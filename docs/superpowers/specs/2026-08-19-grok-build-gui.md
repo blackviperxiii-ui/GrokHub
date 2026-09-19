@@ -36,7 +36,7 @@ Quiet-hour clocks and the daily/host caps type into buffers. Save parses them. A
 
 ## Auth
 
-First-time installers ship Grok Build CLI **alpha** (`GROK_CHANNEL=alpha` / Windows `x.ai/cli/alpha`). First run is Get Started: cabin device-code Super Grok OAuth writes `secrets.json` and, when `~/.grok/auth.json` is empty, the same tokens so `grok` is signed in. Get Started shows live device-code / OAuth failures; leftover wall or install status is not an OAuth error. Settings → Connect does that CLI write only if the CLI is not already connected. Agent auth is that session, an existing `grok login`, or `XAI_API_KEY`. Imagine uses the same token (console key optional). Voice is Ara (realtime + TTS). OAuth covers STT/TTS; duplex needs a console key. While live, Voice · Listening sits above the composer with Stop. PTT `listen_turn` returns to Idle after STT. Voice still prefers cabin `secrets.json` / console key.
+First-time installers ship Grok Build CLI **alpha** (`GROK_CHANNEL=alpha` / Windows `x.ai/cli/alpha`). First run is Get Started: cabin device-code Super Grok OAuth writes `secrets.json` and, when `~/.grok/auth.json` is empty, the same tokens so `grok` is signed in. Get Started shows live device-code / OAuth failures; leftover wall or install status is not an OAuth error. Settings → Connect does that CLI write only if the CLI is not already connected. Agent auth is that session, an existing `grok login`, or `XAI_API_KEY`. Imagine uses the same token (console key optional). Voice is Ara. Hey Grok is push-to-talk STT into chat, then TTS of the reply body (not the thought process) on Linux and Windows. While live, Voice · Listening sits above the composer with Stop. PTT `listen_turn` returns to Idle after STT.
 
 ## Overlay vs agent updates
 
