@@ -347,13 +347,15 @@ pub use voice::{
     dedicated_voice_model, encode_input_audio_append, encode_session_update, hey_grok_on_press, voice_mode_active,
     voice_mode_label,
     hey_grok_route, hey_grok_starts_ptt, is_voice_error, parse_client_secret, parse_realtime_event,
+    ptt_after_speak, ptt_after_stt,
     parse_stt_text, parse_voice_event_text, pcm_from_capture, redact_cabin_from_memory,
     realtime_can_connect, reduce_voice_state, should_attach_cabin_frame, should_capture_before_chat,
     should_mute_speaker, speech_can_connect, stt_multipart, stt_url, transcribe_route,
     tts_request_body, tts_url, voice_can_connect, voice_client_secret_denied, voice_log_role,
     voice_session_url, voice_stream_token, voice_transcript_sends_chat, voice_tts_script,
     live_pcm_argv, live_pcm_frame_bytes,
-    CabinEyesState, HeyGrokAction, HeyGrokRoute, TranscribeRoute, VoiceEvent, VoiceRole, VoiceState,
+    CabinEyesState, HeyGrokAction, HeyGrokRoute, PttLine, TranscribeRoute, VoiceEvent, VoiceRole,
+    VoiceState,
     DEFAULT_VOICE, DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS,
 };
 pub use windshield::{

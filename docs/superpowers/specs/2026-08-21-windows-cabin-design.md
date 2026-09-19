@@ -7,7 +7,7 @@ GrokHub on Windows is the same native egui cabin as Linux. Grok Build (`grok.exe
 
 ## Split
 
-Cabin owns: window, tray, project sidebar as cwd, LAN hub, Hey Grok voice (Ara, PTT STT then TTS of the reply body not thinking, live Voice · Listening + Stop, PTT returns to Idle after STT), Imagine toolbox, `/host` and `/sh` in the cabin (PowerShell on Windows).
+Cabin owns: window, tray, project sidebar as cwd, LAN hub, Hey Grok voice (Ara, PTT STT then TTS of the reply body not thinking, live Voice · Listening + Stop, line stays open until Stop / live mic / Ctrl+G), Imagine toolbox, `/host` and `/sh` in the cabin (PowerShell on Windows).
 
 Grok Build owns: coding tools, sandbox, permissions, plan mode, skills/plugins/MCP, sessions, and desktop computer-use.
 
