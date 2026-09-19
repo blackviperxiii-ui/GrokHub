@@ -348,6 +348,32 @@ pub fn hey_grok_starts_ptt(sock_live: bool, running: bool) -> bool {
     !sock_live && !running
 }
 
+/// What a finished PTT listen should do. The line stays up until the user leaves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PttLine {
+    Leave,
+    Listen,
+    Chat,
+    /// Stay live and surface the receipt. Do not spawn listen (instant STT fail would tight-loop).
+    Hold,
+}
+
+/// After STT: chat on success. On failure stay live but do not immediately listen again.
+pub fn ptt_after_stt(voice_on: bool, stt_ok: bool) -> PttLine {
+    if !voice_on {
+        PttLine::Leave
+    } else if stt_ok {
+        PttLine::Chat
+    } else {
+        PttLine::Hold
+    }
+}
+
+/// After TTS (or a skipped speak), listen again unless they turned voice off.
+pub fn ptt_after_speak(voice_on: bool) -> bool {
+    voice_on
+}
+
 pub fn voice_client_secret_denied(has_api_key: bool) -> Option<&'static str> {
     if has_api_key {
         None
@@ -710,6 +736,12 @@ mod tests {
         assert!(!hey_grok_starts_ptt(true, false));
         assert!(hey_grok_starts_ptt(false, false));
         assert!(!hey_grok_starts_ptt(false, true));
+        assert_eq!(ptt_after_stt(true, true), PttLine::Chat);
+        assert_eq!(ptt_after_stt(true, false), PttLine::Hold);
+        assert_eq!(ptt_after_stt(false, true), PttLine::Leave);
+        assert_eq!(ptt_after_stt(false, false), PttLine::Leave);
+        assert!(ptt_after_speak(true));
+        assert!(!ptt_after_speak(false));
         assert_eq!(
             voice_client_secret_denied(false),
             Some("Duplex Voice needs a console API key. OAuth covers STT and TTS.")
