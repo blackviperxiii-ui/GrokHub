@@ -34,6 +34,21 @@ pub enum HeyGrokRoute {
 }
 
 pub const DEFAULT_VOICE_MODEL: &str = "grok-voice-think-fast-2.0";
+/// xAI realtime `session.voice` and TTS `voice_id`. Cabin voice mode is Ara.
+pub const DEFAULT_VOICE: &str = "ara";
+
+pub fn voice_mode_active(state: VoiceState, sock_live: bool) -> bool {
+    sock_live || !matches!(state, VoiceState::Idle)
+}
+
+pub fn voice_mode_label(state: VoiceState) -> &'static str {
+    match state {
+        VoiceState::Idle => "Voice",
+        VoiceState::Listening => "Voice · Listening",
+        VoiceState::Speaking => "Voice · Speaking",
+        VoiceState::Hands => "Voice · Hands",
+    }
+}
 
 pub fn dedicated_voice_model(user: &str) -> String {
     let u = user.trim();
@@ -167,7 +182,7 @@ pub fn encode_session_update() -> String {
     serde_json::json!({
         "type": "session.update",
         "session": {
-            "voice": "eve",
+            "voice": DEFAULT_VOICE,
             "instructions": "You are Grok in the GrokHub cabin. Be brief.",
             "turn_detection": { "type": "server_vad" },
             "audio": {
@@ -447,7 +462,7 @@ pub fn tts_request_body(text: &str) -> Value {
     let text = &text[..end];
     json!({
         "text": text,
-        "voice_id": "eve",
+        "voice_id": DEFAULT_VOICE,
         "language": "en",
     })
 }
@@ -609,8 +624,14 @@ mod tests {
         });
         assert_eq!(parse_voice_event_text(&ev).as_deref(), Some("hey grok"));
         let tts = tts_request_body("hello");
-        assert_eq!(tts["voice_id"], "eve");
+        assert_eq!(tts["voice_id"], "ara");
         assert_eq!(tts["text"], "hello");
+        assert_eq!(DEFAULT_VOICE, "ara");
+        assert!(!voice_mode_active(VoiceState::Idle, false));
+        assert!(voice_mode_active(VoiceState::Listening, false));
+        assert!(voice_mode_active(VoiceState::Idle, true));
+        assert_eq!(voice_mode_label(VoiceState::Listening), "Voice · Listening");
+        assert_eq!(voice_mode_label(VoiceState::Speaking), "Voice · Speaking");
         let form = stt_multipart(b"RIFF", "grokhub-voice.wav", "bound");
         let s = String::from_utf8_lossy(&form);
         assert!(s.find("name=\"language\"").unwrap() < s.find("name=\"file\"").unwrap());
@@ -636,7 +657,7 @@ mod tests {
         assert!(speech_can_connect("xai-k"));
         assert!(!speech_can_connect(""));
         let sess = encode_session_update();
-        assert!(sess.contains("\"voice\":\"eve\"") || sess.contains("\"voice\": \"eve\""));
+        assert!(sess.contains("\"voice\":\"ara\"") || sess.contains("\"voice\": \"ara\""));
         assert!(sess.contains("server_vad"));
         assert!(sess.contains("audio/pcm"));
         assert!(sess.contains("24000"));

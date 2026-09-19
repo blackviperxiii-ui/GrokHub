@@ -711,6 +711,29 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> S
     out
 }
 
+/// Live Voice strip: state label + Stop. Caller hides this when idle.
+pub fn voice_mode_row(ui: &mut egui::Ui, label: &str) -> bool {
+    let mut stop = false;
+    ui.horizontal(|ui| {
+        let (dot, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), Sense::hover());
+        ui.painter()
+            .circle_filled(dot.center(), 3.5, crate::theme::live());
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(label)
+                .size(crate::theme::FONT_META)
+                .color(crate::theme::fg()),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ghost_pill(ui, "Stop") {
+                stop = true;
+            }
+        });
+    });
+    ui.add_space(8.0);
+    stop
+}
+
 pub fn clip_status(text: &str, max_chars: usize) -> String {
     let first = text.lines().next().unwrap_or("").trim();
     if first.chars().count() <= max_chars {
@@ -2038,7 +2061,7 @@ mod tests {
         let session = include_str!("cards.rs")
             .split("pub fn session_row(")
             .nth(1)
-            .and_then(|s| s.split("pub fn clip_status(").next())
+            .and_then(|s| s.split("pub fn voice_mode_row(").next())
             .expect("session_row");
         assert!(
             session.contains("felt_segment") && session.contains("out.effort = Some(next)"),
@@ -2050,6 +2073,21 @@ mod tests {
                 && session.contains("with_composer_tip"),
             "composer pills must show hover help: {session}"
         );
+        let voice = include_str!("cards.rs")
+            .split("pub fn voice_mode_row(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn clip_status(").next())
+            .expect("voice_mode_row");
+        assert!(
+            voice.contains("theme::live()") && voice.contains("ghost_pill(ui, \"Stop\")"),
+            "voice mode must show a live indicator and Stop: {voice}"
+        );
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                assert!(!voice_mode_row(ui, "Voice · Listening"));
+            });
+        });
         let switch = include_str!("cards.rs")
             .split("pub fn settings_switch(")
             .nth(1)

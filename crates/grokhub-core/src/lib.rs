@@ -341,7 +341,8 @@ pub use verify::{
 };
 pub use voice::{
     cabin_eyes_for_turn, client_secret_ws_protocol, client_secrets_body, client_secrets_url,
-    dedicated_voice_model, encode_input_audio_append, encode_session_update, hey_grok_on_press,
+    dedicated_voice_model, encode_input_audio_append, encode_session_update, hey_grok_on_press, voice_mode_active,
+    voice_mode_label,
     hey_grok_route, hey_grok_starts_ptt, is_voice_error, parse_client_secret, parse_realtime_event,
     parse_stt_text, parse_voice_event_text, pcm_from_capture, redact_cabin_from_memory,
     realtime_can_connect, reduce_voice_state, should_attach_cabin_frame, should_capture_before_chat,
@@ -349,7 +350,7 @@ pub use voice::{
     tts_request_body, tts_url, voice_can_connect, voice_client_secret_denied, voice_log_role,
     voice_session_url, voice_stream_token, voice_transcript_sends_chat, live_pcm_argv, live_pcm_frame_bytes,
     CabinEyesState, HeyGrokAction, HeyGrokRoute, TranscribeRoute, VoiceEvent, VoiceRole, VoiceState,
-    DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS,
+    DEFAULT_VOICE, DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS,
 };
 pub use windshield::{
     build_windshield, filter_atspi_rows, is_interactive_role, keep_atspi_row, lock_check_titles,
