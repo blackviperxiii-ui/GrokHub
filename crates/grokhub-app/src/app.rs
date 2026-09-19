@@ -8609,6 +8609,7 @@ impl Cabin {
             }
             Ok(JobOut::Voice(t)) => {
                 self.running = false;
+                self.voice_state = VoiceState::Idle;
                 self.voice_orb = "idle".into();
                 if is_voice_error(&t) {
                     self.status = t;
