@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Track Grok Build CLI **1.0.38** alpha. Headless spawn/parse (`grok -p --output-format streaming-json`, `agent stdio`, `sessions`, `export`, `update --alpha`) is unchanged from 1.0.36. The only `--help` delta is `grok clone --cone` removed in 1.0.37 (cabin never calls `clone`). Unpackaged `grok update --check --json` still reports `channel=stable` and `latestVersion=1.0.34` (npm `latest`); the cabin stays on alpha via `grok update --alpha` and does not treat the version number as the channel.
+
 ## 2.9.7 — 2026-09-12
 
 One cabin, two ship artifacts on the same tag. Cursor **#28** (deslop first-run / Latest-notify), **#29** (Windows leftover clone uses zip), and **#30** (Get Started OAuth errors, Linux CLI PATH) are on `main`.
