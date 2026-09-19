@@ -354,16 +354,18 @@ pub enum PttLine {
     Leave,
     Listen,
     Chat,
+    /// Stay live and surface the receipt. Do not spawn listen (instant STT fail would tight-loop).
+    Hold,
 }
 
-/// After STT: stay live and either chat or listen again. Idle only if they already left.
+/// After STT: chat on success. On failure stay live but do not immediately listen again.
 pub fn ptt_after_stt(voice_on: bool, stt_ok: bool) -> PttLine {
     if !voice_on {
         PttLine::Leave
     } else if stt_ok {
         PttLine::Chat
     } else {
-        PttLine::Listen
+        PttLine::Hold
     }
 }
 
@@ -735,7 +737,7 @@ mod tests {
         assert!(hey_grok_starts_ptt(false, false));
         assert!(!hey_grok_starts_ptt(false, true));
         assert_eq!(ptt_after_stt(true, true), PttLine::Chat);
-        assert_eq!(ptt_after_stt(true, false), PttLine::Listen);
+        assert_eq!(ptt_after_stt(true, false), PttLine::Hold);
         assert_eq!(ptt_after_stt(false, true), PttLine::Leave);
         assert_eq!(ptt_after_stt(false, false), PttLine::Leave);
         assert!(ptt_after_speak(true));

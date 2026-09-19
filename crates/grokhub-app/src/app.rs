@@ -2060,9 +2060,9 @@ impl Cabin {
         self.persist();
         if let Some(mut s) = self.voice_sock.take() {
             s.halt();
+            self.voice_state = VoiceState::Idle;
+            self.voice_orb = "idle".into();
         }
-        self.voice_state = VoiceState::Idle;
-        self.voice_orb = "idle".into();
     }
 
     fn apply_assistant_snapshot(&mut self, content: String) {
@@ -7715,6 +7715,7 @@ impl Cabin {
                     self.chat_job_thread = None;
                     self.persist();
                 }
+                self.maybe_continue_ptt();
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.grok_p_rx = Some(rx);
@@ -8503,6 +8504,7 @@ impl Cabin {
                 self.status.clear();
                 self.chat_job_thread = None;
                 self.persist();
+                self.maybe_continue_ptt();
             }
             Ok(JobOut::HostLine(line)) => {
                 self.rx = Some(rx);
@@ -8676,6 +8678,9 @@ impl Cabin {
                     PttLine::Listen => {
                         self.status = t;
                         self.maybe_continue_ptt();
+                    }
+                    PttLine::Hold => {
+                        self.status = t;
                     }
                     PttLine::Chat => {
                         self.status = "Hey Grok".into();
@@ -9897,6 +9902,7 @@ impl Cabin {
         self.halt_in_flight();
         self.finish_hub_dispatch(&status, false);
         self.status = status;
+        self.maybe_continue_ptt();
     }
 
     fn drain_inbox(&mut self) {
