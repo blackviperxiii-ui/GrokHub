@@ -3,8 +3,9 @@
 use crate::icons::{self, TileIcon};
 use eframe::egui::{self, Align2, Color32, ColorImage, FontId, RichText, Sense, Stroke, TextureHandle, TextureOptions};
 use grokhub_core::{
-    curate_wall, imagine_media_click, imagine_result_fit, parse_loop_line, wall_curate_seed,
-    ImagineMediaClick, LearnedSuggestion, SuggestionKind, WallGif, WallSlot, IMAGE_FILE_CAP,
+    chat_run_dot_alpha, curate_wall, imagine_media_click, imagine_result_fit, parse_loop_line,
+    wall_curate_seed, ImagineMediaClick, LearnedSuggestion, SuggestionKind, WallGif, WallSlot,
+    IMAGE_FILE_CAP,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
@@ -473,6 +474,44 @@ pub fn status_chip(ui: &mut egui::Ui, label: &str, tone: ChipTone) {
         .show(ui, |ui| {
             ui.label(RichText::new(label).size(12.0).color(color));
         });
+}
+
+/// Glanceable in-progress chrome: pulsing live dot + phase label.
+/// Optional Stop sits on the row (composer disc still halts too).
+/// Hover shows the current action. Not a blinking caret.
+pub fn paint_run_pulse(ui: &mut egui::Ui, label: &str, hint: &str, show_stop: bool) -> bool {
+    if label.is_empty() {
+        return false;
+    }
+    let t = ui.ctx().input(|i| i.time) as f32;
+    let pulse = chat_run_dot_alpha(t);
+    let fill = crate::theme::live();
+    let color = Color32::from_rgba_unmultiplied(
+        fill.r(),
+        fill.g(),
+        fill.b(),
+        (pulse * 255.0) as u8,
+    );
+    ui.add_space(6.0);
+    let mut stop = false;
+    let row = ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
+        ui.painter().circle_filled(rect.center(), 4.0, color);
+        ui.label(
+            RichText::new(label)
+                .size(crate::theme::FONT_META)
+                .color(crate::theme::muted()),
+        );
+        if show_stop && ghost_pill(ui, "Stop") {
+            stop = true;
+        }
+    });
+    if !hint.is_empty() {
+        row.response.on_hover_text(hint);
+    }
+    ui.ctx().request_repaint();
+    stop
 }
 
 pub fn titlebar_update_chip(ui: &mut egui::Ui, label: &str) -> bool {
@@ -2397,6 +2436,42 @@ mod tests {
             tex.contains("image_pixels_ok") || tex.contains("IMAGE_PIXEL_CAP"),
             "a tiny wall still with huge pixels must not decode on the UI thread: {tex}"
         );
+    }
+
+    #[test]
+    fn run_pulse_is_a_labeled_live_dot() {
+        let src = include_str!("cards.rs");
+        let pulse = src
+            .split("pub fn paint_run_pulse(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn titlebar_update_chip(").next())
+            .expect("paint_run_pulse");
+        assert!(
+            pulse.contains("theme::live()")
+                && pulse.contains("circle_filled")
+                && pulse.contains("chat_run_dot_alpha")
+                && pulse.contains("ghost_pill(ui, \"Stop\")")
+                && pulse.contains("on_hover_text"),
+            "a chat turn must show a pulsing live dot, a label, hover action, and Stop: {pulse}"
+        );
+        assert!(
+            !pulse.contains("vec2(2.0, 16.0)") && !pulse.contains("rect_filled"),
+            "the running cue is not a blinking caret: {pulse}"
+        );
+    }
+
+    #[test]
+    fn run_pulse_paints_a_labeled_row() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                crate::theme::set_paint_dark(true);
+                let stopped = paint_run_pulse(ui, "Running", "run_terminal_cmd", true);
+                assert!(!stopped, "paint alone must not halt");
+                let idle = paint_run_pulse(ui, "", "hidden", true);
+                assert!(!idle, "idle phase paints nothing");
+            });
+        });
     }
 
     #[test]
