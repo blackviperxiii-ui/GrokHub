@@ -1079,6 +1079,14 @@ mod tests {
             .as_deref(),
             Some("alpha")
         );
+        // Live unpackaged 1.0.38: version is alpha, update channel is still stable
+        // until config / `grok update --alpha`. Version number is not the channel.
+        // latestVersion is npm latest (1.0.34).
+        let unpackaged_1038 = parse_cli_update_check_channel(
+            r#"{"currentVersion":"1.0.38","latestVersion":"1.0.34","updateAvailable":false,"installer":"internal","channel":"stable","autoUpdate":null,"error":null}"#,
+        );
+        assert_eq!(unpackaged_1038.as_deref(), Some("stable"));
+        assert!(should_switch_cli_to_alpha(unpackaged_1038.as_deref()));
         assert_eq!(
             parse_cli_config_channel("[ui]\ntheme = \"dark\"\n[cli]\nchannel = \"alpha\"\n"),
             Some("alpha".into())
