@@ -1,8 +1,15 @@
 # Changelog
 
-## Unreleased
+## 2.9.10 — 2026-09-19
 
-- PTT voice stays live after one listen/speak turn. Indicator + Stop remain, and the next utterance listens again until Stop, the live-green mic, or Ctrl+G / Super+G. Same on Linux and Windows.
+One cabin, two ship artifacts on the same tag. Cursor **#40** (PTT line stays open until Stop, plus Bugbot Autofix) is on `main`.
+
+- Linux: `grokhub-linux-v2.9.10.tar.gz` and AUR `pkgver=2.9.10`. `/update` overlays the GUI then `grok update --alpha` with `$HOME/.grok/bin:$HOME/.local/bin` prepended.
+- Windows: `GrokHub-Setup-2.9.10.exe` and `grokhub-windows-v2.9.10.zip` from `packaging/windows/` + Inno. Settings → Update downloads the GitHub zip when there is no source clone **or** the leftover clone is not a usable `main` checkout, then `grok update --alpha`.
+- PTT stays live after one listen/speak turn. Indicator + Stop remain until Stop, the live-green mic, or Ctrl+G / Super+G. Same on Linux and Windows.
+- Halt / grok -p Err / Consult call `maybe_continue_ptt` so the line is not dead with the indicator still on. Failed STT returns `Hold` instead of respawning listen every frame.
+- TTS still uses `voice_tts_script` (reply body, not thinking). Voice is Ara.
+- Grok Build CLI **1.0.38** alpha (unchanged). Headless spawn stays `grok -p --output-format streaming-json` + `--alpha`.
 
 ## 2.9.9 — 2026-09-19
 

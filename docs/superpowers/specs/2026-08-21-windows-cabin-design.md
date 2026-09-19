@@ -1,6 +1,6 @@
 # Windows cabin installer
 
-**Version:** 2.9.9  
+**Version:** 2.9.10  
 **Repo:** `blackviperxiii-ui/GrokHub` (one cabin, two artifacts — not the deleted Electron app)
 
 GrokHub on Windows is the same native egui cabin as Linux. Grok Build (`grok.exe` over ACP) is the agent, host shell, and computer-use. The Windows artifact is `GrokHub-Setup-<version>.exe` (Inno) plus `grokhub-windows-v<version>.zip`. Same tag and cabin version as Linux `grokhub-linux-v*.tar.gz`. No Windows AT-SPI / screenshot / click backends.
