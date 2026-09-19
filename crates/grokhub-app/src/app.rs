@@ -39,7 +39,7 @@ use grokhub_core::{
     catalog_line, chip_suggest_prompt, compact_keep_start_from, compose_imagine_prompt,
     context_fingerprint,
     context_percent,
-    dedicated_imagine_model, dedicated_video_model, dedicated_voice_model, default_openclaw_paths, diagnostics_bundle,
+    dedicated_imagine_model, dedicated_video_model, default_openclaw_paths, diagnostics_bundle,
     pick_fresh_seed, wall_can_paint, wall_evict, wall_gif_from_generation, ImagineKind, ImagineSpec,
     ImagineToolboxDock, ImagineWall,
     WallGif, WALL_GIF_EVERY_MS, WALL_GIF_MAX,
@@ -127,9 +127,10 @@ use grokhub_core::{
     transcribe_route, uid, update_cmds_for, overlay_update_begin, overlay_update_finish,
     cabin_update_notice, grok_cli_alpha_update_cmds, settings_update_action_hint,
     should_notify_cabin_update, should_show_cli_alpha_update,
-    realtime_bearer, realtime_can_connect, voice_log_role, voice_stream_token, voice_transcript_sends_chat,
+    realtime_bearer, realtime_can_connect, voice_log_role, voice_mode_active, voice_mode_label,
+    voice_stream_token, voice_transcript_sends_chat,
     fold_stream_fields, StreamTokenKind,
-    update_wipes_config, voice_session_url, Automation, BoardCard, GrokLoop,
+    update_wipes_config, Automation, BoardCard, GrokLoop,
     BoardStatus, ChipInput, ChipKind, ChipMemory, ChipThread, DeviceCodeStart, HeyGrokAction,
     HeyGrokRoute, HubMemoryFile, QuickChip,
     HubSnapshot, HubState, InhabitBundle, LearningState, LocalClock, MintRealtimeFn, Policy, Recipe, ReplayOp, RewindRecord,
@@ -279,6 +280,7 @@ enum ComposerStackSlot {
     SlashPalette,
     Chips,
     Attach,
+    Voice,
     Pill,
 }
 
@@ -288,6 +290,7 @@ fn composer_stack_order() -> &'static [ComposerStackSlot] {
         ComposerStackSlot::ContextBar,
         ComposerStackSlot::SlashPalette,
         ComposerStackSlot::Attach,
+        ComposerStackSlot::Voice,
         ComposerStackSlot::Pill,
         ComposerStackSlot::Chips,
     ]
@@ -9002,6 +9005,10 @@ impl Cabin {
     }
 
     fn listen_voice(&mut self) {
+        if self.voice_is_on() {
+            self.leave_voice();
+            return;
+        }
         let action = hey_grok_on_press(self.voice_state, self.running);
         if action == HeyGrokAction::Halt {
             self.halt_work("Hands on — halted");
@@ -9024,10 +9031,7 @@ impl Cabin {
                                 self.voice_sock = Some(sock);
                                 self.voice_state = VoiceState::Listening;
                                 self.voice_orb = "listening".into();
-                                self.status = format!(
-                                    "Voice live {}",
-                                    voice_session_url(&dedicated_voice_model(&self.cfg.voice_model))
-                                );
+                                self.status = voice_mode_label(VoiceState::Listening).into();
                                 return;
                             }
                             Err(e) => {
@@ -9058,6 +9062,49 @@ impl Cabin {
         std::thread::spawn(move || {
             let _ = tx.send(JobOut::Voice(listen_turn(&speech)));
         });
+    }
+
+    fn voice_is_on(&self) -> bool {
+        voice_mode_active(self.voice_state, self.voice_sock.is_some())
+    }
+
+    fn leave_voice(&mut self) {
+        if let Some(mut s) = self.voice_sock.take() {
+            s.halt();
+        }
+        let ptt = self.running && self.voice_state != VoiceState::Idle;
+        self.voice_state = VoiceState::Idle;
+        self.voice_orb = "idle".into();
+        if ptt {
+            self.halt_work("Voice off");
+        } else {
+            self.status = "Voice off".into();
+        }
+    }
+
+    fn paint_voice_mode_row(&mut self, ui: &mut egui::Ui) {
+        if !self.voice_is_on() {
+            return;
+        }
+        if crate::cards::voice_mode_row(ui, voice_mode_label(self.voice_state)) {
+            self.leave_voice();
+        }
+    }
+
+    fn paint_voice_mic(&mut self, ui: &mut egui::Ui, size: f32) {
+        let on = self.voice_is_on();
+        let color = if on {
+            crate::theme::live()
+        } else {
+            crate::theme::muted()
+        };
+        let tip = if on { "Leave voice" } else { "Hey Grok" };
+        if crate::icons::paint_bar_icon(ui, crate::icons::BarIcon::Mic, size, color)
+            .on_hover_text(tip)
+            .clicked()
+        {
+            self.listen_voice();
+        }
     }
 
     fn capture_cabin_frame_this_turn(&mut self) -> Option<String> {
@@ -11956,6 +12003,9 @@ impl Cabin {
                     ComposerStackSlot::Attach => {
             self.ui_attach_chip(ui, PlusTarget::Chat);
                     }
+                    ComposerStackSlot::Voice => {
+            self.paint_voice_mode_row(ui);
+                    }
                     ComposerStackSlot::Pill => {
             let pill_w = crate::cards::composer_pill_w(ui.ctx().screen_rect().width());
             let cap = pill_w.min(ui.available_width()).max(360.0);
@@ -12080,17 +12130,7 @@ impl Cabin {
                                 ) {
                                     self.send_from_composer(t);
                                 }
-                                if crate::icons::paint_bar_icon(
-                                    ui,
-                                    crate::icons::BarIcon::Mic,
-                                    22.0,
-                                    crate::theme::muted(),
-                                )
-                                .on_hover_text("Hey Grok")
-                                .clicked()
-                                {
-                                    self.listen_voice();
-                                }
+                                self.paint_voice_mic(ui, 22.0);
                             },
                         );
                         let ready = !self.composer.trim().is_empty();
@@ -13608,6 +13648,7 @@ impl Cabin {
                         ui.add_space(crate::theme::IMAGINE_GAP);
                     }
                     self.ui_attach_chip(ui, PlusTarget::Imagine);
+                    self.paint_voice_mode_row(ui);
                     let bar = self.ui_imagine_bar(ui);
                     generate = bar.generate;
                     go_settings = bar.go_settings;
@@ -14027,17 +14068,7 @@ impl Cabin {
                                 }
                                 ComposerGo::Idle => {}
                             }
-                            if crate::icons::paint_bar_icon(
-                                ui,
-                                crate::icons::BarIcon::Mic,
-                                crate::theme::IMAGINE_HIT,
-                                crate::theme::muted(),
-                            )
-                            .on_hover_text("Hey Grok")
-                            .clicked()
-                            {
-                                self.listen_voice();
-                            }
+                            self.paint_voice_mic(ui, crate::theme::IMAGINE_HIT);
                         },
                     );
                 });
@@ -19407,6 +19438,7 @@ mod tests {
                 super::ComposerStackSlot::ContextBar,
                 super::ComposerStackSlot::SlashPalette,
                 super::ComposerStackSlot::Attach,
+                super::ComposerStackSlot::Voice,
                 super::ComposerStackSlot::Pill,
                 super::ComposerStackSlot::Chips,
             ]
@@ -19425,6 +19457,70 @@ mod tests {
             .expect("pill");
         assert!(chips.is_some(), "chips belong below the composer pill");
         assert!(chips.unwrap() > pill);
+        let voice = order
+            .iter()
+            .position(|s| *s == super::ComposerStackSlot::Voice)
+            .expect("voice");
+        assert!(voice < pill, "voice indicator sits above the composer pill");
+    }
+
+    #[test]
+    fn voice_mode_has_indicator_and_stop() {
+        let src = include_str!("app.rs");
+        let listen = src
+            .split("fn listen_voice(")
+            .nth(1)
+            .and_then(|s| s.split("fn voice_is_on(").next())
+            .expect("listen_voice");
+        assert!(
+            listen.contains("voice_is_on()") && listen.contains("self.leave_voice()"),
+            "mic / Ctrl+G must leave a live voice session: {listen}"
+        );
+        let leave = src
+            .split("fn leave_voice(")
+            .nth(1)
+            .and_then(|s| s.split("fn paint_voice_mode_row(").next())
+            .expect("leave_voice");
+        assert!(
+            leave.contains("s.halt()") && leave.contains("Voice off"),
+            "leave voice must close the socket: {leave}"
+        );
+        let row = src
+            .split("fn paint_voice_mode_row(")
+            .nth(1)
+            .and_then(|s| s.split("fn paint_voice_mic(").next())
+            .expect("paint_voice_mode_row");
+        assert!(
+            row.contains("voice_mode_row") && row.contains("leave_voice"),
+            "voice chrome must paint the indicator and Stop: {row}"
+        );
+        let mic = src
+            .split("fn paint_voice_mic(")
+            .nth(1)
+            .and_then(|s| s.split("fn capture_cabin_frame_this_turn(").next())
+            .expect("paint_voice_mic");
+        assert!(
+            mic.contains("theme::live()") && mic.contains("Leave voice"),
+            "live mic must read as leave: {mic}"
+        );
+        let stack = src
+            .split("fn ui_composer_stack")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_devices").next())
+            .expect("composer stack");
+        assert!(
+            stack.contains("ComposerStackSlot::Voice") && stack.contains("paint_voice_mode_row"),
+            "chat composer must show the voice indicator: {stack}"
+        );
+        let imagine = src
+            .split("fn ui_imagine(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_imagine_bar(").next())
+            .expect("ui_imagine");
+        assert!(
+            imagine.contains("paint_voice_mode_row"),
+            "Imagine must show the same voice indicator: {imagine}"
+        );
     }
 
     #[test]
