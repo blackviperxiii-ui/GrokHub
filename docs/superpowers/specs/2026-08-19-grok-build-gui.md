@@ -1,12 +1,12 @@
 # GrokHub is the Grok Build GUI
 
-**Version:** 2.9.7
+**Version:** 2.9.8
 
 GrokHub is the native egui cabin. Grok Build (`grok` CLI) is the agent, the host shell, and computer-use (eyes and hands). One repo, one version — Linux tarball/AUR and Windows `GrokHub-Setup-<version>.exe` ship from the same tag.
 
 ## Split
 
-Cabin owns: window, tray, project sidebar as cwd, LAN hub / Android, Hey Grok voice, Imagine toolbox.
+Cabin owns: window, tray, project sidebar as cwd, LAN hub / Android, Hey Grok voice (Ara, live Voice · Listening + Stop, PTT returns to Idle after STT), Imagine toolbox.
 
 Grok Build owns: coding tools, bash, sandbox, permissions, plan mode, skills/plugins/MCP, sessions, `/imagine` when ACP supports it, and desktop computer-use.
 
@@ -16,7 +16,7 @@ Transport: chat is headless `grok -p --output-format streaming-json` with `--san
 
 Left-rail **Chat** is the new-chat control. There is no separate New chat button. Click Chat on an empty draft (no dialogue, no Grok session) to pull that same draft up. After dialogue has started, Chat opens a new draft. Keep one empty draft at a time. Old convos are sidebar History (`grok sessions`).
 
-`send_chat` runs `grok -p` whose cwd is the bound project, or `~/GrokHub-Work` when unbound — never the cabin process cwd. Stream user and assistant text into bubbles that use the full chat pane. Thinking is faded thought process, not a bubble. Stop / Halt / tray Halt SIGTERMs the `grok -p` child (`session/cancel` on ACP). A dead stored session id retries without `--resume`. Disk-full / permission-denied handshake errors land in the chat with the cwd named. Grok.com-style “I don’t have access to your computer” thoughts are stripped from the pane.
+`send_chat` runs `grok -p` whose cwd is the bound project, or `~/GrokHub-Work` when unbound — never the cabin process cwd. Stream user and assistant text into bubbles that use the full chat pane. Thinking is faded thought process, not a bubble. A green live dot plus Thinking / Running / Waiting sits on the turn (and above the composer); hover shows the current action. Stop / Halt / tray Halt SIGTERMs the `grok -p` child (`session/cancel` on ACP). A dead stored session id retries without `--resume`. Disk-full / permission-denied handshake errors land in the chat with the cwd named. Grok.com-style “I don’t have access to your computer” thoughts are stripped from the pane.
 
 Composer pills: Chat / Plan / Ask, Ask / Auto / Always-approve, and Effort (low / medium / high / xhigh → `grok agent --reasoning-effort`). Hover a pill for what it does. Segment pills, catalog triggers, settings switches, and sidebar chrome use Plasma-style click feel (hover wash, press shrink, ~120ms selection blend). Tool cards, diffs, and computer-use frames sit in a collapsed Work tree. Permission prompts Allow / Deny / Always.
 
@@ -36,7 +36,7 @@ Quiet-hour clocks and the daily/host caps type into buffers. Save parses them. A
 
 ## Auth
 
-First-time installers ship Grok Build CLI **alpha** (`GROK_CHANNEL=alpha` / Windows `x.ai/cli/alpha`). First run is Get Started: cabin device-code Super Grok OAuth writes `secrets.json` and, when `~/.grok/auth.json` is empty, the same tokens so `grok` is signed in. Get Started shows live device-code / OAuth failures; leftover wall or install status is not an OAuth error. Settings → Connect does that CLI write only if the CLI is not already connected. Agent auth is that session, an existing `grok login`, or `XAI_API_KEY`. Imagine uses the same token (console key optional). Voice still prefers cabin `secrets.json` / console key.
+First-time installers ship Grok Build CLI **alpha** (`GROK_CHANNEL=alpha` / Windows `x.ai/cli/alpha`). First run is Get Started: cabin device-code Super Grok OAuth writes `secrets.json` and, when `~/.grok/auth.json` is empty, the same tokens so `grok` is signed in. Get Started shows live device-code / OAuth failures; leftover wall or install status is not an OAuth error. Settings → Connect does that CLI write only if the CLI is not already connected. Agent auth is that session, an existing `grok login`, or `XAI_API_KEY`. Imagine uses the same token (console key optional). Voice is Ara (realtime + TTS). OAuth covers STT/TTS; duplex needs a console key. While live, Voice · Listening sits above the composer with Stop. PTT `listen_turn` returns to Idle after STT. Voice still prefers cabin `secrets.json` / console key.
 
 ## Overlay vs agent updates
 

@@ -2,7 +2,15 @@
 
 ## Unreleased
 
-- Track Grok Build CLI **1.0.38** alpha. Headless spawn/parse (`grok -p --output-format streaming-json`, `agent stdio`, `sessions`, `export`, `update --alpha`) is unchanged from 1.0.36. The only `--help` delta is `grok clone --cone` removed in 1.0.37 (cabin never calls `clone`). Unpackaged `grok update --check --json` still reports `channel=stable` and `latestVersion=1.0.34` (npm `latest`); the cabin stays on alpha via `grok update --alpha` and does not treat the version number as the channel.
+## 2.9.8 — 2026-09-19
+
+One cabin, two ship artifacts on the same tag. Cursor **#37** (voice Ara, live strip, Stop, PTT Idle reset), **#38** (glanceable Thinking / Running / Waiting), and **#36** (CLI alpha 1.0.38 pin) are on `main`. Superseded alpha ports **#35**–**#31** closed with `ours`.
+
+- Linux: `grokhub-linux-v2.9.8.tar.gz` and AUR `pkgver=2.9.8`. `/update` overlays the GUI then `grok update --alpha` with `$HOME/.grok/bin:$HOME/.local/bin` prepended.
+- Windows: `GrokHub-Setup-2.9.8.exe` and `grokhub-windows-v2.9.8.zip` from `packaging/windows/` + Inno. Settings → Update downloads the GitHub zip when there is no source clone **or** the leftover clone is not a usable `main` checkout, then `grok update --alpha`.
+- Voice is Ara (realtime `session.voice` and TTS `voice_id`). Live Voice · Listening sits above the composer with Stop. PTT `listen_turn` returns `voice_state` to Idle after STT so the row does not stay Listening and Stop / mic / Ctrl+G do not halt the reply.
+- Chat turns show a green live dot plus Thinking / Running / Waiting; hover is the current action (permission title, elicit server, or last tool). Composer attach pulse stays when scrolled.
+- Grok Build CLI **1.0.38** alpha. Headless spawn/parse (`grok -p --output-format streaming-json`, `agent stdio`, `sessions`, `export`, `update --alpha`) is unchanged from 1.0.36. `clone --cone` dropped in 1.0.37 (cabin never calls `clone`). Unpackaged `grok update --check --json` still reports `channel=stable` / `latestVersion=1.0.34`; the cabin stays on alpha via `grok update --alpha`.
 
 ## 2.9.7 — 2026-09-12
 

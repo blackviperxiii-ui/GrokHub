@@ -621,7 +621,7 @@ pub fn slash_help() -> String {
         "Settings → Behavior: close to tray, living wall, and a quiet hours dropdown. Picking a window saves it.",
         "History search drops stale hits when the box changes. Re-opening the memory file already in the editor keeps unsaved typing.",
         "Appearance: Dark, Light, System. Interactive chat is grok agent stdio (ACP). Night and phone use grok -p. Halt is session/cancel.",
-        "Voice: Ara. OAuth for STT/TTS; duplex streams PCM with a console key. While live, Voice · Listening sits above the composer with Stop. Desktop control is Grok Build computer-use — Halt cancels the ACP turn.",
+        "Voice: Ara. OAuth for STT/TTS; duplex streams PCM with a console key. While live, Voice · Listening sits above the composer with Stop. PTT returns to Idle after STT. Desktop control is Grok Build computer-use — Halt cancels the ACP turn.",
         if cfg!(windows) {
             "First-time install and reinstall (Windows Setup + first cabin launch) automatically install Grok Build CLI alpha from https://x.ai/cli (GROK_CHANNEL=alpha). UAC on first run is expected. First run is Get Started — Super Grok OAuth signs in grok too. Get Started shows live device-code / OAuth failures, not leftover wall or install status. The Install control is hidden when grok is already present or an alpha install is already running. Settings → Update → Update Grok Build CLI runs grok update --alpha when grok is already installed. Settings → Connect writes CLI auth when grok is not already connected. Settings → Update overlays the cabin (GitHub zip when there is no clone or the leftover clone is not main), then runs grok update --alpha. A newer GitHub Latest cabin notifies in-app on Settings → Update (Update + Restart), not a web page. If grok is on stable after an upgrade, the cabin switches it back to alpha. Settings About shows grok --version."
         } else {
@@ -765,6 +765,7 @@ mod tests {
         assert!(slash_help().contains("Pulse every 15s"));
         assert!(slash_help().contains("Voice: Ara"));
         assert!(slash_help().contains("Voice · Listening"));
+        assert!(slash_help().contains("PTT returns to Idle after STT"));
         assert!(slash_help().contains("Grok Build computer-use"));
         assert!(slash_help().contains("Devices pair URL is a LAN IPv4"));
         assert!(slash_help().contains("Mode pill: Chat / Plan / Ask"));
