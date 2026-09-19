@@ -1,12 +1,12 @@
 # GrokHub is the Grok Build GUI
 
-**Version:** 2.9.8
+**Version:** 2.9.9
 
 GrokHub is the native egui cabin. Grok Build (`grok` CLI) is the agent, the host shell, and computer-use (eyes and hands). One repo, one version — Linux tarball/AUR and Windows `GrokHub-Setup-<version>.exe` ship from the same tag.
 
 ## Split
 
-Cabin owns: window, tray, project sidebar as cwd, LAN hub / Android, Hey Grok voice (Ara, live Voice · Listening + Stop, PTT returns to Idle after STT), Imagine toolbox.
+Cabin owns: window, tray, project sidebar as cwd, LAN hub / Android, Hey Grok voice (Ara, PTT STT then TTS of the reply body not thinking, live Voice · Listening + Stop, PTT returns to Idle after STT), Imagine toolbox.
 
 Grok Build owns: coding tools, bash, sandbox, permissions, plan mode, skills/plugins/MCP, sessions, `/imagine` when ACP supports it, and desktop computer-use.
 

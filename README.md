@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.9.8** — Grok Build **1.0.38** alpha. Voice is Ara; Hey Grok is PTT STT then TTS of the reply body (not thinking). A live Voice · Listening strip with Stop sits above the composer, and PTT returns to Idle after STT. Chat shows a green live dot plus Thinking / Running / Waiting (hover is the current action). First launch and reinstall install CLI alpha when grok is missing; wait / Get Started paint as the only pane and show live OAuth / device-code failures (not leftover wall or install status). Titlebar **Update available** when GitHub Latest is newer. Settings → Update adds **Update Grok Build CLI** (`grok update --alpha`, Linux PATH prepends `~/.grok/bin` and `~/.local/bin`). Windows leftover clones (not `main`) use the GitHub zip, same as Setup with no clone. Imagine videos play in-pane. Avatar menu is Settings / Help / Connect. Empty-home greeting and chips rank from the situation. Windows taskbar/tray icon and tray Quit. Settings is OAuth Account, quiet-hours dropdown, overlay Update. Chat rail reuses one empty draft (no New chat button). `/update` runs `grok update --alpha` on Linux and Windows. History is `grok sessions` 1:1.
+**v2.9.9** — Grok Build **1.0.38** alpha. Voice is Ara; Hey Grok is PTT STT then TTS of the reply body (not thinking). A live Voice · Listening strip with Stop sits above the composer, and PTT returns to Idle after STT. Chat shows a green live dot plus Thinking / Running / Waiting (hover is the current action). First launch and reinstall install CLI alpha when grok is missing; wait / Get Started paint as the only pane and show live OAuth / device-code failures (not leftover wall or install status). Titlebar **Update available** when GitHub Latest is newer. Settings → Update adds **Update Grok Build CLI** (`grok update --alpha`, Linux PATH prepends `~/.grok/bin` and `~/.local/bin`). Windows leftover clones (not `main`) use the GitHub zip, same as Setup with no clone. Imagine videos play in-pane. Avatar menu is Settings / Help / Connect. Empty-home greeting and chips rank from the situation. Windows taskbar/tray icon and tray Quit. Settings is OAuth Account, quiet-hours dropdown, overlay Update. Chat rail reuses one empty draft (no New chat button). `/update` runs `grok update --alpha` on Linux and Windows. History is `grok sessions` 1:1.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.9.8.tar.gz`, AUR | **v2.9.8** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.9.8.exe`, `grokhub-windows-v2.9.8.zip` | **v2.9.8** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.9.9.tar.gz`, AUR | **v2.9.9** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.9.9.exe`, `grokhub-windows-v2.9.9.zip` | **v2.9.9** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
