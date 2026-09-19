@@ -616,7 +616,7 @@ pub fn slash_help() -> String {
         "/usage — today's cabin buckets, tokens spent today, and the last Grok Build turn",
         "/models — Grok catalog",
         "/palette — command palette",
-        "Enter sends; Ctrl+Enter newline. Send becomes Stop while a reply runs.",
+        "Enter sends; Ctrl+Enter newline. Send becomes Stop while a reply runs. A green live dot plus Thinking / Running / Waiting sits on the turn (and above the composer); hover shows the current action.",
         "Mode pill: Chat / Plan / Ask. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort: Low / Medium / High / Extra High. Hover a composer pill for what it does. Grok Build runs the agent.",
         "Settings → Behavior: close to tray, living wall, and a quiet hours dropdown. Picking a window saves it.",
         "History search drops stale hits when the box changes. Re-opening the memory file already in the editor keeps unsaved typing.",
@@ -774,6 +774,7 @@ mod tests {
         assert!(slash_help().contains("collapsed Work tree"));
         assert!(slash_help().contains("thought process"));
         assert!(slash_help().contains("User bubbles sit on the right"));
+        assert!(slash_help().contains("green live dot plus Thinking / Running / Waiting"));
         assert!(slash_help().contains("compact Grok context"));
         assert!(slash_help().contains("/forget and Memory Save stay off"));
         assert!(slash_help().contains("/learn — reflect this chat into MEMORY.md"));
