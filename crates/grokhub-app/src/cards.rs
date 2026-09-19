@@ -2423,6 +2423,20 @@ mod tests {
     }
 
     #[test]
+    fn run_pulse_paints_a_labeled_row() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                crate::theme::set_paint_dark(true);
+                let stopped = paint_run_pulse(ui, "Running", "run_terminal_cmd", true);
+                assert!(!stopped, "paint alone must not halt");
+                let idle = paint_run_pulse(ui, "", "hidden", true);
+                assert!(!idle, "idle phase paints nothing");
+            });
+        });
+    }
+
+    #[test]
     fn get_started_copy_and_connect() {
         let src = include_str!("cards.rs");
         assert!(

@@ -489,8 +489,8 @@ mod tests {
         assert_eq!(chat_run_action(Some("  "), None), "");
         let a0 = chat_run_dot_alpha(0.0);
         let a1 = chat_run_dot_alpha(0.4);
-        assert!(a0 >= 0.35 && a0 <= 1.0, "dot stays visible: {a0}");
-        assert!(a1 >= 0.35 && a1 <= 1.0, "dot stays visible: {a1}");
+        assert!((0.35..=1.0).contains(&a0), "dot stays visible: {a0}");
+        assert!((0.35..=1.0).contains(&a1), "dot stays visible: {a1}");
         assert_ne!(a0, a1, "the live dot pulses instead of blinking off");
         assert!(is_thinking_status("Thinking…"));
         assert!(is_thinking_status("Thinking… 12k/128k"));
