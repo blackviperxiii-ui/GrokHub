@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.9.11 — 2026-09-21
+
+One cabin, two ship artifacts on the same tag. Cursor **#41** (stronger shared button feel, skip off-screen chat rows, width-keyed heights, stable row ids) is on `main`.
+
+- Linux: `grokhub-linux-v2.9.11.tar.gz` and AUR `pkgver=2.9.11`. `/update` overlays the GUI then `grok update --alpha` with `$HOME/.grok/bin:$HOME/.local/bin` prepended.
+- Windows: `GrokHub-Setup-2.9.11.exe` and `grokhub-windows-v2.9.11.zip` from `packaging/windows/` + Inno. Settings → Update downloads the GitHub zip when there is no source clone **or** the leftover clone is not a usable `main` checkout, then `grok update --alpha`.
+- Shared buttons hover-scale to 1.035 over 120ms, shrink on press, and scale plus fill on keyboard focus. Same paint on Linux and Windows.
+- Off-screen chat rows skip paint. Heights are cached by thread and pane width. Each painted row uses a stable id so a skipped neighbor does not move selection or hover.
+- Voice stays Ara, OAuth push-to-talk, reply body only. The line stays open until Stop, the live mic, or Ctrl+G / Super+G.
+- Grok Build CLI **1.0.38** alpha (unchanged). Headless spawn stays `grok -p --output-format streaming-json` + `--alpha`.
+
 ## 2.9.10 — 2026-09-19
 
 One cabin, two ship artifacts on the same tag. Cursor **#40** (PTT line stays open until Stop, plus Bugbot Autofix) is on `main`.
