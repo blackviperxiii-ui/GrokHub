@@ -1039,8 +1039,8 @@ mod tests {
         assert_eq!(v[0].body, "/help — this list\n/new — new chat");
         assert!(!v[0].body.contains("SLASH_RESULT"));
         assert_eq!(
-            assistant_prose("SLASH_RESULT:\nGrok 4.6 — chat"),
-            "Grok 4.6 — chat"
+            assistant_prose("SLASH_RESULT:\nGrok 4.7 — chat"),
+            "Grok 4.7 — chat"
         );
     }
 }
