@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::attach::bound_scan;
 use crate::grok_loop::parse_loop_line;
 use crate::organs::{hm_min, LocalClock};
+use crate::rewind::is_rewind_copy_cmd;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -355,12 +356,19 @@ pub fn teach_routine(schedule_ask: &str, watched_steps: &[String]) -> Option<Sch
     Some(attach_watched_steps(route, watched_steps))
 }
 
-fn attach_watched_steps(route: ScheduleRoute, steps: &[String]) -> ScheduleRoute {
-    let steps: Vec<&str> = steps
+/// Commands worth teaching. The internal rewind snapshot `run_cmds` prepends
+/// is not part of the routine, so it is not stored, shown, or sent later.
+pub fn teachable_steps(steps: &[String]) -> Vec<String> {
+    steps
         .iter()
         .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
+        .filter(|s| !s.is_empty() && !is_rewind_copy_cmd(s))
+        .map(|s| s.to_string())
+        .collect()
+}
+
+fn attach_watched_steps(route: ScheduleRoute, steps: &[String]) -> ScheduleRoute {
+    let steps = teachable_steps(steps);
     if steps.is_empty() {
         return route;
     }
@@ -858,5 +866,33 @@ mod tests {
         assert!(prompt.contains("git status --short"));
         assert!(!watch_once_keeps_running(false));
         assert!(watch_once_keeps_running(true));
+    }
+
+    #[test]
+    fn teach_drops_the_internal_rewind_snapshot() {
+        let rewind = crate::rewind::rewind_copy_cmd(
+            "/home/j/.config/GrokHub/rewind/snap",
+            "/home/j/proj",
+        );
+        let real_cp = "cp notes.md /tmp/notes.md".to_string();
+        let steps = vec![rewind.clone(), real_cp.clone(), "git status --short".into()];
+        let kept = teachable_steps(&steps);
+        assert_eq!(kept, vec![real_cp, "git status --short".to_string()]);
+        let Some(ScheduleRoute::Clock(a)) =
+            teach_routine("every weekday at 9, summarize the board", &steps)
+        else {
+            panic!("a named schedule still teaches");
+        };
+        assert!(!a.instructions.contains("cp -a"), "{}", a.instructions);
+        assert!(!a.instructions.contains("rewind"), "{}", a.instructions);
+        assert!(a.instructions.contains("cp notes.md /tmp/notes.md"));
+        assert!(a.instructions.contains("git status --short"));
+        let Some(ScheduleRoute::Clock(only)) =
+            teach_routine("every weekday at 9, summarize the board", &[rewind])
+        else {
+            panic!("the schedule still saves when the only step was a snapshot");
+        };
+        assert!(!only.instructions.contains("cp -a"), "{}", only.instructions);
+        assert!(!only.instructions.contains("Follow along:"), "{}", only.instructions);
     }
 }
