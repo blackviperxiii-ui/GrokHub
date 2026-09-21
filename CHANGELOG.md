@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- The Thinking / Running / Waiting line no longer sits above the composer, including when the chat pane is scrolled. The green live dot stays on the turn; hover is still the current action. The context usage bar and the Voice · Listening strip stay. Same paint on Linux and Windows.
+
 ## 2.9.13 — 2026-09-21
 
 One cabin, two ship artifacts on the same tag. Cursor **#43** (composer Stop disc, mic ease, no transcript Running Stop, no status line above the composer) is on `main`.

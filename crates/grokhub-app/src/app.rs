@@ -3346,14 +3346,6 @@ impl Cabin {
                 }
             }
         }
-        if self.thinking_here() {
-            let phase = self.run_phase_here();
-            crate::cards::paint_run_pulse(
-                ui,
-                chat_run_label(phase),
-                &chat_run_hint(phase, &self.run_action_here()),
-            );
-        }
     }
 
     fn work_root(&self) -> String {
@@ -15459,8 +15451,8 @@ mod tests {
             .and_then(|s| s.split("fn work_root(").next())
             .expect("ui_attach_chip");
         assert!(
-            attach.contains("paint_run_pulse") && attach.contains("thinking_here"),
-            "composer must keep a glanceable running pulse when the pane is scrolled: {attach}"
+            !attach.contains("paint_run_pulse") && !attach.contains("thinking_here"),
+            "the running line above the composer is gone, including when the pane is scrolled: {attach}"
         );
         assert!(
             !attach.contains("clip_status") && !attach.contains("self.status"),
