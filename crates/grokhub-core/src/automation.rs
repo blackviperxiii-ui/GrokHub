@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::attach::bound_scan;
 use crate::grok_loop::parse_loop_line;
 use crate::organs::{hm_min, LocalClock};
+use crate::rewind::is_rewind_copy_cmd;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -343,6 +344,51 @@ fn schedule_name(before: &str, after_needle: &str) -> String {
 pub enum ScheduleRoute {
     Clock(Box<Automation>),
     Interval { interval: String, prompt: String },
+}
+
+/// Teach one routine into the scheduler that already accepts "every weekday at 9"
+/// and `/loop`. A job exists only when the ask names a schedule. Watched steps
+/// ride along as the prompt. Follow-along by itself is not a clock.
+pub fn teach_routine(schedule_ask: &str, watched_steps: &[String]) -> Option<ScheduleRoute> {
+    // The line the user typed has to name a schedule this door already accepts
+    // (`every weekday at 9`, `/loop`, `every 2h`). "Follow along" does not.
+    let route = route_schedule(schedule_ask)?;
+    Some(attach_watched_steps(route, watched_steps))
+}
+
+/// Commands worth teaching. The internal rewind snapshot `run_cmds` prepends
+/// is not part of the routine, so it is not stored, shown, or sent later.
+pub fn teachable_steps(steps: &[String]) -> Vec<String> {
+    steps
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && !is_rewind_copy_cmd(s))
+        .map(|s| s.to_string())
+        .collect()
+}
+
+fn attach_watched_steps(route: ScheduleRoute, steps: &[String]) -> ScheduleRoute {
+    let steps = teachable_steps(steps);
+    if steps.is_empty() {
+        return route;
+    }
+    let block = steps.join("\n");
+    match route {
+        ScheduleRoute::Clock(mut a) => {
+            a.instructions = format!("{}\n\nFollow along:\n{block}", a.instructions.trim());
+            ScheduleRoute::Clock(a)
+        }
+        ScheduleRoute::Interval { interval, prompt } => ScheduleRoute::Interval {
+            interval,
+            prompt: format!("{}\n\nFollow along:\n{block}", prompt.trim()),
+        },
+    }
+}
+
+/// Follow-along is a page flag. Closing the lid runs nothing unless that
+/// routine was already saved on the Automations list.
+pub fn watch_once_keeps_running(saved_on_list: bool) -> bool {
+    saved_on_list
 }
 
 pub fn route_schedule(text: &str) -> Option<ScheduleRoute> {
@@ -787,5 +833,66 @@ mod tests {
             next >= 1_000 + 29 * 24 * 3_600_000,
             "monthly after today's slot must not become daily: {next}"
         );
+    }
+
+    #[test]
+    fn teach_once_saves_only_when_the_user_names_a_schedule() {
+        assert!(teach_routine("follow along", &[]).is_none());
+        assert!(teach_routine("teach this once", &[]).is_none());
+        assert!(
+            !chat_may_save_automation(
+                "how do I check disk",
+                "You could heartbeat every 15 min check the board."
+            ),
+            "a reply that merely mentions a schedule is still not a job"
+        );
+        let steps = vec!["git status --short".into()];
+        let Some(ScheduleRoute::Clock(a)) =
+            teach_routine("every weekday at 9, summarize the board", &steps)
+        else {
+            panic!("a named clock schedule teaches a cabin job");
+        };
+        assert_eq!(a.schedule, "weekdays");
+        assert_eq!(a.time, "09:00");
+        assert!(a.instructions.contains("Follow along:"));
+        assert!(a.instructions.contains("git status --short"));
+        let Some(ScheduleRoute::Interval { interval, prompt }) =
+            teach_routine("/loop 30m check deploy", &steps)
+        else {
+            panic!("/loop still lands on the interval scheduler");
+        };
+        assert_eq!(interval, "30m");
+        assert!(prompt.contains("check deploy"));
+        assert!(prompt.contains("git status --short"));
+        assert!(!watch_once_keeps_running(false));
+        assert!(watch_once_keeps_running(true));
+    }
+
+    #[test]
+    fn teach_drops_the_internal_rewind_snapshot() {
+        let rewind = crate::rewind::rewind_copy_cmd(
+            "/home/j/.config/GrokHub/rewind/snap",
+            "/home/j/proj",
+        );
+        let real_cp = "cp notes.md /tmp/notes.md".to_string();
+        let steps = vec![rewind.clone(), real_cp.clone(), "git status --short".into()];
+        let kept = teachable_steps(&steps);
+        assert_eq!(kept, vec![real_cp, "git status --short".to_string()]);
+        let Some(ScheduleRoute::Clock(a)) =
+            teach_routine("every weekday at 9, summarize the board", &steps)
+        else {
+            panic!("a named schedule still teaches");
+        };
+        assert!(!a.instructions.contains("cp -a"), "{}", a.instructions);
+        assert!(!a.instructions.contains("rewind"), "{}", a.instructions);
+        assert!(a.instructions.contains("cp notes.md /tmp/notes.md"));
+        assert!(a.instructions.contains("git status --short"));
+        let Some(ScheduleRoute::Clock(only)) =
+            teach_routine("every weekday at 9, summarize the board", &[rewind])
+        else {
+            panic!("the schedule still saves when the only step was a snapshot");
+        };
+        assert!(!only.instructions.contains("cp -a"), "{}", only.instructions);
+        assert!(!only.instructions.contains("Follow along:"), "{}", only.instructions);
     }
 }
