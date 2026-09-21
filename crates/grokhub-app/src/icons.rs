@@ -466,6 +466,19 @@ fn composer_pointer_ease(ui: &egui::Ui, resp: &egui::Response) -> (f32, f32) {
     (hover_t, press_t)
 }
 
+fn channel_moving(t: f32) -> bool {
+    t > 0.0 && t < 1.0
+}
+
+/// Another frame only while the pointer is on the control, it is pressed,
+/// the control is live, or a channel is still easing back to rest.
+fn follow_composer_frame(ui: &egui::Ui, resp: &egui::Response, live: bool, channels: &[f32]) {
+    let moving = channels.iter().copied().any(channel_moving);
+    if resp.hovered() || resp.is_pointer_button_down_on() || live || moving {
+        ui.ctx().request_repaint();
+    }
+}
+
 fn paint_stop_glyph(painter: &egui::Painter, rect: egui::Rect, motion: ComposerMotion) {
     let c = rect.center();
     let radius = rect.width() * 0.34 * motion.scale;
@@ -563,17 +576,26 @@ fn paint_mic_glyph(
 }
 
 /// Composer halt disc. Same paint on Linux and Windows.
-pub fn paint_composer_stop(ui: &mut egui::Ui, size: f32) -> (egui::Response, ComposerMotion) {
+/// `running` is the reply. Idle (`running == false`, pointer off) sits still.
+pub fn paint_composer_stop(
+    ui: &mut egui::Ui,
+    size: f32,
+    running: bool,
+) -> (egui::Response, ComposerMotion) {
     let (alloc, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
     let (resp, _, _) = crate::theme::feel_response(ui, resp, egui::Color32::TRANSPARENT);
     let (hover_t, press_t) = composer_pointer_ease(ui, &resp);
     let live_t = ui
         .ctx()
-        .animate_bool_with_time(resp.id.with("glyph-live"), true, 0.16);
-    let breath = composer_breath(ui.ctx().input(|i| i.time) as f32);
+        .animate_bool_with_time(resp.id.with("glyph-live"), running, 0.16);
+    let breath = if running {
+        composer_breath(ui.ctx().input(|i| i.time) as f32)
+    } else {
+        0.0
+    };
     let motion = composer_motion(hover_t, press_t, live_t, breath);
     paint_stop_glyph(ui.painter(), alloc, motion);
-    ui.ctx().request_repaint();
+    follow_composer_frame(ui, &resp, running, &[hover_t, press_t, live_t]);
     (resp, motion)
 }
 
@@ -596,13 +618,21 @@ pub fn paint_composer_mic(
         speak_target,
         grokhub_core::HOVER_SECS,
     );
-    let breath = composer_breath(ui.ctx().input(|i| i.time) as f32);
+    let pulsing = live || channel_moving(live_t) || channel_moving(speak_t);
+    let breath = if pulsing {
+        composer_breath(ui.ctx().input(|i| i.time) as f32)
+    } else {
+        0.0
+    };
     let speak_phase = speak_t * breath + (1.0 - speak_t) * breath * 0.35 * live_t;
     let motion = composer_motion(hover_t, press_t, live_t, speak_phase);
     paint_mic_glyph(ui.painter(), alloc, mic_ink(mood, motion.fill), motion);
-    if live {
-        ui.ctx().request_repaint();
-    }
+    follow_composer_frame(
+        ui,
+        &resp,
+        live,
+        &[hover_t, press_t, live_t, speak_t],
+    );
     (resp, motion)
 }
 
@@ -613,7 +643,8 @@ pub fn paint_bar_icon(
     color: egui::Color32,
 ) -> egui::Response {
     match icon {
-        BarIcon::Stop => return paint_composer_stop(ui, size).0,
+        // Stop is only chosen while a reply is running (`composer_go`).
+        BarIcon::Stop => return paint_composer_stop(ui, size, true).0,
         BarIcon::Mic => return paint_composer_mic(ui, size, MicMood::Idle).0,
         BarIcon::Plus | BarIcon::Send | BarIcon::ArrowUp | BarIcon::Search => {}
     }
@@ -905,8 +936,10 @@ mod tests {
             stop.contains("feel_response")
                 && stop.contains("animate_bool_with_time")
                 && stop.contains("composer_motion")
-                && stop.contains("paint_stop_glyph"),
-            "stop uses shared feel and a short ease: {stop}"
+                && stop.contains("paint_stop_glyph")
+                && stop.contains("running")
+                && !stop.contains("\"glyph-live\"), true"),
+            "stop eases live only while a reply runs: {stop}"
         );
         let mic = src
             .split("pub fn paint_composer_mic(")
@@ -993,7 +1026,7 @@ mod tests {
             };
             let _ = ctx.run(input, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let (_, stop) = paint_composer_stop(ui, 28.0);
+                    let (_, stop) = paint_composer_stop(ui, 28.0, true);
                     let (_, mic) = paint_composer_mic(ui, 22.0, MicMood::Speaking);
                     stop_scales.push(stop.scale);
                     mic_scales.push(mic.scale);
@@ -1012,6 +1045,51 @@ mod tests {
         assert!(
             mic_fills.windows(2).any(|w| (w[0] - w[1]).abs() > 1e-3),
             "mic fill must change across frames, not a static color: {mic_fills:?}"
+        );
+    }
+
+    #[test]
+    fn composer_idle_stop_and_mic_sit_still() {
+        let ctx = egui::Context::default();
+        let mut stop_scales = Vec::new();
+        let mut mic_scales = Vec::new();
+        let mut delays = Vec::new();
+        for step in 0..8 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 300.0),
+                )),
+                time: Some(step as f64 * 0.05),
+                ..Default::default()
+            };
+            let out = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let (_, stop) = paint_composer_stop(ui, 28.0, false);
+                    let (_, mic) = paint_composer_mic(ui, 22.0, MicMood::Idle);
+                    stop_scales.push(stop.scale);
+                    mic_scales.push(mic.scale);
+                });
+            });
+            let delay = out
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .map(|v| v.repaint_delay)
+                .expect("root viewport");
+            delays.push(delay);
+        }
+        assert!(
+            stop_scales.windows(2).all(|w| (w[0] - w[1]).abs() < 1e-4),
+            "idle stop scale must sit still: {stop_scales:?}"
+        );
+        assert!(
+            mic_scales.windows(2).all(|w| (w[0] - w[1]).abs() < 1e-4),
+            "idle mic scale must sit still: {mic_scales:?}"
+        );
+        assert_eq!(
+            delays.last().copied(),
+            Some(std::time::Duration::MAX),
+            "idle controls must not ask for another frame: {delays:?}"
         );
     }
 }
