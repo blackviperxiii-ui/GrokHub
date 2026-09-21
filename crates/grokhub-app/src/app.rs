@@ -2116,6 +2116,23 @@ impl Cabin {
         redact_held_secrets(&content, &self.secret_hold)
     }
 
+    fn scrub_live_blocks(&mut self) {
+        if self.secret_hold.is_empty() {
+            return;
+        }
+        for b in &mut self.live_blocks {
+            if !b.body.is_empty() {
+                b.body = redact_held_secrets(&b.body, &self.secret_hold);
+            }
+            if !b.tool_title.is_empty() {
+                b.tool_title = redact_held_secrets(&b.tool_title, &self.secret_hold);
+            }
+            if !b.tool_detail.is_empty() {
+                b.tool_detail = redact_held_secrets(&b.tool_detail, &self.secret_hold);
+            }
+        }
+    }
+
     fn hold_secret(&mut self, value: &str) {
         let t = value.trim();
         if t.chars().count() < 4 || self.secret_hold.iter().any(|s| s == t) {
@@ -7710,6 +7727,7 @@ impl Cabin {
                 // cap or the rendered blocks grow past IMAGE_FILE_CAP unbounded.
                 if push_stream_capped(&mut self.thought_buf, &d, IMAGE_FILE_CAP) {
                     append_thought(&mut self.live_blocks, &d);
+                    self.scrub_live_blocks();
                 }
                 self.status = self.thinking_status();
                 self.upsert_stream_assistant();
@@ -7718,12 +7736,16 @@ impl Cabin {
             Ok(GrokPEvent::Text(d)) => {
                 if push_stream_capped(&mut self.stream_buf, &d, IMAGE_FILE_CAP) {
                     append_say(&mut self.live_blocks, &d);
+                    self.scrub_live_blocks();
                 }
                 self.status = self.thinking_status();
                 self.upsert_stream_assistant();
                 self.grok_p_rx = Some(rx);
             }
-            Ok(GrokPEvent::Tool(card)) => {
+            Ok(GrokPEvent::Tool(mut card)) => {
+                card.detail = redact_held_secrets(&card.detail, &self.secret_hold);
+                card.diff = redact_held_secrets(&card.diff, &self.secret_hold);
+                card.title = redact_held_secrets(&card.title, &self.secret_hold);
                 append_tool(
                     &mut self.live_blocks,
                     &card.id,
@@ -7731,6 +7753,7 @@ impl Cabin {
                     &card.status,
                     &card.detail,
                 );
+                self.scrub_live_blocks();
                 if let Some(url) = &card.image_data_url {
                     self.desk_frame = Some(url.clone());
                     self.remember_last_frame(url);
@@ -7993,6 +8016,7 @@ impl Cabin {
                     let changed = push_stream_capped(&mut self.thought_buf, &t, IMAGE_FILE_CAP);
                     if changed {
                         append_thought(&mut self.live_blocks, &t);
+                        self.scrub_live_blocks();
                     }
                     if chat_stream_is_visible(
                         self.chat_job_thread.as_deref(),
@@ -8011,6 +8035,7 @@ impl Cabin {
                     let changed = push_stream_capped(&mut self.stream_buf, &t, IMAGE_FILE_CAP);
                     if changed {
                         append_say(&mut self.live_blocks, &t);
+                        self.scrub_live_blocks();
                     }
                     if chat_stream_is_visible(
                         self.chat_job_thread.as_deref(),
@@ -8033,6 +8058,7 @@ impl Cabin {
                         &card.status,
                         &card.detail,
                     );
+                    self.scrub_live_blocks();
                     if let Some(url) = &card.image_data_url {
                         self.desk_frame = Some(url.clone());
                         self.remember_last_frame(url);
@@ -8167,7 +8193,7 @@ impl Cabin {
     }
 
     fn finish_acp_turn(&mut self, text: String) {
-        let text = take_ui_text(text, IMAGE_FILE_CAP);
+        let text = self.scrub_transcript(take_ui_text(text, IMAGE_FILE_CAP));
         if let Some(p) = self.perm_ask.take() {
             if let Some(h) = &self.acp {
                 let _ = h.answer_permission(p.rpc_id, false);
@@ -8207,6 +8233,7 @@ impl Cabin {
                 _ => append_say(&mut self.live_blocks, &prose),
             }
         }
+        self.scrub_live_blocks();
         self.thought_buf.clear();
         self.stream_buf.clear();
         let origin = self.chat_job_thread.take();
@@ -11853,12 +11880,19 @@ impl Cabin {
                         .size(14.0)
                         .color(crate::theme::fg()),
                 );
+                // A parsed command paints even when it is `[ -f … ]` or `{ …; }`.
+                // Only a leftover title dump is hidden.
                 let action = if p.action.trim().is_empty() {
-                    p.title.trim()
+                    let title = p.title.trim();
+                    if title.starts_with('{') || title.starts_with('[') {
+                        ""
+                    } else {
+                        title
+                    }
                 } else {
                     p.action.trim()
                 };
-                if !action.is_empty() && !action.starts_with('{') && !action.starts_with('[') {
+                if !action.is_empty() {
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new(action)
@@ -15731,11 +15765,34 @@ mod tests {
             "the Ask card says the action on one line, and hook reasons still paint: {ask}"
         );
         assert!(
+            !ask.contains("!action.starts_with('{')"),
+            "a bracket test or brace group must still paint on the Ask card: {ask}"
+        );
+        assert!(
             src.contains("fn paint_elicit_ask(")
                 && src.contains("answer_elicit")
                 && src.contains(".password(")
-                && src.contains("redact_held_secrets"),
+                && src.contains("redact_held_secrets")
+                && src.contains("fn scrub_live_blocks("),
             "a secret elicit is masked and its value stays out of the transcript: {src}"
+        );
+        let finish = src
+            .split("fn finish_acp_turn(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_host_diff(").next())
+            .expect("finish_acp_turn");
+        assert!(
+            finish.contains("scrub_transcript") && finish.contains("scrub_live_blocks"),
+            "held secrets must leave the live transcript and TTS: {finish}"
+        );
+        let grok_p = src
+            .split("fn poll_single(")
+            .nth(1)
+            .and_then(|s| s.split("fn apply_single_turn(").next())
+            .expect("poll_single");
+        assert!(
+            grok_p.contains("redact_held_secrets") && grok_p.contains("scrub_live_blocks"),
+            "the grok-p pump must scrub held secrets: {grok_p}"
         );
         assert!(
             ask.contains("perm_key(")
