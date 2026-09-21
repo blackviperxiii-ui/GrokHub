@@ -1150,12 +1150,12 @@ mod tests {
             None,
             false,
             false,
-            Some("grok-4.6"),
+            Some("grok-4.7"),
             Some("high"),
             true,
         );
         assert!(
-            full.windows(2).any(|w| w[0] == "--model" && w[1] == "grok-4.6"),
+            full.windows(2).any(|w| w[0] == "--model" && w[1] == "grok-4.7"),
             "{full:?}"
         );
         assert!(
