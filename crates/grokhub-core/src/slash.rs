@@ -617,7 +617,7 @@ pub fn slash_help() -> String {
         "/usage — today's cabin buckets, tokens spent today, and the last Grok Build turn",
         "/models — Grok catalog",
         "/palette — command palette",
-        "Enter sends; Ctrl+Enter newline. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The transcript Running row has no Stop. The changing status text above the composer is gone. The context usage bar stays. A green live dot plus Thinking / Running / Waiting sits on the turn (and above the composer when the pane is scrolled); hover shows the current action.",
+        "Enter sends; Ctrl+Enter newline. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The transcript Running row has no Stop. The changing status text above the composer is gone. The context usage bar stays. A green live dot plus Thinking / Running / Waiting sits on the turn; hover shows the current action. That line does not sit above the composer.",
         "Mode pill: Chat / Plan / Ask. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort: None / Minimal / Low / Medium / High / Extra High. A saved Max loads as Extra High. Default model is grok-4.7. Hover a composer pill for what it does. Grok Build runs the agent.",
         "Settings → Behavior: close to tray, living wall, and a quiet hours dropdown. Picking a window saves it.",
         "History search drops stale hits when the box changes. Re-opening the memory file already in the editor keeps unsaved typing.",
@@ -791,6 +791,9 @@ mod tests {
         assert!(slash_help().contains("1.035"));
         assert!(slash_help().contains("each row keeps its id"));
         assert!(slash_help().contains("green live dot plus Thinking / Running / Waiting"));
+        assert!(slash_help().contains("sits on the turn"));
+        assert!(slash_help().contains("That line does not sit above the composer"));
+        assert!(!slash_help().contains("above the composer when the pane is scrolled"));
         assert!(slash_help().contains("Composer Stop is a disc with a small rounded mark"));
         assert!(slash_help().contains("The transcript Running row has no Stop"));
         assert!(slash_help().contains("The changing status text above the composer is gone"));
