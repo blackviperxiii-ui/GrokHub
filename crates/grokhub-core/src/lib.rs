@@ -385,6 +385,7 @@ pub use thread_tab::{
 pub use update::{
     cabin_overlay_step, cabin_update_notice, cabin_version_newer, cli_alpha_is_newer,
     cli_update_notice, combined_update_cmds, combined_update_cmds_for_host, combined_update_hint,
+    pending_from_versions, CombinedUpdatePlan,
     discover_source, grok_cli_alpha_update_cmd, grok_cli_alpha_update_cmds, grok_cli_update_cmd,
     is_grokhub_source, overlay_clone_usable, overlay_stop_targets, overlay_update_begin,
     overlay_update_can_restart, overlay_update_finish, overlay_update_progress, parse_cabin_semver,

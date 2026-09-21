@@ -413,7 +413,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/room", hint: "Speak the room — stage a project", insert: "/room ", run_on_pick: false },
     SlashDef { cmd: "/dream", hint: "Imagine last night’s job", insert: "/dream", run_on_pick: true },
     SlashDef { cmd: "/inhabit", hint: "Hand this Grok to another box", insert: "/inhabit ", run_on_pick: false },
-    SlashDef { cmd: "/update", hint: "Overlay + Grok Build CLI", insert: "/update", run_on_pick: true },
+    SlashDef { cmd: "/update", hint: "Update CLI and cabin when newer", insert: "/update", run_on_pick: true },
     SlashDef { cmd: "/import", hint: "Import OpenClaw workspace", insert: "/import", run_on_pick: true },
     SlashDef { cmd: "/consult", hint: "One-shot consult", insert: "/consult ", run_on_pick: false },
     SlashDef { cmd: "/usage", hint: "Today's usage + Grok spend", insert: "/usage", run_on_pick: true },
@@ -588,9 +588,9 @@ pub fn slash_help() -> String {
         "/forget <topic> — drop memory lines that mention the topic (whole words)",
         "/imagine <prompt>",
         if cfg!(windows) {
-            "/update — latest GitHub Windows zip into %LOCALAPPDATA%\\Programs\\GrokHub, then `grok update --alpha`. A leftover clone (not main) uses the zip. A source clone on main overlays with install-windows.ps1. Restart on Settings. The titlebar chip notifies in-app (Update CLI, Update cabin, or Update CLI and cabin) every 2 hours."
+            "/update — only what is newer. CLI first (`grok update --alpha`) when a newer alpha exists, then the latest GitHub Windows zip into %LOCALAPPDATA%\\Programs\\GrokHub when the cabin is newer. A leftover clone (not main) uses the zip. A source clone on main overlays with install-windows.ps1. A current alpha is left alone. Restart on Settings. The titlebar chip notifies in-app (Update CLI, Update cabin, or Update CLI and cabin) every 2 hours."
         } else {
-            "/update — overlay install, then `grok update --alpha` (PATH prepends ~/.grok/bin and ~/.local/bin). Restart on Settings. The titlebar chip notifies in-app (Update CLI, Update cabin, or Update CLI and cabin) every 2 hours."
+            "/update — only what is newer. CLI first (`grok update --alpha`, PATH prepends ~/.grok/bin and ~/.local/bin) when a newer alpha exists, then overlay install when the cabin is newer. A current alpha is left alone. Restart on Settings. The titlebar chip notifies in-app (Update CLI, Update cabin, or Update CLI and cabin) every 2 hours."
         },
         "/send <task> — task this box",
         "/sync — merge chats and memory with paired computers",

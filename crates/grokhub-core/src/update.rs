@@ -345,6 +345,20 @@ pub fn update_pending(cli_newer: bool, cabin_newer: bool) -> UpdatePending {
     }
 }
 
+/// Shared by the titlebar chip, Settings → Update, `/update`, and `grokhub --update`.
+/// A missing or failed probe is not newer. A current alpha stays put.
+pub fn pending_from_versions(
+    running_cabin: &str,
+    cabin_latest: Option<&str>,
+    cli_installed: Option<&str>,
+    cli_alpha: Option<&str>,
+) -> UpdatePending {
+    update_pending(
+        should_update_cli_alpha(cli_installed, cli_alpha),
+        should_notify_cabin_update(running_cabin, cabin_latest),
+    )
+}
+
 /// Titlebar chip. Names which side is newer. `None` hides the chip.
 pub fn update_chip_label(pending: UpdatePending) -> Option<&'static str> {
     match pending {
@@ -447,13 +461,22 @@ fn cabin_only_cmds_for_host(source: Option<&Path>, windows: bool) -> Result<Vec<
     }
 }
 
+/// Commands for one Update click. `cabin_skipped` is set when Both was asked
+/// and the cabin half could not be built. The CLI command is still in `cmds`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CombinedUpdatePlan {
+    pub cmds: Vec<String>,
+    pub cabin_skipped: Option<String>,
+}
+
 /// CLI first when both are newer. Cabin steps omit a second `grok update`.
-/// Linux and Windows share the pending cases; the host commands stay native.
+/// A cabin-plan failure does not drop the CLI update (Linux tarball / AUR
+/// has no usable `main` clone). Linux and Windows share the pending cases.
 pub fn combined_update_cmds_for_host(
     source: Option<&Path>,
     pending: UpdatePending,
     windows: bool,
-) -> Result<Vec<String>, String> {
+) -> Result<CombinedUpdatePlan, String> {
     let cli_cmd = if windows {
         windows_grok_update_cmd()
     } else {
@@ -461,12 +484,29 @@ pub fn combined_update_cmds_for_host(
     };
     match pending {
         UpdatePending::None => Err("nothing to update".into()),
-        UpdatePending::Cli => Ok(vec![cli_cmd.into()]),
-        UpdatePending::Cabin => cabin_only_cmds_for_host(source, windows),
+        UpdatePending::Cli => Ok(CombinedUpdatePlan {
+            cmds: vec![cli_cmd.into()],
+            cabin_skipped: None,
+        }),
+        UpdatePending::Cabin => {
+            cabin_only_cmds_for_host(source, windows).map(|cmds| CombinedUpdatePlan {
+                cmds,
+                cabin_skipped: None,
+            })
+        }
         UpdatePending::Both => {
             let mut cmds = vec![cli_cmd.into()];
-            cmds.extend(cabin_only_cmds_for_host(source, windows)?);
-            Ok(cmds)
+            let cabin_skipped = match cabin_only_cmds_for_host(source, windows) {
+                Ok(cabin) => {
+                    cmds.extend(cabin);
+                    None
+                }
+                Err(e) => Some(e),
+            };
+            Ok(CombinedUpdatePlan {
+                cmds,
+                cabin_skipped,
+            })
         }
     }
 }
@@ -474,7 +514,7 @@ pub fn combined_update_cmds_for_host(
 pub fn combined_update_cmds(
     source: Option<&Path>,
     pending: UpdatePending,
-) -> Result<Vec<String>, String> {
+) -> Result<CombinedUpdatePlan, String> {
     combined_update_cmds_for_host(source, pending, cfg!(windows))
 }
 
@@ -1382,6 +1422,27 @@ mod tests {
         assert_eq!(update_pending(true, false), UpdatePending::Cli);
         assert_eq!(update_pending(false, true), UpdatePending::Cabin);
         assert_eq!(update_pending(true, true), UpdatePending::Both);
+        assert_eq!(
+            pending_from_versions("2.9.13", Some("v2.9.14"), Some("1.0.38"), Some("1.0.39")),
+            UpdatePending::Both
+        );
+        assert_eq!(
+            pending_from_versions("2.9.13", Some("v2.9.13"), Some("1.0.38"), Some("1.0.39")),
+            UpdatePending::Cli
+        );
+        assert_eq!(
+            pending_from_versions("2.9.13", Some("v2.9.14"), Some("1.0.38"), Some("1.0.38")),
+            UpdatePending::Cabin
+        );
+        assert_eq!(
+            pending_from_versions("2.9.13", Some("v2.9.13"), Some("1.0.38"), Some("1.0.38")),
+            UpdatePending::None
+        );
+        assert_eq!(
+            pending_from_versions("2.9.13", None, None, Some("1.0.39")),
+            UpdatePending::None,
+            "a missing grok and a failed cabin probe are not newer"
+        );
         assert_eq!(update_chip_label(UpdatePending::Cli), Some("Update CLI"));
         assert_eq!(update_chip_label(UpdatePending::Cabin), Some("Update cabin"));
         assert_eq!(
@@ -1410,30 +1471,55 @@ mod tests {
         assert!(notice.contains("1.0.39") && notice.contains("grok update --alpha"));
         assert!(!notice.contains("http") && !notice.contains("x.ai"));
 
-        let cli = combined_update_cmds_for_host(None, UpdatePending::Cli, false).unwrap();
+        let cli = combined_update_cmds_for_host(None, UpdatePending::Cli, false)
+            .unwrap()
+            .cmds;
         assert_eq!(cli.len(), 1);
         assert!(grok_cli_update_cmd(&cli[0]) && cli[0].contains("grok update --alpha"));
         assert!(cli[0].contains("$HOME/.grok/bin"));
         assert!(!cli[0].contains("--stable"));
-        let cli_win = combined_update_cmds_for_host(None, UpdatePending::Cli, true).unwrap();
+        let cli_win = combined_update_cmds_for_host(None, UpdatePending::Cli, true)
+            .unwrap()
+            .cmds;
         assert_eq!(cli_win[0], windows_grok_update_cmd());
 
-        let cabin_win =
-            combined_update_cmds_for_host(None, UpdatePending::Cabin, true).unwrap();
+        let cabin_win = combined_update_cmds_for_host(None, UpdatePending::Cabin, true)
+            .unwrap()
+            .cmds;
         assert!(cabin_win.iter().all(|c| !grok_cli_update_cmd(c)));
         assert!(cabin_win.iter().any(|c| cabin_overlay_step(c)));
         assert!(cabin_win[0].contains("grokhub-windows-v"));
 
         let both_win = combined_update_cmds_for_host(None, UpdatePending::Both, true).unwrap();
-        assert!(grok_cli_update_cmd(&both_win[0]));
-        assert!(both_win[0].contains("--alpha") && !both_win[0].contains("--stable"));
-        assert_eq!(both_win.iter().filter(|c| grok_cli_update_cmd(c)).count(), 1);
-        assert!(both_win.iter().skip(1).any(|c| c.contains("releases/latest")));
-        assert!(both_win.iter().skip(1).all(|c| !grok_cli_update_cmd(c)));
+        assert!(both_win.cabin_skipped.is_none());
+        assert!(grok_cli_update_cmd(&both_win.cmds[0]));
+        assert!(both_win.cmds[0].contains("--alpha") && !both_win.cmds[0].contains("--stable"));
+        assert_eq!(
+            both_win.cmds.iter().filter(|c| grok_cli_update_cmd(c)).count(),
+            1
+        );
+        assert!(both_win
+            .cmds
+            .iter()
+            .skip(1)
+            .any(|c| c.contains("releases/latest")));
+        assert!(both_win
+            .cmds
+            .iter()
+            .skip(1)
+            .all(|c| !grok_cli_update_cmd(c)));
 
         assert!(combined_update_cmds_for_host(None, UpdatePending::None, true).is_err());
         assert!(combined_update_cmds_for_host(None, UpdatePending::Cabin, false).is_err());
-        assert!(combined_update_cmds_for_host(None, UpdatePending::Both, false).is_err());
+        let both_gap = combined_update_cmds_for_host(None, UpdatePending::Both, false).unwrap();
+        assert_eq!(both_gap.cmds.len(), 1);
+        assert!(grok_cli_update_cmd(&both_gap.cmds[0]));
+        assert!(both_gap.cmds[0].contains("grok update --alpha"));
+        assert!(!both_gap.cmds[0].contains("--stable"));
+        assert!(
+            both_gap.cabin_skipped.is_some(),
+            "Linux without a main clone still runs the CLI half"
+        );
 
         let root = std::env::temp_dir().join(format!(
             "grokhub-src-combined-{}",
@@ -1443,17 +1529,22 @@ mod tests {
         seed_git_source(&root, "main");
         let both_unix =
             combined_update_cmds_for_host(Some(&root), UpdatePending::Both, false).unwrap();
-        assert!(grok_cli_update_cmd(&both_unix[0]));
-        assert!(both_unix[0].contains("grok update --alpha"));
-        assert!(both_unix.iter().any(|c| c.contains("pull --ff-only origin main")));
-        assert!(both_unix.iter().any(|c| c.contains("install.sh")));
+        assert!(both_unix.cabin_skipped.is_none());
+        assert!(grok_cli_update_cmd(&both_unix.cmds[0]));
+        assert!(both_unix.cmds[0].contains("grok update --alpha"));
+        assert!(both_unix
+            .cmds
+            .iter()
+            .any(|c| c.contains("pull --ff-only origin main")));
+        assert!(both_unix.cmds.iter().any(|c| c.contains("install.sh")));
         assert_eq!(
-            both_unix.iter().filter(|c| grok_cli_update_cmd(c)).count(),
+            both_unix.cmds.iter().filter(|c| grok_cli_update_cmd(c)).count(),
             1,
             "CLI runs once, before the cabin: {both_unix:?}"
         );
-        let cabin_unix =
-            combined_update_cmds_for_host(Some(&root), UpdatePending::Cabin, false).unwrap();
+        let cabin_unix = combined_update_cmds_for_host(Some(&root), UpdatePending::Cabin, false)
+            .unwrap()
+            .cmds;
         assert!(cabin_unix.iter().all(|c| !grok_cli_update_cmd(c)));
         assert!(cabin_unix.iter().any(|c| c.contains("install.sh")));
         let _ = fs::remove_dir_all(&root);

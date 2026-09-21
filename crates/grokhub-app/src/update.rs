@@ -215,13 +215,18 @@ fn installed_cli_version() -> Option<String> {
 pub fn begin_update_probe() -> std::sync::mpsc::Receiver<UpdateProbe> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(UpdateProbe {
-            cabin_tag: fetch_github_latest_tag().ok(),
-            cli_alpha: fetch_cli_alpha_version().ok(),
-            cli_installed: installed_cli_version(),
-        });
+        let _ = tx.send(blocking_update_probe());
     });
     rx
+}
+
+/// Same three checks as the in-app probe. `grokhub --update` has no UI cache.
+pub fn blocking_update_probe() -> UpdateProbe {
+    UpdateProbe {
+        cabin_tag: fetch_github_latest_tag().ok(),
+        cli_alpha: fetch_cli_alpha_version().ok(),
+        cli_installed: installed_cli_version(),
+    }
 }
 
 fn unit_is_active(unit: &str) -> bool {
