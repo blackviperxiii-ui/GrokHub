@@ -835,7 +835,7 @@ fn chat_row_outside_clip(origin: egui::Pos2, width: f32, height: f32, clip: egui
 /// Keep a cached row's height when it sits fully outside the clip.
 /// Returns true when the caller should skip painting that row.
 fn reserve_offscreen_chat_row(ui: &mut egui::Ui, cached_h: f32) -> bool {
-    if !(cached_h > 0.0) {
+    if cached_h <= 0.0 {
         return false;
     }
     let width = ui.available_width().max(1.0);
