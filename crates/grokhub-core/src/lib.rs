@@ -217,7 +217,10 @@ pub use pair::{
     pair_code_is_live, parse_hostname_i, pick_lan_ipv4, start_hub_rotates_pair, CODE_ALPH,
     PAIR_TTL_MS,
 };
-pub use paths::user_home;
+pub use paths::{
+    cabin_session_cwd, cabin_work_root, canonical_session_cwd, chat_appears_in_history,
+    session_home, user_home,
+};
 pub use automation::{
     automation_blocked_by_policy, automation_schedule_label, automation_summary_line,
     compute_next_run, due_automations, ensure_automation_schedule,

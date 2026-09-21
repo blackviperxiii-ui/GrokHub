@@ -405,11 +405,10 @@ fn cabin_fast_llm(key: String, prompt: String) -> String {
         return String::new();
     };
     let home = std::env::var("HOME").ok();
-    let work = match home.as_deref() {
-        Some(h) => format!("{h}/GrokHub-Work"),
-        None => "GrokHub-Work".into(),
-    };
-    let picked = resolve_acp_cwd("", home.as_deref(), &work);
+    let profile = std::env::var("USERPROFILE").ok();
+    let session = grokhub_core::session_home(cfg!(windows), home.as_deref(), profile.as_deref());
+    let work = grokhub_core::cabin_work_root(cfg!(windows), home.as_deref(), profile.as_deref());
+    let picked = resolve_acp_cwd("", session.as_deref(), &work);
     let path = std::path::PathBuf::from(picked);
     let cwd = grokhub_acp::ensure_session_cwd(&path).unwrap_or(path);
     let text = grokhub_acp::grok_stdout(
@@ -1408,10 +1407,10 @@ impl Cabin {
         }
         let mut projects = crate::store::load_projects();
         let sidebar_file = crate::store::projects_path().exists();
-        let work = std::env::var("HOME")
-            .ok()
-            .map(|home| format!("{home}/GrokHub-Work"))
-            .unwrap_or_default();
+        let home = std::env::var("HOME").ok();
+        let profile = std::env::var("USERPROFILE").ok();
+        let work =
+            grokhub_core::cabin_work_root(cfg!(windows), home.as_deref(), profile.as_deref());
         cfg.project_dir = expand_home(&restore_bound_path(&cfg.project_dir, &work, sidebar_file));
         if should_seed_sidebar(sidebar_file, &projects) {
             projects = seed_from_bound(&cfg.project_dir);
@@ -2225,16 +2224,19 @@ impl Cabin {
 
     fn grok_cwd(&self) -> std::path::PathBuf {
         let home = std::env::var("HOME").ok();
-        let work = self.work_root();
-        let picked = resolve_acp_cwd(&self.cfg.project_dir, home.as_deref(), &work);
-        std::path::PathBuf::from(picked)
+        let profile = std::env::var("USERPROFILE").ok();
+        std::path::PathBuf::from(grokhub_core::cabin_session_cwd(
+            &self.cfg.project_dir,
+            cfg!(windows),
+            home.as_deref(),
+            profile.as_deref(),
+        ))
     }
 
-    /// Same home `grok sessions list` uses in a terminal — not the bound project cwd.
+    /// `grok sessions list` returns only sessions stored under its cwd.
+    /// That directory is the chat `--cwd`, not HOME and not the install dir.
     fn grok_cli_cwd(&self) -> std::path::PathBuf {
-        std::env::var("HOME")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| self.grok_cwd())
+        self.grok_cwd()
     }
 
     fn thread_rail_title(&self, idx: usize) -> String {
@@ -3349,11 +3351,9 @@ impl Cabin {
     }
 
     fn work_root(&self) -> String {
-        if let Ok(home) = std::env::var("HOME") {
-            format!("{home}/GrokHub-Work")
-        } else {
-            "GrokHub-Work".into()
-        }
+        let home = std::env::var("HOME").ok();
+        let profile = std::env::var("USERPROFILE").ok();
+        grokhub_core::cabin_work_root(cfg!(windows), home.as_deref(), profile.as_deref())
     }
 
     fn touch_projects(&mut self) {
@@ -7863,6 +7863,7 @@ impl Cabin {
             let u = turn.usage.clone();
             self.merge_grok_usage(&u);
         }
+        let session_saved = !turn.session_id.trim().is_empty();
         if let Some(t) = self.threads.get_mut(idx) {
             t.grok_session = Some(turn.session_id.clone());
             if t.grok_cwd
@@ -7881,6 +7882,14 @@ impl Cabin {
                 if apply_auto_title_in(&mut tab, hint, renaming) {
                     t.title = tab.title;
                 }
+            }
+        }
+        if session_saved {
+            self.grok_sessions_loaded = false;
+            if self.grok_sessions_inflight > 0 {
+                self.grok_list_gen = self.grok_list_gen.wrapping_add(1);
+            } else {
+                self.reload_grok_sessions();
             }
         }
         let streamed = if self.thought_buf.is_empty() {
@@ -16674,8 +16683,12 @@ mod tests {
             .and_then(|s| s.split("fn reload_grok_sessions(").next())
             .expect("grok_cwd");
         assert!(
-            cwd.contains("resolve_acp_cwd") && cwd.contains("work_root"),
-            "ACP cwd must be the bound project or ~/GrokHub-Work, not the cabin process cwd: {cwd}"
+            cwd.contains("cabin_session_cwd") && cwd.contains("self.grok_cwd()"),
+            "ACP cwd must be the bound project or ~/GrokHub-Work, and History must list that same directory: {cwd}"
+        );
+        assert!(
+            !cwd.contains("unwrap_or_else(|_| self.grok_cwd())"),
+            "listing HOME drops a dialogue session stored under the chat cwd: {cwd}"
         );
         assert!(
             !cwd.contains("current_dir"),
@@ -16684,6 +16697,17 @@ mod tests {
         assert!(
             !cwd.contains("ensure_session_cwd"),
             "ACP cwd lookup must not probe disk on the UI thread: {cwd}"
+        );
+        let saved = src
+            .split("fn apply_single_turn(")
+            .nth(1)
+            .and_then(|s| s.split("fn send_grok_slash(").next())
+            .expect("apply_single_turn");
+        assert!(
+            saved.contains("session_saved")
+                && saved.contains("grok_sessions_loaded = false")
+                && saved.contains("reload_grok_sessions"),
+            "a dialogue session must show in History after it is created: {saved}"
         );
         let inspect = src
             .split("Slash::Inspect =>")
