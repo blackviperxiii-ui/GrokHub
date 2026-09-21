@@ -9,6 +9,22 @@ const PATTERNS: &[(&str, &str)] = &[
     ("Bearer ", "Bearer [redacted]"),
 ];
 
+/// Drop values the user just typed into a secret elicit. Short strings stay,
+/// so a one-letter field cannot blank the transcript.
+pub fn redact_held_secrets(input: &str, secrets: &[String]) -> String {
+    let mut s = input.to_string();
+    for secret in secrets {
+        let t = secret.trim();
+        if t.chars().count() < 4 {
+            continue;
+        }
+        if s.contains(t) {
+            s = s.replace(t, "[redacted]");
+        }
+    }
+    s
+}
+
 pub fn redact_secrets(input: &str) -> String {
     let mut s = input.to_string();
     for (needle, _) in PATTERNS {
@@ -97,6 +113,18 @@ pub fn forget_topic(markdown: &str, topic: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn held_secret_never_lands_in_the_transcript() {
+        let value = "ghp_super-secret-token-value".to_string();
+        let echoed = format!("CONNECTOR_RESULT (facts only):\nused {value} then ok");
+        let scrubbed = redact_held_secrets(&echoed, std::slice::from_ref(&value));
+        assert!(!scrubbed.contains(&value));
+        assert!(scrubbed.contains("[redacted]"));
+        assert!(scrubbed.contains("CONNECTOR_RESULT"));
+        let short = redact_held_secrets("the cat sat", &["the".into()]);
+        assert_eq!(short, "the cat sat");
+    }
 
     #[test]
     fn redacts_sk() {
