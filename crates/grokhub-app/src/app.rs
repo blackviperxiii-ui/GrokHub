@@ -74,7 +74,7 @@ use grokhub_core::{
     refresh_last_stretch, thought_shows_acts, thought_shows_label, visible_chat_refs, visible_turn_count, visible_turn_count_from,
     cluster_gap, scrolled_off_tail, ChatKind, ChatView, CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK,
     apply_job_error, chat_run_action, chat_run_hint, chat_run_label, chat_run_phase,
-    chat_send_kind, chat_shows_thinking, chat_stream_is_visible, is_thinking_status, ChatRunPhase,
+    chat_send_kind, chat_shows_thinking, chat_stream_is_visible, ChatRunPhase,
     upsert_assistant_turn,
     worker_gone_status, ChatSendKind,
     bubble_outer_width, bubble_wrap_width, clamp_row_width, BUBBLE_PAD_X,
@@ -3312,14 +3312,6 @@ impl Cabin {
                 ui,
                 chat_run_label(phase),
                 &chat_run_hint(phase, &self.run_action_here()),
-                false,
-            );
-        }
-        if !self.status.is_empty() && !is_thinking_status(&self.status) {
-            ui.label(
-                RichText::new(crate::cards::clip_status(&self.status, 72))
-                    .size(12.0)
-                    .color(crate::theme::muted()),
             );
         }
     }
@@ -9211,13 +9203,20 @@ impl Cabin {
 
     fn paint_voice_mic(&mut self, ui: &mut egui::Ui, size: f32) {
         let on = self.voice_is_on();
-        let color = if on {
-            crate::theme::live()
-        } else {
-            crate::theme::muted()
+        let mood = match self.voice_state {
+            VoiceState::Speaking => crate::icons::MicMood::Speaking,
+            VoiceState::Listening | VoiceState::Hands => crate::icons::MicMood::Live,
+            VoiceState::Idle => {
+                if on {
+                    crate::icons::MicMood::Live
+                } else {
+                    crate::icons::MicMood::Idle
+                }
+            }
         };
         let tip = if on { "Leave voice" } else { "Hey Grok" };
-        if crate::icons::paint_bar_icon(ui, crate::icons::BarIcon::Mic, size, color)
+        if crate::icons::paint_composer_mic(ui, size, mood)
+            .0
             .on_hover_text(tip)
             .clicked()
         {
@@ -11544,13 +11543,11 @@ impl Cabin {
                         }
                         if thinking {
                             let phase = self.run_phase_here();
-                            if paint_running(
+                            paint_running(
                                 ui,
                                 chat_run_label(phase),
                                 &chat_run_hint(phase, &self.run_action_here()),
-                            ) {
-                                self.run_slash(Slash::Stop);
-                            }
+                            );
                         }
                         match act {
                             ChatBlockAct::Copy(body) => {
@@ -11701,8 +11698,8 @@ impl Cabin {
     }
 }
 
-fn paint_running(ui: &mut egui::Ui, label: &str, hint: &str) -> bool {
-    crate::cards::paint_run_pulse(ui, label, hint, true)
+fn paint_running(ui: &mut egui::Ui, label: &str, hint: &str) {
+    crate::cards::paint_run_pulse(ui, label, hint)
 }
 
 fn paint_one_tool_card(ui: &mut egui::Ui, card: &ToolCard) {
@@ -15214,10 +15211,12 @@ mod tests {
             "tools must sit in the live turn, not always under the last bubble: {chat}"
         );
         assert!(
-            chat.contains("paint_running")
-                && chat.contains("chat_run_label")
-                && chat.contains("run_slash(Slash::Stop)"),
+            chat.contains("paint_running") && chat.contains("chat_run_label"),
             "a running pulse must show while the agent is working: {chat}"
+        );
+        assert!(
+            !chat.contains("run_slash(Slash::Stop)"),
+            "the transcript running row must not paint a Stop: {chat}"
         );
         assert!(
             chat.contains("cluster_gap"),
@@ -15235,8 +15234,8 @@ mod tests {
             .and_then(|s| s.split("fn paint_one_tool_card(").next())
             .expect("paint_running");
         assert!(
-            running.contains("paint_run_pulse") && running.contains("true"),
-            "transcript running chrome must be the labeled live pulse with Stop: {running}"
+            running.contains("paint_run_pulse") && !running.contains("Stop"),
+            "transcript running chrome is the labeled live pulse without a Stop: {running}"
         );
         assert!(
             !running.contains("vec2(2.0, 16.0)"),
@@ -15250,6 +15249,10 @@ mod tests {
         assert!(
             attach.contains("paint_run_pulse") && attach.contains("thinking_here"),
             "composer must keep a glanceable running pulse when the pane is scrolled: {attach}"
+        );
+        assert!(
+            !attach.contains("clip_status") && !attach.contains("self.status"),
+            "the status line above the composer is gone: {attach}"
         );
         assert!(
             chat.contains("scroll_to_cursor") && chat.contains("chat_tail_frames"),
@@ -19713,6 +19716,15 @@ mod tests {
         assert!(!stack.contains("SkillApprove"), "{stack}");
         assert!(!stack.contains("SaveAsSkill"), "{stack}");
         assert!(!stack.contains("HostPlan"), "{stack}");
+        let bar = stack
+            .split("ComposerStackSlot::ContextBar =>")
+            .nth(1)
+            .and_then(|s| s.split("ComposerStackSlot::SlashPalette").next())
+            .expect("context bar");
+        assert!(
+            bar.contains("rect_filled") && bar.contains("grok_context_line"),
+            "the context usage bar stays above the composer: {bar}"
+        );
         let order = super::composer_stack_order();
         assert_eq!(
             order,
@@ -19787,8 +19799,10 @@ mod tests {
             .and_then(|s| s.split("fn capture_cabin_frame_this_turn(").next())
             .expect("paint_voice_mic");
         assert!(
-            mic.contains("theme::live()") && mic.contains("Leave voice"),
-            "live mic must read as leave: {mic}"
+            mic.contains("paint_composer_mic")
+                && mic.contains("MicMood::Speaking")
+                && mic.contains("Leave voice"),
+            "live mic must ease while speaking and read as leave: {mic}"
         );
         let stack = src
             .split("fn ui_composer_stack")
