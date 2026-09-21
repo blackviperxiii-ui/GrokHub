@@ -127,8 +127,10 @@ use grokhub_core::{
     unified_diff_cite, usage_line, add_tokens, token_delta, cap_from_text, normalize_hm,
     quiet_hours_choice_label, quiet_hours_menu,
     transcribe_route, uid, update_cmds_for, overlay_update_begin, overlay_update_finish,
-    cabin_update_notice, grok_cli_alpha_update_cmds, settings_update_action_hint,
-    should_notify_cabin_update, should_show_cli_alpha_update,
+    cabin_overlay_step, cabin_update_notice, cli_update_notice, combined_update_cmds,
+    combined_update_hint, grok_cli_update_cmd, should_notify_cabin_update,
+    should_update_cli_alpha, update_check_due, update_chip_label, update_pending, UpdatePending,
+    UPDATE_CHECK_EVERY,
     realtime_can_connect, voice_log_role, voice_mode_active, voice_mode_label,
     voice_stream_token, voice_transcript_sends_chat, voice_tts_script,
     fold_stream_fields, StreamTokenKind,
@@ -1259,7 +1261,14 @@ pub struct Cabin {
     /// Stay on Get Started after this session's official install lands.
     official_cli_session: bool,
     cabin_latest: Option<String>,
-    cabin_latest_rx: Option<mpsc::Receiver<Result<String, String>>>,
+    /// Published Grok Build CLI alpha (`x.ai/cli/alpha`), not the stable channel.
+    cli_alpha: Option<String>,
+    /// `grok --version` from the last probe. Missing means Install, not Update.
+    cli_installed: Option<String>,
+    last_update_probe: Option<Instant>,
+    update_probe_rx: Option<mpsc::Receiver<crate::update::UpdateProbe>>,
+    /// Cabin files were just overlaid. The running binary is still old until Restart.
+    cabin_overlay_done: bool,
     acp: Option<grokhub_acp::AcpHandle>,
     acp_spawn_rx: Option<mpsc::Receiver<Result<grokhub_acp::AcpHandle, String>>>,
     grok_p_rx: Option<mpsc::Receiver<GrokPEvent>>,
@@ -1665,7 +1674,11 @@ impl Cabin {
             grok_install_wait: false,
             official_cli_session: false,
             cabin_latest: None,
-            cabin_latest_rx: None,
+            cli_alpha: None,
+            cli_installed: None,
+            last_update_probe: None,
+            update_probe_rx: None,
+            cabin_overlay_done: false,
             acp: None,
             acp_spawn_rx: None,
             grok_p_rx: None,
@@ -1730,7 +1743,8 @@ impl Cabin {
         if grokhub_acp::grok_cli_key().is_some() && !c.official_cli_session {
             c.mark_get_started_done();
         }
-        c.cabin_latest_rx = Some(crate::update::begin_cabin_latest_check());
+        c.last_update_probe = Some(Instant::now());
+        c.update_probe_rx = Some(crate::update::begin_update_probe());
         c
     }
 
@@ -7214,25 +7228,52 @@ impl Cabin {
         self.grok_install_rx = Some(grokhub_acp::begin_grok_install_force());
     }
 
-    fn poll_cabin_latest(&mut self) {
-        let Some(rx) = self.cabin_latest_rx.take() else {
-            return;
-        };
-        match rx.try_recv() {
-            Ok(Ok(tag)) => self.cabin_latest = Some(tag),
-            Ok(Err(_)) => {}
-            Err(mpsc::TryRecvError::Empty) => {
-                self.cabin_latest_rx = Some(rx);
+    /// GitHub Latest and Grok Build CLI alpha. First check is at launch; then every 2 hours.
+    fn poll_update_probe(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = self.update_probe_rx.take() {
+            match rx.try_recv() {
+                Ok(probe) => {
+                    if let Some(tag) = probe.cabin_tag {
+                        self.cabin_latest = Some(tag);
+                    }
+                    if let Some(alpha) = probe.cli_alpha {
+                        self.cli_alpha = Some(alpha);
+                    }
+                    if let Some(installed) = probe.cli_installed {
+                        self.cli_installed = Some(installed);
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.update_probe_rx = Some(rx);
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {}
             }
-            Err(mpsc::TryRecvError::Disconnected) => {}
+        }
+        if self.update_probe_rx.is_none()
+            && update_check_due(self.last_update_probe, Instant::now(), UPDATE_CHECK_EVERY)
+        {
+            self.last_update_probe = Some(Instant::now());
+            self.update_probe_rx = Some(crate::update::begin_update_probe());
+        }
+        if self.update_probe_rx.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        } else if let Some(started) = self.last_update_probe {
+            let wait = UPDATE_CHECK_EVERY.saturating_sub(started.elapsed());
+            ctx.request_repaint_after(wait.max(Duration::from_secs(1)));
         }
     }
 
     fn cabin_update_available(&self) -> bool {
-        should_notify_cabin_update(
-            env!("CARGO_PKG_VERSION"),
-            self.cabin_latest.as_deref(),
-        )
+        !self.cabin_overlay_done
+            && should_notify_cabin_update(
+                env!("CARGO_PKG_VERSION"),
+                self.cabin_latest.as_deref(),
+            )
+    }
+
+    fn update_pending_now(&self) -> UpdatePending {
+        let cli = should_update_cli_alpha(self.cli_installed.as_deref(), self.cli_alpha.as_deref());
+        update_pending(cli, self.cabin_update_available())
     }
 
     fn open_update_overlay(&mut self) {
@@ -7240,9 +7281,50 @@ impl Cabin {
         self.settings_sec = SettingsSec::Update;
     }
 
-    fn queue_cli_alpha_update(&mut self) {
-        self.open_update_overlay();
-        self.start_overlay_update(grok_cli_alpha_update_cmds());
+    /// One control: CLI alpha first when it is newer, then the cabin when it is newer.
+    fn queue_combined_update(&mut self) {
+        let pending = self.update_pending_now();
+        if pending == UpdatePending::None {
+            self.open_update_overlay();
+            self.status = combined_update_hint(UpdatePending::None).into();
+            return;
+        }
+        let src = resolve_source(&self.cfg.source_dir);
+        if pending != UpdatePending::Cli
+            && src
+                .as_ref()
+                .is_some_and(|p| grokhub_core::overlay_clone_usable(p))
+        {
+            if let Some(src) = src.as_ref() {
+                self.cfg.source_dir = src.display().to_string();
+                remember_source(src);
+                self.persist_cfg();
+            }
+        }
+        match combined_update_cmds(src.as_deref(), pending) {
+            Ok(cmds) if !update_wipes_config(&cmds) => {
+                self.start_overlay_update(cmds);
+            }
+            Ok(_) => {
+                self.open_update_overlay();
+                self.status = "refusing an update that would wipe config".into();
+            }
+            Err(e) => {
+                self.open_update_overlay();
+                self.status = e;
+            }
+        }
+    }
+
+    fn note_combined_update_landed(&mut self) {
+        if self.last_host.iter().any(|c| grok_cli_update_cmd(c)) {
+            if let Some(alpha) = self.cli_alpha.clone() {
+                self.cli_installed = Some(alpha);
+            }
+        }
+        if self.last_host.iter().any(|c| cabin_overlay_step(c)) {
+            self.cabin_overlay_done = true;
+        }
     }
 
     fn poll_grok_install(&mut self) {
@@ -8731,6 +8813,9 @@ impl Cabin {
                 self.update_pct = Some(view.pct);
                 self.update_can_restart = view.can_restart;
                 self.status = view.status;
+                if ok {
+                    self.note_combined_update_landed();
+                }
             }
             Ok(JobOut::Err(e)) => {
                 self.running = false;
@@ -10354,8 +10439,8 @@ impl eframe::App for Cabin {
             }
         }
         self.poll_grok_install();
-        self.poll_cabin_latest();
-        if self.grok_install_rx.is_some() || self.cabin_latest_rx.is_some() {
+        self.poll_update_probe(ctx);
+        if self.grok_install_rx.is_some() {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
         if self.oauth_pending.is_some() || self.oauth_start_rx.is_some() || self.oauth_poll_rx.is_some()
@@ -10956,8 +11041,8 @@ impl Cabin {
     }
 
     fn ui_titlebar(&mut self, ctx: &egui::Context) {
-        let mut open_update = false;
-        let notify = self.cabin_update_available();
+        let mut run_pending_update = false;
+        let update_chip = update_chip_label(self.update_pending_now());
         egui::TopBottomPanel::top("titlebar")
             .exact_height(crate::theme::TITLEBAR_H)
             .frame(egui::Frame::none().fill(crate::theme::bg()))
@@ -10970,10 +11055,10 @@ impl Cabin {
                             .strong()
                             .color(crate::theme::fg()),
                     );
-                    if notify {
+                    if let Some(label) = update_chip {
                         ui.add_space(8.0);
-                        if crate::cards::titlebar_update_chip(ui, "Update available") {
-                            open_update = true;
+                        if crate::cards::titlebar_update_chip(ui, label) {
+                            run_pending_update = true;
                         }
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -11060,8 +11145,8 @@ impl Cabin {
                     egui::Stroke::new(1.0_f32, crate::theme::border()),
                 );
             });
-        if open_update {
-            self.open_update_overlay();
+        if run_pending_update {
+            self.queue_combined_update();
         }
     }
 
@@ -12830,7 +12915,6 @@ impl Cabin {
         let mut connect = false;
         let mut disconnect = false;
         let mut update = false;
-        let mut update_cli = false;
         let mut install_cli = false;
         let mut restart = false;
         let mut copy_diag = false;
@@ -12839,13 +12923,21 @@ impl Cabin {
         let cli_installing = self.grok_install_rx.is_some();
         let show_cli_install =
             grokhub_core::should_show_manual_cli_install(cli_ready, cli_installing);
-        let show_cli_update = should_show_cli_alpha_update(cli_ready);
+        let pending_update = self.update_pending_now();
+        let update_label = update_chip_label(pending_update);
+        let update_hint = combined_update_hint(pending_update);
         let cabin_notify = self.cabin_update_available();
         let cabin_notice = self
             .cabin_latest
             .as_deref()
             .filter(|_| cabin_notify)
             .map(|tag| cabin_update_notice(env!("CARGO_PKG_VERSION"), tag));
+        let cli_notice = match (self.cli_installed.as_deref(), self.cli_alpha.as_deref()) {
+            (Some(installed), Some(alpha)) if should_update_cli_alpha(Some(installed), Some(alpha)) => {
+                Some(cli_update_notice(installed, alpha))
+            }
+            _ => None,
+        };
         let cli_install_hint = if cli_installing {
             "Installing Grok Build CLI alpha (GROK_CHANNEL=alpha)…"
         } else if !self.grok_install_err.is_empty() {
@@ -13073,6 +13165,9 @@ impl Cabin {
                                                             }
                                                         }
                                                         SettingsSec::Update => {
+                                                            if let Some(notice) = cli_notice.as_deref() {
+                                                                crate::cards::settings_note(ui, notice);
+                                                            }
                                                             if let Some(notice) = cabin_notice.as_deref() {
                                                                 crate::cards::settings_note(ui, notice);
                                                             }
@@ -13087,18 +13182,17 @@ impl Cabin {
                                                             {
                                                                 install_cli = true;
                                                             }
-                                                            if show_cli_update
-                                                                && crate::cards::settings_action(
+                                                            if let Some(label) = update_label {
+                                                                if crate::cards::settings_action(
                                                                     ui,
-                                                                    "Update Grok Build CLI",
-                                                                    "Runs grok update --alpha. Stays on the fastest track. Does not switch to stable.",
-                                                                    "Update CLI",
-                                                                )
-                                                            {
-                                                                update_cli = true;
-                                                            }
-                                                            if crate::cards::settings_action(ui, "Install overlay", settings_update_action_hint(), "Update") {
-                                                                update = true;
+                                                                    label,
+                                                                    update_hint,
+                                                                    "Update",
+                                                                ) {
+                                                                    update = true;
+                                                                }
+                                                            } else if !show_cli_install {
+                                                                crate::cards::settings_note(ui, update_hint);
                                                             }
                                                             if let Some(pct) = self.update_pct {
                                                                 let fill = if self.last_receipt_ok == Some(false) && !self.running {
@@ -13161,10 +13255,7 @@ impl Cabin {
             self.sign_out_oauth();
         }
         if update {
-            self.queue_update();
-        }
-        if update_cli {
-            self.queue_cli_alpha_update();
+            self.queue_combined_update();
         }
         if install_cli {
             self.queue_grok_cli_install();
@@ -15557,27 +15648,32 @@ mod tests {
         assert!(
             !update.contains("settings_update_note()")
                 && !update.contains("Source clone")
-                && update.contains("Install overlay")
-                && update.contains("settings_update_action_hint()")
+                && !update.contains("Install overlay")
+                && !update.contains("Update Grok Build CLI")
+                && !update.contains("show_cli_update")
+                && update.contains("update_label")
+                && update.contains("update_hint")
                 && update.contains("Install Grok Build CLI")
                 && update.contains("show_cli_install")
                 && update.contains("cabin_notice")
-                && update.contains("Update Grok Build CLI")
-                && update.contains("show_cli_update")
-                && update.contains("grok update --alpha"),
-            "Update is overlay + Update + Restart, Latest notify, CLI alpha update when grok is ready, Install when missing: {update}"
+                && update.contains("cli_notice"),
+            "Update is one control for CLI and cabin, Install when missing: {update}"
         );
         assert!(
             settings.contains("cabin_update_notice")
-                && settings.contains("should_show_cli_alpha_update")
-                && settings.contains("queue_cli_alpha_update"),
-            "Settings Update must wire Latest notify and CLI alpha update: {settings}"
+                && settings.contains("cli_update_notice")
+                && settings.contains("should_update_cli_alpha")
+                && settings.contains("queue_combined_update")
+                && settings.contains("update_chip_label"),
+            "Settings Update and the titlebar share one pending update: {settings}"
         );
         assert!(
-            !account.contains("Update available")
+            !account.contains("Update CLI")
                 && !account.contains("cabin_update_notice")
+                && !account.contains("cli_update_notice")
                 && !account.contains("GitHub Latest")
-                && !account.contains("Update Grok Build CLI"),
+                && !account.contains("Update Grok Build CLI")
+                && !account.contains("update_chip_label"),
             "cabin notify must not live on Account: {account}"
         );
     }
@@ -17597,8 +17693,10 @@ mod tests {
             "Windows Update must run without a clone; leftover cursor/* must not be remembered: {queued}"
         );
         assert!(
-            src.contains("settings_update_action_hint()"),
-            "Settings → Update overlay hint must be OS-aware: {src}"
+            src.contains("combined_update_hint")
+                && src.contains("queue_combined_update")
+                && src.contains("UPDATE_CHECK_EVERY"),
+            "one Update control must describe CLI-then-cabin and recheck on the 2h interval: {src}"
         );
         assert!(
             src.contains("Install Grok Build CLI")
@@ -17609,16 +17707,17 @@ mod tests {
             "Settings → Update and Get Started hide Install when grok is present or an alpha install is in progress: {src}"
         );
         let queued_cli = src
-            .split("fn queue_cli_alpha_update(")
+            .split("fn queue_combined_update(")
             .nth(1)
-            .and_then(|s| s.split("fn poll_grok_install(").next())
-            .expect("queue_cli_alpha_update");
+            .and_then(|s| s.split("fn note_combined_update_landed(").next())
+            .expect("queue_combined_update");
         assert!(
-            queued_cli.contains("grok_cli_alpha_update_cmds")
+            queued_cli.contains("combined_update_cmds")
                 && queued_cli.contains("start_overlay_update")
+                && queued_cli.contains("UpdatePending::Cli")
                 && !queued_cli.contains("--stable")
                 && !queued_cli.contains("begin_grok_install"),
-            "CLI update must reuse the overlay with grok update --alpha: {queued_cli}"
+            "the one Update control must run only pending steps, CLI first, on alpha: {queued_cli}"
         );
         let boot = src
             .split("pub fn new(hidden: bool)")
@@ -17626,12 +17725,15 @@ mod tests {
             .and_then(|s| s.split("fn apply_saved_geom(").next())
             .expect("Cabin::new");
         assert!(
-            boot.contains("begin_cabin_latest_check"),
-            "boot must check GitHub Latest for an in-app cabin notify: {boot}"
+            boot.contains("begin_update_probe"),
+            "boot must check GitHub Latest and CLI alpha for the in-app chip: {boot}"
         );
         assert!(
-            src.contains("titlebar_update_chip") && src.contains("Update available"),
-            "newer GitHub Latest must notify in the titlebar, not a web page: {src}"
+            src.contains("titlebar_update_chip")
+                && src.contains("update_chip_label")
+                && src.contains("queue_combined_update")
+                && !src.contains(concat!("Update ", "available")),
+            "the titlebar chip names CLI, cabin, or both and runs that update: {src}"
         );
         let flush_p = src
             .split("fn flush_projects(")

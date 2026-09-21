@@ -306,8 +306,176 @@ pub fn cabin_update_notice(running: &str, latest: &str) -> String {
     )
 }
 
-pub fn should_show_cli_alpha_update(grok_ready: bool) -> bool {
-    grok_ready
+/// CLI half of the one Update control. Missing grok stays Install.
+/// A current alpha (`alpha_newer == false`) is left alone.
+pub fn should_show_cli_alpha_update(grok_ready: bool, alpha_newer: bool) -> bool {
+    grok_ready && alpha_newer
+}
+
+/// GitHub Latest and the published Grok Build CLI alpha. Not launch-only.
+pub const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(2 * 60 * 60);
+
+/// Plain text version at `https://x.ai/cli/alpha` (and the storage fallback).
+pub const CLI_ALPHA_VERSION_URL: &str = "https://x.ai/cli/alpha";
+pub const CLI_ALPHA_VERSION_FALLBACK: &str =
+    "https://storage.googleapis.com/grok-build-public-artifacts/cli/alpha";
+
+pub fn update_check_due(last: Option<Instant>, now: Instant, every: Duration) -> bool {
+    match last {
+        None => true,
+        Some(t) => now.saturating_duration_since(t) >= every,
+    }
+}
+
+/// What the one Update control will run. Linux and Windows use the same cases.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdatePending {
+    None,
+    Cli,
+    Cabin,
+    Both,
+}
+
+pub fn update_pending(cli_newer: bool, cabin_newer: bool) -> UpdatePending {
+    match (cli_newer, cabin_newer) {
+        (true, true) => UpdatePending::Both,
+        (true, false) => UpdatePending::Cli,
+        (false, true) => UpdatePending::Cabin,
+        (false, false) => UpdatePending::None,
+    }
+}
+
+/// Titlebar chip. Names which side is newer. `None` hides the chip.
+pub fn update_chip_label(pending: UpdatePending) -> Option<&'static str> {
+    match pending {
+        UpdatePending::None => None,
+        UpdatePending::Cli => Some("Update CLI"),
+        UpdatePending::Cabin => Some("Update cabin"),
+        UpdatePending::Both => Some("Update CLI and cabin"),
+    }
+}
+
+pub fn combined_update_hint(pending: UpdatePending) -> &'static str {
+    match pending {
+        UpdatePending::Cli => {
+            "Runs grok update --alpha when a newer alpha exists. Stays on alpha. Does not switch to stable."
+        }
+        UpdatePending::Cabin => {
+            "Updates the cabin only. A current Grok Build CLI alpha is left alone."
+        }
+        UpdatePending::Both => {
+            "Updates Grok Build CLI alpha first, then the cabin. Does not switch the CLI to stable."
+        }
+        UpdatePending::None => "GrokHub and Grok Build CLI alpha are current.",
+    }
+}
+
+/// Body of `https://x.ai/cli/alpha` — a single semver line, optional leading `v`.
+pub fn parse_published_cli_alpha(body: &str) -> Option<String> {
+    let line = body.trim().lines().next()?.trim();
+    let t = line.trim_start_matches(['v', 'V']);
+    let (maj, min, pat) = parse_cabin_semver(t)?;
+    let rendered = format!("{maj}.{min}.{pat}");
+    if t == rendered {
+        Some(rendered)
+    } else {
+        None
+    }
+}
+
+/// `grok --version` may be `1.0.38` or a sentence that contains that semver.
+pub fn parse_installed_cli_version(text: &str) -> Option<String> {
+    for tok in text.split_whitespace() {
+        let t = tok.trim_matches(|c: char| !c.is_ascii_digit() && c != '.');
+        let t = t.trim_start_matches(['v', 'V']);
+        if let Some((maj, min, pat)) = parse_cabin_semver(t) {
+            let rendered = format!("{maj}.{min}.{pat}");
+            if t.starts_with(&rendered) {
+                return Some(rendered);
+            }
+        }
+    }
+    None
+}
+
+pub fn cli_alpha_is_newer(installed: &str, published: &str) -> bool {
+    match (
+        parse_installed_cli_version(installed),
+        parse_installed_cli_version(published),
+    ) {
+        (Some(have), Some(want)) => cabin_version_newer(&want, &have),
+        _ => false,
+    }
+}
+
+/// Update a working install only when the published alpha is newer.
+/// Missing grok (`installed == None`) is first-launch Install, not this.
+/// A failed probe does not yank a working alpha.
+pub fn should_update_cli_alpha(installed: Option<&str>, published: Option<&str>) -> bool {
+    match (installed, published) {
+        (Some(have), Some(want)) => cli_alpha_is_newer(have, want),
+        _ => false,
+    }
+}
+
+pub fn cli_update_notice(installed: &str, latest: &str) -> String {
+    format!(
+        "Grok Build CLI alpha {latest} is published (running {installed}). Update runs grok update --alpha."
+    )
+}
+
+pub fn cabin_overlay_step(cmd: &str) -> bool {
+    !grok_cli_update_cmd(cmd)
+        && (cmd.contains("pull --ff-only")
+            || cmd.contains("remote set-url")
+            || cmd.contains("remote add")
+            || cmd.contains("install.sh")
+            || cmd.contains("install-windows.ps1")
+            || cmd.contains("releases/latest")
+            || cmd.contains("grokhub-windows-v"))
+}
+
+fn cabin_only_cmds_for_host(source: Option<&Path>, windows: bool) -> Result<Vec<String>, String> {
+    let cmds: Vec<String> = update_cmds_for_host(source, windows)?
+        .into_iter()
+        .filter(|c| !grok_cli_update_cmd(c))
+        .collect();
+    if cmds.is_empty() {
+        Err("cabin update plan empty".into())
+    } else {
+        Ok(cmds)
+    }
+}
+
+/// CLI first when both are newer. Cabin steps omit a second `grok update`.
+/// Linux and Windows share the pending cases; the host commands stay native.
+pub fn combined_update_cmds_for_host(
+    source: Option<&Path>,
+    pending: UpdatePending,
+    windows: bool,
+) -> Result<Vec<String>, String> {
+    let cli_cmd = if windows {
+        windows_grok_update_cmd()
+    } else {
+        unix_grok_update_cmd()
+    };
+    match pending {
+        UpdatePending::None => Err("nothing to update".into()),
+        UpdatePending::Cli => Ok(vec![cli_cmd.into()]),
+        UpdatePending::Cabin => cabin_only_cmds_for_host(source, windows),
+        UpdatePending::Both => {
+            let mut cmds = vec![cli_cmd.into()];
+            cmds.extend(cabin_only_cmds_for_host(source, windows)?);
+            Ok(cmds)
+        }
+    }
+}
+
+pub fn combined_update_cmds(
+    source: Option<&Path>,
+    pending: UpdatePending,
+) -> Result<Vec<String>, String> {
+    combined_update_cmds_for_host(source, pending, cfg!(windows))
 }
 
 pub fn grok_cli_alpha_update_cmd() -> &'static str {
@@ -1183,9 +1351,13 @@ mod tests {
         assert_eq!(cmds.len(), 1);
         assert!(grok_cli_update_cmd(&cmds[0]));
         assert_eq!(cmds[0], overlay_grok_update_cmd());
-        assert!(should_show_cli_alpha_update(true));
+        assert!(should_show_cli_alpha_update(true, true));
         assert!(
-            !should_show_cli_alpha_update(false),
+            !should_show_cli_alpha_update(true, false),
+            "a current alpha is not updated"
+        );
+        assert!(
+            !should_show_cli_alpha_update(false, true),
             "missing grok is first-run Install, not CLI update"
         );
         let plan = update_plan_steps(cmds);
@@ -1193,5 +1365,97 @@ mod tests {
             plan[0].explain.contains("alpha") && plan[0].explain.contains("Grok Build CLI"),
             "{plan:?}"
         );
+    }
+
+    #[test]
+    fn combined_update_runs_only_what_is_pending() {
+        assert_eq!(UPDATE_CHECK_EVERY, Duration::from_secs(2 * 60 * 60));
+        let now = Instant::now();
+        assert!(update_check_due(None, now, UPDATE_CHECK_EVERY));
+        assert!(!update_check_due(Some(now), now, UPDATE_CHECK_EVERY));
+        assert!(update_check_due(
+            Some(now),
+            now + Duration::from_secs(1),
+            Duration::from_millis(1)
+        ));
+        assert_eq!(update_pending(false, false), UpdatePending::None);
+        assert_eq!(update_pending(true, false), UpdatePending::Cli);
+        assert_eq!(update_pending(false, true), UpdatePending::Cabin);
+        assert_eq!(update_pending(true, true), UpdatePending::Both);
+        assert_eq!(update_chip_label(UpdatePending::Cli), Some("Update CLI"));
+        assert_eq!(update_chip_label(UpdatePending::Cabin), Some("Update cabin"));
+        assert_eq!(
+            update_chip_label(UpdatePending::Both),
+            Some("Update CLI and cabin")
+        );
+        assert_eq!(update_chip_label(UpdatePending::None), None);
+        assert!(combined_update_hint(UpdatePending::Both).contains("first"));
+        assert!(!combined_update_hint(UpdatePending::Cli).contains("--stable"));
+
+        assert_eq!(parse_published_cli_alpha("1.0.39\n"), Some("1.0.39".into()));
+        assert_eq!(parse_published_cli_alpha("v1.0.39"), Some("1.0.39".into()));
+        assert!(parse_published_cli_alpha("<html>1.0.39</html>").is_none());
+        assert!(parse_published_cli_alpha("").is_none());
+        assert_eq!(
+            parse_installed_cli_version("grok 1.0.38\n"),
+            Some("1.0.38".into())
+        );
+        assert!(!should_update_cli_alpha(None, Some("1.0.39")));
+        assert!(!should_update_cli_alpha(Some("1.0.38"), None));
+        assert!(!should_update_cli_alpha(Some("1.0.38"), Some("1.0.38")));
+        assert!(!should_update_cli_alpha(Some("1.0.39"), Some("1.0.38")));
+        assert!(!should_update_cli_alpha(Some("not-a-version"), Some("1.0.39")));
+        assert!(should_update_cli_alpha(Some("grok 1.0.38"), Some("1.0.39")));
+        let notice = cli_update_notice("1.0.38", "1.0.39");
+        assert!(notice.contains("1.0.39") && notice.contains("grok update --alpha"));
+        assert!(!notice.contains("http") && !notice.contains("x.ai"));
+
+        let cli = combined_update_cmds_for_host(None, UpdatePending::Cli, false).unwrap();
+        assert_eq!(cli.len(), 1);
+        assert!(grok_cli_update_cmd(&cli[0]) && cli[0].contains("grok update --alpha"));
+        assert!(cli[0].contains("$HOME/.grok/bin"));
+        assert!(!cli[0].contains("--stable"));
+        let cli_win = combined_update_cmds_for_host(None, UpdatePending::Cli, true).unwrap();
+        assert_eq!(cli_win[0], windows_grok_update_cmd());
+
+        let cabin_win =
+            combined_update_cmds_for_host(None, UpdatePending::Cabin, true).unwrap();
+        assert!(cabin_win.iter().all(|c| !grok_cli_update_cmd(c)));
+        assert!(cabin_win.iter().any(|c| cabin_overlay_step(c)));
+        assert!(cabin_win[0].contains("grokhub-windows-v"));
+
+        let both_win = combined_update_cmds_for_host(None, UpdatePending::Both, true).unwrap();
+        assert!(grok_cli_update_cmd(&both_win[0]));
+        assert!(both_win[0].contains("--alpha") && !both_win[0].contains("--stable"));
+        assert_eq!(both_win.iter().filter(|c| grok_cli_update_cmd(c)).count(), 1);
+        assert!(both_win.iter().skip(1).any(|c| c.contains("releases/latest")));
+        assert!(both_win.iter().skip(1).all(|c| !grok_cli_update_cmd(c)));
+
+        assert!(combined_update_cmds_for_host(None, UpdatePending::None, true).is_err());
+        assert!(combined_update_cmds_for_host(None, UpdatePending::Cabin, false).is_err());
+        assert!(combined_update_cmds_for_host(None, UpdatePending::Both, false).is_err());
+
+        let root = std::env::temp_dir().join(format!(
+            "grokhub-src-combined-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        seed_git_source(&root, "main");
+        let both_unix =
+            combined_update_cmds_for_host(Some(&root), UpdatePending::Both, false).unwrap();
+        assert!(grok_cli_update_cmd(&both_unix[0]));
+        assert!(both_unix[0].contains("grok update --alpha"));
+        assert!(both_unix.iter().any(|c| c.contains("pull --ff-only origin main")));
+        assert!(both_unix.iter().any(|c| c.contains("install.sh")));
+        assert_eq!(
+            both_unix.iter().filter(|c| grok_cli_update_cmd(c)).count(),
+            1,
+            "CLI runs once, before the cabin: {both_unix:?}"
+        );
+        let cabin_unix =
+            combined_update_cmds_for_host(Some(&root), UpdatePending::Cabin, false).unwrap();
+        assert!(cabin_unix.iter().all(|c| !grok_cli_update_cmd(c)));
+        assert!(cabin_unix.iter().any(|c| c.contains("install.sh")));
+        let _ = fs::remove_dir_all(&root);
     }
 }
