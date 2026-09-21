@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use crate::is_plain_text;
 use crate::recipe::user_asks_gui_help;
+use crate::skill::{match_skill, skill_use_in_chat_prompt, SkillMd};
 
 pub const CHIP_VISIBLE_MAX: usize = 5;
 pub const CHIP_HARD_MAX: usize = 8;
@@ -1738,6 +1739,30 @@ fn uniq_by_value(chips: Vec<QuickChip>) -> Vec<QuickChip> {
     out
 }
 
+/// Composer chip for a cabin skill the typed ask already matches.
+pub fn skill_offer_chip(draft: &str, skills: &[SkillMd]) -> Option<QuickChip> {
+    let draft = draft.trim();
+    if draft.is_empty() {
+        return None;
+    }
+    let hit = match_skill(draft, skills)?;
+    let raw = if hit.name.trim().is_empty() {
+        "Saved skill".to_string()
+    } else {
+        hit.name.replace('-', " ")
+    };
+    let label = shorten(&raw, 28);
+    let value = skill_use_in_chat_prompt(&hit.slash, &hit.name);
+    Some(chip(
+        &format!("skill-{}", hit.name),
+        &label,
+        &value,
+        ChipKind::Chat,
+        80.0,
+        "Saved skill",
+    ))
+}
+
 pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
     let max = input.max.clamp(1, CHIP_HARD_MAX);
     let dismissed: std::collections::HashSet<String> = input
@@ -3017,5 +3042,40 @@ mod tests {
         let mut mem = ChipMemory::default();
         remember_home_surface(&mut mem, home_surface_from_nav("imagine").unwrap(), 9);
         assert_eq!(mem.last_surface.as_deref(), Some("imagine"));
+    }
+
+    #[test]
+    fn saved_skill_is_a_chip_when_the_ask_matches() {
+        let flash = SkillMd {
+            name: "flash-pi".into(),
+            description: "write an image".into(),
+            slash: "/flash".into(),
+            trigger: "flash the pi".into(),
+            instructions: "dd".into(),
+            pitfalls: "boot disk".into(),
+            verify: "lsblk".into(),
+            runs: 0,
+        };
+        let chip = skill_offer_chip("flash the pi", std::slice::from_ref(&flash)).expect("match");
+        assert_eq!(chip.value, "/flash");
+        assert_eq!(chip.kind, ChipKind::Chat);
+        assert!(chip.label.contains("flash"));
+        assert!(skill_offer_chip("", std::slice::from_ref(&flash)).is_none());
+        assert!(skill_offer_chip("what is rust", std::slice::from_ref(&flash)).is_none());
+        let patched = crate::patch_skill(
+            &flash,
+            &SkillMd {
+                name: "other".into(),
+                description: String::new(),
+                slash: "/other".into(),
+                trigger: "flash the pi again".into(),
+                instructions: "dd the newer image".into(),
+                pitfalls: String::new(),
+                verify: String::new(),
+                runs: 1,
+            },
+        );
+        assert_eq!(patched.name, "flash-pi");
+        assert!(patched.instructions.contains("newer"));
     }
 }
