@@ -1,10 +1,13 @@
 //! Click feel for GrokHub on CachyOS — snappy Plasma-adjacent timing, no bounce.
 
-pub const HOVER_GROW: f32 = 0.015;
+pub const HOVER_GROW: f32 = 0.035;
 pub const PRESS_SHRINK: f32 = 0.045;
 pub const HOVER_WASH: f32 = 0.10;
 pub const PRESS_WASH: f32 = 0.18;
-pub const HOVER_SECS: f32 = 0.08;
+pub const HOVER_SECS: f32 = 0.12;
+/// Extra scale and wash while a control has keyboard focus.
+pub const FOCUS_GROW: f32 = 0.01;
+pub const FOCUS_WASH: f32 = 0.06;
 pub const PRESS_SECS: f32 = 0.05;
 /// Selection / knob slide — ~120ms, between egui hover and KDE widget motion.
 pub const SELECT_SECS: f32 = 0.12;
@@ -76,11 +79,24 @@ mod tests {
         let hover = feel_scale(1.0, 0.0);
         let press = feel_scale(0.0, 1.0);
         let both = feel_scale(1.0, 1.0);
-        assert!((hover - 1.015).abs() < 1e-6);
+        assert!((hover - 1.035).abs() < 1e-6);
         assert!((press - 0.955).abs() < 1e-6);
         assert!(both < 1.0);
         assert!(both < hover);
         assert!(press < both);
+    }
+
+    #[test]
+    fn hover_scale_is_one_point_zero_three_five() {
+        let full = feel_scale(1.0, 0.0);
+        assert!((full - 1.035).abs() < 1e-5, "full hover scale {full}");
+    }
+
+    #[test]
+    fn hover_scale_moves_across_frames() {
+        let mid = feel_scale(0.33, 0.0);
+        let later = feel_scale(0.66, 0.0);
+        assert!(mid > 1.0 && mid < later);
     }
 
     #[test]
