@@ -1339,6 +1339,15 @@ mod tests {
         assert_eq!(titled, "example.com");
         let dump = permission_action_line(&json!({ "title": "{\"ok\":true}" }));
         assert!(dump.is_empty(), "a raw tool dump is not the action line: {dump}");
+        let test = permission_action_line(&json!({
+            "title": "Run",
+            "rawInput": { "command": "[ -f /etc/os-release ] && cat /etc/os-release" }
+        }));
+        assert_eq!(test, "[ -f /etc/os-release ] && cat /etc/os-release");
+        let group = permission_action_line(&json!({
+            "rawInput": { "command": "{ echo hi; ls; }" }
+        }));
+        assert_eq!(group, "{ echo hi; ls; }");
     }
 
     #[test]
