@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.9.13 — 2026-09-21
+
+One cabin, two ship artifacts on the same tag. Cursor **#43** (composer Stop disc, mic ease, no transcript Running Stop, no status line above the composer) is on `main`.
+
+- Linux: `grokhub-linux-v2.9.13.tar.gz` and AUR `pkgver=2.9.13`. `/update` overlays the GUI then `grok update --alpha` with `$HOME/.grok/bin:$HOME/.local/bin` prepended.
+- Windows: `GrokHub-Setup-2.9.13.exe` and `grokhub-windows-v2.9.13.zip` from `packaging/windows/` + Inno. Settings → Update downloads the GitHub zip when there is no source clone **or** the leftover clone is not a usable `main` checkout, then `grok update --alpha`.
+- Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still. They ease while hovered, pressed, listening, speaking, or a reply is running. Same paint on Linux and Windows.
+- The transcript Running row has no Stop. A green live dot plus Thinking / Running / Waiting stays on the turn (and above the composer when the pane is scrolled); hover is the current action.
+- The changing status text above the composer is gone. The context usage bar stays.
+- Default model remains `grok-4.7`. Effort remains None / Minimal / Low / Medium / High / Extra High. Max is not offered. A saved `reasoningEffort` of `max` loads as Extra High (`xhigh`).
+- Voice stays Ara, OAuth push-to-talk, reply body only. The line stays open until Stop, the live mic, or Ctrl+G / Super+G.
+- Grok Build CLI **1.0.38** alpha (unchanged). Headless spawn stays `grok -p --output-format streaming-json` + `--alpha`.
+
 ## 2.9.12 — 2026-09-21
 
 One cabin, two ship artifacts on the same tag. Cursor **#42** (default chat model `grok-4.7`, Max dropped from effort) is on `main`.
