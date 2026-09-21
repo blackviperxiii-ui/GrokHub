@@ -71,6 +71,14 @@ where
         .count()
 }
 
+/// Marker written after the cabin saves `SKILL.md`. The pane shows the note.
+pub const SKILL_SAVED_MARK: &str = "SKILL_SAVED";
+pub const SKILL_SAVED_NOTE: &str = "Saved as skill";
+
+pub fn is_skill_saved_mark(content: &str) -> bool {
+    content.trim() == SKILL_SAVED_MARK
+}
+
 pub fn is_workload_user(content: &str) -> bool {
     let t = content.trim_start();
     t.starts_with("HOST_RESULT")
@@ -80,6 +88,23 @@ pub fn is_workload_user(content: &str) -> bool {
         || t.starts_with("FOLLOWUP:")
         || t.starts_with("[Goal step ")
         || t.starts_with("VERIFY_RESULT:")
+        || is_skill_saved_mark(t)
+}
+
+/// True when this turn already wrote `SKILL.md`.
+pub fn stretch_saved_skill<'a, I>(messages: I) -> bool
+where
+    I: IntoIterator<Item = (&'a str, &'a str)>,
+{
+    let msgs: Vec<(&str, &str)> = messages.into_iter().collect();
+    let start = msgs
+        .iter()
+        .rposition(|(role, content)| *role == "user" && !is_workload_user(content))
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    msgs[start..]
+        .iter()
+        .any(|(role, content)| *role == "user" && is_skill_saved_mark(content))
 }
 
 pub fn merge_thinking(thought: &str, content: &str) -> String {
@@ -210,7 +235,12 @@ fn emit_stretch(out: &mut Vec<ChatView>, stretch: &[(&str, &str)], ask: &str) {
     let teach = crate::recipe::user_asks_gui_help(ask) && !crate::recipe::user_asks_guide_only(ask);
     let mut last_final: Option<String> = None;
     let mut last_was_work = false;
+    let mut saved_skill = false;
     for &(role, content) in stretch {
+        if role == "user" && is_skill_saved_mark(content) {
+            saved_skill = true;
+            continue;
+        }
         let content = view_text(content);
         if role == "user" && teach {
             if let Some(label) = crate::recipe::hands_step_label(content) {
@@ -258,6 +288,13 @@ fn emit_stretch(out: &mut Vec<ChatView>, stretch: &[(&str, &str)], ask: &str) {
             kind: ChatKind::Assistant,
             title: String::new(),
             body: prose,
+        });
+    }
+    if saved_skill {
+        out.push(ChatView {
+            kind: ChatKind::Assistant,
+            title: String::new(),
+            body: SKILL_SAVED_NOTE.into(),
         });
     }
 }
@@ -651,6 +688,31 @@ mod tests {
     }
 
     #[test]
+    fn saved_skill_note_sits_on_that_turn() {
+        let msgs = vec![
+            ("user".into(), "flash the pi".into()),
+            ("assistant".into(), "Image written.".into()),
+            ("user".into(), "HOST_RESULT (facts only):\n$ dd if=a\n".into()),
+            ("user".into(), SKILL_SAVED_MARK.into()),
+        ];
+        let v = visible_chat(&msgs);
+        assert!(
+            !v.iter().any(|x| x.body.contains(SKILL_SAVED_MARK)),
+            "the marker stays out of the pane: {v:?}"
+        );
+        assert!(
+            v.iter()
+                .any(|x| x.kind == ChatKind::Assistant && x.body == SKILL_SAVED_NOTE),
+            "the turn shows Saved as skill: {v:?}"
+        );
+        assert_eq!(visible_turn_count(&msgs), 1);
+        assert!(stretch_saved_skill(
+            msgs.iter().map(|(r, c)| (r.as_str(), c.as_str()))
+        ));
+        assert!(!stretch_saved_skill([("user", "flash the pi")]));
+    }
+
+    #[test]
     #[allow(clippy::assertions_on_constants)] // pins design constants
     fn consecutive_thoughts_cluster_tighter_than_chat() {
         assert_eq!(cluster_gap(true, true), THOUGHT_CLUSTER_GAP);
@@ -701,6 +763,7 @@ mod tests {
             "[Goal step 2/6]\nTask: flash the pi\nLast progress:\nWriting the image."
         ));
         assert!(is_workload_user("VERIFY_RESULT:\nexit 0\nchecked"));
+        assert!(is_workload_user(SKILL_SAVED_MARK));
         assert!(!is_workload_user("check the box"));
         assert_eq!(
             visible_turn_count(&[
