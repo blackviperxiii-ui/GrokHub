@@ -3,11 +3,21 @@ use serde_json::{json, Value};
 
 pub const XAI_BASE: &str = "https://api.x.ai/v1";
 pub const DEFAULT_MODEL: &str = "grok-3-mini-fast";
-/// Greeting, chips, and other cabin Fast-path calls. Not the composer ladder.
-/// Product name: Grok 4.1 Fast. Live API id still accepted after retirement.
-pub const CABIN_FAST_MODEL: &str = "grok-4.6";
+/// Default `grok -p --model` id, plus greeting and chips.
+/// Grok CLI alpha accepts `-m` / `--model grok-4.7` (xAI model name).
+pub const CABIN_FAST_MODEL: &str = "grok-4.7";
 /// Used only if the default model returns empty.
 pub const CABIN_FAST_FALLBACK: &str = "grok-4.5";
+
+/// Model passed to `grok -p --model`. An empty pin uses [`CABIN_FAST_MODEL`].
+pub fn cabin_spawn_model(pinned: &str) -> &str {
+    let t = pinned.trim();
+    if t.is_empty() {
+        CABIN_FAST_MODEL
+    } else {
+        t
+    }
+}
 
 pub fn needs_auth_banner(has_key: bool) -> bool {
     !has_key
@@ -65,7 +75,7 @@ pub fn chat_request_body_vision(
         "stream": false,
         "messages": msgs,
     });
-    if resolved == "grok-4.6" {
+    if sends_reasoning_effort(resolved) {
         if let Some(effort) = effort {
             body["reasoning_effort"] = json!(effort);
         }
@@ -73,7 +83,12 @@ pub fn chat_request_body_vision(
     body
 }
 
-/// Think is Grok 4.6 at high. Max is the same model at xhigh. Balance leaves effort unset.
+fn sends_reasoning_effort(model: &str) -> bool {
+    matches!(model, "grok-4.6" | "grok-4.7")
+}
+
+/// Think is Grok 4.7 at high. Legacy Max mode is the same model at xhigh.
+/// Balance leaves effort unset. Saved effort `max` migrates to xhigh.
 pub fn reasoning_effort_for_mode(mode: &str) -> Option<&'static str> {
     match mode.trim() {
         "max" | "deep" | "heavy" => Some("xhigh"),
@@ -101,7 +116,6 @@ pub const REASONING_EFFORTS: &[(&str, &str)] = &[
     ("medium", "Medium"),
     ("high", "High"),
     ("xhigh", "Extra High"),
-    ("max", "Max"),
 ];
 
 /// Normalize effort ids and legacy aliases (`/effort`, `/mode`).
@@ -112,8 +126,8 @@ pub fn parse_reasoning_effort(s: &str) -> Option<&'static str> {
         "low" | "fast" => Some("low"),
         "medium" | "med" | "balanced" | "balance" => Some("medium"),
         "high" | "think" | "build" | "expert" => Some("high"),
-        "xhigh" | "deep" | "heavy" => Some("xhigh"),
-        "max" => Some("max"),
+        // Saved Max is the next lower offered level (Extra High). Do not send `max`.
+        "xhigh" | "deep" | "heavy" | "max" => Some("xhigh"),
         _ => None,
     }
 }
@@ -137,15 +151,15 @@ pub fn should_failover_status(status: u16) -> bool {
 
 pub fn model_for_mode(mode: &str) -> &'static str {
     match mode {
-        "max" | "deep" | "heavy" => "grok-4.6",
-        "think" | "build" | "expert" => "grok-4.6",
+        "max" | "deep" | "heavy" => CABIN_FAST_MODEL,
+        "think" | "build" | "expert" => CABIN_FAST_MODEL,
         "balanced" | "balance" => "grok-4.3",
         "auto" | "fast" => "grok-3-mini-fast",
         _ => DEFAULT_MODEL,
     }
 }
 
-/// Max and Think send Grok 4.6. Balance sends Grok 4.3. Fast sends mini.
+/// Legacy Max and Think send Grok 4.7. Balance sends Grok 4.3. Fast sends mini.
 /// Auto keeps a real Settings pin; leftover ladder defaults do not count.
 pub fn resolve_chat_model(mode: &str, model: &str) -> String {
     match mode.trim() {
@@ -162,7 +176,10 @@ pub fn resolve_chat_model(mode: &str, model: &str) -> String {
 /// Models the composer ladder already owns. `/mode` used to write these into
 /// the Settings pin, which made Auto look pinned and never route.
 pub fn is_composer_ladder_model(model: &str) -> bool {
-    matches!(model.trim(), "grok-3-mini-fast" | "grok-4.3" | "grok-4.6")
+    matches!(
+        model.trim(),
+        "grok-3-mini-fast" | "grok-4.3" | "grok-4.6" | "grok-4.7"
+    )
 }
 
 /// A Settings chat-model pin skips Auto. Ladder defaults do not count as a pin.
@@ -431,25 +448,26 @@ mod tests {
         assert!(!should_failover_status(200));
         assert_eq!(failover_model("grok-4-latest"), Some("grok-4.3"));
         assert_eq!(failover_model("grok-4.6"), Some("grok-4.3"));
+        assert_eq!(failover_model("grok-4.7"), Some("grok-4.3"));
         assert!(failover_model(DEFAULT_MODEL).is_none());
         let max = chat_request_body_for_mode("max", &[("user".into(), "hi".into())]);
-        assert_eq!(max["model"], "grok-4.6");
+        assert_eq!(max["model"], "grok-4.7");
         assert_eq!(max["reasoning_effort"], "xhigh");
         let fast = chat_request_body(DEFAULT_MODEL, &[("user".into(), "hi".into())]);
         assert!(fast.get("reasoning_effort").is_none());
         let streamed = responses_request_body(
-            "grok-4.6",
+            "grok-4.7",
             &[("user".into(), "hi".into())],
             None,
             Some("xhigh"),
         );
-        assert_eq!(streamed["model"], "grok-4.6");
+        assert_eq!(streamed["model"], "grok-4.7");
         assert_eq!(streamed["input"][0]["content"], "hi");
         assert_eq!(streamed["store"], false);
         assert_eq!(streamed["reasoning"]["effort"], "xhigh");
         assert_eq!(responses_url(), "https://api.x.ai/v1/responses");
         let vis = responses_request_body(
-            "grok-4.6",
+            "grok-4.7",
             &[("user".into(), "see".into())],
             Some("data:image/jpeg;base64,AAAA"),
             None,
@@ -478,14 +496,14 @@ mod tests {
     }
 
     #[test]
-    fn max_is_grok_4_6_xhigh() {
-        assert_eq!(model_for_mode("max"), "grok-4.6");
-        assert_eq!(model_for_mode("deep"), "grok-4.6");
-        assert_eq!(model_for_mode("heavy"), "grok-4.6");
+    fn max_is_grok_4_7_xhigh() {
+        assert_eq!(model_for_mode("max"), "grok-4.7");
+        assert_eq!(model_for_mode("deep"), "grok-4.7");
+        assert_eq!(model_for_mode("heavy"), "grok-4.7");
         assert_eq!(reasoning_effort_for_mode("max"), Some("xhigh"));
         assert_ne!(model_for_mode("max"), "grok-4-latest");
-        assert_eq!(resolve_chat_model("max", "grok-3"), "grok-4.6");
-        assert_eq!(resolve_chat_model("max", ""), "grok-4.6");
+        assert_eq!(resolve_chat_model("max", "grok-3"), "grok-4.7");
+        assert_eq!(resolve_chat_model("max", ""), "grok-4.7");
         assert_eq!(resolve_chat_model("auto", "grok-3"), "grok-3");
         assert_eq!(resolve_chat_model("auto", ""), "grok-3-mini-fast");
         assert_eq!(
@@ -508,34 +526,47 @@ mod tests {
         assert_eq!(parse_reasoning_effort("high"), Some("high"));
         assert_eq!(parse_reasoning_effort("think"), Some("high"));
         assert_eq!(parse_reasoning_effort("xhigh"), Some("xhigh"));
-        assert_eq!(parse_reasoning_effort("max"), Some("max"));
+        assert_eq!(parse_reasoning_effort("max"), Some("xhigh"));
         assert_eq!(parse_reasoning_effort("mini"), Some("minimal"));
         assert_eq!(parse_reasoning_effort("none"), Some("none"));
         assert_eq!(effort_label("xhigh"), "Extra High");
-        assert_eq!(effort_label("max"), "Max");
-        assert_eq!(REASONING_EFFORTS.len(), 7);
+        assert_eq!(effort_label("max"), "Extra High");
+        assert_eq!(REASONING_EFFORTS.len(), 6);
+        assert!(REASONING_EFFORTS.iter().all(|(id, label)| *id != "max" && *label != "Max"));
+        assert_eq!(cabin_spawn_model(""), "grok-4.7");
+        assert_eq!(cabin_spawn_model("  "), "grok-4.7");
+        assert_eq!(cabin_spawn_model("grok-4.6"), "grok-4.6");
     }
 
     #[test]
-    fn think_is_grok_4_6_high() {
-        assert_eq!(model_for_mode("think"), "grok-4.6");
-        assert_eq!(model_for_mode("build"), "grok-4.6");
-        assert_eq!(model_for_mode("expert"), "grok-4.6");
-        assert_eq!(resolve_chat_model("think", "grok-3"), "grok-4.6");
-        assert_eq!(resolve_chat_model("think", ""), "grok-4.6");
+    fn think_is_grok_4_7_high() {
+        assert_eq!(model_for_mode("think"), "grok-4.7");
+        assert_eq!(model_for_mode("build"), "grok-4.7");
+        assert_eq!(model_for_mode("expert"), "grok-4.7");
+        assert_eq!(resolve_chat_model("think", "grok-3"), "grok-4.7");
+        assert_eq!(resolve_chat_model("think", ""), "grok-4.7");
         assert_eq!(reasoning_effort_for_mode("think"), Some("high"));
         assert_eq!(reasoning_effort_for_mode("max"), Some("xhigh"));
         assert_eq!(agent_reasoning_effort_for_mode("fast"), Some("low"));
         assert_eq!(agent_reasoning_effort_for_mode("balanced"), Some("medium"));
+        assert_eq!(agent_reasoning_effort_for_mode("max"), Some("xhigh"));
         assert_eq!(reasoning_effort_for_mode("auto"), None);
         let think = chat_request_body_for_mode("think", &[("user".into(), "hi".into())]);
-        assert_eq!(think["model"], "grok-4.6");
+        assert_eq!(think["model"], "grok-4.7");
         assert_eq!(think["reasoning_effort"], "high");
         let max = chat_request_body_for_mode("max", &[("user".into(), "hi".into())]);
-        assert_eq!(max["model"], "grok-4.6");
+        assert_eq!(max["model"], "grok-4.7");
         assert_eq!(max["reasoning_effort"], "xhigh");
         assert_ne!(think["reasoning_effort"], max["reasoning_effort"]);
+        let pinned = chat_request_body_vision(
+            "grok-4.6",
+            &[("user".into(), "hi".into())],
+            None,
+            Some("high"),
+        );
+        assert_eq!(pinned["reasoning_effort"], "high");
         assert_eq!(chat_timeout_secs(Some("high")), 600);
+        assert_eq!(failover_model("grok-4.7"), Some("grok-4.3"));
         assert_eq!(failover_model("grok-4.6"), Some("grok-4.3"));
     }
 
@@ -595,7 +626,7 @@ mod tests {
             model_for_mode(route_auto_mode(
                 "architect a host-tool plan and implement the first slice"
             )),
-            "grok-4.6"
+            "grok-4.7"
         );
         assert_eq!(
             reasoning_effort_for_mode(route_auto_mode(
@@ -672,8 +703,10 @@ mod tests {
         assert!(!settings_pin_blocks_auto("grok-3-mini-fast"));
         assert!(!settings_pin_blocks_auto("grok-4.3"));
         assert!(!settings_pin_blocks_auto("grok-4.6"));
+        assert!(!settings_pin_blocks_auto("grok-4.7"));
         assert!(!settings_pin_blocks_auto(""));
         assert!(is_composer_ladder_model("grok-4.6"));
+        assert!(is_composer_ladder_model("grok-4.7"));
         assert!(!is_composer_ladder_model("grok-3"));
     }
 

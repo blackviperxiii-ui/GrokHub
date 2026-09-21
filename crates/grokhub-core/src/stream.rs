@@ -172,7 +172,7 @@ pub fn prefer_complete_reply(streamed: &str, finished: &str) -> String {
     finished.to_string()
 }
 
-/// Grok 4.6 may stream `reasoning_content` or Responses reasoning deltas before the answer.
+/// Grok 4.7 may stream `reasoning_content` or Responses reasoning deltas before the answer.
 pub fn parse_sse_thought(line: &str) -> Option<String> {
     if let Some(v) = sse_json(line) {
         if is_thought_event(event_type(&v)) {
