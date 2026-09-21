@@ -1475,7 +1475,7 @@ fn routing_chip(id: &str, mode: &str, score: f32) -> QuickChip {
             "__mode:max",
             ChipKind::Mode,
             score,
-            "Max · Grok 4.6 xhigh",
+            "Max · Grok 4.7 xhigh",
         )
     } else {
         chip(
@@ -1484,7 +1484,7 @@ fn routing_chip(id: &str, mode: &str, score: f32) -> QuickChip {
             "__mode:think",
             ChipKind::Mode,
             score,
-            "Think · Grok 4.6 high",
+            "Think · Grok 4.7 high",
         )
     }
 }
@@ -2847,7 +2847,7 @@ mod tests {
     #[test]
     fn chip_llm_is_fast_mode() {
         assert_eq!(CHIP_LLM_MODE, "fast");
-        assert_eq!(crate::CABIN_FAST_MODEL, "grok-4.6");
+        assert_eq!(crate::CABIN_FAST_MODEL, "grok-4.7");
     }
 
     #[test]

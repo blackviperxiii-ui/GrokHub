@@ -5137,7 +5137,7 @@ impl Cabin {
                     self.persist_idle_key = self.persist_idle_now();
                     self.status = format!("Effort {}", grokhub_core::effort_label(effort));
                 } else {
-                    self.status = "Effort: low | medium | high | xhigh".into();
+                    self.status = "Effort: none | minimal | low | medium | high | xhigh".into();
                 }
             }
             Slash::Sessions => {
@@ -7610,14 +7610,7 @@ impl Cabin {
         let yolo = self.permission_mode == PermissionMode::AlwaysApprove;
         let auto = self.permission_mode == PermissionMode::Auto;
         let plan = self.session_mode == SessionMode::Plan;
-        let model = {
-            let m = self.cfg.model.trim();
-            if m.is_empty() {
-                None
-            } else {
-                Some(m.to_string())
-            }
-        };
+        let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
         let effort = grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort);
         let resume_in_cabin = resume
             .as_deref()
@@ -7640,7 +7633,7 @@ impl Cabin {
             resume.as_deref(),
             yolo,
             auto,
-            model.as_deref(),
+            Some(model.as_str()),
             effort,
             plan,
             image.as_deref(),
@@ -16133,7 +16126,7 @@ mod tests {
             .expect("cabin_fast_llm");
         assert!(
             fast.contains("CABIN_FAST_MODEL") && fast.contains("grok_cli_key"),
-            "chips/greeting Fast is Grok 4.1 via grok login: {fast}"
+            "chips/greeting use grok-4.7 via grok login: {fast}"
         );
         assert!(
             fast.contains("CABIN_FAST_FALLBACK"),
@@ -19370,14 +19363,18 @@ mod tests {
             super::mode_status_line("auto", "grok-4.6"),
             "Mode auto — routes Fast / Balance / Think / Max"
         );
+        assert_eq!(
+            super::mode_status_line("auto", "grok-4.7"),
+            "Mode auto — routes Fast / Balance / Think / Max"
+        );
         assert_eq!(super::mode_status_line("auto", "grok-3"), "Mode auto → grok-3");
         assert_eq!(
             super::mode_status_line("think", "grok-3"),
-            "Mode think → grok-4.6 · high"
+            "Mode think → grok-4.7 · high"
         );
         assert_eq!(
             super::mode_status_line("max", ""),
-            "Mode max → grok-4.6 · xhigh"
+            "Mode max → grok-4.7 · xhigh"
         );
     }
 

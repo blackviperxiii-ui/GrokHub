@@ -610,7 +610,7 @@ pub fn composer_perm_tip(id: &str) -> Option<(&'static str, &'static str)> {
 pub fn composer_effort_tip() -> (&'static str, &'static str) {
     (
         "Effort",
-        "How hard Grok thinks. Higher is slower and deeper. None through Max; /effort sets the same.",
+        "How hard Grok thinks. Higher is slower and deeper. None through Extra High; /effort sets the same.",
     )
 }
 
@@ -2072,7 +2072,7 @@ mod tests {
         let (effort_t, effort) = composer_effort_tip();
         assert_eq!(effort_t, "Effort");
         assert!(
-            effort.contains("None through Max") && effort.contains("/effort"),
+            effort.contains("None through Extra High") && effort.contains("/effort") && !effort.contains("Max"),
             "{effort}"
         );
         let effort_src = include_str!("cards.rs")
@@ -2095,7 +2095,8 @@ mod tests {
         );
         assert_eq!(composer_modes().len(), 3);
         assert_eq!(permission_modes().len(), 3);
-        assert_eq!(effort_modes().len(), 7);
+        assert_eq!(effort_modes().len(), 6);
+        assert!(effort_modes().iter().all(|(id, label)| *id != "max" && *label != "Max"));
         assert_eq!(effort_label("high"), "High");
         let session = include_str!("cards.rs")
             .split("pub fn session_row(")

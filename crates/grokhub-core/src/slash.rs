@@ -285,7 +285,8 @@ pub fn is_cabin_slash_turn(role: &str, content: &str) -> bool {
         return false;
     }
     t.starts_with("/help — this list")
-        || (t.starts_with("grok-3-mini-fast — ") && t.contains("grok-4.6 — "))
+        || (t.starts_with("grok-3-mini-fast — ")
+            && (t.contains("grok-4.7 — ") || t.contains("grok-4.6 — ")))
 }
 
 pub fn slash_kind(s: &Slash) -> &'static str {
@@ -561,7 +562,7 @@ pub fn slash_help() -> String {
         "/plan — plan mode (Grok Build)",
         "/always-approve — skip tool permission prompts",
         "/auto — auto-approve safe tools",
-        "/effort <none|minimal|low|medium|high|xhigh|max> — reasoning effort (composer dropdown too)",
+        "/effort <none|minimal|low|medium|high|xhigh> — reasoning effort (composer dropdown too)",
         "/sessions — Grok Build sessions",
         "/resume — same as /sessions (Grok /resume)",
         "/inspect — grok inspect --json against ~/.grok",
@@ -710,7 +711,7 @@ mod tests {
         assert_eq!(parse_slash("/loop 30m check deploy").as_ref().map(slash_kind), Some("loop"));
         assert_eq!(parse_slash("/skills"), Some(Slash::GrokSkills));
         assert_eq!(parse_slash("/mcps"), Some(Slash::GrokConnectors));
-        assert_eq!(parse_slash("/model grok-4.6").as_ref().map(slash_kind), Some("model"));
+        assert_eq!(parse_slash("/model grok-4.7").as_ref().map(slash_kind), Some("model"));
         assert_eq!(parse_slash("/m grok-4.5").as_ref().map(slash_kind), Some("model"));
         assert_eq!(parse_slash("/imagine-video a cat").as_ref().map(slash_kind), Some("imagine_video"));
         assert_eq!(parse_slash("/goal migrate auth").as_ref().map(slash_kind), Some("goal"));
@@ -848,7 +849,7 @@ mod tests {
         assert!(is_cabin_slash_turn("assistant", &slash_help()));
         assert!(is_cabin_slash_turn(
             "assistant",
-            "grok-3-mini-fast — Grok 3 Mini Fast (chat)\ngrok-4.6 — Grok 4.6 (chat)"
+            "grok-3-mini-fast — Grok 3 Mini Fast (chat)\ngrok-4.7 — Grok 4.7 (chat)"
         ));
         assert!(!is_cabin_slash_turn("assistant", "Hello Viper"));
         assert!(is_cabin_slash_turn("user", "/help"));
