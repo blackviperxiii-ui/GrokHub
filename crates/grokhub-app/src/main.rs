@@ -65,12 +65,12 @@ fn main() {
         Launch::Help => {
             #[cfg(windows)]
             eprint!(
-                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  latest GitHub zip (or source overlay) + grok update --alpha\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
+                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  only what is newer: grok update --alpha, then GitHub zip or source overlay\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
                 env!("CARGO_PKG_VERSION")
             );
             #[cfg(not(windows))]
             eprint!(
-                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  git pull + install.sh --user + grok update --alpha\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
+                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  only what is newer: grok update --alpha, then git pull + install.sh --user\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
                 env!("CARGO_PKG_VERSION")
             );
         }
@@ -175,17 +175,54 @@ fn run_doctor() {
 fn run_update_cli() {
     let cfg = config::load();
     let src = update::resolve_source(&cfg.source_dir);
-    if src
-        .as_ref()
-        .is_some_and(|p| grokhub_core::overlay_clone_usable(p))
+    let probe = update::blocking_update_probe();
+    let pending = grokhub_core::pending_from_versions(
+        env!("CARGO_PKG_VERSION"),
+        probe.cabin_tag.as_deref(),
+        probe.cli_installed.as_deref(),
+        probe.cli_alpha.as_deref(),
+    );
+    if pending == grokhub_core::UpdatePending::None {
+        println!("{}", grokhub_core::combined_update_hint(pending));
+        return;
+    }
+    if pending != grokhub_core::UpdatePending::Cli
+        && src
+            .as_ref()
+            .is_some_and(|p| grokhub_core::overlay_clone_usable(p))
     {
         if let Some(src) = src.as_ref() {
             update::remember_source(src);
         }
     }
-    match grokhub_core::update_cmds_for(src.as_deref())
-        .and_then(|cmds| update::run_update_cmds(&cmds))
-    {
+    let plan = match grokhub_core::combined_update_cmds(src.as_deref(), pending) {
+        Ok(plan) => plan,
+        Err(e) if pending == grokhub_core::UpdatePending::Both => {
+            match grokhub_core::combined_update_cmds(src.as_deref(), grokhub_core::UpdatePending::Cli)
+            {
+                Ok(mut plan) => {
+                    plan.cabin_skipped = Some(e);
+                    plan
+                }
+                Err(cli_e) => {
+                    eprintln!("{cli_e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    if let Some(note) = &plan.cabin_skipped {
+        eprintln!("{note}");
+    }
+    if grokhub_core::update_wipes_config(&plan.cmds) {
+        eprintln!("refusing an update that would wipe config");
+        std::process::exit(1);
+    }
+    match update::run_update_cmds(&plan.cmds) {
         Ok(out) => print!("{out}"),
         Err(e) => {
             eprintln!("{e}");
@@ -354,10 +391,15 @@ mod tests {
             .and_then(|s| s.split("fn run_hub(").next())
             .expect("run_update_cli");
         assert!(
-            upd.contains("update_cmds_for")
+            upd.contains("combined_update_cmds")
+                && upd.contains("pending_from_versions")
                 && upd.contains("overlay_clone_usable")
-                && !upd.contains("no GrokHub source tree"),
-            "grokhub --update on Windows must not require a clone or remember leftover cursor/*: {upd}"
+                && upd.contains("UpdatePending::Cli")
+                && upd.contains("UpdatePending::Both")
+                && !upd.contains("update_cmds_for")
+                && !upd.contains("no GrokHub source tree")
+                && !upd.contains("--stable"),
+            "grokhub --update runs only what is newer and does not require a Windows clone: {upd}"
         );
     }
 

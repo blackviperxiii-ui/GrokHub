@@ -413,7 +413,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/room", hint: "Speak the room — stage a project", insert: "/room ", run_on_pick: false },
     SlashDef { cmd: "/dream", hint: "Imagine last night’s job", insert: "/dream", run_on_pick: true },
     SlashDef { cmd: "/inhabit", hint: "Hand this Grok to another box", insert: "/inhabit ", run_on_pick: false },
-    SlashDef { cmd: "/update", hint: "Overlay + Grok Build CLI", insert: "/update", run_on_pick: true },
+    SlashDef { cmd: "/update", hint: "Update CLI and cabin when newer", insert: "/update", run_on_pick: true },
     SlashDef { cmd: "/import", hint: "Import OpenClaw workspace", insert: "/import", run_on_pick: true },
     SlashDef { cmd: "/consult", hint: "One-shot consult", insert: "/consult ", run_on_pick: false },
     SlashDef { cmd: "/usage", hint: "Today's usage + Grok spend", insert: "/usage", run_on_pick: true },
@@ -588,9 +588,9 @@ pub fn slash_help() -> String {
         "/forget <topic> — drop memory lines that mention the topic (whole words)",
         "/imagine <prompt>",
         if cfg!(windows) {
-            "/update — latest GitHub Windows zip into %LOCALAPPDATA%\\Programs\\GrokHub, then `grok update --alpha`. A leftover clone (not main) uses the zip. A source clone on main overlays with install-windows.ps1. Restart on Settings. A newer GitHub Latest cabin notifies in-app (Settings → Update)."
+            "/update — only what is newer. CLI first (`grok update --alpha`) when a newer alpha exists, then the latest GitHub Windows zip into %LOCALAPPDATA%\\Programs\\GrokHub when the cabin is newer. A leftover clone (not main) uses the zip. A source clone on main overlays with install-windows.ps1. A current alpha is left alone. Restart on Settings. The titlebar chip notifies in-app (Update CLI, Update cabin, or Update CLI and cabin) every 2 hours."
         } else {
-            "/update — overlay install, then `grok update --alpha` (PATH prepends ~/.grok/bin and ~/.local/bin). Restart on Settings. A newer GitHub Latest cabin notifies in-app (Settings → Update)."
+            "/update — only what is newer. CLI first (`grok update --alpha`, PATH prepends ~/.grok/bin and ~/.local/bin) when a newer alpha exists, then overlay install when the cabin is newer. A current alpha is left alone. Restart on Settings. The titlebar chip notifies in-app (Update CLI, Update cabin, or Update CLI and cabin) every 2 hours."
         },
         "/send <task> — task this box",
         "/sync — merge chats and memory with paired computers",
@@ -624,9 +624,9 @@ pub fn slash_help() -> String {
         "Appearance: Dark, Light, System. Interactive chat is grok agent stdio (ACP). Night and phone use grok -p. Halt is session/cancel.",
         "Voice: Ara. Hey Grok is push-to-talk STT into chat, then TTS of the reply body (not the thought process). Same on Linux and Windows. While live, Voice · Listening sits above the composer with Stop. The line stays open until Stop, the live mic, or Ctrl+G / Super+G. Desktop control is Grok Build computer-use — Halt cancels the ACP turn.",
         if cfg!(windows) {
-            "First-time install and reinstall (Windows Setup + first cabin launch) automatically install Grok Build CLI alpha from https://x.ai/cli (GROK_CHANNEL=alpha). UAC on first run is expected. First run is Get Started — Super Grok OAuth signs in grok too. Get Started shows live device-code / OAuth failures, not leftover wall or install status. The Install control is hidden when grok is already present or an alpha install is already running. Settings → Update → Update Grok Build CLI runs grok update --alpha when grok is already installed. Settings → Connect writes CLI auth when grok is not already connected. Settings → Update overlays the cabin (GitHub zip when there is no clone or the leftover clone is not main), then runs grok update --alpha. A newer GitHub Latest cabin notifies in-app on Settings → Update (Update + Restart), not a web page. If grok is on stable after an upgrade, the cabin switches it back to alpha. Settings About shows grok --version."
+            "First-time install and reinstall (Windows Setup + first cabin launch) automatically install Grok Build CLI alpha from https://x.ai/cli (GROK_CHANNEL=alpha). UAC on first run is expected. First run is Get Started — Super Grok OAuth signs in grok too. Get Started shows live device-code / OAuth failures, not leftover wall or install status. The Install control is hidden when grok is already present or an alpha install is already running. Settings → Connect writes CLI auth when grok is not already connected. One Update control checks every 2 hours for a newer Grok Build CLI alpha and a newer GitHub Latest cabin. The titlebar chip says Update CLI, Update cabin, or Update CLI and cabin and notifies in-app, not a web page. Acting on it runs only what is pending: grok update --alpha first, then the cabin (GitHub zip when there is no clone or the leftover clone is not main). A working alpha install is updated only when a newer alpha exists. It does not switch the CLI to stable. If grok is on stable after an upgrade, the cabin switches it back to alpha. Settings About shows grok --version."
         } else {
-            "First-time install and reinstall (install.sh, AUR, first cabin launch) automatically install Grok Build CLI alpha from https://x.ai/cli (GROK_CHANNEL=alpha). First run is Get Started — Super Grok OAuth signs in grok too. Get Started shows live device-code / OAuth failures, not leftover wall or install status. The Install control is hidden when grok is already present or an alpha install is already running. Settings → Update → Update Grok Build CLI runs grok update --alpha when grok is already installed (PATH prepends ~/.grok/bin and ~/.local/bin). Settings → Connect writes CLI auth when grok is not already connected. Cabin overlay updates the GUI, then runs grok update --alpha. A newer GitHub Latest cabin notifies in-app on Settings → Update (Update + Restart), not a web page. If grok is on stable after an upgrade, the cabin switches it back to alpha. It does not yank a working alpha install."
+            "First-time install and reinstall (install.sh, AUR, first cabin launch) automatically install Grok Build CLI alpha from https://x.ai/cli (GROK_CHANNEL=alpha). First run is Get Started — Super Grok OAuth signs in grok too. Get Started shows live device-code / OAuth failures, not leftover wall or install status. The Install control is hidden when grok is already present or an alpha install is already running. Settings → Connect writes CLI auth when grok is not already connected. One Update control checks every 2 hours for a newer Grok Build CLI alpha and a newer GitHub Latest cabin (PATH prepends ~/.grok/bin and ~/.local/bin). The titlebar chip says Update CLI, Update cabin, or Update CLI and cabin and notifies in-app, not a web page. Acting on it runs only what is pending: grok update --alpha first, then the cabin. A working alpha install is updated only when a newer alpha exists. It does not switch the CLI to stable. If grok is on stable after an upgrade, the cabin switches it back to alpha. It does not yank a working alpha install."
         },
         "× to tray; a pinned taskbar click or second grokhub raises the cabin.",
         "Pulse every 15s. Hidden idle waits for the pulse.",
@@ -817,7 +817,8 @@ mod tests {
                 slash_help().contains("grok update --alpha")
                     && slash_help().contains("LOCALAPPDATA")
                     && slash_help().contains("notifies in-app")
-                    && slash_help().contains("Update Grok Build CLI"),
+                    && slash_help().contains("Update CLI and cabin")
+                    && slash_help().contains("every 2 hours"),
                 "{}",
                 slash_help()
             );
@@ -834,7 +835,8 @@ mod tests {
                     && !slash_help().contains("current channel")
                     && !slash_help().contains("Linux does not pass --alpha")
                     && slash_help().contains("notifies in-app")
-                    && slash_help().contains("Update Grok Build CLI"),
+                    && slash_help().contains("Update CLI and cabin")
+                    && slash_help().contains("every 2 hours"),
                 "Linux /update must pin grok to alpha and notify in-app: {}",
                 slash_help()
             );
