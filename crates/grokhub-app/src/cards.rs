@@ -477,11 +477,11 @@ pub fn status_chip(ui: &mut egui::Ui, label: &str, tone: ChipTone) {
 }
 
 /// Glanceable in-progress chrome: pulsing live dot + phase label.
-/// Optional Stop sits on the row (composer disc still halts too).
-/// Hover shows the current action. Not a blinking caret.
-pub fn paint_run_pulse(ui: &mut egui::Ui, label: &str, hint: &str, show_stop: bool) -> bool {
+/// Hover shows the current action. Halt stays on the composer disc.
+/// Not a blinking caret.
+pub fn paint_run_pulse(ui: &mut egui::Ui, label: &str, hint: &str) {
     if label.is_empty() {
-        return false;
+        return;
     }
     let t = ui.ctx().input(|i| i.time) as f32;
     let pulse = chat_run_dot_alpha(t);
@@ -493,7 +493,6 @@ pub fn paint_run_pulse(ui: &mut egui::Ui, label: &str, hint: &str, show_stop: bo
         (pulse * 255.0) as u8,
     );
     ui.add_space(6.0);
-    let mut stop = false;
     let row = ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), Sense::hover());
@@ -503,15 +502,11 @@ pub fn paint_run_pulse(ui: &mut egui::Ui, label: &str, hint: &str, show_stop: bo
                 .size(crate::theme::FONT_META)
                 .color(crate::theme::muted()),
         );
-        if show_stop && ghost_pill(ui, "Stop") {
-            stop = true;
-        }
     });
     if !hint.is_empty() {
         row.response.on_hover_text(hint);
     }
     ui.ctx().request_repaint();
-    stop
 }
 
 pub fn titlebar_update_chip(ui: &mut egui::Ui, label: &str) -> bool {
@@ -2451,9 +2446,10 @@ mod tests {
             pulse.contains("theme::live()")
                 && pulse.contains("circle_filled")
                 && pulse.contains("chat_run_dot_alpha")
-                && pulse.contains("ghost_pill(ui, \"Stop\")")
-                && pulse.contains("on_hover_text"),
-            "a chat turn must show a pulsing live dot, a label, hover action, and Stop: {pulse}"
+                && pulse.contains("on_hover_text")
+                && !pulse.contains("ghost_pill")
+                && !pulse.contains("Stop"),
+            "a chat turn shows a pulsing live dot and label, and the row has no Stop: {pulse}"
         );
         assert!(
             !pulse.contains("vec2(2.0, 16.0)") && !pulse.contains("rect_filled"),
@@ -2467,10 +2463,8 @@ mod tests {
         let _ = ctx.run(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 crate::theme::set_paint_dark(true);
-                let stopped = paint_run_pulse(ui, "Running", "run_terminal_cmd", true);
-                assert!(!stopped, "paint alone must not halt");
-                let idle = paint_run_pulse(ui, "", "hidden", true);
-                assert!(!idle, "idle phase paints nothing");
+                paint_run_pulse(ui, "Running", "run_terminal_cmd");
+                paint_run_pulse(ui, "", "hidden");
             });
         });
     }
