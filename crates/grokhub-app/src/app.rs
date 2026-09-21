@@ -126,7 +126,7 @@ use grokhub_core::{
     top_habit_labels,
     unified_diff_cite, usage_line, add_tokens, token_delta, cap_from_text, normalize_hm,
     quiet_hours_choice_label, quiet_hours_menu,
-    transcribe_route, uid, update_cmds_for, overlay_update_begin, overlay_update_finish,
+    transcribe_route, uid, overlay_update_begin, overlay_update_finish,
     cabin_overlay_step, cabin_update_notice, cli_update_notice, combined_update_cmds,
     combined_update_hint, grok_cli_update_cmd, should_notify_cabin_update,
     should_update_cli_alpha, update_check_due, update_chip_label, update_pending, UpdatePending,
@@ -1269,6 +1269,10 @@ pub struct Cabin {
     update_probe_rx: Option<mpsc::Receiver<crate::update::UpdateProbe>>,
     /// Cabin files were just overlaid. The running binary is still old until Restart.
     cabin_overlay_done: bool,
+    /// Update clicked while a chat or other job holds `running`. Starts when idle.
+    queued_overlay: Option<Vec<String>>,
+    /// Both was pending and the cabin half could not be built. CLI still runs.
+    update_cabin_note: Option<String>,
     acp: Option<grokhub_acp::AcpHandle>,
     acp_spawn_rx: Option<mpsc::Receiver<Result<grokhub_acp::AcpHandle, String>>>,
     grok_p_rx: Option<mpsc::Receiver<GrokPEvent>>,
@@ -1679,6 +1683,8 @@ impl Cabin {
             last_update_probe: None,
             update_probe_rx: None,
             cabin_overlay_done: false,
+            queued_overlay: None,
+            update_cabin_note: None,
             acp: None,
             acp_spawn_rx: None,
             grok_p_rx: None,
@@ -7283,6 +7289,7 @@ impl Cabin {
 
     /// One control: CLI alpha first when it is newer, then the cabin when it is newer.
     fn queue_combined_update(&mut self) {
+        self.open_update_overlay();
         let pending = self.update_pending_now();
         if pending == UpdatePending::None {
             self.open_update_overlay();
@@ -7301,19 +7308,34 @@ impl Cabin {
                 self.persist_cfg();
             }
         }
-        match combined_update_cmds(src.as_deref(), pending) {
-            Ok(cmds) if !update_wipes_config(&cmds) => {
-                self.start_overlay_update(cmds);
-            }
-            Ok(_) => {
-                self.open_update_overlay();
-                self.status = "refusing an update that would wipe config".into();
+        let plan = match combined_update_cmds(src.as_deref(), pending) {
+            Ok(plan) => plan,
+            Err(e) if pending == UpdatePending::Both => {
+                match combined_update_cmds(src.as_deref(), UpdatePending::Cli) {
+                    Ok(mut plan) => {
+                        plan.cabin_skipped = Some(e);
+                        plan
+                    }
+                    Err(cli_e) => {
+                        self.open_update_overlay();
+                        self.status = cli_e;
+                        return;
+                    }
+                }
             }
             Err(e) => {
                 self.open_update_overlay();
                 self.status = e;
+                return;
             }
+        };
+        if update_wipes_config(&plan.cmds) {
+            self.open_update_overlay();
+            self.status = "refusing an update that would wipe config".into();
+            return;
         }
+        self.update_cabin_note = plan.cabin_skipped;
+        self.start_overlay_update(plan.cmds);
     }
 
     fn note_combined_update_landed(&mut self) {
@@ -9462,28 +9484,7 @@ impl Cabin {
     }
 
     fn queue_update(&mut self) {
-        self.nav = Nav::Settings;
-        self.settings_sec = SettingsSec::Update;
-        let src = resolve_source(&self.cfg.source_dir);
-        // Leftover cursor/* (or any non-main tree) is not a product checkout.
-        // Do not persist it — Windows Setup still runs the GitHub zip path.
-        if src
-            .as_ref()
-            .is_some_and(|p| grokhub_core::overlay_clone_usable(p))
-        {
-            if let Some(src) = src.as_ref() {
-                self.cfg.source_dir = src.display().to_string();
-                remember_source(src);
-                self.persist_cfg();
-            }
-        }
-        match update_cmds_for(src.as_deref()) {
-            Ok(cmds) if !update_wipes_config(&cmds) => {
-                self.start_overlay_update(cmds);
-            }
-            Ok(_) => self.status = "refusing an update that would wipe config".into(),
-            Err(e) => self.status = e,
-        }
+        self.queue_combined_update();
     }
 
     fn restart_after_update(&mut self, ctx: &egui::Context) {
@@ -9506,16 +9507,18 @@ impl Cabin {
     }
 
     fn start_overlay_update(&mut self, cmds: Vec<String>) {
+        self.nav = Nav::Settings;
+        self.settings_sec = SettingsSec::Update;
         if self.running {
-            self.status = "Busy — wait, then update".into();
+            self.queued_overlay = Some(cmds);
+            self.status = "Update queued — it starts when this job finishes.".into();
             return;
         }
+        self.queued_overlay = None;
         if cmds.is_empty() {
             self.status = "Update plan empty".into();
             return;
         }
-        self.nav = Nav::Settings;
-        self.settings_sec = SettingsSec::Update;
         let begin = overlay_update_begin(cmds.len());
         self.running = begin.running;
         self.chat_job_thread = None;
@@ -9539,6 +9542,16 @@ impl Cabin {
                 Err(e) => JobOut::Err(e),
             });
         });
+    }
+
+    fn drain_queued_update(&mut self) {
+        if self.running {
+            return;
+        }
+        let Some(cmds) = self.queued_overlay.take() else {
+            return;
+        };
+        self.start_overlay_update(cmds);
     }
 
     fn touch(&mut self) {
@@ -10588,6 +10601,7 @@ impl eframe::App for Cabin {
                 crate::theme::desktop_prefers_dark(),
             ),
         );
+        self.drain_queued_update();
         self.ui_titlebar(ctx);
         // First-run wait / Get Started takes CentralPanel — a Foreground Area over chat does not paint on Windows.
         if !self.ui_get_started(ctx) {
@@ -11146,6 +11160,7 @@ impl Cabin {
                 );
             });
         if run_pending_update {
+            self.open_update_overlay();
             self.queue_combined_update();
         }
     }
@@ -13170,6 +13185,9 @@ impl Cabin {
                                                             }
                                                             if let Some(notice) = cabin_notice.as_deref() {
                                                                 crate::cards::settings_note(ui, notice);
+                                                            }
+                                                            if let Some(note) = self.update_cabin_note.as_deref() {
+                                                                crate::cards::settings_note(ui, note);
                                                             }
                                                             if show_cli_install
                                                                 && crate::cards::settings_action(
@@ -17681,16 +17699,11 @@ mod tests {
             .and_then(|s| s.split("fn restart_after_update").next())
             .expect("queue_update");
         assert!(
-            queued.contains("self.persist_cfg()")
+            queued.contains("queue_combined_update")
+                && !queued.contains("update_cmds_for")
                 && !queued.contains("config::save")
                 && !queued.contains("persist_snap"),
-            "Update must not clone every thread just to stamp the source path: {queued}"
-        );
-        assert!(
-            queued.contains("update_cmds_for")
-                && queued.contains("overlay_clone_usable")
-                && !queued.contains("Set Settings → source"),
-            "Windows Update must run without a clone; leftover cursor/* must not be remembered: {queued}"
+            "/update must use the same pending plan as the chip: {queued}"
         );
         assert!(
             src.contains("combined_update_hint")
@@ -17715,9 +17728,32 @@ mod tests {
             queued_cli.contains("combined_update_cmds")
                 && queued_cli.contains("start_overlay_update")
                 && queued_cli.contains("UpdatePending::Cli")
+                && queued_cli.contains("UpdatePending::Both")
+                && queued_cli.contains("cabin_skipped")
+                && queued_cli.contains("self.open_update_overlay()")
+                && queued_cli.find("self.open_update_overlay()").unwrap()
+                    < queued_cli.find("combined_update_cmds").unwrap()
+                && queued_cli.contains("self.persist_cfg()")
+                && queued_cli.contains("overlay_clone_usable")
+                && !queued_cli.contains("config::save")
+                && !queued_cli.contains("persist_snap")
+                && !queued_cli.contains("Set Settings → source")
                 && !queued_cli.contains("--stable")
                 && !queued_cli.contains("begin_grok_install"),
             "the one Update control must run only pending steps, CLI first, on alpha: {queued_cli}"
+        );
+        let overlay = src
+            .split("fn start_overlay_update(")
+            .nth(1)
+            .and_then(|s| s.split("fn drain_queued_update(").next())
+            .expect("start_overlay_update");
+        let settings_at = overlay.find("Nav::Settings").expect("settings");
+        let running_at = overlay.find("if self.running").expect("running");
+        assert!(
+            settings_at < running_at
+                && overlay.contains("queued_overlay")
+                && src.contains("drain_queued_update"),
+            "a busy chip click must open Settings and queue the update: {overlay}"
         );
         let boot = src
             .split("pub fn new(hidden: bool)")
