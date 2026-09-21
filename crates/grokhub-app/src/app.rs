@@ -807,6 +807,45 @@ fn paint_thought_bubble(ui: &mut egui::Ui, body: &str) -> egui::Response {
     resp.expect("thought bubble")
 }
 
+/// Temp-data key for per-row heights. Pane width is part of the key so a
+/// resize does not reuse wrap heights measured at another width.
+fn chat_row_height_id(thread_id: &str, pane_w: f32) -> egui::Id {
+    egui::Id::new(("cabin-chat-row-h", thread_id, pane_width_bucket(pane_w)))
+}
+
+fn pane_width_bucket(pane_w: f32) -> i32 {
+    pane_w.round() as i32
+}
+
+/// egui id salt for one transcript row. Thread and index stay put when a
+/// culled neighbor skips `paint_chat_block`, so selection and hover do not
+/// slide onto the next visible row.
+fn chat_row_id_salt(thread_id: &str, index: usize) -> (&str, usize) {
+    (thread_id, index)
+}
+
+fn chat_row_outside_clip(origin: egui::Pos2, width: f32, height: f32, clip: egui::Rect) -> bool {
+    let row = egui::Rect::from_min_size(origin, egui::vec2(width.max(1.0), height));
+    row.max.y <= clip.min.y
+        || row.min.y >= clip.max.y
+        || row.max.x <= clip.min.x
+        || row.min.x >= clip.max.x
+}
+
+/// Keep a cached row's height when it sits fully outside the clip.
+/// Returns true when the caller should skip painting that row.
+fn reserve_offscreen_chat_row(ui: &mut egui::Ui, cached_h: f32) -> bool {
+    if !(cached_h > 0.0) {
+        return false;
+    }
+    let width = ui.available_width().max(1.0);
+    if !chat_row_outside_clip(ui.cursor().min, width, cached_h, ui.clip_rect()) {
+        return false;
+    }
+    ui.add_space(cached_h);
+    true
+}
+
 fn paint_chat_block(
     ui: &mut egui::Ui,
     block: &ChatView,
@@ -11449,8 +11488,8 @@ impl Cabin {
                         let live = !self.live_blocks.is_empty();
                         let mut act = ChatBlockAct::None;
                         {
-                            let row_h_id =
-                                egui::Id::new(("cabin-chat-row-h", self.visible_thread_id()));
+                            let thread_id = self.visible_thread_id();
+                            let row_h_id = chat_row_height_id(&thread_id, pane);
                             let views = self.cached_chat_views();
                             let shown = if live {
                                 views_up_to_last_user(views)
@@ -11470,29 +11509,27 @@ impl Cabin {
                                 let next_thought = shown
                                     .get(i + 1)
                                     .is_some_and(|v| v.kind == ChatKind::Thought);
-                                if let Some(h) = prev_heights.get(i).copied().filter(|h| *h > 0.0) {
-                                    let row = egui::Rect::from_min_size(
-                                        ui.cursor().min,
-                                        egui::vec2(ui.available_width().max(1.0), h),
-                                    );
-                                    let clip = ui.clip_rect();
-                                    let outside = row.max.y <= clip.min.y
-                                        || row.min.y >= clip.max.y
-                                        || row.max.x <= clip.min.x
-                                        || row.min.x >= clip.max.x;
-                                    if outside {
-                                        ui.add_space(h);
-                                        next_heights.push(h);
-                                        continue;
-                                    }
+                                let cached_h = prev_heights.get(i).copied().unwrap_or(0.0);
+                                if reserve_offscreen_chat_row(ui, cached_h) {
+                                    // `push_id` still consumes one parent auto-id
+                                    // (`advance_cursor_after_rect`). A culled row must
+                                    // burn that same slot or the next painted row renumbers.
+                                    ui.skip_ahead_auto_ids(1);
+                                    next_heights.push(cached_h);
+                                    continue;
                                 }
                                 let y0 = ui.cursor().min.y;
-                                match paint_chat_block(
-                                    ui,
-                                    block,
-                                    thought_shows_label(prev_thought),
-                                    thought_shows_acts(next_thought),
-                                ) {
+                                match ui
+                                    .push_id(chat_row_id_salt(&thread_id, i), |ui| {
+                                        paint_chat_block(
+                                            ui,
+                                            block,
+                                            thought_shows_label(prev_thought),
+                                            thought_shows_acts(next_thought),
+                                        )
+                                    })
+                                    .inner
+                                {
                                     ChatBlockAct::None => {}
                                     other => act = other,
                                 }
@@ -15193,6 +15230,12 @@ mod tests {
             chat.contains("cluster_gap"),
             "consecutive thoughts must cluster tighter than chat: {chat}"
         );
+        assert!(
+            chat.contains("chat_row_height_id")
+                && chat.contains("push_id(chat_row_id_salt")
+                && chat.contains("skip_ahead_auto_ids(1)"),
+            "offscreen rows must key height by pane width and keep a stable row id: {chat}"
+        );
         let running = src
             .split("fn paint_running(")
             .nth(1)
@@ -15297,6 +15340,89 @@ mod tests {
         let _ = ctx.run(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| add(ui));
         });
+    }
+
+    #[test]
+    fn chat_row_height_cache_misses_on_resize() {
+        let ctx = egui::Context::default();
+        let narrow = super::chat_row_height_id("thread-a", 720.0);
+        ctx.data_mut(|d| d.insert_temp(narrow, vec![40.0_f32, 88.0]));
+        let same_width: Option<Vec<f32>> =
+            ctx.data(|d| d.get_temp(super::chat_row_height_id("thread-a", 720.2)));
+        assert_eq!(same_width.unwrap(), vec![40.0, 88.0]);
+        let wide: Option<Vec<f32>> =
+            ctx.data(|d| d.get_temp(super::chat_row_height_id("thread-a", 1100.0)));
+        assert!(
+            wide.is_none(),
+            "a wider pane must not reuse heights wrapped at 720"
+        );
+        let other: Option<Vec<f32>> =
+            ctx.data(|d| d.get_temp(super::chat_row_height_id("thread-b", 720.0)));
+        assert!(other.is_none(), "another thread must not share row heights");
+    }
+
+    #[test]
+    fn skipped_row_advances_by_cached_height_only() {
+        with_fonts_ui(|ui| {
+            let y0 = ui.cursor().min.y;
+            assert!(!super::reserve_offscreen_chat_row(ui, 36.0));
+            assert!(
+                (ui.cursor().min.y - y0).abs() < 0.01,
+                "an on-screen row must still be painted"
+            );
+            let clip = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(200.0, 40.0));
+            ui.set_clip_rect(clip);
+            ui.add_space(80.0);
+            let y1 = ui.cursor().min.y;
+            assert!(super::reserve_offscreen_chat_row(ui, 36.0));
+            assert!(
+                (ui.cursor().min.y - y1 - 36.0).abs() < 0.01,
+                "skip must reserve the cached height and nothing more, delta {}",
+                ui.cursor().min.y - y1
+            );
+        });
+    }
+
+    #[test]
+    fn culled_row_does_not_steal_the_next_rows_widget_id() {
+        fn copy_id(skip_earlier: bool, salt: bool) -> egui::Id {
+            let ctx = egui::Context::default();
+            let mut id = egui::Id::NULL;
+            let _ = ctx.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    for i in 0..2 {
+                        if skip_earlier && i == 0 {
+                            ui.add_space(20.0);
+                            if salt {
+                                ui.skip_ahead_auto_ids(1);
+                            }
+                            continue;
+                        }
+                        let button = |ui: &mut egui::Ui| ui.button("Copy");
+                        let resp = if salt {
+                            ui.push_id(super::chat_row_id_salt("thr", i), button).inner
+                        } else {
+                            button(ui)
+                        };
+                        if i == 1 {
+                            id = resp.id;
+                        }
+                    }
+                });
+            });
+            id
+        }
+        let stable_full = copy_id(false, true);
+        let stable_skip = copy_id(true, true);
+        assert_eq!(
+            stable_full, stable_skip,
+            "push_id by thread+index must survive a culled neighbor"
+        );
+        assert_ne!(
+            copy_id(false, false),
+            copy_id(true, false),
+            "egui auto ids still shift when a row is skipped; the salt is what holds them"
+        );
     }
 
     #[test]
