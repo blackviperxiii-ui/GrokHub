@@ -91,7 +91,7 @@ use grokhub_core::{
     mark_loop_ran, new_loop, parse_recipe, parse_slash, slash_kind, route_schedule, ScheduleRoute,
     automation_schedule_label, automation_summary_line,
     parse_theme, pick_theme, plan_room, LOOP_MAX,
-    chat_may_save_automation, teach_routine, user_asked_to_schedule,
+    chat_may_save_automation, teach_routine, teachable_steps, user_asked_to_schedule,
     presence_should_stream, propose_skill_from_turn, quiet_hours_active,
     parse_llm_chips, record_turn, reduce_voice_state, remember_chip_click, remember_chip_dismiss,
     remember_chip_outcome, remember_home_slash, remember_home_surface, remember_typed_prompt,
@@ -8565,12 +8565,7 @@ impl Cabin {
                     self.status = cite;
                 }
                 if self.watch_once {
-                    self.watched_steps = self
-                        .last_host
-                        .iter()
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect();
+                    self.watched_steps = teachable_steps(&self.last_host);
                     self.watch_once = false;
                     if self.watched_steps.is_empty() {
                         self.status = "Nothing to follow. Run the routine once, then teach it.".into();
@@ -18324,8 +18319,10 @@ mod tests {
             "HostDone must not steal the attached image: {host_done}"
         );
         assert!(
-            host_done.contains("watch_once") && !host_done.contains("save_schedule"),
-            "watching a host run must not save a job by itself: {host_done}"
+            host_done.contains("watch_once")
+                && host_done.contains("teachable_steps")
+                && !host_done.contains("save_schedule"),
+            "watching a host run must not save a job or the internal rewind snapshot: {host_done}"
         );
         let pushed = host_done.find("push_bound_msg").expect("host result");
         let recipe = host_done.find("save_recipe").expect("host recipe");
