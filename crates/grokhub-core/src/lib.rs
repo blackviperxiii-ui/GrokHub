@@ -93,7 +93,8 @@ pub use chat::{
     should_failover_status, CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, DEFAULT_MODEL, XAI_BASE,
 };
 pub use chat_view::{
-    assistant_prose, cluster_gap, is_workload_user, merge_thinking, merge_thinking_capped, quote_for_reply, scrub_thought, strip_thinking,
+    assistant_prose, cluster_gap, is_skill_saved_mark, is_workload_user, merge_thinking, merge_thinking_capped, quote_for_reply, scrub_thought, stretch_saved_skill, strip_thinking,
+    SKILL_SAVED_MARK, SKILL_SAVED_NOTE,
     refresh_last_stretch, thought_shows_acts, thought_shows_label, visible_chat, visible_chat_refs, visible_turn_count, visible_turn_count_from,
     scrolled_off_tail,
     ChatKind, ChatView, CHAT_BLOCK_GAP, CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, THOUGHT_CLUSTER_GAP,
@@ -122,7 +123,7 @@ pub use chips::{
     mode_from_chip_value, nav_from_chip_value, parse_llm_chips, predict_intents, prune_retired_chip_memory, remember_chip_click,
     remember_chip_dismiss, remember_chip_outcome, remember_home_slash, remember_home_surface,
     remember_typed_prompt, should_refresh_llm, home_slash_cmd, home_surface_from_nav,
-    top_habit_labels, ChipInput, ChipKind, ChipMemory, ChipStage, ChipThread, PredictedIntent,
+    skill_offer_chip, top_habit_labels, ChipInput, ChipKind, ChipMemory, ChipStage, ChipThread, PredictedIntent,
     QuickChip, CHIP_LLM_DEBOUNCE_MS, CHIP_LLM_MODE, CHIP_VISIBLE_MAX,
 };
 pub use desktop_entry::{
@@ -326,7 +327,7 @@ pub use project::{
     stage_project, toggle_folder, upsert_bound, visible_tree, DropOutcome, ProjectKind,
     ProjectMenuAct, ProjectNode,
 };
-pub use redact::{forget_topic, is_plain_text, redact_secrets};
+pub use redact::{forget_topic, is_plain_text, redact_held_secrets, redact_secrets};
 pub use skill::{
     bump_skill_run, is_hard_run, match_skill, parse_skill_md, patch_skill, prefer_patch,
     propose_skill_from_turn, render_skill_md, skill_dir_name, skill_follow_block,
