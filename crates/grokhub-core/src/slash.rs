@@ -632,6 +632,7 @@ pub fn slash_help() -> String {
         "Devices pair URL is a LAN IPv4. Expired pair codes hide and rotate. Hub complete is owner-only.",
         "Chat rail reuses one empty draft; after dialogue starts it opens a new chat. Old convos are sidebar History.",
         "Tool calls, diffs, and desk frames sit in a collapsed Work tree — expand to view. User and assistant chats are bubbles; thinking is faded thought process, not a bubble. Permission prompts Allow / Deny — Enter allows and Esc denies when the composer is empty. User bubbles sit on the right.",
+        "Shared buttons hover-scale to 1.035 over 120ms, shrink on press, and scale plus fill on keyboard focus. Off-screen chat rows skip paint; height follows the pane width and each row keeps its id.",
         "Five chips sit centered over the composer.",
     ]
     .join("\n")
@@ -782,6 +783,8 @@ mod tests {
         assert!(slash_help().contains("collapsed Work tree"));
         assert!(slash_help().contains("thought process"));
         assert!(slash_help().contains("User bubbles sit on the right"));
+        assert!(slash_help().contains("1.035"));
+        assert!(slash_help().contains("each row keeps its id"));
         assert!(slash_help().contains("green live dot plus Thinking / Running / Waiting"));
         assert!(slash_help().contains("compact Grok context"));
         assert!(slash_help().contains("/forget and Memory Save stay off"));
