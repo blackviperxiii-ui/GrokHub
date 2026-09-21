@@ -681,6 +681,13 @@ mod tests {
         fs::write(root.join("app.json"), r#"{"mode":"max"}"#).expect("write");
         let loaded = load();
         assert_eq!(loaded.reasoning_effort, "xhigh");
+        fs::write(root.join("app.json"), r#"{"reasoningEffort":"max"}"#).expect("write");
+        let saved_max = load();
+        assert_eq!(
+            saved_max.reasoning_effort, "xhigh",
+            "a saved Max effort must load as Extra High and must not be sent"
+        );
+        assert_ne!(saved_max.reasoning_effort, "max");
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }

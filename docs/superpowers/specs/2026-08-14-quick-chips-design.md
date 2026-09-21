@@ -11,7 +11,7 @@ Chips sit **above** the composer pill and change as the user types, as the threa
 - Local rank is instant: stage (empty / mid / error / tools / long), last assistant, draft prefix, hour affinity, click/dismiss memory, previous chats, last slash (`/plan`, `/learn`, `/imagine`), last surface (chat / Imagine / Skills), last session (Chat / Plan / Ask), first-run vs returning, last project, skill count.
 - Empty-home chips stay few and ADHD-short. Rank what they are likely to do next. Do not dump the catalog. Night jobs and GitHub whoami stay off a first-run row.
 - Fast mode (`grok-3-mini-fast`) suggests up to 5 chips when the context fingerprint changes. Debounce 1.2s. Never block chat.
-- Mode chips follow the composer ladder: Think Harder → Think (`grok-4.6` high); from Think, Go Max (`grok-4.6` xhigh); from Max, Use Adaptive (Auto). Auto itself routes Fast / Balance / Think / Max from the ask. Chip `/mode` writes only the combo, not the Settings chat-model pin.
+- Mode chips follow the composer ladder: Think Harder → Think (`grok-4.7` high); from Think, Go Max (`grok-4.7` xhigh); from Max, Use Adaptive (Auto). Auto itself routes Fast / Balance / Think / Max from the ask. Chip `/mode` writes only the combo, not the Settings chat-model pin. The composer Effort dropdown does not offer Max.
 - Visible cap 5, hard cap 8. Mix kinds (chat / shell / nav / mode). One mode chip max.
 - Click sends or navigates. × dismisses and soft-avoids. Typed prompts reinforce matching habits.
 - Secrets never persist in `chips.json`. `is_plain_text` gates every stored value.
