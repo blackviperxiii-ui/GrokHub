@@ -732,24 +732,28 @@ fn paint_speech_bubble(ui: &mut egui::Ui, body: &str, user: bool, markdown: bool
 fn paint_msg_acts(ui: &mut egui::Ui, user: bool, body: &str, avail: f32, align_w: f32) -> ChatBlockAct {
     let mut act = ChatBlockAct::None;
     let mut paint = |ui: &mut egui::Ui| {
-        let copy = ui.add(
-            egui::Button::new(
-                RichText::new("Copy")
-                    .size(crate::theme::FONT_META)
-                    .color(crate::theme::muted()),
-            )
-            .frame(false),
+        let copy = crate::theme::felt_label_button(
+            ui,
+            "Copy",
+            egui::Color32::TRANSPARENT,
+            crate::theme::muted(),
+            6.0,
+            egui::vec2(0.0, 0.0),
+            None,
+            false,
         );
         if copy.clicked() {
             act = ChatBlockAct::Copy(body.to_string());
         }
-        let reply = ui.add(
-            egui::Button::new(
-                RichText::new("Reply")
-                    .size(crate::theme::FONT_META)
-                    .color(crate::theme::muted()),
-            )
-            .frame(false),
+        let reply = crate::theme::felt_label_button(
+            ui,
+            "Reply",
+            egui::Color32::TRANSPARENT,
+            crate::theme::muted(),
+            6.0,
+            egui::vec2(0.0, 0.0),
+            None,
+            false,
         );
         if reply.clicked() {
             act = ChatBlockAct::Reply(body.to_string());
@@ -11445,12 +11449,19 @@ impl Cabin {
                         let live = !self.live_blocks.is_empty();
                         let mut act = ChatBlockAct::None;
                         {
+                            let row_h_id =
+                                egui::Id::new(("cabin-chat-row-h", self.visible_thread_id()));
                             let views = self.cached_chat_views();
                             let shown = if live {
                                 views_up_to_last_user(views)
                             } else {
                                 views
                             };
+                            let prev_heights: Vec<f32> = ui
+                                .ctx()
+                                .data(|d| d.get_temp(row_h_id))
+                                .unwrap_or_default();
+                            let mut next_heights = Vec::with_capacity(shown.len());
                             for (i, block) in shown.iter().enumerate() {
                                 let prev_thought = i
                                     .checked_sub(1)
@@ -11459,6 +11470,23 @@ impl Cabin {
                                 let next_thought = shown
                                     .get(i + 1)
                                     .is_some_and(|v| v.kind == ChatKind::Thought);
+                                if let Some(h) = prev_heights.get(i).copied().filter(|h| *h > 0.0) {
+                                    let row = egui::Rect::from_min_size(
+                                        ui.cursor().min,
+                                        egui::vec2(ui.available_width().max(1.0), h),
+                                    );
+                                    let clip = ui.clip_rect();
+                                    let outside = row.max.y <= clip.min.y
+                                        || row.min.y >= clip.max.y
+                                        || row.max.x <= clip.min.x
+                                        || row.min.x >= clip.max.x;
+                                    if outside {
+                                        ui.add_space(h);
+                                        next_heights.push(h);
+                                        continue;
+                                    }
+                                }
+                                let y0 = ui.cursor().min.y;
                                 match paint_chat_block(
                                     ui,
                                     block,
@@ -11472,7 +11500,9 @@ impl Cabin {
                                     block.kind == ChatKind::Thought,
                                     next_thought,
                                 ));
+                                next_heights.push((ui.cursor().min.y - y0).max(0.0));
                             }
+                            ui.ctx().data_mut(|d| d.insert_temp(row_h_id, next_heights));
                         }
                         if live {
                             match self.paint_live_blocks(ui, thinking) {
@@ -12033,21 +12063,19 @@ impl Cabin {
                                                 } else {
                                                     egui::Color32::TRANSPARENT
                                                 };
-                                                if crate::theme::pointing(
-                                                    ui.add(
-                                                        egui::Button::new(
-                                                            RichText::new(row)
-                                                                .size(13.0)
-                                                                .color(if on {
-                                                                    crate::theme::fg()
-                                                                } else {
-                                                                    crate::theme::muted()
-                                                                }),
-                                                        )
-                                                        .fill(fill)
-                                                        .rounding(8.0)
-                                                        .min_size(egui::vec2(ui.available_width(), 28.0)),
-                                                    ),
+                                                if crate::theme::felt_label_button(
+                                                    ui,
+                                                    &row,
+                                                    fill,
+                                                    if on {
+                                                        crate::theme::fg()
+                                                    } else {
+                                                        crate::theme::muted()
+                                                    },
+                                                    8.0,
+                                                    egui::vec2(ui.available_width(), 28.0),
+                                                    None,
+                                                    false,
                                                 )
                                                 .clicked()
                                                 {
@@ -12889,17 +12917,17 @@ impl Cabin {
                                                 egui::Layout::right_to_left(egui::Align::Center),
                                                 |ui| {
                                                     ui.add_space(16.0);
-                                                    if ui
-                                                        .add(
-                                                            egui::Button::new(
-                                                                RichText::new("×")
-                                                                    .size(18.0)
-                                                                    .color(crate::theme::muted()),
-                                                            )
-                                                            .fill(Color32::TRANSPARENT)
-                                                            .stroke(egui::Stroke::NONE),
-                                                        )
-                                                        .clicked()
+                                                    if crate::theme::felt_label_button(
+                                                        ui,
+                                                        "×",
+                                                        Color32::TRANSPARENT,
+                                                        crate::theme::muted(),
+                                                        6.0,
+                                                        egui::vec2(28.0, 28.0),
+                                                        None,
+                                                        false,
+                                                    )
+                                                    .clicked()
                                                     {
                                                         close = true;
                                                     }
