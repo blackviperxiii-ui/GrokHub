@@ -1,9 +1,11 @@
 use crate::config;
 use crate::host::run_host;
 use grokhub_core::{
-    discover_source, forbidden_reason, parse_github_latest_tag, restart_acts, restart_bin,
-    systemd_user_restart_args, systemd_user_stop_args, update_cmds, update_progress_pct,
-    update_step_label, update_wipes_config, RestartAct, GITHUB_LATEST_API, TEXT_FILE_CAP,
+    discover_source, forbidden_reason, parse_github_latest_tag, parse_installed_cli_version,
+    parse_published_cli_alpha, restart_acts, restart_bin, systemd_user_restart_args,
+    systemd_user_stop_args, update_cmds, update_progress_pct, update_step_label,
+    update_wipes_config, RestartAct, CLI_ALPHA_VERSION_FALLBACK, CLI_ALPHA_VERSION_URL,
+    GITHUB_LATEST_API, TEXT_FILE_CAP,
 };
 use std::io::Read;
 use std::env;
@@ -145,6 +147,86 @@ pub fn begin_cabin_latest_check() -> std::sync::mpsc::Receiver<Result<String, St
         let _ = tx.send(fetch_github_latest_tag());
     });
     rx
+}
+
+pub struct UpdateProbe {
+    pub cabin_tag: Option<String>,
+    pub cli_alpha: Option<String>,
+    pub cli_installed: Option<String>,
+}
+
+pub fn fetch_cli_alpha_version() -> Result<String, String> {
+    let mut last = "Grok Build CLI alpha version unavailable".to_string();
+    for url in [CLI_ALPHA_VERSION_URL, CLI_ALPHA_VERSION_FALLBACK] {
+        match fetch_text_capped(url) {
+            Ok(body) => match parse_published_cli_alpha(&body) {
+                Some(v) => return Ok(v),
+                None => last = "Grok Build CLI alpha version was not a semver".into(),
+            },
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
+
+fn fetch_text_capped(url: &str) -> Result<String, String> {
+    let resp = match ureq::get(url)
+        .set("user-agent", "GrokHub")
+        .timeout(Duration::from_secs(8))
+        .call()
+    {
+        Ok(r) => r,
+        Err(ureq::Error::Status(code, r)) => {
+            let mut buf = Vec::new();
+            let _ = r
+                .into_reader()
+                .take(TEXT_FILE_CAP as u64)
+                .read_to_end(&mut buf);
+            return Err(format!(
+                "CLI alpha version {code}: {}",
+                String::from_utf8_lossy(&buf).chars().take(120).collect::<String>()
+            ));
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+    let mut buf = Vec::new();
+    if resp
+        .into_reader()
+        .take(TEXT_FILE_CAP as u64 + 1)
+        .read_to_end(&mut buf)
+        .is_err()
+    {
+        return Err("CLI alpha version response read failed".into());
+    }
+    if buf.len() > TEXT_FILE_CAP {
+        return Err("CLI alpha version response too large".into());
+    }
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+fn installed_cli_version() -> Option<String> {
+    let bin = grokhub_acp::find_grok()?;
+    let text = grokhub_acp::grok_version(&bin).ok()?;
+    parse_installed_cli_version(&text)
+}
+
+/// Background check for GitHub Latest and the published CLI alpha.
+/// `grok --version` stays off the UI thread.
+pub fn begin_update_probe() -> std::sync::mpsc::Receiver<UpdateProbe> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(blocking_update_probe());
+    });
+    rx
+}
+
+/// Same three checks as the in-app probe. `grokhub --update` has no UI cache.
+pub fn blocking_update_probe() -> UpdateProbe {
+    UpdateProbe {
+        cabin_tag: fetch_github_latest_tag().ok(),
+        cli_alpha: fetch_cli_alpha_version().ok(),
+        cli_installed: installed_cli_version(),
+    }
 }
 
 fn unit_is_active(unit: &str) -> bool {
@@ -498,6 +580,54 @@ mod tests {
                 && !fetch.contains("into_string()")
                 && !fetch.contains("into_json()"),
             "Latest check must cap the GitHub body and stay in-app: {fetch}"
+        );
+    }
+
+    #[test]
+    fn update_probe_checks_cabin_and_cli_alpha_off_the_ui_thread() {
+        let src = include_str!("update.rs");
+        let probe = src
+            .split("pub fn begin_update_probe(")
+            .nth(1)
+            .and_then(|s| s.split("fn unit_is_active(").next())
+            .expect("begin_update_probe");
+        assert!(
+            probe.contains("thread::spawn")
+                && probe.contains("fetch_github_latest_tag")
+                && probe.contains("fetch_cli_alpha_version")
+                && probe.contains("installed_cli_version"),
+            "the 2h probe must check cabin Latest and CLI alpha off the UI thread: {probe}"
+        );
+        let alpha = src
+            .split("pub fn fetch_cli_alpha_version(")
+            .nth(1)
+            .and_then(|s| s.split("fn fetch_text_capped(").next())
+            .expect("fetch_cli_alpha_version");
+        assert!(
+            alpha.contains("CLI_ALPHA_VERSION_URL")
+                && alpha.contains("CLI_ALPHA_VERSION_FALLBACK")
+                && alpha.contains("parse_published_cli_alpha")
+                && !alpha.contains("--stable")
+                && !alpha.contains("x.ai/cli/stable"),
+            "CLI notify must read the alpha version, never stable: {alpha}"
+        );
+        let capped = src
+            .split("fn fetch_text_capped(")
+            .nth(1)
+            .and_then(|s| s.split("fn installed_cli_version(").next())
+            .expect("fetch_text_capped");
+        assert!(
+            capped.contains(".take(") && capped.contains("TEXT_FILE_CAP"),
+            "CLI alpha fetch must cap the body: {capped}"
+        );
+        let installed = src
+            .split("fn installed_cli_version(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn begin_update_probe(").next())
+            .expect("installed_cli_version");
+        assert!(
+            installed.contains("grok_version") && installed.contains("parse_installed_cli_version"),
+            "installed CLI version comes from grok --version: {installed}"
         );
     }
 }
