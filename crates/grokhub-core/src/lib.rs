@@ -66,8 +66,8 @@ pub use appearance::{
     theme_id, theme_label, ThemeChoice,
 };
 pub use feel::{
-    feel_scale, felt_rect, hover_alpha, hover_mix, lerp_f32, lift_rgb, mix_channel, HOVER_EXPANSION,
-    HOVER_SECS, HOVER_WASH, PRESS_EXPANSION, PRESS_SECS, SELECT_SECS,
+    feel_scale, felt_rect, hover_alpha, hover_mix, lerp_f32, lift_rgb, mix_channel, FOCUS_GROW,
+    FOCUS_WASH, HOVER_EXPANSION, HOVER_SECS, HOVER_WASH, PRESS_EXPANSION, PRESS_SECS, SELECT_SECS,
 };
 pub use autonomy::{
     anticipate_consumes_slot, anticipated_need, cabin_system_prompt,
