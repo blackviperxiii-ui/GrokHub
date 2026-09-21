@@ -91,7 +91,7 @@ use grokhub_core::{
     mark_loop_ran, new_loop, parse_recipe, parse_slash, slash_kind, route_schedule, ScheduleRoute,
     automation_schedule_label, automation_summary_line,
     parse_theme, pick_theme, plan_room, LOOP_MAX,
-    chat_may_save_automation, user_asked_to_schedule,
+    chat_may_save_automation, teach_routine, user_asked_to_schedule,
     presence_should_stream, propose_skill_from_turn, quiet_hours_active,
     parse_llm_chips, record_turn, reduce_voice_state, remember_chip_click, remember_chip_dismiss,
     remember_chip_outcome, remember_home_slash, remember_home_surface, remember_typed_prompt,
@@ -1082,6 +1082,10 @@ pub struct Cabin {
     grok_loops: Vec<GrokLoop>,
     grok_loop_rx: Option<(String, mpsc::Receiver<String>)>,
     night_nl: String,
+    /// One-shot watch on the Automations page. Not a second clock.
+    watch_once: bool,
+    watched_steps: Vec<String>,
+    teach_nl: String,
     /// Frames left pulling the chat pane to its newest message after a chat opens.
     chat_tail_frames: u8,
     /// Cap fields are typed, so they hold text until Save parses them.
@@ -1495,6 +1499,9 @@ impl Cabin {
             grok_loops: crate::loops::load(),
             grok_loop_rx: None,
             night_nl: String::new(),
+            watch_once: false,
+            watched_steps: Vec::new(),
+            teach_nl: String::new(),
             chat_tail_frames: CHAT_TAIL_FRAMES,
             cap_auto_buf: cfg_auto_cap.to_string(),
             cap_host_buf: cfg_host_cap.to_string(),
@@ -8557,6 +8564,20 @@ impl Cabin {
                 ) {
                     self.status = cite;
                 }
+                if self.watch_once {
+                    self.watched_steps = self
+                        .last_host
+                        .iter()
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    self.watch_once = false;
+                    if self.watched_steps.is_empty() {
+                        self.status = "Nothing to follow. Run the routine once, then teach it.".into();
+                    } else {
+                        self.status = "Watched once. Name a schedule on Automations.".into();
+                    }
+                }
                 let all_hands = !self.last_host.is_empty()
                     && self
                         .last_host
@@ -13200,10 +13221,14 @@ impl Cabin {
     /// One door for both schedulers. A clock time ("every weekday at 9") is a cabin
     /// automation in `automations.json`; an interval stays a Grok Build `/loop` row.
     fn save_schedule(&mut self, seed: &str) -> Option<String> {
-        match route_schedule(seed)? {
+        Some(self.commit_schedule(route_schedule(seed)?))
+    }
+
+    fn commit_schedule(&mut self, route: ScheduleRoute) -> String {
+        match route {
             ScheduleRoute::Clock(a) => {
                 if self.automations.len() >= LOOP_MAX {
-                    return Some("Maximum 50 scheduled automations".into());
+                    return "Maximum 50 scheduled automations".into();
                 }
                 let mut a = *a;
                 a.id = uid("auto");
@@ -13211,17 +13236,43 @@ impl Cabin {
                 let label = automation_schedule_label(&a);
                 self.automations.push(a);
                 self.persist_automations();
-                Some(format!("Automation added · {label}"))
+                format!("Automation added · {label}")
             }
             ScheduleRoute::Interval { interval, prompt } => {
                 if self.grok_loops.len() >= LOOP_MAX {
-                    return Some("Maximum 50 scheduled loops".into());
+                    return "Maximum 50 scheduled loops".into();
                 }
                 let mut row = new_loop(interval.clone(), prompt, now_ms());
                 row.id = uid("loop");
                 self.grok_loops.push(row);
                 self.persist_loops();
-                Some(format!("Loop added · every {interval}"))
+                format!("Loop added · every {interval}")
+            }
+        }
+    }
+
+    fn teach_watched_routine(&mut self) {
+        let ask = self.teach_nl.trim().to_string();
+        match teach_routine(&ask, &self.watched_steps) {
+            Some(route) => {
+                let status = self.commit_schedule(route);
+                let saved = status.contains("added");
+                self.status = status;
+                if saved {
+                    self.teach_nl.clear();
+                    self.watched_steps.clear();
+                    self.watch_once = false;
+                }
+            }
+            None => {
+                let tried = user_asked_to_schedule(&ask)
+                    || ask.contains("/loop")
+                    || ask.to_ascii_lowercase().contains("every ");
+                self.status = if tried {
+                    "Need `/loop 30m …`, `every 2h …`, or `every day at 9 …`".into()
+                } else {
+                    "A job is saved only when you ask to schedule it.".into()
+                };
             }
         }
     }
@@ -13239,6 +13290,59 @@ impl Cabin {
                     .size(12.0)
                     .color(crate::theme::muted()),
             );
+            ui.add_space(12.0);
+            crate::cards::section_label(ui, "Follow along");
+            ui.label(
+                RichText::new("Teach this once. Do the routine in chat, then name a schedule (`every weekday at 9` or `/loop`). A job is saved only when you ask to schedule it. Quiet hours still apply.")
+                    .size(12.0)
+                    .color(crate::theme::muted()),
+            );
+            ui.add_space(8.0);
+            let watch_label = if self.watch_once { "Watching" } else { "Follow along" };
+            if crate::cards::white_pill(ui, watch_label) {
+                if self.watch_once {
+                    self.watch_once = false;
+                    self.status = "Follow along cancelled".into();
+                } else {
+                    self.watch_once = true;
+                    self.watched_steps.clear();
+                    self.status = "Follow along once. Do the routine in chat.".into();
+                }
+            }
+            if !self.watched_steps.is_empty() {
+                let shown = self
+                    .watched_steps
+                    .iter()
+                    .take(3)
+                    .map(|step| {
+                        let trimmed = step.trim();
+                        if trimmed.chars().count() > 80 {
+                            format!("{}…", trimmed.chars().take(80).collect::<String>())
+                        } else {
+                            trimmed.to_string()
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(shown)
+                        .size(12.0)
+                        .monospace()
+                        .color(crate::theme::muted()),
+                );
+            }
+            ui.add_space(8.0);
+            let teach = ui.add(
+                egui::TextEdit::singleline(&mut self.teach_nl)
+                    .hint_text("every weekday at 9, summarize the board")
+                    .desired_width(f32::INFINITY),
+            );
+            let teach_enter =
+                teach.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if crate::cards::white_pill(ui, "Teach this once") || teach_enter {
+                self.teach_watched_routine();
+            }
             if self.auto_compose {
                 ui.add_space(12.0);
                 egui::Frame::none()
@@ -18219,6 +18323,10 @@ mod tests {
             host_done.contains("kick_model(false)"),
             "HostDone must not steal the attached image: {host_done}"
         );
+        assert!(
+            host_done.contains("watch_once") && !host_done.contains("save_schedule"),
+            "watching a host run must not save a job by itself: {host_done}"
+        );
         let pushed = host_done.find("push_bound_msg").expect("host result");
         let recipe = host_done.find("save_recipe").expect("host recipe");
         let saved = host_done.find("self.persist()").expect("host persist");
@@ -20189,6 +20297,14 @@ mod tests {
         assert!(
             night.contains("/loop") && night.contains("New job") && night.contains("grok_loops"),
             "Automations page still owns the Grok Build /loop list: {night}"
+        );
+        assert!(
+            night.contains("teach_watched_routine")
+                && night.contains("Follow along")
+                && night.contains("Teach this once")
+                && night.contains("watch_once")
+                && !night.contains("thread::spawn"),
+            "Automations teaches one routine into the existing scheduler, not a second clock: {night}"
         );
         assert!(
             night.contains("ui_scheduled_automations") && night.contains("self.automations"),
