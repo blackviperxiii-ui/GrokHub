@@ -548,6 +548,7 @@ pub fn feel_response(
 ) -> (egui::Response, egui::Rect, Color32) {
     let hovered = resp.hovered();
     let pressed = resp.is_pointer_button_down_on();
+    let focused = resp.has_focus();
     let id = resp.id;
     let base = resp.rect;
     let resp = pointing(resp);
@@ -557,8 +558,11 @@ pub fn feel_response(
     let press_t = ui
         .ctx()
         .animate_bool_with_time(id.with("feel-p"), pressed, PRESS_SECS);
-    let scale = feel_scale(hover_t, press_t);
-    let mix = hover_mix(hover_t, press_t);
+    let focus_t = ui
+        .ctx()
+        .animate_bool_with_time(id.with("feel-f"), focused, SELECT_SECS);
+    let scale = feel_scale(hover_t, press_t) + 0.01 * focus_t;
+    let mix = hover_mix(hover_t, press_t) + grokhub_core::FOCUS_WASH * focus_t;
     let (x, y, w, h) = felt_rect(base.min.x, base.min.y, base.width(), base.height(), scale);
     let rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h));
     (resp, rect, lift_fill(fill, mix))
