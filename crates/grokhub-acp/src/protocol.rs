@@ -108,6 +108,8 @@ pub struct PermissionAsk {
     pub session_id: String,
     pub title: String,
     pub tool_call_id: String,
+    /// One plain line: the command, path, or site. Not a raw tool dump.
+    pub action: String,
     /// Hook `ask` reason (or any other prompt body the CLI sent).
     pub reason: String,
 }
@@ -127,6 +129,8 @@ pub struct ElicitAsk {
     /// First string field on a form, if the schema has one.
     pub field_name: Option<String>,
     pub field_title: String,
+    /// Password, token, or other secret. The value stays out of the transcript.
+    pub secret: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -834,13 +838,109 @@ pub fn parse_permission(id: Value, params: &Value) -> PermissionAsk {
         .unwrap_or("")
         .trim()
         .to_string();
+    let action = permission_action_line(tool);
     PermissionAsk {
         rpc_id: id,
         session_id,
         title,
         tool_call_id,
+        action,
         reason,
     }
+}
+
+/// The command, path, or site on one line. JSON tool dumps stay off the card.
+pub fn permission_action_line(tool: &Value) -> String {
+    let raw = tool
+        .get("rawInput")
+        .or_else(|| tool.get("raw_input"))
+        .unwrap_or(&Value::Null);
+    if let Some(cmd) = first_action_str(raw, &["command", "cmd", "shell"]) {
+        return one_action_line(&cmd);
+    }
+    if let Some(url) = first_action_str(raw, &["url", "uri", "href", "site"]) {
+        return one_action_line(&site_label(&url));
+    }
+    if let Some(path) = first_action_str(
+        raw,
+        &[
+            "path",
+            "file",
+            "filePath",
+            "file_path",
+            "target_file",
+            "target",
+        ],
+    ) {
+        return one_action_line(&path);
+    }
+    let title = tool
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if title.is_empty() || looks_json_blob(title) {
+        return String::new();
+    }
+    if let Some(site) = url_in_text(title) {
+        return one_action_line(&site_label(&site));
+    }
+    one_action_line(title)
+}
+
+fn first_action_str(v: &Value, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(s) = v.get(*key).and_then(|x| x.as_str()) {
+            let s = s.trim();
+            if !s.is_empty() {
+                return Some(s.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn one_action_line(s: &str) -> String {
+    let line = s
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if line.chars().count() <= 120 {
+        line
+    } else {
+        format!("{}…", line.chars().take(119).collect::<String>())
+    }
+}
+
+fn site_label(url: &str) -> String {
+    let t = url.trim();
+    let rest = t
+        .strip_prefix("https://")
+        .or_else(|| t.strip_prefix("http://"))
+        .unwrap_or("");
+    if rest.is_empty() {
+        return t.to_string();
+    }
+    let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let host = host.split('@').next_back().unwrap_or(host);
+    if host.is_empty() {
+        t.to_string()
+    } else {
+        host.to_string()
+    }
+}
+
+fn url_in_text(s: &str) -> Option<String> {
+    for word in s.split_whitespace() {
+        let word = word.trim_matches(|c: char| matches!(c, '`' | '"' | '\'' | ',' | ')' | '('));
+        if word.starts_with("https://") || word.starts_with("http://") {
+            return Some(word.to_string());
+        }
+    }
+    None
 }
 
 pub fn permission_allow(id: Value) -> JsonRpc {
@@ -877,7 +977,7 @@ pub fn parse_elicit(id: Value, params: &Value) -> ElicitAsk {
         .unwrap_or("form")
         .to_ascii_lowercase();
     let schema = params.get("requestedSchema").unwrap_or(&Value::Null);
-    let (field_name, field_title) = first_form_field(schema);
+    let (field_name, field_title, secret) = first_form_field(schema);
     ElicitAsk {
         rpc_id: id,
         session_id: params
@@ -914,13 +1014,14 @@ pub fn parse_elicit(id: Value, params: &Value) -> ElicitAsk {
             .to_string(),
         field_name,
         field_title,
+        secret,
     }
 }
 
-fn first_form_field(schema: &Value) -> (Option<String>, String) {
+fn first_form_field(schema: &Value) -> (Option<String>, String, bool) {
     let props = match schema.get("properties").and_then(|v| v.as_object()) {
         Some(p) if !p.is_empty() => p,
-        _ => return (None, String::new()),
+        _ => return (None, String::new(), false),
     };
     let required: Vec<String> = schema
         .get("required")
@@ -948,16 +1049,39 @@ fn first_form_field(schema: &Value) -> (Option<String>, String) {
             })
         });
     let Some(name) = pick else {
-        return (None, String::new());
+        return (None, String::new(), false);
     };
-    let title = props
-        .get(&name)
+    let prop = props.get(&name);
+    let title = prop
         .and_then(|p| p.get("title").or_else(|| p.get("description")))
         .and_then(|v| v.as_str())
         .unwrap_or(name.as_str())
         .trim()
         .to_string();
-    (Some(name), title)
+    let secret = prop.is_some_and(|p| field_asks_for_secret(&name, &title, p));
+    (Some(name), title, secret)
+}
+
+/// Connector and MCP forms that ask for a password, token, or key.
+pub fn field_asks_for_secret(name: &str, title: &str, prop: &Value) -> bool {
+    if prop.get("writeOnly").and_then(|v| v.as_bool()) == Some(true) {
+        return true;
+    }
+    if prop.get("format").and_then(|v| v.as_str()) == Some("password") {
+        return true;
+    }
+    let blob = format!("{name} {title}").to_ascii_lowercase();
+    [
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "api_key",
+        "apikey",
+        "credential",
+    ]
+    .iter()
+    .any(|k| blob.contains(k))
 }
 
 pub fn parse_elicit_complete(params: &Value) -> (String, String) {
@@ -1038,6 +1162,7 @@ mod tests {
             }),
         );
         assert_eq!(ask.title, "Run");
+        assert_eq!(ask.action, "Run");
         assert_eq!(ask.reason, "Confirm this deploy");
         let elicit = parse_elicit(
             json!(2),
@@ -1056,6 +1181,7 @@ mod tests {
         );
         assert_eq!(elicit.server_name, "github");
         assert_eq!(elicit.field_name.as_deref(), Some("email"));
+        assert!(!elicit.secret, "an email field is not a secret");
         assert_eq!(elicit_accept(json!(2), Some(json!({"email": "a@b.com"}))).result.unwrap()["outcome"], "accept");
         assert_eq!(elicit_decline(json!(3)).result.unwrap()["outcome"], "decline");
         let url = parse_elicit(
@@ -1181,5 +1307,74 @@ mod tests {
         assert!(PermissionMode::AlwaysApprove.auto_allows());
         assert!(PermissionMode::Auto.auto_allows());
         assert!(!PermissionMode::Ask.auto_allows());
+    }
+
+    #[test]
+    fn ask_card_says_the_command_path_or_site() {
+        let cmd = parse_permission(
+            json!(1),
+            &json!({
+                "sessionId": "s1",
+                "toolCall": {
+                    "title": "{\"tool\":\"bash\",\"raw\":true}",
+                    "toolCallId": "c1",
+                    "rawInput": { "command": "git status --short" }
+                }
+            }),
+        );
+        assert_eq!(cmd.action, "git status --short");
+        let path = permission_action_line(&json!({
+            "title": "tool",
+            "rawInput": { "path": "C:\\Users\\j\\notes.md" }
+        }));
+        assert_eq!(path, "C:\\Users\\j\\notes.md");
+        let site = permission_action_line(&json!({
+            "title": "Fetch",
+            "rawInput": { "url": "https://github.com/blackviperxiii-ui/GrokHub/pull/1" }
+        }));
+        assert_eq!(site, "github.com");
+        let titled = permission_action_line(&json!({
+            "title": "Open https://example.com/inbox"
+        }));
+        assert_eq!(titled, "example.com");
+        let dump = permission_action_line(&json!({ "title": "{\"ok\":true}" }));
+        assert!(dump.is_empty(), "a raw tool dump is not the action line: {dump}");
+        let test = permission_action_line(&json!({
+            "title": "Run",
+            "rawInput": { "command": "[ -f /etc/os-release ] && cat /etc/os-release" }
+        }));
+        assert_eq!(test, "[ -f /etc/os-release ] && cat /etc/os-release");
+        let group = permission_action_line(&json!({
+            "rawInput": { "command": "{ echo hi; ls; }" }
+        }));
+        assert_eq!(group, "{ echo hi; ls; }");
+    }
+
+    #[test]
+    fn secret_elicit_is_marked_and_email_is_not() {
+        let secret = parse_elicit(
+            json!(4),
+            &json!({
+                "sessionId": "s1",
+                "serverName": "github",
+                "message": "Need a token",
+                "mode": "form",
+                "requestedSchema": {
+                    "type": "object",
+                    "properties": {
+                        "api_token": { "type": "string", "title": "API token", "writeOnly": true }
+                    },
+                    "required": ["api_token"]
+                }
+            }),
+        );
+        assert!(secret.secret);
+        assert_eq!(secret.field_name.as_deref(), Some("api_token"));
+        assert!(field_asks_for_secret(
+            "password",
+            "Password",
+            &json!({ "type": "string", "format": "password" })
+        ));
+        assert!(!field_asks_for_secret("email", "Email", &json!({ "type": "string" })));
     }
 }
