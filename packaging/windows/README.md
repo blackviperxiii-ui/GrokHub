@@ -30,7 +30,7 @@ pwsh -File scripts/make-windows-release.ps1 -SkipGrok
 
 Missing `grokhub.exe` / `grokhub-hub.exe` is fatal. Grok download failure is fatal unless `-SkipGrok`.
 
-In-app **Settings → Update** / `/update` / `grokhub --update` downloads that zip from the latest GitHub Release into `%LOCALAPPDATA%\Programs\GrokHub` when there is no source clone, then runs `grok update --alpha`. A source clone on `main` overlays with `scripts/install-windows.ps1` instead.
+In-app **Settings → Update**, `/update`, and `grokhub --update` run only what is newer. When the cabin is newer and there is no source clone, they download that zip from the latest GitHub Release into `%LOCALAPPDATA%\Programs\GrokHub`. A source clone on `main` overlays with `scripts/install-windows.ps1` instead. When the CLI alpha is newer they run `grok update --alpha` (first, when both are newer). A current alpha is left alone.
 
 ## Lock test (no Windows build)
 
