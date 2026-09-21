@@ -223,8 +223,8 @@ pub use automation::{
     mark_automation_ran, mark_automation_skipped, night_check_command, night_check_exit_code,
     night_check_may_fire, night_counts_run, night_unauth_should_skip,
     night_check_stdout, parse_clock_token, parse_nl_automation, replay_automation_target,
-    route_schedule, skip_automation,
-    chat_may_save_automation, user_asked_to_schedule,
+    route_schedule, skip_automation, teach_routine,
+    chat_may_save_automation, user_asked_to_schedule, watch_once_keeps_running,
     skip_night_check_receipt, Automation, ScheduleRoute,
 };
 pub use connector::{
