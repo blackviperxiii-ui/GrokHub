@@ -8,6 +8,7 @@ use crate::stream::StreamTokenKind;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoiceState {
     Idle,
+    Ready,
     Listening,
     Speaking,
     Hands,
@@ -38,16 +39,36 @@ pub const DEFAULT_VOICE_MODEL: &str = "grok-voice-think-fast-2.0";
 /// xAI realtime `session.voice` and TTS `voice_id`. Cabin voice mode is Ara.
 pub const DEFAULT_VOICE: &str = "ara";
 
+/// Hide the voice strip this long after Ready. Listening / Speaking stay up.
+pub const VOICE_READY_HIDE_MS: u64 = 1000;
+
 pub fn voice_mode_active(state: VoiceState, sock_live: bool) -> bool {
     sock_live || !matches!(state, VoiceState::Idle)
 }
 
 pub fn voice_mode_label(state: VoiceState) -> &'static str {
     match state {
-        VoiceState::Idle => "Voice",
-        VoiceState::Listening => "Voice · Listening",
-        VoiceState::Speaking => "Voice · Speaking",
-        VoiceState::Hands => "Voice · Hands",
+        VoiceState::Idle | VoiceState::Ready | VoiceState::Hands => "Ready",
+        VoiceState::Listening => "Listening",
+        VoiceState::Speaking => "Speaking",
+    }
+}
+
+/// Strip stays up while live. Ready auto-hides after [`VOICE_READY_HIDE_MS`].
+pub fn voice_strip_visible(state: VoiceState, ready_elapsed_ms: u64) -> bool {
+    match state {
+        VoiceState::Listening | VoiceState::Speaking | VoiceState::Hands => true,
+        VoiceState::Ready => ready_elapsed_ms < VOICE_READY_HIDE_MS,
+        VoiceState::Idle => false,
+    }
+}
+
+/// Failed STT must not stay Listening. Hold → Ready so the strip can hide.
+pub fn voice_state_after_ptt_stt(voice_on: bool, stt_ok: bool) -> VoiceState {
+    match ptt_after_stt(voice_on, stt_ok) {
+        PttLine::Leave => VoiceState::Idle,
+        PttLine::Hold => VoiceState::Ready,
+        PttLine::Listen | PttLine::Chat => VoiceState::Listening,
     }
 }
 
@@ -79,7 +100,7 @@ pub fn hey_grok_on_press(voice: VoiceState, hands_on: bool) -> HeyGrokAction {
         return HeyGrokAction::Halt;
     }
     match voice {
-        VoiceState::Idle => HeyGrokAction::Start,
+        VoiceState::Idle | VoiceState::Ready => HeyGrokAction::Start,
         VoiceState::Listening | VoiceState::Speaking => HeyGrokAction::BargeIn,
         VoiceState::Hands => HeyGrokAction::Halt,
     }
@@ -659,9 +680,27 @@ mod tests {
         assert_eq!(DEFAULT_VOICE, "ara");
         assert!(!voice_mode_active(VoiceState::Idle, false));
         assert!(voice_mode_active(VoiceState::Listening, false));
+        assert!(voice_mode_active(VoiceState::Ready, false));
         assert!(voice_mode_active(VoiceState::Idle, true));
-        assert_eq!(voice_mode_label(VoiceState::Listening), "Voice · Listening");
-        assert_eq!(voice_mode_label(VoiceState::Speaking), "Voice · Speaking");
+        assert_eq!(voice_mode_label(VoiceState::Listening), "Listening");
+        assert_eq!(voice_mode_label(VoiceState::Speaking), "Speaking");
+        assert_eq!(voice_mode_label(VoiceState::Ready), "Ready");
+        assert_eq!(hey_grok_on_press(VoiceState::Ready, false), HeyGrokAction::Start);
+        assert!(voice_strip_visible(VoiceState::Listening, 5_000));
+        assert!(voice_strip_visible(VoiceState::Speaking, 5_000));
+        assert!(voice_strip_visible(VoiceState::Ready, 0));
+        assert!(voice_strip_visible(VoiceState::Ready, 999));
+        assert!(!voice_strip_visible(VoiceState::Ready, VOICE_READY_HIDE_MS));
+        assert!(!voice_strip_visible(VoiceState::Idle, 0));
+        assert_eq!(
+            voice_state_after_ptt_stt(true, false),
+            VoiceState::Ready
+        );
+        assert_eq!(
+            voice_state_after_ptt_stt(true, true),
+            VoiceState::Listening
+        );
+        assert_eq!(voice_state_after_ptt_stt(false, false), VoiceState::Idle);
         let form = stt_multipart(b"RIFF", "grokhub-voice.wav", "bound");
         let s = String::from_utf8_lossy(&form);
         assert!(s.find("name=\"language\"").unwrap() < s.find("name=\"file\"").unwrap());

@@ -392,21 +392,69 @@ pub fn felt_pill(ui: &mut egui::Ui, label: &str, style: PillStyle) -> bool {
 
 /// Segmented control segment — animated active wash, Plasma-style click feel.
 pub fn felt_segment(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
+    felt_segment_styled(ui, label, selected, None, false)
+}
+
+/// Always = amber danger stroke + weight. Auto = mid. Ask = default.
+pub fn permission_risk_stroke_w(id: &str) -> f32 {
+    match id {
+        "always-approve" => 2.0,
+        "auto" => 1.35,
+        _ => 1.0,
+    }
+}
+
+pub fn permission_risk_stroke_color(id: &str) -> Color32 {
+    match id {
+        "always-approve" => crate::theme::setup(),
+        "auto" => crate::theme::border_strong(),
+        _ => crate::theme::border(),
+    }
+}
+
+pub fn permission_risk_strong(id: &str) -> bool {
+    id == "always-approve"
+}
+
+pub fn felt_perm_segment(
+    ui: &mut egui::Ui,
+    label: &str,
+    selected: bool,
+    id: &str,
+) -> egui::Response {
+    let stroke = Stroke::new(permission_risk_stroke_w(id), permission_risk_stroke_color(id));
+    felt_segment_styled(ui, label, selected, Some(stroke), permission_risk_strong(id))
+}
+
+fn felt_segment_styled(
+    ui: &mut egui::Ui,
+    label: &str,
+    selected: bool,
+    stroke: Option<Stroke>,
+    strong: bool,
+) -> egui::Response {
     let min = egui::vec2(52.0, 28.0);
     let (_rect, resp) = ui.allocate_exact_size(min, Sense::click());
     let on_t = crate::theme::animate_selection(ui, resp.id.with("seg"), selected);
     let base_fill =
         crate::theme::blend_color(Color32::TRANSPARENT, crate::theme::nav_active(), on_t);
-    let text_color = crate::theme::blend_color(crate::theme::muted(), crate::theme::fg(), on_t);
+    let quiet = if strong {
+        crate::theme::fg()
+    } else {
+        crate::theme::muted()
+    };
+    let text_color = crate::theme::blend_color(quiet, crate::theme::fg(), on_t);
     let (resp, rect, fill) = crate::theme::feel_response(ui, resp, base_fill);
     ui.painter().rect_filled(rect, 14.0, fill);
-    ui.painter().text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        label,
-        FontId::proportional(crate::theme::FONT_CHROME),
-        text_color,
-    );
+    if let Some(stroke) = stroke {
+        ui.painter().rect_stroke(rect, 14.0, stroke);
+    }
+    let font = if strong {
+        crate::theme::title_font(crate::theme::FONT_CHROME)
+    } else {
+        FontId::proportional(crate::theme::FONT_CHROME)
+    };
+    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, font, text_color);
     resp
 }
 
@@ -543,7 +591,7 @@ pub fn composer_modes() -> &'static [(&'static str, &'static str)] {
     &[
         ("chat", "Chat"),
         ("plan", "Plan"),
-        ("ask", "Ask"),
+        ("ask", "Look"),
     ]
 }
 
@@ -563,7 +611,7 @@ pub fn effort_label(id: &str) -> &'static str {
     grokhub_core::effort_label(id)
 }
 
-/// Hover copy for the Chat / Plan / Ask session pills. Unknown ids stay silent.
+/// Hover copy for the Chat / Plan / Look session pills. Unknown ids stay silent.
 pub fn composer_session_tip(id: &str) -> Option<(&'static str, &'static str)> {
     match id {
         "chat" => Some((
@@ -575,8 +623,8 @@ pub fn composer_session_tip(id: &str) -> Option<(&'static str, &'static str)> {
             "Grok writes a plan before changing things. Use this for bigger or riskier work. /plan is the same.",
         )),
         "ask" => Some((
-            "Ask",
-            "Question session. Grok looks and explains without editing. Switch to Chat to do the work.",
+            "Look",
+            "Look-only session. Grok looks and explains without editing. Switch to Chat to do the work.",
         )),
         _ => None,
     }
@@ -694,7 +742,7 @@ pub struct SessionRowOut {
     pub effort: Option<String>,
 }
 
-/// Chat / Plan / Ask, Ask / Auto / Always, and reasoning effort above the composer.
+/// Chat / Plan / Look, Ask / Auto / Always, and reasoning effort above the composer.
 pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> SessionRowOut {
     let mut out = SessionRowOut {
         mode: None,
@@ -722,7 +770,7 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> S
         ui.add_space(6.0);
         for (id, label) in permission_modes() {
             let on = *id == perm;
-            let mut resp = felt_segment(ui, label, on);
+            let mut resp = felt_perm_segment(ui, label, on, id);
             if let Some((title, body)) = composer_perm_tip(id) {
                 resp = with_composer_tip(resp, title, body);
             }
@@ -807,20 +855,93 @@ pub fn chip_row_width_lock(avail: f32) -> f32 {
 /// Tight row so leftover empty-home height cannot vertically center the chips.
 pub const CHIP_ROW_H: f32 = 36.0;
 
-pub fn quick_chip_fill(_primary: bool) -> Color32 {
-    crate::theme::elevated()
+/// Empty-home placeholder when ranking yields none. Not a ranked action chip.
+pub const CHIP_EMPTY_LABEL: &str = "Nothing queued";
+
+pub fn quick_chip_fill(primary: bool) -> Color32 {
+    if primary {
+        crate::theme::surface_hover()
+    } else {
+        crate::theme::elevated()
+    }
 }
 
-pub fn quick_chip_stroke(_primary: bool) -> Color32 {
-    crate::theme::border()
+pub fn quick_chip_stroke(primary: bool) -> Color32 {
+    if primary {
+        crate::theme::border_strong()
+    } else {
+        crate::theme::border()
+    }
 }
 
-pub fn quick_chip_fg(_primary: bool) -> Color32 {
-    crate::theme::fg()
+pub fn quick_chip_stroke_w(primary: bool) -> f32 {
+    if primary {
+        2.0
+    } else {
+        1.0
+    }
+}
+
+pub fn quick_chip_fg(primary: bool) -> Color32 {
+    if primary {
+        crate::theme::fg()
+    } else {
+        crate::theme::muted()
+    }
+}
+
+pub fn quick_chip_strong(primary: bool) -> bool {
+    primary
+}
+
+/// Hover-only why-this copy. No second chip row.
+pub fn chip_why_tip(hint: &str, label: &str) -> String {
+    let why = hint.trim();
+    if !why.is_empty() {
+        format!("Why this?\n{why}")
+    } else {
+        let label = label.trim();
+        if label.is_empty() {
+            "Why this?".into()
+        } else {
+            format!("Why this?\n{label}")
+        }
+    }
+}
+
+pub fn paint_empty_chip_state(ui: &mut egui::Ui) {
+    let max_w = chip_row_width_lock(ui.available_width());
+    ui.allocate_ui_with_layout(
+        egui::vec2(max_w, CHIP_ROW_H),
+        egui::Layout::left_to_right(egui::Align::Center)
+            .with_main_wrap(false)
+            .with_main_align(egui::Align::Center),
+        |ui| {
+            let fill = quick_chip_fill(false);
+            let stroke = Stroke::new(quick_chip_stroke_w(false), quick_chip_stroke(false));
+            let color = quick_chip_fg(false);
+            egui::Frame::none()
+                .fill(fill)
+                .rounding(18.0)
+                .stroke(stroke)
+                .inner_margin(egui::Margin::symmetric(12.0, 6.0))
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(CHIP_EMPTY_LABEL)
+                                .size(13.0)
+                                .color(color),
+                        )
+                        .sense(Sense::hover()),
+                    );
+                });
+        },
+    );
 }
 
 pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> Option<ChipRowAct> {
     if chips.is_empty() {
+        paint_empty_chip_state(ui);
         return None;
     }
     let mut act = None;
@@ -847,27 +968,27 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                 let stroke = quick_chip_stroke(c.primary);
                 let color = quick_chip_fg(c.primary);
                 let paint = chip_paint_label(&c.label);
-                let tip = if paint != c.label {
-                    if c.hint.is_empty() {
-                        c.label.clone()
-                    } else {
-                        format!("{}\n{}", c.label, c.hint)
-                    }
-                } else if c.hint.is_empty() {
-                    c.value.clone()
+                let why = if c.hint.is_empty() && paint != c.label {
+                    c.label.as_str()
                 } else {
-                    c.hint.clone()
+                    c.hint.as_str()
+                };
+                let tip = chip_why_tip(why, &c.label);
+                let font = if quick_chip_strong(c.primary) {
+                    crate::theme::title_font(13.0)
+                } else {
+                    FontId::proportional(13.0)
                 };
                 let ir = egui::Frame::none()
                     .fill(fill)
                     .rounding(18.0)
-                    .stroke(Stroke::new(1.0_f32, stroke))
+                    .stroke(Stroke::new(quick_chip_stroke_w(c.primary), stroke))
                     .inner_margin(egui::Margin::symmetric(12.0, 6.0))
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
                         ui.horizontal(|ui| {
                             let label_galley = ui.fonts(|f| {
-                                f.layout_no_wrap(paint.clone(), FontId::proportional(13.0), color)
+                                f.layout_no_wrap(paint.clone(), font.clone(), color)
                             });
                             let label_w = label_galley.size().x.max(8.0);
                             let (_rect, hit_resp) =
@@ -2073,9 +2194,13 @@ mod tests {
         let (plan_title, plan) = composer_session_tip("plan").unwrap();
         assert_eq!(plan_title, "Plan");
         assert!(plan.contains("plan") && plan.contains("/plan"), "{plan}");
-        let (ask_title, ask) = composer_session_tip("ask").unwrap();
-        assert_eq!(ask_title, "Ask");
-        assert!(ask.contains("without editing"), "{ask}");
+        let (look_title, look) = composer_session_tip("ask").unwrap();
+        assert_eq!(look_title, "Look");
+        assert_eq!(composer_modes()[2], ("ask", "Look"));
+        assert_ne!(composer_modes()[2].1, permission_modes()[0].1);
+        assert!(look.contains("without editing"), "{look}");
+        assert!(!look.contains("Ask"), "{look}");
+        assert!(!look_title.contains("Read"), "{look_title}");
         assert!(composer_session_tip("always-approve").is_none());
         assert!(composer_session_tip("auto").is_none());
 
@@ -2139,9 +2264,23 @@ mod tests {
             .and_then(|s| s.split("pub fn voice_mode_row(").next())
             .expect("session_row");
         assert!(
-            session.contains("felt_segment") && session.contains("out.effort = Some(next)"),
+            session.contains("felt_segment")
+                && session.contains("felt_perm_segment")
+                && session.contains("out.effort = Some(next)"),
             "composer session row must include effort dropdown: {session}"
         );
+        assert!(
+            permission_risk_stroke_w("always-approve") > permission_risk_stroke_w("auto"),
+            "Always stroke is heavier than Auto"
+        );
+        assert!(
+            permission_risk_stroke_w("auto") > permission_risk_stroke_w("ask"),
+            "Auto stroke is mid vs Ask"
+        );
+        assert_eq!(permission_risk_stroke_color("always-approve"), crate::theme::setup());
+        assert!(permission_risk_strong("always-approve"));
+        assert!(!permission_risk_strong("ask"));
+        assert!(!permission_risk_strong("auto"));
         assert!(
             session.contains("composer_session_tip")
                 && session.contains("composer_perm_tip")
@@ -2160,7 +2299,7 @@ mod tests {
         let ctx = egui::Context::default();
         let _ = ctx.run(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                assert!(!voice_mode_row(ui, "Voice · Listening"));
+                assert!(!voice_mode_row(ui, "Listening"));
             });
         });
         let switch = include_str!("cards.rs")
@@ -2194,10 +2333,15 @@ mod tests {
 
     #[test]
     fn first_quick_chip_is_inline_not_selected() {
-        assert_eq!(quick_chip_fill(true), crate::theme::elevated());
-        assert_eq!(quick_chip_fill(true), quick_chip_fill(false));
-        assert_eq!(quick_chip_stroke(true), quick_chip_stroke(false));
+        assert_ne!(quick_chip_fill(true), quick_chip_fill(false));
+        assert_ne!(quick_chip_stroke(true), quick_chip_stroke(false));
+        assert!(quick_chip_stroke_w(true) > quick_chip_stroke_w(false));
+        assert!(quick_chip_strong(true));
+        assert!(!quick_chip_strong(false));
         assert_eq!(quick_chip_fg(true), crate::theme::fg());
+        assert_eq!(quick_chip_fg(false), crate::theme::muted());
+        assert!(chip_why_tip("Last slash", "/plan").starts_with("Why this?"));
+        assert_eq!(chip_why_tip("", "Continue"), "Why this?\nContinue");
         let max_w = chip_row_width_lock(640.0);
         assert_eq!(max_w, 640.0);
         assert_ne!(max_w, 0.0);
@@ -2220,6 +2364,30 @@ mod tests {
             !slice.contains("ui.with_layout("),
             "with_layout eats remaining height and drops chips to the bottom: {slice}"
         );
+        assert_eq!(CHIP_EMPTY_LABEL, "Nothing queued");
+        assert!(
+            slice.contains("paint_empty_chip_state(ui)"),
+            "empty ranking must paint a muted placeholder, not a blank row: {slice}"
+        );
+        let empty = include_str!("cards.rs")
+            .split("pub fn paint_empty_chip_state(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn quick_chip_row(").next())
+            .expect("paint_empty_chip_state");
+        assert!(
+            empty.contains("CHIP_EMPTY_LABEL")
+                && empty.contains("quick_chip_fill(false)")
+                && empty.contains("quick_chip_stroke_w(false)")
+                && empty.contains("CHIP_ROW_H")
+                && empty.contains("Sense::hover()"),
+            "empty state is one muted chip-shaped label, not a ranked action: {empty}"
+        );
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                assert!(quick_chip_row(ui, &[]).is_none());
+            });
+        });
     }
 
     #[test]

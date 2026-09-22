@@ -382,10 +382,10 @@ pub use voice::{
     redact_cabin_from_memory, reduce_voice_state, should_attach_cabin_frame,
     should_capture_before_chat, should_mute_speaker, speech_can_connect, stt_multipart, stt_url,
     transcribe_route, tts_request_body, tts_url, voice_can_connect, voice_client_secret_denied,
-    voice_log_role, voice_mode_active, voice_mode_label, voice_session_url, voice_stream_token,
-    voice_transcript_sends_chat, voice_tts_script, CabinEyesState, HeyGrokAction, HeyGrokRoute,
-    PttLine, TranscribeRoute, VoiceEvent, VoiceRole, VoiceState, DEFAULT_VOICE,
-    DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS,
+    voice_log_role, voice_mode_active, voice_mode_label, voice_session_url, voice_state_after_ptt_stt,
+    voice_stream_token, voice_strip_visible, voice_transcript_sends_chat, voice_tts_script,
+    CabinEyesState, HeyGrokAction, HeyGrokRoute, PttLine, TranscribeRoute, VoiceEvent, VoiceRole,
+    VoiceState, DEFAULT_VOICE, DEFAULT_VOICE_MODEL, RECORDERS, TRANSCRIBERS, VOICE_READY_HIDE_MS,
 };
 pub use windshield::{
     build_windshield, filter_atspi_rows, is_interactive_role, keep_atspi_row, lock_check_titles,
