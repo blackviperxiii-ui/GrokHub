@@ -37,7 +37,7 @@ Composer placeholder: **What do you want to know?** Mode pill: Auto / Fast / Bal
 
 Grok may emit `HOST_CMD:` lines. The cabin runs `bash -lc` and sends stdout back. Host hour cap and forbidden paths still apply. Destructive night jobs skip and mark ran so they do not retry every pulse.
 
-Memory files live under `~/.config/GrokHub/memory/` (`SOUL.md`, `USER.md`, `MEMORY.md`). Config: `~/.config/GrokHub/app.json`. Project tree: `~/.config/GrokHub/projects.json`. Tokens: `~/.config/GrokHub/secrets.json` (mode 0600).
+Memory files live under `~/.config/GrokHub/memory/` (`SOUL.md`, `USER.md`, `MEMORY.md`). Config: `~/.config/GrokHub/app.json`. Project tree: `~/.config/GrokHub/projects.json`. Tokens: `~/.config/GrokHub/secrets.json` (mode 0600; Windows user-only DACL).
 
 Projects sit in the left rail. `+` creates a project under `~/GrokHub-Work/<slug>` or a one-level sidebar folder. Rename is the display name; the path stays. Right-click rename or delete (delete drops the sidebar row, not the files). Folders do not move files. Click a project to bind it. Bound tree is the world. `/project bind|new|folder|rename|move|delete|clear`.
 

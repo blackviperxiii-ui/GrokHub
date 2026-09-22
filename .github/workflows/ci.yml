@@ -14,6 +14,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - name: Native GUI build deps
         run: |
           sudo apt-get update
@@ -21,9 +23,9 @@ jobs:
             pkg-config libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libgl1-mesa-dev libwayland-dev libasound2-dev
-      - run: cargo test --workspace
-      # dead_code stays a warning: the retired direct-xAI chat pipeline in app.rs
-      # (JobOut::Chat*, ensure_acp, refresh_eyes) is the owner's call to remove.
+      - run: cargo test --workspace --locked
+      # -A dead_code stays until the Frontend carcass PR removes the retired
+      # direct-xAI chat pipeline in app.rs (JobOut::Chat*, ensure_acp, refresh_eyes).
       - run: cargo clippy --workspace --all-targets -- -D warnings -A dead_code
       - run: cargo build -p grokhub-app -p grokhub-hub -p grokhub-ffi
       - name: Cabin binary exists
@@ -52,7 +54,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - run: cargo test --workspace --locked
+      # -A dead_code stays until the Frontend carcass PR removes the retired
+      # direct-xAI chat pipeline in app.rs (JobOut::Chat*, ensure_acp, refresh_eyes).
+      - run: cargo clippy --workspace --all-targets -- -D warnings -A dead_code
       - run: cargo build --release --locked -p grokhub-app -p grokhub-hub
       - name: Cabin binaries exist
         shell: pwsh
