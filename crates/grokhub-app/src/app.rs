@@ -7244,6 +7244,7 @@ impl Cabin {
         self.palette_files.clear();
         self.palette_files_q.clear();
         self.palette_files_root.clear();
+        self.palette_file_rx = None;
         self.settings_menu_open = false;
     }
 
@@ -7290,7 +7291,10 @@ impl Cabin {
             path if path.starts_with("file:") => {
                 let shown = path.trim_start_matches("file:").trim();
                 if !shown.is_empty() {
-                    self.status = shown.to_string();
+                    match crate::desktop::open_path(shown) {
+                        Ok(()) => self.status = shown.to_string(),
+                        Err(e) => self.status = e,
+                    }
                 }
             }
             _ => {}
@@ -11302,6 +11306,8 @@ impl Cabin {
         let root_now = self.palette_search_root();
         if self.palette_files_q != q || self.palette_files_root != root_now {
             self.palette_files.clear();
+            self.palette_files_q.clear();
+            self.palette_files_root.clear();
         }
         if self.palette_file_rx.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(60));
@@ -16888,6 +16894,25 @@ mod tests {
             !tick.contains("search_place") && tick.contains("palette_files_q == q"),
             "a saved empty palette result must not walk again, and not on the UI thread: {tick}"
         );
+        let stale = tick
+            .split("if self.palette_files_q != q")
+            .nth(1)
+            .and_then(|s| s.split("if self.palette_file_rx.is_some()").next())
+            .expect("query change");
+        assert!(
+            stale.contains("palette_files_q.clear()")
+                && stale.contains("palette_files_root.clear()"),
+            "a query change must forget the last finished key or a revert keeps the empty list: {stale}"
+        );
+        let open = src
+            .split("fn open_palette(")
+            .nth(1)
+            .and_then(|s| s.split("fn run_palette(").next())
+            .expect("open_palette");
+        assert!(
+            open.contains("palette_file_rx = None"),
+            "reopen must drop a leftover walk or it can block the next search: {open}"
+        );
         let kick = src
             .split("fn kick_palette_search(")
             .nth(1)
@@ -22156,6 +22181,10 @@ mod tests {
         assert!(
             palette.contains("\"nav:chat\"") && palette.contains("self.new_thread(false)"),
             "palette Chat uses the same empty-draft reuse as the rail: {palette}"
+        );
+        assert!(
+            palette.contains("file:") && palette.contains("desktop::open_path"),
+            "picking a palette file must open it, not only write status: {palette}"
         );
         let land = src
             .split("fn land_on_real_chat(")
