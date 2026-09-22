@@ -38,6 +38,12 @@ pub fn save(s: &Secrets) -> Result<(), String> {
     Ok(())
 }
 
+/// Boot: rewrite a leftover world-readable `secrets.json` through `atomic_write`.
+/// Same bytes — do not go through load/save, which would wipe a torn file.
+pub fn ensure_private() {
+    let _ = config::rewrite_if_world_readable(&secrets_path());
+}
+
 pub fn access_token(s: &Secrets) -> String {
     s.oauth
         .as_ref()
@@ -130,8 +136,59 @@ mod tests {
             let mode = fs::metadata(secrets_path()).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600);
         }
+        #[cfg(windows)]
+        {
+            let sddl = crate::win_acl::file_sddl(&secrets_path()).expect("sddl");
+            assert!(
+                !crate::config::sddl_allows_world(&sddl),
+                "save must write user-only DACL, got {sddl}"
+            );
+        }
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ensure_private_rewrites_world_readable_leftover() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("sec-win");
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        fs::create_dir_all(&root).expect("root");
+        let path = secrets_path();
+        let body = br#"{"apiKey":"xai-world","oauth":null}"#;
+        fs::write(&path, body).expect("write");
+        crate::win_acl::apply_sddl(&path, crate::win_acl::WORLD_READ_SDDL).expect("world");
+        assert!(
+            crate::config::sddl_allows_world(&crate::win_acl::file_sddl(&path).unwrap()),
+            "precondition"
+        );
+        ensure_private();
+        let sddl = crate::win_acl::file_sddl(&path).expect("fixed");
+        assert!(
+            !crate::config::sddl_allows_world(&sddl),
+            "ensure_private must rewrite to user-only DACL: {sddl}"
+        );
+        assert_eq!(fs::read(&path).expect("bytes"), body);
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn ensure_private_rewrites_bytes_not_parsed_json() {
+        let src = include_str!("secrets.rs");
+        let ens = src
+            .split("pub fn ensure_private(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn access_token(").next())
+            .expect("ensure_private");
+        assert!(
+            ens.contains("rewrite_if_world_readable")
+                && !ens.contains("load()")
+                && !ens.contains("save("),
+            "boot rewrite must keep leftover bytes, not load/save JSON: {ens}"
+        );
     }
 
     #[test]
