@@ -376,6 +376,20 @@ pub fn update_chip_label(pending: UpdatePending) -> Option<&'static str> {
     }
 }
 
+/// Settings → Update title. Always a string so the button stays up for a manual check.
+/// The titlebar chip still uses `update_chip_label` and hides when nothing is newer.
+pub fn settings_update_label(pending: UpdatePending) -> &'static str {
+    update_chip_label(pending).unwrap_or("Update")
+}
+
+/// Settings / `/update` click. A missed probe still overlays CLI then cabin.
+pub fn pending_for_manual_update(pending: UpdatePending) -> UpdatePending {
+    match pending {
+        UpdatePending::None => UpdatePending::Both,
+        other => other,
+    }
+}
+
 pub fn combined_update_hint(pending: UpdatePending) -> &'static str {
     match pending {
         UpdatePending::Cli => {
@@ -387,7 +401,9 @@ pub fn combined_update_hint(pending: UpdatePending) -> &'static str {
         UpdatePending::Both => {
             "Updates Grok Build CLI alpha first, then the cabin. Does not switch the CLI to stable."
         }
-        UpdatePending::None => "GrokHub and Grok Build CLI alpha are current.",
+        UpdatePending::None => {
+            "GrokHub and Grok Build CLI alpha look current. Update still overlays so a missed probe can land."
+        }
     }
 }
 
@@ -1460,8 +1476,24 @@ mod tests {
             Some("Update CLI and cabin")
         );
         assert_eq!(update_chip_label(UpdatePending::None), None);
+        assert_eq!(settings_update_label(UpdatePending::None), "Update");
+        assert_eq!(settings_update_label(UpdatePending::Cli), "Update CLI");
+        assert_eq!(settings_update_label(UpdatePending::Cabin), "Update cabin");
+        assert_eq!(
+            settings_update_label(UpdatePending::Both),
+            "Update CLI and cabin"
+        );
+        assert_eq!(
+            pending_for_manual_update(UpdatePending::None),
+            UpdatePending::Both
+        );
+        assert_eq!(
+            pending_for_manual_update(UpdatePending::Cabin),
+            UpdatePending::Cabin
+        );
         assert!(combined_update_hint(UpdatePending::Both).contains("first"));
         assert!(!combined_update_hint(UpdatePending::Cli).contains("--stable"));
+        assert!(combined_update_hint(UpdatePending::None).contains("missed probe"));
 
         assert_eq!(parse_published_cli_alpha("1.0.39\n"), Some("1.0.39".into()));
         assert_eq!(parse_published_cli_alpha("v1.0.39"), Some("1.0.39".into()));

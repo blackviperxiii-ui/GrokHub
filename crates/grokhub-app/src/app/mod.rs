@@ -75,7 +75,8 @@ use grokhub_core::{
     overlay_update_begin, overlay_update_finish, pair_code_is_live, parse_computer_op,
     parse_consult, parse_fast_topics, parse_goal_outcome, parse_hostname_i, parse_llm_chips,
     parse_local_clock, parse_recipe, parse_slash, parse_suggest_lines, parse_suggest_skill_patches,
-    parse_theme, parse_trajectory_jsonl, partition_suggestions, patch_skill, perm_key,
+    parse_theme, parse_trajectory_jsonl, partition_suggestions, patch_skill,
+    pending_for_manual_update, perm_key,
     palette_file_shown, palette_forget_stale_walk, palette_row_action,
     palette_search_is_saved, persist_user_turn, pick_fresh_seed, pick_greeting, pick_lan_ipv4, pick_theme, plan_room,
     plus_empty_status, plus_menu_rows, push_stream_capped, prefer_patch, presence_should_stream,
@@ -92,6 +93,7 @@ use grokhub_core::{
     rewind_copy_cmd, rewind_dest, rewind_restore_matches, rewind_snapshot_ready, roll_usage_day,
     route_schedule, save_hub_state, screen_from_extents, scrolled_off_tail, search_corpus,
     search_corpus_tagged, search_place, search_thread_body, seed_from_bound, settings_pin_blocks_auto,
+    settings_update_label,
     settle_project_path, shortcut_help, should_anticipate, should_auto_compact_now,
     should_auto_continue_goal, should_capture_before_chat, should_idle_reflect, should_keep_frame,
     should_name_thread, should_notify_cabin_update, should_paint_greeting, should_refresh_greeting,
@@ -2728,14 +2730,10 @@ impl Cabin {
     }
 
     /// One control: CLI alpha first when it is newer, then the cabin when it is newer.
+    /// A Settings / `/update` click with nothing pending still overlays both.
     fn queue_combined_update(&mut self) {
         self.open_update_overlay();
-        let pending = self.update_pending_now();
-        if pending == UpdatePending::None {
-            self.open_update_overlay();
-            self.status = combined_update_hint(UpdatePending::None).into();
-            return;
-        }
+        let pending = pending_for_manual_update(self.update_pending_now());
         let src = resolve_source(&self.cfg.source_dir);
         if pending != UpdatePending::Cli
             && src
