@@ -130,7 +130,7 @@ use grokhub_core::{
 use grokhub_hub::serve_lan;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -433,11 +433,109 @@ fn mode_status_line(mode: &str, pinned_model: &str) -> String {
 const HISTORY_TYPE_DELAY: Duration = Duration::from_millis(250);
 const RAIL_FOOTER_H: f32 = 52.0;
 const PALETTE_LIST_H: f32 = 280.0;
+const PROFILE_NAME_MAX: usize = 64;
 
 struct OauthPhotoOut {
     tokens: Option<grokhub_core::XaiOAuthTokens>,
     url: String,
     image: Option<ColorImage>,
+}
+
+struct ProfilePhotoOut {
+    path: String,
+    image: Option<ColorImage>,
+}
+
+enum ProfilePick {
+    Chosen(std::path::PathBuf),
+    Cancelled,
+    Failed(String),
+}
+
+/// Name and local picture the avatar menu and rail paint. The email is not a field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AvatarMenu {
+    name: String,
+    picture_path: String,
+}
+
+fn clip_profile_name(s: &str) -> String {
+    s.trim().chars().take(PROFILE_NAME_MAX).collect()
+}
+
+fn fallback_cabin_name(user_md: &str) -> String {
+    let n = greeting_name(user_md, "");
+    if n.is_empty() {
+        "Grok".into()
+    } else {
+        n
+    }
+}
+
+/// Saved name wins. An empty saved name keeps the OAuth name, then USER.md, then Grok.
+/// The OAuth email is not a name.
+fn avatar_menu(
+    saved_name: &str,
+    saved_picture: &str,
+    oauth_name: Option<&str>,
+    user_md: &str,
+) -> AvatarMenu {
+    let saved = clip_profile_name(saved_name);
+    let name = if !saved.is_empty() {
+        saved
+    } else if let Some(n) = oauth_name.map(str::trim).filter(|s| !s.is_empty()) {
+        if greeting_name("", n).is_empty() {
+            fallback_cabin_name(user_md)
+        } else {
+            n.to_string()
+        }
+    } else {
+        fallback_cabin_name(user_md)
+    };
+    AvatarMenu {
+        name,
+        picture_path: saved_picture.trim().to_string(),
+    }
+}
+
+/// Latest cabin config a background save may write. Name keystrokes and picture
+/// changes each publish a generation. A writer saves only its own generation.
+struct CfgSlot {
+    gen: u64,
+    cfg: AppConfig,
+}
+
+fn publish_cfg(slot: &mut CfgSlot, mut cfg: AppConfig) -> u64 {
+    cfg.api_key.clear();
+    let mut gen = slot.gen.wrapping_add(1);
+    if gen == 0 {
+        gen = 1;
+    }
+    slot.gen = gen;
+    slot.cfg = cfg;
+    gen
+}
+
+fn cfg_if_current(slot: &CfgSlot, gen: u64) -> Option<AppConfig> {
+    if gen != 0 && slot.gen == gen {
+        Some(slot.cfg.clone())
+    } else {
+        None
+    }
+}
+
+fn next_pick_token(current: u64) -> u64 {
+    let n = current.wrapping_add(1);
+    if n == 0 {
+        1
+    } else {
+        n
+    }
+}
+
+/// A late picker result applies only when Remove has not bumped the token.
+fn profile_pick_current(active: u64, result: u64) -> bool {
+    active != 0 && active == result
 }
 
 fn oauth_photo_image(bytes: &[u8]) -> Option<ColorImage> {
@@ -1124,6 +1222,7 @@ pub struct Cabin {
     persist_idle_key: String,
     persist_rx: Option<mpsc::Receiver<()>>,
     persist_io: Arc<Mutex<()>>,
+    cfg_slot: Arc<Mutex<CfgSlot>>,
     board: Vec<BoardCard>,
     board_title: String,
     imagine_prompt: String,
@@ -1342,6 +1441,13 @@ pub struct Cabin {
     oauth_photo_rx: Option<mpsc::Receiver<OauthPhotoOut>>,
     oauth_photo_busy: bool,
     oauth_profile_tried: bool,
+    profile_photo: Option<TextureHandle>,
+    profile_photo_key: String,
+    profile_photo_rx: Option<mpsc::Receiver<ProfilePhotoOut>>,
+    profile_photo_busy: bool,
+    profile_pick_rx: Option<mpsc::Receiver<(u64, ProfilePick)>>,
+    profile_pick_token: Arc<AtomicU64>,
+    profile_file_io: Arc<Mutex<()>>,
     grok_install_rx: Option<mpsc::Receiver<Result<std::path::PathBuf, String>>>,
     grok_install_err: String,
     /// Official alpha install this session (missing/unusable at boot or retry).
@@ -1528,6 +1634,10 @@ impl Cabin {
         let boot_perm = PermissionMode::parse(&cfg.permission_mode).unwrap_or(PermissionMode::Ask);
         let goal_step = threads.get(thread_idx).map(|t| t.goal.step).unwrap_or(0);
         let (grok_sessions_tx, grok_sessions_rx) = mpsc::channel();
+        let cfg_slot = Arc::new(Mutex::new(CfgSlot {
+            gen: 0,
+            cfg: cfg.clone(),
+        }));
         let mut c = Self {
             nav: Nav::Chat,
             cfg,
@@ -1550,6 +1660,7 @@ impl Cabin {
             persist_idle_key: String::new(),
             persist_rx: None,
             persist_io: Arc::new(Mutex::new(())),
+            cfg_slot,
             board: config::load_board(),
             board_title: String::new(),
             imagine_prompt: String::new(),
@@ -1766,6 +1877,13 @@ impl Cabin {
             oauth_photo_rx: None,
             oauth_photo_busy: false,
             oauth_profile_tried: false,
+            profile_photo: None,
+            profile_photo_key: String::new(),
+            profile_photo_rx: None,
+            profile_photo_busy: false,
+            profile_pick_rx: None,
+            profile_pick_token: Arc::new(AtomicU64::new(0)),
+            profile_file_io: Arc::new(Mutex::new(())),
             grok_install_rx: None,
             grok_install_err: String::new(),
             grok_install_wait: false,
@@ -6135,10 +6253,22 @@ impl Cabin {
 
     fn persist_cfg(&self) {
         let io = self.persist_io.clone();
+        let slot = self.cfg_slot.clone();
         let mut cfg = self.cfg.clone();
         cfg.api_key.clear();
+        let gen = match slot.lock() {
+            Ok(mut g) => publish_cfg(&mut g, cfg),
+            Err(_) => return,
+        };
         std::thread::spawn(move || {
-            if let Ok(_g) = io.lock() {
+            let Ok(_disk) = io.lock() else {
+                return;
+            };
+            let cfg = match slot.lock() {
+                Ok(g) => cfg_if_current(&g, gen),
+                Err(_) => return,
+            };
+            if let Some(cfg) = cfg {
                 let _ = config::save(&cfg);
             }
         });
@@ -7701,6 +7831,150 @@ impl Cabin {
                 url,
                 image,
             });
+        });
+    }
+
+    fn pick_profile_picture(&mut self) {
+        if self.profile_pick_rx.is_some() {
+            self.status = "Choose a picture…".into();
+            return;
+        }
+        let token = next_pick_token(self.profile_pick_token.load(Ordering::SeqCst));
+        self.profile_pick_token.store(token, Ordering::SeqCst);
+        let gate = Arc::clone(&self.profile_pick_token);
+        let file_io = Arc::clone(&self.profile_file_io);
+        let (tx, rx) = mpsc::channel();
+        self.profile_pick_rx = Some(rx);
+        self.status = "Choose a picture…".into();
+        std::thread::spawn(move || {
+            let out = match pick_file() {
+                Some(p) => {
+                    if !profile_pick_current(gate.load(Ordering::SeqCst), token) {
+                        ProfilePick::Cancelled
+                    } else if let Ok(_file) = file_io.lock() {
+                        if !profile_pick_current(gate.load(Ordering::SeqCst), token) {
+                            ProfilePick::Cancelled
+                        } else {
+                            match crate::oauth::install_profile_picture(&p) {
+                                Ok(dest) => {
+                                    if profile_pick_current(gate.load(Ordering::SeqCst), token) {
+                                        ProfilePick::Chosen(dest)
+                                    } else {
+                                        let _ = std::fs::remove_file(&dest);
+                                        ProfilePick::Cancelled
+                                    }
+                                }
+                                Err(e) => ProfilePick::Failed(e),
+                            }
+                        }
+                    } else {
+                        ProfilePick::Cancelled
+                    }
+                }
+                None => ProfilePick::Cancelled,
+            };
+            let _ = tx.send((token, out));
+        });
+    }
+
+    fn clear_profile_picture(&mut self) {
+        let token = next_pick_token(self.profile_pick_token.load(Ordering::SeqCst));
+        self.profile_pick_token.store(token, Ordering::SeqCst);
+        self.profile_pick_rx = None;
+        self.cfg.profile_picture.clear();
+        self.profile_photo = None;
+        self.profile_photo_key.clear();
+        self.profile_photo_rx = None;
+        self.profile_photo_busy = false;
+        self.persist_cfg();
+        let dest = config::config_dir().join("profile.png");
+        let gate = Arc::clone(&self.profile_pick_token);
+        let file_io = Arc::clone(&self.profile_file_io);
+        std::thread::spawn(move || {
+            let Ok(_file) = file_io.lock() else {
+                return;
+            };
+            if profile_pick_current(gate.load(Ordering::SeqCst), token) {
+                let _ = std::fs::remove_file(dest);
+            }
+        });
+        self.status = "Saved".into();
+    }
+
+    fn poll_profile_pick(&mut self) {
+        let Some(rx) = self.profile_pick_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok((token, ProfilePick::Chosen(path))) => {
+                if profile_pick_current(self.profile_pick_token.load(Ordering::SeqCst), token) {
+                    self.cfg.profile_picture = path.to_string_lossy().into_owned();
+                    self.profile_photo = None;
+                    self.profile_photo_key.clear();
+                    self.persist_cfg();
+                    self.status = "Saved".into();
+                }
+            }
+            Ok((_, ProfilePick::Cancelled)) => {}
+            Ok((token, ProfilePick::Failed(err))) => {
+                if profile_pick_current(self.profile_pick_token.load(Ordering::SeqCst), token) {
+                    self.status = err;
+                }
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.profile_pick_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {}
+        }
+    }
+
+    fn poll_profile_photo(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = self.profile_photo_rx.take() {
+            match rx.try_recv() {
+                Ok(out) => {
+                    self.profile_photo_busy = false;
+                    self.profile_photo_key = out.path;
+                    self.profile_photo = out.image.map(|img| {
+                        ctx.load_texture("profile-avatar", img, TextureOptions::LINEAR)
+                    });
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.profile_photo_rx = Some(rx);
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.profile_photo_busy = false;
+                }
+            }
+        }
+        self.kick_profile_photo();
+    }
+
+    fn kick_profile_photo(&mut self) {
+        if self.profile_photo_busy {
+            return;
+        }
+        let path = self.cfg.profile_picture.trim().to_string();
+        if path.is_empty() {
+            if self.profile_photo.is_some() || !self.profile_photo_key.is_empty() {
+                self.profile_photo = None;
+                self.profile_photo_key.clear();
+            }
+            return;
+        }
+        if path == self.profile_photo_key {
+            return;
+        }
+        self.profile_photo_busy = true;
+        let (tx, rx) = mpsc::channel();
+        self.profile_photo_rx = Some(rx);
+        std::thread::spawn(move || {
+            let bytes = std::fs::metadata(&path)
+                .ok()
+                .filter(|m| m.len() > 0 && m.len() <= grokhub_core::IMAGE_FILE_CAP)
+                .and_then(|_| std::fs::read(&path).ok())
+                .filter(|b| (b.len() as u64) <= grokhub_core::IMAGE_FILE_CAP);
+            let image = bytes.as_ref().and_then(|b| oauth_photo_image(b));
+            let _ = tx.send(ProfilePhotoOut { path, image });
         });
     }
 
@@ -10611,6 +10885,8 @@ impl eframe::App for Cabin {
             ctx.request_repaint_after(Duration::from_secs(wait));
         }
         self.poll_oauth_photo(ctx);
+        self.poll_profile_pick();
+        self.poll_profile_photo(ctx);
         if !self.composer.trim().is_empty()
             || ctx.input(|i| {
                 i.pointer.any_pressed()
@@ -10687,6 +10963,8 @@ impl eframe::App for Cabin {
                 || self.grok_p_rx.is_some()
                 || self.pick_rx.is_some()
                 || self.pick_list_rx.is_some()
+                || self.profile_pick_rx.is_some()
+                || self.profile_photo_busy
                 || self.oauth_start_rx.is_some()
                 || self.oauth_poll_rx.is_some()
                 || self.night_check_rx.is_some()
@@ -10826,6 +11104,8 @@ impl Cabin {
         let mut disconnect = false;
         let mut help = false;
         let authed = self.has_key();
+        let chrome = self.avatar_chrome();
+        let photo = self.photo_for_path(&chrome.picture_path);
         let shown = egui::Window::new("settings-menu")
             .title_bar(false)
             .collapsible(false)
@@ -10841,6 +11121,10 @@ impl Cabin {
             .show(ctx, |ui| {
                 ui.set_min_width(220.0);
                 ui.spacing_mut().item_spacing.y = 2.0;
+                Self::cabin_avatar(ui, &chrome.name, photo.as_ref());
+                ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(4.0);
                 for (id, label) in crate::theme::CABIN_MENU {
                     if crate::cards::felt_menu_row(ui, label) {
                         pick = Some(*id);
@@ -11364,10 +11648,28 @@ impl Cabin {
         resp
     }
 
+    fn avatar_chrome(&self) -> AvatarMenu {
+        avatar_menu(
+            &self.cfg.display_name,
+            &self.cfg.profile_picture,
+            self.secrets.oauth.as_ref().and_then(|t| t.name.as_deref()),
+            &self.greeting_user_md,
+        )
+    }
+
+    fn photo_for_path(&self, picture_path: &str) -> Option<TextureHandle> {
+        if picture_path.trim().is_empty() {
+            self.oauth_photo.clone()
+        } else if self.profile_photo_key == picture_path {
+            self.profile_photo.clone()
+        } else {
+            None
+        }
+    }
+
     fn cabin_avatar(
         ui: &mut egui::Ui,
-        account: &str,
-        email: &str,
+        name: &str,
         photo: Option<&TextureHandle>,
     ) -> egui::Response {
         let (_rect, resp) = ui.allocate_exact_size(
@@ -11393,50 +11695,22 @@ impl Cabin {
             14.0,
             egui::Stroke::new(1.0_f32, crate::theme::border_strong()),
         );
+        let text_left = rect.left() + 42.0;
+        let text_right = rect.right() - 12.0;
+        let painted = fit_rail_label(ui, name, (text_right - text_left).max(8.0));
         ui.painter().text(
-            egui::pos2(rect.left() + 42.0, rect.center().y - 8.0),
+            egui::pos2(text_left, rect.center().y),
             egui::Align2::LEFT_CENTER,
-            account,
+            painted,
             egui::FontId::proportional(crate::theme::FONT_META),
             crate::theme::fg(),
-        );
-        ui.painter().text(
-            egui::pos2(rect.left() + 42.0, rect.center().y + 8.0),
-            egui::Align2::LEFT_CENTER,
-            email,
-            egui::FontId::proportional(11.0),
-            crate::theme::subtle(),
         );
         resp
     }
 
     fn ui_sidebar(&mut self, ctx: &egui::Context) {
-        let account = self
-            .secrets
-            .oauth
-            .as_ref()
-            .and_then(|t| t.name.clone().or(t.email.clone()))
-            .filter(|s| !greeting_name("", s).is_empty())
-            .unwrap_or_else(|| {
-                let n = greeting_name(&self.greeting_user_md, "");
-                if n.is_empty() {
-                    "Grok".into()
-                } else {
-                    n
-                }
-            });
-        let email = self
-            .secrets
-            .oauth
-            .as_ref()
-            .and_then(|t| t.email.clone())
-            .unwrap_or_else(|| {
-                if grokhub_acp::grok_cli_key().is_some() {
-                    "grok login".into()
-                } else {
-                    "Run grok login".into()
-                }
-            });
+        let chrome = self.avatar_chrome();
+        let photo = self.photo_for_path(&chrome.picture_path);
         egui::SidePanel::left("rail")
             .exact_width(crate::theme::SIDEBAR_W)
             .resizable(false)
@@ -11678,8 +11952,7 @@ impl Cabin {
                         }
                     });
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                    if Self::cabin_avatar(ui, &account, &email, self.oauth_photo.as_ref()).clicked()
-                    {
+                    if Self::cabin_avatar(ui, &chrome.name, photo.as_ref()).clicked() {
                         self.settings_menu_open = !self.settings_menu_open;
                         self.settings_menu_ignore = true;
                     }
@@ -13254,6 +13527,9 @@ impl Cabin {
         let mut save = false;
         let mut connect = false;
         let mut disconnect = false;
+        let mut choose_picture = false;
+        let mut clear_picture = false;
+        let mut name_dirty = false;
         let mut update = false;
         let mut install_cli = false;
         let mut restart = false;
@@ -13286,16 +13562,16 @@ impl Cabin {
         } else {
             "Installs Grok Build CLI alpha (GROK_CHANNEL=alpha / https://x.ai/cli/alpha) when grok is missing or broken."
         };
-        let oauth_line = self.secrets.oauth.as_ref().map(|t| {
-            t.email
-                .clone()
-                .or(t.name.clone())
-                .unwrap_or_else(|| "connected".into())
+        let oauth_on = self.secrets.oauth.is_some();
+        let picture_set = !self.cfg.profile_picture.trim().is_empty();
+        let picture_hint = if picture_set {
+            "Saved in cabin config."
+        } else {
+            "A local image, kept in cabin config."
+        };
+        let pending = self.oauth_pending.as_ref().map(|p| {
+            format!("Approve {} at {}", p.user_code, p.verification_uri)
         });
-        let pending = self
-            .oauth_pending
-            .as_ref()
-            .map(|p| format!("Approve {} at {}", p.user_code, p.verification_uri));
         let doctor = self.doctor_text();
         let mut close = false;
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
@@ -13407,21 +13683,52 @@ impl Cabin {
                                                 ui.indent("settings-body", |ui| {
                                                     match sec {
                                                         SettingsSec::Account => {
-                                                            let auth_title = if oauth_line.is_some() {
+                                                            let name_before = self.cfg.display_name.clone();
+                                                            crate::cards::settings_field(
+                                                                ui,
+                                                                "Name",
+                                                                "Shown on the rail and the avatar menu. Leave this blank to use your Grok name.",
+                                                                &mut self.cfg.display_name,
+                                                                false,
+                                                            );
+                                                            if self.cfg.display_name != name_before {
+                                                                name_dirty = true;
+                                                            }
+                                                            if crate::cards::settings_action(
+                                                                ui,
+                                                                "Profile picture",
+                                                                picture_hint,
+                                                                "Choose",
+                                                            ) {
+                                                                choose_picture = true;
+                                                            }
+                                                            if picture_set
+                                                                && crate::cards::settings_action(
+                                                                    ui,
+                                                                    "Remove picture",
+                                                                    "The rail goes back to your Grok photo.",
+                                                                    "Remove",
+                                                                )
+                                                            {
+                                                                clear_picture = true;
+                                                            }
+                                                            let auth_title = if oauth_on {
                                                                 "Connected"
                                                             } else {
                                                                 "Connect Grok"
                                                             };
-                                                            let auth_hint = oauth_line.as_deref().unwrap_or(
-                                                                "Device-code OAuth. Also signs in the Grok Build CLI if it is not already connected.",
-                                                            );
+                                                            let auth_hint = if oauth_on {
+                                                                "Signed in with Grok."
+                                                            } else {
+                                                                "Device-code OAuth. Also signs in the Grok Build CLI if it is not already connected."
+                                                            };
                                                             if crate::cards::settings_action(
                                                                 ui,
                                                                 auth_title,
                                                                 auth_hint,
-                                                                if oauth_line.is_some() { "Sign out" } else { "Connect" },
+                                                                if oauth_on { "Sign out" } else { "Connect" },
                                                             ) {
-                                                                if oauth_line.is_some() {
+                                                                if oauth_on {
                                                                     disconnect = true;
                                                                 } else {
                                                                     connect = true;
@@ -13598,6 +13905,18 @@ impl Cabin {
         }
         if disconnect {
             self.sign_out_oauth();
+        }
+        if name_dirty {
+            if self.cfg.display_name.chars().count() > PROFILE_NAME_MAX {
+                self.cfg.display_name = clip_profile_name(&self.cfg.display_name);
+            }
+            self.persist_cfg();
+        }
+        if choose_picture {
+            self.pick_profile_picture();
+        }
+        if clear_picture {
+            self.clear_profile_picture();
         }
         if update {
             self.queue_combined_update();
@@ -15358,6 +15677,208 @@ fn discover_hub_pair_url(port: u16) -> String {
 mod tests {
     use super::select_all_edit;
     use eframe::egui;
+
+    #[test]
+    fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
+        let email = "jeremy@example.com";
+        let picture = "/home/jeremy/.config/GrokHub/profile.png";
+        let menu = super::avatar_menu("Viper", picture, Some("OAuth Name"), "Name: Jeremy\n");
+        assert_eq!(menu.name, "Viper");
+        assert_eq!(menu.picture_path, picture);
+        assert!(!menu.name.contains(email) && !menu.picture_path.contains(email));
+        assert!(!menu.name.contains('@') && !menu.picture_path.contains('@'));
+
+        let fallback = super::avatar_menu("", "", Some("OAuth Name"), "");
+        assert_eq!(fallback.name, "OAuth Name");
+        assert!(fallback.picture_path.is_empty());
+
+        let blank = super::avatar_menu("   ", "", Some("GrokHub"), "Name: Jeremy\n");
+        assert_eq!(blank.name, "Jeremy");
+        assert!(!blank.name.contains(email));
+
+        let src = include_str!("app.rs");
+        let paint = src
+            .split("fn ui_settings_menu(")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn ui_palette").next())
+            .expect("ui_settings_menu");
+        assert!(
+            paint.contains("chrome.name")
+                && paint.contains("chrome.picture_path")
+                && paint.contains("cabin_avatar")
+                && !paint.contains("email"),
+            "the avatar menu must paint the saved name and picture path, not the email: {paint}"
+        );
+        let avatar = src
+            .split("fn cabin_avatar(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_sidebar(").next())
+            .expect("cabin_avatar");
+        assert!(
+            !avatar.contains("email"),
+            "the rail avatar must not paint an email line: {avatar}"
+        );
+        let account = src
+            .split("SettingsSec::Account => {")
+            .nth(1)
+            .and_then(|s| s.split("SettingsSec::Appearance => {").next())
+            .expect("Account");
+        assert!(
+            account.contains("display_name")
+                && account.contains("Profile picture")
+                && !account.contains("email")
+                && !account.contains(".email"),
+            "Account sets the name and picture and does not show the email: {account}"
+        );
+        let pick = src
+            .split("fn pick_profile_picture(")
+            .nth(1)
+            .and_then(|s| s.split("fn clear_profile_picture(").next())
+            .expect("pick_profile_picture");
+        let spawn = pick.find("thread::spawn").expect("picker leaves the UI thread");
+        let file = pick.find("pick_file()").expect("native picker");
+        let install = pick.find("install_profile_picture").expect("copy into cabin config");
+        assert!(
+            spawn < file && file < install,
+            "the picture picker and decode must not run on the UI thread: {pick}"
+        );
+    }
+
+    #[test]
+    fn remove_ignores_an_in_flight_picture_pick() {
+        let started = 1_u64;
+        let cleared = super::next_pick_token(started);
+        assert!(super::profile_pick_current(started, started));
+        assert!(!super::profile_pick_current(cleared, started));
+        assert!(!super::profile_pick_current(0, 0));
+        let wrapped = super::next_pick_token(u64::MAX);
+        assert_eq!(wrapped, 1);
+        assert!(super::profile_pick_current(wrapped, wrapped));
+
+        let src = include_str!("app.rs");
+        let clear = src
+            .split("fn clear_profile_picture(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_profile_pick(").next())
+            .expect("clear_profile_picture");
+        assert!(
+            clear.contains("profile_pick_rx = None") && clear.contains("next_pick_token"),
+            "Remove must drop the in-flight pick and bump its token: {clear}"
+        );
+        let poll = src
+            .split("fn poll_profile_pick(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_profile_photo(").next())
+            .expect("poll_profile_pick");
+        let gate = poll.find("profile_pick_current").expect("token gate");
+        let apply = poll.find("profile_picture").expect("writes the path");
+        assert!(
+            gate < apply,
+            "a late Chosen must be ignored before it restores the path: {poll}"
+        );
+        let pick = src
+            .split("fn pick_profile_picture(")
+            .nth(1)
+            .and_then(|s| s.split("fn clear_profile_picture(").next())
+            .expect("pick_profile_picture");
+        let file = pick.find("pick_file()").expect("native picker");
+        let install = pick.find("install_profile_picture").expect("copy into cabin config");
+        let before = pick.find("profile_pick_current").expect("cancel check");
+        assert!(
+            file < before && before < install,
+            "Remove must cancel the pick before it installs a picture: {pick}"
+        );
+    }
+
+    /// A writer that already holds the disk lock samples the slot only after a newer
+    /// publish. The older generation must not be what gets saved.
+    fn stale_after_newer_publish(
+        older: super::AppConfig,
+        newer: super::AppConfig,
+    ) -> super::AppConfig {
+        use std::sync::{Arc, Barrier, Mutex};
+        let slot = Arc::new(Mutex::new(super::CfgSlot {
+            gen: 0,
+            cfg: super::AppConfig::default(),
+        }));
+        let io = Arc::new(Mutex::new(()));
+        let older_gen = {
+            let mut g = slot.lock().expect("slot");
+            super::publish_cfg(&mut g, older)
+        };
+        let held = io.lock().expect("disk");
+        let slot_w = Arc::clone(&slot);
+        let io_w = Arc::clone(&io);
+        let gate = Arc::new(Barrier::new(2));
+        let gate_w = Arc::clone(&gate);
+        let worker = std::thread::spawn(move || {
+            let _disk = io_w.lock().expect("disk");
+            gate_w.wait();
+            let g = slot_w.lock().expect("slot");
+            super::cfg_if_current(&g, older_gen)
+        });
+        let newer_gen = {
+            let mut g = slot.lock().expect("slot");
+            super::publish_cfg(&mut g, newer)
+        };
+        drop(held);
+        gate.wait();
+        assert!(worker.join().expect("writer").is_none());
+        let g = slot.lock().expect("slot");
+        super::cfg_if_current(&g, newer_gen).expect("newer config")
+    }
+
+    #[test]
+    fn name_save_does_not_overwrite_a_newer_picture() {
+        let name = super::AppConfig {
+            display_name: "Viper".into(),
+            api_key: "sk-secret".into(),
+            ..super::AppConfig::default()
+        };
+        let picture = super::AppConfig {
+            display_name: "Viper".into(),
+            profile_picture: "/cfg/profile.png".into(),
+            ..super::AppConfig::default()
+        };
+        let current = stale_after_newer_publish(name, picture);
+        assert_eq!(current.display_name, "Viper");
+        assert_eq!(current.profile_picture, "/cfg/profile.png");
+        assert!(current.api_key.is_empty());
+
+        let src = include_str!("app.rs");
+        let persist = src
+            .split("fn persist_cfg(")
+            .nth(1)
+            .and_then(|s| s.split("fn persist_if_dirty(").next())
+            .expect("persist_cfg");
+        let check = persist.find("cfg_if_current").expect("generation check");
+        let save = persist.find("config::save").expect("save");
+        assert!(
+            persist.contains("publish_cfg")
+                && persist.contains("thread::spawn")
+                && persist.contains("persist_io")
+                && persist.contains("api_key.clear")
+                && check < save,
+            "a config save must write the latest generation, not the clone it spawned with: {persist}"
+        );
+    }
+
+    #[test]
+    fn picture_save_does_not_overwrite_a_newer_name() {
+        let picture = super::AppConfig {
+            display_name: "Old".into(),
+            profile_picture: "/cfg/profile.png".into(),
+            ..super::AppConfig::default()
+        };
+        let name = super::AppConfig {
+            display_name: "Viper".into(),
+            profile_picture: "/cfg/profile.png".into(),
+            ..super::AppConfig::default()
+        };
+        let current = stale_after_newer_publish(picture, name);
+        assert_eq!(current.display_name, "Viper");
+        assert_eq!(current.profile_picture, "/cfg/profile.png");
+    }
 
     #[test]
     fn devices_pair_url_is_not_a_placeholder() {
@@ -18874,6 +19395,12 @@ mod tests {
                 && !menu.contains("\"Devices\"")
                 && !menu.contains("\"Queue\""),
             "avatar menu must not hardcode leftover panes: {menu}"
+        );
+        assert!(
+            menu.contains("chrome.name")
+                && menu.contains("chrome.picture_path")
+                && !menu.contains("email"),
+            "avatar menu paints the saved name and picture path, not the email: {menu}"
         );
         let replay = src
             .split("fn replay_recipe(")

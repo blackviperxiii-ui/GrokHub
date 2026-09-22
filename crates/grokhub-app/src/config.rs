@@ -203,6 +203,12 @@ pub struct AppConfig {
     /// First-run Get Started completed (Super Grok OAuth succeeded once).
     #[serde(default)]
     pub get_started_done: bool,
+    /// Display name for the rail and avatar menu. Empty means the user has not set one.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub display_name: String,
+    /// Local profile picture copied into the cabin config. Empty means the user has not set one.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub profile_picture: String,
 }
 
 fn default_yolo() -> bool {
@@ -282,6 +288,8 @@ impl Default for AppConfig {
             theme: default_theme(),
             window: crate::window::WindowGeom::default(),
             get_started_done: false,
+            display_name: String::new(),
+            profile_picture: String::new(),
         }
     }
 }
@@ -796,6 +804,17 @@ mod tests {
             !parsed.get_started_done,
             "missing getStartedDone is first run"
         );
+        assert!(parsed.display_name.is_empty());
+        assert!(parsed.profile_picture.is_empty());
+        let named = AppConfig {
+            display_name: "Viper".into(),
+            profile_picture: "/cfg/profile.png".into(),
+            ..Default::default()
+        };
+        save(&named).expect("profile save");
+        let loaded = load();
+        assert_eq!(loaded.display_name, "Viper");
+        assert_eq!(loaded.profile_picture, "/cfg/profile.png");
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }
