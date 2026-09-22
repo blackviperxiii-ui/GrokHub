@@ -415,7 +415,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             thought.contains("paints_body"),
             "expand, minimize, and hide stay on the existing thought arm: {thought}"
         );
-        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(&src);
+        let impl_src = src.as_str();
         assert_eq!(
             impl_src.matches("ChatKind::Thought => {").count(),
             1,
@@ -1074,7 +1074,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     #[test]
     fn about_paints_the_version() {
         let src = cabin_src();
-        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(&src);
+        let impl_src = src.as_str();
         let about = impl_src
             .split("SettingsSec::About => {")
             .nth(1)
@@ -1729,22 +1729,20 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             src.contains("hidden_raise_ready") && src.contains("reapply_unmap"),
             "× must not flash back from a FocusLost/FocusGained bounce or Visible(false) spam"
         );
-        let night_save = src
-            .split("if user_asked_to_schedule(&last_user)")
-            .nth(1)
-            .and_then(|s| s.split("if let Some(q) = parse_consult").next())
-            .expect("chat loop save");
+        let teach = fn_src(&src, "teach_watched_routine");
+        let finish = fn_src(&src, "finish_acp_turn");
+        let apply = fn_src(&src, "apply_single_turn");
         assert!(
-            src.contains("user_asked_to_schedule")
-                && src.contains("chat_may_save_automation")
-                && night_save.contains("save_schedule"),
+            teach.contains("user_asked_to_schedule")
+                && !finish.contains("save_schedule")
+                && !apply.contains("save_schedule"),
             "ordinary replies that mention every day at / heartbeat every must not become live jobs"
         );
-        let saver = src
-            .split("fn save_schedule(")
-            .nth(1)
-            .and_then(|s| s.split("fn ui_night(").next())
-            .expect("save_schedule");
+        let saver = format!(
+            "{}{}",
+            fn_src(&src, "save_schedule"),
+            fn_src(&src, "commit_schedule")
+        );
         assert!(
             saver.contains("route_schedule") && saver.contains("ScheduleRoute::Clock"),
             "`every day at 9` must keep its hour instead of becoming a 1d loop: {saver}"
@@ -1752,8 +1750,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             saver.contains("persist_loops")
                 && saver.contains("persist_automations")
-                && !saver.contains("self.persist()")
-                && !night_save.contains("self.persist()"),
+                && !saver.contains("self.persist()"),
             "a saved job must not clone every thread 2s later — the persist helpers bump the idle key: {saver}"
         );
         assert!(
@@ -2027,8 +2024,12 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "boot must move a leftover app.json console key into secrets.json"
         );
         assert!(
-            src.contains("&mut self.secrets.api_key"),
-            "Settings Console key must edit secrets.json, not app.json"
+            src.contains("secrets::console_key") && src.contains("migrate_console_key"),
+            "Console key lives in secrets.json; Settings must not keep a leftover app.json field"
+        );
+        assert!(
+            !fn_src(&src, "ui_settings").contains("Console key"),
+            "Settings must not paint a Console key editor"
         );
         let settings_save = fn_src(&src, "save_settings");
         assert!(
@@ -2403,11 +2404,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             !reload.contains("discover_session_files"),
             "History must not walk disk (subagents) — grok sessions list only: {reload}"
         );
-        let kick = src
-            .split("fn kick_imagine(")
-            .nth(1)
-            .and_then(|s| s.split("fn listen_voice(").next())
-            .expect("kick_imagine");
+        let kick = fn_src(&src, "kick_imagine");
         assert!(
             kick.contains("bearer()")
                 && kick.contains("console_key()")
@@ -3220,8 +3217,9 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             ret < rewind && cmds[ret..rewind].contains("self.persist()"),
             "mixed blocked+allowed host must persist block receipts before spawn: {cmds}"
         );
+        let host_done = fn_src(&src, "poll_job");
         assert!(
-            src.contains("host_needs_kick && !self.running"),
+            host_done.contains("pending_connectors") && host_done.contains("self.kick_model(false)"),
             "an all-blocked host plan must still kick the model after connectors"
         );
         let halt = src
@@ -3466,11 +3464,16 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && drop_proj.contains("out.unbound"),
             "deleting an unbound project must not clone every thread just to write projects.json: {drop_proj}"
         );
-        let folders = src
-            .split("fn stage_new_project(")
-            .nth(1)
-            .and_then(|s| s.split("fn chat_pairs").next())
-            .expect("stage_new_project");
+        let folders = format!(
+            "{}{}{}{}{}{}{}",
+            fn_src(&src, "stage_new_project"),
+            fn_src(&src, "make_folder"),
+            fn_src(&src, "stage_new_folder"),
+            fn_src(&src, "begin_proj_rename"),
+            fn_src(&src, "cancel_proj_rename"),
+            fn_src(&src, "finish_proj_rename"),
+            fn_src(&src, "move_sel_to_folder_name"),
+        );
         assert!(
             folders.contains("self.flush_projects()")
                 && !folders.contains("self.persist()")
@@ -3499,11 +3502,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && !rename.contains("persist_snap"),
             "/project rename must not clone every thread just to write projects.json: {rename}"
         );
-        let overlay = src
-            .split("fn ui_project_overlays(")
-            .nth(1)
-            .and_then(|s| s.split("impl eframe::App").next())
-            .expect("ui_project_overlays");
+        let overlay = fn_src(&src, "ui_project_overlays");
         assert!(
             overlay.contains("self.flush_projects()")
                 && !overlay.contains("self.persist()")
@@ -3599,7 +3598,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let boot = src
             .split("pub fn new(hidden: bool)")
             .nth(1)
-            .and_then(|s| s.split("fn persist(&mut self)").next())
+            .and_then(|s| s.split("fn apply_saved_geom(").next())
             .expect("Cabin::new");
         assert!(
             boot.contains("ensure_memory_seeds") && boot.contains("default_device_name"),
@@ -3618,8 +3617,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "boot leftover drop must persist off-thread or restart restores empty Chat tabs: {boot}"
         );
         assert!(
-            src.contains("history_row_visible"),
-            "History must hide leftover empty Chat rows"
+            src.contains("leftover_empty_thread"),
+            "History/boot must hide leftover empty Chat rows"
         );
         let switched = src
             .split("fn switch_thread")
@@ -3669,11 +3668,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             chrome.contains("last_receipt_ok = None"),
             "leaving a tab must not put the next composer into the other tab's error chips: {chrome}"
         );
-        let deleted = src
-            .split("fn delete_thread_at")
-            .nth(1)
-            .and_then(|s| s.split("fn send_chat").next())
-            .expect("delete_thread_at chrome");
+        let deleted = fn_src(&src, "delete_thread_at");
         assert!(
             deleted.contains("drop_leaving_thread_chrome"),
             "deleting the visible tab must drop plus-attach and followup budget: {deleted}"
@@ -3701,11 +3696,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             spawn < run,
             "HostDone verify must not block the cabin for 12s: {verify}"
         );
-        let kick = src
-            .split("fn kick_model(")
-            .nth(1)
-            .and_then(|s| s.split("fn upsert_stream_assistant").next())
-            .expect("kick_model");
+        let kick = fn_src(&src, "kick_model");
         assert!(
             kick.contains("verify_rx"),
             "kick_model must wait for off-thread verify before the follow-up turn: {kick}"
@@ -3751,7 +3742,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && !reflect[insights..].contains("self.persist()"),
             "/learn reflect must persist insights without cloning every thread: {reflect}"
         );
-        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(&src);
+        let impl_src = src.as_str();
         assert!(
             !impl_src.contains("fn take_over_desktop")
                 && !impl_src.contains("white_pill(ui, \"Take over\")"),
@@ -3773,11 +3764,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 "{gone} must not sit in the avatar menu"
             );
         }
-        let menu = src
-            .split("fn ui_settings_menu(")
-            .nth(1)
-            .and_then(|s| s.split("\n    fn ui_palette").next())
-            .expect("ui_settings_menu");
+        let menu = fn_src(&src, "ui_settings_menu");
         assert!(
             menu.contains("CABIN_MENU")
                 && menu.contains("\"Help\"")
@@ -4197,7 +4184,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let boot = src
             .split("pub fn new(hidden: bool)")
             .nth(1)
-            .and_then(|s| s.split("fn persist(&mut self)").next())
+            .and_then(|s| s.split("fn apply_saved_geom(").next())
             .expect("Cabin::new");
         assert!(
             boot.contains("write_cli_auth_if_needed") || boot.contains("sync_cli_auth_from_oauth"),
@@ -4312,11 +4299,11 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             photo_poll.contains("persist_io") && photo_poll.contains("secrets::save"),
             "OAuth profile enrich must not freeze the cabin writing secrets.json: {photo_poll}"
         );
-        let kick = src
-            .split("fn kick_model(")
-            .nth(1)
-            .and_then(|s| s.split("fn upsert_stream_assistant").next())
-            .expect("kick_model");
+        let kick = format!(
+            "{}{}",
+            fn_src(&src, "kick_model"),
+            fn_src(&src, "poll_single")
+        );
         assert!(
             kick.contains("spawn_grok_p_stream") && kick.contains("is_sigterm_status"),
             "kick_model uses grok -p and must not surface leader SIGTERM as a chat error: {kick}"
@@ -4330,11 +4317,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             cap_fn.contains("lock_titles"),
             "leftover capture helper must still see lock windows: {cap_fn}"
         );
-        let anticipate = src
-            .split("fn tick_anticipate")
-            .nth(1)
-            .and_then(|s| s.split("fn tick_night").next())
-            .expect("tick_anticipate");
+        let anticipate = fn_src(&src, "tick_anticipate");
         let bump = anticipate.find("bump_usage").expect("anticipate usage");
         let gate = anticipate
             .find("anticipate_consumes_slot")
@@ -4351,11 +4334,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             anticipate.contains("self.can_agent()") && !anticipate.contains("self.llm_ready()"),
             "OAuth-only must not burn an anticipate slot — send_chat needs Grok Build: {anticipate}"
         );
-        let start_hub = src
-            .split("fn start_hub")
-            .nth(1)
-            .and_then(|s| s.split("fn ui_project_overlays").next())
-            .expect("start_hub");
+        let start_hub = format!("{}{}", fn_src(&src, "start_hub"), fn_src(&src, "bind_lan_hub"));
         assert!(
             start_hub.contains("start_hub_rotates_pair"),
             "Start share must rotate an expired leftover code: {start_hub}"
@@ -5031,13 +5010,18 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             consult_out.contains("status.clear()") || consult_out.contains("status ="),
             "consult must not leave the status bar on Consult… after the reply lands: {consult_out}"
         );
-        let chat_consult = src
-            .split("if let Some(q) = parse_consult")
+        let slash_consult = src
+            .split("Slash::Consult")
             .nth(1)
-            .and_then(|s| s.split("let outcome = parse_goal_outcome").next())
-            .expect("parse_consult");
+            .and_then(|s| s.split("Slash::Usage").next())
+            .expect("Slash::Consult");
+        assert!(
+            slash_consult.contains("run_consult"),
+            "typed /consult must use the consult worker: {slash_consult}"
+        );
+        let chat_consult = fn_src(&src, "run_consult");
         let finish_at = chat_consult.find("finish_hub_dispatch");
-        let run_at = chat_consult.find("run_consult");
+        let run_at = chat_consult.find("grok_chat");
         assert!(
             finish_at.is_some_and(|f| run_at.is_some_and(|r| f < r)),
             "finish the phone task before starting consult: {chat_consult}"
@@ -5217,7 +5201,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             run_cmds.contains("AlwaysApprove") && !run_cmds.contains("cfg.yolo"),
             "bound-tree jail follows the Always pill, not leftover app.json yolo: {run_cmds}"
         );
-        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(&src);
+        let impl_src = src.as_str();
         assert!(
             !impl_src.contains("if let Some(plan) = plan_from_text"),
             "Chat complete must not parse HOST_CMD / COMPUTER_CMD; Grok Build owns tools"
@@ -5417,7 +5401,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     #[test]
     fn last_frame_url_drops_a_huge_capture() {
         let src = cabin_src();
-        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(&src);
+        let impl_src = src.as_str();
         let remember = impl_src
             .split("fn remember_last_frame(")
             .nth(1)
@@ -6035,31 +6019,23 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             hit.contains("That chat is gone"),
             "a hit for a deleted thread must say so, not open the wrong chat: {hit}"
         );
-        let board = src
-            .split("fn ui_board(")
-            .nth(1)
-            .and_then(|s| s.split("fn ui_imagine(").next())
-            .expect("ui_board");
+        let board = fn_src(&src, "ui_board");
         assert!(
             board.contains("self.flush_board()")
                 && !board.contains("self.persist()")
                 && !board.contains("persist_snap"),
             "Workboard add/status must not clone every thread just to write board.json: {board}"
         );
-        let flush_b = src
-            .split("fn flush_board(")
-            .nth(1)
-            .and_then(|s| s.split("fn nav_from_id(").next())
-            .expect("flush_board");
+        let flush_b = fn_src(&src, "flush_board");
         assert!(
             flush_b.contains("persist_idle_now") && flush_b.contains("save_board"),
             "Workboard flush must bump the idle key or persist_bg clones every thread 2s later: {flush_b}"
         );
-        let night = src
-            .split("fn ui_night(")
-            .nth(1)
-            .and_then(|s| s.split("fn ui_history(").next())
-            .expect("ui_night");
+        let night = format!(
+            "{}{}",
+            fn_src(&src, "ui_night"),
+            fn_src(&src, "ui_scheduled_automations")
+        );
         assert!(
             night.contains("merge_suggested_autos"),
             "Loops Suggested uses learned tiles first: {night}"
@@ -6084,11 +6060,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             night.contains("ui_scheduled_automations") && night.contains("self.automations"),
             "Automations page must also show the clock jobs the pulse fires: {night}"
         );
-        let sched = src
-            .split("fn ui_scheduled_automations(")
-            .nth(1)
-            .and_then(|s| s.split("fn ui_history(").next())
-            .expect("ui_scheduled_automations");
+        let sched = fn_src(&src, "ui_scheduled_automations");
         assert!(
             sched.contains("automation_summary_line")
                 && sched.contains("fire_night")
@@ -6244,7 +6216,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     #[test]
     fn mid_thought_stays_out_of_chat() {
         let src = cabin_src();
-        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(&src);
+        let impl_src = src.as_str();
         assert!(
             !impl_src.contains("You sit down. Last night"),
             "MidThought must not inject a fake assistant turn"
