@@ -855,6 +855,9 @@ pub fn chip_row_width_lock(avail: f32) -> f32 {
 /// Tight row so leftover empty-home height cannot vertically center the chips.
 pub const CHIP_ROW_H: f32 = 36.0;
 
+/// Empty-home placeholder when ranking yields none. Not a ranked action chip.
+pub const CHIP_EMPTY_LABEL: &str = "Nothing queued";
+
 pub fn quick_chip_fill(primary: bool) -> Color32 {
     if primary {
         crate::theme::surface_hover()
@@ -906,8 +909,39 @@ pub fn chip_why_tip(hint: &str, label: &str) -> String {
     }
 }
 
+pub fn paint_empty_chip_state(ui: &mut egui::Ui) {
+    let max_w = chip_row_width_lock(ui.available_width());
+    ui.allocate_ui_with_layout(
+        egui::vec2(max_w, CHIP_ROW_H),
+        egui::Layout::left_to_right(egui::Align::Center)
+            .with_main_wrap(false)
+            .with_main_align(egui::Align::Center),
+        |ui| {
+            let fill = quick_chip_fill(false);
+            let stroke = Stroke::new(quick_chip_stroke_w(false), quick_chip_stroke(false));
+            let color = quick_chip_fg(false);
+            egui::Frame::none()
+                .fill(fill)
+                .rounding(18.0)
+                .stroke(stroke)
+                .inner_margin(egui::Margin::symmetric(12.0, 6.0))
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(CHIP_EMPTY_LABEL)
+                                .size(13.0)
+                                .color(color),
+                        )
+                        .sense(Sense::hover()),
+                    );
+                });
+        },
+    );
+}
+
 pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> Option<ChipRowAct> {
     if chips.is_empty() {
+        paint_empty_chip_state(ui);
         return None;
     }
     let mut act = None;
@@ -2330,6 +2364,30 @@ mod tests {
             !slice.contains("ui.with_layout("),
             "with_layout eats remaining height and drops chips to the bottom: {slice}"
         );
+        assert_eq!(CHIP_EMPTY_LABEL, "Nothing queued");
+        assert!(
+            slice.contains("paint_empty_chip_state(ui)"),
+            "empty ranking must paint a muted placeholder, not a blank row: {slice}"
+        );
+        let empty = include_str!("cards.rs")
+            .split("pub fn paint_empty_chip_state(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn quick_chip_row(").next())
+            .expect("paint_empty_chip_state");
+        assert!(
+            empty.contains("CHIP_EMPTY_LABEL")
+                && empty.contains("quick_chip_fill(false)")
+                && empty.contains("quick_chip_stroke_w(false)")
+                && empty.contains("CHIP_ROW_H")
+                && empty.contains("Sense::hover()"),
+            "empty state is one muted chip-shaped label, not a ranked action: {empty}"
+        );
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                assert!(quick_chip_row(ui, &[]).is_none());
+            });
+        });
     }
 
     #[test]
