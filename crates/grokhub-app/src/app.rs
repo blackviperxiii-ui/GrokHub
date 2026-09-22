@@ -242,6 +242,36 @@ fn palette_row_action(
     }
 }
 
+/// Path a palette file row should open. Empty or `file:`-only is not a pick.
+fn palette_file_shown(action: &str) -> Option<&str> {
+    let shown = action.strip_prefix("file:")?.trim();
+    if shown.is_empty() {
+        None
+    } else {
+        Some(shown)
+    }
+}
+
+/// Forget the last finished walk when the query or root changes. Otherwise a
+/// revert can match `palette_files_q` with an empty list and skip the walk.
+fn palette_forget_stale_walk(
+    files: &mut Vec<String>,
+    files_q: &mut String,
+    files_root: &mut String,
+    q: &str,
+    root_now: &str,
+) {
+    if files_q != q || files_root != root_now {
+        files.clear();
+        files_q.clear();
+        files_root.clear();
+    }
+}
+
+fn palette_search_is_saved(files_q: &str, files_root: &str, q: &str, root_now: &str) -> bool {
+    files_q == q && files_root == root_now
+}
+
 fn slash_pick_step(pick: usize, len: usize, dir: i8) -> usize {
     if len == 0 {
         return 0;
@@ -7289,8 +7319,7 @@ impl Cabin {
             "voice" => self.listen_voice(),
             slash if slash.starts_with('/') => self.run_slash_line(slash),
             path if path.starts_with("file:") => {
-                let shown = path.trim_start_matches("file:").trim();
-                if !shown.is_empty() {
+                if let Some(shown) = palette_file_shown(path) {
                     match crate::desktop::open_path(shown) {
                         Ok(()) => self.status = shown.to_string(),
                         Err(e) => self.status = e,
@@ -11304,16 +11333,18 @@ impl Cabin {
             return;
         }
         let root_now = self.palette_search_root();
-        if self.palette_files_q != q || self.palette_files_root != root_now {
-            self.palette_files.clear();
-            self.palette_files_q.clear();
-            self.palette_files_root.clear();
-        }
+        palette_forget_stale_walk(
+            &mut self.palette_files,
+            &mut self.palette_files_q,
+            &mut self.palette_files_root,
+            &q,
+            &root_now,
+        );
         if self.palette_file_rx.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(60));
             return;
         }
-        if self.palette_files_q == q && self.palette_files_root == root_now {
+        if palette_search_is_saved(&self.palette_files_q, &self.palette_files_root, &q, &root_now) {
             return;
         }
         self.kick_palette_search();
@@ -16894,15 +16925,9 @@ mod tests {
             !tick.contains("search_place") && tick.contains("palette_files_q == q"),
             "a saved empty palette result must not walk again, and not on the UI thread: {tick}"
         );
-        let stale = tick
-            .split("if self.palette_files_q != q")
-            .nth(1)
-            .and_then(|s| s.split("if self.palette_file_rx.is_some()").next())
-            .expect("query change");
         assert!(
-            stale.contains("palette_files_q.clear()")
-                && stale.contains("palette_files_root.clear()"),
-            "a query change must forget the last finished key or a revert keeps the empty list: {stale}"
+            tick.contains("palette_forget_stale_walk") && tick.contains("palette_search_is_saved"),
+            "a query change must forget the last finished key or a revert keeps the empty list: {tick}"
         );
         let open = src
             .split("fn open_palette(")
@@ -16925,6 +16950,56 @@ mod tests {
         assert!(
             src.contains("RailIcon::Search") && src.contains("self.open_palette()"),
             "Search stays the palette — no second search page"
+        );
+    }
+
+    #[test]
+    fn palette_query_revert_forgets_empty_saved_hits() {
+        let mut files = vec!["nested/deep/buried.txt".to_string()];
+        let mut files_q = "buried".to_string();
+        let mut files_root = "/place".to_string();
+        super::palette_forget_stale_walk(&mut files, &mut files_q, &mut files_root, "buriexx", "/place");
+        assert!(files.is_empty(), "a query change clears the last hits");
+        assert!(
+            files_q.is_empty() && files_root.is_empty(),
+            "the finished key must be forgotten or a revert matches the empty list"
+        );
+        assert!(
+            !super::palette_search_is_saved(&files_q, &files_root, "buried", "/place"),
+            "reverting to the earlier query must walk again so the file hits come back"
+        );
+        super::palette_forget_stale_walk(&mut files, &mut files_q, &mut files_root, "buried", "/place");
+        assert!(
+            files_q.is_empty() && files.is_empty(),
+            "revert still has no finished key, so tick kicks a real walk: {files_q:?} {files:?}"
+        );
+    }
+
+    #[test]
+    fn picking_a_palette_file_opens_it() {
+        let action = super::palette_row_action(
+            &[],
+            &["nested/deep/buried.txt".to_string()],
+            "/place",
+            0,
+        )
+        .expect("file row");
+        let shown = super::palette_file_shown(&action).expect("picked path");
+        assert!(
+            shown.ends_with("nested/deep/buried.txt") && !shown.contains(".."),
+            "the pick must be the nested file, not a status-only label: {shown}"
+        );
+        assert_eq!(super::palette_file_shown("file:"), None);
+        assert_eq!(super::palette_file_shown("nav:chat"), None);
+        let src = include_str!("app.rs");
+        let run = src
+            .split("fn run_palette(")
+            .nth(1)
+            .and_then(|s| s.split("fn run_slash_line(").next())
+            .expect("run_palette");
+        assert!(
+            run.contains("palette_file_shown") && run.contains("desktop::open_path"),
+            "picking a palette file must open it, not only write status: {run}"
         );
     }
 
@@ -22183,7 +22258,9 @@ mod tests {
             "palette Chat uses the same empty-draft reuse as the rail: {palette}"
         );
         assert!(
-            palette.contains("file:") && palette.contains("desktop::open_path"),
+            palette.contains("file:")
+                && palette.contains("palette_file_shown")
+                && palette.contains("desktop::open_path"),
             "picking a palette file must open it, not only write status: {palette}"
         );
         let land = src
