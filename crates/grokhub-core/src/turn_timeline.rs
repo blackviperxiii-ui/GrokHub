@@ -1,5 +1,7 @@
 //! Live turn order: freeze finished sentences above tools, continue below.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::chat_view::{ChatKind, ChatView};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,6 +19,14 @@ pub struct LiveBlock {
     pub tool_title: String,
     pub tool_status: String,
     pub tool_detail: String,
+    /// Stable while this block lives. Hide / Minimize stay on it as the body grows.
+    /// `0` is unused (tool rows). The stored transcript keys the same fold with `thought_body_key`.
+    pub fold_slot: u64,
+}
+
+fn next_fold_slot() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 fn tool_block(id: &str, title: &str, status: &str, detail: &str) -> LiveBlock {
@@ -27,6 +37,7 @@ fn tool_block(id: &str, title: &str, status: &str, detail: &str) -> LiveBlock {
         tool_title: title.to_string(),
         tool_status: status.to_string(),
         tool_detail: detail.to_string(),
+        fold_slot: 0,
     }
 }
 
@@ -38,6 +49,7 @@ fn text_block(kind: LiveKind, body: String) -> LiveBlock {
         tool_title: String::new(),
         tool_status: String::new(),
         tool_detail: String::new(),
+        fold_slot: next_fold_slot(),
     }
 }
 

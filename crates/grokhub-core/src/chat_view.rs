@@ -107,6 +107,19 @@ pub fn thought_fold_draws(kind: ChatKind, fold: ThoughtFold) -> bool {
     }
 }
 
+/// Identity of a thought's text after the same scrub the transcript uses.
+/// A live block and the stored view of that thought share this key, so Hide
+/// and Minimize survive the handoff. A different body is a new thought.
+pub fn thought_body_key(body: &str) -> u64 {
+    let norm = scrub_thought(body);
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in norm.as_bytes() {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
 /// How far above the newest message still counts as reading the tail.
 pub const CHAT_TAIL_SLACK: f32 = 48.0;
 
@@ -883,6 +896,68 @@ mod tests {
                 assert!(thoughts.is_empty(), "{fold:?} must not draw the thought");
             }
         }
+    }
+
+    #[test]
+    fn thought_fold_survives_live_to_stored_handoff() {
+        let mut live = Vec::new();
+        crate::append_thought(&mut live, "Need a snapshot");
+        let slot = live[0].fold_slot;
+        crate::append_thought(&mut live, " of the restore path.");
+        assert_eq!(live[0].fold_slot, slot, "a growing live thought keeps its slot");
+        assert_ne!(slot, 0);
+
+        let msgs = vec![
+            ("user".into(), "check the session".into()),
+            (
+                "assistant".into(),
+                merge_thinking(&live[0].body, "I'll look at the session."),
+            ),
+        ];
+        let views = visible_chat(&msgs);
+        let stored = views
+            .iter()
+            .find(|v| v.kind == ChatKind::Thought)
+            .expect("stored thought");
+        let reply = views
+            .iter()
+            .find(|v| v.kind == ChatKind::Assistant)
+            .expect("reply");
+        assert_eq!(
+            thought_body_key(&live[0].body),
+            thought_body_key(&stored.body),
+            "live and stored thought must share a fold key"
+        );
+        assert_ne!(
+            thought_body_key(&stored.body),
+            thought_body_key(&reply.body),
+            "the reply must not take the thought key"
+        );
+        assert_ne!(
+            thought_body_key(&stored.body),
+            thought_body_key("a brand new thought"),
+            "a new thought must not reuse a hidden key"
+        );
+        assert_eq!(ThoughtFold::default(), ThoughtFold::Expanded);
+        assert!(thought_fold_draws(ChatKind::Assistant, ThoughtFold::Hidden));
+        assert!(!thought_fold_draws(ChatKind::Thought, ThoughtFold::Hidden));
+
+        let mut spaced = Vec::new();
+        crate::append_thought(&mut spaced, "Need  a\nsnapshot of the restore path.");
+        let spaced_msgs = vec![(
+            "assistant".into(),
+            merge_thinking(&spaced[0].body, "I'll look."),
+        )];
+        let spaced_view = visible_chat(&spaced_msgs);
+        let spaced_stored = spaced_view
+            .iter()
+            .find(|v| v.kind == ChatKind::Thought)
+            .expect("scrubbed thought");
+        assert_eq!(
+            thought_body_key(&spaced[0].body),
+            thought_body_key(&spaced_stored.body),
+            "scrubbed whitespace must not change the fold key"
+        );
     }
 
     #[test]

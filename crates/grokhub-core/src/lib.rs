@@ -95,7 +95,7 @@ pub use chat::{
 pub use chat_view::{
     assistant_prose, cluster_gap, is_skill_saved_mark, is_workload_user, merge_thinking, merge_thinking_capped, quote_for_reply, scrub_thought, stretch_saved_skill, strip_thinking,
     SKILL_SAVED_MARK, SKILL_SAVED_NOTE,
-    refresh_last_stretch, thought_control_act, thought_fold_controls, thought_fold_draws, thought_shows_acts, thought_shows_label, visible_chat, visible_chat_refs, visible_turn_count, visible_turn_count_from,
+    refresh_last_stretch, thought_body_key, thought_control_act, thought_fold_controls, thought_fold_draws, thought_shows_acts, thought_shows_label, visible_chat, visible_chat_refs, visible_turn_count, visible_turn_count_from,
     ThoughtFold, ThoughtFoldAct, THOUGHT_ROW_LABEL,
     scrolled_off_tail,
     ChatKind, ChatView, CHAT_BLOCK_GAP, CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, THOUGHT_CLUSTER_GAP,
