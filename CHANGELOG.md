@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.2 — 2026-09-22
+
+Settings → **Update** stays visible when the 2-hour probe found nothing. A click still overlays CLI then cabin so a missed GitHub Latest or alpha check can land. The titlebar chip still hides until something is newer. Same on Linux and Windows.
+
+- Linux: `grokhub-linux-v2.10.2.tar.gz` and AUR `pkgver=2.10.2`.
+- Windows: `GrokHub-Setup-2.10.2.exe` and `grokhub-windows-v2.10.2.zip`.
+- Cursor cabin 2.10.2. VERSION 2.10.2. Not tagged until MERGE GREEN.
+
 ## 2.10.1 — 2026-09-22
 
 Cabin UI pass on Linux and Windows. Session pill Ask is now Look. Permission Ask / Auto / Always keep their names. Always uses an amber danger stroke and does not persist. Voice strip is Listening / Speaking / Ready and hides about a second after Ready. Empty-home chips keep one primary (fill + stroke + weight). When ranking yields none, one muted **Nothing queued** placeholder stays — no filler action chips.

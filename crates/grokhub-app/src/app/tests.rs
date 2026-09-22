@@ -1275,16 +1275,20 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && update.contains("Install Grok Build CLI")
                 && update.contains("show_cli_install")
                 && update.contains("cabin_notice")
-                && update.contains("cli_notice"),
-            "Update is one control for CLI and cabin, Install when missing: {update}"
+                && update.contains("cli_notice")
+                && update.contains("settings_action")
+                && !update.contains("if let Some(label) = update_label")
+                && !update.contains("else if !show_cli_install"),
+            "Update is one control for CLI and cabin, always visible, Install when missing: {update}"
         );
         assert!(
             settings.contains("cabin_update_notice")
                 && settings.contains("cli_update_notice")
                 && settings.contains("should_update_cli_alpha")
                 && settings.contains("queue_combined_update")
-                && settings.contains("update_chip_label"),
-            "Settings Update and the titlebar share one pending update: {settings}"
+                && settings.contains("settings_update_label")
+                && settings.contains("settings_update_hint"),
+            "Settings Update stays visible; titlebar chip still hides when current: {settings}"
         );
         assert!(
             !account.contains("Update CLI")
@@ -3479,7 +3483,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "/update must use the same pending plan as the chip: {queued}"
         );
         assert!(
-            src.contains("combined_update_hint")
+            src.contains("settings_update_hint")
                 && src.contains("queue_combined_update")
                 && src.contains("UPDATE_CHECK_EVERY"),
             "one Update control must describe CLI-then-cabin and recheck on the 2h interval: {src}"
@@ -3500,6 +3504,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             queued_cli.contains("combined_update_cmds")
                 && queued_cli.contains("start_overlay_update")
+                && queued_cli.contains("pending_for_manual_update")
                 && queued_cli.contains("UpdatePending::Cli")
                 && queued_cli.contains("UpdatePending::Both")
                 && queued_cli.contains("cabin_skipped")
@@ -3512,8 +3517,9 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && !queued_cli.contains("persist_snap")
                 && !queued_cli.contains("Set Settings → source")
                 && !queued_cli.contains("--stable")
-                && !queued_cli.contains("begin_grok_install"),
-            "the one Update control must run only pending steps, CLI first, on alpha: {queued_cli}"
+                && !queued_cli.contains("begin_grok_install")
+                && !queued_cli.contains("combined_update_hint(UpdatePending::None)"),
+            "the one Update control runs pending steps, or both when the probe missed: {queued_cli}"
         );
         let overlay = src
             .split("fn start_overlay_update(")
