@@ -98,6 +98,7 @@ use grokhub_core::{
     skip_night_check_receipt, slash_help, slash_kind, stage_project, start_hub_rotates_pair,
     state_for_disk, stretch_saved_skill, strip_thinking, summarize_trajectory, summarize_write,
     surgical_memory_edit, teach_routine, teachable_steps, theme_id, theme_label,
+    thought_body_key, thought_control_act, thought_fold_controls, thought_fold_draws,
     thought_shows_acts, thought_shows_label, thread_goal_prompt, thread_host_receipts,
     thread_host_receipts_from, toggle_folder, toggle_pin, token_delta, top_habit_labels,
     trajectory_jsonl_line, transcribe_route, trim_result_bodies_in_place, uid, unified_diff_cite,
@@ -116,13 +117,15 @@ use grokhub_core::{
     MintRealtimeFn, PermKey, PlusAct, PlusTarget, Policy, PresenceFrame, ProjectKind,
     ProjectMenuAct, ProjectNode, PttLine, QuickChip, Recipe, ReplayOp, ReviewDigest, RewindRecord,
     ScheduleRoute, SkillMd, Slash, SlashHit, StreamTokenKind, SuggestionStore, ThreadReuseView,
-    ThreadTab, TranscribeRoute, UpdatePending, UsageDay, VerifyResult, VoiceEvent, VoiceState,
+    ThreadTab, ThoughtFold, ThoughtFoldAct, TranscribeRoute, UpdatePending, UsageDay,
+    VerifyResult, VoiceEvent, VoiceState,
     WallGif, BUBBLE_PAD_X, BUBBLE_PAD_Y, CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, CABIN_GITHUB_TOOLS,
     CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, CHIP_VISIBLE_MAX, CONTEXT_BUDGET_TOKENS, FOLLOWUP_MAX_STEPS,
     FOLLOWUP_PROMPT, FRAME_CAP, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HEARTBEAT_MS, HUB_KIND,
     IDLE_REFLECT_MS, IMAGE_FILE_CAP, IMAGINE_ASPECTS, IMAGINE_STYLES, IMAGINE_WALL_GAP, LOOP_MAX,
     PRESENCE_RING_MS, RESULT_TRIM_KEEP_HOPS, REVIEW_NIGHT_HOUR, SKILL_SAVED_MARK, SKILL_SAVED_NOTE,
-    TEXT_FILE_CAP, TRANSCRIBERS, UPDATE_CHECK_EVERY, WALL_GIF_EVERY_MS, WALL_GIF_MAX,
+    TEXT_FILE_CAP, THOUGHT_ROW_LABEL, TRANSCRIBERS, UPDATE_CHECK_EVERY, WALL_GIF_EVERY_MS,
+    WALL_GIF_MAX,
 };
 use grokhub_hub::serve_lan;
 use std::collections::{HashMap, HashSet};
@@ -845,38 +848,118 @@ fn reserve_offscreen_chat_row(ui: &mut egui::Ui, cached_h: f32) -> bool {
     true
 }
 
+struct ChatBlockPaint {
+    act: ChatBlockAct,
+    drawn: bool,
+    thought_fold: ThoughtFold,
+}
+
+/// `kind` is `"slot"` while the thought is a live block, `"body"` once it is stored.
+/// The body key is [`thought_body_key`], so Hide and Minimize survive that handoff.
+fn thought_fold_id(thread_id: &str, kind: &str, key: u64) -> egui::Id {
+    egui::Id::new(("cabin-thought-fold", thread_id, kind, key))
+}
+
+fn read_thought_fold(ctx: &egui::Context, id: egui::Id) -> ThoughtFold {
+    ctx.data(|d| d.get_temp(id)).unwrap_or_default()
+}
+
+fn write_thought_fold(ctx: &egui::Context, id: egui::Id, fold: ThoughtFold) {
+    ctx.data_mut(|d| d.insert_temp(id, fold));
+}
+
+fn paint_thought_fold_buttons(ui: &mut egui::Ui, fold: ThoughtFold) -> ThoughtFold {
+    let mut fold = fold;
+    for label in thought_fold_controls(fold) {
+        let resp = crate::theme::felt_label_button(
+            ui,
+            label,
+            egui::Color32::TRANSPARENT,
+            crate::theme::muted(),
+            6.0,
+            egui::vec2(0.0, 0.0),
+            None,
+            false,
+        );
+        if resp.clicked() {
+            if let Some(act) = thought_control_act(label) {
+                fold = fold.apply(act);
+            }
+        }
+    }
+    fold
+}
+
 fn paint_chat_block(
     ui: &mut egui::Ui,
     block: &ChatView,
     thought_label: bool,
     thought_acts: bool,
-) -> ChatBlockAct {
+    thought_fold: ThoughtFold,
+) -> ChatBlockPaint {
     let avail = clamp_row_width(ui.available_width().min(ui.max_rect().width()));
     let bubble_w = crate::markdown::bubble_width(avail);
+    if !thought_fold_draws(block.kind, thought_fold) {
+        return ChatBlockPaint {
+            act: ChatBlockAct::None,
+            drawn: false,
+            thought_fold,
+        };
+    }
     match block.kind {
         ChatKind::User => {
             let resp = paint_speech_bubble(ui, &block.body, true, false);
-            paint_msg_acts(ui, true, &block.body, avail, resp.rect.width())
+            ChatBlockPaint {
+                act: paint_msg_acts(ui, true, &block.body, avail, resp.rect.width()),
+                drawn: true,
+                thought_fold,
+            }
         }
         ChatKind::Assistant => {
             let resp = paint_speech_bubble(ui, &block.body, false, true);
-            paint_msg_acts(ui, false, &block.body, avail, resp.rect.width())
+            ChatBlockPaint {
+                act: paint_msg_acts(ui, false, &block.body, avail, resp.rect.width()),
+                drawn: true,
+                thought_fold,
+            }
         }
         ChatKind::Thought => {
-            if thought_label {
-                ui.label(
-                    RichText::new("Thought process")
-                        .size(crate::theme::FONT_META)
-                        .italics()
-                        .color(crate::theme::muted()),
-                );
+            let mut fold = thought_fold;
+            let mut act = ChatBlockAct::None;
+            // Paint the fold we were given. A click is stored for the next frame
+            // so minimize and expand do not draw both layouts at once.
+            if fold.paints_body() {
+                ui.horizontal(|ui| {
+                    if thought_label {
+                        ui.label(
+                            RichText::new("Thought process")
+                                .size(crate::theme::FONT_META)
+                                .italics()
+                                .color(crate::theme::muted()),
+                        );
+                    }
+                    fold = paint_thought_fold_buttons(ui, fold);
+                });
                 ui.add_space(4.0);
-            }
-            let resp = paint_thought_bubble(ui, &block.body);
-            if thought_acts {
-                paint_msg_acts(ui, false, &block.body, avail, resp.rect.width())
+                let resp = paint_thought_bubble(ui, &block.body);
+                if thought_acts {
+                    act = paint_msg_acts(ui, false, &block.body, avail, resp.rect.width());
+                }
             } else {
-                ChatBlockAct::None
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(THOUGHT_ROW_LABEL)
+                            .size(crate::theme::FONT_META)
+                            .italics()
+                            .color(crate::theme::muted()),
+                    );
+                    fold = paint_thought_fold_buttons(ui, fold);
+                });
+            }
+            ChatBlockPaint {
+                act,
+                drawn: true,
+                thought_fold: fold,
             }
         }
         ChatKind::Tool => {
@@ -900,7 +983,11 @@ fn paint_chat_block(
                         .color(crate::theme::subtle()),
                 );
             });
-            ChatBlockAct::None
+            ChatBlockPaint {
+                act: ChatBlockAct::None,
+                drawn: true,
+                thought_fold,
+            }
         }
     }
 }
@@ -11677,13 +11764,56 @@ impl Cabin {
                                 ui.ctx().data(|d| d.get_temp(row_h_id)).unwrap_or_default();
                             let mut next_heights = Vec::with_capacity(shown.len());
                             for (i, block) in shown.iter().enumerate() {
-                                let prev_thought = i
-                                    .checked_sub(1)
-                                    .and_then(|p| shown.get(p))
-                                    .is_some_and(|v| v.kind == ChatKind::Thought);
-                                let next_thought = shown
-                                    .get(i + 1)
-                                    .is_some_and(|v| v.kind == ChatKind::Thought);
+                                let prev_thought = i.checked_sub(1).and_then(|p| shown.get(p)).filter(|v| {
+                                    v.kind == ChatKind::Thought
+                                });
+                                let next_thought =
+                                    shown.get(i + 1).filter(|v| v.kind == ChatKind::Thought);
+                                let prev_expanded = prev_thought.is_some_and(|v| {
+                                    read_thought_fold(
+                                        ui.ctx(),
+                                        thought_fold_id(
+                                            &thread_id,
+                                            "body",
+                                            thought_body_key(&v.body),
+                                        ),
+                                    )
+                                    .paints_body()
+                                });
+                                let next_expanded = next_thought.is_some_and(|v| {
+                                    read_thought_fold(
+                                        ui.ctx(),
+                                        thought_fold_id(
+                                            &thread_id,
+                                            "body",
+                                            thought_body_key(&v.body),
+                                        ),
+                                    )
+                                    .paints_body()
+                                });
+                                let next_drawn_thought = next_thought.is_some_and(|v| {
+                                    read_thought_fold(
+                                        ui.ctx(),
+                                        thought_fold_id(
+                                            &thread_id,
+                                            "body",
+                                            thought_body_key(&v.body),
+                                        ),
+                                    )
+                                    .paints_row()
+                                });
+                                let fold = if block.kind == ChatKind::Thought {
+                                    read_thought_fold(
+                                        ui.ctx(),
+                                        thought_fold_id(
+                                            &thread_id,
+                                            "body",
+                                            thought_body_key(&block.body),
+                                        ),
+                                    )
+                                } else {
+                                    ThoughtFold::Expanded
+                                };
                                 let cached_h = prev_heights.get(i).copied().unwrap_or(0.0);
                                 if reserve_offscreen_chat_row(ui, cached_h) {
                                     // `push_id` still consumes one parent auto-id
@@ -11694,24 +11824,38 @@ impl Cabin {
                                     continue;
                                 }
                                 let y0 = ui.cursor().min.y;
-                                match ui
+                                let painted = ui
                                     .push_id(chat_row_id_salt(&thread_id, i), |ui| {
                                         paint_chat_block(
                                             ui,
                                             block,
-                                            thought_shows_label(prev_thought),
-                                            thought_shows_acts(next_thought),
+                                            thought_shows_label(prev_expanded),
+                                            thought_shows_acts(next_expanded),
+                                            fold,
                                         )
                                     })
-                                    .inner
-                                {
+                                    .inner;
+                                if block.kind == ChatKind::Thought {
+                                    write_thought_fold(
+                                        ui.ctx(),
+                                        thought_fold_id(
+                                            &thread_id,
+                                            "body",
+                                            thought_body_key(&block.body),
+                                        ),
+                                        painted.thought_fold,
+                                    );
+                                }
+                                match painted.act {
                                     ChatBlockAct::None => {}
                                     other => act = other,
                                 }
-                                ui.add_space(cluster_gap(
-                                    block.kind == ChatKind::Thought,
-                                    next_thought,
-                                ));
+                                if painted.drawn {
+                                    ui.add_space(cluster_gap(
+                                        block.kind == ChatKind::Thought,
+                                        next_drawn_thought,
+                                    ));
+                                }
                                 next_heights.push((ui.cursor().min.y - y0).max(0.0));
                             }
                             ui.ctx().data_mut(|d| d.insert_temp(row_h_id, next_heights));
@@ -11808,6 +11952,7 @@ impl Cabin {
 
     fn paint_live_blocks(&self, ui: &mut egui::Ui, _thinking: bool) -> ChatBlockAct {
         let mut act = ChatBlockAct::None;
+        let thread_id = self.visible_thread_id();
         for (i, b) in self.live_blocks.iter().enumerate() {
             let this_thought = b.kind == LiveKind::Thought;
             let prev_thought = i
@@ -11818,6 +11963,25 @@ impl Cabin {
                 .live_blocks
                 .get(i + 1)
                 .is_some_and(|v| v.kind == LiveKind::Thought);
+            let prev_expanded = prev_thought
+                && read_thought_fold(
+                    ui.ctx(),
+                    thought_fold_id(&thread_id, "slot", self.live_blocks[i - 1].fold_slot),
+                )
+                .paints_body();
+            let next_expanded = next_thought
+                && read_thought_fold(
+                    ui.ctx(),
+                    thought_fold_id(&thread_id, "slot", self.live_blocks[i + 1].fold_slot),
+                )
+                .paints_body();
+            let next_drawn_thought = next_thought
+                && read_thought_fold(
+                    ui.ctx(),
+                    thought_fold_id(&thread_id, "slot", self.live_blocks[i + 1].fold_slot),
+                )
+                .paints_row();
+            let mut drawn = true;
             match b.kind {
                 LiveKind::Thought => {
                     let view = ChatView {
@@ -11825,12 +11989,24 @@ impl Cabin {
                         title: "Thought".into(),
                         body: b.body.clone(),
                     };
-                    match paint_chat_block(
+                    let slot_id = thought_fold_id(&thread_id, "slot", b.fold_slot);
+                    let fold = read_thought_fold(ui.ctx(), slot_id);
+                    let painted = paint_chat_block(
                         ui,
                         &view,
-                        thought_shows_label(prev_thought),
-                        thought_shows_acts(next_thought),
-                    ) {
+                        thought_shows_label(prev_expanded),
+                        thought_shows_acts(next_expanded),
+                        fold,
+                    );
+                    write_thought_fold(ui.ctx(), slot_id, painted.thought_fold);
+                    // Same text key the stored transcript reads after live_blocks is cleared.
+                    write_thought_fold(
+                        ui.ctx(),
+                        thought_fold_id(&thread_id, "body", thought_body_key(&b.body)),
+                        painted.thought_fold,
+                    );
+                    drawn = painted.drawn;
+                    match painted.act {
                         ChatBlockAct::None => {}
                         other => act = other,
                     }
@@ -11841,7 +12017,7 @@ impl Cabin {
                         title: String::new(),
                         body: b.body.clone(),
                     };
-                    match paint_chat_block(ui, &view, false, false) {
+                    match paint_chat_block(ui, &view, false, false, ThoughtFold::Expanded).act {
                         ChatBlockAct::None => {}
                         other => act = other,
                     }
@@ -11864,7 +12040,9 @@ impl Cabin {
                     paint_one_tool_card(ui, &card);
                 }
             }
-            ui.add_space(cluster_gap(this_thought, next_thought));
+            if drawn {
+                ui.add_space(cluster_gap(this_thought, next_drawn_thought));
+            }
         }
         act
     }
@@ -15353,6 +15531,16 @@ mod tests {
             !thought.contains("if open"),
             "thought body must stay visible after the turn, not collapse to a badge: {thought}"
         );
+        assert!(
+            thought.contains("paints_body"),
+            "expand, minimize, and hide stay on the existing thought arm: {thought}"
+        );
+        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(src);
+        assert_eq!(
+            impl_src.matches("ChatKind::Thought => {").count(),
+            1,
+            "one thought renderer"
+        );
     }
 
     #[test]
@@ -15367,7 +15555,13 @@ mod tests {
                 };
                 let closed = ui
                     .scope(|ui| {
-                        let _ = super::paint_chat_block(ui, &block, true, false);
+                        let _ = super::paint_chat_block(
+                            ui,
+                            &block,
+                            true,
+                            false,
+                            grokhub_core::ThoughtFold::Expanded,
+                        );
                     })
                     .response;
                 assert!(
@@ -15377,6 +15571,127 @@ mod tests {
                 );
             });
         });
+    }
+
+    #[test]
+    fn thought_fold_paints_expand_minimize_and_hide() {
+        with_fonts_ui(|ui| {
+            ui.allocate_ui(egui::vec2(800.0, 700.0), |ui| {
+                ui.set_max_width(800.0);
+                let thought = grokhub_core::ChatView {
+                    kind: grokhub_core::ChatKind::Thought,
+                    title: "Thought".into(),
+                    body: "I'll start by checking which desktop environment and session-restore setup you already have, then wire window size and position into that boot path. After that I'll confirm the restored geometry and say what changed.".into(),
+                };
+                let reply = grokhub_core::ChatView {
+                    kind: grokhub_core::ChatKind::Assistant,
+                    title: String::new(),
+                    body: "Window size and position restore through the session you already have.".into(),
+                };
+                let height = |ui: &mut egui::Ui, block: &grokhub_core::ChatView, fold| {
+                    let y0 = ui.cursor().min.y;
+                    let _ = super::paint_chat_block(ui, block, true, false, fold);
+                    ui.cursor().min.y - y0
+                };
+                let expanded = height(ui, &thought, grokhub_core::ThoughtFold::Expanded);
+                let minimized = height(ui, &thought, grokhub_core::ThoughtFold::Minimized);
+                let hidden = height(ui, &thought, grokhub_core::ThoughtFold::Hidden);
+                let reply_hidden = height(ui, &reply, grokhub_core::ThoughtFold::Hidden);
+                let reply_open = height(ui, &reply, grokhub_core::ThoughtFold::Expanded);
+                assert!(
+                    expanded > 48.0,
+                    "expanded thought must show the body, height {expanded}"
+                );
+                assert!(
+                    minimized + 24.0 < expanded,
+                    "minimized thought must be one short row, minimized {minimized} expanded {expanded}"
+                );
+                assert!(
+                    minimized < 56.0,
+                    "minimized thought grew past one row, height {minimized}"
+                );
+                assert!(
+                    hidden < 4.0,
+                    "hidden thought was still drawn, height {hidden}"
+                );
+                assert!(
+                    (reply_hidden - reply_open).abs() < 1.0 && reply_open > 20.0,
+                    "hiding a thought must not hide the reply: hidden-fold {reply_hidden} expanded-fold {reply_open}"
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn thought_fold_handoff_keeps_minimize_on_the_stored_body() {
+        let ctx = egui::Context::default();
+        let mut live = Vec::new();
+        grokhub_core::append_thought(&mut live, "Need a snapshot");
+        let slot = live[0].fold_slot;
+        grokhub_core::append_thought(&mut live, " of the restore path.");
+        assert_eq!(slot, live[0].fold_slot);
+        let thread = "thread-a";
+        super::write_thought_fold(
+            &ctx,
+            super::thought_fold_id(thread, "slot", live[0].fold_slot),
+            grokhub_core::ThoughtFold::Minimized,
+        );
+        super::write_thought_fold(
+            &ctx,
+            super::thought_fold_id(
+                thread,
+                "body",
+                grokhub_core::thought_body_key(&live[0].body),
+            ),
+            grokhub_core::ThoughtFold::Minimized,
+        );
+        let views = grokhub_core::visible_chat(&[
+            ("user".into(), "check the session".into()),
+            (
+                "assistant".into(),
+                grokhub_core::merge_thinking(&live[0].body, "I'll look at the session."),
+            ),
+        ]);
+        let stored = views
+            .iter()
+            .find(|v| v.kind == grokhub_core::ChatKind::Thought)
+            .expect("stored thought");
+        let got = super::read_thought_fold(
+            &ctx,
+            super::thought_fold_id(
+                thread,
+                "body",
+                grokhub_core::thought_body_key(&stored.body),
+            ),
+        );
+        assert_eq!(got, grokhub_core::ThoughtFold::Minimized);
+        let fresh = super::read_thought_fold(
+            &ctx,
+            super::thought_fold_id(
+                thread,
+                "body",
+                grokhub_core::thought_body_key("a brand new thought"),
+            ),
+        );
+        assert_eq!(fresh, grokhub_core::ThoughtFold::Expanded);
+        let reply = views
+            .iter()
+            .find(|v| v.kind == grokhub_core::ChatKind::Assistant)
+            .expect("reply");
+        assert!(grokhub_core::thought_fold_draws(
+            reply.kind,
+            grokhub_core::ThoughtFold::Minimized
+        ));
+        let src = include_str!("app.rs");
+        let live = src
+            .split("fn paint_live_blocks(")
+            .nth(1)
+            .and_then(|s| s.split("fn paint_tool_cards(").next())
+            .expect("paint_live_blocks");
+        assert!(
+            live.contains("fold_slot") && live.contains("thought_body_key"),
+            "live folds must be copied onto the stored body key: {live}"
+        );
     }
 
     #[test]

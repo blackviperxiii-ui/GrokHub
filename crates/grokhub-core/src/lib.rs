@@ -126,10 +126,11 @@ pub use chat_job::{
 pub use chat_view::{
     assistant_prose, cluster_gap, is_skill_saved_mark, is_workload_user, merge_thinking,
     merge_thinking_capped, quote_for_reply, refresh_last_stretch, scrolled_off_tail, scrub_thought,
-    stretch_saved_skill, strip_thinking, thought_shows_acts, thought_shows_label, visible_chat,
-    visible_chat_refs, visible_turn_count, visible_turn_count_from, ChatKind, ChatView,
-    CHAT_BLOCK_GAP, CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, SKILL_SAVED_MARK, SKILL_SAVED_NOTE,
-    THOUGHT_CLUSTER_GAP,
+    stretch_saved_skill, strip_thinking, thought_body_key, thought_control_act,
+    thought_fold_controls, thought_fold_draws, thought_shows_acts, thought_shows_label,
+    visible_chat, visible_chat_refs, visible_turn_count, visible_turn_count_from, ChatKind,
+    ChatView, ThoughtFold, ThoughtFoldAct, CHAT_BLOCK_GAP, CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK,
+    SKILL_SAVED_MARK, SKILL_SAVED_NOTE, THOUGHT_CLUSTER_GAP, THOUGHT_ROW_LABEL,
 };
 pub use chips::{
     build_quick_chips, chip_memory_key, chip_scan, chip_suggest_prompt, chip_thread_from_messages,
