@@ -118,8 +118,8 @@ impl Cabin {
         let show_cli_install =
             grokhub_core::should_show_manual_cli_install(cli_ready, cli_installing);
         let pending_update = self.update_pending_now();
-        let update_label = update_chip_label(pending_update);
-        let update_hint = combined_update_hint(pending_update);
+        let update_label = settings_update_label(pending_update);
+        let update_hint = settings_update_hint(pending_update);
         let cabin_notify = self.cabin_update_available();
         let cabin_notice = self
             .cabin_latest
@@ -413,17 +413,13 @@ impl Cabin {
                                                             {
                                                                 install_cli = true;
                                                             }
-                                                            if let Some(label) = update_label {
-                                                                if crate::cards::settings_action(
-                                                                    ui,
-                                                                    label,
-                                                                    update_hint,
-                                                                    "Update",
-                                                                ) {
-                                                                    update = true;
-                                                                }
-                                                            } else if !show_cli_install {
-                                                                crate::cards::settings_note(ui, update_hint);
+                                                            if crate::cards::settings_action(
+                                                                ui,
+                                                                update_label,
+                                                                update_hint,
+                                                                "Update",
+                                                            ) {
+                                                                update = true;
                                                             }
                                                             if let Some(pct) = self.update_pct {
                                                                 let fill = if self.last_receipt_ok == Some(false) && !self.running {
