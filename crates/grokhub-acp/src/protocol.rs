@@ -76,6 +76,27 @@ impl PermissionMode {
     pub fn auto_allows(self) -> bool {
         matches!(self, Self::AlwaysApprove | Self::Auto)
     }
+
+    /// Ask needs a live ACP session so Allow / Deny can show.
+    /// Auto and Always stay on headless `grok -p`.
+    pub fn uses_acp(self) -> bool {
+        matches!(self, Self::Ask)
+    }
+}
+
+/// User-visible Ask deny when `grok agent stdio` cannot start or has died.
+/// Do not fall through to headless `grok -p --sandbox off`.
+pub const ASK_ACP_DOWN: &str =
+    "Ask needs ACP so Allow / Deny can show. Grok Build agent is down — turn denied.";
+
+/// Ask fail-closed copy. Empty detail keeps the gate line; extra text is appended.
+pub fn ask_denied_without_acp(detail: &str) -> String {
+    let detail = detail.trim();
+    if detail.is_empty() {
+        ASK_ACP_DOWN.to_string()
+    } else {
+        format!("{ASK_ACP_DOWN} {detail}")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1307,6 +1328,23 @@ mod tests {
         assert!(PermissionMode::AlwaysApprove.auto_allows());
         assert!(PermissionMode::Auto.auto_allows());
         assert!(!PermissionMode::Ask.auto_allows());
+        assert!(PermissionMode::Ask.uses_acp());
+        assert!(!PermissionMode::Auto.uses_acp());
+        assert!(!PermissionMode::AlwaysApprove.uses_acp());
+        let down = ask_denied_without_acp("");
+        assert!(
+            down.contains("Allow / Deny") && down.contains("turn denied"),
+            "{down}"
+        );
+        assert!(
+            !down.contains("sandbox") && !down.contains("grok -p"),
+            "Ask deny must not mention a headless fallthrough: {down}"
+        );
+        let with = ask_denied_without_acp("handshake refused");
+        assert!(
+            with.contains("Allow / Deny") && with.contains("handshake refused"),
+            "{with}"
+        );
     }
 
     #[test]
