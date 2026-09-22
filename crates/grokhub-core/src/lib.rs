@@ -195,7 +195,9 @@ pub use heartbeat::{
     HEARTBEAT_MS,
 };
 pub use history::{
-    dedupe_hits, search_corpus, search_corpus_tagged, search_place, search_text, search_thread_body,
+    dedupe_hits, palette_file_shown, palette_forget_stale_walk, palette_row_action,
+    palette_search_is_saved, search_corpus, search_corpus_tagged, search_place, search_text,
+    search_thread_body,
 };
 pub use host_cite::{host_status_line, last_host_line, summarize_write, unified_diff_cite};
 pub use host_plan::{
@@ -329,8 +331,8 @@ pub use state::{
 pub use stream::{
     chat_include_usage, chat_stream_flag, fold_sse_acc, fold_stream_fields, fold_stream_token,
     keep_sse_acc, parse_sse_delta, parse_sse_finish, parse_sse_text, parse_sse_thought,
-    parse_sse_usage, prefer_complete_reply, should_replace_stream_acc, sse_done, sse_live_delta,
-    stream_was_truncated, StreamTokenKind, StreamUsage,
+    parse_sse_usage, prefer_complete_reply, push_stream_capped, should_replace_stream_acc, sse_done,
+    sse_live_delta, stream_was_truncated, take_ui_text, StreamTokenKind, StreamUsage,
 };
 pub use task::{HubTask, Receipt};
 pub use thread_tab::{
