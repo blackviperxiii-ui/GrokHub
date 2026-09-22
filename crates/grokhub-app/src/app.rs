@@ -10049,7 +10049,7 @@ impl Cabin {
         match crate::update::restart_system(!self.window_visible) {
             Ok(()) => {
                 if let Some(tray) = self.tray.take() {
-                    crate::tray::drop_off_thread(tray);
+                    crate::tray::drop_tray(tray);
                 }
                 self.want_quit = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -10788,7 +10788,7 @@ impl Cabin {
             Some(crate::tray::TrayCmd::Quit) => {
                 self.want_quit = true;
                 if let Some(tray) = self.tray.take() {
-                    crate::tray::drop_off_thread(tray);
+                    crate::tray::drop_tray(tray);
                 }
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
@@ -10942,7 +10942,7 @@ impl eframe::App for Cabin {
         cfg.api_key.clear();
         let _ = crate::config::save(&cfg);
         if let Some(tray) = self.tray.take() {
-            crate::tray::drop_off_thread(tray);
+            crate::tray::drop_tray(tray);
         }
     }
 
@@ -17654,9 +17654,9 @@ mod tests {
             .and_then(|s| s.split("fn start_overlay_update").next())
             .expect("restart_after_update");
         let spawn_at = restart.find("restart_system").expect("restart_system");
-        let drop_at = restart.find("drop_off_thread");
+        let drop_at = restart.find("drop_tray");
         assert!(
-            drop_at.is_none_or(|d| d > spawn_at),
+            drop_at.is_some_and(|d| d > spawn_at),
             "dropping the tray before spawn leaves a headless cabin when restart fails: {restart}"
         );
     }

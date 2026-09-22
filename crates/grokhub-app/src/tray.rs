@@ -649,7 +649,8 @@ pub fn take_spawn_result<T>(rx: &mpsc::Receiver<T>) -> Option<T> {
 }
 
 /// Keep the StatusNotifierItem whether the cabin is visible or hidden.
-pub fn keep_if_hidden<T: Send + 'static>(_hidden: bool, host: T) -> Option<T> {
+/// No `Send` bound — Windows `TrayIcon` is `Rc` / `!Send`.
+pub fn keep_if_hidden<T>(_hidden: bool, host: T) -> Option<T> {
     Some(host)
 }
 
@@ -657,6 +658,16 @@ pub fn drop_off_thread<T: Send + 'static>(value: T) {
     let _ = thread::Builder::new()
         .name("grokhub-tray-drop".into())
         .spawn(move || drop(value));
+}
+
+/// Tear down the tray. Linux D-Bus shutdown is slow — do that off-thread.
+/// Windows `TrayIcon` is `!Send` and must die on the UI thread that created it
+/// (a drop worker leaves a ghost icon and does not compile).
+pub fn drop_tray(host: TrayHost) {
+    #[cfg(unix)]
+    drop_off_thread(host);
+    #[cfg(not(unix))]
+    drop(host);
 }
 
 impl Drop for TrayHost {
@@ -747,6 +758,25 @@ mod tests {
         assert!(
             !attach.contains("GetMessageW") && attach.contains("with_menu"),
             "a worker GetMessage loop is what closed the tray menu in ~1s: {attach}"
+        );
+        let drop = src
+            .split("pub fn drop_tray")
+            .nth(1)
+            .and_then(|s| s.split("impl Drop for TrayHost").next())
+            .expect("drop_tray");
+        assert!(
+            drop.contains("cfg(not(unix))") && drop.contains("drop(host)"),
+            "Windows TrayIcon is !Send — drop on the UI thread: {drop}"
+        );
+        let app = include_str!("app.rs");
+        assert_eq!(
+            app.matches("drop_off_thread(tray)").count(),
+            0,
+            "TrayHost must not go through drop_off_thread (Send)"
+        );
+        assert!(
+            app.contains("drop_tray(tray)"),
+            "Quit / restart / on_exit must drop the tray via drop_tray"
         );
     }
 
