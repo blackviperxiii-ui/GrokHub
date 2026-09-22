@@ -1,6 +1,6 @@
 # GrokHub is the Grok Build GUI
 
-**Version:** 2.9.14
+**Version:** 2.9.15
 
 GrokHub is the native egui cabin. Grok Build (`grok` CLI) is the agent, the host shell, and computer-use (eyes and hands). One repo, one version — Linux tarball/AUR and Windows `GrokHub-Setup-<version>.exe` ship from the same tag.
 
@@ -16,9 +16,9 @@ Transport: chat is headless `grok -p --output-format streaming-json` with `--san
 
 Left-rail **Chat** is the new-chat control. There is no separate New chat button. Click Chat on an empty draft (no dialogue, no Grok session) to pull that same draft up. After dialogue has started, Chat opens a new draft. Keep one empty draft at a time. Old convos are sidebar History (`grok sessions`).
 
-`send_chat` runs `grok -p` whose cwd is the bound project, or `~/GrokHub-Work` when unbound — never the cabin process cwd. Stream user and assistant text into bubbles that use the full chat pane. Thinking is faded thought process, not a bubble. A thought starts expanded. Minimize leaves one short row that opens again. Hide stops drawing that thought. The reply stays. A green live dot plus Thinking / Running / Waiting sits on the turn; hover shows the current action. That line does not sit above the composer. That row has no Stop. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The changing status text above the composer is gone. The context usage bar stays. Stop / Halt / tray Halt SIGTERMs the `grok -p` child (`session/cancel` on ACP). A dead stored session id retries without `--resume`. Disk-full / permission-denied handshake errors land in the chat with the cwd named. Grok.com-style “I don’t have access to your computer” thoughts are stripped from the pane.
+`send_chat` runs `grok -p` whose cwd is the bound project, or `~/GrokHub-Work` when unbound — never the cabin process cwd. Stream user and assistant text into bubbles that use the full chat pane. Thinking is faded thought process, not a bubble. A thought starts expanded. Minimize leaves one short row that opens again. Hide stops drawing that thought. That fold survives the live-to-stored handoff. The reply stays. A long user bubble wraps inside the row and keeps its leading gap. A green live dot plus Thinking / Running / Waiting sits on the turn; hover shows the current action. That line does not sit above the composer. That row has no Stop. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The changing status text above the composer is gone. The context usage bar stays. Stop / Halt / tray Halt SIGTERMs the `grok -p` child (`session/cancel` on ACP). A dead stored session id retries without `--resume`. Disk-full / permission-denied handshake errors land in the chat with the cwd named. Grok.com-style “I don’t have access to your computer” thoughts are stripped from the pane.
 
-Composer pills: Chat / Plan / Ask, Ask / Auto / Always-approve, and Effort (None / Minimal / Low / Medium / High / Extra High → `grok -p --reasoning-effort`; a saved Max loads as Extra High). Chat passes `--model grok-4.7` unless `/model` pins another id. Hover a pill for what it does. Shared buttons (segment pills, catalog triggers, settings switches, sidebar chrome, Copy, Reply, slash-pick rows, and the settings close control) hover-scale to 1.035 over 120ms, shrink on press, and scale plus fill on keyboard focus. The same paint runs on Linux and Windows. Off-screen chat rows skip paint. Row height is cached by thread and pane width, and each row has a stable id so a skip does not move selection or hover. Tool cards, diffs, and computer-use frames sit in a collapsed Work tree. Permission prompts Allow / Deny / Always. The Ask card names the command, path, or site. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out.
+Composer pills: Chat / Plan / Ask, Ask / Auto / Always-approve, and Effort (None / Minimal / Low / Medium / High / Extra High → `grok -p --reasoning-effort`; a saved Max loads as Extra High). Chat passes `--model grok-4.7` unless `/model` pins another id. Hover a pill for what it does. Shared buttons (segment pills, catalog triggers, settings switches, sidebar chrome, Copy, Reply, slash-pick rows, and the settings close control) hover-scale to 1.035 over 120ms, shrink on press, and scale plus fill on keyboard focus. The same paint runs on Linux and Windows. Skills cards, Automations cards, and the Imagine wall keep hover inside the slot. Off-screen chat rows skip paint. Row height is cached by thread and pane width, and each row has a stable id so a skip does not move selection or hover. Tool cards, diffs, and computer-use frames sit in a collapsed Work tree. Permission prompts Allow / Deny / Always. The Ask card names the command, path, or site. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out.
 
 ## Desktop
 
@@ -33,6 +33,8 @@ Below the search, History is `grok sessions list` from the chat cwd (the directo
 ## Settings
 
 Quiet-hour clocks and the daily/host caps type into buffers. Save parses them. A half-typed clock or an hour with no `:` (`7`) keeps the last-good value instead of the factory window or turning the guard off.
+
+Account can set a display name and a local profile picture. The picture is copied into cabin config (`profile.png`). A saved name wins over the OAuth name on the avatar menu and the rail. A blank name keeps the OAuth name, then USER.md, then Grok. The avatar menu, the rail, and the connected hint do not show the email.
 
 ## Auth
 

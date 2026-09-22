@@ -633,8 +633,9 @@ pub fn slash_help() -> String {
         "Pulse every 15s. Hidden idle waits for the pulse.",
         "Devices pair URL is a LAN IPv4. Expired pair codes hide and rotate. Hub complete is owner-only.",
         "Chat rail reuses one empty draft; after dialogue starts it opens a new chat. Old convos are sidebar History.",
-        "Tool calls, diffs, and desk frames sit in a collapsed Work tree — expand to view. User and assistant chats are bubbles; thinking is faded thought process, not a bubble. A thought starts expanded. Minimize leaves one short row that opens again. Hide stops drawing that thought. The reply stays. Permission prompts Allow / Deny — Enter allows and Esc denies when the composer is empty. User bubbles sit on the right.",
-        "Shared buttons hover-scale to 1.035 over 120ms, shrink on press, and scale plus fill on keyboard focus. Off-screen chat rows skip paint; height follows the pane width and each row keeps its id.",
+        "Tool calls, diffs, and desk frames sit in a collapsed Work tree — expand to view. User and assistant chats are bubbles; thinking is faded thought process, not a bubble. A thought starts expanded. Minimize leaves one short row that opens again. Hide stops drawing that thought. That fold survives the live-to-stored handoff. The reply stays. A long user bubble wraps inside the row and keeps its leading gap. Permission prompts Allow / Deny — Enter allows and Esc denies when the composer is empty. User bubbles sit on the right.",
+        "Shared buttons hover-scale to 1.035 over 120ms, shrink on press, and scale plus fill on keyboard focus. Card and wall hover stay inside the slot. Off-screen chat rows skip paint; height follows the pane width and each row keeps its id.",
+        "Account sets a display name and a local profile picture kept in cabin config. The avatar menu, rail, and connected hint do not show the email.",
         "Five chips sit centered over the composer.",
     ]
     .join("\n")
@@ -792,6 +793,13 @@ mod tests {
         assert!(slash_help().contains("Minimize leaves one short row"));
         assert!(slash_help().contains("Hide stops drawing that thought"));
         assert!(slash_help().contains("The reply stays"));
+        assert!(slash_help().contains("That fold survives the live-to-stored handoff"));
+        assert!(slash_help().contains("A long user bubble wraps inside the row"));
+        assert!(slash_help().contains("keeps its leading gap"));
+        assert!(slash_help().contains("Card and wall hover stay inside the slot"));
+        assert!(slash_help().contains("Account sets a display name"));
+        assert!(slash_help().contains("local profile picture"));
+        assert!(slash_help().contains("do not show the email"));
         assert!(slash_help().contains("User bubbles sit on the right"));
         assert!(slash_help().contains("1.035"));
         assert!(slash_help().contains("each row keeps its id"));
