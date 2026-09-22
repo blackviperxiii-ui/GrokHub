@@ -303,6 +303,38 @@ pub fn keep_sse_acc(acc: &str, truncated: bool) -> bool {
     !acc.is_empty() || truncated
 }
 
+/// Cap a complete worker body before it lands on the UI thread.
+pub fn take_ui_text(mut s: String, cap: u64) -> String {
+    if (s.len() as u64) <= cap {
+        return s;
+    }
+    let mut end = (cap as usize).min(s.len());
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.truncate(end);
+    s
+}
+
+/// Append a stream delta without growing `buf` past `cap`. Returns whether `buf` changed.
+pub fn push_stream_capped(buf: &mut String, d: &str, cap: u64) -> bool {
+    let before = buf.len();
+    if (buf.len() as u64) >= cap {
+        return false;
+    }
+    let room = (cap as usize).saturating_sub(buf.len());
+    if d.len() <= room {
+        buf.push_str(d);
+        return buf.len() != before;
+    }
+    let mut end = room;
+    while end > 0 && !d.is_char_boundary(end) {
+        end -= 1;
+    }
+    buf.push_str(&d[..end]);
+    buf.len() != before
+}
+
 pub fn stream_was_truncated(reason: Option<&str>) -> bool {
     let Some(r) = reason.map(|s| s.trim().to_ascii_lowercase()) else {
         return false;
@@ -417,5 +449,23 @@ mod tests {
         );
         assert_eq!(prefer_complete_reply("", "final"), "final");
         assert_eq!(prefer_complete_reply("Hel", "Hello"), "Hello");
+    }
+
+    #[test]
+    fn stream_deltas_do_not_grow_without_bound() {
+        let cap = 8;
+        let mut buf = String::new();
+        assert!(push_stream_capped(&mut buf, "hello", cap));
+        assert_eq!(buf, "hello");
+        assert!(push_stream_capped(&mut buf, " world", cap));
+        assert_eq!(buf, "hello wo");
+        assert!(!push_stream_capped(&mut buf, "more", cap));
+        assert_eq!(buf, "hello wo");
+        assert_eq!(take_ui_text("abcdefghijk".into(), cap), "abcdefgh");
+        assert_eq!(take_ui_text("short".into(), cap), "short");
+        let emoji = "😀😀😀".to_string();
+        let cut = take_ui_text(emoji.clone(), 5);
+        assert!(cut.len() <= 5);
+        assert!(cut.is_char_boundary(cut.len()));
     }
 }
