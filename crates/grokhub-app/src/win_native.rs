@@ -458,7 +458,7 @@ pub fn open_path(path: &str) -> Result<(), String> {
             target.as_ptr(),
             ptr::null(),
             ptr::null(),
-            SW_SHOWNORMAL as i32,
+            SW_SHOWNORMAL,
         )
     };
     if (rc as usize) <= 32 {

@@ -33,6 +33,8 @@ mod window;
 mod update;
 mod xai;
 #[cfg(windows)]
+mod win_acl;
+#[cfg(windows)]
 mod win_audio;
 #[cfg(windows)]
 mod win_native;

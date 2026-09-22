@@ -205,9 +205,9 @@ fn kick_os_dark() {
 fn probe_os_dark() -> bool {
     #[cfg(windows)]
     {
-        return crate::win_native::apps_use_light_theme()
+        crate::win_native::apps_use_light_theme()
             .map(|light| !light)
-            .unwrap_or(true);
+            .unwrap_or(true)
     }
     #[cfg(not(windows))]
     {

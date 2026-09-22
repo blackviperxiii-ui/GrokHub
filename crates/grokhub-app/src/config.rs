@@ -16,7 +16,9 @@ pub const JSON_STORE_CAP: usize = 32 * 1024 * 1024;
 
 /// Write, fsync, then rename so a kill mid-persist cannot leave a truncated JSON.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let dir = path.parent().ok_or_else(|| "atomic write needs a parent".to_string())?;
+    let dir = path
+        .parent()
+        .ok_or_else(|| "atomic write needs a parent".to_string())?;
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let name = path
         .file_name()
@@ -53,9 +55,18 @@ pub fn create_private(path: &Path) -> std::io::Result<fs::File> {
         .open(path)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 pub fn create_private(path: &Path) -> std::io::Result<fs::File> {
-    fs::File::create(path)
+    crate::win_acl::create_user_only(path)
+}
+
+#[cfg(not(any(unix, windows)))]
+pub fn create_private(path: &Path) -> std::io::Result<fs::File> {
+    fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
 }
 
 #[cfg(unix)]
@@ -64,8 +75,59 @@ fn restrict_private(path: &Path) {
     let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn restrict_private(path: &Path) {
+    crate::win_acl::restrict_user_only(path);
+}
+
+#[cfg(not(any(unix, windows)))]
 fn restrict_private(_path: &Path) {}
+
+/// True when an SDDL DACL grants read/write to Everyone, Users, Authenticated Users,
+/// Guests, or Anonymous. Owner / SYSTEM SIDs are fine (`OW` expands to `S-1-5-21-…`).
+pub(crate) fn sddl_allows_world(sddl: &str) -> bool {
+    sddl.split('(')
+        .skip(1)
+        .map(|ace| ace.split(')').next().unwrap_or(""))
+        .filter(|ace| ace.starts_with('A') || ace.starts_with("OA"))
+        .any(|ace| {
+            let trustee = ace.rsplit(';').next().unwrap_or("");
+            matches!(trustee, "WD" | "BU" | "AU" | "BG" | "AN")
+        })
+}
+
+fn is_private_file(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path)
+            .map(|m| m.permissions().mode() & 0o077 == 0)
+            .unwrap_or(false)
+    }
+    #[cfg(windows)]
+    {
+        crate::win_acl::is_user_only(path)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        true
+    }
+}
+
+/// If `path` exists and is world-readable, write the same bytes through `atomic_write`
+/// so the new inode is created 0600 / user-only DACL. Does not parse JSON — a torn
+/// leftover must not be rewritten as `{}`.
+pub fn rewrite_if_world_readable(path: &Path) -> Result<(), String> {
+    if !path.is_file() || is_private_file(path) {
+        return Ok(());
+    }
+    let bytes = fs::read(path).map_err(|e| e.to_string())?;
+    if bytes.len() > JSON_STORE_CAP {
+        return Err("world-readable leftover is over the store cap".into());
+    }
+    atomic_write(path, &bytes)
+}
 
 enum StoreRead {
     Missing,
@@ -731,7 +793,11 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
         fs::create_dir_all(memory_dir()).unwrap();
-        fs::write(memory_dir().join("MEMORY.md"), "x".repeat(MEMORY_FILE_CAP + 4096)).unwrap();
+        fs::write(
+            memory_dir().join("MEMORY.md"),
+            "x".repeat(MEMORY_FILE_CAP + 4096),
+        )
+        .unwrap();
         assert_eq!(read_memory("MEMORY.md").len(), MEMORY_FILE_CAP);
         write_memory("SOUL.md", &"y".repeat(MEMORY_FILE_CAP + 2048)).expect("clip write");
         assert_eq!(read_memory("SOUL.md").len(), MEMORY_FILE_CAP);
@@ -764,7 +830,11 @@ mod tests {
         assert!(loaded.close_to_tray);
         assert!(loaded.host_on);
         fs::create_dir_all(config_dir()).unwrap();
-        fs::write(config_dir().join("app.json"), r#"{"hostOn":false,"yolo":true}"#).unwrap();
+        fs::write(
+            config_dir().join("app.json"),
+            r#"{"hostOn":false,"yolo":true}"#,
+        )
+        .unwrap();
         assert!(
             load().host_on,
             "stale hostOn false must not brick /sh after the toggle was removed"
@@ -895,7 +965,10 @@ mod tests {
         fs::write(&torn, "[{\"id\":\"a\",\"na").expect("write");
         let loaded: Vec<String> = load_json(&torn, JSON_STORE_CAP);
         assert!(loaded.is_empty());
-        assert!(!torn.exists(), "torn JSON must be preserved under a new name");
+        assert!(
+            !torn.exists(),
+            "torn JSON must be preserved under a new name"
+        );
 
         // Missing and empty are ordinary first-run states, not corruption.
         let absent = root.join("absent.json");
@@ -912,9 +985,56 @@ mod tests {
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|n| n.contains(".corrupt-"))
             .collect();
-        assert_eq!(junk.len(), 1, "only the torn store is quarantined: {junk:?}");
+        assert_eq!(
+            junk.len(),
+            1,
+            "only the torn store is quarantined: {junk:?}"
+        );
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sddl_world_trustees_are_not_user_only() {
+        assert!(sddl_allows_world("D:P(A;;FR;;;WD)(A;;FA;;;OW)"));
+        assert!(sddl_allows_world("D:(A;;FA;;;BU)"));
+        assert!(sddl_allows_world("D:(A;;GR;;;AU)"));
+        assert!(sddl_allows_world("D:(OA;;FA;;;BG)"));
+        assert!(!sddl_allows_world("D:P(A;;FA;;;SY)(A;;FA;;;OW)"));
+        assert!(!sddl_allows_world(
+            "D:P(A;;FA;;;SY)(A;;FA;;;S-1-5-21-1-2-3-1001)"
+        ));
+        assert!(
+            !sddl_allows_world("D:(D;;FA;;;WD)"),
+            "a deny-Everyone ACE is not an allow"
+        );
+    }
+
+    #[test]
+    fn windows_create_private_is_not_file_create() {
+        let src = include_str!("config.rs");
+        assert!(
+            !src.contains(concat!("File::", "create(path)")),
+            "Windows create_private must not be a no-op File create"
+        );
+        let acl = include_str!("win_acl.rs");
+        assert!(
+            acl.contains("USER_ONLY_SDDL")
+                && acl.contains("D:P(A;;FA;;;SY)(A;;FA;;;OW)")
+                && acl.contains("CreateFileW")
+                && acl.contains("SECURITY_ATTRIBUTES")
+                && acl.contains("CREATE_NEW"),
+            "new secrets.json must be created with a user-only DACL: {acl}"
+        );
+        let atomic = src
+            .split("pub fn atomic_write(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn create_private(").next())
+            .expect("atomic_write");
+        assert!(
+            atomic.contains("sync_all") && atomic.contains("rename"),
+            "atomic_write must stay fsync+rename: {atomic}"
+        );
     }
 
     #[cfg(unix)]
@@ -940,6 +1060,67 @@ mod tests {
         assert_eq!(mode, 0o600, "destination must be 0600, got {mode:o}");
         assert!(!tmp.exists(), "temp must not survive a successful write");
 
+        fs::write(&path, b"{\"apiKey\":\"xai-leftover\"}").expect("leftover");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("0644");
+        let mode = fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o644, "precondition");
+        rewrite_if_world_readable(&path).expect("rewrite");
+        let mode = fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "boot rewrite must restore 0600, got {mode:o}");
+        assert_eq!(
+            fs::read(&path).expect("bytes"),
+            b"{\"apiKey\":\"xai-leftover\"}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn atomic_write_temp_is_user_only_before_the_rename() {
+        let root = test_config_root("priv");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("root");
+        let path = root.join("secrets.json");
+
+        let tmp = root.join(".secrets.json.tmp");
+        let f = create_private(&tmp).expect("create");
+        drop(f);
+        let tmp_sddl = crate::win_acl::file_sddl(&tmp).expect("tmp sddl");
+        assert!(
+            !sddl_allows_world(&tmp_sddl),
+            "temp file must be created user-only, got {tmp_sddl}"
+        );
+        let _ = fs::remove_file(&tmp);
+
+        atomic_write(&path, b"{\"apiKey\":\"xai-secret\"}").expect("write");
+        let dest_sddl = crate::win_acl::file_sddl(&path).expect("dest sddl");
+        assert!(
+            !sddl_allows_world(&dest_sddl),
+            "destination must be user-only DACL, got {dest_sddl}"
+        );
+        assert!(!tmp.exists(), "temp must not survive a successful write");
+
+        // A leftover world-readable secrets.json must be rewritten, not chmod-after.
+        fs::write(&path, b"{\"apiKey\":\"xai-leftover\"}").expect("leftover");
+        crate::win_acl::apply_sddl(&path, crate::win_acl::WORLD_READ_SDDL).expect("world");
+        let loose = crate::win_acl::file_sddl(&path).expect("loose");
+        assert!(
+            sddl_allows_world(&loose),
+            "precondition: leftover is world-readable: {loose}"
+        );
+        rewrite_if_world_readable(&path).expect("rewrite");
+        let fixed = crate::win_acl::file_sddl(&path).expect("fixed");
+        assert!(
+            !sddl_allows_world(&fixed),
+            "boot rewrite must leave user-only DACL, got {fixed}"
+        );
+        assert_eq!(
+            fs::read(&path).expect("bytes"),
+            b"{\"apiKey\":\"xai-leftover\"}",
+            "rewrite must keep the leftover bytes"
+        );
+
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -956,7 +1137,11 @@ mod tests {
             body.len(),
             "one short read must not silently drop the rest of the file"
         );
-        assert_eq!(read_file_capped(&path, 1000).len(), 1000, "the cap still holds");
+        assert_eq!(
+            read_file_capped(&path, 1000).len(),
+            1000,
+            "the cap still holds"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 }

@@ -1787,7 +1787,7 @@ pub fn open_path(path: &str) -> Result<(), String> {
     }
     #[cfg(windows)]
     {
-        return crate::win_native::open_path(path);
+        crate::win_native::open_path(path)
     }
     #[cfg(not(windows))]
     {
