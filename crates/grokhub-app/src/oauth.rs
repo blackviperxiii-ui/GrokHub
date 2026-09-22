@@ -1,12 +1,13 @@
 use grokhub_core::{
     apply_profile, merge_refreshed, parse_device_start, parse_poll_result, parse_token_json,
-    TEXT_FILE_CAP,
+    IMAGE_FILE_CAP, TEXT_FILE_CAP,
     parse_userinfo_profile, token_needs_refresh, trusted_profile_photo_url, trusted_xai_url,
     DeviceCodeStart, PollResult, PollStatus, XaiOAuthTokens, XAI_DEVICE_CODE_GRANT,
     XAI_OAUTH_CLIENT_ID, XAI_OAUTH_DISCOVERY, XAI_OAUTH_SCOPE, XAI_OAUTH_USERINFO,
 };
 use serde_json::Value;
 use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -483,6 +484,37 @@ fn center_square(img: image::RgbaImage) -> image::RgbaImage {
     image::imageops::crop_imm(&img, x, y, side, side).to_image()
 }
 
+const PROFILE_SIDE: u32 = 256;
+
+/// Copy a local image into the cabin config as `profile.png`. Not a cloud account.
+pub fn install_profile_picture(src: &Path) -> Result<PathBuf, String> {
+    let len = std::fs::metadata(src).map(|m| m.len()).unwrap_or(u64::MAX);
+    if len == 0 || len > IMAGE_FILE_CAP {
+        return Err("Choose a smaller image".into());
+    }
+    let file = std::fs::File::open(src).map_err(|e| e.to_string())?;
+    let mut bytes = Vec::new();
+    file.take(IMAGE_FILE_CAP + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > IMAGE_FILE_CAP {
+        return Err("Choose a smaller image".into());
+    }
+    let rgba = avatar_rgba(&bytes).ok_or_else(|| "Choose an image".to_string())?;
+    let img = if rgba.width() > PROFILE_SIDE || rgba.height() > PROFILE_SIDE {
+        image::imageops::thumbnail(&rgba, PROFILE_SIDE, PROFILE_SIDE)
+    } else {
+        rgba
+    };
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(img)
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    let dest = crate::config::config_dir().join("profile.png");
+    crate::config::atomic_write(&dest, &png)?;
+    Ok(dest)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -605,5 +637,27 @@ mod tests {
             "a failed cabin OAuth refresh must not retry every chip/Imagine paint: {cabin}"
         );
     }
-}
 
+    #[test]
+    fn install_profile_picture_lands_in_cabin_config() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("avatar");
+        let _ = std::fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        std::fs::create_dir_all(&root).unwrap();
+        let src = root.join("shot.png");
+        let img = image::RgbaImage::from_pixel(8, 4, image::Rgba([9, 8, 7, 255]));
+        std::fs::write(&src, png_bytes(img)).unwrap();
+        let dest = install_profile_picture(&src).expect("install");
+        assert_eq!(dest, crate::config::config_dir().join("profile.png"));
+        let back = image::load_from_memory(&std::fs::read(&dest).unwrap())
+            .unwrap()
+            .to_rgba8();
+        assert_eq!(back.width(), back.height());
+        assert!(install_profile_picture(&root.join("missing.png")).is_err());
+        std::fs::write(root.join("note.txt"), b"hello").unwrap();
+        assert!(install_profile_picture(&root.join("note.txt")).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+}
