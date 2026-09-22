@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 2.9.15 — 2026-09-22
+
+One cabin, two ship artifacts on the same tag. Cursor **#49** (hover stays inside the slot), **#50** (user bubble wraps and keeps its gap), **#51** (thought expand, minimize, and hide), and **#52** (Account display name and local profile picture) are on `main`.
+
+- Linux: `grokhub-linux-v2.9.15.tar.gz` and AUR `pkgver=2.9.15`.
+- Windows: `GrokHub-Setup-2.9.15.exe` and `grokhub-windows-v2.9.15.zip`.
+- Skills cards, Automations cards, and the Imagine living wall keep hover inside the slot. The grown plate is clamped to the card. Card tint is the frame fill. The wall keeps the still and only strokes inside the tile.
+- A long user bubble wraps inside the row on a narrow pane and a wide one. The leading gap stays reserved.
+- A thought starts expanded. Minimize leaves one short row that opens again. Hide stops drawing that thought. The reply stays. Hide and Minimize survive the live-to-stored handoff.
+- Account sets a display name and a local profile picture copied into cabin config. A saved name wins over the OAuth name on the avatar menu and the rail. The avatar menu, the rail, and the connected hint do not show the email.
+- Default model remains `grok-4.7`. Effort remains None / Minimal / Low / Medium / High / Extra High. Max is not offered.
+- Voice stays Ara, OAuth push-to-talk, reply body only. The line stays open until Stop, the live mic, or Ctrl+G / Super+G.
+- Grok Build CLI **1.0.38** alpha (unchanged). Headless spawn stays `grok -p --output-format streaming-json` + `--alpha`.
+
 ## 2.9.14 — 2026-09-21
 
 One cabin, two ship artifacts on the same tag. Cursor **#44** (Ask card names the action), **#45** (teach a routine), **#46** (no running line above the composer), **#47** (one update for CLI and cabin), and **#48** (History lists the chat cwd) are on `main`.
