@@ -2518,7 +2518,12 @@ mod tests {
                 && src.contains("Connect Super Grok"),
             "{src}"
         );
-        let app = include_str!("app.rs");
+        let app = concat!(
+            include_str!("app/mod.rs"),
+            include_str!("app/pages.rs"),
+            include_str!("app/oauth.rs"),
+            include_str!("app/settings.rs"),
+        );
         assert!(
             app.contains("ui_get_started")
                 && app.contains("should_show_get_started")
