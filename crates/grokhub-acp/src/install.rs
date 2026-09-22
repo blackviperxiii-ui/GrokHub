@@ -337,7 +337,6 @@ mod tests {
                 "a stub grok.exe must not skip the alpha installer"
             );
             let _ = std::fs::remove_dir_all(&dir);
-            return;
         }
         #[cfg(not(windows))]
         {
@@ -346,28 +345,32 @@ mod tests {
             let mut p = std::fs::metadata(&bin).unwrap().permissions();
             p.set_mode(0o755);
             std::fs::set_permissions(&bin, p).unwrap();
+            let prev = std::env::var_os("GROKHUB_GROK");
+            let prev_home = std::env::var_os("HOME");
+            let home = dir.join("home");
+            let _ = std::fs::create_dir_all(home.join(".grok"));
+            std::fs::write(home.join(".grok").join("config.toml"), "[cli]\nchannel = \"alpha\"\n")
+                .unwrap();
+            std::env::set_var("HOME", &home);
+            std::env::set_var("GROKHUB_GROK", &bin);
+            invalidate_grok_bin_cache();
+            let hit = install_grok_blocking();
+            match prev {
+                Some(v) => std::env::set_var("GROKHUB_GROK", v),
+                None => std::env::remove_var("GROKHUB_GROK"),
+            }
+            match prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            invalidate_grok_bin_cache();
+            let _ = std::fs::remove_dir_all(&dir);
+            assert_eq!(
+                hit,
+                Ok(bin.clone()),
+                "present runnable grok must skip install: {hit:?}"
+            );
         }
-        let prev = std::env::var_os("GROKHUB_GROK");
-        let prev_home = std::env::var_os("HOME");
-        let home = dir.join("home");
-        let _ = std::fs::create_dir_all(home.join(".grok"));
-        std::fs::write(home.join(".grok").join("config.toml"), "[cli]\nchannel = \"alpha\"\n")
-            .unwrap();
-        std::env::set_var("HOME", &home);
-        std::env::set_var("GROKHUB_GROK", &bin);
-        invalidate_grok_bin_cache();
-        let hit = install_grok_blocking();
-        match prev {
-            Some(v) => std::env::set_var("GROKHUB_GROK", v),
-            None => std::env::remove_var("GROKHUB_GROK"),
-        }
-        match prev_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
-        invalidate_grok_bin_cache();
-        let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(hit, Ok(bin.clone()), "present runnable grok must skip install: {hit:?}");
     }
 
     #[test]

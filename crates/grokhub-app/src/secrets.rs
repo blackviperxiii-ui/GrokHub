@@ -1,5 +1,6 @@
 use grokhub_core::XaiOAuthTokens;
 use serde::{Deserialize, Serialize};
+#[cfg(any(unix, test))]
 use std::fs;
 use std::path::PathBuf;
 

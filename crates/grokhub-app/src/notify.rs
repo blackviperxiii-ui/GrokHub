@@ -31,7 +31,6 @@ pub fn ping(title: &str, body: &str) {
     #[cfg(windows)]
     {
         crate::win_native::toast(title, body);
-        return;
     }
     #[cfg(not(windows))]
     {
@@ -49,7 +48,7 @@ pub fn inhibit_sleep() -> Option<std::process::Child> {
     #[cfg(windows)]
     {
         crate::win_native::keep_awake(true);
-        return None;
+        None
     }
     #[cfg(not(windows))]
     {

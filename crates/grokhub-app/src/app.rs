@@ -2096,7 +2096,10 @@ impl Cabin {
         };
         let size = inner.map(|r| r.size()).unwrap_or(outer.size());
         #[cfg(windows)]
-        let maximized = self.win_max;
+        let maximized = {
+            let _ = egui_max;
+            self.win_max
+        };
         #[cfg(not(windows))]
         let maximized = egui_max.unwrap_or(self.win_max);
         if let Some(g) = crate::window::remember_geom(

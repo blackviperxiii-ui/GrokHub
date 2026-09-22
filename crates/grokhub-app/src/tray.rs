@@ -581,18 +581,17 @@ fn windows_tray_attach() -> Option<TrayHost> {
     });
     std::thread::spawn(move || {
         while let Ok(ev) = TrayIconEvent::receiver().recv() {
-            let show = match ev {
+            let show = matches!(
+                ev,
                 TrayIconEvent::Click {
                     button: MouseButton::Left,
                     button_state: MouseButtonState::Up,
                     ..
-                }
-                | TrayIconEvent::DoubleClick {
+                } | TrayIconEvent::DoubleClick {
                     button: MouseButton::Left,
                     ..
-                } => true,
-                _ => false,
-            };
+                }
+            );
             if show && tx.send(TrayCmd::Show).is_err() {
                 break;
             }
