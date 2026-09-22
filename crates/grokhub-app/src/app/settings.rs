@@ -119,7 +119,7 @@ impl Cabin {
             grokhub_core::should_show_manual_cli_install(cli_ready, cli_installing);
         let pending_update = self.update_pending_now();
         let update_label = settings_update_label(pending_update);
-        let update_hint = combined_update_hint(pending_update);
+        let update_hint = settings_update_hint(pending_update);
         let cabin_notify = self.cabin_update_available();
         let cabin_notice = self
             .cabin_latest

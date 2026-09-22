@@ -401,9 +401,11 @@ mod tests {
         assert!(
             upd.contains("combined_update_cmds")
                 && upd.contains("pending_from_versions")
+                && upd.contains("combined_update_hint")
                 && upd.contains("overlay_clone_usable")
                 && upd.contains("UpdatePending::Cli")
                 && upd.contains("UpdatePending::Both")
+                && !upd.contains("pending_for_manual_update")
                 && !upd.contains("update_cmds_for")
                 && !upd.contains("no GrokHub source tree")
                 && !upd.contains("--stable"),

@@ -390,6 +390,18 @@ pub fn pending_for_manual_update(pending: UpdatePending) -> UpdatePending {
     }
 }
 
+/// Settings → Update hint. A click still overlays when the probe found nothing.
+/// `combined_update_hint` stays the pending-state / `grokhub --update` copy.
+pub fn settings_update_hint(pending: UpdatePending) -> &'static str {
+    match pending {
+        UpdatePending::None => {
+            "GrokHub and Grok Build CLI alpha look current. Update still overlays so a missed probe can land."
+        }
+        other => combined_update_hint(other),
+    }
+}
+
+/// Pending-state copy. `None` is the `grokhub --update` exit line (no overlay).
 pub fn combined_update_hint(pending: UpdatePending) -> &'static str {
     match pending {
         UpdatePending::Cli => {
@@ -401,9 +413,7 @@ pub fn combined_update_hint(pending: UpdatePending) -> &'static str {
         UpdatePending::Both => {
             "Updates Grok Build CLI alpha first, then the cabin. Does not switch the CLI to stable."
         }
-        UpdatePending::None => {
-            "GrokHub and Grok Build CLI alpha look current. Update still overlays so a missed probe can land."
-        }
+        UpdatePending::None => "GrokHub and Grok Build CLI alpha are current.",
     }
 }
 
@@ -1493,7 +1503,15 @@ mod tests {
         );
         assert!(combined_update_hint(UpdatePending::Both).contains("first"));
         assert!(!combined_update_hint(UpdatePending::Cli).contains("--stable"));
-        assert!(combined_update_hint(UpdatePending::None).contains("missed probe"));
+        assert_eq!(
+            combined_update_hint(UpdatePending::None),
+            "GrokHub and Grok Build CLI alpha are current."
+        );
+        assert!(settings_update_hint(UpdatePending::None).contains("missed probe"));
+        assert_eq!(
+            settings_update_hint(UpdatePending::Both),
+            combined_update_hint(UpdatePending::Both)
+        );
 
         assert_eq!(parse_published_cli_alpha("1.0.39\n"), Some("1.0.39".into()));
         assert_eq!(parse_published_cli_alpha("v1.0.39"), Some("1.0.39".into()));

@@ -1286,7 +1286,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && settings.contains("cli_update_notice")
                 && settings.contains("should_update_cli_alpha")
                 && settings.contains("queue_combined_update")
-                && settings.contains("settings_update_label"),
+                && settings.contains("settings_update_label")
+                && settings.contains("settings_update_hint"),
             "Settings Update stays visible; titlebar chip still hides when current: {settings}"
         );
         assert!(
@@ -3482,7 +3483,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "/update must use the same pending plan as the chip: {queued}"
         );
         assert!(
-            src.contains("combined_update_hint")
+            src.contains("settings_update_hint")
                 && src.contains("queue_combined_update")
                 && src.contains("UPDATE_CHECK_EVERY"),
             "one Update control must describe CLI-then-cabin and recheck on the 2h interval: {src}"
