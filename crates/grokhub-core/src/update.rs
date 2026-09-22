@@ -39,8 +39,8 @@ pub fn discover_source(hints: &[PathBuf]) -> Option<PathBuf> {
     None
 }
 
-fn host_quote(s: &str) -> String {
-    if cfg!(windows) {
+fn host_quote_for(s: &str, windows: bool) -> String {
+    if windows {
         format!("'{}'", s.replace('\'', "''"))
     } else {
         format!("'{}'", s.replace('\'', "'\\''"))
@@ -149,6 +149,13 @@ pub fn stale_github_origin(url: &str) -> bool {
 }
 
 pub fn update_cmds(source: &Path) -> Result<Vec<String>, String> {
+    update_cmds_on(source, cfg!(windows))
+}
+
+/// Same plan as `update_cmds`, for the host the caller named.
+/// `combined_update_cmds_for_host` passes that flag so a Windows test can
+/// still assert the Linux `install.sh` plan.
+fn update_cmds_on(source: &Path, windows: bool) -> Result<Vec<String>, String> {
     if !is_grokhub_source(source) {
         return Err("not a GrokHub source tree — set Settings → source or GROKHUB_SRC".into());
     }
@@ -158,7 +165,7 @@ pub fn update_cmds(source: &Path) -> Result<Vec<String>, String> {
             "source clone is on {branch} — checkout main, then Update"
         ));
     }
-    let src = host_quote(&source.display().to_string());
+    let src = host_quote_for(&source.display().to_string(), windows);
     let mut cmds = Vec::new();
     match git_origin_url(source) {
         Ok(origin) if origin_needs_retarget(&origin) => {
@@ -174,8 +181,8 @@ pub fn update_cmds(source: &Path) -> Result<Vec<String>, String> {
         }
     }
     cmds.push(format!("git -C {src} pull --ff-only origin main"));
-    cmds.push(overlay_install_cmd(source, &src));
-    cmds.push(overlay_grok_update_cmd().into());
+    cmds.push(overlay_install_cmd(source, &src, windows));
+    cmds.push(overlay_grok_update_for(windows).into());
     Ok(cmds)
 }
 
@@ -193,7 +200,7 @@ pub fn update_cmds_for(source: Option<&Path>) -> Result<Vec<String>, String> {
 
 pub fn update_cmds_for_host(source: Option<&Path>, windows: bool) -> Result<Vec<String>, String> {
     match source {
-        Some(src) => match update_cmds(src) {
+        Some(src) => match update_cmds_on(src, windows) {
             Ok(cmds) => Ok(cmds),
             Err(_) if windows => Ok(windows_release_update_cmds()),
             Err(e) => Err(e),
@@ -526,21 +533,20 @@ pub fn grok_cli_alpha_update_cmds() -> Vec<String> {
     vec![overlay_grok_update_cmd().into()]
 }
 
-fn overlay_install_cmd(source: &Path, src_quoted: &str) -> String {
-    if cfg!(windows) {
+fn overlay_install_cmd(source: &Path, src_quoted: &str, windows: bool) -> String {
+    if windows {
         // run_host is already PowerShell -Command. Do not nest powershell.exe -File
         // or the script's exit code is lost. Process Bypass is required because `&`
         // a .ps1 file is still subject to Restricted (Windows 10 default).
-        let install = host_quote(
+        let install = host_quote_for(
             &source
                 .join("scripts")
                 .join("install-windows.ps1")
                 .display()
                 .to_string(),
+            true,
         );
-        format!(
-            "Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force; & {install}"
-        )
+        format!("Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force; & {install}")
     } else {
         format!("{src_quoted}/scripts/install.sh --user")
     }
@@ -553,9 +559,13 @@ pub fn unix_grok_update_cmd() -> &'static str {
 }
 
 fn overlay_grok_update_cmd() -> &'static str {
+    overlay_grok_update_for(cfg!(windows))
+}
+
+fn overlay_grok_update_for(windows: bool) -> &'static str {
     // Cabin stays on Grok Build CLI alpha. Linux matches Windows: grok update --alpha.
     // Do not pass --stable. A working alpha install is not yanked.
-    if cfg!(windows) {
+    if windows {
         windows_grok_update_cmd()
     } else {
         unix_grok_update_cmd()
