@@ -458,11 +458,69 @@ fn mode_status_line(mode: &str, pinned_model: &str) -> String {
 const HISTORY_TYPE_DELAY: Duration = Duration::from_millis(250);
 const RAIL_FOOTER_H: f32 = 52.0;
 const PALETTE_LIST_H: f32 = 280.0;
+const PROFILE_NAME_MAX: usize = 64;
 
 struct OauthPhotoOut {
     tokens: Option<grokhub_core::XaiOAuthTokens>,
     url: String,
     image: Option<ColorImage>,
+}
+
+struct ProfilePhotoOut {
+    path: String,
+    image: Option<ColorImage>,
+}
+
+enum ProfilePick {
+    Chosen(std::path::PathBuf),
+    Cancelled,
+    Failed(String),
+}
+
+/// Name and local picture the avatar menu and rail paint. The email is not a field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AvatarMenu {
+    name: String,
+    picture_path: String,
+}
+
+fn clip_profile_name(s: &str) -> String {
+    s.trim().chars().take(PROFILE_NAME_MAX).collect()
+}
+
+fn fallback_cabin_name(user_md: &str) -> String {
+    let n = greeting_name(user_md, "");
+    if n.is_empty() {
+        "Grok".into()
+    } else {
+        n
+    }
+}
+
+/// Saved name wins. An empty saved name keeps the OAuth name, then USER.md, then Grok.
+/// The OAuth email is not a name.
+fn avatar_menu(
+    saved_name: &str,
+    saved_picture: &str,
+    oauth_name: Option<&str>,
+    user_md: &str,
+) -> AvatarMenu {
+    let saved = clip_profile_name(saved_name);
+    let name = if !saved.is_empty() {
+        saved
+    } else if let Some(n) = oauth_name.map(str::trim).filter(|s| !s.is_empty()) {
+        if greeting_name("", n).is_empty() {
+            fallback_cabin_name(user_md)
+        } else {
+            n.to_string()
+        }
+    } else {
+        fallback_cabin_name(user_md)
+    };
+    AvatarMenu {
+        name,
+        picture_path: saved_picture.trim().to_string(),
+    }
 }
 
 fn oauth_photo_image(bytes: &[u8]) -> Option<ColorImage> {
@@ -1258,6 +1316,11 @@ pub struct Cabin {
     oauth_photo_rx: Option<mpsc::Receiver<OauthPhotoOut>>,
     oauth_photo_busy: bool,
     oauth_profile_tried: bool,
+    profile_photo: Option<TextureHandle>,
+    profile_photo_key: String,
+    profile_photo_rx: Option<mpsc::Receiver<ProfilePhotoOut>>,
+    profile_photo_busy: bool,
+    profile_pick_rx: Option<mpsc::Receiver<ProfilePick>>,
     grok_install_rx: Option<mpsc::Receiver<Result<std::path::PathBuf, String>>>,
     grok_install_err: String,
     /// Official alpha install this session (missing/unusable at boot or retry).
@@ -1682,6 +1745,11 @@ impl Cabin {
             oauth_photo_rx: None,
             oauth_photo_busy: false,
             oauth_profile_tried: false,
+            profile_photo: None,
+            profile_photo_key: String::new(),
+            profile_photo_rx: None,
+            profile_photo_busy: false,
+            profile_pick_rx: None,
             grok_install_rx: None,
             grok_install_err: String::new(),
             grok_install_wait: false,
@@ -7650,6 +7718,113 @@ impl Cabin {
         });
     }
 
+    fn pick_profile_picture(&mut self) {
+        if self.profile_pick_rx.is_some() {
+            self.status = "Choose a picture…".into();
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        self.profile_pick_rx = Some(rx);
+        self.status = "Choose a picture…".into();
+        std::thread::spawn(move || {
+            let out = match pick_file() {
+                Some(p) => match crate::oauth::install_profile_picture(&p) {
+                    Ok(dest) => ProfilePick::Chosen(dest),
+                    Err(e) => ProfilePick::Failed(e),
+                },
+                None => ProfilePick::Cancelled,
+            };
+            let _ = tx.send(out);
+        });
+    }
+
+    fn clear_profile_picture(&mut self) {
+        self.cfg.profile_picture.clear();
+        self.profile_photo = None;
+        self.profile_photo_key.clear();
+        self.profile_photo_rx = None;
+        self.profile_photo_busy = false;
+        self.persist_cfg();
+        let dest = config::config_dir().join("profile.png");
+        std::thread::spawn(move || {
+            let _ = std::fs::remove_file(dest);
+        });
+        self.status = "Saved".into();
+    }
+
+    fn poll_profile_pick(&mut self) {
+        let Some(rx) = self.profile_pick_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(ProfilePick::Chosen(path)) => {
+                self.cfg.profile_picture = path.to_string_lossy().into_owned();
+                self.profile_photo = None;
+                self.profile_photo_key.clear();
+                self.persist_cfg();
+                self.status = "Saved".into();
+            }
+            Ok(ProfilePick::Cancelled) => {}
+            Ok(ProfilePick::Failed(err)) => {
+                self.status = err;
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.profile_pick_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {}
+        }
+    }
+
+    fn poll_profile_photo(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = self.profile_photo_rx.take() {
+            match rx.try_recv() {
+                Ok(out) => {
+                    self.profile_photo_busy = false;
+                    self.profile_photo_key = out.path;
+                    self.profile_photo = out.image.map(|img| {
+                        ctx.load_texture("profile-avatar", img, TextureOptions::LINEAR)
+                    });
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.profile_photo_rx = Some(rx);
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.profile_photo_busy = false;
+                }
+            }
+        }
+        self.kick_profile_photo();
+    }
+
+    fn kick_profile_photo(&mut self) {
+        if self.profile_photo_busy {
+            return;
+        }
+        let path = self.cfg.profile_picture.trim().to_string();
+        if path.is_empty() {
+            if self.profile_photo.is_some() || !self.profile_photo_key.is_empty() {
+                self.profile_photo = None;
+                self.profile_photo_key.clear();
+            }
+            return;
+        }
+        if path == self.profile_photo_key {
+            return;
+        }
+        self.profile_photo_busy = true;
+        let (tx, rx) = mpsc::channel();
+        self.profile_photo_rx = Some(rx);
+        std::thread::spawn(move || {
+            let bytes = std::fs::metadata(&path)
+                .ok()
+                .filter(|m| m.len() > 0 && m.len() <= grokhub_core::IMAGE_FILE_CAP)
+                .and_then(|_| std::fs::read(&path).ok())
+                .filter(|b| (b.len() as u64) <= grokhub_core::IMAGE_FILE_CAP);
+            let image = bytes.as_ref().and_then(|b| oauth_photo_image(b));
+            let _ = tx.send(ProfilePhotoOut { path, image });
+        });
+    }
+
     fn kick_model(&mut self, consume_attach: bool) {
         if !self.can_agent() {
             self.status = "Install Grok Build (x.ai/cli) or Connect Grok in Settings".into();
@@ -10565,6 +10740,8 @@ impl eframe::App for Cabin {
             ctx.request_repaint_after(Duration::from_secs(wait));
         }
         self.poll_oauth_photo(ctx);
+        self.poll_profile_pick();
+        self.poll_profile_photo(ctx);
         if !self.composer.trim().is_empty()
             || ctx.input(|i| {
                 i.pointer.any_pressed()
@@ -10644,6 +10821,8 @@ impl eframe::App for Cabin {
                 || self.grok_p_rx.is_some()
                 || self.pick_rx.is_some()
                 || self.pick_list_rx.is_some()
+                || self.profile_pick_rx.is_some()
+                || self.profile_photo_busy
                 || self.oauth_start_rx.is_some()
                 || self.oauth_poll_rx.is_some()
                 || self.night_check_rx.is_some()
@@ -10788,6 +10967,8 @@ impl Cabin {
         let mut disconnect = false;
         let mut help = false;
         let authed = self.has_key();
+        let chrome = self.avatar_chrome();
+        let photo = self.photo_for_path(&chrome.picture_path);
         let shown = egui::Window::new("settings-menu")
             .title_bar(false)
             .collapsible(false)
@@ -10803,6 +10984,10 @@ impl Cabin {
             .show(ctx, |ui| {
                 ui.set_min_width(220.0);
                 ui.spacing_mut().item_spacing.y = 2.0;
+                Self::cabin_avatar(ui, &chrome.name, photo.as_ref());
+                ui.add_space(4.0);
+                ui.separator();
+                ui.add_space(4.0);
                 for (id, label) in crate::theme::CABIN_MENU {
                     if crate::cards::felt_menu_row(ui, label) {
                         pick = Some(*id);
@@ -11307,10 +11492,28 @@ impl Cabin {
         resp
     }
 
+    fn avatar_chrome(&self) -> AvatarMenu {
+        avatar_menu(
+            &self.cfg.display_name,
+            &self.cfg.profile_picture,
+            self.secrets.oauth.as_ref().and_then(|t| t.name.as_deref()),
+            &self.greeting_user_md,
+        )
+    }
+
+    fn photo_for_path(&self, picture_path: &str) -> Option<TextureHandle> {
+        if picture_path.trim().is_empty() {
+            self.oauth_photo.clone()
+        } else if self.profile_photo_key == picture_path {
+            self.profile_photo.clone()
+        } else {
+            None
+        }
+    }
+
     fn cabin_avatar(
         ui: &mut egui::Ui,
-        account: &str,
-        email: &str,
+        name: &str,
         photo: Option<&TextureHandle>,
     ) -> egui::Response {
         let (_rect, resp) =
@@ -11334,50 +11537,22 @@ impl Cabin {
             14.0,
             egui::Stroke::new(1.0_f32, crate::theme::border_strong()),
         );
+        let text_left = rect.left() + 42.0;
+        let text_right = rect.right() - 12.0;
+        let painted = fit_rail_label(ui, name, (text_right - text_left).max(8.0));
         ui.painter().text(
-            egui::pos2(rect.left() + 42.0, rect.center().y - 8.0),
+            egui::pos2(text_left, rect.center().y),
             egui::Align2::LEFT_CENTER,
-            account,
+            painted,
             egui::FontId::proportional(crate::theme::FONT_META),
             crate::theme::fg(),
-        );
-        ui.painter().text(
-            egui::pos2(rect.left() + 42.0, rect.center().y + 8.0),
-            egui::Align2::LEFT_CENTER,
-            email,
-            egui::FontId::proportional(11.0),
-            crate::theme::subtle(),
         );
         resp
     }
 
     fn ui_sidebar(&mut self, ctx: &egui::Context) {
-        let account = self
-            .secrets
-            .oauth
-            .as_ref()
-            .and_then(|t| t.name.clone().or(t.email.clone()))
-            .filter(|s| !greeting_name("", s).is_empty())
-            .unwrap_or_else(|| {
-                let n = greeting_name(&self.greeting_user_md, "");
-                if n.is_empty() {
-                    "Grok".into()
-                } else {
-                    n
-                }
-            });
-        let email = self
-            .secrets
-            .oauth
-            .as_ref()
-            .and_then(|t| t.email.clone())
-            .unwrap_or_else(|| {
-                if grokhub_acp::grok_cli_key().is_some() {
-                    "grok login".into()
-                } else {
-                    "Run grok login".into()
-                }
-            });
+        let chrome = self.avatar_chrome();
+        let photo = self.photo_for_path(&chrome.picture_path);
         egui::SidePanel::left("rail")
             .exact_width(crate::theme::SIDEBAR_W)
             .resizable(false)
@@ -11609,7 +11784,7 @@ impl Cabin {
                         }
                     });
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                    if Self::cabin_avatar(ui, &account, &email, self.oauth_photo.as_ref()).clicked() {
+                    if Self::cabin_avatar(ui, &chrome.name, photo.as_ref()).clicked() {
                         self.settings_menu_open = !self.settings_menu_open;
                         self.settings_menu_ignore = true;
                     }
@@ -13059,6 +13234,9 @@ impl Cabin {
         let mut save = false;
         let mut connect = false;
         let mut disconnect = false;
+        let mut choose_picture = false;
+        let mut clear_picture = false;
+        let mut name_dirty = false;
         let mut update = false;
         let mut install_cli = false;
         let mut restart = false;
@@ -13090,12 +13268,13 @@ impl Cabin {
         } else {
             "Installs Grok Build CLI alpha (GROK_CHANNEL=alpha / https://x.ai/cli/alpha) when grok is missing or broken."
         };
-        let oauth_line = self.secrets.oauth.as_ref().map(|t| {
-            t.email
-                .clone()
-                .or(t.name.clone())
-                .unwrap_or_else(|| "connected".into())
-        });
+        let oauth_on = self.secrets.oauth.is_some();
+        let picture_set = !self.cfg.profile_picture.trim().is_empty();
+        let picture_hint = if picture_set {
+            "Saved in cabin config."
+        } else {
+            "A local image, kept in cabin config."
+        };
         let pending = self.oauth_pending.as_ref().map(|p| {
             format!("Approve {} at {}", p.user_code, p.verification_uri)
         });
@@ -13210,21 +13389,52 @@ impl Cabin {
                                                 ui.indent("settings-body", |ui| {
                                                     match sec {
                                                         SettingsSec::Account => {
-                                                            let auth_title = if oauth_line.is_some() {
+                                                            let name_before = self.cfg.display_name.clone();
+                                                            crate::cards::settings_field(
+                                                                ui,
+                                                                "Name",
+                                                                "Shown on the rail and the avatar menu. Leave this blank to use your Grok name.",
+                                                                &mut self.cfg.display_name,
+                                                                false,
+                                                            );
+                                                            if self.cfg.display_name != name_before {
+                                                                name_dirty = true;
+                                                            }
+                                                            if crate::cards::settings_action(
+                                                                ui,
+                                                                "Profile picture",
+                                                                picture_hint,
+                                                                "Choose",
+                                                            ) {
+                                                                choose_picture = true;
+                                                            }
+                                                            if picture_set
+                                                                && crate::cards::settings_action(
+                                                                    ui,
+                                                                    "Remove picture",
+                                                                    "The rail goes back to your Grok photo.",
+                                                                    "Remove",
+                                                                )
+                                                            {
+                                                                clear_picture = true;
+                                                            }
+                                                            let auth_title = if oauth_on {
                                                                 "Connected"
                                                             } else {
                                                                 "Connect Grok"
                                                             };
-                                                            let auth_hint = oauth_line.as_deref().unwrap_or(
-                                                                "Device-code OAuth. Also signs in the Grok Build CLI if it is not already connected.",
-                                                            );
+                                                            let auth_hint = if oauth_on {
+                                                                "Signed in with Grok."
+                                                            } else {
+                                                                "Device-code OAuth. Also signs in the Grok Build CLI if it is not already connected."
+                                                            };
                                                             if crate::cards::settings_action(
                                                                 ui,
                                                                 auth_title,
                                                                 auth_hint,
-                                                                if oauth_line.is_some() { "Sign out" } else { "Connect" },
+                                                                if oauth_on { "Sign out" } else { "Connect" },
                                                             ) {
-                                                                if oauth_line.is_some() {
+                                                                if oauth_on {
                                                                     disconnect = true;
                                                                 } else {
                                                                     connect = true;
@@ -13401,6 +13611,18 @@ impl Cabin {
         }
         if disconnect {
             self.sign_out_oauth();
+        }
+        if name_dirty {
+            if self.cfg.display_name.chars().count() > PROFILE_NAME_MAX {
+                self.cfg.display_name = clip_profile_name(&self.cfg.display_name);
+            }
+            self.persist_cfg();
+        }
+        if choose_picture {
+            self.pick_profile_picture();
+        }
+        if clear_picture {
+            self.clear_profile_picture();
         }
         if update {
             self.queue_combined_update();
@@ -15149,6 +15371,72 @@ fn discover_hub_pair_url(port: u16) -> String {
 mod tests {
     use super::select_all_edit;
     use eframe::egui;
+
+    #[test]
+    fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
+        let email = "jeremy@example.com";
+        let picture = "/home/jeremy/.config/GrokHub/profile.png";
+        let menu = super::avatar_menu("Viper", picture, Some("OAuth Name"), "Name: Jeremy\n");
+        assert_eq!(menu.name, "Viper");
+        assert_eq!(menu.picture_path, picture);
+        assert!(!menu.name.contains(email) && !menu.picture_path.contains(email));
+        assert!(!menu.name.contains('@') && !menu.picture_path.contains('@'));
+
+        let fallback = super::avatar_menu("", "", Some("OAuth Name"), "");
+        assert_eq!(fallback.name, "OAuth Name");
+        assert!(fallback.picture_path.is_empty());
+
+        let blank = super::avatar_menu("   ", "", Some("GrokHub"), "Name: Jeremy\n");
+        assert_eq!(blank.name, "Jeremy");
+        assert!(!blank.name.contains(email));
+
+        let src = include_str!("app.rs");
+        let paint = src
+            .split("fn ui_settings_menu(")
+            .nth(1)
+            .and_then(|s| s.split("\n    fn ui_palette").next())
+            .expect("ui_settings_menu");
+        assert!(
+            paint.contains("chrome.name")
+                && paint.contains("chrome.picture_path")
+                && paint.contains("cabin_avatar")
+                && !paint.contains("email"),
+            "the avatar menu must paint the saved name and picture path, not the email: {paint}"
+        );
+        let avatar = src
+            .split("fn cabin_avatar(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_sidebar(").next())
+            .expect("cabin_avatar");
+        assert!(
+            !avatar.contains("email"),
+            "the rail avatar must not paint an email line: {avatar}"
+        );
+        let account = src
+            .split("SettingsSec::Account => {")
+            .nth(1)
+            .and_then(|s| s.split("SettingsSec::Appearance => {").next())
+            .expect("Account");
+        assert!(
+            account.contains("display_name")
+                && account.contains("Profile picture")
+                && !account.contains("email")
+                && !account.contains(".email"),
+            "Account sets the name and picture and does not show the email: {account}"
+        );
+        let pick = src
+            .split("fn pick_profile_picture(")
+            .nth(1)
+            .and_then(|s| s.split("fn clear_profile_picture(").next())
+            .expect("pick_profile_picture");
+        let spawn = pick.find("thread::spawn").expect("picker leaves the UI thread");
+        let file = pick.find("pick_file()").expect("native picker");
+        let install = pick.find("install_profile_picture").expect("copy into cabin config");
+        assert!(
+            spawn < file && file < install,
+            "the picture picker and decode must not run on the UI thread: {pick}"
+        );
+    }
 
     #[test]
     fn devices_pair_url_is_not_a_placeholder() {
@@ -18368,6 +18656,12 @@ mod tests {
                 && !menu.contains("\"Devices\"")
                 && !menu.contains("\"Queue\""),
             "avatar menu must not hardcode leftover panes: {menu}"
+        );
+        assert!(
+            menu.contains("chrome.name")
+                && menu.contains("chrome.picture_path")
+                && !menu.contains("email"),
+            "avatar menu paints the saved name and picture path, not the email: {menu}"
         );
         let replay = src
             .split("fn replay_recipe(")
