@@ -19010,10 +19010,10 @@ mod tests {
             "Ask + ACP down must deny and must not sandbox-off grok -p: {ask_arm}"
         );
         assert!(
-            ask_kick.contains("PermissionMode::Auto")
-                && ask_kick.contains("PermissionMode::AlwaysApprove")
+            ask_kick.contains("scheduled_flags")
+                && ask_kick.contains("composer_headless_flags")
                 && ask_kick[grok_p..].contains("spawn_grok_p_stream"),
-            "Auto/Always stay on grok -p: {ask_kick}"
+            "Auto/Always stay on grok -p via inherited PermissionMode flags: {ask_kick}"
         );
     }
 
