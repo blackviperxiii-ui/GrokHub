@@ -1014,8 +1014,8 @@ mod tests {
     fn windows_create_private_is_not_file_create() {
         let src = include_str!("config.rs");
         assert!(
-            !src.contains("File::create(path)"),
-            "Windows create_private must not be a no-op File::create: {src}"
+            !src.contains(concat!("File::", "create(path)")),
+            "Windows create_private must not be a no-op File create"
         );
         let acl = include_str!("win_acl.rs");
         assert!(
