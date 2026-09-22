@@ -2,7 +2,20 @@
 
 ## Unreleased
 
-- The Thinking / Running / Waiting line no longer sits above the composer, including when the chat pane is scrolled. The green live dot stays on the turn; hover is still the current action. The context usage bar and the Voice · Listening strip stay. Same paint on Linux and Windows.
+## 2.9.14 — 2026-09-21
+
+One cabin, two ship artifacts on the same tag. Cursor **#44** (Ask card names the action), **#45** (teach a routine), **#46** (no running line above the composer), **#47** (one update for CLI and cabin), and **#48** (History lists the chat cwd) are on `main`.
+
+- Linux: `grokhub-linux-v2.9.14.tar.gz` and AUR `pkgver=2.9.14`. One Update runs only what is newer: `grok update --alpha` first when a newer alpha exists, then the cabin overlay. Linux PATH prepends `$HOME/.grok/bin:$HOME/.local/bin`.
+- Windows: `GrokHub-Setup-2.9.14.exe` and `grokhub-windows-v2.9.14.zip` from `packaging/windows/` + Inno. The same pending rules. When the cabin is newer, Settings → Update downloads the GitHub zip when there is no source clone **or** the leftover clone is not a usable `main` checkout. A `main` clone overlays with `install-windows.ps1`.
+- Titlebar chip says **Update CLI**, **Update cabin**, or **Update CLI and cabin**. Checked at launch and every 2 hours. `/update` and `grokhub --update` use that same plan. A current alpha is left alone.
+- The Thinking / Running / Waiting line no longer sits above the composer, including when the chat pane is scrolled. The green live dot stays on the turn; hover is still the current action. The context usage bar and the Voice · Listening strip stay.
+- The Ask card names the command, path, or site. Live secrets stay redacted.
+- Naming a schedule teaches the watched steps on Automations. The rewind snapshot is not stored.
+- History lists `grok sessions` from the chat cwd. On Windows the session home is USERPROFILE, so a dialogue saved under the work root still shows after restart. Same rule on Linux.
+- Default model remains `grok-4.7`. Effort remains None / Minimal / Low / Medium / High / Extra High. Max is not offered.
+- Voice stays Ara, OAuth push-to-talk, reply body only. The line stays open until Stop, the live mic, or Ctrl+G / Super+G.
+- Grok Build CLI **1.0.38** alpha (unchanged). Headless spawn stays `grok -p --output-format streaming-json` + `--alpha`.
 
 ## 2.9.13 — 2026-09-21
 

@@ -618,6 +618,7 @@ pub fn slash_help() -> String {
         "/models — Grok catalog",
         "/palette — command palette",
         "Enter sends; Ctrl+Enter newline. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The transcript Running row has no Stop. The changing status text above the composer is gone. The context usage bar stays. A green live dot plus Thinking / Running / Waiting sits on the turn; hover shows the current action. That line does not sit above the composer.",
+        "The Ask card names the command, path, or site. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out. History lists grok sessions from the chat cwd on Linux and Windows.",
         "Mode pill: Chat / Plan / Ask. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort: None / Minimal / Low / Medium / High / Extra High. A saved Max loads as Extra High. Default model is grok-4.7. Hover a composer pill for what it does. Grok Build runs the agent.",
         "Settings → Behavior: close to tray, living wall, and a quiet hours dropdown. Picking a window saves it.",
         "History search drops stale hits when the box changes. Re-opening the memory file already in the editor keeps unsaved typing.",
@@ -798,6 +799,9 @@ mod tests {
         assert!(slash_help().contains("The transcript Running row has no Stop"));
         assert!(slash_help().contains("The changing status text above the composer is gone"));
         assert!(slash_help().contains("The context usage bar stays"));
+        assert!(slash_help().contains("The Ask card names the command, path, or site"));
+        assert!(slash_help().contains("leaves the rewind snapshot out"));
+        assert!(slash_help().contains("History lists grok sessions from the chat cwd"));
         assert!(slash_help().contains("Idle Stop and the idle mic sit still"));
         assert!(slash_help().contains("compact Grok context"));
         assert!(slash_help().contains("/forget and Memory Save stay off"));
