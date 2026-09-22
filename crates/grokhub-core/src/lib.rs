@@ -195,7 +195,7 @@ pub use heartbeat::{
     HEARTBEAT_MS,
 };
 pub use history::{
-    dedupe_hits, search_corpus, search_corpus_tagged, search_text, search_thread_body,
+    dedupe_hits, search_corpus, search_corpus_tagged, search_place, search_text, search_thread_body,
 };
 pub use host_cite::{host_status_line, last_host_line, summarize_write, unified_diff_cite};
 pub use host_plan::{
