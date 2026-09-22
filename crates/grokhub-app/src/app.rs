@@ -16922,7 +16922,7 @@ mod tests {
             .and_then(|s| s.split("fn kick_palette_search(").next())
             .expect("tick_palette_search");
         assert!(
-            !tick.contains("search_place") && tick.contains("palette_files_q == q"),
+            !tick.contains("search_place") && tick.contains("palette_search_is_saved"),
             "a saved empty palette result must not walk again, and not on the UI thread: {tick}"
         );
         assert!(
