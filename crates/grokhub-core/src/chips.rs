@@ -1867,6 +1867,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         ));
     }
     chips.extend(stage_chips(stage, input.mode));
+    chips.extend(default_chips(input.mode));
     if ctx.imagine {
         chips.push(chip(
             "ctx-imagine",
@@ -1924,11 +1925,6 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
     }
     let draft = input.draft.trim().to_ascii_lowercase();
     chips.retain(|c| c.value.trim().to_ascii_lowercase() != draft);
-
-    // No filler row when ranking (or dismiss) yields none.
-    if chips.is_empty() && dismissed.is_empty() {
-        chips.extend(default_chips(input.mode));
-    }
 
     apply_intent_boost(&mut chips, &intents);
     apply_home_signal_boost(&mut chips, &input);
@@ -2656,15 +2652,27 @@ mod tests {
         assert!(!mid.is_empty(), "mid {:?}", labels(&mid));
         assert!(mid.len() <= CHIP_VISIBLE_MAX, "mid {:?}", labels(&mid));
 
-        let dismissed: Vec<String> = empty
+        let mut dismissed: Vec<String> = empty
             .iter()
             .flat_map(|c| [c.id.clone(), c.value.clone()])
             .collect();
         let after = build_quick_chips(input(&[], "", &mem, &dismissed, &[]));
         assert!(
-            after.is_empty(),
-            "no filler chips if ranking yields none: {:?}",
+            after.len() <= CHIP_VISIBLE_MAX,
+            "cap 5 after dismiss: {:?}",
             labels(&after)
+        );
+        let mut rest = after;
+        let mut guard = 0;
+        while !rest.is_empty() && guard < 8 {
+            dismissed.extend(rest.iter().flat_map(|c| [c.id.clone(), c.value.clone()]));
+            rest = build_quick_chips(input(&[], "", &mem, &dismissed, &[]));
+            guard += 1;
+        }
+        assert!(
+            rest.is_empty(),
+            "no filler chips if ranking yields none: {:?}",
+            labels(&rest)
         );
     }
 
