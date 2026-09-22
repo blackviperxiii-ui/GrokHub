@@ -115,10 +115,13 @@ fn run_oauth_cli() {
                     if let Err(e) = grokhub_acp::write_cli_auth_if_needed(&tokens) {
                         eprintln!("grok auth.json: {e}");
                     }
-                    println!(
-                        "connected {}",
-                        tokens.email.or(tokens.name).unwrap_or_else(|| "grok".into())
-                    );
+                    let who = tokens
+                        .name
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("grok");
+                    println!("connected {who}");
                 }
                 Err(e) => {
                     eprintln!("{e}");
