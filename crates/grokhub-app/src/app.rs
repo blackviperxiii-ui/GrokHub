@@ -25,9 +25,10 @@ use global_hotkey::{
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
 };
 use grokhub_acp::{
-    classify_stream_error, grok_context_line, grok_usage_line, inspect_advisory, kill_pid,
-    merge_tool_card, retry_status_line, rewrite_truncation_error, turn_footer, AcpEvent,
-    GrokPEvent, GrokUsage, PermissionMode, SessionMode, StreamErrorKind, ToolCard,
+    ask_denied_without_acp, classify_stream_error, grok_context_line, grok_usage_line,
+    inspect_advisory, kill_pid, merge_tool_card, retry_status_line, rewrite_truncation_error,
+    turn_footer, AcpEvent, GrokPEvent, GrokUsage, PermissionMode, SessionMode, StreamErrorKind,
+    ToolCard,
 };
 use grokhub_core::{
     add_to_folder, add_tokens, anticipate_consumes_slot, anticipated_need, appearance_choices,
@@ -2971,21 +2972,29 @@ impl Cabin {
                 self.persist();
             }
             Ok(Err(e)) => {
-                self.running = false;
-                self.pending_kick = None;
-                self.status = self.apply_job_fail(&e);
-                self.chat_job_thread = None;
-                self.persist();
+                if self.permission_mode.uses_acp() {
+                    self.fail_ask_without_acp(&e);
+                } else {
+                    self.running = false;
+                    self.pending_kick = None;
+                    self.status = self.apply_job_fail(&e);
+                    self.chat_job_thread = None;
+                    self.persist();
+                }
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.acp_spawn_rx = Some(rx);
             }
             Err(mpsc::TryRecvError::Disconnected) => {
-                self.running = false;
-                self.pending_kick = None;
-                self.status = self.apply_job_fail("Grok Build session missing");
-                self.chat_job_thread = None;
-                self.persist();
+                if self.permission_mode.uses_acp() {
+                    self.fail_ask_without_acp("Grok Build session missing");
+                } else {
+                    self.running = false;
+                    self.pending_kick = None;
+                    self.status = self.apply_job_fail("Grok Build session missing");
+                    self.chat_job_thread = None;
+                    self.persist();
+                }
             }
         }
     }
@@ -3045,7 +3054,18 @@ impl Cabin {
         self.persist();
     }
 
+    fn fail_ask_without_acp(&mut self, detail: &str) {
+        self.running = false;
+        self.pending_kick = None;
+        self.status = self.apply_job_fail(&ask_denied_without_acp(detail));
+        self.chat_job_thread = None;
+        self.persist();
+    }
+
     fn ensure_acp(&mut self) -> Result<(), String> {
+        if grokhub_acp::find_grok().is_none() {
+            return Err("Grok Build CLI is not on PATH".into());
+        }
         let idx = self
             .chat_job_thread
             .as_deref()
@@ -8135,6 +8155,16 @@ impl Cabin {
             self.pending_kick = Some(consume_attach);
             return;
         }
+        if self.permission_mode.uses_acp() && self.acp.is_none() {
+            if let Err(e) = self.ensure_acp() {
+                self.fail_ask_without_acp(&e);
+                return;
+            }
+            if self.acp.is_none() {
+                self.pending_kick = Some(consume_attach);
+                return;
+            }
+        }
         let cabin = self.kick_frame.take();
         self.kick_skip = false;
         self.eyes_attach = false;
@@ -8155,6 +8185,21 @@ impl Cabin {
         } else {
             None
         };
+        if self.permission_mode.uses_acp() {
+            let prompt_err = self
+                .acp
+                .as_ref()
+                .map(|h| h.prompt_with_image(&last_user, image.as_deref()));
+            match prompt_err {
+                Some(Ok(())) => {}
+                Some(Err(e)) => {
+                    self.acp = None;
+                    self.fail_ask_without_acp(&e);
+                }
+                None => self.fail_ask_without_acp(""),
+            }
+            return;
+        }
         let idx = self
             .chat_job_thread
             .as_deref()
@@ -17773,6 +17818,10 @@ mod tests {
             ensure.contains("if grok_login.is_some()") && ensure.contains("(grok_login, None)"),
             "grok login must not also inject a console XAI_API_KEY: {ensure}"
         );
+        assert!(
+            ensure.contains("find_grok") && ensure.contains("Grok Build CLI is not on PATH"),
+            "Ask ACP handshake must fail closed without grok: {ensure}"
+        );
         let ensure_spawn = ensure
             .find("thread::spawn")
             .expect("handshake must leave the UI thread");
@@ -18369,6 +18418,19 @@ mod tests {
             spawn_drop.contains("apply_job_fail") && spawn_drop.contains("self.persist()"),
             "a dropped handshake must persist the fail turn or persist_bg waits 2s: {spawn_drop}"
         );
+        assert!(
+            spawn_drop.contains("fail_ask_without_acp") && spawn_drop.contains("uses_acp"),
+            "Ask handshake death must deny the turn, not fall through to grok -p: {spawn_drop}"
+        );
+        let spawn_err = spawn_poll
+            .split("Ok(Err(e))")
+            .nth(1)
+            .and_then(|s| s.split("TryRecvError::Empty").next())
+            .expect("spawn err");
+        assert!(
+            spawn_err.contains("fail_ask_without_acp") && spawn_err.contains("uses_acp"),
+            "Ask ACP spawn fail must deny, not start grok -p: {spawn_err}"
+        );
         let show = src
             .split("fn poll_session_show(")
             .nth(1)
@@ -18808,12 +18870,15 @@ mod tests {
             .and_then(|s| s.split("fn upsert_stream_assistant").next())
             .expect("kick_model");
         assert!(
-            kick.contains("spawn_grok_p_stream") && !kick.contains("prompt_with_image"),
-            "kick_model must use grok -p, not agent stdio (exit 143): {kick}"
+            kick.contains("uses_acp")
+                && kick.contains("ensure_acp")
+                && kick.contains("prompt_with_image")
+                && kick.contains("fail_ask_without_acp"),
+            "Ask must start ACP so Allow / Deny can show: {kick}"
         );
         assert!(
             kick.contains("spawn_grok_p_stream") && kick.contains("grok_p_rx"),
-            "kick_model must keep grok -p as fallback: {kick}"
+            "Auto/Always stay on grok -p: {kick}"
         );
         assert!(
             kick.contains("parse_reasoning_effort") && kick.contains("cfg.reasoning_effort"),
@@ -18836,6 +18901,36 @@ mod tests {
                 && kick.contains("kick_cap_rx")
                 && kick.contains("grok_p_rx"),
             "kick_model must wait for the off-thread frame and grok -p instead of blocking: {kick}"
+        );
+        let ask_kick = src
+            .split("fn kick_model(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_single(").next())
+            .expect("kick_model body");
+        let ask_gate = ask_kick
+            .find("uses_acp")
+            .expect("Ask permission must choose ACP");
+        let grok_p = ask_kick
+            .find("spawn_grok_p_stream")
+            .expect("Auto/Always grok -p");
+        assert!(
+            ask_gate < grok_p,
+            "Ask must decide before headless grok -p: {ask_kick}"
+        );
+        let ask_arm = &ask_kick[ask_gate..grok_p];
+        assert!(
+            ask_arm.contains("ensure_acp")
+                && ask_arm.contains("prompt_with_image")
+                && ask_arm.contains("fail_ask_without_acp")
+                && ask_arm.contains("return")
+                && !ask_arm.contains("spawn_grok_p_stream"),
+            "Ask + ACP down must deny and must not sandbox-off grok -p: {ask_arm}"
+        );
+        assert!(
+            ask_kick.contains("PermissionMode::Auto")
+                && ask_kick.contains("PermissionMode::AlwaysApprove")
+                && ask_kick[grok_p..].contains("spawn_grok_p_stream"),
+            "Auto/Always stay on grok -p: {ask_kick}"
         );
     }
 

@@ -40,8 +40,8 @@ pub use locate::{
     single_turn_args_full, which, write_cli_auth_if_needed,
 };
 pub use protocol::{
-    merge_tool_card, AcpEvent, ElicitAsk, PermissionAsk, PermissionMode, SessionMode, ToolCard,
-    PROTOCOL_VERSION,
+    ask_denied_without_acp, merge_tool_card, AcpEvent, ElicitAsk, PermissionAsk, PermissionMode,
+    SessionMode, ToolCard, ASK_ACP_DOWN, PROTOCOL_VERSION,
 };
 pub use stream::{
     fold_stream, grok_context_line, grok_usage_line, kill_pid, parse_signals_json, parse_stream_line,
