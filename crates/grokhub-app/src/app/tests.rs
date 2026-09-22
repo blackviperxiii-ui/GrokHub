@@ -2041,6 +2041,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "boot must move a leftover app.json console key into secrets.json"
         );
         assert!(
+            src.contains("secrets::ensure_private"),
+            "boot must rewrite a world-readable leftover secrets.json"
+        );
+        assert!(
             src.contains("secrets::console_key") && src.contains("migrate_console_key"),
             "Console key lives in secrets.json; Settings must not keep a leftover app.json field"
         );

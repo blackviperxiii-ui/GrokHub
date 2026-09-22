@@ -715,6 +715,7 @@ impl Cabin {
             .map(|n| n.id.clone());
         let mut secrets = secrets::load();
         secrets::migrate_console_key(&mut cfg, &mut secrets);
+        secrets::ensure_private();
         let win_max = cfg.window.maximized;
         let cfg_auto_cap = cfg.daily_auto_cap;
         let cfg_host_cap = cfg.host_hour_cap;
@@ -1128,7 +1129,10 @@ impl Cabin {
         };
         let size = inner.map(|r| r.size()).unwrap_or(outer.size());
         #[cfg(windows)]
-        let maximized = self.win_max;
+        let maximized = {
+            let _ = egui_max;
+            self.win_max
+        };
         #[cfg(not(windows))]
         let maximized = egui_max.unwrap_or(self.win_max);
         if let Some(g) = crate::window::remember_geom(
