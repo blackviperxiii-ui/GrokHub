@@ -2,7 +2,8 @@ use eframe::egui;
 
 pub fn apply_tray_window(ctx: &egui::Context, w: crate::tray::TrayWindow) {
     // winit Visible(false) is SW_HIDE on Windows — that freezes egui timers
-    // so tray Quit / Show never run. Linux still unmaps; Windows cloaks.
+    // so tray Quit / Show never run. Linux still unmaps. Windows cloaks and
+    // drops the taskbar stub (TOOLWINDOW) so × is unmap-to-tray, not minimize.
     #[cfg(not(windows))]
     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(w.visible));
     #[cfg(windows)]
@@ -139,7 +140,7 @@ mod tests {
         let src = include_str!("titlebar.rs");
         assert!(
             src.contains("cfg(not(windows))") && src.contains("Visible(w.visible)"),
-            "Windows must cloak, not winit Visible(false)/SW_HIDE, or tray Quit never runs: {src}"
+            "Windows must cloak + leave the taskbar, not winit Visible(false)/SW_HIDE, or tray Quit never runs: {src}"
         );
         assert!(
             src.contains("cfg(windows)") && src.contains("Visible(true)"),
