@@ -642,9 +642,10 @@ fn paint_speech_bubble(
     } else {
         0.0
     };
-    let hugged = outer_w;
+    // Always keep `gap` out of the bubble. The spacer below is the rest of the
+    // row, so a typical pane reserves item_spacing even when the 84% cap
+    // already fits, and a narrow pane does not subtract the gap twice.
     outer_w = clamp_bubble_outer(bubble_avail, outer_w, gap);
-    let lead_gap = if outer_w + 0.5 < hugged { gap } else { 0.0 };
     let inner_w = inner_w.min((outer_w - BUBBLE_PAD_X * 2.0).max(1.0));
     let frame = egui::Frame::none()
         .fill(if user {
@@ -660,7 +661,7 @@ fn paint_speech_bubble(
             ui.set_max_width(avail);
             ui.horizontal(|ui| {
                 ui.set_max_width(avail);
-                let lead = (avail - outer_w - lead_gap).max(0.0);
+                let lead = (avail - outer_w).max(0.0);
                 if lead > 0.0 {
                     ui.add_space(lead);
                 }
@@ -15472,11 +15473,14 @@ mod tests {
     #[test]
     fn unbroken_user_text_stays_inside_narrow_and_wide_rows() {
         let body = "a".repeat(480);
-        for width in [280.0_f32, 480.0, 1600.0] {
+        // 140 shrinks to leave item_spacing. 800 is a typical pane: the 84% cap
+        // already fits, and the leading gap must still be there.
+        for width in [140.0_f32, 280.0, 480.0, 800.0, 1600.0] {
             with_fonts_ui(|ui| {
                 ui.allocate_ui(egui::vec2(width, 800.0), |ui| {
                     ui.set_max_width(width);
                     let row = ui.max_rect();
+                    let gap = ui.spacing().item_spacing.x.max(0.0);
                     assert!(
                         (row.width() - width).abs() < 1.0,
                         "harness row {} != requested {width}",
@@ -15491,6 +15495,7 @@ mod tests {
                         measured.y
                     );
                     let resp = super::paint_speech_bubble(ui, &body, true, false);
+                    let lead = resp.rect.min.x - row.min.x;
                     assert!(
                         resp.rect.min.x + 0.5 >= row.min.x,
                         "width {width}: bubble left {} < row {}",
@@ -15498,11 +15503,21 @@ mod tests {
                         row.min.x
                     );
                     assert!(
+                        lead + 1.0 >= gap,
+                        "width {width}: leading gap {gap} not reserved, lead {lead}"
+                    );
+                    assert!(
                         resp.rect.max.x <= row.max.x + 1.0,
                         "width {width}: user bubble ran past the row {} > {} (bubble w {})",
                         resp.rect.max.x,
                         row.max.x,
                         resp.rect.width()
+                    );
+                    assert!(
+                        row.max.x - resp.rect.max.x <= 1.0,
+                        "width {width}: stray hole on the right, bubble max {} row {}",
+                        resp.rect.max.x,
+                        row.max.x
                     );
                     assert!(
                         resp.rect.width() <= width + 1.0,
