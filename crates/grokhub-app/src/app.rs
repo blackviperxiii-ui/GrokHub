@@ -155,7 +155,7 @@ use global_hotkey::{
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -521,6 +521,46 @@ fn avatar_menu(
         name,
         picture_path: saved_picture.trim().to_string(),
     }
+}
+
+/// Latest cabin config a background save may write. Name keystrokes and picture
+/// changes each publish a generation. A writer saves only its own generation.
+struct CfgSlot {
+    gen: u64,
+    cfg: AppConfig,
+}
+
+fn publish_cfg(slot: &mut CfgSlot, mut cfg: AppConfig) -> u64 {
+    cfg.api_key.clear();
+    let mut gen = slot.gen.wrapping_add(1);
+    if gen == 0 {
+        gen = 1;
+    }
+    slot.gen = gen;
+    slot.cfg = cfg;
+    gen
+}
+
+fn cfg_if_current(slot: &CfgSlot, gen: u64) -> Option<AppConfig> {
+    if gen != 0 && slot.gen == gen {
+        Some(slot.cfg.clone())
+    } else {
+        None
+    }
+}
+
+fn next_pick_token(current: u64) -> u64 {
+    let n = current.wrapping_add(1);
+    if n == 0 {
+        1
+    } else {
+        n
+    }
+}
+
+/// A late picker result applies only when Remove has not bumped the token.
+fn profile_pick_current(active: u64, result: u64) -> bool {
+    active != 0 && active == result
 }
 
 fn oauth_photo_image(bytes: &[u8]) -> Option<ColorImage> {
@@ -1098,6 +1138,7 @@ pub struct Cabin {
     persist_idle_key: String,
     persist_rx: Option<mpsc::Receiver<()>>,
     persist_io: Arc<Mutex<()>>,
+    cfg_slot: Arc<Mutex<CfgSlot>>,
     board: Vec<BoardCard>,
     board_title: String,
     imagine_prompt: String,
@@ -1320,7 +1361,9 @@ pub struct Cabin {
     profile_photo_key: String,
     profile_photo_rx: Option<mpsc::Receiver<ProfilePhotoOut>>,
     profile_photo_busy: bool,
-    profile_pick_rx: Option<mpsc::Receiver<ProfilePick>>,
+    profile_pick_rx: Option<mpsc::Receiver<(u64, ProfilePick)>>,
+    profile_pick_token: Arc<AtomicU64>,
+    profile_file_io: Arc<Mutex<()>>,
     grok_install_rx: Option<mpsc::Receiver<Result<std::path::PathBuf, String>>>,
     grok_install_err: String,
     /// Official alpha install this session (missing/unusable at boot or retry).
@@ -1507,6 +1550,10 @@ impl Cabin {
         let boot_perm = PermissionMode::parse(&cfg.permission_mode).unwrap_or(PermissionMode::Ask);
         let goal_step = threads.get(thread_idx).map(|t| t.goal.step).unwrap_or(0);
         let (grok_sessions_tx, grok_sessions_rx) = mpsc::channel();
+        let cfg_slot = Arc::new(Mutex::new(CfgSlot {
+            gen: 0,
+            cfg: cfg.clone(),
+        }));
         let mut c = Self {
             nav: Nav::Chat,
             cfg,
@@ -1529,6 +1576,7 @@ impl Cabin {
             persist_idle_key: String::new(),
             persist_rx: None,
             persist_io: Arc::new(Mutex::new(())),
+            cfg_slot,
             board: config::load_board(),
             board_title: String::new(),
             imagine_prompt: String::new(),
@@ -1750,6 +1798,8 @@ impl Cabin {
             profile_photo_rx: None,
             profile_photo_busy: false,
             profile_pick_rx: None,
+            profile_pick_token: Arc::new(AtomicU64::new(0)),
+            profile_file_io: Arc::new(Mutex::new(())),
             grok_install_rx: None,
             grok_install_err: String::new(),
             grok_install_wait: false,
@@ -6152,10 +6202,22 @@ impl Cabin {
 
     fn persist_cfg(&self) {
         let io = self.persist_io.clone();
+        let slot = self.cfg_slot.clone();
         let mut cfg = self.cfg.clone();
         cfg.api_key.clear();
+        let gen = match slot.lock() {
+            Ok(mut g) => publish_cfg(&mut g, cfg),
+            Err(_) => return,
+        };
         std::thread::spawn(move || {
-            if let Ok(_g) = io.lock() {
+            let Ok(_disk) = io.lock() else {
+                return;
+            };
+            let cfg = match slot.lock() {
+                Ok(g) => cfg_if_current(&g, gen),
+                Err(_) => return,
+            };
+            if let Some(cfg) = cfg {
                 let _ = config::save(&cfg);
             }
         });
@@ -7723,22 +7785,48 @@ impl Cabin {
             self.status = "Choose a picture…".into();
             return;
         }
+        let token = next_pick_token(self.profile_pick_token.load(Ordering::SeqCst));
+        self.profile_pick_token.store(token, Ordering::SeqCst);
+        let gate = Arc::clone(&self.profile_pick_token);
+        let file_io = Arc::clone(&self.profile_file_io);
         let (tx, rx) = mpsc::channel();
         self.profile_pick_rx = Some(rx);
         self.status = "Choose a picture…".into();
         std::thread::spawn(move || {
             let out = match pick_file() {
-                Some(p) => match crate::oauth::install_profile_picture(&p) {
-                    Ok(dest) => ProfilePick::Chosen(dest),
-                    Err(e) => ProfilePick::Failed(e),
-                },
+                Some(p) => {
+                    if !profile_pick_current(gate.load(Ordering::SeqCst), token) {
+                        ProfilePick::Cancelled
+                    } else if let Ok(_file) = file_io.lock() {
+                        if !profile_pick_current(gate.load(Ordering::SeqCst), token) {
+                            ProfilePick::Cancelled
+                        } else {
+                            match crate::oauth::install_profile_picture(&p) {
+                                Ok(dest) => {
+                                    if profile_pick_current(gate.load(Ordering::SeqCst), token) {
+                                        ProfilePick::Chosen(dest)
+                                    } else {
+                                        let _ = std::fs::remove_file(&dest);
+                                        ProfilePick::Cancelled
+                                    }
+                                }
+                                Err(e) => ProfilePick::Failed(e),
+                            }
+                        }
+                    } else {
+                        ProfilePick::Cancelled
+                    }
+                }
                 None => ProfilePick::Cancelled,
             };
-            let _ = tx.send(out);
+            let _ = tx.send((token, out));
         });
     }
 
     fn clear_profile_picture(&mut self) {
+        let token = next_pick_token(self.profile_pick_token.load(Ordering::SeqCst));
+        self.profile_pick_token.store(token, Ordering::SeqCst);
+        self.profile_pick_rx = None;
         self.cfg.profile_picture.clear();
         self.profile_photo = None;
         self.profile_photo_key.clear();
@@ -7746,8 +7834,15 @@ impl Cabin {
         self.profile_photo_busy = false;
         self.persist_cfg();
         let dest = config::config_dir().join("profile.png");
+        let gate = Arc::clone(&self.profile_pick_token);
+        let file_io = Arc::clone(&self.profile_file_io);
         std::thread::spawn(move || {
-            let _ = std::fs::remove_file(dest);
+            let Ok(_file) = file_io.lock() else {
+                return;
+            };
+            if profile_pick_current(gate.load(Ordering::SeqCst), token) {
+                let _ = std::fs::remove_file(dest);
+            }
         });
         self.status = "Saved".into();
     }
@@ -7757,16 +7852,20 @@ impl Cabin {
             return;
         };
         match rx.try_recv() {
-            Ok(ProfilePick::Chosen(path)) => {
-                self.cfg.profile_picture = path.to_string_lossy().into_owned();
-                self.profile_photo = None;
-                self.profile_photo_key.clear();
-                self.persist_cfg();
-                self.status = "Saved".into();
+            Ok((token, ProfilePick::Chosen(path))) => {
+                if profile_pick_current(self.profile_pick_token.load(Ordering::SeqCst), token) {
+                    self.cfg.profile_picture = path.to_string_lossy().into_owned();
+                    self.profile_photo = None;
+                    self.profile_photo_key.clear();
+                    self.persist_cfg();
+                    self.status = "Saved".into();
+                }
             }
-            Ok(ProfilePick::Cancelled) => {}
-            Ok(ProfilePick::Failed(err)) => {
-                self.status = err;
+            Ok((_, ProfilePick::Cancelled)) => {}
+            Ok((token, ProfilePick::Failed(err))) => {
+                if profile_pick_current(self.profile_pick_token.load(Ordering::SeqCst), token) {
+                    self.status = err;
+                }
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.profile_pick_rx = Some(rx);
@@ -15436,6 +15535,142 @@ mod tests {
             spawn < file && file < install,
             "the picture picker and decode must not run on the UI thread: {pick}"
         );
+    }
+
+    #[test]
+    fn remove_ignores_an_in_flight_picture_pick() {
+        let started = 1_u64;
+        let cleared = super::next_pick_token(started);
+        assert!(super::profile_pick_current(started, started));
+        assert!(!super::profile_pick_current(cleared, started));
+        assert!(!super::profile_pick_current(0, 0));
+        let wrapped = super::next_pick_token(u64::MAX);
+        assert_eq!(wrapped, 1);
+        assert!(super::profile_pick_current(wrapped, wrapped));
+
+        let src = include_str!("app.rs");
+        let clear = src
+            .split("fn clear_profile_picture(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_profile_pick(").next())
+            .expect("clear_profile_picture");
+        assert!(
+            clear.contains("profile_pick_rx = None") && clear.contains("next_pick_token"),
+            "Remove must drop the in-flight pick and bump its token: {clear}"
+        );
+        let poll = src
+            .split("fn poll_profile_pick(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_profile_photo(").next())
+            .expect("poll_profile_pick");
+        let gate = poll.find("profile_pick_current").expect("token gate");
+        let apply = poll.find("profile_picture").expect("writes the path");
+        assert!(
+            gate < apply,
+            "a late Chosen must be ignored before it restores the path: {poll}"
+        );
+        let pick = src
+            .split("fn pick_profile_picture(")
+            .nth(1)
+            .and_then(|s| s.split("fn clear_profile_picture(").next())
+            .expect("pick_profile_picture");
+        let file = pick.find("pick_file()").expect("native picker");
+        let install = pick.find("install_profile_picture").expect("copy into cabin config");
+        let before = pick.find("profile_pick_current").expect("cancel check");
+        assert!(
+            file < before && before < install,
+            "Remove must cancel the pick before it installs a picture: {pick}"
+        );
+    }
+
+    /// A writer that already holds the disk lock samples the slot only after a newer
+    /// publish. The older generation must not be what gets saved.
+    fn stale_after_newer_publish(
+        older: super::AppConfig,
+        newer: super::AppConfig,
+    ) -> super::AppConfig {
+        use std::sync::{Arc, Barrier, Mutex};
+        let slot = Arc::new(Mutex::new(super::CfgSlot {
+            gen: 0,
+            cfg: super::AppConfig::default(),
+        }));
+        let io = Arc::new(Mutex::new(()));
+        let older_gen = {
+            let mut g = slot.lock().expect("slot");
+            super::publish_cfg(&mut g, older)
+        };
+        let held = io.lock().expect("disk");
+        let slot_w = Arc::clone(&slot);
+        let io_w = Arc::clone(&io);
+        let gate = Arc::new(Barrier::new(2));
+        let gate_w = Arc::clone(&gate);
+        let worker = std::thread::spawn(move || {
+            let _disk = io_w.lock().expect("disk");
+            gate_w.wait();
+            let g = slot_w.lock().expect("slot");
+            super::cfg_if_current(&g, older_gen)
+        });
+        let newer_gen = {
+            let mut g = slot.lock().expect("slot");
+            super::publish_cfg(&mut g, newer)
+        };
+        drop(held);
+        gate.wait();
+        assert!(worker.join().expect("writer").is_none());
+        let g = slot.lock().expect("slot");
+        super::cfg_if_current(&g, newer_gen).expect("newer config")
+    }
+
+    #[test]
+    fn name_save_does_not_overwrite_a_newer_picture() {
+        let name = super::AppConfig {
+            display_name: "Viper".into(),
+            api_key: "sk-secret".into(),
+            ..super::AppConfig::default()
+        };
+        let picture = super::AppConfig {
+            display_name: "Viper".into(),
+            profile_picture: "/cfg/profile.png".into(),
+            ..super::AppConfig::default()
+        };
+        let current = stale_after_newer_publish(name, picture);
+        assert_eq!(current.display_name, "Viper");
+        assert_eq!(current.profile_picture, "/cfg/profile.png");
+        assert!(current.api_key.is_empty());
+
+        let src = include_str!("app.rs");
+        let persist = src
+            .split("fn persist_cfg(")
+            .nth(1)
+            .and_then(|s| s.split("fn persist_if_dirty(").next())
+            .expect("persist_cfg");
+        let check = persist.find("cfg_if_current").expect("generation check");
+        let save = persist.find("config::save").expect("save");
+        assert!(
+            persist.contains("publish_cfg")
+                && persist.contains("thread::spawn")
+                && persist.contains("persist_io")
+                && persist.contains("api_key.clear")
+                && check < save,
+            "a config save must write the latest generation, not the clone it spawned with: {persist}"
+        );
+    }
+
+    #[test]
+    fn picture_save_does_not_overwrite_a_newer_name() {
+        let picture = super::AppConfig {
+            display_name: "Old".into(),
+            profile_picture: "/cfg/profile.png".into(),
+            ..super::AppConfig::default()
+        };
+        let name = super::AppConfig {
+            display_name: "Viper".into(),
+            profile_picture: "/cfg/profile.png".into(),
+            ..super::AppConfig::default()
+        };
+        let current = stale_after_newer_publish(picture, name);
+        assert_eq!(current.display_name, "Viper");
+        assert_eq!(current.profile_picture, "/cfg/profile.png");
     }
 
     #[test]
