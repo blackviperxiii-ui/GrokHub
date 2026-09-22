@@ -335,6 +335,21 @@ pub fn hide_to_tray_window() -> TrayWindow {
     }
 }
 
+/// Win32 `WS_EX_TOOLWINDOW` — hidden from the taskbar and Alt-Tab.
+pub const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
+/// Win32 `WS_EX_APPWINDOW` — forced onto the taskbar.
+pub const WS_EX_APPWINDOW: u32 = 0x0004_0000;
+
+/// × / close-to-tray: keep the HWND so winit timers live, drop the taskbar stub.
+pub fn windows_unmap_exstyle(ex: u32) -> u32 {
+    (ex | WS_EX_TOOLWINDOW) & !WS_EX_APPWINDOW
+}
+
+/// Show cabin: put the cabin back on the taskbar.
+pub fn windows_map_exstyle(ex: u32) -> u32 {
+    (ex | WS_EX_APPWINDOW) & !WS_EX_TOOLWINDOW
+}
+
 pub fn show_from_tray_window() -> TrayWindow {
     TrayWindow {
         visible: true,
@@ -378,7 +393,9 @@ pub struct TrayHost {
     #[cfg(unix)]
     _keep: ksni::blocking::Handle<GrokTray>,
     #[cfg(windows)]
-    tray_tid: u32,
+    _keep: tray_icon::TrayIcon,
+    #[cfg(windows)]
+    _menu_items: Vec<tray_icon::menu::MenuItem>,
 }
 
 impl TrayHost {
@@ -516,18 +533,16 @@ fn windows_tray_icon() -> Option<tray_icon::Icon> {
     tray_icon::Icon::from_rgba(rgba, width, height).ok()
 }
 
+/// Build the Win32 tray on the caller (UI) thread. A worker `GetMessageW`
+/// loop is what closed the right-click menu in about a second — the popup
+/// was owned by a thread that was not the foreground cabin.
 #[cfg(windows)]
-fn windows_tray_thread(ready: mpsc::Sender<Option<TrayHost>>) {
+fn windows_tray_attach() -> Option<TrayHost> {
     if !tray_wanted() {
-        let _ = ready.send(None);
-        return;
+        return None;
     }
     use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
     use tray_icon::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageW, GetMessageW, TranslateMessage, MSG,
-    };
     let (tx, rx) = mpsc::channel();
     let show = MenuItem::new("Show cabin", true, None);
     let halt = MenuItem::new("Halt", true, None);
@@ -537,25 +552,13 @@ fn windows_tray_thread(ready: mpsc::Sender<Option<TrayHost>>) {
     let _ = menu.append(&halt);
     let _ = menu.append(&PredefinedMenuItem::separator());
     let _ = menu.append(&quit);
-    let icon = match windows_tray_icon() {
-        Some(i) => i,
-        None => {
-            let _ = ready.send(None);
-            return;
-        }
-    };
-    let tray = match TrayIconBuilder::new()
+    let icon = windows_tray_icon()?;
+    let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_tooltip("GrokHub")
         .with_icon(icon)
         .build()
-    {
-        Ok(t) => t,
-        Err(_) => {
-            let _ = ready.send(None);
-            return;
-        }
-    };
+        .ok()?;
     let show_id = show.id().clone();
     let halt_id = halt.id().clone();
     let quit_id = quit.id().clone();
@@ -595,18 +598,11 @@ fn windows_tray_thread(ready: mpsc::Sender<Option<TrayHost>>) {
             }
         }
     });
-    let tray_tid = unsafe { GetCurrentThreadId() };
-    if ready.send(Some(TrayHost { rx, tray_tid })).is_err() {
-        return;
-    }
-    unsafe {
-        let mut msg = std::mem::zeroed::<MSG>();
-        while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-    }
-    drop(tray);
+    Some(TrayHost {
+        rx,
+        _keep: tray,
+        _menu_items: vec![show, halt, quit],
+    })
 }
 
 /// ksni `spawn()` `block_on`s session-bus setup on the caller. Never do that
@@ -632,10 +628,10 @@ pub fn begin_tray_spawn() -> mpsc::Receiver<Option<TrayHost>> {
     }
     #[cfg(windows)]
     {
+        // Attach on this thread so winit pumps the tray HWND. A worker
+        // GetMessage loop owned the popup and Windows dismissed it in ~1s.
         let (tx, rx) = mpsc::channel();
-        let _ = thread::Builder::new()
-            .name("grokhub-tray".into())
-            .spawn(move || windows_tray_thread(tx));
+        let _ = tx.send(windows_tray_attach());
         rx
     }
     #[cfg(not(any(unix, windows)))]
@@ -668,13 +664,6 @@ impl Drop for TrayHost {
         #[cfg(unix)]
         {
             let _ = self._keep.shutdown();
-        }
-        #[cfg(windows)]
-        {
-            use windows_sys::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
-            unsafe {
-                let _ = PostThreadMessageW(self.tray_tid, WM_QUIT, 0, 0);
-            }
         }
     }
 }
@@ -712,6 +701,53 @@ mod tests {
         let show = show_from_tray_window();
         assert!(show.visible);
         assert!(!show.minimized);
+    }
+
+    #[test]
+    fn windows_close_unmaps_the_taskbar_stub() {
+        assert_eq!(windows_unmap_exstyle(0), WS_EX_TOOLWINDOW);
+        assert_eq!(windows_unmap_exstyle(WS_EX_APPWINDOW), WS_EX_TOOLWINDOW);
+        assert_eq!(
+            windows_unmap_exstyle(WS_EX_APPWINDOW | 0x200),
+            WS_EX_TOOLWINDOW | 0x200
+        );
+        assert_eq!(windows_map_exstyle(WS_EX_TOOLWINDOW), WS_EX_APPWINDOW);
+        assert_eq!(
+            windows_map_exstyle(windows_unmap_exstyle(WS_EX_APPWINDOW)),
+            WS_EX_APPWINDOW
+        );
+        let src = include_str!("win_native.rs");
+        assert!(
+            src.contains("windows_unmap_exstyle") && src.contains("SWP_NOACTIVATE"),
+            "hide_cabin must drop the taskbar stub without activating (that closed the tray menu): {src}"
+        );
+        assert!(
+            src.contains("windows_map_exstyle"),
+            "Show cabin must put the cabin back on the taskbar: {src}"
+        );
+    }
+
+    #[test]
+    fn windows_tray_menu_attaches_on_the_ui_thread() {
+        let src = include_str!("tray.rs");
+        let begin = src
+            .split("pub fn begin_tray_spawn")
+            .nth(1)
+            .and_then(|s| s.split("pub fn take_spawn_result").next())
+            .expect("begin_tray_spawn");
+        assert!(
+            begin.contains("windows_tray_attach") && !begin.contains("GetMessageW"),
+            "Windows tray must attach on the UI thread or the right-click menu self-closes: {begin}"
+        );
+        let attach = src
+            .split("fn windows_tray_attach")
+            .nth(1)
+            .and_then(|s| s.split("/// ksni").next())
+            .expect("windows_tray_attach");
+        assert!(
+            !attach.contains("GetMessageW") && attach.contains("with_menu"),
+            "a worker GetMessage loop is what closed the tray menu in ~1s: {attach}"
+        );
     }
 
     #[test]
@@ -850,10 +886,10 @@ mod tests {
     fn windows_tray_uses_the_linux_cabin_mark() {
         let src = include_str!("tray.rs");
         let win = src
-            .split("fn windows_tray_thread")
+            .split("fn windows_tray_attach")
             .nth(1)
             .and_then(|s| s.split("/// ksni").next())
-            .expect("windows_tray_thread");
+            .expect("windows_tray_attach");
         assert!(
             win.contains("windows_tray_icon") && !win.contains("from_rgba(vec!"),
             "Windows tray must load the cabin PNG, not a fill square: {win}"

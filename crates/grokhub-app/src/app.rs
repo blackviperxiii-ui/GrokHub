@@ -11140,6 +11140,8 @@ impl eframe::App for Cabin {
                 crate::tray::HiddenTick::StayHidden => {
                     if crate::tray::reapply_unmap(true, focused) {
                         apply_tray_window(ctx, crate::tray::hide_to_tray_window());
+                        #[cfg(windows)]
+                        crate::win_native::hide_cabin();
                     }
                 }
             }
@@ -17576,6 +17578,10 @@ mod tests {
             hide.contains("persist_if_dirty") && !hide.contains("self.persist()"),
             "hide to tray must not clone every thread when idle persist already wrote: {hide}"
         );
+        assert!(
+            hide.contains("hide_cabin"),
+            "Windows × must cloak and leave the taskbar, not minimize: {hide}"
+        );
         let tick = src
             .split("hidden_window_tick(")
             .nth(1)
@@ -17588,6 +17594,15 @@ mod tests {
         assert!(
             src.contains("hidden_raise_ready") && src.contains("reapply_unmap"),
             "× must not flash back from a FocusLost/FocusGained bounce or Visible(false) spam"
+        );
+        let stay = src
+            .split("HiddenTick::StayHidden =>")
+            .nth(1)
+            .and_then(|s| s.split("ctx.request_repaint_after").next())
+            .expect("StayHidden");
+        assert!(
+            stay.contains("hide_cabin"),
+            "leftover focus after × must re-unmap the Windows taskbar stub: {stay}"
         );
         let night_save = src
             .split("if user_asked_to_schedule(&last_user)")
