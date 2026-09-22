@@ -1,3 +1,4 @@
+use eframe::egui::text::LayoutJob;
 use eframe::egui::{Color32, Label, RichText, TextStyle, TextWrapMode, Ui, Vec2};
 use grokhub_core::{bubble_max_width, TEXT_FILE_CAP};
 
@@ -19,15 +20,24 @@ pub fn bubble_width(available: f32) -> f32 {
     bubble_max_width(available)
 }
 
-pub fn measure_text(ui: &Ui, text: &str, wrap: f32) -> Vec2 {
+/// Layout bubble text so a long token wraps inside `wrap`.
+pub fn wrapped_job(ui: &Ui, text: &str, wrap: f32, color: Color32) -> LayoutJob {
     let text = display_text(text);
     let font = TextStyle::Body.resolve(ui.style());
+    let wrap = wrap.max(1.0);
+    let mut job = LayoutJob::simple(text.to_owned(), font, color, wrap);
+    job.wrap.break_anywhere = true;
+    job
+}
+
+pub fn measure_text(ui: &Ui, text: &str, wrap: f32) -> Vec2 {
+    let text = display_text(text);
     let wrap = wrap.max(1.0);
     if text.is_empty() {
         return Vec2::new(0.0, ui.text_style_height(&TextStyle::Body));
     }
-    ui.fonts(|f| f.layout(text.to_owned(), font, Color32::WHITE, wrap))
-        .size()
+    let job = wrapped_job(ui, text, wrap, Color32::WHITE);
+    ui.fonts(|f| f.layout_job(job)).size()
 }
 
 pub fn show(ui: &mut Ui, text: &str) {
@@ -41,9 +51,7 @@ pub fn show(ui: &mut Ui, text: &str) {
             in_fence = !in_fence;
             wrapping_label(
                 ui,
-                RichText::new(line)
-                    .monospace()
-                    .color(crate::theme::muted()),
+                RichText::new(line).monospace().color(crate::theme::muted()),
                 wrap,
             );
             continue;
@@ -93,7 +101,11 @@ fn inline(ui: &mut Ui, line: &str, wrap: f32) {
             while !rest.is_empty() {
                 if let Some(after) = rest.strip_prefix("**") {
                     if let Some(end) = after.find("**") {
-                        ui.add(Label::new(RichText::new(&after[..end]).strong()).wrap().selectable(true));
+                        ui.add(
+                            Label::new(RichText::new(&after[..end]).strong())
+                                .wrap()
+                                .selectable(true),
+                        );
                         rest = &after[end + 2..];
                         continue;
                     }
@@ -221,7 +233,12 @@ mod tests {
             let short = measure_text(ui, "Hi", wrap);
             let long = measure_text(ui, &"word ".repeat(80), wrap);
             assert!(long.x <= wrap + 1.0);
-            assert!(long.y > short.y * 2.0, "long y {} short y {}", long.y, short.y);
+            assert!(
+                long.y > short.y * 2.0,
+                "long y {} short y {}",
+                long.y,
+                short.y
+            );
             let outer = bubble_outer_width(800.0, long.x, BUBBLE_PAD_X);
             let cap = bubble_max_width(800.0);
             assert!(outer <= cap + 1.0, "outer {outer} cap {cap}");
