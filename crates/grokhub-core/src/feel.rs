@@ -30,6 +30,32 @@ pub fn felt_rect(x: f32, y: f32, w: f32, h: f32, scale: f32) -> (f32, f32, f32, 
     (x + (w - nw) * 0.5, y + (h - nh) * 0.5, nw, nh)
 }
 
+/// Keep a felt rect inside the slot it grew from.
+/// Buttons may paint [`felt_rect`] directly. A card or Imagine wall tile fills
+/// its slot, so the same hover grow would cover the neighbor.
+pub fn clamp_rect_to_slot(
+    slot_x: f32,
+    slot_y: f32,
+    slot_w: f32,
+    slot_h: f32,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+) -> (f32, f32, f32, f32) {
+    let left = x.max(slot_x);
+    let top = y.max(slot_y);
+    let right = (x + w).min(slot_x + slot_w).max(left);
+    let bottom = (y + h).min(slot_y + slot_h).max(top);
+    (left, top, right - left, bottom - top)
+}
+
+/// [`felt_rect`] then [`clamp_rect_to_slot`].
+pub fn felt_inside_slot(x: f32, y: f32, w: f32, h: f32, scale: f32) -> (f32, f32, f32, f32) {
+    let (fx, fy, fw, fh) = felt_rect(x, y, w, h, scale);
+    clamp_rect_to_slot(x, y, w, h, fx, fy, fw, fh)
+}
+
 pub fn hover_mix(hovered: f32, pressed: f32) -> f32 {
     let hover = hovered.clamp(0.0, 1.0);
     let press = pressed.clamp(0.0, 1.0);
@@ -106,6 +132,26 @@ mod tests {
         assert!((y - 10.0).abs() < 1e-4);
         assert!((w - 50.0).abs() < 1e-4);
         assert!((h - 20.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn hover_grow_stays_inside_the_card_slot() {
+        let (x, y, w, h) = (12.0, 40.0, 280.0, 120.0);
+        let hover = feel_scale(1.0, 0.0) + FOCUS_GROW;
+        let (fx, fy, fw, fh) = felt_rect(x, y, w, h, hover);
+        assert!(fx < x && fy < y, "unclamped hover leaves the slot");
+        assert!(fx + fw > x + w && fy + fh > y + h);
+        let (cx, cy, cw, ch) = felt_inside_slot(x, y, w, h, hover);
+        assert!((cx - x).abs() < 1e-4 && (cy - y).abs() < 1e-4);
+        assert!((cw - w).abs() < 1e-4 && (ch - h).abs() < 1e-4);
+        let neighbor = x + w + 8.0;
+        assert!(cx + cw <= neighbor, "clamped card reaches the next slot");
+        let press = feel_scale(0.0, 1.0);
+        let raw = felt_rect(x, y, w, h, press);
+        let (px, py, pw, ph) = felt_inside_slot(x, y, w, h, press);
+        assert!((px - raw.0).abs() < 1e-4 && (py - raw.1).abs() < 1e-4);
+        assert!((pw - raw.2).abs() < 1e-4 && (ph - raw.3).abs() < 1e-4);
+        assert!(px >= x && py >= y && px + pw <= x + w && py + ph <= y + h);
     }
 
     #[test]
