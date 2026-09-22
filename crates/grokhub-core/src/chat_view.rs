@@ -38,6 +38,88 @@ pub fn thought_shows_acts(next_thought: bool) -> bool {
     !next_thought
 }
 
+/// How one agent thought is drawn. A new thought starts expanded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ThoughtFold {
+    /// Full thought. This is the cabin default.
+    #[default]
+    Expanded,
+    /// One short row that can be opened again.
+    Minimized,
+    /// That thought is not drawn. The reply stays.
+    Hidden,
+}
+
+/// A control on one thought. Hide and minimize never apply to the reply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThoughtFoldAct {
+    Expand,
+    Minimize,
+    Hide,
+}
+
+/// Label on the minimized row.
+pub const THOUGHT_ROW_LABEL: &str = "Thought";
+
+impl ThoughtFold {
+    pub fn apply(self, act: ThoughtFoldAct) -> Self {
+        match act {
+            ThoughtFoldAct::Expand => Self::Expanded,
+            ThoughtFoldAct::Minimize => Self::Minimized,
+            ThoughtFoldAct::Hide => Self::Hidden,
+        }
+    }
+
+    /// The full thought text. Minimized and hidden do not paint it.
+    pub fn paints_body(self) -> bool {
+        matches!(self, Self::Expanded)
+    }
+
+    /// Minimized keeps one short row. Hidden draws nothing.
+    pub fn paints_row(self) -> bool {
+        matches!(self, Self::Expanded | Self::Minimized)
+    }
+}
+
+/// Buttons for the current fold. Hidden has none, because that thought is not drawn.
+pub fn thought_fold_controls(fold: ThoughtFold) -> &'static [&'static str] {
+    match fold {
+        ThoughtFold::Expanded => &["Minimize", "Hide"],
+        ThoughtFold::Minimized => &["Expand", "Hide"],
+        ThoughtFold::Hidden => &[],
+    }
+}
+
+pub fn thought_control_act(label: &str) -> Option<ThoughtFoldAct> {
+    match label {
+        "Expand" => Some(ThoughtFoldAct::Expand),
+        "Minimize" => Some(ThoughtFoldAct::Minimize),
+        "Hide" => Some(ThoughtFoldAct::Hide),
+        _ => None,
+    }
+}
+
+/// Folding a thought never drops the reply, a user turn, or a tool row.
+pub fn thought_fold_draws(kind: ChatKind, fold: ThoughtFold) -> bool {
+    match kind {
+        ChatKind::Thought => fold.paints_row(),
+        ChatKind::User | ChatKind::Assistant | ChatKind::Tool => true,
+    }
+}
+
+/// Identity of a thought's text after the same scrub the transcript uses.
+/// A live block and the stored view of that thought share this key, so Hide
+/// and Minimize survive the handoff. A different body is a new thought.
+pub fn thought_body_key(body: &str) -> u64 {
+    let norm = scrub_thought(body);
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in norm.as_bytes() {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
 /// How far above the newest message still counts as reading the tail.
 pub const CHAT_TAIL_SLACK: f32 = 48.0;
 
@@ -723,6 +805,159 @@ mod tests {
         assert!(!thought_shows_label(true));
         assert!(thought_shows_acts(false));
         assert!(!thought_shows_acts(true));
+    }
+
+    #[test]
+    fn thought_fold_three_states_leave_the_reply() {
+        assert_eq!(ThoughtFold::default(), ThoughtFold::Expanded);
+        assert!(ThoughtFold::Expanded.paints_body());
+        assert!(ThoughtFold::Expanded.paints_row());
+        assert!(!ThoughtFold::Minimized.paints_body());
+        assert!(ThoughtFold::Minimized.paints_row());
+        assert!(!ThoughtFold::Hidden.paints_body());
+        assert!(!ThoughtFold::Hidden.paints_row());
+        assert_eq!(
+            thought_fold_controls(ThoughtFold::Expanded),
+            &["Minimize", "Hide"]
+        );
+        assert_eq!(
+            thought_fold_controls(ThoughtFold::Minimized),
+            &["Expand", "Hide"]
+        );
+        assert!(thought_fold_controls(ThoughtFold::Hidden).is_empty());
+        assert_eq!(
+            ThoughtFold::Expanded.apply(ThoughtFoldAct::Minimize),
+            ThoughtFold::Minimized
+        );
+        assert_eq!(
+            ThoughtFold::Minimized.apply(ThoughtFoldAct::Expand),
+            ThoughtFold::Expanded
+        );
+        assert_eq!(
+            ThoughtFold::Expanded.apply(ThoughtFoldAct::Hide),
+            ThoughtFold::Hidden
+        );
+        assert_eq!(
+            ThoughtFold::Minimized.apply(ThoughtFoldAct::Hide),
+            ThoughtFold::Hidden
+        );
+        assert_eq!(thought_control_act("Expand"), Some(ThoughtFoldAct::Expand));
+        assert_eq!(thought_control_act("Minimize"), Some(ThoughtFoldAct::Minimize));
+        assert_eq!(thought_control_act("Hide"), Some(ThoughtFoldAct::Hide));
+        assert_eq!(thought_control_act("Reply"), None);
+
+        let views = visible_chat(&[
+            ("user".into(), "check the session".into()),
+            (
+                "assistant".into(),
+                "THINKING:\nNeed a snapshot of the restore path.\n\nI'll look at the session.\n"
+                    .into(),
+            ),
+        ]);
+        assert!(
+            views.iter().any(|v| v.kind == ChatKind::Thought),
+            "fixture must include a thought: {views:?}"
+        );
+        let reply = views
+            .iter()
+            .find(|v| v.kind == ChatKind::Assistant)
+            .expect("reply");
+        assert!(
+            reply.body.contains("I'll look"),
+            "fixture reply: {}",
+            reply.body
+        );
+        for fold in [
+            ThoughtFold::Expanded,
+            ThoughtFold::Minimized,
+            ThoughtFold::Hidden,
+        ] {
+            let drawn: Vec<_> = views
+                .iter()
+                .filter(|v| thought_fold_draws(v.kind, fold))
+                .collect();
+            assert!(
+                drawn
+                    .iter()
+                    .any(|v| v.kind == ChatKind::Assistant && v.body == reply.body),
+                "fold {fold:?} dropped the reply: {drawn:?}"
+            );
+            assert!(
+                drawn.iter().any(|v| v.kind == ChatKind::User),
+                "fold {fold:?} dropped the user turn"
+            );
+            let thoughts: Vec<_> = drawn
+                .iter()
+                .filter(|v| v.kind == ChatKind::Thought)
+                .collect();
+            if fold.paints_row() {
+                assert_eq!(thoughts.len(), 1, "{fold:?} should keep the thought row");
+            } else {
+                assert!(thoughts.is_empty(), "{fold:?} must not draw the thought");
+            }
+        }
+    }
+
+    #[test]
+    fn thought_fold_survives_live_to_stored_handoff() {
+        let mut live = Vec::new();
+        crate::append_thought(&mut live, "Need a snapshot");
+        let slot = live[0].fold_slot;
+        crate::append_thought(&mut live, " of the restore path.");
+        assert_eq!(live[0].fold_slot, slot, "a growing live thought keeps its slot");
+        assert_ne!(slot, 0);
+
+        let msgs = vec![
+            ("user".into(), "check the session".into()),
+            (
+                "assistant".into(),
+                merge_thinking(&live[0].body, "I'll look at the session."),
+            ),
+        ];
+        let views = visible_chat(&msgs);
+        let stored = views
+            .iter()
+            .find(|v| v.kind == ChatKind::Thought)
+            .expect("stored thought");
+        let reply = views
+            .iter()
+            .find(|v| v.kind == ChatKind::Assistant)
+            .expect("reply");
+        assert_eq!(
+            thought_body_key(&live[0].body),
+            thought_body_key(&stored.body),
+            "live and stored thought must share a fold key"
+        );
+        assert_ne!(
+            thought_body_key(&stored.body),
+            thought_body_key(&reply.body),
+            "the reply must not take the thought key"
+        );
+        assert_ne!(
+            thought_body_key(&stored.body),
+            thought_body_key("a brand new thought"),
+            "a new thought must not reuse a hidden key"
+        );
+        assert_eq!(ThoughtFold::default(), ThoughtFold::Expanded);
+        assert!(thought_fold_draws(ChatKind::Assistant, ThoughtFold::Hidden));
+        assert!(!thought_fold_draws(ChatKind::Thought, ThoughtFold::Hidden));
+
+        let mut spaced = Vec::new();
+        crate::append_thought(&mut spaced, "Need  a\nsnapshot of the restore path.");
+        let spaced_msgs = vec![(
+            "assistant".into(),
+            merge_thinking(&spaced[0].body, "I'll look."),
+        )];
+        let spaced_view = visible_chat(&spaced_msgs);
+        let spaced_stored = spaced_view
+            .iter()
+            .find(|v| v.kind == ChatKind::Thought)
+            .expect("scrubbed thought");
+        assert_eq!(
+            thought_body_key(&spaced[0].body),
+            thought_body_key(&spaced_stored.body),
+            "scrubbed whitespace must not change the fold key"
+        );
     }
 
     #[test]
