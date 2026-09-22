@@ -89,7 +89,7 @@ use grokhub_core::{
     review_status_line, review_system_prompt, rewind_allowed, rewind_blocked_reason,
     rewind_copy_cmd, rewind_dest, rewind_restore_matches, rewind_snapshot_ready, roll_usage_day,
     route_schedule, save_hub_state, screen_from_extents, scrolled_off_tail, search_corpus,
-    search_corpus_tagged, search_thread_body, seed_from_bound, settings_pin_blocks_auto,
+    search_corpus_tagged, search_place, search_thread_body, seed_from_bound, settings_pin_blocks_auto,
     settle_project_path, shortcut_help, should_anticipate, should_auto_compact_now,
     should_auto_continue_goal, should_capture_before_chat, should_idle_reflect, should_keep_frame,
     should_name_thread, should_notify_cabin_update, should_paint_greeting, should_refresh_greeting,
@@ -221,6 +221,55 @@ fn settings_group_home(group: SettingsGroup) -> SettingsSec {
         SettingsGroup::General => SettingsSec::Account,
         SettingsGroup::About => SettingsSec::Update,
     }
+}
+
+fn palette_row_action(
+    cmds: &[(&str, &str)],
+    files: &[String],
+    root: &str,
+    i: usize,
+) -> Option<String> {
+    if i < cmds.len() {
+        Some(cmds[i].1.to_string())
+    } else {
+        let rel = files.get(i - cmds.len())?;
+        if rel.split('/').any(|p| p.is_empty() || p == "." || p == "..") {
+            None
+        } else {
+            let full = std::path::Path::new(root).join(rel);
+            Some(format!("file:{}", full.display()))
+        }
+    }
+}
+
+/// Path a palette file row should open. Empty or `file:`-only is not a pick.
+fn palette_file_shown(action: &str) -> Option<&str> {
+    let shown = action.strip_prefix("file:")?.trim();
+    if shown.is_empty() {
+        None
+    } else {
+        Some(shown)
+    }
+}
+
+/// Forget the last finished walk when the query or root changes. Otherwise a
+/// revert can match `palette_files_q` with an empty list and skip the walk.
+fn palette_forget_stale_walk(
+    files: &mut Vec<String>,
+    files_q: &mut String,
+    files_root: &mut String,
+    q: &str,
+    root_now: &str,
+) {
+    if files_q != q || files_root != root_now {
+        files.clear();
+        files_q.clear();
+        files_root.clear();
+    }
+}
+
+fn palette_search_is_saved(files_q: &str, files_root: &str, q: &str, root_now: &str) -> bool {
+    files_q == q && files_root == root_now
 }
 
 fn slash_pick_step(pick: usize, len: usize, dir: i8) -> usize {
@@ -1310,6 +1359,11 @@ pub struct Cabin {
     palette_q: String,
     palette_pick: usize,
     palette_focus: bool,
+    /// Relative paths from the last palette file walk. Empty is a finished result.
+    palette_files: Vec<String>,
+    palette_files_q: String,
+    palette_files_root: String,
+    palette_file_rx: Option<mpsc::Receiver<(String, String, Vec<String>)>>,
     shortcuts_open: bool,
     active_skill_follow: Option<String>,
     last_anticipate_ms: u64,
@@ -1747,6 +1801,10 @@ impl Cabin {
             palette_q: String::new(),
             palette_pick: 0,
             palette_focus: false,
+            palette_files: Vec::new(),
+            palette_files_q: String::new(),
+            palette_files_root: String::new(),
+            palette_file_rx: None,
             shortcuts_open: false,
             active_skill_follow: None,
             last_anticipate_ms: 0,
@@ -3570,6 +3628,15 @@ impl Cabin {
         let home = std::env::var("HOME").ok();
         let profile = std::env::var("USERPROFILE").ok();
         grokhub_core::cabin_work_root(cfg!(windows), home.as_deref(), profile.as_deref())
+    }
+
+    /// Bound project, or ~/GrokHub-Work when nothing is bound. Never the process cwd.
+    fn palette_search_root(&self) -> String {
+        let bound = crate::helpers::expand_home(self.cfg.project_dir.trim());
+        if !bound.trim().is_empty() {
+            return bound;
+        }
+        self.work_root()
     }
 
     fn touch_projects(&mut self) {
@@ -7204,6 +7271,10 @@ impl Cabin {
         self.palette_focus = true;
         self.palette_pick = 0;
         self.palette_q.clear();
+        self.palette_files.clear();
+        self.palette_files_q.clear();
+        self.palette_files_root.clear();
+        self.palette_file_rx = None;
         self.settings_menu_open = false;
     }
 
@@ -7247,6 +7318,14 @@ impl Cabin {
             }
             "voice" => self.listen_voice(),
             slash if slash.starts_with('/') => self.run_slash_line(slash),
+            path if path.starts_with("file:") => {
+                if let Some(shown) = palette_file_shown(path) {
+                    match crate::desktop::open_path(shown) {
+                        Ok(()) => self.status = shown.to_string(),
+                        Err(e) => self.status = e,
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -10830,6 +10909,7 @@ impl eframe::App for Cabin {
         self.poll_grok_catalog();
         self.poll_grok_ext();
         self.poll_history_search();
+        self.poll_palette_search();
         self.poll_mem_restore();
         self.poll_mem_file();
         self.poll_recall();
@@ -11175,11 +11255,16 @@ impl Cabin {
     }
 
     fn ui_palette(&mut self, ctx: &egui::Context) {
+        self.tick_palette_search(ctx);
         let mut close = false;
         let mut picked: Option<String> = None;
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             close = true;
         }
+        let cmds = filter_palette(&self.palette_q);
+        let files = self.palette_files.clone();
+        let root = self.palette_files_root.clone();
+        let n = cmds.len() + files.len();
         egui::Window::new("Palette")
             .collapsible(false)
             .resizable(false)
@@ -11195,32 +11280,34 @@ impl Cabin {
                     edit.request_focus();
                     self.palette_focus = false;
                 }
-                let hits = filter_palette(&self.palette_q);
-                self.palette_pick = slash_pick_step(self.palette_pick, hits.len(), 0);
+                self.palette_pick = slash_pick_step(self.palette_pick, n, 0);
                 if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
-                    self.palette_pick = slash_pick_step(self.palette_pick, hits.len(), 1);
+                    self.palette_pick = slash_pick_step(self.palette_pick, n, 1);
                 } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp))
                 {
-                    self.palette_pick = slash_pick_step(self.palette_pick, hits.len(), -1);
+                    self.palette_pick = slash_pick_step(self.palette_pick, n, -1);
                 } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
-                    if let Some((_, action)) = hits.get(self.palette_pick) {
-                        picked = Some((*action).to_string());
-                    }
+                    picked = palette_row_action(&cmds, &files, &root, self.palette_pick);
                 }
                 egui::ScrollArea::vertical()
                     .max_height(PALETTE_LIST_H)
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
                         ui.set_min_width(360.0);
-                        for (i, (label, action)) in hits.iter().enumerate() {
+                        for i in 0..n {
+                            let label = if i < cmds.len() {
+                                cmds[i].0.to_string()
+                            } else {
+                                files[i - cmds.len()].clone()
+                            };
                             if ui
                                 .add_sized(
                                     [ui.available_width(), 28.0],
-                                    egui::SelectableLabel::new(i == self.palette_pick, *label),
+                                    egui::SelectableLabel::new(i == self.palette_pick, label),
                                 )
                                 .clicked()
                             {
-                                picked = Some((*action).to_string());
+                                picked = palette_row_action(&cmds, &files, &root, i);
                             }
                         }
                     });
@@ -11233,6 +11320,67 @@ impl Cabin {
         }
         if close {
             self.palette_open = false;
+        }
+    }
+
+    /// File hits for the open palette. A saved empty result for this query is not walked again.
+    fn tick_palette_search(&mut self, ctx: &egui::Context) {
+        let q = self.palette_q.trim().to_string();
+        if q.is_empty() {
+            self.palette_files.clear();
+            self.palette_files_q.clear();
+            self.palette_files_root.clear();
+            return;
+        }
+        let root_now = self.palette_search_root();
+        palette_forget_stale_walk(
+            &mut self.palette_files,
+            &mut self.palette_files_q,
+            &mut self.palette_files_root,
+            &q,
+            &root_now,
+        );
+        if self.palette_file_rx.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(60));
+            return;
+        }
+        if palette_search_is_saved(&self.palette_files_q, &self.palette_files_root, &q, &root_now) {
+            return;
+        }
+        self.kick_palette_search();
+        ctx.request_repaint_after(std::time::Duration::from_millis(60));
+    }
+
+    fn kick_palette_search(&mut self) {
+        let q = self.palette_q.trim().to_string();
+        if q.is_empty() {
+            return;
+        }
+        let root = self.palette_search_root();
+        let (tx, rx) = mpsc::channel();
+        self.palette_file_rx = Some(rx);
+        std::thread::spawn(move || {
+            let hits = search_place(std::path::Path::new(&root), &q);
+            let _ = tx.send((q, root, hits));
+        });
+    }
+
+    fn poll_palette_search(&mut self) {
+        let Some(rx) = self.palette_file_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok((q, root, hits)) => {
+                if self.palette_open && q == self.palette_q.trim() {
+                    self.palette_files = hits;
+                    self.palette_files_q = q;
+                    self.palette_files_root = root;
+                }
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.palette_file_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {}
         }
     }
 
@@ -16766,6 +16914,96 @@ mod tests {
     }
 
     #[test]
+    fn palette_search_walks_nested_files_off_the_ui_thread() {
+        let src = include_str!("app.rs");
+        let tick = src
+            .split("fn tick_palette_search(")
+            .nth(1)
+            .and_then(|s| s.split("fn kick_palette_search(").next())
+            .expect("tick_palette_search");
+        assert!(
+            !tick.contains("search_place") && tick.contains("palette_search_is_saved"),
+            "a saved empty palette result must not walk again, and not on the UI thread: {tick}"
+        );
+        assert!(
+            tick.contains("palette_forget_stale_walk") && tick.contains("palette_search_is_saved"),
+            "a query change must forget the last finished key or a revert keeps the empty list: {tick}"
+        );
+        let open = src
+            .split("fn open_palette(")
+            .nth(1)
+            .and_then(|s| s.split("fn run_palette(").next())
+            .expect("open_palette");
+        assert!(
+            open.contains("palette_file_rx = None"),
+            "reopen must drop a leftover walk or it can block the next search: {open}"
+        );
+        let kick = src
+            .split("fn kick_palette_search(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_palette_search(").next())
+            .expect("kick_palette_search");
+        assert!(
+            kick.contains("thread::spawn") && kick.contains("search_place"),
+            "palette search walks the current place off the UI thread: {kick}"
+        );
+        assert!(
+            src.contains("RailIcon::Search") && src.contains("self.open_palette()"),
+            "Search stays the palette — no second search page"
+        );
+    }
+
+    #[test]
+    fn palette_query_revert_forgets_empty_saved_hits() {
+        let mut files = vec!["nested/deep/buried.txt".to_string()];
+        let mut files_q = "buried".to_string();
+        let mut files_root = "/place".to_string();
+        super::palette_forget_stale_walk(&mut files, &mut files_q, &mut files_root, "buriexx", "/place");
+        assert!(files.is_empty(), "a query change clears the last hits");
+        assert!(
+            files_q.is_empty() && files_root.is_empty(),
+            "the finished key must be forgotten or a revert matches the empty list"
+        );
+        assert!(
+            !super::palette_search_is_saved(&files_q, &files_root, "buried", "/place"),
+            "reverting to the earlier query must walk again so the file hits come back"
+        );
+        super::palette_forget_stale_walk(&mut files, &mut files_q, &mut files_root, "buried", "/place");
+        assert!(
+            files_q.is_empty() && files.is_empty(),
+            "revert still has no finished key, so tick kicks a real walk: {files_q:?} {files:?}"
+        );
+    }
+
+    #[test]
+    fn picking_a_palette_file_opens_it() {
+        let action = super::palette_row_action(
+            &[],
+            &["nested/deep/buried.txt".to_string()],
+            "/place",
+            0,
+        )
+        .expect("file row");
+        let shown = super::palette_file_shown(&action).expect("picked path");
+        assert!(
+            shown.ends_with("nested/deep/buried.txt") && !shown.contains(".."),
+            "the pick must be the nested file, not a status-only label: {shown}"
+        );
+        assert_eq!(super::palette_file_shown("file:"), None);
+        assert_eq!(super::palette_file_shown("nav:chat"), None);
+        let src = include_str!("app.rs");
+        let run = src
+            .split("fn run_palette(")
+            .nth(1)
+            .and_then(|s| s.split("fn run_slash_line(").next())
+            .expect("run_palette");
+        assert!(
+            run.contains("palette_file_shown") && run.contains("desktop::open_path"),
+            "picking a palette file must open it, not only write status: {run}"
+        );
+    }
+
+    #[test]
     fn settings_drops_cabin_tabs() {
         let src = include_str!("app.rs");
         let settings = src
@@ -22018,6 +22256,12 @@ mod tests {
         assert!(
             palette.contains("\"nav:chat\"") && palette.contains("self.new_thread(false)"),
             "palette Chat uses the same empty-draft reuse as the rail: {palette}"
+        );
+        assert!(
+            palette.contains("file:")
+                && palette.contains("palette_file_shown")
+                && palette.contains("desktop::open_path"),
+            "picking a palette file must open it, not only write status: {palette}"
         );
         let land = src
             .split("fn land_on_real_chat(")

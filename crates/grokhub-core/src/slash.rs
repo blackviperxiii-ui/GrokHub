@@ -616,7 +616,7 @@ pub fn slash_help() -> String {
         "/consult <q> — one-shot consult",
         "/usage — today's cabin buckets, tokens spent today, and the last Grok Build turn",
         "/models — Grok catalog",
-        "/palette — command palette",
+        "/palette — command palette. Search walks nested files in the bound project (or ~/GrokHub-Work), not only the top of that folder.",
         "Enter sends; Ctrl+Enter newline. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The transcript Running row has no Stop. The changing status text above the composer is gone. The context usage bar stays. A green live dot plus Thinking / Running / Waiting sits on the turn; hover shows the current action. That line does not sit above the composer.",
         "The Ask card names the command, path, or site. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out. History lists grok sessions from the chat cwd on Linux and Windows.",
         "Mode pill: Chat / Plan / Ask. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort: None / Minimal / Low / Medium / High / Extra High. A saved Max loads as Extra High. Default model is grok-4.7. Hover a composer pill for what it does. Grok Build runs the agent.",
@@ -757,6 +757,7 @@ mod tests {
         assert_eq!(parse_slash("/usage"), Some(Slash::Usage));
         assert_eq!(parse_slash("/models"), Some(Slash::Models));
         assert_eq!(parse_slash("/palette"), Some(Slash::Palette));
+        assert!(slash_help().contains("nested files"));
         assert!(slash_help().contains("/import"));
         assert!(slash_help().contains("/consult"));
         assert!(slash_help().contains("/project new"));
