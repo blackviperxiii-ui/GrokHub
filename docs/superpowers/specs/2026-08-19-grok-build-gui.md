@@ -1,6 +1,6 @@
 # GrokHub is the Grok Build GUI
 
-**Version:** 2.10.0
+**Version:** 2.10.1
 
 GrokHub is the native egui cabin. Grok Build (`grok` CLI) is the agent, the host shell, and computer-use (eyes and hands). One repo, one version — Linux tarball/AUR and Windows `GrokHub-Setup-<version>.exe` ship from the same tag.
 
