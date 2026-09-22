@@ -40,7 +40,11 @@ pub fn bubble_outer_width(available: f32, content_width: f32, pad_x: f32) -> f32
     (inner + pad_x * 2.0).min(max_w)
 }
 
-/// Right-aligned user bubbles sit after a leading gap. Keep `outer` inside the row.
+/// Right-aligned user bubbles sit after a leading gap.
+///
+/// The returned width always leaves at least `gap` in the row, including when
+/// the 84% cap is already narrower than `available - gap`. Callers place
+/// `available - width` as that leading space and must not subtract `gap` again.
 pub fn clamp_bubble_outer(available: f32, outer: f32, gap: f32) -> f32 {
     let avail = clamp_row_width(available);
     let gap = if gap.is_finite() { gap.max(0.0) } else { 0.0 };
@@ -164,5 +168,33 @@ mod tests {
             "wide row must keep the 84% cap, got {wide}"
         );
         assert!(wide + 8.0 <= 1600.0 + 0.1);
+        // 140 is the shrink case (the cap is the whole row). 280 and 800 are
+        // typical panes: the 84% cap already fits, and the leading gap is the
+        // slack, not a second subtraction.
+        for avail in [140.0_f32, 160.0, 280.0, 800.0, 1600.0] {
+            let gap = 8.0;
+            let outer = clamp_bubble_outer(avail, 10_000.0, gap);
+            let lead = (avail - outer).max(0.0);
+            let cap = bubble_max_width(avail);
+            assert!(
+                outer + gap <= avail + 0.1,
+                "width {avail}: bubble {outer} plus gap {gap} left the row"
+            );
+            assert!(
+                lead + 0.1 >= gap,
+                "width {avail}: leading gap not reserved, lead {lead}"
+            );
+            assert!(
+                (lead + outer - avail).abs() < 0.1,
+                "width {avail}: lead {lead} + outer {outer} must fill the row"
+            );
+            assert!(outer <= cap + 0.1, "width {avail}: outer {outer} over cap {cap}");
+            if cap + 0.5 < avail - gap {
+                assert!(
+                    (outer - cap).abs() < 0.1,
+                    "width {avail}: typical pane must keep the 84% cap, got {outer}"
+                );
+            }
+        }
     }
 }
