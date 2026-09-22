@@ -117,7 +117,7 @@ use grokhub_core::{
     MintRealtimeFn, PermKey, PlusAct, PlusTarget, Policy, PresenceFrame, ProjectKind,
     ProjectMenuAct, ProjectNode, PttLine, QuickChip, Recipe, ReplayOp, ReviewDigest, RewindRecord,
     ScheduleRoute, SkillMd, Slash, SlashHit, StreamTokenKind, SuggestionStore, ThreadReuseView,
-    ThreadTab, ThoughtFold, ThoughtFoldAct, TranscribeRoute, UpdatePending, UsageDay,
+    ThreadTab, ThoughtFold, TranscribeRoute, UpdatePending, UsageDay,
     VerifyResult, VoiceEvent, VoiceState,
     WallGif, BUBBLE_PAD_X, BUBBLE_PAD_Y, CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, CABIN_GITHUB_TOOLS,
     CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, CHIP_VISIBLE_MAX, CONTEXT_BUDGET_TOKENS, FOLLOWUP_MAX_STEPS,
