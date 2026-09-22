@@ -587,7 +587,7 @@ pub fn composer_perm_tip(id: &str) -> Option<(&'static str, &'static str)> {
     match id {
         "ask" => Some((
             "Ask",
-            "You approve each tool. Allow / Deny shows in chat. Safest default.",
+            "You approve each tool. Allow / Deny shows in chat. If ACP is down the turn is denied.",
         )),
         "auto" => Some((
             "Auto",
@@ -2088,7 +2088,10 @@ mod tests {
         }
         let (ask_p, ask_body) = composer_perm_tip("ask").unwrap();
         assert_eq!(ask_p, "Ask");
-        assert!(ask_body.contains("Allow / Deny"), "{ask_body}");
+        assert!(
+            ask_body.contains("Allow / Deny") && ask_body.contains("denied"),
+            "{ask_body}"
+        );
         let (auto_t, auto) = composer_perm_tip("auto").unwrap();
         assert_eq!(auto_t, "Auto");
         assert!(auto.contains("Safe tools") && auto.contains("/auto"), "{auto}");
