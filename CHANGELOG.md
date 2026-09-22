@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Cabin UI pass: empty-home primary chip (fill + stroke + weight), session pill Ask → Look, Always warning stroke, voice strip Listening / Speaking / Ready with ~1s Ready hide.
 - Night, loops, heartbeat anticipate, and phone `/v1/task` inherit the composer PermissionMode pill. Ask stays fail-closed (no silent `--always-approve`). Auto is `--permission-mode auto`. Always is `--always-approve`.
 
 ## 2.10.0 — 2026-09-22

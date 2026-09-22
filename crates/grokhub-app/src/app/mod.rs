@@ -108,7 +108,8 @@ use grokhub_core::{
     upsert_assistant_turn, upsert_bound, usage_line, user_asked_to_schedule, user_pref_facts,
     verify_ok_after_user_turn, views_up_to_last_user, visible_chat_refs,
     visible_goal_step_on_continue, visible_tree, visible_turn_count, visible_turn_count_from,
-    voice_log_role, voice_mode_active, voice_mode_label, voice_stream_token,
+    voice_log_role, voice_mode_active, voice_mode_label, voice_state_after_ptt_stt,
+    voice_stream_token, voice_strip_visible,
     voice_transcript_sends_chat, voice_tts_script, wall_can_paint, wall_evict,
     wall_gif_from_generation, worker_gone_status, yesterday_ms, AttachKind, Automation, BoardCard,
     BoardStatus, ChatKind, ChatRunPhase, ChatSendKind, ChatView, ChipInput, ChipKind, ChipMemory,
@@ -451,6 +452,7 @@ pub struct Cabin {
     presence_ring: Vec<(u64, String)>,
     voice_sock: Option<crate::voice_ws::VoiceSock>,
     voice_state: VoiceState,
+    voice_ready_at: Option<Instant>,
     voice_hold_rx: Option<mpsc::Receiver<()>>,
     cmd_line: String,
     cmd_hist: Vec<String>,
@@ -856,6 +858,7 @@ impl Cabin {
             presence_ring: vec![],
             voice_sock: None,
             voice_state: VoiceState::Idle,
+            voice_ready_at: None,
             voice_hold_rx: None,
             cmd_line: String::new(),
             cmd_hist: vec![],
@@ -2119,7 +2122,7 @@ impl Cabin {
 
     fn set_permission_mode(&mut self, mode: PermissionMode) {
         self.permission_mode = mode;
-        self.cfg.permission_mode = mode.as_str().to_string();
+        self.cfg.permission_mode = crate::config::persistable_permission_mode(mode.as_str());
         self.persist_cfg();
     }
 

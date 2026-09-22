@@ -1867,7 +1867,6 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         ));
     }
     chips.extend(stage_chips(stage, input.mode));
-    chips.extend(default_chips(input.mode));
     if ctx.imagine {
         chips.push(chip(
             "ctx-imagine",
@@ -1888,7 +1887,6 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
             "Thread topic",
         ));
     }
-    chips.extend(default_chips(input.mode));
 
     for c in input.llm_chips {
         if !is_plain_text(&c.value) || !is_plain_text(&c.label) {
@@ -1926,6 +1924,11 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
     }
     let draft = input.draft.trim().to_ascii_lowercase();
     chips.retain(|c| c.value.trim().to_ascii_lowercase() != draft);
+
+    // No filler row when ranking (or dismiss) yields none.
+    if chips.is_empty() && dismissed.is_empty() {
+        chips.extend(default_chips(input.mode));
+    }
 
     apply_intent_boost(&mut chips, &intents);
     apply_home_signal_boost(&mut chips, &input);
@@ -2637,27 +2640,30 @@ mod tests {
     }
 
     #[test]
-    fn always_five_visible_chips() {
+    fn visible_chips_cap_five_and_skip_filler() {
         let mem = ChipMemory::default();
         let empty = build_quick_chips(input(&[], "", &mem, &[], &[]));
-        assert_eq!(empty.len(), CHIP_VISIBLE_MAX, "empty {:?}", labels(&empty));
+        assert!(!empty.is_empty(), "empty {:?}", labels(&empty));
+        assert!(empty.len() <= CHIP_VISIBLE_MAX, "empty {:?}", labels(&empty));
+        assert!(empty[0].primary);
+        assert_eq!(empty.iter().filter(|c| c.primary).count(), 1);
 
         let chat = [
             msg("user", "hi"),
             msg("assistant", "Hello — what should we work on in the cabin tonight?"),
         ];
         let mid = build_quick_chips(input(&chat, "", &mem, &[], &[]));
-        assert_eq!(mid.len(), CHIP_VISIBLE_MAX, "mid {:?}", labels(&mid));
+        assert!(!mid.is_empty(), "mid {:?}", labels(&mid));
+        assert!(mid.len() <= CHIP_VISIBLE_MAX, "mid {:?}", labels(&mid));
 
         let dismissed: Vec<String> = empty
             .iter()
             .flat_map(|c| [c.id.clone(), c.value.clone()])
             .collect();
         let after = build_quick_chips(input(&[], "", &mem, &dismissed, &[]));
-        assert_eq!(
-            after.len(),
-            CHIP_VISIBLE_MAX,
-            "after dismissing the first row {:?}",
+        assert!(
+            after.is_empty(),
+            "no filler chips if ranking yields none: {:?}",
             labels(&after)
         );
     }
