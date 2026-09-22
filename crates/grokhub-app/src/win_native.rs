@@ -19,9 +19,11 @@ use windows_sys::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromWindow, MONITOR_DEFAULTTONEAREST, MONITORINFO,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
-    SetForegroundWindow, SetWindowPos, ShowWindow, SystemParametersInfoW, HWND_TOP, SWP_SHOWWINDOW,
-    SW_HIDE, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL, SPI_GETWORKAREA,
+    EnumWindows, GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
+    IsIconic, IsWindowVisible, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    SystemParametersInfoW, GWL_EXSTYLE, HWND_TOP, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL,
+    SPI_GETWORKAREA,
 };
 
 const APP_USER_MODEL_ID: &str = "GrokHub.Cabin";
@@ -223,12 +225,48 @@ fn set_cloaked(hwnd: HWND, cloak: bool) {
     }
 }
 
+fn apply_exstyle(hwnd: HWND, next: isize) {
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        if ex == next {
+            return;
+        }
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next);
+        let _ = SetWindowPos(
+            hwnd,
+            ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
+    }
+}
+
+fn unmap_from_taskbar(hwnd: HWND) {
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        apply_exstyle(hwnd, crate::tray::windows_unmap_exstyle(ex) as isize);
+    }
+}
+
+fn map_to_taskbar(hwnd: HWND) {
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        apply_exstyle(hwnd, crate::tray::windows_map_exstyle(ex) as isize);
+    }
+}
+
 /// Hide without freezing winit: DWM cloak keeps the message pump alive.
 /// `SW_HIDE` stops egui timers so cabin.raise / tray Show never run.
+/// TOOLWINDOW / drop APPWINDOW removes the taskbar stub so × is unmap-to-tray,
+/// not minimize.
 pub fn hide_cabin() -> bool {
     let hwnd = cabin_hwnd();
     let ok = if let Some(hwnd) = hwnd {
         set_cloaked(hwnd, true);
+        unmap_from_taskbar(hwnd);
         true
     } else {
         false
@@ -319,6 +357,7 @@ pub fn show_cabin(x: i32, y: i32, w: i32, h: i32, maximized: bool) -> bool {
         return false;
     };
     set_cloaked(hwnd, false);
+    map_to_taskbar(hwnd);
     unsafe {
         let _ = ShowWindow(hwnd, SW_SHOW);
         if maximized {
@@ -573,5 +612,32 @@ mod tests {
     #[test]
     fn app_user_model_id_is_stable() {
         assert_eq!(APP_USER_MODEL_ID, "GrokHub.Cabin");
+    }
+
+    #[test]
+    fn hide_cabin_unmaps_from_the_taskbar() {
+        let src = include_str!("win_native.rs");
+        let hide = src
+            .split("pub fn hide_cabin(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn work_area(").next())
+            .expect("hide_cabin");
+        assert!(
+            hide.contains("unmap_from_taskbar") && hide.contains("set_cloaked"),
+            "× must cloak and leave the taskbar, not only cloak: {hide}"
+        );
+        assert!(
+            !hide.contains("SW_HIDE"),
+            "SW_HIDE on the titled cabin freezes tray Show / Quit: {hide}"
+        );
+        let show = src
+            .split("pub fn show_cabin(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn repair_stub_if_needed(").next())
+            .expect("show_cabin");
+        assert!(
+            show.contains("map_to_taskbar") && show.contains("set_cloaked"),
+            "Show cabin must uncloak and restore the taskbar button: {show}"
+        );
     }
 }
