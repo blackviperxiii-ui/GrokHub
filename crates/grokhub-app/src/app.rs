@@ -72,7 +72,7 @@ use grokhub_core::{
     match_skill, mode_from_chip_value, model_for_mode, nav_from_chip_value, chat_attach_status, imagine_ref_status, next_chat_image, next_goal_prompt,
     is_workload_user, merge_thinking_capped, prefer_complete_reply, quote_for_reply, stretch_saved_skill, strip_thinking,
     SKILL_SAVED_MARK, SKILL_SAVED_NOTE,
-    refresh_last_stretch, thought_control_act, thought_fold_controls, thought_fold_draws, thought_shows_acts, thought_shows_label, visible_chat_refs, visible_turn_count, visible_turn_count_from,
+    refresh_last_stretch, thought_body_key, thought_control_act, thought_fold_controls, thought_fold_draws, thought_shows_acts, thought_shows_label, visible_chat_refs, visible_turn_count, visible_turn_count_from,
     ThoughtFold, THOUGHT_ROW_LABEL,
     cluster_gap, scrolled_off_tail, ChatKind, ChatView, CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK,
     apply_job_error, chat_run_action, chat_run_hint, chat_run_label, chat_run_phase,
@@ -855,8 +855,10 @@ struct ChatBlockPaint {
     thought_fold: ThoughtFold,
 }
 
-fn thought_fold_id(thread_id: &str, live: bool, index: usize) -> egui::Id {
-    egui::Id::new(("cabin-thought-fold", thread_id, live, index))
+/// `kind` is `"slot"` while the thought is a live block, `"body"` once it is stored.
+/// The body key is [`thought_body_key`], so Hide and Minimize survive that handoff.
+fn thought_fold_id(thread_id: &str, kind: &str, key: u64) -> egui::Id {
+    egui::Id::new(("cabin-thought-fold", thread_id, kind, key))
 }
 
 fn read_thought_fold(ctx: &egui::Context, id: egui::Id) -> ThoughtFold {
@@ -11775,35 +11777,52 @@ impl Cabin {
                                 .unwrap_or_default();
                             let mut next_heights = Vec::with_capacity(shown.len());
                             for (i, block) in shown.iter().enumerate() {
-                                let prev_thought = i
-                                    .checked_sub(1)
-                                    .and_then(|p| shown.get(p))
-                                    .is_some_and(|v| v.kind == ChatKind::Thought);
-                                let next_thought = shown
-                                    .get(i + 1)
-                                    .is_some_and(|v| v.kind == ChatKind::Thought);
-                                let prev_expanded = prev_thought
-                                    && read_thought_fold(
+                                let prev_thought = i.checked_sub(1).and_then(|p| shown.get(p)).filter(|v| {
+                                    v.kind == ChatKind::Thought
+                                });
+                                let next_thought =
+                                    shown.get(i + 1).filter(|v| v.kind == ChatKind::Thought);
+                                let prev_expanded = prev_thought.is_some_and(|v| {
+                                    read_thought_fold(
                                         ui.ctx(),
-                                        thought_fold_id(&thread_id, false, i - 1),
+                                        thought_fold_id(
+                                            &thread_id,
+                                            "body",
+                                            thought_body_key(&v.body),
+                                        ),
                                     )
-                                    .paints_body();
-                                let next_expanded = next_thought
-                                    && read_thought_fold(
+                                    .paints_body()
+                                });
+                                let next_expanded = next_thought.is_some_and(|v| {
+                                    read_thought_fold(
                                         ui.ctx(),
-                                        thought_fold_id(&thread_id, false, i + 1),
+                                        thought_fold_id(
+                                            &thread_id,
+                                            "body",
+                                            thought_body_key(&v.body),
+                                        ),
                                     )
-                                    .paints_body();
-                                let next_drawn_thought = next_thought
-                                    && read_thought_fold(
+                                    .paints_body()
+                                });
+                                let next_drawn_thought = next_thought.is_some_and(|v| {
+                                    read_thought_fold(
                                         ui.ctx(),
-                                        thought_fold_id(&thread_id, false, i + 1),
+                                        thought_fold_id(
+                                            &thread_id,
+                                            "body",
+                                            thought_body_key(&v.body),
+                                        ),
                                     )
-                                    .paints_row();
+                                    .paints_row()
+                                });
                                 let fold = if block.kind == ChatKind::Thought {
                                     read_thought_fold(
                                         ui.ctx(),
-                                        thought_fold_id(&thread_id, false, i),
+                                        thought_fold_id(
+                                            &thread_id,
+                                            "body",
+                                            thought_body_key(&block.body),
+                                        ),
                                     )
                                 } else {
                                     ThoughtFold::Expanded
@@ -11832,7 +11851,11 @@ impl Cabin {
                                 if block.kind == ChatKind::Thought {
                                     write_thought_fold(
                                         ui.ctx(),
-                                        thought_fold_id(&thread_id, false, i),
+                                        thought_fold_id(
+                                            &thread_id,
+                                            "body",
+                                            thought_body_key(&block.body),
+                                        ),
                                         painted.thought_fold,
                                     );
                                 }
@@ -11954,14 +11977,23 @@ impl Cabin {
                 .get(i + 1)
                 .is_some_and(|v| v.kind == LiveKind::Thought);
             let prev_expanded = prev_thought
-                && read_thought_fold(ui.ctx(), thought_fold_id(&thread_id, true, i - 1))
-                    .paints_body();
+                && read_thought_fold(
+                    ui.ctx(),
+                    thought_fold_id(&thread_id, "slot", self.live_blocks[i - 1].fold_slot),
+                )
+                .paints_body();
             let next_expanded = next_thought
-                && read_thought_fold(ui.ctx(), thought_fold_id(&thread_id, true, i + 1))
-                    .paints_body();
+                && read_thought_fold(
+                    ui.ctx(),
+                    thought_fold_id(&thread_id, "slot", self.live_blocks[i + 1].fold_slot),
+                )
+                .paints_body();
             let next_drawn_thought = next_thought
-                && read_thought_fold(ui.ctx(), thought_fold_id(&thread_id, true, i + 1))
-                    .paints_row();
+                && read_thought_fold(
+                    ui.ctx(),
+                    thought_fold_id(&thread_id, "slot", self.live_blocks[i + 1].fold_slot),
+                )
+                .paints_row();
             let mut drawn = true;
             match b.kind {
                 LiveKind::Thought => {
@@ -11970,7 +12002,8 @@ impl Cabin {
                         title: "Thought".into(),
                         body: b.body.clone(),
                     };
-                    let fold = read_thought_fold(ui.ctx(), thought_fold_id(&thread_id, true, i));
+                    let slot_id = thought_fold_id(&thread_id, "slot", b.fold_slot);
+                    let fold = read_thought_fold(ui.ctx(), slot_id);
                     let painted = paint_chat_block(
                         ui,
                         &view,
@@ -11978,9 +12011,11 @@ impl Cabin {
                         thought_shows_acts(next_expanded),
                         fold,
                     );
+                    write_thought_fold(ui.ctx(), slot_id, painted.thought_fold);
+                    // Same text key the stored transcript reads after live_blocks is cleared.
                     write_thought_fold(
                         ui.ctx(),
-                        thought_fold_id(&thread_id, true, i),
+                        thought_fold_id(&thread_id, "body", thought_body_key(&b.body)),
                         painted.thought_fold,
                     );
                     drawn = painted.drawn;
@@ -15552,6 +15587,78 @@ mod tests {
                 );
             });
         });
+    }
+
+    #[test]
+    fn thought_fold_handoff_keeps_minimize_on_the_stored_body() {
+        let ctx = egui::Context::default();
+        let mut live = Vec::new();
+        grokhub_core::append_thought(&mut live, "Need a snapshot");
+        let slot = live[0].fold_slot;
+        grokhub_core::append_thought(&mut live, " of the restore path.");
+        assert_eq!(slot, live[0].fold_slot);
+        let thread = "thread-a";
+        super::write_thought_fold(
+            &ctx,
+            super::thought_fold_id(thread, "slot", live[0].fold_slot),
+            grokhub_core::ThoughtFold::Minimized,
+        );
+        super::write_thought_fold(
+            &ctx,
+            super::thought_fold_id(
+                thread,
+                "body",
+                grokhub_core::thought_body_key(&live[0].body),
+            ),
+            grokhub_core::ThoughtFold::Minimized,
+        );
+        let views = grokhub_core::visible_chat(&[
+            ("user".into(), "check the session".into()),
+            (
+                "assistant".into(),
+                grokhub_core::merge_thinking(&live[0].body, "I'll look at the session."),
+            ),
+        ]);
+        let stored = views
+            .iter()
+            .find(|v| v.kind == grokhub_core::ChatKind::Thought)
+            .expect("stored thought");
+        let got = super::read_thought_fold(
+            &ctx,
+            super::thought_fold_id(
+                thread,
+                "body",
+                grokhub_core::thought_body_key(&stored.body),
+            ),
+        );
+        assert_eq!(got, grokhub_core::ThoughtFold::Minimized);
+        let fresh = super::read_thought_fold(
+            &ctx,
+            super::thought_fold_id(
+                thread,
+                "body",
+                grokhub_core::thought_body_key("a brand new thought"),
+            ),
+        );
+        assert_eq!(fresh, grokhub_core::ThoughtFold::Expanded);
+        let reply = views
+            .iter()
+            .find(|v| v.kind == grokhub_core::ChatKind::Assistant)
+            .expect("reply");
+        assert!(grokhub_core::thought_fold_draws(
+            reply.kind,
+            grokhub_core::ThoughtFold::Minimized
+        ));
+        let src = include_str!("app.rs");
+        let live = src
+            .split("fn paint_live_blocks(")
+            .nth(1)
+            .and_then(|s| s.split("fn paint_tool_cards(").next())
+            .expect("paint_live_blocks");
+        assert!(
+            live.contains("fold_slot") && live.contains("thought_body_key"),
+            "live folds must be copied onto the stored body key: {live}"
+        );
     }
 
     #[test]
