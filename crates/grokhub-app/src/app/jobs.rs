@@ -183,8 +183,12 @@ impl Cabin {
             }
             Ok(JobOut::Voice(t)) => {
                 self.running = false;
-                match ptt_after_stt(self.voice_is_on(), !is_voice_error(&t)) {
+                let stt_ok = !is_voice_error(&t);
+                let voice_on = self.voice_is_on();
+                self.voice_state = voice_state_after_ptt_stt(voice_on, stt_ok);
+                match ptt_after_stt(voice_on, stt_ok) {
                     PttLine::Leave => {
+                        self.voice_ready_at = None;
                         self.status = if is_voice_error(&t) {
                             t
                         } else {
@@ -192,13 +196,17 @@ impl Cabin {
                         };
                     }
                     PttLine::Listen => {
+                        self.voice_ready_at = None;
                         self.status = t;
                         self.maybe_continue_ptt();
                     }
                     PttLine::Hold => {
+                        self.voice_orb = "idle".into();
+                        self.voice_ready_at = Some(Instant::now());
                         self.status = t;
                     }
                     PttLine::Chat => {
+                        self.voice_ready_at = None;
                         self.status = "Hey Grok".into();
                         self.speak_next = true;
                         self.send_chat(t);

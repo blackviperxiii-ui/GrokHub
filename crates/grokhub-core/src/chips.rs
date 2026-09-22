@@ -1888,7 +1888,6 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
             "Thread topic",
         ));
     }
-    chips.extend(default_chips(input.mode));
 
     for c in input.llm_chips {
         if !is_plain_text(&c.value) || !is_plain_text(&c.label) {
@@ -2637,28 +2636,43 @@ mod tests {
     }
 
     #[test]
-    fn always_five_visible_chips() {
+    fn visible_chips_cap_five_and_skip_filler() {
         let mem = ChipMemory::default();
         let empty = build_quick_chips(input(&[], "", &mem, &[], &[]));
-        assert_eq!(empty.len(), CHIP_VISIBLE_MAX, "empty {:?}", labels(&empty));
+        assert!(!empty.is_empty(), "empty {:?}", labels(&empty));
+        assert!(empty.len() <= CHIP_VISIBLE_MAX, "empty {:?}", labels(&empty));
+        assert!(empty[0].primary);
+        assert_eq!(empty.iter().filter(|c| c.primary).count(), 1);
 
         let chat = [
             msg("user", "hi"),
             msg("assistant", "Hello — what should we work on in the cabin tonight?"),
         ];
         let mid = build_quick_chips(input(&chat, "", &mem, &[], &[]));
-        assert_eq!(mid.len(), CHIP_VISIBLE_MAX, "mid {:?}", labels(&mid));
+        assert!(!mid.is_empty(), "mid {:?}", labels(&mid));
+        assert!(mid.len() <= CHIP_VISIBLE_MAX, "mid {:?}", labels(&mid));
 
-        let dismissed: Vec<String> = empty
+        let mut dismissed: Vec<String> = empty
             .iter()
             .flat_map(|c| [c.id.clone(), c.value.clone()])
             .collect();
         let after = build_quick_chips(input(&[], "", &mem, &dismissed, &[]));
-        assert_eq!(
-            after.len(),
-            CHIP_VISIBLE_MAX,
-            "after dismissing the first row {:?}",
+        assert!(
+            after.len() <= CHIP_VISIBLE_MAX,
+            "cap 5 after dismiss: {:?}",
             labels(&after)
+        );
+        let mut rest = after;
+        let mut guard = 0;
+        while !rest.is_empty() && guard < 8 {
+            dismissed.extend(rest.iter().flat_map(|c| [c.id.clone(), c.value.clone()]));
+            rest = build_quick_chips(input(&[], "", &mem, &dismissed, &[]));
+            guard += 1;
+        }
+        assert!(
+            rest.is_empty(),
+            "no filler chips if ranking yields none: {:?}",
+            labels(&rest)
         );
     }
 

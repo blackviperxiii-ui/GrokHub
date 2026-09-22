@@ -2,7 +2,13 @@
 
 ## Unreleased
 
-- Night, loops, heartbeat anticipate, and phone `/v1/task` inherit the composer PermissionMode pill. Ask stays fail-closed (no silent `--always-approve`). Auto is `--permission-mode auto`. Always is `--always-approve`.
+## 2.10.1 — 2026-09-22
+
+Cabin UI pass on Linux and Windows. Session pill Ask is now Look. Permission Ask / Auto / Always keep their names. Always uses an amber danger stroke and does not persist. Voice strip is Listening / Speaking / Ready and hides about a second after Ready. Empty-home chips keep one primary (fill + stroke + weight). When ranking yields none, one muted **Nothing queued** placeholder stays — no filler action chips.
+
+- Linux: `grokhub-linux-v2.10.1.tar.gz` and AUR `pkgver=2.10.1`.
+- Windows: `GrokHub-Setup-2.10.1.exe` and `grokhub-windows-v2.10.1.zip`.
+- Cursor **#60**: chips, Look, Always tone, voice Ready. VERSION 2.10.1. Not tagged until MERGE GREEN.
 
 ## 2.10.0 — 2026-09-22
 

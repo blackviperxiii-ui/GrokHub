@@ -321,6 +321,16 @@ fn default_permission_mode() -> String {
     "ask".into()
 }
 
+/// Always is session-only. Disk and relaunch keep Ask or Auto, never Always.
+pub fn persistable_permission_mode(raw: &str) -> String {
+    match grokhub_acp::PermissionMode::parse(raw) {
+        Some(grokhub_acp::PermissionMode::Auto) => {
+            grokhub_acp::PermissionMode::Auto.as_str().to_string()
+        }
+        _ => grokhub_acp::PermissionMode::Ask.as_str().to_string(),
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -445,12 +455,7 @@ pub fn load() -> AppConfig {
         .to_string();
     // Always-approve is a per-run choice, same as the yolo reset above: a cabin must not
     // boot into blanket approval because one turn needed it last week.
-    cfg.permission_mode = match grokhub_acp::PermissionMode::parse(&cfg.permission_mode) {
-        Some(grokhub_acp::PermissionMode::Auto) => grokhub_acp::PermissionMode::Auto,
-        _ => grokhub_acp::PermissionMode::Ask,
-    }
-    .as_str()
-    .to_string();
+    cfg.permission_mode = persistable_permission_mode(&cfg.permission_mode);
     cfg
 }
 
@@ -726,6 +731,13 @@ mod tests {
         assert_eq!(loaded.permission_mode, "auto");
         cfg.permission_mode = "always-approve".into();
         save(&cfg).expect("save");
+        assert_eq!(
+            persistable_permission_mode("always-approve"),
+            "ask",
+            "Always must not persist"
+        );
+        assert_eq!(persistable_permission_mode("auto"), "auto");
+        assert_eq!(persistable_permission_mode("ask"), "ask");
         assert_eq!(
             load().permission_mode,
             "ask",
