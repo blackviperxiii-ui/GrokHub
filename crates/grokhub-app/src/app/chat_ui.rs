@@ -763,7 +763,7 @@ impl Cabin {
     }
 
     /// Sending from the composer follows your own message down. A night job or a phone
-    /// task calls `send_chat` directly, so it cannot yank the pane out of your reading.
+    /// task calls `send_scheduled_chat` directly, so it cannot yank the pane out of your reading.
     pub(super) fn send_from_composer(&mut self, text: String) {
         self.pin_chat_tail();
         self.send_chat(text);

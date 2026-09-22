@@ -457,7 +457,7 @@ impl Cabin {
             return;
         }
         self.land_on_real_chat();
-        self.send_chat(a.instructions);
+        self.send_scheduled_chat(a.instructions);
     }
 
     pub(super) fn tick_loops(&mut self) -> bool {
@@ -533,6 +533,7 @@ impl Cabin {
         let cwd = self.grok_cwd();
         let prompt = row.prompt.clone();
         let resume = row.session_id.clone().filter(|s| !s.is_empty());
+        let perm_args = self.permission_mode.scheduled_args();
         let (tx, rx) = mpsc::channel();
         self.grok_loop_rx = Some((row.id.clone(), rx));
         let title: String = row.prompt.chars().take(48).collect();
@@ -547,8 +548,8 @@ impl Cabin {
                 cwd.display().to_string(),
                 "--output-format".into(),
                 "json".into(),
-                "--always-approve".into(),
             ];
+            args.extend(perm_args);
             if let Some(id) = resume {
                 args.push("--resume".into());
                 args.push(id);

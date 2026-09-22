@@ -1716,6 +1716,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             hide.contains("persist_if_dirty") && !hide.contains("self.persist()"),
             "hide to tray must not clone every thread when idle persist already wrote: {hide}"
         );
+        assert!(
+            hide.contains("hide_cabin"),
+            "Windows × must cloak and leave the taskbar, not minimize: {hide}"
+        );
         let tick = src
             .split("hidden_window_tick(")
             .nth(1)
@@ -1728,6 +1732,15 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             src.contains("hidden_raise_ready") && src.contains("reapply_unmap"),
             "× must not flash back from a FocusLost/FocusGained bounce or Visible(false) spam"
+        );
+        let stay = src
+            .split("HiddenTick::StayHidden =>")
+            .nth(1)
+            .and_then(|s| s.split("ctx.request_repaint_after").next())
+            .expect("StayHidden");
+        assert!(
+            stay.contains("hide_cabin"),
+            "leftover focus after × must re-unmap the Windows taskbar stub: {stay}"
         );
         let teach = fn_src(&src, "teach_watched_routine");
         let finish = fn_src(&src, "finish_acp_turn");
@@ -1776,9 +1789,9 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("fn start_overlay_update").next())
             .expect("restart_after_update");
         let spawn_at = restart.find("restart_system").expect("restart_system");
-        let drop_at = restart.find("drop_off_thread");
+        let drop_at = restart.find("drop_tray");
         assert!(
-            drop_at.is_none_or(|d| d > spawn_at),
+            drop_at.is_some_and(|d| d > spawn_at),
             "dropping the tray before spawn leaves a headless cabin when restart fails: {restart}"
         );
     }
@@ -1956,6 +1969,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             ensure.contains("if grok_login.is_some()") && ensure.contains("(grok_login, None)"),
             "grok login must not also inject a console XAI_API_KEY: {ensure}"
+        );
+        assert!(
+            ensure.contains("find_grok") && ensure.contains("Grok Build CLI is not on PATH"),
+            "Ask ACP handshake must fail closed without grok: {ensure}"
         );
         let ensure_spawn = ensure
             .find("thread::spawn")
@@ -2529,6 +2546,19 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             spawn_drop.contains("apply_job_fail") && spawn_drop.contains("self.persist()"),
             "a dropped handshake must persist the fail turn or persist_bg waits 2s: {spawn_drop}"
         );
+        assert!(
+            spawn_drop.contains("fail_ask_without_acp") && spawn_drop.contains("uses_acp"),
+            "Ask handshake death must deny the turn, not fall through to grok -p: {spawn_drop}"
+        );
+        let spawn_err = spawn_poll
+            .split("Ok(Err(e))")
+            .nth(1)
+            .and_then(|s| s.split("TryRecvError::Empty").next())
+            .expect("spawn err");
+        assert!(
+            spawn_err.contains("fail_ask_without_acp") && spawn_err.contains("uses_acp"),
+            "Ask ACP spawn fail must deny, not start grok -p: {spawn_err}"
+        );
         let show = src
             .split("fn poll_session_show(")
             .nth(1)
@@ -2968,12 +2998,15 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("fn upsert_stream_assistant").next())
             .expect("kick_model");
         assert!(
-            kick.contains("spawn_grok_p_stream") && !kick.contains("prompt_with_image"),
-            "kick_model must use grok -p, not agent stdio (exit 143): {kick}"
+            kick.contains("uses_acp")
+                && kick.contains("ensure_acp")
+                && kick.contains("prompt_with_image")
+                && kick.contains("fail_ask_without_acp"),
+            "Ask must start ACP so Allow / Deny can show: {kick}"
         );
         assert!(
             kick.contains("spawn_grok_p_stream") && kick.contains("grok_p_rx"),
-            "kick_model must keep grok -p as fallback: {kick}"
+            "Auto/Always stay on grok -p: {kick}"
         );
         assert!(
             kick.contains("parse_reasoning_effort") && kick.contains("cfg.reasoning_effort"),
@@ -2996,6 +3029,73 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && kick.contains("kick_cap_rx")
                 && kick.contains("grok_p_rx"),
             "kick_model must wait for the off-thread frame and grok -p instead of blocking: {kick}"
+        );
+        let ask_kick = fn_src(&src, "kick_model");
+        let ask_gate = ask_kick
+            .find("uses_acp")
+            .expect("Ask permission must choose ACP");
+        let grok_p = ask_kick
+            .find("spawn_grok_p_stream")
+            .expect("Auto/Always grok -p");
+        assert!(
+            ask_gate < grok_p,
+            "Ask must decide before headless grok -p: {ask_kick}"
+        );
+        let ask_arm = &ask_kick[ask_gate..grok_p];
+        assert!(
+            ask_arm.contains("ensure_acp")
+                && ask_arm.contains("prompt_with_image")
+                && ask_arm.contains("fail_ask_without_acp")
+                && ask_arm.contains("return")
+                && !ask_arm.contains("spawn_grok_p_stream"),
+            "Ask + ACP down must deny and must not sandbox-off grok -p: {ask_arm}"
+        );
+        assert!(
+            ask_kick.contains("scheduled_flags")
+                && ask_kick.contains("composer_headless_flags")
+                && ask_kick[grok_p..].contains("spawn_grok_p_stream"),
+            "Auto/Always stay on grok -p via inherited PermissionMode flags: {ask_kick}"
+        );
+    }
+
+    #[test]
+    fn scheduled_night_loop_and_phone_inherit_permission_mode() {
+        let src = cabin_src();
+        let fire_loop = fn_src(&src, "fire_loop");
+        assert!(
+            fire_loop.contains("scheduled_args") && fire_loop.contains("permission_mode"),
+            "loop spawn must read the composer PermissionMode pill: {fire_loop}"
+        );
+        assert!(
+            !fire_loop.contains("\"--always-approve\""),
+            "Ask must not silent always-approve a loop: {fire_loop}"
+        );
+        let fire_night = fn_src(&src, "fire_night");
+        assert!(
+            fire_night.contains("send_scheduled_chat"),
+            "night chat must inherit PermissionMode, not a separate yolo path: {fire_night}"
+        );
+        let inbox = fn_src(&src, "drain_inbox");
+        assert!(
+            inbox.contains("send_scheduled_chat"),
+            "phone /v1/task must inherit PermissionMode: {inbox}"
+        );
+        let anticipate = fn_src(&src, "tick_anticipate");
+        assert!(
+            anticipate.contains("send_scheduled_chat"),
+            "heartbeat anticipate must inherit PermissionMode: {anticipate}"
+        );
+        let kick = fn_src(&src, "kick_model");
+        assert!(
+            kick.contains("scheduled_perm")
+                && kick.contains("scheduled_flags")
+                && kick.contains("composer_headless_flags"),
+            "kick_model must map Auto/Always and fail-close scheduled Ask: {kick}"
+        );
+        let scheduled = fn_src(&src, "send_scheduled_chat");
+        assert!(
+            scheduled.contains("scheduled_perm = true") && scheduled.contains("send_chat"),
+            "scheduled enqueue must reuse send_chat after marking the pill inherit: {scheduled}"
         );
     }
 
@@ -6107,8 +6207,11 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             fire.contains("grok_user_stdout_timeout")
                 && fire.contains("-p")
                 && fire.contains("--verbatim")
-                && fire.contains("thread::spawn"),
-            "loop Run must fire grok -p --verbatim against ~/.grok off the UI thread: {fire}"
+                && fire.contains("thread::spawn")
+                && fire.contains("scheduled_args")
+                && fire.contains("permission_mode")
+                && !fire.contains("\"--always-approve\""),
+            "loop Run must inherit the PermissionMode pill — no silent always-approve: {fire}"
         );
         let skills = src
             .split("fn ui_skills(")

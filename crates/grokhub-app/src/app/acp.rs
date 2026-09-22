@@ -1,6 +1,7 @@
 //! Grok Build ACP session spawn, poll, and `grok -p` stream.
 
 use super::*;
+use grokhub_acp::ask_denied_without_acp;
 
 
 pub(super) enum GrokSessMsg {
@@ -63,27 +64,45 @@ impl Cabin {
                 self.persist();
             }
             Ok(Err(e)) => {
-                self.running = false;
-                self.pending_kick = None;
-                self.status = self.apply_job_fail(&e);
-                self.chat_job_thread = None;
-                self.persist();
+                if self.permission_mode.uses_acp() {
+                    self.fail_ask_without_acp(&e);
+                } else {
+                    self.running = false;
+                    self.pending_kick = None;
+                    self.status = self.apply_job_fail(&e);
+                    self.chat_job_thread = None;
+                    self.persist();
+                }
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.acp_spawn_rx = Some(rx);
             }
             Err(mpsc::TryRecvError::Disconnected) => {
-                self.running = false;
-                self.pending_kick = None;
-                self.status = self.apply_job_fail("Grok Build session missing");
-                self.chat_job_thread = None;
-                self.persist();
+                if self.permission_mode.uses_acp() {
+                    self.fail_ask_without_acp("Grok Build session missing");
+                } else {
+                    self.running = false;
+                    self.pending_kick = None;
+                    self.status = self.apply_job_fail("Grok Build session missing");
+                    self.chat_job_thread = None;
+                    self.persist();
+                }
             }
         }
     }
 
-    #[allow(dead_code)]
+    pub(super) fn fail_ask_without_acp(&mut self, detail: &str) {
+        self.running = false;
+        self.pending_kick = None;
+        self.status = self.apply_job_fail(&ask_denied_without_acp(detail));
+        self.chat_job_thread = None;
+        self.persist();
+    }
+
     pub(super) fn ensure_acp(&mut self) -> Result<(), String> {
+        if grokhub_acp::find_grok().is_none() {
+            return Err("Grok Build CLI is not on PATH".into());
+        }
         let idx = self
             .chat_job_thread
             .as_deref()

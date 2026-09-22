@@ -79,6 +79,16 @@ impl Cabin {
         self.kick_model(true);
     }
 
+    /// Night, anticipate, and phone `/v1/task` enqueue through `send_chat` so they
+    /// share the composer PermissionMode pill — not a separate always-yolo path.
+    pub(super) fn send_scheduled_chat(&mut self, text: String) {
+        self.scheduled_perm = true;
+        self.send_chat(text);
+        if !self.running && self.pending_kick.is_none() {
+            self.scheduled_perm = false;
+        }
+    }
+
     pub(super) fn send_followup_turn(&mut self) {
         if self.followup_step >= FOLLOWUP_MAX_STEPS {
             return;
@@ -167,6 +177,16 @@ impl Cabin {
             self.pending_kick = Some(consume_attach);
             return;
         }
+        if self.permission_mode.uses_acp() && self.acp.is_none() {
+            if let Err(e) = self.ensure_acp() {
+                self.fail_ask_without_acp(&e);
+                return;
+            }
+            if self.acp.is_none() {
+                self.pending_kick = Some(consume_attach);
+                return;
+            }
+        }
         let cabin = self.kick_frame.take();
         self.kick_skip = false;
         self.eyes_attach = false;
@@ -187,6 +207,21 @@ impl Cabin {
         } else {
             None
         };
+        if self.permission_mode.uses_acp() {
+            let prompt_err = self
+                .acp
+                .as_ref()
+                .map(|h| h.prompt_with_image(&last_user, image.as_deref()));
+            match prompt_err {
+                Some(Ok(())) => {}
+                Some(Err(e)) => {
+                    self.acp = None;
+                    self.fail_ask_without_acp(&e);
+                }
+                None => self.fail_ask_without_acp(""),
+            }
+            return;
+        }
         let idx = self
             .chat_job_thread
             .as_deref()
@@ -207,8 +242,11 @@ impl Cabin {
                 None
             }
         });
-        let yolo = self.permission_mode == PermissionMode::AlwaysApprove;
-        let auto = self.permission_mode == PermissionMode::Auto;
+        let (yolo, auto) = if self.scheduled_perm {
+            self.permission_mode.scheduled_flags()
+        } else {
+            self.permission_mode.composer_headless_flags()
+        };
         let plan = self.session_mode == SessionMode::Plan;
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
         let effort = grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort);

@@ -614,6 +614,8 @@ pub struct Cabin {
     secret_hold: Vec<String>,
     session_mode: SessionMode,
     permission_mode: PermissionMode,
+    /// Night / loop / phone `/v1/task` inherit the composer PermissionMode pill.
+    scheduled_perm: bool,
     grok_sessions: Vec<grokhub_acp::GrokSession>,
     grok_sessions_loaded: bool,
     grok_sessions_tx: mpsc::Sender<GrokSessMsg>,
@@ -1006,6 +1008,7 @@ impl Cabin {
             secret_hold: Vec::new(),
             session_mode: boot_session,
             permission_mode: boot_perm,
+            scheduled_perm: false,
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
             grok_sessions_tx,
@@ -1275,6 +1278,7 @@ impl Cabin {
         self.active_skill_follow = None;
         self.followup_step = 0;
         self.speak_next = false;
+        self.scheduled_perm = false;
         self.stream_buf.clear();
         self.thought_buf.clear();
         self.perm_ask = None;
@@ -2346,7 +2350,7 @@ impl Cabin {
         bump_usage(&mut self.usage, "automation");
         self.daily_auto_used = self.usage.automation;
         self.daily_auto_day = self.usage.day.clone();
-        self.send_chat(prompt);
+        self.send_scheduled_chat(prompt);
     }
 
     fn poll_import_openclaw(&mut self) {
@@ -2934,7 +2938,7 @@ impl Cabin {
         match crate::update::restart_system(!self.window_visible) {
             Ok(()) => {
                 if let Some(tray) = self.tray.take() {
-                    crate::tray::drop_off_thread(tray);
+                    crate::tray::drop_tray(tray);
                 }
                 self.want_quit = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -3506,7 +3510,7 @@ impl Cabin {
         if let Some(t) = task {
             self.pending_hub_task = Some(t.id.clone());
             self.land_on_real_chat();
-            self.send_chat(format!("[from {}] {}", t.from_name, t.prompt));
+            self.send_scheduled_chat(format!("[from {}] {}", t.from_name, t.prompt));
         }
     }
 
@@ -3616,7 +3620,7 @@ impl Cabin {
             Some(crate::tray::TrayCmd::Quit) => {
                 self.want_quit = true;
                 if let Some(tray) = self.tray.take() {
-                    crate::tray::drop_off_thread(tray);
+                    crate::tray::drop_tray(tray);
                 }
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
@@ -3676,7 +3680,7 @@ impl eframe::App for Cabin {
         cfg.api_key.clear();
         let _ = crate::config::save(&cfg);
         if let Some(tray) = self.tray.take() {
-            crate::tray::drop_off_thread(tray);
+            crate::tray::drop_tray(tray);
         }
     }
 
@@ -3874,6 +3878,8 @@ impl eframe::App for Cabin {
                 crate::tray::HiddenTick::StayHidden => {
                     if crate::tray::reapply_unmap(true, focused) {
                         apply_tray_window(ctx, crate::tray::hide_to_tray_window());
+                        #[cfg(windows)]
+                        crate::win_native::hide_cabin();
                     }
                 }
             }
