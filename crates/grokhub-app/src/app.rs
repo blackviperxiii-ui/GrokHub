@@ -1542,6 +1542,8 @@ pub struct Cabin {
     secret_hold: Vec<String>,
     session_mode: SessionMode,
     permission_mode: PermissionMode,
+    /// Night / loop / phone `/v1/task` inherit the composer PermissionMode pill.
+    scheduled_perm: bool,
     grok_sessions: Vec<grokhub_acp::GrokSession>,
     grok_sessions_loaded: bool,
     grok_sessions_tx: mpsc::Sender<GrokSessMsg>,
@@ -1973,6 +1975,7 @@ impl Cabin {
             secret_hold: Vec::new(),
             session_mode: boot_session,
             permission_mode: boot_perm,
+            scheduled_perm: false,
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
             grok_sessions_tx,
@@ -2372,6 +2375,7 @@ impl Cabin {
         self.active_skill_follow = None;
         self.followup_step = 0;
         self.speak_next = false;
+        self.scheduled_perm = false;
         self.stream_buf.clear();
         self.thought_buf.clear();
         self.perm_ask = None;
@@ -5003,6 +5007,16 @@ impl Cabin {
         self.kick_model(true);
     }
 
+    /// Night, anticipate, and phone `/v1/task` enqueue through `send_chat` so they
+    /// share the composer PermissionMode pill — not a separate always-yolo path.
+    fn send_scheduled_chat(&mut self, text: String) {
+        self.scheduled_perm = true;
+        self.send_chat(text);
+        if !self.running && self.pending_kick.is_none() {
+            self.scheduled_perm = false;
+        }
+    }
+
     fn send_followup_turn(&mut self) {
         if self.followup_step >= FOLLOWUP_MAX_STEPS {
             return;
@@ -6621,7 +6635,7 @@ impl Cabin {
         bump_usage(&mut self.usage, "automation");
         self.daily_auto_used = self.usage.automation;
         self.daily_auto_day = self.usage.day.clone();
-        self.send_chat(prompt);
+        self.send_scheduled_chat(prompt);
     }
 
     fn persist_loops(&mut self) {
@@ -6713,6 +6727,7 @@ impl Cabin {
         let cwd = self.grok_cwd();
         let prompt = row.prompt.clone();
         let resume = row.session_id.clone().filter(|s| !s.is_empty());
+        let perm_args = self.permission_mode.scheduled_args();
         let (tx, rx) = mpsc::channel();
         self.grok_loop_rx = Some((row.id.clone(), rx));
         let title: String = row.prompt.chars().take(48).collect();
@@ -6727,8 +6742,8 @@ impl Cabin {
                 cwd.display().to_string(),
                 "--output-format".into(),
                 "json".into(),
-                "--always-approve".into(),
             ];
+            args.extend(perm_args);
             if let Some(id) = resume {
                 args.push("--resume".into());
                 args.push(id);
@@ -6854,7 +6869,7 @@ impl Cabin {
             return;
         }
         self.land_on_real_chat();
-        self.send_chat(a.instructions);
+        self.send_scheduled_chat(a.instructions);
     }
 
     fn tick_review(&mut self) {
@@ -8220,8 +8235,11 @@ impl Cabin {
                 None
             }
         });
-        let yolo = self.permission_mode == PermissionMode::AlwaysApprove;
-        let auto = self.permission_mode == PermissionMode::Auto;
+        let (yolo, auto) = if self.scheduled_perm {
+            self.permission_mode.scheduled_flags()
+        } else {
+            self.permission_mode.composer_headless_flags()
+        };
         let plan = self.session_mode == SessionMode::Plan;
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
         let effort = grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort);
@@ -10602,7 +10620,7 @@ impl Cabin {
         if let Some(t) = task {
             self.pending_hub_task = Some(t.id.clone());
             self.land_on_real_chat();
-            self.send_chat(format!("[from {}] {}", t.from_name, t.prompt));
+            self.send_scheduled_chat(format!("[from {}] {}", t.from_name, t.prompt));
         }
     }
 
@@ -12410,7 +12428,7 @@ impl Cabin {
     }
 
     /// Sending from the composer follows your own message down. A night job or a phone
-    /// task calls `send_chat` directly, so it cannot yank the pane out of your reading.
+    /// task calls `send_scheduled_chat` directly, so it cannot yank the pane out of your reading.
     fn send_from_composer(&mut self, text: String) {
         self.pin_chat_tail();
         self.send_chat(text);
@@ -18717,6 +18735,71 @@ mod tests {
     }
 
     #[test]
+    fn scheduled_night_loop_and_phone_inherit_permission_mode() {
+        let src = include_str!("app.rs");
+        let fire_loop = src
+            .split("fn fire_loop(")
+            .nth(1)
+            .and_then(|s| s.split("fn tick_night(").next())
+            .expect("fire_loop");
+        assert!(
+            fire_loop.contains("scheduled_args") && fire_loop.contains("permission_mode"),
+            "loop spawn must read the composer PermissionMode pill: {fire_loop}"
+        );
+        assert!(
+            !fire_loop.contains("\"--always-approve\""),
+            "Ask must not silent always-approve a loop: {fire_loop}"
+        );
+        let fire_night = src
+            .split("fn fire_night(")
+            .nth(1)
+            .and_then(|s| s.split("fn tick_review(").next())
+            .expect("fire_night");
+        assert!(
+            fire_night.contains("send_scheduled_chat"),
+            "night chat must inherit PermissionMode, not a separate yolo path: {fire_night}"
+        );
+        let inbox = src
+            .split("fn drain_inbox(")
+            .nth(1)
+            .and_then(|s| s.split("fn finish_hub_dispatch(").next())
+            .expect("drain_inbox");
+        assert!(
+            inbox.contains("send_scheduled_chat"),
+            "phone /v1/task must inherit PermissionMode: {inbox}"
+        );
+        let anticipate = src
+            .split("fn tick_anticipate(")
+            .nth(1)
+            .and_then(|s| s.split("fn persist_loops(").next())
+            .expect("tick_anticipate");
+        assert!(
+            anticipate.contains("send_scheduled_chat"),
+            "heartbeat anticipate must inherit PermissionMode: {anticipate}"
+        );
+        let kick = src
+            .split("fn kick_model(")
+            .nth(1)
+            .and_then(|s| s.split("fn poll_single(").next())
+            .expect("kick_model");
+        assert!(
+            kick.contains("scheduled_perm")
+                && kick.contains("scheduled_flags")
+                && kick.contains("composer_headless_flags"),
+            "kick_model must map Auto/Always and fail-close scheduled Ask: {kick}"
+        );
+        let scheduled = src
+            .split("fn send_scheduled_chat(")
+            .nth(1)
+            .and_then(|s| s.split("fn send_followup_turn(").next())
+            .expect("send_scheduled_chat");
+        assert!(
+            scheduled.contains("scheduled_perm = true") && scheduled.contains("send_chat"),
+            "scheduled enqueue must reuse send_chat after marking the pill inherit: {scheduled}"
+        );
+    }
+
+    #[test]
     fn periodic_persist_leaves_the_ui_thread() {
         let src = include_str!("app.rs");
         let beat = src
@@ -18927,10 +19010,10 @@ mod tests {
             "Ask + ACP down must deny and must not sandbox-off grok -p: {ask_arm}"
         );
         assert!(
-            ask_kick.contains("PermissionMode::Auto")
-                && ask_kick.contains("PermissionMode::AlwaysApprove")
+            ask_kick.contains("scheduled_flags")
+                && ask_kick.contains("composer_headless_flags")
                 && ask_kick[grok_p..].contains("spawn_grok_p_stream"),
-            "Auto/Always stay on grok -p: {ask_kick}"
+            "Auto/Always stay on grok -p via inherited PermissionMode flags: {ask_kick}"
         );
     }
 
@@ -22075,8 +22158,11 @@ mod tests {
             fire.contains("grok_user_stdout_timeout")
                 && fire.contains("-p")
                 && fire.contains("--verbatim")
-                && fire.contains("thread::spawn"),
-            "loop Run must fire grok -p --verbatim against ~/.grok off the UI thread: {fire}"
+                && fire.contains("thread::spawn")
+                && fire.contains("scheduled_args")
+                && fire.contains("permission_mode")
+                && !fire.contains("\"--always-approve\""),
+            "loop Run must inherit the PermissionMode pill — no silent always-approve: {fire}"
         );
         let skills = src
             .split("fn ui_skills(")

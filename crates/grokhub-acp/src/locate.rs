@@ -855,10 +855,10 @@ pub fn single_turn_args_full(
     if plan {
         a.push("--permission-mode".into());
         a.push("plan".into());
-    } else if !always_approve && !auto {
-        // grok -p has no TTY. Default Ask would cancel every shell tool.
-        a.push("--always-approve".into());
     }
+    // Ask is fail-closed here: do not remap to --always-approve.
+    // Composer chat still yolos Ask via PermissionMode::composer_headless_flags.
+    // Night / loop / phone inherit the pill via PermissionMode::scheduled_flags.
     if let Some(m) = model.map(str::trim).filter(|s| !s.is_empty()) {
         a.push("--model".into());
         a.push(m.to_string());
@@ -1171,8 +1171,19 @@ mod tests {
         assert!(resume.iter().any(|a| a == "--always-approve"), "{resume:?}");
         let ask = single_turn_args_full("hi", "/tmp/work", None, false, false, None, None, false);
         assert!(
-            ask.iter().any(|a| a == "--always-approve"),
-            "grok -p cannot prompt; Ask must not cancel shell tools: {ask:?}"
+            !ask.iter().any(|a| a == "--always-approve"),
+            "Ask inherit is fail-closed — no silent always-approve: {ask:?}"
+        );
+        let always = single_turn_args_full("hi", "/tmp/work", None, true, false, None, None, false);
+        assert!(
+            always.iter().any(|a| a == "--always-approve"),
+            "Always maps to --always-approve: {always:?}"
+        );
+        let auto = single_turn_args_full("hi", "/tmp/work", None, false, true, None, None, false);
+        assert!(
+            auto.windows(2)
+                .any(|w| w[0] == "--permission-mode" && w[1] == "auto"),
+            "Auto maps to --permission-mode auto: {auto:?}"
         );
         assert!(
             !ask.windows(2)
