@@ -7,8 +7,9 @@ use eframe::egui::{
     TextureHandle, TextureOptions,
 };
 use grokhub_core::{
-    feel_scale, felt_rect, hover_alpha, hover_mix, lift_rgb, mix_channel, os_prefers_dark,
-    HOVER_EXPANSION, HOVER_SECS, HOVER_WASH, PRESS_EXPANSION, PRESS_SECS, SELECT_SECS,
+    clamp_rect_to_slot, feel_scale, felt_rect, hover_alpha, hover_mix, lift_rgb, mix_channel,
+    os_prefers_dark, HOVER_EXPANSION, HOVER_SECS, HOVER_WASH, PRESS_EXPANSION, PRESS_SECS,
+    SELECT_SECS,
 };
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -568,6 +569,45 @@ pub fn feel_response(
     (resp, rect, lift_fill(fill, mix))
 }
 
+/// Same clock and wash as [`feel_response`], clamped to the widget slot.
+/// Cards and the Imagine wall use this. Buttons keep [`feel_response`].
+pub fn feel_response_in_slot(
+    ui: &egui::Ui,
+    resp: egui::Response,
+    fill: Color32,
+) -> (egui::Response, egui::Rect, Color32) {
+    let slot = resp.rect;
+    let (resp, felt, color) = feel_response(ui, resp, fill);
+    let (x, y, w, h) = clamp_rect_to_slot(
+        slot.min.x,
+        slot.min.y,
+        slot.width(),
+        slot.height(),
+        felt.min.x,
+        felt.min.y,
+        felt.width(),
+        felt.height(),
+    );
+    let rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h));
+    (resp, rect, color)
+}
+
+/// Hover plate alpha is the 0.12s amount. Partial plates are premultiplied,
+/// so the target is the theme hover color. Full hover is the card background.
+pub fn veil_over(base: Color32, veil: Color32) -> Color32 {
+    if veil.a() == 0 {
+        return base;
+    }
+    let t = veil.a() as f32 / 255.0;
+    let toward = hover();
+    Color32::from_rgba_unmultiplied(
+        mix_channel(base.r(), toward.r(), t),
+        mix_channel(base.g(), toward.g(), t),
+        mix_channel(base.b(), toward.b(), t),
+        base.a(),
+    )
+}
+
 fn mark_image() -> &'static ColorImage {
     static IMG: OnceLock<ColorImage> = OnceLock::new();
     IMG.get_or_init(|| {
@@ -714,6 +754,23 @@ mod tests {
         assert!(light.r() < 244);
         set_paint_dark(true);
         assert_eq!(hover(), HOVER);
+    }
+
+    #[test]
+    fn veil_over_tints_the_card_without_clearing_it() {
+        set_paint_dark(true);
+        let rest = elevated();
+        assert_eq!(veil_over(rest, Color32::TRANSPARENT), rest);
+        let plate = lift_fill(Color32::TRANSPARENT, HOVER_WASH);
+        assert_eq!(plate.a(), 255, "the hover plate itself is opaque");
+        let painted = veil_over(rest, plate);
+        assert_eq!(painted.a(), rest.a());
+        assert_eq!(painted.r(), HOVER.r());
+        assert_ne!(painted, Color32::TRANSPARENT);
+        let half = lift_fill(Color32::TRANSPARENT, HOVER_WASH * 0.5);
+        let mid = veil_over(rest, half);
+        assert_eq!(mid.a(), rest.a());
+        assert!(mid.r() > rest.r() && mid.r() < HOVER.r());
     }
 
     #[test]

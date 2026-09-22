@@ -1194,6 +1194,30 @@ pub fn search_bar(ui: &mut egui::Ui, q: &mut String, hint: &str, width: f32) {
         });
 }
 
+fn paint_slot_card(
+    ui: &mut egui::Ui,
+    mut prepared: egui::containers::frame::Prepared,
+    selected: bool,
+    rounding: f32,
+) -> egui::Response {
+    let resp = prepared.allocate_space(ui).interact(Sense::click());
+    let resting = prepared.frame.fill;
+    let (resp, slot, veil) = crate::theme::feel_response_in_slot(ui, resp, Color32::TRANSPARENT);
+    prepared.frame.fill = crate::theme::veil_over(resting, veil);
+    prepared.frame.stroke = Stroke::NONE;
+    prepared.paint(ui);
+    let stroke = if selected {
+        crate::theme::fg()
+    } else if resp.hovered() {
+        crate::theme::border_strong()
+    } else {
+        crate::theme::border()
+    };
+    ui.painter()
+        .rect_stroke(slot.shrink(0.5), rounding, Stroke::new(1.0_f32, stroke));
+    resp
+}
+
 pub fn grok_tile(
     ui: &mut egui::Ui,
     icon: TileIcon,
@@ -1205,53 +1229,42 @@ pub fn grok_tile(
     let mut hit = TileHit::None;
     let mut add_clicked = false;
     let mut add_rect = None;
-    let resp = egui::Frame::none()
+    let mut prepared = egui::Frame::none()
         .fill(crate::theme::elevated())
         .rounding(14.0)
-        .stroke(Stroke::new(
-            1.0_f32,
-            if selected {
-                crate::theme::fg()
-            } else {
-                crate::theme::border()
-            },
-        ))
         .inner_margin(egui::Margin::same(12.0))
-        .show(ui, |ui| {
-            ui.set_min_height(96.0);
-            ui.horizontal(|ui| {
-                icons::paint_icon(ui, icon, 40.0);
-                ui.add_space(10.0);
-                ui.vertical(|ui| {
-                    ui.label(RichText::new(title).size(15.0).strong().color(crate::theme::fg()));
-                    ui.add_space(4.0);
-                    let clipped: String = body.chars().take(80).collect();
-                    ui.label(RichText::new(clipped).size(12.0).color(crate::theme::muted()));
-                });
-                if let Some(label) = add {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                        let r = crate::theme::felt_label_button(
-                            ui,
-                            label,
-                            crate::theme::fg(),
-                            crate::theme::bg(),
-                            crate::theme::HIT,
-                            egui::vec2(0.0, crate::theme::HIT),
-                            None,
-                            true,
-                        );
-                        add_clicked = r.clicked();
-                        add_rect = Some(r.rect);
-                    });
-                }
+        .begin(ui);
+    {
+        let ui = &mut prepared.content_ui;
+        ui.set_min_height(96.0);
+        ui.horizontal(|ui| {
+            icons::paint_icon(ui, icon, 40.0);
+            ui.add_space(10.0);
+            ui.vertical(|ui| {
+                ui.label(RichText::new(title).size(15.0).strong().color(crate::theme::fg()));
+                ui.add_space(4.0);
+                let clipped: String = body.chars().take(80).collect();
+                ui.label(RichText::new(clipped).size(12.0).color(crate::theme::muted()));
             });
-        })
-        .response
-        .interact(Sense::click());
-    let (resp, felt, wash) = crate::theme::feel_response(ui, resp, Color32::TRANSPARENT);
-    if wash.a() > 0 {
-        ui.painter().rect_filled(felt, 14.0, wash);
+            if let Some(label) = add {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    let r = crate::theme::felt_label_button(
+                        ui,
+                        label,
+                        crate::theme::fg(),
+                        crate::theme::bg(),
+                        crate::theme::HIT,
+                        egui::vec2(0.0, crate::theme::HIT),
+                        None,
+                        true,
+                    );
+                    add_clicked = r.clicked();
+                    add_rect = Some(r.rect);
+                });
+            }
+        });
     }
+    let resp = paint_slot_card(ui, prepared, selected, 14.0);
     let click_on_add = add_rect
         .zip(ui.input(|i| i.pointer.interact_pos()))
         .is_some_and(|(r, p)| r.expand(6.0).contains(p));
@@ -1259,13 +1272,6 @@ pub fn grok_tile(
         hit = TileHit::Add;
     } else if resp.clicked() {
         hit = TileHit::Body;
-    }
-    if selected || resp.hovered() {
-        ui.painter().rect_stroke(
-            felt,
-            14.0,
-            Stroke::new(1.0_f32, crate::theme::border_strong()),
-        );
     }
     hit
 }
@@ -1708,7 +1714,6 @@ fn imagine_photo_tile(
     now_ms: u64,
 ) -> bool {
     let resp = ui.interact(rect, egui::Id::new(("imagine-tile", idx)), Sense::click());
-    let (resp, _felt, wash) = crate::theme::feel_response(ui, resp, Color32::TRANSPARENT);
     let (key_a, key_b, fade) = imagine_frame_pair(scene, now_ms);
     let (tex, size) = imagine_still_tex(ui.ctx(), key_a);
     let uv = cover_uv(
@@ -1744,14 +1749,7 @@ fn imagine_photo_tile(
         egui::FontId::proportional(crate::theme::FONT_CHROME),
         Color32::WHITE,
     );
-    if selected || resp.hovered() {
-        ui.painter()
-            .rect_stroke(rect, 0.0, Stroke::new(1.0_f32, crate::theme::fg()));
-    }
-    if wash.a() > 0 {
-        ui.painter().rect_filled(rect, 0.0, wash);
-    }
-    resp.clicked()
+    wall_slot_feel(ui, resp, selected).clicked()
 }
 
 fn imagine_disk_tex(ctx: &egui::Context, path: &str) -> (TextureHandle, [usize; 2]) {
@@ -1855,7 +1853,6 @@ fn imagine_disk_tile(
         egui::Id::new(("imagine-wall", idx, gif.id.as_str())),
         Sense::click(),
     );
-    let (resp, _felt, wash) = crate::theme::feel_response(ui, resp, Color32::TRANSPARENT);
     if grokhub_core::imagine_is_video_path(&gif.path_a) {
         ui.painter()
             .rect_filled(rect, 0.0, crate::theme::elevated());
@@ -1883,7 +1880,7 @@ fn imagine_disk_tile(
             egui::FontId::proportional(crate::theme::FONT_CHROME),
             Color32::WHITE,
         );
-        return resp.clicked();
+        return wall_slot_feel(ui, resp, selected).clicked();
     }
     let n = if gif.path_b.is_empty() { 1 } else { 2 };
     let tick = (now_ms / crate::theme::IMAGINE_FRAME_MS) as usize + gif.title.len();
@@ -1937,53 +1934,93 @@ fn imagine_disk_tile(
         egui::FontId::proportional(crate::theme::FONT_CHROME),
         Color32::WHITE,
     );
+    wall_slot_feel(ui, resp, selected).clicked()
+}
+
+fn wall_slot_feel(ui: &egui::Ui, resp: egui::Response, selected: bool) -> egui::Response {
+    let (resp, slot, _veil) = crate::theme::feel_response_in_slot(ui, resp, Color32::TRANSPARENT);
     if selected || resp.hovered() {
-        ui.painter()
-            .rect_stroke(rect, 0.0, Stroke::new(1.0_f32, crate::theme::fg()));
+        ui.painter().rect_stroke(
+            slot.shrink(0.5),
+            0.0,
+            Stroke::new(1.0_f32, crate::theme::fg()),
+        );
     }
-    if wash.a() > 0 {
-        ui.painter().rect_filled(rect, 0.0, wash);
-    }
-    resp.clicked()
+    resp
 }
 
 pub fn empty_prompt_tile(ui: &mut egui::Ui, icon: TileIcon, title: &str, hint: &str) -> bool {
-    let mut hit = false;
-    let resp = egui::Frame::none()
+    let mut prepared = egui::Frame::none()
         .fill(crate::theme::elevated())
         .rounding(14.0)
-        .stroke(Stroke::new(1.0_f32, crate::theme::border()))
         .inner_margin(egui::Margin::same(14.0))
-        .show(ui, |ui| {
-            ui.set_min_height(100.0);
-            ui.vertical_centered(|ui| {
-                icons::paint_icon(ui, icon, 36.0);
-                ui.add_space(8.0);
-                ui.label(RichText::new(title).size(14.0).strong().color(crate::theme::fg()));
-                ui.add_space(4.0);
-                ui.label(RichText::new(hint).size(12.0).color(crate::theme::muted()));
-            });
-        })
-        .response
-        .interact(Sense::click());
-    let (resp, felt, wash) = crate::theme::feel_response(ui, resp, Color32::TRANSPARENT);
-    if wash.a() > 0 {
-        ui.painter().rect_filled(felt, 14.0, wash);
+        .begin(ui);
+    {
+        let ui = &mut prepared.content_ui;
+        ui.set_min_height(100.0);
+        ui.vertical_centered(|ui| {
+            icons::paint_icon(ui, icon, 36.0);
+            ui.add_space(8.0);
+            ui.label(RichText::new(title).size(14.0).strong().color(crate::theme::fg()));
+            ui.add_space(4.0);
+            ui.label(RichText::new(hint).size(12.0).color(crate::theme::muted()));
+        });
     }
-    if resp.clicked() {
-        hit = true;
-    }
-    if resp.hovered() {
-        ui.painter()
-            .rect_stroke(felt, 14.0, Stroke::new(1.0_f32, crate::theme::border_strong()));
-    }
-    hit
+    paint_slot_card(ui, prepared, false, 14.0).clicked()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use grokhub_core::parse_loop_line;
+
+    #[test]
+    fn card_and_wall_hover_stay_in_slot() {
+        let src = include_str!("cards.rs");
+        let card = src
+            .split("fn paint_slot_card(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn grok_tile(").next())
+            .expect("paint_slot_card");
+        assert!(
+            card.contains("feel_response_in_slot") && card.contains("veil_over"),
+            "skill and automation cards must tint inside the slot: {card}"
+        );
+        assert!(!card.contains("rect_filled"), "hover plate must not cover the title: {card}");
+        let tile = src
+            .split("pub fn grok_tile(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn tile_row(").next())
+            .expect("grok_tile");
+        assert!(tile.contains("paint_slot_card"), "{tile}");
+        let empty = src
+            .split("pub fn empty_prompt_tile(")
+            .nth(1)
+            .and_then(|s| s.split("#[cfg(test)]").next())
+            .expect("empty_prompt_tile");
+        assert!(empty.contains("paint_slot_card") && !empty.contains("rect_filled"), "{empty}");
+        let wall = src
+            .split("fn wall_slot_feel(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn empty_prompt_tile(").next())
+            .expect("wall_slot_feel");
+        assert!(
+            wall.contains("feel_response_in_slot") && !wall.contains("rect_filled"),
+            "{wall}"
+        );
+        let photo = src
+            .split("fn imagine_photo_tile(")
+            .nth(1)
+            .and_then(|s| s.split("fn imagine_disk_tex(").next())
+            .expect("imagine_photo_tile");
+        assert!(photo.contains("wall_slot_feel") && !photo.contains("wash"), "{photo}");
+        let disk = src
+            .split("fn imagine_disk_tile(")
+            .nth(1)
+            .and_then(|s| s.split("fn wall_slot_feel(").next())
+            .expect("imagine_disk_tile");
+        assert!(disk.contains("wall_slot_feel") && !disk.contains("wash"), "{disk}");
+    }
 
     #[test]
     fn the_selected_tab_label_is_readable_on_its_pill() {
