@@ -40,6 +40,17 @@ pub fn bubble_outer_width(available: f32, content_width: f32, pad_x: f32) -> f32
     (inner + pad_x * 2.0).min(max_w)
 }
 
+/// Right-aligned user bubbles sit after a leading gap. Keep `outer` inside the row.
+pub fn clamp_bubble_outer(available: f32, outer: f32, gap: f32) -> f32 {
+    let avail = clamp_row_width(available);
+    let gap = if gap.is_finite() { gap.max(0.0) } else { 0.0 };
+    let room = (avail - gap).max(0.0);
+    if !outer.is_finite() || outer <= 0.0 {
+        return 0.0;
+    }
+    outer.min(room).min(bubble_max_width(avail))
+}
+
 /// Outer height grows with wrapped lines plus padding.
 pub fn bubble_outer_height(content_height: f32, pad_y: f32) -> f32 {
     content_height.max(0.0) + pad_y * 2.0
@@ -80,7 +91,10 @@ mod tests {
         assert!((w - max).abs() < 0.1, "got {w} want {max}");
         let one = bubble_outer_height(18.0, BUBBLE_PAD_Y);
         let wrapped = bubble_outer_height(18.0 * 4.0, BUBBLE_PAD_Y);
-        assert!(wrapped > one + 20.0, "wrapped text must grow the bubble height");
+        assert!(
+            wrapped > one + 20.0,
+            "wrapped text must grow the bubble height"
+        );
         assert!((wrapped - (72.0 + BUBBLE_PAD_Y * 2.0)).abs() < 0.1);
     }
 
@@ -124,11 +138,31 @@ mod tests {
             (max - 3180.0 * BUBBLE_MAX_FRAC).abs() < 0.1,
             "thoughts and replies wrap with the window, got {max}"
         );
-        assert!(max > 2000.0, "ultrawide chat must not sit in a 1600px strip, got {max}");
+        assert!(
+            max > 2000.0,
+            "ultrawide chat must not sit in a 1600px strip, got {max}"
+        );
         let mid = clamp_row_width(1660.0);
         assert!(
             (mid - 1660.0).abs() < 0.1,
             "a 1920 pane minus the rail must keep the width, got {mid}"
         );
+    }
+
+    #[test]
+    fn clamp_keeps_a_long_token_inside_narrow_and_wide_rows() {
+        let narrow = clamp_bubble_outer(280.0, 10_000.0, 8.0);
+        assert!(
+            narrow + 8.0 <= 280.0 + 0.1,
+            "narrow row let the bubble past the edge: {narrow}"
+        );
+        assert!(narrow <= bubble_max_width(280.0) + 0.1);
+        let wide_cap = bubble_max_width(1600.0);
+        let wide = clamp_bubble_outer(1600.0, wide_cap, 8.0);
+        assert!(
+            (wide - wide_cap).abs() < 0.1,
+            "wide row must keep the 84% cap, got {wide}"
+        );
+        assert!(wide + 8.0 <= 1600.0 + 0.1);
     }
 }
