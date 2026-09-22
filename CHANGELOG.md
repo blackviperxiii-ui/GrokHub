@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Night, loops, heartbeat anticipate, and phone `/v1/task` inherit the composer PermissionMode pill. Ask stays fail-closed (no silent `--always-approve`). Auto is `--permission-mode auto`. Always is `--always-approve`.
+
 ## 2.10.0 — 2026-09-22
 
 Ask is a fail-closed ACP gate. Permission Ask starts `grok agent stdio` so Allow / Deny can show. If ACP cannot start or dies, the turn is denied. It does not fall through to headless `grok -p --sandbox off`. Auto/Always stay on `grok -p`.

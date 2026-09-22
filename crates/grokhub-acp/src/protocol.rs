@@ -82,6 +82,38 @@ impl PermissionMode {
     pub fn uses_acp(self) -> bool {
         matches!(self, Self::Ask)
     }
+
+    /// Composer `grok -p` leftover. `kick_model` Ask uses ACP (`uses_acp`) and
+    /// does not reach this. Night / loop / phone use [`Self::scheduled_flags`].
+    pub fn composer_headless_flags(self) -> (bool, bool) {
+        match self {
+            Self::Auto => (false, true),
+            Self::AlwaysApprove | Self::Ask => (true, false),
+        }
+    }
+
+    /// Scheduled / night / phone `/v1/task` inherit the composer PermissionMode pill.
+    /// Ask is fail-closed (no silent `--always-approve`). Interactive Ask uses ACP.
+    pub fn scheduled_flags(self) -> (bool, bool) {
+        match self {
+            Self::AlwaysApprove => (true, false),
+            Self::Auto => (false, true),
+            Self::Ask => (false, false),
+        }
+    }
+
+    /// CLI argv for a scheduled `grok -p` that must honor the PermissionMode pill.
+    pub fn scheduled_args(self) -> Vec<String> {
+        let (always, auto) = self.scheduled_flags();
+        let mut a = Vec::new();
+        if always {
+            a.push("--always-approve".into());
+        } else if auto {
+            a.push("--permission-mode".into());
+            a.push("auto".into());
+        }
+        a
+    }
 }
 
 /// User-visible Ask deny when `grok agent stdio` cannot start or has died.
@@ -1344,6 +1376,39 @@ mod tests {
         assert!(
             with.contains("Allow / Deny") && with.contains("handshake refused"),
             "{with}"
+        );
+        assert_eq!(
+            PermissionMode::Ask.composer_headless_flags(),
+            (true, false),
+            "composer grok -p leftover; kick_model Ask uses ACP instead"
+        );
+        assert_eq!(PermissionMode::Auto.composer_headless_flags(), (false, true));
+        assert_eq!(
+            PermissionMode::AlwaysApprove.composer_headless_flags(),
+            (true, false)
+        );
+        assert_eq!(
+            PermissionMode::Ask.scheduled_flags(),
+            (false, false),
+            "scheduled Ask must not silent always-approve"
+        );
+        assert_eq!(PermissionMode::Auto.scheduled_flags(), (false, true));
+        assert_eq!(
+            PermissionMode::AlwaysApprove.scheduled_flags(),
+            (true, false)
+        );
+        assert!(
+            PermissionMode::Ask.scheduled_args().is_empty(),
+            "{:?}",
+            PermissionMode::Ask.scheduled_args()
+        );
+        assert_eq!(
+            PermissionMode::Auto.scheduled_args(),
+            vec!["--permission-mode".to_string(), "auto".into()]
+        );
+        assert_eq!(
+            PermissionMode::AlwaysApprove.scheduled_args(),
+            vec!["--always-approve".to_string()]
         );
     }
 
