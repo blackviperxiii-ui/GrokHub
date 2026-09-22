@@ -2,7 +2,13 @@
 
 ## Unreleased
 
-- Ask is a real ACP gate: permission Ask starts `grok agent stdio` so Allow / Deny can show. If ACP cannot start or dies, the turn is denied. It does not fall through to headless `grok -p --sandbox off`. Auto/Always stay on `grok -p`.
+## 2.10.0 — 2026-09-22
+
+Ask is a fail-closed ACP gate. Permission Ask starts `grok agent stdio` so Allow / Deny can show. If ACP cannot start or dies, the turn is denied. It does not fall through to headless `grok -p --sandbox off`. Auto/Always stay on `grok -p`.
+
+- Linux: `grokhub-linux-v2.10.0.tar.gz` and AUR `pkgver=2.10.0`.
+- Windows: `GrokHub-Setup-2.10.0.exe` and `grokhub-windows-v2.10.0.zip`.
+- Cursor **#54**: Ask calls `ensure_acp`; ACP down denies the turn. Night, loops, tray, and secrets are unchanged.
 
 ## 2.9.15 — 2026-09-22
 
