@@ -14,6 +14,56 @@ const SEARCH_MAX_HITS: usize = 40;
 /// Build output is not the place being searched, and it can be millions of files.
 const SEARCH_SKIP_DIRS: &[&str] = &["target", "node_modules", "dist"];
 
+/// Palette row `i` is a command action, or `file:<root>/<rel>` for a walk hit.
+pub fn palette_row_action(
+    cmds: &[(&str, &str)],
+    files: &[String],
+    root: &str,
+    i: usize,
+) -> Option<String> {
+    if i < cmds.len() {
+        Some(cmds[i].1.to_string())
+    } else {
+        let rel = files.get(i - cmds.len())?;
+        if rel.split(['/', '\\']).any(|p| p.is_empty() || p == "." || p == "..") {
+            None
+        } else {
+            let full = Path::new(root).join(rel);
+            Some(format!("file:{}", full.display()))
+        }
+    }
+}
+
+/// Path a palette file row should open. Empty or `file:`-only is not a pick.
+pub fn palette_file_shown(action: &str) -> Option<&str> {
+    let shown = action.strip_prefix("file:")?.trim();
+    if shown.is_empty() {
+        None
+    } else {
+        Some(shown)
+    }
+}
+
+/// Forget the last finished walk when the query or root changes. Otherwise a
+/// revert can match `files_q` with an empty list and skip the walk.
+pub fn palette_forget_stale_walk(
+    files: &mut Vec<String>,
+    files_q: &mut String,
+    files_root: &mut String,
+    q: &str,
+    root_now: &str,
+) {
+    if files_q != q || files_root != root_now {
+        files.clear();
+        files_q.clear();
+        files_root.clear();
+    }
+}
+
+pub fn palette_search_is_saved(files_q: &str, files_root: &str, q: &str, root_now: &str) -> bool {
+    files_q == q && files_root == root_now
+}
+
 /// Files under `root` whose relative path contains `query`.
 ///
 /// Walks nested folders. A missing root, a blank query, and a tree with no match
@@ -344,6 +394,51 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn palette_query_revert_forgets_empty_saved_hits() {
+        let mut files = vec!["nested/deep/buried.txt".to_string()];
+        let mut files_q = "buried".to_string();
+        let mut files_root = "/place".to_string();
+        palette_forget_stale_walk(&mut files, &mut files_q, &mut files_root, "buriexx", "/place");
+        assert!(files.is_empty(), "a query change clears the last hits");
+        assert!(
+            files_q.is_empty() && files_root.is_empty(),
+            "the finished key must be forgotten or a revert matches the empty list"
+        );
+        assert!(
+            !palette_search_is_saved(&files_q, &files_root, "buried", "/place"),
+            "reverting to the earlier query must walk again so the file hits come back"
+        );
+        palette_forget_stale_walk(&mut files, &mut files_q, &mut files_root, "buried", "/place");
+        assert!(
+            files_q.is_empty() && files.is_empty(),
+            "revert still has no finished key, so tick kicks a real walk: {files_q:?} {files:?}"
+        );
+        assert!(palette_search_is_saved("buried", "/place", "buried", "/place"));
+    }
+
+    #[test]
+    fn picking_a_palette_file_opens_the_nested_path() {
+        let action = palette_row_action(&[], &["nested/deep/buried.txt".to_string()], "/place", 0)
+            .expect("file row");
+        let shown = palette_file_shown(&action).expect("picked path");
+        assert!(
+            shown.ends_with("nested/deep/buried.txt") && !shown.contains(".."),
+            "the pick must be the nested file, not a status-only label: {shown}"
+        );
+        assert_eq!(palette_file_shown("file:"), None);
+        assert_eq!(palette_file_shown("nav:chat"), None);
+        assert_eq!(
+            palette_row_action(&[("Chat", "nav:chat")], &[], "/place", 0).as_deref(),
+            Some("nav:chat")
+        );
+        assert_eq!(
+            palette_row_action(&[], &["../escape.txt".to_string()], "/place", 0),
+            None,
+            "a relative escape is not a pick"
+        );
     }
 
     fn scratch_dir(label: &str) -> std::path::PathBuf {

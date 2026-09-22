@@ -767,7 +767,12 @@ mod tests {
             drop.contains("cfg(not(unix))") && drop.contains("drop(host)"),
             "Windows TrayIcon is !Send — drop on the UI thread: {drop}"
         );
-        let app = include_str!("app.rs");
+        let app = concat!(
+            include_str!("app/mod.rs"),
+            include_str!("app/acp.rs"),
+            include_str!("app/chat_kick.rs"),
+            include_str!("app/night.rs"),
+        );
         assert_eq!(
             app.matches("drop_off_thread(tray)").count(),
             0,
