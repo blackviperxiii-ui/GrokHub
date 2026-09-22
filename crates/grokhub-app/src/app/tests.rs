@@ -1,7 +1,7 @@
 use super::*;
 use eframe::egui;
 
-fn cabin_src() -> &'static str {
+fn cabin_src() -> String {
     concat!(
         include_str!("mod.rs"),
         include_str!("persist.rs"),
@@ -23,6 +23,22 @@ fn cabin_src() -> &'static str {
         include_str!("voice.rs"),
         include_str!("threads_nav.rs"),
     )
+    .replace("pub(super) ", "")
+}
+
+/// One `fn name(` body in the concatenated cabin, stopping at the next same-indent fn.
+fn fn_src<'a>(src: &'a str, name: &str) -> &'a str {
+    let needle = format!("fn {name}(");
+    let start = src
+        .find(&needle)
+        .unwrap_or_else(|| panic!("missing fn {name}"));
+    let after = &src[start..];
+    let rest = &after[needle.len()..];
+    let end = rest
+        .find("\n    fn ")
+        .or_else(|| rest.find("\nfn "))
+        .unwrap_or(rest.len());
+    &after[..needle.len() + end]
 }
 
 #[test]
@@ -44,11 +60,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(!blank.name.contains(email));
 
         let src = cabin_src();
-        let paint = src
-            .split("fn ui_settings_menu(")
-            .nth(1)
-            .and_then(|s| s.split("\n    fn ui_palette").next())
-            .expect("ui_settings_menu");
+        let paint = fn_src(&src, "ui_settings_menu");
         assert!(
             paint.contains("chrome.name")
                 && paint.contains("chrome.picture_path")
@@ -403,7 +415,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             thought.contains("paints_body"),
             "expand, minimize, and hide stay on the existing thought arm: {thought}"
         );
-        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(src);
+        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(&src);
         assert_eq!(
             impl_src.matches("ChatKind::Thought => {").count(),
             1,
@@ -904,11 +916,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     #[test]
     fn cached_chat_views_do_not_clone_the_thread_on_stream_delta() {
         let src = cabin_src();
-        let cache = src
-            .split("fn cached_chat_views(")
-            .nth(1)
-            .and_then(|s| s.split("fn ui_chat(").next())
-            .expect("cached_chat_views");
+        let cache = fn_src(&src, "cached_chat_views");
         assert!(
             !cache.contains("m.1.clone()") && !cache.contains("role.clone()"),
             "a stream delta must not clone every message to rebuild chat views: {cache}"
@@ -1066,7 +1074,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     #[test]
     fn about_paints_the_version() {
         let src = cabin_src();
-        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(src);
+        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(&src);
         let about = impl_src
             .split("SettingsSec::About => {")
             .nth(1)
@@ -1096,7 +1104,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .split("fn run_palette(")
             .nth(1)
             .and_then(|s| s.split("fn open_palette(").next())
-            .unwrap_or(src);
+            .unwrap_or(&src);
         assert!(
             run.contains("\"nav:command\" => self.nav = Nav::Command"),
             "Command is a real page — a chip that names it must not land on Chat: {run}"
@@ -1673,11 +1681,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     #[test]
     fn show_cabin_keeps_the_tray_icon() {
         let src = cabin_src();
-        let show = src
-            .split("fn show_from_tray")
-            .nth(1)
-            .and_then(|s| s.split("fn poll_voice").next())
-            .expect("show_from_tray");
+        let show = fn_src(&src, "show_from_tray");
         assert!(
             !show.contains("drop_off_thread"),
             "Show cabin must not tear down the tray icon: {show}"
@@ -1824,11 +1828,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             day.contains("thread::spawn") && day.contains("inflight"),
             "stale local_day must refresh off the UI thread: {day}"
         );
-        let roll = src
-            .split("fn roll_today(")
-            .nth(1)
-            .and_then(|s| s.split("\n    fn ui_settings_menu").next())
-            .expect("roll_today");
+        let roll = fn_src(&src, "roll_today");
         assert!(
             roll.contains("local_day(") && !roll.contains(".output()"),
             "roll_today must reuse the cached day, not spawn date on the UI thread: {roll}"
@@ -1844,11 +1844,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     #[test]
     fn persist_does_not_hold_hub_lock_across_disk() {
         let src = cabin_src();
-        let persist = src
-            .split("fn persist(&mut self)")
-            .nth(1)
-            .and_then(|s| s.split("\n    fn sync_hub_voice").next())
-            .expect("persist");
+        let persist = format!("{}{}", fn_src(&src, "persist"), fn_src(&src, "persist_snap"));
         assert!(
             persist.contains("self.hub.clone()") && !persist.contains("state_for_disk"),
             "persist must not clone hub snapshot/last_frame on the UI thread: {persist}"
@@ -1857,11 +1853,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             !persist.contains("if let Ok(st) = self.hub.lock()"),
             "persist must not hold hub.lock() across save_hub_state: {persist}"
         );
-        let write = src
-            .split("fn write_persist_disk(")
-            .nth(1)
-            .and_then(|s| s.split("pub struct Cabin").next())
-            .expect("write_persist_disk");
+        let write = fn_src(&src, "write_persist_disk");
         let lock = write.find("hub.lock").expect("worker hub lock");
         let save = write.find("save_hub_state").expect("save_hub_state");
         assert!(
@@ -1935,11 +1927,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     #[test]
     fn grok_login_powers_history_and_imagine() {
         let src = cabin_src();
-        let ensure = src
-            .split("fn ensure_acp(")
-            .nth(1)
-            .and_then(|s| s.split("fn open_plus(").next())
-            .expect("ensure_acp");
+        let ensure = fn_src(&src, "ensure_acp");
         assert!(
             ensure.contains("grok_session") && ensure.contains("session_id"),
             "new ACP sessions must bind onto the cabin thread: {ensure}"
@@ -1998,11 +1986,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             !ensure.contains("agent_reasoning_effort_for_mode(&self.cfg.mode)"),
             "ACP effort must not route through legacy cfg.mode ladder: {ensure}"
         );
-        let bearer = src
-            .split("fn bearer(")
-            .nth(1)
-            .and_then(|s| s.split("fn switch_thread(").next())
-            .expect("bearer");
+        let bearer = fn_src(&src, "bearer");
         assert!(
             bearer.contains("grok_cli_key")
                 && bearer.find("grok_cli_key").unwrap()
@@ -2029,11 +2013,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             bearer.contains("console_key()"),
             "Imagine/ACP console-key fallback must read secrets.json: {bearer}"
         );
-        let disk = src
-            .split("fn write_persist_disk(")
-            .nth(1)
-            .and_then(|s| s.split("pub struct Cabin").next())
-            .expect("write_persist_disk");
+        let disk = fn_src(&src, "write_persist_disk");
         assert!(
             disk.contains("secrets::save"),
             "persist must write the console key to secrets.json: {disk}"
@@ -2050,11 +2030,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             src.contains("&mut self.secrets.api_key"),
             "Settings Console key must edit secrets.json, not app.json"
         );
-        let settings_save = src
-            .split("fn save_settings")
-            .nth(1)
-            .and_then(|s| s.split("fn ui_settings").next())
-            .expect("save_settings");
+        let settings_save = fn_src(&src, "save_settings");
         assert!(
             settings_save.contains("api_key.clear"),
             "Settings Save must not keep a leftover console key on cfg: {settings_save}"
@@ -2099,11 +2075,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && !persist_secrets.contains("self.persist()"),
             "Settings Save must not freeze the cabin writing secrets.json: {persist_secrets}"
         );
-        let persist_usage = src
-            .split("fn persist_usage(")
-            .nth(1)
-            .and_then(|s| s.split("fn poll_sync").next())
-            .expect("persist_usage");
+        let persist_usage = fn_src(&src, "persist_usage");
         let usage_spawn = persist_usage
             .find("thread::spawn")
             .expect("usage write must leave the UI thread");
@@ -2190,11 +2162,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             bearer_spawn < bearer_save,
             "OAuth refresh must not freeze the cabin writing secrets.json: {bearer}"
         );
-        let kick = src
-            .split("fn kick_model(")
-            .nth(1)
-            .and_then(|s| s.split("fn upsert_stream_assistant").next())
-            .expect("kick_model");
+        let kick = fn_src(&src, "kick_model");
         assert!(
             kick.contains("next_chat_image")
                 && kick.contains("spawn_grok_p_stream")
@@ -2214,11 +2182,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             send_attach.contains("attach_prompt_line") && send_attach.contains("attach_name"),
             "the visible user turn must mention the attached still: {send_attach}"
         );
-        let cwd = src
-            .split("fn grok_cwd(")
-            .nth(1)
-            .and_then(|s| s.split("fn reload_grok_sessions(").next())
-            .expect("grok_cwd");
+        let cwd = format!("{}{}", fn_src(&src, "grok_cwd"), fn_src(&src, "grok_cli_cwd"));
         assert!(
             cwd.contains("cabin_session_cwd") && cwd.contains("self.grok_cwd()"),
             "ACP cwd must be the bound project or ~/GrokHub-Work, and History must list that same directory: {cwd}"
@@ -3200,11 +3164,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && listen.find("IMAGE_FILE_CAP").expect("wav cap") < wav_read,
             "voice STT must not slurp a huge wav: {listen}"
         );
-        let queue = src
-            .split("fn ui_agents")
-            .nth(1)
-            .and_then(|s| s.split("fn page_nav").next())
-            .expect("ui_agents");
+        let queue = fn_src(&src, "ui_agents");
         assert!(
             !queue.contains("send_chat")
                 && queue.contains("chat_job_thread")
@@ -3791,7 +3751,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && !reflect[insights..].contains("self.persist()"),
             "/learn reflect must persist insights without cloning every thread: {reflect}"
         );
-        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(src);
+        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(&src);
         assert!(
             !impl_src.contains("fn take_over_desktop")
                 && !impl_src.contains("white_pill(ui, \"Take over\")"),
@@ -5257,7 +5217,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             run_cmds.contains("AlwaysApprove") && !run_cmds.contains("cfg.yolo"),
             "bound-tree jail follows the Always pill, not leftover app.json yolo: {run_cmds}"
         );
-        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(src);
+        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(&src);
         assert!(
             !impl_src.contains("if let Some(plan) = plan_from_text"),
             "Chat complete must not parse HOST_CMD / COMPUTER_CMD; Grok Build owns tools"
@@ -5457,7 +5417,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     #[test]
     fn last_frame_url_drops_a_huge_capture() {
         let src = cabin_src();
-        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(src);
+        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(&src);
         let remember = impl_src
             .split("fn remember_last_frame(")
             .nth(1)
@@ -5913,11 +5873,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && !digest_fn.contains("text.clone()"),
             "nightly review must not clone an 8MB complete into the digest: {digest_fn}"
         );
-        let apply = src
-            .split("fn apply_review_reply(")
-            .nth(1)
-            .and_then(|s| s.split("fn poll_wall(").next())
-            .expect("apply_review_reply");
+        let apply = fn_src(&src, "apply_review_reply");
         assert!(
             !apply.contains("send_chat") && !apply.contains("Nav::Chat"),
             "applying suggestions stays off the chat: {apply}"
@@ -6210,141 +6166,75 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     #[test]
     fn stream_deltas_do_not_grow_without_bound() {
         let src = cabin_src();
-        let delta = src
-            .split("Ok(JobOut::ChatDelta(d))")
-            .nth(1)
-            .and_then(|s| s.split("Ok(JobOut::ThoughtDelta(d))").next())
-            .expect("ChatDelta");
+        let poll = fn_src(&src, "poll_single");
         assert!(
-            delta.contains("IMAGE_FILE_CAP"),
-            "stream deltas must not grow stream_buf without bound: {delta}"
+            poll.contains("GrokPEvent::Thought")
+                && poll.contains("GrokPEvent::Text")
+                && poll.contains("push_stream_capped")
+                && poll.contains("IMAGE_FILE_CAP"),
+            "live grok -p thought and text deltas must not grow stream buffers without bound: {poll}"
         );
-        let thought = src
-            .split("Ok(JobOut::ThoughtDelta(d))")
-            .nth(1)
-            .and_then(|s| s.split("Ok(JobOut::Chat {").next())
-            .expect("ThoughtDelta");
+        let snap = fn_src(&src, "apply_assistant_snapshot");
         assert!(
-            thought.contains("IMAGE_FILE_CAP"),
-            "thought deltas must not grow thought_buf without bound: {thought}"
-        );
-        let snap = src
-            .split("fn apply_assistant_snapshot(")
-            .nth(1)
-            .and_then(|s| s.split("fn push_bound_msg(").next())
-            .expect("apply_assistant_snapshot");
-        assert!(
-            snap.contains("IMAGE_FILE_CAP"),
+            snap.contains("take_ui_text") && snap.contains("IMAGE_FILE_CAP"),
             "a huge complete reply must not land in the transcript unbounded: {snap}"
         );
-        let live = src
-            .split("fn apply_live_assistant(")
-            .nth(1)
-            .and_then(|s| s.split("fn has_key(").next())
-            .expect("apply_live_assistant");
+        let live = fn_src(&src, "apply_live_assistant");
         assert!(
-            live.contains("merge_thinking_capped")
-                || live.contains("take_ui_text")
-                || live.contains("IMAGE_FILE_CAP"),
-            "live thought+stream merge must not allocate two 8MB buffers unbounded: {live}"
+            live.contains("merge_thinking_capped") && live.contains("TEXT_FILE_CAP"),
+            "live thought+stream merge must not copy an 8MB stream into the transcript every delta: {live}"
         );
+        let finish = fn_src(&src, "finish_acp_turn");
         assert!(
-            live.contains("TEXT_FILE_CAP"),
-            "live snapshot must not copy an 8MB stream into the transcript every delta: {live}"
+            finish.contains("take_ui_text") && finish.contains("IMAGE_FILE_CAP"),
+            "complete grok -p text must be capped before the UI thread merges: {finish}"
         );
+        let apply = fn_src(&src, "apply_single_turn");
         assert!(
-            delta.contains("if push_stream_capped") || delta.contains("changed"),
-            "leftover deltas after the stream cap must not re-merge on the UI thread: {delta}"
+            apply.contains("merge_thinking_capped") && apply.contains("TEXT_FILE_CAP"),
+            "single-turn merge must stay under TEXT_FILE_CAP: {apply}"
         );
     }
 
     #[test]
     fn chat_arm_checks_stream_end_followup() {
         let src = cabin_src();
-        let chat = src
-            .split("Ok(JobOut::Chat { text, truncated })")
-            .nth(1)
-            .and_then(|s| s.split("Ok(JobOut::Consult").next())
-            .expect("Chat arm");
-        let strip = chat.find("strip_thinking(&text)").expect("strip complete");
+        let apply = fn_src(&src, "apply_single_turn");
+        let finish = fn_src(&src, "finish_acp_turn");
+        let follow = fn_src(&src, "send_followup_turn");
+        let drain = fn_src(&src, "drain_followup_queue");
+        let poll = fn_src(&src, "poll_single");
         assert!(
-            chat[..strip].contains("take_ui_text") || chat[..strip].contains("IMAGE_FILE_CAP"),
-            "Chat complete must not strip/merge a 64MB worker body on the UI thread: {chat}"
+            finish.contains("take_ui_text") && finish.contains("IMAGE_FILE_CAP"),
+            "complete must not strip/merge a 64MB worker body on the UI thread: {finish}"
         );
         assert!(
-            chat.contains("reply_needs_followup"),
-            "stream-end follow-up belongs in the Chat arm: {chat}"
+            apply.contains("drain_followup_queue"),
+            "stream-end follow-up belongs on the grok -p complete path: {apply}"
         );
         assert!(
-            chat.contains("send_followup_turn"),
-            "Chat arm kicks a quiet continue, not send_chat: {chat}"
+            follow.contains("FOLLOWUP_MAX_STEPS") && follow.contains("followup_step"),
+            "auto-follow is capped per user turn: {follow}"
         );
         assert!(
-            chat.contains("FOLLOWUP_MAX_STEPS") && chat.contains("followup_step"),
-            "auto-follow is capped per user turn: {chat}"
+            follow.contains("kick_model(false)") && !follow.contains("send_chat("),
+            "follow-up kicks a quiet continue, not send_chat: {follow}"
         );
         assert!(
-            chat.contains("!self.running"),
-            "skip follow-up when host/goal already continues: {chat}"
+            drain.contains("send_chat"),
+            "a queued composer follow-up still uses the typed send path: {drain}"
         );
         assert!(
-            chat.contains("should_auto_continue_goal"),
-            "goal continue must not send_chat while host is running: {chat}"
-        );
-        let queued = chat
-            .split("self.agents.push")
-            .nth(1)
-            .expect("auto-continue queue");
-        assert!(
-            queued.contains("thread_id") && queued.contains("\"running\""),
-            "auto-continue must remember the origin thread and mark the queue row running: {queued}"
+            poll.contains("mem::take")
+                && !poll.contains("stream_buf.clone()")
+                && !poll.contains("thought_buf.clone()"),
+            "disconnect complete must take the stream buffers, not clone an 8MB complete on the UI thread: {poll}"
         );
         assert!(
-            chat.contains("estimate_messages")
-                && (chat.contains("chat_job_thread") || chat.contains("job.as_deref()")),
-            "auto-compact must use the origin thread, not only the visible tab: {chat}"
+            finish.contains("self.persist()") && finish.contains("chat_job_thread"),
+            "complete must persist the origin thread: {finish}"
         );
-        assert!(
-            !chat.contains("t.messages.clone()") && !chat.contains("content.clone()"),
-            "Chat complete must not clone an 8MB transcript to estimate/compact: {chat}"
-        );
-        assert!(
-            chat.contains("mem::take")
-                && !chat.contains("stream_buf.clone()")
-                && !chat.contains("thought_buf.clone()"),
-            "Chat complete must take the stream buffers, not clone an 8MB complete on the UI thread: {chat}"
-        );
-        assert!(
-            chat.contains("should_auto_compact_now(tokens, CONTEXT_BUDGET_TOKENS, compact_step)"),
-            "auto-compact must use the post-outcome goal step, not the pre-outcome job_step: {chat}"
-        );
-        let bg_compact = chat
-            .split("compact_keep_start_from")
-            .nth(1)
-            .expect("background compact");
-        assert!(
-            bg_compact.contains("accessed_ms") && !chat.contains("compact_keep_pin(&t.messages"),
-            "background auto-compact must drain dropped turns without cloning an 8MB pane: {bg_compact}"
-        );
-        let pins = chat.find("extract_work_pins").expect("work pins");
-        assert!(
-            chat[..pins].contains("bound_scan"),
-            "Chat complete must not walk an 8MB body for pins/recipe/host/connectors: {chat}"
-        );
-        assert!(
-            chat[pins..].contains("self.persist()")
-                && !chat.contains("if let Some(plan) = plan_from_text"),
-            "Chat complete must persist pins and must not parse HOST_CMD: {chat}"
-        );
-        assert!(
-            chat.contains("goal_continue_pin"),
-            "empty goal_pin must fall back to the last user task: {chat}"
-        );
-        let mid = src
-            .split("fn tick_mid_thought(")
-            .nth(1)
-            .and_then(|s| s.split("fn last_night_hint(").next())
-            .expect("tick_mid_thought");
+        let mid = fn_src(&src, "tick_mid_thought");
         assert!(
             !mid.contains("send_chat") && !mid.contains("send_followup_turn"),
             "MidThought must not auto-continue chat: {mid}"
@@ -6354,16 +6244,12 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     #[test]
     fn mid_thought_stays_out_of_chat() {
         let src = cabin_src();
-        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(src);
+        let impl_src = src.split("#[cfg(test)]").next().unwrap_or(&src);
         assert!(
             !impl_src.contains("You sit down. Last night"),
             "MidThought must not inject a fake assistant turn"
         );
-        let mid = src
-            .split("fn tick_mid_thought(")
-            .nth(1)
-            .and_then(|s| s.split("fn last_night_hint(").next())
-            .expect("tick_mid_thought");
+        let mid = fn_src(&src, "tick_mid_thought");
         assert!(
             !mid.contains("send_chat")
                 && !mid.contains("Nav::Chat")
@@ -6374,11 +6260,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             mid.contains("continue_thread_hint"),
             "MidThought folds Continue {{title}} into the greeting path: {mid}"
         );
-        let hint = src
-            .split("fn last_night_hint(")
-            .nth(1)
-            .and_then(|s| s.split("fn mark_auto_ran(").next())
-            .expect("last_night_hint");
+        let hint = fn_src(&src, "last_night_hint");
         assert!(
             !hint.contains("messages.push") && !hint.contains("send_chat"),
             "last-night context stays in the greeting: {hint}"
@@ -6403,11 +6285,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .find("(\"imagine\", \"Imagine\")")
             .expect("imagine rail");
         assert!(chat < imagine, "Chat sits above Imagine on the rail");
-        let set_nav = src
-            .split("fn set_nav_id(")
-            .nth(1)
-            .and_then(|s| s.split("fn ui_titlebar(").next())
-            .expect("set_nav_id");
+        let set_nav = fn_src(&src, "set_nav_id");
         let chat_arm = set_nav
             .split("\"chat\" =>")
             .nth(1)
@@ -6434,11 +6312,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             created.contains("composer_want_focus = true"),
             "Chat rail must put the cursor in the composer: {created}"
         );
-        let side = src
-            .split("fn ui_sidebar(")
-            .nth(1)
-            .and_then(|s| s.split("fn cached_chat_views(").next())
-            .expect("ui_sidebar");
+        let side = fn_src(&src, "ui_sidebar");
         assert!(
             !side.contains("\"New chat\"") && !side.contains("RailIcon::Compose"),
             "sidebar must not keep a separate New chat button: {side}"
