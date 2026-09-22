@@ -619,11 +619,11 @@ pub fn slash_help() -> String {
         "/palette — command palette. Search walks nested files in the bound project (or ~/GrokHub-Work), not only the top of that folder.",
         "Enter sends; Ctrl+Enter newline. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The transcript Running row has no Stop. The changing status text above the composer is gone. The context usage bar stays. A green live dot plus Thinking / Running / Waiting sits on the turn; hover shows the current action. That line does not sit above the composer.",
         "The Ask card names the command, path, or site. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out. History lists grok sessions from the chat cwd on Linux and Windows.",
-        "Mode pill: Chat / Plan / Ask. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort: None / Minimal / Low / Medium / High / Extra High. A saved Max loads as Extra High. Default model is grok-4.7. Hover a composer pill for what it does. Grok Build runs the agent.",
+        "Mode pill: Chat / Plan / Look. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort: None / Minimal / Low / Medium / High / Extra High. A saved Max loads as Extra High. Default model is grok-4.7. Hover a composer pill for what it does. Grok Build runs the agent.",
         "Settings → Behavior: close to tray, living wall, and a quiet hours dropdown. Picking a window saves it.",
         "History search drops stale hits when the box changes. Re-opening the memory file already in the editor keeps unsaved typing.",
         "Appearance: Dark, Light, System. Ask permission is grok agent stdio (ACP) so Allow / Deny can show; if ACP is down the turn is denied. Auto/Always and night/phone use grok -p and inherit the PermissionMode pill. Ask is fail-closed on those runs until ACP ensure. Halt is session/cancel.",
-        "Voice: Ara. Hey Grok is push-to-talk STT into chat, then TTS of the reply body (not the thought process). Same on Linux and Windows. While live, Voice · Listening sits above the composer with Stop. The line stays open until Stop, the live mic, or Ctrl+G / Super+G. Desktop control is Grok Build computer-use — Halt cancels the ACP turn.",
+        "Voice: Ara. Hey Grok is push-to-talk STT into chat, then TTS of the reply body (not the thought process). Same on Linux and Windows. While live, Listening / Speaking / Ready sits above the composer with Stop. The strip stays up while Listening or Speaking and auto-hides about a second after Ready. Stop, the live mic, or Ctrl+G / Super+G leave. Failed STT shows Ready, not Listening. Desktop control is Grok Build computer-use — Halt cancels the ACP turn.",
         if cfg!(windows) {
             "First-time install and reinstall (Windows Setup + first cabin launch) automatically install Grok Build CLI alpha from https://x.ai/cli (GROK_CHANNEL=alpha). UAC on first run is expected. First run is Get Started — Super Grok OAuth signs in grok too. Get Started shows live device-code / OAuth failures, not leftover wall or install status. The Install control is hidden when grok is already present or an alpha install is already running. Settings → Connect writes CLI auth when grok is not already connected. One Update control checks every 2 hours for a newer Grok Build CLI alpha and a newer GitHub Latest cabin. The titlebar chip says Update CLI, Update cabin, or Update CLI and cabin and notifies in-app, not a web page. Acting on it runs only what is pending: grok update --alpha first, then the cabin (GitHub zip when there is no clone or the leftover clone is not main). A working alpha install is updated only when a newer alpha exists. It does not switch the CLI to stable. If grok is on stable after an upgrade, the cabin switches it back to alpha. Settings About shows grok --version."
         } else {
@@ -769,8 +769,9 @@ mod tests {
         assert!(slash_help().contains("/always-approve"));
         assert!(slash_help().contains("Pulse every 15s"));
         assert!(slash_help().contains("Voice: Ara"));
-        assert!(slash_help().contains("Voice · Listening"));
-        assert!(slash_help().contains("The line stays open until Stop"));
+        assert!(slash_help().contains("Listening / Speaking / Ready"));
+        assert!(slash_help().contains("auto-hides about a second after Ready"));
+        assert!(slash_help().contains("Failed STT shows Ready"));
         assert!(
             slash_help().contains("not the thought process"),
             "{}",
@@ -780,7 +781,7 @@ mod tests {
         assert!(slash_help().contains("inherit the PermissionMode pill"));
         assert!(slash_help().contains("Ask is fail-closed on those runs until ACP ensure"));
         assert!(slash_help().contains("Devices pair URL is a LAN IPv4"));
-        assert!(slash_help().contains("Mode pill: Chat / Plan / Ask"));
+        assert!(slash_help().contains("Mode pill: Chat / Plan / Look"));
         assert!(
             slash_help().contains("Ask permission is grok agent stdio")
                 && slash_help().contains("if ACP is down the turn is denied")

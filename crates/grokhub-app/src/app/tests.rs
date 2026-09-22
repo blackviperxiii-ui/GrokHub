@@ -5751,7 +5751,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("fn paint_voice_mic(").next())
             .expect("paint_voice_mode_row");
         assert!(
-            row.contains("voice_mode_row") && row.contains("leave_voice"),
+            row.contains("voice_mode_row")
+                && row.contains("leave_voice")
+                && row.contains("voice_strip_visible")
+                && row.contains("VoiceState::Ready"),
             "voice chrome must paint the indicator and Stop: {row}"
         );
         let mic = src
@@ -5790,6 +5793,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .expect("JobOut::Voice");
         assert!(
             !voice_job.contains("voice_state = VoiceState::Idle")
+                && voice_job.contains("voice_state_after_ptt_stt")
                 && voice_job.contains("ptt_after_stt")
                 && voice_job.contains("maybe_continue_ptt"),
             "PTT must not idle after one listen: {voice_job}"
@@ -5811,6 +5815,11 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             start.contains("listen_turn") && !start.contains("leave_voice"),
             "the next utterance must listen without re-entering voice: {start}"
+        );
+        let perm = fn_src(&src, "set_permission_mode");
+        assert!(
+            perm.contains("persistable_permission_mode"),
+            "Always must not persist: {perm}"
         );
     }
 

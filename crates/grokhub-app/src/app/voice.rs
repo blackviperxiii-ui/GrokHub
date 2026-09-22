@@ -110,6 +110,7 @@ impl Cabin {
 
     pub(super) fn leave_voice(&mut self) {
         self.voice_hold_rx = None;
+        self.voice_ready_at = None;
         if let Some(mut s) = self.voice_sock.take() {
             s.halt();
         }
@@ -127,6 +128,23 @@ impl Cabin {
         if !self.voice_is_on() {
             return;
         }
+        let ready_ms = match self.voice_state {
+            VoiceState::Ready => {
+                let at = self.voice_ready_at.get_or_insert(Instant::now());
+                at.elapsed().as_millis() as u64
+            }
+            VoiceState::Listening | VoiceState::Speaking | VoiceState::Hands => {
+                self.voice_ready_at = None;
+                0
+            }
+            VoiceState::Idle => 0,
+        };
+        if !voice_strip_visible(self.voice_state, ready_ms) {
+            if self.voice_state == VoiceState::Ready {
+                self.leave_voice();
+            }
+            return;
+        }
         if crate::cards::voice_mode_row(ui, voice_mode_label(self.voice_state)) {
             self.leave_voice();
         }
@@ -137,7 +155,7 @@ impl Cabin {
         let mood = match self.voice_state {
             VoiceState::Speaking => crate::icons::MicMood::Speaking,
             VoiceState::Listening | VoiceState::Hands => crate::icons::MicMood::Live,
-            VoiceState::Idle => {
+            VoiceState::Idle | VoiceState::Ready => {
                 if on {
                     crate::icons::MicMood::Live
                 } else {
@@ -169,7 +187,7 @@ impl Cabin {
                 VoiceState::Listening => "listening",
                 VoiceState::Speaking => "speaking",
                 VoiceState::Hands => "hands",
-                VoiceState::Idle => "idle",
+                VoiceState::Idle | VoiceState::Ready => "idle",
             }
             .into();
             match ev {
