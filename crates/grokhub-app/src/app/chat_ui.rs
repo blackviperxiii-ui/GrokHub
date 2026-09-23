@@ -809,8 +809,9 @@ impl Cabin {
                     return ChatJump::LastYou;
                 }
                 if resp.clicked() {
-                    let used = ui.ctx().data_mut(|d| d.remove::<bool>(used_id)).unwrap_or(false);
+                    let used = ui.ctx().data(|d| d.get_temp::<bool>(used_id)).unwrap_or(false);
                     if used {
+                        ui.ctx().data_mut(|d| d.insert_temp(used_id, false));
                         return ChatJump::None;
                     }
                     return ChatJump::Latest;
