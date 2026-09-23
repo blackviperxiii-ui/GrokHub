@@ -5874,12 +5874,30 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             bar.contains("rect_filled") && bar.contains("grok_context_line"),
             "the context usage bar stays above the composer: {bar}"
         );
+        assert!(
+            bar.contains("Compact") && bar.contains("Slash::Compact"),
+            "Compact sits on the existing context bar: {bar}"
+        );
+        assert!(
+            src.contains("Copy session")
+                && src.contains("\"Export\"")
+                && src.contains("View plan")
+                && src.contains("How fork works")
+                && src.contains("fork_offer_why"),
+            "session export, view plan, and fork chrome must be in the cabin"
+        );
+        let send = fn_src(&src, "send_chat");
+        assert!(
+            send.contains("btw_queues_without_interrupt") && send.contains("side_ask_queue"),
+            "btw must queue a side ask instead of halting the live run: {send}"
+        );
         let order = super::composer_stack_order();
         assert_eq!(
             order,
             &[
                 super::ComposerStackSlot::AuthBanner,
                 super::ComposerStackSlot::ContextBar,
+                super::ComposerStackSlot::SessionTools,
                 super::ComposerStackSlot::SlashPalette,
                 super::ComposerStackSlot::Attach,
                 super::ComposerStackSlot::Voice,

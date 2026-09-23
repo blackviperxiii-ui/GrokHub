@@ -866,13 +866,13 @@ pub fn single_turn_args_full(
         a.push("--permission-mode".into());
         a.push("plan".into());
     } else if look {
-        // SessionMode::Ask is the Questions / Look pill. CLI allows
+        // SessionMode::Ask is the btw pill (saved id `ask`). CLI allows
         // default | acceptEdits | auto | dontAsk | bypassPermissions | plan.
         // Literal "ask" is invalid (Grok Build CLI exit 2).
         a.push("--permission-mode".into());
         a.push("default".into());
     }
-    // Questions / Look stay look-only: do not remap to --always-approve.
+    // btw (saved as ask) stays look-only: do not remap to --always-approve.
     // Composer Ask leftover flags match scheduled Ask (no yolo).
     // Night / loop / phone inherit the pill via PermissionMode::scheduled_flags.
     if let Some(m) = model.map(str::trim).filter(|s| !s.is_empty()) {
@@ -1257,7 +1257,7 @@ mod tests {
         assert!(
             look.windows(2)
                 .any(|w| w[0] == "--permission-mode" && w[1] == "default"),
-            "Questions / Look on Auto/Always is --permission-mode default: {look:?}"
+            "btw (saved as ask) on Auto/Always is --permission-mode default: {look:?}"
         );
         assert!(
             !look.windows(2)
@@ -1352,7 +1352,7 @@ mod tests {
         assert!(
             look.windows(2)
                 .any(|w| w[0] == "--permission-mode" && w[1] == "default"),
-            "Questions / Look is --permission-mode default: {look:?}"
+            "btw (saved as ask) is --permission-mode default: {look:?}"
         );
         assert_eq!(PermissionMode::Ask.composer_headless_flags(), (false, false));
         assert_eq!(PermissionMode::Auto.composer_headless_flags(), (false, true));

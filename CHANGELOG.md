@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.14 — 2026-09-23
+
+btw replaces the Questions label on the session pill (saved id stays `ask`). A live run is not cancelled; the side ask waits, then sends look-safe. Compact sits on the existing context bar. Copy session and Export are on the thread chrome; per-bubble Copy stays. View plan reopens a Plan-mode plan. Fork shows only on a long thread (12+ turns) or when context is at least half the budget, with a one-time how-it-works note. `/rewind` is unchanged.
+
+- Linux: `grokhub-linux-v2.10.14.tar.gz` and AUR `pkgver=2.10.14`.
+- Windows: `GrokHub-Setup-2.10.14.exe` and `grokhub-windows-v2.10.14.zip`.
+- Cursor cabin 2.10.14. VERSION 2.10.14. Not tagged until MERGE GREEN.
+
 ## 2.10.13 — 2026-09-23
 
 Quick chips are one fixed-height line. Long labels ellipsize instead of wrapping or clipping. A chip that does not fully fit is dropped, not cut off at the window edge. The same ranked pool stays up mid-conversation (habit / static chips when the LLM row is not ready). Click, dismiss, and session pills are unchanged.
@@ -9,6 +17,7 @@ Quick chips are one fixed-height line. Long labels ellipsize instead of wrapping
 - Linux: `grokhub-linux-v2.10.13.tar.gz` and AUR `pkgver=2.10.13`.
 - Windows: `GrokHub-Setup-2.10.13.exe` and `grokhub-windows-v2.10.13.zip`.
 - Cursor cabin 2.10.13. VERSION 2.10.13. Not tagged until MERGE GREEN.
+
 
 ## 2.10.12 — 2026-09-23
 

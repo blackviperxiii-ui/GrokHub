@@ -322,6 +322,9 @@ impl Cabin {
                     }
                 }
                 AcpEvent::Plan(t) => {
+                    // Plan text only. No approve / request-changes / comment RPC on this tip:
+                    // session/request_permission is tool Allow/Deny, and /approve does not parse.
+                    self.store_session_plan(&t, true);
                     self.status = format!("Plan · {t}");
                 }
                 AcpEvent::Usage(u) => self.merge_grok_usage(&u),
@@ -478,6 +481,9 @@ impl Cabin {
         remember_chip_outcome(&mut self.chip_memory, true, now_ms());
         record_turn(&mut self.learning);
         bump_usage(&mut self.usage, "message");
+        if self.session_mode == SessionMode::Plan {
+            self.store_session_plan(&text, false);
+        }
         self.apply_assistant_snapshot(text.clone());
         let prose = grokhub_core::assistant_prose(&text);
         if !prose.is_empty() {
@@ -589,6 +595,7 @@ impl Cabin {
                 self.grok_p_rx = Some(rx);
             }
             Ok(GrokPEvent::Plan(t)) => {
+                self.store_session_plan(&t, true);
                 self.status = format!("Plan · {t}");
                 self.grok_p_rx = Some(rx);
             }
@@ -821,11 +828,28 @@ impl Cabin {
     }
 
     pub(super) fn drain_followup_queue(&mut self) {
+        if self.running {
+            return;
+        }
+        if let Some(next) = self.side_ask_queue.first().cloned() {
+            self.side_ask_queue.remove(0);
+            self.send_queued_side_ask(next);
+            return;
+        }
         let Some(next) = self.followup_queue.first().cloned() else {
             return;
         };
         self.followup_queue.remove(0);
         self.send_chat(next);
+    }
+
+    /// Look-safe send after the live turn. Does not cancel that turn — it already ended.
+    pub(super) fn send_queued_side_ask(&mut self, text: String) {
+        self.side_ask_kick = true;
+        self.send_chat(text);
+        if !self.running && self.pending_kick.is_none() && self.acp_spawn_rx.is_none() {
+            self.side_ask_kick = false;
+        }
     }
 
     pub(super) fn thinking_status(&self) -> String {

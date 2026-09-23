@@ -623,7 +623,7 @@ impl Cabin {
                                                             if let Some(i) = crate::cards::settings_dropdown(
                                                                 ui,
                                                                 "Session mode",
-                                                                "Chat, Plan, or Questions. Composer pills still change this launch.",
+                                                                "Chat, Plan, or btw. Composer pills still change this launch.",
                                                                 &session_selected,
                                                                 &session_labels,
                                                             ) {
@@ -823,7 +823,7 @@ mod tests {
         let sessions = cabin_default_sessions();
         assert_eq!(
             sessions,
-            &[("chat", "Chat"), ("plan", "Plan"), ("ask", "Questions")]
+            &[("chat", "Chat"), ("plan", "Plan"), ("ask", "btw")]
         );
         assert_eq!(cabin_default_session_id("ask"), "ask");
         assert_eq!(cabin_default_session_id("plan"), "plan");
