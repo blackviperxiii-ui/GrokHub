@@ -2176,7 +2176,7 @@ pub fn parse_llm_chips(raw: &str) -> Vec<QuickChip> {
                     .split_whitespace()
                     .collect::<Vec<_>>()
                     .join(" ");
-                let label: String = label.chars().take(32).collect();
+                let label = chip_label(&label);
                 let value: String = value.chars().take(400).collect();
                 if label.len() < 2 || value.len() < 4 {
                     continue;
@@ -2222,7 +2222,7 @@ pub fn parse_llm_chips(raw: &str) -> Vec<QuickChip> {
                 }
                 out.push(chip(
                     &format!("llm-{i}-{}", label.chars().take(12).collect::<String>()),
-                    &label.chars().take(32).collect::<String>(),
+                    &chip_label(label),
                     &value.chars().take(400).collect::<String>(),
                     ChipKind::Chat,
                     98.0 - i as f32,
@@ -2792,6 +2792,25 @@ mod tests {
             r#"[{"label":"Continue the wall","value":"Continue painting the cabin wall.","kind":"chat"},{"label":"Cabin brief","value":"Give me a short cabin brief.","kind":"chat"},{"label":"Think Harder","value":"__mode:think","kind":"mode"},{"label":"Open Imagine","value":"__nav:imagine","kind":"nav"},{"label":"Make a checklist","value":"Turn the last answer into a short checklist.","kind":"chat"}]"#,
         );
         assert_eq!(chips.len(), 5, "{:?}", labels(&chips));
+    }
+
+    #[test]
+    fn parse_llm_keeps_full_chip_labels() {
+        let chips = parse_llm_chips(
+            r#"[{"label":"you should already have mcp configured","value":"Confirm the existing MCP connector is wired.","kind":"chat"}]"#,
+        );
+        assert_eq!(chips[0].label, "you should already have mcp configured");
+        assert!(!chips[0].label.contains('…'));
+        let src = include_str!("chips.rs");
+        let parse = src
+            .split("pub fn parse_llm_chips(")
+            .nth(1)
+            .and_then(|s| s.split("fn cabin_chip_copy_ok(").next())
+            .expect("parse_llm_chips");
+        assert!(
+            !parse.contains("take(32)") && parse.contains("chip_label"),
+            "LLM labels must not hard-cut mid-phrase: {parse}"
+        );
     }
 
     #[test]

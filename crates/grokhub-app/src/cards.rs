@@ -926,9 +926,9 @@ pub const CHIP_LABEL_WRAP: f32 = 180.0;
 pub const CHIP_PAD_X: f32 = 14.0;
 pub const CHIP_PAD_Y: f32 = 8.0;
 
-/// Max width of the chip cluster — follows the composer column.
+/// Max width of the chip cluster — Ask anything column, never the inflated pane.
 pub fn chip_row_width_lock(avail: f32) -> f32 {
-    avail.max(120.0)
+    avail.clamp(120.0, crate::theme::CHAT_COL_W)
 }
 
 /// One chip line (pad + two wrapped label lines). Empty-home leftover must not
@@ -1034,7 +1034,8 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
         return None;
     }
     let mut act = None;
-    let max_w = chip_row_width_lock(ui.available_width());
+    let col = composer_pill_w(ui.ctx().screen_rect().width());
+    let max_w = chip_row_width_lock(ui.available_width().min(col));
     ui.allocate_ui_with_layout(
         egui::vec2(max_w, CHIP_CLUSTER_H),
         egui::Layout::left_to_right(egui::Align::Min)
@@ -2574,6 +2575,11 @@ mod tests {
         let max_w = chip_row_width_lock(640.0);
         assert_eq!(max_w, 640.0);
         assert_ne!(max_w, 0.0);
+        assert_eq!(
+            chip_row_width_lock(2000.0),
+            crate::theme::CHAT_COL_W,
+            "inflated pane width must not stretch chips past Ask anything"
+        );
         let src = include_str!("cards.rs");
         let slice = src
             .split("pub fn quick_chip_row(")
@@ -2585,8 +2591,10 @@ mod tests {
             "chips sit on the midline of the bar: {slice}"
         );
         assert!(
-            slice.contains("with_main_wrap(true)") && slice.contains("CHIP_CLUSTER_H"),
-            "five chips wrap to a second line inside the composer width: {slice}"
+            slice.contains("with_main_wrap(true)")
+                && slice.contains("CHIP_CLUSTER_H")
+                && slice.contains("composer_pill_w"),
+            "five chips wrap to a second line inside the Ask anything column: {slice}"
         );
         assert!(
             !slice.contains("with_main_wrap(false)"),

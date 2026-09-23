@@ -6859,8 +6859,9 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             chip_row.contains("with_main_wrap(true)")
                 && chip_row.contains("CHIP_CLUSTER_H")
+                && chip_row.contains("composer_pill_w")
                 && !chip_row.contains("with_main_wrap(false)")
                 && !chip_row.contains('…'),
-            "home chips wrap inside the composer; no mid-phrase ellipsis"
+            "home chips wrap inside Ask anything; no mid-phrase ellipsis"
         );
     }
