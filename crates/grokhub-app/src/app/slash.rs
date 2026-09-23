@@ -208,6 +208,26 @@ impl Cabin {
                     };
                 }
             }
+            Slash::Btw => {
+                self.set_session_mode(SessionMode::Ask);
+                self.status = if self.running {
+                    "btw — side ask, main run continues".into()
+                } else {
+                    "btw — look-safe side ask".into()
+                };
+            }
+            Slash::ViewPlan => {
+                let has = self
+                    .threads
+                    .get(self.thread_idx)
+                    .is_some_and(|t| !t.plan_body.trim().is_empty());
+                if has {
+                    self.plan_open = true;
+                    self.status = "View plan".into();
+                } else {
+                    self.status = "No plan yet — use Plan mode".into();
+                }
+            }
             Slash::RewindFiles => self.rewind_project(),
             Slash::Compact => {
                 let pin = self.cfg.goal_pin.trim().to_string();
