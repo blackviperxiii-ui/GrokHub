@@ -2524,8 +2524,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         );
         let err = poll.split("AcpEvent::Err").nth(1).expect("err arm");
         assert!(
-            !err.contains("grok_session = None") && err.contains("self.acp = None"),
-            "agent exit must keep the attached Grok Build session id: {err}"
+            !err.contains("grok_session = None")
+                && err.contains("self.acp = None")
+                && err.contains("maybe_continue_ptt"),
+            "agent exit must keep the attached Grok Build session id and resume PTT: {err}"
         );
         let spawn_poll = src
             .split("fn poll_acp_spawn(")
@@ -3039,6 +3041,9 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "kick_model must wait for the off-thread frame and grok -p instead of blocking: {kick}"
         );
         let ask_kick = fn_src(&src, "kick_model");
+        let sched_gate = ask_kick
+            .find("!self.scheduled_perm")
+            .expect("scheduled Ask must skip ACP");
         let ask_gate = ask_kick
             .find("uses_acp")
             .expect("Ask permission must choose ACP");
@@ -3046,8 +3051,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .find("spawn_grok_p_stream")
             .expect("Auto/Always grok -p");
         assert!(
-            ask_gate < grok_p,
-            "Ask must decide before headless grok -p: {ask_kick}"
+            sched_gate < ask_gate && ask_gate < grok_p,
+            "scheduled Ask must skip ACP before headless grok -p: {ask_kick}"
         );
         let ask_arm = &ask_kick[ask_gate..grok_p];
         assert!(
@@ -3061,8 +3066,9 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             ask_kick.contains("scheduled_flags")
                 && ask_kick.contains("composer_headless_flags")
+                && ask_kick.contains("self.session_mode")
                 && ask_kick[grok_p..].contains("spawn_grok_p_stream"),
-            "Auto/Always stay on grok -p via inherited PermissionMode flags: {ask_kick}"
+            "Look + Auto/Always stay on grok -p with look-only flags: {ask_kick}"
         );
     }
 
@@ -3083,6 +3089,22 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             fire_night.contains("send_scheduled_chat"),
             "night chat must inherit PermissionMode, not a separate yolo path: {fire_night}"
         );
+        let send_at = fire_night
+            .find("send_scheduled_chat")
+            .expect("night send");
+        let ran_at = fire_night
+            .rfind("mark_auto_ran")
+            .expect("night mark ran");
+        assert!(
+            send_at < ran_at,
+            "night must mark ran after a live kick, not before: {fire_night}"
+        );
+        assert!(
+            fire_night.contains("self.running")
+                && fire_night.contains("pending_kick")
+                && fire_night.contains("grok_p_rx"),
+            "night marks ran only after a live kick: {fire_night}"
+        );
         let inbox = fn_src(&src, "drain_inbox");
         assert!(
             inbox.contains("send_scheduled_chat"),
@@ -3102,8 +3124,25 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         );
         let scheduled = fn_src(&src, "send_scheduled_chat");
         assert!(
-            scheduled.contains("scheduled_perm = true") && scheduled.contains("send_chat"),
-            "scheduled enqueue must reuse send_chat after marking the pill inherit: {scheduled}"
+            scheduled.contains("scheduled_perm = true")
+                && scheduled.contains("send_chat")
+                && scheduled.contains("scheduled_flags")
+                && scheduled.contains("scheduled_args"),
+            "scheduled enqueue must pass scheduled_args / scheduled_flags: {scheduled}"
+        );
+        let fail_ask = fn_src(&src, "fail_ask_without_acp");
+        assert!(
+            fail_ask.contains("maybe_continue_ptt"),
+            "Ask deny must resume PTT: {fail_ask}"
+        );
+        let poll_acp = fn_src(&src, "poll_acp");
+        let err = poll_acp
+            .split("AcpEvent::Err")
+            .nth(1)
+            .expect("AcpEvent::Err");
+        assert!(
+            err.contains("maybe_continue_ptt"),
+            "fatal ACP Err must resume PTT: {err}"
         );
     }
 

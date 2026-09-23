@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.4 — 2026-09-23
+
+Look is look-only on Auto/Always as well as Permission Ask. Headless Look uses `grok -p --permission-mode ask` and does not inject `CABIN_DESKTOP_RULES` / desktop-do-the-work. Plan stays plan. Chat stays chat. Night, inbox, and anticipate inherit `scheduled_args` like loops: scheduled Ask skips ACP and does not silent `--always-approve`. Night marks the slot ran after a live kick, not before. Composer Ask leftover flags match scheduled Ask (no yolo). Ask ACP deny and fatal `AcpEvent::Err` resume PTT. Ask fail-closed copy names Install Grok Build CLI / Start agent in Settings → Update. `AcpHandle` drop backtraces stay behind `GROKHUB_ACP_DROP_TRACE`.
+
+- Linux: `grokhub-linux-v2.10.4.tar.gz` and AUR `pkgver=2.10.4`.
+- Windows: `GrokHub-Setup-2.10.4.exe` and `grokhub-windows-v2.10.4.zip`.
+- Cursor cabin 2.10.4. VERSION 2.10.4.
+
 ## 2.10.3 — 2026-09-23
 
 Always idle matches Ask/Auto (no amber). Selected Always is a 2px amber stroke only — dark `#E8A838`, light `#B86E00` — same elevated fill as Auto, no yellow wash or text. Weight is the 2px ring plus selected type. Risk tip stays. Hi-fi pass: canvas / elevated / hover, 1px borders, soft card elevation, Fluent 16/20 icons, Inter 16 / 13 / 12, ~120ms motion, session row quieter than permission. ACP Ask, Look, Enter/Esc, and redaction are unchanged.

@@ -97,6 +97,7 @@ impl Cabin {
         self.status = self.apply_job_fail(&ask_denied_without_acp(detail));
         self.chat_job_thread = None;
         self.persist();
+        self.maybe_continue_ptt();
     }
 
     pub(super) fn ensure_acp(&mut self) -> Result<(), String> {
@@ -427,6 +428,7 @@ impl Cabin {
                     self.status = self.apply_job_fail(&e);
                     self.chat_job_thread = None;
                     self.persist();
+                    self.maybe_continue_ptt();
                 }
             }
         }
@@ -742,7 +744,7 @@ impl Cabin {
             false,
             None,
             None,
-            false,
+            SessionMode::Chat,
             None,
             false,
             user_home,

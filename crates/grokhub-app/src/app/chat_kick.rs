@@ -81,7 +81,10 @@ impl Cabin {
 
     /// Night, anticipate, and phone `/v1/task` enqueue through `send_chat` so they
     /// share the composer PermissionMode pill — not a separate always-yolo path.
+    /// `scheduled_perm` makes `kick_model` skip ACP and honor `scheduled_flags`
+    /// / `scheduled_args` (Ask is fail-closed, no `--always-approve`).
     pub(super) fn send_scheduled_chat(&mut self, text: String) {
+        // kick_model honors scheduled_flags / scheduled_args while scheduled_perm.
         self.scheduled_perm = true;
         self.send_chat(text);
         if !self.running && self.pending_kick.is_none() {
@@ -177,7 +180,7 @@ impl Cabin {
             self.pending_kick = Some(consume_attach);
             return;
         }
-        if self.permission_mode.uses_acp() && self.acp.is_none() {
+        if !self.scheduled_perm && self.permission_mode.uses_acp() && self.acp.is_none() {
             if let Err(e) = self.ensure_acp() {
                 self.fail_ask_without_acp(&e);
                 return;
@@ -207,7 +210,7 @@ impl Cabin {
         } else {
             None
         };
-        if self.permission_mode.uses_acp() {
+        if !self.scheduled_perm && self.permission_mode.uses_acp() {
             let prompt_err = self
                 .acp
                 .as_ref()
@@ -247,7 +250,6 @@ impl Cabin {
         } else {
             self.permission_mode.composer_headless_flags()
         };
-        let plan = self.session_mode == SessionMode::Plan;
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
         let effort = grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort);
         let resume_in_cabin = resume
@@ -273,7 +275,7 @@ impl Cabin {
             auto,
             Some(model.as_str()),
             effort,
-            plan,
+            self.session_mode,
             image.as_deref(),
             fork,
             user_home,
