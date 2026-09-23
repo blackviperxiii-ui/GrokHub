@@ -927,6 +927,16 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             chat.contains("scrolled_off_tail") && chat.contains("jump_to_latest"),
             "scrolled up, the pane owes you a way back down: {chat}"
         );
+        assert!(
+            chat.contains("chat-jump")
+                && chat.contains("BarIcon::ArrowDown")
+                && chat.contains("ChatJump::Latest")
+                && !chat.contains("chat-jump-last-you")
+                && !chat.contains("chat-jump-latest")
+                && !chat.contains("ghost_pill(ui, \"Last you\")")
+                && !chat.contains("white_pill(ui, \"Jump to latest\")"),
+            "one down-arrow jump Area, no overlapping Last you / Jump to latest pills: {chat}"
+        );
         let switch = src
             .split("fn apply_switch_thread(")
             .nth(1)
