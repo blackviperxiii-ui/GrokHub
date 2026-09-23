@@ -4242,24 +4242,8 @@ fn kick_eyes_tex(ctx: egui::Context, key: String, url: String) {
     });
 }
 
-fn project_row_active(selected: bool, is_project: bool, nav: Nav) -> bool {
-    if !selected || !is_project {
-        return false;
-    }
-    match nav {
-        Nav::Workboard => true,
-        Nav::Chat
-        | Nav::Devices
-        | Nav::Memory
-        | Nav::Imagine
-        | Nav::Skills
-        | Nav::Night
-        | Nav::History
-        | Nav::Command
-        | Nav::Connectors
-        | Nav::Agents
-        | Nav::Settings => false,
-    }
+fn project_row_active(selected: bool, is_project: bool, _nav: Nav) -> bool {
+    selected && is_project
 }
 
 fn health_settings_sec() -> SettingsSec {

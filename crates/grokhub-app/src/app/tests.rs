@@ -1098,34 +1098,79 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     }
 
     #[test]
-    fn click_bound_project_opens_the_board() {
-        assert!(super::click_project_opens_board(true));
+    fn click_bound_project_stays_on_chat() {
+        assert!(!super::click_project_opens_board(true));
     }
 
     #[test]
-    fn selected_project_highlights_only_on_the_board() {
+    fn selected_project_stays_lit_while_filtering_chats() {
+        assert!(super::project_row_active(true, true, super::Nav::Chat));
         assert!(super::project_row_active(true, true, super::Nav::Workboard));
-        assert!(
-            !super::project_row_active(true, true, super::Nav::Chat),
-            "a History chat must not leave the project lit"
-        );
-        assert!(
-            !super::project_row_active(true, true, super::Nav::Imagine),
-            "Imagine must not leave the project lit"
-        );
-        assert!(!super::project_row_active(true, true, super::Nav::Night));
-        assert!(!super::project_row_active(true, true, super::Nav::Skills));
-        assert!(!super::project_row_active(true, true, super::Nav::History));
+        assert!(super::project_row_active(true, true, super::Nav::History));
         assert!(!super::project_row_active(
             true,
             false,
-            super::Nav::Workboard
+            super::Nav::Chat
         ));
-        assert!(!super::project_row_active(
-            false,
-            true,
-            super::Nav::Workboard
-        ));
+        assert!(!super::project_row_active(false, true, super::Nav::Chat));
+    }
+
+    #[test]
+    fn project_click_does_not_steal_chat_and_delete_releases_chats() {
+        let src = cabin_src();
+        let bind = src
+            .split("fn bind_project_id(")
+            .nth(1)
+            .and_then(|s| s.split("fn make_project(").next())
+            .expect("bind_project_id");
+        assert!(
+            !bind.contains("self.nav = Nav::Workboard"),
+            "project click must not open the workboard: {bind}"
+        );
+        assert!(
+            bind.contains("click_project_opens_board") && bind.contains("Nav::Chat"),
+            "a project selected from the board returns to chat: {bind}"
+        );
+        let tree_at = bind.find("if tree_changed").expect("tree_changed");
+        let halt_at = bind.find("halt_in_flight").expect("halt_in_flight");
+        assert!(
+            tree_at < halt_at,
+            "restoring the same project filter must not halt a live reply: {bind}"
+        );
+        let drop_proj = src
+            .split("fn remove_project_id(")
+            .nth(1)
+            .and_then(|s| s.split("fn apply_project_menu(").next())
+            .expect("remove_project_id");
+        assert!(
+            drop_proj.contains("release_project_chats")
+                && !drop_proj.contains("messages.clear")
+                && !drop_proj.contains("threads.clear"),
+            "delete must unassign chats without wiping transcripts: {drop_proj}"
+        );
+        let created = src
+            .split("fn new_thread")
+            .nth(1)
+            .and_then(|s| s.split("fn begin_chat_rename").next())
+            .expect("new_thread");
+        assert!(
+            created.contains("project_id"),
+            "new chat while a project is selected must file into that folder: {created}"
+        );
+        let rail = src
+            .split("id_salt(\"rail-history\")")
+            .nth(1)
+            .and_then(|s| s.split("fn cached_chat_views(").next())
+            .expect("rail-history");
+        assert!(
+            rail.contains("project_folder_history_row"),
+            "project History must skip unlisted empty drafts: {rail}"
+        );
+        let row = include_str!("../threads.rs");
+        assert!(
+            row.contains("fn project_folder_history_row") && row.contains("empty_chat_draft"),
+            "project History rows must use empty_chat_draft"
+        );
     }
 
     #[test]

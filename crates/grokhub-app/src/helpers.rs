@@ -2,8 +2,9 @@ use grokhub_core::{chip_thread_from_messages, ChipThread};
 
 use crate::threads;
 
-pub fn click_project_opens_board(already_selected: bool) -> bool {
-    already_selected
+/// Project click and create stay on chat. The Workboard opens from the rail, `/board`, or the palette.
+pub fn click_project_opens_board(_already_selected: bool) -> bool {
+    false
 }
 
 pub fn collect_other_chip_threads(threads: &[threads::ChatThread], current_id: &str) -> Vec<ChipThread> {
@@ -59,8 +60,8 @@ mod tests {
     }
 
     #[test]
-    fn selected_project_opens_the_board() {
-        assert!(click_project_opens_board(true));
+    fn project_click_never_opens_the_board() {
+        assert!(!click_project_opens_board(true));
         assert!(!click_project_opens_board(false));
     }
 
