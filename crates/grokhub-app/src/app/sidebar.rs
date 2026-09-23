@@ -438,6 +438,8 @@ impl Cabin {
                     .show(ui, |ui| {
                         if !self.grok_sessions_loaded {
                             self.reload_grok_sessions();
+                        } else {
+                            self.maybe_refresh_grok_sessions();
                         }
                         let q = self.sidebar_q.to_ascii_lowercase();
                         let current_sid = self

@@ -105,6 +105,16 @@ pub fn chat_appears_in_history(list_cwd: &str, session_cwd: Option<&str>, dialog
     }
 }
 
+/// How often History re-lists `grok sessions`. Windows CLI lags new rows, so
+/// the watch interval is tighter. Linux stays quieter.
+pub fn history_list_refresh_due(windows: bool, loaded: bool, elapsed_ms: u64) -> bool {
+    if !loaded {
+        return true;
+    }
+    let wait_ms = if windows { 3_000 } else { 20_000 };
+    elapsed_ms >= wait_ms
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,6 +184,11 @@ mod tests {
         assert_eq!(bound, r"D:\src\app");
         assert!(chat_appears_in_history(&bound, Some(r"D:/src/app"), true));
         assert!(!chat_appears_in_history(&list, Some(&bound), true));
+        assert!(history_list_refresh_due(true, false, 0));
+        assert!(history_list_refresh_due(true, true, 3_000));
+        assert!(!history_list_refresh_due(true, true, 2_999));
+        assert!(!history_list_refresh_due(false, true, 3_000));
+        assert!(history_list_refresh_due(false, true, 20_000));
     }
 
     #[test]

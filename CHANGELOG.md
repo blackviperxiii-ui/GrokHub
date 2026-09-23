@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.9 — 2026-09-23
+
+Skills and Connectors `grok_tile` wraps the full description; Use in chat sits under the body (no title-row overlap, no 80-char mid-word clip). Accepting a Suggested automation dismisses it from `suggestions.json` and the UI every time. Quiet daily session-derived Suggested Automations and Skills land on the night/review path and persist. Automations no longer paints Follow along / Teach this once. Loop and scheduled titles wrap instead of `take(40)`. History indexes a live session as soon as it is created and Windows re-lists on a 3s watch so new chats do not lag forever.
+
+- Linux: `grokhub-linux-v2.10.9.tar.gz` and AUR `pkgver=2.10.9`.
+- Windows: `GrokHub-Setup-2.10.9.exe` and `grokhub-windows-v2.10.9.zip`.
+- Cursor cabin 2.10.9. VERSION 2.10.9. Not tagged until MERGE GREEN.
+
 ## 2.10.8 — 2026-09-23
 
 Selecting a cabin skill follows into grok -p / ACP: `Follow skill {name}` matches, and the kick prepends `active_skill_follow`. Skills Suggested tiles from the nightly review Add via `save_skill`. Connectors owns the GitHub PAT plus read-only Who am I / List repos tiles (`run_connector` only — no writes, no other websites). `/workflow` `/compact` `/rewind` honor the PermissionMode pill: Ask is fail-closed if ACP is down; Auto/Always keep composer flags and session mode. Questions / Look session mode maps to `--permission-mode default` (never the invalid CLI value `ask`). Scrolled-up chat is one down-arrow jump (click = latest; Last you is right-click or hold). Home chips pad inside the fill and wrap without ellipsis. The Questions session pill keeps id `ask` with 8px inset.

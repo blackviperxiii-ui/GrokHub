@@ -270,6 +270,7 @@ pub use pair::{
 };
 pub use paths::{
     cabin_session_cwd, cabin_work_root, canonical_session_cwd, chat_appears_in_history,
+    history_list_refresh_due,
     session_home, user_home,
 };
 pub use project::{
@@ -299,11 +300,11 @@ pub use reflect::{
 };
 pub use review::{
     build_review_digest, cabin_real_text, dedupe_suggestions, digest_line_from,
-    merge_suggestion_store, parse_suggest_lines, parse_suggest_skill_patches,
+    dismiss_accepted_auto, merge_suggestion_store, parse_suggest_lines, parse_suggest_skill_patches,
     partition_suggestions, prune_live_suggestions, review_due, review_status_line,
-    review_system_prompt, skill_from_suggestion, DigestLine, LearnedSuggestion, ReviewDigest,
-    SkillPatch, SuggestionKind, SuggestionStore, CABIN_GITHUB_TOOLS, DIGEST_LINE_CAP,
-    REVIEW_NIGHT_HOUR, SUGGEST_CAP,
+    review_system_prompt, skill_from_suggestion, suggestions_from_sessions, DigestLine,
+    LearnedSuggestion, ReviewDigest, SkillPatch, SuggestionKind, SuggestionStore,
+    CABIN_GITHUB_TOOLS, DIGEST_LINE_CAP, REVIEW_NIGHT_HOUR, SUGGEST_CAP,
 };
 pub use rewind::{
     is_rewind_copy_cmd, is_rewind_copy_cmd_in, keep_last_rewinds, rewind_allowed,

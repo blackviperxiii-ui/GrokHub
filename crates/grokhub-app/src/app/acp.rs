@@ -55,10 +55,17 @@ impl Cabin {
                         .as_deref()
                         .and_then(|id| self.threads.iter().position(|t| t.id == id))
                         .unwrap_or(self.thread_idx);
+                    let title = self
+                        .threads
+                        .get(idx)
+                        .map(|t| t.title.clone())
+                        .unwrap_or_default();
                     if let Some(t) = self.threads.get_mut(idx) {
-                        t.grok_session = Some(sid);
-                        t.grok_cwd = Some(cwd);
+                        t.grok_session = Some(sid.clone());
+                        t.grok_cwd = Some(cwd.clone());
                     }
+                    self.note_live_grok_session(&sid, &title, Some(std::path::PathBuf::from(cwd)));
+                    self.request_grok_sessions_refresh();
                 }
                 self.acp = Some(h);
                 self.persist();
@@ -692,9 +699,21 @@ impl Cabin {
             }
         }
         if session_saved {
+            let title = self
+                .threads
+                .get(idx)
+                .map(|t| t.title.clone())
+                .unwrap_or_default();
+            let cwd = self
+                .threads
+                .get(idx)
+                .and_then(|t| t.grok_cwd.clone())
+                .map(std::path::PathBuf::from);
+            self.note_live_grok_session(&turn.session_id, &title, cwd);
             self.grok_sessions_loaded = false;
             if self.grok_sessions_inflight > 0 {
                 self.grok_list_gen = self.grok_list_gen.wrapping_add(1);
+                self.grok_sessions_refresh_pending = true;
             } else {
                 self.reload_grok_sessions();
             }
@@ -895,11 +914,13 @@ impl Cabin {
 
     pub(super) fn reload_grok_sessions(&mut self) {
         if self.grok_sessions_inflight > 0 {
+            self.grok_sessions_refresh_pending = true;
             return;
         }
         self.grok_list_gen = self.grok_list_gen.wrapping_add(1);
         let gen = self.grok_list_gen;
         self.grok_sessions_inflight = self.grok_sessions_inflight.saturating_add(1);
+        self.grok_sessions_refresh_pending = false;
         let bin = grokhub_acp::find_grok();
         let cwd = self.grok_cli_cwd();
         let tx = self.grok_sessions_tx.clone();
@@ -958,10 +979,75 @@ impl Cabin {
         }
         self.grok_sessions = hide_pending_grok_sessions(rows, &self.pending_grok_deletes);
         self.grok_sessions_loaded = true;
+        self.last_grok_list_at = Instant::now();
         self.sync_unlocked_titles_from_sessions();
         if self.nav == Nav::History && done.is_empty() && !delete_failed {
             self.status = format!("{} Grok sessions", self.grok_sessions.len());
         }
+        if self.grok_sessions_refresh_pending && self.grok_sessions_inflight == 0 {
+            self.request_grok_sessions_refresh();
+        }
+    }
+
+    pub(super) fn note_live_grok_session(
+        &mut self,
+        id: &str,
+        title: &str,
+        cwd: Option<std::path::PathBuf>,
+    ) {
+        let id = id.trim();
+        if id.is_empty() {
+            return;
+        }
+        if let Some(s) = self.grok_sessions.iter_mut().find(|s| s.id == id) {
+            if !title.is_empty()
+                && (s.title.is_empty()
+                    || s.title == s.id
+                    || grokhub_acp::is_placeholder_session_title(&s.title))
+            {
+                s.title = title.to_string();
+            }
+            if s.cwd.is_none() {
+                s.cwd = cwd;
+            }
+            return;
+        }
+        self.grok_sessions.insert(
+            0,
+            grokhub_acp::GrokSession {
+                id: id.to_string(),
+                title: if title.trim().is_empty() {
+                    id.to_string()
+                } else {
+                    title.to_string()
+                },
+                path: None,
+                cwd,
+                cabin: false,
+            },
+        );
+    }
+
+    pub(super) fn request_grok_sessions_refresh(&mut self) {
+        self.grok_sessions_loaded = false;
+        if self.grok_sessions_inflight > 0 {
+            self.grok_list_gen = self.grok_list_gen.wrapping_add(1);
+            self.grok_sessions_refresh_pending = true;
+            return;
+        }
+        self.reload_grok_sessions();
+    }
+
+    pub(super) fn maybe_refresh_grok_sessions(&mut self) {
+        let elapsed = self.last_grok_list_at.elapsed().as_millis() as u64;
+        if !history_list_refresh_due(cfg!(windows), self.grok_sessions_loaded, elapsed) {
+            return;
+        }
+        if self.grok_sessions_inflight > 0 {
+            self.grok_sessions_refresh_pending = true;
+            return;
+        }
+        self.reload_grok_sessions();
     }
 
     pub(super) fn reload_grok_catalog(&mut self) {
