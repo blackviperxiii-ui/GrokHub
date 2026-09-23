@@ -1409,6 +1409,26 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "the shortcut sheet promises Enter / Esc on a permission card: {ask}"
         );
         assert!(
+            ask.contains("perm_always_confirm")
+                && ask.contains("ALWAYS_CONFIRM_LINE1")
+                && ask.contains("ALWAYS_CONFIRM_LINE2")
+                && ask.contains("always_amber()")
+                && ask.contains("Confirm")
+                && ask.contains("Cancel"),
+            "Ask Always is a second beat that names session skip and scheduled inherit: {ask}"
+        );
+        let always_click = ask
+            .find("ghost_pill(ui, \"Always\")")
+            .expect("Always ghost");
+        let set_always = ask
+            .find("set_permission_mode(PermissionMode::AlwaysApprove)")
+            .expect("Always mode");
+        assert!(
+            always_click < set_always
+                && ask[always_click..set_always].contains("perm_always_confirm"),
+            "Always on the Ask card must confirm before flipping the pill: {ask}"
+        );
+        assert!(
             ask.contains("self.composer"),
             "Enter must send a typed follow-up instead of approving a tool: {ask}"
         );
@@ -5445,6 +5465,19 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             slice.contains("paint_perm_ask"),
             "empty home must still show a live permission bar: {slice}"
         );
+        assert!(
+            slice.contains("paint_empty_pulse")
+                && slice.contains("pulse_should_paint")
+                && slice.contains("empty_home_composer_top"),
+            "signed-in empty home paints the pulse under the greeting: {slice}"
+        );
+        assert!(
+            !slice.contains("weather")
+                && !slice.contains("Outlook")
+                && !slice.contains("Gmail")
+                && !slice.contains("calendar"),
+            "empty-home pulse must not invent mail or weather: {slice}"
+        );
         let greet = slice.find("self.greeting").expect("greeting");
         let composer = slice.find("ui_composer_stack").expect("composer");
         assert!(greet < composer, "greeting sits above the chat box");
@@ -6541,5 +6574,32 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert_eq!(
             crate::threads::most_recently_accessed_index(&[older, newer, scratch]),
             Some(1)
+        );
+    }
+
+    #[test]
+    fn empty_home_pulse_stays_off_scratch_and_off_about() {
+        let src = cabin_src();
+        let home = src
+            .split("fn ui_empty_home")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_composer_stack(").next())
+            .expect("empty home");
+        assert!(
+            home.contains("pulse_should_paint") && !home.contains("vertical_centered_justified"),
+            "pulse must not re-center the chip row: {home}"
+        );
+        assert!(
+            !home.contains("grok_tile("),
+            "full grok_tiles shove the composer off a short cabin: {home}"
+        );
+        let about = src.split("SettingsSec::About").nth(1).unwrap_or("");
+        assert!(
+            !about.contains("usage_line") && !about.contains("paint_empty_pulse"),
+            "About must not grow today's buckets: {about}"
+        );
+        assert!(
+            src.contains("Nav::Workboard") && src.contains("Nav::Night"),
+            "pulse clicks reuse Workboard and Automations"
         );
     }

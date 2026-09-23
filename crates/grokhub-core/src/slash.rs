@@ -618,7 +618,7 @@ pub fn slash_help() -> String {
         "/models — Grok catalog",
         "/palette — command palette. Search walks nested files in the bound project (or ~/GrokHub-Work), not only the top of that folder.",
         "Enter sends; Ctrl+Enter newline. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The transcript Running row has no Stop. The changing status text above the composer is gone. The context usage bar stays. A green live dot plus Thinking / Running / Waiting sits on the turn; hover shows the current action. That line does not sit above the composer.",
-        "The Ask card names the command, path, or site. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out. History lists grok sessions from the chat cwd on Linux and Windows.",
+        "The Ask card names the command, path, or site. Always on that card confirms skip every tool prompt this launch; night / loop / phone inherit --always-approve until quit. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out. History lists grok sessions from the chat cwd on Linux and Windows.",
         "Mode pill: Chat / Plan / Look. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort: None / Minimal / Low / Medium / High / Extra High. A saved Max loads as Extra High. Default model is grok-4.7. Hover a composer pill for what it does. Grok Build runs the agent.",
         "Settings → Behavior: close to tray, living wall, and a quiet hours dropdown. Picking a window saves it.",
         "History search drops stale hits when the box changes. Re-opening the memory file already in the editor keeps unsaved typing.",
@@ -636,7 +636,7 @@ pub fn slash_help() -> String {
         "Tool calls, diffs, and desk frames sit in a collapsed Work tree — expand to view. User and assistant chats are bubbles; thinking is faded thought process, not a bubble. A thought starts expanded. Minimize leaves one short row that opens again. Hide stops drawing that thought. That fold survives the live-to-stored handoff. The reply stays. A long user bubble wraps inside the row and keeps its leading gap. Permission prompts Allow / Deny — Enter allows and Esc denies when the composer is empty. User bubbles sit on the right.",
         "Shared buttons hover-scale to 1.035 over 120ms, shrink on press, and scale plus fill on keyboard focus. Card and wall hover stay inside the slot. Off-screen chat rows skip paint; height follows the pane width and each row keeps its id.",
         "Account sets a display name and a local profile picture kept in cabin config. The avatar menu, rail, and connected hint do not show the email.",
-        "Five chips sit centered over the composer.",
+        "Five chips sit centered over the composer. Signed-in empty home paints a cabin pulse under the greeting: next job or Morning brief seed, goal pin, open workboard, cabin usage. No weather, mail, or calendar stubs.",
     ]
     .join("\n")
 }
@@ -824,6 +824,8 @@ mod tests {
         assert!(slash_help().contains("The changing status text above the composer is gone"));
         assert!(slash_help().contains("The context usage bar stays"));
         assert!(slash_help().contains("The Ask card names the command, path, or site"));
+        assert!(slash_help().contains("skip every tool prompt this launch"));
+        assert!(slash_help().contains("cabin pulse"));
         assert!(slash_help().contains("leaves the rewind snapshot out"));
         assert!(slash_help().contains("History lists grok sessions from the chat cwd"));
         assert!(slash_help().contains("Idle Stop and the idle mic sit still"));

@@ -151,6 +151,7 @@ mod oauth;
 mod imagine;
 mod night;
 mod chat_ui;
+mod pulse;
 mod sidebar;
 mod pages;
 mod jobs;
@@ -172,6 +173,8 @@ use imagine::*;
 use oauth::*;
 #[allow(unused_imports)]
 use plus::*;
+#[allow(unused_imports)]
+use pulse::*;
 #[allow(unused_imports)]
 use settings::*;
 #[allow(unused_imports)]
@@ -612,6 +615,8 @@ pub struct Cabin {
     live_blocks: Vec<LiveBlock>,
     desk_frame: Option<String>,
     perm_ask: Option<grokhub_acp::PermissionAsk>,
+    /// Ask-card Always second beat. Not the composer pill.
+    perm_always_confirm: bool,
     elicit_ask: Option<grokhub_acp::ElicitAsk>,
     elicit_draft: String,
     /// Secret values typed into an elicit. Memory only — never persisted.
@@ -1009,6 +1014,7 @@ impl Cabin {
             live_blocks: Vec::new(),
             desk_frame: None,
             perm_ask: None,
+            perm_always_confirm: false,
             elicit_ask: None,
             elicit_draft: String::new(),
             secret_hold: Vec::new(),
