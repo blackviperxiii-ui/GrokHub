@@ -76,6 +76,9 @@ pub struct SuggestionStore {
     pub last_review_day: Option<String>,
     #[serde(default)]
     pub last_review_ms: u64,
+    /// Local calendar day of the last quiet session-derived Suggest pass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_session_suggest_day: Option<String>,
     #[serde(default)]
     pub autos: Vec<LearnedSuggestion>,
     #[serde(default)]
@@ -594,6 +597,9 @@ pub fn merge_suggestion_store(
             .last_review_day
             .or_else(|| existing.last_review_day.clone()),
         last_review_ms: incoming.last_review_ms.max(existing.last_review_ms),
+        last_session_suggest_day: incoming
+            .last_session_suggest_day
+            .or_else(|| existing.last_session_suggest_day.clone()),
         autos: merge_suggest_bucket(&existing.autos, incoming.autos),
         skills: merge_suggest_bucket(&existing.skills, incoming.skills),
         connectors: merge_suggest_bucket(&existing.connectors, incoming.connectors),
@@ -632,6 +638,121 @@ pub fn skill_from_suggestion(s: &LearnedSuggestion) -> Option<SkillMd> {
         verify: String::new(),
         runs: 0,
     })
+}
+
+/// Drop a Suggested automation after Accept saved it. Matches title or seed.
+pub fn dismiss_accepted_auto(store: &mut SuggestionStore, seed: &str, title: &str) {
+    let mut keys = Vec::new();
+    for raw in [title, seed] {
+        let k = raw.trim().to_ascii_lowercase();
+        if !k.is_empty() {
+            keys.push(k);
+        }
+    }
+    if let Some((_, prompt)) = crate::grok_loop::parse_loop_line(seed) {
+        let p = prompt.to_ascii_lowercase();
+        if !p.is_empty() {
+            keys.push(p);
+        }
+    }
+    if keys.is_empty() {
+        return;
+    }
+    store.autos.retain(|item| {
+        let title = item.title.to_ascii_lowercase();
+        let seed = item.seed.as_deref().unwrap_or("").to_ascii_lowercase();
+        !keys.iter().any(|k| {
+            k == &title
+                || k == &seed
+                || (!seed.is_empty() && (seed.contains(k) || k.contains(&seed)))
+        })
+    });
+}
+
+/// Quiet daily tiles from prior chat/session lines. Empty when nothing repeats.
+pub fn suggestions_from_sessions(
+    lines: &[DigestLine],
+    existing_skills: &[String],
+    existing_autos: &[String],
+) -> Vec<LearnedSuggestion> {
+    let mut board = 0u32;
+    let mut host = 0u32;
+    let mut morning = 0u32;
+    let mut skill_hits = 0u32;
+    for line in lines {
+        if line.role != "user" {
+            continue;
+        }
+        if !cabin_real_text(&line.text) {
+            continue;
+        }
+        let t = line.text.to_ascii_lowercase();
+        if t.contains("workboard") || t.contains("the board") || t.contains("open tasks") {
+            board += 1;
+        }
+        if t.contains("snapshot") || t.contains("host_cmd") || t.contains("read-only host") {
+            host += 1;
+        }
+        if t.contains("morning") || (t.contains("summarize") && t.contains("receipt")) {
+            morning += 1;
+        }
+        if t.contains("/skill") || t.contains("when i ") || t.contains("every time i") {
+            skill_hits += 1;
+        }
+    }
+    let mut items = Vec::new();
+    if board >= 2 {
+        items.push(session_auto(
+            "Midday board",
+            "Summarize the workboard from recent chats.",
+            "/loop 12h summarize the workboard",
+        ));
+    }
+    if host >= 2 {
+        items.push(session_auto(
+            "Host heartbeat",
+            "Read-only snapshot, then a short note.",
+            "/loop 60m run a read-only host snapshot and summarize",
+        ));
+    }
+    if morning >= 2 {
+        items.push(session_auto(
+            "Morning brief",
+            "Workboard and last host receipt.",
+            "/loop 1d summarize the workboard and last host receipt",
+        ));
+    }
+    if skill_hits >= 2 {
+        items.push(LearnedSuggestion {
+            kind: SuggestionKind::Skill,
+            title: "Session habit".into(),
+            body: "A skill from a routine you already run in chat.".into(),
+            seed: None,
+            name: Some("session-habit".into()),
+            trigger: Some("when I repeat this chat routine".into()),
+            instructions: Some(
+                "Follow the steps the owner already ran in recent sessions. Stay cabin-real."
+                    .into(),
+            ),
+            provider: None,
+            tool: None,
+        });
+    }
+    dedupe_suggestions(items, existing_skills, existing_autos, &[])
+}
+
+fn session_auto(title: &str, body: &str, seed: &str) -> LearnedSuggestion {
+    LearnedSuggestion {
+        kind: SuggestionKind::Auto,
+        title: title.into(),
+        body: body.into(),
+        seed: Some(seed.into()),
+        name: None,
+        trigger: None,
+        instructions: None,
+        provider: None,
+        tool: None,
+    }
 }
 
 /// Split a mixed list into the three store buckets, capped.
@@ -840,6 +961,73 @@ SUGGEST_AUTO: Night wrap | Close the day | every day at 21, say good night
         let merged = merge_suggestion_store(&prior, incoming);
         assert_eq!(merged.autos.len(), 1);
         assert_eq!(merged.autos[0].body, "New body");
+    }
+
+    #[test]
+    fn accept_dismisses_matching_auto() {
+        let mut store = partition_suggestions(parse_suggest_lines(
+            "SUGGEST_AUTO: Morning brief | Board | /loop 1d summarize the workboard and last host receipt\n\
+             SUGGEST_SKILL: desk-tidy | Desk | Body | trig | do it\n",
+        ));
+        dismiss_accepted_auto(
+            &mut store,
+            "/loop 1d summarize the workboard and last host receipt",
+            "",
+        );
+        assert!(
+            store.autos.is_empty(),
+            "Accept must drop the matching Suggested auto from the store"
+        );
+        assert_eq!(store.skills.len(), 1, "skills stay");
+    }
+
+    #[test]
+    fn session_lines_seed_quiet_daily_tiles() {
+        let lines = vec![
+            DigestLine {
+                role: "user".into(),
+                text: "summarize the workboard".into(),
+            },
+            DigestLine {
+                role: "user".into(),
+                text: "put open tasks on the workboard".into(),
+            },
+            DigestLine {
+                role: "user".into(),
+                text: "run a read-only host snapshot".into(),
+            },
+            DigestLine {
+                role: "user".into(),
+                text: "HOST_CMD snapshot again".into(),
+            },
+            DigestLine {
+                role: "user".into(),
+                text: "when I tidy the desk /skill desk-tidy".into(),
+            },
+            DigestLine {
+                role: "user".into(),
+                text: "every time I tidy /skill desk-tidy".into(),
+            },
+        ];
+        let items = suggestions_from_sessions(&lines, &[], &[]);
+        assert!(
+            items.iter().any(|i| i.kind == SuggestionKind::Auto && i.title == "Midday board"),
+            "{items:?}"
+        );
+        assert!(
+            items.iter().any(|i| i.kind == SuggestionKind::Auto && i.title == "Host heartbeat"),
+            "{items:?}"
+        );
+        assert!(
+            items
+                .iter()
+                .any(|i| i.kind == SuggestionKind::Skill && i.name.as_deref() == Some("session-habit")),
+            "{items:?}"
+        );
+        let hidden = suggestions_from_sessions(&lines, &["session-habit".into()], &["Midday board".into()]);
+        assert!(!hidden.iter().any(|i| i.title == "Midday board"));
+        assert!(!hidden.iter().any(|i| i.name.as_deref() == Some("session-habit")));
+        assert!(suggestions_from_sessions(&[], &[], &[]).is_empty());
     }
 
     #[test]
