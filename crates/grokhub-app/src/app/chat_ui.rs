@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ComposerStackSlot {
     AuthBanner,
@@ -13,7 +12,6 @@ pub(super) enum ComposerStackSlot {
     Voice,
     Pill,
 }
-
 
 pub(super) fn composer_stack_order() -> &'static [ComposerStackSlot] {
     &[
@@ -27,17 +25,14 @@ pub(super) fn composer_stack_order() -> &'static [ComposerStackSlot] {
     ]
 }
 
-
 pub(super) fn empty_home_side_gap(avail_w: f32, pane_w: f32) -> f32 {
     ((avail_w - pane_w) * 0.5).max(0.0)
 }
-
 
 /// Chat-pill top so the box stays on the pane midline.
 pub(super) fn empty_home_composer_top(avail_h: f32, pill_h: f32) -> f32 {
     ((avail_h - pill_h) * 0.5).max(16.0)
 }
-
 
 /// Greeting top: middle of the title-bar-to-composer gap, using wrapped height.
 pub(super) fn empty_home_greet_top(gap_h: f32, greet_h: f32, gap_below: f32) -> f32 {
@@ -48,7 +43,6 @@ pub(super) fn empty_home_greet_top(gap_h: f32, greet_h: f32, gap_below: f32) -> 
         (usable - greet_h) * 0.5
     }
 }
-
 
 pub(super) fn greeting_galley_h(ui: &egui::Ui, text: &str, wrap_w: f32) -> f32 {
     let font = crate::theme::title_font(crate::theme::GREET_HERO);
@@ -63,7 +57,6 @@ pub(super) fn greeting_galley_h(ui: &egui::Ui, text: &str, wrap_w: f32) -> f32 {
     galley.size().y.max(crate::theme::GREET_HERO)
 }
 
-
 pub(super) fn consume_enter_keys(ui: &mut egui::Ui) {
     ui.input_mut(|i| {
         i.events.retain(|ev| match ev {
@@ -76,7 +69,6 @@ pub(super) fn consume_enter_keys(ui: &mut egui::Ui) {
         });
     });
 }
-
 
 /// Enter sends. Control+Enter is left for TextEdit (`return_key`) to insert a newline.
 pub(super) fn take_focused_composer(
@@ -106,7 +98,6 @@ pub(super) fn take_focused_composer(
     }
 }
 
-
 pub(super) fn slash_pick_step(pick: usize, len: usize, dir: i8) -> usize {
     if len == 0 {
         return 0;
@@ -119,9 +110,12 @@ pub(super) fn slash_pick_step(pick: usize, len: usize, dir: i8) -> usize {
     }
 }
 
-
 /// Tab / click accept. `Some` means run the command this frame.
-pub(super) fn slash_pick_take(composer: &mut String, insert: &str, run_on_pick: bool) -> Option<String> {
+pub(super) fn slash_pick_take(
+    composer: &mut String,
+    insert: &str,
+    run_on_pick: bool,
+) -> Option<String> {
     *composer = insert.to_string();
     if run_on_pick {
         Some(std::mem::take(composer))
@@ -129,7 +123,6 @@ pub(super) fn slash_pick_take(composer: &mut String, insert: &str, run_on_pick: 
         None
     }
 }
-
 
 pub(super) fn slash_pick_retain(pick: usize, list_changed: bool, len: usize) -> usize {
     if list_changed || len == 0 {
@@ -139,7 +132,6 @@ pub(super) fn slash_pick_retain(pick: usize, list_changed: bool, len: usize) -> 
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ChatBlockAct {
     None,
@@ -147,13 +139,11 @@ pub(super) enum ChatBlockAct {
     Reply(String),
 }
 
-
 pub(super) struct ChatBlockPaint {
     act: ChatBlockAct,
     drawn: bool,
     thought_fold: ThoughtFold,
 }
-
 
 pub(super) fn paint_speech_bubble(
     ui: &mut egui::Ui,
@@ -254,7 +244,6 @@ pub(super) fn paint_speech_bubble(
     resp.expect("speech bubble")
 }
 
-
 pub(super) fn paint_msg_acts(
     ui: &mut egui::Ui,
     user: bool,
@@ -304,7 +293,6 @@ pub(super) fn paint_msg_acts(
     act
 }
 
-
 pub(super) fn paint_thought_bubble(ui: &mut egui::Ui, body: &str) -> egui::Response {
     let body = crate::markdown::display_text(body);
     let avail = clamp_row_width(ui.available_width().min(ui.max_rect().width()));
@@ -340,18 +328,15 @@ pub(super) fn paint_thought_bubble(ui: &mut egui::Ui, body: &str) -> egui::Respo
     resp.expect("thought bubble")
 }
 
-
 /// Temp-data key for per-row heights. Pane width is part of the key so a
 /// resize does not reuse wrap heights measured at another width.
 pub(super) fn chat_row_height_id(thread_id: &str, pane_w: f32) -> egui::Id {
     egui::Id::new(("cabin-chat-row-h", thread_id, pane_width_bucket(pane_w)))
 }
 
-
 pub(super) fn pane_width_bucket(pane_w: f32) -> i32 {
     pane_w.round() as i32
 }
-
 
 /// egui id salt for one transcript row. Thread and index stay put when a
 /// culled neighbor skips `paint_chat_block`, so selection and hover do not
@@ -360,15 +345,18 @@ pub(super) fn chat_row_id_salt(thread_id: &str, index: usize) -> (&str, usize) {
     (thread_id, index)
 }
 
-
-pub(super) fn chat_row_outside_clip(origin: egui::Pos2, width: f32, height: f32, clip: egui::Rect) -> bool {
+pub(super) fn chat_row_outside_clip(
+    origin: egui::Pos2,
+    width: f32,
+    height: f32,
+    clip: egui::Rect,
+) -> bool {
     let row = egui::Rect::from_min_size(origin, egui::vec2(width.max(1.0), height));
     row.max.y <= clip.min.y
         || row.min.y >= clip.max.y
         || row.max.x <= clip.min.x
         || row.min.x >= clip.max.x
 }
-
 
 /// Keep a cached row's height when it sits fully outside the clip.
 /// Returns true when the caller should skip painting that row.
@@ -384,23 +372,19 @@ pub(super) fn reserve_offscreen_chat_row(ui: &mut egui::Ui, cached_h: f32) -> bo
     true
 }
 
-
 /// `kind` is `"slot"` while the thought is a live block, `"body"` once it is stored.
 /// The body key is [`thought_body_key`], so Hide and Minimize survive that handoff.
 pub(super) fn thought_fold_id(thread_id: &str, kind: &str, key: u64) -> egui::Id {
     egui::Id::new(("cabin-thought-fold", thread_id, kind, key))
 }
 
-
 pub(super) fn read_thought_fold(ctx: &egui::Context, id: egui::Id) -> ThoughtFold {
     ctx.data(|d| d.get_temp(id)).unwrap_or_default()
 }
 
-
 pub(super) fn write_thought_fold(ctx: &egui::Context, id: egui::Id, fold: ThoughtFold) {
     ctx.data_mut(|d| d.insert_temp(id, fold));
 }
-
 
 pub(super) fn paint_thought_fold_buttons(ui: &mut egui::Ui, fold: ThoughtFold) -> ThoughtFold {
     let mut fold = fold;
@@ -423,7 +407,6 @@ pub(super) fn paint_thought_fold_buttons(ui: &mut egui::Ui, fold: ThoughtFold) -
     }
     fold
 }
-
 
 pub(super) fn paint_chat_block(
     ui: &mut egui::Ui,
@@ -528,7 +511,6 @@ pub(super) fn paint_chat_block(
 }
 
 impl Cabin {
-
     pub(super) fn ui_chat(&mut self, ctx: &egui::Context) {
         let empty = self.messages.is_empty();
         if !empty {
@@ -583,9 +565,10 @@ impl Cabin {
                                 ui.ctx().data(|d| d.get_temp(row_h_id)).unwrap_or_default();
                             let mut next_heights = Vec::with_capacity(shown.len());
                             for (i, block) in shown.iter().enumerate() {
-                                let prev_thought = i.checked_sub(1).and_then(|p| shown.get(p)).filter(|v| {
-                                    v.kind == ChatKind::Thought
-                                });
+                                let prev_thought = i
+                                    .checked_sub(1)
+                                    .and_then(|p| shown.get(p))
+                                    .filter(|v| v.kind == ChatKind::Thought);
                                 let next_thought =
                                     shown.get(i + 1).filter(|v| v.kind == ChatKind::Thought);
                                 let prev_expanded = prev_thought.is_some_and(|v| {
@@ -887,8 +870,12 @@ impl Cabin {
     }
     pub(super) fn paint_perm_ask(&mut self, ui: &mut egui::Ui) {
         let Some(p) = self.perm_ask.clone() else {
+            self.perm_always_confirm = None;
             return;
         };
+        if !always_confirm_matches_rpc(self.perm_always_confirm.as_ref(), &p.rpc_id) {
+            self.perm_always_confirm = None;
+        }
         ui.add_space(8.0);
         egui::Frame::none()
             .fill(egui::Color32::TRANSPARENT)
@@ -938,22 +925,54 @@ impl Cabin {
                             let _ = h.answer_permission(p.rpc_id.clone(), true);
                         }
                         self.perm_ask = None;
+                        self.perm_always_confirm = None;
                     }
                     if crate::cards::ghost_pill(ui, "Deny") || key == Some(PermKey::Deny) {
                         if let Some(h) = &self.acp {
                             let _ = h.answer_permission(p.rpc_id.clone(), false);
                         }
                         self.perm_ask = None;
+                        self.perm_always_confirm = None;
                     }
-                    if crate::cards::ghost_pill(ui, "Always") {
-                        self.set_permission_mode(PermissionMode::AlwaysApprove);
-                        if let Some(h) = &self.acp {
-                            let _ = h.answer_permission_always(p.rpc_id.clone());
-                        }
-                        self.perm_ask = None;
-                        self.status = "Permission always-approve".into();
+                    if self.perm_always_confirm.is_none() && crate::cards::ghost_pill(ui, "Always") {
+                        self.perm_always_confirm = Some(p.rpc_id.clone());
                     }
                 });
+                if always_confirm_matches_rpc(self.perm_always_confirm.as_ref(), &p.rpc_id) {
+                    ui.add_space(8.0);
+                    egui::Frame::none()
+                        .fill(crate::theme::elevated())
+                        .rounding(crate::theme::CHROME_RADIUS)
+                        .stroke(egui::Stroke::new(2.0_f32, crate::theme::always_amber()))
+                        .inner_margin(egui::Margin::same(10.0))
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new(ALWAYS_CONFIRM_LINE1)
+                                    .size(13.0)
+                                    .color(crate::theme::fg()),
+                            );
+                            ui.label(
+                                RichText::new(ALWAYS_CONFIRM_LINE2)
+                                    .size(13.0)
+                                    .color(crate::theme::muted()),
+                            );
+                            ui.add_space(6.0);
+                            ui.horizontal(|ui| {
+                                if crate::cards::white_pill(ui, "Confirm") {
+                                    self.set_permission_mode(PermissionMode::AlwaysApprove);
+                                    if let Some(h) = &self.acp {
+                                        let _ = h.answer_permission_always(p.rpc_id.clone());
+                                    }
+                                    self.perm_ask = None;
+                                    self.perm_always_confirm = None;
+                                    self.status = "Permission always-approve".into();
+                                }
+                                if crate::cards::ghost_pill(ui, "Cancel") {
+                                    self.perm_always_confirm = None;
+                                }
+                            });
+                        });
+                }
             });
     }
 
@@ -1068,6 +1087,7 @@ impl Cabin {
     pub(super) fn ui_empty_home(&mut self, ui: &mut egui::Ui) {
         let greet_on = should_paint_greeting(self.messages.is_empty(), self.scratch())
             && !self.greeting.is_empty();
+        let pulse_on = self.pulse_should_paint();
         let avail = ui.available_rect_before_wrap();
         let pane_w =
             crate::cards::composer_pill_w(ui.ctx().screen_rect().width()).min(avail.width());
@@ -1079,11 +1099,18 @@ impl Cabin {
         } else {
             0.0
         };
-        let greet_top = empty_home_greet_top(composer_top, greet_h, 12.0);
-        if greet_on {
+        let pulse_h = if pulse_on {
+            pulse_card_h(self.collect_pulse_rows().len())
+        } else {
+            0.0
+        };
+        let pulse_gap = if pulse_on && greet_on { 8.0 } else { 0.0 };
+        let block_h = greet_h + pulse_gap + pulse_h;
+        let greet_top = empty_home_greet_top(composer_top, block_h, 12.0);
+        if greet_on || pulse_on {
             let greet_rect = egui::Rect::from_min_size(
                 egui::pos2(avail.left() + side, avail.top() + greet_top),
-                egui::vec2(pane_w, greet_h.max(1.0)),
+                egui::vec2(pane_w, block_h.max(1.0)),
             );
             ui.allocate_new_ui(egui::UiBuilder::new().max_rect(greet_rect), |ui| {
                 ui.set_min_size(greet_rect.size());
@@ -1091,17 +1118,25 @@ impl Cabin {
                     egui::Layout::top_down_justified(egui::Align::Center),
                     |ui| {
                         ui.set_width(pane_w);
-                        let mark = crate::theme::mark(ui.ctx());
-                        ui.add(
-                            egui::Image::from_texture(&mark)
-                                .fit_to_exact_size(egui::vec2(40.0, 40.0)),
-                        );
-                        ui.add_space(12.0);
-                        ui.label(
-                            RichText::new(&self.greeting)
-                                .font(crate::theme::title_font(crate::theme::GREET_HERO))
-                                .color(crate::theme::muted()),
-                        );
+                        if greet_on {
+                            let mark = crate::theme::mark(ui.ctx());
+                            ui.add(
+                                egui::Image::from_texture(&mark)
+                                    .fit_to_exact_size(egui::vec2(40.0, 40.0)),
+                            );
+                            ui.add_space(12.0);
+                            ui.label(
+                                RichText::new(&self.greeting)
+                                    .font(crate::theme::title_font(crate::theme::GREET_HERO))
+                                    .color(crate::theme::muted()),
+                            );
+                        }
+                        if pulse_on {
+                            if greet_on {
+                                ui.add_space(8.0);
+                            }
+                            self.paint_empty_pulse(ui, pane_w);
+                        }
                     },
                 );
             });
