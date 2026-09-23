@@ -11,6 +11,25 @@ impl Cabin {
         }
     }
 
+    /// Skills Suggested Add — same door as Automations Add → `save_schedule`.
+    pub(super) fn add_suggested_skill(&mut self, item: &grokhub_core::LearnedSuggestion) {
+        let Some(parsed) = skill_from_suggestion(item) else {
+            self.status = "Need a cabin-real skill name and steps".into();
+            return;
+        };
+        let written = parsed.clone();
+        std::thread::spawn(move || {
+            let _ = crate::skills::save_skill(&written);
+        });
+        self.remember_skill(parsed.clone());
+        let name = parsed.name.clone();
+        self.suggestions
+            .skills
+            .retain(|s| s.name.as_deref() != Some(name.as_str()));
+        self.persist_suggestions();
+        self.status = format!("Wrote skill {name}");
+    }
+
     /// One door for both schedulers. A clock time ("every weekday at 9") is a cabin
     /// automation in `automations.json`; an interval stays a Grok Build `/loop` row.
     pub(super) fn save_schedule(&mut self, seed: &str) -> Option<String> {

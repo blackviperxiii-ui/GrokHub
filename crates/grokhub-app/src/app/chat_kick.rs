@@ -145,7 +145,7 @@ impl Cabin {
         let vis = self.visible_thread_id();
         let last_user = {
             let job = self.chat_job_thread.as_deref();
-            if job.is_none() || job == Some(vis.as_str()) {
+            let raw = if job.is_none() || job == Some(vis.as_str()) {
                 self.messages
                     .iter()
                     .rev()
@@ -171,7 +171,8 @@ impl Cabin {
                             .map(|m| m.1.clone())
                             .unwrap_or_default()
                     })
-            }
+            };
+            apply_skill_follow(&raw, self.active_skill_follow.as_deref())
         };
         if self.grok_p_rx.is_some() {
             return;

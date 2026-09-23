@@ -301,8 +301,9 @@ pub use review::{
     build_review_digest, cabin_real_text, dedupe_suggestions, digest_line_from,
     merge_suggestion_store, parse_suggest_lines, parse_suggest_skill_patches,
     partition_suggestions, prune_live_suggestions, review_due, review_status_line,
-    review_system_prompt, DigestLine, LearnedSuggestion, ReviewDigest, SkillPatch, SuggestionKind,
-    SuggestionStore, CABIN_GITHUB_TOOLS, DIGEST_LINE_CAP, REVIEW_NIGHT_HOUR, SUGGEST_CAP,
+    review_system_prompt, skill_from_suggestion, DigestLine, LearnedSuggestion, ReviewDigest,
+    SkillPatch, SuggestionKind, SuggestionStore, CABIN_GITHUB_TOOLS, DIGEST_LINE_CAP,
+    REVIEW_NIGHT_HOUR, SUGGEST_CAP,
 };
 pub use rewind::{
     is_rewind_copy_cmd, is_rewind_copy_cmd_in, keep_last_rewinds, rewind_allowed,
@@ -314,9 +315,9 @@ pub use shortcuts::{
     shortcut_help, ComposerEnter, ComposerGo, PermKey, SHORTCUTS,
 };
 pub use skill::{
-    bump_skill_run, is_hard_run, match_skill, parse_skill_md, patch_skill, prefer_patch,
-    propose_skill_from_turn, render_skill_md, skill_dir_name, skill_follow_block, skill_safe,
-    skill_use_in_chat_prompt, SkillMd,
+    apply_skill_follow, bump_skill_run, is_hard_run, match_skill, parse_skill_md, patch_skill,
+    prefer_patch, propose_skill_from_turn, render_skill_md, skill_dir_name, skill_follow_block,
+    skill_safe, skill_use_in_chat_prompt, SkillMd,
 };
 pub use slash::{
     filter_slash_commands, filter_slash_hits, grok_command_hits, is_cabin_slash_turn,

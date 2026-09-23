@@ -158,6 +158,13 @@ pub fn match_skill<'a>(user_text: &str, skills: &'a [SkillMd]) -> Option<&'a Ski
             }
         }
     }
+    // Anticipate and Use in chat without a slash send `Follow skill {name}`.
+    // Jaccard against the trigger misses that line — match the name first.
+    if let Some(name) = follow_skill_name(t) {
+        if let Some(hit) = skills.iter().find(|s| skill_named(s, name)) {
+            return Some(hit);
+        }
+    }
     let q = words(t);
     let mut best: Option<&SkillMd> = None;
     let mut best_score = 0.0f32;
@@ -172,6 +179,24 @@ pub fn match_skill<'a>(user_text: &str, skills: &'a [SkillMd]) -> Option<&'a Ski
     best
 }
 
+fn follow_skill_name(t: &str) -> Option<&str> {
+    let rest = t
+        .strip_prefix("Follow skill ")
+        .or_else(|| t.strip_prefix("follow skill "))?;
+    let name = rest.trim();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+fn skill_named(s: &SkillMd, name: &str) -> bool {
+    s.name.eq_ignore_ascii_case(name)
+        || s.slash.eq_ignore_ascii_case(name)
+        || s.slash.eq_ignore_ascii_case(&format!("/{name}"))
+}
+
 /// Skills "Use in chat" must send a line `match_skill` actually hits.
 pub fn skill_use_in_chat_prompt(slash: &str, name: &str) -> String {
     let s = slash.trim();
@@ -179,6 +204,14 @@ pub fn skill_use_in_chat_prompt(slash: &str, name: &str) -> String {
         s.to_string()
     } else {
         format!("Follow skill {name}")
+    }
+}
+
+/// Prepend the active skill follow so grok -p / ACP sees the steps.
+pub fn apply_skill_follow(prompt: &str, follow: Option<&str>) -> String {
+    match follow.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(block) => format!("{block}\n\n{prompt}"),
+        None => prompt.to_string(),
     }
 }
 
@@ -336,9 +369,10 @@ mod tests {
             "flash-pi",
             "Use in chat must activate the skill, not send a vague Follow skill line"
         );
-        assert!(
-            match_skill("Follow skill flash-pi", &skills).is_none(),
-            "Follow skill <name> is below the Jaccard gate"
+        assert_eq!(
+            match_skill("Follow skill flash-pi", &skills).unwrap().name,
+            "flash-pi",
+            "anticipate / Use in chat must hit Follow skill <name>"
         );
         let proposed = propose_skill_from_turn("flash the pi", "ok", &["dd if=a".into()]);
         assert_eq!(proposed.slash, "/flash");
@@ -351,5 +385,10 @@ mod tests {
         assert!(follow.contains("Active skill flash-pi"));
         assert!(follow.contains("## Steps"));
         assert!(follow.contains("dd"));
+        assert_eq!(
+            apply_skill_follow("flash the pi", Some(&follow)),
+            format!("{follow}\n\nflash the pi")
+        );
+        assert_eq!(apply_skill_follow("flash the pi", Some("  ")), "flash the pi");
     }
 }

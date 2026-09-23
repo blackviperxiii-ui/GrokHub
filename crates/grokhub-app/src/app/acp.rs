@@ -723,8 +723,25 @@ impl Cabin {
     }
 
     pub(super) fn send_grok_slash(&mut self, cmd: &str) {
-        if let Some(h) = &self.acp {
-            let _ = h.prompt(cmd);
+        if self.permission_mode.uses_acp() {
+            if self.acp.is_none() {
+                if let Err(e) = self.ensure_acp() {
+                    self.fail_ask_without_acp(&e);
+                    return;
+                }
+            }
+            if let Some(h) = &self.acp {
+                match h.prompt(cmd) {
+                    Ok(()) => self.running = true,
+                    Err(e) => {
+                        self.acp = None;
+                        self.fail_ask_without_acp(&e);
+                    }
+                }
+                return;
+            }
+            // Handshake in flight or ACP still down — fail-closed, no yolo grok -p.
+            self.fail_ask_without_acp("");
             return;
         }
         let idx = self.thread_idx;
@@ -750,15 +767,16 @@ impl Cabin {
             .get(idx)
             .map(|t| t.grok_worktree)
             .unwrap_or(false);
+        let (yolo, auto) = self.permission_mode.composer_headless_flags();
         if let Ok((pid, rx)) = grokhub_acp::spawn_grok_p_stream(
             cmd,
             &cwd,
             resume.as_deref(),
-            true,
-            false,
+            yolo,
+            auto,
             None,
             None,
-            SessionMode::Chat,
+            self.session_mode,
             None,
             false,
             user_home,
