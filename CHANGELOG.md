@@ -4,7 +4,7 @@
 
 ## 2.10.8 — 2026-09-23
 
-Selecting a cabin skill follows into grok -p / ACP: `Follow skill {name}` matches, and the kick prepends `active_skill_follow`. Skills Suggested tiles from the nightly review Add via `save_skill`. Connectors owns the GitHub PAT plus read-only Who am I / List repos tiles (`run_connector` only — no writes, no other websites). `/workflow` `/compact` `/rewind` honor the PermissionMode pill: Ask is fail-closed if ACP is down; Auto/Always keep composer flags and session mode.
+Selecting a cabin skill follows into grok -p / ACP: `Follow skill {name}` matches, and the kick prepends `active_skill_follow`. Skills Suggested tiles from the nightly review Add via `save_skill`. Connectors owns the GitHub PAT plus read-only Who am I / List repos tiles (`run_connector` only — no writes, no other websites). `/workflow` `/compact` `/rewind` honor the PermissionMode pill: Ask is fail-closed if ACP is down; Auto/Always keep composer flags and session mode. Questions / Look session mode maps to `--permission-mode default` (never the invalid CLI value `ask`). Scrolled-up chat is one down-arrow jump (click = latest; Last you is right-click or hold). Home chips pad inside the fill and wrap without ellipsis. The Questions session pill keeps id `ask` with 8px inset.
 
 - Linux: `grokhub-linux-v2.10.8.tar.gz` and AUR `pkgver=2.10.8`.
 - Windows: `GrokHub-Setup-2.10.8.exe` and `grokhub-windows-v2.10.8.zip`.

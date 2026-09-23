@@ -3,6 +3,13 @@
 use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ChatJump {
+    None,
+    Latest,
+    LastYou,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ComposerStackSlot {
     AuthBanner,
     ContextBar,
@@ -744,48 +751,71 @@ impl Cabin {
                     out.inner_rect.height(),
                     CHAT_TAIL_SLACK,
                 ) {
-                    if self.jump_to_latest(ctx, out.inner_rect) {
-                        self.pin_chat_tail();
-                    }
-                    if last_user_text(&self.messages).is_some()
-                        && self.jump_to_last_you(ctx, out.inner_rect)
-                    {
-                        self.jump_last_you = true;
+                    match self.jump_to_latest(ctx, out.inner_rect) {
+                        ChatJump::Latest => self.pin_chat_tail(),
+                        ChatJump::LastYou => self.jump_last_you = true,
+                        ChatJump::None => {}
                     }
                 }
             });
     }
 
-    /// Compact jump to the last user turn. Hidden when History has no marker.
-    pub(super) fn jump_to_last_you(&self, ctx: &egui::Context, pane: egui::Rect) -> bool {
-        let size = egui::vec2(120.0, 34.0);
-        let pos = egui::pos2(
-            pane.center().x - size.x * 0.5 - 80.0,
-            (pane.max.y - size.y - 10.0).max(pane.min.y),
-        );
-        egui::Area::new(egui::Id::new("chat-jump-last-you"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(pos)
-            .show(ctx, |ui| {
-                ui.set_width(size.x);
-                crate::cards::ghost_pill(ui, "Last you")
-            })
-            .inner
-    }
-
-    /// A way back to the newest message once the reader has scrolled up.
-    pub(super) fn jump_to_latest(&self, ctx: &egui::Context, pane: egui::Rect) -> bool {
-        let size = egui::vec2(150.0, 34.0);
+    /// One down-arrow: click = latest. Last you is secondary / long-press only.
+    pub(super) fn jump_to_latest(&self, ctx: &egui::Context, pane: egui::Rect) -> ChatJump {
+        const HIT: f32 = 32.0;
+        let size = egui::vec2(HIT, HIT);
         let pos = egui::pos2(
             pane.center().x - size.x * 0.5,
             (pane.max.y - size.y - 10.0).max(pane.min.y),
         );
-        egui::Area::new(egui::Id::new("chat-jump-latest"))
+        let has_last_you = last_user_text(&self.messages).is_some();
+        egui::Area::new(egui::Id::new("chat-jump"))
             .order(egui::Order::Foreground)
             .fixed_pos(pos)
             .show(ctx, |ui| {
-                ui.set_width(size.x);
-                crate::cards::white_pill(ui, "Jump to latest")
+                let resp = crate::icons::paint_bar_icon(
+                    ui,
+                    crate::icons::BarIcon::ArrowDown,
+                    28.0,
+                    crate::theme::fg(),
+                );
+                let tip = if has_last_you {
+                    "Jump to latest. Right-click or hold for Last you."
+                } else {
+                    "Jump to latest"
+                };
+                let resp = resp.on_hover_text(tip);
+                let hold_id = egui::Id::new("chat-jump-hold");
+                let used_id = egui::Id::new("chat-jump-used");
+                if has_last_you && resp.is_pointer_button_down_on() {
+                    let now = ui.input(|i| i.time);
+                    let start = ui.ctx().data(|d| d.get_temp::<f64>(hold_id)).unwrap_or(now);
+                    ui.ctx().data_mut(|d| d.insert_temp(hold_id, start));
+                    if now - start >= 0.45 {
+                        ui.ctx().data_mut(|d| {
+                            d.insert_temp(used_id, true);
+                            d.remove::<f64>(hold_id);
+                        });
+                        return ChatJump::LastYou;
+                    }
+                } else {
+                    ui.ctx().data_mut(|d| d.remove::<f64>(hold_id));
+                }
+                if has_last_you
+                    && (resp.secondary_clicked()
+                        || (resp.clicked() && ui.input(|i| i.modifiers.alt)))
+                {
+                    ui.ctx().data_mut(|d| d.remove::<bool>(used_id));
+                    return ChatJump::LastYou;
+                }
+                if resp.clicked() {
+                    let used = ui.ctx().data_mut(|d| d.remove::<bool>(used_id)).unwrap_or(false);
+                    if used {
+                        return ChatJump::None;
+                    }
+                    return ChatJump::Latest;
+                }
+                ChatJump::None
             })
             .inner
     }
