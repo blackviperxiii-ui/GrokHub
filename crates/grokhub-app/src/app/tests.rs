@@ -5950,16 +5950,61 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "the context usage bar stays above the composer: {bar}"
         );
         assert!(
-            bar.contains("Compact") && bar.contains("Slash::Compact"),
-            "Compact sits on the existing context bar: {bar}"
+            !bar.contains("ghost_pill(ui, \"Compact\")") && !bar.contains("Slash::Compact"),
+            "Compact leaves the context bar for the titlebar menu: {bar}"
+        );
+        let tools = stack
+            .split("ComposerStackSlot::SessionTools =>")
+            .nth(1)
+            .and_then(|s| s.split("ComposerStackSlot::SlashPalette").next())
+            .expect("session tools");
+        assert!(
+            !tools.contains("Copy session") && !tools.contains("\"Export\""),
+            "Copy session and Export leave the composer: {tools}"
         );
         assert!(
-            src.contains("Copy session")
-                && src.contains("\"Export\"")
-                && src.contains("View plan")
+            src.contains("View plan")
                 && src.contains("How fork works")
                 && src.contains("fork_offer_why"),
-            "session export, view plan, and fork chrome must be in the cabin"
+            "view plan and fork stay on the thread"
+        );
+        let menu = src
+            .split("fn paint_session_actions_menu")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_composer_stack").next())
+            .expect("session menu");
+        assert!(
+            menu.contains("ChromeBtn::Menu")
+                && menu.contains("\"Compact\"")
+                && menu.contains("Slash::Compact")
+                && menu.contains("\"Copy session\"")
+                && menu.contains("export_markdown")
+                && menu.contains("Copied session")
+                && menu.contains("\"Export\"")
+                && menu.contains("Slash::Export"),
+            "the titlebar menu keeps Compact, Copy session, and Export: {menu}"
+        );
+        let title = src
+            .split("fn ui_titlebar(")
+            .nth(1)
+            .and_then(|s| s.split("fn nav_row(").next())
+            .expect("titlebar");
+        let min = title.find("ChromeBtn::Minimize").expect("minimize");
+        let ham = title.find("paint_session_actions_menu").expect("menu");
+        let drag = title.find("titlebar_should_start_drag").expect("drag");
+        assert!(
+            min < ham && ham < drag,
+            "hamburger is allocated immediately after minimize (RTL: directly to its left)"
+        );
+        assert_eq!(
+            super::session_menu_enabled(false, true),
+            (false, false, false)
+        );
+        assert_eq!(super::session_menu_enabled(true, true), (true, true, true));
+        assert_eq!(
+            super::session_menu_enabled(false, false),
+            (true, false, false),
+            "usage alone still offers Compact, not Copy or Export"
         );
         let send = fn_src(&src, "send_chat");
         assert!(

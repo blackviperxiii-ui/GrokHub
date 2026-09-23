@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.19 — 2026-09-24
+
+Compact, Copy session, and Export leave the composer. They sit in a three-bar menu immediately beside minimize. A titlebar press opens the menu the same way as the other chrome buttons (`titlebar_chrome_hit`). Each action is unchanged. Settings, Chat / Plan / btw, Ask / Auto / Always, and the quick chips stay put. The context usage bar stays. View plan and Fork stay on the thread.
+
+- Linux: `grokhub-linux-v2.10.19.tar.gz` and AUR `pkgver=2.10.19`.
+- Windows: `GrokHub-Setup-2.10.19.exe` and `grokhub-windows-v2.10.19.zip`.
+- Cursor cabin 2.10.19. VERSION 2.10.19. Draft only. Not tagged. Rebased onto main 2.10.18 (home update feed).
+
 ## 2.10.18 — 2026-09-24
 
 Signed-in empty home drops the Coding / Life chip and the under-greeting workboard summary card. That slot is an update feed in `updates.json`: newest first, hidden when nothing is undismissed (no “No updates” placeholder). A finished `/loop` posts `automation_done` from `poll_grok_loop`. A night recipe replay that finishes posts the same kind. Saving a clock job or interval loop posts `schedule_created` from `commit_schedule`. `suggestion` and `automate_offer` are typed cards for a later producer. Open marks a card opened and leaves it; Dismiss removes it. No interest learning and no `interest_update`.
