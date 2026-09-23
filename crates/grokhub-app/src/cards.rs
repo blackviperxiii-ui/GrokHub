@@ -931,8 +931,11 @@ pub fn chip_row_width_lock(avail: f32) -> f32 {
     avail.max(120.0)
 }
 
-/// Two-line chip row so leftover empty-home height cannot vertically center the chips.
+/// One chip line (pad + two wrapped label lines). Empty-home leftover must not
+/// vertically center a single chip.
 pub const CHIP_ROW_H: f32 = 68.0;
+/// Two chip lines so a 5-wide rank wraps inside `chip_row_width_lock` instead of clipping.
+pub const CHIP_CLUSTER_H: f32 = CHIP_ROW_H * 2.0 + 6.0;
 
 /// Empty-home placeholder when ranking yields none. Not a ranked action chip.
 pub const CHIP_EMPTY_LABEL: &str = "Nothing queued";
@@ -1033,11 +1036,12 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
     let mut act = None;
     let max_w = chip_row_width_lock(ui.available_width());
     ui.allocate_ui_with_layout(
-        egui::vec2(max_w, CHIP_ROW_H),
-        egui::Layout::left_to_right(egui::Align::Center)
-            .with_main_wrap(false)
+        egui::vec2(max_w, CHIP_CLUSTER_H),
+        egui::Layout::left_to_right(egui::Align::Min)
+            .with_main_wrap(true)
             .with_main_align(egui::Align::Center),
         |ui| {
+            ui.set_max_width(max_w);
             ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
             for (i, c) in chips.iter().take(grokhub_core::CHIP_VISIBLE_MAX).enumerate() {
                 let chip_id = ui.id().with(("qchip", i));
@@ -2581,17 +2585,28 @@ mod tests {
             "chips sit on the midline of the bar: {slice}"
         );
         assert!(
+            slice.contains("with_main_wrap(true)") && slice.contains("CHIP_CLUSTER_H"),
+            "five chips wrap to a second line inside the composer width: {slice}"
+        );
+        assert!(
+            !slice.contains("with_main_wrap(false)"),
+            "leftovers must wrap, not clip off the right edge: {slice}"
+        );
+        assert!(
             !slice.contains("set_width(max_w)") && !slice.contains("set_min_width"),
             "chip cluster must shrink-wrap, not fill the pill: {slice}"
         );
         assert!(
-            slice.contains("CHIP_ROW_H") && slice.contains("allocate_ui_with_layout"),
-            "chip row must use a tight height or leftover empty-home space vertically centers it: {slice}"
+            slice.contains("CHIP_CLUSTER_H") && slice.contains("allocate_ui_with_layout"),
+            "chip cluster must grow for two lines or leftovers clip: {slice}"
         );
         assert!(
             !slice.contains('…') && slice.contains("CHIP_PAD_X") && slice.contains("add_space"),
             "chip paint pads inside the fill and must not ellipsize: {slice}"
         );
+        const {
+            assert!(CHIP_CLUSTER_H > CHIP_ROW_H && CHIP_CLUSTER_H < CHIP_ROW_H * 3.0);
+        }
         assert!(
             !slice.contains("ui.with_layout("),
             "with_layout eats remaining height and drops chips to the bottom: {slice}"
