@@ -250,6 +250,14 @@ impl Cabin {
         self.persist_idle_key = self.persist_idle_now();
     }
 
+    pub(super) fn persist_suggestions(&mut self) {
+        let suggestions = self.suggestions.clone();
+        std::thread::spawn(move || {
+            let _ = crate::store::save_suggestions(&suggestions);
+        });
+        self.persist_idle_key = self.persist_idle_now();
+    }
+
     pub(super) fn persist_automations(&mut self) {
         let list = self.automations.clone();
         std::thread::spawn(move || {

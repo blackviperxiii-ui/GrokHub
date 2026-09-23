@@ -3154,6 +3154,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && ask_kick[grok_p..].contains("spawn_grok_p_stream"),
             "Look + Auto/Always stay on grok -p with look-only flags: {ask_kick}"
         );
+        assert!(
+            ask_kick.contains("apply_skill_follow") && ask_kick.contains("active_skill_follow"),
+            "selecting a skill must inject the follow block into grok -p / ACP: {ask_kick}"
+        );
     }
 
     #[test]
@@ -6422,6 +6426,40 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             skills.contains("uninstall") && skills.contains("plugin") && skills.contains("update"),
             "Connectors must expose grok plugin uninstall/update: {skills}"
+        );
+        assert!(
+            skills.contains("Suggested")
+                && skills.contains("merge_suggested_skills")
+                && skills.contains("add_suggested_skill"),
+            "Skills Suggested tiles must Add via save_skill: {skills}"
+        );
+        assert!(
+            skills.contains("GITHUB_TILES")
+                && skills.contains("Save PAT")
+                && skills.contains("run_connector")
+                && skills.contains("github_token")
+                && !skills.contains("create_pr")
+                && !skills.contains("outlook")
+                && !skills.contains("gmail"),
+            "Connectors GitHub tiles + PAT must stay read-only: {skills}"
+        );
+        let add_skill = fn_src(&src, "add_suggested_skill");
+        assert!(
+            add_skill.contains("skill_from_suggestion")
+                && add_skill.contains("save_skill")
+                && add_skill.contains("thread::spawn")
+                && add_skill.contains("persist_suggestions"),
+            "Suggested Add must write SKILL.md off the UI thread: {add_skill}"
+        );
+        let slash = fn_src(&src, "send_grok_slash");
+        assert!(
+            slash.contains("uses_acp")
+                && slash.contains("fail_ask_without_acp")
+                && slash.contains("composer_headless_flags")
+                && slash.contains("self.session_mode")
+                && !slash.contains("SessionMode::Chat")
+                && !slash.contains("true,\n            false,"),
+            "/workflow /compact /rewind must honor the PermissionMode pill: {slash}"
         );
     }
 
