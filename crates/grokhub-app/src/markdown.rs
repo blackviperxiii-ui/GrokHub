@@ -86,15 +86,18 @@ fn wrapping_label(ui: &mut Ui, text: RichText, wrap: f32) {
     ui.add(Label::new(text).wrap().selectable(true));
 }
 
+fn wrapping_break(ui: &mut Ui, line: &str, wrap: f32) {
+    ui.set_max_width(wrap);
+    let job = wrapped_job(ui, line, wrap, crate::theme::fg());
+    ui.add(Label::new(job).wrap().selectable(true));
+}
+
 fn inline(ui: &mut Ui, line: &str, wrap: f32) {
     if !line.contains("**") && !line.contains('`') {
-        wrapping_label(ui, RichText::new(line), wrap);
+        wrapping_break(ui, line, wrap);
         return;
     }
-    ui.allocate_ui_with_layout(
-        Vec2::new(wrap, 0.0),
-        eframe::egui::Layout::left_to_right(eframe::egui::Align::Min).with_main_wrap(true),
-        |ui| {
+    ui.horizontal_wrapped(|ui| {
             ui.set_max_width(wrap);
             ui.style_mut().wrap_mode = Some(TextWrapMode::Wrap);
             let mut rest = line;
@@ -135,8 +138,7 @@ fn inline(ui: &mut Ui, line: &str, wrap: f32) {
                 ui.add(Label::new(&rest[..next]).wrap().selectable(true));
                 rest = &rest[next..];
             }
-        },
-    );
+    });
 }
 
 #[cfg(test)]

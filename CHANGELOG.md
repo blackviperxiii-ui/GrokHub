@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.7 — 2026-09-23
+
+Owner UI: assistant bubbles keep real inner padding (no left/top clip of the first glyphs). The chat pane sits flush beside the sidebar. Empty-home pulse, usage/meta, and suggestion chips wrap to two lines instead of a one-line ellipsis. History titles still ellipsize only when the rail width forces it; hover shows the full title. Session pill label is **Questions** (same look-only mode). Same paint on Linux and Windows.
+
+- Linux: `grokhub-linux-v2.10.7.tar.gz` and AUR `pkgver=2.10.7`.
+- Windows: `GrokHub-Setup-2.10.7.exe` and `grokhub-windows-v2.10.7.zip`.
+- Cursor cabin 2.10.7. VERSION 2.10.7.
+
 ## 2.10.6 — 2026-09-23
 
 Cabin C chrome: shared explicit-yes confirm sheet (Ask Always, session Always, destructive host). Empty-home Coding / Life chip (default Coding). Titlebar Quiet until X when Behavior quiet hours are active. History Last you / fork branch map. Device glance only when hub share or a last frame is bound.

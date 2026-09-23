@@ -3,14 +3,12 @@
 use super::*;
 use grokhub_core::{usage_line, Automation, BoardCard, BoardStatus, GrokLoop, UsageDay};
 
-/// One text line at FONT_TIP. Must match `paint_empty_pulse` row allocate.
-const PULSE_ROW_H: f32 = 22.0;
-/// Frame `inner_margin` on each side. Reserve uses 2× this, never leftover wrap.
+/// Two wrapped lines at FONT_TIP. Must match `paint_empty_pulse` row allocate.
+const PULSE_ROW_H: f32 = 40.0;
+/// Frame `inner_margin` on each side. Reserve uses 2× this.
 const PULSE_MARGIN: f32 = 6.0;
 const PULSE_GAP: f32 = 2.0;
 const PULSE_MAX_ROWS: usize = 4;
-/// Conservative single-line cap for a ~600px empty-home pane.
-const PULSE_LABEL_CHARS: usize = 56;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PulseNav {
@@ -44,18 +42,13 @@ pub(super) fn pulse_card_h(row_count: usize) -> f32 {
     PULSE_MARGIN * 2.0 + n * PULSE_ROW_H + (n - 1.0) * PULSE_GAP
 }
 
-/// Single-line pulse copy. Wrap would overflow the reserved `pulse_card_h` slot.
+/// Full pulse copy. The paint wraps inside the reserved two-line slot.
 pub(super) fn pulse_row_label(title: &str, detail: &str) -> String {
-    let raw = if detail.is_empty() {
+    if detail.is_empty() {
         title.trim().to_string()
     } else {
         format!("{} · {}", title.trim(), detail.trim())
-    };
-    let mut out: String = raw.chars().take(PULSE_LABEL_CHARS).collect();
-    if raw.chars().count() > PULSE_LABEL_CHARS {
-        out.push('…');
     }
-    out
 }
 
 fn board_is_open(status: BoardStatus) -> bool {
@@ -111,7 +104,7 @@ fn next_job_row(autos: &[Automation], loops: &[GrokLoop], now_ms: u64) -> PulseR
             continue;
         }
         if best.as_ref().is_none_or(|(t, _)| when < *t) {
-            best = Some((when, name.chars().take(PULSE_LABEL_CHARS).collect()));
+            best = Some((when, name.to_string()));
         }
     }
     for row in loops.iter().filter(|l| l.enabled) {
@@ -250,13 +243,14 @@ impl Cabin {
                         ui.allocate_exact_size(egui::vec2(inner_w, PULSE_ROW_H), sense);
                     ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
                         ui.set_max_width(inner_w);
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
                         ui.add(
                             egui::Label::new(
                                 RichText::new(label)
                                     .size(crate::theme::FONT_TIP)
                                     .color(color),
                             )
-                            .truncate(),
+                            .wrap(),
                         );
                     });
                     if resp.clicked() {
@@ -391,13 +385,13 @@ mod tests {
             pulse_card_h(4),
             PULSE_MARGIN * 2.0 + 4.0 * PULSE_ROW_H + 3.0 * PULSE_GAP
         );
-        assert!(pulse_card_h(4) < 120.0);
+        assert!(pulse_card_h(4) < 200.0);
         assert!(pulse_card_h(1) < pulse_card_h(4));
     }
 
     #[test]
-    fn pulse_labels_stay_one_line() {
-        let long = "x".repeat(200);
+    fn pulse_labels_keep_full_copy() {
+        let long = "x".repeat(80);
         let rows = pulse_rows(
             &[auto(&long, 5_000)],
             &[],
@@ -417,11 +411,16 @@ mod tests {
         for row in &rows {
             let label = pulse_row_label(&row.title, &row.detail);
             assert!(
-                label.chars().count() <= PULSE_LABEL_CHARS + 1,
-                "pulse row must stay one reserved line: {label}"
+                !label.ends_with('…'),
+                "pulse must not ellipsize the only line: {label}"
             );
             assert!(!label.contains('\n'));
         }
-        assert!(pulse_row_label(&long, "now").ends_with('…'));
+        let brief = pulse_row_label(
+            "Morning brief",
+            "Every 1d — workboard and last host receipt",
+        );
+        assert!(brief.contains("workboard and last host receipt"), "{brief}");
+        assert!(!brief.contains('…'), "{brief}");
     }
 }

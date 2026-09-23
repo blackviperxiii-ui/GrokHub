@@ -403,7 +403,7 @@ pub fn felt_pill(ui: &mut egui::Ui, label: &str, style: PillStyle) -> bool {
     .clicked()
 }
 
-/// Session Chat / Plan / Look — quieter than the permission row (no stroke).
+/// Session Chat / Plan / Questions — quieter than the permission row (no stroke).
 pub fn felt_segment(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
     felt_segment_styled(ui, label, selected, None, false, crate::theme::FONT_BODY)
 }
@@ -620,7 +620,7 @@ pub fn composer_modes() -> &'static [(&'static str, &'static str)] {
     &[
         ("chat", "Chat"),
         ("plan", "Plan"),
-        ("ask", "Look"),
+        ("ask", "Questions"),
     ]
 }
 
@@ -640,7 +640,7 @@ pub fn effort_label(id: &str) -> &'static str {
     grokhub_core::effort_label(id)
 }
 
-/// Hover copy for the Chat / Plan / Look session pills. Unknown ids stay silent.
+/// Hover copy for the Chat / Plan / Questions session pills. Unknown ids stay silent.
 pub fn composer_session_tip(id: &str) -> Option<(&'static str, &'static str)> {
     match id {
         "chat" => Some((
@@ -652,8 +652,8 @@ pub fn composer_session_tip(id: &str) -> Option<(&'static str, &'static str)> {
             "Grok writes a plan before changing things. Use this for bigger or riskier work. /plan is the same.",
         )),
         "ask" => Some((
-            "Look",
-            "Look-only session. Grok looks and explains without editing. Switch to Chat to do the work.",
+            "Questions",
+            "Look-only session. Grok explains without editing. Switch to Chat to do the work.",
         )),
         _ => None,
     }
@@ -775,7 +775,7 @@ pub struct SessionRowOut {
     pub effort: Option<String>,
 }
 
-/// Chat / Plan / Look, Ask / Auto / Always, and reasoning effort above the composer.
+/// Chat / Plan / Questions, Ask / Auto / Always, and reasoning effort above the composer.
 pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> SessionRowOut {
     let mut out = SessionRowOut {
         mode: None,
@@ -865,28 +865,19 @@ pub enum ChipRowAct {
 }
 
 pub(crate) fn chip_paint_label(label: &str) -> String {
-    const MAX: usize = 22;
-    let t = label.split_whitespace().collect::<Vec<_>>().join(" ");
-    if t.chars().count() <= MAX {
-        return t;
-    }
-    let mut out = String::new();
-    for (i, ch) in t.chars().enumerate() {
-        if i + 1 >= MAX {
-            break;
-        }
-        out.push(ch);
-    }
-    format!("{}…", out.trim_end())
+    label.split_whitespace().collect::<Vec<_>>().join(" ")
 }
+
+/// Wrap width for a suggestion chip. Two lines, not a one-line ellipsis.
+pub const CHIP_LABEL_WRAP: f32 = 148.0;
 
 /// Max width of the chip cluster — follows the composer column.
 pub fn chip_row_width_lock(avail: f32) -> f32 {
     avail.max(120.0)
 }
 
-/// Tight row so leftover empty-home height cannot vertically center the chips.
-pub const CHIP_ROW_H: f32 = 36.0;
+/// Two-line chip row so leftover empty-home height cannot vertically center the chips.
+pub const CHIP_ROW_H: f32 = 52.0;
 
 /// Empty-home placeholder when ranking yields none. Not a ranked action chip.
 pub const CHIP_EMPTY_LABEL: &str = "Nothing queued";
@@ -1021,11 +1012,12 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                         ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
                         ui.horizontal(|ui| {
                             let label_galley = ui.fonts(|f| {
-                                f.layout_no_wrap(paint.clone(), font.clone(), color)
+                                f.layout(paint.clone(), font.clone(), color, CHIP_LABEL_WRAP)
                             });
-                            let label_w = label_galley.size().x.max(8.0);
+                            let label_w = label_galley.size().x.clamp(8.0, CHIP_LABEL_WRAP);
+                            let label_h = label_galley.size().y.clamp(20.0, 36.0);
                             let (_rect, hit_resp) =
-                                ui.allocate_exact_size(egui::vec2(label_w, 20.0), Sense::click());
+                                ui.allocate_exact_size(egui::vec2(label_w, label_h), Sense::click());
                             let (hit_resp, felt, wash) =
                                 crate::theme::feel_response(ui, hit_resp, Color32::TRANSPARENT);
                             if wash.a() > 0 {
@@ -2227,8 +2219,11 @@ mod tests {
         let long = chip_paint_label(
             "Continue the work from the chat \"Night cabin\". Last ask: paint the wall.",
         );
-        assert!(long.chars().count() <= 22, "{long}");
-        assert!(long.ends_with('…'), "{long}");
+        assert!(
+            long.contains("Night cabin") && long.contains("paint the wall"),
+            "{long}"
+        );
+        assert!(!long.contains('…'), "{long}");
     }
 
     #[test]
@@ -2247,8 +2242,8 @@ mod tests {
         assert_eq!(plan_title, "Plan");
         assert!(plan.contains("plan") && plan.contains("/plan"), "{plan}");
         let (look_title, look) = composer_session_tip("ask").unwrap();
-        assert_eq!(look_title, "Look");
-        assert_eq!(composer_modes()[2], ("ask", "Look"));
+        assert_eq!(look_title, "Questions");
+        assert_eq!(composer_modes()[2], ("ask", "Questions"));
         assert_ne!(composer_modes()[2].1, permission_modes()[0].1);
         assert!(look.contains("without editing"), "{look}");
         assert!(!look.contains("Ask"), "{look}");
