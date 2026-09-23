@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.15 — 2026-09-23
+
+A project is a folder of persistent chats. Selecting it filters sidebar History and files new chats there. Global chats stay on disk; click the project again to see every chat. Delete unassigns those chats back to History and does not wipe transcripts. Clicking or creating a project does not open the Workboard.
+
+- Linux: `grokhub-linux-v2.10.15.tar.gz` and AUR `pkgver=2.10.15`.
+- Windows: `GrokHub-Setup-2.10.15.exe` and `grokhub-windows-v2.10.15.zip`.
+- Cursor cabin 2.10.15. VERSION 2.10.15. Draft only. Not tagged.
+
 ## 2.10.14 — 2026-09-23
 
 btw replaces the Questions label on the session pill (saved id stays `ask`). A live run is not cancelled; the side ask waits, then sends look-safe. Compact sits on the existing context bar. Copy session and Export are on the thread chrome; per-bubble Copy stays. View plan reopens a Plan-mode plan. Fork shows only on a long thread (12+ turns) or when context is at least half the budget, with a one-time how-it-works note. `/rewind` is unchanged.

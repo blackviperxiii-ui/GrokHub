@@ -81,6 +81,7 @@ impl Cabin {
     }
 
     pub(super) fn new_thread(&mut self, scratch: bool) {
+        let want_project = self.project_sel.clone();
         let reuse = {
             let views: Vec<ThreadReuseView> = self
                 .threads
@@ -100,7 +101,10 @@ impl Cabin {
                         .is_some_and(|s| !s.trim().is_empty()),
                 })
                 .collect();
-            reuse_empty_thread_idx(&views, self.thread_idx, scratch)
+            reuse_empty_thread_idx(&views, self.thread_idx, scratch).filter(|&idx| {
+                self.threads.get(idx).and_then(|t| t.project_id.as_deref())
+                    == want_project.as_deref()
+            })
         };
         if let Some(idx) = reuse {
             if idx != self.thread_idx {
@@ -111,6 +115,7 @@ impl Cabin {
             if let Some(t) = self.threads.get_mut(self.thread_idx) {
                 t.grok_session = None;
                 t.grok_cwd = None;
+                t.project_id = want_project.clone();
             }
             self.stamp_current_access();
             self.persist();
@@ -127,7 +132,9 @@ impl Cabin {
             flush_visible_goal(&mut t.goal, self.goal_step, &self.cfg.goal_pin);
         }
         let title = if scratch { "Scratch" } else { "Chat" };
-        self.threads.push(ChatThread::new(title, scratch));
+        let mut created = ChatThread::new(title, scratch);
+        created.project_id = want_project;
+        self.threads.push(created);
         self.thread_idx = self.threads.len() - 1;
         self.messages = Arc::new(Vec::new());
         self.imagine_last.clear();
