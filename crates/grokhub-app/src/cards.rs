@@ -438,6 +438,11 @@ pub fn felt_pill(ui: &mut egui::Ui, label: &str, style: PillStyle) -> bool {
     .clicked()
 }
 
+/// Horizontal inset so a long session label (Questions) is not jammed on the pill edge.
+pub const SEG_INSET_X: f32 = 8.0;
+/// Vertical inset for session / permission pills.
+pub const SEG_INSET_Y: f32 = 6.0;
+
 /// Session Chat / Plan / Questions — quieter than the permission row (no stroke).
 pub fn felt_segment(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
     felt_segment_styled(ui, label, selected, None, false, crate::theme::FONT_BODY)
@@ -502,8 +507,18 @@ fn felt_segment_styled(
     strong: bool,
     font_size: f32,
 ) -> egui::Response {
-    let min = egui::vec2(52.0, 28.0);
-    let (_rect, resp) = ui.allocate_exact_size(min, Sense::click());
+    let font = if strong {
+        crate::theme::title_font(font_size)
+    } else {
+        FontId::proportional(font_size)
+    };
+    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER));
+    // Questions is longer than Chat / Plan / Ask. Size to the label + 8px inset.
+    let size = egui::vec2(
+        (galley.size().x + SEG_INSET_X * 2.0).max(52.0),
+        (galley.size().y + SEG_INSET_Y * 2.0).max(28.0),
+    );
+    let (_rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let on_t = crate::theme::animate_selection(ui, resp.id.with("seg"), selected);
     let base_fill =
         crate::theme::blend_color(Color32::TRANSPARENT, permission_risk_fill(true), on_t);
@@ -513,12 +528,14 @@ fn felt_segment_styled(
     if let Some(stroke) = stroke {
         ui.painter().rect_stroke(rect, 14.0, stroke);
     }
-    let font = if strong {
-        crate::theme::title_font(font_size)
-    } else {
-        FontId::proportional(font_size)
-    };
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, font, text_color);
+    ui.painter().galley(
+        egui::pos2(
+            rect.center().x - galley.size().x * 0.5,
+            rect.center().y - galley.size().y * 0.5,
+        ),
+        galley,
+        text_color,
+    );
     resp
 }
 
@@ -904,7 +921,10 @@ pub(crate) fn chip_paint_label(label: &str) -> String {
 }
 
 /// Wrap width for a suggestion chip. Two lines, not a one-line ellipsis.
-pub const CHIP_LABEL_WRAP: f32 = 148.0;
+pub const CHIP_LABEL_WRAP: f32 = 180.0;
+/// Pad inside the fill with spaces — Frame inner_margin clips the first glyphs.
+pub const CHIP_PAD_X: f32 = 14.0;
+pub const CHIP_PAD_Y: f32 = 8.0;
 
 /// Max width of the chip cluster — follows the composer column.
 pub fn chip_row_width_lock(avail: f32) -> f32 {
@@ -912,7 +932,7 @@ pub fn chip_row_width_lock(avail: f32) -> f32 {
 }
 
 /// Two-line chip row so leftover empty-home height cannot vertically center the chips.
-pub const CHIP_ROW_H: f32 = 52.0;
+pub const CHIP_ROW_H: f32 = 68.0;
 
 /// Empty-home placeholder when ranking yields none. Not a ranked action chip.
 pub const CHIP_EMPTY_LABEL: &str = "Nothing queued";
@@ -983,16 +1003,23 @@ pub fn paint_empty_chip_state(ui: &mut egui::Ui) {
                 .fill(fill)
                 .rounding(18.0)
                 .stroke(stroke)
-                .inner_margin(egui::Margin::symmetric(12.0, 6.0))
+                .inner_margin(egui::Margin::ZERO)
                 .show(ui, |ui| {
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(CHIP_EMPTY_LABEL)
-                                .size(13.0)
-                                .color(color),
-                        )
-                        .sense(Sense::hover()),
-                    );
+                    ui.add_space(CHIP_PAD_Y);
+                    ui.horizontal(|ui| {
+                        ui.add_space(CHIP_PAD_X);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(CHIP_EMPTY_LABEL)
+                                    .size(13.0)
+                                    .color(color),
+                            )
+                            .wrap()
+                            .sense(Sense::hover()),
+                        );
+                        ui.add_space(CHIP_PAD_X);
+                    });
+                    ui.add_space(CHIP_PAD_Y);
                 });
         },
     );
@@ -1042,15 +1069,17 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                     .fill(fill)
                     .rounding(18.0)
                     .stroke(Stroke::new(quick_chip_stroke_w(c.primary), stroke))
-                    .inner_margin(egui::Margin::symmetric(12.0, 6.0))
+                    .inner_margin(egui::Margin::ZERO)
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
+                        ui.add_space(CHIP_PAD_Y);
                         ui.horizontal(|ui| {
+                            ui.add_space(CHIP_PAD_X);
                             let label_galley = ui.fonts(|f| {
                                 f.layout(paint.clone(), font.clone(), color, CHIP_LABEL_WRAP)
                             });
                             let label_w = label_galley.size().x.clamp(8.0, CHIP_LABEL_WRAP);
-                            let label_h = label_galley.size().y.clamp(20.0, 36.0);
+                            let label_h = label_galley.size().y.max(20.0);
                             let (_rect, hit_resp) =
                                 ui.allocate_exact_size(egui::vec2(label_w, label_h), Sense::click());
                             let (hit_resp, felt, wash) =
@@ -1088,7 +1117,9 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                                     act = Some(ChipRowAct::Dismiss(i));
                                 }
                             }
+                            ui.add_space(CHIP_PAD_X);
                         });
+                        ui.add_space(CHIP_PAD_Y);
                     });
                 let hit = ir.response.interact(egui::Sense::click());
                 if hit.clicked() && act.is_none() {
@@ -2280,6 +2311,19 @@ mod tests {
         assert_eq!(look_title, "Questions");
         assert_eq!(composer_modes()[2], ("ask", "Questions"));
         assert_ne!(composer_modes()[2].1, permission_modes()[0].1);
+        assert!(SEG_INSET_X >= 8.0);
+        assert!(SEG_INSET_Y >= 6.0);
+        let styled = include_str!("cards.rs")
+            .split("fn felt_segment_styled(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn felt_tab(").next())
+            .expect("felt_segment_styled");
+        assert!(
+            styled.contains("SEG_INSET_X")
+                && styled.contains("layout_no_wrap")
+                && styled.contains("galley"),
+            "Questions must size to the label plus inset, not a 52px jam: {styled}"
+        );
         assert!(look.contains("without editing"), "{look}");
         assert!(!look.contains("Ask"), "{look}");
         assert!(!look_title.contains("Read"), "{look_title}");
@@ -2481,7 +2525,7 @@ mod tests {
         assert_ne!(max_w, 0.0);
         let src = include_str!("cards.rs");
         let start = src.find("pub fn quick_chip_row").expect("chip row");
-        let slice = &src[start..start + 900];
+        let slice = &src[start..start + 2200];
         assert!(
             slice.contains("with_main_align(egui::Align::Center)"),
             "chips sit on the midline of the bar: {slice}"
@@ -2493,6 +2537,10 @@ mod tests {
         assert!(
             slice.contains("CHIP_ROW_H") && slice.contains("allocate_ui_with_layout"),
             "chip row must use a tight height or leftover empty-home space vertically centers it: {slice}"
+        );
+        assert!(
+            !slice.contains('…') && slice.contains("CHIP_PAD_X") && slice.contains("add_space"),
+            "chip paint pads inside the fill and must not ellipsize: {slice}"
         );
         assert!(
             !slice.contains("ui.with_layout("),
