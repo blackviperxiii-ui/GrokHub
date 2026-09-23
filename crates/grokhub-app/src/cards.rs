@@ -390,30 +390,40 @@ pub fn felt_pill(ui: &mut egui::Ui, label: &str, style: PillStyle) -> bool {
     .clicked()
 }
 
-/// Segmented control segment — animated active wash, Plasma-style click feel.
+/// Session Chat / Plan / Look — quieter than the permission row (no stroke).
 pub fn felt_segment(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
-    felt_segment_styled(ui, label, selected, None, false)
+    felt_segment_styled(ui, label, selected, None, false, crate::theme::FONT_BODY)
 }
 
-/// Always = amber danger stroke + weight. Auto = mid. Ask = default.
-pub fn permission_risk_stroke_w(id: &str) -> f32 {
-    match id {
-        "always-approve" => 2.0,
-        "auto" => 1.35,
-        _ => 1.0,
+/// Idle Always matches Ask/Auto. Selected Always = 2px amber stroke, same fill.
+pub fn permission_risk_stroke_w(id: &str, selected: bool) -> f32 {
+    if selected && id == "always-approve" {
+        2.0
+    } else {
+        1.0
     }
 }
 
-pub fn permission_risk_stroke_color(id: &str) -> Color32 {
-    match id {
-        "always-approve" => crate::theme::setup(),
-        "auto" => crate::theme::border_strong(),
-        _ => crate::theme::border(),
+pub fn permission_risk_stroke_color(id: &str, selected: bool) -> Color32 {
+    if selected && id == "always-approve" {
+        crate::theme::always_amber()
+    } else if selected {
+        crate::theme::border_strong()
+    } else {
+        crate::theme::border()
     }
 }
 
-pub fn permission_risk_strong(id: &str) -> bool {
-    id == "always-approve"
+pub fn permission_risk_strong(id: &str, selected: bool) -> bool {
+    selected && id == "always-approve"
+}
+
+pub fn permission_risk_fill(selected: bool) -> Color32 {
+    if selected {
+        crate::theme::nav_active()
+    } else {
+        Color32::TRANSPARENT
+    }
 }
 
 pub fn felt_perm_segment(
@@ -422,8 +432,18 @@ pub fn felt_perm_segment(
     selected: bool,
     id: &str,
 ) -> egui::Response {
-    let stroke = Stroke::new(permission_risk_stroke_w(id), permission_risk_stroke_color(id));
-    felt_segment_styled(ui, label, selected, Some(stroke), permission_risk_strong(id))
+    let stroke = Stroke::new(
+        permission_risk_stroke_w(id, selected),
+        permission_risk_stroke_color(id, selected),
+    );
+    felt_segment_styled(
+        ui,
+        label,
+        selected,
+        Some(stroke),
+        permission_risk_strong(id, selected),
+        crate::theme::FONT_CHROME,
+    )
 }
 
 fn felt_segment_styled(
@@ -432,27 +452,23 @@ fn felt_segment_styled(
     selected: bool,
     stroke: Option<Stroke>,
     strong: bool,
+    font_size: f32,
 ) -> egui::Response {
     let min = egui::vec2(52.0, 28.0);
     let (_rect, resp) = ui.allocate_exact_size(min, Sense::click());
     let on_t = crate::theme::animate_selection(ui, resp.id.with("seg"), selected);
     let base_fill =
-        crate::theme::blend_color(Color32::TRANSPARENT, crate::theme::nav_active(), on_t);
-    let quiet = if strong {
-        crate::theme::fg()
-    } else {
-        crate::theme::muted()
-    };
-    let text_color = crate::theme::blend_color(quiet, crate::theme::fg(), on_t);
+        crate::theme::blend_color(Color32::TRANSPARENT, permission_risk_fill(true), on_t);
+    let text_color = crate::theme::blend_color(crate::theme::muted(), crate::theme::fg(), on_t);
     let (resp, rect, fill) = crate::theme::feel_response(ui, resp, base_fill);
     ui.painter().rect_filled(rect, 14.0, fill);
     if let Some(stroke) = stroke {
         ui.painter().rect_stroke(rect, 14.0, stroke);
     }
     let font = if strong {
-        crate::theme::title_font(crate::theme::FONT_CHROME)
+        crate::theme::title_font(font_size)
     } else {
-        FontId::proportional(crate::theme::FONT_CHROME)
+        FontId::proportional(font_size)
     };
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, font, text_color);
     resp
@@ -664,11 +680,15 @@ fn show_composer_tip(ui: &mut egui::Ui, title: &str, body: &str) {
     ui.visuals_mut().widgets.noninteractive.bg_fill = crate::theme::hover();
     ui.label(
         RichText::new(title)
-            .size(13.0)
+            .size(crate::theme::FONT_BODY)
             .strong()
             .color(crate::theme::fg()),
     );
-    ui.label(RichText::new(body).size(12.0).color(crate::theme::muted()));
+    ui.label(
+        RichText::new(body)
+            .size(crate::theme::FONT_TIP)
+            .color(crate::theme::muted()),
+    );
 }
 
 fn with_composer_tip(resp: egui::Response, title: &str, body: &str) -> egui::Response {
@@ -750,7 +770,7 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> S
         effort: None,
     };
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.spacing_mut().item_spacing.x = 3.0;
         for (id, label) in composer_modes() {
             let on = *id == mode;
             let mut resp = felt_segment(ui, label, on);
@@ -761,13 +781,13 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> S
                 out.mode = Some((*id).to_string());
             }
         }
-        ui.add_space(6.0);
+        ui.add_space(4.0);
         ui.label(
             RichText::new("|")
-                .size(crate::theme::FONT_META)
-                .color(crate::theme::border()),
+                .size(crate::theme::FONT_TIP)
+                .color(crate::theme::subtle()),
         );
-        ui.add_space(6.0);
+        ui.add_space(4.0);
         for (id, label) in permission_modes() {
             let on = *id == perm;
             let mut resp = felt_perm_segment(ui, label, on, id);
@@ -778,13 +798,13 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> S
                 out.perm = Some((*id).to_string());
             }
         }
-        ui.add_space(6.0);
+        ui.add_space(4.0);
         ui.label(
             RichText::new("|")
-                .size(crate::theme::FONT_META)
-                .color(crate::theme::border()),
+                .size(crate::theme::FONT_TIP)
+                .color(crate::theme::subtle()),
         );
-        ui.add_space(6.0);
+        ui.add_space(4.0);
         if let Some(next) = effort_pill(ui, effort) {
             out.effort = Some(next);
         }
@@ -1327,15 +1347,15 @@ fn paint_slot_card(
     prepared.frame.fill = crate::theme::veil_over(resting, veil);
     prepared.frame.stroke = Stroke::NONE;
     prepared.paint(ui);
-    let stroke = if selected {
-        crate::theme::fg()
+    let (stroke, stroke_w) = if selected {
+        (crate::theme::fg(), 1.5_f32)
     } else if resp.hovered() {
-        crate::theme::border_strong()
+        (crate::theme::border_strong(), 1.0_f32)
     } else {
-        crate::theme::border()
+        (crate::theme::border(), 1.0_f32)
     };
     ui.painter()
-        .rect_stroke(slot.shrink(0.5), rounding, Stroke::new(1.0_f32, stroke));
+        .rect_stroke(slot.shrink(0.5), rounding, Stroke::new(stroke_w, stroke));
     resp
 }
 
@@ -1352,20 +1372,28 @@ pub fn grok_tile(
     let mut add_rect = None;
     let mut prepared = egui::Frame::none()
         .fill(crate::theme::elevated())
-        .rounding(14.0)
-        .inner_margin(egui::Margin::same(12.0))
+        .rounding(crate::theme::CARD_RADIUS)
+        .inner_margin(egui::Margin::same(14.0))
         .begin(ui);
     {
         let ui = &mut prepared.content_ui;
         ui.set_min_height(96.0);
         ui.horizontal(|ui| {
-            icons::paint_icon(ui, icon, 40.0);
+            icons::paint_icon(ui, icon, crate::theme::TILE_ICON);
             ui.add_space(10.0);
             ui.vertical(|ui| {
-                ui.label(RichText::new(title).size(15.0).strong().color(crate::theme::fg()));
-                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(title)
+                        .font(crate::theme::card_title_font())
+                        .color(crate::theme::fg()),
+                );
+                ui.add_space(3.0);
                 let clipped: String = body.chars().take(80).collect();
-                ui.label(RichText::new(clipped).size(12.0).color(crate::theme::muted()));
+                ui.label(
+                    RichText::new(clipped)
+                        .size(crate::theme::FONT_BODY)
+                        .color(crate::theme::muted()),
+                );
             });
             if let Some(label) = add {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
@@ -1385,7 +1413,7 @@ pub fn grok_tile(
             }
         });
     }
-    let resp = paint_slot_card(ui, prepared, selected, 14.0);
+    let resp = paint_slot_card(ui, prepared, selected, crate::theme::CARD_RADIUS);
     let click_on_add = add_rect
         .zip(ui.input(|i| i.pointer.interact_pos()))
         .is_some_and(|(r, p)| r.expand(6.0).contains(p));
@@ -2073,21 +2101,29 @@ fn wall_slot_feel(ui: &egui::Ui, resp: egui::Response, selected: bool) -> egui::
 pub fn empty_prompt_tile(ui: &mut egui::Ui, icon: TileIcon, title: &str, hint: &str) -> bool {
     let mut prepared = egui::Frame::none()
         .fill(crate::theme::elevated())
-        .rounding(14.0)
+        .rounding(crate::theme::CARD_RADIUS)
         .inner_margin(egui::Margin::same(14.0))
         .begin(ui);
     {
         let ui = &mut prepared.content_ui;
         ui.set_min_height(100.0);
         ui.vertical_centered(|ui| {
-            icons::paint_icon(ui, icon, 36.0);
+            icons::paint_icon(ui, icon, crate::theme::TILE_ICON);
             ui.add_space(8.0);
-            ui.label(RichText::new(title).size(14.0).strong().color(crate::theme::fg()));
+            ui.label(
+                RichText::new(title)
+                    .font(crate::theme::card_title_font())
+                    .color(crate::theme::fg()),
+            );
             ui.add_space(4.0);
-            ui.label(RichText::new(hint).size(12.0).color(crate::theme::muted()));
+            ui.label(
+                RichText::new(hint)
+                    .size(crate::theme::FONT_TIP)
+                    .color(crate::theme::muted()),
+            );
         });
     }
-    paint_slot_card(ui, prepared, false, 14.0).clicked()
+    paint_slot_card(ui, prepared, false, crate::theme::CARD_RADIUS).clicked()
 }
 
 #[cfg(test)]
@@ -2113,7 +2149,10 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("pub fn tile_row(").next())
             .expect("grok_tile");
-        assert!(tile.contains("paint_slot_card"), "{tile}");
+        assert!(
+            tile.contains("paint_slot_card") && tile.contains("card_title_font"),
+            "{tile}"
+        );
         let empty = src
             .split("pub fn empty_prompt_tile(")
             .nth(1)
@@ -2269,23 +2308,74 @@ mod tests {
                 && session.contains("out.effort = Some(next)"),
             "composer session row must include effort dropdown: {session}"
         );
-        assert!(
-            permission_risk_stroke_w("always-approve") > permission_risk_stroke_w("auto"),
-            "Always stroke is heavier than Auto"
+        assert_eq!(
+            permission_risk_stroke_w("always-approve", false),
+            permission_risk_stroke_w("ask", false)
         );
-        assert!(
-            permission_risk_stroke_w("auto") > permission_risk_stroke_w("ask"),
-            "Auto stroke is mid vs Ask"
+        assert_eq!(
+            permission_risk_stroke_w("always-approve", false),
+            permission_risk_stroke_w("auto", false)
         );
-        assert_eq!(permission_risk_stroke_color("always-approve"), crate::theme::setup());
-        assert!(permission_risk_strong("always-approve"));
-        assert!(!permission_risk_strong("ask"));
-        assert!(!permission_risk_strong("auto"));
+        assert_eq!(
+            permission_risk_stroke_color("always-approve", false),
+            permission_risk_stroke_color("ask", false)
+        );
+        assert_eq!(
+            permission_risk_stroke_color("always-approve", false),
+            crate::theme::border()
+        );
+        crate::theme::set_paint_dark(true);
+        assert_eq!(
+            permission_risk_stroke_color("always-approve", true),
+            crate::theme::ALWAYS_AMBER_DARK
+        );
+        crate::theme::set_paint_dark(false);
+        assert_eq!(
+            permission_risk_stroke_color("always-approve", true),
+            crate::theme::ALWAYS_AMBER_LIGHT
+        );
+        crate::theme::set_paint_dark(true);
+        assert_ne!(
+            permission_risk_stroke_color("always-approve", true),
+            crate::theme::setup()
+        );
+        assert_ne!(
+            permission_risk_stroke_color("always-approve", false),
+            crate::theme::always_amber()
+        );
+        assert_eq!(permission_risk_stroke_w("always-approve", true), 2.0);
+        assert_eq!(permission_risk_stroke_w("auto", true), 1.0);
+        assert_eq!(permission_risk_stroke_w("ask", true), 1.0);
+        assert_eq!(permission_risk_fill(true), crate::theme::nav_active());
+        assert_eq!(permission_risk_fill(false), Color32::TRANSPARENT);
+        assert_ne!(permission_risk_fill(true), crate::theme::always_amber());
+        assert!(permission_risk_strong("always-approve", true));
+        assert!(!permission_risk_strong("always-approve", false));
+        assert!(!permission_risk_strong("ask", true));
+        assert!(!permission_risk_strong("auto", true));
         assert!(
             session.contains("composer_session_tip")
                 && session.contains("composer_perm_tip")
                 && session.contains("with_composer_tip"),
             "composer pills must show hover help: {session}"
+        );
+        let seg = include_str!("cards.rs")
+            .split("pub fn felt_segment(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn permission_risk_stroke_w(").next())
+            .expect("felt_segment");
+        assert!(
+            seg.contains("FONT_BODY") && seg.contains("None"),
+            "session pills stay quieter than permission: {seg}"
+        );
+        let perm_seg = include_str!("cards.rs")
+            .split("pub fn felt_perm_segment(")
+            .nth(1)
+            .and_then(|s| s.split("fn felt_segment_styled(").next())
+            .expect("felt_perm_segment");
+        assert!(
+            perm_seg.contains("FONT_CHROME") && perm_seg.contains("permission_risk_stroke_w"),
+            "permission row keeps a designed stroke: {perm_seg}"
         );
         let voice = include_str!("cards.rs")
             .split("pub fn voice_mode_row(")

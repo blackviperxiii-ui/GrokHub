@@ -53,6 +53,10 @@ pub const SEND_ON: Color32 = Color32::WHITE;
 pub const SEND_ON_INK: Color32 = Color32::BLACK;
 pub const LIVE: Color32 = Color32::from_rgb(0x22, 0xc5, 0x5e);
 pub const SETUP: Color32 = Color32::from_rgb(0xea, 0xb3, 0x08);
+/// Selected Always stroke only — dark OLED, ≥3:1 on `#16181C`.
+pub const ALWAYS_AMBER_DARK: Color32 = Color32::from_rgb(0xe8, 0xa8, 0x38);
+/// Selected Always stroke only — light surface, ≥3:1 on elevated white.
+pub const ALWAYS_AMBER_LIGHT: Color32 = Color32::from_rgb(0xb8, 0x6e, 0x00);
 pub const OFFLINE: Color32 = Color32::from_rgb(0xef, 0x44, 0x44);
 /// grok.com light `--surface-base` (System when the desktop is light).
 pub const LIGHT_BG: Color32 = Color32::from_rgb(0xf4, 0xf4, 0xf5);
@@ -144,8 +148,41 @@ pub fn live() -> Color32 {
 pub fn setup() -> Color32 {
     SETUP
 }
+/// Selected Always ring. Idle Always never uses this.
+pub fn always_amber() -> Color32 {
+    tok(ALWAYS_AMBER_DARK, ALWAYS_AMBER_LIGHT)
+}
 pub fn offline() -> Color32 {
     OFFLINE
+}
+
+/// Quiet sheet elevation. Light is a soft drop; dark is a faint lift on OLED `#000`.
+pub fn sheet_shadow() -> egui::Shadow {
+    if USE_LIGHT.load(Ordering::Relaxed) {
+        egui::Shadow {
+            offset: egui::vec2(0.0, 2.0),
+            blur: 8.0,
+            spread: 0.0,
+            color: Color32::from_black_alpha(28),
+        }
+    } else {
+        egui::Shadow {
+            offset: egui::vec2(0.0, 2.0),
+            blur: 10.0,
+            spread: 0.0,
+            color: Color32::from_white_alpha(14),
+        }
+    }
+}
+
+/// Agent / catalog card title — Inter SemiBold 16.
+pub fn card_title_font() -> FontId {
+    title_font(FONT_SECTION)
+}
+
+/// Composer pill hairline. Focus lifts to the strong border, never warning amber.
+pub fn composer_chrome_stroke(focused: bool) -> Stroke {
+    Stroke::new(1.0_f32, if focused { border_strong() } else { border() })
 }
 
 #[cfg(test)]
@@ -239,6 +276,16 @@ pub const CHAT_COL_W: f32 = 768.0;
 pub const USER_BUBBLE_RADIUS: f32 = 20.0;
 /// Quiet chrome (rail rows, sheets, menus). Composer + user bubble stay large.
 pub const CHROME_RADIUS: f32 = 6.0;
+/// Catalog / agent card — Fluent card radius, not a chat pill.
+pub const CARD_RADIUS: f32 = 12.0;
+/// Catalog icon well that holds a 20px Fluent glyph.
+pub const TILE_ICON: f32 = 28.0;
+/// Rail / composer chrome glyph.
+pub const ICON_CHROME: f32 = 16.0;
+/// Primary action glyph (Send, card well).
+pub const ICON_ACTION: f32 = 20.0;
+/// Hairline painted icons (denser than a 1.5 sketch).
+pub const ICON_STROKE: f32 = 1.25;
 pub const TITLEBAR_H: f32 = 40.0;
 /// `[data-testid=chat-input]` `min-h-[60px]`
 pub const QUERY_MIN_H: f32 = 60.0;
@@ -260,6 +307,12 @@ pub const NAV_ROW_H: f32 = 40.0;
 pub const FONT_UI: f32 = 15.0;
 pub const FONT_CHROME: f32 = 14.0;
 pub const FONT_META: f32 = 13.0;
+/// Card / section title — Inter SemiBold.
+pub const FONT_SECTION: f32 = 16.0;
+/// Card body / quieter session chrome.
+pub const FONT_BODY: f32 = 13.0;
+/// Tips and meta.
+pub const FONT_TIP: f32 = 12.0;
 /// Settings / pane titles — larger than Body.
 pub const FONT_HEADING: f32 = 22.0;
 /// grok.com/imagine `h1.text-[22px].leading-7`
@@ -331,11 +384,7 @@ fn install_inter(ctx: &egui::Context) {
     }
     fonts.families.insert(
         FontFamily::Name("inter-bold".into()),
-        vec![
-            "inter-bold".into(),
-            "inter-medium".into(),
-            "inter".into(),
-        ],
+        vec!["inter-bold".into(), "inter-medium".into(), "inter".into()],
     );
     let mono = std::fs::read("/usr/share/fonts/TTF/JetBrainsMono-Regular.ttf")
         .or_else(|_| std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"))
@@ -412,8 +461,8 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     visuals.window_stroke = Stroke::new(1.0_f32, border());
     visuals.window_rounding = CHROME_RADIUS.into();
     visuals.menu_rounding = CHROME_RADIUS.into();
-    visuals.window_shadow = egui::Shadow::NONE;
-    visuals.popup_shadow = egui::Shadow::NONE;
+    visuals.window_shadow = sheet_shadow();
+    visuals.popup_shadow = sheet_shadow();
     visuals.widgets.noninteractive.rounding = CHROME_RADIUS.into();
     visuals.widgets.inactive.rounding = CHROME_RADIUS.into();
     visuals.widgets.hovered.rounding = CHROME_RADIUS.into();
@@ -421,11 +470,26 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     ctx.set_visuals(visuals);
 
     let mut style = (*ctx.style()).clone();
-    style.text_styles.insert(TextStyle::Small, FontId::new(FONT_META, FontFamily::Proportional));
-    style.text_styles.insert(TextStyle::Body, FontId::new(FONT_UI, FontFamily::Proportional));
-    style.text_styles.insert(TextStyle::Button, FontId::new(FONT_CHROME, FontFamily::Proportional));
-    style.text_styles.insert(TextStyle::Heading, FontId::new(FONT_HEADING, FontFamily::Proportional));
-    style.text_styles.insert(TextStyle::Monospace, FontId::new(12.0, FontFamily::Monospace));
+    style.text_styles.insert(
+        TextStyle::Small,
+        FontId::new(FONT_META, FontFamily::Proportional),
+    );
+    style.text_styles.insert(
+        TextStyle::Body,
+        FontId::new(FONT_UI, FontFamily::Proportional),
+    );
+    style.text_styles.insert(
+        TextStyle::Button,
+        FontId::new(FONT_CHROME, FontFamily::Proportional),
+    );
+    style.text_styles.insert(
+        TextStyle::Heading,
+        FontId::new(FONT_HEADING, FontFamily::Proportional),
+    );
+    style.text_styles.insert(
+        TextStyle::Monospace,
+        FontId::new(12.0, FontFamily::Monospace),
+    );
     style.spacing.item_spacing = egui::vec2(8.0, 8.0);
     style.spacing.button_padding = egui::vec2(12.0, 7.0);
     style.spacing.scroll.bar_width = 8.0;
@@ -480,8 +544,7 @@ pub fn felt_label_button(
     if let Some(s) = stroke {
         ui.painter().rect_stroke(rect, rounding, s);
     }
-    ui.painter()
-        .galley(rect.min + pad, galley, text_color);
+    ui.painter().galley(rect.min + pad, galley, text_color);
     pointing(resp)
 }
 
@@ -496,19 +559,14 @@ pub fn felt_icon_hit(
     let (_rect, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
     let (resp, rect, wash) = feel_response(ui, resp, Color32::TRANSPARENT);
     if wash.a() > 0 {
-        ui.painter()
-            .rect_filled(rect, 6.0, wash);
+        ui.painter().rect_filled(rect, 6.0, wash);
     }
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
         label,
         FontId::proportional(font_size),
-        if resp.hovered() {
-            fg()
-        } else {
-            text_color
-        },
+        if resp.hovered() { fg() } else { text_color },
     );
     pointing(resp)
 }
@@ -636,11 +694,19 @@ mod tests {
     #[test]
     fn blend_color_endpoints() {
         assert_eq!(
-            blend_color(Color32::from_rgb(0, 0, 0), Color32::from_rgb(100, 100, 100), 0.0),
+            blend_color(
+                Color32::from_rgb(0, 0, 0),
+                Color32::from_rgb(100, 100, 100),
+                0.0
+            ),
             Color32::from_rgb(0, 0, 0)
         );
         assert_eq!(
-            blend_color(Color32::from_rgb(0, 0, 0), Color32::from_rgb(100, 100, 100), 1.0),
+            blend_color(
+                Color32::from_rgb(0, 0, 0),
+                Color32::from_rgb(100, 100, 100),
+                1.0
+            ),
             Color32::from_rgb(100, 100, 100)
         );
     }
@@ -668,6 +734,40 @@ mod tests {
         assert_eq!(USER_BUBBLE_RADIUS, 20.0);
         assert!(USER_BUBBLE_RADIUS < QUERY_RADIUS);
         assert_eq!(CHROME_RADIUS, 6.0);
+        assert_eq!(CARD_RADIUS, 12.0);
+        assert_eq!(TILE_ICON, 28.0);
+        assert_eq!(ICON_CHROME, 16.0);
+        assert_eq!(ICON_ACTION, 20.0);
+        assert_eq!(ICON_STROKE, 1.25);
+        assert!(ICON_CHROME < ICON_ACTION);
+        assert!(ICON_ACTION < TILE_ICON);
+        assert_eq!(FONT_SECTION, 16.0);
+        assert_eq!(FONT_BODY, 13.0);
+        assert_eq!(FONT_TIP, 12.0);
+        assert!(FONT_TIP < FONT_BODY);
+        assert!(FONT_SECTION > FONT_CHROME);
+        assert_eq!(ALWAYS_AMBER_DARK, Color32::from_rgb(0xe8, 0xa8, 0x38));
+        assert_eq!(ALWAYS_AMBER_LIGHT, Color32::from_rgb(0xb8, 0x6e, 0x00));
+        assert_ne!(ALWAYS_AMBER_DARK, SETUP);
+        set_paint_dark(true);
+        assert_eq!(always_amber(), ALWAYS_AMBER_DARK);
+        set_paint_dark(false);
+        assert_eq!(always_amber(), ALWAYS_AMBER_LIGHT);
+        set_paint_dark(true);
+        assert_eq!(composer_chrome_stroke(false).color, border());
+        assert_eq!(composer_chrome_stroke(true).color, border_strong());
+        assert_ne!(composer_chrome_stroke(true).color, always_amber());
+        set_paint_dark(true);
+        let dark_sheet = sheet_shadow();
+        assert!(dark_sheet.blur > 0.0);
+        assert_ne!(dark_sheet.color, always_amber());
+        set_paint_dark(false);
+        let light_sheet = sheet_shadow();
+        assert!(light_sheet.blur > 0.0);
+        assert_ne!(light_sheet.color, ALWAYS_AMBER_LIGHT);
+        set_paint_dark(true);
+        assert!(CHROME_RADIUS < CARD_RADIUS);
+        assert!(CARD_RADIUS < USER_BUBBLE_RADIUS);
         assert!(CHROME_RADIUS < USER_BUBBLE_RADIUS);
         assert_eq!(QUERY_MIN_H, 60.0);
         assert_eq!(QUERY_RADIUS, 160.0);
@@ -820,10 +920,7 @@ mod tests {
             mark.contains("get_temp") && mark.contains("insert_temp"),
             "reuse the GPU texture across paints: {mark}"
         );
-        let paint = mark
-            .split("pub fn mark(")
-            .nth(1)
-            .expect("mark paint");
+        let paint = mark.split("pub fn mark(").nth(1).expect("mark paint");
         assert!(
             !paint.contains("load_from_memory"),
             "paint must not decode the PNG: {paint}"

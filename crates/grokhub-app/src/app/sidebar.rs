@@ -2,7 +2,6 @@
 
 use super::*;
 
-
 pub(super) fn fit_rail_label(ui: &egui::Ui, label: &str, max_w: f32) -> String {
     let font = egui::FontId::proportional(crate::theme::FONT_CHROME);
     let fits = |s: &str| {
@@ -25,7 +24,6 @@ pub(super) fn fit_rail_label(ui: &egui::Ui, label: &str, max_w: f32) -> String {
 }
 
 impl Cabin {
-
     pub(super) fn ui_titlebar(&mut self, ctx: &egui::Context) {
         let mut run_pending_update = false;
         let update_chip = update_chip_label(self.update_pending_now());
@@ -37,8 +35,7 @@ impl Cabin {
                     ui.add_space(12.0);
                     ui.label(
                         RichText::new("GrokHub")
-                            .size(crate::theme::FONT_CHROME)
-                            .strong()
+                            .font(crate::theme::title_font(crate::theme::FONT_CHROME))
                             .color(crate::theme::fg()),
                     );
                     if let Some(label) = update_chip {

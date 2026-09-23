@@ -1351,6 +1351,8 @@ impl Cabin {
                     self.status = format!("Effort {}", grokhub_core::effort_label(e));
                 }
             }
+            let composer_id = egui::Id::new("chat-composer");
+            let focused = ui.memory(|m| m.has_focus(composer_id));
             ui.allocate_ui_with_layout(
                 egui::vec2(cap, crate::theme::QUERY_MIN_H),
                 egui::Layout::top_down(egui::Align::Min),
@@ -1360,10 +1362,10 @@ impl Cabin {
             egui::Frame::none()
                 .fill(crate::theme::elevated())
                 .rounding(crate::theme::QUERY_RADIUS)
-                .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                .inner_margin(egui::Margin::same(8.0))
+                .stroke(crate::theme::composer_chrome_stroke(focused))
+                .inner_margin(egui::Margin::same(7.0))
                 .show(ui, |ui| {
-                    let inner = (cap - 16.0).max(200.0);
+                    let inner = (cap - 14.0).max(200.0);
                     ui.set_width(inner);
                     ui.set_max_width(inner);
                     ui.set_min_height(crate::theme::QUERY_MIN_H - 16.0);
@@ -1379,7 +1381,6 @@ impl Cabin {
                         if plus.clicked() {
                             self.open_plus(PlusTarget::Chat, plus.rect.left_bottom());
                         }
-                        let composer_id = egui::Id::new("chat-composer");
                         if self.composer_want_focus {
                             ui.memory_mut(|m| m.request_focus(composer_id));
                             self.composer_want_focus = false;
