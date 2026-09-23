@@ -1,6 +1,6 @@
 # GrokHub is the Grok Build GUI
 
-**Version:** 2.10.11
+**Version:** 2.10.12
 
 GrokHub is the native egui cabin. Grok Build (`grok` CLI) is the agent, the host shell, and computer-use (eyes and hands). One repo, one version — Linux tarball/AUR and Windows `GrokHub-Setup-<version>.exe` ship from the same tag.
 
@@ -33,6 +33,8 @@ Below the search, History is `grok sessions list` from the chat cwd (the directo
 ## Settings
 
 Quiet-hour clocks and the daily/host caps type into buffers. Save parses them. A half-typed clock or an hour with no `:` (`7`) keeps the last-good value instead of the factory window or turning the guard off.
+
+Settings → Cabin defaults pins the chat model (Auto saves an empty string), reasoning effort, permission Ask or Auto, and session Chat / Plan / Questions in `app.json`. Those values feed headless `grok -p`. Always is not written from that page. Always collapse (`always_collapse_thoughts`, default off) starts thoughts folded in every session; collapsing one thought folds that session, and expand opens one thought at a time. Close-to-tray still unmaps the cabin. `close_to_tray_tip_seen` (default false) is set only when the “Still running in the tray” toast is shown, so a first hide during quiet hours does not consume the tip. Later hides stay silent. Tray Show and Quit are unchanged. The cabin status string stays.
 
 Account can set a display name and a local profile picture. The picture is copied into cabin config (`profile.png`). A saved name wins over the OAuth name on the avatar menu and the rail. A blank name keeps the OAuth name, then USER.md, then Grok. The avatar menu, the rail, and the connected hint do not show the email.
 

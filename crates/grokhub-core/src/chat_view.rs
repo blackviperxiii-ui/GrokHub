@@ -100,6 +100,67 @@ pub fn thought_control_act(label: &str) -> Option<ThoughtFoldAct> {
     }
 }
 
+/// Thoughts start collapsed when Settings Always collapse is on, or this
+/// session already folded its thoughts. Always off keeps each thread separate.
+pub fn session_thoughts_start_collapsed(always_collapse: bool, session_collapsed: bool) -> bool {
+    always_collapse || session_collapsed
+}
+
+/// No stored fold follows the session default. A stored fold is an explicit
+/// choice: Expanded is one thought opened by hand; Minimized is a session fold.
+pub fn effective_thought_fold(stored: Option<ThoughtFold>, start_collapsed: bool) -> ThoughtFold {
+    stored.unwrap_or(if start_collapsed {
+        ThoughtFold::Minimized
+    } else {
+        ThoughtFold::Expanded
+    })
+}
+
+/// A click that actually changed the fold. The same state is not an action.
+pub fn thought_fold_transition(before: ThoughtFold, after: ThoughtFold) -> Option<ThoughtFoldAct> {
+    if before == after {
+        None
+    } else {
+        match after {
+            ThoughtFold::Expanded => Some(ThoughtFoldAct::Expand),
+            ThoughtFold::Minimized => Some(ThoughtFoldAct::Minimize),
+            ThoughtFold::Hidden => Some(ThoughtFoldAct::Hide),
+        }
+    }
+}
+
+/// Collapse marks the session and folds every thought in it.
+/// Expand opens only `index` and leaves the session flag set so siblings stay folded.
+/// Returns true when the act folded the whole session.
+pub fn apply_session_thought_act(
+    folds: &mut [ThoughtFold],
+    session_collapsed: &mut bool,
+    index: usize,
+    act: ThoughtFoldAct,
+) -> bool {
+    match act {
+        ThoughtFoldAct::Minimize => {
+            *session_collapsed = true;
+            for fold in folds.iter_mut() {
+                *fold = ThoughtFold::Minimized;
+            }
+            true
+        }
+        ThoughtFoldAct::Expand => {
+            if let Some(fold) = folds.get_mut(index) {
+                *fold = ThoughtFold::Expanded;
+            }
+            false
+        }
+        ThoughtFoldAct::Hide => {
+            if let Some(fold) = folds.get_mut(index) {
+                *fold = ThoughtFold::Hidden;
+            }
+            false
+        }
+    }
+}
+
 /// Folding a thought never drops the reply, a user turn, or a tool row.
 pub fn thought_fold_draws(kind: ChatKind, fold: ThoughtFold) -> bool {
     match kind {
@@ -849,6 +910,72 @@ mod tests {
         assert_eq!(thought_control_act("Minimize"), Some(ThoughtFoldAct::Minimize));
         assert_eq!(thought_control_act("Hide"), Some(ThoughtFoldAct::Hide));
         assert_eq!(thought_control_act("Reply"), None);
+        let mut session_a = [
+            ThoughtFold::Expanded,
+            ThoughtFold::Expanded,
+            ThoughtFold::Expanded,
+        ];
+        let mut collapsed_a = false;
+        assert!(apply_session_thought_act(
+            &mut session_a,
+            &mut collapsed_a,
+            1,
+            ThoughtFoldAct::Minimize,
+        ));
+        assert!(collapsed_a);
+        assert_eq!(
+            session_a,
+            [
+                ThoughtFold::Minimized,
+                ThoughtFold::Minimized,
+                ThoughtFold::Minimized,
+            ]
+        );
+        assert!(!apply_session_thought_act(
+            &mut session_a,
+            &mut collapsed_a,
+            0,
+            ThoughtFoldAct::Expand,
+        ));
+        assert!(collapsed_a, "expand one must not clear the session fold");
+        assert_eq!(session_a[0], ThoughtFold::Expanded);
+        assert_eq!(session_a[1], ThoughtFold::Minimized);
+        assert_eq!(session_a[2], ThoughtFold::Minimized);
+        assert!(apply_session_thought_act(
+            &mut session_a,
+            &mut collapsed_a,
+            0,
+            ThoughtFoldAct::Minimize,
+        ));
+        assert!(session_a.iter().all(|f| *f == ThoughtFold::Minimized));
+        let session_b = [ThoughtFold::Expanded, ThoughtFold::Expanded];
+        let collapsed_b = false;
+        assert!(
+            !collapsed_b && session_b.iter().all(|f| *f == ThoughtFold::Expanded),
+            "session B stays expanded when only A was collapsed"
+        );
+        assert!(!session_thoughts_start_collapsed(false, collapsed_b));
+        assert!(session_thoughts_start_collapsed(false, collapsed_a));
+        assert!(session_thoughts_start_collapsed(true, false));
+        assert_eq!(effective_thought_fold(None, false), ThoughtFold::Expanded);
+        assert_eq!(effective_thought_fold(None, true), ThoughtFold::Minimized);
+        assert_eq!(
+            effective_thought_fold(Some(ThoughtFold::Expanded), true),
+            ThoughtFold::Expanded,
+            "an opened thought stays open while the session default is collapsed"
+        );
+        assert_eq!(
+            thought_fold_transition(ThoughtFold::Expanded, ThoughtFold::Minimized),
+            Some(ThoughtFoldAct::Minimize)
+        );
+        assert_eq!(
+            thought_fold_transition(ThoughtFold::Minimized, ThoughtFold::Expanded),
+            Some(ThoughtFoldAct::Expand)
+        );
+        assert_eq!(
+            thought_fold_transition(ThoughtFold::Minimized, ThoughtFold::Minimized),
+            None
+        );
 
         let views = visible_chat(&[
             ("user".into(), "check the session".into()),

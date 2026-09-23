@@ -395,6 +395,102 @@ pub(super) fn write_thought_fold(ctx: &egui::Context, id: egui::Id, fold: Though
     ctx.data_mut(|d| d.insert_temp(id, fold));
 }
 
+pub(super) fn session_thoughts_collapsed_id(thread_id: &str) -> egui::Id {
+    egui::Id::new(("cabin-session-thoughts-collapsed", thread_id))
+}
+
+pub(super) fn read_session_thoughts_collapsed(ctx: &egui::Context, thread_id: &str) -> bool {
+    ctx.data(|d| d.get_temp(session_thoughts_collapsed_id(thread_id)))
+        .unwrap_or(false)
+}
+
+pub(super) fn write_session_thoughts_collapsed(ctx: &egui::Context, thread_id: &str, on: bool) {
+    ctx.data_mut(|d| d.insert_temp(session_thoughts_collapsed_id(thread_id), on));
+}
+
+pub(super) fn resolve_thought_fold(
+    ctx: &egui::Context,
+    id: egui::Id,
+    start_collapsed: bool,
+) -> ThoughtFold {
+    let stored = ctx.data(|d| d.get_temp(id));
+    grokhub_core::effective_thought_fold(stored, start_collapsed)
+}
+
+/// Expand writes only this thought. Collapse asks the caller to fold the session.
+fn note_thought_fold_click(
+    ctx: &egui::Context,
+    thread_id: &str,
+    slot: Option<u64>,
+    body_key: u64,
+    before: ThoughtFold,
+    after: ThoughtFold,
+    collapse_session: &mut bool,
+) {
+    let Some(act) = grokhub_core::thought_fold_transition(before, after) else {
+        return;
+    };
+    match act {
+        grokhub_core::ThoughtFoldAct::Minimize => *collapse_session = true,
+        grokhub_core::ThoughtFoldAct::Expand => {
+            if let Some(slot) = slot {
+                write_thought_fold(
+                    ctx,
+                    thought_fold_id(thread_id, "slot", slot),
+                    ThoughtFold::Expanded,
+                );
+            }
+            write_thought_fold(
+                ctx,
+                thought_fold_id(thread_id, "body", body_key),
+                ThoughtFold::Expanded,
+            );
+        }
+        grokhub_core::ThoughtFoldAct::Hide => {
+            if let Some(slot) = slot {
+                write_thought_fold(
+                    ctx,
+                    thought_fold_id(thread_id, "slot", slot),
+                    ThoughtFold::Hidden,
+                );
+            }
+            write_thought_fold(
+                ctx,
+                thought_fold_id(thread_id, "body", body_key),
+                ThoughtFold::Hidden,
+            );
+        }
+    }
+}
+
+fn minimize_session_thoughts(
+    ctx: &egui::Context,
+    thread_id: &str,
+    stored: &[ChatView],
+    live: &[LiveBlock],
+) {
+    write_session_thoughts_collapsed(ctx, thread_id, true);
+    for view in stored.iter().filter(|v| v.kind == ChatKind::Thought) {
+        write_thought_fold(
+            ctx,
+            thought_fold_id(thread_id, "body", thought_body_key(&view.body)),
+            ThoughtFold::Minimized,
+        );
+    }
+    for block in live.iter().filter(|b| b.kind == LiveKind::Thought) {
+        write_thought_fold(
+            ctx,
+            thought_fold_id(thread_id, "slot", block.fold_slot),
+            ThoughtFold::Minimized,
+        );
+        write_thought_fold(
+            ctx,
+            thought_fold_id(thread_id, "body", thought_body_key(&block.body)),
+            ThoughtFold::Minimized,
+        );
+    }
+}
+
 /// One quiet collapse control. Expanded shows a down chevron; minimized shows a right chevron.
 /// Same toggle as Minimize: the thought body hides, the short row stays. Hide is not painted.
 pub(super) fn paint_thought_fold_buttons(ui: &mut egui::Ui, fold: ThoughtFold) -> ThoughtFold {
@@ -630,8 +726,14 @@ impl Cabin {
                         let mut act = ChatBlockAct::None;
                         let jump_you = self.jump_last_you;
                         let mut jumped_you = false;
+                        let fold_thread = self.visible_thread_id();
+                        let start_collapsed = grokhub_core::session_thoughts_start_collapsed(
+                            self.cfg.always_collapse_thoughts,
+                            read_session_thoughts_collapsed(ui.ctx(), &fold_thread),
+                        );
+                        let mut collapse_session = false;
                         {
-                            let thread_id = self.visible_thread_id();
+                            let thread_id = fold_thread.clone();
                             let row_h_id = chat_row_height_id(&thread_id, pane);
                             let views = self.cached_chat_views();
                             let shown = if live {
@@ -651,46 +753,50 @@ impl Cabin {
                                 let next_thought =
                                     shown.get(i + 1).filter(|v| v.kind == ChatKind::Thought);
                                 let prev_expanded = prev_thought.is_some_and(|v| {
-                                    read_thought_fold(
+                                    resolve_thought_fold(
                                         ui.ctx(),
                                         thought_fold_id(
                                             &thread_id,
                                             "body",
                                             thought_body_key(&v.body),
                                         ),
+                                        start_collapsed,
                                     )
                                     .paints_body()
                                 });
                                 let next_expanded = next_thought.is_some_and(|v| {
-                                    read_thought_fold(
+                                    resolve_thought_fold(
                                         ui.ctx(),
                                         thought_fold_id(
                                             &thread_id,
                                             "body",
                                             thought_body_key(&v.body),
                                         ),
+                                        start_collapsed,
                                     )
                                     .paints_body()
                                 });
                                 let next_drawn_thought = next_thought.is_some_and(|v| {
-                                    read_thought_fold(
+                                    resolve_thought_fold(
                                         ui.ctx(),
                                         thought_fold_id(
                                             &thread_id,
                                             "body",
                                             thought_body_key(&v.body),
                                         ),
+                                        start_collapsed,
                                     )
                                     .paints_row()
                                 });
                                 let fold = if block.kind == ChatKind::Thought {
-                                    read_thought_fold(
+                                    resolve_thought_fold(
                                         ui.ctx(),
                                         thought_fold_id(
                                             &thread_id,
                                             "body",
                                             thought_body_key(&block.body),
                                         ),
+                                        start_collapsed,
                                     )
                                 } else {
                                     ThoughtFold::Expanded
@@ -731,14 +837,14 @@ impl Cabin {
                                 }
                                 let painted = painted.inner;
                                 if block.kind == ChatKind::Thought {
-                                    write_thought_fold(
+                                    note_thought_fold_click(
                                         ui.ctx(),
-                                        thought_fold_id(
-                                            &thread_id,
-                                            "body",
-                                            thought_body_key(&block.body),
-                                        ),
+                                        &thread_id,
+                                        None,
+                                        thought_body_key(&block.body),
+                                        fold,
                                         painted.thought_fold,
+                                        &mut collapse_session,
                                     );
                                 }
                                 match painted.act {
@@ -759,7 +865,12 @@ impl Cabin {
                             self.jump_last_you = false;
                         }
                         if live {
-                            match self.paint_live_blocks(ui, thinking) {
+                            match self.paint_live_blocks(
+                                ui,
+                                thinking,
+                                start_collapsed,
+                                &mut collapse_session,
+                            ) {
                                 ChatBlockAct::None => {}
                                 other => act = other,
                             }
@@ -774,6 +885,15 @@ impl Cabin {
                             }
                         } else {
                             self.paint_tool_cards(ui);
+                        }
+                        if collapse_session {
+                            let stored = self.cached_chat_views().to_vec();
+                            minimize_session_thoughts(
+                                ui.ctx(),
+                                &fold_thread,
+                                &stored,
+                                &self.live_blocks,
+                            );
                         }
                         if thinking {
                             let phase = self.run_phase_here();
@@ -895,7 +1015,13 @@ impl Cabin {
         self.send_chat(text);
     }
 
-    pub(super) fn paint_live_blocks(&self, ui: &mut egui::Ui, _thinking: bool) -> ChatBlockAct {
+    pub(super) fn paint_live_blocks(
+        &self,
+        ui: &mut egui::Ui,
+        _thinking: bool,
+        start_collapsed: bool,
+        collapse_session: &mut bool,
+    ) -> ChatBlockAct {
         let mut act = ChatBlockAct::None;
         let thread_id = self.visible_thread_id();
         for (i, b) in self.live_blocks.iter().enumerate() {
@@ -909,21 +1035,24 @@ impl Cabin {
                 .get(i + 1)
                 .is_some_and(|v| v.kind == LiveKind::Thought);
             let prev_expanded = prev_thought
-                && read_thought_fold(
+                && resolve_thought_fold(
                     ui.ctx(),
                     thought_fold_id(&thread_id, "slot", self.live_blocks[i - 1].fold_slot),
+                    start_collapsed,
                 )
                 .paints_body();
             let next_expanded = next_thought
-                && read_thought_fold(
+                && resolve_thought_fold(
                     ui.ctx(),
                     thought_fold_id(&thread_id, "slot", self.live_blocks[i + 1].fold_slot),
+                    start_collapsed,
                 )
                 .paints_body();
             let next_drawn_thought = next_thought
-                && read_thought_fold(
+                && resolve_thought_fold(
                     ui.ctx(),
                     thought_fold_id(&thread_id, "slot", self.live_blocks[i + 1].fold_slot),
+                    start_collapsed,
                 )
                 .paints_row();
             let mut drawn = true;
@@ -935,7 +1064,13 @@ impl Cabin {
                         body: b.body.clone(),
                     };
                     let slot_id = thought_fold_id(&thread_id, "slot", b.fold_slot);
-                    let fold = read_thought_fold(ui.ctx(), slot_id);
+                    let body_key = thought_body_key(&b.body);
+                    let body_id = thought_fold_id(&thread_id, "body", body_key);
+                    let stored = ui.ctx().data(|d| {
+                        d.get_temp::<ThoughtFold>(slot_id)
+                            .or_else(|| d.get_temp(body_id))
+                    });
+                    let fold = grokhub_core::effective_thought_fold(stored, start_collapsed);
                     let painted = paint_chat_block(
                         ui,
                         &view,
@@ -943,13 +1078,19 @@ impl Cabin {
                         thought_shows_acts(next_expanded),
                         fold,
                     );
-                    write_thought_fold(ui.ctx(), slot_id, painted.thought_fold);
-                    // Same text key the stored transcript reads after live_blocks is cleared.
-                    write_thought_fold(
+                    note_thought_fold_click(
                         ui.ctx(),
-                        thought_fold_id(&thread_id, "body", thought_body_key(&b.body)),
+                        &thread_id,
+                        Some(b.fold_slot),
+                        body_key,
+                        fold,
                         painted.thought_fold,
+                        collapse_session,
                     );
+                    // A growing live thought keeps an explicit fold on the current body key.
+                    if let Some(explicit) = ui.ctx().data(|d| d.get_temp::<ThoughtFold>(slot_id)) {
+                        write_thought_fold(ui.ctx(), body_id, explicit);
+                    }
                     drawn = painted.drawn;
                     match painted.act {
                         ChatBlockAct::None => {}

@@ -237,6 +237,9 @@ pub struct AppConfig {
     pub connector_hosts: Vec<String>,
     #[serde(default = "default_close_to_tray")]
     pub close_to_tray: bool,
+    /// First close-to-tray toast has been shown. Quiet hours do not set this.
+    #[serde(default)]
+    pub close_to_tray_tip_seen: bool,
     #[serde(default)]
     pub mode: String,
     #[serde(default)]
@@ -247,6 +250,9 @@ pub struct AppConfig {
     /// Composer permission pill — ask / auto. Always-approve is a per-run choice.
     #[serde(default = "default_permission_mode")]
     pub permission_mode: String,
+    /// Settings → Cabin defaults. Thoughts start collapsed in every session.
+    #[serde(default)]
+    pub always_collapse_thoughts: bool,
     /// Copy-only Coding / Life lane. Default Coding. Not a new rail.
     #[serde(default = "default_cabin_lane")]
     pub cabin_lane: String,
@@ -355,10 +361,12 @@ impl Default for AppConfig {
             current_thread: String::new(),
             connector_hosts: Vec::new(),
             close_to_tray: default_close_to_tray(),
+            close_to_tray_tip_seen: false,
             mode: String::new(),
             reasoning_effort: default_reasoning_effort(),
             session_mode: default_session_mode(),
             permission_mode: default_permission_mode(),
+            always_collapse_thoughts: false,
             cabin_lane: default_cabin_lane(),
             quiet_start: default_quiet_start(),
             quiet_end: default_quiet_end(),
@@ -761,6 +769,95 @@ mod tests {
         let fallback = load();
         assert_eq!(fallback.session_mode, "chat");
         assert_eq!(fallback.permission_mode, "ask");
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn cabin_defaults_round_trip_app_json() {
+        let _g = hold_test_config();
+        let root = test_config_root("cabin-defaults");
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let mut cfg = AppConfig::default();
+        assert!(!cfg.always_collapse_thoughts);
+        assert!(!cfg.close_to_tray_tip_seen);
+        cfg.model = grokhub_core::sanitize_chat_model("grok-4.6").into();
+        cfg.reasoning_effort = grokhub_core::parse_reasoning_effort("xhigh")
+            .unwrap()
+            .into();
+        cfg.permission_mode = persistable_permission_mode("auto");
+        cfg.session_mode = "plan".into();
+        cfg.always_collapse_thoughts = true;
+        cfg.close_to_tray_tip_seen = true;
+        save(&cfg).expect("save");
+        let loaded = load();
+        assert_eq!(loaded.model, "grok-4.6");
+        assert_eq!(loaded.reasoning_effort, "xhigh");
+        assert_eq!(loaded.permission_mode, "auto");
+        assert_eq!(loaded.session_mode, "plan");
+        assert!(loaded.always_collapse_thoughts);
+        assert!(loaded.close_to_tray_tip_seen);
+        cfg.model.clear();
+        cfg.reasoning_effort = grokhub_core::parse_reasoning_effort("max").unwrap().into();
+        cfg.permission_mode = persistable_permission_mode("always-approve");
+        cfg.session_mode = "ask".into();
+        cfg.always_collapse_thoughts = false;
+        cfg.close_to_tray_tip_seen = false;
+        assert_eq!(cfg.permission_mode, "ask");
+        assert_eq!(cfg.reasoning_effort, "xhigh");
+        save(&cfg).expect("save always collapsed to ask");
+        let body = fs::read_to_string(config_dir().join("app.json")).expect("app.json");
+        assert!(
+            body.contains("\"model\": \"\""),
+            "Auto persists an empty model pin: {body}"
+        );
+        assert!(
+            !body.contains("always-approve"),
+            "Always must not be written: {body}"
+        );
+        assert!(
+            body.contains("\"alwaysCollapseThoughts\": false"),
+            "Always collapse round-trips through app.json: {body}"
+        );
+        assert!(
+            body.contains("\"closeToTrayTipSeen\": false"),
+            "tray tip seen round-trips through app.json: {body}"
+        );
+        let loaded = load();
+        assert_eq!(loaded.model, "");
+        assert_eq!(loaded.reasoning_effort, "xhigh");
+        assert_eq!(loaded.permission_mode, "ask");
+        assert_eq!(loaded.session_mode, "ask");
+        assert!(!loaded.always_collapse_thoughts);
+        assert!(!loaded.close_to_tray_tip_seen);
+        let mut raw: serde_json::Value = serde_json::from_str(&body).unwrap();
+        raw["permissionMode"] = serde_json::json!("always");
+        raw["alwaysCollapseThoughts"] = serde_json::json!(true);
+        raw["model"] = serde_json::json!("grok-4.7");
+        raw["reasoningEffort"] = serde_json::json!("minimal");
+        raw["sessionMode"] = serde_json::json!("chat");
+        fs::write(
+            config_dir().join("app.json"),
+            serde_json::to_string_pretty(&raw).unwrap(),
+        )
+        .expect("rewrite");
+        let loaded = load();
+        assert_eq!(
+            persistable_permission_mode("always"),
+            "ask",
+            "Always input via the helper collapses to Ask"
+        );
+        assert_eq!(loaded.permission_mode, "ask");
+        assert_eq!(loaded.model, "grok-4.7");
+        assert_eq!(loaded.reasoning_effort, "minimal");
+        assert_eq!(loaded.session_mode, "chat");
+        assert!(loaded.always_collapse_thoughts);
+        fs::write(config_dir().join("app.json"), r#"{"closeToTray":true}"#).expect("bare");
+        assert!(
+            !load().close_to_tray_tip_seen,
+            "a missing closeToTrayTipSeen key stays false"
+        );
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }

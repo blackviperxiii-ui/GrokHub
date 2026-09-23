@@ -214,6 +214,7 @@ enum SettingsSec {
     Behavior,
     Update,
     About,
+    Defaults,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3574,23 +3575,30 @@ impl Cabin {
     }
 
     fn hide_to_tray(&mut self, ctx: &egui::Context) {
-        match crate::tray::hide_action(self.window_visible, self.told_tray) {
-            crate::tray::HideAction::Skip => return,
+        let already = self.told_tray || self.cfg.close_to_tray_tip_seen;
+        match crate::tray::hide_action(self.window_visible, already) {
+            crate::tray::HideAction::Skip => {}
             crate::tray::HideAction::Hide => {
                 self.unmap_to_tray(ctx);
             }
             crate::tray::HideAction::HideAndPing => {
-                self.unmap_to_tray(ctx);
                 let clock = Self::local_clock();
                 let quiet =
                     quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
-                if crate::notify::allow_ping(quiet) {
+                let tip = crate::tray::tray_tip_on_hide(already, quiet);
+                // Mark seen only when the toast is actually shown, and do it
+                // before unmap so the hide persist writes the flag.
+                if tip.show {
                     crate::notify::ping("GrokHub", "Still running in the tray");
                 }
+                if tip.mark_seen {
+                    self.told_tray = true;
+                    self.cfg.close_to_tray_tip_seen = true;
+                }
+                self.unmap_to_tray(ctx);
                 self.status = "In the tray — Show cabin to sit down".into();
             }
         }
-        self.told_tray = true;
     }
 
     fn unmap_to_tray(&mut self, ctx: &egui::Context) {
