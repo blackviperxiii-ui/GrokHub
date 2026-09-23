@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.11 — 2026-09-23
+
+Skills and Connectors cards in a row share one height. Descriptions clamp to three lines and ellipsize on a word boundary. Use in chat and the other tile actions sit on the bottom of the card, so a short description does not leave the button high.
+
+- Linux: `grokhub-linux-v2.10.11.tar.gz` and AUR `pkgver=2.10.11`.
+- Windows: `GrokHub-Setup-2.10.11.exe` and `grokhub-windows-v2.10.11.zip`.
+- Cursor cabin 2.10.11. VERSION 2.10.11. Not tagged until MERGE GREEN.
+
 ## 2.10.10 — 2026-09-23
 
 Thought process header is one quiet collapse control (chevron plus Collapse / Expand). Hide is gone. Collapse still toggles the thought body the way Minimize did. Tool-call rows are unchanged.
