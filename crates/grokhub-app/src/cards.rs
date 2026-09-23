@@ -325,6 +325,41 @@ pub fn merge_suggested_autos(
     out
 }
 
+/// Nightly Suggested skills, minus names already saved as Cabin skills.
+pub fn merge_suggested_skills(
+    learned: &[LearnedSuggestion],
+    existing_names: &[String],
+) -> Vec<(icons::TileIcon, String, String, LearnedSuggestion)> {
+    let seen: Vec<String> = existing_names.iter().map(|s| s.to_ascii_lowercase()).collect();
+    let mut out = Vec::new();
+    for s in learned {
+        if s.kind != SuggestionKind::Skill {
+            continue;
+        }
+        let key = s
+            .name
+            .as_deref()
+            .unwrap_or(&s.title)
+            .to_ascii_lowercase();
+        if key.is_empty() || seen.iter().any(|n| n == &key) {
+            continue;
+        }
+        out.push((
+            icons::icon_for_label(&s.title),
+            s.title.clone(),
+            s.body.clone(),
+            s.clone(),
+        ));
+    }
+    out
+}
+
+/// Built-in read-only GitHub tiles. Who am I / List repos — no writes.
+pub const GITHUB_TILES: &[(&str, &str, &str)] = &[
+    ("Who am I", "Authenticated login and public repo count.", "user"),
+    ("List repos", "Twenty most recently updated repositories.", "list_repos"),
+];
+
 pub fn page_header(ui: &mut egui::Ui, title: &str, action: &str) -> bool {
     let mut clicked = false;
     ui.add_space(4.0);
@@ -2527,7 +2562,24 @@ mod tests {
             !by_prompt.iter().any(|t| t.1 == "Morning brief"),
             "adding a /loop seed must hide the matching Suggested tile: {by_prompt:?}"
         );
-
+        let learned_skill = LearnedSuggestion {
+            kind: SuggestionKind::Skill,
+            title: "Desk tidy".into(),
+            body: "Straighten windows".into(),
+            seed: None,
+            name: Some("desk-tidy".into()),
+            trigger: Some("when the desk is messy".into()),
+            instructions: Some("stack the windows".into()),
+            provider: None,
+            tool: None,
+        };
+        let skills = merge_suggested_skills(&[learned_skill.clone()], &[]);
+        assert_eq!(skills[0].1, "Desk tidy");
+        let hidden_skill = merge_suggested_skills(&[learned_skill], &["desk-tidy".into()]);
+        assert!(hidden_skill.is_empty());
+        assert_eq!(GITHUB_TILES.len(), 2);
+        assert_eq!(GITHUB_TILES[0].2, "user");
+        assert_eq!(GITHUB_TILES[1].2, "list_repos");
     }
 
     #[test]
