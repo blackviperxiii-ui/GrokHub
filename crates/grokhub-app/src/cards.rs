@@ -1,6 +1,7 @@
 //! Grok catalog chrome — huge title, white pills, 3-column icon tiles.
 
 use crate::icons::{self, TileIcon};
+use eframe::egui::text::{LayoutJob, TextFormat, TextWrapping};
 use eframe::egui::{self, Align2, Color32, ColorImage, FontId, RichText, Sense, Stroke, TextureHandle, TextureOptions};
 use grokhub_core::{
     chat_run_dot_alpha, curate_wall, imagine_media_click, imagine_result_fit, parse_loop_line,
@@ -8,7 +9,7 @@ use grokhub_core::{
     IMAGE_FILE_CAP,
 };
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub use grokhub_core::ImagineKind;
 
@@ -925,22 +926,90 @@ pub(crate) fn chip_paint_label(label: &str) -> String {
         .join(" ")
 }
 
-/// Wrap width for a suggestion chip. Two lines, not a one-line ellipsis.
-pub const CHIP_LABEL_WRAP: f32 = 180.0;
-/// Pad inside the fill with spaces — Frame inner_margin clips the first glyphs.
+/// Max width of one chip label before an ellipsis. Single line only.
+pub const CHIP_LABEL_MAX_W: f32 = 180.0;
+/// Pad inside the fill. Drawn in the pill rect — Frame inner_margin clips the first glyphs.
 pub const CHIP_PAD_X: f32 = 14.0;
+/// Vertical pad budget so 13px type and descenders sit inside `CHIP_ROW_H`.
 pub const CHIP_PAD_Y: f32 = 8.0;
+/// Gap between chips. Fluid fit uses the same gap the row paints.
+pub const CHIP_GAP: f32 = 6.0;
+/// Hover dismiss control. Reserved on every pill so hover does not reflow the row.
+pub const CHIP_DISMISS_SLOT: f32 = 16.0;
+/// Space between the label and the dismiss slot.
+pub const CHIP_DISMISS_GAP: f32 = 4.0;
+/// One fixed chip height. Does not grow when a label is long.
+pub const CHIP_ROW_H: f32 = 40.0;
 
 /// Max width of the chip cluster — Ask anything column, never the inflated pane.
 pub fn chip_row_width_lock(avail: f32) -> f32 {
     avail.clamp(120.0, crate::theme::CHAT_COL_W)
 }
 
-/// One chip line (pad + two wrapped label lines). Empty-home leftover must not
-/// vertically center a single chip.
-pub const CHIP_ROW_H: f32 = 68.0;
-/// Two chip lines so a 5-wide rank wraps inside `chip_row_width_lock` instead of clipping.
-pub const CHIP_CLUSTER_H: f32 = CHIP_ROW_H * 2.0 + 6.0;
+/// Width the chip row may actually paint. `composer_pill_w` floors at 360,
+/// which is wider than a narrow pane and cuts the last chip on the window edge.
+/// The visible clip wins, then the Ask anything column.
+pub fn chip_row_visible_w(ui: &egui::Ui) -> f32 {
+    let left = ui.cursor().left();
+    let clip_w = (ui.clip_rect().right() - left).max(0.0);
+    let avail = ui.available_width().min(clip_w);
+    let col = composer_pill_w(ui.ctx().screen_rect().width());
+    chip_row_width_lock(avail.min(col))
+}
+
+/// Pill width for a measured single-line label, including the reserved dismiss slot.
+pub fn chip_pill_width(label_w: f32) -> f32 {
+    CHIP_PAD_X + label_w.max(0.0) + CHIP_DISMISS_GAP + CHIP_DISMISS_SLOT + CHIP_PAD_X
+}
+
+/// Label width cap for this row. Never above `CHIP_LABEL_MAX_W`. A narrow row
+/// ellipsizes sooner so the first chip still fits.
+pub fn chip_label_budget(row_w: f32) -> f32 {
+    let chrome = chip_pill_width(0.0);
+    (row_w - chrome).clamp(32.0, CHIP_LABEL_MAX_W)
+}
+
+/// How many leading chips fit in `row_w` with `gap` between them.
+/// Later chips are dropped. The row does not wrap.
+pub fn fluid_chip_count(widths: &[f32], row_w: f32, gap: f32) -> usize {
+    if widths.is_empty() || row_w <= 0.0 {
+        return 0;
+    }
+    let mut used = 0.0;
+    let mut n = 0usize;
+    for (i, w) in widths.iter().enumerate() {
+        let add = if i == 0 { *w } else { gap + *w };
+        // A chip that starts inside the row and ends past it is the owner
+        // cut-off ("control my mou"). Drop the whole pill.
+        if used + add > row_w + 0.5 {
+            break;
+        }
+        used += add;
+        n += 1;
+    }
+    n
+}
+
+/// Single-line label. Overflow becomes an ellipsis at `max_w` instead of a second line.
+pub fn layout_chip_label(
+    ui: &egui::Ui,
+    text: &str,
+    font: FontId,
+    color: Color32,
+    max_w: f32,
+) -> Arc<egui::Galley> {
+    let mut job = LayoutJob::single_section(
+        text.to_owned(),
+        TextFormat {
+            font_id: font,
+            color,
+            ..Default::default()
+        },
+    );
+    job.wrap = TextWrapping::truncate_at_width(max_w.max(1.0));
+    job.break_on_newline = false;
+    ui.fonts(|f| f.layout_job(job))
+}
 
 /// Empty-home placeholder when ranking yields none. Not a ranked action chip.
 pub const CHIP_EMPTY_LABEL: &str = "Nothing queued";
@@ -996,8 +1065,16 @@ pub fn chip_why_tip(hint: &str, label: &str) -> String {
     }
 }
 
+fn paint_chip_pill(ui: &mut egui::Ui, rect: egui::Rect, fill: Color32, primary: bool) {
+    let stroke_w = quick_chip_stroke_w(primary);
+    let stroke = Stroke::new(stroke_w, quick_chip_stroke(primary));
+    let body = rect.shrink(stroke_w * 0.5);
+    ui.painter()
+        .rect(body, CHIP_ROW_H * 0.5, fill, stroke);
+}
+
 pub fn paint_empty_chip_state(ui: &mut egui::Ui) {
-    let max_w = chip_row_width_lock(ui.available_width());
+    let max_w = chip_row_visible_w(ui);
     ui.allocate_ui_with_layout(
         egui::vec2(max_w, CHIP_ROW_H),
         egui::Layout::left_to_right(egui::Align::Center)
@@ -1005,30 +1082,25 @@ pub fn paint_empty_chip_state(ui: &mut egui::Ui) {
             .with_main_align(egui::Align::Center),
         |ui| {
             let fill = quick_chip_fill(false);
-            let stroke = Stroke::new(quick_chip_stroke_w(false), quick_chip_stroke(false));
             let color = quick_chip_fg(false);
-            egui::Frame::none()
-                .fill(fill)
-                .rounding(18.0)
-                .stroke(stroke)
-                .inner_margin(egui::Margin::ZERO)
-                .show(ui, |ui| {
-                    ui.add_space(CHIP_PAD_Y);
-                    ui.horizontal(|ui| {
-                        ui.add_space(CHIP_PAD_X);
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(CHIP_EMPTY_LABEL)
-                                    .size(13.0)
-                                    .color(color),
-                            )
-                            .wrap()
-                            .sense(Sense::hover()),
-                        );
-                        ui.add_space(CHIP_PAD_X);
-                    });
-                    ui.add_space(CHIP_PAD_Y);
-                });
+            let budget = chip_label_budget(max_w);
+            let galley = layout_chip_label(
+                ui,
+                CHIP_EMPTY_LABEL,
+                FontId::proportional(13.0),
+                color,
+                budget,
+            );
+            let pill_w = (CHIP_PAD_X + galley.size().x.max(8.0) + CHIP_PAD_X).min(max_w);
+            let (rect, resp) =
+                ui.allocate_exact_size(egui::vec2(pill_w, CHIP_ROW_H), Sense::hover());
+            paint_chip_pill(ui, rect, fill, false);
+            let text_pos = egui::pos2(
+                rect.left() + CHIP_PAD_X,
+                rect.center().y - galley.size().y * 0.5,
+            );
+            ui.painter().galley(text_pos, galley, color);
+            let _ = resp.hovered();
         },
     );
 }
@@ -1039,18 +1111,51 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
         return None;
     }
     let mut act = None;
-    let col = composer_pill_w(ui.ctx().screen_rect().width());
-    let max_w = chip_row_width_lock(ui.available_width().min(col));
+    let max_w = chip_row_visible_w(ui);
+    let budget = chip_label_budget(max_w);
+    let measured: Vec<Arc<egui::Galley>> = chips
+        .iter()
+        .map(|c| {
+            let font = if quick_chip_strong(c.primary) {
+                crate::theme::title_font(13.0)
+            } else {
+                FontId::proportional(13.0)
+            };
+            let color = quick_chip_fg(c.primary);
+            layout_chip_label(ui, &chip_paint_label(&c.label), font, color, budget)
+        })
+        .collect();
+    let widths: Vec<f32> = measured
+        .iter()
+        .map(|g| chip_pill_width(g.size().x.min(budget)).min(max_w))
+        .collect();
+    let fit = fluid_chip_count(&widths, max_w, CHIP_GAP);
     ui.allocate_ui_with_layout(
-        egui::vec2(max_w, CHIP_CLUSTER_H),
-        egui::Layout::left_to_right(egui::Align::Min)
-            .with_main_wrap(true)
-            .with_main_align(egui::Align::Center),
+        egui::vec2(max_w, CHIP_ROW_H),
+        egui::Layout::left_to_right(egui::Align::Center)
+            .with_main_wrap(false)
+            .with_main_align(egui::Align::Min),
         |ui| {
             ui.set_max_width(max_w);
-            ui.set_clip_rect(ui.max_rect());
-            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-            for (i, c) in chips.iter().take(grokhub_core::CHIP_VISIBLE_MAX).enumerate() {
+            ui.spacing_mut().item_spacing = egui::vec2(CHIP_GAP, 0.0);
+            let mut used = 0.0f32;
+            for (i, c) in chips.iter().enumerate().take(fit) {
+                let galley = measured[i].clone();
+                debug_assert!(
+                    galley.rows.len() <= 1,
+                    "chip labels stay one line: {}",
+                    galley.text()
+                );
+                let pill_w = widths[i];
+                let add = if used == 0.0 {
+                    pill_w
+                } else {
+                    CHIP_GAP + pill_w
+                };
+                if used + add > max_w + 0.5 {
+                    break;
+                }
+                used += add;
                 let chip_id = ui.id().with(("qchip", i));
                 let hovered = ui
                     .ctx()
@@ -1062,7 +1167,6 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                     grokhub_core::SELECT_SECS,
                 );
                 let fill = quick_chip_fill(c.primary);
-                let stroke = quick_chip_stroke(c.primary);
                 let color = quick_chip_fg(c.primary);
                 let paint = chip_paint_label(&c.label);
                 let why = if c.hint.is_empty() && paint != c.label {
@@ -1071,69 +1175,48 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                     c.hint.as_str()
                 };
                 let tip = chip_why_tip(why, &c.label);
-                let font = if quick_chip_strong(c.primary) {
-                    crate::theme::title_font(13.0)
-                } else {
-                    FontId::proportional(13.0)
-                };
-                let ir = egui::Frame::none()
-                    .fill(fill)
-                    .rounding(18.0)
-                    .stroke(Stroke::new(quick_chip_stroke_w(c.primary), stroke))
-                    .inner_margin(egui::Margin::ZERO)
-                    .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
-                        ui.add_space(CHIP_PAD_Y);
-                        ui.horizontal(|ui| {
-                            ui.add_space(CHIP_PAD_X);
-                            let label_galley = ui.fonts(|f| {
-                                f.layout(paint.clone(), font.clone(), color, CHIP_LABEL_WRAP)
-                            });
-                            let label_w = label_galley.size().x.clamp(8.0, CHIP_LABEL_WRAP);
-                            let label_h = label_galley.size().y.max(20.0);
-                            let (_rect, hit_resp) =
-                                ui.allocate_exact_size(egui::vec2(label_w, label_h), Sense::click());
-                            let (hit_resp, felt, wash) =
-                                crate::theme::feel_response(ui, hit_resp, Color32::TRANSPARENT);
-                            if wash.a() > 0 {
-                                ui.painter().rect_filled(felt, 10.0, wash);
-                            }
-                            ui.painter().galley(felt.min, label_galley, color);
-                            let hit = hit_resp.on_hover_text(tip);
-                            if hit.clicked() {
-                                act = Some(ChipRowAct::Apply(i));
-                            }
-                            if dismiss_t > 0.01 {
-                                let (_xr, x_resp) =
-                                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), Sense::click());
-                                let (x_resp, x_felt, x_wash) =
-                                    crate::theme::feel_response(ui, x_resp, Color32::TRANSPARENT);
-                                if x_wash.a() > 0 {
-                                    ui.painter().rect_filled(x_felt, 6.0, x_wash);
-                                }
-                                let x_color = crate::theme::blend_color(
-                                    Color32::TRANSPARENT,
-                                    crate::theme::subtle(),
-                                    dismiss_t,
-                                );
-                                ui.painter().text(
-                                    x_felt.center(),
-                                    Align2::CENTER_CENTER,
-                                    "×",
-                                    FontId::proportional(12.0),
-                                    x_color,
-                                );
-                                let x = x_resp.on_hover_text("Hide this suggestion");
-                                if x.clicked() {
-                                    act = Some(ChipRowAct::Dismiss(i));
-                                }
-                            }
-                            ui.add_space(CHIP_PAD_X);
-                        });
-                        ui.add_space(CHIP_PAD_Y);
-                    });
-                let hit = ir.response.interact(egui::Sense::click());
-                if hit.clicked() && act.is_none() {
+                let (rect, hit_resp) =
+                    ui.allocate_exact_size(egui::vec2(pill_w, CHIP_ROW_H), Sense::click());
+                let (hit_resp, _, wash) = crate::theme::feel_response(ui, hit_resp, fill);
+                paint_chip_pill(ui, rect, wash, c.primary);
+                let text_pos = egui::pos2(
+                    rect.left() + CHIP_PAD_X,
+                    rect.center().y - galley.size().y * 0.5,
+                );
+                ui.painter().galley(text_pos, galley, color);
+                let hit = hit_resp.on_hover_text(tip);
+                let x_rect = egui::Rect::from_center_size(
+                    egui::pos2(
+                        rect.right() - CHIP_PAD_X - CHIP_DISMISS_SLOT * 0.5,
+                        rect.center().y,
+                    ),
+                    egui::vec2(CHIP_DISMISS_SLOT, CHIP_DISMISS_SLOT),
+                );
+                if dismiss_t > 0.01 {
+                    let x_resp = ui.interact(x_rect, chip_id.with("x"), Sense::click());
+                    let (x_resp, x_felt, x_wash) =
+                        crate::theme::feel_response(ui, x_resp, Color32::TRANSPARENT);
+                    if x_wash.a() > 0 {
+                        ui.painter().rect_filled(x_felt, 6.0, x_wash);
+                    }
+                    let x_color = crate::theme::blend_color(
+                        Color32::TRANSPARENT,
+                        crate::theme::subtle(),
+                        dismiss_t,
+                    );
+                    ui.painter().text(
+                        x_rect.center(),
+                        Align2::CENTER_CENTER,
+                        "×",
+                        FontId::proportional(12.0),
+                        x_color,
+                    );
+                    let x = x_resp.on_hover_text("Hide this suggestion");
+                    if x.clicked() {
+                        act = Some(ChipRowAct::Dismiss(i));
+                    }
+                }
+                if hit.clicked() && act != Some(ChipRowAct::Dismiss(i)) {
                     act = Some(ChipRowAct::Apply(i));
                 }
                 ui.ctx()
@@ -2963,33 +3046,43 @@ mod tests {
             .and_then(|s| s.split("pub fn tab_pill(").next())
             .expect("chip row");
         assert!(
-            slice.contains("with_main_align(egui::Align::Center)"),
-            "chips sit on the midline of the bar: {slice}"
+            slice.contains("left_to_right(egui::Align::Center)")
+                && slice.contains("CHIP_ROW_H"),
+            "chips share one fixed midline height: {slice}"
         );
         assert!(
-            slice.contains("with_main_wrap(true)")
-                && slice.contains("CHIP_CLUSTER_H")
-                && slice.contains("composer_pill_w"),
-            "five chips wrap to a second line inside the Ask anything column: {slice}"
+            slice.contains("with_main_wrap(false)")
+                && slice.contains("fluid_chip_count")
+                && slice.contains("chip_row_visible_w")
+                && !slice.contains("with_main_wrap(true)")
+                && !slice.contains("CHIP_CLUSTER_H")
+                && !slice.contains("CHIP_VISIBLE_MAX"),
+            "chips fit the row and drop overflow; no second wrap line and no fixed visible count: {slice}"
         );
         assert!(
-            !slice.contains("with_main_wrap(false)"),
-            "leftovers must wrap, not clip off the right edge: {slice}"
+            slice.contains("layout_chip_label") && slice.contains("CHIP_PAD_X"),
+            "long labels ellipsize on one line inside the pad: {slice}"
+        );
+        let layout = src
+            .split("pub fn layout_chip_label(")
+            .nth(1)
+            .and_then(|s| s.split("fn paint_chip_pill(").next())
+            .expect("layout_chip_label");
+        assert!(
+            layout.contains("truncate_at_width") && layout.contains("break_on_newline = false"),
+            "chip labels are one line with an ellipsis: {layout}"
         );
         assert!(
             !slice.contains("set_width(max_w)") && !slice.contains("set_min_width"),
             "chip cluster must shrink-wrap, not fill the pill: {slice}"
         );
         assert!(
-            slice.contains("CHIP_CLUSTER_H") && slice.contains("allocate_ui_with_layout"),
-            "chip cluster must grow for two lines or leftovers clip: {slice}"
-        );
-        assert!(
-            !slice.contains('…') && slice.contains("CHIP_PAD_X") && slice.contains("add_space"),
-            "chip paint pads inside the fill and must not ellipsize: {slice}"
+            slice.contains("allocate_ui_with_layout") && slice.contains("CHIP_ROW_H"),
+            "chip row stays one fixed height: {slice}"
         );
         const {
-            assert!(CHIP_CLUSTER_H > CHIP_ROW_H && CHIP_CLUSTER_H < CHIP_ROW_H * 3.0);
+            assert!(CHIP_ROW_H >= 13.0 + CHIP_PAD_Y * 2.0);
+            assert!(CHIP_LABEL_MAX_W >= 48.0);
         }
         assert!(
             !slice.contains("ui.with_layout("),
@@ -3008,15 +3101,202 @@ mod tests {
         assert!(
             empty.contains("CHIP_EMPTY_LABEL")
                 && empty.contains("quick_chip_fill(false)")
-                && empty.contains("quick_chip_stroke_w(false)")
+                && empty.contains("paint_chip_pill")
                 && empty.contains("CHIP_ROW_H")
-                && empty.contains("Sense::hover()"),
-            "empty state is one muted chip-shaped label, not a ranked action: {empty}"
+                && empty.contains("Sense::hover()")
+                && empty.contains("layout_chip_label"),
+            "empty state is one muted single-line chip, not a ranked action: {empty}"
         );
         let ctx = egui::Context::default();
         let _ = ctx.run(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 assert!(quick_chip_row(ui, &[]).is_none());
+            });
+        });
+    }
+
+    fn sample_chip(label: &str, primary: bool) -> grokhub_core::QuickChip {
+        grokhub_core::QuickChip {
+            id: label.into(),
+            label: label.into(),
+            value: format!("send {label}"),
+            kind: grokhub_core::ChipKind::Chat,
+            score: 1.0,
+            hint: String::new(),
+            primary,
+        }
+    }
+
+    #[test]
+    fn quick_chips_are_one_line_and_fluid() {
+        let gap = CHIP_GAP;
+        let w = 100.0;
+        assert_eq!(fluid_chip_count(&[w, w, w, w, w], w, gap), 1);
+        assert_eq!(fluid_chip_count(&[w, w, w, w, w], w + gap + w, gap), 2);
+        assert_eq!(
+            fluid_chip_count(&[w, w, w, w, w], w + gap + w + 1.0, gap),
+            2,
+            "a chip that does not fit is dropped, not wrapped"
+        );
+        assert_eq!(fluid_chip_count(&[w; 5], 10_000.0, gap), 5);
+        assert_eq!(fluid_chip_count(&[], 400.0, gap), 0);
+        assert_eq!(
+            fluid_chip_count(&[200.0], 100.0, gap),
+            0,
+            "a pill wider than the row is omitted, not sliced"
+        );
+        // Owner shot 2026-09-23: last chip starts on screen and is cut
+        // ("control my mou" / "close one"). Drop that whole pill.
+        let owner_w = [72.0, 48.0, 168.0, 176.0, 150.0];
+        let partial = 72.0 + gap + 48.0 + gap + 168.0 + gap + 176.0 + 40.0;
+        assert!(partial < owner_w.iter().sum::<f32>() + gap * 4.0);
+        assert_eq!(
+            fluid_chip_count(&owner_w, partial, gap),
+            4,
+            "do not paint a chip the viewport would cut"
+        );
+        assert_eq!(chip_label_budget(4_000.0), CHIP_LABEL_MAX_W);
+        let narrow = chip_label_budget(120.0);
+        assert!(narrow < CHIP_LABEL_MAX_W);
+        assert!(chip_pill_width(narrow) <= 120.5);
+
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let font = FontId::proportional(13.0);
+                let color = Color32::WHITE;
+                let long = layout_chip_label(
+                    ui,
+                    "you should already have mcp configured",
+                    font.clone(),
+                    color,
+                    CHIP_LABEL_MAX_W,
+                );
+                let cut = layout_chip_label(
+                    ui,
+                    "how do you feel about the new grok",
+                    font.clone(),
+                    color,
+                    CHIP_LABEL_MAX_W,
+                );
+                let short = layout_chip_label(ui, "Continue", font.clone(), color, CHIP_LABEL_MAX_W);
+                let desc = layout_chip_label(ui, "gypq", font, color, CHIP_LABEL_MAX_W);
+                for galley in [&long, &cut, &short, &desc] {
+                    assert_eq!(galley.rows.len(), 1, "single line: {}", galley.rows[0].text());
+                    assert!(
+                        galley.size().y + CHIP_PAD_Y * 2.0 <= CHIP_ROW_H + 0.5,
+                        "descenders must fit the fixed height: h={} row={}",
+                        galley.size().y,
+                        CHIP_ROW_H
+                    );
+                }
+                let natural = ui.fonts(|f| {
+                    f.layout_no_wrap(
+                        "you should already have mcp configured".into(),
+                        FontId::proportional(13.0),
+                        color,
+                    )
+                    .size()
+                    .x
+                });
+                assert!(
+                    natural > CHIP_LABEL_MAX_W,
+                    "owner-length label must overflow the cap, got {natural}"
+                );
+                assert!(long.elided, "long label must ellipsize: {}", long.rows[0].text());
+                assert!(
+                    long.rows[0].text().ends_with('…'),
+                    "ellipsis, not a hard clip: {}",
+                    long.rows[0].text()
+                );
+                assert!(
+                    cut.elided && cut.rows[0].text().ends_with('…'),
+                    "clipped owner label must ellipsize: {}",
+                    cut.rows[0].text()
+                );
+                assert!(long.size().x <= CHIP_LABEL_MAX_W + 0.5);
+                assert!(!short.elided, "short label stays whole: {}", short.rows[0].text());
+                assert_eq!(cut.rows.len(), 1);
+                // Owner shot: these wrapped to two lines and the last was cut
+                // mid-glyph. Each stays one line; overflow is an ellipsis.
+                for label in [
+                    "hey that was super close that time",
+                    "lets try this again using only",
+                    "control my mouse close one",
+                ] {
+                    let galley = layout_chip_label(
+                        ui,
+                        label,
+                        FontId::proportional(13.0),
+                        color,
+                        CHIP_LABEL_MAX_W,
+                    );
+                    assert_eq!(galley.rows.len(), 1, "owner wrap: {label}");
+                    let natural = ui.fonts(|f| {
+                        f.layout_no_wrap(label.to_owned(), FontId::proportional(13.0), color)
+                            .size()
+                            .x
+                    });
+                    if natural > CHIP_LABEL_MAX_W {
+                        assert!(
+                            galley.elided && galley.rows[0].text().ends_with('…'),
+                            "owner clip must be an ellipsis: {label} -> {}",
+                            galley.rows[0].text()
+                        );
+                    } else {
+                        assert!(!galley.elided, "short owner label stays whole: {label}");
+                    }
+                    assert!(galley.size().y + CHIP_PAD_Y * 2.0 <= CHIP_ROW_H + 0.5);
+                }
+                let continue_g = layout_chip_label(
+                    ui,
+                    "continue",
+                    FontId::proportional(13.0),
+                    color,
+                    CHIP_LABEL_MAX_W,
+                );
+                let test_g =
+                    layout_chip_label(ui, "test", FontId::proportional(13.0), color, CHIP_LABEL_MAX_W);
+                assert!(!continue_g.elided && continue_g.rows.len() == 1);
+                assert!(!test_g.elided && test_g.rows.len() == 1);
+                let owner = vec![
+                    sample_chip("continue", false),
+                    sample_chip("test", false),
+                    sample_chip("hey that was super close that time", false),
+                    sample_chip("lets try this again using only", false),
+                    sample_chip("control my mouse close one", false),
+                ];
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let y_owner = ui.cursor().min.y;
+                let _ = quick_chip_row(ui, &owner);
+                let owner_h = ui.cursor().min.y - y_owner;
+                assert!(
+                    owner_h + 0.5 >= CHIP_ROW_H && owner_h < CHIP_ROW_H + 8.0,
+                    "owner row must stay one fixed line, got {owner_h}"
+                );
+
+                let mixed = vec![
+                    sample_chip("Continue", false),
+                    sample_chip("you should already have mcp configured", false),
+                    sample_chip("Fix", false),
+                    sample_chip("how do you feel about the new grok", false),
+                    sample_chip("Skills", false),
+                ];
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let y0 = ui.cursor().min.y;
+                let _ = quick_chip_row(ui, &mixed);
+                let mixed_h = ui.cursor().min.y - y0;
+                let y1 = ui.cursor().min.y;
+                let _ = quick_chip_row(ui, &[sample_chip("Fix", false)]);
+                let short_h = ui.cursor().min.y - y1;
+                assert!(
+                    (mixed_h - CHIP_ROW_H).abs() < 1.0,
+                    "mixed row height {mixed_h} != {CHIP_ROW_H}"
+                );
+                assert!(
+                    (short_h - mixed_h).abs() < 0.5,
+                    "short and long rows must match: {short_h} vs {mixed_h}"
+                );
             });
         });
     }

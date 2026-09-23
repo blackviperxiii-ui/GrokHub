@@ -1588,21 +1588,11 @@ impl Cabin {
                         }
                     }
                     ComposerStackSlot::Chips => {
-            if self.messages.is_empty() {
-            ui.add_space(6.0);
-            let chips = self.composer_chips(true);
-            if let Some(act) = crate::cards::quick_chip_row(ui, &chips) {
-                self.take_chip_act(act, &chips);
-            }
-            } else {
-                let chips = self.composer_chips(false);
-                if !chips.is_empty() {
-                    ui.add_space(6.0);
-                    if let Some(act) = crate::cards::quick_chip_row(ui, &chips) {
-                        self.take_chip_act(act, &chips);
-                    }
-                }
-            }
+                        ui.add_space(6.0);
+                        let chips = self.composer_chips();
+                        if let Some(act) = crate::cards::quick_chip_row(ui, &chips) {
+                            self.take_chip_act(act, &chips);
+                        }
                     }
                     ComposerStackSlot::Attach => {
             self.ui_attach_chip(ui, PlusTarget::Chat);
