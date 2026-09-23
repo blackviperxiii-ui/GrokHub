@@ -52,6 +52,7 @@ pub mod state;
 pub mod stream;
 pub mod task;
 pub mod thread_tab;
+pub mod tui_gaps;
 pub mod trajectory;
 pub mod turn_timeline;
 pub mod update;
@@ -339,6 +340,10 @@ pub use stream::{
     sse_live_delta, stream_was_truncated, take_ui_text, StreamTokenKind, StreamUsage,
 };
 pub use task::{HubTask, Receipt};
+pub use tui_gaps::{
+    btw_queues_without_interrupt, fork_offer_why, BTW_LABEL, BTW_TIP_BODY, BTW_TIP_TITLE,
+    FORK_EXPLAINER, FORK_TURN_MIN,
+};
 pub use thread_tab::{
     apply_auto_title, apply_auto_title_in, apply_manual_rename, auto_title_blocked,
     clean_tab_title, default_thread_title, delete_thread, display_tab_title, empty_chat_draft,

@@ -439,12 +439,12 @@ pub fn felt_pill(ui: &mut egui::Ui, label: &str, style: PillStyle) -> bool {
     .clicked()
 }
 
-/// Horizontal inset so a long session label (Questions) is not jammed on the pill edge.
+/// Horizontal inset so a long session label is not jammed on the pill edge.
 pub const SEG_INSET_X: f32 = 8.0;
 /// Vertical inset for session / permission pills.
 pub const SEG_INSET_Y: f32 = 6.0;
 
-/// Session Chat / Plan / Questions — quieter than the permission row (no stroke).
+/// Session Chat / Plan / btw — quieter than the permission row (no stroke).
 pub fn felt_segment(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
     felt_segment_styled(ui, label, selected, None, false, crate::theme::FONT_BODY)
 }
@@ -514,7 +514,7 @@ fn felt_segment_styled(
         FontId::proportional(font_size)
     };
     let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER));
-    // Questions is longer than Chat / Plan / Ask. Size to the label + 8px inset.
+    // Size to the label + 8px inset so a longer session word is not jammed.
     let size = egui::vec2(
         (galley.size().x + SEG_INSET_X * 2.0).max(52.0),
         (galley.size().y + SEG_INSET_Y * 2.0).max(28.0),
@@ -673,7 +673,7 @@ pub fn composer_modes() -> &'static [(&'static str, &'static str)] {
     &[
         ("chat", "Chat"),
         ("plan", "Plan"),
-        ("ask", "Questions"),
+        ("ask", grokhub_core::BTW_LABEL),
     ]
 }
 
@@ -693,7 +693,7 @@ pub fn effort_label(id: &str) -> &'static str {
     grokhub_core::effort_label(id)
 }
 
-/// Hover copy for the Chat / Plan / Questions session pills. Unknown ids stay silent.
+/// Hover copy for the Chat / Plan / btw session pills. Unknown ids stay silent.
 pub fn composer_session_tip(id: &str) -> Option<(&'static str, &'static str)> {
     match id {
         "chat" => Some((
@@ -704,10 +704,7 @@ pub fn composer_session_tip(id: &str) -> Option<(&'static str, &'static str)> {
             "Plan",
             "Grok writes a plan before changing things. Use this for bigger or riskier work. /plan is the same.",
         )),
-        "ask" => Some((
-            "Questions",
-            "Look-only session. Grok explains without editing. Switch to Chat to do the work.",
-        )),
+        "ask" => Some((grokhub_core::BTW_TIP_TITLE, grokhub_core::BTW_TIP_BODY)),
         _ => None,
     }
 }
@@ -828,7 +825,7 @@ pub struct SessionRowOut {
     pub effort: Option<String>,
 }
 
-/// Chat / Plan / Questions, Ask / Auto / Always, and reasoning effort above the composer.
+/// Chat / Plan / btw, Ask / Auto / Always, and reasoning effort above the composer.
 pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> SessionRowOut {
     let mut out = SessionRowOut {
         mode: None,
@@ -2819,8 +2816,8 @@ mod tests {
         assert_eq!(plan_title, "Plan");
         assert!(plan.contains("plan") && plan.contains("/plan"), "{plan}");
         let (look_title, look) = composer_session_tip("ask").unwrap();
-        assert_eq!(look_title, "Questions");
-        assert_eq!(composer_modes()[2], ("ask", "Questions"));
+        assert_eq!(look_title, "btw");
+        assert_eq!(composer_modes()[2], ("ask", "btw"));
         assert_ne!(composer_modes()[2].1, permission_modes()[0].1);
         const { assert!(SEG_INSET_X >= 8.0) };
         const { assert!(SEG_INSET_Y >= 6.0) };
@@ -2835,7 +2832,9 @@ mod tests {
                 && styled.contains("galley"),
             "Questions must size to the label plus inset, not a 52px jam: {styled}"
         );
-        assert!(look.contains("without editing"), "{look}");
+        assert!(look.contains("does not stop"), "{look}");
+        assert!(look.contains("/btw"), "{look}");
+        assert!(look.contains("look-safe"), "{look}");
         assert!(!look.contains("Ask"), "{look}");
         assert!(!look_title.contains("Read"), "{look_title}");
         assert!(composer_session_tip("always-approve").is_none());
