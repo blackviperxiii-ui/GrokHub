@@ -291,6 +291,7 @@ impl Cabin {
             }
             Err(e) => {
                 self.running = false;
+                self.scheduled_perm = false;
                 self.status = self.apply_job_fail(&e);
                 self.chat_job_thread = None;
             }

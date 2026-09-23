@@ -69,6 +69,7 @@ impl Cabin {
                 } else {
                     self.running = false;
                     self.pending_kick = None;
+                    self.scheduled_perm = false;
                     self.status = self.apply_job_fail(&e);
                     self.chat_job_thread = None;
                     self.persist();
@@ -83,6 +84,7 @@ impl Cabin {
                 } else {
                     self.running = false;
                     self.pending_kick = None;
+                    self.scheduled_perm = false;
                     self.status = self.apply_job_fail("Grok Build session missing");
                     self.chat_job_thread = None;
                     self.persist();
@@ -94,6 +96,7 @@ impl Cabin {
     pub(super) fn fail_ask_without_acp(&mut self, detail: &str) {
         self.running = false;
         self.pending_kick = None;
+        self.scheduled_perm = false;
         self.status = self.apply_job_fail(&ask_denied_without_acp(detail));
         self.chat_job_thread = None;
         self.persist();
@@ -424,6 +427,7 @@ impl Cabin {
                         self.kick_model(false);
                         continue;
                     }
+                    self.scheduled_perm = false;
                     let e = grokhub_acp::explain_handshake_error(&e, &self.grok_cwd());
                     self.status = self.apply_job_fail(&e);
                     self.chat_job_thread = None;
@@ -493,6 +497,7 @@ impl Cabin {
         self.maybe_continue_ptt();
         self.persist();
         if !self.running {
+            self.scheduled_perm = false;
             self.finish_hub_dispatch(&text, hub_dispatch_ok(&text));
         }
         let vis = self.visible_thread_id();
@@ -600,11 +605,13 @@ impl Cabin {
                         self.status = "Retrying…".into();
                         self.kick_model(false);
                     } else {
+                        self.scheduled_perm = false;
                         self.status.clear();
                         self.chat_job_thread = None;
                         self.persist();
                     }
                 } else {
+                    self.scheduled_perm = false;
                     self.status = self.apply_job_fail(&rewrite_truncation_error(&e));
                     self.chat_job_thread = None;
                     self.persist();
@@ -629,6 +636,7 @@ impl Cabin {
                     };
                     self.finish_acp_turn(text);
                 } else {
+                    self.scheduled_perm = false;
                     self.status = self.apply_job_fail("Grok Build session missing");
                     self.chat_job_thread = None;
                     self.persist();

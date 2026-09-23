@@ -464,6 +464,9 @@ impl Cabin {
             self.daily_auto_used = self.usage.automation;
             self.daily_auto_day = self.usage.day.clone();
             self.persist_usage();
+        } else {
+            self.mark_auto_skipped(&a.id, now_ms);
+            self.status = format!("Night skipped {} (kick did not start)", a.name);
         }
     }
 

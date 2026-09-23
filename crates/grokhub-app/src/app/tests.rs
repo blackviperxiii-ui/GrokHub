@@ -3105,6 +3105,11 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && fire_night.contains("grok_p_rx"),
             "night marks ran only after a live kick: {fire_night}"
         );
+        let send_block = &fire_night[send_at..];
+        assert!(
+            send_block.contains("mark_auto_ran") && send_block.contains("mark_auto_skipped"),
+            "a night send that did not start a live kick must skip, not retry every 5s: {fire_night}"
+        );
         let inbox = fn_src(&src, "drain_inbox");
         assert!(
             inbox.contains("send_scheduled_chat"),
@@ -3134,6 +3139,25 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             fail_ask.contains("maybe_continue_ptt"),
             "Ask deny must resume PTT: {fail_ask}"
+        );
+        assert!(
+            fail_ask.contains("scheduled_perm = false"),
+            "Ask deny must drop scheduled_perm so the next typed Ask uses ACP: {fail_ask}"
+        );
+        let finish = fn_src(&src, "finish_acp_turn");
+        assert!(
+            finish.contains("scheduled_perm = false"),
+            "a finished chat turn must drop scheduled_perm so the next typed Ask uses ACP: {finish}"
+        );
+        let halt = fn_src(&src, "halt_in_flight");
+        assert!(
+            halt.contains("scheduled_perm = false"),
+            "Stop must drop scheduled_perm: {halt}"
+        );
+        let kick_err = fn_src(&src, "kick_model");
+        assert!(
+            kick_err.contains("scheduled_perm = false"),
+            "a failed grok -p spawn must drop scheduled_perm: {kick_err}"
         );
         let poll_acp = fn_src(&src, "poll_acp");
         let err = poll_acp
@@ -4008,6 +4032,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             halt_flight.contains("speak_next = false"),
             "Stop must cancel a pending voice speak: {halt_flight}"
+        );
+        assert!(
+            halt_flight.contains("scheduled_perm = false"),
+            "Stop must drop scheduled_perm so the next typed Ask uses ACP: {halt_flight}"
         );
         assert!(
             halt_flight.contains("perm_ask = None"),
