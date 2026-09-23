@@ -8,6 +8,7 @@ use crate::automation::parse_nl_automation;
 use crate::chat_view::is_workload_user;
 use crate::organs::LocalClock;
 use crate::redact::{is_plain_text, redact_secrets};
+use crate::skill::{skill_dir_name, skill_safe, SkillMd};
 use serde::{Deserialize, Serialize};
 
 /// Local hour when the first-run review becomes due (21:00).
@@ -599,6 +600,40 @@ pub fn merge_suggestion_store(
     }
 }
 
+/// Turn a nightly Suggested skill tile into a `SKILL.md` the cabin can save.
+pub fn skill_from_suggestion(s: &LearnedSuggestion) -> Option<SkillMd> {
+    if s.kind != SuggestionKind::Skill {
+        return None;
+    }
+    let name = skill_dir_name(s.name.as_deref().unwrap_or(""));
+    if name.is_empty() {
+        return None;
+    }
+    let instructions = s.instructions.clone().unwrap_or_default();
+    if instructions.trim().is_empty() || !skill_safe(&instructions) {
+        return None;
+    }
+    let trigger = s.trigger.clone().unwrap_or_default();
+    if !skill_safe(&trigger) {
+        return None;
+    }
+    let description = if s.body.trim().is_empty() {
+        s.title.clone()
+    } else {
+        s.body.clone()
+    };
+    Some(SkillMd {
+        name: name.clone(),
+        description,
+        slash: format!("/{name}"),
+        trigger,
+        instructions,
+        pitfalls: String::new(),
+        verify: String::new(),
+        runs: 0,
+    })
+}
+
 /// Split a mixed list into the three store buckets, capped.
 pub fn partition_suggestions(items: Vec<LearnedSuggestion>) -> SuggestionStore {
     let mut store = SuggestionStore::default();
@@ -696,6 +731,12 @@ noise
         assert_eq!(items[1].name.as_deref(), Some("desk-tidy"));
         assert_eq!(items[2].kind, SuggestionKind::Connector);
         assert_eq!(items[2].tool.as_deref(), Some("user"));
+        let saved = skill_from_suggestion(&items[1]).expect("skill tile");
+        assert_eq!(saved.name, "desk-tidy");
+        assert_eq!(saved.slash, "/desk-tidy");
+        assert!(saved.instructions.contains("stack the windows"));
+        assert!(skill_from_suggestion(&items[0]).is_none());
+        assert!(skill_from_suggestion(&items[2]).is_none());
     }
 
     #[test]
