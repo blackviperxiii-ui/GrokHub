@@ -2311,8 +2311,8 @@ mod tests {
         assert_eq!(look_title, "Questions");
         assert_eq!(composer_modes()[2], ("ask", "Questions"));
         assert_ne!(composer_modes()[2].1, permission_modes()[0].1);
-        assert!(SEG_INSET_X >= 8.0);
-        assert!(SEG_INSET_Y >= 6.0);
+        const { assert!(SEG_INSET_X >= 8.0) };
+        const { assert!(SEG_INSET_Y >= 6.0) };
         let styled = include_str!("cards.rs")
             .split("fn felt_segment_styled(")
             .nth(1)
@@ -2524,8 +2524,11 @@ mod tests {
         assert_eq!(max_w, 640.0);
         assert_ne!(max_w, 0.0);
         let src = include_str!("cards.rs");
-        let start = src.find("pub fn quick_chip_row").expect("chip row");
-        let slice = &src[start..start + 2200];
+        let slice = src
+            .split("pub fn quick_chip_row(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn tab_pill(").next())
+            .expect("chip row");
         assert!(
             slice.contains("with_main_align(egui::Align::Center)"),
             "chips sit on the midline of the bar: {slice}"
