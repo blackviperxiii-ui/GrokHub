@@ -552,6 +552,8 @@ impl Cabin {
                         let thinking = self.thinking_here();
                         let live = !self.live_blocks.is_empty();
                         let mut act = ChatBlockAct::None;
+                        let jump_you = self.jump_last_you;
+                        let mut jumped_you = false;
                         {
                             let thread_id = self.visible_thread_id();
                             let row_h_id = chat_row_height_id(&thread_id, pane);
@@ -561,6 +563,7 @@ impl Cabin {
                             } else {
                                 views
                             };
+                            let last_you_i = shown.iter().rposition(|v| v.kind == ChatKind::User);
                             let prev_heights: Vec<f32> =
                                 ui.ctx().data(|d| d.get_temp(row_h_id)).unwrap_or_default();
                             let mut next_heights = Vec::with_capacity(shown.len());
@@ -635,8 +638,12 @@ impl Cabin {
                                             thought_shows_acts(next_expanded),
                                             fold,
                                         )
-                                    })
-                                    .inner;
+                                    });
+                                if jump_you && last_you_i == Some(i) {
+                                    ui.scroll_to_rect(painted.response.rect, Some(egui::Align::Center));
+                                    jumped_you = true;
+                                }
+                                let painted = painted.inner;
                                 if block.kind == ChatKind::Thought {
                                     write_thought_fold(
                                         ui.ctx(),
@@ -661,6 +668,9 @@ impl Cabin {
                                 next_heights.push((ui.cursor().min.y - y0).max(0.0));
                             }
                             ui.ctx().data_mut(|d| d.insert_temp(row_h_id, next_heights));
+                        }
+                        if jumped_you {
+                            self.jump_last_you = false;
                         }
                         if live {
                             match self.paint_live_blocks(ui, thinking) {
@@ -716,11 +726,34 @@ impl Cabin {
                     out.content_size.y,
                     out.inner_rect.height(),
                     CHAT_TAIL_SLACK,
-                ) && self.jump_to_latest(ctx, out.inner_rect)
-                {
-                    self.pin_chat_tail();
+                ) {
+                    if self.jump_to_latest(ctx, out.inner_rect) {
+                        self.pin_chat_tail();
+                    }
+                    if last_user_text(&self.messages).is_some()
+                        && self.jump_to_last_you(ctx, out.inner_rect)
+                    {
+                        self.jump_last_you = true;
+                    }
                 }
             });
+    }
+
+    /// Compact jump to the last user turn. Hidden when History has no marker.
+    pub(super) fn jump_to_last_you(&self, ctx: &egui::Context, pane: egui::Rect) -> bool {
+        let size = egui::vec2(120.0, 34.0);
+        let pos = egui::pos2(
+            pane.center().x - size.x * 0.5 - 80.0,
+            (pane.max.y - size.y - 10.0).max(pane.min.y),
+        );
+        egui::Area::new(egui::Id::new("chat-jump-last-you"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos)
+            .show(ctx, |ui| {
+                ui.set_width(size.x);
+                crate::cards::ghost_pill(ui, "Last you")
+            })
+            .inner
     }
 
     /// A way back to the newest message once the reader has scrolled up.
@@ -940,38 +973,24 @@ impl Cabin {
                 });
                 if always_confirm_matches_rpc(self.perm_always_confirm.as_ref(), &p.rpc_id) {
                     ui.add_space(8.0);
-                    egui::Frame::none()
-                        .fill(crate::theme::elevated())
-                        .rounding(crate::theme::CHROME_RADIUS)
-                        .stroke(egui::Stroke::new(2.0_f32, crate::theme::always_amber()))
-                        .inner_margin(egui::Margin::same(10.0))
-                        .show(ui, |ui| {
-                            ui.label(
-                                RichText::new(ALWAYS_CONFIRM_LINE1)
-                                    .size(13.0)
-                                    .color(crate::theme::fg()),
-                            );
-                            ui.label(
-                                RichText::new(ALWAYS_CONFIRM_LINE2)
-                                    .size(13.0)
-                                    .color(crate::theme::muted()),
-                            );
-                            ui.add_space(6.0);
-                            ui.horizontal(|ui| {
-                                if crate::cards::white_pill(ui, "Confirm") {
-                                    self.set_permission_mode(PermissionMode::AlwaysApprove);
-                                    if let Some(h) = &self.acp {
-                                        let _ = h.answer_permission_always(p.rpc_id.clone());
-                                    }
-                                    self.perm_ask = None;
-                                    self.perm_always_confirm = None;
-                                    self.status = "Permission always-approve".into();
+                    if let Some(act) =
+                        paint_confirm_sheet(ui, always_session_spec(), ALWAYS_CONFIRM_LINE2)
+                    {
+                        match act {
+                            ConfirmAct::Confirm => {
+                                self.set_permission_mode(PermissionMode::AlwaysApprove);
+                                if let Some(h) = &self.acp {
+                                    let _ = h.answer_permission_always(p.rpc_id.clone());
                                 }
-                                if crate::cards::ghost_pill(ui, "Cancel") {
-                                    self.perm_always_confirm = None;
-                                }
-                            });
-                        });
+                                self.perm_ask = None;
+                                self.perm_always_confirm = None;
+                                self.status = "Permission always-approve".into();
+                            }
+                            ConfirmAct::Cancel => {
+                                self.perm_always_confirm = None;
+                            }
+                        }
+                    }
                 }
             });
     }
@@ -1104,8 +1123,11 @@ impl Cabin {
         } else {
             0.0
         };
+        let lane_h = if pulse_on { 26.0 } else { 0.0 };
+        let device_on = pulse_on && device_glance(self.hub_on, self.last_frame_url.as_deref()).is_some();
+        let device_h = if device_on { 26.0 } else { 0.0 };
         let pulse_gap = if pulse_on && greet_on { 8.0 } else { 0.0 };
-        let block_h = greet_h + pulse_gap + pulse_h;
+        let block_h = greet_h + pulse_gap + pulse_h + lane_h + device_h;
         let greet_top = empty_home_greet_top(composer_top, block_h, 12.0);
         if greet_on || pulse_on {
             let greet_rect = egui::Rect::from_min_size(
@@ -1135,7 +1157,13 @@ impl Cabin {
                             if greet_on {
                                 ui.add_space(8.0);
                             }
+                            self.paint_lane_chip(ui);
+                            ui.add_space(4.0);
                             self.paint_empty_pulse(ui, pane_w);
+                            if device_on {
+                                ui.add_space(4.0);
+                                self.paint_device_glance_row(ui, pane_w);
+                            }
                         }
                     },
                 );
@@ -1357,6 +1385,11 @@ impl Cabin {
             }
             if let Some(perm) = row.perm {
                 if let Some(p) = PermissionMode::parse(&perm) {
+                    if p == PermissionMode::AlwaysApprove
+                        && self.permission_mode != PermissionMode::AlwaysApprove
+                    {
+                        self.arm_session_always();
+                    } else {
                     if self.running {
                         self.halt_in_flight();
                     }
@@ -1368,6 +1401,7 @@ impl Cabin {
                     }
                     self.persist_idle_key = self.persist_idle_now();
                     self.status = format!("Permission {}", p.as_str());
+                    }
                 }
             }
             if let Some(effort) = row.effort {

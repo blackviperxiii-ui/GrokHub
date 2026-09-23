@@ -352,10 +352,15 @@ pub fn ghost_pill(ui: &mut egui::Ui, label: &str) -> bool {
     felt_pill(ui, label, PillStyle::Ghost)
 }
 
+pub fn danger_pill(ui: &mut egui::Ui, label: &str) -> bool {
+    felt_pill(ui, label, PillStyle::Danger)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PillStyle {
     Solid,
     Ghost,
+    Danger,
 }
 
 pub fn felt_pill(ui: &mut egui::Ui, label: &str, style: PillStyle) -> bool {
@@ -375,6 +380,14 @@ pub fn felt_pill(ui: &mut egui::Ui, label: &str, style: PillStyle) -> bool {
             egui::vec2(0.0, 0.0),
             Some(Stroke::new(1.0_f32, crate::theme::border())),
             false,
+        ),
+        PillStyle::Danger => (
+            crate::theme::offline(),
+            crate::theme::bg(),
+            crate::theme::HIT,
+            egui::vec2(0.0, crate::theme::HIT),
+            None,
+            true,
         ),
     };
     crate::theme::felt_label_button(
