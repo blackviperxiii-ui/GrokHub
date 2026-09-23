@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.3 — 2026-09-23
+
+Always idle matches Ask/Auto (no amber). Selected Always is a 2px amber stroke only — dark `#E8A838`, light `#B86E00` — same elevated fill as Auto, no yellow wash or text. Weight is the 2px ring plus selected type. Risk tip stays. Hi-fi pass: canvas / elevated / hover, 1px borders, soft card elevation, Fluent 16/20 icons, Inter 16 / 13 / 12, ~120ms motion, session row quieter than permission. ACP Ask, Look, Enter/Esc, and redaction are unchanged.
+
+- Linux: `grokhub-linux-v2.10.3.tar.gz` and AUR `pkgver=2.10.3`.
+- Windows: `GrokHub-Setup-2.10.3.exe` and `grokhub-windows-v2.10.3.zip`.
+- Cursor cabin 2.10.3. VERSION 2.10.3. Not tagged until MERGE GREEN.
+
 ## 2.10.2 — 2026-09-22
 
 Settings → **Update** stays visible when the 2-hour probe found nothing. A click still overlays CLI then cabin so a missed GitHub Latest or alpha check can land. The titlebar chip still hides until something is newer. Same on Linux and Windows.
