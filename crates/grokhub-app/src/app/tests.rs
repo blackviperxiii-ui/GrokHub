@@ -6897,7 +6897,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && chip_row.contains("fluid_chip_count")
                 && chip_row.contains("layout_chip_label")
                 && chip_row.contains("CHIP_ROW_H")
-                && chip_row.contains("composer_pill_w")
+                && chip_row.contains("chip_row_visible_w")
                 && !chip_row.contains("CHIP_CLUSTER_H")
                 && !chip_row.contains("with_main_wrap(true)"),
             "chips are one fixed line, ellipsized, and drop overflow inside Ask anything"

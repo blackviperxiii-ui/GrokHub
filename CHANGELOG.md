@@ -4,7 +4,7 @@
 
 ## 2.10.13 — 2026-09-23
 
-Quick chips are one fixed-height line. Long labels ellipsize instead of wrapping or clipping, overflow chips drop instead of a second row, and the same ranked pool stays up mid-conversation (habit / static chips when the LLM row is not ready). Click, dismiss, and session pills are unchanged.
+Quick chips are one fixed-height line. Long labels ellipsize instead of wrapping or clipping. A chip that does not fully fit is dropped, not cut off at the window edge. The same ranked pool stays up mid-conversation (habit / static chips when the LLM row is not ready). Click, dismiss, and session pills are unchanged.
 
 - Linux: `grokhub-linux-v2.10.13.tar.gz` and AUR `pkgver=2.10.13`.
 - Windows: `GrokHub-Setup-2.10.13.exe` and `grokhub-windows-v2.10.13.zip`.

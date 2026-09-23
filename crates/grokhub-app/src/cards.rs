@@ -946,6 +946,17 @@ pub fn chip_row_width_lock(avail: f32) -> f32 {
     avail.clamp(120.0, crate::theme::CHAT_COL_W)
 }
 
+/// Width the chip row may actually paint. `composer_pill_w` floors at 360,
+/// which is wider than a narrow pane and cuts the last chip on the window edge.
+/// The visible clip wins, then the Ask anything column.
+pub fn chip_row_visible_w(ui: &egui::Ui) -> f32 {
+    let left = ui.cursor().left();
+    let clip_w = (ui.clip_rect().right() - left).max(0.0);
+    let avail = ui.available_width().min(clip_w);
+    let col = composer_pill_w(ui.ctx().screen_rect().width());
+    chip_row_width_lock(avail.min(col))
+}
+
 /// Pill width for a measured single-line label, including the reserved dismiss slot.
 pub fn chip_pill_width(label_w: f32) -> f32 {
     CHIP_PAD_X + label_w.max(0.0) + CHIP_DISMISS_GAP + CHIP_DISMISS_SLOT + CHIP_PAD_X
@@ -968,7 +979,9 @@ pub fn fluid_chip_count(widths: &[f32], row_w: f32, gap: f32) -> usize {
     let mut n = 0usize;
     for (i, w) in widths.iter().enumerate() {
         let add = if i == 0 { *w } else { gap + *w };
-        if n > 0 && used + add > row_w + 0.5 {
+        // A chip that starts inside the row and ends past it is the owner
+        // cut-off ("control my mou"). Drop the whole pill.
+        if used + add > row_w + 0.5 {
             break;
         }
         used += add;
@@ -1061,7 +1074,7 @@ fn paint_chip_pill(ui: &mut egui::Ui, rect: egui::Rect, fill: Color32, primary: 
 }
 
 pub fn paint_empty_chip_state(ui: &mut egui::Ui) {
-    let max_w = chip_row_width_lock(ui.available_width());
+    let max_w = chip_row_visible_w(ui);
     ui.allocate_ui_with_layout(
         egui::vec2(max_w, CHIP_ROW_H),
         egui::Layout::left_to_right(egui::Align::Center)
@@ -1098,8 +1111,7 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
         return None;
     }
     let mut act = None;
-    let col = composer_pill_w(ui.ctx().screen_rect().width());
-    let max_w = chip_row_width_lock(ui.available_width().min(col));
+    let max_w = chip_row_visible_w(ui);
     let budget = chip_label_budget(max_w);
     let measured: Vec<Arc<egui::Galley>> = chips
         .iter()
@@ -1115,7 +1127,7 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
         .collect();
     let widths: Vec<f32> = measured
         .iter()
-        .map(|g| chip_pill_width(g.size().x.min(budget)))
+        .map(|g| chip_pill_width(g.size().x.min(budget)).min(max_w))
         .collect();
     let fit = fluid_chip_count(&widths, max_w, CHIP_GAP);
     ui.allocate_ui_with_layout(
@@ -1126,9 +1138,24 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
         |ui| {
             ui.set_max_width(max_w);
             ui.spacing_mut().item_spacing = egui::vec2(CHIP_GAP, 0.0);
+            let mut used = 0.0f32;
             for (i, c) in chips.iter().enumerate().take(fit) {
                 let galley = measured[i].clone();
+                debug_assert!(
+                    galley.rows.len() <= 1,
+                    "chip labels stay one line: {}",
+                    galley.text()
+                );
                 let pill_w = widths[i];
+                let add = if used == 0.0 {
+                    pill_w
+                } else {
+                    CHIP_GAP + pill_w
+                };
+                if used + add > max_w + 0.5 {
+                    break;
+                }
+                used += add;
                 let chip_id = ui.id().with(("qchip", i));
                 let hovered = ui
                     .ctx()
@@ -3026,7 +3053,7 @@ mod tests {
         assert!(
             slice.contains("with_main_wrap(false)")
                 && slice.contains("fluid_chip_count")
-                && slice.contains("composer_pill_w")
+                && slice.contains("chip_row_visible_w")
                 && !slice.contains("with_main_wrap(true)")
                 && !slice.contains("CHIP_CLUSTER_H")
                 && !slice.contains("CHIP_VISIBLE_MAX"),
@@ -3113,6 +3140,21 @@ mod tests {
         );
         assert_eq!(fluid_chip_count(&[w; 5], 10_000.0, gap), 5);
         assert_eq!(fluid_chip_count(&[], 400.0, gap), 0);
+        assert_eq!(
+            fluid_chip_count(&[200.0], 100.0, gap),
+            0,
+            "a pill wider than the row is omitted, not sliced"
+        );
+        // Owner shot 2026-09-23: last chip starts on screen and is cut
+        // ("control my mou" / "close one"). Drop that whole pill.
+        let owner_w = [72.0, 48.0, 168.0, 176.0, 150.0];
+        let partial = 72.0 + gap + 48.0 + gap + 168.0 + gap + 176.0 + 40.0;
+        assert!(partial < owner_w.iter().sum::<f32>() + gap * 4.0);
+        assert_eq!(
+            fluid_chip_count(&owner_w, partial, gap),
+            4,
+            "do not paint a chip the viewport would cut"
+        );
         assert_eq!(chip_label_budget(4_000.0), CHIP_LABEL_MAX_W);
         let narrow = chip_label_budget(120.0);
         assert!(narrow < CHIP_LABEL_MAX_W);
@@ -3175,6 +3217,63 @@ mod tests {
                 assert!(long.size().x <= CHIP_LABEL_MAX_W + 0.5);
                 assert!(!short.elided, "short label stays whole: {}", short.rows[0].text());
                 assert_eq!(cut.rows.len(), 1);
+                // Owner shot: these wrapped to two lines and the last was cut
+                // mid-glyph. Each stays one line; overflow is an ellipsis.
+                for label in [
+                    "hey that was super close that time",
+                    "lets try this again using only",
+                    "control my mouse close one",
+                ] {
+                    let galley = layout_chip_label(
+                        ui,
+                        label,
+                        FontId::proportional(13.0),
+                        color,
+                        CHIP_LABEL_MAX_W,
+                    );
+                    assert_eq!(galley.rows.len(), 1, "owner wrap: {label}");
+                    let natural = ui.fonts(|f| {
+                        f.layout_no_wrap(label.to_owned(), FontId::proportional(13.0), color)
+                            .size()
+                            .x
+                    });
+                    if natural > CHIP_LABEL_MAX_W {
+                        assert!(
+                            galley.elided && galley.rows[0].text().ends_with('…'),
+                            "owner clip must be an ellipsis: {label} -> {}",
+                            galley.rows[0].text()
+                        );
+                    } else {
+                        assert!(!galley.elided, "short owner label stays whole: {label}");
+                    }
+                    assert!(galley.size().y + CHIP_PAD_Y * 2.0 <= CHIP_ROW_H + 0.5);
+                }
+                let continue_g = layout_chip_label(
+                    ui,
+                    "continue",
+                    FontId::proportional(13.0),
+                    color,
+                    CHIP_LABEL_MAX_W,
+                );
+                let test_g =
+                    layout_chip_label(ui, "test", FontId::proportional(13.0), color, CHIP_LABEL_MAX_W);
+                assert!(!continue_g.elided && continue_g.rows.len() == 1);
+                assert!(!test_g.elided && test_g.rows.len() == 1);
+                let owner = vec![
+                    sample_chip("continue", false),
+                    sample_chip("test", false),
+                    sample_chip("hey that was super close that time", false),
+                    sample_chip("lets try this again using only", false),
+                    sample_chip("control my mouse close one", false),
+                ];
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let y_owner = ui.cursor().min.y;
+                let _ = quick_chip_row(ui, &owner);
+                let owner_h = ui.cursor().min.y - y_owner;
+                assert!(
+                    owner_h + 0.5 >= CHIP_ROW_H && owner_h < CHIP_ROW_H + 8.0,
+                    "owner row must stay one fixed line, got {owner_h}"
+                );
 
                 let mixed = vec![
                     sample_chip("Continue", false),
