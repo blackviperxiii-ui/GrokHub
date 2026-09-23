@@ -1619,4 +1619,94 @@ mod tests {
             "channel probe must prefer config.toml then grok update --check --json: {src}"
         );
     }
+
+    #[test]
+    fn cabin_defaults_feed_single_turn_args() {
+        use crate::protocol::{PermissionMode, SessionMode};
+
+        let (always, auto) = PermissionMode::Auto.composer_headless_flags();
+        assert!(!always && auto);
+        let pinned = single_turn_args_full(
+            "hi",
+            "/tmp/work",
+            None,
+            always,
+            auto,
+            Some("grok-4.6"),
+            Some("xhigh"),
+            SessionMode::Chat,
+        );
+        assert!(
+            pinned
+                .windows(2)
+                .any(|w| w[0] == "--model" && w[1] == "grok-4.6"),
+            "{pinned:?}"
+        );
+        assert!(
+            pinned
+                .windows(2)
+                .any(|w| w[0] == "--reasoning-effort" && w[1] == "xhigh"),
+            "{pinned:?}"
+        );
+        assert!(
+            pinned
+                .windows(2)
+                .any(|w| w[0] == "--permission-mode" && w[1] == "auto"),
+            "{pinned:?}"
+        );
+        assert!(
+            !pinned.iter().any(|a| a == "--always-approve"),
+            "{pinned:?}"
+        );
+
+        let (always, auto) = PermissionMode::Ask.composer_headless_flags();
+        assert!(!always && !auto);
+        assert!(PermissionMode::Ask.uses_acp(), "Ask stays on the ACP path");
+        let ask = single_turn_args_full(
+            "hi",
+            "/tmp/work",
+            None,
+            always,
+            auto,
+            Some(grokhub_core::cabin_spawn_model("")),
+            Some("high"),
+            SessionMode::Chat,
+        );
+        assert_eq!(grokhub_core::cabin_spawn_model(""), "grok-4.7");
+        assert!(
+            ask.windows(2)
+                .any(|w| w[0] == "--model" && w[1] == "grok-4.7"),
+            "an empty Settings model pin still uses the cabin spawn model: {ask:?}"
+        );
+        assert!(
+            ask.windows(2)
+                .any(|w| w[0] == "--reasoning-effort" && w[1] == "high"),
+            "{ask:?}"
+        );
+        assert!(
+            !ask.iter().any(|a| a == "--always-approve"),
+            "Ask must not send --always-approve: {ask:?}"
+        );
+        assert!(
+            !ask.windows(2).any(|w| w[0] == "--permission-mode"),
+            "Chat Ask does not put a permission flag on grok -p: {ask:?}"
+        );
+
+        let look = single_turn_args_full(
+            "hi",
+            "/tmp/work",
+            None,
+            false,
+            true,
+            Some("grok-4.7"),
+            Some("low"),
+            SessionMode::Ask,
+        );
+        assert!(
+            look.windows(2)
+                .any(|w| w[0] == "--permission-mode" && w[1] == "default"),
+            "Questions stays look-only, not the invalid CLI value ask: {look:?}"
+        );
+        assert!(!look.iter().any(|a| a == "--always-approve"), "{look:?}");
+    }
 }
