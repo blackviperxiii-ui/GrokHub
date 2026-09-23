@@ -6438,6 +6438,39 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             flush_b.contains("persist_idle_now") && flush_b.contains("save_board"),
             "Workboard flush must bump the idle key or persist_bg clones every thread 2s later: {flush_b}"
         );
+        let kick = fn_src(&src, "kick_model");
+        assert!(
+            kick.contains("note_inflight_card"),
+            "run start files a Workboards card from the user ask: {kick}"
+        );
+        let finish = fn_src(&src, "finish_acp_turn");
+        assert!(
+            finish.contains("settle_turn_card"),
+            "run complete settles that card: {finish}"
+        );
+        let note = fn_src(&src, "note_inflight_card");
+        assert!(
+            note.contains("upsert_inflight_card") && note.contains("flush_board"),
+            "inflight hook writes workboard.json, not a full thread persist: {note}"
+        );
+        let settled = fn_src(&src, "settle_turn_card");
+        assert!(
+            settled.contains("settle_inflight_card")
+                && settled.contains("apply_assistant_work_marks")
+                && settled.contains("flush_board"),
+            "complete moves doing to done and applies WORK_PIN lines: {settled}"
+        );
+        assert!(
+            board.contains("Workboards")
+                && board.contains("Open chat")
+                && board.contains("Archive"),
+            "Workboards page is the kanban, with a thread link: {board}"
+        );
+        let open = fn_src(&src, "open_board_thread");
+        assert!(
+            open.contains("switch_thread") && open.contains("Nav::Chat"),
+            "Open chat leaves the board on the rail and shows the linked thread: {open}"
+        );
         let night = format!(
             "{}{}",
             fn_src(&src, "ui_night"),

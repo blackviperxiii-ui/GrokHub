@@ -663,6 +663,33 @@ impl Cabin {
         });
     }
 
+    /// Run start. `kick_model` calls this once the user ask is known.
+    /// Writes `workboard.json` through `flush_board` when the card changes.
+    pub(super) fn note_inflight_card(&mut self, ask: &str, thread_label: &str) {
+        let Some(id) = self.chat_job_thread.clone() else {
+            return;
+        };
+        let title = inflight_card_title(ask, thread_label);
+        if upsert_inflight_card(&mut self.board, &id, &title) {
+            self.flush_board();
+        }
+    }
+
+    /// Run complete. `finish_acp_turn` calls this before it drops `chat_job_thread`.
+    /// Doing → done, then `WORK_PIN:` / `WORK_UPDATE:` lines in the assistant text.
+    pub(super) fn settle_turn_card(&mut self, assistant: &str) {
+        let Some(id) = self.chat_job_thread.clone() else {
+            return;
+        };
+        let mut changed = settle_inflight_card(&mut self.board, &id);
+        if apply_assistant_work_marks(&mut self.board, assistant, &id) {
+            changed = true;
+        }
+        if changed {
+            self.flush_board();
+        }
+    }
+
     pub(super) fn flush_board(&mut self) {
         let board = self.board.clone();
         let io = self.persist_io.clone();

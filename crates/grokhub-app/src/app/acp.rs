@@ -499,6 +499,7 @@ impl Cabin {
         self.scrub_live_blocks();
         self.thought_buf.clear();
         self.stream_buf.clear();
+        self.settle_turn_card(&text);
         let origin = self.chat_job_thread.take();
         if here && self.speak_next {
             self.speak_next = false;

@@ -151,9 +151,15 @@ impl Cabin {
             self.chat_job_thread = Some(self.visible_thread_id());
         }
         let vis = self.visible_thread_id();
-        let last_user = {
+        let thread_label = self
+            .threads
+            .iter()
+            .find(|t| self.chat_job_thread.as_deref() == Some(t.id.as_str()))
+            .map(|t| t.title.clone())
+            .unwrap_or_default();
+        let raw_ask = {
             let job = self.chat_job_thread.as_deref();
-            let raw = if job.is_none() || job == Some(vis.as_str()) {
+            if job.is_none() || job == Some(vis.as_str()) {
                 self.messages
                     .iter()
                     .rev()
@@ -179,9 +185,9 @@ impl Cabin {
                             .map(|m| m.1.clone())
                             .unwrap_or_default()
                     })
-            };
-            apply_skill_follow(&raw, self.active_skill_follow.as_deref())
+            }
         };
+        let last_user = apply_skill_follow(&raw_ask, self.active_skill_follow.as_deref());
         if self.grok_p_rx.is_some() {
             return;
         }
@@ -212,6 +218,7 @@ impl Cabin {
         self.confirm = None;
         self.elicit_ask = None;
         self.elicit_draft.clear();
+        self.note_inflight_card(&raw_ask, &thread_label);
         let image = if consume_attach {
             let url =
                 next_chat_image(self.attach_url.as_deref(), cabin.as_deref()).map(str::to_string);

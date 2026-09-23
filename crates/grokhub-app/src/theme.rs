@@ -348,6 +348,7 @@ pub const GROK_NAV: &[(&str, &str)] = &[
     ("imagine", "Imagine"),
     ("automations", "Automations"),
     ("skills", "Skills and Connectors"),
+    ("workboard", "Workboards"),
 ];
 
 /// Avatar-menu destinations besides Help / Sign in / Sign out.
@@ -360,7 +361,7 @@ pub fn stage_subtitle(id: &str) -> &'static str {
         "history" => "Past chats",
         "chat" => "Recent chat",
         "imagine" => "Images",
-        "workboard" => "Pinned tasks",
+        "workboard" => "Tasks and plans",
         "skills" => "Personal skills and connectors",
         "automations" => "Grok Build /loop scheduler",
         "command" => "Overview",
@@ -809,6 +810,15 @@ mod tests {
         assert_eq!(GROK_NAV[0], ("chat", "Chat"));
         assert_eq!(GROK_NAV[1], ("imagine", "Imagine"));
         assert!(GROK_NAV.iter().all(|(id, _)| *id != "settings"));
+        let skills = GROK_NAV
+            .iter()
+            .position(|(id, _)| *id == "skills")
+            .expect("skills rail");
+        assert_eq!(
+            GROK_NAV.get(skills + 1),
+            Some(&("workboard", "Workboards")),
+            "Workboards sits immediately under Skills and Connectors"
+        );
         assert_eq!(CABIN_MENU, &[("settings", "Settings")]);
         for gone in [
             "history",
