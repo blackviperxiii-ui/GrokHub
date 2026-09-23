@@ -2573,7 +2573,7 @@ mod tests {
             provider: None,
             tool: None,
         };
-        let skills = merge_suggested_skills(&[learned_skill.clone()], &[]);
+        let skills = merge_suggested_skills(std::slice::from_ref(&learned_skill), &[]);
         assert_eq!(skills[0].1, "Desk tidy");
         let hidden_skill = merge_suggested_skills(&[learned_skill], &["desk-tidy".into()]);
         assert!(hidden_skill.is_empty());
