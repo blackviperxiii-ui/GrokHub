@@ -917,7 +917,12 @@ pub enum ChipRowAct {
 }
 
 pub(crate) fn chip_paint_label(label: &str) -> String {
-    label.split_whitespace().collect::<Vec<_>>().join(" ")
+    label
+        .split_whitespace()
+        .flat_map(|w| w.split('…'))
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Wrap width for a suggestion chip. Two lines, not a one-line ellipsis.
@@ -1043,6 +1048,7 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
             .with_main_align(egui::Align::Center),
         |ui| {
             ui.set_max_width(max_w);
+            ui.set_clip_rect(ui.max_rect());
             ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
             for (i, c) in chips.iter().take(grokhub_core::CHIP_VISIBLE_MAX).enumerate() {
                 let chip_id = ui.id().with(("qchip", i));
@@ -2342,6 +2348,15 @@ mod tests {
             "{long}"
         );
         assert!(!long.contains('…'), "{long}");
+        for fail in [
+            "you should already have mcp con…",
+            "check doosan for information on…",
+            "can you search the web and veri…",
+        ] {
+            let paint = chip_paint_label(fail);
+            assert!(!paint.contains('…'), "{paint}");
+            assert!(paint.split_whitespace().count() >= 3, "{paint}");
+        }
     }
 
     #[test]

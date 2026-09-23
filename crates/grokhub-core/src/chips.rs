@@ -578,9 +578,13 @@ fn shorten(s: &str, n: usize) -> String {
     format!("{}…", out.trim_end())
 }
 
-/// Visible chip label: collapse whitespace, never ellipsis. Paint wraps.
+/// Visible chip label: collapse whitespace, drop mid-phrase `…`. Paint wraps.
 fn chip_label(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
+    s.split_whitespace()
+        .flat_map(|w| w.split('…'))
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn topic_from_text(text: &str) -> String {
@@ -936,7 +940,7 @@ fn upsert_hit(
         return;
     }
     if let Some(h) = memory.hits.iter_mut().find(|h| h.key == key) {
-        h.label = label.chars().take(48).collect();
+        h.label = chip_label(label);
         h.value = value.chars().take(400).collect();
         h.kind = kind;
         h.uses = h.uses.saturating_add(uses_delta);
@@ -955,7 +959,7 @@ fn upsert_hit(
             0,
             ChipHit {
                 key,
-                label: label.chars().take(48).collect(),
+                label: chip_label(label),
                 value: value.chars().take(400).collect(),
                 kind,
                 uses: uses_delta,
@@ -2801,6 +2805,11 @@ mod tests {
         );
         assert_eq!(chips[0].label, "you should already have mcp configured");
         assert!(!chips[0].label.contains('…'));
+        let clipped = parse_llm_chips(
+            r#"[{"label":"check doosan for information on…","value":"Look up Doosan in this chat.","kind":"chat"}]"#,
+        );
+        assert_eq!(clipped[0].label, "check doosan for information on");
+        assert!(!clipped[0].label.contains('…'));
         let src = include_str!("chips.rs");
         let parse = src
             .split("pub fn parse_llm_chips(")
@@ -2810,6 +2819,15 @@ mod tests {
         assert!(
             !parse.contains("take(32)") && parse.contains("chip_label"),
             "LLM labels must not hard-cut mid-phrase: {parse}"
+        );
+        let upsert = src
+            .split("fn upsert_hit(")
+            .nth(1)
+            .and_then(|s| s.split("fn record_transition(").next())
+            .expect("upsert_hit");
+        assert!(
+            !upsert.contains("take(48)") && upsert.contains("chip_label"),
+            "habit labels must not mid-cut at 48: {upsert}"
         );
     }
 
