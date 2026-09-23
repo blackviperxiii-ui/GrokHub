@@ -6229,6 +6229,13 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         );
         assert!(src.contains("self.tick_review()"));
         assert!(
+            src.contains("fn tick_session_suggestions(")
+                && src.contains("suggestions_from_sessions")
+                && src.contains("last_session_suggest_day")
+                && src.contains("self.tick_session_suggestions()"),
+            "quiet daily session suggestions must feed Suggestions: {src}"
+        );
+        assert!(
             src.contains("if !night_fired && !self.running"),
             "Review waits if Night just fired or chat is running"
         );
@@ -6350,12 +6357,16 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "Automations page still owns the Grok Build /loop list: {night}"
         );
         assert!(
-            night.contains("teach_watched_routine")
-                && night.contains("Follow along")
-                && night.contains("Teach this once")
-                && night.contains("watch_once")
+            !night.contains("Follow along")
+                && !night.contains("Teach this once")
+                && !night.contains("teach_watched_routine")
+                && !night.contains("watch_once")
+                && !night.contains("teach_nl")
+                && night.contains("New job")
+                && night.contains("Suggested")
+                && night.contains("Loops")
                 && !night.contains("thread::spawn"),
-            "Automations teaches one routine into the existing scheduler, not a second clock: {night}"
+            "Automations must drop Follow along / Teach this once: {night}"
         );
         assert!(
             night.contains("ui_scheduled_automations") && night.contains("self.automations"),
@@ -6396,8 +6407,16 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "Add must route the seed and persist loops.json off the UI thread: {added}"
         );
         assert!(
+            added.contains("dismiss_accepted_auto") && added.contains("persist_suggestions"),
+            "Accept must drop the Suggested tile from store + persist every time: {added}"
+        );
+        assert!(
             !added.contains("self.persist()"),
             "Add must not clone every thread 2s later: {added}"
+        );
+        assert!(
+            !night.contains("take(40)"),
+            "loop and scheduled titles wrap — no mid-word take(40): {night}"
         );
         let fire = src
             .split("fn fire_loop(")
@@ -6790,5 +6809,45 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             ask_auto.contains("self.confirm = None"),
             "Auto/Ask must disarm the session Always overlay: {ask_auto}"
+        );
+    }
+
+    #[test]
+    fn cabin_2109_must_ships() {
+        let src = cabin_src();
+        let night = fn_src(&src, "ui_night");
+        assert!(
+            !night.contains("Follow along") && !night.contains("Teach this once"),
+            "{night}"
+        );
+        assert!(
+            night.contains("New job")
+                && night.contains("Loops")
+                && night.contains("Suggested")
+                && night.contains("ui_scheduled_automations"),
+            "{night}"
+        );
+        let added = fn_src(&src, "add_automation_seed");
+        assert!(
+            added.contains("dismiss_accepted_auto") && added.contains("persist_suggestions"),
+            "{added}"
+        );
+        let session = fn_src(&src, "tick_session_suggestions");
+        assert!(
+            session.contains("suggestions_from_sessions")
+                && session.contains("persist_suggestions")
+                && session.contains("last_session_suggest_day")
+                && !session.contains("send_chat"),
+            "{session}"
+        );
+        let review = fn_src(&src, "tick_review");
+        assert!(review.contains("tick_session_suggestions"), "{review}");
+        let acp = include_str!("acp.rs");
+        assert!(
+            acp.contains("note_live_grok_session")
+                && acp.contains("request_grok_sessions_refresh")
+                && acp.contains("history_list_refresh_due")
+                && acp.contains("grok_sessions_refresh_pending"),
+            "Windows History must index live sessions and re-list when CLI lags"
         );
     }

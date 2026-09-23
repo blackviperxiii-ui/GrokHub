@@ -1430,6 +1430,32 @@ fn paint_slot_card(
     resp
 }
 
+/// Body paint for a skill/connector tile. Wrap the full description; never
+/// mid-word clip. Only a word-boundary "more" cut when the body is huge.
+pub fn tile_body_text(body: &str) -> String {
+    let t = body.trim();
+    if t.chars().count() <= 240 {
+        return t.to_string();
+    }
+    word_boundary_take(t, 240)
+}
+
+fn word_boundary_take(s: &str, max_chars: usize) -> String {
+    let mut end = 0;
+    let mut last_space = 0;
+    for (i, c) in s.char_indices() {
+        if s[..i].chars().count() >= max_chars {
+            break;
+        }
+        if c.is_whitespace() {
+            last_space = i;
+        }
+        end = i + c.len_utf8();
+    }
+    let cut = if last_space > 0 { last_space } else { end };
+    s.get(..cut).unwrap_or(s).trim_end().to_string()
+}
+
 pub fn grok_tile(
     ui: &mut egui::Ui,
     icon: TileIcon,
@@ -1453,21 +1479,25 @@ pub fn grok_tile(
             icons::paint_icon(ui, icon, crate::theme::TILE_ICON);
             ui.add_space(10.0);
             ui.vertical(|ui| {
-                ui.label(
-                    RichText::new(title)
-                        .font(crate::theme::card_title_font())
-                        .color(crate::theme::fg()),
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(title)
+                            .font(crate::theme::card_title_font())
+                            .color(crate::theme::fg()),
+                    )
+                    .wrap(),
                 );
                 ui.add_space(3.0);
-                let clipped: String = body.chars().take(80).collect();
-                ui.label(
-                    RichText::new(clipped)
-                        .size(crate::theme::FONT_BODY)
-                        .color(crate::theme::muted()),
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(tile_body_text(body))
+                            .size(crate::theme::FONT_BODY)
+                            .color(crate::theme::muted()),
+                    )
+                    .wrap(),
                 );
-            });
-            if let Some(label) = add {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                if let Some(label) = add {
+                    ui.add_space(8.0);
                     let r = crate::theme::felt_label_button(
                         ui,
                         label,
@@ -1480,8 +1510,8 @@ pub fn grok_tile(
                     );
                     add_clicked = r.clicked();
                     add_rect = Some(r.rect);
-                });
-            }
+                }
+            });
         });
     }
     let resp = paint_slot_card(ui, prepared, selected, crate::theme::CARD_RADIUS);
@@ -2203,6 +2233,18 @@ mod tests {
     use grokhub_core::parse_loop_line;
 
     #[test]
+    fn grok_tile_body_does_not_clip_mid_word() {
+        assert_eq!(tile_body_text("short"), "short");
+        let long = "Built-in — Required reading before you start, watch, or wait on anything that remains after the first eighty glyphs of this description so wrap is the path.";
+        let painted = tile_body_text(long);
+        assert!(!painted.contains("take(80)"));
+        assert!(!painted.ends_with(" re"));
+        assert!(!painted.contains('…'));
+        assert!(painted.starts_with("Built-in"));
+        assert!(painted.chars().count() <= 240);
+    }
+
+    #[test]
     fn card_and_wall_hover_stay_in_slot() {
         let src = include_str!("cards.rs");
         let card = src
@@ -2221,8 +2263,13 @@ mod tests {
             .and_then(|s| s.split("pub fn tile_row(").next())
             .expect("grok_tile");
         assert!(
-            tile.contains("paint_slot_card") && tile.contains("card_title_font"),
-            "{tile}"
+            tile.contains("paint_slot_card")
+                && tile.contains("card_title_font")
+                && tile.contains("tile_body_text")
+                && tile.contains(".wrap()")
+                && !tile.contains("take(80)")
+                && !tile.contains("right_to_left"),
+            "Use in chat must sit under the body, never clip mid-word: {tile}"
         );
         let empty = src
             .split("pub fn empty_prompt_tile(")
