@@ -35,7 +35,8 @@ use grokhub_core::{
     appearance_hint, append_composer, append_say, append_thought, append_tool, apply_auto_title_in,
     apply_job_error, apply_manual_rename, attach_kind, attach_name,
     attach_prompt_line, automation_blocked_by_policy, automation_schedule_label,
-    automation_summary_line, blend_thread_goal, bound_scan, bubble_outer_width, bubble_wrap_width,
+    automation_summary_line, blend_thread_goal, bound_scan, btw_queues_without_interrupt,
+    bubble_outer_width, bubble_wrap_width,
     build_hub_snapshot, build_quick_chips, build_review_digest, build_windshield, bump_skill_run,
     bump_usage, cabin_overlay_step, cabin_update_notice, cap_from_text, catalog_line,
     chat_attach_status, chat_bearer, chat_run_action, chat_run_hint,
@@ -52,7 +53,7 @@ use grokhub_core::{
     estimate_messages, estimate_messages_from, extract_imagine_prompt, extract_insights,
     extract_work_pins, extract_work_updates, fact_candidates, fact_candidates_from, filter_palette,
     filter_slash_hits, flush_visible_goal, fold_stream_fields, folder_choices, forbidden_reason,
-    forget_topic, format_consult_reply, frame_bytes, goal_continue_pin, goal_pin_for_job,
+    forget_topic, fork_offer_why, format_consult_reply, frame_bytes, goal_continue_pin, goal_pin_for_job,
     goal_step_after_outcome, greet_from_last_job, greeting_fingerprint, greeting_name,
     greeting_prompt, grok_cli_update_cmd, grok_command_hits, has_auth, has_verify_ok,
     history_list_refresh_due,
@@ -129,6 +130,7 @@ use grokhub_core::{
     VerifyResult, VoiceEvent, VoiceState,
     WallGif, BUBBLE_PAD_X, BUBBLE_PAD_Y, CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, CABIN_GITHUB_TOOLS,
     CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, CHIP_VISIBLE_MAX, CONTEXT_BUDGET_TOKENS, FOLLOWUP_MAX_STEPS,
+    FORK_EXPLAINER,
     FOLLOWUP_PROMPT, FRAME_CAP, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HEARTBEAT_MS, HUB_KIND,
     IDLE_REFLECT_MS, IMAGE_FILE_CAP, IMAGINE_ASPECTS, IMAGINE_STYLES, IMAGINE_WALL_GAP, LOOP_MAX,
     PRESENCE_RING_MS, RESULT_TRIM_KEEP_HOPS, REVIEW_NIGHT_HOUR, SKILL_SAVED_MARK, SKILL_SAVED_NOTE,
@@ -621,6 +623,14 @@ pub struct Cabin {
     grok_commands: Vec<SlashHit>,
     grok_tasks: Vec<(String, String, bool)>,
     followup_queue: Vec<String>,
+    /// btw questions waiting until the live turn ends. They do not cancel it.
+    side_ask_queue: Vec<String>,
+    /// Next kick uses SessionMode::Ask even if the pill changes before spawn.
+    side_ask_kick: bool,
+    /// Plan card open. The body lives on the thread (`plan_body`).
+    plan_open: bool,
+    /// Once-only fork how-it-works. Disk flag `fork_explainer_seen`, not AppConfig.
+    fork_explainer_seen: bool,
     tool_cards: Vec<ToolCard>,
     live_blocks: Vec<LiveBlock>,
     desk_frame: Option<String>,
@@ -663,6 +673,16 @@ pub struct Cabin {
     grok_catalog_loaded: bool,
     grok_catalog_rx: Option<mpsc::Receiver<Result<grokhub_acp::GrokCatalog, String>>>,
     grok_ext_rx: Option<mpsc::Receiver<String>>,
+}
+
+fn fork_explainer_path() -> PathBuf {
+    config::config_dir().join("fork_explainer_seen")
+}
+
+fn fork_explainer_seen_on_disk() -> bool {
+    std::fs::read_to_string(fork_explainer_path())
+        .map(|s| s.trim() == "1")
+        .unwrap_or(false)
 }
 
 impl Cabin {
@@ -1026,6 +1046,10 @@ impl Cabin {
             grok_commands: Vec::new(),
             grok_tasks: Vec::new(),
             followup_queue: Vec::new(),
+            side_ask_queue: Vec::new(),
+            side_ask_kick: false,
+            plan_open: false,
+            fork_explainer_seen: fork_explainer_seen_on_disk(),
             tool_cards: Vec::new(),
             live_blocks: Vec::new(),
             desk_frame: None,
@@ -2155,6 +2179,38 @@ impl Cabin {
         self.session_mode = mode;
         self.cfg.session_mode = mode.as_str().to_string();
         self.persist_cfg();
+    }
+
+    /// `replace` overwrites a plan event. Turn-end fill keeps a structured plan.
+    pub(super) fn store_session_plan(&mut self, text: &str, replace: bool) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        let id = self
+            .chat_job_thread
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| self.visible_thread_id());
+        let Some(t) = self.threads.iter_mut().find(|t| t.id == id) else {
+            return;
+        };
+        if !replace && !t.plan_body.trim().is_empty() {
+            return;
+        }
+        if t.plan_body == text {
+            return;
+        }
+        let first = t.plan_body.trim().is_empty();
+        t.plan_body = text.to_string();
+        if first {
+            self.plan_open = true;
+        }
+    }
+
+    pub(super) fn dismiss_fork_explainer(&mut self) {
+        self.fork_explainer_seen = true;
+        let _ = std::fs::write(fork_explainer_path(), b"1");
     }
 
     fn set_permission_mode(&mut self, mode: PermissionMode) {

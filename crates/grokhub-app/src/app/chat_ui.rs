@@ -13,6 +13,7 @@ pub(super) enum ChatJump {
 pub(super) enum ComposerStackSlot {
     AuthBanner,
     ContextBar,
+    SessionTools,
     SlashPalette,
     Chips,
     Attach,
@@ -24,6 +25,7 @@ pub(super) fn composer_stack_order() -> &'static [ComposerStackSlot] {
     &[
         ComposerStackSlot::AuthBanner,
         ComposerStackSlot::ContextBar,
+        ComposerStackSlot::SessionTools,
         ComposerStackSlot::SlashPalette,
         ComposerStackSlot::Attach,
         ComposerStackSlot::Voice,
@@ -1440,6 +1442,100 @@ impl Cabin {
         });
     }
 
+    /// Export, view plan, and the recommended fork offer. Not slash-only.
+    pub(super) fn paint_session_tools(&mut self, ui: &mut egui::Ui) {
+        let plan = self
+            .threads
+            .get(self.thread_idx)
+            .map(|t| t.plan_body.clone())
+            .unwrap_or_default();
+        let turns =
+            visible_turn_count_from(self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())));
+        let tokens = if self.grok_usage.context_tokens_used > 0 {
+            self.grok_usage.context_used().min(u64::from(u32::MAX)) as u32
+        } else {
+            estimate_messages_from(self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())))
+        };
+        let why = fork_offer_why(turns, tokens, CONTEXT_BUDGET_TOKENS);
+        let has_messages = !self.messages.is_empty();
+        if !has_messages && plan.trim().is_empty() && why.is_none() {
+            return;
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            if has_messages && crate::cards::ghost_pill(ui, "Copy session") {
+                if let Some(t) = self.threads.get(self.thread_idx) {
+                    ui.ctx().copy_text(crate::threads::export_markdown(t));
+                    self.status = "Copied session".into();
+                }
+            }
+            if has_messages && crate::cards::ghost_pill(ui, "Export") {
+                self.run_slash(Slash::Export);
+            }
+            if !plan.trim().is_empty() {
+                let label = if self.plan_open { "Hide plan" } else { "View plan" };
+                if crate::cards::ghost_pill(ui, label) {
+                    self.plan_open = !self.plan_open;
+                }
+            }
+            if let Some(why) = why {
+                ui.label(
+                    RichText::new(why)
+                        .size(crate::theme::FONT_META)
+                        .color(crate::theme::muted()),
+                );
+                if crate::cards::ghost_pill(ui, "Fork") {
+                    self.run_slash(Slash::Fork);
+                }
+            }
+        });
+        if why.is_some() && !self.fork_explainer_seen {
+            ui.add_space(4.0);
+            egui::Frame::none()
+                .fill(crate::theme::elevated())
+                .rounding(12.0)
+                .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
+                .inner_margin(egui::Margin::same(10.0))
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new("How fork works")
+                            .size(crate::theme::FONT_BODY)
+                            .strong()
+                            .color(crate::theme::fg()),
+                    );
+                    ui.label(
+                        RichText::new(FORK_EXPLAINER)
+                            .size(crate::theme::FONT_META)
+                            .color(crate::theme::muted()),
+                    );
+                    if crate::cards::ghost_pill(ui, "Got it") {
+                        self.dismiss_fork_explainer();
+                    }
+                });
+        }
+        if self.plan_open && !plan.trim().is_empty() {
+            ui.add_space(4.0);
+            egui::Frame::none()
+                .fill(crate::theme::elevated())
+                .rounding(12.0)
+                .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
+                .inner_margin(egui::Margin::same(10.0))
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new("Plan")
+                            .size(crate::theme::FONT_BODY)
+                            .strong()
+                            .color(crate::theme::fg()),
+                    );
+                    ui.label(
+                        RichText::new(plan)
+                            .size(crate::theme::FONT_META)
+                            .color(crate::theme::fg()),
+                    );
+                });
+        }
+    }
+
     pub(super) fn ui_composer_stack(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.vertical_centered_justified(|ui| {
@@ -1482,28 +1578,43 @@ impl Cabin {
                         }
                     }
                     ComposerStackSlot::ContextBar => {
-                        if !self.grok_usage.is_empty() {
-                            let used = self.grok_usage.context_used();
-                            let window = self.grok_usage.context_window().max(1);
-                            let frac = (used as f32 / window as f32).clamp(0.0, 1.0);
-                            let line = grok_context_line(&self.grok_usage);
-                            let (rect, _) = ui.allocate_exact_size(
-                                egui::vec2(ui.available_width(), 14.0),
-                                egui::Sense::hover(),
-                            );
-                            ui.painter().rect_filled(rect, 4.0, crate::theme::elevated());
-                            let mut fill = rect;
-                            fill.set_width((rect.width() * frac).max(2.0));
-                            ui.painter().rect_filled(fill, 4.0, crate::theme::nav_active());
-                            ui.painter().text(
-                                rect.center(),
-                                egui::Align2::CENTER_CENTER,
-                                line,
-                                egui::FontId::proportional(11.0),
-                                crate::theme::muted(),
-                            );
+                        let show_compact =
+                            !self.messages.is_empty() || !self.grok_usage.is_empty();
+                        if !self.grok_usage.is_empty() || show_compact {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 8.0;
+                                if !self.grok_usage.is_empty() {
+                                    let used = self.grok_usage.context_used();
+                                    let window = self.grok_usage.context_window().max(1);
+                                    let frac = (used as f32 / window as f32).clamp(0.0, 1.0);
+                                    let line = grok_context_line(&self.grok_usage);
+                                    let reserve = if show_compact { 92.0 } else { 0.0 };
+                                    let bar_w = (ui.available_width() - reserve).max(48.0);
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(bar_w, 14.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    ui.painter().rect_filled(rect, 4.0, crate::theme::elevated());
+                                    let mut fill = rect;
+                                    fill.set_width((rect.width() * frac).max(2.0));
+                                    ui.painter().rect_filled(fill, 4.0, crate::theme::nav_active());
+                                    ui.painter().text(
+                                        rect.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        line,
+                                        egui::FontId::proportional(11.0),
+                                        crate::theme::muted(),
+                                    );
+                                }
+                                if show_compact && crate::cards::ghost_pill(ui, "Compact") {
+                                    self.run_slash(Slash::Compact);
+                                }
+                            });
                             ui.add_space(4.0);
                         }
+                    }
+                    ComposerStackSlot::SessionTools => {
+                        self.paint_session_tools(ui);
                     }
                     ComposerStackSlot::SlashPalette => {
                         let hits = filter_slash_hits(&self.composer, &self.grok_commands);
@@ -1611,18 +1722,27 @@ impl Cabin {
             let row = crate::cards::session_row(ui, &session_now, &perm_now, &effort_now);
             if let Some(mode) = row.mode {
                 if let Some(m) = SessionMode::parse(&mode) {
-                    self.confirm = None;
-                    if self.running {
-                        self.halt_in_flight();
+                    if m == SessionMode::Ask && self.running {
+                        self.set_session_mode(m);
+                        self.status = "btw — side ask, main run continues".into();
+                    } else {
+                        self.confirm = None;
+                        if self.running {
+                            self.halt_in_flight();
+                        }
+                        self.set_session_mode(m);
+                        self.acp = None;
+                        self.acp_spawn_rx = None;
+                        if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                            t.grok_session = None;
+                        }
+                        self.persist_idle_key = self.persist_idle_now();
+                        self.status = if m == SessionMode::Ask {
+                            "btw — look-safe side ask".into()
+                        } else {
+                            format!("Session {}", m.as_str())
+                        };
                     }
-                    self.set_session_mode(m);
-                    self.acp = None;
-                    self.acp_spawn_rx = None;
-                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                        t.grok_session = None;
-                    }
-                    self.persist_idle_key = self.persist_idle_now();
-                    self.status = format!("Session {}", m.as_str());
                 }
             }
             if let Some(perm) = row.perm {

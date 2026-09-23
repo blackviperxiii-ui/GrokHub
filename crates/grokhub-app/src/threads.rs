@@ -33,6 +33,9 @@ pub struct ChatThread {
     pub grok_fork: bool,
     #[serde(default)]
     pub grok_worktree: bool,
+    /// Last plan from Plan mode or a `plan` stream event. Empty until one exists.
+    #[serde(default)]
+    pub plan_body: String,
 }
 
 impl ChatThread {
@@ -51,6 +54,7 @@ impl ChatThread {
             grok_user_home: false,
             grok_fork: false,
             grok_worktree: false,
+            plan_body: String::new(),
         }
     }
 
