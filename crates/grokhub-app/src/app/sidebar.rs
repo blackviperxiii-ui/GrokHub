@@ -190,11 +190,15 @@ impl Cabin {
         ui.painter().text(
             egui::pos2(text_left, rect.center().y),
             egui::Align2::LEFT_CENTER,
-            painted,
+            &painted,
             egui::FontId::proportional(crate::theme::FONT_CHROME),
             color,
         );
-        resp
+        if painted != label {
+            resp.on_hover_text(label)
+        } else {
+            resp
+        }
     }
 
     pub(super) fn avatar_chrome(&self) -> AvatarMenu {
@@ -461,7 +465,7 @@ impl Cabin {
                                 ui,
                                 on && self.nav == Nav::Chat,
                                 crate::icons::RailIcon::Chat,
-                                &display_tab_title(&title),
+                                &title,
                                 false,
                             );
                             if resp.clicked() {

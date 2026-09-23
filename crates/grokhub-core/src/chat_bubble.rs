@@ -1,8 +1,9 @@
 //! Chat bubbles hug their text and wrap with the chat pane.
 
 pub const BUBBLE_MAX_FRAC: f32 = 0.84;
-pub const BUBBLE_PAD_X: f32 = 12.0;
-pub const BUBBLE_PAD_Y: f32 = 8.0;
+/// Inner pad must clear the 20px corner so text is not clipped by the rounded fill.
+pub const BUBBLE_PAD_X: f32 = 16.0;
+pub const BUBBLE_PAD_Y: f32 = 14.0;
 pub const BUBBLE_RADIUS: f32 = 16.0;
 /// 8K-wide pane. Above this, ScrollArea is reporting garbage, not a monitor.
 const ROW_SANE_MAX: f32 = 8192.0;
