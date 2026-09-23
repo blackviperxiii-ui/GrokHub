@@ -566,12 +566,11 @@ impl Cabin {
         });
     }
 
-    pub(super) fn composer_chips(&self, home: bool) -> Vec<QuickChip> {
-        let mut chips = if home {
-            self.visible_chips.clone()
-        } else {
-            Vec::new()
-        };
+    /// Ranked composer chips. Empty home and mid-thread share `visible_chips`
+    /// (habit / static / stage pool when the LLM row is not ready). A thread
+    /// with messages must not clear that pool.
+    pub(super) fn composer_chips(&self) -> Vec<QuickChip> {
+        let mut chips = self.visible_chips.clone();
         if let Some(c) = skill_offer_chip(&self.composer, &self.skill_list) {
             let gone = self
                 .chip_dismissed
