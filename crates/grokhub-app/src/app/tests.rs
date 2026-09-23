@@ -6850,4 +6850,17 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && acp.contains("grok_sessions_refresh_pending"),
             "Windows History must index live sessions and re-list when CLI lags"
         );
+        let chips = include_str!("../cards.rs");
+        let chip_row = chips
+            .split("pub fn quick_chip_row(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn tab_pill(").next())
+            .expect("quick_chip_row");
+        assert!(
+            chip_row.contains("with_main_wrap(true)")
+                && chip_row.contains("CHIP_CLUSTER_H")
+                && !chip_row.contains("with_main_wrap(false)")
+                && !chip_row.contains('…'),
+            "home chips wrap inside the composer; no mid-phrase ellipsis"
+        );
     }
