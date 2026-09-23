@@ -2,14 +2,12 @@
 
 use super::*;
 
-
 pub(super) fn settings_group_home(group: SettingsGroup) -> SettingsSec {
     match group {
         SettingsGroup::General => SettingsSec::Account,
         SettingsGroup::About => SettingsSec::Update,
     }
 }
-
 
 pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
     match sec {
@@ -18,11 +16,72 @@ pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
         SettingsSec::Behavior => "Behavior",
         SettingsSec::Update => "Update",
         SettingsSec::About => "About",
+        SettingsSec::Defaults => "Cabin defaults",
     }
 }
 
-impl Cabin {
+/// Chat catalog ids plus Auto. Auto persists an empty model pin.
+pub(super) fn cabin_default_models() -> Vec<(&'static str, &'static str)> {
+    let mut out = vec![("", "Auto")];
+    for row in grokhub_core::MODEL_CATALOG {
+        if row.kind == "chat" {
+            out.push((row.id, row.label));
+        }
+    }
+    out
+}
 
+/// Empty stays empty. Any other value is a chat catalog id.
+pub(super) fn cabin_default_model_id(raw: &str) -> String {
+    let t = raw.trim();
+    if t.is_empty() {
+        String::new()
+    } else {
+        grokhub_core::sanitize_chat_model(t).to_string()
+    }
+}
+
+pub(super) fn cabin_default_model_label(raw: &str) -> &'static str {
+    let id = cabin_default_model_id(raw);
+    cabin_default_models()
+        .into_iter()
+        .find(|(k, _)| *k == id)
+        .map(|(_, label)| label)
+        .unwrap_or("Auto")
+}
+
+pub(super) fn cabin_default_efforts() -> &'static [(&'static str, &'static str)] {
+    grokhub_core::REASONING_EFFORTS
+}
+
+pub(super) fn cabin_default_permissions() -> &'static [(&'static str, &'static str)] {
+    &[("ask", "Ask"), ("auto", "Auto")]
+}
+
+/// Ask or Auto only. Always collapses to Ask.
+pub(super) fn cabin_default_permission_id(raw: &str) -> String {
+    crate::config::persistable_permission_mode(raw)
+}
+
+pub(super) fn cabin_default_sessions() -> &'static [(&'static str, &'static str)] {
+    crate::cards::composer_modes()
+}
+
+pub(super) fn cabin_default_session_id(raw: &str) -> &'static str {
+    SessionMode::parse(raw)
+        .unwrap_or(SessionMode::Chat)
+        .as_str()
+}
+
+fn choice_label(choices: &[(&str, &str)], id: &str, fallback: &str) -> String {
+    choices
+        .iter()
+        .find(|(k, _)| *k == id)
+        .map(|(_, label)| (*label).to_string())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+impl Cabin {
     pub(super) fn ui_settings_menu(&mut self, ctx: &egui::Context) {
         if !self.settings_menu_open {
             return;
@@ -148,9 +207,10 @@ impl Cabin {
         } else {
             "A local image, kept in cabin config."
         };
-        let pending = self.oauth_pending.as_ref().map(|p| {
-            format!("Approve {} at {}", p.user_code, p.verification_uri)
-        });
+        let pending = self
+            .oauth_pending
+            .as_ref()
+            .map(|p| format!("Approve {} at {}", p.user_code, p.verification_uri));
         let doctor = self.doctor_text();
         let mut close = false;
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
@@ -197,6 +257,7 @@ impl Cabin {
                                                     (SettingsSec::Account, "Account"),
                                                     (SettingsSec::Appearance, "Appearance"),
                                                     (SettingsSec::Behavior, "Behavior"),
+                                                    (SettingsSec::Defaults, "Cabin defaults"),
                                                 ] {
                                                     if crate::cards::settings_nav(ui, label, sec == s) {
                                                         next_sec = Some(s);
@@ -460,6 +521,134 @@ impl Cabin {
                                                                 copy_diag = true;
                                                             }
                                                         }
+                                                        SettingsSec::Defaults => {
+                                                            let models = cabin_default_models();
+                                                            let model_labels: Vec<String> = models
+                                                                .iter()
+                                                                .map(|(_, label)| (*label).to_string())
+                                                                .collect();
+                                                            let model_selected =
+                                                                cabin_default_model_label(&self.cfg.model)
+                                                                    .to_string();
+                                                            if let Some(i) = crate::cards::settings_dropdown(
+                                                                ui,
+                                                                "Default model",
+                                                                "Chat model for headless grok -p. Auto saves an empty pin.",
+                                                                &model_selected,
+                                                                &model_labels,
+                                                            ) {
+                                                                if let Some((id, _)) = models.get(i) {
+                                                                    let next = cabin_default_model_id(id);
+                                                                    if next != self.cfg.model {
+                                                                        self.cfg.model = next;
+                                                                        self.persist_cfg();
+                                                                        self.status = "Saved".into();
+                                                                    }
+                                                                }
+                                                            }
+                                                            let efforts = cabin_default_efforts();
+                                                            let effort_labels: Vec<String> = efforts
+                                                                .iter()
+                                                                .map(|(_, label)| (*label).to_string())
+                                                                .collect();
+                                                            let effort_id = grokhub_core::parse_reasoning_effort(
+                                                                &self.cfg.reasoning_effort,
+                                                            )
+                                                            .unwrap_or("high");
+                                                            let effort_selected =
+                                                                grokhub_core::effort_label(effort_id)
+                                                                    .to_string();
+                                                            if let Some(i) = crate::cards::settings_dropdown(
+                                                                ui,
+                                                                "Reasoning effort",
+                                                                "None through Extra High. Saved for the next cabin turn.",
+                                                                &effort_selected,
+                                                                &effort_labels,
+                                                            ) {
+                                                                if let Some((id, _)) = efforts.get(i) {
+                                                                    if let Some(effort) =
+                                                                        grokhub_core::parse_reasoning_effort(id)
+                                                                    {
+                                                                        if self.cfg.reasoning_effort != effort {
+                                                                            self.drop_turn_for_pin();
+                                                                            self.cfg.reasoning_effort =
+                                                                                effort.to_string();
+                                                                            self.persist_cfg();
+                                                                            self.status = "Saved".into();
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            let perms = cabin_default_permissions();
+                                                            let perm_labels: Vec<String> = perms
+                                                                .iter()
+                                                                .map(|(_, label)| (*label).to_string())
+                                                                .collect();
+                                                            let perm_id = cabin_default_permission_id(
+                                                                &self.cfg.permission_mode,
+                                                            );
+                                                            let perm_selected =
+                                                                choice_label(perms, &perm_id, "Ask");
+                                                            if let Some(i) = crate::cards::settings_dropdown(
+                                                                ui,
+                                                                "Permission",
+                                                                "Ask or Auto. Always stays on the composer for this launch.",
+                                                                &perm_selected,
+                                                                &perm_labels,
+                                                            ) {
+                                                                if let Some((id, _)) = perms.get(i) {
+                                                                    let next = cabin_default_permission_id(id);
+                                                                    if let Some(mode) = PermissionMode::parse(&next)
+                                                                    {
+                                                                        if mode != PermissionMode::AlwaysApprove
+                                                                            && (self.permission_mode != mode
+                                                                                || self.cfg.permission_mode != next)
+                                                                        {
+                                                                            self.drop_turn_for_pin();
+                                                                            self.set_permission_mode(mode);
+                                                                            self.status = "Saved".into();
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            let sessions = cabin_default_sessions();
+                                                            let session_labels: Vec<String> = sessions
+                                                                .iter()
+                                                                .map(|(_, label)| (*label).to_string())
+                                                                .collect();
+                                                            let session_id =
+                                                                cabin_default_session_id(&self.cfg.session_mode);
+                                                            let session_selected =
+                                                                choice_label(sessions, session_id, "Chat");
+                                                            if let Some(i) = crate::cards::settings_dropdown(
+                                                                ui,
+                                                                "Session mode",
+                                                                "Chat, Plan, or Questions. Composer pills still change this launch.",
+                                                                &session_selected,
+                                                                &session_labels,
+                                                            ) {
+                                                                if let Some((id, _)) = sessions.get(i) {
+                                                                    if let Some(mode) = SessionMode::parse(id) {
+                                                                        if self.session_mode != mode
+                                                                            || self.cfg.session_mode != mode.as_str()
+                                                                        {
+                                                                            self.drop_turn_for_pin();
+                                                                            self.set_session_mode(mode);
+                                                                            self.status = "Saved".into();
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            if crate::cards::settings_toggle(
+                                                                ui,
+                                                                "Always collapse",
+                                                                "Thoughts start collapsed in every session. Expand opens one at a time.",
+                                                                &mut self.cfg.always_collapse_thoughts,
+                                                            ) {
+                                                                self.persist_cfg();
+                                                                self.status = "Saved".into();
+                                                            }
+                                                        }
                                                     }
                                                 });
                                             });
@@ -520,6 +709,20 @@ impl Cabin {
         }
     }
 
+    /// Next cabin turn picks up a Settings pin the same way a composer pill does.
+    fn drop_turn_for_pin(&mut self) {
+        self.confirm = None;
+        if self.running {
+            self.halt_in_flight();
+        }
+        self.acp = None;
+        self.acp_spawn_rx = None;
+        if let Some(t) = self.threads.get_mut(self.thread_idx) {
+            t.grok_session = None;
+        }
+        self.persist_idle_key = self.persist_idle_now();
+    }
+
     pub(super) fn save_settings(&mut self) {
         self.cfg.api_key.clear();
         self.cfg.quiet_start = normalize_hm(&self.quiet_start_buf, &self.cfg.quiet_start);
@@ -570,5 +773,60 @@ impl Cabin {
             self.persist_hub();
             self.persist_secrets();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cabin_default_choices_match_the_headless_pins() {
+        let models = cabin_default_models();
+        assert_eq!(models[0], ("", "Auto"));
+        let chat: Vec<_> = grokhub_core::MODEL_CATALOG
+            .iter()
+            .filter(|row| row.kind == "chat")
+            .map(|row| row.id)
+            .collect();
+        assert!(chat.len() >= 7);
+        for id in &chat {
+            assert!(
+                models.iter().any(|(k, _)| k == id),
+                "missing chat model {id}"
+            );
+        }
+        assert!(models.iter().all(|(id, _)| {
+            id.is_empty()
+                || grokhub_core::MODEL_CATALOG
+                    .iter()
+                    .any(|row| row.kind == "chat" && row.id == *id)
+        }));
+        assert_eq!(cabin_default_model_id(""), "");
+        assert_eq!(cabin_default_model_label(""), "Auto");
+        assert_eq!(
+            cabin_default_model_id("grok-4.7"),
+            grokhub_core::sanitize_chat_model("grok-4.7")
+        );
+        assert_eq!(
+            cabin_default_model_id("nope"),
+            grokhub_core::sanitize_chat_model("nope")
+        );
+        assert_eq!(cabin_default_efforts(), grokhub_core::REASONING_EFFORTS);
+        assert_eq!(grokhub_core::parse_reasoning_effort("max"), Some("xhigh"));
+        let perms = cabin_default_permissions();
+        assert_eq!(perms, &[("ask", "Ask"), ("auto", "Auto")]);
+        assert!(perms.iter().all(|(id, _)| *id != "always-approve"));
+        assert_eq!(cabin_default_permission_id("always-approve"), "ask");
+        assert_eq!(cabin_default_permission_id("always"), "ask");
+        assert_eq!(cabin_default_permission_id("auto"), "auto");
+        let sessions = cabin_default_sessions();
+        assert_eq!(
+            sessions,
+            &[("chat", "Chat"), ("plan", "Plan"), ("ask", "Questions")]
+        );
+        assert_eq!(cabin_default_session_id("ask"), "ask");
+        assert_eq!(cabin_default_session_id("plan"), "plan");
+        assert_eq!(cabin_default_session_id("nonsense"), "chat");
     }
 }

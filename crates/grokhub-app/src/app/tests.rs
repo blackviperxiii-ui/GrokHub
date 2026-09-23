@@ -6865,3 +6865,107 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "home chips wrap inside Ask anything; no mid-phrase ellipsis"
         );
     }
+
+#[test]
+fn settings_cabin_defaults_section() {
+    let settings = include_str!("settings.rs");
+    assert!(
+        settings.contains("(SettingsSec::Defaults, \"Cabin defaults\")"),
+        "Cabin defaults is a Settings section"
+    );
+    let defaults = settings
+        .split("SettingsSec::Defaults => {")
+        .nth(1)
+        .and_then(|s| s.split("if let Some(s) = next_sec").next())
+        .expect("defaults arm");
+    for label in [
+        "Default model",
+        "Reasoning effort",
+        "Permission",
+        "Session mode",
+        "Always collapse",
+    ] {
+        assert!(defaults.contains(label), "missing {label}: {defaults}");
+    }
+    assert_eq!(defaults.matches("settings_dropdown").count(), 4);
+    assert!(defaults.contains("settings_toggle"));
+    assert!(defaults.contains("parse_reasoning_effort"));
+    assert!(defaults.contains("cabin_default_model_id"));
+    assert!(defaults.contains("set_permission_mode"));
+    assert!(defaults.contains("set_session_mode"));
+    assert!(defaults.contains("always_collapse_thoughts"));
+    assert!(defaults.contains("persist_cfg"));
+    assert!(!defaults.contains("always-approve"));
+    assert!(!defaults.contains("grok_tile"));
+    assert!(!defaults.contains("quick_chip_row"));
+    let cards = include_str!("../cards.rs");
+    assert!(
+        cards.contains("pub fn session_row(") && cards.contains("(\"always-approve\", \"Always\")"),
+        "composer pills stay the live session controls, including Always"
+    );
+}
+
+#[test]
+fn session_thought_collapse_stays_on_one_thread() {
+    let ctx = egui::Context::default();
+    let a = "thread-a";
+    let b = "thread-b";
+    assert!(!super::read_session_thoughts_collapsed(&ctx, a));
+    assert!(!super::read_session_thoughts_collapsed(&ctx, b));
+    let one = grokhub_core::thought_body_key("need a snapshot");
+    let two = grokhub_core::thought_body_key("of the restore path");
+    let bee = grokhub_core::thought_body_key("session b stays open");
+    let id = |thread, key| super::thought_fold_id(thread, "body", key);
+    assert_eq!(
+        super::resolve_thought_fold(&ctx, id(a, one), false),
+        grokhub_core::ThoughtFold::Expanded
+    );
+    super::write_session_thoughts_collapsed(&ctx, a, true);
+    super::write_thought_fold(&ctx, id(a, one), grokhub_core::ThoughtFold::Minimized);
+    super::write_thought_fold(&ctx, id(a, two), grokhub_core::ThoughtFold::Minimized);
+    assert!(super::read_session_thoughts_collapsed(&ctx, a));
+    assert!(!super::read_session_thoughts_collapsed(&ctx, b));
+    assert_eq!(
+        super::resolve_thought_fold(&ctx, id(b, bee), false),
+        grokhub_core::ThoughtFold::Expanded,
+        "session B stays expanded when Always collapse is off"
+    );
+    let fresh = grokhub_core::thought_body_key("a new thought in A");
+    assert_eq!(
+        super::resolve_thought_fold(&ctx, id(a, fresh), true),
+        grokhub_core::ThoughtFold::Minimized,
+        "a new thought in a collapsed session arrives folded"
+    );
+    super::write_thought_fold(&ctx, id(a, one), grokhub_core::ThoughtFold::Expanded);
+    assert_eq!(
+        super::resolve_thought_fold(&ctx, id(a, one), true),
+        grokhub_core::ThoughtFold::Expanded
+    );
+    assert_eq!(
+        super::resolve_thought_fold(&ctx, id(a, two), true),
+        grokhub_core::ThoughtFold::Minimized,
+        "expand opens one thought"
+    );
+    assert!(super::read_session_thoughts_collapsed(&ctx, a));
+    assert_eq!(
+        super::resolve_thought_fold(&ctx, id(b, bee), true),
+        grokhub_core::ThoughtFold::Minimized,
+        "Always collapse starts every session folded"
+    );
+    let chat = include_str!("chat_ui.rs");
+    assert_eq!(
+        grokhub_core::thought_fold_controls(grokhub_core::ThoughtFold::Expanded),
+        &["Collapse"]
+    );
+    assert_eq!(
+        grokhub_core::thought_fold_controls(grokhub_core::ThoughtFold::Minimized),
+        &["Expand"]
+    );
+    assert!(grokhub_core::thought_fold_controls(grokhub_core::ThoughtFold::Hidden).is_empty());
+    assert!(
+        chat.contains("minimize_session_thoughts")
+            && chat.contains("session_thoughts_start_collapsed")
+            && !chat.contains("paint_thought_fold_buttons(ui, \"Hide\")"),
+        "quiet Collapse/Expand stays; Hide is not painted"
+    );
+}

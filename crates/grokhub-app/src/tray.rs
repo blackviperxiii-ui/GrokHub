@@ -126,6 +126,34 @@ pub enum HideAction {
     HideAndPing,
 }
 
+/// Whether this close should toast, and whether that toast counts as seen.
+/// Quiet hours suppress the toast and leave the flag clear so the first close
+/// outside quiet hours can still tip once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrayTip {
+    pub show: bool,
+    pub mark_seen: bool,
+}
+
+pub fn tray_tip_on_hide(already_seen: bool, quiet: bool) -> TrayTip {
+    if already_seen {
+        TrayTip {
+            show: false,
+            mark_seen: true,
+        }
+    } else if !crate::notify::allow_ping(quiet) {
+        TrayTip {
+            show: false,
+            mark_seen: false,
+        }
+    } else {
+        TrayTip {
+            show: true,
+            mark_seen: true,
+        }
+    }
+}
+
 /// Close-to-tray can fire every frame while `close_requested` sticks. Do not
 /// re-unmap or re-ping once the cabin is already hidden.
 pub fn hide_action(window_visible: bool, already_told: bool) -> HideAction {
@@ -803,6 +831,26 @@ mod tests {
         assert_eq!(hide_action(false, true), HideAction::Skip);
         assert_eq!(hide_action(true, false), HideAction::HideAndPing);
         assert_eq!(hide_action(true, true), HideAction::Hide);
+        let first = tray_tip_on_hide(false, false);
+        assert!(first.show && first.mark_seen);
+        let quiet = tray_tip_on_hide(false, true);
+        assert!(!quiet.show && !quiet.mark_seen);
+        let again = tray_tip_on_hide(true, false);
+        assert!(!again.show && again.mark_seen);
+        let hide = include_str!("app/mod.rs")
+            .split("fn hide_to_tray")
+            .nth(1)
+            .and_then(|s| s.split("fn unmap_to_tray").next())
+            .expect("hide_to_tray");
+        assert!(
+            hide.contains("close_to_tray_tip_seen")
+                && hide.contains("tray_tip_on_hide")
+                && hide.contains("if tip.show")
+                && hide.contains("if tip.mark_seen")
+                && hide.contains("Still running in the tray")
+                && hide.contains("In the tray — Show cabin to sit down"),
+            "first tip persists only when shown; cabin status stays: {hide}"
+        );
     }
 
     #[test]

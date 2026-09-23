@@ -1,6 +1,6 @@
 # Windows cabin installer
 
-**Version:** 2.10.11  
+**Version:** 2.10.12  
  
 **Repo:** `blackviperxiii-ui/GrokHub` (one cabin, two artifacts — not the deleted Electron app)
 
