@@ -362,14 +362,14 @@ pub fn stage_subtitle(id: &str) -> &'static str {
         "imagine" => "Images",
         "workboard" => "Pinned tasks",
         "skills" => "Personal skills and connectors",
-        "automations" => "Grok Build /loop scheduler",
+        "automations" => "Loops and clock jobs",
         "command" => "Overview",
         "queue" => "Background jobs",
         "settings" => "Preferences",
         "devices" => "Paired computers",
         "memory" => "SOUL / USER / MEMORY",
         "eyes" => "Computer-use frames",
-        "connectors" => "MCP / skills / plugins",
+        "connectors" => "GitHub, MCP, and plugins",
         _ => "GrokHub",
     }
 }
@@ -827,7 +827,8 @@ mod tests {
         assert_eq!(stage_subtitle("history"), "Past chats");
         assert_eq!(stage_subtitle("chat"), "Recent chat");
         assert_eq!(stage_subtitle("imagine"), "Images");
-        assert_eq!(stage_subtitle("connectors"), "MCP / skills / plugins");
+        assert_eq!(stage_subtitle("connectors"), "GitHub, MCP, and plugins");
+        assert_eq!(stage_subtitle("automations"), "Loops and clock jobs");
         assert_eq!(title_font(40.0).size, 40.0);
         set_paint_dark(true);
         assert_eq!(bg(), BG);

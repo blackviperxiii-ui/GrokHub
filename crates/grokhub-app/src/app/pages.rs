@@ -769,6 +769,97 @@ impl Cabin {
             let mut plugin_uninstall: Option<String> = None;
             egui::ScrollArea::vertical().show(ui, |ui| {
             if self.skills_tab_connectors {
+                crate::cards::section_label(ui, "GitHub");
+                ui.label(
+                    RichText::new("Read-only tiles. PAT from secrets — no writes, no other websites.")
+                        .size(12.0)
+                        .color(crate::theme::muted()),
+                );
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("PAT").size(13.0).color(crate::theme::muted()));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.secrets.github_token)
+                            .password(true)
+                            .hint_text("classic or fine-grained PAT")
+                            .desired_width(280.0),
+                    );
+                    if crate::cards::white_pill(ui, "Save PAT") {
+                        self.persist_github_pat();
+                    }
+                });
+                ui.add_space(8.0);
+                let gh_pat = !self.secrets.github_token.trim().is_empty();
+                let gh_body = if gh_pat {
+                    "Read-only · PAT set"
+                } else {
+                    "Needs PAT in secrets"
+                };
+                let mut run_gh: Option<&'static str> = None;
+                crate::cards::tile_row(ui, CABIN_GITHUB_TOOLS.len(), |ui, i| {
+                    let tool = CABIN_GITHUB_TOOLS[i];
+                    let title = match tool {
+                        "user" => "Whoami",
+                        "list_repos" => "Repos",
+                        "list_issues" => "Open issues",
+                        "search_code" => "Search code",
+                        "search_issues" => "Search issues",
+                        other => other,
+                    };
+                    if crate::cards::grok_tile(
+                        ui,
+                        crate::icons::TileIcon::List,
+                        title,
+                        gh_body,
+                        Some("Run"),
+                        gh_pat,
+                    ) == crate::cards::TileHit::Add
+                    {
+                        run_gh = Some(tool);
+                    }
+                });
+                if let Some(tool) = run_gh {
+                    self.nav = Nav::Chat;
+                    self.run_connector("github", tool, "");
+                }
+                let extra_conn: Vec<_> = self
+                    .suggestions
+                    .connectors
+                    .iter()
+                    .filter(|s| {
+                        let tool = s.tool.as_deref().unwrap_or("").to_ascii_lowercase();
+                        !tool.is_empty()
+                            && !CABIN_GITHUB_TOOLS.iter().any(|t| *t == tool)
+                            && s.provider.as_deref().unwrap_or("github").eq_ignore_ascii_case("github")
+                    })
+                    .cloned()
+                    .collect();
+                if !extra_conn.is_empty() {
+                    ui.add_space(12.0);
+                    crate::cards::section_label(ui, "Suggested GitHub");
+                    ui.add_space(8.0);
+                    let mut run_extra: Option<(String, String)> = None;
+                    crate::cards::tile_row(ui, extra_conn.len(), |ui, i| {
+                        let s = &extra_conn[i];
+                        let tool = s.tool.clone().unwrap_or_default();
+                        if crate::cards::grok_tile(
+                            ui,
+                            crate::icons::TileIcon::List,
+                            &s.title,
+                            &s.body,
+                            Some("Run"),
+                            false,
+                        ) == crate::cards::TileHit::Add
+                        {
+                            run_extra = Some((tool, String::new()));
+                        }
+                    });
+                    if let Some((tool, args)) = run_extra {
+                        self.nav = Nav::Chat;
+                        self.run_connector("github", &tool, &args);
+                    }
+                }
+                ui.add_space(20.0);
                 ui.horizontal(|ui| {
                     crate::cards::section_label(ui, "MCP servers");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -785,7 +876,7 @@ impl Cabin {
                     });
                 });
                 ui.label(
-                    RichText::new("Grok Build `grok mcp` — add, enable, disable, or remove servers.")
+                    RichText::new("Grok Build `grok mcp` against ~/.grok — add, enable, disable, or remove. Not a website catalog.")
                         .size(12.0)
                         .color(crate::theme::muted()),
                 );
@@ -954,6 +1045,55 @@ impl Cabin {
                     });
                 }
             } else {
+            let saved_names: Vec<String> = self
+                .skill_list
+                .iter()
+                .map(|s| s.name.to_ascii_lowercase())
+                .collect();
+            let skill_tiles: Vec<_> = self.suggestions.skills.iter()
+                .filter(|s| {
+                    let n = s
+                        .name
+                        .as_deref()
+                        .unwrap_or(s.title.as_str())
+                        .to_ascii_lowercase();
+                    !n.is_empty() && !saved_names.iter().any(|have| have == &n)
+                })
+                .cloned()
+                .collect();
+            if !skill_tiles.is_empty() {
+                crate::cards::section_label(ui, "Suggested");
+                ui.label(
+                    RichText::new(review_status_line(
+                        self.suggestions.last_review_day.as_deref(),
+                        &Self::local_day(),
+                    ))
+                    .size(12.0)
+                    .color(crate::theme::muted()),
+                );
+                ui.add_space(8.0);
+                let mut save_suggest: Option<LearnedSuggestion> = None;
+                crate::cards::tile_row(ui, skill_tiles.len(), |ui, i| {
+                    let s = &skill_tiles[i];
+                    if matches!(
+                        crate::cards::grok_tile(
+                            ui,
+                            crate::icons::icon_for_label(&s.title),
+                            &s.title,
+                            &s.body,
+                            Some("Add"),
+                            false,
+                        ),
+                        crate::cards::TileHit::Add | crate::cards::TileHit::Body
+                    ) {
+                        save_suggest = Some(s.clone());
+                    }
+                });
+                if let Some(s) = save_suggest {
+                    self.save_suggested_skill(&s);
+                }
+                ui.add_space(16.0);
+            }
             let workflows: Vec<_> = self
                 .grok_catalog
                 .workflows
@@ -1063,10 +1203,14 @@ impl Cabin {
                 .cloned()
                 .collect();
             if skills.is_empty() {
-                ui.label(
-                    RichText::new("Loading Grok Build skills… or none matched.")
-                        .color(crate::theme::muted()),
-                );
+                let empty = if !self.grok_catalog_loaded {
+                    "Loading Grok Build skills…"
+                } else if q.is_empty() {
+                    "None from grok inspect."
+                } else {
+                    "None matched."
+                };
+                ui.label(RichText::new(empty).color(crate::theme::muted()));
             } else {
                 crate::cards::tile_row(ui, skills.len(), |ui, i| {
                     let s = &skills[i];
