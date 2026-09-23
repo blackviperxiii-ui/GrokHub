@@ -432,24 +432,25 @@ impl Cabin {
                 self.status = "Plan mode — Grok Build will plan first".into();
             }
             Slash::AlwaysApprove => {
-                let next = if self.permission_mode == PermissionMode::AlwaysApprove {
-                    PermissionMode::Ask
+                if self.permission_mode == PermissionMode::AlwaysApprove {
+                    self.confirm = None;
+                    self.set_permission_mode(PermissionMode::Ask);
+                    if self.running {
+                        self.halt_in_flight();
+                    }
+                    self.acp = None;
+                    self.acp_spawn_rx = None;
+                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                        t.grok_session = None;
+                    }
+                    self.persist_idle_key = self.persist_idle_now();
+                    self.status = format!("Permission {}", self.permission_mode.as_str());
                 } else {
-                    PermissionMode::AlwaysApprove
-                };
-                self.set_permission_mode(next);
-                if self.running {
-                    self.halt_in_flight();
+                    self.arm_session_always();
                 }
-                self.acp = None;
-                self.acp_spawn_rx = None;
-                if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                    t.grok_session = None;
-                }
-                self.persist_idle_key = self.persist_idle_now();
-                self.status = format!("Permission {}", self.permission_mode.as_str());
             }
             Slash::AutoPerm => {
+                self.confirm = None;
                 self.set_permission_mode(PermissionMode::Auto);
                 if self.running {
                     self.halt_in_flight();

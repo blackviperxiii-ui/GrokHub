@@ -349,6 +349,7 @@ impl Cabin {
                             }
                         }
                         self.perm_always_confirm = None;
+                        self.confirm = None;
                         self.perm_ask = Some(p);
                         self.status = "Grok wants permission".into();
                     }
@@ -417,6 +418,7 @@ impl Cabin {
                         }
                     }
                     self.perm_always_confirm = None;
+                    self.confirm = None;
                     if let Some(p) = self.elicit_ask.take() {
                         if let Some(h) = &self.acp {
                             let _ = h.answer_elicit(p.rpc_id, "cancel", None);
@@ -448,6 +450,7 @@ impl Cabin {
             }
         }
         self.perm_always_confirm = None;
+        self.confirm = None;
         if let Some(p) = self.elicit_ask.take() {
             if let Some(h) = &self.acp {
                 let _ = h.answer_elicit(p.rpc_id, "cancel", None);

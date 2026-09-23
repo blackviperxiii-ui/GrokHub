@@ -65,7 +65,7 @@ use grokhub_core::{
     inhabit_claim_allowed, inhabit_ready, insight_pin, is_cabin_first_run, is_hard_run,
     is_openclaw_workspace, is_plain_text, is_rewind_copy_cmd, is_rewind_copy_cmd_in,
     is_voice_error, is_workload_user, job_error_goes_to_chat, job_is_scratch, keep_last_rewinds,
-    lan_bind_in_use, last_imagine_receipt, last_user_scan, leftover_empty_thread, load_hub_state,
+    lan_bind_in_use, last_imagine_receipt, last_user_scan, last_user_text, leftover_empty_thread, load_hub_state,
     local_greeting, lock_blocks_hands, mark_automation_ran, mark_automation_skipped, mark_loop_ran,
     mark_slash_result, match_skill, merge_hub_snapshots, merge_imported_memory,
     merge_suggestion_store, merge_thinking_capped, mint_host_halt, mode_from_chip_value,
@@ -152,6 +152,8 @@ mod imagine;
 mod night;
 mod chat_ui;
 mod pulse;
+mod confirm;
+mod glance;
 mod sidebar;
 mod pages;
 mod jobs;
@@ -175,6 +177,10 @@ use oauth::*;
 use plus::*;
 #[allow(unused_imports)]
 use pulse::*;
+#[allow(unused_imports)]
+use confirm::*;
+#[allow(unused_imports)]
+use glance::*;
 #[allow(unused_imports)]
 use settings::*;
 #[allow(unused_imports)]
@@ -617,6 +623,10 @@ pub struct Cabin {
     perm_ask: Option<grokhub_acp::PermissionAsk>,
     /// Ask-card Always second beat for this `rpc_id` only. Not the composer pill.
     perm_always_confirm: Option<serde_json::Value>,
+    /// Session Always escalate / destructive host. Ask Always stays on `perm_always_confirm`.
+    confirm: Option<ConfirmKind>,
+    /// History "Last you" scroll once the thread is open.
+    jump_last_you: bool,
     elicit_ask: Option<grokhub_acp::ElicitAsk>,
     elicit_draft: String,
     /// Secret values typed into an elicit. Memory only — never persisted.
@@ -1015,6 +1025,8 @@ impl Cabin {
             desk_frame: None,
             perm_ask: None,
             perm_always_confirm: None,
+            confirm: None,
+            jump_last_you: false,
             elicit_ask: None,
             elicit_draft: String::new(),
             secret_hold: Vec::new(),
@@ -1250,6 +1262,7 @@ impl Cabin {
                 let _ = h.answer_permission(p.rpc_id, false);
             }
             self.perm_always_confirm = None;
+            self.confirm = None;
             if let Some(p) = self.elicit_ask.take() {
                 let _ = h.answer_elicit(p.rpc_id, "cancel", None);
             }
@@ -1299,6 +1312,7 @@ impl Cabin {
         self.thought_buf.clear();
         self.perm_ask = None;
         self.perm_always_confirm = None;
+        self.confirm = None;
         self.elicit_ask = None;
         self.elicit_draft.clear();
         let vis = self.visible_thread_id();
@@ -1726,6 +1740,11 @@ impl Cabin {
     }
 
     fn queue_sh(&mut self, cmd: String) {
+        if should_confirm_destructive_host(&cmd) {
+            self.confirm = Some(ConfirmKind::DestructiveHost { cmd });
+            self.status = "Confirm host…".into();
+            return;
+        }
         self.run_cmds(vec![cmd]);
     }
 
@@ -3941,6 +3960,9 @@ impl eframe::App for Cabin {
         }
         if self.palette_open {
             self.ui_palette(ctx);
+        }
+        if self.confirm.as_ref().is_some_and(|c| c.paints_overlay()) {
+            self.paint_confirm_overlay(ctx);
         }
         if self.shortcuts_open {
             egui::Window::new("Shortcuts")

@@ -1410,11 +1410,11 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         );
         assert!(
             ask.contains("perm_always_confirm")
-                && ask.contains("ALWAYS_CONFIRM_LINE1")
+                && ask.contains("paint_confirm_sheet")
+                && ask.contains("always_session_spec")
                 && ask.contains("ALWAYS_CONFIRM_LINE2")
-                && ask.contains("always_amber()")
-                && ask.contains("Confirm")
-                && ask.contains("Cancel"),
+                && ask.contains("ConfirmAct::Confirm")
+                && ask.contains("ConfirmAct::Cancel"),
             "Ask Always is a second beat that names session skip and scheduled inherit: {ask}"
         );
         let always_click = ask
@@ -6621,5 +6621,73 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && pulse.contains(".truncate()")
                 && !pulse.contains("status_chip"),
             "pulse rows stay one reserved line so the card cannot paint over the composer: {pulse}"
+        );
+        assert!(
+            home.contains("paint_lane_chip") && home.contains("paint_device_glance_row"),
+            "empty home paints Coding/Life and a fail-soft device glance: {home}"
+        );
+        assert!(
+            !home.contains("\"Personal\"") && !home.contains("Nav::"),
+            "lane chrome must not add a Personal rail or nav id: {home}"
+        );
+        let title = src
+            .split("fn ui_titlebar(")
+            .nth(1)
+            .and_then(|s| s.split("fn nav_row(").next())
+            .expect("titlebar");
+        assert!(
+            title.contains("quiet_until_chip") && title.contains("SettingsSec::Behavior"),
+            "quiet-hours chip is titlebar chrome; Behavior stays SoT: {title}"
+        );
+        let hist = src
+            .split("fn ui_history(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_board(").next())
+            .expect("history");
+        assert!(
+            hist.contains("session_markers")
+                && hist.contains("LastYou")
+                && hist.contains("jump_last_you")
+                && hist.contains("apply_switch_thread")
+                && !hist.contains("self.thread_idx = i"),
+            "History map must swap the visible thread, not only the index: {hist}"
+        );
+        let reserved = src
+            .split("if reserve_offscreen_chat_row(ui, cached_h)")
+            .nth(1)
+            .and_then(|s| s.split("let y0 = ui.cursor().min.y").next())
+            .expect("reserved last-you");
+        assert!(
+            reserved.contains("scroll_to_rect")
+                && reserved.contains("jump_you")
+                && reserved.contains("last_you_i"),
+            "Last you must scroll a reserved off-screen row: {reserved}"
+        );
+        let auto = src
+            .split("Slash::AutoPerm =>")
+            .nth(1)
+            .and_then(|s| s.split("Slash::Effort(").next())
+            .expect("AutoPerm");
+        assert!(
+            auto.contains("self.confirm = None"),
+            "/auto must drop a session Always overlay: {auto}"
+        );
+        let row = src
+            .split("let row = crate::cards::session_row")
+            .nth(1)
+            .and_then(|s| s.split("ui.allocate_ui_with_layout").next())
+            .expect("session_row");
+        let perm = row
+            .split("if let Some(perm) = row.perm")
+            .nth(1)
+            .and_then(|s| s.split("if let Some(effort) = row.effort").next())
+            .expect("perm pills");
+        let ask_auto = perm
+            .split("self.arm_session_always();")
+            .nth(1)
+            .expect("Ask/Auto after Always");
+        assert!(
+            ask_auto.contains("self.confirm = None"),
+            "Auto/Ask must disarm the session Always overlay: {ask_auto}"
         );
     }
