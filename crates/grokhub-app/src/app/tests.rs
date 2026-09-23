@@ -2713,6 +2713,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             poll.contains("retry_status_line"),
             "1.0.14 retry status must show a short reason: {poll}"
         );
+        assert!(
+            poll.contains("scheduled_perm = false"),
+            "a finished or failed grok -p turn must drop scheduled_perm: {poll}"
+        );
         let deleted = src
             .split("fn delete_thread_at")
             .nth(1)
