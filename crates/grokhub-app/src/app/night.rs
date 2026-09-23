@@ -6,7 +6,14 @@ impl Cabin {
 
     pub(super) fn add_automation_seed(&mut self, seed: &str) {
         match self.save_schedule(seed) {
-            Some(status) => self.status = status,
+            Some(status) => {
+                let saved = status.contains("added");
+                self.status = status;
+                if saved {
+                    dismiss_accepted_auto(&mut self.suggestions, seed, "");
+                    self.persist_suggestions();
+                }
+            }
             None => self.status = "Need `/loop 30m …`, `every 2h …`, or `every day at 9 …`".into(),
         }
     }
@@ -103,58 +110,6 @@ impl Cabin {
                     .color(crate::theme::muted()),
             );
             ui.add_space(12.0);
-            crate::cards::section_label(ui, "Follow along");
-            ui.label(
-                RichText::new("Teach this once. Do the routine in chat, then name a schedule (`every weekday at 9` or `/loop`). A job is saved only when you ask to schedule it. Quiet hours still apply.")
-                    .size(12.0)
-                    .color(crate::theme::muted()),
-            );
-            ui.add_space(8.0);
-            let watch_label = if self.watch_once { "Watching" } else { "Follow along" };
-            if crate::cards::white_pill(ui, watch_label) {
-                if self.watch_once {
-                    self.watch_once = false;
-                    self.status = "Follow along cancelled".into();
-                } else {
-                    self.watch_once = true;
-                    self.watched_steps.clear();
-                    self.status = "Follow along once. Do the routine in chat.".into();
-                }
-            }
-            if !self.watched_steps.is_empty() {
-                let shown = self
-                    .watched_steps
-                    .iter()
-                    .take(3)
-                    .map(|step| {
-                        let trimmed = step.trim();
-                        if trimmed.chars().count() > 80 {
-                            format!("{}…", trimmed.chars().take(80).collect::<String>())
-                        } else {
-                            trimmed.to_string()
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" · ");
-                ui.add_space(6.0);
-                ui.label(
-                    RichText::new(shown)
-                        .size(12.0)
-                        .monospace()
-                        .color(crate::theme::muted()),
-                );
-            }
-            ui.add_space(8.0);
-            let teach = ui.add(
-                egui::TextEdit::singleline(&mut self.teach_nl)
-                    .hint_text("every weekday at 9, summarize the board")
-                    .desired_width(f32::INFINITY),
-            );
-            let teach_enter =
-                teach.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if crate::cards::white_pill(ui, "Teach this once") || teach_enter {
-                self.teach_watched_routine();
-            }
             if self.auto_compose {
                 ui.add_space(12.0);
                 egui::Frame::none()
@@ -206,7 +161,7 @@ impl Cabin {
                 ui.add_space(16.0);
             } else {
                 for i in 0..self.grok_loops.len() {
-                    let title = self.grok_loops[i].prompt.chars().take(40).collect::<String>();
+                    let title = self.grok_loops[i].prompt.clone();
                     let body = format!(
                         "every {} · {} runs",
                         self.grok_loops[i].interval,
@@ -223,8 +178,13 @@ impl Cabin {
                                     self.persist_loops();
                                 }
                                 ui.vertical(|ui| {
-                                    ui.label(
-                                        RichText::new(&title).size(15.0).color(crate::theme::fg()),
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(&title)
+                                                .size(15.0)
+                                                .color(crate::theme::fg()),
+                                        )
+                                        .wrap(),
                                     );
                                     ui.label(
                                         RichText::new(&body).size(12.0).color(crate::theme::muted()),
@@ -257,11 +217,13 @@ impl Cabin {
                 .color(crate::theme::muted()),
             );
             ui.add_space(8.0);
-            let active_names: Vec<String> = self
+            let mut active_names: Vec<String> = self
                 .grok_loops
                 .iter()
-                .map(|a| a.prompt.chars().take(40).collect())
+                .map(|a| a.prompt.clone())
                 .collect();
+            active_names.extend(self.automations.iter().map(|a| a.name.clone()));
+            active_names.extend(self.automations.iter().map(|a| a.instructions.clone()));
             let auto_tiles = crate::cards::merge_suggested_autos(&self.suggestions.autos, &active_names);
             crate::cards::tile_row(ui, auto_tiles.len(), |ui, i| {
                 let (icon, title, body, seed) = &auto_tiles[i];
@@ -306,12 +268,8 @@ impl Cabin {
         let mut toggled = false;
         for i in 0..self.automations.len() {
             let title = match self.automations[i].name.trim() {
-                "" => self.automations[i]
-                    .instructions
-                    .chars()
-                    .take(40)
-                    .collect::<String>(),
-                name => name.chars().take(40).collect::<String>(),
+                "" => self.automations[i].instructions.clone(),
+                name => name.to_string(),
             };
             let body = automation_summary_line(&self.automations[i], now);
             egui::Frame::none()
@@ -325,7 +283,12 @@ impl Cabin {
                             toggled = true;
                         }
                         ui.vertical(|ui| {
-                            ui.label(RichText::new(&title).size(15.0).color(crate::theme::fg()));
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(&title).size(15.0).color(crate::theme::fg()),
+                                )
+                                .wrap(),
+                            );
                             ui.label(RichText::new(&body).size(12.0).color(crate::theme::muted()));
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -590,7 +553,31 @@ impl Cabin {
         });
     }
 
+    pub(super) fn tick_session_suggestions(&mut self) {
+        let today = Self::local_day();
+        if !review_due(
+            self.suggestions.last_session_suggest_day.as_deref(),
+            &today,
+            &Self::local_clock(),
+            REVIEW_NIGHT_HOUR,
+        ) {
+            return;
+        }
+        let (thread_lines, _) = self.review_chat_digest();
+        let skill_names: Vec<String> = self.skill_list.iter().map(|s| s.name.clone()).collect();
+        let mut auto_names: Vec<String> = self.automations.iter().map(|a| a.name.clone()).collect();
+        auto_names.extend(self.grok_loops.iter().map(|a| a.prompt.clone()));
+        let items = suggestions_from_sessions(&thread_lines, &skill_names, &auto_names);
+        self.suggestions.last_session_suggest_day = Some(today);
+        if !items.is_empty() {
+            let incoming = partition_suggestions(items);
+            self.suggestions = merge_suggestion_store(&self.suggestions, incoming);
+        }
+        self.persist_suggestions();
+    }
+
     pub(super) fn tick_review(&mut self) {
+        self.tick_session_suggestions();
         if self.review_busy {
             return;
         }
