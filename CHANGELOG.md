@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.5 — 2026-09-23
+
+Empty-home cabin pulse (signed-in, not Scratch) sits under the greeting: next job or Morning brief seed, pinned goal, up to two open workboard titles, muted `usage_line`. No weather, mail, or calendar stubs. Ask-card Always is a second beat that names session-wide skip and that night / loop / phone inherit `--always-approve` until quit. Enter is still Allow, Esc is still Deny. Composer Always stays session-only.
+
+- Linux: `grokhub-linux-v2.10.5.tar.gz` and AUR `pkgver=2.10.5`.
+- Windows: `GrokHub-Setup-2.10.5.exe` and `grokhub-windows-v2.10.5.zip`.
+- Cursor cabin 2.10.5. VERSION 2.10.5.
+
 ## 2.10.4 — 2026-09-23
 
 Look is look-only on Auto/Always as well as Permission Ask. Headless Look uses `grok -p --permission-mode ask` and does not inject `CABIN_DESKTOP_RULES` / desktop-do-the-work. Plan stays plan. Chat stays chat. Night, inbox, and anticipate inherit `scheduled_args` like loops: scheduled Ask skips ACP and does not silent `--always-approve`. Night marks the slot ran after a live kick, not before; a send that never starts a kick is skipped so the slot does not retry every 5s. `scheduled_perm` clears when the chat turn ends so the next typed Ask uses ACP. Composer Ask leftover flags match scheduled Ask (no yolo). Ask ACP deny and fatal `AcpEvent::Err` resume PTT. Ask fail-closed copy names Install Grok Build CLI / Start agent in Settings → Update. `AcpHandle` drop backtraces stay behind `GROKHUB_ACP_DROP_TRACE`.

@@ -233,6 +233,7 @@ impl Cabin {
         self.tool_cards.clear();
         self.live_blocks.clear();
         self.perm_ask = None;
+        self.perm_always_confirm = None;
         self.elicit_ask = None;
         self.elicit_draft.clear();
     }
