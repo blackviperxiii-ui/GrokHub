@@ -382,7 +382,17 @@ impl Cabin {
                                 self.touch_projects();
                                 self.flush_projects();
                             }
-                            ProjectKind::Project => self.bind_project_id(&id),
+                            ProjectKind::Project => {
+                                if self.project_sel.as_deref() == Some(id.as_str()) {
+                                    self.project_sel = None;
+                                    if self.nav == Nav::Workboard {
+                                        self.nav = Nav::Chat;
+                                    }
+                                    self.status = "All chats".into();
+                                } else {
+                                    self.bind_project_id(&id);
+                                }
+                            }
                         }
                     }
                     let nid = self.projects[idx].id.clone();
@@ -403,7 +413,7 @@ impl Cabin {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("History")
+                        RichText::new(self.history_folder_label())
                             .size(12.0)
                             .color(crate::theme::subtle()),
                     );
@@ -462,6 +472,17 @@ impl Cabin {
                             {
                                 continue;
                             }
+                            let filed = self
+                                .threads
+                                .iter()
+                                .find(|t| t.grok_session.as_deref() == Some(s.id.as_str()))
+                                .and_then(|t| t.project_id.as_deref());
+                            if !threads::session_in_chat_folder(
+                                filed,
+                                self.project_sel.as_deref(),
+                            ) {
+                                continue;
+                            }
                             let on = current_sid.as_deref() == Some(s.id.as_str());
                             let resp = Self::nav_row(
                                 ui,
@@ -480,6 +501,49 @@ impl Cabin {
                                     ui.close_menu();
                                 }
                             });
+                        }
+                        if self.project_sel.is_some() {
+                            let listed: Vec<String> =
+                                self.grok_sessions.iter().map(|s| s.id.clone()).collect();
+                            let selected = self.project_sel.clone();
+                            let rows: Vec<(usize, String)> = self
+                                .threads
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(i, t)| {
+                                    if !threads::session_in_chat_folder(
+                                        t.project_id.as_deref(),
+                                        selected.as_deref(),
+                                    ) {
+                                        return None;
+                                    }
+                                    if t.grok_session
+                                        .as_deref()
+                                        .is_some_and(|id| listed.iter().any(|s| s == id))
+                                    {
+                                        return None;
+                                    }
+                                    if !q.is_empty()
+                                        && !t.title.to_ascii_lowercase().contains(&q)
+                                    {
+                                        return None;
+                                    }
+                                    Some((i, t.title.clone()))
+                                })
+                                .collect();
+                            for (i, title) in rows {
+                                let on = i == self.thread_idx && self.nav == Nav::Chat;
+                                let resp = Self::nav_row(
+                                    ui,
+                                    on,
+                                    crate::icons::RailIcon::Chat,
+                                    &title,
+                                    false,
+                                );
+                                if resp.clicked() {
+                                    act = Some(TabAct::Switch(i));
+                                }
+                            }
                         }
                         match act {
                             Some(TabAct::Switch(i)) => {

@@ -28,6 +28,17 @@ impl Cabin {
         });
     }
 
+    pub(super) fn history_folder_label(&self) -> String {
+        let Some(id) = self.project_sel.as_deref() else {
+            return "History".into();
+        };
+        self.projects
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| format!("History · {}", n.name))
+            .unwrap_or_else(|| "History".into())
+    }
+
     pub(super) fn bind_project_id(&mut self, id: &str) {
         let Some(n) = self
             .projects
@@ -50,8 +61,12 @@ impl Cabin {
         }
         let already = self.project_sel.as_deref() == Some(id);
         self.project_sel = Some(id.to_string());
-        if click_project_opens_board(already) {
-            self.nav = Nav::Workboard;
+        assert!(
+            !click_project_opens_board(already),
+            "project click must not open the workboard"
+        );
+        if self.nav == Nav::Workboard {
+            self.nav = Nav::Chat;
         }
         self.status = format!("Bound {name}");
         if self.running {
@@ -98,6 +113,7 @@ impl Cabin {
             self.status = "Project not found".into();
             return;
         }
+        let released = threads::release_project_chats(&mut self.threads, id);
         if out.unbound {
             self.cfg.project_dir.clear();
             if self.running {
@@ -114,12 +130,14 @@ impl Cabin {
             self.project_sel = None;
         }
         self.touch_projects();
-        if out.unbound {
+        if out.unbound || released > 0 {
             self.persist();
         } else {
             self.flush_projects();
         }
-        self.status = if out.unbound {
+        self.status = if released > 0 {
+            format!("Removed {} · chats back in History", out.name)
+        } else if out.unbound {
             format!("Removed {} · unbound", out.name)
         } else {
             format!("Removed {}", out.name)

@@ -29,6 +29,9 @@ pub struct ChatThread {
     /// Resume from ~/.grok (TUI session) instead of cabin GROK_HOME.
     #[serde(default)]
     pub grok_user_home: bool,
+    /// Sidebar project folder. `None` is a global chat.
+    #[serde(default)]
+    pub project_id: Option<String>,
     #[serde(default)]
     pub grok_fork: bool,
     #[serde(default)]
@@ -54,6 +57,7 @@ impl ChatThread {
             grok_user_home: false,
             grok_fork: false,
             grok_worktree: false,
+            project_id: None,
             plan_body: String::new(),
         }
     }
@@ -104,6 +108,26 @@ pub fn load() -> Vec<ChatThread> {
 pub fn save(threads: &[ChatThread]) -> Result<(), String> {
     let s = serde_json::to_string_pretty(threads).map_err(|e| e.to_string())?;
     config::atomic_write(&threads_path(), s.as_bytes())
+}
+
+/// Sidebar History filter. No selection shows global chats. A project shows only that folder.
+pub fn session_in_chat_folder(thread_project: Option<&str>, selected: Option<&str>) -> bool {
+    match selected {
+        Some(id) => thread_project == Some(id),
+        None => thread_project.is_none(),
+    }
+}
+
+/// Delete Project puts chats back in History. Transcripts stay on the thread.
+pub fn release_project_chats(threads: &mut [ChatThread], project_id: &str) -> usize {
+    let mut n = 0;
+    for t in threads.iter_mut() {
+        if t.project_id.as_deref() == Some(project_id) {
+            t.project_id = None;
+            n += 1;
+        }
+    }
+    n
 }
 
 pub fn export_markdown(t: &ChatThread) -> String {
@@ -255,5 +279,42 @@ mod tests {
         assert!(!Arc::ptr_eq(&t.messages, &u.messages));
         assert_eq!(t.messages.len(), 1);
         assert_eq!(u.messages.len(), 2);
+    }
+
+    #[test]
+    fn project_folder_filters_sidebar_and_delete_returns_chats() {
+        let mut global = ChatThread::new("Global", false);
+        global.messages_mut().push(("user".into(), "keep-global".into()));
+        let mut filed = ChatThread::new("Lab notes", false);
+        filed.project_id = Some("proj-lab".into());
+        filed.messages_mut().push(("user".into(), "keep-lab".into()));
+        let mut other = ChatThread::new("Other", false);
+        other.project_id = Some("proj-other".into());
+        other.messages_mut().push(("assistant".into(), "stay".into()));
+        let threads = vec![global, filed, other];
+
+        let visible = |selected: Option<&str>| {
+            threads
+                .iter()
+                .filter(|t| session_in_chat_folder(t.project_id.as_deref(), selected))
+                .map(|t| t.title.as_str())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(visible(None), ["Global"]);
+        assert_eq!(visible(Some("proj-lab")), ["Lab notes"]);
+        assert!(visible(Some("proj-lab")).iter().all(|t| *t != "Global"));
+
+        let mut owned = threads.clone();
+        let n = release_project_chats(&mut owned, "proj-lab");
+        assert_eq!(n, 1);
+        assert!(owned[1].project_id.is_none());
+        assert_eq!(owned[1].messages[0].1, "keep-lab");
+        assert_eq!(owned[0].messages[0].1, "keep-global");
+        assert_eq!(owned[2].project_id.as_deref(), Some("proj-other"));
+        assert_eq!(owned.len(), 3);
+        assert!(session_in_chat_folder(owned[1].project_id.as_deref(), None));
+
+        let legacy: ChatThread = serde_json::from_str(r#"{"id":"t1","title":"legacy"}"#).unwrap();
+        assert!(legacy.project_id.is_none());
     }
 }
