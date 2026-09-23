@@ -1,6 +1,6 @@
 # GrokHub is the Grok Build GUI
 
-**Version:** 2.10.3
+**Version:** 2.10.4
 
 GrokHub is the native egui cabin. Grok Build (`grok` CLI) is the agent, the host shell, and computer-use (eyes and hands). One repo, one version — Linux tarball/AUR and Windows `GrokHub-Setup-<version>.exe` ship from the same tag.
 
@@ -10,7 +10,7 @@ Cabin owns: window, tray, project sidebar as cwd, LAN hub / Android, Hey Grok vo
 
 Grok Build owns: coding tools, bash, sandbox, permissions, plan mode, skills/plugins/MCP, sessions, `/imagine` when ACP supports it, and desktop computer-use.
 
-Transport: Auto/Always chat is headless `grok -p --output-format streaming-json` with `--sandbox off`, a desktop `--rules` line, and `--leader-socket` on the cabin socket (do not share `~/.grok/leader.sock`). New chats use the user `~/.grok` so tools and `grok sessions` match the TUI. Ask is ACP `grok agent stdio` so Allow / Deny can show; if ACP cannot start or is down the turn is denied (no `grok -p` fallthrough). Night, loops, and phone `/v1/task` inherit the composer PermissionMode pill (Ask fail-closed until ACP ensure; Auto `--permission-mode auto`; Always `--always-approve`). Do not vendor grok-build crates. Cabin overlay (`install.sh`) runs the official installer from `https://x.ai/cli` so `grok` is on PATH with `grokhub`.
+Transport: Auto/Always chat is headless `grok -p --output-format streaming-json` with `--sandbox off`, a desktop `--rules` line, and `--leader-socket` on the cabin socket (do not share `~/.grok/leader.sock`). Look on any permission pill stays look-only (`--permission-mode ask`, no desktop-do-the-work rules). New chats use the user `~/.grok` so tools and `grok sessions` match the TUI. Interactive Ask is ACP `grok agent stdio` so Allow / Deny can show; if ACP cannot start or is down the turn is denied (no `grok -p` fallthrough). Night, loops, inbox, and phone `/v1/task` inherit the composer PermissionMode pill via `scheduled_args` (Ask fail-closed, no ACP; Auto `--permission-mode auto`; Always `--always-approve`). Do not vendor grok-build crates. Cabin overlay (`install.sh`) runs the official installer from `https://x.ai/cli` so `grok` is on PATH with `grokhub`.
 
 ## Chat
 
