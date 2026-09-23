@@ -762,6 +762,9 @@ impl Cabin {
             let q = self.skill_q.to_ascii_lowercase();
             let mut use_skill: Option<String> = None;
             let mut use_cabin_skill: Option<(String, String)> = None;
+            let mut add_skill: Option<grokhub_core::LearnedSuggestion> = None;
+            let mut run_gh: Option<String> = None;
+            let mut save_pat = false;
             let mut mcp_toggle: Option<(String, bool)> = None;
             let mut mcp_remove: Option<String> = None;
             let mut plugin_toggle: Option<(String, bool)> = None;
@@ -769,6 +772,41 @@ impl Cabin {
             let mut plugin_uninstall: Option<String> = None;
             egui::ScrollArea::vertical().show(ui, |ui| {
             if self.skills_tab_connectors {
+                crate::cards::section_label(ui, "GitHub");
+                ui.label(
+                    RichText::new("Read-only. Who am I and List repos use the PAT via run_connector. No writes. No other websites.")
+                        .size(12.0)
+                        .color(crate::theme::muted()),
+                );
+                ui.add_space(8.0);
+                crate::cards::settings_field(
+                    ui,
+                    "Personal access token",
+                    "Classic or fine-grained PAT with repo read. Stored in secrets.json.",
+                    &mut self.secrets.github_token,
+                    true,
+                );
+                if crate::cards::white_pill(ui, "Save PAT") {
+                    save_pat = true;
+                }
+                ui.add_space(8.0);
+                crate::cards::tile_row(ui, crate::cards::GITHUB_TILES.len(), |ui, i| {
+                    let (title, body, tool) = crate::cards::GITHUB_TILES[i];
+                    if matches!(
+                        crate::cards::grok_tile(
+                            ui,
+                            crate::icons::TileIcon::Github,
+                            title,
+                            body,
+                            Some("Run"),
+                            false,
+                        ),
+                        crate::cards::TileHit::Add | crate::cards::TileHit::Body
+                    ) {
+                        run_gh = Some((*tool).to_string());
+                    }
+                });
+                ui.add_space(20.0);
                 ui.horizontal(|ui| {
                     crate::cards::section_label(ui, "MCP servers");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -954,6 +992,31 @@ impl Cabin {
                     });
                 }
             } else {
+            let skill_names: Vec<String> = self.skill_list.iter().map(|s| s.name.clone()).collect();
+            let skill_tiles =
+                crate::cards::merge_suggested_skills(&self.suggestions.skills, &skill_names);
+            if !skill_tiles.is_empty() {
+                crate::cards::section_label(ui, "Suggested");
+                ui.label(
+                    RichText::new(review_status_line(
+                        self.suggestions.last_review_day.as_deref(),
+                        &Self::local_day(),
+                    ))
+                    .size(12.0)
+                    .color(crate::theme::muted()),
+                );
+                ui.add_space(8.0);
+                crate::cards::tile_row(ui, skill_tiles.len(), |ui, i| {
+                    let (icon, title, body, item) = &skill_tiles[i];
+                    if matches!(
+                        crate::cards::grok_tile(ui, *icon, title, body, Some("Add"), false),
+                        crate::cards::TileHit::Add | crate::cards::TileHit::Body
+                    ) {
+                        add_skill = Some(item.clone());
+                    }
+                });
+                ui.add_space(16.0);
+            }
             let workflows: Vec<_> = self
                 .grok_catalog
                 .workflows
@@ -1103,6 +1166,21 @@ impl Cabin {
             if let Some((slash, name)) = use_cabin_skill {
                 self.nav = Nav::Chat;
                 self.send_chat(skill_use_in_chat_prompt(&slash, &name));
+            }
+            if let Some(item) = add_skill {
+                self.add_suggested_skill(&item);
+            }
+            if save_pat {
+                self.persist_secrets();
+                self.status = if self.secrets.github_token.trim().is_empty() {
+                    "GitHub PAT cleared".into()
+                } else {
+                    "GitHub PAT saved".into()
+                };
+            }
+            if let Some(tool) = run_gh {
+                self.nav = Nav::Chat;
+                self.run_connector("github", &tool, "");
             }
             if let Some((name, on)) = mcp_toggle {
                 let cmd = if on { "enable" } else { "disable" };

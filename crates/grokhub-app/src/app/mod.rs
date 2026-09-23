@@ -98,7 +98,8 @@ use grokhub_core::{
     should_auto_continue_goal, should_capture_before_chat, should_idle_reflect, should_keep_frame,
     should_name_thread, should_notify_cabin_update, should_paint_greeting, should_refresh_greeting,
     should_refresh_llm, should_seed_sidebar, should_send_screenshot, should_trim_result_bodies,
-    should_update_cli_alpha, skill_follow_block, skill_offer_chip, skill_use_in_chat_prompt,
+    should_update_cli_alpha, apply_skill_follow, skill_follow_block, skill_from_suggestion,
+    skill_offer_chip, skill_use_in_chat_prompt,
     skip_night_check_receipt, slash_help, slash_kind, stage_project, start_hub_rotates_pair,
     state_for_disk, stretch_saved_skill, strip_thinking, summarize_trajectory, summarize_write,
     surgical_memory_edit, take_ui_text, teach_routine, teachable_steps, theme_id, theme_label,
@@ -1635,7 +1636,7 @@ impl Cabin {
             .unwrap_or_default()
     }
 
-    fn remember_skill(&mut self, skill: SkillMd) {
+    pub(super) fn remember_skill(&mut self, skill: SkillMd) {
         if let Some(existing) = self.skill_list.iter_mut().find(|s| s.name == skill.name) {
             *existing = skill;
         } else {

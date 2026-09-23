@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.8 — 2026-09-23
+
+Selecting a cabin skill follows into grok -p / ACP: `Follow skill {name}` matches, and the kick prepends `active_skill_follow`. Skills Suggested tiles from the nightly review Add via `save_skill`. Connectors owns the GitHub PAT plus read-only Who am I / List repos tiles (`run_connector` only — no writes, no other websites). `/workflow` `/compact` `/rewind` honor the PermissionMode pill: Ask is fail-closed if ACP is down; Auto/Always keep composer flags and session mode.
+
+- Linux: `grokhub-linux-v2.10.8.tar.gz` and AUR `pkgver=2.10.8`.
+- Windows: `GrokHub-Setup-2.10.8.exe` and `grokhub-windows-v2.10.8.zip`.
+- Cursor cabin 2.10.8. VERSION 2.10.8. Not tagged until MERGE GREEN.
+
 ## 2.10.7 — 2026-09-23
 
 Owner UI: assistant bubbles keep real inner padding (no left/top clip of the first glyphs). The chat pane sits flush beside the sidebar. Empty-home pulse, usage/meta, and suggestion chips wrap to two lines instead of a one-line ellipsis. History titles still ellipsize only when the rail width forces it; hover shows the full title. Session pill label is **Questions** (same look-only mode). Same paint on Linux and Windows.
