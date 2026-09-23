@@ -1441,30 +1441,162 @@ fn paint_slot_card(
     resp
 }
 
-/// Body paint for a skill/connector tile. Wrap the full description; never
-/// mid-word clip. Only a word-boundary "more" cut when the body is huge.
-pub fn tile_body_text(body: &str) -> String {
-    let t = body.trim();
-    if t.chars().count() <= 240 {
-        return t.to_string();
-    }
-    word_boundary_take(t, 240)
+/// Description lines reserved on every skill / connector tile.
+pub const TILE_BODY_MAX_LINES: usize = 3;
+
+/// One `tile_row` grid row. The previous frame's natural card heights
+/// stretch shorter neighbors so the row is even and the action can pin.
+#[derive(Clone, Debug, Default)]
+struct TileRowPass {
+    active: bool,
+    cursor: usize,
+    fill: f32,
+    prev: Vec<f32>,
+    next: Vec<f32>,
 }
 
-fn word_boundary_take(s: &str, max_chars: usize) -> String {
-    let mut end = 0;
-    let mut last_space = 0;
-    for (i, c) in s.char_indices() {
-        if s[..i].chars().count() >= max_chars {
-            break;
-        }
-        if c.is_whitespace() {
-            last_space = i;
-        }
-        end = i + c.len_utf8();
+fn tile_pass_id() -> egui::Id {
+    egui::Id::new("grokhub-tile-row-pass")
+}
+
+fn tile_body_font() -> FontId {
+    FontId::proportional(crate::theme::FONT_BODY)
+}
+
+fn tile_body_width(wrap_width: f32) -> f32 {
+    if wrap_width.is_finite() {
+        wrap_width.max(8.0)
+    } else {
+        4_000.0
     }
-    let cut = if last_space > 0 { last_space } else { end };
-    s.get(..cut).unwrap_or(s).trim_end().to_string()
+}
+
+fn tile_body_galley(
+    fonts: &egui::epaint::text::Fonts,
+    text: &str,
+    width: f32,
+) -> std::sync::Arc<egui::epaint::text::Galley> {
+    fonts.layout(
+        text.to_owned(),
+        tile_body_font(),
+        Color32::PLACEHOLDER,
+        width,
+    )
+}
+
+fn tile_body_fits(fonts: &egui::epaint::text::Fonts, text: &str, width: f32) -> bool {
+    let galley = tile_body_galley(fonts, text, width);
+    galley.rows.len() <= TILE_BODY_MAX_LINES && galley.rect.width() <= width + 1.0
+}
+
+/// Body copy for a skill/connector tile. At most three wrapped lines.
+/// Overflow ends on a word boundary with an ellipsis. A single token wider
+/// than the card is the only case that ellipsizes inside the token.
+pub fn tile_body_text(fonts: &egui::epaint::text::Fonts, body: &str, wrap_width: f32) -> String {
+    let t = body.trim();
+    if t.is_empty() {
+        return String::new();
+    }
+    let width = tile_body_width(wrap_width);
+    if tile_body_fits(fonts, t, width) {
+        return t.to_string();
+    }
+    let words: Vec<&str> = t.split_whitespace().collect();
+    if words.is_empty() {
+        return String::new();
+    }
+    let mut lo = 0usize;
+    let mut hi = words.len();
+    let mut best = 0usize;
+    while lo < hi {
+        let mid = lo + (hi - lo).div_ceil(2);
+        let mut candidate = words[..mid].join(" ");
+        candidate.push('…');
+        if tile_body_fits(fonts, &candidate, width) {
+            best = mid;
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    if best > 0 {
+        let mut out = words[..best].join(" ");
+        out.push('…');
+        return out;
+    }
+    ellipsize_tile_token(fonts, words[0], width)
+}
+
+fn ellipsize_tile_token(fonts: &egui::epaint::text::Fonts, token: &str, width: f32) -> String {
+    let chars: Vec<char> = token.chars().collect();
+    let mut lo = 0usize;
+    let mut hi = chars.len();
+    let mut best = 0usize;
+    while lo < hi {
+        let mid = lo + (hi - lo).div_ceil(2);
+        let mut candidate: String = chars[..mid].iter().collect();
+        candidate.push('…');
+        if tile_body_fits(fonts, &candidate, width) {
+            best = mid;
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    let mut out: String = chars[..best].iter().collect();
+    out.push('…');
+    out
+}
+
+/// Gap above the primary action. `extra` is the slack that pins the action
+/// to the bottom once this card stretches up to the tallest neighbor.
+fn tile_action_gap(extra: f32) -> f32 {
+    8.0 + extra.max(0.0)
+}
+
+fn next_tile_row_id(ui: &egui::Ui) -> egui::Id {
+    let frame = ui.ctx().cumulative_pass_nr();
+    let seq_id = ui.id().with("grokhub-tile-row-seq");
+    let (seen, seq) = ui
+        .ctx()
+        .data(|d| d.get_temp::<(u64, u32)>(seq_id))
+        .unwrap_or((u64::MAX, 0));
+    let seq = if seen == frame { seq } else { 0 };
+    ui.ctx().data_mut(|d| d.insert_temp(seq_id, (frame, seq + 1)));
+    ui.id().with(("grokhub-tile-row", seq))
+}
+
+fn begin_tile_slot(ctx: &egui::Context) -> Option<(f32, f32)> {
+    let mut pass = ctx
+        .data(|d| d.get_temp::<TileRowPass>(tile_pass_id()))
+        .unwrap_or_default();
+    if !pass.active {
+        return None;
+    }
+    let prev = pass.prev.get(pass.cursor).copied().unwrap_or(0.0);
+    let fill = pass.fill;
+    pass.cursor += 1;
+    ctx.data_mut(|d| d.insert_temp(tile_pass_id(), pass));
+    Some((prev, fill))
+}
+
+fn note_tile_natural(ctx: &egui::Context, natural: f32) {
+    let mut pass = ctx
+        .data(|d| d.get_temp::<TileRowPass>(tile_pass_id()))
+        .unwrap_or_default();
+    if !pass.active {
+        return;
+    }
+    pass.next.push(natural);
+    ctx.data_mut(|d| d.insert_temp(tile_pass_id(), pass));
+}
+
+fn tile_row_slack(prev: f32, fill: f32) -> f32 {
+    if prev > 0.0 && fill > prev + 0.5 {
+        fill - prev
+    } else {
+        0.0
+    }
 }
 
 pub fn grok_tile(
@@ -1478,6 +1610,11 @@ pub fn grok_tile(
     let mut hit = TileHit::None;
     let mut add_clicked = false;
     let mut add_rect = None;
+    let mut body_h = 0.0_f32;
+    let slot = begin_tile_slot(ui.ctx());
+    let extra = slot
+        .map(|(prev, fill)| tile_row_slack(prev, fill))
+        .unwrap_or(0.0);
     let mut prepared = egui::Frame::none()
         .fill(crate::theme::elevated())
         .rounding(crate::theme::CARD_RADIUS)
@@ -1485,11 +1622,14 @@ pub fn grok_tile(
         .begin(ui);
     {
         let ui = &mut prepared.content_ui;
-        ui.set_min_height(96.0);
         ui.horizontal(|ui| {
             icons::paint_icon(ui, icon, crate::theme::TILE_ICON);
             ui.add_space(10.0);
             ui.vertical(|ui| {
+                let text_w = ui.available_width();
+                if text_w.is_finite() {
+                    ui.set_max_width(text_w);
+                }
                 ui.add(
                     egui::Label::new(
                         RichText::new(title)
@@ -1499,16 +1639,21 @@ pub fn grok_tile(
                     .wrap(),
                 );
                 ui.add_space(3.0);
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(tile_body_text(body))
-                            .size(crate::theme::FONT_BODY)
-                            .color(crate::theme::muted()),
-                    )
-                    .wrap(),
-                );
+                let body_w = ui.available_width().max(8.0);
+                let galley = ui.fonts(|fonts| {
+                    let painted = tile_body_text(fonts, body, body_w);
+                    tile_body_galley(fonts, &painted, body_w)
+                });
+                let line_h = ui
+                    .fonts(|fonts| fonts.row_height(&tile_body_font()))
+                    .max(1.0);
+                body_h = line_h * TILE_BODY_MAX_LINES as f32;
+                let (body_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(body_w, body_h), Sense::hover());
+                ui.painter()
+                    .galley(body_rect.min, galley, crate::theme::muted());
                 if let Some(label) = add {
-                    ui.add_space(8.0);
+                    ui.add_space(tile_action_gap(extra));
                     let r = crate::theme::felt_label_button(
                         ui,
                         label,
@@ -1521,11 +1666,23 @@ pub fn grok_tile(
                     );
                     add_clicked = r.clicked();
                     add_rect = Some(r.rect);
+                } else if extra > 0.0 {
+                    ui.add_space(extra);
                 }
             });
         });
     }
     let resp = paint_slot_card(ui, prepared, selected, crate::theme::CARD_RADIUS);
+    if slot.is_some() {
+        note_tile_natural(ui.ctx(), (resp.rect.height() - extra).max(1.0));
+    }
+    #[cfg(test)]
+    push_tile_metric(TileMetric {
+        height: resp.rect.height(),
+        bottom: resp.rect.bottom(),
+        button_bottom: add_rect.map(|r| r.bottom()),
+        body_h,
+    });
     let click_on_add = add_rect
         .zip(ui.input(|i| i.pointer.interact_pos()))
         .is_some_and(|(r, p)| r.expand(6.0).contains(p));
@@ -1567,6 +1724,21 @@ pub fn tile_row(ui: &mut egui::Ui, n: usize, mut each: impl FnMut(&mut egui::Ui,
     }
     let rows = n.div_ceil(cols);
     for r in 0..rows {
+        let row_id = next_tile_row_id(ui);
+        let prev: Vec<f32> = ui.ctx().data(|d| d.get_temp(row_id)).unwrap_or_default();
+        let fill = prev.iter().copied().fold(0.0_f32, f32::max);
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(
+                tile_pass_id(),
+                TileRowPass {
+                    active: true,
+                    cursor: 0,
+                    fill,
+                    prev: prev.clone(),
+                    next: Vec::new(),
+                },
+            );
+        });
         ui.columns(cols, |col_uis| {
             for (c, col_ui) in col_uis.iter_mut().enumerate() {
                 let i = r * cols + c;
@@ -1575,6 +1747,23 @@ pub fn tile_row(ui: &mut egui::Ui, n: usize, mut each: impl FnMut(&mut egui::Ui,
                 }
             }
         });
+        let pass = ui
+            .ctx()
+            .data(|d| d.get_temp::<TileRowPass>(tile_pass_id()))
+            .unwrap_or_default();
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(tile_pass_id(), TileRowPass::default());
+            d.insert_temp(row_id, pass.next.clone());
+        });
+        let changed = pass.next.len() != prev.len()
+            || pass
+                .next
+                .iter()
+                .zip(prev.iter())
+                .any(|(a, b)| (a - b).abs() > 1.0);
+        if changed {
+            ui.ctx().request_repaint();
+        }
         ui.add_space(14.0);
     }
 }
@@ -2239,20 +2428,166 @@ pub fn empty_prompt_tile(ui: &mut egui::Ui, icon: TileIcon, title: &str, hint: &
 }
 
 #[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+struct TileMetric {
+    height: f32,
+    bottom: f32,
+    button_bottom: Option<f32>,
+    body_h: f32,
+}
+
+#[cfg(test)]
+thread_local! {
+    static TILE_METRICS: std::cell::RefCell<Vec<TileMetric>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn push_tile_metric(metric: TileMetric) {
+    TILE_METRICS.with(|v| v.borrow_mut().push(metric));
+}
+
+#[cfg(test)]
+fn take_tile_metrics() -> Vec<TileMetric> {
+    TILE_METRICS.with(|v| std::mem::take(&mut *v.borrow_mut()))
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use grokhub_core::parse_loop_line;
 
+    fn with_fonts(mut check: impl FnMut(&egui::epaint::text::Fonts)) {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.fonts(|fonts| check(fonts));
+            });
+        });
+    }
+
     #[test]
     fn grok_tile_body_does_not_clip_mid_word() {
-        assert_eq!(tile_body_text("short"), "short");
-        let long = "Built-in — Required reading before you start, watch, or wait on anything that remains after the first eighty glyphs of this description so wrap is the path.";
-        let painted = tile_body_text(long);
-        assert!(!painted.contains("take(80)"));
-        assert!(!painted.ends_with(" re"));
-        assert!(!painted.contains('…'));
-        assert!(painted.starts_with("Built-in"));
-        assert!(painted.chars().count() <= 240);
+        with_fonts(|fonts| {
+            assert_eq!(tile_body_text(fonts, "short", 220.0), "short");
+            assert_eq!(tile_body_text(fonts, "  ", 220.0), "");
+            let long = "Built-in — Required reading before you start, watch, or wait on anything that remains after the first eighty glyphs of this description so wrap is the path and the card stays three lines.";
+            let width = 160.0;
+            let painted = tile_body_text(fonts, long, width);
+            assert!(painted.ends_with('…'), "{painted}");
+            assert!(!painted.ends_with(" re"), "{painted}");
+            assert!(!painted.contains("take(80)"), "{painted}");
+            let stem = painted.trim_end_matches('…');
+            let orig: Vec<_> = long.split_whitespace().collect();
+            let got: Vec<_> = stem.split_whitespace().collect();
+            assert!(!got.is_empty() && got.len() < orig.len(), "{painted}");
+            assert_eq!(&orig[..got.len()], got.as_slice(), "{painted}");
+            let clamped = tile_body_galley(fonts, &painted, width);
+            assert!(
+                clamped.rows.len() <= TILE_BODY_MAX_LINES,
+                "rows {} text {painted}",
+                clamped.rows.len()
+            );
+            let full = tile_body_galley(fonts, long, width);
+            assert!(
+                full.rows.len() > TILE_BODY_MAX_LINES,
+                "uncut copy must exceed three lines, got {}",
+                full.rows.len()
+            );
+            let wide = tile_body_text(fonts, "one two", 400.0);
+            assert_eq!(wide, "one two");
+            assert!(!wide.contains('…'));
+        });
+    }
+
+    fn paint_tile_grid(ctx: &egui::Context, tiles: &[(&str, &str, Option<&str>)]) {
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "inter-bold".into(),
+            egui::FontData::from_static(include_bytes!("../assets/fonts/Inter-SemiBold.ttf")),
+        );
+        fonts.families.insert(
+            egui::FontFamily::Name("inter-bold".into()),
+            vec!["inter-bold".into()],
+        );
+        ctx.set_fonts(fonts);
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(960.0, 900.0),
+            )),
+            ..Default::default()
+        };
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.set_width(920.0);
+                ui.set_min_width(920.0);
+                tile_row(ui, tiles.len(), |ui, i| {
+                    let (title, body, action) = tiles[i];
+                    let _ = grok_tile(ui, TileIcon::Bolt, title, body, action, false);
+                });
+            });
+        });
+    }
+
+    fn action_gap(metric: &TileMetric) -> f32 {
+        metric.bottom - metric.button_bottom.expect("action")
+    }
+
+    #[test]
+    fn grok_tile_row_shares_height_and_pins_action() {
+        let _paint = crate::theme::hold_paint_test();
+        let ctx = egui::Context::default();
+        let long_body = "word ".repeat(80);
+        let long_title = "Workspace memory and nightly review suggestions for the cabin skill shelf that wrap the title";
+        let mixed = [
+            ("Add", long_body.as_str(), Some("Use in chat")),
+            (long_title, "", Some("Use in chat")),
+        ];
+        let _ = take_tile_metrics();
+        for _ in 0..3 {
+            let _ = take_tile_metrics();
+            paint_tile_grid(&ctx, &mixed);
+        }
+        let mixed_metrics = take_tile_metrics();
+        assert_eq!(mixed_metrics.len(), 2, "{mixed_metrics:?}");
+        let (a, b) = (mixed_metrics[0], mixed_metrics[1]);
+        assert!(
+            (a.bottom - b.bottom).abs() < 2.0,
+            "both cards must share a row: {mixed_metrics:?}"
+        );
+        assert!(
+            (a.height - b.height).abs() < 1.5,
+            "taller neighbor wins: {mixed_metrics:?}"
+        );
+        assert!(
+            (a.body_h - b.body_h).abs() < 0.5 && a.body_h > 30.0,
+            "empty and long bodies share the 3-line band: {mixed_metrics:?}"
+        );
+        let gap_a = action_gap(&a);
+        let gap_b = action_gap(&b);
+        assert!(
+            (gap_a - gap_b).abs() < 1.5 && gap_a < 22.0 && gap_b < 22.0,
+            "Use in chat pins to the card bottom: gaps {gap_a} {gap_b} {mixed_metrics:?}"
+        );
+
+        let stubs = [
+            ("Alpha", "", Some("Use in chat")),
+            ("Beta", long_body.as_str(), Some("Add")),
+        ];
+        let _ = take_tile_metrics();
+        for _ in 0..2 {
+            let _ = take_tile_metrics();
+            paint_tile_grid(&ctx, &stubs);
+        }
+        let stubs_metrics = take_tile_metrics();
+        assert_eq!(stubs_metrics.len(), 2, "{stubs_metrics:?}");
+        assert!(
+            (stubs_metrics[0].height - stubs_metrics[1].height).abs() < 1.5,
+            "copy length must not change card height: {stubs_metrics:?}"
+        );
+        assert!((stubs_metrics[0].body_h - stubs_metrics[1].body_h).abs() < 0.5);
+        assert!((action_gap(&stubs_metrics[0]) - action_gap(&stubs_metrics[1])).abs() < 1.5);
     }
 
     #[test]
@@ -2277,10 +2612,36 @@ mod tests {
             tile.contains("paint_slot_card")
                 && tile.contains("card_title_font")
                 && tile.contains("tile_body_text")
+                && tile.contains("TILE_BODY_MAX_LINES")
+                && tile.contains("tile_action_gap")
                 && tile.contains(".wrap()")
                 && !tile.contains("take(80)")
                 && !tile.contains("right_to_left"),
-            "Use in chat must sit under the body, never clip mid-word: {tile}"
+            "Use in chat pins under a 3-line body, never clip mid-word: {tile}"
+        );
+        let row = src
+            .split("pub fn tile_row(")
+            .nth(1)
+            .and_then(|s| s.split("fn still_jpeg(").next())
+            .expect("tile_row");
+        assert!(
+            row.contains("tile_pass_id")
+                && row.contains("TileRowPass")
+                && row.contains("request_repaint"),
+            "a tile row must stretch short cards up to the tallest neighbor: {row}"
+        );
+        let pages = include_str!("app/pages.rs");
+        let connectors = pages
+            .split("fn ui_connectors(")
+            .nth(1)
+            .expect("ui_connectors");
+        assert!(
+            connectors.contains("self.ui_skills(ctx)"),
+            "connectors must reuse the skills grid: {connectors}"
+        );
+        assert!(
+            pages.contains("GITHUB_TILES") && pages.contains("grok_tile("),
+            "connector cards must be grok_tile"
         );
         let empty = src
             .split("pub fn empty_prompt_tile(")
