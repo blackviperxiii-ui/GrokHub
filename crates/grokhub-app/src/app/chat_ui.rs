@@ -870,9 +870,12 @@ impl Cabin {
     }
     pub(super) fn paint_perm_ask(&mut self, ui: &mut egui::Ui) {
         let Some(p) = self.perm_ask.clone() else {
-            self.perm_always_confirm = false;
+            self.perm_always_confirm = None;
             return;
         };
+        if !always_confirm_matches_rpc(self.perm_always_confirm.as_ref(), &p.rpc_id) {
+            self.perm_always_confirm = None;
+        }
         ui.add_space(8.0);
         egui::Frame::none()
             .fill(egui::Color32::TRANSPARENT)
@@ -922,20 +925,20 @@ impl Cabin {
                             let _ = h.answer_permission(p.rpc_id.clone(), true);
                         }
                         self.perm_ask = None;
-                        self.perm_always_confirm = false;
+                        self.perm_always_confirm = None;
                     }
                     if crate::cards::ghost_pill(ui, "Deny") || key == Some(PermKey::Deny) {
                         if let Some(h) = &self.acp {
                             let _ = h.answer_permission(p.rpc_id.clone(), false);
                         }
                         self.perm_ask = None;
-                        self.perm_always_confirm = false;
+                        self.perm_always_confirm = None;
                     }
-                    if !self.perm_always_confirm && crate::cards::ghost_pill(ui, "Always") {
-                        self.perm_always_confirm = true;
+                    if self.perm_always_confirm.is_none() && crate::cards::ghost_pill(ui, "Always") {
+                        self.perm_always_confirm = Some(p.rpc_id.clone());
                     }
                 });
-                if self.perm_always_confirm {
+                if always_confirm_matches_rpc(self.perm_always_confirm.as_ref(), &p.rpc_id) {
                     ui.add_space(8.0);
                     egui::Frame::none()
                         .fill(crate::theme::elevated())
@@ -961,11 +964,11 @@ impl Cabin {
                                         let _ = h.answer_permission_always(p.rpc_id.clone());
                                     }
                                     self.perm_ask = None;
-                                    self.perm_always_confirm = false;
+                                    self.perm_always_confirm = None;
                                     self.status = "Permission always-approve".into();
                                 }
                                 if crate::cards::ghost_pill(ui, "Cancel") {
-                                    self.perm_always_confirm = false;
+                                    self.perm_always_confirm = None;
                                 }
                             });
                         });

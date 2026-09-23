@@ -1429,6 +1429,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "Always on the Ask card must confirm before flipping the pill: {ask}"
         );
         assert!(
+            ask.contains("always_confirm_matches_rpc") && ask.contains("p.rpc_id"),
+            "Always confirm must drop when the prompt/rpc_id changes: {ask}"
+        );
+        assert!(
             ask.contains("self.composer"),
             "Enter must send a typed follow-up instead of approving a tool: {ask}"
         );
@@ -1444,6 +1448,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             poll.contains("answer_permission_always"),
             "Always must answer allow-always, not allow-once: {poll}"
+        );
+        assert!(
+            poll.contains("perm_always_confirm = None"),
+            "a replacement Ask must drop the Always confirm beat: {poll}"
         );
         let err = poll.split("AcpEvent::Err").nth(1).expect("acp err");
         let classify = err
@@ -3150,6 +3158,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && kick.contains("scheduled_flags")
                 && kick.contains("composer_headless_flags"),
             "kick_model must map Auto/Always and fail-close scheduled Ask: {kick}"
+        );
+        assert!(
+            kick.contains("perm_always_confirm = None"),
+            "a kick that clears perm_ask must also drop Always confirm: {kick}"
         );
         let scheduled = fn_src(&src, "send_scheduled_chat");
         assert!(
@@ -6601,5 +6613,13 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             src.contains("Nav::Workboard") && src.contains("Nav::Night"),
             "pulse clicks reuse Workboard and Automations"
+        );
+        let pulse = include_str!("pulse.rs");
+        assert!(
+            pulse.contains("allocate_exact_size")
+                && pulse.contains("pulse_row_label")
+                && pulse.contains(".truncate()")
+                && !pulse.contains("status_chip"),
+            "pulse rows stay one reserved line so the card cannot paint over the composer: {pulse}"
         );
     }

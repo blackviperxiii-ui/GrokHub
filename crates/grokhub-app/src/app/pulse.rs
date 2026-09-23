@@ -8,10 +8,22 @@ pub(super) const ALWAYS_CONFIRM_LINE1: &str = "Skip every tool prompt this launc
 pub(super) const ALWAYS_CONFIRM_LINE2: &str =
     "Night, loops, and phone inherit --always-approve until quit.";
 
+/// Confirm sheet stays up only while Ask still shows this `rpc_id`.
+pub(super) fn always_confirm_matches_rpc(
+    armed: Option<&serde_json::Value>,
+    current: &serde_json::Value,
+) -> bool {
+    armed == Some(current)
+}
+
+/// One text line at FONT_TIP. Must match `paint_empty_pulse` row allocate.
 const PULSE_ROW_H: f32 = 22.0;
-const PULSE_PAD: f32 = 12.0;
+/// Frame `inner_margin` on each side. Reserve uses 2× this, never leftover wrap.
+const PULSE_MARGIN: f32 = 6.0;
 const PULSE_GAP: f32 = 2.0;
 const PULSE_MAX_ROWS: usize = 4;
+/// Conservative single-line cap for a ~600px empty-home pane.
+const PULSE_LABEL_CHARS: usize = 56;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PulseNav {
@@ -42,7 +54,21 @@ pub(super) fn should_paint_pulse(empty_chat: bool, scratch: bool, signed_in: boo
 
 pub(super) fn pulse_card_h(row_count: usize) -> f32 {
     let n = row_count.clamp(1, PULSE_MAX_ROWS) as f32;
-    PULSE_PAD + n * PULSE_ROW_H + (n - 1.0) * PULSE_GAP
+    PULSE_MARGIN * 2.0 + n * PULSE_ROW_H + (n - 1.0) * PULSE_GAP
+}
+
+/// Single-line pulse copy. Wrap would overflow the reserved `pulse_card_h` slot.
+pub(super) fn pulse_row_label(title: &str, detail: &str) -> String {
+    let raw = if detail.is_empty() {
+        title.trim().to_string()
+    } else {
+        format!("{} · {}", title.trim(), detail.trim())
+    };
+    let mut out: String = raw.chars().take(PULSE_LABEL_CHARS).collect();
+    if raw.chars().count() > PULSE_LABEL_CHARS {
+        out.push('…');
+    }
+    out
 }
 
 fn board_is_open(status: BoardStatus) -> bool {
@@ -98,7 +124,7 @@ fn next_job_row(autos: &[Automation], loops: &[GrokLoop], now_ms: u64) -> PulseR
             continue;
         }
         if best.as_ref().is_none_or(|(t, _)| when < *t) {
-            best = Some((when, name.to_string()));
+            best = Some((when, name.chars().take(PULSE_LABEL_CHARS).collect()));
         }
     }
     for row in loops.iter().filter(|l| l.enabled) {
@@ -207,14 +233,18 @@ impl Cabin {
 
     pub(super) fn paint_empty_pulse(&mut self, ui: &mut egui::Ui, pane_w: f32) {
         let rows = self.collect_pulse_rows();
+        let reserved_h = pulse_card_h(rows.len());
+        let inner_w = (pane_w - PULSE_MARGIN * 2.0).max(1.0);
         let mut go: Option<PulseNav> = None;
         egui::Frame::none()
             .fill(crate::theme::elevated())
             .rounding(crate::theme::CARD_RADIUS)
             .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-            .inner_margin(egui::Margin::same(6.0))
+            .inner_margin(egui::Margin::same(PULSE_MARGIN))
             .show(ui, |ui| {
-                ui.set_width(pane_w);
+                ui.set_width(inner_w);
+                ui.set_max_width(inner_w);
+                ui.set_max_height((reserved_h - PULSE_MARGIN * 2.0).max(PULSE_ROW_H));
                 ui.spacing_mut().item_spacing.y = PULSE_GAP;
                 for row in &rows {
                     let muted = row.kind == PulseRowKind::Usage || row.kind == PulseRowKind::Empty;
@@ -223,27 +253,25 @@ impl Cabin {
                     } else {
                         crate::theme::fg()
                     };
-                    let label = if row.detail.is_empty() {
-                        row.title.clone()
+                    let label = pulse_row_label(&row.title, &row.detail);
+                    let sense = if row.nav.is_some() {
+                        egui::Sense::click()
                     } else {
-                        format!("{} · {}", row.title, row.detail)
+                        egui::Sense::hover()
                     };
-                    if row.kind == PulseRowKind::Goal {
-                        crate::cards::status_chip(ui, &label, crate::cards::ChipTone::Mute);
-                        continue;
-                    }
-                    let resp = ui.add(
-                        egui::Label::new(
-                            RichText::new(label)
-                                .size(crate::theme::FONT_TIP)
-                                .color(color),
-                        )
-                        .sense(if row.nav.is_some() {
-                            egui::Sense::click()
-                        } else {
-                            egui::Sense::hover()
-                        }),
-                    );
+                    let (rect, resp) =
+                        ui.allocate_exact_size(egui::vec2(inner_w, PULSE_ROW_H), sense);
+                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+                        ui.set_max_width(inner_w);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(label)
+                                    .size(crate::theme::FONT_TIP)
+                                    .color(color),
+                            )
+                            .truncate(),
+                        );
+                    });
                     if resp.clicked() {
                         go = row.nav;
                     }
@@ -372,8 +400,42 @@ mod tests {
 
     #[test]
     fn pulse_card_stays_short() {
+        assert_eq!(
+            pulse_card_h(4),
+            PULSE_MARGIN * 2.0 + 4.0 * PULSE_ROW_H + 3.0 * PULSE_GAP
+        );
         assert!(pulse_card_h(4) < 120.0);
         assert!(pulse_card_h(1) < pulse_card_h(4));
+    }
+
+    #[test]
+    fn pulse_labels_stay_one_line() {
+        let long = "x".repeat(200);
+        let rows = pulse_rows(
+            &[auto(&long, 5_000)],
+            &[],
+            &long,
+            9,
+            &[open_card(&long)],
+            &UsageDay {
+                day: "2026-09-23".into(),
+                messages: 99,
+                tokens_in: 12_000,
+                tokens_out: 34_000,
+                tokens_think: 1_000,
+                ..Default::default()
+            },
+            1_000,
+        );
+        for row in &rows {
+            let label = pulse_row_label(&row.title, &row.detail);
+            assert!(
+                label.chars().count() <= PULSE_LABEL_CHARS + 1,
+                "pulse row must stay one reserved line: {label}"
+            );
+            assert!(!label.contains('\n'));
+        }
+        assert!(pulse_row_label(&long, "now").ends_with('…'));
     }
 
     #[test]
@@ -387,5 +449,10 @@ mod tests {
         assert!(ALWAYS_CONFIRM_LINE2.contains("Night"));
         assert!(ALWAYS_CONFIRM_LINE2.contains("loop"));
         assert!(ALWAYS_CONFIRM_LINE2.contains("phone"));
+        let a = serde_json::json!(1);
+        let b = serde_json::json!(2);
+        assert!(always_confirm_matches_rpc(Some(&a), &a));
+        assert!(!always_confirm_matches_rpc(Some(&a), &b));
+        assert!(!always_confirm_matches_rpc(None, &a));
     }
 }
