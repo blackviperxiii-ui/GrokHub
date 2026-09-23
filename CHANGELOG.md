@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.13 — 2026-09-23
+
+Quick chips are one fixed-height line. Long labels ellipsize instead of wrapping or clipping. A chip that does not fully fit is dropped, not cut off at the window edge. The same ranked pool stays up mid-conversation (habit / static chips when the LLM row is not ready). Click, dismiss, and session pills are unchanged.
+
+- Linux: `grokhub-linux-v2.10.13.tar.gz` and AUR `pkgver=2.10.13`.
+- Windows: `GrokHub-Setup-2.10.13.exe` and `grokhub-windows-v2.10.13.zip`.
+- Cursor cabin 2.10.13. VERSION 2.10.13. Not tagged until MERGE GREEN.
+
 ## 2.10.12 — 2026-09-23
 
 Settings → Cabin defaults pins the chat model (Auto saves empty), reasoning effort, Ask or Auto, and Chat / Plan / Questions into `app.json` for headless `grok -p`. Always stays on the composer. Always collapse starts thoughts folded in every session. Collapsing any thought folds that session; expand opens one thought at a time. Quiet Collapse / Expand stays; Hide is not painted. The first close-to-tray toast is saved as `closeToTrayTipSeen`. Later closes, including after a relaunch, stay quiet. Quiet hours skip that toast and leave the flag clear, so the first close outside quiet hours can still tip once. Close-to-tray and tray Show / Quit are unchanged.

@@ -5598,8 +5598,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "chips sit a tight gap under the pill: {chips}"
         );
         assert!(
-            chips.contains("messages.is_empty()"),
-            "suggestion chips only on empty state: {chips}"
+            chips.contains("composer_chips()") && !chips.contains("messages.is_empty()"),
+            "suggestion chips stay up mid-thread, not only on an empty chat: {chips}"
         );
         assert_eq!(super::empty_home_side_gap(1800.0, 800.0), 500.0);
         assert_eq!(super::empty_home_side_gap(700.0, 800.0), 0.0);
@@ -5886,6 +5886,42 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 super::ComposerStackSlot::Pill,
                 super::ComposerStackSlot::Chips,
             ]
+        );
+    }
+
+    #[test]
+    fn composer_chips_stay_visible_mid_thread() {
+        let src = include_str!("chips.rs");
+        let body = src
+            .split("fn composer_chips(")
+            .nth(1)
+            .and_then(|s| s.split("fn take_chip_act(").next())
+            .expect("composer_chips");
+        assert!(
+            body.contains("self.visible_chips.clone()"),
+            "mid-chat uses the ranked pool, including the habit/static fallback: {body}"
+        );
+        assert!(
+            !body.contains("Vec::new()") && !body.contains("if home"),
+            "a thread with messages must not clear ranked chips: {body}"
+        );
+        assert!(
+            body.contains("skill_offer_chip"),
+            "skill offer still inserts on the same row: {body}"
+        );
+        let ui = include_str!("chat_ui.rs");
+        let chips = ui
+            .split("ComposerStackSlot::Chips =>")
+            .nth(1)
+            .and_then(|s| s.split("ComposerStackSlot::Attach =>").next())
+            .expect("chips slot");
+        assert!(
+            chips.contains("composer_chips()") && chips.contains("quick_chip_row"),
+            "{chips}"
+        );
+        assert!(
+            !chips.contains("messages.is_empty()") && !chips.contains("is_empty()"),
+            "chips paint when the thread has messages: {chips}"
         );
     }
 
@@ -6857,12 +6893,14 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("pub fn tab_pill(").next())
             .expect("quick_chip_row");
         assert!(
-            chip_row.contains("with_main_wrap(true)")
-                && chip_row.contains("CHIP_CLUSTER_H")
-                && chip_row.contains("composer_pill_w")
-                && !chip_row.contains("with_main_wrap(false)")
-                && !chip_row.contains('…'),
-            "home chips wrap inside Ask anything; no mid-phrase ellipsis"
+            chip_row.contains("with_main_wrap(false)")
+                && chip_row.contains("fluid_chip_count")
+                && chip_row.contains("layout_chip_label")
+                && chip_row.contains("CHIP_ROW_H")
+                && chip_row.contains("chip_row_visible_w")
+                && !chip_row.contains("CHIP_CLUSTER_H")
+                && !chip_row.contains("with_main_wrap(true)"),
+            "chips are one fixed line, ellipsized, and drop overflow inside Ask anything"
         );
     }
 
