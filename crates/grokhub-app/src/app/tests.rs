@@ -5975,6 +5975,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .expect("session menu");
         assert!(
             menu.contains("ChromeBtn::Menu")
+                && menu.contains("titlebar_chrome_hit")
+                && !menu.contains("resp.clicked()")
                 && menu.contains("\"Compact\"")
                 && menu.contains("Slash::Compact")
                 && menu.contains("\"Copy session\"")

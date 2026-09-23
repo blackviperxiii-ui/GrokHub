@@ -1561,7 +1561,7 @@ impl Cabin {
     pub(super) fn paint_session_actions_menu(&mut self, ui: &mut egui::Ui) {
         let resp = titlebar_chrome_btn(ui, ChromeBtn::Menu);
         let id = ui.make_persistent_id("session-actions-menu");
-        if resp.clicked() {
+        if titlebar_chrome_hit(&resp) {
             ui.memory_mut(|m| m.toggle_popup(id));
         }
         let (compact_on, copy_on, export_on) =
