@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.10 — 2026-09-23
+
+Thought process header is one quiet collapse control (chevron plus Collapse / Expand). Hide is gone. Collapse still toggles the thought body the way Minimize did. Tool-call rows are unchanged.
+
+- Linux: `grokhub-linux-v2.10.10.tar.gz` and AUR `pkgver=2.10.10`.
+- Windows: `GrokHub-Setup-2.10.10.exe` and `grokhub-windows-v2.10.10.zip`.
+- Cursor cabin 2.10.10. VERSION 2.10.10. Not tagged until MERGE GREEN.
+
 ## 2.10.9 — 2026-09-23
 
 Skills and Connectors `grok_tile` wraps the full description; Use in chat sits under the body (no title-row overlap, no 80-char mid-word clip). Accepting a Suggested automation dismisses it from `suggestions.json` and the UI every time. Quiet daily session-derived Suggested Automations and Skills land on the night/review path and persist. Automations no longer paints Follow along / Teach this once. Loop and scheduled titles wrap instead of `take(40)`. History indexes a live session as soon as it is created and Windows re-lists on a 3s watch so new chats do not lag forever.

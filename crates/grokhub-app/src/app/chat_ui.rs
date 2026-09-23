@@ -382,7 +382,7 @@ pub(super) fn reserve_offscreen_chat_row(ui: &mut egui::Ui, cached_h: f32) -> bo
 }
 
 /// `kind` is `"slot"` while the thought is a live block, `"body"` once it is stored.
-/// The body key is [`thought_body_key`], so Hide and Minimize survive that handoff.
+/// The body key is [`thought_body_key`], so a collapse survives that handoff.
 pub(super) fn thought_fold_id(thread_id: &str, kind: &str, key: u64) -> egui::Id {
     egui::Id::new(("cabin-thought-fold", thread_id, kind, key))
 }
@@ -395,19 +395,12 @@ pub(super) fn write_thought_fold(ctx: &egui::Context, id: egui::Id, fold: Though
     ctx.data_mut(|d| d.insert_temp(id, fold));
 }
 
+/// One quiet collapse control. Expanded shows a down chevron; minimized shows a right chevron.
+/// Same toggle as Minimize: the thought body hides, the short row stays. Hide is not painted.
 pub(super) fn paint_thought_fold_buttons(ui: &mut egui::Ui, fold: ThoughtFold) -> ThoughtFold {
     let mut fold = fold;
     for label in thought_fold_controls(fold) {
-        let resp = crate::theme::felt_label_button(
-            ui,
-            label,
-            egui::Color32::TRANSPARENT,
-            crate::theme::muted(),
-            6.0,
-            egui::vec2(0.0, 0.0),
-            None,
-            false,
-        );
+        let resp = paint_thought_collapse_hit(ui, label, fold.paints_body());
         if resp.clicked() {
             if let Some(act) = thought_control_act(label) {
                 fold = fold.apply(act);
@@ -415,6 +408,75 @@ pub(super) fn paint_thought_fold_buttons(ui: &mut egui::Ui, fold: ThoughtFold) -
         }
     }
     fold
+}
+
+fn paint_thought_collapse_hit(ui: &mut egui::Ui, label: &str, expanded: bool) -> egui::Response {
+    let color = crate::theme::subtle();
+    let font = egui::FontId::proportional(11.0);
+    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font, color));
+    let chev = 8.0_f32;
+    let gap = 3.0;
+    let pad = egui::vec2(2.0, 1.0);
+    let size = egui::vec2(
+        pad.x * 2.0 + chev + gap + galley.size().x,
+        (galley.size().y + pad.y * 2.0).max(14.0),
+    );
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    if resp.hovered() {
+        ui.painter()
+            .rect_filled(rect, 3.0, crate::theme::hover());
+    }
+    let cy = rect.center().y;
+    paint_thought_chevron(
+        ui.painter(),
+        egui::pos2(rect.min.x + pad.x, cy),
+        chev,
+        expanded,
+        color,
+    );
+    ui.painter().galley(
+        egui::pos2(
+            rect.min.x + pad.x + chev + gap,
+            cy - galley.size().y * 0.5,
+        ),
+        galley,
+        color,
+    );
+    crate::theme::pointing(resp)
+}
+
+fn paint_thought_chevron(
+    painter: &egui::Painter,
+    origin: egui::Pos2,
+    size: f32,
+    down: bool,
+    color: egui::Color32,
+) {
+    let stroke = egui::Stroke::new(1.1_f32, color);
+    let mid_y = origin.y;
+    let left = origin.x;
+    let right = origin.x + size;
+    let top = mid_y - size * 0.32;
+    let bot = mid_y + size * 0.32;
+    if down {
+        painter.line_segment(
+            [egui::pos2(left, top), egui::pos2(left + size * 0.5, bot)],
+            stroke,
+        );
+        painter.line_segment(
+            [egui::pos2(left + size * 0.5, bot), egui::pos2(right, top)],
+            stroke,
+        );
+    } else {
+        painter.line_segment(
+            [egui::pos2(left + 1.0, top), egui::pos2(right - 1.0, mid_y)],
+            stroke,
+        );
+        painter.line_segment(
+            [egui::pos2(right - 1.0, mid_y), egui::pos2(left + 1.0, bot)],
+            stroke,
+        );
+    }
 }
 
 pub(super) fn paint_chat_block(
