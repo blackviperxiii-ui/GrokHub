@@ -169,6 +169,8 @@ pub(super) fn paint_speech_bubble(
     // already fits, and a narrow pane does not subtract the gap twice.
     outer_w = clamp_bubble_outer(bubble_avail, outer_w, gap);
     let inner_w = inner_w.min((outer_w - BUBBLE_PAD_X * 2.0).max(1.0));
+    // Pad with spaces, not Frame inner_margin: egui clips the rounded fill
+    // against the content origin, which ate the first glyphs on Windows 2.10.6.
     let frame = egui::Frame::none()
         .fill(if user {
             crate::theme::bubble_user()
@@ -176,7 +178,33 @@ pub(super) fn paint_speech_bubble(
             crate::theme::bubble_assistant()
         })
         .rounding(crate::theme::USER_BUBBLE_RADIUS)
-        .inner_margin(egui::Margin::symmetric(BUBBLE_PAD_X, BUBBLE_PAD_Y));
+        .inner_margin(egui::Margin::ZERO);
+    let paint_inner = |ui: &mut egui::Ui| {
+        ui.set_width(outer_w);
+        ui.set_max_width(outer_w);
+        ui.add_space(BUBBLE_PAD_Y);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.add_space(BUBBLE_PAD_X);
+            ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                ui.set_max_width(inner_w);
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
+                if user || !markdown {
+                    let job = crate::markdown::wrapped_job(
+                        ui,
+                        body,
+                        inner_w,
+                        crate::theme::fg(),
+                    );
+                    ui.add(egui::Label::new(job).wrap().selectable(true));
+                } else {
+                    crate::markdown::show(ui, body);
+                }
+            });
+            ui.add_space(BUBBLE_PAD_X);
+        });
+        ui.add_space(BUBBLE_PAD_Y);
+    };
     let mut resp = None;
     if user {
         ui.scope(|ui| {
@@ -189,21 +217,7 @@ pub(super) fn paint_speech_bubble(
                 }
                 ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                     ui.set_max_width(outer_w);
-                    resp = Some(
-                        frame
-                            .show(ui, |ui| {
-                                ui.set_max_width(inner_w);
-                                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-                                let job = crate::markdown::wrapped_job(
-                                    ui,
-                                    body,
-                                    inner_w,
-                                    crate::theme::fg(),
-                                );
-                                ui.add(egui::Label::new(job).wrap().selectable(true));
-                            })
-                            .response,
-                    );
+                    resp = Some(frame.show(ui, paint_inner).response);
                 });
             });
         });
@@ -213,31 +227,19 @@ pub(super) fn paint_speech_bubble(
         ui.set_max_width(avail);
         ui.horizontal_top(|ui| {
             ui.set_max_width(avail);
+            ui.spacing_mut().item_spacing.x = 6.0;
             let mark = crate::theme::mark(ui.ctx());
-            ui.add(
-                egui::Image::from_texture(&mark)
-                    .fit_to_exact_size(egui::vec2(16.0, 16.0))
-                    .tint(crate::theme::muted()),
+            let (mark_rect, _) =
+                ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+            ui.painter().image(
+                mark.id(),
+                mark_rect,
+                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                crate::theme::muted(),
             );
             ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
                 ui.set_max_width(outer_w);
-                resp = Some(
-                    frame
-                        .show(ui, |ui| {
-                            ui.set_max_width(inner_w);
-                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-                            if markdown {
-                                crate::markdown::show(ui, body);
-                            } else {
-                                ui.add(
-                                    egui::Label::new(RichText::new(body).color(crate::theme::fg()))
-                                        .wrap()
-                                        .selectable(true),
-                                );
-                            }
-                        })
-                        .response,
-                );
+                resp = Some(frame.show(ui, paint_inner).response);
             });
         });
     });
@@ -533,7 +535,12 @@ impl Cabin {
             .frame(
                 egui::Frame::none()
                     .fill(crate::theme::bg())
-                    .inner_margin(egui::Margin::same(20.0)),
+                    .inner_margin(egui::Margin {
+                        left: 8.0,
+                        right: 16.0,
+                        top: 12.0,
+                        bottom: 8.0,
+                    }),
             )
             .show(ctx, |ui| {
                 if empty {

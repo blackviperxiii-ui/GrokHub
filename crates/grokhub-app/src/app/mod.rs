@@ -46,7 +46,7 @@ use grokhub_core::{
     composer_go, composer_go_tip, computer_cmd_line, context_fingerprint, context_percent,
     create_folder, create_project, daily_units_blocked, dedicated_imagine_model,
     dedicated_video_model, dedupe_hits, dedupe_suggestions, default_openclaw_paths, delete_thread,
-    devices_shows_pair_code, diagnostics_bundle, digest_line_from, display_tab_title, drop_node,
+    devices_shows_pair_code, diagnostics_bundle, digest_line_from, drop_node,
     drop_selected, drop_trailing_assistant, due_automations, due_loops, ensure_automation_schedule,
     estimate_messages, estimate_messages_from, extract_imagine_prompt, extract_insights,
     extract_work_pins, extract_work_updates, fact_candidates, fact_candidates_from, filter_palette,

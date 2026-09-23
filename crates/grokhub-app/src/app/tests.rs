@@ -348,6 +348,58 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     }
 
     #[test]
+    fn assistant_bubble_sits_flush_and_keeps_inner_pad() {
+        with_fonts_ui(|ui| {
+            ui.allocate_ui(egui::vec2(800.0, 400.0), |ui| {
+                ui.set_max_width(800.0);
+                let row = ui.max_rect();
+                let body = "The service page listing a Cummins QSX15 https://example.com/emea/documents/Service/02_Generators/PowerSource%20manual.pdf and a 500-hour kit.";
+                let resp = super::paint_speech_bubble(ui, body, false, true);
+                let lead = resp.rect.min.x - row.min.x;
+                assert!(
+                    lead < 40.0,
+                    "assistant bubble shoved right of the pane: lead {lead} row {} bubble {}",
+                    row.min.x,
+                    resp.rect.min.x
+                );
+                assert!(
+                    resp.rect.min.x + 0.5 >= row.min.x,
+                    "assistant bubble clipped off the left: {} < {}",
+                    resp.rect.min.x,
+                    row.min.x
+                );
+                assert!(
+                    resp.rect.max.x <= row.max.x + 1.0,
+                    "assistant bubble overflowed the right: {} > {}",
+                    resp.rect.max.x,
+                    row.max.x
+                );
+                assert!(
+                    resp.rect.width() > 400.0,
+                    "long assistant reply must use the pane, got {}",
+                    resp.rect.width()
+                );
+                assert!(
+                    resp.rect.height() > 36.0,
+                    "long URL must wrap inside the bubble, height {}",
+                    resp.rect.height()
+                );
+            });
+        });
+        let speech = include_str!("chat_ui.rs")
+            .split("fn paint_speech_bubble(")
+            .nth(1)
+            .and_then(|s| s.split("fn paint_msg_acts(").next())
+            .expect("paint_speech_bubble");
+        assert!(
+            speech.contains("inner_margin(egui::Margin::ZERO)")
+                && speech.contains("add_space(BUBBLE_PAD_Y)")
+                && speech.contains("add_space(BUBBLE_PAD_X)")
+                && speech.contains("allocate_exact_size(egui::vec2(16.0, 16.0)"),
+            "bubble pad must sit inside the fill, not get clipped by rounded inner_margin: {speech}"
+        );
+    }
+
     fn long_assistant_bubble_wraps_instead_of_one_line() {
         with_fonts_ui(|ui| {
             ui.allocate_ui(egui::vec2(800.0, 400.0), |ui| {
@@ -6618,9 +6670,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             pulse.contains("allocate_exact_size")
                 && pulse.contains("pulse_row_label")
-                && pulse.contains(".truncate()")
+                && pulse.contains(".wrap()")
+                && !pulse.contains(".truncate()")
                 && !pulse.contains("status_chip"),
-            "pulse rows stay one reserved line so the card cannot paint over the composer: {pulse}"
+            "pulse rows wrap the full line inside the reserved slot: {pulse}"
         );
         assert!(
             home.contains("paint_lane_chip") && home.contains("paint_device_glance_row"),
