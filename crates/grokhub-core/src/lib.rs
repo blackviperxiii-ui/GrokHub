@@ -124,10 +124,12 @@ pub use chat_job::{
     ChatSendKind,
 };
 pub use chat_view::{
-    assistant_prose, cluster_gap, is_skill_saved_mark, is_workload_user, merge_thinking,
-    merge_thinking_capped, quote_for_reply, refresh_last_stretch, scrolled_off_tail, scrub_thought,
+    apply_session_thought_act, assistant_prose, cluster_gap, effective_thought_fold,
+    is_skill_saved_mark, is_workload_user, merge_thinking, merge_thinking_capped, quote_for_reply,
+    refresh_last_stretch, scrolled_off_tail, scrub_thought, session_thoughts_start_collapsed,
     stretch_saved_skill, strip_thinking, thought_body_key, thought_control_act,
-    thought_fold_controls, thought_fold_draws, thought_shows_acts, thought_shows_label,
+    thought_fold_controls, thought_fold_draws, thought_fold_transition, thought_shows_acts,
+    thought_shows_label,
     visible_chat, visible_chat_refs, visible_turn_count, visible_turn_count_from, ChatKind,
     ChatView, ThoughtFold, ThoughtFoldAct, CHAT_BLOCK_GAP, CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK,
     SKILL_SAVED_MARK, SKILL_SAVED_NOTE, THOUGHT_CLUSTER_GAP, THOUGHT_ROW_LABEL,
