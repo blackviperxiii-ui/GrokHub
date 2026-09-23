@@ -1037,7 +1037,7 @@ impl AcpHandle {
 
 impl Drop for AcpHandle {
     fn drop(&mut self) {
-        {
+        if std::env::var_os("GROKHUB_ACP_DROP_TRACE").is_some() {
             use std::io::Write;
             if let Ok(mut f) = std::fs::OpenOptions::new()
                 .create(true)
@@ -1137,7 +1137,16 @@ pub fn run_single_turn(
     always_approve: bool,
     auto: bool,
 ) -> Result<SingleTurn, String> {
-    run_single_turn_full(prompt, cwd, resume, always_approve, auto, None, None, false)
+    run_single_turn_full(
+        prompt,
+        cwd,
+        resume,
+        always_approve,
+        auto,
+        None,
+        None,
+        SessionMode::Chat,
+    )
 }
 
 pub fn run_single_turn_full(
@@ -1148,7 +1157,7 @@ pub fn run_single_turn_full(
     auto: bool,
     model: Option<&str>,
     effort: Option<&str>,
-    plan: bool,
+    mode: SessionMode,
 ) -> Result<SingleTurn, String> {
     match grok_p_once(
         prompt,
@@ -1158,7 +1167,7 @@ pub fn run_single_turn_full(
         auto,
         model,
         effort,
-        plan,
+        mode,
         None,
         false,
     ) {
@@ -1171,7 +1180,7 @@ pub fn run_single_turn_full(
             auto,
             model,
             effort,
-            plan,
+            mode,
             None,
             false,
         ),
@@ -1188,7 +1197,7 @@ pub fn spawn_grok_p_stream(
     auto: bool,
     model: Option<&str>,
     effort: Option<&str>,
-    plan: bool,
+    mode: SessionMode,
     image: Option<&str>,
     fork: bool,
     skip_cabin_home: bool,
@@ -1202,7 +1211,7 @@ pub fn spawn_grok_p_stream(
         auto,
         model,
         effort,
-        plan,
+        mode,
         image,
         fork,
         skip_cabin_home,
@@ -1318,7 +1327,7 @@ fn grok_p_child(
     auto: bool,
     model: Option<&str>,
     effort: Option<&str>,
-    plan: bool,
+    mode: SessionMode,
     image: Option<&str>,
     fork: bool,
     skip_cabin_home: bool,
@@ -1339,7 +1348,7 @@ fn grok_p_child(
         auto,
         model,
         effort,
-        plan,
+        mode,
     );
     if image.is_some() {
         args = crate::locate::with_prompt_json(args, &crate::stream::prompt_json(prompt, image));
@@ -1353,9 +1362,9 @@ fn grok_p_child(
         .stderr(Stdio::piped())
         .env("GROK_NO_AUTO_UPDATE", "1");
     hide_windows_console(&mut cmd);
-    if always_approve {
+    if mode == SessionMode::Chat && always_approve {
         cmd.env("GROK_DEFAULT_SELECTED_PERMISSION", "always_allow_all_sessions");
-    } else if auto {
+    } else if mode == SessionMode::Chat && auto {
         cmd.env("GROK_DEFAULT_SELECTED_PERMISSION", "allow_command_always");
     }
     #[cfg(unix)]
@@ -1387,7 +1396,7 @@ fn grok_p_once(
     auto: bool,
     model: Option<&str>,
     effort: Option<&str>,
-    plan: bool,
+    mode: SessionMode,
     image: Option<&str>,
     fork: bool,
 ) -> Result<SingleTurn, String> {
@@ -1399,7 +1408,7 @@ fn grok_p_once(
         auto,
         model,
         effort,
-        plan,
+        mode,
         image,
         fork,
         false,
@@ -2531,6 +2540,10 @@ mod tests {
             .nth(1)
             .and_then(|s| s.split("fn looks_like_session_id").next())
             .expect("AcpHandle drop");
+        assert!(
+            drop.contains("GROKHUB_ACP_DROP_TRACE"),
+            "AcpHandle drop backtraces must stay gated: {drop}"
+        );
         let src = include_str!("client.rs");
         let drain = src
             .split("fn drain_stderr(")
@@ -2544,6 +2557,16 @@ mod tests {
         assert!(
             drain.contains("trim_stderr_tail"),
             "trimming must go through the char-boundary-safe helper: {drain}"
+        );
+        let child = src
+            .split("fn grok_p_child(")
+            .nth(1)
+            .and_then(|s| s.split("fn grok_p_once(").next())
+            .expect("grok_p_child");
+        assert!(
+            child.contains("mode == SessionMode::Chat && always_approve")
+                && child.contains("mode == SessionMode::Chat && auto"),
+            "Look/Plan must not set GROK_DEFAULT_SELECTED_PERMISSION yolo: {child}"
         );
         let stream = src
             .split("pub fn spawn_grok_p_stream(")

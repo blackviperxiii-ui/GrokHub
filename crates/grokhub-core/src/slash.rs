@@ -622,7 +622,7 @@ pub fn slash_help() -> String {
         "Mode pill: Chat / Plan / Look. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort: None / Minimal / Low / Medium / High / Extra High. A saved Max loads as Extra High. Default model is grok-4.7. Hover a composer pill for what it does. Grok Build runs the agent.",
         "Settings → Behavior: close to tray, living wall, and a quiet hours dropdown. Picking a window saves it.",
         "History search drops stale hits when the box changes. Re-opening the memory file already in the editor keeps unsaved typing.",
-        "Appearance: Dark, Light, System. Ask permission is grok agent stdio (ACP) so Allow / Deny can show; if ACP is down the turn is denied. Auto/Always and night/phone use grok -p and inherit the PermissionMode pill. Ask is fail-closed on those runs until ACP ensure. Halt is session/cancel.",
+        "Appearance: Dark, Light, System. Ask permission is grok agent stdio (ACP) so Allow / Deny can show; if ACP is down the turn is denied. Auto/Always stay on grok -p and inherit the PermissionMode pill. Look stays look-only on grok -p (`--permission-mode ask`, no desktop-do-the-work). Night/inbox/anticipate inherit scheduled_args like loops — Ask is fail-closed, no ACP. Halt is session/cancel.",
         "Voice: Ara. Hey Grok is push-to-talk STT into chat, then TTS of the reply body (not the thought process). Same on Linux and Windows. While live, Listening / Speaking / Ready sits above the composer with Stop. The strip stays up while Listening or Speaking and auto-hides about a second after Ready. Stop, the live mic, or Ctrl+G / Super+G leave. Failed STT shows Ready, not Listening. Desktop control is Grok Build computer-use — Halt cancels the ACP turn.",
         if cfg!(windows) {
             "First-time install and reinstall (Windows Setup + first cabin launch) automatically install Grok Build CLI alpha from https://x.ai/cli (GROK_CHANNEL=alpha). UAC on first run is expected. First run is Get Started — Super Grok OAuth signs in grok too. Get Started shows live device-code / OAuth failures, not leftover wall or install status. The Install control is hidden when grok is already present or an alpha install is already running. Settings → Connect writes CLI auth when grok is not already connected. One Update control checks every 2 hours for a newer Grok Build CLI alpha and a newer GitHub Latest cabin. Settings → Update stays visible for a manual check. The titlebar chip says Update CLI, Update cabin, or Update CLI and cabin and notifies in-app, not a web page. Acting on it runs only what is pending: grok update --alpha first, then the cabin (GitHub zip when there is no clone or the leftover clone is not main). A click when the probe found nothing still overlays both. A working alpha install is updated only when a newer alpha exists unless that manual check overlays. It does not switch the CLI to stable. If grok is on stable after an upgrade, the cabin switches it back to alpha. Settings About shows grok --version."
@@ -779,13 +779,14 @@ mod tests {
         );
         assert!(slash_help().contains("Grok Build computer-use"));
         assert!(slash_help().contains("inherit the PermissionMode pill"));
-        assert!(slash_help().contains("Ask is fail-closed on those runs until ACP ensure"));
+        assert!(slash_help().contains("Ask is fail-closed, no ACP"));
         assert!(slash_help().contains("Devices pair URL is a LAN IPv4"));
         assert!(slash_help().contains("Mode pill: Chat / Plan / Look"));
         assert!(
             slash_help().contains("Ask permission is grok agent stdio")
                 && slash_help().contains("if ACP is down the turn is denied")
-                && slash_help().contains("Auto/Always and night/phone use grok -p"),
+                && slash_help().contains("Look stays look-only")
+                && slash_help().contains("Night/inbox/anticipate inherit scheduled_args"),
             "{}",
             slash_help()
         );

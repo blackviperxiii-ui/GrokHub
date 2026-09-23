@@ -186,6 +186,16 @@ pub fn composer_chrome_stroke(focused: bool) -> Stroke {
 }
 
 #[cfg(test)]
+pub static PAINT_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+/// Tests that flip `USE_LIGHT` must hold this across set + assert so parallel
+/// `apply` / `set_paint_dark` cannot restore dark between the two.
+#[cfg(test)]
+pub fn hold_paint_test() -> std::sync::MutexGuard<'static, ()> {
+    PAINT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+#[cfg(test)]
 pub fn set_paint_dark(dark: bool) {
     USE_LIGHT.store(!dark, Ordering::Relaxed);
     LAST_PAINT.store(255, Ordering::SeqCst);
@@ -409,6 +419,8 @@ pub fn install_fonts(ctx: &egui::Context) {
 
 pub fn apply(ctx: &egui::Context, dark: bool) {
     install_fonts(ctx);
+    #[cfg(test)]
+    let _paint = hold_paint_test();
     USE_LIGHT.store(!dark, Ordering::Relaxed);
     let flag = if dark { 1 } else { 0 };
     if LAST_PAINT.swap(flag, Ordering::SeqCst) == flag {
@@ -714,6 +726,7 @@ mod tests {
     #[test]
     #[allow(clippy::assertions_on_constants)] // pins design constants
     fn grok_com_chrome_tokens() {
+        let _paint = hold_paint_test();
         assert_eq!(BG, Color32::from_rgb(0, 0, 0));
         assert_eq!(SURFACE, Color32::from_rgb(0x16, 0x18, 0x1c));
         assert_eq!(PANEL, Color32::from_rgb(0x1a, 0x1a, 0x1a));
@@ -836,6 +849,7 @@ mod tests {
 
     #[test]
     fn lift_fill_washes_transparent() {
+        let _paint = hold_paint_test();
         set_paint_dark(true);
         assert_eq!(lift_fill(Color32::TRANSPARENT, 0.0).a(), 0);
         let wash = lift_fill(Color32::TRANSPARENT, HOVER_WASH);
@@ -858,6 +872,7 @@ mod tests {
 
     #[test]
     fn veil_over_tints_the_card_without_clearing_it() {
+        let _paint = hold_paint_test();
         set_paint_dark(true);
         let rest = elevated();
         assert_eq!(veil_over(rest, Color32::TRANSPARENT), rest);
