@@ -173,6 +173,10 @@ impl Cabin {
                     })
             }
         };
+        let last_user = match self.active_skill_follow.as_deref() {
+            Some(block) if !block.trim().is_empty() => format!("{block}\n\n{last_user}"),
+            _ => last_user,
+        };
         if self.grok_p_rx.is_some() {
             return;
         }

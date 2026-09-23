@@ -4278,6 +4278,11 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             retry.contains("match_skill") && retry.contains("skill_follow_block"),
             "/retry must re-inject the skill follow that halt_in_flight cleared: {retry}"
         );
+        let kick = fn_src(&src, "kick_model");
+        assert!(
+            kick.contains("active_skill_follow") && kick.contains("last_user"),
+            "skill follow must ride the grok -p / ACP kick prompt, not sit unused: {kick}"
+        );
         let host_done = src
             .split("Ok(JobOut::HostDone(block))")
             .nth(1)
@@ -6422,6 +6427,77 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             skills.contains("uninstall") && skills.contains("plugin") && skills.contains("update"),
             "Connectors must expose grok plugin uninstall/update: {skills}"
+        );
+        assert!(
+            skills.contains("suggestions.skills") && skills.contains("save_suggested_skill"),
+            "Skills Suggested tiles must save like Automations Add: {skills}"
+        );
+        assert!(
+            skills.contains("CABIN_GITHUB_TOOLS")
+                && skills.contains("run_connector")
+                && skills.contains("github_token")
+                && skills.contains("persist_github_pat"),
+            "Connectors must paint read-only GitHub tiles wired to PAT secrets: {skills}"
+        );
+        assert!(
+            !skills.contains("create_pr_comment") && !skills.contains("outlook") && !skills.contains("gmail"),
+            "GitHub tiles are read-only and must not invent other websites: {skills}"
+        );
+        assert!(
+            skills.contains("Loading Grok Build skills…")
+                && skills.contains("None from grok inspect."),
+            "Grok Build skills must tell Loading apart from empty: {skills}"
+        );
+    }
+
+    #[test]
+    fn cabin_sca_2108_must_ships() {
+        let src = cabin_src();
+        let slash = fn_src(&src, "send_grok_slash");
+        assert!(
+            slash.contains("uses_acp")
+                && slash.contains("fail_ask_without_acp")
+                && slash.contains("composer_headless_flags")
+                && slash.contains("yolo")
+                && slash.contains("auto"),
+            "slash /workflow /compact /rewind must honor the PermissionMode pill: {slash}"
+        );
+        assert!(
+            !slash.contains("true,\n            false,\n            None,\n            None,\n            SessionMode::Chat"),
+            "Ask slash must not always yolo on grok -p: {slash}"
+        );
+        let send = fn_src(&src, "send_chat");
+        assert!(
+            send.contains("match_skill") && send.contains("skill_follow_block") && send.contains("active_skill_follow"),
+            "selecting a skill must set follow for the kick path: {send}"
+        );
+        let anticipate = fn_src(&src, "tick_anticipate");
+        assert!(
+            anticipate.contains("send_scheduled_chat"),
+            "anticipate must enqueue Follow skill through send_chat so match_skill can fire: {anticipate}"
+        );
+        let save = fn_src(&src, "save_suggested_skill");
+        assert!(
+            save.contains("save_skill") && save.contains("remember_skill") && save.contains("LearnedSuggestion"),
+            "Suggested skill Add must persist SKILL.md: {save}"
+        );
+        let conn = fn_src(&src, "run_connector");
+        assert!(
+            conn.contains("github")
+                && conn.contains("github_token")
+                && conn.contains("run_github_tool")
+                && !conn.contains("create_pr_comment"),
+            "run_connector is GitHub read-only via PAT: {conn}"
+        );
+        let path = include_str!("../../../grokhub-core/src/connector.rs");
+        let api = path
+            .split("pub fn github_api_path(")
+            .nth(1)
+            .and_then(|s| s.split("fn urlencode(").next())
+            .expect("github_api_path");
+        assert!(
+            api.contains("writes are not wired") && api.contains("create_pr_comment"),
+            "GitHub connector must reject writes: {api}"
         );
     }
 

@@ -98,7 +98,7 @@ use grokhub_core::{
     should_auto_continue_goal, should_capture_before_chat, should_idle_reflect, should_keep_frame,
     should_name_thread, should_notify_cabin_update, should_paint_greeting, should_refresh_greeting,
     should_refresh_llm, should_seed_sidebar, should_send_screenshot, should_trim_result_bodies,
-    should_update_cli_alpha, skill_follow_block, skill_offer_chip, skill_use_in_chat_prompt,
+    should_update_cli_alpha, skill_dir_name, skill_follow_block, skill_offer_chip, skill_use_in_chat_prompt,
     skip_night_check_receipt, slash_help, slash_kind, stage_project, start_hub_rotates_pair,
     state_for_disk, stretch_saved_skill, strip_thinking, summarize_trajectory, summarize_write,
     surgical_memory_edit, take_ui_text, teach_routine, teachable_steps, theme_id, theme_label,
@@ -118,7 +118,8 @@ use grokhub_core::{
     ChipThread, ComposerEnter, ComposerGo, DeleteOutcome, DeviceCodeStart, DigestLine,
     GreetingInput, GrokLoop, HeartbeatAct, HeyGrokAction, HeyGrokRoute, HostPlanStep, HostRisk,
     HubMemoryFile, HubSnapshot, HubState, ImagineKind, ImagineSpec, ImagineToolboxDock,
-    ImagineWall, InhabitBundle, LearningState, LiveBlock, LiveKind, LocalClock, MemoryEdit,
+    ImagineWall, InhabitBundle, LearnedSuggestion, LearningState, LiveBlock, LiveKind, LocalClock,
+    MemoryEdit,
     MintRealtimeFn, PermKey, PlusAct, PlusTarget, Policy, PresenceFrame, ProjectKind,
     ProjectMenuAct, ProjectNode, PttLine, QuickChip, Recipe, ReplayOp, ReviewDigest, RewindRecord,
     ScheduleRoute, SkillMd, Slash, SlashHit, StreamTokenKind, SuggestionStore, ThreadReuseView,
@@ -473,6 +474,7 @@ pub struct Cabin {
     eyes_cap_rx: Option<mpsc::Receiver<Result<String, String>>>,
     kick_cap_rx: Option<mpsc::Receiver<Result<String, String>>>,
     pending_kick: Option<bool>,
+    pending_slash: Option<String>,
     kick_frame: Option<String>,
     kick_skip: bool,
     recipe_cap_rx: Option<mpsc::Receiver<Result<String, String>>>,
@@ -885,6 +887,7 @@ impl Cabin {
             eyes_cap_rx: None,
             kick_cap_rx: None,
             pending_kick: None,
+            pending_slash: None,
             kick_frame: None,
             kick_skip: false,
             recipe_cap_rx: None,
@@ -1289,6 +1292,7 @@ impl Cabin {
         }
         self.pending_connectors.clear();
         self.pending_kick = None;
+        self.pending_slash = None;
         self.kick_cap_rx = None;
         self.kick_frame = None;
         self.kick_skip = false;
@@ -1642,6 +1646,58 @@ impl Cabin {
             self.skill_list.push(skill);
             self.skill_list.sort_by(|a, b| a.name.cmp(&b.name));
         }
+    }
+
+    pub(super) fn save_suggested_skill(&mut self, learned: &LearnedSuggestion) {
+        let name = learned
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(learned.title.trim());
+        if name.is_empty() {
+            self.status = "Suggested skill needs a name".into();
+            return;
+        }
+        let dir = skill_dir_name(name);
+        let slash = if dir.is_empty() {
+            String::new()
+        } else {
+            format!("/{dir}")
+        };
+        let proposed = SkillMd {
+            name: name.to_string(),
+            description: learned.body.clone(),
+            slash,
+            trigger: learned.trigger.clone().unwrap_or_default(),
+            instructions: learned.instructions.clone().unwrap_or_default(),
+            pitfalls: String::new(),
+            verify: String::new(),
+            runs: 0,
+        };
+        let to_save = if let Some(hit) = prefer_patch(&self.skill_list, &proposed) {
+            if let Some(existing) = self.skill_list.iter().find(|s| s.name == hit) {
+                patch_skill(existing, &proposed)
+            } else {
+                proposed
+            }
+        } else {
+            proposed
+        };
+        let written = to_save.clone();
+        std::thread::spawn(move || {
+            let _ = skills::save_skill(&written);
+        });
+        self.remember_skill(to_save.clone());
+        self.suggestions.skills.retain(|s| {
+            let n = s.name.as_deref().unwrap_or(s.title.as_str());
+            !n.eq_ignore_ascii_case(&to_save.name)
+        });
+        let suggestions = self.suggestions.clone();
+        std::thread::spawn(move || {
+            let _ = crate::store::save_suggestions(&suggestions);
+        });
+        self.status = format!("Wrote skill {}", to_save.name);
     }
 
     fn commit_proposed_skill(&mut self, proposed: SkillMd) {

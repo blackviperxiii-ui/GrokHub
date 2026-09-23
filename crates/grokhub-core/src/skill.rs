@@ -158,6 +158,20 @@ pub fn match_skill<'a>(user_text: &str, skills: &'a [SkillMd]) -> Option<&'a Ski
             }
         }
     }
+    // Anticipate and Use-in-chat "Follow skill {name}" must hit by name, not Jaccard.
+    let lower = t.to_ascii_lowercase();
+    if let Some(rest) = lower.strip_prefix("follow skill ") {
+        let name = rest.trim();
+        if !name.is_empty() {
+            if let Some(hit) = skills.iter().find(|s| {
+                s.name.eq_ignore_ascii_case(name)
+                    || s.slash.eq_ignore_ascii_case(name)
+                    || s.slash.eq_ignore_ascii_case(&format!("/{name}"))
+            }) {
+                return Some(hit);
+            }
+        }
+    }
     let q = words(t);
     let mut best: Option<&SkillMd> = None;
     let mut best_score = 0.0f32;
@@ -336,9 +350,10 @@ mod tests {
             "flash-pi",
             "Use in chat must activate the skill, not send a vague Follow skill line"
         );
-        assert!(
-            match_skill("Follow skill flash-pi", &skills).is_none(),
-            "Follow skill <name> is below the Jaccard gate"
+        assert_eq!(
+            match_skill("Follow skill flash-pi", &skills).unwrap().name,
+            "flash-pi",
+            "Follow skill <name> must hit by name so anticipate is not a no-op"
         );
         let proposed = propose_skill_from_turn("flash the pi", "ok", &["dd if=a".into()]);
         assert_eq!(proposed.slash, "/flash");
