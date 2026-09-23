@@ -81,11 +81,12 @@ impl ThoughtFold {
     }
 }
 
-/// Buttons for the current fold. Hidden has none, because that thought is not drawn.
+/// One collapse control. Expanded collapses the body; minimized expands it.
+/// Hide is not offered. A fold already stored as hidden still draws nothing.
 pub fn thought_fold_controls(fold: ThoughtFold) -> &'static [&'static str] {
     match fold {
-        ThoughtFold::Expanded => &["Minimize", "Hide"],
-        ThoughtFold::Minimized => &["Expand", "Hide"],
+        ThoughtFold::Expanded => &["Collapse"],
+        ThoughtFold::Minimized => &["Expand"],
         ThoughtFold::Hidden => &[],
     }
 }
@@ -93,7 +94,7 @@ pub fn thought_fold_controls(fold: ThoughtFold) -> &'static [&'static str] {
 pub fn thought_control_act(label: &str) -> Option<ThoughtFoldAct> {
     match label {
         "Expand" => Some(ThoughtFoldAct::Expand),
-        "Minimize" => Some(ThoughtFoldAct::Minimize),
+        "Collapse" | "Minimize" => Some(ThoughtFoldAct::Minimize),
         "Hide" => Some(ThoughtFoldAct::Hide),
         _ => None,
     }
@@ -816,15 +817,14 @@ mod tests {
         assert!(ThoughtFold::Minimized.paints_row());
         assert!(!ThoughtFold::Hidden.paints_body());
         assert!(!ThoughtFold::Hidden.paints_row());
-        assert_eq!(
-            thought_fold_controls(ThoughtFold::Expanded),
-            &["Minimize", "Hide"]
-        );
-        assert_eq!(
-            thought_fold_controls(ThoughtFold::Minimized),
-            &["Expand", "Hide"]
-        );
+        assert_eq!(thought_fold_controls(ThoughtFold::Expanded), &["Collapse"]);
+        assert_eq!(thought_fold_controls(ThoughtFold::Minimized), &["Expand"]);
         assert!(thought_fold_controls(ThoughtFold::Hidden).is_empty());
+        assert!(
+            !thought_fold_controls(ThoughtFold::Expanded).contains(&"Hide")
+                && !thought_fold_controls(ThoughtFold::Minimized).contains(&"Hide"),
+            "Hide is not a thought-process control"
+        );
         assert_eq!(
             ThoughtFold::Expanded.apply(ThoughtFoldAct::Minimize),
             ThoughtFold::Minimized
@@ -842,6 +842,10 @@ mod tests {
             ThoughtFold::Hidden
         );
         assert_eq!(thought_control_act("Expand"), Some(ThoughtFoldAct::Expand));
+        assert_eq!(
+            thought_control_act("Collapse"),
+            Some(ThoughtFoldAct::Minimize)
+        );
         assert_eq!(thought_control_act("Minimize"), Some(ThoughtFoldAct::Minimize));
         assert_eq!(thought_control_act("Hide"), Some(ThoughtFoldAct::Hide));
         assert_eq!(thought_control_act("Reply"), None);
