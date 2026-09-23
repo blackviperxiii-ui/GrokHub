@@ -17,6 +17,14 @@ impl Cabin {
             self.status = "Unknown command — /help".into();
             return;
         }
+        if btw_queues_without_interrupt(self.session_mode == SessionMode::Ask, self.running) {
+            self.side_ask_queue.push(text);
+            self.status = format!(
+                "btw queued ({}) — main run continues",
+                self.side_ask_queue.len()
+            );
+            return;
+        }
         match chat_send_kind(
             self.chat_job_thread.as_deref(),
             &self.visible_thread_id(),
@@ -214,6 +222,7 @@ impl Cabin {
             None
         };
         if !self.scheduled_perm && self.permission_mode.uses_acp() {
+            self.side_ask_kick = false;
             let prompt_err = self
                 .acp
                 .as_ref()
@@ -265,6 +274,12 @@ impl Cabin {
             .unwrap_or(true)
             || !resume_in_cabin;
         let fork = self.threads.get(idx).map(|t| t.grok_fork).unwrap_or(false);
+        let mode = if self.side_ask_kick {
+            SessionMode::Ask
+        } else {
+            self.session_mode
+        };
+        self.side_ask_kick = false;
         let worktree = self
             .threads
             .get(idx)
@@ -278,7 +293,7 @@ impl Cabin {
             auto,
             Some(model.as_str()),
             effort,
-            self.session_mode,
+            mode,
             image.as_deref(),
             fork,
             user_home,
