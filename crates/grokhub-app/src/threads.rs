@@ -1,4 +1,4 @@
-use grokhub_core::{uid, ThreadGoal};
+use grokhub_core::{empty_chat_draft, uid, ThreadGoal};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -116,6 +116,12 @@ pub fn session_in_chat_folder(thread_project: Option<&str>, selected: Option<&st
         Some(id) => thread_project == Some(id),
         None => thread_project.is_none(),
     }
+}
+
+/// Extra History row for a project folder. Grok session rows are painted separately.
+/// An unused Chat draft (no dialogue, no session) stays off the rail.
+pub fn project_folder_history_row(already_listed: bool, empty: bool, has_session: bool) -> bool {
+    !already_listed && !empty_chat_draft(empty, has_session)
 }
 
 /// Delete Project puts chats back in History. Transcripts stay on the thread.
@@ -316,5 +322,17 @@ mod tests {
 
         let legacy: ChatThread = serde_json::from_str(r#"{"id":"t1","title":"legacy"}"#).unwrap();
         assert!(legacy.project_id.is_none());
+    }
+
+    #[test]
+    fn project_history_skips_the_unused_empty_draft() {
+        assert!(
+            !project_folder_history_row(false, true, false),
+            "clicking Chat must not paint the empty draft in the project folder"
+        );
+        assert!(project_folder_history_row(false, false, false));
+        assert!(!project_folder_history_row(true, false, true));
+        assert!(empty_chat_draft(true, false));
+        assert!(!empty_chat_draft(false, false));
     }
 }

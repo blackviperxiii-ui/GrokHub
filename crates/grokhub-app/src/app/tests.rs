@@ -1131,6 +1131,12 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             bind.contains("click_project_opens_board") && bind.contains("Nav::Chat"),
             "a project selected from the board returns to chat: {bind}"
         );
+        let tree_at = bind.find("if tree_changed").expect("tree_changed");
+        let halt_at = bind.find("halt_in_flight").expect("halt_in_flight");
+        assert!(
+            tree_at < halt_at,
+            "restoring the same project filter must not halt a live reply: {bind}"
+        );
         let drop_proj = src
             .split("fn remove_project_id(")
             .nth(1)
@@ -1150,6 +1156,20 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             created.contains("project_id"),
             "new chat while a project is selected must file into that folder: {created}"
+        );
+        let rail = src
+            .split("id_salt(\"rail-history\")")
+            .nth(1)
+            .and_then(|s| s.split("fn cached_chat_views(").next())
+            .expect("rail-history");
+        assert!(
+            rail.contains("project_folder_history_row"),
+            "project History must skip unlisted empty drafts: {rail}"
+        );
+        let row = include_str!("../threads.rs");
+        assert!(
+            row.contains("fn project_folder_history_row") && row.contains("empty_chat_draft"),
+            "project History rows must use empty_chat_draft"
         );
     }
 

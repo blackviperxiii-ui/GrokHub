@@ -69,12 +69,13 @@ impl Cabin {
             self.nav = Nav::Chat;
         }
         self.status = format!("Bound {name}");
-        if self.running {
-            self.halt_in_flight();
-        }
-        self.acp = None;
-        self.acp_spawn_rx = None;
+        // Same bound tree is a History filter restore. Halt only when the cwd changes.
         if tree_changed {
+            if self.running {
+                self.halt_in_flight();
+            }
+            self.acp = None;
+            self.acp_spawn_rx = None;
             if let Some(t) = self.threads.get_mut(self.thread_idx) {
                 t.grok_cwd = None;
                 t.grok_session = None;

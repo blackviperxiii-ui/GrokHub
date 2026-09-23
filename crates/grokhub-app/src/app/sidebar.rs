@@ -517,10 +517,24 @@ impl Cabin {
                                     ) {
                                         return None;
                                     }
-                                    if t.grok_session
+                                    let has_session = t
+                                        .grok_session
                                         .as_deref()
-                                        .is_some_and(|id| listed.iter().any(|s| s == id))
-                                    {
+                                        .is_some_and(|id| !id.trim().is_empty());
+                                    let already_listed = t
+                                        .grok_session
+                                        .as_deref()
+                                        .is_some_and(|id| listed.iter().any(|s| s == id));
+                                    let empty = if i == self.thread_idx {
+                                        self.messages.is_empty()
+                                    } else {
+                                        t.messages.is_empty()
+                                    };
+                                    if !threads::project_folder_history_row(
+                                        already_listed,
+                                        empty,
+                                        has_session,
+                                    ) {
                                         return None;
                                     }
                                     if !q.is_empty()
