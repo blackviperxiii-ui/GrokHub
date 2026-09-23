@@ -5,6 +5,8 @@ use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::protocol::SessionMode;
+
 /// `(env key, scanned at, grok path, refresh in flight)`.
 type GrokBinCache = Option<(String, Instant, Option<PathBuf>, bool)>;
 /// `(settings path, settings mtime, read at, api key, refresh in flight)`.
@@ -849,15 +851,26 @@ pub fn single_turn_args_full(
     auto: bool,
     model: Option<&str>,
     effort: Option<&str>,
-    plan: bool,
+    mode: SessionMode,
 ) -> Vec<String> {
-    let mut a = single_turn_args(prompt, cwd, resume, always_approve && !plan, auto && !plan);
+    let plan = mode == SessionMode::Plan;
+    let look = mode == SessionMode::Ask;
+    let mut a = single_turn_args(
+        prompt,
+        cwd,
+        resume,
+        always_approve && !plan && !look,
+        auto && !plan && !look,
+    );
     if plan {
         a.push("--permission-mode".into());
         a.push("plan".into());
+    } else if look {
+        a.push("--permission-mode".into());
+        a.push("ask".into());
     }
-    // Ask is fail-closed here: do not remap to --always-approve.
-    // Composer chat still yolos Ask via PermissionMode::composer_headless_flags.
+    // Ask / Look are fail-closed here: do not remap to --always-approve.
+    // Composer Ask leftover flags match scheduled Ask (no yolo).
     // Night / loop / phone inherit the pill via PermissionMode::scheduled_flags.
     if let Some(m) = model.map(str::trim).filter(|s| !s.is_empty()) {
         a.push("--model".into());
@@ -867,10 +880,12 @@ pub fn single_turn_args_full(
         a.push("--reasoning-effort".into());
         a.push(e.to_string());
     }
-    a.push("--sandbox".into());
-    a.push("off".into());
-    a.push("--rules".into());
-    a.push(CABIN_DESKTOP_RULES.into());
+    if !look {
+        a.push("--sandbox".into());
+        a.push("off".into());
+        a.push("--rules".into());
+        a.push(CABIN_DESKTOP_RULES.into());
+    }
     a
 }
 
@@ -1152,7 +1167,7 @@ mod tests {
             false,
             Some("grok-4.7"),
             Some("high"),
-            true,
+            SessionMode::Plan,
         );
         assert!(
             full.windows(2).any(|w| w[0] == "--model" && w[1] == "grok-4.7"),
@@ -1169,17 +1184,44 @@ mod tests {
             "{full:?}"
         );
         assert!(resume.iter().any(|a| a == "--always-approve"), "{resume:?}");
-        let ask = single_turn_args_full("hi", "/tmp/work", None, false, false, None, None, false);
+        let ask = single_turn_args_full(
+            "hi",
+            "/tmp/work",
+            None,
+            false,
+            false,
+            None,
+            None,
+            SessionMode::Chat,
+        );
         assert!(
             !ask.iter().any(|a| a == "--always-approve"),
             "Ask inherit is fail-closed — no silent always-approve: {ask:?}"
         );
-        let always = single_turn_args_full("hi", "/tmp/work", None, true, false, None, None, false);
+        let always = single_turn_args_full(
+            "hi",
+            "/tmp/work",
+            None,
+            true,
+            false,
+            None,
+            None,
+            SessionMode::Chat,
+        );
         assert!(
             always.iter().any(|a| a == "--always-approve"),
             "Always maps to --always-approve: {always:?}"
         );
-        let auto = single_turn_args_full("hi", "/tmp/work", None, false, true, None, None, false);
+        let auto = single_turn_args_full(
+            "hi",
+            "/tmp/work",
+            None,
+            false,
+            true,
+            None,
+            None,
+            SessionMode::Chat,
+        );
         assert!(
             auto.windows(2)
                 .any(|w| w[0] == "--permission-mode" && w[1] == "auto"),
@@ -1197,6 +1239,56 @@ mod tests {
         assert!(
             ask.windows(2).any(|w| w[0] == "--rules" && w[1] == CABIN_DESKTOP_RULES),
             "cabin grok -p must tell Grok it has this computer: {ask:?}"
+        );
+        let look = single_turn_args_full(
+            "hi",
+            "/tmp/work",
+            None,
+            true,
+            true,
+            None,
+            None,
+            SessionMode::Ask,
+        );
+        assert!(
+            look.windows(2)
+                .any(|w| w[0] == "--permission-mode" && w[1] == "ask"),
+            "Look on Auto/Always is --permission-mode ask: {look:?}"
+        );
+        assert!(
+            !look.iter().any(|a| a == "--always-approve"),
+            "Look must not yolo: {look:?}"
+        );
+        assert!(
+            !look.windows(2).any(|w| w[0] == "--permission-mode" && w[1] == "auto"),
+            "Look must not inherit Auto: {look:?}"
+        );
+        assert!(
+            !look.iter().any(|a| a == "--sandbox")
+                && !look.iter().any(|a| a == CABIN_DESKTOP_RULES),
+            "Look must not inject desktop-do-the-work: {look:?}"
+        );
+        let plan_only = single_turn_args_full(
+            "hi",
+            "/tmp/work",
+            None,
+            false,
+            false,
+            None,
+            None,
+            SessionMode::Plan,
+        );
+        assert!(
+            plan_only
+                .windows(2)
+                .any(|w| w[0] == "--permission-mode" && w[1] == "plan"),
+            "Plan stays plan: {plan_only:?}"
+        );
+        assert!(
+            plan_only
+                .windows(2)
+                .any(|w| w[0] == "--rules" && w[1] == CABIN_DESKTOP_RULES),
+            "Plan keeps desktop rules: {plan_only:?}"
         );
         // 1.0.38 --help: same headless surface as 1.0.36. Do not switch to
         // streaming-messages-json / --include-partial-messages (TUI Messages wire).

@@ -83,12 +83,14 @@ impl PermissionMode {
         matches!(self, Self::Ask)
     }
 
-    /// Composer `grok -p` leftover. `kick_model` Ask uses ACP (`uses_acp`) and
-    /// does not reach this. Night / loop / phone use [`Self::scheduled_flags`].
+    /// Composer `grok -p` leftover. Interactive Ask uses ACP (`uses_acp`) and
+    /// does not reach this. Ask matches [`Self::scheduled_flags`] — no silent
+    /// `--always-approve` if a future path skips the ACP arm.
     pub fn composer_headless_flags(self) -> (bool, bool) {
         match self {
             Self::Auto => (false, true),
-            Self::AlwaysApprove | Self::Ask => (true, false),
+            Self::AlwaysApprove => (true, false),
+            Self::Ask => (false, false),
         }
     }
 
@@ -119,7 +121,7 @@ impl PermissionMode {
 /// User-visible Ask deny when `grok agent stdio` cannot start or has died.
 /// Do not fall through to headless `grok -p --sandbox off`.
 pub const ASK_ACP_DOWN: &str =
-    "Ask needs ACP so Allow / Deny can show. Grok Build agent is down — turn denied.";
+    "Ask is fail-closed: Allow / Deny needs a live Grok Build agent. Turn denied. Install Grok Build CLI or Start agent in Settings → Update.";
 
 /// Ask fail-closed copy. Empty detail keeps the gate line; extra text is appended.
 pub fn ask_denied_without_acp(detail: &str) -> String {
@@ -1365,7 +1367,10 @@ mod tests {
         assert!(!PermissionMode::AlwaysApprove.uses_acp());
         let down = ask_denied_without_acp("");
         assert!(
-            down.contains("Allow / Deny") && down.contains("turn denied"),
+            down.contains("Allow / Deny")
+                && down.to_ascii_lowercase().contains("turn denied")
+                && down.contains("Install Grok Build")
+                && down.contains("Start agent"),
             "{down}"
         );
         assert!(
@@ -1379,8 +1384,8 @@ mod tests {
         );
         assert_eq!(
             PermissionMode::Ask.composer_headless_flags(),
-            (true, false),
-            "composer grok -p leftover; kick_model Ask uses ACP instead"
+            (false, false),
+            "composer Ask must not yolo --always-approve"
         );
         assert_eq!(PermissionMode::Auto.composer_headless_flags(), (false, true));
         assert_eq!(

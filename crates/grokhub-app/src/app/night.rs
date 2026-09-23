@@ -447,17 +447,27 @@ impl Cabin {
             self.status = "Install Grok Build (x.ai/cli) or Connect Grok in Settings".into();
             return;
         }
-        self.mark_auto_ran(&a.id, now_ms);
-        bump_usage(&mut self.usage, "automation");
-        self.daily_auto_used = self.usage.automation;
-        self.daily_auto_day = self.usage.day.clone();
-        self.persist_usage();
         self.status = format!("Night: {}", a.name);
         if replay.is_some() {
+            self.mark_auto_ran(&a.id, now_ms);
+            bump_usage(&mut self.usage, "automation");
+            self.daily_auto_used = self.usage.automation;
+            self.daily_auto_day = self.usage.day.clone();
+            self.persist_usage();
             return;
         }
         self.land_on_real_chat();
         self.send_scheduled_chat(a.instructions);
+        if self.running || self.pending_kick.is_some() || self.grok_p_rx.is_some() {
+            self.mark_auto_ran(&a.id, now_ms);
+            bump_usage(&mut self.usage, "automation");
+            self.daily_auto_used = self.usage.automation;
+            self.daily_auto_day = self.usage.day.clone();
+            self.persist_usage();
+        } else {
+            self.mark_auto_skipped(&a.id, now_ms);
+            self.status = format!("Night skipped {} (kick did not start)", a.name);
+        }
     }
 
     pub(super) fn tick_loops(&mut self) -> bool {

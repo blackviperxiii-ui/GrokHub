@@ -2324,6 +2324,7 @@ mod tests {
             permission_risk_stroke_color("always-approve", false),
             crate::theme::border()
         );
+        let _paint = crate::theme::hold_paint_test();
         crate::theme::set_paint_dark(true);
         assert_eq!(
             permission_risk_stroke_color("always-approve", true),
@@ -2760,6 +2761,7 @@ mod tests {
         let ctx = egui::Context::default();
         let _ = ctx.run(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
+                let _paint = crate::theme::hold_paint_test();
                 crate::theme::set_paint_dark(true);
                 paint_run_pulse(ui, "Running", "run_terminal_cmd");
                 paint_run_pulse(ui, "", "hidden");
