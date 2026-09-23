@@ -44,6 +44,18 @@ impl Cabin {
                             run_pending_update = true;
                         }
                     }
+                    let clock = Self::local_clock();
+                    if let Some(quiet) = quiet_until_chip(
+                        &clock.hm(),
+                        &self.cfg.quiet_start,
+                        &self.cfg.quiet_end,
+                    ) {
+                        ui.add_space(8.0);
+                        if crate::cards::titlebar_update_chip(ui, &quiet) {
+                            self.nav = Nav::Settings;
+                            self.settings_sec = SettingsSec::Behavior;
+                        }
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
                         if titlebar_chrome_hit(&titlebar_chrome_btn(ui, ChromeBtn::Close)) {

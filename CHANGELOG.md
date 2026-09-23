@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.6 — 2026-09-23
+
+Cabin C chrome: shared explicit-yes confirm sheet (Ask Always, session Always, destructive host). Empty-home Coding / Life chip (default Coding). Titlebar Quiet until X when Behavior quiet hours are active. History Last you / fork branch map. Device glance only when hub share or a last frame is bound.
+
+- Linux: `grokhub-linux-v2.10.6.tar.gz` and AUR `pkgver=2.10.6`.
+- Windows: `GrokHub-Setup-2.10.6.exe` and `grokhub-windows-v2.10.6.zip`.
+- Cursor cabin 2.10.6. VERSION 2.10.6.
+
 ## 2.10.5 — 2026-09-23
 
 Empty-home cabin pulse (signed-in, not Scratch) sits under the greeting: next job or Morning brief seed, pinned goal, up to two open workboard titles, muted `usage_line`. No weather, mail, or calendar stubs. Ask-card Always is a second beat that names session-wide skip and that night / loop / phone inherit `--always-approve` until quit. Enter is still Allow, Esc is still Deny. Composer Always stays session-only.

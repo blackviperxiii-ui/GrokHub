@@ -3,19 +3,6 @@
 use super::*;
 use grokhub_core::{usage_line, Automation, BoardCard, BoardStatus, GrokLoop, UsageDay};
 
-/// Ask-card Always second beat. Named so tests can lock the inherit line.
-pub(super) const ALWAYS_CONFIRM_LINE1: &str = "Skip every tool prompt this launch.";
-pub(super) const ALWAYS_CONFIRM_LINE2: &str =
-    "Night, loops, and phone inherit --always-approve until quit.";
-
-/// Confirm sheet stays up only while Ask still shows this `rpc_id`.
-pub(super) fn always_confirm_matches_rpc(
-    armed: Option<&serde_json::Value>,
-    current: &serde_json::Value,
-) -> bool {
-    armed == Some(current)
-}
-
 /// One text line at FONT_TIP. Must match `paint_empty_pulse` row allocate.
 const PULSE_ROW_H: f32 = 22.0;
 /// Frame `inner_margin` on each side. Reserve uses 2× this, never leftover wrap.
@@ -436,23 +423,5 @@ mod tests {
             assert!(!label.contains('\n'));
         }
         assert!(pulse_row_label(&long, "now").ends_with('…'));
-    }
-
-    #[test]
-    fn always_confirm_names_session_skip_and_scheduled_inherit() {
-        assert!(ALWAYS_CONFIRM_LINE1
-            .to_ascii_lowercase()
-            .contains("skip every tool prompt this launch"));
-        assert!(
-            ALWAYS_CONFIRM_LINE2.contains("--always") && ALWAYS_CONFIRM_LINE2.contains("approve")
-        );
-        assert!(ALWAYS_CONFIRM_LINE2.contains("Night"));
-        assert!(ALWAYS_CONFIRM_LINE2.contains("loop"));
-        assert!(ALWAYS_CONFIRM_LINE2.contains("phone"));
-        let a = serde_json::json!(1);
-        let b = serde_json::json!(2);
-        assert!(always_confirm_matches_rpc(Some(&a), &a));
-        assert!(!always_confirm_matches_rpc(Some(&a), &b));
-        assert!(!always_confirm_matches_rpc(None, &a));
     }
 }

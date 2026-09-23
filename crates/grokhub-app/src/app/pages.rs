@@ -505,6 +505,25 @@ impl Cabin {
             if crate::cards::page_header(ui, "History", "Delete all") {
                 self.delete_all_history();
             }
+            let marks = session_markers(&self.threads, self.thread_idx);
+            if !marks.is_empty() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    for mark in &marks {
+                        if crate::cards::ghost_pill(ui, &mark.label) {
+                            if let Some(i) = self.threads.iter().position(|t| t.id == mark.thread_id)
+                            {
+                                self.apply_switch_thread(i);
+                                if mark.kind == SessionMarkKind::LastYou {
+                                    self.jump_last_you = true;
+                                }
+                                self.nav = Nav::Chat;
+                            }
+                        }
+                    }
+                });
+                ui.add_space(8.0);
+            }
             ui.horizontal(|ui| {
                 crate::cards::search_bar(ui, &mut self.history_q, "Search chats and memory", 320.0);
                 if crate::cards::white_pill(ui, "Search") {

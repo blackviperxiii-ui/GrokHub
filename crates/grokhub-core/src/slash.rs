@@ -618,9 +618,9 @@ pub fn slash_help() -> String {
         "/models — Grok catalog",
         "/palette — command palette. Search walks nested files in the bound project (or ~/GrokHub-Work), not only the top of that folder.",
         "Enter sends; Ctrl+Enter newline. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The transcript Running row has no Stop. The changing status text above the composer is gone. The context usage bar stays. A green live dot plus Thinking / Running / Waiting sits on the turn; hover shows the current action. That line does not sit above the composer.",
-        "The Ask card names the command, path, or site. Always on that card confirms skip every tool prompt this launch; night / loop / phone inherit --always-approve until quit. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out. History lists grok sessions from the chat cwd on Linux and Windows.",
+        "The Ask card names the command, path, or site. Always on that card confirms skip every tool prompt this launch; night / loop / phone inherit --always-approve until quit. Composer Always and a destructive host command reuse that confirm sheet (title, consequence, Confirm or Run, Cancel). Enter / Esc stay Allow / Deny on the Ask card; overlay confirm uses them only when the composer is empty. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out. History lists grok sessions from the chat cwd on Linux and Windows. History offers Last you and fork branch points when those markers exist.",
         "Mode pill: Chat / Plan / Look. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort: None / Minimal / Low / Medium / High / Extra High. A saved Max loads as Extra High. Default model is grok-4.7. Hover a composer pill for what it does. Grok Build runs the agent.",
-        "Settings → Behavior: close to tray, living wall, and a quiet hours dropdown. Picking a window saves it.",
+        "Settings → Behavior: close to tray, living wall, and a quiet hours dropdown. Picking a window saves it. A Quiet until chip shows on the titlebar only while that window is active. Empty home shows a Coding / Life chip (default Coding) that only reorders chips — no Personal rail. A device glance appears only when hub share or a last frame is bound; click opens Devices.",
         "History search drops stale hits when the box changes. Re-opening the memory file already in the editor keeps unsaved typing.",
         "Appearance: Dark, Light, System. Ask permission is grok agent stdio (ACP) so Allow / Deny can show; if ACP is down the turn is denied. Auto/Always stay on grok -p and inherit the PermissionMode pill. Look stays look-only on grok -p (`--permission-mode ask`, no desktop-do-the-work). Night/inbox/anticipate inherit scheduled_args like loops — Ask is fail-closed, no ACP. Halt is session/cancel.",
         "Voice: Ara. Hey Grok is push-to-talk STT into chat, then TTS of the reply body (not the thought process). Same on Linux and Windows. While live, Listening / Speaking / Ready sits above the composer with Stop. The strip stays up while Listening or Speaking and auto-hides about a second after Ready. Stop, the live mic, or Ctrl+G / Super+G leave. Failed STT shows Ready, not Listening. Desktop control is Grok Build computer-use — Halt cancels the ACP turn.",
@@ -825,6 +825,11 @@ mod tests {
         assert!(slash_help().contains("The context usage bar stays"));
         assert!(slash_help().contains("The Ask card names the command, path, or site"));
         assert!(slash_help().contains("skip every tool prompt this launch"));
+        assert!(slash_help().contains("reuse that confirm sheet"));
+        assert!(slash_help().contains("Last you and fork branch points"));
+        assert!(slash_help().contains("Quiet until chip"));
+        assert!(slash_help().contains("Coding / Life chip"));
+        assert!(slash_help().contains("device glance appears only when hub share"));
         assert!(slash_help().contains("cabin pulse"));
         assert!(slash_help().contains("leaves the rewind snapshot out"));
         assert!(slash_help().contains("History lists grok sessions from the chat cwd"));
