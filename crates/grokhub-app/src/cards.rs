@@ -917,7 +917,12 @@ pub enum ChipRowAct {
 }
 
 pub(crate) fn chip_paint_label(label: &str) -> String {
-    label.split_whitespace().collect::<Vec<_>>().join(" ")
+    label
+        .split_whitespace()
+        .flat_map(|w| w.split('…'))
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Wrap width for a suggestion chip. Two lines, not a one-line ellipsis.
@@ -926,13 +931,16 @@ pub const CHIP_LABEL_WRAP: f32 = 180.0;
 pub const CHIP_PAD_X: f32 = 14.0;
 pub const CHIP_PAD_Y: f32 = 8.0;
 
-/// Max width of the chip cluster — follows the composer column.
+/// Max width of the chip cluster — Ask anything column, never the inflated pane.
 pub fn chip_row_width_lock(avail: f32) -> f32 {
-    avail.max(120.0)
+    avail.clamp(120.0, crate::theme::CHAT_COL_W)
 }
 
-/// Two-line chip row so leftover empty-home height cannot vertically center the chips.
+/// One chip line (pad + two wrapped label lines). Empty-home leftover must not
+/// vertically center a single chip.
 pub const CHIP_ROW_H: f32 = 68.0;
+/// Two chip lines so a 5-wide rank wraps inside `chip_row_width_lock` instead of clipping.
+pub const CHIP_CLUSTER_H: f32 = CHIP_ROW_H * 2.0 + 6.0;
 
 /// Empty-home placeholder when ranking yields none. Not a ranked action chip.
 pub const CHIP_EMPTY_LABEL: &str = "Nothing queued";
@@ -1031,13 +1039,16 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
         return None;
     }
     let mut act = None;
-    let max_w = chip_row_width_lock(ui.available_width());
+    let col = composer_pill_w(ui.ctx().screen_rect().width());
+    let max_w = chip_row_width_lock(ui.available_width().min(col));
     ui.allocate_ui_with_layout(
-        egui::vec2(max_w, CHIP_ROW_H),
-        egui::Layout::left_to_right(egui::Align::Center)
-            .with_main_wrap(false)
+        egui::vec2(max_w, CHIP_CLUSTER_H),
+        egui::Layout::left_to_right(egui::Align::Min)
+            .with_main_wrap(true)
             .with_main_align(egui::Align::Center),
         |ui| {
+            ui.set_max_width(max_w);
+            ui.set_clip_rect(ui.max_rect());
             ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
             for (i, c) in chips.iter().take(grokhub_core::CHIP_VISIBLE_MAX).enumerate() {
                 let chip_id = ui.id().with(("qchip", i));
@@ -1430,6 +1441,32 @@ fn paint_slot_card(
     resp
 }
 
+/// Body paint for a skill/connector tile. Wrap the full description; never
+/// mid-word clip. Only a word-boundary "more" cut when the body is huge.
+pub fn tile_body_text(body: &str) -> String {
+    let t = body.trim();
+    if t.chars().count() <= 240 {
+        return t.to_string();
+    }
+    word_boundary_take(t, 240)
+}
+
+fn word_boundary_take(s: &str, max_chars: usize) -> String {
+    let mut end = 0;
+    let mut last_space = 0;
+    for (i, c) in s.char_indices() {
+        if s[..i].chars().count() >= max_chars {
+            break;
+        }
+        if c.is_whitespace() {
+            last_space = i;
+        }
+        end = i + c.len_utf8();
+    }
+    let cut = if last_space > 0 { last_space } else { end };
+    s.get(..cut).unwrap_or(s).trim_end().to_string()
+}
+
 pub fn grok_tile(
     ui: &mut egui::Ui,
     icon: TileIcon,
@@ -1453,21 +1490,25 @@ pub fn grok_tile(
             icons::paint_icon(ui, icon, crate::theme::TILE_ICON);
             ui.add_space(10.0);
             ui.vertical(|ui| {
-                ui.label(
-                    RichText::new(title)
-                        .font(crate::theme::card_title_font())
-                        .color(crate::theme::fg()),
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(title)
+                            .font(crate::theme::card_title_font())
+                            .color(crate::theme::fg()),
+                    )
+                    .wrap(),
                 );
                 ui.add_space(3.0);
-                let clipped: String = body.chars().take(80).collect();
-                ui.label(
-                    RichText::new(clipped)
-                        .size(crate::theme::FONT_BODY)
-                        .color(crate::theme::muted()),
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(tile_body_text(body))
+                            .size(crate::theme::FONT_BODY)
+                            .color(crate::theme::muted()),
+                    )
+                    .wrap(),
                 );
-            });
-            if let Some(label) = add {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                if let Some(label) = add {
+                    ui.add_space(8.0);
                     let r = crate::theme::felt_label_button(
                         ui,
                         label,
@@ -1480,8 +1521,8 @@ pub fn grok_tile(
                     );
                     add_clicked = r.clicked();
                     add_rect = Some(r.rect);
-                });
-            }
+                }
+            });
         });
     }
     let resp = paint_slot_card(ui, prepared, selected, crate::theme::CARD_RADIUS);
@@ -2203,6 +2244,18 @@ mod tests {
     use grokhub_core::parse_loop_line;
 
     #[test]
+    fn grok_tile_body_does_not_clip_mid_word() {
+        assert_eq!(tile_body_text("short"), "short");
+        let long = "Built-in — Required reading before you start, watch, or wait on anything that remains after the first eighty glyphs of this description so wrap is the path.";
+        let painted = tile_body_text(long);
+        assert!(!painted.contains("take(80)"));
+        assert!(!painted.ends_with(" re"));
+        assert!(!painted.contains('…'));
+        assert!(painted.starts_with("Built-in"));
+        assert!(painted.chars().count() <= 240);
+    }
+
+    #[test]
     fn card_and_wall_hover_stay_in_slot() {
         let src = include_str!("cards.rs");
         let card = src
@@ -2221,8 +2274,13 @@ mod tests {
             .and_then(|s| s.split("pub fn tile_row(").next())
             .expect("grok_tile");
         assert!(
-            tile.contains("paint_slot_card") && tile.contains("card_title_font"),
-            "{tile}"
+            tile.contains("paint_slot_card")
+                && tile.contains("card_title_font")
+                && tile.contains("tile_body_text")
+                && tile.contains(".wrap()")
+                && !tile.contains("take(80)")
+                && !tile.contains("right_to_left"),
+            "Use in chat must sit under the body, never clip mid-word: {tile}"
         );
         let empty = src
             .split("pub fn empty_prompt_tile(")
@@ -2290,6 +2348,15 @@ mod tests {
             "{long}"
         );
         assert!(!long.contains('…'), "{long}");
+        for fail in [
+            "you should already have mcp con…",
+            "check doosan for information on…",
+            "can you search the web and veri…",
+        ] {
+            let paint = chip_paint_label(fail);
+            assert!(!paint.contains('…'), "{paint}");
+            assert!(paint.split_whitespace().count() >= 3, "{paint}");
+        }
     }
 
     #[test]
@@ -2523,6 +2590,11 @@ mod tests {
         let max_w = chip_row_width_lock(640.0);
         assert_eq!(max_w, 640.0);
         assert_ne!(max_w, 0.0);
+        assert_eq!(
+            chip_row_width_lock(2000.0),
+            crate::theme::CHAT_COL_W,
+            "inflated pane width must not stretch chips past Ask anything"
+        );
         let src = include_str!("cards.rs");
         let slice = src
             .split("pub fn quick_chip_row(")
@@ -2534,17 +2606,30 @@ mod tests {
             "chips sit on the midline of the bar: {slice}"
         );
         assert!(
+            slice.contains("with_main_wrap(true)")
+                && slice.contains("CHIP_CLUSTER_H")
+                && slice.contains("composer_pill_w"),
+            "five chips wrap to a second line inside the Ask anything column: {slice}"
+        );
+        assert!(
+            !slice.contains("with_main_wrap(false)"),
+            "leftovers must wrap, not clip off the right edge: {slice}"
+        );
+        assert!(
             !slice.contains("set_width(max_w)") && !slice.contains("set_min_width"),
             "chip cluster must shrink-wrap, not fill the pill: {slice}"
         );
         assert!(
-            slice.contains("CHIP_ROW_H") && slice.contains("allocate_ui_with_layout"),
-            "chip row must use a tight height or leftover empty-home space vertically centers it: {slice}"
+            slice.contains("CHIP_CLUSTER_H") && slice.contains("allocate_ui_with_layout"),
+            "chip cluster must grow for two lines or leftovers clip: {slice}"
         );
         assert!(
             !slice.contains('…') && slice.contains("CHIP_PAD_X") && slice.contains("add_space"),
             "chip paint pads inside the fill and must not ellipsize: {slice}"
         );
+        const {
+            assert!(CHIP_CLUSTER_H > CHIP_ROW_H && CHIP_CLUSTER_H < CHIP_ROW_H * 3.0);
+        }
         assert!(
             !slice.contains("ui.with_layout("),
             "with_layout eats remaining height and drops chips to the bottom: {slice}"
