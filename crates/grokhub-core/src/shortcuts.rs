@@ -97,6 +97,7 @@ pub const SHORTCUTS: &[Shortcut] = &[
     Shortcut { keys: "Ctrl+Enter", action: "New line", scope: "Composer" },
     Shortcut { keys: "Tab", action: "Accept slash", scope: "Composer" },
     Shortcut { keys: "Enter / Esc", action: "Allow / deny tool permission (empty composer)", scope: "Chat" },
+    Shortcut { keys: "Enter / Esc", action: "Confirm / cancel overlay sheet (empty composer; Ask Always stays Allow / Deny)", scope: "Chat" },
     Shortcut { keys: "Ctrl+/", action: "Shortcut sheet", scope: "Global" },
 ];
 

@@ -450,7 +450,7 @@ impl Cabin {
         let skill_count = self.skill_list.len();
         let session_mode = self.session_mode.as_str().to_string();
         let key = format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             self.thread_idx,
             n,
             last,
@@ -470,7 +470,8 @@ impl Cabin {
             last_surface,
             first_run,
             last_project,
-            session_mode
+            session_mode,
+            persistable_cabin_lane(&self.cfg.cabin_lane)
         );
         if self.chip_paint_key == key && !self.visible_chips.is_empty() {
             return;
@@ -580,6 +581,7 @@ impl Cabin {
                 chips.insert(0, c);
             }
         }
+        bias_chips_for_lane(&mut chips, cabin_lane(&self.cfg.cabin_lane));
         chips
     }
 

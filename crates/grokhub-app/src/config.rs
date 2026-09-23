@@ -247,6 +247,9 @@ pub struct AppConfig {
     /// Composer permission pill — ask / auto. Always-approve is a per-run choice.
     #[serde(default = "default_permission_mode")]
     pub permission_mode: String,
+    /// Copy-only Coding / Life lane. Default Coding. Not a new rail.
+    #[serde(default = "default_cabin_lane")]
+    pub cabin_lane: String,
     #[serde(default = "default_quiet_start")]
     pub quiet_start: String,
     #[serde(default = "default_quiet_end")]
@@ -321,6 +324,10 @@ fn default_permission_mode() -> String {
     "ask".into()
 }
 
+fn default_cabin_lane() -> String {
+    "coding".into()
+}
+
 /// Always is session-only. Disk and relaunch keep Ask or Auto, never Always.
 pub fn persistable_permission_mode(raw: &str) -> String {
     match grokhub_acp::PermissionMode::parse(raw) {
@@ -352,6 +359,7 @@ impl Default for AppConfig {
             reasoning_effort: default_reasoning_effort(),
             session_mode: default_session_mode(),
             permission_mode: default_permission_mode(),
+            cabin_lane: default_cabin_lane(),
             quiet_start: default_quiet_start(),
             quiet_end: default_quiet_end(),
             daily_auto_cap: default_daily_auto(),
@@ -456,6 +464,10 @@ pub fn load() -> AppConfig {
     // Always-approve is a per-run choice, same as the yolo reset above: a cabin must not
     // boot into blanket approval because one turn needed it last week.
     cfg.permission_mode = persistable_permission_mode(&cfg.permission_mode);
+    cfg.cabin_lane = match cfg.cabin_lane.trim().to_ascii_lowercase().as_str() {
+        "life" => "life".into(),
+        _ => "coding".into(),
+    };
     cfg
 }
 
