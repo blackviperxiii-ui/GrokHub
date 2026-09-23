@@ -22,10 +22,10 @@ pub enum TileIcon {
 pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
     let painter = ui.painter();
-    let fill = crate::theme::surface();
-    let stroke = Stroke::new(1.5_f32, crate::theme::fg());
-    painter.rect_filled(rect, 10.0, fill);
-    painter.rect_stroke(rect, 10.0, Stroke::new(1.0_f32, crate::theme::border_strong()));
+    let fill = crate::theme::elevated();
+    let stroke = Stroke::new(crate::theme::ICON_STROKE, crate::theme::fg());
+    painter.rect_filled(rect, 6.0, fill);
+    painter.rect_stroke(rect, 6.0, Stroke::new(1.0_f32, crate::theme::border()));
     let r = rect.shrink(size * 0.22);
     let c = r.center();
     let w = r.width();
@@ -248,7 +248,7 @@ pub fn paint_rail_icon(ui: &mut egui::Ui, icon: RailIcon, size: f32, color: egui
 pub fn paint_rail_icon_at(painter: &egui::Painter, rect: egui::Rect, icon: RailIcon, color: egui::Color32) {
     let c = rect.center();
     let w = rect.width();
-    let stroke = Stroke::new(1.8_f32, color);
+    let stroke = Stroke::new(crate::theme::ICON_STROKE, color);
     match icon {
         RailIcon::Search => {
             painter.circle_stroke(Pos2::new(c.x - 1.0, c.y - 1.0), w * 0.22, stroke);
@@ -654,9 +654,14 @@ pub fn paint_bar_icon(
     if wash.a() > 0 {
         painter.circle_filled(rect.center(), rect.width() * 0.55, wash);
     }
-    let c = rect.center();
-    let w = rect.width();
-    let stroke = Stroke::new(1.6_f32, color);
+    let optical = match icon {
+        BarIcon::Send => crate::theme::ICON_ACTION,
+        _ => crate::theme::ICON_CHROME,
+    };
+    let glyph = rect.shrink(((rect.width() - optical) * 0.5).max(0.0));
+    let c = glyph.center();
+    let w = glyph.width();
+    let stroke = Stroke::new(crate::theme::ICON_STROKE, color);
     match icon {
         BarIcon::Plus => {
             painter.line_segment(
