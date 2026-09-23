@@ -620,12 +620,22 @@ impl Cabin {
                                     ThoughtFold::Expanded
                                 };
                                 let cached_h = prev_heights.get(i).copied().unwrap_or(0.0);
+                                let origin = ui.cursor().min;
+                                let row_w = ui.available_width().max(1.0);
                                 if reserve_offscreen_chat_row(ui, cached_h) {
                                     // `push_id` still consumes one parent auto-id
                                     // (`advance_cursor_after_rect`). A culled row must
                                     // burn that same slot or the next painted row renumbers.
                                     ui.skip_ahead_auto_ids(1);
                                     next_heights.push(cached_h);
+                                    if jump_you && last_you_i == Some(i) {
+                                        let slot = egui::Rect::from_min_size(
+                                            origin,
+                                            egui::vec2(row_w, cached_h),
+                                        );
+                                        ui.scroll_to_rect(slot, Some(egui::Align::Center));
+                                        jumped_you = true;
+                                    }
                                     continue;
                                 }
                                 let y0 = ui.cursor().min.y;
@@ -1370,6 +1380,7 @@ impl Cabin {
             let row = crate::cards::session_row(ui, &session_now, &perm_now, &effort_now);
             if let Some(mode) = row.mode {
                 if let Some(m) = SessionMode::parse(&mode) {
+                    self.confirm = None;
                     if self.running {
                         self.halt_in_flight();
                     }
@@ -1390,6 +1401,7 @@ impl Cabin {
                     {
                         self.arm_session_always();
                     } else {
+                    self.confirm = None;
                     if self.running {
                         self.halt_in_flight();
                     }
@@ -1406,6 +1418,7 @@ impl Cabin {
             }
             if let Some(effort) = row.effort {
                 if let Some(e) = grokhub_core::parse_reasoning_effort(&effort) {
+                    self.confirm = None;
                     if self.running {
                         self.halt_in_flight();
                     }

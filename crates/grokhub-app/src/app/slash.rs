@@ -433,6 +433,7 @@ impl Cabin {
             }
             Slash::AlwaysApprove => {
                 if self.permission_mode == PermissionMode::AlwaysApprove {
+                    self.confirm = None;
                     self.set_permission_mode(PermissionMode::Ask);
                     if self.running {
                         self.halt_in_flight();
@@ -449,6 +450,7 @@ impl Cabin {
                 }
             }
             Slash::AutoPerm => {
+                self.confirm = None;
                 self.set_permission_mode(PermissionMode::Auto);
                 if self.running {
                     self.halt_in_flight();

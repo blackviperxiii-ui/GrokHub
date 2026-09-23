@@ -6645,7 +6645,49 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("fn ui_board(").next())
             .expect("history");
         assert!(
-            hist.contains("session_markers") && hist.contains("LastYou") && hist.contains("jump_last_you"),
-            "History paints a compact last-you / branch map: {hist}"
+            hist.contains("session_markers")
+                && hist.contains("LastYou")
+                && hist.contains("jump_last_you")
+                && hist.contains("apply_switch_thread")
+                && !hist.contains("self.thread_idx = i"),
+            "History map must swap the visible thread, not only the index: {hist}"
+        );
+        let reserved = src
+            .split("if reserve_offscreen_chat_row(ui, cached_h)")
+            .nth(1)
+            .and_then(|s| s.split("let y0 = ui.cursor().min.y").next())
+            .expect("reserved last-you");
+        assert!(
+            reserved.contains("scroll_to_rect")
+                && reserved.contains("jump_you")
+                && reserved.contains("last_you_i"),
+            "Last you must scroll a reserved off-screen row: {reserved}"
+        );
+        let auto = src
+            .split("Slash::AutoPerm =>")
+            .nth(1)
+            .and_then(|s| s.split("Slash::Effort(").next())
+            .expect("AutoPerm");
+        assert!(
+            auto.contains("self.confirm = None"),
+            "/auto must drop a session Always overlay: {auto}"
+        );
+        let row = src
+            .split("let row = crate::cards::session_row")
+            .nth(1)
+            .and_then(|s| s.split("ui.allocate_ui_with_layout").next())
+            .expect("session_row");
+        let perm = row
+            .split("if let Some(perm) = row.perm")
+            .nth(1)
+            .and_then(|s| s.split("if let Some(effort) = row.effort").next())
+            .expect("perm pills");
+        let ask_auto = perm
+            .split("self.arm_session_always();")
+            .nth(1)
+            .expect("Ask/Auto after Always");
+        assert!(
+            ask_auto.contains("self.confirm = None"),
+            "Auto/Ask must disarm the session Always overlay: {ask_auto}"
         );
     }

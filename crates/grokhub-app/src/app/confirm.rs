@@ -226,16 +226,10 @@ impl Cabin {
     }
 
     pub(super) fn arm_session_always(&mut self) {
+        // Arm the sheet only. Cancel drops confirm. Confirm applies Always
+        // and then tears the live job down. Doing that on arm would clear
+        // the sheet and kill the job before it can paint.
         self.confirm = Some(ConfirmKind::AlwaysSession);
-        if self.running {
-            self.halt_in_flight();
-        }
-        self.acp = None;
-        self.acp_spawn_rx = None;
-        if let Some(t) = self.threads.get_mut(self.thread_idx) {
-            t.grok_session = None;
-        }
-        self.persist_idle_key = self.persist_idle_now();
         self.status = "Confirm Always…".into();
     }
 }
@@ -305,5 +299,35 @@ mod tests {
         assert_eq!(host.title, HOST_CONFIRM_TITLE);
         assert_eq!(host.primary, HOST_CONFIRM_PRIMARY);
         assert!(host.danger);
+    }
+
+    #[test]
+    fn arm_session_always_leaves_the_live_job() {
+        let src = include_str!("confirm.rs");
+        let arm = src
+            .split("fn arm_session_always(")
+            .nth(1)
+            .and_then(|s| s.split("\n}").next())
+            .expect("arm_session_always");
+        assert!(
+            arm.contains("ConfirmKind::AlwaysSession") && arm.contains("Confirm Always"),
+            "Always must arm the overlay: {arm}"
+        );
+        assert!(
+            !arm.contains("halt_in_flight")
+                && !arm.contains("self.acp = None")
+                && !arm.contains("acp_spawn_rx")
+                && !arm.contains("grok_session"),
+            "Cancel must not tear down ACP/grok before confirm: {arm}"
+        );
+        let apply = src
+            .split("fn apply_session_always(")
+            .nth(1)
+            .and_then(|s| s.split("fn arm_session_always(").next())
+            .expect("apply_session_always");
+        assert!(
+            apply.contains("halt_in_flight") && apply.contains("self.acp = None"),
+            "Confirm still applies Always and then drops the live job: {apply}"
+        );
     }
 }

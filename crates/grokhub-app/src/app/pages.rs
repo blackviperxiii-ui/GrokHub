@@ -513,7 +513,7 @@ impl Cabin {
                         if crate::cards::ghost_pill(ui, &mark.label) {
                             if let Some(i) = self.threads.iter().position(|t| t.id == mark.thread_id)
                             {
-                                self.thread_idx = i;
+                                self.apply_switch_thread(i);
                                 if mark.kind == SessionMarkKind::LastYou {
                                     self.jump_last_you = true;
                                 }

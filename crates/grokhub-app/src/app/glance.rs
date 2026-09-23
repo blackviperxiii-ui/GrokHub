@@ -236,6 +236,11 @@ impl Cabin {
 }
 
 fn paint_frame_thumb(ui: &mut egui::Ui, url: &str) {
+    let id = egui::Id::new(("cabin-device-glance", url));
+    if let Some(tex) = ui.ctx().data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        ui.add(egui::Image::from_texture(&tex).fit_to_exact_size(egui::vec2(18.0, 18.0)));
+        return;
+    }
     let Some(frame) = grokhub_core::store_frame(url, 1) else {
         return;
     };
@@ -253,6 +258,7 @@ fn paint_frame_thumb(ui: &mut egui::Ui, url: &str) {
         egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
         egui::TextureOptions::LINEAR,
     );
+    ui.ctx().data_mut(|d| d.insert_temp(id, tex.clone()));
     ui.add(egui::Image::from_texture(&tex).fit_to_exact_size(egui::vec2(18.0, 18.0)));
 }
 
@@ -318,6 +324,25 @@ mod tests {
         assert!(
             !blob.to_ascii_lowercase().contains("phone"),
             "device glance must not stub a phone: {blob}"
+        );
+    }
+
+    #[test]
+    fn frame_thumb_caches_the_texture() {
+        let src = include_str!("glance.rs");
+        let thumb = src
+            .split("fn paint_frame_thumb(")
+            .nth(1)
+            .and_then(|s| s.split("#[cfg(test)]").next())
+            .expect("paint_frame_thumb");
+        let get = thumb.find("get_temp").expect("get_temp before decode");
+        let load = thumb
+            .find("load_from_memory")
+            .expect("decode only on cache miss");
+        let insert = thumb.find("insert_temp").expect("insert_temp after upload");
+        assert!(
+            get < load && load < insert && thumb.contains("cabin-device-glance"),
+            "empty-home paint must reuse the glance texture: {thumb}"
         );
     }
 
