@@ -79,7 +79,7 @@ impl Cabin {
             }
             egui::ScrollArea::vertical().show(ui, |ui| {
             ui.label(
-                RichText::new("Interval prompts run as Grok Build `/loop`. A clock time — `every weekday at 9` — runs as a cabin automation on the 15s pulse. Stop a job when the work is done.")
+                RichText::new("Loops and clock jobs. Interval prompts run as Grok Build `/loop`. A clock time — `every weekday at 9` — runs as a cabin automation on the 15s pulse. Stop a job when the work is done.")
                     .size(12.0)
                     .color(crate::theme::muted()),
             );

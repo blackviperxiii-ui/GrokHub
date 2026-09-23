@@ -62,6 +62,19 @@ impl Cabin {
                 }
                 self.acp = Some(h);
                 self.persist();
+                if self.pending_kick.is_none() {
+                    if let Some(cmd) = self.pending_slash.take() {
+                        if let Some(handle) = &self.acp {
+                            match handle.prompt(&cmd) {
+                                Ok(()) => self.running = true,
+                                Err(e) => {
+                                    self.acp = None;
+                                    self.fail_ask_without_acp(&e);
+                                }
+                            }
+                        }
+                    }
+                }
             }
             Ok(Err(e)) => {
                 if self.permission_mode.uses_acp() {
@@ -96,6 +109,7 @@ impl Cabin {
     pub(super) fn fail_ask_without_acp(&mut self, detail: &str) {
         self.running = false;
         self.pending_kick = None;
+        self.pending_slash = None;
         self.scheduled_perm = false;
         self.status = self.apply_job_fail(&ask_denied_without_acp(detail));
         self.chat_job_thread = None;
@@ -723,8 +737,31 @@ impl Cabin {
     }
 
     pub(super) fn send_grok_slash(&mut self, cmd: &str) {
-        if let Some(h) = &self.acp {
-            let _ = h.prompt(cmd);
+        if self.permission_mode.uses_acp() {
+            if let Err(e) = self.ensure_acp() {
+                self.fail_ask_without_acp(&e);
+                return;
+            }
+            match self.acp.as_ref().map(|h| h.prompt(cmd)) {
+                Some(Ok(())) => {
+                    self.running = true;
+                    if self.chat_job_thread.is_none() {
+                        self.chat_job_thread = Some(self.visible_thread_id());
+                    }
+                }
+                Some(Err(e)) => {
+                    self.acp = None;
+                    self.fail_ask_without_acp(&e);
+                }
+                None if self.acp_spawn_rx.is_some() => {
+                    self.pending_slash = Some(cmd.to_string());
+                    self.running = true;
+                    if self.chat_job_thread.is_none() {
+                        self.chat_job_thread = Some(self.visible_thread_id());
+                    }
+                }
+                None => self.fail_ask_without_acp(""),
+            }
             return;
         }
         let idx = self.thread_idx;
@@ -750,12 +787,13 @@ impl Cabin {
             .get(idx)
             .map(|t| t.grok_worktree)
             .unwrap_or(false);
+        let (yolo, auto) = self.permission_mode.composer_headless_flags();
         if let Ok((pid, rx)) = grokhub_acp::spawn_grok_p_stream(
             cmd,
             &cwd,
             resume.as_deref(),
-            true,
-            false,
+            yolo,
+            auto,
             None,
             None,
             SessionMode::Chat,

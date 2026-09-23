@@ -406,6 +406,18 @@ impl Cabin {
         false
     }
 
+    pub(super) fn persist_github_pat(&mut self) {
+        let secrets = self.secrets.clone();
+        std::thread::spawn(move || {
+            let _ = secrets::save(&secrets);
+        });
+        self.status = if self.secrets.github_token.trim().is_empty() {
+            "GitHub PAT cleared".into()
+        } else {
+            "GitHub PAT saved".into()
+        };
+    }
+
     pub(super) fn run_connector(&mut self, id: &str, tool: &str, args: &str) {
         if id != "github" {
             self.push_bound_msg(
