@@ -578,6 +578,11 @@ fn shorten(s: &str, n: usize) -> String {
     format!("{}…", out.trim_end())
 }
 
+/// Visible chip label: collapse whitespace, never ellipsis. Paint wraps.
+fn chip_label(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn topic_from_text(text: &str) -> String {
     let plain = text
         .replace("```", " ")
@@ -656,7 +661,7 @@ fn chips_from_last_assistant(chat: &[(String, String)]) -> Vec<QuickChip> {
     if has_code {
         out.push(chip(
             "last-code-bugs",
-            &shorten(&format!("Find bugs{topic_bit}"), 34),
+            &chip_label(&format!("Find bugs{topic_bit}")),
             "Review the code in your last message for bugs and edge cases. List issues by severity with concrete fixes.",
             ChipKind::Chat,
             94.0,
@@ -748,7 +753,7 @@ fn chips_from_other_threads(threads: &[ChipThread]) -> Vec<QuickChip> {
         if !last_user.is_empty() && !is_plain_text(last_user) {
             continue;
         }
-        let label = shorten(&format!("Continue {}", t.title.trim()), 34);
+        let label = chip_label(&format!("Continue {}", t.title.trim()));
         let value = if !last_user.is_empty() {
             format!(
                 "Continue the work from the chat \"{}\". Last ask: {}. Pick up where we left off and act now.",
@@ -1052,7 +1057,7 @@ pub fn remember_typed_prompt(memory: &mut ChipMemory, text: &str, now_ms: u64, h
         return;
     }
     let key = value_key(raw, kind);
-    let label = shorten(raw, if kind == ChipKind::Shell { 28 } else { 32 });
+    let label = chip_label(raw);
     let from = memory.last_chip_key.clone();
     upsert_hit(memory, key.clone(), &label, raw, kind, 1, 1, 0, None, now_ms, hour);
     record_transition(memory, from, key);
@@ -1130,7 +1135,7 @@ fn home_project_title(raw: &str) -> String {
     if low.starts_with("failed:") || low.contains("grokhub") {
         return String::new();
     }
-    shorten(t, 22)
+    chip_label(t)
 }
 
 fn slash_home_chip(cmd: &str, score: f32) -> Option<QuickChip> {
@@ -1751,7 +1756,7 @@ pub fn skill_offer_chip(draft: &str, skills: &[SkillMd]) -> Option<QuickChip> {
     } else {
         hit.name.replace('-', " ")
     };
-    let label = shorten(&raw, 28);
+    let label = chip_label(&raw);
     let value = skill_use_in_chat_prompt(&hit.slash, &hit.name);
     Some(chip(
         &format!("skill-{}", hit.name),
@@ -1881,7 +1886,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
     if !input.thread_title.trim().is_empty() && input.thread_title != "Chat" && input.thread_title != "Scratch" {
         chips.push(chip(
             "topic-title",
-            &shorten(&format!("Continue {}", input.thread_title), 34),
+            &chip_label(&format!("Continue {}", input.thread_title)),
             &format!("Continue the work on {}.", input.thread_title),
             ChipKind::Chat,
             60.0,
@@ -2628,7 +2633,7 @@ mod tests {
         remember_typed_prompt(&mut mem, "/compact", 40, 8);
         assert_eq!(mem.hits.len(), 1);
         assert!(mem.hits[0].typed_uses >= 2);
-        assert_eq!(top_habit_labels(&mem, 3)[0], shorten("morning brief for the cabin", 32));
+        assert_eq!(top_habit_labels(&mem, 3)[0], chip_label("morning brief for the cabin"));
     }
 
     fn labels(chips: &[QuickChip]) -> Vec<String> {

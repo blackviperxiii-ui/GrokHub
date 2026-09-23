@@ -210,6 +210,7 @@ pub enum BarIcon {
     Send,
     Stop,
     ArrowUp,
+    ArrowDown,
     Search,
 }
 
@@ -646,7 +647,7 @@ pub fn paint_bar_icon(
         // Stop is only chosen while a reply is running (`composer_go`).
         BarIcon::Stop => return paint_composer_stop(ui, size, true).0,
         BarIcon::Mic => return paint_composer_mic(ui, size, MicMood::Idle).0,
-        BarIcon::Plus | BarIcon::Send | BarIcon::ArrowUp | BarIcon::Search => {}
+        BarIcon::Plus | BarIcon::Send | BarIcon::ArrowUp | BarIcon::ArrowDown | BarIcon::Search => {}
     }
     let (_rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
     let (resp, rect, wash) = crate::theme::feel_response(ui, resp, egui::Color32::TRANSPARENT);
@@ -714,6 +715,26 @@ pub fn paint_bar_icon(
                 [
                     Pos2::new(c.x + w * 0.20, c.y - w * 0.02),
                     Pos2::new(c.x, c.y - w * 0.22),
+                ],
+                stroke,
+            );
+        }
+        BarIcon::ArrowDown => {
+            painter.line_segment(
+                [Pos2::new(c.x, c.y - w * 0.22), Pos2::new(c.x, c.y + w * 0.22)],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(c.x - w * 0.20, c.y + w * 0.02),
+                    Pos2::new(c.x, c.y + w * 0.22),
+                ],
+                stroke,
+            );
+            painter.line_segment(
+                [
+                    Pos2::new(c.x + w * 0.20, c.y + w * 0.02),
+                    Pos2::new(c.x, c.y + w * 0.22),
                 ],
                 stroke,
             );
@@ -908,6 +929,7 @@ mod tests {
         assert_ne!(BarIcon::Mic, BarIcon::Send);
         assert_ne!(BarIcon::Plus, BarIcon::Search);
         assert_ne!(BarIcon::ArrowUp, BarIcon::Send);
+        assert_ne!(BarIcon::ArrowDown, BarIcon::ArrowUp);
         assert_ne!(BarIcon::Stop, BarIcon::Send);
         assert_eq!(rail_icon_for("chat"), RailIcon::Chat);
         assert_eq!(rail_icon_for("imagine"), RailIcon::Imagine);

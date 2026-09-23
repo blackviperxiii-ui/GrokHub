@@ -866,10 +866,13 @@ pub fn single_turn_args_full(
         a.push("--permission-mode".into());
         a.push("plan".into());
     } else if look {
+        // SessionMode::Ask is the Questions / Look pill. CLI allows
+        // default | acceptEdits | auto | dontAsk | bypassPermissions | plan.
+        // Literal "ask" is invalid (Grok Build CLI exit 2).
         a.push("--permission-mode".into());
-        a.push("ask".into());
+        a.push("default".into());
     }
-    // Ask / Look are fail-closed here: do not remap to --always-approve.
+    // Questions / Look stay look-only: do not remap to --always-approve.
     // Composer Ask leftover flags match scheduled Ask (no yolo).
     // Night / loop / phone inherit the pill via PermissionMode::scheduled_flags.
     if let Some(m) = model.map(str::trim).filter(|s| !s.is_empty()) {
@@ -931,6 +934,7 @@ pub fn agent_args_resume(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::PermissionMode;
 
     #[test]
     fn env_override_missing_is_none() {
@@ -1252,8 +1256,13 @@ mod tests {
         );
         assert!(
             look.windows(2)
+                .any(|w| w[0] == "--permission-mode" && w[1] == "default"),
+            "Questions / Look on Auto/Always is --permission-mode default: {look:?}"
+        );
+        assert!(
+            !look.windows(2)
                 .any(|w| w[0] == "--permission-mode" && w[1] == "ask"),
-            "Look on Auto/Always is --permission-mode ask: {look:?}"
+            "CLI rejects --permission-mode ask: {look:?}"
         );
         assert!(
             !look.iter().any(|a| a == "--always-approve"),
@@ -1305,6 +1314,60 @@ mod tests {
                 .iter()
                 .any(|a| a == "--no-auto-update"),
             "1.0.38 still accepts hidden --no-auto-update"
+        );
+    }
+
+    #[test]
+    fn session_mode_ask_never_emits_cli_permission_ask() {
+        for (yolo, auto) in [(false, false), (false, true), (true, false), (true, true)] {
+            for mode in [SessionMode::Chat, SessionMode::Plan, SessionMode::Ask] {
+                let args = single_turn_args_full(
+                    "hi",
+                    "/tmp/work",
+                    None,
+                    yolo,
+                    auto,
+                    None,
+                    None,
+                    mode,
+                );
+                assert!(
+                    !args
+                        .windows(2)
+                        .any(|w| w[0] == "--permission-mode" && w[1] == "ask"),
+                    "SessionMode::{mode:?} yolo={yolo} auto={auto} must not emit --permission-mode ask: {args:?}"
+                );
+            }
+        }
+        let look = single_turn_args_full(
+            "hi",
+            "/tmp/work",
+            None,
+            true,
+            true,
+            None,
+            None,
+            SessionMode::Ask,
+        );
+        assert!(
+            look.windows(2)
+                .any(|w| w[0] == "--permission-mode" && w[1] == "default"),
+            "Questions / Look is --permission-mode default: {look:?}"
+        );
+        assert_eq!(PermissionMode::Ask.composer_headless_flags(), (false, false));
+        assert_eq!(PermissionMode::Auto.composer_headless_flags(), (false, true));
+        assert_eq!(
+            PermissionMode::AlwaysApprove.composer_headless_flags(),
+            (true, false)
+        );
+        assert!(PermissionMode::Ask.scheduled_args().is_empty());
+        assert_eq!(
+            PermissionMode::Auto.scheduled_args(),
+            vec!["--permission-mode".to_string(), "auto".into()]
+        );
+        assert_eq!(
+            PermissionMode::AlwaysApprove.scheduled_args(),
+            vec!["--always-approve".to_string()]
         );
     }
 
