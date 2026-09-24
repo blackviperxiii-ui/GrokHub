@@ -325,6 +325,122 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         });
     }
 
+    fn with_cabin_theme_ui(mut add: impl FnMut(&mut egui::Ui)) {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            crate::theme::apply(ctx, true);
+            egui::CentralPanel::default().show(ctx, |ui| add(ui));
+        });
+    }
+
+    #[test]
+    fn short_user_reply_stays_inside_the_viewport() {
+        // Cabin button padding makes Copy+Reply wider than a "hey" bubble.
+        // The row used to floor the lead at 96px and draw Reply past the pane.
+        for width in [360.0_f32, 480.0, 800.0, 1100.0] {
+            with_cabin_theme_ui(|ui| {
+                ui.allocate_ui(egui::vec2(width, 280.0), |ui| {
+                    ui.set_max_width(width);
+                    let row = ui.max_rect();
+                    assert!(
+                        (row.width() - width).abs() < 1.0,
+                        "harness row {} != requested {width}",
+                        row.width()
+                    );
+                    let bubble = super::paint_speech_bubble(ui, "hey", true, false);
+                    let acts = super::paint_msg_acts(
+                        ui,
+                        true,
+                        "hey",
+                        row.width(),
+                        bubble.rect.width(),
+                    );
+                    assert!(
+                        bubble.rect.max.x <= row.max.x + 1.0,
+                        "width {width}: bubble past the right {} > {}",
+                        bubble.rect.max.x,
+                        row.max.x
+                    );
+                    assert!(
+                        bubble.rect.min.x >= row.min.x - 0.5,
+                        "width {width}: bubble past the left {} < {}",
+                        bubble.rect.min.x,
+                        row.min.x
+                    );
+                    assert!(
+                        bubble.rect.min.y >= row.min.y - 0.5,
+                        "width {width}: bubble past the top {} < {}",
+                        bubble.rect.min.y,
+                        row.min.y
+                    );
+                    assert!(
+                        acts.row.width() > 40.0 && acts.row.height() > 8.0,
+                        "width {width}: Copy/Reply row missing {:?}",
+                        acts.row
+                    );
+                    assert!(
+                        acts.row.max.x <= row.max.x + 1.0,
+                        "width {width}: Reply past the right {} > {} (row w {})",
+                        acts.row.max.x,
+                        row.max.x,
+                        acts.row.width()
+                    );
+                    assert!(
+                        acts.row.min.x >= row.min.x - 0.5,
+                        "width {width}: Copy past the left {} < {}",
+                        acts.row.min.x,
+                        row.min.x
+                    );
+                    assert!(
+                        acts.row.min.y >= row.min.y - 0.5,
+                        "width {width}: action row past the top {} < {}",
+                        acts.row.min.y,
+                        row.min.y
+                    );
+                    assert!(
+                        acts.row.max.x <= bubble.rect.max.x + 1.0,
+                        "width {width}: Reply extends past the bubble {} > {}",
+                        acts.row.max.x,
+                        bubble.rect.max.x
+                    );
+                    assert!(
+                        (bubble.rect.max.x - row.max.x).abs() < 8.0,
+                        "width {width}: short user bubble left the right edge, bubble {} row {}",
+                        bubble.rect.max.x,
+                        row.max.x
+                    );
+                });
+            });
+        }
+        with_cabin_theme_ui(|ui| {
+            ui.allocate_ui(egui::vec2(800.0, 420.0), |ui| {
+                ui.set_max_width(800.0);
+                let row = ui.max_rect();
+                let body = "word ".repeat(48);
+                let bubble = super::paint_speech_bubble(ui, &body, true, false);
+                let acts = super::paint_msg_acts(ui, true, &body, row.width(), bubble.rect.width());
+                assert!(
+                    bubble.rect.height() > 36.0,
+                    "long user text must still wrap, height {}",
+                    bubble.rect.height()
+                );
+                assert!(
+                    bubble.rect.max.x <= row.max.x + 1.0 && acts.row.max.x <= row.max.x + 1.0,
+                    "long user row left the pane bubble {} acts {} row {}",
+                    bubble.rect.max.x,
+                    acts.row.max.x,
+                    row.max.x
+                );
+                assert!(
+                    (acts.row.min.x - bubble.rect.min.x).abs() < 4.0,
+                    "wide bubble actions must stay under the bubble, acts {} bubble {}",
+                    acts.row.min.x,
+                    bubble.rect.min.x
+                );
+            });
+        });
+    }
+
     #[test]
     fn short_user_bubble_sits_on_the_right() {
         with_fonts_ui(|ui| {

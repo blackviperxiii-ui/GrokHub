@@ -2409,8 +2409,16 @@ mod tests {
             out.is_none(),
             "hung desktop spawn must time out, got {out:?}"
         );
+        // `sleep 30` is the child. Windows `taskkill` startup on a loaded
+        // runner can take a few seconds; the bound only has to prove the UI
+        // thread returned before that child finished.
+        let kill_budget = if cfg!(windows) {
+            Duration::from_secs(12)
+        } else {
+            Duration::from_secs(3)
+        };
         assert!(
-            started.elapsed() < Duration::from_secs(3),
+            started.elapsed() < kill_budget,
             "UI-thread desktop spawn must not wait out the child: {:?}",
             started.elapsed()
         );
@@ -2429,7 +2437,8 @@ mod tests {
         );
         let mut dump = Command::new("head");
         dump.args(["-c", &(IMAGE_FILE_CAP + 2 * 1024 * 1024).to_string(), "/dev/zero"]);
-        let out = run_limited(dump, Duration::from_secs(3)).expect("head exited");
+        let read_budget = Duration::from_secs(if cfg!(windows) { 12 } else { 3 });
+        let out = run_limited(dump, read_budget).expect("head exited");
         assert!(
             out.stdout.len() as u64 <= IMAGE_FILE_CAP + 1,
             "huge stdout must stay capped, got {}",
