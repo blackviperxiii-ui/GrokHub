@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.16 — 2026-09-23
+
+Workboards is its own rail row, directly under Skills and Connectors. The page is a kanban (Todo, Doing, Blocked, Done) stored in `workboard.json`. Create, edit, move, and archive cards there. A card can link a chat; Open chat switches to that thread and leaves Workboards on the rail. When a run actually starts, `kick_model` calls `note_inflight_card` and upserts one Doing card for that thread (title from the user ask, or the thread label). `finish_acp_turn` calls `settle_turn_card`, which moves that card to Done and applies any `WORK_PIN:` / `WORK_UPDATE:` lines in the assistant text. A project click still only filters chats.
+
+- Linux: `grokhub-linux-v2.10.16.tar.gz` and AUR `pkgver=2.10.16`.
+- Windows: `GrokHub-Setup-2.10.16.exe` and `grokhub-windows-v2.10.16.zip`.
+- Cursor cabin 2.10.16. VERSION 2.10.16. Draft only. Not tagged.
+
 ## 2.10.15 — 2026-09-23
 
 A project is a folder of persistent chats. Selecting it filters sidebar History and files new chats there. Global chats stay on disk; click the project again to see every chat. Delete unassigns those chats back to History and does not wipe transcripts. Clicking or creating a project does not open the Workboard.

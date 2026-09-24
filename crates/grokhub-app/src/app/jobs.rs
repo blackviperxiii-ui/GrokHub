@@ -11,6 +11,7 @@ impl Cabin {
                 self.running = false;
                 self.push_bound_msg("assistant", detail.clone());
                 self.status.clear();
+                self.abandon_turn_card();
                 self.chat_job_thread = None;
                 self.persist();
                 self.maybe_continue_ptt();
@@ -177,6 +178,7 @@ impl Cabin {
                 self.pin_generation_to_wall(&url, &job_prompt);
                 self.push_bound_msg("assistant", format!("IMAGINE: {url}"));
                 self.finish_hub_dispatch(&format!("IMAGINE: {url}"), true);
+                self.abandon_turn_card();
                 self.chat_job_thread = None;
                 self.persist();
                 self.maybe_continue_ptt();
@@ -243,6 +245,7 @@ impl Cabin {
                 remember_chip_outcome(&mut self.chip_memory, false, now_ms());
                 self.status = self.apply_job_fail(&e);
                 self.finish_hub_dispatch(&e, false);
+                self.abandon_turn_card();
                 self.chat_job_thread = None;
                 self.stream_buf.clear();
                 self.thought_buf.clear();
@@ -257,6 +260,7 @@ impl Cabin {
                 self.imagine_pending = false;
                 self.status = self.apply_job_fail(worker_gone_status());
                 self.finish_hub_dispatch(worker_gone_status(), false);
+                self.abandon_turn_card();
                 self.chat_job_thread = None;
                 self.stream_buf.clear();
                 self.thought_buf.clear();

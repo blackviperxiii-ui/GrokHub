@@ -151,9 +151,15 @@ impl Cabin {
             self.chat_job_thread = Some(self.visible_thread_id());
         }
         let vis = self.visible_thread_id();
-        let last_user = {
+        let thread_label = self
+            .threads
+            .iter()
+            .find(|t| self.chat_job_thread.as_deref() == Some(t.id.as_str()))
+            .map(|t| t.title.clone())
+            .unwrap_or_default();
+        let raw_ask = {
             let job = self.chat_job_thread.as_deref();
-            let raw = if job.is_none() || job == Some(vis.as_str()) {
+            if job.is_none() || job == Some(vis.as_str()) {
                 self.messages
                     .iter()
                     .rev()
@@ -179,9 +185,9 @@ impl Cabin {
                             .map(|m| m.1.clone())
                             .unwrap_or_default()
                     })
-            };
-            apply_skill_follow(&raw, self.active_skill_follow.as_deref())
+            }
         };
+        let last_user = apply_skill_follow(&raw_ask, self.active_skill_follow.as_deref());
         if self.grok_p_rx.is_some() {
             return;
         }
@@ -228,7 +234,7 @@ impl Cabin {
                 .as_ref()
                 .map(|h| h.prompt_with_image(&last_user, image.as_deref()));
             match prompt_err {
-                Some(Ok(())) => {}
+                Some(Ok(())) => self.note_inflight_card(&raw_ask, &thread_label),
                 Some(Err(e)) => {
                     self.acp = None;
                     self.fail_ask_without_acp(&e);
@@ -306,8 +312,10 @@ impl Cabin {
                     t.grok_fork = false;
                     t.grok_user_home = user_home;
                 }
+                self.note_inflight_card(&raw_ask, &thread_label);
             }
             Err(e) => {
+                self.abandon_turn_card();
                 self.running = false;
                 self.scheduled_perm = false;
                 self.status = self.apply_job_fail(&e);
