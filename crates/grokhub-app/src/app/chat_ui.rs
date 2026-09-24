@@ -280,14 +280,36 @@ pub(super) fn paint_speech_bubble(
     resp.expect("speech bubble")
 }
 
+pub(super) struct MsgActsPaint {
+    pub act: ChatBlockAct,
+    /// Union of the Copy and Reply hit rects.
+    pub row: egui::Rect,
+}
+
+/// Hit width of one quiet label button. Matches [`crate::theme::felt_label_button`]
+/// with a zero minimum size and the chrome font.
+fn label_hit_width(ui: &egui::Ui, label: &str) -> f32 {
+    let font = egui::FontId::proportional(crate::theme::FONT_CHROME);
+    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font, egui::Color32::PLACEHOLDER));
+    let pad = ui.style().spacing.button_padding.x;
+    galley.size().x + pad * 2.0
+}
+
+/// Copy, the gap, and Reply. A short user bubble is narrower than this row.
+pub(super) fn msg_acts_row_width(ui: &egui::Ui) -> f32 {
+    let gap = ui.spacing().item_spacing.x.max(0.0);
+    label_hit_width(ui, "Copy") + gap + label_hit_width(ui, "Reply")
+}
+
 pub(super) fn paint_msg_acts(
     ui: &mut egui::Ui,
     user: bool,
     body: &str,
     avail: f32,
     align_w: f32,
-) -> ChatBlockAct {
+) -> MsgActsPaint {
     let mut act = ChatBlockAct::None;
+    let mut bounds: Option<egui::Rect> = None;
     let mut paint = |ui: &mut egui::Ui| {
         let copy = crate::theme::felt_label_button(
             ui,
@@ -302,6 +324,10 @@ pub(super) fn paint_msg_acts(
         if copy.clicked() {
             act = ChatBlockAct::Copy(body.to_string());
         }
+        bounds = Some(match bounds {
+            Some(rect) => rect.union(copy.rect),
+            None => copy.rect,
+        });
         let reply = crate::theme::felt_label_button(
             ui,
             "Reply",
@@ -315,18 +341,37 @@ pub(super) fn paint_msg_acts(
         if reply.clicked() {
             act = ChatBlockAct::Reply(body.to_string());
         }
+        if let Some(rect) = bounds {
+            bounds = Some(rect.union(reply.rect));
+        }
     };
+    // User bubbles sit on the right. Copy+Reply is wider than a short bubble
+    // ("hey"). A fixed 96px floor still let Reply draw past the window.
+    // Size the lead from the real row so Reply ends on the bubble's right edge.
+    let gap = ui.spacing().item_spacing.x.max(0.0);
+    let acts_w = msg_acts_row_width(ui);
     ui.scope(|ui| {
         ui.set_max_width(avail);
         ui.horizontal(|ui| {
             ui.set_max_width(avail);
+            ui.spacing_mut().item_spacing.x = 0.0;
             if user {
-                ui.add_space((avail - align_w.max(96.0)).max(0.0));
+                let anchor = align_w.max(acts_w);
+                let lead = (avail - anchor).max(0.0);
+                if lead > 0.0 {
+                    ui.add_space(lead);
+                }
             }
-            paint(ui);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+                paint(ui);
+            });
         });
     });
-    act
+    MsgActsPaint {
+        act,
+        row: bounds.unwrap_or(egui::Rect::NOTHING),
+    }
 }
 
 pub(super) fn paint_thought_bubble(ui: &mut egui::Ui, body: &str) -> egui::Response {
@@ -622,7 +667,7 @@ pub(super) fn paint_chat_block(
         ChatKind::User => {
             let resp = paint_speech_bubble(ui, &block.body, true, false);
             ChatBlockPaint {
-                act: paint_msg_acts(ui, true, &block.body, avail, resp.rect.width()),
+                act: paint_msg_acts(ui, true, &block.body, avail, resp.rect.width()).act,
                 drawn: true,
                 thought_fold,
             }
@@ -630,7 +675,7 @@ pub(super) fn paint_chat_block(
         ChatKind::Assistant => {
             let resp = paint_speech_bubble(ui, &block.body, false, true);
             ChatBlockPaint {
-                act: paint_msg_acts(ui, false, &block.body, avail, resp.rect.width()),
+                act: paint_msg_acts(ui, false, &block.body, avail, resp.rect.width()).act,
                 drawn: true,
                 thought_fold,
             }
@@ -655,7 +700,7 @@ pub(super) fn paint_chat_block(
                 ui.add_space(4.0);
                 let resp = paint_thought_bubble(ui, &block.body);
                 if thought_acts {
-                    act = paint_msg_acts(ui, false, &block.body, avail, resp.rect.width());
+                    act = paint_msg_acts(ui, false, &block.body, avail, resp.rect.width()).act;
                 }
             } else {
                 ui.horizontal(|ui| {
