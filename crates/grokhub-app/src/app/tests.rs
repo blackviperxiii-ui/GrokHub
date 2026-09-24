@@ -6450,6 +6450,13 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             prompt_at < note_at && kick[spawn_at..].contains("note_inflight_card"),
             "Doing card is filed only after the prompt or grok -p spawn succeeds: {kick}"
         );
+        assert!(
+            kick[spawn_at..].contains("abandon_turn_card")
+                && fn_src(&src, "fail_ask_without_acp").contains("abandon_turn_card")
+                && fn_src(&src, "poll_acp").contains("abandon_turn_card")
+                && fn_src(&src, "poll_single").contains("abandon_turn_card"),
+            "prompt, spawn, and stream failures undo the Doing card"
+        );
         let finish = fn_src(&src, "finish_acp_turn");
         assert!(
             finish.contains("settle_turn_card"),

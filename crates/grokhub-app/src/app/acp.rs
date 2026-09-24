@@ -78,7 +78,7 @@ impl Cabin {
                     self.pending_kick = None;
                     self.scheduled_perm = false;
                     self.status = self.apply_job_fail(&e);
-                    self.inflight_open = false;
+                    self.abandon_turn_card();
                     self.chat_job_thread = None;
                     self.persist();
                 }
@@ -94,7 +94,7 @@ impl Cabin {
                     self.pending_kick = None;
                     self.scheduled_perm = false;
                     self.status = self.apply_job_fail("Grok Build session missing");
-                    self.inflight_open = false;
+                    self.abandon_turn_card();
                     self.chat_job_thread = None;
                     self.persist();
                 }

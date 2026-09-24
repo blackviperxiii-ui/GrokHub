@@ -1372,7 +1372,7 @@ impl Cabin {
                 t.accessed_ms = now_ms();
             }
         }
-        self.inflight_open = false;
+        self.abandon_turn_card();
         self.chat_job_thread = None;
         self.persist();
         if let Some(mut s) = self.voice_sock.take() {
@@ -3071,7 +3071,7 @@ impl Cabin {
         }
         let begin = overlay_update_begin(cmds.len());
         self.running = begin.running;
-        self.inflight_open = false;
+        self.abandon_turn_card();
         self.chat_job_thread = None;
         self.update_pct = Some(begin.pct);
         self.update_can_restart = begin.can_restart;

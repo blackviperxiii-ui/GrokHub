@@ -154,8 +154,9 @@ pub fn inflight_card_title(ask: &str, thread_label: &str) -> String {
     one_line(thread_label)
 }
 
-/// Run-start hook. One non-archived run card per thread, status `doing`.
+/// Run-start hook. One Doing or Done run card per thread.
 /// Pins and linked user cards share `thread_id` and are left alone.
+/// Proposed, Todo, and Blocked cards are never moved into Doing.
 /// A finished run card for that thread is reused and retitled from the new ask.
 pub fn upsert_inflight_card(cards: &mut Vec<BoardCard>, thread_id: &str, title: &str) -> bool {
     let thread_id = thread_id.trim();
@@ -164,19 +165,17 @@ pub fn upsert_inflight_card(cards: &mut Vec<BoardCard>, thread_id: &str, title: 
         return false;
     }
     if let Some(c) = cards.iter_mut().rev().find(|c| {
-        c.run && c.thread_id.as_deref() == Some(thread_id) && c.status != BoardStatus::Dismissed
+        c.run
+            && c.thread_id.as_deref() == Some(thread_id)
+            && matches!(c.status, BoardStatus::InProgress | BoardStatus::Done)
     }) {
         if c.status == BoardStatus::InProgress {
             return false;
         }
-        let next_title = if c.status == BoardStatus::Done {
-            title.chars().take(120).collect()
-        } else {
-            c.title.clone()
-        };
+        let next_title: String = title.chars().take(120).collect();
         c.undo = Some(InflightUndo::Reused {
             title: c.title.clone(),
-            status: c.status,
+            status: BoardStatus::Done,
         });
         c.title = next_title;
         c.status = BoardStatus::InProgress;
@@ -366,16 +365,16 @@ mod tests {
         assert_eq!(cards[0].title, "Verify boot");
         assert_eq!(cards[0].status, BoardStatus::InProgress);
         cards[0].status = BoardStatus::Blocked;
-        assert!(upsert_inflight_card(
-            &mut cards,
-            "thr-1",
-            "ignored while blocked title"
-        ));
-        assert_eq!(cards[0].title, "Verify boot");
-        assert_eq!(cards[0].status, BoardStatus::InProgress);
-        cards[0].status = BoardStatus::Dismissed;
-        assert!(upsert_inflight_card(&mut cards, "thr-1", "Fresh card"));
+        assert!(upsert_inflight_card(&mut cards, "thr-1", "Retry after block"));
         assert_eq!(cards.len(), 2);
+        assert_eq!(cards[0].title, "Verify boot");
+        assert_eq!(cards[0].status, BoardStatus::Blocked);
+        assert_eq!(cards[1].title, "Retry after block");
+        assert_eq!(cards[1].status, BoardStatus::InProgress);
+        cards[1].status = BoardStatus::Dismissed;
+        assert!(upsert_inflight_card(&mut cards, "thr-1", "Fresh card"));
+        assert_eq!(cards.len(), 3);
+        assert_eq!(cards[2].title, "Fresh card");
         assert_eq!(
             inflight_card_title("  \nsecond line", "Thread"),
             "second line"
@@ -436,6 +435,18 @@ mod tests {
         assert!(settle_inflight_card(&mut manual, "thr-2"));
         assert_eq!(manual[0].status, BoardStatus::Todo);
         assert_eq!(manual[1].status, BoardStatus::Done);
+
+        let mut parked = BoardCard::new("Stuck flash", "", "");
+        parked.status = BoardStatus::Blocked;
+        parked.thread_id = Some("thr-3".into());
+        parked.run = true;
+        let mut blocked = vec![parked];
+        assert!(upsert_inflight_card(&mut blocked, "thr-3", "Retry the flash"));
+        assert_eq!(blocked[0].title, "Stuck flash");
+        assert_eq!(blocked[0].status, BoardStatus::Blocked);
+        assert_eq!(blocked[1].title, "Retry the flash");
+        assert_eq!(blocked[1].status, BoardStatus::InProgress);
+        assert!(blocked[1].run);
     }
 
     #[test]
