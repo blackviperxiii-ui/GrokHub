@@ -129,6 +129,8 @@ impl Cabin {
                         if titlebar_chrome_hit(&titlebar_chrome_btn(ui, ChromeBtn::Minimize)) {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                         }
+                        // RTL: allocated after minimize, so it sits immediately to its left.
+                        self.paint_session_actions_menu(ui);
                         let (_rect, drag) = ui.allocate_exact_size(
                             ui.available_size(),
                             egui::Sense::click_and_drag(),

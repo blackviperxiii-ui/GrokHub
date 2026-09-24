@@ -28,6 +28,8 @@ pub enum ChromeBtn {
     Maximize,
     Restore,
     Minimize,
+    /// Three-bar menu for Compact, Copy session, and Export.
+    Menu,
 }
 
 /// egui ignores a click held longer than 0.8s (`max_click_duration`). The
@@ -92,6 +94,14 @@ fn paint_chrome_glyph(ui: &egui::Ui, rect: egui::Rect, kind: ChromeBtn, color: e
             let y = r.center().y;
             painter.line_segment([egui::pos2(r.left(), y), egui::pos2(r.right(), y)], stroke);
         }
+        ChromeBtn::Menu => {
+            let y0 = r.top() + 1.0;
+            let y1 = r.center().y;
+            let y2 = r.bottom() - 1.0;
+            painter.line_segment([egui::pos2(r.left(), y0), egui::pos2(r.right(), y0)], stroke);
+            painter.line_segment([egui::pos2(r.left(), y1), egui::pos2(r.right(), y1)], stroke);
+            painter.line_segment([egui::pos2(r.left(), y2), egui::pos2(r.right(), y2)], stroke);
+        }
     }
 }
 
@@ -120,6 +130,18 @@ mod tests {
     fn titlebar_body_starts_a_window_drag() {
         assert!(titlebar_should_start_drag(true));
         assert!(!titlebar_should_start_drag(false));
+    }
+
+    #[test]
+    fn titlebar_menu_is_three_bars() {
+        let src = include_str!("titlebar.rs");
+        let menu = src.split("ChromeBtn::Menu =>").nth(1).expect("menu glyph");
+        let arm = menu.split("\n    }").next().unwrap_or(menu);
+        let bars = arm.matches("painter.line_segment").count();
+        assert_eq!(
+            bars, 3,
+            "session menu must be a 3-bar hamburger, got {bars} strokes: {arm}"
+        );
     }
 
     #[test]
