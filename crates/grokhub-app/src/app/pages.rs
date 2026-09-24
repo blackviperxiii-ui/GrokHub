@@ -614,21 +614,44 @@ impl Cabin {
             } else {
                 let mut open: Option<String> = None;
                 let mut del: Option<String> = None;
-                for s in &self.grok_sessions {
-                    if self.pending_grok_deletes.contains(&s.id) {
-                        continue;
-                    }
-                    let kind = "Grok Build";
+                let shown: Vec<usize> = self
+                    .grok_sessions
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| !self.pending_grok_deletes.contains(&s.id))
+                    .map(|(i, _)| i)
+                    .collect();
+                let listed_n = shown.len() as u64;
+                let keys: Vec<threads::SessionSortKey> = shown
+                    .iter()
+                    .enumerate()
+                    .map(|(rank, &i)| {
+                        let id = self.grok_sessions[i].id.clone();
+                        self.session_sort_key(&id, listed_n - rank as u64)
+                    })
+                    .collect();
+                let order = threads::session_list_order(&keys);
+                for pos in order {
+                    let (id, grok_title) = {
+                        let s = &self.grok_sessions[shown[pos]];
+                        (s.id.clone(), s.title.clone())
+                    };
+                    let title = self.session_row_title(&id, &grok_title);
+                    let kind = if keys[pos].pinned {
+                        "Pinned"
+                    } else {
+                        "Grok Build"
+                    };
                     match crate::cards::grok_tile(
                         ui,
                         crate::icons::TileIcon::Chat,
-                        &s.title,
+                        &title,
                         kind,
                         Some("Delete"),
                         false,
                     ) {
-                        crate::cards::TileHit::Body => open = Some(s.id.clone()),
-                        crate::cards::TileHit::Add => del = Some(s.id.clone()),
+                        crate::cards::TileHit::Body => open = Some(id.clone()),
+                        crate::cards::TileHit::Add => del = Some(id),
                         crate::cards::TileHit::None => {}
                     }
                     ui.add_space(6.0);

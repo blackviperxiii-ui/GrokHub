@@ -283,6 +283,8 @@ enum TabAct {
     Delete(usize),
     OpenGrok(String),
     DeleteGrok(String),
+    PinGrok(String),
+    StartRenameGrok(String),
 }
 
 enum JobOut {

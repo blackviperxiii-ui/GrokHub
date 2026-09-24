@@ -1,4 +1,4 @@
-use grokhub_core::{empty_chat_draft, uid, ThreadGoal};
+use grokhub_core::{empty_chat_draft, history_order, uid, ThreadGoal};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -17,6 +17,10 @@ pub struct ChatThread {
     pub goal: ThreadGoal,
     #[serde(default)]
     pub pinned: bool,
+    /// When this chat was last pinned. The pinned block sorts last-pinned-first.
+    /// Opening the chat does not move it inside that block.
+    #[serde(default)]
+    pub pinned_ms: u64,
     #[serde(default)]
     pub title_locked: bool,
     #[serde(default)]
@@ -36,6 +40,10 @@ pub struct ChatThread {
     pub grok_fork: bool,
     #[serde(default)]
     pub grok_worktree: bool,
+    /// Session show has not filled this row. Pin and rename must not store `messages: []`
+    /// as if that were the transcript.
+    #[serde(default)]
+    pub grok_show_pending: bool,
     /// Last plan from Plan mode or a `plan` stream event. Empty until one exists.
     #[serde(default)]
     pub plan_body: String,
@@ -50,6 +58,7 @@ impl ChatThread {
             messages: Arc::new(Vec::new()),
             goal: ThreadGoal::default(),
             pinned: false,
+            pinned_ms: 0,
             title_locked: false,
             accessed_ms: 0,
             grok_session: None,
@@ -57,6 +66,7 @@ impl ChatThread {
             grok_user_home: false,
             grok_fork: false,
             grok_worktree: false,
+            grok_show_pending: false,
             project_id: None,
             plan_body: String::new(),
         }
@@ -105,9 +115,52 @@ pub fn load() -> Vec<ChatThread> {
     config::load_json(&threads_path(), config::JSON_STORE_CAP)
 }
 
+/// An unloaded Grok row has no transcript yet. Persisting `messages: []` would make the next open treat that blank list as the chat.
+pub fn session_transcript_unloaded(show_pending: bool, message_count: usize) -> bool {
+    show_pending && message_count == 0
+}
+
 pub fn save(threads: &[ChatThread]) -> Result<(), String> {
-    let s = serde_json::to_string_pretty(threads).map_err(|e| e.to_string())?;
+    let mut rows = Vec::with_capacity(threads.len());
+    for t in threads {
+        let mut row = serde_json::to_value(t).map_err(|e| e.to_string())?;
+        if session_transcript_unloaded(t.grok_show_pending, t.messages.len()) {
+            if let Some(obj) = row.as_object_mut() {
+                obj.remove("messages");
+            }
+        }
+        rows.push(row);
+    }
+    let s = serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?;
     config::atomic_write(&threads_path(), s.as_bytes())
+}
+
+/// One History row for [`session_list_order`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionSortKey {
+    pub pinned: bool,
+    pub pinned_ms: u64,
+    pub accessed_ms: u64,
+    /// Higher is newer among rows the cabin has not opened (`accessed_ms == 0`).
+    pub list_rank: u64,
+}
+
+/// Pinned block on top (last pinned first). Unpinned stay last-used.
+/// Untouched rows (`accessed_ms == 0`) keep CLI order via `list_rank`.
+pub fn session_list_order(keys: &[SessionSortKey]) -> Vec<usize> {
+    let pinned: Vec<bool> = keys.iter().map(|k| k.pinned).collect();
+    let accessed: Vec<u64> = keys
+        .iter()
+        .map(|k| {
+            if k.accessed_ms == 0 {
+                k.list_rank
+            } else {
+                k.accessed_ms
+            }
+        })
+        .collect();
+    let pinned_ms: Vec<u64> = keys.iter().map(|k| k.pinned_ms).collect();
+    history_order(&pinned, &accessed, &pinned_ms)
 }
 
 /// Sidebar History filter. No selection shows global chats. A project shows only that folder.
@@ -177,6 +230,51 @@ mod tests {
         let old: ChatThread = serde_json::from_str(r#"{"id":"t1","title":"legacy"}"#).unwrap();
         assert_eq!(old.accessed_ms, 0);
         assert!(old.grok_cwd.is_none());
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn unloaded_pin_does_not_store_an_empty_transcript() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("unloaded-pin");
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let mut pinned = ChatThread::new("Night watch", false);
+        pinned.pinned = true;
+        pinned.pinned_ms = 50;
+        pinned.title_locked = true;
+        pinned.grok_session = Some("01a01b0f-7e06-74b1-8f22-5236c9d57d45".into());
+        pinned.grok_show_pending = true;
+        assert!(session_transcript_unloaded(
+            pinned.grok_show_pending,
+            pinned.messages.len()
+        ));
+        save(&[pinned]).expect("save pin");
+        let raw = fs::read_to_string(threads_path()).expect("threads.json");
+        assert!(
+            !raw.contains("\"messages\""),
+            "pin of an unloaded session must not persist an empty transcript: {raw}"
+        );
+        let loaded = load();
+        assert_eq!(loaded.len(), 1);
+        assert!(loaded[0].pinned);
+        assert!(loaded[0].title_locked);
+        assert!(loaded[0].grok_show_pending);
+        assert!(loaded[0].messages.is_empty());
+        assert_eq!(loaded[0].title, "Night watch");
+        let mut opened = loaded[0].clone();
+        opened.grok_show_pending = false;
+        opened
+            .messages_mut()
+            .push(("user".into(), "harbor line".into()));
+        save(&[opened]).expect("save transcript");
+        let raw = fs::read_to_string(threads_path()).expect("threads.json");
+        assert!(
+            raw.contains("harbor line"),
+            "a loaded transcript still persists: {raw}"
+        );
+        assert_eq!(load()[0].messages.len(), 1);
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }
@@ -334,5 +432,88 @@ mod tests {
         assert!(!project_folder_history_row(true, false, true));
         assert!(empty_chat_draft(true, false));
         assert!(!empty_chat_draft(false, false));
+    }
+
+    #[test]
+    fn session_list_is_last_pinned_first_then_last_used() {
+        let keys = [
+            SessionSortKey {
+                pinned: false,
+                pinned_ms: 0,
+                accessed_ms: 5_000,
+                list_rank: 3,
+            },
+            SessionSortKey {
+                pinned: true,
+                pinned_ms: 100,
+                accessed_ms: 9_000,
+                list_rank: 2,
+            },
+            SessionSortKey {
+                pinned: true,
+                pinned_ms: 400,
+                accessed_ms: 1,
+                list_rank: 1,
+            },
+            SessionSortKey {
+                pinned: false,
+                pinned_ms: 0,
+                accessed_ms: 0,
+                list_rank: 9,
+            },
+        ];
+        assert_eq!(
+            session_list_order(&keys),
+            vec![2, 1, 0, 3],
+            "newest pin, older pin, then last-used, then untouched CLI rank"
+        );
+        let unpinned = [
+            SessionSortKey {
+                pinned: false,
+                pinned_ms: 900,
+                accessed_ms: 10,
+                list_rank: 1,
+            },
+            SessionSortKey {
+                pinned: false,
+                pinned_ms: 1,
+                accessed_ms: 80,
+                list_rank: 1,
+            },
+        ];
+        assert_eq!(
+            session_list_order(&unpinned),
+            vec![1, 0],
+            "after unpin, pin time does not beat last used"
+        );
+    }
+
+    #[test]
+    fn project_filter_keeps_pin_and_title() {
+        let mut night = ChatThread::new("Night watch", false);
+        night.pinned = true;
+        night.pinned_ms = 40;
+        night.title_locked = true;
+        night.project_id = Some("lab".into());
+        let mut day = ChatThread::new("Day plan", false);
+        day.pinned = true;
+        day.pinned_ms = 80;
+        day.title_locked = true;
+        day.project_id = Some("other".into());
+        let threads = [night, day];
+        let shown: Vec<_> = threads
+            .iter()
+            .filter(|t| session_in_chat_folder(t.project_id.as_deref(), Some("lab")))
+            .collect();
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].title, "Night watch");
+        assert!(shown[0].pinned);
+        assert_eq!(shown[0].pinned_ms, 40);
+        assert!(threads[1].pinned);
+        assert_eq!(threads[1].title, "Day plan");
+        assert_eq!(threads[1].pinned_ms, 80);
+        let legacy: ChatThread = serde_json::from_str(r#"{"id":"t1","title":"legacy"}"#).unwrap();
+        assert_eq!(legacy.pinned_ms, 0);
+        assert!(!legacy.pinned);
     }
 }
