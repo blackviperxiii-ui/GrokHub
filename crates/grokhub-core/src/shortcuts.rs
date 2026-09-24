@@ -119,7 +119,7 @@ pub fn filter_palette(q: &str) -> Vec<(&'static str, &'static str)> {
         ("Connectors", "nav:connectors"),
         ("Agents", "nav:agents"),
         ("Skills", "nav:skills"),
-        ("Board", "nav:board"),
+        ("Workboards", "nav:board"),
         ("Imagine", "nav:imagine"),
         ("Memory", "nav:memory"),
         ("Settings", "nav:settings"),

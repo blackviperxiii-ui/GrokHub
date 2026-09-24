@@ -51,7 +51,9 @@ use grokhub_core::{
     devices_shows_pair_code, diagnostics_bundle, digest_line_from, drop_node,
     drop_selected, drop_trailing_assistant, due_automations, due_loops, ensure_automation_schedule,
     estimate_messages, estimate_messages_from, extract_imagine_prompt, extract_insights,
-    extract_work_pins, extract_work_updates, fact_candidates, fact_candidates_from, filter_palette,
+    abandon_inflight_card, apply_assistant_work_marks, extract_work_pins, extract_work_updates,
+    fact_candidates, fact_candidates_from, filter_palette, inflight_card_title,
+    release_inflight_card, settle_inflight_card, upsert_inflight_card,
     filter_slash_hits, flush_visible_goal, fold_stream_fields, folder_choices, forbidden_reason,
     forget_topic, fork_offer_why, format_consult_reply, frame_bytes, goal_continue_pin, goal_pin_for_job,
     goal_step_after_outcome, greet_from_last_job, greeting_fingerprint, greeting_name,
@@ -119,6 +121,7 @@ use grokhub_core::{
     voice_transcript_sends_chat, voice_tts_script, wall_can_paint, wall_evict,
     wall_gif_from_generation, worker_gone_status, yesterday_ms, AttachKind, Automation, BoardCard,
     BoardStatus, ChatKind, ChatRunPhase, ChatSendKind, ChatView, ChipInput, ChipKind, ChipMemory,
+    KanbanColumn,
     ChipThread, ComposerEnter, ComposerGo, DeleteOutcome, DeviceCodeStart, DigestLine,
     GreetingInput, GrokLoop, HeartbeatAct, HeyGrokAction, HeyGrokRoute, HostPlanStep, HostRisk,
     HubMemoryFile, HubSnapshot, HubState, ImagineKind, ImagineSpec, ImagineToolboxDock,
@@ -350,6 +353,8 @@ pub struct Cabin {
     host_halt: Arc<AtomicBool>,
     rx: Option<mpsc::Receiver<JobOut>>,
     chat_job_thread: Option<String>,
+    /// This attempt filed a Doing card. Fail paths use it to undo that write.
+    inflight_open: bool,
     hub: Arc<Mutex<HubState>>,
     hub_on: bool,
     hub_port: u16,
@@ -365,6 +370,7 @@ pub struct Cabin {
     cfg_slot: Arc<Mutex<CfgSlot>>,
     board: Vec<BoardCard>,
     board_title: String,
+    board_notes: String,
     imagine_prompt: String,
     imagine_last: String,
     skill_name: String,
@@ -525,6 +531,8 @@ pub struct Cabin {
     pending_connectors: Vec<(String, String, String)>,
     auto_compose: bool,
     board_compose: bool,
+    board_edit: Option<String>,
+    board_link: bool,
     settings_menu_open: bool,
     settings_menu_ignore: bool,
     win_max: bool,
@@ -784,6 +792,7 @@ impl Cabin {
             host_halt: Arc::new(AtomicBool::new(false)),
             rx: None,
             chat_job_thread: None,
+            inflight_open: false,
             hub: Arc::new(Mutex::new(hub)),
             hub_on: false,
             hub_port: grokhub_core::DEFAULT_PORT,
@@ -799,6 +808,7 @@ impl Cabin {
             cfg_slot,
             board: config::load_board(),
             board_title: String::new(),
+            board_notes: String::new(),
             imagine_prompt: String::new(),
             imagine_last,
             skill_name: String::new(),
@@ -956,6 +966,8 @@ impl Cabin {
             pending_connectors: vec![],
             auto_compose: false,
             board_compose: false,
+            board_edit: None,
+            board_link: false,
             settings_menu_open: false,
             settings_menu_ignore: false,
             win_max,
@@ -1360,6 +1372,7 @@ impl Cabin {
                 t.accessed_ms = now_ms();
             }
         }
+        self.abandon_turn_card();
         self.chat_job_thread = None;
         self.persist();
         if let Some(mut s) = self.voice_sock.take() {
@@ -3058,6 +3071,7 @@ impl Cabin {
         }
         let begin = overlay_update_begin(cmds.len());
         self.running = begin.running;
+        self.abandon_turn_card();
         self.chat_job_thread = None;
         self.update_pct = Some(begin.pct);
         self.update_can_restart = begin.can_restart;
