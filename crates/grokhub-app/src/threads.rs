@@ -233,6 +233,21 @@ pub fn prompt_history(
     }
 }
 
+/// Fork and a non-continuing chat (session/new after a dead id) replace the
+/// open id. A follow-up on a continuing chat keeps it.
+pub fn adopt_reported_session(
+    open: Option<&str>,
+    reported: &str,
+    fork: bool,
+    continuing: bool,
+) -> bool {
+    let reported = reported.trim();
+    let Some(open) = open.map(str::trim).filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    !reported.is_empty() && reported != open && (fork || !continuing)
+}
+
 /// True when this id was a follow-up on a chat that already had a History row.
 pub fn session_is_retired(threads: &[ChatThread], id: &str) -> bool {
     let id = id.trim();
@@ -610,6 +625,24 @@ mod tests {
         }
         assert!(session_is_retired(&[thread.clone()], "sess-b"));
         assert!(!session_is_retired(&[thread], "sess-a"));
+        assert!(adopt_reported_session(
+            Some("parent"),
+            "forked",
+            true,
+            true
+        ));
+        assert!(adopt_reported_session(
+            Some("dead"),
+            "fresh",
+            false,
+            false
+        ));
+        assert!(!adopt_reported_session(
+            Some("sess-a"),
+            "sess-b",
+            false,
+            true
+        ));
         let fresh_chat = prompt_history(&started.channels, None, "sess-d");
         assert_eq!(
             fresh_chat.channels,

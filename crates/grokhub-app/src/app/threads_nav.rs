@@ -299,6 +299,11 @@ impl Cabin {
             .get(idx)
             .and_then(|t| t.grok_session.clone())
             .filter(|s| !s.trim().is_empty());
+        let retired = self
+            .threads
+            .get(idx)
+            .map(|t| t.retired_sessions.clone())
+            .unwrap_or_default();
         let was_current = idx == self.thread_idx;
         match delete_thread(self.threads.len(), idx, self.thread_idx) {
             DeleteOutcome::ResetLast => {
@@ -343,7 +348,9 @@ impl Cabin {
             }
         }
         if let Some(id) = grok_id {
-            self.forget_grok_build_session(&id);
+            self.forget_grok_build_session(&id, &retired);
+        } else if let Some((first, rest)) = retired.split_first() {
+            self.forget_grok_build_session(first, rest);
         }
         self.rename_idx = None;
         self.persist();
@@ -358,6 +365,13 @@ impl Cabin {
             .filter_map(|t| t.grok_session.clone())
             .filter(|s| !s.trim().is_empty())
             .collect();
+        for t in &self.threads {
+            for id in &t.retired_sessions {
+                if !id.trim().is_empty() && !ids.iter().any(|s| s == id) {
+                    ids.push(id.clone());
+                }
+            }
+        }
         for s in &self.grok_sessions {
             if !ids.iter().any(|id| id == &s.id) {
                 ids.push(s.id.clone());

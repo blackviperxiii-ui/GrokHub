@@ -60,18 +60,22 @@ impl Cabin {
                         .get(idx)
                         .map(|t| t.title.clone())
                         .unwrap_or_default();
-                    let open = self
-                        .threads
-                        .get(idx)
-                        .and_then(|t| t.grok_session.clone());
+                    let allow_fresh = self.threads.get(idx).is_some_and(|t| {
+                        t.grok_session
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .is_none()
+                            || t.messages.len() <= 1
+                    });
+                    let open = self.bind_reported_grok_session(idx, &sid, allow_fresh, false);
                     if let Some(t) = self.threads.get_mut(idx) {
-                        if open
+                        if t.grok_cwd
                             .as_deref()
                             .map(str::trim)
                             .filter(|s| !s.is_empty())
                             .is_none()
                         {
-                            t.grok_session = Some(sid.clone());
                             t.grok_cwd = Some(cwd.clone());
                         }
                     }
@@ -280,19 +284,17 @@ impl Cabin {
                             .and_then(|id| self.threads.iter().position(|t| t.id == id))
                             .unwrap_or(self.thread_idx);
                         let acp_cwd = self.acp.as_ref().map(|h| h.cwd.display().to_string());
-                        let open = self
-                            .threads
-                            .get(idx)
-                            .and_then(|t| t.grok_session.clone());
-                        if let Some(t) = self.threads.get_mut(idx) {
-                            if open
+                        let allow_fresh = self.threads.get(idx).is_some_and(|t| {
+                            t.grok_session
                                 .as_deref()
                                 .map(str::trim)
                                 .filter(|s| !s.is_empty())
                                 .is_none()
-                            {
-                                t.grok_session = Some(session_id.clone());
-                            }
+                                || t.messages.len() <= 1
+                        });
+                        let open =
+                            self.bind_reported_grok_session(idx, &session_id, allow_fresh, false);
+                        if let Some(t) = self.threads.get_mut(idx) {
                             if let Some(cwd) = acp_cwd.clone() {
                                 if t.grok_cwd
                                     .as_deref()
@@ -736,21 +738,14 @@ impl Cabin {
             let u = turn.usage.clone();
             self.merge_grok_usage(&u);
         }
-        let open = self
-            .threads
-            .get(idx)
-            .and_then(|t| t.grok_session.clone());
         let session_saved = !turn.session_id.trim().is_empty();
+        let fork = self.threads.get(idx).map(|t| t.grok_fork).unwrap_or(false);
+        let open = if session_saved {
+            self.bind_reported_grok_session(idx, &turn.session_id, false, fork)
+        } else {
+            self.threads.get(idx).and_then(|t| t.grok_session.clone())
+        };
         if let Some(t) = self.threads.get_mut(idx) {
-            if open
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .is_none()
-                && session_saved
-            {
-                t.grok_session = Some(turn.session_id.clone());
-            }
             if t.grok_cwd
                 .as_deref()
                 .map(|s| s.trim().is_empty())
@@ -954,13 +949,25 @@ impl Cabin {
         }
     }
 
-    pub(super) fn forget_grok_build_session(&mut self, id: &str) {
-        let id = id.trim().to_string();
-        if id.is_empty() {
+    pub(super) fn forget_grok_build_session(&mut self, id: &str, also: &[String]) {
+        let mut ids = Vec::new();
+        let id = id.trim();
+        if !id.is_empty() {
+            ids.push(id.to_string());
+        }
+        for extra in also {
+            let extra = extra.trim();
+            if !extra.is_empty() && !ids.iter().any(|s| s == extra) {
+                ids.push(extra.to_string());
+            }
+        }
+        if ids.is_empty() {
             return;
         }
-        self.pending_grok_deletes.insert(id.clone());
-        self.grok_sessions.retain(|s| s.id != id);
+        for id in &ids {
+            self.pending_grok_deletes.insert(id.clone());
+            self.grok_sessions.retain(|s| s.id != *id);
+        }
         self.grok_list_gen = self.grok_list_gen.wrapping_add(1);
         let gen = self.grok_list_gen;
         self.grok_sessions_inflight = self.grok_sessions_inflight.saturating_add(1);
@@ -969,7 +976,17 @@ impl Cabin {
         let tx = self.grok_sessions_tx.clone();
         std::thread::spawn(move || {
             let error = match bin.as_ref() {
-                Some(bin) => grokhub_acp::delete_session(bin, &cwd, &id).err(),
+                Some(bin) => {
+                    let mut err = None;
+                    for id in &ids {
+                        if let Err(e) = grokhub_acp::delete_session(bin, &cwd, id) {
+                            if err.is_none() {
+                                err = Some(e);
+                            }
+                        }
+                    }
+                    err
+                }
                 None => Some("Grok Build CLI missing".into()),
             };
             let listed = match bin.as_ref() {
@@ -980,7 +997,7 @@ impl Cabin {
             let _ = tx.send(GrokSessMsg::Listed {
                 gen,
                 rows,
-                done: vec![id],
+                done: ids,
                 error,
             });
         });
@@ -995,7 +1012,7 @@ impl Cabin {
             self.delete_thread_at(i);
             return;
         }
-        self.forget_grok_build_session(id);
+        self.forget_grok_build_session(id, &[]);
         self.status = "Deleting session…".into();
         self.persist();
     }
@@ -1081,6 +1098,42 @@ impl Cabin {
         }
         if self.grok_sessions_refresh_pending && self.grok_sessions_inflight == 0 {
             self.request_grok_sessions_refresh();
+        }
+    }
+
+    /// Keep the open id on a continuing follow-up. Fork and a fresh session/new
+    /// replace it, and History must keep that new id instead of retiring it.
+    fn bind_reported_grok_session(
+        &mut self,
+        idx: usize,
+        reported: &str,
+        allow_fresh: bool,
+        clear_fork: bool,
+    ) -> Option<String> {
+        let open = self.threads.get(idx).and_then(|t| t.grok_session.clone());
+        let fork = self.threads.get(idx).map(|t| t.grok_fork).unwrap_or(false);
+        let adopt = threads::adopt_reported_session(open.as_deref(), reported, fork, !allow_fresh);
+        let reported = reported.trim();
+        if let Some(t) = self.threads.get_mut(idx) {
+            if adopt {
+                t.grok_session = Some(reported.to_string());
+            } else if open
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .is_none()
+                && !reported.is_empty()
+            {
+                t.grok_session = Some(reported.to_string());
+            }
+            if clear_fork {
+                t.grok_fork = false;
+            }
+        }
+        if adopt {
+            Some(reported.to_string())
+        } else {
+            open
         }
     }
 

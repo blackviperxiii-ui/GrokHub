@@ -306,7 +306,6 @@ impl Cabin {
                 self.grok_p_pid = Some(pid);
                 self.grok_p_rx = Some(rx);
                 if let Some(t) = self.threads.get_mut(idx) {
-                    t.grok_fork = false;
                     t.grok_user_home = user_home;
                 }
                 self.note_inflight_card(&raw_ask, &thread_label);
