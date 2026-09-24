@@ -1114,16 +1114,13 @@ impl Cabin {
         let fork = self.threads.get(idx).map(|t| t.grok_fork).unwrap_or(false);
         let adopt = threads::adopt_reported_session(open.as_deref(), reported, fork, !allow_fresh);
         let reported = reported.trim();
+        let unbound = open
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .is_none();
         if let Some(t) = self.threads.get_mut(idx) {
-            if adopt {
-                t.grok_session = Some(reported.to_string());
-            } else if open
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .is_none()
-                && !reported.is_empty()
-            {
+            if (adopt || unbound) && !reported.is_empty() {
                 t.grok_session = Some(reported.to_string());
             }
             if clear_fork {
