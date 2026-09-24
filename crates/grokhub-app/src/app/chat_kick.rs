@@ -218,7 +218,6 @@ impl Cabin {
         self.confirm = None;
         self.elicit_ask = None;
         self.elicit_draft.clear();
-        self.note_inflight_card(&raw_ask, &thread_label);
         let image = if consume_attach {
             let url =
                 next_chat_image(self.attach_url.as_deref(), cabin.as_deref()).map(str::to_string);
@@ -235,7 +234,7 @@ impl Cabin {
                 .as_ref()
                 .map(|h| h.prompt_with_image(&last_user, image.as_deref()));
             match prompt_err {
-                Some(Ok(())) => {}
+                Some(Ok(())) => self.note_inflight_card(&raw_ask, &thread_label),
                 Some(Err(e)) => {
                     self.acp = None;
                     self.fail_ask_without_acp(&e);
@@ -313,8 +312,10 @@ impl Cabin {
                     t.grok_fork = false;
                     t.grok_user_home = user_home;
                 }
+                self.note_inflight_card(&raw_ask, &thread_label);
             }
             Err(e) => {
+                self.abandon_turn_card();
                 self.running = false;
                 self.scheduled_perm = false;
                 self.status = self.apply_job_fail(&e);

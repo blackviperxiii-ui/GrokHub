@@ -51,9 +51,9 @@ use grokhub_core::{
     devices_shows_pair_code, diagnostics_bundle, digest_line_from, drop_node,
     drop_selected, drop_trailing_assistant, due_automations, due_loops, ensure_automation_schedule,
     estimate_messages, estimate_messages_from, extract_imagine_prompt, extract_insights,
-    apply_assistant_work_marks, extract_work_pins, extract_work_updates, fact_candidates,
-    fact_candidates_from, filter_palette, inflight_card_title, settle_inflight_card,
-    upsert_inflight_card,
+    abandon_inflight_card, apply_assistant_work_marks, extract_work_pins, extract_work_updates,
+    fact_candidates, fact_candidates_from, filter_palette, inflight_card_title,
+    release_inflight_card, settle_inflight_card, upsert_inflight_card,
     filter_slash_hits, flush_visible_goal, fold_stream_fields, folder_choices, forbidden_reason,
     forget_topic, fork_offer_why, format_consult_reply, frame_bytes, goal_continue_pin, goal_pin_for_job,
     goal_step_after_outcome, greet_from_last_job, greeting_fingerprint, greeting_name,
@@ -353,6 +353,8 @@ pub struct Cabin {
     host_halt: Arc<AtomicBool>,
     rx: Option<mpsc::Receiver<JobOut>>,
     chat_job_thread: Option<String>,
+    /// This attempt filed a Doing card. Fail paths use it to undo that write.
+    inflight_open: bool,
     hub: Arc<Mutex<HubState>>,
     hub_on: bool,
     hub_port: u16,
@@ -790,6 +792,7 @@ impl Cabin {
             host_halt: Arc::new(AtomicBool::new(false)),
             rx: None,
             chat_job_thread: None,
+            inflight_open: false,
             hub: Arc::new(Mutex::new(hub)),
             hub_on: false,
             hub_port: grokhub_core::DEFAULT_PORT,
@@ -1369,6 +1372,7 @@ impl Cabin {
                 t.accessed_ms = now_ms();
             }
         }
+        self.inflight_open = false;
         self.chat_job_thread = None;
         self.persist();
         if let Some(mut s) = self.voice_sock.take() {
@@ -3067,6 +3071,7 @@ impl Cabin {
         }
         let begin = overlay_update_begin(cmds.len());
         self.running = begin.running;
+        self.inflight_open = false;
         self.chat_job_thread = None;
         self.update_pct = Some(begin.pct);
         self.update_can_restart = begin.can_restart;

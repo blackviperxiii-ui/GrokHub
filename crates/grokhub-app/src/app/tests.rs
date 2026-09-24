@@ -6443,6 +6443,13 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             kick.contains("note_inflight_card"),
             "run start files a Workboards card from the user ask: {kick}"
         );
+        let prompt_at = kick.find("prompt_with_image").expect("prompt");
+        let note_at = kick.find("note_inflight_card").expect("note");
+        let spawn_at = kick.find("spawn_grok_p_stream").expect("spawn");
+        assert!(
+            prompt_at < note_at && kick[spawn_at..].contains("note_inflight_card"),
+            "Doing card is filed only after the prompt or grok -p spawn succeeds: {kick}"
+        );
         let finish = fn_src(&src, "finish_acp_turn");
         assert!(
             finish.contains("settle_turn_card"),

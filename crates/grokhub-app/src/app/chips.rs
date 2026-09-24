@@ -663,13 +663,20 @@ impl Cabin {
         });
     }
 
-    /// Run start. `kick_model` calls this once the user ask is known.
+    /// Run start. `kick_model` calls this after the prompt or `grok -p` spawn succeeds.
     /// Writes `workboard.json` through `flush_board` when the card changes.
     pub(super) fn note_inflight_card(&mut self, ask: &str, thread_label: &str) {
         let Some(id) = self.chat_job_thread.clone() else {
             return;
         };
         let title = inflight_card_title(ask, thread_label);
+        if title.trim().is_empty() {
+            return;
+        }
+        if !self.inflight_open {
+            release_inflight_card(&mut self.board, &id);
+        }
+        self.inflight_open = true;
         if upsert_inflight_card(&mut self.board, &id, &title) {
             self.flush_board();
         }
@@ -678,6 +685,7 @@ impl Cabin {
     /// Run complete. `finish_acp_turn` calls this before it drops `chat_job_thread`.
     /// Doing → done, then `WORK_PIN:` / `WORK_UPDATE:` lines in the assistant text.
     pub(super) fn settle_turn_card(&mut self, assistant: &str) {
+        self.inflight_open = false;
         let Some(id) = self.chat_job_thread.clone() else {
             return;
         };
@@ -686,6 +694,20 @@ impl Cabin {
             changed = true;
         }
         if changed {
+            self.flush_board();
+        }
+    }
+
+    /// The turn never finished. Undoes the Doing card this attempt filed.
+    pub(super) fn abandon_turn_card(&mut self) {
+        if !self.inflight_open {
+            return;
+        }
+        self.inflight_open = false;
+        let Some(id) = self.chat_job_thread.clone() else {
+            return;
+        };
+        if abandon_inflight_card(&mut self.board, &id) {
             self.flush_board();
         }
     }

@@ -73,6 +73,7 @@ impl Cabin {
         self.voice_orb = "listening".into();
         self.voice_state = VoiceState::Listening;
         self.running = true;
+        self.inflight_open = false;
         self.chat_job_thread = None;
         self.status = "Listening… STT".into();
         let (tx, rx) = mpsc::channel();

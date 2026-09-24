@@ -102,6 +102,23 @@ pub struct BoardCard {
     /// Cabin thread id. Opening it switches to that chat; the board stays on the rail.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<String>,
+    /// The one run-start card for `thread_id`. Pins and linked cards share the
+    /// thread so Open chat works, and are not this card.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub run: bool,
+    /// How this hook put the card in Doing. Cleared on settle. Not persisted.
+    #[serde(skip)]
+    undo: Option<InflightUndo>,
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
+#[derive(Debug, Clone)]
+enum InflightUndo {
+    Created,
+    Reused { title: String, status: BoardStatus },
 }
 
 impl BoardCard {
@@ -113,6 +130,8 @@ impl BoardCard {
             status: BoardStatus::Proposed,
             priority: priority.trim().chars().take(16).collect(),
             thread_id: None,
+            run: false,
+            undo: None,
         }
     }
 }
@@ -135,54 +154,96 @@ pub fn inflight_card_title(ask: &str, thread_label: &str) -> String {
     one_line(thread_label)
 }
 
-/// Run-start hook. One non-archived card per thread, status `doing` (`in_progress`).
-/// A finished card for that thread is reused and retitled from the new ask.
+/// Run-start hook. One non-archived run card per thread, status `doing`.
+/// Pins and linked user cards share `thread_id` and are left alone.
+/// A finished run card for that thread is reused and retitled from the new ask.
 pub fn upsert_inflight_card(cards: &mut Vec<BoardCard>, thread_id: &str, title: &str) -> bool {
     let thread_id = thread_id.trim();
     let title = title.trim();
     if thread_id.is_empty() || title.is_empty() {
         return false;
     }
-    if let Some(c) = cards
-        .iter_mut()
-        .rev()
-        .find(|c| c.thread_id.as_deref() == Some(thread_id) && c.status != BoardStatus::Dismissed)
-    {
-        let mut changed = false;
-        if c.status != BoardStatus::InProgress {
-            if c.status == BoardStatus::Done {
-                let next: String = title.chars().take(120).collect();
-                if c.title != next {
-                    c.title = next;
-                }
-            }
-            c.status = BoardStatus::InProgress;
-            changed = true;
+    if let Some(c) = cards.iter_mut().rev().find(|c| {
+        c.run && c.thread_id.as_deref() == Some(thread_id) && c.status != BoardStatus::Dismissed
+    }) {
+        if c.status == BoardStatus::InProgress {
+            return false;
         }
-        return changed;
+        let next_title = if c.status == BoardStatus::Done {
+            title.chars().take(120).collect()
+        } else {
+            c.title.clone()
+        };
+        c.undo = Some(InflightUndo::Reused {
+            title: c.title.clone(),
+            status: c.status,
+        });
+        c.title = next_title;
+        c.status = BoardStatus::InProgress;
+        return true;
     }
     let mut card = BoardCard::new(title, "", "");
     card.status = BoardStatus::InProgress;
     card.thread_id = Some(thread_id.to_string());
+    card.run = true;
+    card.undo = Some(InflightUndo::Created);
     cards.push(card);
     true
 }
 
-/// Run-complete hook. The in-flight card for this thread moves to `done`.
+/// A new attempt does not own a Doing card left by an earlier stop.
+pub fn release_inflight_card(cards: &mut [BoardCard], thread_id: &str) {
+    let thread_id = thread_id.trim();
+    if thread_id.is_empty() {
+        return;
+    }
+    if let Some(c) = cards.iter_mut().rev().find(|c| {
+        c.run && c.thread_id.as_deref() == Some(thread_id) && c.status == BoardStatus::InProgress
+    }) {
+        c.undo = None;
+    }
+}
+
+/// Run-complete hook. The in-flight run card for this thread moves to `done`.
 pub fn settle_inflight_card(cards: &mut [BoardCard], thread_id: &str) -> bool {
     let thread_id = thread_id.trim();
     if thread_id.is_empty() {
         return false;
     }
-    let Some(c) = cards
-        .iter_mut()
-        .rev()
-        .find(|c| c.thread_id.as_deref() == Some(thread_id) && c.status == BoardStatus::InProgress)
-    else {
+    let Some(c) = cards.iter_mut().rev().find(|c| {
+        c.run && c.thread_id.as_deref() == Some(thread_id) && c.status == BoardStatus::InProgress
+    }) else {
         return false;
     };
+    c.undo = None;
     c.status = BoardStatus::Done;
     true
+}
+
+/// The turn never finished. A card this hook created is removed.
+/// A reused card returns to the title and status it had before Doing.
+pub fn abandon_inflight_card(cards: &mut Vec<BoardCard>, thread_id: &str) -> bool {
+    let thread_id = thread_id.trim();
+    if thread_id.is_empty() {
+        return false;
+    }
+    let Some(idx) = cards.iter().rposition(|c| {
+        c.run && c.thread_id.as_deref() == Some(thread_id) && c.status == BoardStatus::InProgress
+    }) else {
+        return false;
+    };
+    match cards[idx].undo.take() {
+        Some(InflightUndo::Created) => {
+            cards.remove(idx);
+            true
+        }
+        Some(InflightUndo::Reused { title, status }) => {
+            cards[idx].title = title;
+            cards[idx].status = status;
+            true
+        }
+        None => false,
+    }
 }
 
 /// `WORK_PIN:` adds a card. `WORK_UPDATE:` moves one. Pins inherit `thread_id` when set.
@@ -338,6 +399,64 @@ mod tests {
         let legacy = r#"[{"id":"w1","title":"Old","detail":"","status":"proposed","priority":""}]"#;
         let old: Vec<BoardCard> = serde_json::from_str(legacy).unwrap();
         assert!(old[0].thread_id.is_none());
+        assert!(!old[0].run);
         assert_eq!(old[0].status.column(), Some(KanbanColumn::Todo));
+    }
+
+    #[test]
+    fn inflight_does_not_steal_a_pin_or_linked_card() {
+        let mut cards = Vec::new();
+        assert!(upsert_inflight_card(&mut cards, "thr-1", "Flash the pi"));
+        assert!(settle_inflight_card(&mut cards, "thr-1"));
+        assert!(apply_assistant_work_marks(
+            &mut cards,
+            "WORK_PIN: Write the image | sd card | priority=high",
+            "thr-1",
+        ));
+        assert!(upsert_inflight_card(&mut cards, "thr-1", "Verify boot"));
+        assert_eq!(cards[0].title, "Verify boot");
+        assert_eq!(cards[0].status, BoardStatus::InProgress);
+        assert!(cards[0].run);
+        assert_eq!(cards[1].title, "Write the image");
+        assert_eq!(cards[1].status, BoardStatus::Proposed);
+        assert!(!cards[1].run);
+        assert!(settle_inflight_card(&mut cards, "thr-1"));
+        assert_eq!(cards[0].status, BoardStatus::Done);
+        assert_eq!(cards[1].status, BoardStatus::Proposed);
+
+        let mut linked = BoardCard::new("Manual todo", "notes", "");
+        linked.status = BoardStatus::Todo;
+        linked.thread_id = Some("thr-2".into());
+        let mut manual = vec![linked];
+        assert!(upsert_inflight_card(&mut manual, "thr-2", "Clarify the pin"));
+        assert_eq!(manual[0].status, BoardStatus::Todo);
+        assert_eq!(manual[0].title, "Manual todo");
+        assert_eq!(manual[1].status, BoardStatus::InProgress);
+        assert!(manual[1].run);
+        assert!(settle_inflight_card(&mut manual, "thr-2"));
+        assert_eq!(manual[0].status, BoardStatus::Todo);
+        assert_eq!(manual[1].status, BoardStatus::Done);
+    }
+
+    #[test]
+    fn abandon_drops_a_new_card_and_restores_a_reused_one() {
+        let mut cards = Vec::new();
+        assert!(upsert_inflight_card(&mut cards, "thr-1", "Flash the pi"));
+        assert!(abandon_inflight_card(&mut cards, "thr-1"));
+        assert!(cards.is_empty());
+
+        assert!(upsert_inflight_card(&mut cards, "thr-1", "Flash the pi"));
+        assert!(settle_inflight_card(&mut cards, "thr-1"));
+        assert!(upsert_inflight_card(&mut cards, "thr-1", "Verify boot"));
+        assert!(abandon_inflight_card(&mut cards, "thr-1"));
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].title, "Flash the pi");
+        assert_eq!(cards[0].status, BoardStatus::Done);
+
+        assert!(upsert_inflight_card(&mut cards, "thr-1", "Verify boot"));
+        release_inflight_card(&mut cards, "thr-1");
+        assert!(!abandon_inflight_card(&mut cards, "thr-1"));
+        assert_eq!(cards[0].title, "Verify boot");
+        assert_eq!(cards[0].status, BoardStatus::InProgress);
     }
 }
