@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.17 — 2026-09-23
+
+Right-click a History chat to Pin, Unpin, or Rename. Double-click the row to rename it in place. Pinned chats sit above the rest, last pinned first (`pinned_ms` in `threads.json`). Unpin puts the chat back with the other chats by last use. A blank or whitespace name is rejected and the previous title stays. Rename does not clear the pin. A project filter only hides other chats; it does not drop a pin or a title. `click_project_opens_board` stays false.
+
+- Linux: `grokhub-linux-v2.10.17.tar.gz` and AUR `pkgver=2.10.17`.
+- Windows: `GrokHub-Setup-2.10.17.exe` and `grokhub-windows-v2.10.17.zip`.
+- Cursor cabin 2.10.17. VERSION 2.10.17. Draft only. Not tagged.
+
 ## 2.10.16 — 2026-09-23
 
 Workboards is its own rail row, directly under Skills and Connectors. The page is a kanban (Todo, Doing, Blocked, Done) stored in `workboard.json`. Create, edit, move, and archive cards there. A card can link a chat; Open chat switches to that thread and leaves Workboards on the rail. When a run actually starts, `kick_model` calls `note_inflight_card` and upserts one Doing card for that thread (title from the user ask, or the thread label). `finish_acp_turn` calls `settle_turn_card`, which moves that card to Done and applies any `WORK_PIN:` / `WORK_UPDATE:` lines in the assistant text. A project click still only filters chats.

@@ -1,4 +1,4 @@
-use grokhub_core::{empty_chat_draft, uid, ThreadGoal};
+use grokhub_core::{empty_chat_draft, history_order, uid, ThreadGoal};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -17,6 +17,10 @@ pub struct ChatThread {
     pub goal: ThreadGoal,
     #[serde(default)]
     pub pinned: bool,
+    /// When this chat was last pinned. The pinned block sorts last-pinned-first.
+    /// Opening the chat does not move it inside that block.
+    #[serde(default)]
+    pub pinned_ms: u64,
     #[serde(default)]
     pub title_locked: bool,
     #[serde(default)]
@@ -50,6 +54,7 @@ impl ChatThread {
             messages: Arc::new(Vec::new()),
             goal: ThreadGoal::default(),
             pinned: false,
+            pinned_ms: 0,
             title_locked: false,
             accessed_ms: 0,
             grok_session: None,
@@ -108,6 +113,34 @@ pub fn load() -> Vec<ChatThread> {
 pub fn save(threads: &[ChatThread]) -> Result<(), String> {
     let s = serde_json::to_string_pretty(threads).map_err(|e| e.to_string())?;
     config::atomic_write(&threads_path(), s.as_bytes())
+}
+
+/// One History row for [`session_list_order`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionSortKey {
+    pub pinned: bool,
+    pub pinned_ms: u64,
+    pub accessed_ms: u64,
+    /// Higher is newer among rows the cabin has not opened (`accessed_ms == 0`).
+    pub list_rank: u64,
+}
+
+/// Pinned block on top (last pinned first). Unpinned stay last-used.
+/// Untouched rows (`accessed_ms == 0`) keep CLI order via `list_rank`.
+pub fn session_list_order(keys: &[SessionSortKey]) -> Vec<usize> {
+    let pinned: Vec<bool> = keys.iter().map(|k| k.pinned).collect();
+    let accessed: Vec<u64> = keys
+        .iter()
+        .map(|k| {
+            if k.accessed_ms == 0 {
+                k.list_rank
+            } else {
+                k.accessed_ms
+            }
+        })
+        .collect();
+    let pinned_ms: Vec<u64> = keys.iter().map(|k| k.pinned_ms).collect();
+    history_order(&pinned, &accessed, &pinned_ms)
 }
 
 /// Sidebar History filter. No selection shows global chats. A project shows only that folder.
@@ -334,5 +367,88 @@ mod tests {
         assert!(!project_folder_history_row(true, false, true));
         assert!(empty_chat_draft(true, false));
         assert!(!empty_chat_draft(false, false));
+    }
+
+    #[test]
+    fn session_list_is_last_pinned_first_then_last_used() {
+        let keys = [
+            SessionSortKey {
+                pinned: false,
+                pinned_ms: 0,
+                accessed_ms: 5_000,
+                list_rank: 3,
+            },
+            SessionSortKey {
+                pinned: true,
+                pinned_ms: 100,
+                accessed_ms: 9_000,
+                list_rank: 2,
+            },
+            SessionSortKey {
+                pinned: true,
+                pinned_ms: 400,
+                accessed_ms: 1,
+                list_rank: 1,
+            },
+            SessionSortKey {
+                pinned: false,
+                pinned_ms: 0,
+                accessed_ms: 0,
+                list_rank: 9,
+            },
+        ];
+        assert_eq!(
+            session_list_order(&keys),
+            vec![2, 1, 0, 3],
+            "newest pin, older pin, then last-used, then untouched CLI rank"
+        );
+        let unpinned = [
+            SessionSortKey {
+                pinned: false,
+                pinned_ms: 900,
+                accessed_ms: 10,
+                list_rank: 1,
+            },
+            SessionSortKey {
+                pinned: false,
+                pinned_ms: 1,
+                accessed_ms: 80,
+                list_rank: 1,
+            },
+        ];
+        assert_eq!(
+            session_list_order(&unpinned),
+            vec![1, 0],
+            "after unpin, pin time does not beat last used"
+        );
+    }
+
+    #[test]
+    fn project_filter_keeps_pin_and_title() {
+        let mut night = ChatThread::new("Night watch", false);
+        night.pinned = true;
+        night.pinned_ms = 40;
+        night.title_locked = true;
+        night.project_id = Some("lab".into());
+        let mut day = ChatThread::new("Day plan", false);
+        day.pinned = true;
+        day.pinned_ms = 80;
+        day.title_locked = true;
+        day.project_id = Some("other".into());
+        let threads = [night, day];
+        let shown: Vec<_> = threads
+            .iter()
+            .filter(|t| session_in_chat_folder(t.project_id.as_deref(), Some("lab")))
+            .collect();
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].title, "Night watch");
+        assert!(shown[0].pinned);
+        assert_eq!(shown[0].pinned_ms, 40);
+        assert!(threads[1].pinned);
+        assert_eq!(threads[1].title, "Day plan");
+        assert_eq!(threads[1].pinned_ms, 80);
+        let legacy: ChatThread = serde_json::from_str(r#"{"id":"t1","title":"legacy"}"#).unwrap();
+        assert_eq!(legacy.pinned_ms, 0);
+        assert!(!legacy.pinned);
     }
 }

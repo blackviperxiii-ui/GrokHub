@@ -2752,6 +2752,15 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "sidebar Grok session rows must offer Delete: {rail}"
         );
         assert!(
+            rail.contains("session_list_order")
+                && rail.contains("\"Unpin\"")
+                && rail.contains("\"Pin\"")
+                && rail.contains("\"Rename\"")
+                && rail.contains("TabAct::PinGrok")
+                && rail.contains("StartRenameGrok"),
+            "sidebar session rows must pin and rename: {rail}"
+        );
+        assert!(
             rail.contains("reload_grok_sessions"),
             "sidebar History must load Grok sessions so names can appear: {rail}"
         );
@@ -3844,8 +3853,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("fn delete_thread_at").next())
             .expect("pin_thread");
         assert!(
-            pinned.contains("accessed_ms"),
-            "pin must bump accessed_ms or /sync LWW can drop the pin: {pinned}"
+            pinned.contains("accessed_ms") && pinned.contains("pinned_ms"),
+            "pin must bump accessed_ms and record pinned_ms or /sync LWW can drop the pin: {pinned}"
         );
         let goal = src
             .split("fn apply_thread_goal")
