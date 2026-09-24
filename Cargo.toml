@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "2.10.20"
+version = "2.10.21"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/blackviperxiii-ui/GrokHub.git"
