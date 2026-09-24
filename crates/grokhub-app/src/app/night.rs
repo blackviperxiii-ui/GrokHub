@@ -53,18 +53,24 @@ impl Cabin {
                 a.id = uid("auto");
                 a = ensure_automation_schedule(a, Self::local_clock());
                 let label = automation_schedule_label(&a);
+                let id = a.id.clone();
+                let name = a.name.clone();
                 self.automations.push(a);
                 self.persist_automations();
+                self.note_schedule_created(&id, &name, &label);
                 format!("Automation added · {label}")
             }
             ScheduleRoute::Interval { interval, prompt } => {
                 if self.grok_loops.len() >= LOOP_MAX {
                     return "Maximum 50 scheduled loops".into();
                 }
+                let title = prompt.clone();
                 let mut row = new_loop(interval.clone(), prompt, now_ms());
                 row.id = uid("loop");
+                let id = row.id.clone();
                 self.grok_loops.push(row);
                 self.persist_loops();
+                self.note_schedule_created(&id, &title, &format!("every {interval}"));
                 format!("Loop added · every {interval}")
             }
         }
@@ -432,6 +438,7 @@ impl Cabin {
         self.status = format!("Night: {}", a.name);
         if replay.is_some() {
             self.mark_auto_ran(&a.id, now_ms);
+            self.note_automation_done(&a.id, &a.name, &a.instructions);
             bump_usage(&mut self.usage, "automation");
             self.daily_auto_used = self.usage.automation;
             self.daily_auto_day = self.usage.day.clone();
@@ -477,13 +484,20 @@ impl Cabin {
         true
     }
 
+    /// Live update-feed hook. A finished `/loop` posts `automation_done`.
     pub(super) fn poll_grok_loop(&mut self) -> bool {
         let Some((id, rx)) = self.grok_loop_rx.take() else {
             return false;
         };
         match rx.try_recv() {
             Ok(text) => {
-                if let Ok(turn) = grokhub_acp::parse_single_turn(&text) {
+                let prompt = self
+                    .grok_loops
+                    .iter()
+                    .find(|x| x.id == id)
+                    .map(|r| r.prompt.clone())
+                    .unwrap_or_default();
+                let summary = if let Ok(turn) = grokhub_acp::parse_single_turn(&text) {
                     if let Some(row) = self.grok_loops.iter_mut().find(|x| x.id == id) {
                         row.session_id = Some(turn.session_id);
                     }
@@ -492,12 +506,15 @@ impl Cabin {
                     if !clip.is_empty() {
                         self.status = format!("Loop: {clip}");
                     }
+                    turn.text
                 } else {
                     let clip: String = text.chars().take(160).collect();
                     if !clip.is_empty() {
-                        self.status = clip;
+                        self.status = clip.clone();
                     }
-                }
+                    text
+                };
+                self.note_automation_done(&id, &prompt, &summary);
                 true
             }
             Err(mpsc::TryRecvError::Empty) => {
