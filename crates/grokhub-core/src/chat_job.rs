@@ -31,6 +31,21 @@ pub fn chat_stream_is_visible(job_thread_id: Option<&str>, visible_thread_id: &s
     }
 }
 
+/// Switching tabs is not Stop.
+/// A hidden background job keeps running. A live reply bound to a chat keeps
+/// running, including when that chat is the one you left or the one you open
+/// again. Cabin-wide work (no thread) still stops so the next tab is not Thinking.
+pub fn halt_when_leaving_tab(
+    job_thread_id: Option<&str>,
+    _visible_thread_id: &str,
+    job_is_background: bool,
+) -> bool {
+    if job_is_background {
+        return false;
+    }
+    job_thread_id.is_none()
+}
+
 /// Thinking / live-thought chrome for this thread only.
 /// A host/imagine job (`job_thread_id` none) still busy the whole cabin.
 pub fn chat_shows_thinking(
@@ -308,6 +323,19 @@ mod tests {
         assert!(chat_shows_thinking(Some("thr-a"), "thr-a", true));
         assert!(!chat_stream_is_visible(Some("thr-a"), "thr-b"));
         assert!(chat_stream_is_visible(Some("thr-a"), "thr-a"));
+        assert!(
+            !halt_when_leaving_tab(Some("thr-a"), "thr-b", false),
+            "switching away must not kill the live reply on the chat you left"
+        );
+        assert!(
+            !halt_when_leaving_tab(Some("thr-a"), "thr-a", false),
+            "opening that chat again must not kill the live reply"
+        );
+        assert!(
+            !halt_when_leaving_tab(Some("bg"), "thr-b", true),
+            "a hidden background job keeps running when History or Chat changes"
+        );
+        assert!(halt_when_leaving_tab(None, "thr-b", false));
     }
 
     #[test]

@@ -70,20 +70,31 @@ impl Cabin {
         }
         self.status = format!("Bound {name}");
         // Same bound tree is a History filter restore. Halt only when the cwd changes.
+        // The chat transcript and its headless session stay. Creating or binding a
+        // project must not wipe History.
         if tree_changed {
             if self.running {
                 self.halt_in_flight();
             }
             self.acp = None;
             self.acp_spawn_rx = None;
-            if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                t.grok_cwd = None;
-                t.grok_session = None;
-            }
             self.persist();
         } else {
             self.persist_cfg();
         }
+    }
+
+    /// Clicking a project opens the chat you left, when that folder has one.
+    pub(super) fn open_project_chat(&mut self, id: &str) {
+        let Some(idx) = threads::project_return_index(&self.threads, id) else {
+            return;
+        };
+        if idx != self.thread_idx {
+            self.switch_thread(idx);
+        } else {
+            self.composer_want_focus = true;
+        }
+        self.nav = Nav::Chat;
     }
 
     pub(super) fn make_project(&mut self, name: &str, parent: Option<&str>) {
@@ -99,7 +110,7 @@ impl Cabin {
                     });
                 }
                 self.touch_projects();
-                self.bind_project_id(&id);
+                self.flush_projects();
                 self.status = format!("Project {}", self.projects[i].name);
             }
             Err(e) => self.status = e.into(),
@@ -260,7 +271,7 @@ impl Cabin {
                                     let _ = std::fs::create_dir_all(&p);
                                 });
                             }
-                            self.bind_project_id(&id);
+                            self.flush_projects();
                             bound = true;
                         }
                     }

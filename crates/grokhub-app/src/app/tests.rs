@@ -1279,8 +1279,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("fn cached_chat_views(").next())
             .expect("rail-history");
         assert!(
-            rail.contains("project_folder_history_row"),
-            "project History must skip unlisted empty drafts: {rail}"
+            rail.contains("cabin_history_indices"),
+            "project History is cabin chats, and skips empty drafts: {rail}"
         );
         let row = include_str!("../threads.rs");
         assert!(
@@ -2530,9 +2530,13 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .expect("apply_single_turn");
         assert!(
             saved.contains("session_saved")
-                && saved.contains("grok_sessions_loaded = false")
-                && saved.contains("reload_grok_sessions"),
-            "a dialogue session must show in History after it is created: {saved}"
+                && (saved.contains("grok_session = Some")
+                    || saved.contains("bind_reported_grok_session")),
+            "a dialogue session stays on the cabin chat, which is History: {saved}"
+        );
+        assert!(
+            !saved.contains("reload_grok_sessions"),
+            "a finished headless turn must not rebuild History from grok sessions list: {saved}"
         );
         let inspect = src
             .split("Slash::Inspect =>")
@@ -2610,8 +2614,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "sidebar bind during handshake must halt, not only drop a live ACP handle: {sidebar}"
         );
         assert!(
-            sidebar.contains("grok_cwd = None") && sidebar.contains("grok_session = None"),
-            "sidebar bind must forget the thread worktree or the next send stays in a History tree: {sidebar}"
+            !sidebar.contains("grok_session = None") && !sidebar.contains("messages.clear"),
+            "sidebar bind must keep the chat transcript and its headless session: {sidebar}"
         );
         let bind_spawn = sidebar
             .find("thread::spawn")
@@ -2912,54 +2916,44 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("fn cached_chat_views(").next())
             .expect("rail-history");
         assert!(
-            rail.contains("grok_sessions") && rail.contains("OpenGrok"),
-            "sidebar History must be grok sessions list, not cabin leftover Chat tabs: {rail}"
+            rail.contains("cabin_history_indices") && rail.contains("TabAct::Switch"),
+            "sidebar History is cabin chats, not grok sessions list: {rail}"
         );
         assert!(
-            !rail.contains("discover_session_files") && !rail.contains("rail_history_order"),
-            "sidebar History must not walk session dirs or cabin threads: {rail}"
+            !rail.contains("discover_session_files") && !rail.contains("reload_grok_sessions"),
+            "sidebar History must not walk session dirs or relist the CLI: {rail}"
         );
         assert!(
-            rail.contains("TabAct::DeleteGrok") && rail.contains("button(\"Delete\")"),
-            "sidebar Grok session rows must offer Delete: {rail}"
+            rail.contains("TabAct::Delete") && rail.contains("button(\"Delete\")"),
+            "sidebar chat rows must offer Delete: {rail}"
         );
         assert!(
             rail.contains("session_list_order")
                 && rail.contains("\"Unpin\"")
                 && rail.contains("\"Pin\"")
-                && rail.contains("\"Rename\"")
-                && rail.contains("TabAct::PinGrok")
-                && rail.contains("StartRenameGrok"),
-            "sidebar session rows must pin and rename: {rail}"
+                && rail.contains("\"Rename\""),
+            "sidebar chat rows must pin and rename: {rail}"
         );
         assert!(
-            rail.contains("reload_grok_sessions"),
-            "sidebar History must load Grok sessions so names can appear: {rail}"
-        );
-        assert!(
-            rail.contains("delete_grok_history") || rail.contains("TabAct::DeleteGrok(id)"),
-            "sidebar DeleteGrok must drop the session from the list: {rail}"
-        );
-        assert!(
-            rail.contains("pending_grok_deletes"),
-            "sidebar must hide a session while grok sessions delete is still running: {rail}"
+            rail.contains("is_background_history_title"),
+            "sidebar History must drop workboard summarize and similar: {rail}"
         );
         let page = src
-            .split("crate::cards::section_label(ui, \"Grok Build sessions\")")
+            .split("crate::cards::section_label(ui, \"Chats\")")
             .nth(1)
             .and_then(|s| s.split("fn ui_board(").next())
-            .expect("history grok section");
+            .expect("history chats section");
         assert!(
-            page.contains("s.title") && page.contains("grok_sessions"),
-            "History page must paint grok sessions list titles: {page}"
+            page.contains("thread_rail_title") && page.contains("cabin_history_indices"),
+            "History page must paint cabin chats: {page}"
         );
         assert!(
-            page.contains("Delete") && page.contains("delete_grok_history"),
-            "History page must delete Grok sessions from the list: {page}"
+            page.contains("Delete") && page.contains("delete_thread_at"),
+            "History page must delete the cabin chat: {page}"
         );
         assert!(
-            page.contains("pending_grok_deletes"),
-            "History page must hide a session while grok sessions delete is still running: {page}"
+            page.contains("is_background_history_title"),
+            "History page must not list workboard summarize: {page}"
         );
         let forget = src
             .split("fn forget_grok_build_session(")

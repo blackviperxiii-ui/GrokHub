@@ -57,7 +57,8 @@ use grokhub_core::{
     filter_slash_hits, flush_visible_goal, fold_stream_fields, folder_choices, forbidden_reason,
     forget_topic, fork_offer_why, format_consult_reply, frame_bytes, goal_continue_pin, goal_pin_for_job,
     goal_step_after_outcome, greet_from_last_job, greeting_fingerprint, greeting_name,
-    greeting_prompt, grok_cli_update_cmd, grok_command_hits, has_auth, has_verify_ok,
+    greeting_prompt, grok_cli_update_cmd, grok_command_hits, halt_when_leaving_tab, has_auth,
+    has_verify_ok,
     history_list_refresh_due,
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, hey_grok_on_press, hey_grok_route,
     hey_grok_starts_ptt, home_slash_cmd, home_surface_from_nav, host_cmd_leaves_project,
@@ -69,7 +70,8 @@ use grokhub_core::{
     imagine_video_resolution, imagine_wall_bounds, import_memory_file, inbox_claim_ready,
     inhabit_claim_allowed, inhabit_ready, insight_pin, is_cabin_first_run, is_hard_run,
     is_openclaw_workspace, is_plain_text, is_rewind_copy_cmd, is_rewind_copy_cmd_in,
-    is_voice_error, is_workload_user, job_error_goes_to_chat, job_is_scratch, keep_last_rewinds,
+    is_thinking_status, is_voice_error, is_workload_user, job_error_goes_to_chat, job_is_scratch,
+    keep_last_rewinds,
     lan_bind_in_use, last_imagine_receipt, last_user_scan, last_user_text, leftover_empty_thread, load_hub_state,
     local_greeting, lock_blocks_hands, mark_automation_ran, mark_automation_skipped, mark_loop_ran,
     mark_slash_result, match_skill, merge_hub_snapshots, merge_imported_memory,
@@ -1270,6 +1272,62 @@ impl Cabin {
             &self.visible_thread_id(),
             self.running,
         )
+    }
+
+    /// Live thought/say/tool chrome belongs to the thread that owns the stream.
+    fn stream_here(&self) -> bool {
+        chat_stream_is_visible(self.chat_job_thread.as_deref(), &self.visible_thread_id())
+    }
+
+    /// Night, inbox, and workboard runs live on the hidden background thread.
+    fn job_on_background_thread(&self) -> bool {
+        self.chat_job_thread.as_deref().is_some_and(|id| {
+            self.threads.iter().any(|t| t.background && t.id == id)
+        })
+    }
+
+    /// Permission cards and status belong on the tab that owns the turn.
+    /// Unbound cabin-wide work still paints here.
+    fn chrome_here(&self) -> bool {
+        self.chat_job_thread
+            .as_deref()
+            .is_none_or(|id| id == self.visible_thread_id())
+    }
+
+    /// A background job and any chat-bound reply keep their process.
+    /// Cabin-wide work with no thread still stops.
+    fn leave_should_halt(&self) -> bool {
+        halt_when_leaving_tab(
+            self.chat_job_thread.as_deref(),
+            &self.visible_thread_id(),
+            self.job_on_background_thread(),
+        )
+    }
+
+    /// Paint the stream on this tab. A parked turn rebuilds from the buffers
+    /// so returning mid-reply does not show only the newest chunk.
+    fn paint_text_delta(&mut self, kind: LiveKind, delta: &str) {
+        if !self.stream_here() {
+            return;
+        }
+        let has_text = self
+            .live_blocks
+            .iter()
+            .any(|b| matches!(b.kind, LiveKind::Thought | LiveKind::Say));
+        if !has_text && (!self.thought_buf.is_empty() || !self.stream_buf.is_empty()) {
+            if !self.thought_buf.is_empty() {
+                append_thought(&mut self.live_blocks, &self.thought_buf);
+            }
+            if !self.stream_buf.is_empty() {
+                append_say(&mut self.live_blocks, &self.stream_buf);
+            }
+            return;
+        }
+        match kind {
+            LiveKind::Thought => append_thought(&mut self.live_blocks, delta),
+            LiveKind::Say => append_say(&mut self.live_blocks, delta),
+            LiveKind::Tool => {}
+        }
     }
 
     fn run_phase_here(&self) -> ChatRunPhase {

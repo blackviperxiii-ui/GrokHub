@@ -315,13 +315,12 @@ impl Cabin {
                     }
                     let changed = push_stream_capped(&mut self.thought_buf, &t, IMAGE_FILE_CAP);
                     if changed {
-                        append_thought(&mut self.live_blocks, &t);
-                        self.scrub_live_blocks();
+                        self.paint_text_delta(LiveKind::Thought, &t);
+                        if self.stream_here() {
+                            self.scrub_live_blocks();
+                        }
                     }
-                    if chat_stream_is_visible(
-                        self.chat_job_thread.as_deref(),
-                        &self.visible_thread_id(),
-                    ) {
+                    if self.stream_here() {
                         self.status = self.thinking_status();
                     }
                     if changed {
@@ -334,13 +333,12 @@ impl Cabin {
                     }
                     let changed = push_stream_capped(&mut self.stream_buf, &t, IMAGE_FILE_CAP);
                     if changed {
-                        append_say(&mut self.live_blocks, &t);
-                        self.scrub_live_blocks();
+                        self.paint_text_delta(LiveKind::Say, &t);
+                        if self.stream_here() {
+                            self.scrub_live_blocks();
+                        }
                     }
-                    if chat_stream_is_visible(
-                        self.chat_job_thread.as_deref(),
-                        &self.visible_thread_id(),
-                    ) {
+                    if self.stream_here() {
                         self.status = self.thinking_status();
                     }
                     if changed {
@@ -351,30 +349,36 @@ impl Cabin {
                     card.detail = redact_held_secrets(&card.detail, &self.secret_hold);
                     card.diff = redact_held_secrets(&card.diff, &self.secret_hold);
                     card.title = redact_held_secrets(&card.title, &self.secret_hold);
-                    append_tool(
-                        &mut self.live_blocks,
-                        &card.id,
-                        &card.title,
-                        &card.status,
-                        &card.detail,
-                    );
-                    self.scrub_live_blocks();
                     if let Some(url) = &card.image_data_url {
-                        self.desk_frame = Some(url.clone());
                         self.remember_last_frame(url);
                         self.store_hub_frame(url);
                     }
-                    if let Some(old) = self.tool_cards.iter_mut().find(|c| c.id == card.id) {
-                        *old = merge_tool_card(old.clone(), card);
-                    } else {
-                        self.tool_cards.push(card);
+                    if self.stream_here() {
+                        append_tool(
+                            &mut self.live_blocks,
+                            &card.id,
+                            &card.title,
+                            &card.status,
+                            &card.detail,
+                        );
+                        self.scrub_live_blocks();
+                        if let Some(url) = &card.image_data_url {
+                            self.desk_frame = Some(url.clone());
+                        }
+                        if let Some(old) = self.tool_cards.iter_mut().find(|c| c.id == card.id) {
+                            *old = merge_tool_card(old.clone(), card);
+                        } else {
+                            self.tool_cards.push(card);
+                        }
                     }
                 }
                 AcpEvent::Plan(t) => {
                     // Plan text only. No approve / request-changes / comment RPC on this tip:
                     // session/request_permission is tool Allow/Deny, and /approve does not parse.
                     self.store_session_plan(&t, true);
-                    self.status = format!("Plan · {t}");
+                    if self.stream_here() {
+                        self.status = format!("Plan · {t}");
+                    }
                 }
                 AcpEvent::Usage(u) => self.merge_grok_usage(&u),
                 AcpEvent::Commands(cmds) => self.apply_grok_commands(cmds),
@@ -384,7 +388,11 @@ impl Cabin {
                     usage,
                     error,
                 } => {
-                    self.apply_compact_status(started, usage, error);
+                    if self.stream_here() {
+                        self.apply_compact_status(started, usage, error);
+                    } else {
+                        self.merge_grok_usage(&usage);
+                    }
                 }
                 AcpEvent::Permission(p) => {
                     if !self.running {
@@ -410,7 +418,9 @@ impl Cabin {
                         self.perm_always_confirm = None;
                         self.confirm = None;
                         self.perm_ask = Some(p);
-                        self.status = "Grok wants permission".into();
+                        if self.chrome_here() {
+                            self.status = "Grok wants permission".into();
+                        }
                     }
                 }
                 AcpEvent::Elicit(p) => {
@@ -426,7 +436,9 @@ impl Cabin {
                         }
                     }
                     self.elicit_draft.clear();
-                    self.status = format!("{} wants input", p.server_name);
+                    if self.chrome_here() {
+                        self.status = format!("{} wants input", p.server_name);
+                    }
                     self.elicit_ask = Some(p);
                 }
                 AcpEvent::ElicitComplete {
@@ -536,17 +548,19 @@ impl Cabin {
         }
         self.apply_assistant_snapshot(text.clone());
         let prose = grokhub_core::assistant_prose(&text);
-        if !prose.is_empty() {
-            match self.live_blocks.last_mut() {
-                Some(b) if b.kind == LiveKind::Say => {
-                    if b.body.trim().len() < prose.trim().len() {
-                        b.body = prose;
+        if here {
+            if !prose.is_empty() {
+                match self.live_blocks.last_mut() {
+                    Some(b) if b.kind == LiveKind::Say => {
+                        if b.body.trim().len() < prose.trim().len() {
+                            b.body = prose;
+                        }
                     }
+                    _ => append_say(&mut self.live_blocks, &prose),
                 }
-                _ => append_say(&mut self.live_blocks, &prose),
             }
+            self.scrub_live_blocks();
         }
-        self.scrub_live_blocks();
         self.thought_buf.clear();
         self.stream_buf.clear();
         self.settle_turn_card(&text);
@@ -592,20 +606,26 @@ impl Cabin {
             Ok(GrokPEvent::Thought(d)) => {
                 // `append_thought` has no cap of its own, so it has to respect the buffer
                 // cap or the rendered blocks grow past IMAGE_FILE_CAP unbounded.
-                if push_stream_capped(&mut self.thought_buf, &d, IMAGE_FILE_CAP) {
-                    append_thought(&mut self.live_blocks, &d);
+                let paints = self.stream_here();
+                if push_stream_capped(&mut self.thought_buf, &d, IMAGE_FILE_CAP) && paints {
+                    self.paint_text_delta(LiveKind::Thought, &d);
                     self.scrub_live_blocks();
                 }
-                self.status = self.thinking_status();
+                if paints {
+                    self.status = self.thinking_status();
+                }
                 self.upsert_stream_assistant();
                 self.grok_p_rx = Some(rx);
             }
             Ok(GrokPEvent::Text(d)) => {
-                if push_stream_capped(&mut self.stream_buf, &d, IMAGE_FILE_CAP) {
-                    append_say(&mut self.live_blocks, &d);
+                let paints = self.stream_here();
+                if push_stream_capped(&mut self.stream_buf, &d, IMAGE_FILE_CAP) && paints {
+                    self.paint_text_delta(LiveKind::Say, &d);
                     self.scrub_live_blocks();
                 }
-                self.status = self.thinking_status();
+                if paints {
+                    self.status = self.thinking_status();
+                }
                 self.upsert_stream_assistant();
                 self.grok_p_rx = Some(rx);
             }
@@ -613,23 +633,27 @@ impl Cabin {
                 card.detail = redact_held_secrets(&card.detail, &self.secret_hold);
                 card.diff = redact_held_secrets(&card.diff, &self.secret_hold);
                 card.title = redact_held_secrets(&card.title, &self.secret_hold);
-                append_tool(
-                    &mut self.live_blocks,
-                    &card.id,
-                    &card.title,
-                    &card.status,
-                    &card.detail,
-                );
-                self.scrub_live_blocks();
                 if let Some(url) = &card.image_data_url {
-                    self.desk_frame = Some(url.clone());
                     self.remember_last_frame(url);
                     self.store_hub_frame(url);
                 }
-                if let Some(old) = self.tool_cards.iter_mut().find(|c| c.id == card.id) {
-                    *old = merge_tool_card(old.clone(), card);
-                } else {
-                    self.tool_cards.push(card);
+                if self.stream_here() {
+                    append_tool(
+                        &mut self.live_blocks,
+                        &card.id,
+                        &card.title,
+                        &card.status,
+                        &card.detail,
+                    );
+                    self.scrub_live_blocks();
+                    if let Some(url) = &card.image_data_url {
+                        self.desk_frame = Some(url.clone());
+                    }
+                    if let Some(old) = self.tool_cards.iter_mut().find(|c| c.id == card.id) {
+                        *old = merge_tool_card(old.clone(), card);
+                    } else {
+                        self.tool_cards.push(card);
+                    }
                 }
                 self.grok_p_rx = Some(rx);
             }
@@ -647,7 +671,9 @@ impl Cabin {
             }
             Ok(GrokPEvent::Plan(t)) => {
                 self.store_session_plan(&t, true);
-                self.status = format!("Plan · {t}");
+                if self.stream_here() {
+                    self.status = format!("Plan · {t}");
+                }
                 self.grok_p_rx = Some(rx);
             }
             Ok(GrokPEvent::Compact {
@@ -655,11 +681,17 @@ impl Cabin {
                 usage,
                 error,
             }) => {
-                self.apply_compact_status(started, usage, error);
+                if self.stream_here() {
+                    self.apply_compact_status(started, usage, error);
+                } else {
+                    self.merge_grok_usage(&usage);
+                }
                 self.grok_p_rx = Some(rx);
             }
             Ok(GrokPEvent::Recovering(msg)) => {
-                self.status = retry_status_line(&msg);
+                if self.stream_here() {
+                    self.status = retry_status_line(&msg);
+                }
                 self.grok_p_rx = Some(rx);
             }
             Ok(GrokPEvent::End(turn)) => {
@@ -670,21 +702,29 @@ impl Cabin {
                 self.grok_p_pid = None;
                 self.running = false;
                 self.pending_kick = None;
+                let paints = self.stream_here();
                 if grokhub_acp::is_sigterm_status(&e) {
                     let empty = self.stream_buf.is_empty() && self.thought_buf.is_empty();
                     if empty && self.status != "Retrying…" {
-                        self.status = "Retrying…".into();
+                        if paints {
+                            self.status = "Retrying…".into();
+                        }
                         self.kick_model(false);
                     } else {
                         self.scheduled_perm = false;
-                        self.status.clear();
+                        if paints {
+                            self.status.clear();
+                        }
                         self.abandon_turn_card();
                         self.chat_job_thread = None;
                         self.persist();
                     }
                 } else {
                     self.scheduled_perm = false;
-                    self.status = self.apply_job_fail(&rewrite_truncation_error(&e));
+                    let status = self.apply_job_fail(&rewrite_truncation_error(&e));
+                    if paints {
+                        self.status = status;
+                    }
                     self.abandon_turn_card();
                     self.chat_job_thread = None;
                     self.persist();
@@ -710,7 +750,11 @@ impl Cabin {
                     self.finish_acp_turn(text);
                 } else {
                     self.scheduled_perm = false;
-                    self.status = self.apply_job_fail("Grok Build session missing");
+                    let paints = self.stream_here();
+                    let status = self.apply_job_fail("Grok Build session missing");
+                    if paints {
+                        self.status = status;
+                    }
                     self.abandon_turn_card();
                     self.chat_job_thread = None;
                     self.persist();
@@ -776,13 +820,6 @@ impl Cabin {
                 .and_then(|t| t.grok_cwd.clone())
                 .map(std::path::PathBuf::from);
             self.record_prompt_history(idx, open.as_deref(), &turn.session_id, &title, cwd);
-            self.grok_sessions_loaded = false;
-            if self.grok_sessions_inflight > 0 {
-                self.grok_list_gen = self.grok_list_gen.wrapping_add(1);
-                self.grok_sessions_refresh_pending = true;
-            } else {
-                self.reload_grok_sessions();
-            }
         }
         let streamed = if self.thought_buf.is_empty() {
             self.stream_buf.clone()
@@ -800,8 +837,10 @@ impl Cabin {
             streamed
         };
         let footer = turn_footer(&turn.stop_reason, &self.grok_usage);
+        let here =
+            chat_stream_is_visible(self.chat_job_thread.as_deref(), &self.visible_thread_id());
         self.finish_acp_turn(text);
-        if !footer.is_empty() && self.status.is_empty() {
+        if here && !footer.is_empty() && self.status.is_empty() {
             self.status = footer;
         }
         self.drain_followup_queue();

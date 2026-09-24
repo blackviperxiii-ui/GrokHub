@@ -78,10 +78,25 @@ impl Cabin {
                 self.active_skill_follow = Some(skill_follow_block(sk));
             }
         }
-        self.live_mut().push(("user".into(), text.clone()));
         self.eyes_attach = false;
         self.hands_attach = false;
         self.followup_step = 0;
+        if self.scheduled_perm {
+            let idx = self.ensure_background_history_thread();
+            if let Some(t) = self.threads.get(idx) {
+                self.chat_job_thread = Some(t.id.clone());
+            }
+        }
+        let hidden = self.scheduled_perm
+            && self
+                .chat_job_thread
+                .as_deref()
+                .is_some_and(|id| id != self.visible_thread_id());
+        if hidden {
+            self.push_bound_msg("user", text.clone());
+        } else {
+            self.live_mut().push(("user".into(), text.clone()));
+        }
         self.stamp_current_access();
         self.persist();
         self.kick_model(true);
@@ -94,6 +109,8 @@ impl Cabin {
     pub(super) fn send_scheduled_chat(&mut self, text: String) {
         // kick_model honors scheduled_flags / scheduled_args while scheduled_perm.
         self.scheduled_perm = true;
+        let _ = self.permission_mode.scheduled_args();
+        let _ = self.permission_mode.scheduled_flags();
         self.send_chat(text);
         if !self.running && self.pending_kick.is_none() {
             self.scheduled_perm = false;
@@ -127,7 +144,9 @@ impl Cabin {
                         self.chat_job_thread = Some(self.visible_thread_id());
                     }
                     self.running = true;
-                    self.status = "Capturing…".into();
+                    if self.chrome_here() {
+                        self.status = "Capturing…".into();
+                    }
                     return;
                 }
                 CabinFrame::Ready(url) => {
@@ -142,11 +161,19 @@ impl Cabin {
                 self.chat_job_thread = Some(self.visible_thread_id());
             }
             self.running = true;
-            self.status = "Verifying…".into();
+            if self.chrome_here() {
+                self.status = "Verifying…".into();
+            }
             return;
         }
         self.running = true;
-        self.status = "Thinking…".into();
+        if self
+            .chat_job_thread
+            .as_deref()
+            .is_none_or(|id| id == self.visible_thread_id())
+        {
+            self.status = "Thinking…".into();
+        }
         if self.chat_job_thread.is_none() {
             self.chat_job_thread = Some(self.visible_thread_id());
         }
@@ -211,8 +238,10 @@ impl Cabin {
         self.hands_attach = false;
         self.stream_buf.clear();
         self.thought_buf.clear();
-        self.tool_cards.clear();
-        self.live_blocks.clear();
+        if self.stream_here() {
+            self.tool_cards.clear();
+            self.live_blocks.clear();
+        }
         self.perm_ask = None;
         self.perm_always_confirm = None;
         self.confirm = None;
