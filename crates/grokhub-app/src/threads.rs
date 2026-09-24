@@ -36,6 +36,9 @@ pub struct ChatThread {
     /// Sidebar project folder. `None` is a global chat.
     #[serde(default)]
     pub project_id: Option<String>,
+    /// Headless background work (workboard summarize and similar). Not a user History row.
+    #[serde(default)]
+    pub background: bool,
     #[serde(default)]
     pub grok_fork: bool,
     #[serde(default)]
@@ -72,6 +75,7 @@ impl ChatThread {
             grok_worktree: false,
             grok_show_pending: false,
             project_id: None,
+            background: false,
             plan_body: String::new(),
             retired_sessions: Vec::new(),
         }
@@ -180,6 +184,74 @@ pub fn session_in_chat_folder(thread_project: Option<&str>, selected: Option<&st
 /// An unused Chat draft (no dialogue, no session) stays off the rail.
 pub fn project_folder_history_row(already_listed: bool, empty: bool, has_session: bool) -> bool {
     !already_listed && !empty_chat_draft(empty, has_session)
+}
+
+/// Workboard summarize and the same family of headless jobs are not user chats.
+pub fn is_background_history_title(title: &str) -> bool {
+    let t = title.trim().to_ascii_lowercase();
+    t == "summarize the workboard"
+        || t.starts_with("summarize the workboard ")
+        || t.starts_with("summarize the workboard,")
+        || t.starts_with("summarize the workboard.")
+}
+
+/// Cabin History is the user's chats. Empty drafts and background jobs stay off it.
+pub fn user_history_row(background: bool, title: &str, empty: bool, has_session: bool) -> bool {
+    if background || is_background_history_title(title) {
+        return false;
+    }
+    !empty_chat_draft(empty, has_session)
+}
+
+/// Indices of user History rows. `selected` None is global chats; Some is that project.
+pub fn cabin_history_indices(
+    threads: &[ChatThread],
+    selected: Option<&str>,
+    live_idx: Option<usize>,
+    live_empty: bool,
+) -> Vec<usize> {
+    threads
+        .iter()
+        .enumerate()
+        .filter(|(i, t)| {
+            if !session_in_chat_folder(t.project_id.as_deref(), selected) {
+                return false;
+            }
+            let empty = if Some(*i) == live_idx {
+                live_empty
+            } else {
+                t.messages.is_empty()
+            };
+            let has_session = t
+                .grok_session
+                .as_deref()
+                .is_some_and(|s| !s.trim().is_empty());
+            user_history_row(t.background, &t.title, empty, has_session)
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// User chats that exist, ignoring the project filter. Creating a project must not drop these.
+pub fn history_corpus(threads: &[ChatThread]) -> Vec<(String, usize)> {
+    let mut out = Vec::new();
+    for t in threads {
+        let has_session = t
+            .grok_session
+            .as_deref()
+            .is_some_and(|s| !s.trim().is_empty());
+        if user_history_row(t.background, &t.title, t.messages.is_empty(), has_session) {
+            out.push((t.id.clone(), t.messages.len()));
+        }
+    }
+    out
+}
+
+/// Most recently used user chat in a project. Leaving and coming back opens this row.
+pub fn project_return_index(threads: &[ChatThread], project_id: &str) -> Option<usize> {
+    let rows = cabin_history_indices(threads, Some(project_id), None, false);
+    rows.into_iter()
+        .max_by_key(|i| (threads[*i].accessed_ms, *i))
 }
 
 /// What History should show after one prompt.
@@ -613,6 +685,112 @@ mod tests {
         let legacy: ChatThread = serde_json::from_str(r#"{"id":"t1","title":"legacy"}"#).unwrap();
         assert_eq!(legacy.pinned_ms, 0);
         assert!(!legacy.pinned);
+        assert!(!legacy.background);
+    }
+
+    #[test]
+    fn create_project_does_not_clear_history() {
+        let mut night = ChatThread::new("Night watch", false);
+        night.messages_mut().push(("user".into(), "keep-me".into()));
+        night.pinned = true;
+        night.pinned_ms = 40;
+        let mut lab = ChatThread::new("Lab notes", false);
+        lab.project_id = Some("lab".into());
+        lab.messages_mut().push(("user".into(), "stay".into()));
+        lab.grok_session = Some("01a01b0f-7e06-74b1-8f22-5236c9d57d45".into());
+        let mut board = ChatThread::new("summarize the workboard", false);
+        board.background = true;
+        board.messages_mut()
+            .push(("user".into(), "summarize the workboard".into()));
+        let before_threads = vec![night, lab, board];
+        let before = history_corpus(&before_threads);
+        assert_eq!(before.len(), 2, "background workboard summarize is not History");
+        assert!(before.iter().all(|(_, n)| *n > 0));
+        // Creating a project adds a folder. It does not rewrite threads.json.
+        let after = history_corpus(&before_threads);
+        assert_eq!(after, before, "create must not drop or blank user chats");
+        assert_eq!(before_threads[0].messages[0].1, "keep-me");
+        assert_eq!(before_threads[1].messages[0].1, "stay");
+        assert!(before_threads[0].pinned);
+        assert_eq!(before_threads[1].grok_session.as_deref().unwrap().len(), 36);
+        let global = cabin_history_indices(&before_threads, None, None, false);
+        assert_eq!(global.len(), 1);
+        assert_eq!(before_threads[global[0]].title, "Night watch");
+        assert!(
+            !cabin_history_indices(&before_threads, Some("brand-new"), None, false)
+                .iter()
+                .any(|&i| before_threads[i].title == "Night watch"),
+            "a new project folder is empty; the global chat is still in the corpus"
+        );
+    }
+
+    #[test]
+    fn summarize_the_workboard_is_not_a_user_history_row() {
+        assert!(is_background_history_title("summarize the workboard"));
+        assert!(is_background_history_title("  Summarize the workboard  "));
+        assert!(is_background_history_title(
+            "summarize the workboard and last host receipt"
+        ));
+        assert!(!is_background_history_title("Night watch"));
+        assert!(!user_history_row(
+            false,
+            "summarize the workboard",
+            false,
+            true
+        ));
+        let mut leaked = ChatThread::new("summarize the workboard", false);
+        leaked.messages_mut()
+            .push(("user".into(), "summarize the workboard".into()));
+        leaked.grok_session = Some("01a01b0f-7e06-74b1-8f22-5236c9d57d46".into());
+        let mut flagged = ChatThread::new("Morning brief", false);
+        flagged.background = true;
+        flagged.messages_mut().push(("user".into(), "hello".into()));
+        let mut real = ChatThread::new("Night watch", false);
+        real.messages_mut().push(("user".into(), "hello".into()));
+        let threads = vec![leaked, flagged, real];
+        let rows = cabin_history_indices(&threads, None, None, false);
+        assert_eq!(rows, vec![2]);
+        assert_eq!(threads[rows[0]].title, "Night watch");
+        assert!(history_corpus(&threads)
+            .iter()
+            .all(|(id, _)| id == &threads[2].id));
+    }
+
+    #[test]
+    fn leave_and_return_opens_the_same_project_chat() {
+        let mut global = ChatThread::new("Global", false);
+        global.messages_mut().push(("user".into(), "g".into()));
+        global.accessed_ms = 90;
+        let mut older = ChatThread::new("Older lab", false);
+        older.project_id = Some("lab".into());
+        older.accessed_ms = 5;
+        older.messages_mut().push(("user".into(), "old".into()));
+        let mut lab = ChatThread::new("Lab notes", false);
+        lab.project_id = Some("lab".into());
+        lab.accessed_ms = 20;
+        lab.pinned = true;
+        lab.messages_mut().push(("user".into(), "the work".into()));
+        let lab_id = lab.id.clone();
+        let mut board = ChatThread::new("summarize the workboard", false);
+        board.project_id = Some("lab".into());
+        board.background = true;
+        board.accessed_ms = 99;
+        board.messages_mut()
+            .push(("user".into(), "summarize the workboard".into()));
+        let threads = vec![global, older, lab, board];
+        let back = project_return_index(&threads, "lab").expect("project chat");
+        assert_eq!(threads[back].id, lab_id);
+        assert_eq!(threads[back].messages[0].1, "the work");
+        assert!(threads[back].pinned);
+        assert_eq!(
+            project_return_index(&threads, "lab"),
+            Some(back),
+            "a second return opens the same chat"
+        );
+        assert!(project_return_index(&threads, "missing").is_none());
+        let folder = cabin_history_indices(&threads, Some("lab"), None, false);
+        assert!(folder.contains(&back));
+        assert!(!folder.iter().any(|&i| threads[i].background));
     }
 
     #[test]

@@ -990,8 +990,10 @@ impl Cabin {
                             }
                             ChatBlockAct::None => {}
                         }
-                        self.paint_perm_ask(ui);
-                        self.paint_elicit_ask(ui);
+                        if self.chrome_here() {
+                            self.paint_perm_ask(ui);
+                            self.paint_elicit_ask(ui);
+                        }
                         self.paint_try_again(ui);
                         if pin_tail {
                             // The transcript is laid out now, so the bottom is a real place.
@@ -1510,8 +1512,10 @@ impl Cabin {
                 |ui| {
                     ui.set_width(pane_w);
                     self.ui_composer_stack(ui);
-                    self.paint_perm_ask(ui);
-                    self.paint_elicit_ask(ui);
+                    if self.chrome_here() {
+                        self.paint_perm_ask(ui);
+                        self.paint_elicit_ask(ui);
+                    }
                     self.paint_try_again(ui);
                 },
             );

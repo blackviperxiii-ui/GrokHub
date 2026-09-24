@@ -218,9 +218,17 @@ impl Cabin {
     }
 
     pub(super) fn drop_leaving_thread_chrome(&mut self) {
-        if self.running {
+        // Switching chats is not Stop. A live reply stays on its chat.
+        // A hidden night/inbox/workboard job keeps running. Cabin-wide work
+        // with no thread still halts so the next tab is not Thinking.
+        let halt = self.running && self.leave_should_halt();
+        if halt {
             self.halt_in_flight();
         }
+        let keep_run = self.running && !halt;
+        // grok -p, including the hidden background thread, is not the ACP
+        // session. Drop a stale handle without SIGTERM of that process.
+        let keep_acp = keep_run && self.grok_p_rx.is_none() && !self.job_on_background_thread();
         self.attach_url = None;
         self.attach_name = None;
         self.followup_step = 0;
@@ -228,15 +236,20 @@ impl Cabin {
         self.hands_attach = false;
         self.eyes_attach = false;
         self.last_receipt_ok = None;
-        self.acp = None;
-        self.acp_spawn_rx = None;
+        if !keep_acp {
+            self.acp = None;
+            self.acp_spawn_rx = None;
+            self.perm_ask = None;
+            self.perm_always_confirm = None;
+            self.confirm = None;
+            self.elicit_ask = None;
+            self.elicit_draft.clear();
+        }
         self.tool_cards.clear();
         self.live_blocks.clear();
-        self.perm_ask = None;
-        self.perm_always_confirm = None;
-        self.confirm = None;
-        self.elicit_ask = None;
-        self.elicit_draft.clear();
+        if keep_run && !self.chrome_here() && is_thinking_status(&self.status) {
+            self.status.clear();
+        }
     }
 
     pub(super) fn pick_entries(dir: &Path) -> Vec<(String, bool)> {
