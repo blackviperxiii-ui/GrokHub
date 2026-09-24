@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.22 — 2026-09-24
+
+Copy and Reply under a user bubble stay inside the window. A short message such as “hey” still sits on the right and still wraps when it is long. The Reply label no longer draws past the right edge.
+
+- Linux: `grokhub-linux-v2.10.22.tar.gz` and AUR `pkgver=2.10.22`.
+- Windows: `GrokHub-Setup-2.10.22.exe` and `grokhub-windows-v2.10.22.zip`.
+- Cursor cabin 2.10.22. VERSION 2.10.22. Draft only. Not tagged. Rebased onto main 2.10.21 (Plan does not rename the chat).
+
 ## 2.10.21 — 2026-09-24
 
 Clicking Plan switches the session to Plan. The thread title and the History row stay. Chat and btw pills are unchanged. The session id still clears so the next turn is a new Grok session.
