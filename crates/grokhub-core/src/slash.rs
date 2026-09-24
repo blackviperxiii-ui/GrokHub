@@ -648,7 +648,7 @@ pub fn slash_help() -> String {
         "Tool calls, diffs, and desk frames sit in a collapsed Work tree — expand to view. User and assistant chats are bubbles; thinking is faded thought process, not a bubble. A thought starts expanded. Collapse leaves one short row that opens again. Collapsing any thought folds the rest of that session; expanding one opens only that thought. That fold survives the live-to-stored handoff. The reply stays. A long user bubble wraps inside the row and keeps its leading gap. Copy and Reply under a user bubble stay inside the window. Permission prompts Allow / Deny — Enter allows and Esc denies when the composer is empty. User bubbles sit on the right.",
         "Shared buttons hover-scale to 1.035 over 120ms, shrink on press, and scale plus fill on keyboard focus. Card and wall hover stay inside the slot. Off-screen chat rows skip paint; height follows the pane width and each row keeps its id.",
         "Account sets a display name and a local profile picture kept in cabin config. The avatar menu, rail, and connected hint do not show the email.",
-        "Five chips sit centered over the composer. The home update feed is newest-first short cards (automation_done, schedule_created, suggestion, automate_offer). No weather, mail, or calendar stubs.",
+        "Five chips sit centered over the composer. The home update feed is newest-first event cards (automation_done, schedule_created). Idea and digest cards share updates.json and do not use that four-card cap. Accept on an idea files a workboard Todo. No weather, mail, or calendar stubs.",
     ]
     .join("\n")
 }

@@ -1444,11 +1444,11 @@ impl Cabin {
             0.0
         };
         let feed_n = if pulse_on {
-            grokhub_core::visible_updates(&self.updates).len()
+            home_feed_count(&self.updates)
         } else {
             0
         };
-        let feed_h = update_feed_h(feed_n);
+        let feed_h = stacked_feed_h(feed_n);
         let device_on = pulse_on && device_glance(self.hub_on, self.last_frame_url.as_deref()).is_some();
         let device_h = if device_on { 26.0 } else { 0.0 };
         let slot_gap = if (feed_n > 0 || device_on) && greet_on {

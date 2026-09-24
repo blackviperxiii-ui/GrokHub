@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.25 — 2026-09-24
+
+Idea Accept files a workboard Todo (`BoardStatus::Todo` through `flush_board`) on the feed and on Ideas. Digest and idea cards share `updates.json` and stay out of the event paint cap of 4. The user dismisses an idea; Housekeep expires it at about two weeks or `expires_at`. One brief box in `app.json` steers the digest. Quiet hours hold digest, idea, and `automation_done` visibility. `poll_grok_loop` still records the finish. Minimize, tray show, and the next launch open a fresh empty chat. The previous transcript and pin stay in History. The feed stays hidden when nothing is undismissed. Draft only. Not tagged.
+
+- Linux: `grokhub-linux-v2.10.25.tar.gz` and AUR `pkgver=2.10.25`.
+- Windows: `GrokHub-Setup-2.10.25.exe` and `grokhub-windows-v2.10.25.zip`.
+- Cursor cabin 2.10.25. VERSION 2.10.25. Draft only. Not tagged.
+
 ## 2.10.24 — 2026-09-24
 
 Cabin History is the cabin's own chats, kept on the thread through headless `grok -p`. It is not `grok sessions list`. Creating a project does not wipe those chats. Background jobs such as “summarize the workboard” stay off History. They do not paint on the open chat, and leaving a chat does not stop them. A live reply keeps running when you switch chats. Leave a project chat and click the project again: the same chat opens. Pins stay. Transcripts stay. A project click still does not open the Workboard.
@@ -41,7 +49,6 @@ Quick-chip × stays in its reserved slot. Hovering it no longer flashes the poin
 - Linux: `grokhub-linux-v2.10.20.tar.gz` and AUR `pkgver=2.10.20`.
 - Windows: `GrokHub-Setup-2.10.20.exe` and `grokhub-windows-v2.10.20.zip`.
 - Cursor cabin 2.10.20. VERSION 2.10.20. Draft only. Not tagged. Rebased onto main 2.10.19 (session actions beside minimize).
-
 ## 2.10.19 — 2026-09-24
 
 Compact, Copy session, and Export leave the composer. They sit in a three-bar menu immediately beside minimize. A titlebar press opens the menu the same way as the other chrome buttons (`titlebar_chrome_hit`). Each action is unchanged. Settings, Chat / Plan / btw, Ask / Auto / Always, and the quick chips stay put. The context usage bar stays. View plan and Fork stay on the thread.

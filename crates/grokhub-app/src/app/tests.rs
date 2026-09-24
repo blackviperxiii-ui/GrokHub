@@ -7382,3 +7382,81 @@ fn session_thought_collapse_stays_on_one_thread() {
         "quiet Collapse/Expand stays; Hide is not painted"
     );
 }
+
+#[test]
+fn feed_pulse_and_fresh_home_stay_off_the_review() {
+    let src = cabin_src();
+    let house = src
+        .split("HeartbeatAct::Housekeep =>")
+        .nth(1)
+        .and_then(|s| s.split("HeartbeatAct::Inbox =>").next())
+        .expect("housekeep");
+    assert!(
+        house.contains("tick_feed_pulse")
+            && house.contains("stamp_current_access")
+            && house.contains("Nav::Chat"),
+        "expiry, quiet release, and the digest clock run on Housekeep: {house}"
+    );
+    let tick = src
+        .split("fn tick_review(")
+        .nth(1)
+        .and_then(|s| s.split("fn review_digest(").next())
+        .expect("tick_review");
+    assert!(
+        !tick.contains("tick_feed_pulse") && !tick.contains("expire_ideas"),
+        "the feed pulse must not run from the nightly review: {tick}"
+    );
+    let spawn = src
+        .split("fn spawn_review(")
+        .nth(1)
+        .and_then(|s| s.split("fn poll_review(").next())
+        .expect("spawn_review");
+    assert!(
+        !spawn.contains("tick_feed_pulse")
+            && !spawn.contains("expire_ideas")
+            && !spawn.contains("suggestions_from_sessions"),
+        "spawn_review stays the transcript review: {spawn}"
+    );
+    let show = src
+        .split("fn show_from_tray(")
+        .nth(1)
+        .and_then(|s| s.split("fn note_window_resume(").next())
+        .expect("show_from_tray");
+    assert!(
+        show.contains("open_fresh_home") && show.contains("apply_saved_geom"),
+        "tray show opens a fresh chat and restores the window: {show}"
+    );
+    let fresh = fn_src(&src, "open_fresh_home");
+    assert!(
+        fresh.contains("new_thread(false)")
+            && fresh.contains("resume_needs_fresh_chat")
+            && !fresh.contains("delete_thread")
+            && !fresh.contains("pinned = false")
+            && !fresh.contains("No updates")
+            && !fresh.contains("Nothing queued"),
+        "fresh home keeps the previous chat: {fresh}"
+    );
+    let pulse = include_str!("feed_ui.rs");
+    let body = pulse
+        .split("fn tick_feed_pulse(")
+        .nth(1)
+        .and_then(|s| s.split("fn digest_taste(").next())
+        .expect("tick_feed_pulse");
+    assert!(
+        body.contains("read_memory(\"USER.md\")")
+            && body.contains("read_memory(\"MEMORY.md\")")
+            && body.contains("read_memory(\"SOUL.md\")")
+            && !body.contains("last_review_day")
+            && !body.contains("suggestions_from_sessions")
+            && !body.contains("spawn_review")
+            && !body.contains("notify::")
+            && !body.contains("send_chat")
+            && !body.contains("send_scheduled"),
+        "digest authoring stays off transcripts, chat, and pings: {body}"
+    );
+    assert!(
+        !pulse.contains("No updates") && !pulse.contains("Nothing queued"),
+        "the feed must not paint an empty label"
+    );
+}
+

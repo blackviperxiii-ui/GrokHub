@@ -136,6 +136,22 @@ impl BoardCard {
     }
 }
 
+/// One tap on an idea. Files `BoardStatus::Todo`. A matching live title is already on the board.
+pub fn file_idea_todo(cards: &mut Vec<BoardCard>, title: &str, detail: &str) -> String {
+    let title = title.trim();
+    if let Some(existing) = cards
+        .iter()
+        .find(|c| c.title.eq_ignore_ascii_case(title) && c.status != BoardStatus::Dismissed)
+    {
+        return existing.id.clone();
+    }
+    let mut card = BoardCard::new(title, detail, "");
+    card.status = BoardStatus::Todo;
+    let id = card.id.clone();
+    cards.push(card);
+    id
+}
+
 /// First line of the user ask, else the thread label. Empty when both are blank.
 pub fn inflight_card_title(ask: &str, thread_label: &str) -> String {
     fn one_line(s: &str) -> String {
@@ -331,6 +347,11 @@ mod tests {
         assert_eq!(card.title, "Flash the pi");
         assert_eq!(card.priority, "high");
         assert_eq!(card.status, BoardStatus::Proposed);
+        let mut board = Vec::new();
+        let id = file_idea_todo(&mut board, "More F1", "from the brief");
+        assert_eq!(board[0].status, BoardStatus::Todo);
+        assert_eq!(file_idea_todo(&mut board, "more f1", "again"), id);
+        assert_eq!(board.len(), 1);
         assert_eq!(card.status.column(), Some(KanbanColumn::Todo));
         let (key, st) = parse_work_update("WORK_UPDATE: Flash the pi | status=doing").unwrap();
         let mut cards = vec![card];
@@ -365,7 +386,11 @@ mod tests {
         assert_eq!(cards[0].title, "Verify boot");
         assert_eq!(cards[0].status, BoardStatus::InProgress);
         cards[0].status = BoardStatus::Blocked;
-        assert!(upsert_inflight_card(&mut cards, "thr-1", "Retry after block"));
+        assert!(upsert_inflight_card(
+            &mut cards,
+            "thr-1",
+            "Retry after block"
+        ));
         assert_eq!(cards.len(), 2);
         assert_eq!(cards[0].title, "Verify boot");
         assert_eq!(cards[0].status, BoardStatus::Blocked);
@@ -427,7 +452,11 @@ mod tests {
         linked.status = BoardStatus::Todo;
         linked.thread_id = Some("thr-2".into());
         let mut manual = vec![linked];
-        assert!(upsert_inflight_card(&mut manual, "thr-2", "Clarify the pin"));
+        assert!(upsert_inflight_card(
+            &mut manual,
+            "thr-2",
+            "Clarify the pin"
+        ));
         assert_eq!(manual[0].status, BoardStatus::Todo);
         assert_eq!(manual[0].title, "Manual todo");
         assert_eq!(manual[1].status, BoardStatus::InProgress);
@@ -441,7 +470,11 @@ mod tests {
         parked.thread_id = Some("thr-3".into());
         parked.run = true;
         let mut blocked = vec![parked];
-        assert!(upsert_inflight_card(&mut blocked, "thr-3", "Retry the flash"));
+        assert!(upsert_inflight_card(
+            &mut blocked,
+            "thr-3",
+            "Retry the flash"
+        ));
         assert_eq!(blocked[0].title, "Stuck flash");
         assert_eq!(blocked[0].status, BoardStatus::Blocked);
         assert_eq!(blocked[1].title, "Retry the flash");

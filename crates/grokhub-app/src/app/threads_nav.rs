@@ -163,6 +163,15 @@ impl Cabin {
         self.composer_want_focus = true;
     }
 
+    /// Minimize, tray show, and the next launch land on an empty chat so the feed is first.
+    /// The previous transcript and pin stay on that thread in History.
+    pub(super) fn open_fresh_home(&mut self) {
+        if grokhub_core::resume_needs_fresh_chat(self.messages.len(), self.scratch()) {
+            self.new_thread(false);
+        }
+        self.nav = Nav::Chat;
+    }
+
     pub(super) fn begin_chat_rename(&mut self, idx: usize) {
         self.rename_buf = self.thread_rail_title(idx);
         self.rename_lock = if self.rename_buf.is_empty() {

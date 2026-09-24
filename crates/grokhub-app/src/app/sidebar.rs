@@ -127,6 +127,8 @@ impl Cabin {
                             }
                         }
                         if titlebar_chrome_hit(&titlebar_chrome_btn(ui, ChromeBtn::Minimize)) {
+                            self.resume_fresh = true;
+                            self.saw_minimized = true;
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                         }
                         // RTL: allocated after minimize, so it sits immediately to its left.
@@ -622,6 +624,7 @@ impl Cabin {
             Nav::History => "history",
             Nav::Imagine => "imagine",
             Nav::Workboard => "workboard",
+            Nav::Ideas => "ideas",
             Nav::Settings => "chat",
             Nav::Skills => "skills",
             Nav::Night => "automations",
@@ -641,6 +644,7 @@ impl Cabin {
                 Nav::Imagine
             }
             "workboard" => Nav::Workboard,
+            "ideas" => Nav::Ideas,
             "settings" => {
                 if self.nav != Nav::Settings {
                     self.settings_back = self.nav;
