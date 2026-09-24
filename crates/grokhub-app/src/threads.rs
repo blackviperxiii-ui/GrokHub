@@ -248,6 +248,22 @@ pub fn adopt_reported_session(
     !reported.is_empty() && reported != open && (fork || !continuing)
 }
 
+/// Grok session ids that must be deleted with this chat. A later list refresh
+/// paints anything left behind as its own History row.
+pub fn sessions_deleted_with_chat(open: Option<&str>, retired: &[String]) -> Vec<String> {
+    let mut ids = Vec::new();
+    if let Some(id) = open.map(str::trim).filter(|s| !s.is_empty()) {
+        ids.push(id.to_string());
+    }
+    for extra in retired {
+        let extra = extra.trim();
+        if !extra.is_empty() && !ids.iter().any(|s| s == extra) {
+            ids.push(extra.to_string());
+        }
+    }
+    ids
+}
+
 /// True when this id was a follow-up on a chat that already had a History row.
 pub fn session_is_retired(threads: &[ChatThread], id: &str) -> bool {
     let id = id.trim();
@@ -648,5 +664,53 @@ mod tests {
             fresh_chat.channels,
             vec!["sess-d".to_string(), "sess-c".to_string()]
         );
+    }
+
+    #[test]
+    fn fork_and_fresh_session_stay_in_history() {
+        assert!(adopt_reported_session(
+            Some("parent"),
+            "forked",
+            true,
+            true
+        ));
+        let fork = prompt_history(&["parent".into()], Some("forked"), "forked");
+        assert_eq!(fork.keep, "forked");
+        assert!(fork.retire.is_none());
+        assert!(fork.channels.iter().any(|id| id == "forked"));
+
+        assert!(adopt_reported_session(Some("dead"), "fresh", false, false));
+        let fresh = prompt_history(&["dead".into()], Some("fresh"), "fresh");
+        assert_eq!(fresh.keep, "fresh");
+        assert!(
+            fresh.retire.is_none(),
+            "a session/new id must stay in History"
+        );
+        assert!(fresh.channels.iter().any(|id| id == "fresh"));
+
+        assert!(!adopt_reported_session(
+            Some("sess-a"),
+            "sess-b",
+            false,
+            true
+        ));
+        let follow = prompt_history(&["sess-a".into()], Some("sess-a"), "sess-b");
+        assert_eq!(follow.keep, "sess-a");
+        assert_eq!(follow.retire.as_deref(), Some("sess-b"));
+        assert!(!follow.channels.iter().any(|id| id == "sess-b"));
+    }
+
+    #[test]
+    fn delete_chat_also_removes_retired_followups() {
+        let ids = sessions_deleted_with_chat(
+            Some("sess-a"),
+            &["sess-b".into(), " sess-a ".into(), "  ".into()],
+        );
+        assert_eq!(ids, vec!["sess-a".to_string(), "sess-b".to_string()]);
+        assert_eq!(
+            sessions_deleted_with_chat(None, &["sess-b".into()]),
+            vec!["sess-b".to_string()]
+        );
+        assert!(sessions_deleted_with_chat(None, &["  ".into()]).is_empty());
     }
 }

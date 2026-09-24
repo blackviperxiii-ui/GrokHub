@@ -347,9 +347,8 @@ impl Cabin {
                 self.status = format!("Deleted {}", gone.title);
             }
         }
-        if let Some(id) = grok_id {
-            self.forget_grok_build_session(&id, &retired);
-        } else if let Some((first, rest)) = retired.split_first() {
+        let ids = threads::sessions_deleted_with_chat(grok_id.as_deref(), &retired);
+        if let Some((first, rest)) = ids.split_first() {
             self.forget_grok_build_session(first, rest);
         }
         self.rename_idx = None;
@@ -359,16 +358,13 @@ impl Cabin {
     pub(super) fn delete_all_history(&mut self) {
         self.halt_in_flight();
         self.finish_hub_dispatch("Chats deleted", false);
-        let mut ids: Vec<String> = self
-            .threads
-            .iter()
-            .filter_map(|t| t.grok_session.clone())
-            .filter(|s| !s.trim().is_empty())
-            .collect();
+        let mut ids: Vec<String> = Vec::new();
         for t in &self.threads {
-            for id in &t.retired_sessions {
-                if !id.trim().is_empty() && !ids.iter().any(|s| s == id) {
-                    ids.push(id.clone());
+            for id in
+                threads::sessions_deleted_with_chat(t.grok_session.as_deref(), &t.retired_sessions)
+            {
+                if !ids.iter().any(|s| s == &id) {
+                    ids.push(id);
                 }
             }
         }
