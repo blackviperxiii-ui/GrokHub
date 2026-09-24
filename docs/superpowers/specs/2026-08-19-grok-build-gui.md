@@ -1,6 +1,6 @@
 # GrokHub is the Grok Build GUI
 
-**Version:** 2.10.18
+**Version:** 2.10.19
 
 GrokHub is the native egui cabin. Grok Build (`grok` CLI) is the agent, the host shell, and computer-use (eyes and hands). One repo, one version — Linux tarball/AUR and Windows `GrokHub-Setup-<version>.exe` ship from the same tag.
 
@@ -10,7 +10,7 @@ Cabin owns: window, tray, project sidebar as cwd, LAN hub / Android, Hey Grok vo
 
 Grok Build owns: coding tools, bash, sandbox, permissions, plan mode, skills/plugins/MCP, sessions, `/imagine` when ACP supports it, and desktop computer-use.
 
-Transport: Auto/Always chat is headless `grok -p --output-format streaming-json` with `--sandbox off`, a desktop `--rules` line, and `--leader-socket` on the cabin socket (do not share `~/.grok/leader.sock`). btw (saved as `ask`) is a side ask: a live run keeps going, then the question sends look-safe (`--permission-mode default`, no desktop-do-the-work rules). Idle btw sends that same look-safe ask. Compact sits on the existing context bar. Copy session and Export are thread chrome. View plan reopens a Plan-mode plan. Fork shows only when the thread is long or context is at least half full. New chats use the user `~/.grok` so tools and `grok sessions` match the TUI. Interactive Ask is ACP `grok agent stdio` so Allow / Deny can show; if ACP cannot start or is down the turn is denied (no `grok -p` fallthrough). Night, loops, inbox, and phone `/v1/task` inherit the composer PermissionMode pill via `scheduled_args` (Ask fail-closed, no ACP; Auto `--permission-mode auto`; Always `--always-approve`). `/workflow` `/compact` `/rewind` honor that same pill. A matching cabin skill prepends `active_skill_follow` on the kick. Do not vendor grok-build crates. Cabin overlay (`install.sh`) runs the official installer from `https://x.ai/cli` so `grok` is on PATH with `grokhub`.
+Transport: Auto/Always chat is headless `grok -p --output-format streaming-json` with `--sandbox off`, a desktop `--rules` line, and `--leader-socket` on the cabin socket (do not share `~/.grok/leader.sock`). btw (saved as `ask`) is a side ask: a live run keeps going, then the question sends look-safe (`--permission-mode default`, no desktop-do-the-work rules). Idle btw sends that same look-safe ask. Compact, Copy session, and Export sit in the titlebar menu beside minimize. The context usage bar stays. View plan reopens a Plan-mode plan. Fork shows only when the thread is long or context is at least half full. New chats use the user `~/.grok` so tools and `grok sessions` match the TUI. Interactive Ask is ACP `grok agent stdio` so Allow / Deny can show; if ACP cannot start or is down the turn is denied (no `grok -p` fallthrough). Night, loops, inbox, and phone `/v1/task` inherit the composer PermissionMode pill via `scheduled_args` (Ask fail-closed, no ACP; Auto `--permission-mode auto`; Always `--always-approve`). `/workflow` `/compact` `/rewind` honor that same pill. A matching cabin skill prepends `active_skill_follow` on the kick. Do not vendor grok-build crates. Cabin overlay (`install.sh`) runs the official installer from `https://x.ai/cli` so `grok` is on PATH with `grokhub`.
 
 ## Chat
 
