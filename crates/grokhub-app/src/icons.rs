@@ -235,6 +235,7 @@ pub fn rail_icon_for(id: &str) -> RailIcon {
         "automations" => RailIcon::Clock,
         "skills" | "connectors" => RailIcon::Grid,
         "workboard" => RailIcon::Folder,
+        "ideas" => RailIcon::File,
         "history" => RailIcon::Clock,
         "search" => RailIcon::Search,
         "new" => RailIcon::Compose,
