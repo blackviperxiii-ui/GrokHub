@@ -405,8 +405,10 @@ pub use windshield::{
     windshield_browser_line, windshield_prompt, AtspiRow, PendingStep, WindshieldFrame,
 };
 pub use workboard::{
-    apply_work_update, extract_work_pins, extract_work_updates, parse_work_pin, parse_work_update,
-    BoardCard, BoardStatus,
+    abandon_inflight_card, apply_assistant_work_marks, apply_work_update, extract_work_pins,
+    extract_work_updates, inflight_card_title, parse_work_pin, parse_work_update,
+    release_inflight_card, settle_inflight_card, upsert_inflight_card, BoardCard, BoardStatus,
+    KanbanColumn,
 };
 
 pub const PRESENCE_PUSH_MIN_MS: u64 = 400;
