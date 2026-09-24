@@ -1727,6 +1727,53 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             3,
             "session/permission/effort row must not clone every thread — bump the idle key so persist_bg skips: {row}"
         );
+        assert!(
+            row.contains("select_plan_without_rename") && !row.contains("t.title ="),
+            "clicking Plan must switch mode without writing the chat title: {row}"
+        );
+        let plan_pick = src
+            .split("fn select_plan_without_rename(")
+            .nth(1)
+            .and_then(|s| s.split("fn hold_chat_name_for_plan(").next())
+            .expect("select_plan_without_rename");
+        assert!(
+            plan_pick.contains("hold_chat_name_for_plan")
+                && plan_pick.contains("grok_session = None")
+                && plan_pick.contains("set_session_mode(SessionMode::Plan)")
+                && !plan_pick.contains("t.title ="),
+            "selecting Plan keeps the session-id clear and does not write the thread title: {plan_pick}"
+        );
+        let hold = src
+            .split("fn hold_chat_name_for_plan(")
+            .nth(1)
+            .and_then(|s| s.split("fn thread_rail_title(").next())
+            .expect("hold_chat_name_for_plan");
+        assert!(
+            hold.contains("title_after_selecting_plan")
+                && hold.contains("history_label_after_plan")
+                && !hold.contains("t.title ="),
+            "Plan must keep the thread title and the History label already on screen: {hold}"
+        );
+        assert!(
+            plan.contains("hold_chat_name_for_plan"),
+            "/plan must keep the chat name when it clears the session id: {plan}"
+        );
+    }
+
+    #[test]
+    fn selecting_plan_does_not_change_the_thread_title() {
+        assert_eq!(
+            grokhub_acp::title_after_selecting_plan("Night watch"),
+            "Night watch"
+        );
+        assert_eq!(
+            grokhub_acp::preferred_history_title("Night watch", false, Some("Plan"), Some("abc")),
+            "Night watch"
+        );
+        assert_eq!(
+            grokhub_acp::history_label_after_plan("Night watch", "fix the dock"),
+            "Night watch"
+        );
     }
 
     #[test]
