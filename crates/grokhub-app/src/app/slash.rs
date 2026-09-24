@@ -445,6 +445,7 @@ impl Cabin {
                 self.set_session_mode(SessionMode::Plan);
                 self.acp = None;
                 self.acp_spawn_rx = None;
+                self.hold_chat_name_for_plan();
                 if let Some(t) = self.threads.get_mut(self.thread_idx) {
                     t.grok_session = None;
                 }
