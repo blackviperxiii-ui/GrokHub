@@ -60,11 +60,28 @@ impl Cabin {
                         .get(idx)
                         .map(|t| t.title.clone())
                         .unwrap_or_default();
+                    let open = self
+                        .threads
+                        .get(idx)
+                        .and_then(|t| t.grok_session.clone());
                     if let Some(t) = self.threads.get_mut(idx) {
-                        t.grok_session = Some(sid.clone());
-                        t.grok_cwd = Some(cwd.clone());
+                        if open
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .is_none()
+                        {
+                            t.grok_session = Some(sid.clone());
+                            t.grok_cwd = Some(cwd.clone());
+                        }
                     }
-                    self.note_live_grok_session(&sid, &title, Some(std::path::PathBuf::from(cwd)));
+                    self.record_prompt_history(
+                        idx,
+                        open.as_deref(),
+                        &sid,
+                        &title,
+                        Some(std::path::PathBuf::from(cwd)),
+                    );
                     self.request_grok_sessions_refresh();
                 }
                 self.acp = Some(h);
@@ -193,6 +210,13 @@ impl Cabin {
             .get(idx)
             .map(|t| t.grok_worktree)
             .unwrap_or(false);
+        // The open chat already has dialogue. session/new would be another History row.
+        let continuing = self.threads.get(idx).is_some_and(|t| {
+            t.grok_session
+                .as_deref()
+                .is_some_and(|s| !s.trim().is_empty())
+                && t.messages.len() > 1
+        });
         let (tx, rx) = mpsc::channel();
         self.acp_spawn_rx = Some(rx);
         std::thread::spawn(move || {
@@ -222,6 +246,7 @@ impl Cabin {
                     let retry_fresh = resume.is_some()
                         && !foreign
                         && !unknown_cwd
+                        && !continuing
                         && !grokhub_acp::is_session_cwd_error(&e);
                     if retry_fresh {
                         spawn(None).map_err(|e2| grokhub_acp::explain_handshake_error(&e2, &cwd))
@@ -255,12 +280,31 @@ impl Cabin {
                             .and_then(|id| self.threads.iter().position(|t| t.id == id))
                             .unwrap_or(self.thread_idx);
                         let acp_cwd = self.acp.as_ref().map(|h| h.cwd.display().to_string());
+                        let open = self
+                            .threads
+                            .get(idx)
+                            .and_then(|t| t.grok_session.clone());
                         if let Some(t) = self.threads.get_mut(idx) {
-                            t.grok_session = Some(session_id);
-                            if let Some(cwd) = acp_cwd {
-                                t.grok_cwd = Some(cwd);
+                            if open
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|s| !s.is_empty())
+                                .is_none()
+                            {
+                                t.grok_session = Some(session_id.clone());
+                            }
+                            if let Some(cwd) = acp_cwd.clone() {
+                                if t.grok_cwd
+                                    .as_deref()
+                                    .map(str::trim)
+                                    .filter(|s| !s.is_empty())
+                                    .is_none()
+                                {
+                                    t.grok_cwd = Some(cwd);
+                                }
                             }
                         }
+                        self.record_prompt_history(idx, open.as_deref(), &session_id, "", None);
                     }
                 }
                 AcpEvent::Thought(t) => {
@@ -692,9 +736,21 @@ impl Cabin {
             let u = turn.usage.clone();
             self.merge_grok_usage(&u);
         }
+        let open = self
+            .threads
+            .get(idx)
+            .and_then(|t| t.grok_session.clone());
         let session_saved = !turn.session_id.trim().is_empty();
         if let Some(t) = self.threads.get_mut(idx) {
-            t.grok_session = Some(turn.session_id.clone());
+            if open
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .is_none()
+                && session_saved
+            {
+                t.grok_session = Some(turn.session_id.clone());
+            }
             if t.grok_cwd
                 .as_deref()
                 .map(|s| s.trim().is_empty())
@@ -724,7 +780,7 @@ impl Cabin {
                 .get(idx)
                 .and_then(|t| t.grok_cwd.clone())
                 .map(std::path::PathBuf::from);
-            self.note_live_grok_session(&turn.session_id, &title, cwd);
+            self.record_prompt_history(idx, open.as_deref(), &turn.session_id, &title, cwd);
             self.grok_sessions_loaded = false;
             if self.grok_sessions_inflight > 0 {
                 self.grok_list_gen = self.grok_list_gen.wrapping_add(1);
@@ -1010,6 +1066,13 @@ impl Cabin {
             return;
         }
         self.grok_sessions = hide_pending_grok_sessions(rows, &self.pending_grok_deletes);
+        let retired: Vec<String> = self
+            .threads
+            .iter()
+            .flat_map(|t| t.retired_sessions.iter().cloned())
+            .collect();
+        self.grok_sessions
+            .retain(|s| !retired.iter().any(|id| id == &s.id));
         self.grok_sessions_loaded = true;
         self.last_grok_list_at = Instant::now();
         self.sync_unlocked_titles_from_sessions();
@@ -1021,6 +1084,44 @@ impl Cabin {
         }
     }
 
+    /// Keep one History row for the open chat. A follow-up id is retired, not appended.
+    pub(super) fn record_prompt_history(
+        &mut self,
+        idx: usize,
+        open_session: Option<&str>,
+        reported: &str,
+        title: &str,
+        cwd: Option<std::path::PathBuf>,
+    ) {
+        let plan = threads::prompt_history(
+            &self
+                .grok_sessions
+                .iter()
+                .map(|s| s.id.clone())
+                .collect::<Vec<_>>(),
+            open_session,
+            reported,
+        );
+        if let Some(id) = plan.retire.clone() {
+            if let Some(t) = self.threads.get_mut(idx) {
+                if t.grok_session.as_deref() != Some(id.as_str())
+                    && !t.retired_sessions.iter().any(|s| s == &id)
+                {
+                    t.retired_sessions.push(id);
+                }
+            }
+        }
+        let retired: Vec<String> = self
+            .threads
+            .iter()
+            .flat_map(|t| t.retired_sessions.iter().cloned())
+            .collect();
+        self.grok_sessions.retain(|s| {
+            plan.channels.iter().any(|id| id == &s.id) && !retired.iter().any(|id| id == &s.id)
+        });
+        self.note_live_grok_session(&plan.keep, title, cwd);
+    }
+
     pub(super) fn note_live_grok_session(
         &mut self,
         id: &str,
@@ -1028,7 +1129,7 @@ impl Cabin {
         cwd: Option<std::path::PathBuf>,
     ) {
         let id = id.trim();
-        if id.is_empty() {
+        if id.is_empty() || threads::session_is_retired(&self.threads, id) {
             return;
         }
         if let Some(s) = self.grok_sessions.iter_mut().find(|s| s.id == id) {

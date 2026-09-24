@@ -255,13 +255,10 @@ impl Cabin {
             .filter(|s| !s.trim().is_empty())
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| self.grok_cwd());
+        // A follow-up resumes the open chat. Dropping --resume here started a
+        // new Grok session and History gained a row per prompt.
         let resume = self.threads.get(idx).and_then(|t| {
-            let id = t.grok_session.clone().filter(|s| !s.trim().is_empty())?;
-            if t.grok_user_home || grokhub_acp::cabin_has_session(&id) {
-                Some(id)
-            } else {
-                None
-            }
+            t.grok_session.clone().filter(|s| !s.trim().is_empty())
         });
         let (yolo, auto) = if self.scheduled_perm {
             self.permission_mode.scheduled_flags()
