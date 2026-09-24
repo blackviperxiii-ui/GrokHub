@@ -1,6 +1,6 @@
 # GrokHub is the Grok Build GUI
 
-**Version:** 2.10.23
+**Version:** 2.10.24
 
 GrokHub is the native egui cabin. Grok Build (`grok` CLI) is the agent, the host shell, and computer-use (eyes and hands). One repo, one version — Linux tarball/AUR and Windows `GrokHub-Setup-<version>.exe` ship from the same tag.
 
@@ -16,7 +16,7 @@ Transport: Auto/Always chat is headless `grok -p --output-format streaming-json`
 
 Signed-in empty home no longer paints a Coding / Life chip or the under-greeting workboard summary. That slot is the update feed (`updates.json`): newest-first cards, hidden entirely when none are undismissed. `poll_grok_loop` posts `automation_done` when a `/loop` finishes. `commit_schedule` posts `schedule_created`. Open leaves the card marked opened; Dismiss removes it.
 
-Left-rail **Chat** is the new-chat control. There is no separate New chat button. Click Chat on an empty draft (no dialogue, no Grok session) to pull that same draft up. After dialogue has started, Chat opens a new draft. Keep one empty draft at a time. Old convos are sidebar History (`grok sessions`). A project is a folder of those chats: selecting it filters History and files new chats there, and does not open the Workboard. Click it again for every chat. Delete puts those chats back in History and does not wipe transcripts.
+Left-rail **Chat** is the new-chat control. There is no separate New chat button. Click Chat on an empty draft (no dialogue, no Grok session) to pull that same draft up. After dialogue has started, Chat opens a new draft. Keep one empty draft at a time. Old convos are sidebar History (cabin chats on headless `grok -p`, not `grok sessions list`). A project is a folder of those chats: selecting it filters History and files new chats there, and does not open the Workboard. Creating a project does not wipe History. Click the project to reopen the chat you left; click it again while you are in that chat for every chat. Background jobs such as workboard summarize are not History rows. Delete puts those chats back in History and does not wipe transcripts.
 
 `send_chat` on Auto/Always runs `grok -p` whose cwd is the bound project, or `~/GrokHub-Work` when unbound — never the cabin process cwd. Ask calls `ensure_acp` and prompts over ACP; a dead agent denies the turn. Stream user and assistant text into bubbles that use the full chat pane. Thinking is faded thought process, not a bubble. A thought starts expanded. Collapse leaves one short row that opens again. That fold survives the live-to-stored handoff. The reply stays. A long user bubble wraps inside the row and keeps its leading gap. Copy and Reply under a user bubble stay inside the window. A green live dot plus Thinking / Running / Waiting sits on the turn; hover shows the current action. That line does not sit above the composer. That row has no Stop. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The changing status text above the composer is gone. The context usage bar stays. Quick chips under the composer are one fixed-height line (ellipsis at max label width, fluid count, overflow dropped) on an empty chat and mid-thread. The × stays in that reserved slot, so hovering it does not move the hit, and a click dismisses that chip. Stop / Halt / tray Halt SIGTERMs the `grok -p` child (`session/cancel` on ACP). A dead stored session id retries without `--resume`. Disk-full / permission-denied handshake errors land in the chat with the cwd named. Grok.com-style “I don’t have access to your computer” thoughts are stripped from the pane.
 
@@ -30,7 +30,7 @@ Grok Build owns computer-use. There is no Desk / Take over menu. The cabin keeps
 
 History search types across SOUL/USER/MEMORY and every chat. A new query drops the previous needle's hits; a finished walk only installs when it still matches the box. A hit opens that memory file or thread. Re-opening the file already in the Memory editor keeps unsaved typing.
 
-Below the search, History is `grok sessions list` from the chat cwd (the directory the turn was saved in), on Linux and Windows. A second prompt on the open chat stays on that History row. A new row is only a new chat. On Windows the session home is USERPROFILE. No disk walk of subagents. Delete is `grok sessions delete` against `~/.grok`, then a refresh from that list. Session transcripts load via `grok export`. The Connectors tab runs `grok inspect` / `grok mcp` / skills / plugins JSON.
+Below the search, History is the cabin's own chats on Linux and Windows. Headless `grok -p` stores the session on the thread. A second prompt on the open chat stays on that History row. A new row is only a new chat. Background jobs such as workboard summarize are not rows. Creating a project does not clear that list. Delete removes the cabin chat and its Grok Build session. The Connectors tab runs `grok inspect` / `grok mcp` / skills / plugins JSON.
 
 ## Settings
 
