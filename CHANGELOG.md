@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.20 — 2026-09-24
+
+Quick-chip × stays in its reserved slot. Hovering it no longer flashes the pointer, and a click dismisses that chip on the composer and on empty home. The chip row is otherwise unchanged.
+
+- Linux: `grokhub-linux-v2.10.20.tar.gz` and AUR `pkgver=2.10.20`.
+- Windows: `GrokHub-Setup-2.10.20.exe` and `grokhub-windows-v2.10.20.zip`.
+- Cursor cabin 2.10.20. VERSION 2.10.20. Draft only. Not tagged. Rebased onto main 2.10.19 (session actions beside minimize).
+
 ## 2.10.19 — 2026-09-24
 
 Compact, Copy session, and Export leave the composer. They sit in a three-bar menu immediately beside minimize. A titlebar press opens the menu the same way as the other chrome buttons (`titlebar_chrome_hit`). Each action is unchanged. Settings, Chat / Plan / btw, Ask / Auto / Always, and the quick chips stay put. The context usage bar stays. View plan and Fork stay on the thread.

@@ -932,6 +932,8 @@ pub const CHIP_PAD_Y: f32 = 8.0;
 /// Gap between chips. Fluid fit uses the same gap the row paints.
 pub const CHIP_GAP: f32 = 6.0;
 /// Hover dismiss control. Reserved on every pill so hover does not reflow the row.
+/// The slot is part of the chip hit. A second widget would steal hover, flash the
+/// pointer, and drop the click.
 pub const CHIP_DISMISS_SLOT: f32 = 16.0;
 /// Space between the label and the dismiss slot.
 pub const CHIP_DISMISS_GAP: f32 = 4.0;
@@ -957,6 +959,43 @@ pub fn chip_row_visible_w(ui: &egui::Ui) -> f32 {
 /// Pill width for a measured single-line label, including the reserved dismiss slot.
 pub fn chip_pill_width(label_w: f32) -> f32 {
     CHIP_PAD_X + label_w.max(0.0) + CHIP_DISMISS_GAP + CHIP_DISMISS_SLOT + CHIP_PAD_X
+}
+
+/// Dismiss hit inside a chip pill. Same rect at rest and while the pointer is on it.
+pub fn chip_dismiss_rect(pill: egui::Rect) -> egui::Rect {
+    egui::Rect::from_center_size(
+        egui::pos2(
+            pill.right() - CHIP_PAD_X - CHIP_DISMISS_SLOT * 0.5,
+            pill.center().y,
+        ),
+        egui::vec2(CHIP_DISMISS_SLOT, CHIP_DISMISS_SLOT),
+    )
+}
+
+/// A click in the reserved slot dismisses. Anywhere else on the pill applies.
+pub fn chip_hit_act(index: usize, dismiss: egui::Rect, pointer: egui::Pos2) -> ChipRowAct {
+    if dismiss.contains(pointer) {
+        ChipRowAct::Dismiss(index)
+    } else {
+        ChipRowAct::Apply(index)
+    }
+}
+
+#[cfg(test)]
+fn begin_chip_dismiss_hits(ui: &egui::Ui) {
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(egui::Id::new("qchip-dismiss-hits"), Vec::<egui::Rect>::new());
+    });
+}
+
+#[cfg(test)]
+fn remember_chip_dismiss_hit(ui: &egui::Ui, rect: egui::Rect) {
+    ui.ctx().data_mut(|d| {
+        let id = egui::Id::new("qchip-dismiss-hits");
+        let mut hits = d.get_temp::<Vec<egui::Rect>>(id).unwrap_or_default();
+        hits.push(rect);
+        d.insert_temp(id, hits);
+    });
 }
 
 /// Label width cap for this row. Never above `CHIP_LABEL_MAX_W`. A narrow row
@@ -1135,6 +1174,8 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
         |ui| {
             ui.set_max_width(max_w);
             ui.spacing_mut().item_spacing = egui::vec2(CHIP_GAP, 0.0);
+            #[cfg(test)]
+            begin_chip_dismiss_hits(ui);
             let mut used = 0.0f32;
             for (i, c) in chips.iter().enumerate().take(fit) {
                 let galley = measured[i].clone();
@@ -1154,15 +1195,6 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                 }
                 used += add;
                 let chip_id = ui.id().with(("qchip", i));
-                let hovered = ui
-                    .ctx()
-                    .data(|d| d.get_temp::<bool>(chip_id))
-                    .unwrap_or(false);
-                let dismiss_t = ui.ctx().animate_bool_with_time(
-                    chip_id.with("dismiss"),
-                    hovered,
-                    grokhub_core::SELECT_SECS,
-                );
                 let fill = quick_chip_fill(c.primary);
                 let color = quick_chip_fg(c.primary);
                 let paint = chip_paint_label(&c.label);
@@ -1181,20 +1213,30 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                     rect.center().y - galley.size().y * 0.5,
                 );
                 ui.painter().galley(text_pos, galley, color);
-                let hit = hit_resp.on_hover_text(tip);
-                let x_rect = egui::Rect::from_center_size(
-                    egui::pos2(
-                        rect.right() - CHIP_PAD_X - CHIP_DISMISS_SLOT * 0.5,
-                        rect.center().y,
-                    ),
-                    egui::vec2(CHIP_DISMISS_SLOT, CHIP_DISMISS_SLOT),
+                let x_rect = chip_dismiss_rect(rect);
+                #[cfg(test)]
+                remember_chip_dismiss_hit(ui, x_rect);
+                let dismiss_t = ui.ctx().animate_bool_with_time(
+                    chip_id.with("dismiss"),
+                    hit_resp.hovered(),
+                    grokhub_core::SELECT_SECS,
                 );
+                let over_x = hit_resp.hover_pos().is_some_and(|p| x_rect.contains(p));
+                let hit = if over_x {
+                    hit_resp.on_hover_text("Hide this suggestion")
+                } else {
+                    hit_resp.on_hover_text(tip)
+                };
                 if dismiss_t > 0.01 {
-                    let x_resp = ui.interact(x_rect, chip_id.with("x"), Sense::click());
-                    let (x_resp, x_felt, x_wash) =
-                        crate::theme::feel_response(ui, x_resp, Color32::TRANSPARENT);
-                    if x_wash.a() > 0 {
-                        ui.painter().rect_filled(x_felt, 6.0, x_wash);
+                    if over_x {
+                        ui.painter().rect_filled(
+                            x_rect,
+                            6.0,
+                            crate::theme::lift_fill(
+                                Color32::TRANSPARENT,
+                                grokhub_core::HOVER_WASH * dismiss_t,
+                            ),
+                        );
                     }
                     let x_color = crate::theme::blend_color(
                         Color32::TRANSPARENT,
@@ -1208,16 +1250,13 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                         FontId::proportional(12.0),
                         x_color,
                     );
-                    let x = x_resp.on_hover_text("Hide this suggestion");
-                    if x.clicked() {
-                        act = Some(ChipRowAct::Dismiss(i));
-                    }
                 }
-                if hit.clicked() && act != Some(ChipRowAct::Dismiss(i)) {
-                    act = Some(ChipRowAct::Apply(i));
+                if hit.clicked() {
+                    act = Some(match hit.interact_pointer_pos() {
+                        Some(pos) => chip_hit_act(i, x_rect, pos),
+                        None => ChipRowAct::Apply(i),
+                    });
                 }
-                ui.ctx()
-                    .data_mut(|d| d.insert_temp(chip_id, hit.hovered()));
             }
         },
     );
@@ -3298,6 +3337,121 @@ mod tests {
                 );
             });
         });
+    }
+
+    fn install_chip_fonts(ctx: &egui::Context) {
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "inter-bold".into(),
+            egui::FontData::from_static(include_bytes!("../assets/fonts/Inter-SemiBold.ttf")),
+        );
+        fonts.families.insert(
+            egui::FontFamily::Name("inter-bold".into()),
+            vec!["inter-bold".into()],
+        );
+        ctx.set_fonts(fonts);
+    }
+
+    fn chip_frame(
+        ctx: &egui::Context,
+        time: f64,
+        pointer: Option<egui::Pos2>,
+        press: Option<bool>,
+        chips: &[grokhub_core::QuickChip],
+    ) -> (Option<ChipRowAct>, egui::CursorIcon, Vec<egui::Rect>) {
+        install_chip_fonts(ctx);
+        let mut events = Vec::new();
+        if let Some(pos) = pointer {
+            events.push(egui::Event::PointerMoved(pos));
+            if let Some(pressed) = press {
+                events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                });
+            }
+        }
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 400.0),
+            )),
+            time: Some(time),
+            events,
+            ..Default::default()
+        };
+        let mut act = None;
+        let out = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                act = quick_chip_row(ui, chips);
+            });
+        });
+        let hits = ctx
+            .data(|d| d.get_temp::<Vec<egui::Rect>>(egui::Id::new("qchip-dismiss-hits")))
+            .unwrap_or_default();
+        (act, out.platform_output.cursor_icon, hits)
+    }
+
+    #[test]
+    fn chip_dismiss_hit_stays_under_the_pointer() {
+        let pill = egui::Rect::from_min_size(egui::pos2(8.0, 12.0), egui::vec2(140.0, CHIP_ROW_H));
+        let slot = chip_dismiss_rect(pill);
+        assert!(pill.contains_rect(slot));
+        assert!((slot.width() - CHIP_DISMISS_SLOT).abs() < 0.01);
+        assert!((pill.right() - slot.right() - CHIP_PAD_X).abs() < 0.01);
+        assert_eq!(chip_dismiss_rect(pill), slot);
+        assert_eq!(chip_hit_act(1, slot, slot.center()), ChipRowAct::Dismiss(1));
+        assert_eq!(
+            chip_hit_act(1, slot, slot.left_center() - egui::vec2(12.0, 0.0)),
+            ChipRowAct::Apply(1)
+        );
+
+        let chips = vec![sample_chip("Continue", true), sample_chip("Fix", false)];
+        let ctx = egui::Context::default();
+        let (_, _, rest) = chip_frame(&ctx, 0.0, None, None, &chips);
+        assert_eq!(rest.len(), 2, "both chips reserve a dismiss hit: {rest:?}");
+        let parked = rest[0].center();
+        assert!(rest[0].contains(parked));
+        let mut cursors = Vec::new();
+        for step in 1..=16 {
+            let time = step as f64 * 0.025;
+            let (_, cursor, hits) = chip_frame(&ctx, time, Some(parked), None, &chips);
+            assert_eq!(hits.len(), 2, "hover must not drop a dismiss hit: {hits:?}");
+            assert_eq!(
+                hits, rest,
+                "hover must not move the dismiss slot off the pointer at t={time}: {hits:?} vs {rest:?}"
+            );
+            assert!(hits[0].contains(parked), "pointer left the × at t={time}: {hits:?}");
+            cursors.push(cursor);
+        }
+        assert!(
+            cursors.iter().all(|c| *c == egui::CursorIcon::PointingHand),
+            "the pointer must stay a hand on the ×, not flash: {cursors:?}"
+        );
+
+        let (pressed, _, _) = chip_frame(&ctx, 0.50, Some(parked), Some(true), &chips);
+        assert!(pressed.is_none(), "press alone is not a click: {pressed:?}");
+        let (clicked, cursor, hits) = chip_frame(&ctx, 0.54, Some(parked), Some(false), &chips);
+        assert_eq!(hits, rest, "the click must not shove the ×: {hits:?}");
+        assert!(hits[0].contains(parked));
+        assert_eq!(cursor, egui::CursorIcon::PointingHand);
+        assert_eq!(clicked, Some(ChipRowAct::Dismiss(0)));
+
+        let label = egui::pos2(rest[0].left() - 28.0, rest[0].center().y);
+        let ctx = egui::Context::default();
+        let (_, _, label_rest) = chip_frame(&ctx, 0.0, None, None, &chips);
+        assert!(
+            !label_rest[0].contains(label),
+            "label probe must miss the ×: {label:?} {label_rest:?}"
+        );
+        for step in 1..=16 {
+            let (_, _, hits) = chip_frame(&ctx, step as f64 * 0.025, Some(label), None, &chips);
+            assert_eq!(hits, label_rest, "label hover must not move the ×");
+        }
+        let _ = chip_frame(&ctx, 0.50, Some(label), Some(true), &chips);
+        let (applied, _, _) = chip_frame(&ctx, 0.54, Some(label), Some(false), &chips);
+        assert_eq!(applied, Some(ChipRowAct::Apply(0)));
     }
 
     #[test]
