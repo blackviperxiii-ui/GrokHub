@@ -9,6 +9,7 @@ pub(super) struct PersistSnap {
     pub(super) board: Vec<BoardCard>,
     pub(super) automations: Vec<Automation>,
     pub(super) grok_loops: Vec<GrokLoop>,
+    pub(super) updates: Vec<grokhub_core::UpdateCard>,
     pub(super) rewind_rows: Vec<RewindRecord>,
     pub(super) learning: LearningState,
     pub(super) suggestions: SuggestionStore,
@@ -35,6 +36,7 @@ pub(super) fn write_persist_disk(snap: &PersistSnap) {
     let _ = config::save_board(&snap.board);
     let _ = crate::night::save(&snap.automations);
     let _ = crate::loops::save(&snap.grok_loops);
+    let _ = crate::feed::save(&snap.updates);
     let _ = crate::night::save_rewinds(&snap.rewind_rows);
     let _ = crate::store::save_learning(&snap.learning);
     let _ = crate::store::save_suggestions(&snap.suggestions);
@@ -92,6 +94,7 @@ impl Cabin {
             board: self.board.clone(),
             automations: self.automations.clone(),
             grok_loops: self.grok_loops.clone(),
+            updates: self.updates.clone(),
             rewind_rows: self.rewind_rows.clone(),
             learning: self.learning.clone(),
             suggestions: self.suggestions.clone(),
@@ -262,6 +265,14 @@ impl Cabin {
         let list = self.automations.clone();
         std::thread::spawn(move || {
             let _ = crate::night::save(&list);
+        });
+        self.persist_idle_key = self.persist_idle_now();
+    }
+
+    pub(super) fn persist_updates(&mut self) {
+        let list = self.updates.clone();
+        std::thread::spawn(move || {
+            let _ = crate::feed::save(&list);
         });
         self.persist_idle_key = self.persist_idle_now();
     }

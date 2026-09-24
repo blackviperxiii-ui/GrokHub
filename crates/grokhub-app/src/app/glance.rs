@@ -174,33 +174,6 @@ pub(super) fn device_glance(hub_on: bool, last_frame_url: Option<&str>) -> Optio
 }
 
 impl Cabin {
-    pub(super) fn paint_lane_chip(&mut self, ui: &mut egui::Ui) {
-        let lane = cabin_lane(&self.cfg.cabin_lane);
-        let label = cabin_lane_label(lane);
-        let hit = egui::Frame::none()
-            .fill(crate::theme::elevated())
-            .rounding(12.0)
-            .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-            .inner_margin(egui::Margin::symmetric(10.0, 4.0))
-            .show(ui, |ui| {
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(label)
-                            .size(12.0)
-                            .color(crate::theme::muted()),
-                    )
-                    .sense(egui::Sense::click()),
-                )
-            })
-            .inner;
-        if hit.clicked() {
-            let next = flip_cabin_lane(lane);
-            self.cfg.cabin_lane = persistable_cabin_lane(cabin_lane_label(next));
-            self.persist_cfg();
-            self.refresh_chips();
-        }
-    }
-
     pub(super) fn paint_device_glance_row(&mut self, ui: &mut egui::Ui, pane_w: f32) -> bool {
         let glance = device_glance(self.hub_on, self.last_frame_url.as_deref());
         let Some(glance) = glance else {

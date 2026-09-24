@@ -5616,10 +5616,13 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "empty home must still show a live permission bar: {slice}"
         );
         assert!(
-            slice.contains("paint_empty_pulse")
+            slice.contains("paint_update_feed")
                 && slice.contains("pulse_should_paint")
-                && slice.contains("empty_home_composer_top"),
-            "signed-in empty home paints the pulse under the greeting: {slice}"
+                && slice.contains("empty_home_composer_top")
+                && !slice.contains("paint_empty_pulse")
+                && !slice.contains("paint_lane_chip")
+                && !slice.contains("No updates"),
+            "signed-in empty home paints the update feed under the greeting and hides it when empty: {slice}"
         );
         assert!(
             !slice.contains("weather")
@@ -6891,7 +6894,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .expect("empty home");
         assert!(
             home.contains("pulse_should_paint") && !home.contains("vertical_centered_justified"),
-            "pulse must not re-center the chip row: {home}"
+            "the home slot must not re-center the chip row: {home}"
         );
         assert!(
             !home.contains("grok_tile("),
@@ -6916,12 +6919,43 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "pulse rows wrap the full line inside the reserved slot: {pulse}"
         );
         assert!(
-            home.contains("paint_lane_chip") && home.contains("paint_device_glance_row"),
-            "empty home paints Coding/Life and a fail-soft device glance: {home}"
+            home.contains("paint_update_feed")
+                && home.contains("paint_device_glance_row")
+                && !home.contains("paint_lane_chip")
+                && !home.contains("No updates"),
+            "empty home paints the update feed only when a card exists, plus a fail-soft device glance: {home}"
         );
         assert!(
             !home.contains("\"Personal\"") && !home.contains("Nav::"),
-            "lane chrome must not add a Personal rail or nav id: {home}"
+            "home chrome must not add a Personal rail or nav id: {home}"
+        );
+        let feed = include_str!("feed_ui.rs");
+        assert!(
+            feed.contains("note_automation_done")
+                && feed.contains("note_schedule_created")
+                && feed.contains("feed_visible")
+                && !feed.contains("No updates")
+                && !feed.contains("interest_update"),
+            "feed hook is typed and hidden when empty: {feed}"
+        );
+        let night = include_str!("night.rs");
+        let poll = night
+            .split("fn poll_grok_loop(")
+            .nth(1)
+            .and_then(|s| s.split("fn fire_loop(").next())
+            .expect("poll_grok_loop");
+        assert!(
+            poll.contains("note_automation_done"),
+            "a finished /loop posts automation_done: {poll}"
+        );
+        let commit = night
+            .split("fn commit_schedule(")
+            .nth(1)
+            .and_then(|s| s.split("fn teach_watched_routine(").next())
+            .expect("commit_schedule");
+        assert!(
+            commit.contains("note_schedule_created"),
+            "saving a schedule posts schedule_created: {commit}"
         );
         let title = src
             .split("fn ui_titlebar(")
