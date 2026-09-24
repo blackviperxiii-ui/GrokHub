@@ -1337,6 +1337,14 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "the chip id and the page have to agree"
         );
         assert!(
+            super::Cabin::nav_from_id("ideas") == super::Nav::Ideas,
+            "an ideas chip must open Ideas, not Chat"
+        );
+        assert!(
+            grokhub_core::nav_from_chip_value("__nav:ideas") == Some("ideas"),
+            "command chips name Ideas as __nav:ideas"
+        );
+        assert!(
             super::Cabin::nav_from_id("eyes") == super::Nav::Chat,
             "Desk is gone — its id lands on chat"
         );
@@ -7429,12 +7437,24 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     let fresh = fn_src(&src, "open_fresh_home");
     assert!(
         fresh.contains("new_thread(false)")
+            && fresh.contains("park_fresh_chat")
             && fresh.contains("resume_needs_fresh_chat")
+            && !fresh.contains("halt_in_flight")
+            && !fresh.contains("drop_leaving_thread_chrome")
             && !fresh.contains("delete_thread")
             && !fresh.contains("pinned = false")
             && !fresh.contains("No updates")
             && !fresh.contains("Nothing queued"),
-        "fresh home keeps the previous chat: {fresh}"
+        "fresh home keeps the previous chat and does not stop a live reply: {fresh}"
+    );
+    let park = fn_src(&src, "park_fresh_chat");
+    assert!(
+        park.contains("self.messages.clone()")
+            && !park.contains("halt_in_flight")
+            && !park.contains("drop_leaving_thread_chrome")
+            && !park.contains("delete_thread")
+            && !park.contains("pinned = false"),
+        "parking a fresh chat leaves the running thread alone: {park}"
     );
     let pulse = include_str!("feed_ui.rs");
     let body = pulse
@@ -7457,6 +7477,29 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     assert!(
         !pulse.contains("No updates") && !pulse.contains("Nothing queued"),
         "the feed must not paint an empty label"
+    );
+    let ideas = pulse
+        .split("fn ui_ideas(")
+        .nth(1)
+        .and_then(|s| s.split("fn apply_feed_act(").next())
+        .expect("ui_ideas");
+    let refresh = ideas.find("Refresh").expect("refresh");
+    let flushed = ideas[refresh..].find("persist_updates").expect("flush");
+    let reloaded = ideas[refresh..].find("feed::load").expect("reload");
+    assert!(
+        flushed < reloaded,
+        "Ideas Refresh must flush updates before it reloads disk"
+    );
+    let offer = pulse
+        .split("fn accept_automate_offer(")
+        .nth(1)
+        .and_then(|s| s.split("fn react_card(").next())
+        .expect("accept_automate_offer");
+    assert!(
+        offer.contains("c.title.clone()")
+            && offer.contains("route_schedule")
+            && !offer.contains("c.body"),
+        "Accept seeds the schedule from the title, not the canned offer body: {offer}"
     );
 }
 

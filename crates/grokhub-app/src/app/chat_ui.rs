@@ -794,7 +794,7 @@ impl Cabin {
                         ui.set_width(pane);
                         ui.set_max_width(pane);
                         let thinking = self.thinking_here();
-                        let live = !self.live_blocks.is_empty();
+                        let live = thinking && !self.live_blocks.is_empty();
                         let mut act = ChatBlockAct::None;
                         let jump_you = self.jump_last_you;
                         let mut jumped_you = false;
@@ -955,7 +955,7 @@ impl Cabin {
                                         .color(crate::theme::muted()),
                                 );
                             }
-                        } else {
+                        } else if self.thinking_here() || self.chat_job_thread.is_none() {
                             self.paint_tool_cards(ui);
                         }
                         if collapse_session {
@@ -1955,7 +1955,7 @@ impl Cabin {
                             },
                         );
                         let ready = !self.composer.trim().is_empty();
-                        let go = composer_go(self.running, ready);
+                        let go = composer_go(self.thinking_here(), ready);
                         ui.allocate_ui_with_layout(
                             egui::vec2(go_sz, bar_h),
                             egui::Layout::left_to_right(egui::Align::Center),
@@ -1978,7 +1978,7 @@ impl Cabin {
                                         }
                                     },
                                 )
-                                .on_hover_text(composer_go_tip(self.running));
+                                .on_hover_text(composer_go_tip(self.thinking_here()));
                                 let go_hit = send.clicked()
                                     || (send.is_pointer_button_down_on()
                                         && ui.input(|i| i.pointer.primary_pressed()));

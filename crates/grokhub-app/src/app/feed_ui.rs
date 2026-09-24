@@ -198,6 +198,8 @@ impl Cabin {
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if crate::cards::ghost_pill(ui, "Refresh") {
+                            self.persist_updates();
+                            let _ = crate::feed::save(&self.updates);
                             self.updates = crate::feed::load();
                         }
                     });
@@ -292,12 +294,7 @@ impl Cabin {
             .updates
             .iter()
             .find(|c| c.id == id)
-            .map(|c| {
-                c.body
-                    .clone()
-                    .filter(|b| !b.trim().is_empty())
-                    .unwrap_or_else(|| c.title.clone())
-            })
+            .map(|c| c.title.clone())
             .unwrap_or_default();
         self.persist_updates();
         if let Some(route) = route_schedule(&seed) {
