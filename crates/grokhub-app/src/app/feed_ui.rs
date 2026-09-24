@@ -5,11 +5,11 @@
 use super::*;
 use grokhub_core::{
     archive_digest, automation_done_card, card_matches, discuss_context, dismiss_idea,
-    dismiss_update, feed_visible, file_idea_todo, hold_if_quiet, home_feed_n, links_from_research,
-    mark_update_opened, post_update, quiet_hours_active, route_schedule, schedule_created_card,
-    tick_feed_pulse, visible_digests, visible_ideas, visible_updates, CardReaction, CitedLink,
-    DigestMaterial, PulseNow, TasteNote, UpdateAction, UpdateCard, UpdateKind, UpdateStatus,
-    DIGEST_PAINT_MAX, FEED_PAINT_MAX, IDEA_DISCOVERY_MAX,
+    dismiss_update, feed_visible, file_idea_todo, hold_if_quiet, home_feed_n, idea_todo_title,
+    links_from_research, mark_update_opened, post_update, quiet_hours_active, route_schedule,
+    schedule_created_card, tick_feed_pulse, visible_digests, visible_ideas, visible_updates,
+    CardReaction, CitedLink, DigestMaterial, PulseNow, TasteNote, UpdateAction, UpdateCard,
+    UpdateKind, UpdateStatus, DIGEST_PAINT_MAX, FEED_PAINT_MAX, IDEA_DISCOVERY_MAX,
 };
 
 const FEED_CARD_H: f32 = 64.0;
@@ -261,7 +261,7 @@ impl Cabin {
         }
     }
 
-    /// Same build on the feed and the Ideas surface. Files a real Todo.
+    /// Same build on the feed and the Ideas surface. Files one Todo titled with the task.
     pub(super) fn build_idea(&mut self, id: &str) {
         let Some(idea) = self
             .updates
@@ -275,8 +275,8 @@ impl Cabin {
             self.nav = Nav::Workboard;
             return;
         }
-        let detail = idea.body.clone().unwrap_or_default();
-        let board_id = file_idea_todo(&mut self.board, &idea.title, &detail);
+        let task = idea_todo_title(&idea.title, idea.body.as_deref().unwrap_or(""));
+        let board_id = file_idea_todo(&mut self.board, &task, "");
         self.flush_board();
         if let Some(card) = self.updates.iter_mut().find(|c| c.id == id) {
             card.built = true;

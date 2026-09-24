@@ -417,9 +417,9 @@ pub use update_feed::{
 };
 pub use workboard::{
     abandon_inflight_card, apply_assistant_work_marks, apply_work_update, extract_work_pins,
-    extract_work_updates, file_idea_todo, inflight_card_title, parse_work_pin, parse_work_update,
-    release_inflight_card, settle_inflight_card, upsert_inflight_card, BoardCard, BoardStatus,
-    KanbanColumn,
+    extract_work_updates, file_idea_todo, idea_todo_title, inflight_card_title, parse_work_pin,
+    parse_work_update, release_inflight_card, settle_inflight_card, todo_task_line,
+    upsert_inflight_card, BoardCard, BoardStatus, KanbanColumn,
 };
 
 pub const PRESENCE_PUSH_MIN_MS: u64 = 400;

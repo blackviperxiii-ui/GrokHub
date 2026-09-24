@@ -7501,5 +7501,16 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
             && !offer.contains("c.body"),
         "Accept seeds the schedule from the title, not the canned offer body: {offer}"
     );
+    let build = pulse
+        .split("fn build_idea(")
+        .nth(1)
+        .and_then(|s| s.split("fn accept_automate_offer(").next())
+        .expect("build_idea");
+    assert!(
+        build.contains("idea_todo_title(")
+            && build.contains("file_idea_todo(&mut self.board, &task, \"\")")
+            && !build.contains("idea.body.clone()"),
+        "Idea Accept files the task line, not the raw message: {build}"
+    );
 }
 

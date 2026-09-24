@@ -4,7 +4,7 @@
 
 ## 2.10.25 — 2026-09-24
 
-Idea Accept files a workboard Todo (`BoardStatus::Todo` through `flush_board`) on the feed and on Ideas. Digest and idea cards share `updates.json` and stay out of the event paint cap of 4. The user dismisses an idea; Housekeep expires it at about two weeks or `expires_at`. One brief box in `app.json` steers the digest. Quiet hours hold digest, idea, and `automation_done` visibility. `poll_grok_loop` still records the finish. Minimize, tray show, and the next launch open a fresh empty chat. The previous transcript and pin stay in History. The feed stays hidden when nothing is undismissed. Draft only. Not tagged.
+Idea Accept files a workboard Todo (`BoardStatus::Todo` through `flush_board`) on the feed and on Ideas. The Todo title is the task, one line of work, not the feed card's canned line and not the raw message. An ordinary chat prompt such as "summarize the workboard" does not file a card. A live turn can still track a Doing run card, and that card is not a user Todo. Digest and idea cards share `updates.json` and stay out of the event paint cap of 4. The user dismisses an idea; Housekeep expires it at about two weeks or `expires_at`. One brief box in `app.json` steers the digest. Quiet hours hold digest, idea, and `automation_done` visibility. `poll_grok_loop` still records the finish. Minimize, tray show, and the next launch open a fresh empty chat. The previous transcript and pin stay in History. The feed stays hidden when nothing is undismissed. Draft only. Not tagged.
 
 - Linux: `grokhub-linux-v2.10.25.tar.gz` and AUR `pkgver=2.10.25`.
 - Windows: `GrokHub-Setup-2.10.25.exe` and `grokhub-windows-v2.10.25.zip`.
