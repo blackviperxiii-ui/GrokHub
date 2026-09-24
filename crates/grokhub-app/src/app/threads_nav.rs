@@ -163,23 +163,38 @@ impl Cabin {
     }
 
     pub(super) fn rename_thread(&mut self, idx: usize, title: &str) {
-        let Some(t) = self.threads.get_mut(idx) else {
-            return;
+        let applied = {
+            let Some(t) = self.threads.get_mut(idx) else {
+                return;
+            };
+            let mut tab = ThreadTab {
+                title: t.title.clone(),
+                pinned: t.pinned,
+                title_locked: t.title_locked,
+            };
+            if apply_manual_rename(&mut tab, title) {
+                t.title = tab.title;
+                t.title_locked = true;
+                t.pinned = tab.pinned;
+                t.accessed_ms = now_ms();
+                Some((t.title.clone(), t.grok_session.clone()))
+            } else {
+                None
+            }
         };
-        let mut tab = ThreadTab {
-            title: t.title.clone(),
-            pinned: t.pinned,
-            title_locked: t.title_locked,
-        };
-        if apply_manual_rename(&mut tab, title) {
-            t.title = tab.title;
-            t.title_locked = true;
-            t.accessed_ms = now_ms();
-            self.status = format!("Renamed {}", t.title);
-            self.rename_idx = None;
-            self.rename_focus = false;
-            self.rename_lock = None;
+        self.rename_idx = None;
+        self.rename_focus = false;
+        self.rename_lock = None;
+        if let Some((shown, sid)) = applied {
+            if let Some(id) = sid {
+                if let Some(s) = self.grok_sessions.iter_mut().find(|s| s.id == id) {
+                    s.title = shown.clone();
+                }
+            }
+            self.status = format!("Renamed {shown}");
             self.persist();
+        } else if let Some(t) = self.threads.get(idx) {
+            self.status = format!("Kept {}", t.title);
         }
     }
 
@@ -188,13 +203,94 @@ impl Cabin {
             return;
         };
         t.pinned = toggle_pin(t.pinned);
-        t.accessed_ms = now_ms();
+        let now = now_ms();
+        t.accessed_ms = now;
+        if t.pinned {
+            t.pinned_ms = now;
+        }
         self.status = if t.pinned {
             format!("Pinned {}", t.title)
         } else {
             format!("Unpinned {}", t.title)
         };
         self.persist();
+    }
+
+    pub(super) fn thread_for_grok(&self, id: &str) -> Option<usize> {
+        self.threads
+            .iter()
+            .position(|t| t.grok_session.as_deref() == Some(id))
+    }
+
+    pub(super) fn session_row_title(&self, id: &str, grok_title: &str) -> String {
+        if let Some(i) = self.thread_for_grok(id) {
+            let t = &self.threads[i];
+            return grokhub_acp::preferred_history_title(
+                &t.title,
+                t.title_locked,
+                Some(grok_title),
+                Some(id),
+            );
+        }
+        let title = grok_title.trim();
+        if title.is_empty() || title == id {
+            id.to_string()
+        } else {
+            title.to_string()
+        }
+    }
+
+    pub(super) fn session_sort_key(&self, id: &str, list_rank: u64) -> threads::SessionSortKey {
+        if let Some(i) = self.thread_for_grok(id) {
+            let t = &self.threads[i];
+            threads::SessionSortKey {
+                pinned: t.pinned,
+                pinned_ms: t.pinned_ms,
+                accessed_ms: t.accessed_ms,
+                list_rank,
+            }
+        } else {
+            threads::SessionSortKey {
+                pinned: false,
+                pinned_ms: 0,
+                accessed_ms: 0,
+                list_rank,
+            }
+        }
+    }
+
+    /// Bind a Grok session onto a cabin thread so pin and rename persist in threads.json.
+    /// Does not switch chats or change the project filter.
+    pub(super) fn ensure_grok_thread(&mut self, id: &str) -> Option<usize> {
+        let id = id.trim();
+        if id.is_empty() {
+            return None;
+        }
+        if let Some(i) = self.thread_for_grok(id) {
+            if self.threads[i].messages.is_empty() {
+                self.threads[i].grok_show_pending = true;
+            }
+            self.kick_session_show(id);
+            return Some(i);
+        }
+        let sess = self.grok_sessions.iter().find(|s| s.id == id).cloned();
+        let title = sess
+            .as_ref()
+            .map(|s| self.session_row_title(&s.id, &s.title))
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or_else(|| id.chars().take(24).collect());
+        let mut created = ChatThread::new(&title, false);
+        created.grok_session = Some(id.to_string());
+        created.grok_user_home = sess.as_ref().is_none_or(|s| !s.cabin);
+        created.grok_cwd = sess
+            .as_ref()
+            .and_then(|s| s.cwd.clone())
+            .map(|p| p.display().to_string())
+            .filter(|s| !s.is_empty());
+        created.grok_show_pending = true;
+        self.threads.push(created);
+        self.kick_session_show(id);
+        Some(self.threads.len() - 1)
     }
 
     pub(super) fn delete_thread_at(&mut self, idx: usize) {

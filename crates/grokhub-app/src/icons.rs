@@ -225,6 +225,7 @@ pub enum RailIcon {
     Folder,
     Chat,
     File,
+    Pin,
 }
 
 pub fn rail_icon_for(id: &str) -> RailIcon {
@@ -369,6 +370,13 @@ pub fn paint_rail_icon_at(painter: &egui::Painter, rect: egui::Rect, icon: RailI
                     Pos2::new(r.right() - 5.0, r.top()),
                     Pos2::new(r.right(), r.top() + 5.0),
                 ],
+                stroke,
+            );
+        }
+        RailIcon::Pin => {
+            painter.circle_filled(Pos2::new(c.x, c.y - w * 0.10), w * 0.14, color);
+            painter.line_segment(
+                [Pos2::new(c.x, c.y - w * 0.02), Pos2::new(c.x, c.y + w * 0.28)],
                 stroke,
             );
         }

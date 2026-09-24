@@ -151,6 +151,34 @@ impl Cabin {
         }
     }
 
+    fn chat_rename_act(&mut self, ui: &mut egui::Ui, idx: usize) -> Option<TabAct> {
+        let edit = ui.add(
+            egui::TextEdit::singleline(&mut self.rename_buf)
+                .desired_width(ui.available_width())
+                .hint_text("Name this chat"),
+        );
+        if self.rename_focus {
+            edit.request_focus();
+            self.rename_focus = false;
+        }
+        if let Some(lock) = self.rename_lock.clone() {
+            if self.rename_buf == lock {
+                select_all_edit(ui, edit.id, &self.rename_buf);
+            } else {
+                self.rename_lock = None;
+            }
+        }
+        if ui.input(|inp| inp.key_pressed(egui::Key::Escape)) {
+            Some(TabAct::CancelRename)
+        } else if ui.input(|inp| inp.key_pressed(egui::Key::Enter))
+            || (edit.lost_focus() && !self.rename_focus)
+        {
+            Some(TabAct::CommitRename(idx))
+        } else {
+            None
+        }
+    }
+
     pub(super) fn nav_row(
         ui: &mut egui::Ui,
         active: bool,
@@ -457,105 +485,183 @@ impl Cabin {
                             .get(self.thread_idx)
                             .and_then(|t| t.grok_session.clone());
                         let mut act: Option<TabAct> = None;
-                        for s in &self.grok_sessions {
-                            if self.pending_grok_deletes.contains(&s.id) {
-                                continue;
-                            }
-                            let title = if s.title.is_empty() || s.title == s.id {
-                                s.id.clone()
-                            } else {
-                                s.title.clone()
-                            };
-                            if !q.is_empty()
-                                && !title.to_ascii_lowercase().contains(&q)
-                                && !s.id.to_ascii_lowercase().contains(&q)
-                            {
-                                continue;
-                            }
+                        #[derive(Clone)]
+                        enum HistoryKind {
+                            Grok { id: String, thread: Option<usize> },
+                            Thread(usize),
+                        }
+                        struct HistoryRow {
+                            title: String,
+                            key: threads::SessionSortKey,
+                            kind: HistoryKind,
+                        }
+                        let mut rows: Vec<HistoryRow> = Vec::new();
+                        let mut grok_visible: Vec<(String, String)> = Vec::new();
+                        let session_rows: Vec<(String, String)> = self
+                            .grok_sessions
+                            .iter()
+                            .filter(|s| !self.pending_grok_deletes.contains(&s.id))
+                            .map(|s| (s.id.clone(), s.title.clone()))
+                            .collect();
+                        for (id, grok_title) in session_rows {
                             let filed = self
                                 .threads
                                 .iter()
-                                .find(|t| t.grok_session.as_deref() == Some(s.id.as_str()))
-                                .and_then(|t| t.project_id.as_deref());
+                                .find(|t| t.grok_session.as_deref() == Some(id.as_str()))
+                                .and_then(|t| t.project_id.clone());
                             if !threads::session_in_chat_folder(
-                                filed,
+                                filed.as_deref(),
                                 self.project_sel.as_deref(),
                             ) {
                                 continue;
                             }
-                            let on = current_sid.as_deref() == Some(s.id.as_str());
-                            let resp = Self::nav_row(
-                                ui,
-                                on && self.nav == Nav::Chat,
-                                crate::icons::RailIcon::Chat,
-                                &title,
-                                false,
-                            );
-                            if resp.clicked() {
-                                act = Some(TabAct::OpenGrok(s.id.clone()));
+                            let title = self.session_row_title(&id, &grok_title);
+                            if !q.is_empty()
+                                && !title.to_ascii_lowercase().contains(&q)
+                                && !id.to_ascii_lowercase().contains(&q)
+                            {
+                                continue;
                             }
-                            let sid = s.id.clone();
-                            resp.context_menu(|ui| {
-                                if ui.button("Delete").clicked() {
-                                    act = Some(TabAct::DeleteGrok(sid.clone()));
-                                    ui.close_menu();
-                                }
+                            grok_visible.push((id, title));
+                        }
+                        let listed_n = grok_visible.len() as u64;
+                        for (i, (id, title)) in grok_visible.into_iter().enumerate() {
+                            let thread = self.thread_for_grok(&id);
+                            let key = self.session_sort_key(&id, listed_n - i as u64);
+                            rows.push(HistoryRow {
+                                title,
+                                key,
+                                kind: HistoryKind::Grok { id, thread },
                             });
                         }
                         if self.project_sel.is_some() {
                             let listed: Vec<String> =
                                 self.grok_sessions.iter().map(|s| s.id.clone()).collect();
                             let selected = self.project_sel.clone();
-                            let rows: Vec<(usize, String)> = self
-                                .threads
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(i, t)| {
-                                    if !threads::session_in_chat_folder(
-                                        t.project_id.as_deref(),
-                                        selected.as_deref(),
-                                    ) {
-                                        return None;
+                            for (i, t) in self.threads.iter().enumerate() {
+                                if !threads::session_in_chat_folder(
+                                    t.project_id.as_deref(),
+                                    selected.as_deref(),
+                                ) {
+                                    continue;
+                                }
+                                let has_session = t
+                                    .grok_session
+                                    .as_deref()
+                                    .is_some_and(|id| !id.trim().is_empty());
+                                let already_listed = t
+                                    .grok_session
+                                    .as_deref()
+                                    .is_some_and(|id| listed.iter().any(|s| s == id));
+                                let empty = if i == self.thread_idx {
+                                    self.messages.is_empty()
+                                } else {
+                                    t.messages.is_empty()
+                                };
+                                if !threads::project_folder_history_row(
+                                    already_listed,
+                                    empty,
+                                    has_session,
+                                ) {
+                                    continue;
+                                }
+                                if !q.is_empty() && !t.title.to_ascii_lowercase().contains(&q) {
+                                    continue;
+                                }
+                                rows.push(HistoryRow {
+                                    title: t.title.clone(),
+                                    key: threads::SessionSortKey {
+                                        pinned: t.pinned,
+                                        pinned_ms: t.pinned_ms,
+                                        accessed_ms: t.accessed_ms,
+                                        list_rank: 0,
+                                    },
+                                    kind: HistoryKind::Thread(i),
+                                });
+                            }
+                        }
+                        let order = threads::session_list_order(
+                            &rows.iter().map(|r| r.key).collect::<Vec<_>>(),
+                        );
+                        for pos in order {
+                            let title = rows[pos].title.clone();
+                            let pinned = rows[pos].key.pinned;
+                            let kind = rows[pos].kind.clone();
+                            let thread_idx = match &kind {
+                                HistoryKind::Grok { thread, .. } => *thread,
+                                HistoryKind::Thread(i) => Some(*i),
+                            };
+                            if let Some(i) = thread_idx {
+                                if self.rename_idx == Some(i) {
+                                    if let Some(next) = self.chat_rename_act(ui, i) {
+                                        act = Some(next);
                                     }
-                                    let has_session = t
-                                        .grok_session
-                                        .as_deref()
-                                        .is_some_and(|id| !id.trim().is_empty());
-                                    let already_listed = t
-                                        .grok_session
-                                        .as_deref()
-                                        .is_some_and(|id| listed.iter().any(|s| s == id));
-                                    let empty = if i == self.thread_idx {
-                                        self.messages.is_empty()
-                                    } else {
-                                        t.messages.is_empty()
-                                    };
-                                    if !threads::project_folder_history_row(
-                                        already_listed,
-                                        empty,
-                                        has_session,
-                                    ) {
-                                        return None;
+                                    continue;
+                                }
+                            }
+                            let icon = if pinned {
+                                crate::icons::RailIcon::Pin
+                            } else {
+                                crate::icons::RailIcon::Chat
+                            };
+                            let on = match &kind {
+                                HistoryKind::Grok { id, .. } => {
+                                    current_sid.as_deref() == Some(id.as_str())
+                                        && self.nav == Nav::Chat
+                                }
+                                HistoryKind::Thread(i) => {
+                                    *i == self.thread_idx && self.nav == Nav::Chat
+                                }
+                            };
+                            let resp = Self::nav_row(ui, on, icon, &title, false);
+                            match &kind {
+                                HistoryKind::Grok { id, .. } => {
+                                    let sid = id.clone();
+                                    if resp.clicked() {
+                                        act = Some(TabAct::OpenGrok(sid.clone()));
                                     }
-                                    if !q.is_empty()
-                                        && !t.title.to_ascii_lowercase().contains(&q)
-                                    {
-                                        return None;
+                                    if resp.double_clicked() {
+                                        act = Some(TabAct::StartRenameGrok(sid.clone()));
                                     }
-                                    Some((i, t.title.clone()))
-                                })
-                                .collect();
-                            for (i, title) in rows {
-                                let on = i == self.thread_idx && self.nav == Nav::Chat;
-                                let resp = Self::nav_row(
-                                    ui,
-                                    on,
-                                    crate::icons::RailIcon::Chat,
-                                    &title,
-                                    false,
-                                );
-                                if resp.clicked() {
-                                    act = Some(TabAct::Switch(i));
+                                    resp.context_menu(|ui| {
+                                        if ui.button(if pinned { "Unpin" } else { "Pin" }).clicked()
+                                        {
+                                            act = Some(TabAct::PinGrok(sid.clone()));
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("Rename").clicked() {
+                                            act = Some(TabAct::StartRenameGrok(sid.clone()));
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("Delete").clicked() {
+                                            act = Some(TabAct::DeleteGrok(sid.clone()));
+                                            ui.close_menu();
+                                        }
+                                    });
+                                }
+                                HistoryKind::Thread(i) => {
+                                    let i = *i;
+                                    if resp.clicked() {
+                                        act = Some(TabAct::Switch(i));
+                                    }
+                                    if resp.double_clicked() {
+                                        act = Some(TabAct::StartRename(i));
+                                    }
+                                    resp.context_menu(|ui| {
+                                        if ui.button(if pinned { "Unpin" } else { "Pin" }).clicked()
+                                        {
+                                            act = Some(TabAct::Pin(i));
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("Rename").clicked() {
+                                            act = Some(TabAct::StartRename(i));
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("Delete").clicked() {
+                                            act = Some(TabAct::Delete(i));
+                                            ui.close_menu();
+                                        }
+                                    });
                                 }
                             }
                         }
@@ -581,6 +687,16 @@ impl Cabin {
                                 self.composer_want_focus = true;
                             }
                             Some(TabAct::DeleteGrok(id)) => self.delete_grok_history(&id),
+                            Some(TabAct::PinGrok(id)) => {
+                                if let Some(i) = self.ensure_grok_thread(&id) {
+                                    self.pin_thread(i);
+                                }
+                            }
+                            Some(TabAct::StartRenameGrok(id)) => {
+                                if let Some(i) = self.ensure_grok_thread(&id) {
+                                    self.begin_chat_rename(i);
+                                }
+                            }
                             None => {}
                         }
                     });

@@ -99,7 +99,10 @@ pub fn toggle_pin(pinned: bool) -> bool {
     !pinned
 }
 
-pub fn history_order(pinned: &[bool], accessed: &[u64]) -> Vec<usize> {
+/// Pinned block first. Inside that block, last-pinned-first (`pinned_ms`).
+/// A legacy pin with `pinned_ms == 0` falls back to `accessed`.
+/// Unpinned rows ignore `pinned_ms` and sort by last-used (`accessed`).
+pub fn history_order(pinned: &[bool], accessed: &[u64], pinned_ms: &[u64]) -> Vec<usize> {
     let n = pinned.len();
     let mut idx: Vec<usize> = (0..n).collect();
     idx.sort_by(|&a, &b| {
@@ -109,13 +112,26 @@ pub fn history_order(pinned: &[bool], accessed: &[u64]) -> Vec<usize> {
             (true, false) => std::cmp::Ordering::Less,
             (false, true) => std::cmp::Ordering::Greater,
             _ => {
-                let aa = accessed.get(a).copied().unwrap_or(0);
-                let bb = accessed.get(b).copied().unwrap_or(0);
-                bb.cmp(&aa).then(b.cmp(&a))
+                let ka = history_rank(pa, a, accessed, pinned_ms);
+                let kb = history_rank(pb, b, accessed, pinned_ms);
+                kb.cmp(&ka).then(b.cmp(&a))
             }
         }
     });
     idx
+}
+
+fn history_rank(pinned: bool, i: usize, accessed: &[u64], pinned_ms: &[u64]) -> u64 {
+    if pinned {
+        let ms = pinned_ms.get(i).copied().unwrap_or(0);
+        if ms == 0 {
+            accessed.get(i).copied().unwrap_or(0)
+        } else {
+            ms
+        }
+    } else {
+        accessed.get(i).copied().unwrap_or(0)
+    }
 }
 
 pub fn delete_thread(count: usize, idx: usize, current: usize) -> DeleteOutcome {
@@ -202,8 +218,15 @@ mod tests {
         assert!(apply_manual_rename(&mut tab, "  night watch  "));
         assert_eq!(tab.title, "night watch");
         assert!(tab.title_locked);
+        assert!(!tab.pinned);
+        tab.pinned = true;
         assert!(!apply_manual_rename(&mut tab, "   "));
+        assert!(!apply_manual_rename(&mut tab, "  "));
         assert_eq!(tab.title, "night watch");
+        assert!(
+            tab.pinned,
+            "a blank rename keeps the pin and the prior title"
+        );
         assert!(!apply_auto_title(&mut tab, "porn"));
         assert_eq!(tab.title, "night watch");
         assert!(tab.title_locked);
@@ -252,19 +275,29 @@ mod tests {
         assert!(toggle_pin(false));
         assert!(!toggle_pin(true));
         assert_eq!(
-            history_order(&[false, true, false, true], &[0, 0, 0, 0]),
+            history_order(&[false, true, false, true], &[0, 0, 0, 0], &[]),
             vec![3, 1, 2, 0],
             "pins first (newest pin first), then newest unpinned"
         );
         assert_eq!(
-            history_order(&[false, false, false], &[1_000, 9_000, 5_000]),
+            history_order(&[false, false, false], &[1_000, 9_000, 5_000], &[]),
             vec![1, 2, 0],
             "newest accessed chats sit on top"
         );
         assert_eq!(
-            history_order(&[true, false, true], &[1, 99, 2]),
+            history_order(&[true, false, true], &[1, 99, 2], &[]),
             vec![2, 0, 1],
             "pinned chats stay above unpinned, newest pin first"
+        );
+        assert_eq!(
+            history_order(&[true, true, false], &[9_000, 10, 8_000], &[100, 900, 0]),
+            vec![1, 0, 2],
+            "last pinned stays above an older pin even if that one was opened later"
+        );
+        assert_eq!(
+            history_order(&[false, false], &[100, 500], &[9_000, 1]),
+            vec![1, 0],
+            "unpin ignores pin time and sorts by last used"
         );
         assert_eq!(delete_thread(3, 0, 0), DeleteOutcome::Removed { next: 0 });
         assert_eq!(delete_thread(3, 0, 2), DeleteOutcome::Removed { next: 1 });
