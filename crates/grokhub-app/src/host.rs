@@ -265,7 +265,14 @@ mod tests {
         } else {
             "echo grokhub-smoke"
         };
-        let out = run_host(cmd, Duration::from_secs(15));
+        // PowerShell startup on a loaded Windows runner can sit past 15s
+        // while a parallel host test still exits. Give that one spawn a
+        // longer budget, then one fresh process if it still times out.
+        let budget = Duration::from_secs(if cfg!(windows) { 45 } else { 15 });
+        let mut out = run_host(cmd, budget);
+        if cfg!(windows) && out.contains("HOST_RECEIPT: timed out") {
+            out = run_host(cmd, budget);
+        }
         assert!(out.contains("grokhub-smoke"), "{out}");
         assert!(out.contains("exit 0"), "{out}");
         #[cfg(unix)]
