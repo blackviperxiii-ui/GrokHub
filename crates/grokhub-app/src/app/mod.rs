@@ -207,6 +207,7 @@ enum Nav {
     Devices,
     Memory,
     Workboard,
+    Ideas,
     Imagine,
     Skills,
     Night,
@@ -411,6 +412,11 @@ pub struct Cabin {
     tray: Option<crate::tray::TrayHost>,
     tray_rx: Option<mpsc::Receiver<Option<crate::tray::TrayHost>>>,
     window_visible: bool,
+    /// Minimize or tray hide. The next show opens a fresh empty chat.
+    resume_fresh: bool,
+    saw_minimized: bool,
+    brief_buf: String,
+    ideas_q: String,
     tray_saw_unfocused: bool,
     tray_hid_at: Instant,
     want_quit: bool,
@@ -782,6 +788,7 @@ impl Cabin {
         let cfg_auto_cap = cfg.daily_auto_cap;
         let cfg_host_cap = cfg.host_hour_cap;
         let cfg_quiet_start = cfg.quiet_start.clone();
+        let brief_buf = cfg.digest_brief.clone();
         let cfg_quiet_end = cfg.quiet_end.clone();
         let boot_session = SessionMode::parse(&cfg.session_mode).unwrap_or(SessionMode::Chat);
         let boot_perm = PermissionMode::parse(&cfg.permission_mode).unwrap_or(PermissionMode::Ask);
@@ -855,6 +862,10 @@ impl Cabin {
                 None
             },
             window_visible: !hidden,
+            resume_fresh: false,
+            saw_minimized: false,
+            brief_buf,
+            ideas_q: String::new(),
             tray_saw_unfocused: false,
             tray_hid_at: Instant::now(),
             want_quit: false,
@@ -1136,6 +1147,7 @@ impl Cabin {
         }
         c.last_update_probe = Some(Instant::now());
         c.update_probe_rx = Some(crate::update::begin_update_probe());
+        c.open_fresh_home();
         c
     }
 
@@ -2457,6 +2469,7 @@ impl Cabin {
                     if self.nav == Nav::Chat && !self.scratch() {
                         self.stamp_current_access();
                     }
+                    self.tick_feed_pulse();
                     if self.last_persist.elapsed() > Duration::from_secs(2) {
                         self.persist_bg();
                     }
@@ -3780,7 +3793,22 @@ impl Cabin {
         }
         self.apply_saved_geom(ctx);
         self.ensure_tray_spawn();
+        self.resume_fresh = false;
+        self.saw_minimized = false;
+        self.open_fresh_home();
         ctx.request_repaint();
+    }
+
+    fn note_window_resume(&mut self, ctx: &egui::Context) {
+        let minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+        if minimized {
+            self.saw_minimized = true;
+            self.resume_fresh = true;
+        } else if self.resume_fresh && self.saw_minimized && self.window_visible {
+            self.resume_fresh = false;
+            self.saw_minimized = false;
+            self.open_fresh_home();
+        }
     }
 
     fn poll_tray(&mut self, ctx: &egui::Context) {
@@ -3913,6 +3941,7 @@ impl eframe::App for Cabin {
         self.poll_pending_kick();
         self.live_room();
         self.tick_heartbeat();
+        self.note_window_resume(ctx);
         let close_requested = ctx.input(|i| i.viewport().close_requested());
         let mut just_hid = false;
         if crate::tray::ignore_close_request(self.window_visible, close_requested, self.want_quit) {
@@ -4093,6 +4122,7 @@ impl eframe::App for Cabin {
                 Nav::Devices => self.ui_devices(ctx),
                 Nav::Memory => self.ui_memory(ctx),
                 Nav::Workboard => self.ui_board(ctx),
+                Nav::Ideas => self.ui_ideas(ctx),
                 Nav::Imagine => self.ui_imagine(ctx),
                 Nav::Skills => self.ui_skills(ctx),
                 Nav::Night => self.ui_night(ctx),

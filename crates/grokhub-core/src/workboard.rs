@@ -136,22 +136,283 @@ impl BoardCard {
     }
 }
 
-/// First line of the user ask, else the thread label. Empty when both are blank.
+/// One tap on an idea. Files `BoardStatus::Todo` whose title is the task.
+/// The feed card's canned line and the raw message are not stored.
+pub fn file_idea_todo(cards: &mut Vec<BoardCard>, title: &str, detail: &str) -> String {
+    let title = idea_todo_title(title, detail);
+    if let Some(existing) = cards
+        .iter()
+        .find(|c| c.title.eq_ignore_ascii_case(&title) && c.status != BoardStatus::Dismissed)
+    {
+        return existing.id.clone();
+    }
+    let mut card = BoardCard::new(&title, "", "");
+    card.status = BoardStatus::Todo;
+    let id = card.id.clone();
+    cards.push(card);
+    id
+}
+
+/// Run-card label. A blank ask can still name the live turn from the thread.
+/// An ordinary prompt, including "summarize the workboard", files nothing.
 pub fn inflight_card_title(ask: &str, thread_label: &str) -> String {
-    fn one_line(s: &str) -> String {
-        s.lines()
-            .map(str::trim)
-            .find(|l| !l.is_empty())
-            .unwrap_or("")
-            .chars()
-            .take(80)
-            .collect()
+    if ask.trim().is_empty() {
+        return first_line(thread_label).chars().take(TASK_CHARS).collect();
     }
-    let from_ask = one_line(ask);
-    if !from_ask.is_empty() {
-        return from_ask;
+    todo_task_line(ask).unwrap_or_default()
+}
+
+const TASK_CHARS: usize = 80;
+
+/// One line of work the user can act on. `None` for chat, questions, and background.
+pub fn todo_task_line(text: &str) -> Option<String> {
+    let line = first_line(text);
+    if line.is_empty() || is_canned_line(&line) || is_background_line(&line) {
+        return None;
     }
-    one_line(thread_label)
+    let acted = without_polite(&line);
+    if acted.is_empty() || is_canned_line(acted) || is_background_line(acted) {
+        return None;
+    }
+    if !is_work_verb(&first_word(acted)) {
+        return None;
+    }
+    let task = task_title(acted);
+    if task.is_empty() {
+        None
+    } else {
+        Some(task)
+    }
+}
+
+/// Idea Accept title. The canned feed line and the raw message stay off the card.
+pub fn idea_todo_title(title: &str, body: &str) -> String {
+    for raw in [title, body] {
+        let line = first_line(raw);
+        if line.is_empty() || is_canned_line(&line) {
+            continue;
+        }
+        if let Some(task) = todo_task_line(&line) {
+            return task;
+        }
+    }
+    for raw in [title, body] {
+        if let Some(task) = steer_cover(&first_line(raw)) {
+            return task;
+        }
+    }
+    "Take the next step on this idea".to_string()
+}
+
+fn first_line(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn task_title(line: &str) -> String {
+    let clipped: String = line.chars().take(TASK_CHARS).collect();
+    let clipped = clipped.trim();
+    let mut chars = clipped.chars();
+    match chars.next() {
+        Some(c) => {
+            let mut titled = c.to_uppercase().collect::<String>();
+            titled.push_str(chars.as_str());
+            titled
+        }
+        None => String::new(),
+    }
+}
+
+fn first_word(line: &str) -> String {
+    line.split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_matches(|c: char| !c.is_ascii_alphanumeric())
+        .to_ascii_lowercase()
+}
+
+fn without_polite(line: &str) -> &str {
+    let lower = line.to_ascii_lowercase();
+    const PREFIXES: &[&str] = &[
+        "please ",
+        "can you ",
+        "could you ",
+        "would you ",
+        "will you ",
+        "i need you to ",
+        "i want you to ",
+        "let's ",
+        "lets ",
+    ];
+    for prefix in PREFIXES {
+        if lower.starts_with(prefix) {
+            return line[prefix.len()..].trim();
+        }
+    }
+    line
+}
+
+fn is_canned_line(line: &str) -> bool {
+    let lower = line
+        .trim()
+        .trim_end_matches('.')
+        .trim()
+        .to_ascii_lowercase();
+    const EXACT: &[&str] = &[
+        "idea",
+        "worth doing",
+        "from your brief",
+        "from the brief",
+        "from your profile",
+        "want me to automate this and notify you here when done",
+        "nothing queued",
+        "no updates",
+        "digest",
+    ];
+    EXACT.contains(&lower.as_str()) || lower.starts_with("digest ")
+}
+
+fn is_background_line(line: &str) -> bool {
+    let lower = line.trim().to_ascii_lowercase();
+    if lower.ends_with('?') || lower.starts_with('/') {
+        return true;
+    }
+    const EXACT: &[&str] = &[
+        "hi",
+        "hello",
+        "hey",
+        "thanks",
+        "thank you",
+        "ok",
+        "okay",
+        "yes",
+        "no",
+        "lol",
+        "yo",
+        "status",
+    ];
+    if EXACT.contains(&lower.as_str()) {
+        return true;
+    }
+    const STARTS: &[&str] = &[
+        "summarize",
+        "summarise",
+        "summary",
+        "recap",
+        "what ",
+        "what's ",
+        "whats ",
+        "how ",
+        "why ",
+        "when ",
+        "who ",
+        "where ",
+        "tell me",
+        "explain ",
+        "describe ",
+        "show me",
+        "list ",
+        "give me",
+        "status of",
+    ];
+    if STARTS.iter().any(|prefix| lower.starts_with(prefix)) {
+        return true;
+    }
+    const PHRASES: &[&str] = &[
+        "summarize the workboard",
+        "summarise the workboard",
+        "summary of the workboard",
+        "recap the workboard",
+        "status of the workboard",
+        "status of the board",
+    ];
+    PHRASES.iter().any(|phrase| lower.contains(phrase))
+}
+
+fn is_work_verb(word: &str) -> bool {
+    const VERBS: &[&str] = &[
+        "add",
+        "apply",
+        "archive",
+        "build",
+        "check",
+        "clarify",
+        "clean",
+        "close",
+        "configure",
+        "cover",
+        "create",
+        "cut",
+        "debug",
+        "deploy",
+        "draft",
+        "edit",
+        "enable",
+        "file",
+        "finish",
+        "fix",
+        "flash",
+        "follow",
+        "implement",
+        "install",
+        "merge",
+        "move",
+        "open",
+        "pair",
+        "pin",
+        "publish",
+        "push",
+        "record",
+        "release",
+        "remove",
+        "repair",
+        "replace",
+        "retry",
+        "run",
+        "schedule",
+        "set",
+        "ship",
+        "start",
+        "stop",
+        "take",
+        "test",
+        "update",
+        "verify",
+        "wire",
+        "write",
+    ];
+    VERBS.contains(&word)
+}
+
+/// "less crypto, more F1" is a steer, not the task. The work is to cover F1.
+fn steer_cover(line: &str) -> Option<String> {
+    if line.is_empty() || is_canned_line(line) || is_background_line(line) {
+        return None;
+    }
+    let lower = line.to_ascii_lowercase();
+    let idx = lower.find("more ")?;
+    let before = lower[..idx].trim().trim_end_matches(',');
+    let steered = before.is_empty() || before == "less" || before.starts_with("less ");
+    if !steered {
+        return None;
+    }
+    let more = line[idx + "more ".len()..]
+        .trim()
+        .trim_matches(|c: char| matches!(c, '.' | ','));
+    if more.is_empty() || is_canned_line(more) || is_background_line(more) {
+        return None;
+    }
+    let task = task_title(&format!("Cover {more}"));
+    if task.is_empty() {
+        None
+    } else {
+        Some(task)
+    }
 }
 
 /// Run-start hook. One Doing or Done run card per thread.
@@ -331,6 +592,13 @@ mod tests {
         assert_eq!(card.title, "Flash the pi");
         assert_eq!(card.priority, "high");
         assert_eq!(card.status, BoardStatus::Proposed);
+        let mut board = Vec::new();
+        let id = file_idea_todo(&mut board, "More F1", "from the brief");
+        assert_eq!(board[0].status, BoardStatus::Todo);
+        assert_eq!(board[0].title, "Cover F1");
+        assert!(board[0].detail.is_empty());
+        assert_eq!(file_idea_todo(&mut board, "more f1", "again"), id);
+        assert_eq!(board.len(), 1);
         assert_eq!(card.status.column(), Some(KanbanColumn::Todo));
         let (key, st) = parse_work_update("WORK_UPDATE: Flash the pi | status=doing").unwrap();
         let mut cards = vec![card];
@@ -365,7 +633,11 @@ mod tests {
         assert_eq!(cards[0].title, "Verify boot");
         assert_eq!(cards[0].status, BoardStatus::InProgress);
         cards[0].status = BoardStatus::Blocked;
-        assert!(upsert_inflight_card(&mut cards, "thr-1", "Retry after block"));
+        assert!(upsert_inflight_card(
+            &mut cards,
+            "thr-1",
+            "Retry after block"
+        ));
         assert_eq!(cards.len(), 2);
         assert_eq!(cards[0].title, "Verify boot");
         assert_eq!(cards[0].status, BoardStatus::Blocked);
@@ -375,11 +647,59 @@ mod tests {
         assert!(upsert_inflight_card(&mut cards, "thr-1", "Fresh card"));
         assert_eq!(cards.len(), 3);
         assert_eq!(cards[2].title, "Fresh card");
-        assert_eq!(
-            inflight_card_title("  \nsecond line", "Thread"),
-            "second line"
-        );
         assert_eq!(inflight_card_title("   ", "Cabin rail"), "Cabin rail");
+        assert_eq!(
+            inflight_card_title("  \nFlash the pi", "Thread"),
+            "Flash the pi"
+        );
+    }
+
+    #[test]
+    fn chat_prompt_is_not_a_todo() {
+        assert_eq!(todo_task_line("summarize the workboard"), None);
+        assert_eq!(
+            todo_task_line("  \nsecond line"),
+            None,
+            "a chat line with no work verb is not a task"
+        );
+        assert_eq!(inflight_card_title("summarize the workboard", "Thread"), "");
+        assert_eq!(
+            inflight_card_title("Can you summarize the workboard", "Thread"),
+            ""
+        );
+        assert_eq!(
+            inflight_card_title("please flash the pi", "Thread"),
+            "Flash the pi"
+        );
+        assert_eq!(
+            todo_task_line("Flash the pi\nextra chat"),
+            Some("Flash the pi".into())
+        );
+        assert_eq!(todo_task_line("Verify boot"), Some("Verify boot".into()));
+        assert_eq!(
+            todo_task_line("Write the image"),
+            Some("Write the image".into())
+        );
+        assert_eq!(
+            idea_todo_title("less crypto, more F1", "less crypto, more F1"),
+            "Cover F1"
+        );
+        assert_eq!(
+            idea_todo_title("From your brief.", "summarize the workboard"),
+            "Take the next step on this idea"
+        );
+        assert_eq!(idea_todo_title("Idea", "Flash the pi"), "Flash the pi");
+        let mut board = Vec::new();
+        file_idea_todo(
+            &mut board,
+            "Want me to automate this and notify you here when done?",
+            "summarize the workboard",
+        );
+        assert_eq!(board[0].title, "Take the next step on this idea");
+        assert!(board[0].detail.is_empty());
+        assert!(!board[0].title.contains("summarize"));
+        assert_eq!(board[0].status, BoardStatus::Todo);
+        assert!(!board[0].run);
     }
 
     #[test]
@@ -427,7 +747,11 @@ mod tests {
         linked.status = BoardStatus::Todo;
         linked.thread_id = Some("thr-2".into());
         let mut manual = vec![linked];
-        assert!(upsert_inflight_card(&mut manual, "thr-2", "Clarify the pin"));
+        assert!(upsert_inflight_card(
+            &mut manual,
+            "thr-2",
+            "Clarify the pin"
+        ));
         assert_eq!(manual[0].status, BoardStatus::Todo);
         assert_eq!(manual[0].title, "Manual todo");
         assert_eq!(manual[1].status, BoardStatus::InProgress);
@@ -441,7 +765,11 @@ mod tests {
         parked.thread_id = Some("thr-3".into());
         parked.run = true;
         let mut blocked = vec![parked];
-        assert!(upsert_inflight_card(&mut blocked, "thr-3", "Retry the flash"));
+        assert!(upsert_inflight_card(
+            &mut blocked,
+            "thr-3",
+            "Retry the flash"
+        ));
         assert_eq!(blocked[0].title, "Stuck flash");
         assert_eq!(blocked[0].status, BoardStatus::Blocked);
         assert_eq!(blocked[1].title, "Retry the flash");

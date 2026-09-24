@@ -1,4 +1,4 @@
-use grokhub_core::{is_plain_text, BoardCard};
+use grokhub_core::{is_plain_text, BoardCard, FeedPulse};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Read, Write};
@@ -280,6 +280,12 @@ pub struct AppConfig {
     /// Local profile picture copied into the cabin config. Empty means the user has not set one.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub profile_picture: String,
+    /// One plain-text steer for the editorial digest. Not a memory file.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub digest_brief: String,
+    /// Expiry sweep, quiet release, and the digest clock. No settings panel.
+    #[serde(default, skip_serializing_if = "FeedPulse::is_background_default")]
+    pub feed_pulse: FeedPulse,
 }
 
 fn default_yolo() -> bool {
@@ -378,6 +384,8 @@ impl Default for AppConfig {
             get_started_done: false,
             display_name: String::new(),
             profile_picture: String::new(),
+            digest_brief: String::new(),
+            feed_pulse: FeedPulse::default(),
         }
     }
 }
