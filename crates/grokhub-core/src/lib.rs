@@ -56,6 +56,7 @@ pub mod tui_gaps;
 pub mod trajectory;
 pub mod turn_timeline;
 pub mod update;
+pub mod update_feed;
 pub mod usage;
 pub mod verify;
 pub mod voice;
@@ -403,6 +404,11 @@ pub use windshield::{
     parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse, pick_named_row, rank_atspi_rows,
     refused_lock, tab_list_from_rows, window_name_from_atspi, window_name_from_wmctrl,
     windshield_browser_line, windshield_prompt, AtspiRow, PendingStep, WindshieldFrame,
+};
+pub use update_feed::{
+    automate_offer_card, automation_done_card, dismiss_update, feed_visible, mark_update_opened,
+    post_update, schedule_created_card, suggestion_card, visible_updates, UpdateAction, UpdateCard,
+    UpdateKind, UpdateStatus, FEED_PAINT_MAX,
 };
 pub use workboard::{
     abandon_inflight_card, apply_assistant_work_marks, apply_work_update, extract_work_pins,

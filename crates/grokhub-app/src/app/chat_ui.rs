@@ -1371,16 +1371,20 @@ impl Cabin {
         } else {
             0.0
         };
-        let pulse_h = if pulse_on {
-            pulse_card_h(self.collect_pulse_rows().len())
+        let feed_n = if pulse_on {
+            grokhub_core::visible_updates(&self.updates).len()
+        } else {
+            0
+        };
+        let feed_h = update_feed_h(feed_n);
+        let device_on = pulse_on && device_glance(self.hub_on, self.last_frame_url.as_deref()).is_some();
+        let device_h = if device_on { 26.0 } else { 0.0 };
+        let slot_gap = if (feed_n > 0 || device_on) && greet_on {
+            8.0
         } else {
             0.0
         };
-        let lane_h = if pulse_on { 26.0 } else { 0.0 };
-        let device_on = pulse_on && device_glance(self.hub_on, self.last_frame_url.as_deref()).is_some();
-        let device_h = if device_on { 26.0 } else { 0.0 };
-        let pulse_gap = if pulse_on && greet_on { 8.0 } else { 0.0 };
-        let block_h = greet_h + pulse_gap + pulse_h + lane_h + device_h;
+        let block_h = greet_h + slot_gap + feed_h + device_h;
         let greet_top = empty_home_greet_top(composer_top, block_h, 12.0);
         if greet_on || pulse_on {
             let greet_rect = egui::Rect::from_min_size(
@@ -1406,15 +1410,17 @@ impl Cabin {
                                     .color(crate::theme::muted()),
                             );
                         }
-                        if pulse_on {
+                        if pulse_on && (feed_n > 0 || device_on) {
                             if greet_on {
                                 ui.add_space(8.0);
                             }
-                            self.paint_lane_chip(ui);
-                            ui.add_space(4.0);
-                            self.paint_empty_pulse(ui, pane_w);
+                            if feed_n > 0 {
+                                self.paint_update_feed(ui, pane_w);
+                            }
                             if device_on {
-                                ui.add_space(4.0);
+                                if feed_n > 0 {
+                                    ui.add_space(4.0);
+                                }
                                 self.paint_device_glance_row(ui, pane_w);
                             }
                         }

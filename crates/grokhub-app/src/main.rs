@@ -23,6 +23,7 @@ mod host;
 mod markdown;
 mod night;
 mod loops;
+mod feed;
 mod recipes;
 mod notify;
 mod store;
