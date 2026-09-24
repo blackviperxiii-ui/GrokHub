@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.18 — 2026-09-24
+
+Signed-in empty home drops the Coding / Life chip and the under-greeting workboard summary card. That slot is an update feed in `updates.json`: newest first, hidden when nothing is undismissed (no “No updates” placeholder). A finished `/loop` posts `automation_done` from `poll_grok_loop`. A night recipe replay that finishes posts the same kind. Saving a clock job or interval loop posts `schedule_created` from `commit_schedule`. `suggestion` and `automate_offer` are typed cards for a later producer. Open marks a card opened and leaves it; Dismiss removes it. No interest learning and no `interest_update`.
+
+- Linux: `grokhub-linux-v2.10.18.tar.gz` and AUR `pkgver=2.10.18`.
+- Windows: `GrokHub-Setup-2.10.18.exe` and `grokhub-windows-v2.10.18.zip`.
+- Cursor cabin 2.10.18. VERSION 2.10.18. Draft only. Not tagged. Rebased onto main 2.10.17 (session pin and rename).
+
 ## 2.10.17 — 2026-09-23
 
 Right-click a History chat to Pin, Unpin, or Rename. Double-click the row to rename it in place. Pinned chats sit above the rest, last pinned first (`pinned_ms` in `threads.json`). Unpin puts the chat back with the other chats by last use. A blank or whitespace name is rejected and the previous title stays. Rename does not clear the pin. A project filter only hides other chats; it does not drop a pin or a title. `click_project_opens_board` stays false.

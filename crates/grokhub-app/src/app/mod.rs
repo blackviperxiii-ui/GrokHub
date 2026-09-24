@@ -160,6 +160,7 @@ mod imagine;
 mod night;
 mod chat_ui;
 mod pulse;
+mod feed_ui;
 mod confirm;
 mod glance;
 mod sidebar;
@@ -185,6 +186,8 @@ use oauth::*;
 use plus::*;
 #[allow(unused_imports)]
 use pulse::*;
+#[allow(unused_imports)]
+use feed_ui::*;
 #[allow(unused_imports)]
 use confirm::*;
 #[allow(unused_imports)]
@@ -413,6 +416,8 @@ pub struct Cabin {
     pending_hub_task: Option<String>,
     automations: Vec<Automation>,
     grok_loops: Vec<GrokLoop>,
+    /// Home update feed. `updates.json`. Not an AppConfig field.
+    updates: Vec<grokhub_core::UpdateCard>,
     grok_loop_rx: Option<(String, mpsc::Receiver<String>)>,
     night_nl: String,
     /// One-shot watch on the Automations page. Not a second clock.
@@ -855,6 +860,7 @@ impl Cabin {
             pending_hub_task: None,
             automations: crate::night::load(),
             grok_loops: crate::loops::load(),
+            updates: crate::feed::load(),
             grok_loop_rx: None,
             night_nl: String::new(),
             watch_once: false,

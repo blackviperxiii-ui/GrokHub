@@ -1,6 +1,6 @@
 # GrokHub is the Grok Build GUI
 
-**Version:** 2.10.17
+**Version:** 2.10.18
 
 GrokHub is the native egui cabin. Grok Build (`grok` CLI) is the agent, the host shell, and computer-use (eyes and hands). One repo, one version — Linux tarball/AUR and Windows `GrokHub-Setup-<version>.exe` ship from the same tag.
 
@@ -13,6 +13,8 @@ Grok Build owns: coding tools, bash, sandbox, permissions, plan mode, skills/plu
 Transport: Auto/Always chat is headless `grok -p --output-format streaming-json` with `--sandbox off`, a desktop `--rules` line, and `--leader-socket` on the cabin socket (do not share `~/.grok/leader.sock`). btw (saved as `ask`) is a side ask: a live run keeps going, then the question sends look-safe (`--permission-mode default`, no desktop-do-the-work rules). Idle btw sends that same look-safe ask. Compact sits on the existing context bar. Copy session and Export are thread chrome. View plan reopens a Plan-mode plan. Fork shows only when the thread is long or context is at least half full. New chats use the user `~/.grok` so tools and `grok sessions` match the TUI. Interactive Ask is ACP `grok agent stdio` so Allow / Deny can show; if ACP cannot start or is down the turn is denied (no `grok -p` fallthrough). Night, loops, inbox, and phone `/v1/task` inherit the composer PermissionMode pill via `scheduled_args` (Ask fail-closed, no ACP; Auto `--permission-mode auto`; Always `--always-approve`). `/workflow` `/compact` `/rewind` honor that same pill. A matching cabin skill prepends `active_skill_follow` on the kick. Do not vendor grok-build crates. Cabin overlay (`install.sh`) runs the official installer from `https://x.ai/cli` so `grok` is on PATH with `grokhub`.
 
 ## Chat
+
+Signed-in empty home no longer paints a Coding / Life chip or the under-greeting workboard summary. That slot is the update feed (`updates.json`): newest-first cards, hidden entirely when none are undismissed. `poll_grok_loop` posts `automation_done` when a `/loop` finishes. `commit_schedule` posts `schedule_created`. Open leaves the card marked opened; Dismiss removes it.
 
 Left-rail **Chat** is the new-chat control. There is no separate New chat button. Click Chat on an empty draft (no dialogue, no Grok session) to pull that same draft up. After dialogue has started, Chat opens a new draft. Keep one empty draft at a time. Old convos are sidebar History (`grok sessions`). A project is a folder of those chats: selecting it filters History and files new chats there, and does not open the Workboard. Click it again for every chat. Delete puts those chats back in History and does not wipe transcripts.
 
