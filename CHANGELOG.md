@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.23 — 2026-09-24
+
+A second prompt on the open chat stays on the same History row. The cabin resumes that Grok session. A different id from the follow-up is not a new channel. A new History row is only a new chat. Transcripts stay. Project folder filter and pins stay.
+
+- Linux: `grokhub-linux-v2.10.23.tar.gz` and AUR `pkgver=2.10.23`.
+- Windows: `GrokHub-Setup-2.10.23.exe` and `grokhub-windows-v2.10.23.zip`.
+- Cursor cabin 2.10.23. VERSION 2.10.23. Draft only. Not tagged. Rebased onto main 2.10.22 (keep Reply inside the window).
+
 ## 2.10.22 — 2026-09-24
 
 Copy and Reply under a user bubble stay inside the window. A short message such as “hey” still sits on the right and still wraps when it is long. The Reply label no longer draws past the right edge.

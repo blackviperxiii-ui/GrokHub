@@ -47,6 +47,10 @@ pub struct ChatThread {
     /// Last plan from Plan mode or a `plan` stream event. Empty until one exists.
     #[serde(default)]
     pub plan_body: String,
+    /// Session ids a follow-up reported for this same chat. They stay on disk
+    /// and must not become extra History rows.
+    #[serde(default)]
+    pub retired_sessions: Vec<String>,
 }
 
 impl ChatThread {
@@ -69,6 +73,7 @@ impl ChatThread {
             grok_show_pending: false,
             project_id: None,
             plan_body: String::new(),
+            retired_sessions: Vec::new(),
         }
     }
 
@@ -175,6 +180,99 @@ pub fn session_in_chat_folder(thread_project: Option<&str>, selected: Option<&st
 /// An unused Chat draft (no dialogue, no session) stays off the rail.
 pub fn project_folder_history_row(already_listed: bool, empty: bool, has_session: bool) -> bool {
     !already_listed && !empty_chat_draft(empty, has_session)
+}
+
+/// What History should show after one prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptHistory {
+    pub channels: Vec<String>,
+    pub keep: String,
+    /// A follow-up session id that must not become its own History row.
+    pub retire: Option<String>,
+}
+
+/// A second prompt on the open chat keeps that chat's History channel.
+/// A reported id is a new row only when this chat does not have a session yet.
+pub fn prompt_history(
+    channels: &[String],
+    open_session: Option<&str>,
+    reported: &str,
+) -> PromptHistory {
+    let reported = reported.trim();
+    let bound = open_session.map(str::trim).filter(|s| !s.is_empty());
+    let keep = match bound {
+        Some(id) => id.to_string(),
+        None => reported.to_string(),
+    };
+    if keep.is_empty() {
+        return PromptHistory {
+            channels: channels.to_vec(),
+            keep,
+            retire: None,
+        };
+    }
+    let retire = bound.and_then(|id| {
+        if !reported.is_empty() && reported != id {
+            Some(reported.to_string())
+        } else {
+            None
+        }
+    });
+    let mut out: Vec<String> = channels
+        .iter()
+        .filter(|id| retire.as_deref() != Some(id.as_str()))
+        .cloned()
+        .collect();
+    if !out.iter().any(|id| id == &keep) {
+        out.insert(0, keep.clone());
+    }
+    PromptHistory {
+        channels: out,
+        keep,
+        retire,
+    }
+}
+
+/// Fork and a non-continuing chat (session/new after a dead id) replace the
+/// open id. A follow-up on a continuing chat keeps it.
+pub fn adopt_reported_session(
+    open: Option<&str>,
+    reported: &str,
+    fork: bool,
+    continuing: bool,
+) -> bool {
+    let reported = reported.trim();
+    let Some(open) = open.map(str::trim).filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    !reported.is_empty() && reported != open && (fork || !continuing)
+}
+
+/// Grok session ids that must be deleted with this chat. A later list refresh
+/// paints anything left behind as its own History row.
+pub fn sessions_deleted_with_chat(open: Option<&str>, retired: &[String]) -> Vec<String> {
+    let mut ids = Vec::new();
+    if let Some(id) = open.map(str::trim).filter(|s| !s.is_empty()) {
+        ids.push(id.to_string());
+    }
+    for extra in retired {
+        let extra = extra.trim();
+        if !extra.is_empty() && !ids.iter().any(|s| s == extra) {
+            ids.push(extra.to_string());
+        }
+    }
+    ids
+}
+
+/// True when this id was a follow-up on a chat that already had a History row.
+pub fn session_is_retired(threads: &[ChatThread], id: &str) -> bool {
+    let id = id.trim();
+    if id.is_empty() {
+        return false;
+    }
+    threads
+        .iter()
+        .any(|t| t.retired_sessions.iter().any(|s| s == id))
 }
 
 /// Delete Project puts chats back in History. Transcripts stay on the thread.
@@ -515,5 +613,104 @@ mod tests {
         let legacy: ChatThread = serde_json::from_str(r#"{"id":"t1","title":"legacy"}"#).unwrap();
         assert_eq!(legacy.pinned_ms, 0);
         assert!(!legacy.pinned);
+    }
+
+    #[test]
+    fn second_prompt_on_open_chat_does_not_append_history_channel() {
+        let open = vec!["sess-a".to_string()];
+        let again = prompt_history(&open, Some("sess-a"), "sess-a");
+        assert_eq!(again.channels, open);
+        assert!(again.retire.is_none());
+        assert_eq!(again.keep, "sess-a");
+        let stray = prompt_history(&open, Some("sess-a"), "sess-b");
+        assert_eq!(
+            stray.channels.len(),
+            1,
+            "a second prompt must not append a History channel"
+        );
+        assert_eq!(stray.channels, vec!["sess-a".to_string()]);
+        assert_eq!(stray.keep, "sess-a");
+        assert_eq!(stray.retire.as_deref(), Some("sess-b"));
+        let started = prompt_history(&[], None, "sess-c");
+        assert_eq!(started.channels, vec!["sess-c".to_string()]);
+        assert!(started.retire.is_none());
+        let mut thread = ChatThread::new("Chat", false);
+        thread.grok_session = Some("sess-a".into());
+        if let Some(id) = stray.retire.clone() {
+            thread.retired_sessions.push(id);
+        }
+        assert!(session_is_retired(&[thread.clone()], "sess-b"));
+        assert!(!session_is_retired(&[thread], "sess-a"));
+        assert!(adopt_reported_session(
+            Some("parent"),
+            "forked",
+            true,
+            true
+        ));
+        assert!(adopt_reported_session(
+            Some("dead"),
+            "fresh",
+            false,
+            false
+        ));
+        assert!(!adopt_reported_session(
+            Some("sess-a"),
+            "sess-b",
+            false,
+            true
+        ));
+        let fresh_chat = prompt_history(&started.channels, None, "sess-d");
+        assert_eq!(
+            fresh_chat.channels,
+            vec!["sess-d".to_string(), "sess-c".to_string()]
+        );
+    }
+
+    #[test]
+    fn fork_and_fresh_session_stay_in_history() {
+        assert!(adopt_reported_session(
+            Some("parent"),
+            "forked",
+            true,
+            true
+        ));
+        let fork = prompt_history(&["parent".into()], Some("forked"), "forked");
+        assert_eq!(fork.keep, "forked");
+        assert!(fork.retire.is_none());
+        assert!(fork.channels.iter().any(|id| id == "forked"));
+
+        assert!(adopt_reported_session(Some("dead"), "fresh", false, false));
+        let fresh = prompt_history(&["dead".into()], Some("fresh"), "fresh");
+        assert_eq!(fresh.keep, "fresh");
+        assert!(
+            fresh.retire.is_none(),
+            "a session/new id must stay in History"
+        );
+        assert!(fresh.channels.iter().any(|id| id == "fresh"));
+
+        assert!(!adopt_reported_session(
+            Some("sess-a"),
+            "sess-b",
+            false,
+            true
+        ));
+        let follow = prompt_history(&["sess-a".into()], Some("sess-a"), "sess-b");
+        assert_eq!(follow.keep, "sess-a");
+        assert_eq!(follow.retire.as_deref(), Some("sess-b"));
+        assert!(!follow.channels.iter().any(|id| id == "sess-b"));
+    }
+
+    #[test]
+    fn delete_chat_also_removes_retired_followups() {
+        let ids = sessions_deleted_with_chat(
+            Some("sess-a"),
+            &["sess-b".into(), " sess-a ".into(), "  ".into()],
+        );
+        assert_eq!(ids, vec!["sess-a".to_string(), "sess-b".to_string()]);
+        assert_eq!(
+            sessions_deleted_with_chat(None, &["sess-b".into()]),
+            vec!["sess-b".to_string()]
+        );
+        assert!(sessions_deleted_with_chat(None, &["  ".into()]).is_empty());
     }
 }
