@@ -28,17 +28,6 @@ impl Cabin {
         });
     }
 
-    pub(super) fn history_folder_label(&self) -> String {
-        let Some(id) = self.project_sel.as_deref() else {
-            return "History".into();
-        };
-        self.projects
-            .iter()
-            .find(|n| n.id == id)
-            .map(|n| format!("History · {}", n.name))
-            .unwrap_or_else(|| "History".into())
-    }
-
     pub(super) fn bind_project_id(&mut self, id: &str) {
         let Some(n) = self
             .projects
@@ -69,9 +58,9 @@ impl Cabin {
             self.nav = Nav::Chat;
         }
         self.status = format!("Bound {name}");
-        // Same bound tree is a History filter restore. Halt only when the cwd changes.
-        // The chat transcript and its headless session stay. Creating or binding a
-        // project must not wipe History.
+        // Halt only when the cwd changes. The chat section is a separate list, so
+        // binding a project must not filter it. The transcript and its headless
+        // session stay. Creating or binding a project must not wipe History.
         if tree_changed {
             if self.running {
                 self.halt_in_flight();
@@ -176,8 +165,30 @@ impl Cabin {
                 }
             }
             ProjectMenuAct::NewHere => self.stage_new_project(Some(&id)),
+            ProjectMenuAct::NewChat => self.new_chat_under(&id),
             ProjectMenuAct::Delete => self.remove_project_id(&id),
         }
+    }
+
+    /// File a new chat under this project or folder. Existing chat-section rows stay.
+    pub(super) fn new_chat_under(&mut self, id: &str) {
+        let is_project = self
+            .projects
+            .iter()
+            .any(|n| n.id == id && n.kind == ProjectKind::Project);
+        if is_project {
+            self.bind_project_id(id);
+        } else {
+            self.project_sel = Some(id.to_string());
+            if let Some(node) = self.projects.iter_mut().find(|n| n.id == id) {
+                node.open = true;
+            }
+            self.touch_projects();
+            self.flush_projects();
+        }
+        self.new_thread(false);
+        self.nav = Nav::Chat;
+        self.composer_want_focus = true;
     }
 
     pub(super) fn stage_new_project(&mut self, parent: Option<&str>) {
