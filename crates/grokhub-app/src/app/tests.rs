@@ -2529,7 +2529,9 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("fn send_grok_slash(").next())
             .expect("apply_single_turn");
         assert!(
-            saved.contains("session_saved") && saved.contains("grok_session = Some"),
+            saved.contains("session_saved")
+                && (saved.contains("grok_session = Some")
+                    || saved.contains("bind_reported_grok_session")),
             "a dialogue session stays on the cabin chat, which is History: {saved}"
         );
         assert!(

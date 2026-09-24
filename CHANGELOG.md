@@ -4,7 +4,7 @@
 
 ## 2.10.24 — 2026-09-24
 
-Cabin History is the cabin's own chats, kept on the thread through headless `grok -p`. It is not `grok sessions list`. Creating a project does not wipe those chats. Background jobs such as “summarize the workboard” stay off History. Leave a project chat and click the project again: the same chat opens. Pins stay. Transcripts stay. A project click still does not open the Workboard.
+Cabin History is the cabin's own chats, kept on the thread through headless `grok -p`. It is not `grok sessions list`. Creating a project does not wipe those chats. Background jobs such as “summarize the workboard” stay off History. They do not paint on the open chat, and leaving a chat does not stop them. A live reply keeps running when you switch chats. Leave a project chat and click the project again: the same chat opens. Pins stay. Transcripts stay. A project click still does not open the Workboard.
 
 - Linux: `grokhub-linux-v2.10.24.tar.gz` and AUR `pkgver=2.10.24`.
 - Windows: `GrokHub-Setup-2.10.24.exe` and `grokhub-windows-v2.10.24.zip`.

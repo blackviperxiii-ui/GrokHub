@@ -120,7 +120,7 @@ pub use chat_bubble::{
 pub use chat_job::{
     apply_job_error, apply_stream_snapshot, chat_run_action, chat_run_dot_alpha, chat_run_hint,
     chat_run_label, chat_run_phase, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
-    drop_trailing_assistant, drop_trailing_assistant_on, is_thinking_status,
+    drop_trailing_assistant, drop_trailing_assistant_on, halt_when_leaving_tab, is_thinking_status,
     job_error_goes_to_chat, job_is_scratch, kick_messages_for_job, last_user_for_job,
     persist_user_turn, push_bound_message, upsert_assistant_turn, worker_gone_status, ChatRunPhase,
     ChatSendKind,

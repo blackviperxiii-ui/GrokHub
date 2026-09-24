@@ -144,7 +144,9 @@ impl Cabin {
                         self.chat_job_thread = Some(self.visible_thread_id());
                     }
                     self.running = true;
-                    self.status = "Capturing…".into();
+                    if self.chrome_here() {
+                        self.status = "Capturing…".into();
+                    }
                     return;
                 }
                 CabinFrame::Ready(url) => {
@@ -159,11 +161,19 @@ impl Cabin {
                 self.chat_job_thread = Some(self.visible_thread_id());
             }
             self.running = true;
-            self.status = "Verifying…".into();
+            if self.chrome_here() {
+                self.status = "Verifying…".into();
+            }
             return;
         }
         self.running = true;
-        self.status = "Thinking…".into();
+        if self
+            .chat_job_thread
+            .as_deref()
+            .is_none_or(|id| id == self.visible_thread_id())
+        {
+            self.status = "Thinking…".into();
+        }
         if self.chat_job_thread.is_none() {
             self.chat_job_thread = Some(self.visible_thread_id());
         }
@@ -228,8 +238,10 @@ impl Cabin {
         self.hands_attach = false;
         self.stream_buf.clear();
         self.thought_buf.clear();
-        self.tool_cards.clear();
-        self.live_blocks.clear();
+        if self.stream_here() {
+            self.tool_cards.clear();
+            self.live_blocks.clear();
+        }
         self.perm_ask = None;
         self.perm_always_confirm = None;
         self.confirm = None;
