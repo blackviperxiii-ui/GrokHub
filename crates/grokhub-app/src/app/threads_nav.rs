@@ -267,6 +267,10 @@ impl Cabin {
             return None;
         }
         if let Some(i) = self.thread_for_grok(id) {
+            if self.threads[i].messages.is_empty() {
+                self.threads[i].grok_show_pending = true;
+            }
+            self.kick_session_show(id);
             return Some(i);
         }
         let sess = self.grok_sessions.iter().find(|s| s.id == id).cloned();
@@ -283,7 +287,9 @@ impl Cabin {
             .and_then(|s| s.cwd.clone())
             .map(|p| p.display().to_string())
             .filter(|s| !s.is_empty());
+        created.grok_show_pending = true;
         self.threads.push(created);
+        self.kick_session_show(id);
         Some(self.threads.len() - 1)
     }
 

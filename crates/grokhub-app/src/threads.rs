@@ -40,6 +40,10 @@ pub struct ChatThread {
     pub grok_fork: bool,
     #[serde(default)]
     pub grok_worktree: bool,
+    /// Session show has not filled this row. Pin and rename must not store `messages: []`
+    /// as if that were the transcript.
+    #[serde(default)]
+    pub grok_show_pending: bool,
     /// Last plan from Plan mode or a `plan` stream event. Empty until one exists.
     #[serde(default)]
     pub plan_body: String,
@@ -62,6 +66,7 @@ impl ChatThread {
             grok_user_home: false,
             grok_fork: false,
             grok_worktree: false,
+            grok_show_pending: false,
             project_id: None,
             plan_body: String::new(),
         }
@@ -110,8 +115,23 @@ pub fn load() -> Vec<ChatThread> {
     config::load_json(&threads_path(), config::JSON_STORE_CAP)
 }
 
+/// An unloaded Grok row has no transcript yet. Persisting `messages: []` would make the next open treat that blank list as the chat.
+pub fn session_transcript_unloaded(show_pending: bool, message_count: usize) -> bool {
+    show_pending && message_count == 0
+}
+
 pub fn save(threads: &[ChatThread]) -> Result<(), String> {
-    let s = serde_json::to_string_pretty(threads).map_err(|e| e.to_string())?;
+    let mut rows = Vec::with_capacity(threads.len());
+    for t in threads {
+        let mut row = serde_json::to_value(t).map_err(|e| e.to_string())?;
+        if session_transcript_unloaded(t.grok_show_pending, t.messages.len()) {
+            if let Some(obj) = row.as_object_mut() {
+                obj.remove("messages");
+            }
+        }
+        rows.push(row);
+    }
+    let s = serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?;
     config::atomic_write(&threads_path(), s.as_bytes())
 }
 
@@ -210,6 +230,51 @@ mod tests {
         let old: ChatThread = serde_json::from_str(r#"{"id":"t1","title":"legacy"}"#).unwrap();
         assert_eq!(old.accessed_ms, 0);
         assert!(old.grok_cwd.is_none());
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn unloaded_pin_does_not_store_an_empty_transcript() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("unloaded-pin");
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let mut pinned = ChatThread::new("Night watch", false);
+        pinned.pinned = true;
+        pinned.pinned_ms = 50;
+        pinned.title_locked = true;
+        pinned.grok_session = Some("01a01b0f-7e06-74b1-8f22-5236c9d57d45".into());
+        pinned.grok_show_pending = true;
+        assert!(session_transcript_unloaded(
+            pinned.grok_show_pending,
+            pinned.messages.len()
+        ));
+        save(&[pinned]).expect("save pin");
+        let raw = fs::read_to_string(threads_path()).expect("threads.json");
+        assert!(
+            !raw.contains("\"messages\""),
+            "pin of an unloaded session must not persist an empty transcript: {raw}"
+        );
+        let loaded = load();
+        assert_eq!(loaded.len(), 1);
+        assert!(loaded[0].pinned);
+        assert!(loaded[0].title_locked);
+        assert!(loaded[0].grok_show_pending);
+        assert!(loaded[0].messages.is_empty());
+        assert_eq!(loaded[0].title, "Night watch");
+        let mut opened = loaded[0].clone();
+        opened.grok_show_pending = false;
+        opened
+            .messages_mut()
+            .push(("user".into(), "harbor line".into()));
+        save(&[opened]).expect("save transcript");
+        let raw = fs::read_to_string(threads_path()).expect("threads.json");
+        assert!(
+            raw.contains("harbor line"),
+            "a loaded transcript still persists: {raw}"
+        );
+        assert_eq!(load()[0].messages.len(), 1);
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }
