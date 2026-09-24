@@ -1768,7 +1768,9 @@ impl Cabin {
             let row = crate::cards::session_row(ui, &session_now, &perm_now, &effort_now);
             if let Some(mode) = row.mode {
                 if let Some(m) = SessionMode::parse(&mode) {
-                    if m == SessionMode::Ask && self.running {
+                    if m == SessionMode::Plan {
+                        self.select_plan_without_rename();
+                    } else if m == SessionMode::Ask && self.running {
                         self.set_session_mode(m);
                         self.status = "btw — side ask, main run continues".into();
                     } else {

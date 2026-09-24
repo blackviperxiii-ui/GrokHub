@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.21 — 2026-09-24
+
+Clicking Plan switches the session to Plan. The thread title and the History row stay. Chat and btw pills are unchanged. The session id still clears so the next turn is a new Grok session.
+
+- Linux: `grokhub-linux-v2.10.21.tar.gz` and AUR `pkgver=2.10.21`.
+- Windows: `GrokHub-Setup-2.10.21.exe` and `grokhub-windows-v2.10.21.zip`.
+- Cursor cabin 2.10.21. VERSION 2.10.21. Draft only. Not tagged. Rebased onto main 2.10.20 (quick-chip dismiss).
+
 ## 2.10.20 — 2026-09-24
 
 Quick-chip × stays in its reserved slot. Hovering it no longer flashes the pointer, and a click dismisses that chip on the composer and on empty home. The chip row is otherwise unchanged.

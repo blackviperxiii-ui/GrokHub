@@ -1524,6 +1524,22 @@ pub fn is_placeholder_session_title(s: &str) -> bool {
         || t.eq_ignore_ascii_case("(no summary)")
         || t.eq_ignore_ascii_case("(no label)")
         || t.eq_ignore_ascii_case("session")
+        || t.eq_ignore_ascii_case("plan")
+}
+
+/// Selecting Plan switches the session mode. The thread title is unchanged.
+pub fn title_after_selecting_plan(title: &str) -> String {
+    title.to_string()
+}
+
+/// History row text after Plan. Keep the label already on screen.
+pub fn history_label_after_plan(shown: &str, grok_title: &str) -> String {
+    let shown = shown.trim();
+    if shown.is_empty() {
+        grok_title.to_string()
+    } else {
+        shown.to_string()
+    }
 }
 
 /// Cabin History label: Grok Build session name unless the user renamed the tab.
@@ -2207,6 +2223,24 @@ mod tests {
             preferred_history_title("Chat", false, Some("(no summary)"), Some("abc")),
             "Chat"
         );
+        assert_eq!(title_after_selecting_plan("Night watch"), "Night watch");
+        assert_eq!(title_after_selecting_plan("Chat"), "Chat");
+        assert!(is_placeholder_session_title("Plan"));
+        assert!(is_placeholder_session_title("plan"));
+        assert!(!is_placeholder_session_title("Plan the dock"));
+        assert_eq!(
+            preferred_history_title("Night watch", false, Some("Plan"), Some("abc")),
+            "Night watch"
+        );
+        assert_eq!(
+            preferred_history_title("Chat", false, Some("Plan the dock"), Some("abc")),
+            "Plan the dock"
+        );
+        assert_eq!(
+            history_label_after_plan("Night watch", "fix the dock"),
+            "Night watch"
+        );
+        assert_eq!(history_label_after_plan("", "fix the dock"), "fix the dock");
         let json = r#"[{"id":"abc-def-ghi-jkl-mnop","title":"Hi"}]"#;
         assert_eq!(
             parse_session_list(json),
