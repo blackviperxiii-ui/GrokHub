@@ -21,6 +21,31 @@ pub(super) enum ComposerStackSlot {
     Pill,
 }
 
+/// Compact, Copy session, Export. Same gates the composer pills used.
+pub(super) fn session_menu_enabled(has_messages: bool, usage_empty: bool) -> (bool, bool, bool) {
+    let compact = has_messages || !usage_empty;
+    (compact, has_messages, has_messages)
+}
+
+fn session_menu_row(ui: &mut egui::Ui, label: &str, enabled: bool) -> bool {
+    let color = if enabled {
+        crate::theme::fg()
+    } else {
+        crate::theme::subtle()
+    };
+    let resp = crate::theme::felt_label_button(
+        ui,
+        label,
+        egui::Color32::TRANSPARENT,
+        color,
+        8.0,
+        egui::vec2(176.0, 32.0),
+        None,
+        false,
+    );
+    resp.clicked() && enabled
+}
+
 pub(super) fn composer_stack_order() -> &'static [ComposerStackSlot] {
     &[
         ComposerStackSlot::AuthBanner,
@@ -1463,21 +1488,11 @@ impl Cabin {
             estimate_messages_from(self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())))
         };
         let why = fork_offer_why(turns, tokens, CONTEXT_BUDGET_TOKENS);
-        let has_messages = !self.messages.is_empty();
-        if !has_messages && plan.trim().is_empty() && why.is_none() {
+        if plan.trim().is_empty() && why.is_none() {
             return;
         }
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            if has_messages && crate::cards::ghost_pill(ui, "Copy session") {
-                if let Some(t) = self.threads.get(self.thread_idx) {
-                    ui.ctx().copy_text(crate::threads::export_markdown(t));
-                    self.status = "Copied session".into();
-                }
-            }
-            if has_messages && crate::cards::ghost_pill(ui, "Export") {
-                self.run_slash(Slash::Export);
-            }
             if !plan.trim().is_empty() {
                 let label = if self.plan_open { "Hide plan" } else { "View plan" };
                 if crate::cards::ghost_pill(ui, label) {
@@ -1542,6 +1557,39 @@ impl Cabin {
         }
     }
 
+    /// Compact, Copy session, and Export. Titlebar, immediately left of minimize.
+    pub(super) fn paint_session_actions_menu(&mut self, ui: &mut egui::Ui) {
+        let resp = titlebar_chrome_btn(ui, ChromeBtn::Menu);
+        let id = ui.make_persistent_id("session-actions-menu");
+        if titlebar_chrome_hit(&resp) {
+            ui.memory_mut(|m| m.toggle_popup(id));
+        }
+        let (compact_on, copy_on, export_on) =
+            session_menu_enabled(!self.messages.is_empty(), self.grok_usage.is_empty());
+        egui::popup::popup_below_widget(
+            ui,
+            id,
+            &resp,
+            egui::popup::PopupCloseBehavior::CloseOnClick,
+            |ui| {
+                ui.set_min_width(176.0);
+                ui.spacing_mut().item_spacing.y = 2.0;
+                if session_menu_row(ui, "Compact", compact_on) {
+                    self.run_slash(Slash::Compact);
+                }
+                if session_menu_row(ui, "Copy session", copy_on) {
+                    if let Some(t) = self.threads.get(self.thread_idx) {
+                        ui.ctx().copy_text(crate::threads::export_markdown(t));
+                        self.status = "Copied session".into();
+                    }
+                }
+                if session_menu_row(ui, "Export", export_on) {
+                    self.run_slash(Slash::Export);
+                }
+            },
+        );
+    }
+
     pub(super) fn ui_composer_stack(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.vertical_centered_justified(|ui| {
@@ -1584,37 +1632,29 @@ impl Cabin {
                         }
                     }
                     ComposerStackSlot::ContextBar => {
-                        let show_compact =
-                            !self.messages.is_empty() || !self.grok_usage.is_empty();
-                        if !self.grok_usage.is_empty() || show_compact {
+                        if !self.grok_usage.is_empty() {
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 8.0;
-                                if !self.grok_usage.is_empty() {
-                                    let used = self.grok_usage.context_used();
-                                    let window = self.grok_usage.context_window().max(1);
-                                    let frac = (used as f32 / window as f32).clamp(0.0, 1.0);
-                                    let line = grok_context_line(&self.grok_usage);
-                                    let reserve = if show_compact { 92.0 } else { 0.0 };
-                                    let bar_w = (ui.available_width() - reserve).max(48.0);
-                                    let (rect, _) = ui.allocate_exact_size(
-                                        egui::vec2(bar_w, 14.0),
-                                        egui::Sense::hover(),
-                                    );
-                                    ui.painter().rect_filled(rect, 4.0, crate::theme::elevated());
-                                    let mut fill = rect;
-                                    fill.set_width((rect.width() * frac).max(2.0));
-                                    ui.painter().rect_filled(fill, 4.0, crate::theme::nav_active());
-                                    ui.painter().text(
-                                        rect.center(),
-                                        egui::Align2::CENTER_CENTER,
-                                        line,
-                                        egui::FontId::proportional(11.0),
-                                        crate::theme::muted(),
-                                    );
-                                }
-                                if show_compact && crate::cards::ghost_pill(ui, "Compact") {
-                                    self.run_slash(Slash::Compact);
-                                }
+                                let used = self.grok_usage.context_used();
+                                let window = self.grok_usage.context_window().max(1);
+                                let frac = (used as f32 / window as f32).clamp(0.0, 1.0);
+                                let line = grok_context_line(&self.grok_usage);
+                                let bar_w = ui.available_width().max(48.0);
+                                let (rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(bar_w, 14.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().rect_filled(rect, 4.0, crate::theme::elevated());
+                                let mut fill = rect;
+                                fill.set_width((rect.width() * frac).max(2.0));
+                                ui.painter().rect_filled(fill, 4.0, crate::theme::nav_active());
+                                ui.painter().text(
+                                    rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    line,
+                                    egui::FontId::proportional(11.0),
+                                    crate::theme::muted(),
+                                );
                             });
                             ui.add_space(4.0);
                         }
