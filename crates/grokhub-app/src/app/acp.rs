@@ -1248,6 +1248,7 @@ impl Cabin {
                 if let Some(t) = self.threads.get_mut(i) {
                     if t.messages.is_empty() {
                         t.messages = filled.clone();
+                        t.grok_show_pending = false;
                     }
                 }
                 if i == self.thread_idx && self.messages.is_empty() {
@@ -1269,6 +1270,10 @@ impl Cabin {
             .iter()
             .position(|t| t.grok_session.as_deref() == Some(id))
         {
+            if self.threads[i].messages.is_empty() {
+                self.threads[i].grok_show_pending = true;
+            }
+            self.kick_session_show(id);
             self.switch_thread(i);
             self.nav = Nav::Chat;
             return;
@@ -1288,33 +1293,68 @@ impl Cabin {
             .map(|p| p.display().to_string())
             .filter(|s| !s.is_empty());
         t.accessed_ms = now_ms();
-        if t.messages.is_empty() {
-            let path = sess.as_ref().and_then(|s| s.path.clone());
-            let cwd = sess
-                .as_ref()
-                .and_then(|s| s.cwd.clone())
-                .unwrap_or_else(|| self.grok_cwd());
-            let sid = id.to_string();
-            let (tx, rx) = mpsc::channel();
-            self.session_show_rx = Some((sid.clone(), rx));
-            std::thread::spawn(move || {
-                let mut text = String::new();
-                if let Some(path) = path {
-                    text = config::read_file_capped(&path, config::MEMORY_FILE_CAP);
-                }
-                if text.trim().is_empty() {
-                    if let Some(bin) = grokhub_acp::find_grok() {
-                        text = grokhub_acp::show_session(&bin, &cwd, &sid).unwrap_or_default();
-                    }
-                }
-                let _ = tx.send(text);
-            });
-        }
+        t.grok_show_pending = true;
         self.threads.push(t);
+        self.kick_session_show(id);
         self.apply_switch_thread(self.threads.len() - 1);
         self.acp = None;
         self.nav = Nav::Chat;
         self.status = format!("Opened {title}");
         self.persist();
+    }
+
+    /// Fetch a Grok transcript into an empty cabin thread. Pin and rename can bind the
+    /// session before it is opened; that empty row is not the transcript.
+    pub(super) fn kick_session_show(&mut self, id: &str) {
+        let id = id.trim();
+        if id.is_empty() {
+            return;
+        }
+        let empty = match self.thread_for_grok(id) {
+            Some(i) if i == self.thread_idx => self.messages.is_empty(),
+            Some(i) => self.threads.get(i).is_some_and(|t| t.messages.is_empty()),
+            None => true,
+        };
+        if !empty {
+            return;
+        }
+        if self
+            .session_show_rx
+            .as_ref()
+            .is_some_and(|(sid, _)| sid == id)
+        {
+            return;
+        }
+        let sess = self.grok_sessions.iter().find(|s| s.id == id).cloned();
+        let path = sess.as_ref().and_then(|s| s.path.clone());
+        let cwd = sess
+            .as_ref()
+            .and_then(|s| s.cwd.clone())
+            .or_else(|| {
+                self.thread_for_grok(id).and_then(|i| {
+                    self.threads.get(i).and_then(|t| {
+                        t.grok_cwd
+                            .as_ref()
+                            .filter(|s| !s.is_empty())
+                            .map(|s| std::path::PathBuf::from(s.as_str()))
+                    })
+                })
+            })
+            .unwrap_or_else(|| self.grok_cwd());
+        let sid = id.to_string();
+        let (tx, rx) = mpsc::channel();
+        self.session_show_rx = Some((sid.clone(), rx));
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            if let Some(path) = path {
+                text = config::read_file_capped(&path, config::MEMORY_FILE_CAP);
+            }
+            if text.trim().is_empty() {
+                if let Some(bin) = grokhub_acp::find_grok() {
+                    text = grokhub_acp::show_session(&bin, &cwd, &sid).unwrap_or_default();
+                }
+            }
+            let _ = tx.send(text);
+        });
     }
 }

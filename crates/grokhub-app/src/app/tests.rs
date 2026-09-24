@@ -2545,6 +2545,15 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             open.contains("apply_switch_thread") && open.contains("self.persist()"),
             "opening a grok session must not clone every thread twice: {open}"
         );
+        let open_body = src
+            .split("fn open_grok_session(")
+            .nth(1)
+            .and_then(|s| s.split("fn kick_session_show(").next())
+            .expect("open_grok_session body");
+        assert!(
+            open_body.contains("kick_session_show") && open_body.contains("grok_show_pending = true"),
+            "opening a session bound by pin or rename must still load the transcript: {open_body}"
+        );
         let reload = src
             .split("fn reload_grok_sessions(")
             .nth(1)
@@ -2750,6 +2759,15 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             rail.contains("TabAct::DeleteGrok") && rail.contains("button(\"Delete\")"),
             "sidebar Grok session rows must offer Delete: {rail}"
+        );
+        assert!(
+            rail.contains("session_list_order")
+                && rail.contains("\"Unpin\"")
+                && rail.contains("\"Pin\"")
+                && rail.contains("\"Rename\"")
+                && rail.contains("TabAct::PinGrok")
+                && rail.contains("StartRenameGrok"),
+            "sidebar session rows must pin and rename: {rail}"
         );
         assert!(
             rail.contains("reload_grok_sessions"),
@@ -3844,8 +3862,17 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("fn delete_thread_at").next())
             .expect("pin_thread");
         assert!(
-            pinned.contains("accessed_ms"),
-            "pin must bump accessed_ms or /sync LWW can drop the pin: {pinned}"
+            pinned.contains("accessed_ms") && pinned.contains("pinned_ms"),
+            "pin must bump accessed_ms and record pinned_ms or /sync LWW can drop the pin: {pinned}"
+        );
+        let bound = src
+            .split("fn ensure_grok_thread(")
+            .nth(1)
+            .and_then(|s| s.split("fn delete_thread_at").next())
+            .expect("ensure_grok_thread");
+        assert!(
+            bound.contains("grok_show_pending = true") && bound.contains("kick_session_show"),
+            "pin or rename must not store an empty transcript for an unloaded session: {bound}"
         );
         let goal = src
             .split("fn apply_thread_goal")
