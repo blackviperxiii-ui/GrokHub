@@ -1,6 +1,6 @@
 # GrokHub is the Grok Build GUI
 
-**Version:** 2.10.22
+**Version:** 2.10.23
 
 GrokHub is the native egui cabin. Grok Build (`grok` CLI) is the agent, the host shell, and computer-use (eyes and hands). One repo, one version — Linux tarball/AUR and Windows `GrokHub-Setup-<version>.exe` ship from the same tag.
 
@@ -30,7 +30,7 @@ Grok Build owns computer-use. There is no Desk / Take over menu. The cabin keeps
 
 History search types across SOUL/USER/MEMORY and every chat. A new query drops the previous needle's hits; a finished walk only installs when it still matches the box. A hit opens that memory file or thread. Re-opening the file already in the Memory editor keeps unsaved typing.
 
-Below the search, History is `grok sessions list` from the chat cwd (the directory the turn was saved in), on Linux and Windows. On Windows the session home is USERPROFILE. No disk walk of subagents. Delete is `grok sessions delete` against `~/.grok`, then a refresh from that list. Session transcripts load via `grok export`. The Connectors tab runs `grok inspect` / `grok mcp` / skills / plugins JSON.
+Below the search, History is `grok sessions list` from the chat cwd (the directory the turn was saved in), on Linux and Windows. A second prompt on the open chat stays on that History row. A new row is only a new chat. On Windows the session home is USERPROFILE. No disk walk of subagents. Delete is `grok sessions delete` against `~/.grok`, then a refresh from that list. Session transcripts load via `grok export`. The Connectors tab runs `grok inspect` / `grok mcp` / skills / plugins JSON.
 
 ## Settings
 
