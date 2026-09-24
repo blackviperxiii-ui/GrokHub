@@ -575,73 +575,48 @@ impl Cabin {
                 self.open_history_hit(&target);
             }
             ui.add_space(16.0);
-            crate::cards::section_label(ui, "Grok Build sessions");
-            ui.horizontal(|ui| {
+            crate::cards::section_label(ui, "Chats");
+            ui.label(
+                RichText::new("Cabin chats. Background jobs stay off this list. Delete removes the chat.")
+                    .size(12.0)
+                    .color(crate::theme::subtle()),
+            );
+            let live_empty = self.messages.is_empty();
+            let shown = threads::cabin_history_indices(
+                &self.threads,
+                self.project_sel.as_deref(),
+                Some(self.thread_idx),
+                live_empty,
+            );
+            if shown.is_empty() {
                 ui.label(
-                    RichText::new("Same list as `grok sessions list`. Delete here deletes it in Grok Build.")
-                        .size(12.0)
-                        .color(crate::theme::subtle()),
-                );
-                if crate::cards::ghost_pill(ui, "Refresh") {
-                    self.grok_sessions_loaded = false;
-                    self.reload_grok_sessions();
-                    self.status = if grokhub_acp::find_grok().is_some() {
-                        "Listing Grok sessions…".into()
-                    } else {
-                        build_agent::grok_banner()
-                    };
-                }
-            });
-            if !self.grok_sessions_loaded {
-                self.reload_grok_sessions();
-            }
-            if self.grok_sessions_inflight > 0 && self.grok_sessions.is_empty() {
-                ui.label(
-                    RichText::new("Listing Grok sessions…")
+                    RichText::new("No chats yet.")
                         .size(13.0)
                         .color(crate::theme::muted()),
                 );
-            } else if self.grok_sessions.is_empty() {
-                ui.label(
-                    RichText::new(if grokhub_acp::find_grok().is_some() {
-                        "No grok sessions listed yet."
-                    } else {
-                        "Install Grok Build (x.ai/cli) to list sessions."
-                    })
-                    .size(13.0)
-                    .color(crate::theme::muted()),
-                );
             } else {
-                let mut open: Option<String> = None;
-                let mut del: Option<String> = None;
-                let shown: Vec<usize> = self
-                    .grok_sessions
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, s)| !self.pending_grok_deletes.contains(&s.id))
-                    .map(|(i, _)| i)
-                    .collect();
-                let listed_n = shown.len() as u64;
+                let mut open: Option<usize> = None;
+                let mut del: Option<usize> = None;
                 let keys: Vec<threads::SessionSortKey> = shown
                     .iter()
-                    .enumerate()
-                    .map(|(rank, &i)| {
-                        let id = self.grok_sessions[i].id.clone();
-                        self.session_sort_key(&id, listed_n - rank as u64)
+                    .map(|&i| {
+                        let t = &self.threads[i];
+                        threads::SessionSortKey {
+                            pinned: t.pinned,
+                            pinned_ms: t.pinned_ms,
+                            accessed_ms: t.accessed_ms,
+                            list_rank: 0,
+                        }
                     })
                     .collect();
                 let order = threads::session_list_order(&keys);
                 for pos in order {
-                    let (id, grok_title) = {
-                        let s = &self.grok_sessions[shown[pos]];
-                        (s.id.clone(), s.title.clone())
-                    };
-                    let title = self.session_row_title(&id, &grok_title);
-                    let kind = if keys[pos].pinned {
-                        "Pinned"
-                    } else {
-                        "Grok Build"
-                    };
+                    let i = shown[pos];
+                    let title = self.thread_rail_title(i);
+                    if threads::is_background_history_title(&title) {
+                        continue;
+                    }
+                    let kind = if keys[pos].pinned { "Pinned" } else { "Chat" };
                     match crate::cards::grok_tile(
                         ui,
                         crate::icons::TileIcon::Chat,
@@ -650,17 +625,19 @@ impl Cabin {
                         Some("Delete"),
                         false,
                     ) {
-                        crate::cards::TileHit::Body => open = Some(id.clone()),
-                        crate::cards::TileHit::Add => del = Some(id),
+                        crate::cards::TileHit::Body => open = Some(i),
+                        crate::cards::TileHit::Add => del = Some(i),
                         crate::cards::TileHit::None => {}
                     }
                     ui.add_space(6.0);
                 }
-                if let Some(id) = open {
-                    self.open_grok_session(&id);
+                if let Some(i) = open {
+                    self.switch_thread(i);
+                    self.nav = Nav::Chat;
+                    self.composer_want_focus = true;
                 }
-                if let Some(id) = del {
-                    self.delete_grok_history(&id);
+                if let Some(i) = del {
+                    self.delete_thread_at(i);
                     self.nav = Nav::History;
                 }
             }

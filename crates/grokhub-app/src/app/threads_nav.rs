@@ -51,6 +51,18 @@ impl Cabin {
         self.composer_want_focus = true;
     }
 
+    /// One hidden thread for night, loops-via-chat, inbox, and anticipate.
+    /// It is not a History row.
+    pub(super) fn ensure_background_history_thread(&mut self) -> usize {
+        if let Some(i) = self.threads.iter().position(|t| t.background) {
+            return i;
+        }
+        let mut created = ChatThread::new("Background", false);
+        created.background = true;
+        self.threads.push(created);
+        self.threads.len() - 1
+    }
+
     pub(super) fn stamp_current_access(&mut self) {
         if let Some(t) = self.threads.get_mut(self.thread_idx) {
             t.accessed_ms = now_ms();

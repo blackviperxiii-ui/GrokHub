@@ -78,10 +78,25 @@ impl Cabin {
                 self.active_skill_follow = Some(skill_follow_block(sk));
             }
         }
-        self.live_mut().push(("user".into(), text.clone()));
         self.eyes_attach = false;
         self.hands_attach = false;
         self.followup_step = 0;
+        if self.scheduled_perm {
+            let idx = self.ensure_background_history_thread();
+            if let Some(t) = self.threads.get(idx) {
+                self.chat_job_thread = Some(t.id.clone());
+            }
+        }
+        let hidden = self.scheduled_perm
+            && self
+                .chat_job_thread
+                .as_deref()
+                .is_some_and(|id| id != self.visible_thread_id());
+        if hidden {
+            self.push_bound_msg("user", text.clone());
+        } else {
+            self.live_mut().push(("user".into(), text.clone()));
+        }
         self.stamp_current_access();
         self.persist();
         self.kick_model(true);
@@ -94,6 +109,8 @@ impl Cabin {
     pub(super) fn send_scheduled_chat(&mut self, text: String) {
         // kick_model honors scheduled_flags / scheduled_args while scheduled_perm.
         self.scheduled_perm = true;
+        let _ = self.permission_mode.scheduled_args();
+        let _ = self.permission_mode.scheduled_flags();
         self.send_chat(text);
         if !self.running && self.pending_kick.is_none() {
             self.scheduled_perm = false;
