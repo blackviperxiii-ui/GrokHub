@@ -16,6 +16,7 @@ impl Cabin {
     pub(super) fn apply_switch_thread(&mut self, idx: usize) {
         let idx = idx.min(self.threads.len().saturating_sub(1));
         let leaving = idx != self.thread_idx;
+        let leaving_id = self.visible_thread_id();
         if leaving {
             if let Some(t) = self.threads.get_mut(self.thread_idx) {
                 t.messages = self.messages.clone();
@@ -45,7 +46,14 @@ impl Cabin {
             .map(|t| t.goal.step)
             .unwrap_or(0);
         if leaving {
-            self.drop_leaving_thread_chrome();
+            let owns_run = self
+                .chat_job_thread
+                .as_deref()
+                .map(|id| id == leaving_id)
+                .unwrap_or(true);
+            if owns_run {
+                self.drop_leaving_thread_chrome();
+            }
         }
         self.stamp_current_access();
         self.composer_want_focus = true;
@@ -158,6 +166,101 @@ impl Cabin {
         } else {
             "New chat".into()
         };
+        self.stamp_current_access();
+        self.persist();
+        self.composer_want_focus = true;
+    }
+
+    /// Minimize, tray show, and the next launch land on an empty chat so the feed is first.
+    /// The previous transcript and pin stay on that thread in History.
+    /// A reply that is still running stays on the thread that started it.
+    pub(super) fn open_fresh_home(&mut self) {
+        if grokhub_core::resume_needs_fresh_chat(self.messages.len(), self.scratch()) {
+            if self.running && self.chat_job_thread.is_some() {
+                self.park_fresh_chat();
+            } else {
+                self.new_thread(false);
+            }
+        }
+        self.nav = Nav::Chat;
+    }
+
+    /// Empty home. Does not halt or drop the in-flight reply on the previous thread.
+    fn park_fresh_chat(&mut self) {
+        let want_project = self.project_sel.clone();
+        let reuse = {
+            let views: Vec<ThreadReuseView> = self
+                .threads
+                .iter()
+                .enumerate()
+                .map(|(i, t)| ThreadReuseView {
+                    title: t.title.as_str(),
+                    scratch: t.scratch,
+                    empty: if i == self.thread_idx {
+                        self.messages.is_empty()
+                    } else {
+                        t.messages.is_empty()
+                    },
+                    has_session: t
+                        .grok_session
+                        .as_deref()
+                        .is_some_and(|s| !s.trim().is_empty()),
+                })
+                .collect();
+            reuse_empty_thread_idx(&views, self.thread_idx, false).filter(|&idx| {
+                self.threads.get(idx).and_then(|t| t.project_id.as_deref())
+                    == want_project.as_deref()
+            })
+        };
+        if let Some(idx) = reuse {
+            if idx != self.thread_idx {
+                if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                    t.messages = self.messages.clone();
+                    flush_visible_goal(&mut t.goal, self.goal_step, &self.cfg.goal_pin);
+                }
+                self.thread_idx = idx;
+                self.messages = self
+                    .threads
+                    .get(self.thread_idx)
+                    .map(|t| t.messages.clone())
+                    .unwrap_or_else(|| Arc::new(Vec::new()));
+                self.pin_chat_tail();
+            }
+            if let Some(t) = self.threads.get_mut(self.thread_idx) {
+                t.grok_session = None;
+                t.grok_cwd = None;
+                t.project_id = want_project;
+            }
+            self.cfg.goal_pin = self
+                .threads
+                .get(self.thread_idx)
+                .map(|t| t.goal.label.clone())
+                .unwrap_or_default();
+            self.goal_step = self
+                .threads
+                .get(self.thread_idx)
+                .map(|t| t.goal.step)
+                .unwrap_or(0);
+            self.imagine_last.clear();
+            self.stamp_current_access();
+            self.persist();
+            self.status = "New chat".into();
+            self.composer_want_focus = true;
+            return;
+        }
+        if let Some(t) = self.threads.get_mut(self.thread_idx) {
+            t.messages = self.messages.clone();
+            flush_visible_goal(&mut t.goal, self.goal_step, &self.cfg.goal_pin);
+        }
+        let mut created = ChatThread::new("Chat", false);
+        created.project_id = want_project;
+        self.threads.push(created);
+        self.thread_idx = self.threads.len() - 1;
+        self.messages = Arc::new(Vec::new());
+        self.imagine_last.clear();
+        self.cfg.goal_pin.clear();
+        self.goal_step = 0;
+        self.status = "New chat".into();
         self.stamp_current_access();
         self.persist();
         self.composer_want_focus = true;
@@ -438,6 +541,7 @@ impl Cabin {
             "imagine" => Nav::Imagine,
             "history" => Nav::History,
             "workboard" => Nav::Workboard,
+            "ideas" => Nav::Ideas,
             "skills" => Nav::Skills,
             "night" | "automations" => Nav::Night,
             "agents" | "queue" => Nav::Agents,

@@ -1337,6 +1337,14 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "the chip id and the page have to agree"
         );
         assert!(
+            super::Cabin::nav_from_id("ideas") == super::Nav::Ideas,
+            "an ideas chip must open Ideas, not Chat"
+        );
+        assert!(
+            grokhub_core::nav_from_chip_value("__nav:ideas") == Some("ideas"),
+            "command chips name Ideas as __nav:ideas"
+        );
+        assert!(
             super::Cabin::nav_from_id("eyes") == super::Nav::Chat,
             "Desk is gone — its id lands on chat"
         );
@@ -7382,3 +7390,127 @@ fn session_thought_collapse_stays_on_one_thread() {
         "quiet Collapse/Expand stays; Hide is not painted"
     );
 }
+
+#[test]
+fn feed_pulse_and_fresh_home_stay_off_the_review() {
+    let src = cabin_src();
+    let house = src
+        .split("HeartbeatAct::Housekeep =>")
+        .nth(1)
+        .and_then(|s| s.split("HeartbeatAct::Inbox =>").next())
+        .expect("housekeep");
+    assert!(
+        house.contains("tick_feed_pulse")
+            && house.contains("stamp_current_access")
+            && house.contains("Nav::Chat"),
+        "expiry, quiet release, and the digest clock run on Housekeep: {house}"
+    );
+    let tick = src
+        .split("fn tick_review(")
+        .nth(1)
+        .and_then(|s| s.split("fn review_digest(").next())
+        .expect("tick_review");
+    assert!(
+        !tick.contains("tick_feed_pulse") && !tick.contains("expire_ideas"),
+        "the feed pulse must not run from the nightly review: {tick}"
+    );
+    let spawn = src
+        .split("fn spawn_review(")
+        .nth(1)
+        .and_then(|s| s.split("fn poll_review(").next())
+        .expect("spawn_review");
+    assert!(
+        !spawn.contains("tick_feed_pulse")
+            && !spawn.contains("expire_ideas")
+            && !spawn.contains("suggestions_from_sessions"),
+        "spawn_review stays the transcript review: {spawn}"
+    );
+    let show = src
+        .split("fn show_from_tray(")
+        .nth(1)
+        .and_then(|s| s.split("fn note_window_resume(").next())
+        .expect("show_from_tray");
+    assert!(
+        show.contains("open_fresh_home") && show.contains("apply_saved_geom"),
+        "tray show opens a fresh chat and restores the window: {show}"
+    );
+    let fresh = fn_src(&src, "open_fresh_home");
+    assert!(
+        fresh.contains("new_thread(false)")
+            && fresh.contains("park_fresh_chat")
+            && fresh.contains("resume_needs_fresh_chat")
+            && !fresh.contains("halt_in_flight")
+            && !fresh.contains("drop_leaving_thread_chrome")
+            && !fresh.contains("delete_thread")
+            && !fresh.contains("pinned = false")
+            && !fresh.contains("No updates")
+            && !fresh.contains("Nothing queued"),
+        "fresh home keeps the previous chat and does not stop a live reply: {fresh}"
+    );
+    let park = fn_src(&src, "park_fresh_chat");
+    assert!(
+        park.contains("self.messages.clone()")
+            && !park.contains("halt_in_flight")
+            && !park.contains("drop_leaving_thread_chrome")
+            && !park.contains("delete_thread")
+            && !park.contains("pinned = false"),
+        "parking a fresh chat leaves the running thread alone: {park}"
+    );
+    let pulse = include_str!("feed_ui.rs");
+    let body = pulse
+        .split("fn tick_feed_pulse(")
+        .nth(1)
+        .and_then(|s| s.split("fn digest_taste(").next())
+        .expect("tick_feed_pulse");
+    assert!(
+        body.contains("read_memory(\"USER.md\")")
+            && body.contains("read_memory(\"MEMORY.md\")")
+            && body.contains("read_memory(\"SOUL.md\")")
+            && !body.contains("last_review_day")
+            && !body.contains("suggestions_from_sessions")
+            && !body.contains("spawn_review")
+            && !body.contains("notify::")
+            && !body.contains("send_chat")
+            && !body.contains("send_scheduled"),
+        "digest authoring stays off transcripts, chat, and pings: {body}"
+    );
+    assert!(
+        !pulse.contains("No updates") && !pulse.contains("Nothing queued"),
+        "the feed must not paint an empty label"
+    );
+    let ideas = pulse
+        .split("fn ui_ideas(")
+        .nth(1)
+        .and_then(|s| s.split("fn apply_feed_act(").next())
+        .expect("ui_ideas");
+    let refresh = ideas.find("Refresh").expect("refresh");
+    let flushed = ideas[refresh..].find("persist_updates").expect("flush");
+    let reloaded = ideas[refresh..].find("feed::load").expect("reload");
+    assert!(
+        flushed < reloaded,
+        "Ideas Refresh must flush updates before it reloads disk"
+    );
+    let offer = pulse
+        .split("fn accept_automate_offer(")
+        .nth(1)
+        .and_then(|s| s.split("fn react_card(").next())
+        .expect("accept_automate_offer");
+    assert!(
+        offer.contains("c.title.clone()")
+            && offer.contains("route_schedule")
+            && !offer.contains("c.body"),
+        "Accept seeds the schedule from the title, not the canned offer body: {offer}"
+    );
+    let build = pulse
+        .split("fn build_idea(")
+        .nth(1)
+        .and_then(|s| s.split("fn accept_automate_offer(").next())
+        .expect("build_idea");
+    assert!(
+        build.contains("idea_todo_title(")
+            && build.contains("file_idea_todo(&mut self.board, &task, \"\")")
+            && !build.contains("idea.body.clone()"),
+        "Idea Accept files the task line, not the raw message: {build}"
+    );
+}
+

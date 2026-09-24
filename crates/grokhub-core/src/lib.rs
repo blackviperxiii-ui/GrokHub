@@ -406,15 +406,20 @@ pub use windshield::{
     windshield_browser_line, windshield_prompt, AtspiRow, PendingStep, WindshieldFrame,
 };
 pub use update_feed::{
-    automate_offer_card, automation_done_card, dismiss_update, feed_visible, mark_update_opened,
-    post_update, schedule_created_card, suggestion_card, visible_updates, UpdateAction, UpdateCard,
-    UpdateKind, UpdateStatus, FEED_PAINT_MAX,
+    archive_digest, archived_digests, automate_offer_card, automation_done_card, card_matches,
+    digest_card, digest_topic_refused, discuss_context, dismiss_idea, dismiss_update, expire_ideas,
+    feed_visible, hold_if_quiet, home_feed_n, idea_card, links_from_research, mark_update_opened,
+    post_update, release_quiet_hold, resume_needs_fresh_chat, schedule_created_card,
+    suggestion_card, tick_feed_pulse, visible_digests, visible_ideas, visible_updates,
+    CardReaction, CitedLink, DigestMaterial, FeedPulse, PulseNow, PulseTick, TasteNote,
+    UpdateAction, UpdateCard, UpdateKind, UpdateStatus, DIGEST_PAINT_MAX, FEED_PAINT_MAX,
+    IDEA_DISCOVERY_MAX, IDEA_TTL_MS,
 };
 pub use workboard::{
     abandon_inflight_card, apply_assistant_work_marks, apply_work_update, extract_work_pins,
-    extract_work_updates, inflight_card_title, parse_work_pin, parse_work_update,
-    release_inflight_card, settle_inflight_card, upsert_inflight_card, BoardCard, BoardStatus,
-    KanbanColumn,
+    extract_work_updates, file_idea_todo, idea_todo_title, inflight_card_title, parse_work_pin,
+    parse_work_update, release_inflight_card, settle_inflight_card, todo_task_line,
+    upsert_inflight_card, BoardCard, BoardStatus, KanbanColumn,
 };
 
 pub const PRESENCE_PUSH_MIN_MS: u64 = 400;
