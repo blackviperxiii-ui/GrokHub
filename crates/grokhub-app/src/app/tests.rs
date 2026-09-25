@@ -7570,3 +7570,35 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn heartbeat_pulse_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("heartbeat_pulse_stays_off_a_run");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.hub_on = false;
+    cabin.automations.clear();
+    cabin.running = false;
+    cabin.last_activity = std::time::Instant::now();
+    cabin.last_heartbeat = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(30))
+        .expect("age last_heartbeat");
+
+    cabin.tick_heartbeat();
+
+    assert!(!cabin.running);
+    assert!(matches!(cabin.pending_hub_task, None));
+    assert!(matches!(cabin.night_check_rx, None));
+    assert!(cabin.last_heartbeat.elapsed() < std::time::Duration::from_secs(5));
+
+    let stamped = cabin.last_heartbeat;
+    cabin.tick_heartbeat();
+
+    assert!(!cabin.running);
+    assert!(matches!(cabin.pending_hub_task, None));
+    assert!(matches!(cabin.night_check_rx, None));
+    assert_eq!(cabin.last_heartbeat, stamped);
+}
