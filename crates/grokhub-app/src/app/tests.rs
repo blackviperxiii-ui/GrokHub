@@ -7570,3 +7570,17 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn missing_skill_stays_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("missing-skill");
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash(grokhub_core::Slash::Skill("harbor".into()));
+    assert_eq!(cabin.status, "No skill harbor");
+    assert!(matches!(cabin.nav, super::Nav::Chat));
+    assert!(!cabin.running);
+    assert!(cabin.messages.is_empty());
+}
+
