@@ -7570,3 +7570,25 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn thinking_status_shows_context_when_usage_is_present() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("thinking-status");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert_eq!(cabin.thinking_status(), "Thinking…");
+
+    let usage = GrokUsage {
+        context_tokens_used: 26000,
+        context_window_tokens: 500000,
+        ..GrokUsage::default()
+    };
+    cabin.grok_usage = usage.clone();
+    let line = grok_context_line(&usage);
+    assert_eq!(cabin.thinking_status(), format!("Thinking… {line}"));
+    assert!(!cabin.running);
+}
+
