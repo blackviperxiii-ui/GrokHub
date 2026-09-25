@@ -7570,3 +7570,15 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn clear_chat_attach_clears_name_url_and_status() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.attach_name = Some("harbor.png".into());
+    cabin.attach_url = Some("file://harbor.png".into());
+    cabin.status = "Attached harbor.png".into();
+    cabin.clear_chat_attach();
+    assert!(cabin.attach_name.is_none());
+    assert!(cabin.attach_url.is_none());
+    assert!(cabin.status.is_empty());
+}
+
