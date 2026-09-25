@@ -7570,3 +7570,55 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn empty_imagine_opens_without_a_run() {
+    struct RestoreEnv {
+        config: Option<String>,
+        tray: Option<String>,
+    }
+    impl Drop for RestoreEnv {
+        fn drop(&mut self) {
+            match self.config.take() {
+                Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+                None => std::env::remove_var("GROKHUB_CONFIG"),
+            }
+            match self.tray.take() {
+                Some(v) => std::env::set_var("GROKHUB_TRAY", v),
+                None => std::env::remove_var("GROKHUB_TRAY"),
+            }
+        }
+    }
+
+    let _cfg = crate::config::hold_test_config();
+    let restore = RestoreEnv {
+        config: std::env::var("GROKHUB_CONFIG").ok(),
+        tray: std::env::var("GROKHUB_TRAY").ok(),
+    };
+    let root = crate::config::test_config_root("empty-imagine");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_TRAY", "0");
+
+    let mut cabin = Cabin::quiet_for_test();
+    let kind_before = cabin.imagine_kind;
+    assert!(cabin.imagine_prompt.is_empty());
+    assert!(!cabin.running);
+
+    cabin.run_slash(Slash::Imagine(String::new()));
+    assert!(matches!(cabin.nav, Nav::Imagine));
+    assert!(cabin.imagine_want_focus);
+    assert!(cabin.imagine_prompt.is_empty());
+    assert_eq!(cabin.imagine_kind, kind_before);
+    assert!(!cabin.running);
+
+    cabin.run_slash(Slash::Imagine("   ".into()));
+    assert!(matches!(cabin.nav, Nav::Imagine));
+    assert!(cabin.imagine_want_focus);
+    assert!(cabin.imagine_prompt.is_empty());
+    assert_eq!(cabin.imagine_kind, kind_before);
+    assert!(!cabin.running);
+
+    drop(restore);
+}
+
