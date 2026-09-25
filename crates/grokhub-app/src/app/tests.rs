@@ -7638,7 +7638,39 @@ impl QuietCabin {
     fn boot(label: &str) -> Self {
         let lock = crate::config::hold_test_config();
         let boot = QuietBoot::apply(label);
-        let cabin = super::Cabin::new(true);
+        let mut cabin = super::Cabin::quiet_for_test();
+        // `Cabin::new` loaded this isolated config and opened one chat. Keep that
+        // home without the installer, tray, hotkey, or update probe.
+        let mut cfg = crate::config::load();
+        if cfg.device_name.trim().is_empty() {
+            cfg.device_name = crate::config::default_device_name();
+            let _ = crate::config::save(&cfg);
+        }
+        crate::config::ensure_memory_seeds();
+        cabin.mem_name = "SOUL.md".into();
+        cabin.mem_body = crate::config::read_memory(&cabin.mem_name);
+        cabin.mem_cache_at = [crate::config::memory_updated_at("SOUL.md"), 0, 0];
+        cabin.mem_cache_body = [cabin.mem_body.clone(), String::new(), String::new()];
+        let mut threads = crate::threads::load();
+        if threads.is_empty() {
+            let mut thread = crate::threads::ChatThread::new("Chat", false);
+            thread.messages = std::sync::Arc::new(crate::config::load_chat());
+            threads.push(thread);
+        }
+        cabin.messages = threads
+            .first()
+            .map(|t| t.messages.clone())
+            .unwrap_or_else(|| std::sync::Arc::new(Vec::new()));
+        cabin.threads = threads;
+        cabin.thread_idx = 0;
+        cabin.session_mode = grokhub_acp::SessionMode::parse(&cfg.session_mode)
+            .unwrap_or(grokhub_acp::SessionMode::Chat);
+        cabin.permission_mode = grokhub_acp::PermissionMode::parse(&cfg.permission_mode)
+            .unwrap_or(grokhub_acp::PermissionMode::Ask);
+        cabin.cfg = cfg.clone();
+        if let Ok(mut slot) = cabin.cfg_slot.lock() {
+            slot.cfg = cfg;
+        }
         Self {
             cabin,
             boot,
