@@ -2,7 +2,7 @@
 
 use super::*;
 
-enum BoardAct {
+pub(super) enum BoardAct {
     Add,
     Save(String),
     Move { id: String, status: BoardStatus },
@@ -844,7 +844,7 @@ impl Cabin {
         }
     }
 
-    fn apply_board_act(&mut self, act: Option<BoardAct>) -> bool {
+    pub(super) fn apply_board_act(&mut self, act: Option<BoardAct>) -> bool {
         let Some(act) = act else {
             return false;
         };

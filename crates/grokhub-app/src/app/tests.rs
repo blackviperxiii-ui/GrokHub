@@ -7570,3 +7570,36 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn board_edit_fills_the_form_and_save_writes_it() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("board-edit");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.apply_board_act(Some(BoardAct::Edit("missing".into()))));
+    assert!(!cabin.board_compose);
+    cabin.new_thread(false);
+    let thread_id = cabin.threads[cabin.thread_idx].id.clone();
+    cabin.board_title = "Harbor lamp".into();
+    cabin.board_notes = "fold the charts".into();
+    assert!(cabin.apply_board_act(Some(BoardAct::Add)));
+    let id = cabin.board[0].id.clone();
+    assert!(!cabin.apply_board_act(Some(BoardAct::Edit(id.clone()))));
+    assert!(cabin.board_compose);
+    assert_eq!(cabin.board_edit.as_deref(), Some(id.as_str()));
+    assert_eq!(cabin.board_title, "Harbor lamp");
+    assert_eq!(cabin.board_notes, "fold the charts");
+    assert!(!cabin.board_link);
+    cabin.board_title = "  Harbor dock  ".into();
+    cabin.board_notes = "  tie the lines  ".into();
+    cabin.board_link = true;
+    assert!(cabin.apply_board_act(Some(BoardAct::Save(id))));
+    assert_eq!(cabin.board[0].title, "Harbor dock");
+    assert_eq!(cabin.board[0].detail, "tie the lines");
+    assert_eq!(cabin.board[0].thread_id.as_deref(), Some(thread_id.as_str()));
+    assert!(!cabin.board_compose);
+    assert!(cabin.board_edit.is_none());
+    assert!(cabin.board_title.is_empty());
+    assert!(!cabin.running);
+}
+
