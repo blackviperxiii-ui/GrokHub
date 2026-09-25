@@ -7608,5 +7608,7 @@ fn ask_denied_without_acp_stays_off_a_run() {
         cabin.status
     );
     assert!(!cabin.running);
+    assert!(cabin.pending_kick.is_none());
+    assert!(cabin.chat_job_thread.is_none());
 }
 
