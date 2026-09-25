@@ -7570,3 +7570,39 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn clear_slash_empties_the_chat() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("clear-slash");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.new_thread(false);
+    let idx = cabin.thread_idx;
+    let thread_id = cabin.threads[idx].id.clone();
+    {
+        let thread = &mut cabin.threads[idx];
+        thread.messages_mut().push(("user".into(), "hello".into()));
+        thread.grok_session = Some("sess".into());
+    }
+    cabin.messages = cabin.threads[idx].messages.clone();
+    assert!(!cabin.running);
+
+    cabin.run_slash(Slash::Clear);
+
+    assert_eq!(cabin.status, "Cleared");
+    assert!(cabin.messages.is_empty());
+    let thread = cabin
+        .threads
+        .iter()
+        .find(|t| t.id == thread_id)
+        .expect("seeded thread");
+    assert!(thread.messages.is_empty());
+    assert!(thread.grok_session.as_deref().unwrap_or("").is_empty());
+    assert!(!cabin.running);
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
