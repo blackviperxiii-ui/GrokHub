@@ -4,7 +4,7 @@
 
 ## 2.10.26 — 2026-09-24
 
-The project section and the chat section are separate lists. Projects stay in the project section, including inside a folder. Clicking a project chat does not filter, hide, or remove the other chats. New chats can be created under a folder or project and stay there. Creating a project does not wipe History. Background jobs stay off History and off the visible chat. Leaving a chat does not stop a hidden job or a live reply. Pins and transcripts stay. A project click does not open the Workboard.
+The project section and the chat section are separate lists. A folder looks like a folder. Clicking it shows the chats underneath and does not open a chat or hide History. A chat under that folder opens that chat only. It does not filter, hide, or remove the other chats. Projects stay in the project section, including inside a folder, and a project row is not a chat. New chats can be created under a folder or project and stay there. Creating a project does not wipe History. Background jobs stay off History and off the visible chat. Leaving a chat does not stop a hidden job or a live reply. Pins and transcripts stay. A project click does not open the Workboard.
 
 - Linux: `grokhub-linux-v2.10.26.tar.gz` and AUR `pkgver=2.10.26`.
 - Windows: `GrokHub-Setup-2.10.26.exe` and `grokhub-windows-v2.10.26.zip`.

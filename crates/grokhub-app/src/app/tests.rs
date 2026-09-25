@@ -1291,6 +1291,20 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             projects.contains("project_section_chat_indices"),
             "project chats stay under the project: {projects}"
         );
+        assert!(
+            !projects.contains("open_project_chat") && !projects.contains("switch_thread"),
+            "a folder or project click must not open a chat or replace History: {projects}"
+        );
+        assert!(
+            projects.contains("RailIcon::Folder")
+                && projects.contains("RailIcon::File")
+                && !projects.contains("RailIcon::Chat"),
+            "a folder looks like a folder and a project row is not a chat: {projects}"
+        );
+        assert!(
+            projects.contains("paint_folder_caret") && projects.contains("if open"),
+            "opening a folder or project lists its chats underneath: {projects}"
+        );
         let paint = fn_src(&src, "paint_section_chats");
         assert!(
             paint.contains("TabAct::Switch") && !paint.contains("project_sel"),

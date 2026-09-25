@@ -348,25 +348,8 @@ impl Cabin {
                 let tree = visible_tree(&self.projects);
                 let mut proj_act: Option<(String, ProjectMenuAct, egui::Pos2)> = None;
                 let mut section_act: Option<TabAct> = None;
-                let mut folder_chats: Option<String> = None;
                 let live_empty = self.messages.is_empty();
                 for (depth, idx) in tree {
-                    if depth == 0 {
-                        if let Some(fid) = folder_chats.take() {
-                            if let Some(act) = self.paint_section_chats(
-                                ui,
-                                &threads::project_section_chat_indices(
-                                    &self.threads,
-                                    &fid,
-                                    Some(self.thread_idx),
-                                    live_empty,
-                                ),
-                                20.0,
-                            ) {
-                                section_act = Some(act);
-                            }
-                        }
-                    }
                     let kind = self.projects[idx].kind;
                     let open = self.projects[idx].open;
                     let indent = 20.0 * depth as f32;
@@ -404,7 +387,7 @@ impl Cabin {
                     }
                     let icon = match kind {
                         ProjectKind::Folder => crate::icons::RailIcon::Folder,
-                        ProjectKind::Project => crate::icons::RailIcon::Chat,
+                        ProjectKind::Project => crate::icons::RailIcon::File,
                     };
                     let active = project_row_active(
                         self.project_sel.as_deref() == Some(self.projects[idx].id.as_str()),
@@ -414,9 +397,7 @@ impl Cabin {
                     let row = ui
                         .horizontal(|ui| {
                             ui.add_space(indent);
-                            if kind == ProjectKind::Folder {
-                                crate::icons::paint_folder_caret(ui, open, crate::theme::subtle());
-                            }
+                            crate::icons::paint_folder_caret(ui, open, crate::theme::subtle());
                             Self::nav_row(ui, active, icon, &self.projects[idx].name, false)
                         })
                         .inner;
@@ -427,31 +408,20 @@ impl Cabin {
                         );
                     } else if row.clicked() {
                         let id = self.projects[idx].id.clone();
-                        match kind {
-                            ProjectKind::Folder => {
-                                toggle_folder(&mut self.projects, &id);
-                                self.touch_projects();
-                                self.flush_projects();
-                            }
-                            ProjectKind::Project => {
-                                let returning = threads::project_return_index(&self.threads, &id);
-                                let on_project_chat = returning == Some(self.thread_idx);
-                                if self.project_sel.as_deref() == Some(id.as_str())
-                                    && !on_project_chat
-                                    && returning.is_some()
-                                {
-                                    self.open_project_chat(&id);
-                                } else if self.project_sel.as_deref() == Some(id.as_str()) {
-                                    self.project_sel = None;
-                                    if self.nav == Nav::Workboard {
-                                        self.nav = Nav::Chat;
-                                    }
-                                    self.status = "New chats go to History".into();
-                                } else {
-                                    self.bind_project_id(&id);
-                                    self.open_project_chat(&id);
-                                }
-                            }
+                        let opening = self
+                            .projects
+                            .iter()
+                            .find(|n| n.id == id)
+                            .is_some_and(|n| !n.open);
+                        if let Some(n) = self.projects.iter_mut().find(|n| n.id == id) {
+                            n.open = !n.open;
+                        }
+                        self.touch_projects();
+                        self.flush_projects();
+                        // A folder or project is a container. Opening it lists the chats
+                        // underneath. It does not switch the open chat or hide History.
+                        if opening && kind == ProjectKind::Project {
+                            self.bind_project_id(&id);
                         }
                     }
                     let nid = self.projects[idx].id.clone();
@@ -464,9 +434,8 @@ impl Cabin {
                             }
                         }
                     });
-                    if kind == ProjectKind::Folder && open {
-                        folder_chats = Some(nid.clone());
-                    } else if kind == ProjectKind::Project {
+                    if open {
+                        let chat_indent = 20.0 * (depth as f32 + 1.0);
                         if let Some(act) = self.paint_section_chats(
                             ui,
                             &threads::project_section_chat_indices(
@@ -475,24 +444,10 @@ impl Cabin {
                                 Some(self.thread_idx),
                                 live_empty,
                             ),
-                            20.0 * (depth as f32 + 1.0),
+                            chat_indent,
                         ) {
                             section_act = Some(act);
                         }
-                    }
-                }
-                if let Some(fid) = folder_chats.take() {
-                    if let Some(act) = self.paint_section_chats(
-                        ui,
-                        &threads::project_section_chat_indices(
-                            &self.threads,
-                            &fid,
-                            Some(self.thread_idx),
-                            live_empty,
-                        ),
-                        20.0,
-                    ) {
-                        section_act = Some(act);
                     }
                 }
                 if let Some(act) = section_act {

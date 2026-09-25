@@ -73,19 +73,6 @@ impl Cabin {
         }
     }
 
-    /// Clicking a project opens the chat you left, when that folder has one.
-    pub(super) fn open_project_chat(&mut self, id: &str) {
-        let Some(idx) = threads::project_return_index(&self.threads, id) else {
-            return;
-        };
-        if idx != self.thread_idx {
-            self.switch_thread(idx);
-        } else {
-            self.composer_want_focus = true;
-        }
-        self.nav = Nav::Chat;
-    }
-
     pub(super) fn make_project(&mut self, name: &str, parent: Option<&str>) {
         let id = uid("proj");
         let root = self.work_root();
@@ -176,15 +163,15 @@ impl Cabin {
             .projects
             .iter()
             .any(|n| n.id == id && n.kind == ProjectKind::Project);
+        if let Some(node) = self.projects.iter_mut().find(|n| n.id == id) {
+            node.open = true;
+        }
+        self.touch_projects();
+        self.flush_projects();
         if is_project {
             self.bind_project_id(id);
         } else {
             self.project_sel = Some(id.to_string());
-            if let Some(node) = self.projects.iter_mut().find(|n| n.id == id) {
-                node.open = true;
-            }
-            self.touch_projects();
-            self.flush_projects();
         }
         self.new_thread(false);
         self.nav = Nav::Chat;
