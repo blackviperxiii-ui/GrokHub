@@ -7570,3 +7570,37 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn import_without_openclaw_and_consult_without_login() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("import-consult");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("HOME", &root);
+    std::env::set_var("GROKHUB_GROK", "/tmp/grokhub-no-such-grok");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.api_key.clear();
+    cabin.run_slash_line("/import");
+    assert_eq!(cabin.status, "Importing OpenClaw…");
+    let start = std::time::Instant::now();
+    while cabin.status == "Importing OpenClaw…"
+        && start.elapsed() < std::time::Duration::from_secs(2)
+    {
+        cabin.poll_import_openclaw();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(
+        cabin.status,
+        "No OpenClaw workspace (~/.openclaw/workspace)"
+    );
+    assert!(!matches!(cabin.nav, Nav::Memory));
+    assert!(!cabin.llm_ready(), "consult must have no key and no grok binary");
+    cabin.run_slash_line("/consult harbor");
+    assert_eq!(
+        cabin.status,
+        "Run grok login, or Connect Grok in Settings."
+    );
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
+    std::env::remove_var("GROKHUB_GROK");
+}
