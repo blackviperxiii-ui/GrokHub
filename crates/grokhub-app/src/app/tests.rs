@@ -7570,3 +7570,49 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn finish_staged_folder_renames_it() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("finish-folder");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+
+    cabin.stage_new_folder();
+    cabin.proj_rename_buf.clear();
+    cabin.finish_proj_rename();
+    assert_eq!(cabin.status, "need a name");
+    assert!(cabin.projects.is_empty());
+    assert!(cabin.proj_staged.is_none());
+    assert!(!cabin.running);
+
+    cabin.stage_new_folder();
+    cabin.proj_rename_buf = "Harbor".into();
+    cabin.finish_proj_rename();
+    assert_eq!(cabin.status, "Renamed Harbor");
+    assert!(
+        matches!(
+            cabin.projects.as_slice(),
+            [node]
+                if node.name == "Harbor"
+                    && node.path.is_empty()
+                    && matches!(node.kind, grokhub_core::ProjectKind::Folder)
+        ),
+        "status={} projects={}",
+        cabin.status,
+        cabin.projects.len()
+    );
+    assert!(
+        cabin
+            .projects
+            .iter()
+            .all(|node| !matches!(node.kind, grokhub_core::ProjectKind::Project))
+    );
+    assert!(cabin.proj_staged.is_none());
+    assert!(cabin.proj_rename.is_none());
+    assert!(!cabin.running);
+}
+
