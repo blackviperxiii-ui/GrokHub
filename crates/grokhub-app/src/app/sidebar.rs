@@ -387,7 +387,7 @@ impl Cabin {
                     }
                     let icon = match kind {
                         ProjectKind::Folder => crate::icons::RailIcon::Folder,
-                        ProjectKind::Project => crate::icons::RailIcon::File,
+                        ProjectKind::Project => crate::icons::RailIcon::Chat,
                     };
                     let active = project_row_active(
                         self.project_sel.as_deref() == Some(self.projects[idx].id.as_str()),
@@ -397,7 +397,9 @@ impl Cabin {
                     let row = ui
                         .horizontal(|ui| {
                             ui.add_space(indent);
-                            crate::icons::paint_folder_caret(ui, open, crate::theme::subtle());
+                            if kind == ProjectKind::Folder {
+                                crate::icons::paint_folder_caret(ui, open, crate::theme::subtle());
+                            }
                             Self::nav_row(ui, active, icon, &self.projects[idx].name, false)
                         })
                         .inner;
@@ -408,20 +410,18 @@ impl Cabin {
                         );
                     } else if row.clicked() {
                         let id = self.projects[idx].id.clone();
-                        let opening = self
-                            .projects
-                            .iter()
-                            .find(|n| n.id == id)
-                            .is_some_and(|n| !n.open);
-                        if let Some(n) = self.projects.iter_mut().find(|n| n.id == id) {
-                            n.open = !n.open;
-                        }
-                        self.touch_projects();
-                        self.flush_projects();
-                        // A folder or project is a container. Opening it lists the chats
-                        // underneath. It does not switch the open chat or hide History.
-                        if opening && kind == ProjectKind::Project {
-                            self.bind_project_id(&id);
+                        match kind {
+                            ProjectKind::Folder => {
+                                if let Some(n) = self.projects.iter_mut().find(|n| n.id == id) {
+                                    n.open = !n.open;
+                                }
+                                self.touch_projects();
+                                self.flush_projects();
+                            }
+                            ProjectKind::Project => {
+                                self.bind_project_id(&id);
+                                self.open_project_chat(&id);
+                            }
                         }
                     }
                     let nid = self.projects[idx].id.clone();
@@ -434,7 +434,7 @@ impl Cabin {
                             }
                         }
                     });
-                    if open {
+                    if kind == ProjectKind::Folder && open {
                         let chat_indent = 20.0 * (depth as f32 + 1.0);
                         if let Some(act) = self.paint_section_chats(
                             ui,

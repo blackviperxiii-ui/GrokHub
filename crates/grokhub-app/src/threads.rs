@@ -624,6 +624,59 @@ mod tests {
     }
 
     #[test]
+    fn project_chat_stays_in_its_folder_and_out_of_history() {
+        let mut nodes = Vec::new();
+        grokhub_core::create_folder(&mut nodes, "fold", "Cabin", None).unwrap();
+        grokhub_core::create_project(&mut nodes, "proj-lab", "Lab", Some("fold"), "/w").unwrap();
+        nodes[0].open = false;
+        let closed = grokhub_core::visible_tree(&nodes);
+        assert!(
+            closed.iter().all(|&(_, i)| nodes[i].id != "proj-lab"),
+            "collapsing the folder hides the project chat in the tree: {closed:?}"
+        );
+        nodes[0].open = true;
+        let open = grokhub_core::visible_tree(&nodes);
+        assert!(
+            open.iter().any(|&(_, i)| nodes[i].id == "proj-lab"),
+            "expanding the folder shows the project chat underneath: {open:?}"
+        );
+
+        let mut history = ChatThread::new("Global", false);
+        history.messages_mut().push(("user".into(), "stay".into()));
+        history.pinned = true;
+        history.pinned_ms = 9;
+        let mut lab = ChatThread::new("Lab", false);
+        lab.project_id = Some("proj-lab".into());
+        lab.messages_mut().push(("user".into(), "lab-body".into()));
+        lab.pinned = true;
+        lab.pinned_ms = 4;
+        let threads = vec![history, lab];
+        let before = chat_section_indices(&threads, None, false);
+        assert_eq!(
+            before.iter().map(|&i| threads[i].title.as_str()).collect::<Vec<_>>(),
+            ["Global"]
+        );
+        assert!(
+            !before.iter().any(|&i| threads[i].project_id.is_some()),
+            "a project chat does not also appear in History"
+        );
+        let project = project_section_chat_indices(&threads, "proj-lab", None, false);
+        assert_eq!(project, vec![1]);
+        assert!(threads[1].pinned);
+        assert_eq!(threads[1].messages[0].1, "lab-body");
+        let opened = chat_section_indices(&threads, Some(1), false);
+        let collapsed = chat_section_indices(&threads, None, false);
+        assert!(
+            project_chat_click_keeps_chat_section(&before, &opened),
+            "opening a project chat must not change History"
+        );
+        assert!(
+            project_chat_click_keeps_chat_section(&before, &collapsed),
+            "collapsing the folder must not change History"
+        );
+    }
+
+    #[test]
     fn project_history_skips_the_unused_empty_draft() {
         assert!(
             !project_folder_history_row(false, true, false),
