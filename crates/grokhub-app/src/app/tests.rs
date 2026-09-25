@@ -7570,3 +7570,26 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn memory_switch_flushes_the_file_you_left() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("memory-switch");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.mem_name = "MEMORY.md".into();
+    cabin.mem_body = "harbor light".into();
+    cabin.open_memory_file("SOUL.md");
+    assert_eq!(cabin.mem_name, "SOUL.md");
+    assert_eq!(cabin.mem_body, "");
+    assert!(!cabin.running);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while !crate::config::read_memory("MEMORY.md").contains("harbor light") {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "MEMORY.md was not flushed"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(crate::config::read_memory("SOUL.md"), "");
+}
+
