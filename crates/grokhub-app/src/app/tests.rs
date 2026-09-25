@@ -7570,3 +7570,65 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn feed_pulse_ticks_without_a_chat() {
+    let _cfg = crate::config::hold_test_config();
+    let prev_config = std::env::var("GROKHUB_CONFIG").ok();
+    let root = crate::config::test_config_root("feed-pulse");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    // Whole-day quiet so Housekeep holds the digest clock and does not post a card.
+    cabin.cfg.quiet_start = "00:00".into();
+    cabin.cfg.quiet_end = "23:59".into();
+    let before = cabin.cfg.feed_pulse.clone();
+    assert!(!cabin.running);
+    assert!(
+        cabin.updates.is_empty() && !grokhub_core::feed_visible(&cabin.updates),
+        "an empty feed stays hidden"
+    );
+
+    cabin.tick_feed_pulse();
+    assert_ne!(
+        cabin.cfg.feed_pulse, before,
+        "one tick advances the stored FeedPulse"
+    );
+    assert!(!cabin.running, "the feed pulse must not start a run");
+    assert!(
+        cabin.updates.is_empty() && !grokhub_core::feed_visible(&cabin.updates),
+        "an empty feed stays hidden"
+    );
+
+    let advanced = cabin.cfg.feed_pulse.clone();
+    cabin.tick_feed_pulse();
+    assert!(!cabin.running, "a second tick does not start a run");
+    assert_eq!(
+        cabin.cfg.feed_pulse, advanced,
+        "a second tick does not start a run"
+    );
+    assert!(
+        cabin.updates.is_empty() && !grokhub_core::feed_visible(&cabin.updates),
+        "an empty feed stays hidden"
+    );
+
+    let io = cabin.persist_io.clone();
+    let path = root.join("app.json");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while std::time::Instant::now() < deadline {
+        if std::fs::read_to_string(&path)
+            .map(|body| body.contains("feedPulse"))
+            .unwrap_or(false)
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let _disk = std::mem::ManuallyDrop::new(io.lock().unwrap_or_else(|e| e.into_inner()));
+    match prev_config {
+        Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+        None => std::env::remove_var("GROKHUB_CONFIG"),
+    }
+}
