@@ -7570,3 +7570,30 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn models_and_inspect_without_grok() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("models-inspect");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_GROK", "/tmp/grokhub-no-such-grok");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/models");
+    assert!(
+        cabin.messages.iter().any(|m| {
+            m.0 == "assistant" && m.1.contains("grok-4.7 — Grok 4.7 (chat)")
+        }),
+        "models catalog did not land: {:?}",
+        cabin.messages
+    );
+    assert!(cabin.inspect_rx.is_none());
+    assert!(!cabin.running);
+    cabin.run_slash_line("/inspect");
+    assert!(matches!(cabin.nav, Nav::Connectors));
+    assert_eq!(cabin.status, crate::build_agent::grok_banner());
+    assert_eq!(cabin.inspect_text, crate::build_agent::grok_banner());
+    assert!(cabin.inspect_rx.is_none());
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
+    std::env::remove_var("GROKHUB_GROK");
+}
+
