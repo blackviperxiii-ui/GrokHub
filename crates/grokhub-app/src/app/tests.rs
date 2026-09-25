@@ -7570,3 +7570,23 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn rewind_files_asks_for_a_bind() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("rewind-bind");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    if !cabin.cfg.project_dir.is_empty() {
+        cabin.cfg.project_dir = String::new();
+    }
+    cabin.run_slash(Slash::RewindFiles);
+    assert_eq!(cabin.status, "Bind a project first — /project bind");
+    assert!(
+        cabin.rewind_rows.is_empty(),
+        "empty project dir must not snapshot"
+    );
+    assert!(!cabin.running, "empty project dir must not queue a shell");
+    assert!(cabin.cfg.project_dir.is_empty());
+}
+
