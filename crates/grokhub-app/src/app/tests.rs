@@ -7570,3 +7570,24 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn store_session_plan_opens_once_and_keeps_the_first() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("session-plan");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.store_session_plan("   ", true);
+    assert!(cabin.threads.is_empty());
+    assert!(!cabin.plan_open);
+    cabin.new_thread(false);
+    cabin.store_session_plan("  fold the charts  ", false);
+    assert!(cabin.plan_open);
+    assert_eq!(cabin.threads[cabin.thread_idx].plan_body, "fold the charts");
+    cabin.store_session_plan("other plan", false);
+    assert_eq!(cabin.threads[cabin.thread_idx].plan_body, "fold the charts");
+    cabin.store_session_plan("other plan", true);
+    assert_eq!(cabin.threads[cabin.thread_idx].plan_body, "other plan");
+    assert!(cabin.plan_open);
+    assert!(!cabin.running);
+}
+
