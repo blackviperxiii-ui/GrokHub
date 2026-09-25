@@ -7570,3 +7570,44 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn memory_goal_model_loop_forget_and_empty_imagine() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("memory-goal");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.mem_name = "MEMORY.md".into();
+    cabin.mem_body = "harbor light\nkeep the dock\n".into();
+    cabin.run_slash_line("/memory");
+    assert!(matches!(cabin.nav, Nav::Memory));
+    assert_eq!(cabin.status, "Memory");
+    cabin.run_slash_line("/goal migrate auth");
+    assert_eq!(cabin.cfg.goal_pin, "migrate auth");
+    assert_eq!(cabin.status, "Goal: migrate auth");
+    cabin.run_slash_line("/goal");
+    assert_eq!(cabin.status, "Goal: migrate auth");
+    cabin.run_slash_line("/goal clear");
+    assert!(cabin.cfg.goal_pin.is_empty());
+    assert_eq!(cabin.status, "Goal cleared");
+    cabin.run_slash_line("/model grok-4.7");
+    assert_eq!(cabin.cfg.model, "grok-4.7");
+    assert_eq!(cabin.status, "grok --model grok-4.7");
+    cabin.run_slash_line("/loop");
+    assert!(matches!(cabin.nav, Nav::Night));
+    assert!(cabin.auto_compose);
+    cabin.run_slash_line("/forget harbor");
+    assert_eq!(cabin.status, "Forgot harbor");
+    assert!(!cabin.mem_body.to_ascii_lowercase().contains("harbor"));
+    assert!(cabin.mem_body.contains("keep the dock"));
+    cabin.run_slash_line("/forget");
+    assert_eq!(cabin.status, "Forgot MEMORY.md");
+    assert!(cabin.mem_body.is_empty());
+    cabin.imagine_prompt.clear();
+    cabin.run_slash_line("/imagine");
+    assert!(matches!(cabin.nav, Nav::Imagine));
+    assert!(cabin.imagine_want_focus);
+    assert!(!cabin.running);
+    assert!(!cabin.imagine_pending);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
