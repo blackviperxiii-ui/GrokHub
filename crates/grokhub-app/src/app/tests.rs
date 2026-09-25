@@ -7570,3 +7570,47 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn rewind_and_compact_stay_closed_without_grok() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("rewind-compact");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_GROK", "/tmp/grokhub-no-such-grok");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.live_mut().push(("user".into(), "harbor".into()));
+    cabin.live_mut().push(("assistant".into(), "light".into()));
+    cabin.run_slash_line("/rewind");
+    assert!(
+        cabin.messages.iter().any(|m| m.0 == "assistant" && m.1 == "light"),
+        "rewind dropped the reply without a grok agent: {:?}",
+        cabin.messages
+    );
+    assert!(!cabin.running);
+    assert!(
+        cabin.status.contains("Ask is fail-closed") && cabin.status.contains("Turn denied"),
+        "rewind status was {}",
+        cabin.status
+    );
+    assert_ne!(cabin.status, "Rewinding Grok conversation…");
+    cabin.live_mut().clear();
+    for i in 0..9 {
+        cabin.live_mut().push(("user".into(), format!("turn-{i}")));
+    }
+    cabin.run_slash_line("/compact");
+    assert!(
+        cabin.messages.iter().any(|m| m.1 == "turn-0"),
+        "compact dropped history without a grok agent: {:?}",
+        cabin.messages
+    );
+    assert_eq!(cabin.messages.len(), 9);
+    assert!(!cabin.running);
+    assert!(
+        cabin.status.contains("Ask is fail-closed") && cabin.status.contains("Turn denied"),
+        "compact status was {}",
+        cabin.status
+    );
+    assert_ne!(cabin.status, "Compacting Grok context…");
+    std::env::remove_var("GROKHUB_CONFIG");
+    std::env::remove_var("GROKHUB_GROK");
+}
+
