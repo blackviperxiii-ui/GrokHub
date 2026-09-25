@@ -73,6 +73,20 @@ impl Cabin {
         }
     }
 
+    /// A project row is a chat. Clicking it opens that chat and leaves History as it was.
+    pub(super) fn open_project_chat(&mut self, id: &str) {
+        let Some(idx) = threads::project_return_index(&self.threads, id) else {
+            self.new_chat_under(id);
+            return;
+        };
+        if idx != self.thread_idx {
+            self.switch_thread(idx);
+        } else {
+            self.composer_want_focus = true;
+        }
+        self.nav = Nav::Chat;
+    }
+
     pub(super) fn make_project(&mut self, name: &str, parent: Option<&str>) {
         let id = uid("proj");
         let root = self.work_root();
