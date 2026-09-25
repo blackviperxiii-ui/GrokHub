@@ -7570,3 +7570,27 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn new_thread_opens_another_chat_when_the_current_one_has_a_message() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("new-chat");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.threads.push(crate::threads::ChatThread::new("Harbor", false));
+        cabin.thread_idx = 0;
+    }
+    let line = std::sync::Arc::new(vec![("user".into(), "paint the harbor".into())]);
+    for t in &mut cabin.threads {
+        t.messages = line.clone();
+    }
+    cabin.messages = line;
+    let before = cabin.threads.len();
+    cabin.new_thread(false);
+    assert_eq!(cabin.threads.len(), before + 1);
+    assert_eq!(cabin.status, "New chat");
+    assert!(cabin.messages.is_empty());
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Chat");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
