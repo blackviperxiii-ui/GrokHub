@@ -7570,3 +7570,73 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn composer_action_chips_stay_off_a_run() {
+    let _hold = config::hold_test_config();
+    let root = config::test_config_root("composer-action-chips");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(matches!(cabin.nav, Nav::Chat));
+    assert!(!cabin.running);
+
+    const SENT: &str = "Install Grok Build (x.ai/cli) or Connect Grok in Settings";
+
+    fn click(cabin: &mut Cabin, label: &str) {
+        cabin.refresh_chips();
+        let chips = cabin.composer_chips();
+        let chip = chips
+            .iter()
+            .find(|c| c.label == label)
+            .cloned()
+            .unwrap_or_else(|| {
+                let labels: Vec<_> = chips.iter().map(|c| c.label.as_str()).collect();
+                panic!("missing {label} among {labels:?}");
+            });
+        assert!(matches!(chip.kind, ChipKind::Chat), "{label}");
+        let before = cabin.messages.len();
+        let value = chip.value.clone();
+        cabin.apply_chip(chip);
+        assert!(!cabin.running, "{label}");
+        assert!(matches!(cabin.nav, Nav::Chat));
+        assert_eq!(cabin.messages.len(), before, "{label} transcript");
+        assert!(
+            cabin.messages.iter().all(|(_, line)| line != SENT),
+            "{label} transcript gained the status line"
+        );
+        if cabin.composer.is_empty() {
+            assert_eq!(cabin.status, SENT, "{label}");
+        } else {
+            assert_eq!(cabin.composer, value, "{label}");
+        }
+    }
+
+    cabin.composer = "paint the north wall".into();
+    click(&mut cabin, "Expand & send");
+
+    cabin.messages = Arc::new(vec![
+        ("user".into(), "We started the cabin wall.".into()),
+        (
+            "assistant".into(),
+            "The north wall has one coat already.".into(),
+        ),
+    ]);
+    cabin.composer.clear();
+    cabin.chip_paint_key.clear();
+    click(&mut cabin, "Continue");
+
+    cabin.messages = Arc::new(vec![
+        ("user".into(), "Look at the cabin logs.".into()),
+        (
+            "assistant".into(),
+            "I'll check the cabin logs and then run a short probe.".into(),
+        ),
+    ]);
+    cabin.composer.clear();
+    cabin.chip_paint_key.clear();
+    click(&mut cabin, "Finish — run tools now");
+    click(&mut cabin, "Finish the job");
+}
+
