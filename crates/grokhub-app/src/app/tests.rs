@@ -7570,3 +7570,191 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+/// Isolated cabin. Skips the grok installer and the update probe. Restores env on drop.
+struct QuietCabin {
+    cabin: super::Cabin,
+    boot: QuietBoot,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+struct QuietBoot {
+    root: std::path::PathBuf,
+    prev_config: Option<std::ffi::OsString>,
+    prev_grok: Option<std::ffi::OsString>,
+    prev_quiet: Option<std::ffi::OsString>,
+    prev_tray: Option<std::ffi::OsString>,
+    restored: bool,
+}
+
+impl QuietBoot {
+    fn apply(label: &str) -> Self {
+        let prev_config = std::env::var_os("GROKHUB_CONFIG");
+        let prev_grok = std::env::var_os("GROKHUB_GROK");
+        let prev_quiet = std::env::var_os("GROKHUB_QUIET_BOOT");
+        let prev_tray = std::env::var_os("GROKHUB_TRAY");
+        let root = crate::config::test_config_root(label);
+        let _ = std::fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        std::env::set_var("GROKHUB_GROK", "/no/such/grok-binary-xyz");
+        std::env::set_var("GROKHUB_QUIET_BOOT", "1");
+        std::env::set_var("GROKHUB_TRAY", "0");
+        Self {
+            root,
+            prev_config,
+            prev_grok,
+            prev_quiet,
+            prev_tray,
+            restored: false,
+        }
+    }
+
+    fn restore(&mut self) {
+        if self.restored {
+            return;
+        }
+        self.restored = true;
+        restore_env("GROKHUB_CONFIG", self.prev_config.take());
+        restore_env("GROKHUB_GROK", self.prev_grok.take());
+        restore_env("GROKHUB_QUIET_BOOT", self.prev_quiet.take());
+        restore_env("GROKHUB_TRAY", self.prev_tray.take());
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+fn restore_env(key: &str, prev: Option<std::ffi::OsString>) {
+    match prev {
+        Some(v) => std::env::set_var(key, v),
+        None => std::env::remove_var(key),
+    }
+}
+
+impl Drop for QuietBoot {
+    fn drop(&mut self) {
+        self.restore();
+    }
+}
+
+impl QuietCabin {
+    fn boot(label: &str) -> Self {
+        let lock = crate::config::hold_test_config();
+        let boot = QuietBoot::apply(label);
+        let cabin = super::Cabin::new(true);
+        Self {
+            cabin,
+            boot,
+            _lock: lock,
+        }
+    }
+
+    /// Let background config writes finish before the config dir changes.
+    fn settle(&self) {
+        let io = self.cabin.persist_io.clone();
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        for _ in 0..8 {
+            drop(io.lock().ok());
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+    }
+}
+
+impl Drop for QuietCabin {
+    fn drop(&mut self) {
+        self.settle();
+        // The config lock field is still held until this Drop returns.
+        self.boot.restore();
+    }
+}
+
+#[test]
+fn send_from_composer_runs_help_and_refuses_without_grok() {
+    let mut quiet = QuietCabin::boot("send-help");
+    let cabin = &mut quiet.cabin;
+    cabin.send_from_composer("/help".into());
+    let help = cabin
+        .messages
+        .iter()
+        .find(|m| m.0 == "assistant" && m.1.contains("/help — this list"));
+    assert!(
+        help.is_some(),
+        " /help must land on the open chat, got {:?}",
+        cabin.messages
+    );
+    assert!(
+        !cabin.running,
+        "a local slash must not start a run: {}",
+        cabin.status
+    );
+
+    let before = cabin.messages.len();
+    cabin.send_from_composer("paint the harbor".into());
+    assert!(
+        !cabin.running,
+        "no grok binary must refuse before a run starts"
+    );
+    assert_eq!(
+        cabin.status,
+        "Install Grok Build (x.ai/cli) or Connect Grok in Settings"
+    );
+    assert_eq!(
+        cabin.messages.len(),
+        before,
+        "the refused line must not be written onto the chat"
+    );
+    assert!(
+        cabin
+            .messages
+            .iter()
+            .all(|m| !m.1.contains("paint the harbor")),
+        "the refused prompt must stay off the transcript"
+    );
+    quiet.settle();
+}
+
+#[test]
+fn run_slash_pin_flips_the_pin() {
+    let mut quiet = QuietCabin::boot("slash-pin");
+    let cabin = &mut quiet.cabin;
+    let idx = cabin.thread_idx;
+    let title = cabin.threads[idx].title.clone();
+    assert!(!cabin.threads[idx].pinned);
+    cabin.run_slash(grokhub_core::Slash::Pin);
+    assert!(cabin.threads[idx].pinned, " /pin must pin the open chat");
+    assert!(cabin.threads[idx].pinned_ms > 0);
+    assert_eq!(cabin.status, format!("Pinned {title}"));
+    quiet.settle();
+}
+
+#[test]
+fn pin_thread_flips_the_pin() {
+    let mut quiet = QuietCabin::boot("pin-thread");
+    let cabin = &mut quiet.cabin;
+    let idx = cabin.thread_idx;
+    let title = cabin.threads[idx].title.clone();
+    assert!(!cabin.threads[idx].pinned);
+    cabin.pin_thread(idx);
+    assert!(cabin.threads[idx].pinned, "the pin control must pin this chat");
+    assert!(cabin.threads[idx].pinned_ms > 0);
+    assert_eq!(cabin.status, format!("Pinned {title}"));
+    quiet.settle();
+}
+
+#[test]
+fn apply_board_act_add_files_one_todo() {
+    let mut quiet = QuietCabin::boot("board-add");
+    let cabin = &mut quiet.cabin;
+    assert!(cabin.board.is_empty());
+    cabin.board_title = "Cover the dock".into();
+    cabin.board_notes = "night shift".into();
+    assert!(cabin.apply_board_act(Some(super::pages::BoardAct::Add)));
+    assert_eq!(cabin.board.len(), 1);
+    assert_eq!(cabin.board[0].title, "Cover the dock");
+    assert_eq!(cabin.board[0].detail, "night shift");
+    assert_eq!(cabin.board[0].status, grokhub_core::BoardStatus::Todo);
+    assert_eq!(
+        cabin.board[0].status.column(),
+        Some(grokhub_core::KanbanColumn::Todo)
+    );
+    assert!(cabin.board_title.is_empty());
+    quiet.settle();
+}
+

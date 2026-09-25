@@ -1140,13 +1140,20 @@ impl Cabin {
         c.grok_install_wait =
             grokhub_core::should_kick_alpha_install(grokhub_acp::find_grok().is_some());
         c.official_cli_session = c.grok_install_wait;
-        c.grok_install_rx = Some(grokhub_acp::begin_ensure_grok_alpha());
+        // Test builds can set GROKHUB_QUIET_BOOT so a cabin under test does not
+        // install grok or probe GitHub / x.ai. Shipping builds always take this path.
+        let quiet_boot = cfg!(test) && std::env::var_os("GROKHUB_QUIET_BOOT").is_some();
+        if !quiet_boot {
+            c.grok_install_rx = Some(grokhub_acp::begin_ensure_grok_alpha());
+        }
         c.sync_cli_auth_from_oauth();
         if grokhub_acp::grok_cli_key().is_some() && !c.official_cli_session {
             c.mark_get_started_done();
         }
-        c.last_update_probe = Some(Instant::now());
-        c.update_probe_rx = Some(crate::update::begin_update_probe());
+        if !quiet_boot {
+            c.last_update_probe = Some(Instant::now());
+            c.update_probe_rx = Some(crate::update::begin_update_probe());
+        }
         c.open_fresh_home();
         c
     }
