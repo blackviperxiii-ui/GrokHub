@@ -7570,3 +7570,32 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn open_history_hit_opens_pier_and_a_memory_file() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("history-open");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads.clear();
+    let mut harbor = crate::threads::ChatThread::new("Harbor", false);
+    let mut pier = crate::threads::ChatThread::new("Pier", false);
+    let line = std::sync::Arc::new(vec![("user".into(), "paint the harbor".into())]);
+    harbor.messages = line.clone();
+    pier.messages = line.clone();
+    let pier_id = pier.id.clone();
+    cabin.threads.push(harbor);
+    cabin.threads.push(pier);
+    cabin.thread_idx = 0;
+    cabin.messages = line;
+    cabin.open_history_hit(&format!("thread:{pier_id}"));
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Pier");
+    assert!(matches!(cabin.nav, Nav::Chat));
+    cabin.open_history_hit("thread:missing");
+    assert_eq!(cabin.status, "That chat is gone");
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Pier");
+    cabin.open_history_hit("mem:USER.md");
+    assert!(matches!(cabin.nav, Nav::Memory));
+    assert_eq!(cabin.status, "USER.md");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
