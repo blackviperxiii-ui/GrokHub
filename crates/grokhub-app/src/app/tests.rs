@@ -7570,3 +7570,70 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn grok_session_list_applies_the_matching_generation() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("grok-sess-list");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let row = |id: &str, title: &str| grokhub_acp::GrokSession {
+        id: id.to_string(),
+        title: title.to_string(),
+        path: None,
+        cwd: None,
+        cabin: false,
+    };
+    let ids = |cabin: &Cabin| -> Vec<String> {
+        cabin.grok_sessions.iter().map(|s| s.id.clone()).collect()
+    };
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.nav = Nav::History;
+    cabin.running = false;
+    cabin.grok_list_gen = 4;
+    cabin.grok_sessions_loaded = false;
+    cabin.grok_sessions = vec![row("keep-a", "Kept A"), row("keep-b", "Kept B")];
+
+    cabin.apply_grok_sess_msg(GrokSessMsg::Listed {
+        gen: 3,
+        rows: vec![row("stale", "Stale")],
+        done: Vec::new(),
+        error: None,
+    });
+    assert_eq!(ids(&cabin), ["keep-a".to_string(), "keep-b".to_string()]);
+    assert!(!cabin.grok_sessions_loaded);
+    assert!(!cabin.running);
+    assert!(matches!(cabin.nav, Nav::History));
+
+    cabin.apply_grok_sess_msg(GrokSessMsg::Listed {
+        gen: 4,
+        rows: vec![row("one", "One"), row("two", "Two")],
+        done: Vec::new(),
+        error: None,
+    });
+    assert_eq!(ids(&cabin), ["one".to_string(), "two".to_string()]);
+    assert!(cabin.grok_sessions_loaded);
+    assert_eq!(cabin.status, "2 Grok sessions");
+    assert!(!cabin.running);
+    assert!(matches!(cabin.nav, Nav::History));
+
+    cabin.apply_grok_sess_msg(GrokSessMsg::Listed {
+        gen: 4,
+        rows: vec![row("one", "One")],
+        done: vec!["two".to_string()],
+        error: None,
+    });
+    assert_eq!(cabin.status, "Deleted session");
+    assert!(!cabin.running);
+
+    cabin.apply_grok_sess_msg(GrokSessMsg::Listed {
+        gen: 4,
+        rows: vec![row("one", "One")],
+        done: Vec::new(),
+        error: Some("missing on disk".to_string()),
+    });
+    assert_eq!(cabin.status, "Could not delete session: missing on disk");
+    assert!(!cabin.running);
+}
+
