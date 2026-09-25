@@ -7570,3 +7570,233 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+struct IsolatedConfig {
+    prev: Option<std::ffi::OsString>,
+    root: std::path::PathBuf,
+}
+
+impl IsolatedConfig {
+    fn arm(label: &str) -> Self {
+        let root = crate::config::test_config_root(label);
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("config root");
+        let prev = std::env::var_os("GROKHUB_CONFIG");
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        Self { prev, root }
+    }
+}
+
+impl Drop for IsolatedConfig {
+    fn drop(&mut self) {
+        match self.prev.take() {
+            Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+            None => std::env::remove_var("GROKHUB_CONFIG"),
+        }
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+struct HideGrok {
+    path: Option<std::ffi::OsString>,
+    grok: Option<std::ffi::OsString>,
+}
+
+impl HideGrok {
+    fn arm() -> Self {
+        let path = std::env::var_os("PATH");
+        let grok = std::env::var_os("GROKHUB_GROK");
+        std::env::set_var("PATH", "");
+        std::env::set_var("GROKHUB_GROK", "/no/such/grok-binary-for-delete-all");
+        grokhub_acp::invalidate_grok_bin_cache();
+        Self { path, grok }
+    }
+}
+
+impl Drop for HideGrok {
+    fn drop(&mut self) {
+        match self.path.take() {
+            Some(v) => std::env::set_var("PATH", v),
+            None => std::env::remove_var("PATH"),
+        }
+        match self.grok.take() {
+            Some(v) => std::env::set_var("GROKHUB_GROK", v),
+            None => std::env::remove_var("GROKHUB_GROK"),
+        }
+        grokhub_acp::invalidate_grok_bin_cache();
+    }
+}
+
+fn wait_file_has(path: &std::path::Path, needle: &str) -> String {
+    let start = std::time::Instant::now();
+    loop {
+        if let Ok(body) = std::fs::read_to_string(path) {
+            if body.contains(needle) {
+                return body;
+            }
+        }
+        if start.elapsed() > std::time::Duration::from_secs(5) {
+            panic!("{} never contained {needle}", path.display());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(15));
+    }
+}
+
+fn wait_tree_contains(root: &std::path::Path, needle: &str) {
+    let start = std::time::Instant::now();
+    loop {
+        if let Ok(rd) = std::fs::read_dir(root) {
+            for ent in rd.filter_map(|e| e.ok()) {
+                let path = ent.path();
+                if !path.is_file() {
+                    continue;
+                }
+                if std::fs::read_to_string(&path)
+                    .ok()
+                    .is_some_and(|body| body.contains(needle))
+                {
+                    return;
+                }
+            }
+        }
+        if start.elapsed() > std::time::Duration::from_secs(5) {
+            panic!("{} never contained {needle}", root.display());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(15));
+    }
+}
+
+fn join_persist(io: &std::sync::Arc<std::sync::Mutex<()>>) {
+    drop(io.lock().unwrap_or_else(|e| e.into_inner()));
+}
+
+#[test]
+fn make_folder_saves_harbor_notes() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("make-folder");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.make_folder("Harbor notes");
+    let saved = wait_file_has(&crate::store::projects_path(), "Harbor notes");
+    join_persist(&cabin.persist_io);
+    let folders: Vec<_> = cabin
+        .projects
+        .iter()
+        .filter(|n| n.kind == ProjectKind::Folder && n.name == "Harbor notes")
+        .collect();
+    assert_eq!(folders.len(), 1, "one folder row named Harbor notes");
+    assert!(
+        cabin.status.starts_with("Folder "),
+        "status {status}",
+        status = cabin.status
+    );
+    assert!(
+        saved.contains("Harbor notes"),
+        "projects file must contain the folder name"
+    );
+    drop(cfg);
+}
+
+#[test]
+fn delete_all_history_clears_seeded_chats() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("delete-all");
+    let hide = HideGrok::arm();
+    assert!(
+        grokhub_acp::find_grok().is_none(),
+        "hidden grok must not resolve to a binary"
+    );
+    let mut cabin = Cabin::quiet_for_test();
+    let mut pier = crate::threads::ChatThread::new("Pier light", false);
+    pier.messages_mut()
+        .push(("user".into(), "bring the lamp".into()));
+    let mut salt = crate::threads::ChatThread::new("Salt lane", false);
+    salt.messages_mut()
+        .push(("user".into(), "walk the lane".into()));
+    cabin.threads = vec![pier, salt];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.delete_all_history();
+    let listed = cabin
+        .grok_sessions_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("delete-all session sweep");
+    assert!(
+        matches!(listed, GrokSessMsg::Listed { error: None, .. }),
+        "hidden grok must not report a delete error"
+    );
+    wait_tree_contains(&cfg.root, "Chat");
+    join_persist(&cabin.persist_io);
+    assert!(
+        cabin.threads.iter().all(|t| t.title != "Pier light"),
+        "Pier light must be gone"
+    );
+    assert!(
+        cabin.threads.iter().all(|t| t.title != "Salt lane"),
+        "Salt lane must be gone"
+    );
+    assert_eq!(cabin.status, "Deleted all chats");
+    assert_eq!(cabin.threads.len(), 1, "the fresh chat is the only row");
+    assert_eq!(cabin.threads[0].title, "Chat");
+    assert!(
+        cabin.threads[0].messages.is_empty(),
+        "the fresh chat has no transcript"
+    );
+    drop(hide);
+    drop(cfg);
+}
+
+#[test]
+fn react_card_keeps_the_reaction() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("react-card");
+    let mut cabin = Cabin::quiet_for_test();
+    let card = grokhub_core::idea_card("harbor", "Harbor lamp", "fold the charts", 1);
+    let id = card.id.clone();
+    assert!(card.reaction.is_none());
+    cabin.updates.push(card);
+    cabin.react_card(&id, grokhub_core::CardReaction::Up);
+    wait_tree_contains(&cfg.root, "Harbor lamp");
+    let stuck = cabin
+        .updates
+        .iter()
+        .find(|c| c.id == id)
+        .expect("reaction card");
+    assert_eq!(stuck.reaction, Some(grokhub_core::CardReaction::Up));
+    assert_eq!(stuck.kind, grokhub_core::UpdateKind::Idea);
+    drop(cfg);
+}
+
+#[test]
+fn archive_feed_digest_drops_the_digest() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("archive-digest");
+    let mut cabin = Cabin::quiet_for_test();
+    let card = grokhub_core::digest_card("week", "Week notes", "rolled up", 2);
+    let id = card.id.clone();
+    cabin.updates.push(card);
+    assert!(
+        grokhub_core::visible_digests(&cabin.updates)
+            .iter()
+            .any(|c| c.id == id),
+        "the digest starts on the live feed"
+    );
+    cabin.archive_feed_digest(&id);
+    wait_tree_contains(&cfg.root, "Week notes");
+    assert!(
+        grokhub_core::visible_digests(&cabin.updates)
+            .iter()
+            .all(|c| c.id != id),
+        "archive drops the digest from the live feed"
+    );
+    assert!(
+        grokhub_core::archived_digests(&cabin.updates)
+            .iter()
+            .any(|c| c.id == id),
+        "the dropped digest is the archived row"
+    );
+    assert_eq!(
+        cabin.updates.iter().find(|c| c.id == id).map(|c| c.status),
+        Some(grokhub_core::UpdateStatus::Dismissed)
+    );
+    drop(cfg);
+}
+
