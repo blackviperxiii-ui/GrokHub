@@ -121,7 +121,7 @@ impl PermissionMode {
 /// User-visible Ask deny when `grok agent stdio` cannot start or has died.
 /// Do not fall through to headless `grok -p --sandbox off`.
 pub const ASK_ACP_DOWN: &str =
-    "Ask needs ACP so Allow / Deny can show. Grok Build agent is down — turn denied.";
+    "Ask is fail-closed: Allow / Deny needs a live Grok Build agent. Turn denied. Install Grok Build CLI or Start agent in Settings → Update.";
 
 /// Ask fail-closed copy. Empty detail keeps the gate line; extra text is appended.
 pub fn ask_denied_without_acp(detail: &str) -> String {
@@ -1367,7 +1367,10 @@ mod tests {
         assert!(!PermissionMode::AlwaysApprove.uses_acp());
         let down = ask_denied_without_acp("");
         assert!(
-            down.contains("Allow / Deny") && down.to_ascii_lowercase().contains("turn denied"),
+            down.contains("Allow / Deny")
+                && down.to_ascii_lowercase().contains("turn denied")
+                && down.contains("Install Grok Build")
+                && down.contains("Start agent"),
             "{down}"
         );
         assert!(

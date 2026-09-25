@@ -7594,14 +7594,9 @@ fn ask_denied_without_acp_stays_off_a_run() {
     cabin.pending_kick = Some(true);
     cabin.chat_job_thread = Some("job".into());
 
-    let denied =
-        "Ask needs ACP so Allow / Deny can show. Grok Build agent is down — turn denied.";
+    let denied = "Ask is fail-closed: Allow / Deny needs a live Grok Build agent. Turn denied. Install Grok Build CLI or Start agent in Settings → Update.";
     cabin.fail_ask_without_acp("");
-    assert!(
-        cabin.status.contains(denied),
-        "status must contain the Ask deny sentence, got {}",
-        cabin.status
-    );
+    assert_eq!(cabin.status, denied);
     assert!(!cabin.running);
     assert!(cabin.pending_kick.is_none());
     assert!(cabin.chat_job_thread.is_none());
