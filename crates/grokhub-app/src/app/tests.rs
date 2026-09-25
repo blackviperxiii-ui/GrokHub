@@ -7570,3 +7570,37 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn project_acts_need_a_selection() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("project-need-sel");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    assert!(cabin.project_sel.is_none());
+    assert!(cabin.projects.is_empty());
+    assert!(!cabin.running);
+
+    cabin.run_slash(Slash::ProjectRename("Harbor".into()));
+    assert_eq!(cabin.status, "Select a project first");
+    assert!(cabin.project_sel.is_none());
+    assert!(cabin.projects.is_empty());
+    assert!(!cabin.running);
+
+    cabin.run_slash(Slash::ProjectMove("Notes".into()));
+    assert_eq!(cabin.status, "Select a project first");
+    assert!(cabin.project_sel.is_none());
+    assert!(cabin.projects.is_empty());
+    assert!(!cabin.running);
+
+    cabin.run_slash(Slash::ProjectDelete);
+    assert_eq!(cabin.status, "Select a project first");
+    assert!(cabin.project_sel.is_none());
+    assert!(cabin.projects.is_empty());
+    assert!(!cabin.running);
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
