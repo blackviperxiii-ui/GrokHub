@@ -7570,3 +7570,28 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn teach_watched_routine_saves_a_daily_job_and_rejects_a_plain_line() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.teach_nl = "every day at 9, summarize the board".into();
+    cabin.teach_watched_routine();
+    assert!(
+        cabin.status.contains("added"),
+        "status should record the saved job: {}",
+        cabin.status
+    );
+    assert!(
+        cabin.status.contains("09:00"),
+        "status should name the clock time: {}",
+        cabin.status
+    );
+    assert!(cabin.teach_nl.is_empty());
+
+    cabin.teach_nl = "hello".into();
+    cabin.teach_watched_routine();
+    assert_eq!(
+        cabin.status,
+        "A job is saved only when you ask to schedule it."
+    );
+}
+
