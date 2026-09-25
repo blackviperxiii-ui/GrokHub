@@ -7570,3 +7570,24 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn slash_pick_fills_or_returns_the_command() {
+    let mut composer = String::new();
+    let run = super::slash_pick_take(&mut composer, "/help", true);
+    assert_eq!(run.as_deref(), Some("/help"));
+    assert!(composer.is_empty());
+
+    let mut composer = String::new();
+    let run = super::slash_pick_take(&mut composer, "/model ", false);
+    assert!(run.is_none());
+    assert_eq!(composer, "/model ");
+
+    assert_eq!(super::slash_pick_step(0, 3, 1), 1);
+    assert_eq!(super::slash_pick_step(2, 3, 1), 2);
+    assert_eq!(super::slash_pick_step(0, 3, -1), 0);
+    assert_eq!(super::slash_pick_step(0, 0, 1), 0);
+
+    assert_eq!(super::slash_pick_retain(2, true, 5), 0);
+    assert_eq!(super::slash_pick_retain(2, false, 5), 2);
+}
+
