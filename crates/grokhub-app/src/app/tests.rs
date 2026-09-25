@@ -7570,3 +7570,35 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn settings_section_titles_match_the_page() {
+    assert_eq!(
+        super::settings::settings_sec_title(super::SettingsSec::Account),
+        "Account"
+    );
+    assert_eq!(
+        super::settings::settings_sec_title(super::SettingsSec::Appearance),
+        "Appearance"
+    );
+    assert_eq!(
+        super::settings::settings_sec_title(super::SettingsSec::Behavior),
+        "Behavior"
+    );
+    assert_eq!(
+        super::settings::settings_sec_title(super::SettingsSec::Update),
+        "Update"
+    );
+    assert_eq!(
+        super::settings::settings_sec_title(super::SettingsSec::About),
+        "About"
+    );
+    assert!(matches!(
+        super::settings::settings_group_home(super::SettingsGroup::General),
+        super::SettingsSec::Account
+    ));
+    assert!(matches!(
+        super::settings::settings_group_home(super::SettingsGroup::About),
+        super::SettingsSec::Update
+    ));
+}
+
