@@ -7592,6 +7592,14 @@ fn unknown_slash_stays_off_a_run() {
     assert_eq!(cabin.running, running);
 
     cabin.send_chat("/not-a-command".to_string());
+    assert_eq!(
+        cabin.status,
+        "Install Grok Build (x.ai/cli) or Connect Grok in Settings"
+    );
+    assert_eq!(&*cabin.messages, &*transcript);
+    assert!(!cabin.running);
+
+    cabin.send_chat("/approve".to_string());
     assert_eq!(cabin.status, "Unknown command — /help");
     assert_eq!(&*cabin.messages, &*transcript);
     assert!(!cabin.running);
