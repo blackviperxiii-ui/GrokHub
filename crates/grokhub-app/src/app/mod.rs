@@ -1151,6 +1151,18 @@ impl Cabin {
         c
     }
 
+    pub(super) fn make_folder(&mut self, name: &str) {
+        let id = uid("fold");
+        match create_folder(&mut self.projects, &id, name, None) {
+            Ok(i) => {
+                self.status = format!("Folder {}", self.projects[i].name);
+                self.touch_projects();
+                self.flush_projects();
+            }
+            Err(e) => self.status = e.into(),
+        }
+    }
+
     fn apply_saved_geom(&mut self, ctx: &egui::Context) {
         let g = crate::window::clamp_geom(self.cfg.window);
         #[cfg(windows)]

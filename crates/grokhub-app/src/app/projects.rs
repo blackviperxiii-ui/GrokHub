@@ -211,18 +211,6 @@ impl Cabin {
         }
     }
 
-    pub(super) fn make_folder(&mut self, name: &str) {
-        let id = uid("fold");
-        match create_folder(&mut self.projects, &id, name, None) {
-            Ok(i) => {
-                self.status = format!("Folder {}", self.projects[i].name);
-                self.touch_projects();
-                self.flush_projects();
-            }
-            Err(e) => self.status = e.into(),
-        }
-    }
-
     pub(super) fn stage_new_folder(&mut self) {
         let id = uid("fold");
         match create_folder(&mut self.projects, &id, "Folder", None) {
