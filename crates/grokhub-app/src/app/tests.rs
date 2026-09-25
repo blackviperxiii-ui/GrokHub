@@ -7570,3 +7570,28 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn night_add_lands_a_daily_job_and_a_loop() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("night-add");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.add_automation_seed("every day at 9, summarize the board");
+    assert_eq!(cabin.status, "Automation added · daily at 09:00");
+    assert_eq!(cabin.automations.len(), 1);
+    assert_eq!(cabin.automations[0].schedule, "daily");
+    assert_eq!(cabin.automations[0].time, "09:00");
+    assert!(cabin.grok_loops.is_empty());
+    cabin.add_automation_seed("/loop 30m check deploy");
+    assert_eq!(cabin.status, "Loop added · every 30m");
+    assert_eq!(cabin.grok_loops.len(), 1);
+    assert_eq!(cabin.grok_loops[0].interval, "30m");
+    cabin.add_automation_seed("what is rust");
+    assert_eq!(
+        cabin.status,
+        "Need `/loop 30m …`, `every 2h …`, or `every day at 9 …`"
+    );
+    assert_eq!(cabin.automations.len(), 1);
+    assert_eq!(cabin.grok_loops.len(), 1);
+    assert!(!cabin.running);
+}
