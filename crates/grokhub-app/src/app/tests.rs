@@ -7570,3 +7570,42 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn project_bind_show_and_clear() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("project-bind");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let home_s = home.display().to_string().trim_end_matches('/').to_string();
+    let prev_home = std::env::var("HOME").ok();
+    std::env::set_var("HOME", &home_s);
+    let dock = format!("{}/dock", root.display().to_string().trim_end_matches('/'));
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/project");
+    assert_eq!(cabin.status, "No bound project");
+    cabin.run_slash_line(&format!("/project bind {dock}"));
+    assert_eq!(cabin.cfg.project_dir, dock);
+    assert!(cabin.project_sel.is_some());
+    assert_eq!(cabin.status, format!("Bound {dock}"));
+    assert!(!cabin.running);
+    let dir = std::path::PathBuf::from(&dock);
+    let start = std::time::Instant::now();
+    while !dir.is_dir() && start.elapsed() < std::time::Duration::from_secs(2) {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(dir.is_dir(), "bind did not create the project directory");
+    cabin.run_slash_line("/project show");
+    assert_eq!(cabin.status, format!("Project {dock}"));
+    cabin.run_slash_line("/project clear");
+    assert!(cabin.cfg.project_dir.is_empty());
+    assert!(cabin.project_sel.is_none());
+    assert_eq!(cabin.status, "Unbound — full desktop");
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
+    match prev_home {
+        Some(h) => std::env::set_var("HOME", h),
+        None => std::env::remove_var("HOME"),
+    }
+}
