@@ -7570,3 +7570,58 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn grok_tasks_and_commands_stay_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("grok-tasks");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+
+    cabin.apply_grok_task("task-1".into(), "Draft the note".into(), false);
+    assert_eq!(
+        cabin.grok_tasks,
+        vec![("task-1".into(), "Draft the note".into(), false)]
+    );
+    assert!(!cabin.running);
+
+    cabin.apply_grok_task("task-1".into(), "Note is filed".into(), true);
+    assert_eq!(
+        cabin.grok_tasks,
+        vec![("task-1".into(), "Note is filed".into(), true)]
+    );
+    assert!(!cabin.running);
+
+    let owned = grokhub_core::filter_slash_commands("/")
+        .first()
+        .expect("cabin slash")
+        .cmd
+        .to_string();
+    let foreign = "create-skill".to_string();
+    let names = vec![foreign.clone(), "   ".into(), String::new(), owned.clone()];
+    let hits = grokhub_core::grok_command_hits(&names);
+    cabin.apply_grok_commands(names);
+    assert_eq!(cabin.grok_commands, hits);
+    assert!(
+        cabin
+            .grok_commands
+            .iter()
+            .any(|h| h.cmd == format!("/{foreign}")),
+        "a name the cabin does not own stays"
+    );
+    assert!(
+        cabin.grok_commands.iter().all(|h| {
+            let name = h.cmd.trim_start_matches('/').trim();
+            !name.is_empty() && h.cmd != owned
+        }),
+        "a blank name and a cabin-owned slash are dropped"
+    );
+    assert!(!cabin.running);
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
