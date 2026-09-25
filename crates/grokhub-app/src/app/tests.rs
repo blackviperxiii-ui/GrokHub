@@ -7570,3 +7570,63 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn rename_folder_and_move_project_into_folder() {
+    let mut app = Cabin::quiet_for_test();
+    app.make_folder("Harbor notes");
+    let harbor_id = app
+        .projects
+        .iter()
+        .find(|n| n.name == "Harbor notes")
+        .expect("Harbor notes")
+        .id
+        .clone();
+    app.begin_proj_rename(harbor_id.clone(), "Dock notes".to_string());
+    app.finish_proj_rename();
+    let renamed = app
+        .projects
+        .iter()
+        .find(|n| n.id == harbor_id)
+        .expect("renamed folder");
+    assert_eq!(renamed.name, "Dock notes");
+    assert_eq!(app.status, "Renamed Dock notes");
+
+    app.move_sel_to_folder_name("Lab");
+    assert_eq!(app.status, "Select a project first");
+
+    app.make_folder("Lab");
+    app.make_project("Pier", None);
+    let lab_id = app
+        .projects
+        .iter()
+        .find(|n| n.name == "Lab")
+        .expect("Lab")
+        .id
+        .clone();
+    let pier_id = app
+        .projects
+        .iter()
+        .find(|n| n.name == "Pier")
+        .expect("Pier")
+        .id
+        .clone();
+    app.project_sel = Some(pier_id.clone());
+    app.move_sel_to_folder_name("Lab");
+    assert_eq!(app.status, "Added to Lab");
+    let lab_open = app
+        .projects
+        .iter()
+        .find(|n| n.id == lab_id)
+        .expect("Lab")
+        .open;
+    assert!(lab_open);
+    let pier_parent = app
+        .projects
+        .iter()
+        .find(|n| n.id == pier_id)
+        .expect("Pier")
+        .parent
+        .clone();
+    assert_eq!(pier_parent.as_deref(), Some(lab_id.as_str()));
+}
