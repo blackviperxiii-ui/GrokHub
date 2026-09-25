@@ -7570,3 +7570,44 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn room_binds_a_work_tree_and_rewind_files_needs_a_project() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("room");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let home_s = home.display().to_string().trim_end_matches('/').to_string();
+    let prev_home = std::env::var("HOME").ok();
+    std::env::set_var("HOME", &home_s);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/rewind --files");
+    assert_eq!(cabin.status, "Bind a project first — /project bind");
+    assert!(!cabin.running);
+    cabin.run_slash_line("/room harbor");
+    let bound = format!("{home_s}/GrokHub-Work/harbor");
+    assert_eq!(cabin.cfg.project_dir, bound);
+    assert!(cabin.project_sel.is_some());
+    assert_eq!(cabin.status, format!("Room harbor → {bound}"));
+    assert!(!cabin.running);
+    assert!(
+        cabin
+            .messages
+            .iter()
+            .any(|m| m.0 == "user" && m.1.contains("blocked: outside bound project")),
+        "room host script should stay inside the host rail: {:?}",
+        cabin.messages
+    );
+    let dir = std::path::PathBuf::from(&bound);
+    let start = std::time::Instant::now();
+    while !dir.is_dir() && start.elapsed() < std::time::Duration::from_secs(2) {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(dir.is_dir(), "room directory was not created");
+    std::env::remove_var("GROKHUB_CONFIG");
+    match prev_home {
+        Some(h) => std::env::set_var("HOME", h),
+        None => std::env::remove_var("HOME"),
+    }
+}
