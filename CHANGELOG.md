@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.27 — 2026-09-25
+
+A project is a chat. It lives in its folder in the project section and does not also appear in History. Clicking it opens that chat. Every chat that belongs to the folder or to a project inside it is listed under the open folder. A folder is the only collapsible container. Clicking it lists those chats and does not open a chat. Collapsing the folder hides them. Expanding it shows them again. History does not gain, lose, or filter rows because a folder was collapsed or a project chat was opened. Pins and transcripts stay. A project click does not open the Workboard.
+
+- Linux: `grokhub-linux-v2.10.27.tar.gz` and AUR `pkgver=2.10.27`.
+- Windows: `GrokHub-Setup-2.10.27.exe` and `grokhub-windows-v2.10.27.zip`.
+- Cursor cabin 2.10.27. VERSION 2.10.27. Draft only. Not tagged. Based on main 2.10.26 (`624c490`).
+
 ## 2.10.26 — 2026-09-24
 
 The project section and the chat section are separate lists. A folder looks like a folder. Clicking it shows the chats underneath and does not open a chat or hide History. A chat under that folder opens that chat only. It does not filter, hide, or remove the other chats. Projects stay in the project section, including inside a folder, and a project row is not a chat. New chats can be created under a folder or project and stay there. Creating a project does not wipe History. Background jobs stay off History and off the visible chat. Leaving a chat does not stop a hidden job or a live reply. Pins and transcripts stay. A project click does not open the Workboard.
