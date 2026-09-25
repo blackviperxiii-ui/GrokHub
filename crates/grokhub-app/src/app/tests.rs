@@ -7570,3 +7570,61 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn housekeep_expires_ideas_after_two_weeks() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("idea-expiry");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(
+        !grokhub_core::feed_visible(&cabin.updates),
+        "an empty feed stays hidden"
+    );
+
+    let now = grokhub_core::now_ms();
+    let stale_at = now
+        .saturating_sub(grokhub_core::IDEA_TTL_MS)
+        .saturating_sub(1);
+    let stale = grokhub_core::idea_card("old", "Stale idea", "aged out", stale_at);
+    let fresh = grokhub_core::idea_card("new", "Fresh idea", "still good", now);
+    assert!(!stale.kind.event() && !fresh.kind.event());
+    crate::feed::save(&[stale.clone(), fresh.clone()]).expect("updates.json");
+    cabin.updates = crate::feed::load();
+
+    cabin.tick_feed_pulse();
+
+    assert!(
+        cabin
+            .updates
+            .iter()
+            .all(|card| card.status != grokhub_core::UpdateStatus::Dismissed),
+        "housekeep expiry is the age path, not a dismiss"
+    );
+    assert!(
+        !cabin.updates.iter().any(|card| card.id == stale.id),
+        "an idea older than about two weeks is gone after housekeep"
+    );
+    assert!(
+        cabin.updates.iter().any(|card| card.id == fresh.id),
+        "a fresh idea stays"
+    );
+    assert!(!cabin.running);
+    assert!(
+        grokhub_core::visible_updates(&cabin.updates).is_empty(),
+        "ideas must not invent event rows or take the paint cap of 4"
+    );
+    assert_eq!(
+        grokhub_core::visible_ideas(&cabin.updates)
+            .iter()
+            .filter(|card| card.id == fresh.id)
+            .count(),
+        1
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
