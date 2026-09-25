@@ -7570,3 +7570,54 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn followup_queue_drains_one_and_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("followup-queue");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_GROK", root.join("missing-grok"));
+
+    let mut composer = Cabin::quiet_for_test();
+    assert!(!composer.running);
+    composer.send_chat("/help".into());
+    let help_status = composer.status.clone();
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+
+    cabin.drain_followup_queue();
+    assert!(cabin.followup_queue.is_empty());
+    assert!(!cabin.running);
+
+    let second = "second line stays queued".to_string();
+    cabin.followup_queue = vec!["/help".into(), second.clone()];
+    cabin.drain_followup_queue();
+    assert_eq!(cabin.followup_queue, vec![second]);
+    assert_eq!(cabin.status, help_status);
+    assert_eq!(cabin.messages.as_ref(), composer.messages.as_ref());
+    assert!(!cabin.running);
+
+    cabin.followup_queue = vec!["/approve".into()];
+    cabin.drain_followup_queue();
+    assert_eq!(cabin.status, "Unknown command — /help");
+    assert!(!cabin.running);
+
+    let sentence = "plain sentence with no grok".to_string();
+    cabin.followup_queue = vec![sentence.clone()];
+    cabin.drain_followup_queue();
+    assert_eq!(
+        cabin.status,
+        "Install Grok Build (x.ai/cli) or Connect Grok in Settings"
+    );
+    assert!(
+        cabin.messages.iter().all(|(_, body)| !body.contains(&sentence)),
+        "the plain sentence must stay off the chat"
+    );
+    assert!(!cabin.running);
+
+    std::env::remove_var("GROKHUB_GROK");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
