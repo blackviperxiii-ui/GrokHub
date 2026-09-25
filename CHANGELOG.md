@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 2.10.26 — 2026-09-24
+
+The project section and the chat section are separate lists. A folder looks like a folder. Clicking it shows the chats underneath and does not open a chat or hide History. A chat under that folder opens that chat only. It does not filter, hide, or remove the other chats. Projects stay in the project section, including inside a folder, and a project row is not a chat. New chats can be created under a folder or project and stay there. Creating a project does not wipe History. Background jobs stay off History and off the visible chat. Leaving a chat does not stop a hidden job or a live reply. Pins and transcripts stay. A project click does not open the Workboard.
+
+- Linux: `grokhub-linux-v2.10.26.tar.gz` and AUR `pkgver=2.10.26`.
+- Windows: `GrokHub-Setup-2.10.26.exe` and `grokhub-windows-v2.10.26.zip`.
+- Cursor cabin 2.10.26. VERSION 2.10.26. Draft only. Not tagged. Rebased onto main 2.10.25 (`07fd28d`).
+
 ## 2.10.25 — 2026-09-24
 
 Idea Accept files a workboard Todo (`BoardStatus::Todo` through `flush_board`) on the feed and on Ideas. The Todo title is the task, one line of work, not the feed card's canned line and not the raw message. An ordinary chat prompt such as "summarize the workboard" does not file a card. A live turn can still track a Doing run card, and that card is not a user Todo. Digest and idea cards share `updates.json` and stay out of the event paint cap of 4. The user dismisses an idea; Housekeep expires it at about two weeks or `expires_at`. One brief box in `app.json` steers the digest. Quiet hours hold digest, idea, and `automation_done` visibility. `poll_grok_loop` still records the finish. Minimize, tray show, and the next launch open a fresh empty chat. The previous transcript and pin stay in History. The feed stays hidden when nothing is undismissed. Draft only. Not tagged.

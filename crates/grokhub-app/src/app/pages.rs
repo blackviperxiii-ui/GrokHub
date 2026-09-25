@@ -577,14 +577,13 @@ impl Cabin {
             ui.add_space(16.0);
             crate::cards::section_label(ui, "Chats");
             ui.label(
-                RichText::new("Cabin chats. Background jobs stay off this list. Delete removes the chat.")
+                RichText::new("Cabin chats. Project chats stay in the project section. Background jobs stay off this list. Delete removes the chat.")
                     .size(12.0)
                     .color(crate::theme::subtle()),
             );
             let live_empty = self.messages.is_empty();
-            let shown = threads::cabin_history_indices(
+            let shown = threads::chat_section_indices(
                 &self.threads,
-                self.project_sel.as_deref(),
                 Some(self.thread_idx),
                 live_empty,
             );
@@ -661,7 +660,7 @@ impl Cabin {
                     self.board_compose = true;
                 }
                 ui.label(
-                    RichText::new("Tasks stay here. A project click still filters chats.")
+                    RichText::new("Tasks stay here. A project click does not change the chat list.")
                         .size(crate::theme::FONT_TIP)
                         .color(crate::theme::muted()),
                 );

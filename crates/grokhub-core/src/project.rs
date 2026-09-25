@@ -184,18 +184,21 @@ pub enum ProjectMenuAct {
     AddToFolder,
     RemoveFromFolder,
     NewHere,
+    NewChat,
     Delete,
 }
 
 pub fn project_menu_acts(kind: ProjectKind) -> &'static [ProjectMenuAct] {
     match kind {
         ProjectKind::Project => &[
+            ProjectMenuAct::NewChat,
             ProjectMenuAct::Rename,
             ProjectMenuAct::AddToFolder,
             ProjectMenuAct::RemoveFromFolder,
             ProjectMenuAct::Delete,
         ],
         ProjectKind::Folder => &[
+            ProjectMenuAct::NewChat,
             ProjectMenuAct::Rename,
             ProjectMenuAct::NewHere,
             ProjectMenuAct::Delete,
@@ -209,6 +212,7 @@ pub fn project_menu_label(act: ProjectMenuAct) -> &'static str {
         ProjectMenuAct::AddToFolder => "Add to folder",
         ProjectMenuAct::RemoveFromFolder => "Remove from folder",
         ProjectMenuAct::NewHere => "New project here",
+        ProjectMenuAct::NewChat => "New chat",
         ProjectMenuAct::Delete => "Delete",
     }
 }
@@ -924,6 +928,9 @@ mod tests {
         assert!(fold.contains(&ProjectMenuAct::Rename));
         assert!(fold.contains(&ProjectMenuAct::Delete));
         assert!(fold.contains(&ProjectMenuAct::NewHere));
+        assert!(fold.contains(&ProjectMenuAct::NewChat));
+        assert!(proj.contains(&ProjectMenuAct::NewChat));
+        assert_eq!(project_menu_label(ProjectMenuAct::NewChat), "New chat");
         assert!(!fold.contains(&ProjectMenuAct::AddToFolder));
     }
 

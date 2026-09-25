@@ -347,6 +347,8 @@ impl Cabin {
                 });
                 let tree = visible_tree(&self.projects);
                 let mut proj_act: Option<(String, ProjectMenuAct, egui::Pos2)> = None;
+                let mut section_act: Option<TabAct> = None;
+                let live_empty = self.messages.is_empty();
                 for (depth, idx) in tree {
                     let kind = self.projects[idx].kind;
                     let open = self.projects[idx].open;
@@ -385,7 +387,7 @@ impl Cabin {
                     }
                     let icon = match kind {
                         ProjectKind::Folder => crate::icons::RailIcon::Folder,
-                        ProjectKind::Project => crate::icons::RailIcon::Chat,
+                        ProjectKind::Project => crate::icons::RailIcon::File,
                     };
                     let active = project_row_active(
                         self.project_sel.as_deref() == Some(self.projects[idx].id.as_str()),
@@ -395,9 +397,7 @@ impl Cabin {
                     let row = ui
                         .horizontal(|ui| {
                             ui.add_space(indent);
-                            if kind == ProjectKind::Folder {
-                                crate::icons::paint_folder_caret(ui, open, crate::theme::subtle());
-                            }
+                            crate::icons::paint_folder_caret(ui, open, crate::theme::subtle());
                             Self::nav_row(ui, active, icon, &self.projects[idx].name, false)
                         })
                         .inner;
@@ -408,31 +408,20 @@ impl Cabin {
                         );
                     } else if row.clicked() {
                         let id = self.projects[idx].id.clone();
-                        match kind {
-                            ProjectKind::Folder => {
-                                toggle_folder(&mut self.projects, &id);
-                                self.touch_projects();
-                                self.flush_projects();
-                            }
-                            ProjectKind::Project => {
-                                let returning = threads::project_return_index(&self.threads, &id);
-                                let on_project_chat = returning == Some(self.thread_idx);
-                                if self.project_sel.as_deref() == Some(id.as_str())
-                                    && !on_project_chat
-                                    && returning.is_some()
-                                {
-                                    self.open_project_chat(&id);
-                                } else if self.project_sel.as_deref() == Some(id.as_str()) {
-                                    self.project_sel = None;
-                                    if self.nav == Nav::Workboard {
-                                        self.nav = Nav::Chat;
-                                    }
-                                    self.status = "All chats".into();
-                                } else {
-                                    self.bind_project_id(&id);
-                                    self.open_project_chat(&id);
-                                }
-                            }
+                        let opening = self
+                            .projects
+                            .iter()
+                            .find(|n| n.id == id)
+                            .is_some_and(|n| !n.open);
+                        if let Some(n) = self.projects.iter_mut().find(|n| n.id == id) {
+                            n.open = !n.open;
+                        }
+                        self.touch_projects();
+                        self.flush_projects();
+                        // A folder or project is a container. Opening it lists the chats
+                        // underneath. It does not switch the open chat or hide History.
+                        if opening && kind == ProjectKind::Project {
+                            self.bind_project_id(&id);
                         }
                     }
                     let nid = self.projects[idx].id.clone();
@@ -445,6 +434,24 @@ impl Cabin {
                             }
                         }
                     });
+                    if open {
+                        let chat_indent = 20.0 * (depth as f32 + 1.0);
+                        if let Some(act) = self.paint_section_chats(
+                            ui,
+                            &threads::project_section_chat_indices(
+                                &self.threads,
+                                &nid,
+                                Some(self.thread_idx),
+                                live_empty,
+                            ),
+                            chat_indent,
+                        ) {
+                            section_act = Some(act);
+                        }
+                    }
+                }
+                if let Some(act) = section_act {
+                    self.apply_tab_act(act);
                 }
                 if let Some((id, act, pos)) = proj_act {
                     self.proj_menu_pos = pos;
@@ -453,7 +460,7 @@ impl Cabin {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(self.history_folder_label())
+                        RichText::new("History")
                             .size(12.0)
                             .color(crate::theme::subtle()),
                     );
@@ -487,115 +494,24 @@ impl Cabin {
                     .max_height(hist_h)
                     .show(ui, |ui| {
                         let q = self.sidebar_q.to_ascii_lowercase();
-                        let mut act: Option<TabAct> = None;
-                        struct HistoryRow {
-                            title: String,
-                            key: threads::SessionSortKey,
-                            idx: usize,
-                        }
                         let live_empty = self.messages.is_empty();
-                        let listed = threads::cabin_history_indices(
+                        let listed = threads::chat_section_indices(
                             &self.threads,
-                            self.project_sel.as_deref(),
                             Some(self.thread_idx),
                             live_empty,
                         );
-                        let mut rows: Vec<HistoryRow> = Vec::new();
-                        for i in listed {
-                            let title = self.thread_rail_title(i);
-                            if threads::is_background_history_title(&title) {
-                                continue;
-                            }
-                            if !q.is_empty() && !title.to_ascii_lowercase().contains(&q) {
-                                continue;
-                            }
-                            let t = &self.threads[i];
-                            rows.push(HistoryRow {
-                                title,
-                                key: threads::SessionSortKey {
-                                    pinned: t.pinned,
-                                    pinned_ms: t.pinned_ms,
-                                    accessed_ms: t.accessed_ms,
-                                    list_rank: 0,
-                                },
-                                idx: i,
-                            });
-                        }
-                        let order = threads::session_list_order(
-                            &rows.iter().map(|r| r.key).collect::<Vec<_>>(),
-                        );
-                        for pos in order {
-                            let title = rows[pos].title.clone();
-                            let pinned = rows[pos].key.pinned;
-                            let i = rows[pos].idx;
-                            if self.rename_idx == Some(i) {
-                                if let Some(next) = self.chat_rename_act(ui, i) {
-                                    act = Some(next);
-                                }
-                                continue;
-                            }
-                            let icon = if pinned {
-                                crate::icons::RailIcon::Pin
-                            } else {
-                                crate::icons::RailIcon::Chat
-                            };
-                            let on = i == self.thread_idx && self.nav == Nav::Chat;
-                            let resp = Self::nav_row(ui, on, icon, &title, false);
-                            if resp.clicked() {
-                                act = Some(TabAct::Switch(i));
-                            }
-                            if resp.double_clicked() {
-                                act = Some(TabAct::StartRename(i));
-                            }
-                            resp.context_menu(|ui| {
-                                if ui.button(if pinned { "Unpin" } else { "Pin" }).clicked() {
-                                    act = Some(TabAct::Pin(i));
-                                    ui.close_menu();
-                                }
-                                if ui.button("Rename").clicked() {
-                                    act = Some(TabAct::StartRename(i));
-                                    ui.close_menu();
-                                }
-                                if ui.button("Delete").clicked() {
-                                    act = Some(TabAct::Delete(i));
-                                    ui.close_menu();
-                                }
-                            });
-                        }
-                        match act {
-                            Some(TabAct::Switch(i)) => {
-                                self.switch_thread(i);
-                                self.nav = Nav::Chat;
-                                self.composer_want_focus = true;
-                            }
-                            Some(TabAct::Pin(i)) => self.pin_thread(i),
-                            Some(TabAct::StartRename(i)) => self.begin_chat_rename(i),
-                            Some(TabAct::CommitRename(i)) => {
-                                let name = self.rename_buf.clone();
-                                self.rename_thread(i, &name);
-                            }
-                            Some(TabAct::CancelRename) => {
-                                self.rename_idx = None;
-                                self.rename_focus = false;
-                                self.rename_lock = None;
-                            }
-                            Some(TabAct::Delete(i)) => self.delete_thread_at(i),
-                            Some(TabAct::OpenGrok(id)) => {
-                                self.open_grok_session(&id);
-                                self.composer_want_focus = true;
-                            }
-                            Some(TabAct::DeleteGrok(id)) => self.delete_grok_history(&id),
-                            Some(TabAct::PinGrok(id)) => {
-                                if let Some(i) = self.ensure_grok_thread(&id) {
-                                    self.pin_thread(i);
-                                }
-                            }
-                            Some(TabAct::StartRenameGrok(id)) => {
-                                if let Some(i) = self.ensure_grok_thread(&id) {
-                                    self.begin_chat_rename(i);
-                                }
-                            }
-                            None => {}
+                        let listed: Vec<usize> = listed
+                            .into_iter()
+                            .filter(|&i| {
+                                q.is_empty()
+                                    || self
+                                        .thread_rail_title(i)
+                                        .to_ascii_lowercase()
+                                        .contains(&q)
+                            })
+                            .collect();
+                        if let Some(act) = self.paint_section_chats(ui, &listed, 0.0) {
+                            self.apply_tab_act(act);
                         }
                     });
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
@@ -675,5 +591,132 @@ impl Cabin {
             }
             _ => Nav::Chat,
         };
+    }
+
+    /// One sidebar chat list. The project section and the chat section both use this.
+    /// A click switches, pins, renames, or deletes that chat. It does not take a project
+    /// selection, so the other list stays as it was.
+    fn paint_section_chats(
+        &mut self,
+        ui: &mut egui::Ui,
+        listed: &[usize],
+        indent: f32,
+    ) -> Option<TabAct> {
+        struct Row {
+            title: String,
+            key: threads::SessionSortKey,
+            idx: usize,
+        }
+        let mut rows: Vec<Row> = Vec::new();
+        for &i in listed {
+            let title = self.thread_rail_title(i);
+            if threads::is_background_history_title(&title) {
+                continue;
+            }
+            let t = &self.threads[i];
+            rows.push(Row {
+                title,
+                key: threads::SessionSortKey {
+                    pinned: t.pinned,
+                    pinned_ms: t.pinned_ms,
+                    accessed_ms: t.accessed_ms,
+                    list_rank: 0,
+                },
+                idx: i,
+            });
+        }
+        let order = threads::session_list_order(&rows.iter().map(|r| r.key).collect::<Vec<_>>());
+        let mut act: Option<TabAct> = None;
+        for pos in order {
+            let title = rows[pos].title.clone();
+            let pinned = rows[pos].key.pinned;
+            let i = rows[pos].idx;
+            if self.rename_idx == Some(i) {
+                if indent > 0.0 {
+                    ui.horizontal(|ui| {
+                        ui.add_space(indent);
+                        if let Some(next) = self.chat_rename_act(ui, i) {
+                            act = Some(next);
+                        }
+                    });
+                } else if let Some(next) = self.chat_rename_act(ui, i) {
+                    act = Some(next);
+                }
+                continue;
+            }
+            let icon = if pinned {
+                crate::icons::RailIcon::Pin
+            } else {
+                crate::icons::RailIcon::Chat
+            };
+            let on = i == self.thread_idx && self.nav == Nav::Chat;
+            let resp = if indent > 0.0 {
+                ui.horizontal(|ui| {
+                    ui.add_space(indent);
+                    Self::nav_row(ui, on, icon, &title, false)
+                })
+                .inner
+            } else {
+                Self::nav_row(ui, on, icon, &title, false)
+            };
+            if resp.clicked() {
+                act = Some(TabAct::Switch(i));
+            }
+            if resp.double_clicked() {
+                act = Some(TabAct::StartRename(i));
+            }
+            resp.context_menu(|ui| {
+                if ui.button(if pinned { "Unpin" } else { "Pin" }).clicked() {
+                    act = Some(TabAct::Pin(i));
+                    ui.close_menu();
+                }
+                if ui.button("Rename").clicked() {
+                    act = Some(TabAct::StartRename(i));
+                    ui.close_menu();
+                }
+                if ui.button("Delete").clicked() {
+                    act = Some(TabAct::Delete(i));
+                    ui.close_menu();
+                }
+            });
+        }
+        act
+    }
+
+    fn apply_tab_act(&mut self, act: TabAct) {
+        match act {
+            TabAct::Switch(i) => {
+                self.switch_thread(i);
+                self.nav = Nav::Chat;
+                self.composer_want_focus = true;
+            }
+            TabAct::Pin(i) => self.pin_thread(i),
+            TabAct::StartRename(i) => self.begin_chat_rename(i),
+            TabAct::CommitRename(i) => {
+                let name = self.rename_buf.clone();
+                self.rename_thread(i, &name);
+            }
+            TabAct::CancelRename => {
+                self.rename_idx = None;
+                self.rename_focus = false;
+                self.rename_lock = None;
+            }
+            TabAct::Delete(i) => self.delete_thread_at(i),
+            TabAct::OpenGrok(id) => {
+                self.open_grok_session(&id);
+                self.composer_want_focus = true;
+            }
+            TabAct::DeleteGrok(id) => self.delete_grok_history(&id),
+            TabAct::PinGrok(id) => {
+                if let Some(i) = self.ensure_grok_thread(&id) {
+                    self.pin_thread(i);
+                }
+            }
+            TabAct::StartRenameGrok(id) => {
+                if let Some(i) = self.ensure_grok_thread(&id) {
+                    self.begin_chat_rename(i);
+                }
+            }
+        }
     }
 }
