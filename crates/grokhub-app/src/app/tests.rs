@@ -7570,3 +7570,37 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn skill_hub_help_and_clear() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("skill-hub");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.hub_on = false;
+    cabin.skill_list.clear();
+    cabin.run_slash_line("/skill missing-harbor");
+    assert_eq!(cabin.status, "No skill missing-harbor");
+    assert!(matches!(cabin.nav, Nav::Chat) || !matches!(cabin.nav, Nav::Devices));
+    cabin.run_slash_line("/hub");
+    assert!(matches!(cabin.nav, Nav::Devices));
+    assert_eq!(cabin.status, "Start share on Devices");
+    assert!(!cabin.hub_on);
+    cabin.run_slash_line("/help");
+    assert!(
+        cabin
+            .messages
+            .iter()
+            .any(|m| m.0 == "assistant" && m.1.contains("/clear")),
+        "help did not land on the transcript"
+    );
+    cabin.running = true;
+    cabin.imagine_pending = true;
+    cabin.live_mut().push(("user".into(), "harbor".into()));
+    cabin.run_slash_line("/clear");
+    assert!(!cabin.running, "clear must halt a live job");
+    assert!(!cabin.imagine_pending);
+    assert!(cabin.messages.is_empty());
+    assert_eq!(cabin.status, "Cleared");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
