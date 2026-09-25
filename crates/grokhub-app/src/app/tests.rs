@@ -7570,3 +7570,24 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn save_settings_stores_quiet_hours_and_clears_the_key() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("save-settings");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.api_key = "secret-key".into();
+    cabin.quiet_start_buf = "22:00".into();
+    cabin.quiet_end_buf = "07:00".into();
+    cabin.cap_auto_buf = "12".into();
+    cabin.cap_host_buf = "4".into();
+    cabin.save_settings();
+    assert_eq!(cabin.status, "Saved");
+    assert!(cabin.cfg.api_key.is_empty());
+    assert_eq!(cabin.cfg.quiet_start, "22:00");
+    assert_eq!(cabin.cfg.quiet_end, "07:00");
+    assert_eq!(cabin.cfg.daily_auto_cap, 12);
+    assert_eq!(cabin.cfg.host_hour_cap, 4);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
