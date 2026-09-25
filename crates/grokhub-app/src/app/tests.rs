@@ -7570,3 +7570,56 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn fork_and_worktree_stay_off_a_send() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("fork-worktree");
+    let _ = std::fs::create_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.new_thread(false);
+    let seeded = cabin
+        .threads
+        .get_mut(cabin.thread_idx)
+        .expect("quiet cabin needs one thread before fork");
+    seeded.grok_session = Some("sess".into());
+
+    let before = cabin.threads.len();
+    cabin.run_slash(super::Slash::Fork);
+
+    assert!(cabin.threads.len() > before);
+    let fork = cabin
+        .threads
+        .get(cabin.thread_idx)
+        .expect("fork chat");
+    assert_eq!(fork.title, "Fork");
+    assert_eq!(fork.grok_session.as_deref(), Some("sess"));
+    assert!(fork.grok_fork);
+    assert!(cabin.acp.is_none());
+    assert_eq!(
+        cabin.status,
+        "Forked — next send starts a new Grok session from this history"
+    );
+    assert!(!cabin.running);
+    assert!(matches!(cabin.nav, super::Nav::Chat));
+
+    cabin.run_slash(super::Slash::Worktree);
+    let worked = cabin
+        .threads
+        .get(cabin.thread_idx)
+        .expect("worktree chat");
+    assert!(worked.grok_worktree);
+    assert_eq!(cabin.status, "Next chat uses --worktree");
+    assert!(!cabin.running);
+
+    cabin.run_slash(super::Slash::Worktree);
+    let off = cabin
+        .threads
+        .get(cabin.thread_idx)
+        .expect("worktree chat");
+    assert!(!off.grok_worktree);
+    assert_eq!(cabin.status, "Worktree off");
+    assert!(!cabin.running);
+}
+
