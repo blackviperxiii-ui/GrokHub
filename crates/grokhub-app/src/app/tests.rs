@@ -7570,3 +7570,21 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn usage_and_host_slashes_set_status_without_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("usage-host");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/usage");
+    assert!(cabin.status.starts_with("today "));
+    assert!(cabin.status.contains(" · chat "));
+    assert!(cabin.status.contains(" · imagine "));
+    assert!(cabin.inspect_rx.is_none());
+    assert!(!cabin.running);
+    cabin.run_slash_line("/host");
+    assert_eq!(cabin.status, crate::build_agent::grok_banner());
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
