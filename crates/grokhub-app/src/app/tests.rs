@@ -7570,3 +7570,33 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn composer_slash_runs_and_plain_text_refuses_without_grok() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("composer-send");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let missing = root.join("no-grok");
+    let prev_grok = std::env::var_os("GROKHUB_GROK");
+    std::env::set_var("GROKHUB_GROK", &missing);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.send_from_composer("/help".into());
+    assert!(!cabin.running);
+    assert!(
+        cabin.messages.iter().any(|(_, body)| body.contains("/clear")),
+        "help lands on the open chat"
+    );
+    let before = cabin.messages.len();
+    cabin.send_from_composer("hello harbor".into());
+    assert_eq!(
+        cabin.status,
+        "Install Grok Build (x.ai/cli) or Connect Grok in Settings"
+    );
+    assert!(!cabin.running);
+    assert_eq!(cabin.messages.len(), before);
+    assert!(cabin.messages.iter().all(|(role, _)| role != "user"));
+    match prev_grok {
+        Some(v) => std::env::set_var("GROKHUB_GROK", v),
+        None => std::env::remove_var("GROKHUB_GROK"),
+    }
+}
