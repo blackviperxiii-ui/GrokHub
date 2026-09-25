@@ -7570,3 +7570,29 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn update_queues_while_a_job_is_running() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("update-queue");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.running = true;
+    cabin.start_overlay_update(vec!["echo grokhub-update-queued".into()]);
+    assert!(matches!(cabin.nav, Nav::Settings));
+    assert_eq!(cabin.settings_sec, SettingsSec::Update);
+    assert_eq!(
+        cabin.status,
+        "Update queued — it starts when this job finishes."
+    );
+    assert_eq!(
+        cabin.queued_overlay,
+        Some(vec!["echo grokhub-update-queued".into()])
+    );
+    assert!(cabin.running);
+    assert!(cabin.rx.is_none(), "a busy cabin must not start the update");
+    drop(cabin);
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
