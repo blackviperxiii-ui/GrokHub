@@ -7570,3 +7570,61 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn shell_chip_stays_off_a_run_when_host_is_blocked() {
+    let _guard = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("shell-chip");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let project = root.join("proj");
+    std::fs::create_dir_all(&project).expect("project");
+    let project_dir = project.to_string_lossy().into_owned();
+    let cmd = "cat /etc/passwd".to_string();
+    assert!(
+        grokhub_core::host_cmd_leaves_project(&cmd, &project_dir),
+        "cat /etc/passwd must leave the bound project"
+    );
+
+    let chip = grokhub_core::QuickChip {
+        id: "shell".into(),
+        label: "Shell".into(),
+        value: cmd,
+        kind: grokhub_core::ChipKind::Shell,
+        score: 1.0,
+        hint: String::new(),
+        primary: false,
+    };
+
+    let mut off = super::Cabin::quiet_for_test();
+    off.cfg.host_on = false;
+    off.cfg.project_dir = project_dir.clone();
+    off.permission_mode = grokhub_acp::PermissionMode::Ask;
+    off.running = false;
+    off.apply_chip(chip.clone());
+    assert_eq!(off.status, "Host off — /host on");
+    assert!(!off.running);
+
+    let mut ask = super::Cabin::quiet_for_test();
+    ask.cfg.host_on = true;
+    ask.cfg.project_dir = project_dir;
+    ask.permission_mode = grokhub_acp::PermissionMode::Ask;
+    ask.running = false;
+    ask.apply_chip(chip);
+    assert!(
+        !ask.running,
+        "running became true; the command was inside the project"
+    );
+    let chat = ask
+        .messages
+        .iter()
+        .map(|(_, body)| body.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        chat.contains("blocked: outside bound project"),
+        "chat missing outside-project block: {chat}"
+    );
+}
+
