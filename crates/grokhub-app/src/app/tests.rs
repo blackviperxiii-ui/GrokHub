@@ -7570,3 +7570,53 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn remove_project_returns_chats() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("remove-chats");
+    let prev = std::env::var("GROKHUB_CONFIG").ok();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.cfg.project_dir.is_empty());
+    assert!(!cabin.running);
+
+    cabin.projects.push(ProjectNode {
+        id: "p1".into(),
+        name: "Harbor".into(),
+        kind: ProjectKind::Project,
+        path: String::new(),
+        parent: None,
+        open: true,
+    });
+    assert!(cabin.projects.iter().any(|n| {
+        n.id == "p1" && n.name == "Harbor" && n.path.is_empty() && n.parent.is_none() && n.open
+            && matches!(n.kind, ProjectKind::Project)
+    }));
+
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    let idx = cabin.thread_idx;
+    let thread_id = cabin.threads[idx].id.clone();
+    cabin.threads[idx].project_id = Some("p1".into());
+
+    cabin.remove_project_id("p1");
+
+    assert_eq!(cabin.status, "Removed Harbor · chats back in History");
+    assert!(cabin.projects.is_empty());
+    let thread = cabin
+        .threads
+        .iter()
+        .find(|t| t.id == thread_id)
+        .expect("current thread");
+    assert!(thread.project_id.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.cfg.project_dir.is_empty());
+
+    match prev {
+        Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+        None => std::env::remove_var("GROKHUB_CONFIG"),
+    }
+}
+
