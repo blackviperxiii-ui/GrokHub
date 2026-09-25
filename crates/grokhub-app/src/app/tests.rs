@@ -1288,22 +1288,29 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("id_salt(\"rail-history\")").next())
             .expect("project section");
         assert!(
-            projects.contains("project_section_chat_indices"),
-            "project chats stay under the project: {projects}"
+            projects.contains("folder_chat_indices"),
+            "every chat in an open folder is listed there: {projects}"
         );
         assert!(
-            !projects.contains("open_project_chat") && !projects.contains("switch_thread"),
-            "a folder or project click must not open a chat or replace History: {projects}"
+            projects.contains("open_project_chat")
+                && projects.contains("ProjectKind::Project =>"),
+            "a project row is a chat: clicking it opens that chat: {projects}"
         );
         assert!(
             projects.contains("RailIcon::Folder")
-                && projects.contains("RailIcon::File")
-                && !projects.contains("RailIcon::Chat"),
-            "a folder looks like a folder and a project row is not a chat: {projects}"
+                && projects.contains("RailIcon::Chat")
+                && !projects.contains("RailIcon::File"),
+            "a folder looks like a folder and a project looks like a chat: {projects}"
         );
+        let caret = projects
+            .split("paint_folder_caret")
+            .next()
+            .unwrap_or("");
         assert!(
-            projects.contains("paint_folder_caret") && projects.contains("if open"),
-            "opening a folder or project lists its chats underneath: {projects}"
+            projects.contains("paint_folder_caret")
+                && caret.contains("ProjectKind::Folder")
+                && !projects.contains("n.open = !n.open;\n                        }\n                        self.touch_projects"),
+            "only a folder collapses, and that click does not open a chat: {projects}"
         );
         let paint = fn_src(&src, "paint_section_chats");
         assert!(
