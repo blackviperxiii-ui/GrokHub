@@ -7570,3 +7570,93 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn queue_rows_label_done_failed_and_running() {
+    let rows = [
+        ("job-done", "Flash the pi", true),
+        ("job-fail", "Failed · boot", false),
+        ("job-run", "Write the image", false),
+    ];
+    let painted: Vec<(&str, String)> = rows
+        .iter()
+        .map(|(id, title, done)| {
+            let st = super::pages::queue_task_label(title, *done);
+            (st, format!("{st} · {id}"))
+        })
+        .collect();
+    assert_eq!(
+        painted,
+        vec![
+            ("done", "done · job-done".into()),
+            ("failed", "failed · job-fail".into()),
+            ("running", "running · job-run".into()),
+        ]
+    );
+}
+
+#[test]
+fn park_fresh_chat_keeps_the_running_reply_and_opens_an_empty_chat() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("park-fresh");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut live = crate::threads::ChatThread::new("Night watch", false);
+    live.pinned = true;
+    live.messages = std::sync::Arc::new(vec![
+        ("user".into(), "keep this reply".into()),
+        ("assistant".into(), "still writing".into()),
+    ]);
+    let live_id = live.id.clone();
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.threads = vec![live];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.running = true;
+    cabin.chat_job_thread = Some(live_id.clone());
+    cabin.grok_p_pid = Some(4242);
+
+    cabin.park_fresh_chat();
+
+    assert!(cabin.running, "parking must not halt the reply");
+    assert_eq!(cabin.chat_job_thread.as_deref(), Some(live_id.as_str()));
+    assert_eq!(cabin.grok_p_pid, Some(4242));
+    assert!(
+        cabin.messages.is_empty(),
+        "the open pane must be an empty chat"
+    );
+    assert_ne!(
+        cabin.threads[cabin.thread_idx].id, live_id,
+        "the empty chat must not be the thread that is still replying"
+    );
+    let old = cabin
+        .threads
+        .iter()
+        .find(|t| t.id == live_id)
+        .expect("the running thread stays in the list");
+    assert!(old.pinned);
+    assert_eq!(old.title, "Night watch");
+    assert_eq!(
+        old.messages.as_slice(),
+        [
+            ("user".into(), "keep this reply".into()),
+            ("assistant".into(), "still writing".into()),
+        ]
+    );
+
+    let io = cabin.persist_io.clone();
+    drop(cabin);
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(3) {
+        if io.try_lock().is_ok() {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            if io.try_lock().is_ok() {
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+

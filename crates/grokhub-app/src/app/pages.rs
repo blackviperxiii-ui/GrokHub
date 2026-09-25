@@ -2,6 +2,19 @@
 
 use super::*;
 
+/// Queue tile status. A finished task is done. A live task whose title starts
+/// with "failed" is failed. Every other live task is running.
+pub(super) fn queue_task_label(title: &str, done: bool) -> &'static str {
+    let failed = title.to_ascii_lowercase().starts_with("failed");
+    if done {
+        "done"
+    } else if failed {
+        "failed"
+    } else {
+        "running"
+    }
+}
+
 enum BoardAct {
     Add,
     Save(String),
@@ -135,14 +148,7 @@ impl Cabin {
                     crate::cards::section_label(ui, "Grok tasks");
                     ui.add_space(8.0);
                     for (id, title, done) in &self.grok_tasks {
-                        let failed = title.to_ascii_lowercase().starts_with("failed");
-                        let st = if *done {
-                            "done"
-                        } else if failed {
-                            "failed"
-                        } else {
-                            "running"
-                        };
+                        let st = queue_task_label(title, *done);
                         crate::cards::grok_tile(
                             ui,
                             crate::icons::TileIcon::Bolt,

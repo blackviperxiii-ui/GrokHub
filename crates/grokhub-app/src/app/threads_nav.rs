@@ -186,7 +186,7 @@ impl Cabin {
     }
 
     /// Empty home. Does not halt or drop the in-flight reply on the previous thread.
-    fn park_fresh_chat(&mut self) {
+    pub(super) fn park_fresh_chat(&mut self) {
         let want_project = self.project_sel.clone();
         let reuse = {
             let views: Vec<ThreadReuseView> = self
