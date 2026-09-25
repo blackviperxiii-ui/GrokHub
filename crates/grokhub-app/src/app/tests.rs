@@ -7860,12 +7860,21 @@ fn session_menu_sits_left_of_minimize() {
 
 #[test]
 fn kick_without_grok_does_not_start_a_run() {
-    assert!(
-        grokhub_acp::find_grok().is_none(),
-        "this call is the offline refusal; a machine with grok must not spawn it from this test"
-    );
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("kick-offline");
+    let _restore = GrokPathRestore {
+        path: std::env::var_os("PATH"),
+        grok: std::env::var_os("GROKHUB_GROK"),
+    };
+    let empty = root.join("empty-bin");
+    std::fs::create_dir_all(&empty).unwrap();
+    std::env::set_var("PATH", &empty);
+    std::env::set_var("GROKHUB_GROK", root.join("no-such-grok"));
+    grokhub_acp::invalidate_grok_bin_cache();
+    assert!(
+        grokhub_acp::find_grok().is_none(),
+        "a missing GROKHUB_GROK must hide any grok already on the machine"
+    );
     let thread = crate::threads::ChatThread::new("Chat", false);
     cabin.threads = vec![thread];
     cabin.thread_idx = 0;
@@ -7916,7 +7925,6 @@ fn kick_imagine_empty_stays_idle_and_no_key_refuses() {
 struct GrokPathRestore {
     path: Option<std::ffi::OsString>,
     grok: Option<std::ffi::OsString>,
-    had_grok: bool,
 }
 
 impl Drop for GrokPathRestore {
@@ -7925,11 +7933,9 @@ impl Drop for GrokPathRestore {
             Some(p) => std::env::set_var("PATH", p),
             None => std::env::remove_var("PATH"),
         }
-        if self.had_grok {
-            match self.grok.take() {
-                Some(p) => std::env::set_var("GROKHUB_GROK", p),
-                None => std::env::remove_var("GROKHUB_GROK"),
-            }
+        match self.grok.take() {
+            Some(p) => std::env::set_var("GROKHUB_GROK", p),
+            None => std::env::remove_var("GROKHUB_GROK"),
         }
         grokhub_acp::invalidate_grok_bin_cache();
     }
@@ -7943,6 +7949,8 @@ fn fake_child_still_up(pid: u32, fake: &std::path::Path) -> bool {
     String::from_utf8_lossy(&cmd).contains(&fake.display().to_string())
 }
 
+/// Linux is the reference. Windows `find_grok` only accepts an MZ `grok.exe`, so a shell stub cannot prove the spawn there.
+#[cfg(unix)]
 #[test]
 fn kick_with_fake_grok_runs_the_prompt() {
     let _g = crate::config::hold_test_config();
@@ -7968,7 +7976,6 @@ fn kick_with_fake_grok_runs_the_prompt() {
     let restore = GrokPathRestore {
         path: std::env::var_os("PATH"),
         grok: std::env::var_os("GROKHUB_GROK"),
-        had_grok: std::env::var_os("GROKHUB_GROK").is_some(),
     };
     let mut path = std::ffi::OsString::from(bin_dir.as_os_str());
     path.push(":");
@@ -7976,9 +7983,7 @@ fn kick_with_fake_grok_runs_the_prompt() {
         path.push(old);
     }
     std::env::set_var("PATH", &path);
-    if restore.had_grok {
-        std::env::set_var("GROKHUB_GROK", &fake);
-    }
+    std::env::remove_var("GROKHUB_GROK");
     grokhub_acp::invalidate_grok_bin_cache();
     assert_eq!(
         grokhub_acp::find_grok().as_deref(),
