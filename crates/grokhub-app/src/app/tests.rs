@@ -7570,3 +7570,37 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn history_hit_opens_memory_or_chat() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("history-hit");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+
+    cabin.open_history_hit("mem:MEMORY.md");
+    assert!(matches!(cabin.nav, Nav::Memory));
+    assert_eq!(cabin.status, "MEMORY.md");
+    assert_eq!(cabin.mem_name, "MEMORY.md");
+    assert!(!cabin.running);
+
+    cabin.open_history_hit("thread:nope");
+    assert_eq!(cabin.status, "That chat is gone");
+    assert!(!cabin.running);
+
+    cabin.new_thread(false);
+    cabin.new_thread(false);
+    let id = cabin
+        .threads
+        .get(cabin.thread_idx)
+        .map(|t| t.id.clone())
+        .expect("seeded thread");
+    cabin.open_history_hit(&format!("thread:{id}"));
+    assert_eq!(cabin.threads[cabin.thread_idx].id, id);
+    assert!(matches!(cabin.nav, Nav::Chat));
+    assert!(!cabin.running);
+}
+
