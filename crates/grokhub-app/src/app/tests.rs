@@ -7912,3 +7912,133 @@ fn kick_imagine_empty_stays_idle_and_no_key_refuses() {
     release_isolated(&root, cabin);
 }
 
+/// Restores `PATH` and `GROKHUB_GROK` after a test that points `find_grok` at a fake.
+struct GrokPathRestore {
+    path: Option<std::ffi::OsString>,
+    grok: Option<std::ffi::OsString>,
+    had_grok: bool,
+}
+
+impl Drop for GrokPathRestore {
+    fn drop(&mut self) {
+        match self.path.take() {
+            Some(p) => std::env::set_var("PATH", p),
+            None => std::env::remove_var("PATH"),
+        }
+        if self.had_grok {
+            match self.grok.take() {
+                Some(p) => std::env::set_var("GROKHUB_GROK", p),
+                None => std::env::remove_var("GROKHUB_GROK"),
+            }
+        }
+        grokhub_acp::invalidate_grok_bin_cache();
+    }
+}
+
+#[cfg(unix)]
+fn fake_child_still_up(pid: u32, fake: &std::path::Path) -> bool {
+    let Ok(cmd) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
+        return false;
+    };
+    String::from_utf8_lossy(&cmd).contains(&fake.display().to_string())
+}
+
+#[test]
+fn kick_with_fake_grok_runs_the_prompt() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("kick-fake-grok");
+    let prompt = "proof-fake-grok-harbor";
+    let bin_dir = root.join("bin");
+    let argv_path = root.join("argv.txt");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let fake = bin_dir.join("grok");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{}'\nexit 0\n",
+        argv_path.display()
+    );
+    std::fs::write(&fake, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perm = std::fs::metadata(&fake).unwrap().permissions();
+        perm.set_mode(0o755);
+        std::fs::set_permissions(&fake, perm).unwrap();
+    }
+
+    let restore = GrokPathRestore {
+        path: std::env::var_os("PATH"),
+        grok: std::env::var_os("GROKHUB_GROK"),
+        had_grok: std::env::var_os("GROKHUB_GROK").is_some(),
+    };
+    let mut path = std::ffi::OsString::from(bin_dir.as_os_str());
+    path.push(":");
+    if let Some(old) = restore.path.as_ref() {
+        path.push(old);
+    }
+    std::env::set_var("PATH", &path);
+    if restore.had_grok {
+        std::env::set_var("GROKHUB_GROK", &fake);
+    }
+    grokhub_acp::invalidate_grok_bin_cache();
+    assert_eq!(
+        grokhub_acp::find_grok().as_deref(),
+        Some(fake.as_path()),
+        "find_grok must see the fake"
+    );
+
+    cabin.permission_mode = PermissionMode::Auto;
+    assert!(
+        !cabin.permission_mode.uses_acp(),
+        "Auto stays on headless grok -p"
+    );
+    cabin.session_mode = SessionMode::Chat;
+    cabin.cfg.project_dir = root.display().to_string();
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), prompt.into())]);
+    cabin.threads[0].messages = cabin.messages.clone();
+
+    cabin.kick_model(false);
+    assert!(
+        cabin.running,
+        "kick with the fake on PATH should start a run: {}",
+        cabin.status
+    );
+    let child = cabin.grok_p_pid;
+    assert!(child.is_some(), "headless kick should record a pid");
+    assert!(
+        cabin.acp.is_none() && cabin.acp_spawn_rx.is_none(),
+        "Auto must not enter ACP"
+    );
+
+    let start = std::time::Instant::now();
+    while cabin.running && start.elapsed() < std::time::Duration::from_secs(5) {
+        cabin.poll_single();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    if cabin.running {
+        if let Some(pid) = child {
+            #[cfg(unix)]
+            if fake_child_still_up(pid, &fake) {
+                grokhub_acp::kill_pid(pid);
+            }
+            #[cfg(not(unix))]
+            grokhub_acp::kill_pid(pid);
+        }
+        panic!(
+            "fake grok still running after 5s; status {}",
+            cabin.status
+        );
+    }
+
+    let argv = std::fs::read_to_string(&argv_path).unwrap_or_default();
+    assert!(
+        argv_path.is_file() && (argv.contains("-p") || argv.contains(prompt)),
+        "fake grok argv must contain -p or the prompt: {argv:?} status={}",
+        cabin.status
+    );
+    eprintln!("FAKE_GROK_ARGV_BEGIN\n{argv}FAKE_GROK_ARGV_END");
+    drop(restore);
+    release_isolated(&root, cabin);
+}
+
