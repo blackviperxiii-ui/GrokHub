@@ -7570,3 +7570,67 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn goal_pin_sets_and_clears() {
+    let _hold = config::hold_test_config();
+    let root = config::test_config_root("goal-pin");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.goal_pin.clear();
+    assert!(cabin.cfg.goal_pin.is_empty());
+    assert!(!cabin.running);
+
+    let wait_pin = |want: &str| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut last = String::new();
+        while std::time::Instant::now() < deadline {
+            last = config::load().goal_pin;
+            if last == want {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("persisted goal_pin {last:?}, want {want:?}");
+    };
+
+    for raw in ["", "   ", "\t", "\n  ", "status", "STATUS", "Status"] {
+        cabin.run_slash(Slash::Goal(raw.to_string()));
+        assert_eq!(cabin.status, "No goal pin", "input {raw:?}");
+        assert!(cabin.cfg.goal_pin.is_empty(), "input {raw:?}");
+        assert!(!cabin.running);
+    }
+
+    cabin.run_slash(Slash::Goal("Ship the harbor".to_string()));
+    assert_eq!(cabin.cfg.goal_pin, "Ship the harbor");
+    assert_eq!(cabin.status, "Goal: Ship the harbor");
+    assert!(!cabin.running);
+    wait_pin("Ship the harbor");
+
+    for raw in ["status", "STATUS", "Status"] {
+        cabin.run_slash(Slash::Goal(raw.to_string()));
+        assert_eq!(cabin.status, "Goal: Ship the harbor", "input {raw:?}");
+        assert_eq!(cabin.cfg.goal_pin, "Ship the harbor");
+        assert!(!cabin.running);
+    }
+
+    for raw in ["clear", "CLEAR", "Clear"] {
+        if cabin.cfg.goal_pin.is_empty() {
+            cabin.run_slash(Slash::Goal("Ship the harbor".to_string()));
+            assert_eq!(cabin.cfg.goal_pin, "Ship the harbor");
+            wait_pin("Ship the harbor");
+        }
+        cabin.run_slash(Slash::Goal(raw.to_string()));
+        assert!(cabin.cfg.goal_pin.is_empty(), "input {raw:?}");
+        assert_eq!(cabin.status, "Goal cleared", "input {raw:?}");
+        assert!(!cabin.running);
+        wait_pin("");
+    }
+
+    cabin.run_slash(Slash::Goal("status".to_string()));
+    assert_eq!(cabin.status, "No goal pin");
+    assert!(cabin.cfg.goal_pin.is_empty());
+    assert!(!cabin.running);
+}
+
