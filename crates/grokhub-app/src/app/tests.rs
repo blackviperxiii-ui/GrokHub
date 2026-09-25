@@ -7570,3 +7570,36 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn empty_skill_tile_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("empty-skill-tile");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let tile = grokhub_core::LearnedSuggestion {
+        kind: grokhub_core::SuggestionKind::Skill,
+        title: String::new(),
+        body: String::new(),
+        name: None,
+        seed: None,
+        trigger: None,
+        instructions: None,
+        provider: None,
+        tool: None,
+    };
+    assert!(matches!(tile.kind, grokhub_core::SuggestionKind::Skill));
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    assert!(cabin.suggestions.skills.is_empty());
+    assert!(!cabin.running);
+    assert!(matches!(cabin.nav, super::Nav::Chat));
+
+    cabin.add_suggested_skill(&tile);
+
+    assert_eq!(cabin.status, "Need a cabin-real skill name and steps");
+    assert!(cabin.suggestions.skills.is_empty());
+    assert!(!cabin.running);
+    assert!(matches!(cabin.nav, super::Nav::Chat));
+}
+
