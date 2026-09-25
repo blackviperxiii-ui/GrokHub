@@ -706,6 +706,12 @@ fn fork_explainer_seen_on_disk() -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(test)]
+thread_local! {
+    static QUIET_THREADS: std::cell::RefCell<Option<(Vec<ChatThread>, usize)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 impl Cabin {
     pub fn new(hidden: bool) -> Self {
         let mut cfg = config::load();
@@ -726,32 +732,49 @@ impl Cabin {
         let mem_body = config::read_memory(&mem_name);
         let mem_cache_at = [config::memory_updated_at("SOUL.md"), 0, 0];
         let mem_cache_body = [mem_body.clone(), String::new(), String::new()];
-        let mut threads = threads::load();
-        if threads.is_empty() {
-            let mut t = ChatThread::new("Chat", false);
-            t.messages = Arc::new(config::load_chat());
-            threads.push(t);
-        }
-        let keep_id = threads
-            .iter()
-            .find(|t| t.id == cfg.current_thread)
-            .map(|t| t.id.clone())
-            .or_else(|| threads.first().map(|t| t.id.clone()));
-        let before = threads.len();
-        threads.retain(|t| {
-            keep_id.as_deref() == Some(t.id.as_str())
-                || t.pinned
-                || !leftover_empty_thread(&t.title, t.scratch, t.messages.is_empty())
-        });
-        if threads.is_empty() {
-            threads.push(ChatThread::new("Chat", false));
-        }
-        let dropped_leftover = threads.len() != before;
-        let thread_idx = threads
-            .iter()
-            .position(|t| keep_id.as_deref() == Some(t.id.as_str()))
-            .or_else(|| threads.iter().position(|t| t.id == cfg.current_thread))
-            .unwrap_or(0);
+        let load_saved = |cfg: &AppConfig| -> (Vec<ChatThread>, bool, usize) {
+            let mut threads = threads::load();
+            if threads.is_empty() {
+                let mut t = ChatThread::new("Chat", false);
+                t.messages = Arc::new(config::load_chat());
+                threads.push(t);
+            }
+            let keep_id = threads
+                .iter()
+                .find(|t| t.id == cfg.current_thread)
+                .map(|t| t.id.clone())
+                .or_else(|| threads.first().map(|t| t.id.clone()));
+            let before = threads.len();
+            threads.retain(|t| {
+                keep_id.as_deref() == Some(t.id.as_str())
+                    || t.pinned
+                    || !leftover_empty_thread(&t.title, t.scratch, t.messages.is_empty())
+            });
+            if threads.is_empty() {
+                threads.push(ChatThread::new("Chat", false));
+            }
+            let dropped_leftover = threads.len() != before;
+            let thread_idx = threads
+                .iter()
+                .position(|t| keep_id.as_deref() == Some(t.id.as_str()))
+                .or_else(|| threads.iter().position(|t| t.id == cfg.current_thread))
+                .unwrap_or(0);
+            (threads, dropped_leftover, thread_idx)
+        };
+        #[cfg(test)]
+        let (threads, dropped_leftover, thread_idx, quiet) =
+            if let Some((threads, idx)) = QUIET_THREADS.with(|slot| slot.borrow_mut().take()) {
+                let thread_idx = idx.min(threads.len().saturating_sub(1));
+                (threads, false, thread_idx, true)
+            } else {
+                let (threads, dropped_leftover, thread_idx) = load_saved(&cfg);
+                (threads, dropped_leftover, thread_idx, false)
+            };
+        #[cfg(not(test))]
+        let (threads, dropped_leftover, thread_idx, quiet) = {
+            let (threads, dropped_leftover, thread_idx) = load_saved(&cfg);
+            (threads, dropped_leftover, thread_idx, false)
+        };
         let messages = threads
             .get(thread_idx)
             .map(|t| t.messages.clone())
@@ -1117,34 +1140,51 @@ impl Cabin {
             grok_catalog_rx: None,
             grok_ext_rx: None,
         };
-        if let Ok(mgr) = GlobalHotKeyManager::new() {
-            let hey = HotKey::new(Some(Modifiers::SUPER), Code::KeyG);
-            let halt = HotKey::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Escape);
-            let hey_id = hey.id();
-            let halt_id = halt.id();
-            if mgr.register(hey).is_ok() && mgr.register(halt).is_ok() {
-                c.hotkey_hey = hey_id;
-                c.hotkey_halt = halt_id;
-                c.hotkeys = Some(mgr);
+        if !quiet {
+            if let Ok(mgr) = GlobalHotKeyManager::new() {
+                let hey = HotKey::new(Some(Modifiers::SUPER), Code::KeyG);
+                let halt = HotKey::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Escape);
+                let hey_id = hey.id();
+                let halt_id = halt.id();
+                if mgr.register(hey).is_ok() && mgr.register(halt).is_ok() {
+                    c.hotkey_hey = hey_id;
+                    c.hotkey_halt = halt_id;
+                    c.hotkeys = Some(mgr);
+                }
+            }
+            if dropped_leftover {
+                c.persist_bg();
+            }
+            grokhub_acp::silence_windows_hard_errors();
+            // Official alpha when missing/unusable; pin a working CLI. UAC is expected on Windows.
+            c.grok_install_wait =
+                grokhub_core::should_kick_alpha_install(grokhub_acp::find_grok().is_some());
+            c.official_cli_session = c.grok_install_wait;
+            c.grok_install_rx = Some(grokhub_acp::begin_ensure_grok_alpha());
+            c.sync_cli_auth_from_oauth();
+            if grokhub_acp::grok_cli_key().is_some() && !c.official_cli_session {
+                c.mark_get_started_done();
+            }
+            c.last_update_probe = Some(Instant::now());
+            c.update_probe_rx = Some(crate::update::begin_update_probe());
+            c.open_fresh_home();
+        }
+        c
+    }
+
+    /// A cabin with the given chats already loaded. No install, update probe, or
+    /// fresh-home stamp. `GROKHUB_CONFIG` must already point at a test root.
+    #[cfg(test)]
+    pub(super) fn quiet_cabin(threads: Vec<ChatThread>, thread_idx: usize) -> Self {
+        struct Clear;
+        impl Drop for Clear {
+            fn drop(&mut self) {
+                QUIET_THREADS.with(|slot| *slot.borrow_mut() = None);
             }
         }
-        if dropped_leftover {
-            c.persist_bg();
-        }
-        grokhub_acp::silence_windows_hard_errors();
-        // Official alpha when missing/unusable; pin a working CLI. UAC is expected on Windows.
-        c.grok_install_wait =
-            grokhub_core::should_kick_alpha_install(grokhub_acp::find_grok().is_some());
-        c.official_cli_session = c.grok_install_wait;
-        c.grok_install_rx = Some(grokhub_acp::begin_ensure_grok_alpha());
-        c.sync_cli_auth_from_oauth();
-        if grokhub_acp::grok_cli_key().is_some() && !c.official_cli_session {
-            c.mark_get_started_done();
-        }
-        c.last_update_probe = Some(Instant::now());
-        c.update_probe_rx = Some(crate::update::begin_update_probe());
-        c.open_fresh_home();
-        c
+        QUIET_THREADS.with(|slot| *slot.borrow_mut() = Some((threads, thread_idx)));
+        let _clear = Clear;
+        Self::new(true)
     }
 
     fn apply_saved_geom(&mut self, ctx: &egui::Context) {
