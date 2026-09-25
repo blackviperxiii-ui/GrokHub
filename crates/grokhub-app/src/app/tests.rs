@@ -7570,3 +7570,89 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn project_menu_rename_move_and_delete() {
+    let _guard = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("proj-menu");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    let work = root.join("work");
+    create_folder(&mut cabin.projects, "fold-menu", "Notes", None).expect("folder");
+    create_project(
+        &mut cabin.projects,
+        "proj-menu",
+        "Harbor",
+        Some("fold-menu"),
+        &work.display().to_string(),
+    )
+    .expect("project");
+    let name = cabin
+        .projects
+        .iter()
+        .find(|n| n.id == "proj-menu")
+        .expect("seeded project")
+        .name
+        .clone();
+    assert_eq!(
+        cabin
+            .projects
+            .iter()
+            .find(|n| n.id == "proj-menu")
+            .and_then(|n| n.parent.clone())
+            .as_deref(),
+        Some("fold-menu")
+    );
+
+    let io = cabin.persist_io.clone();
+    let _held = io.lock().unwrap_or_else(|e| e.into_inner());
+
+    cabin.apply_project_menu("proj-menu".into(), ProjectMenuAct::Rename);
+    assert_eq!(cabin.proj_rename.as_deref(), Some("proj-menu"));
+    assert_eq!(cabin.proj_rename_buf, name);
+    assert!(!cabin.running);
+
+    cabin.apply_project_menu("proj-menu".into(), ProjectMenuAct::AddToFolder);
+    assert_eq!(cabin.proj_add_for.as_deref(), Some("proj-menu"));
+    assert_eq!(cabin.project_sel.as_deref(), Some("proj-menu"));
+    assert!(cabin.proj_ignore_close);
+    assert!(!cabin.running);
+
+    cabin.apply_project_menu("proj-menu".into(), ProjectMenuAct::RemoveFromFolder);
+    assert!(cabin
+        .projects
+        .iter()
+        .find(|n| n.id == "proj-menu")
+        .and_then(|n| n.parent.as_ref())
+        .is_none());
+    assert_eq!(cabin.status, "Moved to Projects");
+    assert!(!cabin.running);
+
+    cabin.apply_project_menu("proj-menu".into(), ProjectMenuAct::Delete);
+    assert!(cabin.projects.iter().all(|n| n.id != "proj-menu"));
+    assert!(!cabin.running);
+
+    let projects = cabin.projects.clone();
+    let status = cabin.status.clone();
+    let proj_rename = cabin.proj_rename.clone();
+    let proj_rename_buf = cabin.proj_rename_buf.clone();
+    let running = cabin.running;
+    cabin.apply_project_menu("missing-proj".into(), ProjectMenuAct::Rename);
+    assert_eq!(cabin.projects, projects);
+    assert_eq!(cabin.status, status);
+    assert_eq!(cabin.proj_rename, proj_rename);
+    assert_eq!(cabin.proj_rename_buf, proj_rename_buf);
+    assert_eq!(cabin.running, running);
+    assert!(!cabin.running);
+
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    drop(_held);
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    let _done = io.lock().unwrap_or_else(|e| e.into_inner());
+    drop(_done);
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
