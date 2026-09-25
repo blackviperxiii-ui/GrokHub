@@ -7570,3 +7570,53 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn grok_history_open_and_delete_stay_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("grok-hist");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let id = "sess-quiet-known";
+    let title = "Known cabin title";
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.grok_sessions.push(grokhub_acp::GrokSession {
+        id: id.to_string(),
+        title: title.to_string(),
+        path: None,
+        cwd: None,
+        cabin: false,
+    });
+
+    cabin.open_grok_session(id);
+    assert_eq!(cabin.threads.len(), 1);
+    assert_eq!(cabin.threads[0].grok_session.as_deref(), Some(id));
+    assert_eq!(cabin.threads[0].title, title);
+    assert_eq!(cabin.nav, super::Nav::Chat);
+    assert_eq!(cabin.status, format!("Opened {title}"));
+    assert!(!cabin.running);
+
+    cabin.open_grok_session(id);
+    assert_eq!(cabin.threads.len(), 1);
+    assert_eq!(cabin.threads[0].grok_session.as_deref(), Some(id));
+    assert!(!cabin.running);
+
+    cabin.delete_grok_history(id);
+    assert!(cabin
+        .threads
+        .iter()
+        .all(|t| t.grok_session.as_deref() != Some(id)));
+    assert!(!cabin.running);
+
+    let threads_after = cabin.threads.len();
+    let missing = "not-a-thread-and-not-open";
+    cabin.delete_grok_history(missing);
+    assert_eq!(cabin.status, "Deleting session…");
+    assert_eq!(cabin.threads.len(), threads_after);
+    assert!(cabin
+        .threads
+        .iter()
+        .all(|t| t.grok_session.as_deref() != Some(missing)));
+    assert!(!cabin.running);
+}
+
