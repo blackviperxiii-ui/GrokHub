@@ -7570,3 +7570,24 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn remove_project_id_drops_folder() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.make_folder("Harbor folder");
+    let id = cabin
+        .projects
+        .iter()
+        .find(|n| n.name == "Harbor folder")
+        .expect("folder row")
+        .id
+        .clone();
+    cabin.remove_project_id(&id);
+    assert!(
+        cabin.projects.iter().all(|n| n.id != id),
+        "folder id should be gone"
+    );
+    assert_eq!(cabin.status, "Removed Harbor folder");
+    cabin.remove_project_id("missing-id");
+    assert_eq!(cabin.status, "Project not found");
+}
