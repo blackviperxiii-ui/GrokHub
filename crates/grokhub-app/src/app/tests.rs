@@ -7592,7 +7592,7 @@ fn grok_history_open_and_delete_stay_off_a_run() {
     assert_eq!(cabin.threads.len(), 1);
     assert_eq!(cabin.threads[0].grok_session.as_deref(), Some(id));
     assert_eq!(cabin.threads[0].title, title);
-    assert_eq!(cabin.nav, super::Nav::Chat);
+    assert!(cabin.nav == super::Nav::Chat);
     assert_eq!(cabin.status, format!("Opened {title}"));
     assert!(!cabin.running);
 
