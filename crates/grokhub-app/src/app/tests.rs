@@ -7580,3 +7580,162 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+/// Sidebar History order: pins last-pinned-first, then last used.
+fn history_row_titles(cabin: &Cabin) -> Vec<String> {
+    let listed = crate::threads::chat_section_indices(
+        &cabin.threads,
+        Some(cabin.thread_idx),
+        cabin.messages.is_empty(),
+    );
+    let keys: Vec<crate::threads::SessionSortKey> = listed
+        .iter()
+        .map(|&i| {
+            let t = &cabin.threads[i];
+            crate::threads::SessionSortKey {
+                pinned: t.pinned,
+                pinned_ms: t.pinned_ms,
+                accessed_ms: t.accessed_ms,
+                list_rank: 0,
+            }
+        })
+        .collect();
+    crate::threads::session_list_order(&keys)
+        .into_iter()
+        .map(|pos| cabin.threads[listed[pos]].title.clone())
+        .collect()
+}
+
+struct RestoreEnv {
+    key: &'static str,
+    prev: Option<String>,
+}
+
+impl RestoreEnv {
+    fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let prev = std::env::var(key).ok();
+        std::env::set_var(key, value);
+        Self { key, prev }
+    }
+}
+
+impl Drop for RestoreEnv {
+    fn drop(&mut self) {
+        match self.prev.take() {
+            Some(value) => std::env::set_var(self.key, value),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
+
+fn spoke(title: &str, accessed_ms: u64) -> crate::threads::ChatThread {
+    let mut thread = crate::threads::ChatThread::new(title, false);
+    thread.accessed_ms = accessed_ms;
+    thread
+        .messages_mut()
+        .push(("user".into(), format!("keep {title}")));
+    thread
+}
+
+#[test]
+fn opening_a_history_row_keeps_its_place() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("history-click");
+    let _ = std::fs::remove_dir_all(&root);
+    let _cfg = RestoreEnv::set("GROKHUB_CONFIG", &root);
+    let _tray = RestoreEnv::set("GROKHUB_TRAY", "0");
+
+    let mut last_pin = spoke("Last pin", 1);
+    last_pin.pinned = true;
+    last_pin.pinned_ms = 80;
+    let mut earlier_pin = spoke("Earlier pin", 9_000);
+    earlier_pin.pinned = true;
+    earlier_pin.pinned_ms = 20;
+    let newer = spoke("Newer chat", 500);
+    let older = spoke("Older chat", 100);
+    let earlier_idx = 1;
+    let newer_idx = 2;
+    let older_idx = 3;
+    let mut cabin = Cabin::quiet_cabin(vec![last_pin, earlier_pin, newer, older], newer_idx);
+    assert!(!cabin.running, "the cabin is quiet before the click");
+
+    let before = history_row_titles(&cabin);
+    assert_eq!(
+        before,
+        ["Last pin", "Earlier pin", "Newer chat", "Older chat"],
+        "pins stay last-pinned-first, then last used: {before:?}"
+    );
+    let opened_at = before.iter().position(|t| t == "Older chat").unwrap();
+    assert_ne!(opened_at, 0, "the chat we open is not already first");
+    let older_accessed = cabin.threads[older_idx].accessed_ms;
+    let earlier_pin_ms = cabin.threads[earlier_idx].pinned_ms;
+    let earlier_accessed = cabin.threads[earlier_idx].accessed_ms;
+
+    cabin.switch_thread(older_idx);
+    let after_click = history_row_titles(&cabin);
+    assert_eq!(
+        after_click, before,
+        "switch_thread is the History click and must not move the row: {after_click:?}"
+    );
+    assert_eq!(cabin.thread_idx, older_idx);
+    assert_eq!(
+        cabin.threads[older_idx].accessed_ms, older_accessed,
+        "the click must not bump accessed_ms"
+    );
+
+    // send_chat stamps the open thread with stamp_current_access. That is the
+    // sent-turn bump. The click above did not call it.
+    cabin.stamp_current_access();
+    let after_stamp = history_row_titles(&cabin);
+    assert_eq!(
+        after_stamp,
+        ["Last pin", "Earlier pin", "Older chat", "Newer chat"],
+        "a sent turn moves that chat up, under the pins: {after_stamp:?}"
+    );
+    let stamped_at = after_stamp
+        .iter()
+        .position(|t| t == "Older chat")
+        .unwrap();
+    assert!(stamped_at < opened_at, "the messaged chat moved up");
+    assert!(cabin.threads[older_idx].accessed_ms > older_accessed);
+
+    let pins_before: Vec<_> = after_stamp
+        .iter()
+        .filter(|title| {
+            cabin
+                .threads
+                .iter()
+                .any(|t| t.title == **title && t.pinned)
+        })
+        .cloned()
+        .collect();
+    assert_eq!(pins_before, ["Last pin", "Earlier pin"]);
+    cabin.switch_thread(earlier_idx);
+    let after_pin_click = history_row_titles(&cabin);
+    let pins_after: Vec<_> = after_pin_click
+        .iter()
+        .take(2)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        pins_after, pins_before,
+        "clicking a pinned chat leaves the pin group last-pinned-first: {after_pin_click:?}"
+    );
+    assert!(cabin.threads[earlier_idx].pinned);
+    assert_eq!(cabin.threads[earlier_idx].pinned_ms, earlier_pin_ms);
+    assert_eq!(
+        cabin.threads[earlier_idx].accessed_ms, earlier_accessed,
+        "clicking a pin is not activity"
+    );
+    assert_eq!(
+        after_pin_click, after_stamp,
+        "the pin click does not reorder History"
+    );
+
+    let start = std::time::Instant::now();
+    while cabin.persist_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(5) {
+        cabin.poll_persist();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
