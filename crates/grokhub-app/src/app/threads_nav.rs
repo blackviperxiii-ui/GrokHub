@@ -55,7 +55,6 @@ impl Cabin {
                 self.drop_leaving_thread_chrome();
             }
         }
-        self.stamp_current_access();
         self.composer_want_focus = true;
     }
 
