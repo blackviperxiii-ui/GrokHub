@@ -7570,3 +7570,32 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn cancel_staged_folder_drops_it() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("cancel-folder");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    cabin.stage_new_folder();
+    assert_eq!(cabin.projects.len(), 1);
+    assert!(matches!(
+        cabin.projects[0].kind,
+        super::ProjectKind::Folder
+    ));
+    assert_eq!(cabin.projects[0].name, "Folder");
+    assert!(cabin.proj_staged.is_some());
+    assert_eq!(cabin.status, "Name this folder");
+    assert!(!cabin.running);
+
+    cabin.cancel_proj_rename();
+    assert!(cabin.projects.is_empty());
+    assert!(cabin.proj_staged.is_none());
+    assert!(cabin.proj_rename.is_none());
+    assert_eq!(cabin.status, "Name this folder");
+    assert!(!cabin.running);
+}
+
