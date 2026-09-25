@@ -7570,3 +7570,34 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn bubble_reply_quotes_into_the_composer() {
+    fn reply_like_the_button(cabin: &mut Cabin, body: &str) {
+        cabin.composer = append_composer(&cabin.composer, &quote_for_reply(body));
+        if !cabin.composer.ends_with('\n') {
+            cabin.composer.push('\n');
+        }
+        cabin.composer_want_focus = true;
+    }
+
+    let mut plain = Cabin::quiet_for_test();
+    plain.composer = "notes for later".into();
+    assert!(!plain.running);
+    assert!(!plain.composer_want_focus);
+    reply_like_the_button(&mut plain, "Ship the harbor");
+    assert_eq!(plain.composer, "notes for later\n> Ship the harbor\n");
+    assert!(plain.composer.starts_with("notes for later\n"));
+    assert!(plain.composer_want_focus);
+    assert!(!plain.running);
+
+    let mut marked = Cabin::quiet_for_test();
+    marked.composer = "notes for later".into();
+    assert!(!marked.running);
+    assert!(!marked.composer_want_focus);
+    reply_like_the_button(&mut marked, "> already quoted");
+    assert_eq!(marked.composer, "notes for later\n> > already quoted\n");
+    assert!(marked.composer.starts_with("notes for later\n"));
+    assert!(marked.composer_want_focus);
+    assert!(!marked.running);
+}
+
