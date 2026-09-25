@@ -7880,3 +7880,35 @@ fn kick_without_grok_does_not_start_a_run() {
     release_isolated(&root, cabin);
 }
 
+#[test]
+fn kick_imagine_empty_stays_idle_and_no_key_refuses() {
+    const NO_KEY: &str = "Add an xAI console API key in Settings, or run grok login.";
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("imagine-nokey");
+    assert!(
+        cabin.console_key().trim().is_empty(),
+        "no console key"
+    );
+    assert!(
+        grokhub_acp::grok_cli_key()
+            .map(|k| k.trim().is_empty())
+            .unwrap_or(true),
+        "no bearer; this test must not POST"
+    );
+    assert!(cabin.secrets.oauth.is_none(), "no oauth bearer");
+
+    cabin.imagine_prompt.clear();
+    cabin.kick_imagine();
+    assert!(!cabin.running, "an empty prompt must not start Imagine");
+    assert!(cabin.rx.is_none(), "an empty prompt must not spawn a job");
+    assert!(cabin.imagine_error.is_empty());
+
+    cabin.imagine_prompt = "harbor at dusk".into();
+    cabin.kick_imagine();
+    assert!(!cabin.running, "no key must not start Imagine");
+    assert_eq!(cabin.status, NO_KEY);
+    assert_eq!(cabin.imagine_error, NO_KEY);
+    assert!(cabin.rx.is_none(), "no-key refusal must not spawn a job");
+    release_isolated(&root, cabin);
+}
+
