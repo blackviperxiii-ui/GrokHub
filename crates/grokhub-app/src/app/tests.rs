@@ -7570,3 +7570,42 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+
+#[test]
+fn plan_and_empty_video_stay_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("plan-video");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.new_thread(false);
+    {
+        let thread = cabin
+            .threads
+            .get_mut(cabin.thread_idx)
+            .expect("seeded thread");
+        thread.grok_session = Some("sess".into());
+    }
+
+    cabin.run_slash(super::Slash::Plan);
+    assert_eq!(cabin.status, "Plan mode — Grok Build will plan first");
+    assert!(matches!(cabin.session_mode, super::SessionMode::Plan));
+    assert_eq!(cabin.cfg.session_mode, "plan");
+    assert!(cabin.acp.is_none());
+    let session = cabin
+        .threads
+        .get(cabin.thread_idx)
+        .and_then(|t| t.grok_session.as_deref())
+        .unwrap_or("");
+    assert!(session.is_empty());
+    assert!(!cabin.running);
+
+    cabin.run_slash(super::Slash::ImagineVideo(String::new()));
+    assert!(matches!(cabin.nav, super::Nav::Imagine));
+    assert!(matches!(cabin.imagine_kind, super::ImagineKind::Video));
+    assert!(cabin.imagine_want_focus);
+    assert!(!cabin.running);
+}
