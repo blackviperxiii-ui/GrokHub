@@ -7570,3 +7570,30 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn unknown_slash_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("unknown-slash");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+
+    let status = cabin.status.clone();
+    let transcript = cabin.messages.clone();
+    let running = cabin.running;
+
+    cabin.send_chat(String::new());
+    assert_eq!(cabin.status, status);
+    assert_eq!(&*cabin.messages, &*transcript);
+    assert_eq!(cabin.running, running);
+
+    cabin.send_chat("/not-a-command".to_string());
+    assert_eq!(cabin.status, "Unknown command — /help");
+    assert_eq!(&*cabin.messages, &*transcript);
+    assert!(!cabin.running);
+}
+
