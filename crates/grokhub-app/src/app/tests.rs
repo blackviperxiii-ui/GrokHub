@@ -1292,9 +1292,17 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "every chat in an open folder is listed there: {projects}"
         );
         assert!(
-            projects.contains("open_project_chat")
-                && projects.contains("ProjectKind::Project =>"),
+            projects.contains("activate_project_row")
+                && projects.contains("ProjectKind::Project"),
             "a project row is a chat: clicking it opens that chat: {projects}"
+        );
+        let activate = fn_src(&src, "activate_project_row");
+        assert!(
+            activate.contains("open_project_chat")
+                && activate.contains("ProjectKind::Project")
+                && activate.contains("n.open = !n.open")
+                && activate.contains("ProjectKind::Folder"),
+            "folder click only toggles open; project click opens the chat: {activate}"
         );
         assert!(
             projects.contains("RailIcon::Folder")
@@ -3714,12 +3722,14 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "voice STT must not slurp a huge wav: {listen}"
         );
         let queue = fn_src(&src, "ui_agents");
+        let queued = fn_src(&src, "start_queued_job");
         assert!(
             !queue.contains("send_chat")
-                && queue.contains("chat_job_thread")
-                && queue.contains("push_bound_msg")
-                && queue.contains("kick_model"),
-            "Queue Run must kick the origin thread, not send_chat on the visible tab: {queue}"
+                && queue.contains("kick_model")
+                && queued.contains("chat_job_thread")
+                && queued.contains("push_bound_msg")
+                && !queued.contains("kick_model"),
+            "Queue Run must kick the origin thread, not send_chat on the visible tab: {queue} {queued}"
         );
         assert!(
             src.contains("finish_hub_dispatch"),
@@ -7658,5 +7668,135 @@ fn park_fresh_chat_keeps_the_running_reply_and_opens_an_empty_chat() {
     }
     let _ = std::fs::remove_dir_all(&root);
     std::env::remove_var("GROKHUB_CONFIG");
+}
+
+fn isolated_cabin(label: &str) -> (std::path::PathBuf, super::Cabin) {
+    let root = crate::config::test_config_root(label);
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    (root, super::Cabin::quiet_for_test())
+}
+
+fn release_isolated(root: &std::path::Path, cabin: super::Cabin) {
+    let io = cabin.persist_io.clone();
+    drop(cabin);
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(3) {
+        if io.try_lock().is_ok() {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            if io.try_lock().is_ok() {
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let _ = std::fs::remove_dir_all(root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn selecting_plan_leaves_the_title_and_sets_plan() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("plan-title");
+    let mut thread = crate::threads::ChatThread::new("Night watch", false);
+    thread.messages = std::sync::Arc::new(vec![("user".into(), "dock".into())]);
+    cabin.threads = vec![thread];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.session_mode = SessionMode::Chat;
+
+    cabin.select_plan_without_rename();
+
+    assert_eq!(cabin.threads[0].title, "Night watch");
+    assert_eq!(cabin.session_mode, SessionMode::Plan);
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn feed_accept_files_one_todo() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("idea-accept");
+    let card = grokhub_core::idea_card("src", "More F1", "from the brief", 1);
+    let id = card.id.clone();
+    cabin.updates = vec![card];
+
+    cabin.apply_feed_act(Some(FeedAct::Build(id)));
+
+    assert_eq!(cabin.board.len(), 1);
+    assert_eq!(cabin.board[0].status, grokhub_core::BoardStatus::Todo);
+    assert_eq!(cabin.board[0].title, "Cover F1");
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn folder_click_toggles_and_project_click_opens_the_chat() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("project-row");
+    cabin.projects = vec![
+        ProjectNode {
+            id: "fold".into(),
+            name: "Apps".into(),
+            kind: ProjectKind::Folder,
+            path: String::new(),
+            parent: None,
+            open: false,
+        },
+        ProjectNode {
+            id: "proj".into(),
+            name: "Lab".into(),
+            kind: ProjectKind::Project,
+            path: "/tmp/grokhub-proof-lab".into(),
+            parent: Some("fold".into()),
+            open: false,
+        },
+    ];
+    let before = cabin.threads.len();
+    cabin.activate_project_row("fold");
+    assert!(cabin.projects.iter().find(|n| n.id == "fold").unwrap().open);
+    assert_eq!(cabin.threads.len(), before, "a folder click does not open a chat");
+
+    cabin.activate_project_row("proj");
+    assert!(matches!(cabin.nav, Nav::Chat));
+    assert!(
+        cabin.threads.iter().any(|t| t.project_id.as_deref() == Some("proj")),
+        "a project click opens that project's chat"
+    );
+    assert!(
+        cabin.projects.iter().find(|n| n.id == "fold").unwrap().open,
+        "opening a project chat does not collapse the folder"
+    );
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn queue_run_starts_the_origin_thread() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("queue-run");
+    let visible = crate::threads::ChatThread::new("Visible", false);
+    let mut origin = crate::threads::ChatThread::new("Origin", false);
+    let origin_id = origin.id.clone();
+    origin.messages = std::sync::Arc::new(Vec::new());
+    cabin.threads = vec![visible, origin];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.agents.push(AgentJob {
+        title: "Flash the pi".into(),
+        status: "queued".into(),
+        prompt: "write the image".into(),
+        thread_id: origin_id.clone(),
+    });
+
+    assert!(cabin.start_queued_job(0));
+    assert!(!cabin.running, "the state change does not spawn grok");
+    assert_eq!(cabin.agents[0].status, "running");
+    assert_eq!(cabin.chat_job_thread.as_deref(), Some(origin_id.as_str()));
+    assert!(matches!(cabin.nav, Nav::Chat));
+    let origin = cabin.threads.iter().find(|t| t.id == origin_id).unwrap();
+    assert_eq!(
+        origin.messages.as_slice(),
+        [("user".into(), "write the image".into())]
+    );
+    assert!(cabin.threads[0].messages.is_empty());
+    release_isolated(&root, cabin);
 }
 

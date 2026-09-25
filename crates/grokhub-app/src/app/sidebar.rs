@@ -410,19 +410,7 @@ impl Cabin {
                         );
                     } else if row.clicked() {
                         let id = self.projects[idx].id.clone();
-                        match kind {
-                            ProjectKind::Folder => {
-                                if let Some(n) = self.projects.iter_mut().find(|n| n.id == id) {
-                                    n.open = !n.open;
-                                }
-                                self.touch_projects();
-                                self.flush_projects();
-                            }
-                            ProjectKind::Project => {
-                                self.bind_project_id(&id);
-                                self.open_project_chat(&id);
-                            }
-                        }
+                        self.activate_project_row(&id);
                     }
                     let nid = self.projects[idx].id.clone();
                     let row_pos = row.rect.left_bottom();
@@ -617,6 +605,25 @@ impl Cabin {
             }
             _ => Nav::Chat,
         };
+    }
+
+    /// Folder click toggles the tree. Project click opens that project's chat.
+    pub(super) fn activate_project_row(&mut self, id: &str) {
+        let kind = self.projects.iter().find(|n| n.id == id).map(|n| n.kind);
+        match kind {
+            Some(ProjectKind::Folder) => {
+                if let Some(n) = self.projects.iter_mut().find(|n| n.id == id) {
+                    n.open = !n.open;
+                }
+                self.touch_projects();
+                self.flush_projects();
+            }
+            Some(ProjectKind::Project) => {
+                self.bind_project_id(id);
+                self.open_project_chat(id);
+            }
+            None => {}
+        }
     }
 
     /// One sidebar chat list. The project section and the chat section both use this.

@@ -31,7 +31,7 @@ pub(super) fn home_feed_count(cards: &[UpdateCard]) -> usize {
     home_feed_n(cards)
 }
 
-enum FeedAct {
+pub(super) enum FeedAct {
     Open(String),
     Dismiss(String),
     Build(String),
@@ -248,7 +248,7 @@ impl Cabin {
             });
     }
 
-    fn apply_feed_act(&mut self, act: Option<FeedAct>) {
+    pub(super) fn apply_feed_act(&mut self, act: Option<FeedAct>) {
         match act {
             Some(FeedAct::Dismiss(id)) => self.dismiss_feed_card(&id),
             Some(FeedAct::Build(id)) => self.build_idea(&id),

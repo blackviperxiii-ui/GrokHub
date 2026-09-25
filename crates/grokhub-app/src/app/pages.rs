@@ -184,24 +184,33 @@ impl Cabin {
                     }
                 }
                 if let Some(i) = run_at {
-                    if i < self.agents.len() {
-                        if self.running {
-                            self.status = "Busy — wait, then run".into();
-                        } else {
-                            self.agents[i].status = "running".into();
-                            let p = self.agents[i].prompt.clone();
-                            let tid = self.agents[i].thread_id.clone();
-                            self.nav = Nav::Chat;
-                            if !tid.is_empty() {
-                                self.chat_job_thread = Some(tid);
-                            }
-                            self.push_bound_msg("user", p);
-                            self.persist();
-                            self.kick_model(false);
-                        }
+                    if self.start_queued_job(i) {
+                        self.kick_model(false);
                     }
                 }
             });
+    }
+
+    /// Queue Run state. True when the caller should kick the model.
+    /// This call does not spawn grok.
+    pub(super) fn start_queued_job(&mut self, i: usize) -> bool {
+        if i >= self.agents.len() {
+            return false;
+        }
+        if self.running {
+            self.status = "Busy — wait, then run".into();
+            return false;
+        }
+        self.agents[i].status = "running".into();
+        let p = self.agents[i].prompt.clone();
+        let tid = self.agents[i].thread_id.clone();
+        self.nav = Nav::Chat;
+        if !tid.is_empty() {
+            self.chat_job_thread = Some(tid);
+        }
+        self.push_bound_msg("user", p);
+        self.persist();
+        true
     }
 
     pub(super) fn ui_devices(&mut self, ctx: &egui::Context) {
