@@ -7570,3 +7570,50 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn attach_sets_the_chip_and_paste_lands_in_the_composer() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("plus-attach");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.apply_plus_ready(
+        grokhub_core::PlusTarget::Chat,
+        PlusReady {
+            kind: grokhub_core::AttachKind::Image,
+            name: "harbor.png".into(),
+            raw: "/tmp/harbor.png".into(),
+            image_url: Some("data:image/png;base64,aGk=".into()),
+            text: None,
+        },
+    );
+    assert_eq!(cabin.attach_name.as_deref(), Some("harbor.png"));
+    assert_eq!(
+        cabin.attach_url.as_deref(),
+        Some("data:image/png;base64,aGk=")
+    );
+    assert_eq!(
+        cabin.status,
+        "Attached harbor.png — sends with the next message"
+    );
+    assert!(!cabin.running);
+    assert!(cabin.messages.is_empty());
+    cabin.composer = "hello".into();
+    cabin.apply_clipboard(grokhub_core::PlusTarget::Chat, "harbor light\n");
+    assert_eq!(cabin.composer, "hello\nharbor light");
+    assert_eq!(cabin.status, "Pasted clipboard");
+    cabin.apply_plus_ready(
+        grokhub_core::PlusTarget::Chat,
+        PlusReady {
+            kind: grokhub_core::AttachKind::Text,
+            name: "note.txt".into(),
+            raw: "/tmp/note.txt".into(),
+            image_url: None,
+            text: Some("fold the charts".into()),
+        },
+    );
+    assert_eq!(cabin.composer, "hello\nharbor light\nfold the charts");
+    assert_eq!(cabin.status, "Pasted note.txt");
+    assert!(!cabin.running);
+    assert!(cabin.messages.is_empty());
+}
+
