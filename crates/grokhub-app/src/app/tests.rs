@@ -7570,3 +7570,191 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn kick_imagine_local_send_stores_harbor_url() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    struct RestoreEnv {
+        config: Option<String>,
+        tray: Option<String>,
+        proxies: Vec<(String, String)>,
+    }
+    impl Drop for RestoreEnv {
+        fn drop(&mut self) {
+            crate::xai::set_imagine_base_override(None);
+            match self.config.take() {
+                Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+                None => std::env::remove_var("GROKHUB_CONFIG"),
+            }
+            match self.tray.take() {
+                Some(v) => std::env::set_var("GROKHUB_TRAY", v),
+                None => std::env::remove_var("GROKHUB_TRAY"),
+            }
+            for (k, v) in self.proxies.drain(..) {
+                std::env::set_var(k, v);
+            }
+        }
+    }
+
+    let _cfg = crate::config::hold_test_config();
+    let mut restore = RestoreEnv {
+        config: std::env::var("GROKHUB_CONFIG").ok(),
+        tray: std::env::var("GROKHUB_TRAY").ok(),
+        proxies: Vec::new(),
+    };
+    for key in [
+        "http_proxy",
+        "https_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "all_proxy",
+        "ALL_PROXY",
+    ] {
+        if let Ok(v) = std::env::var(key) {
+            restore.proxies.push((key.to_string(), v));
+            std::env::remove_var(key);
+        }
+    }
+    let root = crate::config::test_config_root("imagine-local");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_TRAY", "0");
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let origin = format!("http://127.0.0.1:{port}");
+    crate::xai::set_imagine_base_override(Some(&origin));
+
+    let hits: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorded = hits.clone();
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking");
+    std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .expect("timeout");
+                    let mut buf = Vec::new();
+                    let mut tmp = [0u8; 8192];
+                    let header_end = loop {
+                        let n = stream.read(&mut tmp).expect("request headers");
+                        assert!(n > 0, "eof before imagine headers");
+                        buf.extend_from_slice(&tmp[..n]);
+                        if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                            break i + 4;
+                        }
+                        assert!(buf.len() < 1_000_000, "imagine headers too large");
+                    };
+                    let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
+                    let mut len = 0usize;
+                    for line in head.lines() {
+                        if let Some(rest) = line.to_ascii_lowercase().strip_prefix("content-length:")
+                        {
+                            len = rest.trim().parse().expect("content-length");
+                        }
+                    }
+                    while buf.len() < header_end + len {
+                        let n = stream.read(&mut tmp).expect("request body");
+                        assert!(n > 0, "eof before imagine body");
+                        buf.extend_from_slice(&tmp[..n]);
+                    }
+                    let body = String::from_utf8_lossy(&buf[header_end..header_end + len]).to_string();
+                    recorded
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push((head, body));
+                    let json = r#"{"data":[{"url":"http://127.0.0.1/harbor.png"}]}"#;
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{json}",
+                        json.len()
+                    );
+                    stream.write_all(resp.as_bytes()).expect("response");
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => panic!("accept: {e}"),
+            }
+        }
+    });
+
+    let mut cabin = Cabin::new(true);
+    cabin.secrets.api_key = "xai-local-console".into();
+    cabin.cfg.api_key.clear();
+    cabin.imagine_prompt = "harbor at dusk".into();
+    assert!(
+        !cabin.running,
+        "imagine send must start from an idle cabin"
+    );
+    cabin.kick_imagine();
+    assert!(
+        cabin.running,
+        "console key and prompt must start the imagine send, status={}",
+        cabin.status
+    );
+
+    let started = Instant::now();
+    while cabin.running && started.elapsed() < Duration::from_secs(8) {
+        cabin.poll_job();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        !cabin.running,
+        "running stayed stuck: status={} err={}",
+        cabin.status, cabin.imagine_error
+    );
+    assert_eq!(
+        cabin.imagine_last, "http://127.0.0.1/harbor.png",
+        "cabin must keep the URL the local server returned, status={} err={}",
+        cabin.status, cabin.imagine_error
+    );
+    assert!(
+        cabin
+            .messages
+            .iter()
+            .any(|(_, text)| text.contains("http://127.0.0.1/harbor.png")),
+        "transcript must keep the image URL: {:?}",
+        cabin.messages
+    );
+
+    let got = hits.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    assert_eq!(got.len(), 1, "expected one imagine POST, got {got:?}");
+    let (head, body) = &got[0];
+    assert!(
+        !head.to_ascii_lowercase().contains("api.x.ai") && !body.contains("api.x.ai"),
+        "request host must not be api.x.ai: {head}"
+    );
+    let host = head
+        .lines()
+        .find(|l| l.to_ascii_lowercase().starts_with("host:"))
+        .unwrap_or("");
+    assert!(
+        host.contains("127.0.0.1"),
+        "POST host must be the local server: {host}"
+    );
+    assert!(
+        head.lines().next().unwrap_or("").starts_with("POST "),
+        "imagine send must POST: {head}"
+    );
+    let json: serde_json::Value = serde_json::from_str(body).expect("json body");
+    assert_eq!(json["model"], "grok-imagine-image-2.0");
+    let prompt = json["prompt"].as_str().unwrap_or("");
+    assert!(
+        prompt.contains("harbor at dusk"),
+        "prompt must include harbor at dusk: {prompt}"
+    );
+    let _ = std::fs::write(
+        "/opt/cursor/artifacts/imagine-local-post.json",
+        body.as_bytes(),
+    );
+    let _ = restore;
+}
+
