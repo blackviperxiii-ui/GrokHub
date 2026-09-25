@@ -7570,3 +7570,22 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn clear_profile_picture_saves_without_a_dialog() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("clear-profile");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    cabin.cfg.profile_picture = "profile.png".into();
+    cabin.clear_profile_picture();
+
+    assert!(cabin.cfg.profile_picture.is_empty());
+    assert!(cabin.profile_photo.is_none());
+    assert_eq!(cabin.status, "Saved");
+    assert!(!cabin.running);
+}
+
