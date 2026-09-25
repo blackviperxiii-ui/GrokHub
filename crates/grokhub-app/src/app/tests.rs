@@ -7570,3 +7570,20 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn mode_slash_sets_think_and_auto() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("mode-slash");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.model.clear();
+    cabin.run_slash_line("/mode think");
+    assert_eq!(cabin.cfg.mode, "think");
+    assert_eq!(cabin.status, "Mode think → grok-4.7 · high");
+    cabin.cfg.model.clear();
+    cabin.run_slash_line("/mode auto");
+    assert_eq!(cabin.cfg.mode, "auto");
+    assert_eq!(cabin.status, "Mode auto — routes Fast / Balance / Think / Max");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
