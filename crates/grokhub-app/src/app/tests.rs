@@ -7570,3 +7570,46 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn scratch_btw_worktree_plan_and_fork() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("scratch-btw");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.running = false;
+    cabin.run_slash_line("/view-plan");
+    assert_eq!(cabin.status, "No plan yet — use Plan mode");
+    assert!(!cabin.plan_open);
+    cabin.run_slash_line("/btw");
+    assert!(matches!(cabin.session_mode, SessionMode::Ask));
+    assert_eq!(cabin.cfg.session_mode, "ask");
+    assert_eq!(cabin.status, "btw — look-safe side ask");
+    cabin.run_slash_line("/scratch");
+    assert_eq!(cabin.status, "Scratch — no memory writes");
+    assert!(cabin.scratch());
+    assert!(cabin.composer_want_focus);
+    cabin.run_slash_line("/worktree");
+    assert_eq!(cabin.status, "Next chat uses --worktree");
+    assert!(cabin.threads[cabin.thread_idx].grok_worktree);
+    cabin.run_slash_line("/worktree");
+    assert_eq!(cabin.status, "Worktree off");
+    assert!(!cabin.threads[cabin.thread_idx].grok_worktree);
+    cabin.threads[cabin.thread_idx].grok_session = Some("sess-harbor".into());
+    cabin.run_slash_line("/fork");
+    assert_eq!(
+        cabin.status,
+        "Forked — next send starts a new Grok session from this history"
+    );
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Fork");
+    assert!(cabin.threads[cabin.thread_idx].grok_fork);
+    assert_eq!(
+        cabin.threads[cabin.thread_idx].grok_session.as_deref(),
+        Some("sess-harbor")
+    );
+    cabin.threads[cabin.thread_idx].plan_body = "harbor steps".into();
+    cabin.run_slash_line("/view-plan");
+    assert!(cabin.plan_open);
+    assert_eq!(cabin.status, "View plan");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
