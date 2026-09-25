@@ -7570,3 +7570,29 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn discuss_card_opens_a_local_chat() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("discuss-card");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.discuss_card("missing");
+    assert!(cabin.threads.is_empty());
+    assert!(!cabin.running);
+    let card = grokhub_core::idea_card("harbor", "Harbor lamp", "fold the charts", 1);
+    let id = card.id.clone();
+    cabin.updates.push(card);
+    cabin.discuss_card(&id);
+    assert!(matches!(cabin.nav, Nav::Chat));
+    assert!(!cabin.running);
+    let thread = cabin.threads.get(cabin.thread_idx).expect("discuss thread");
+    assert_eq!(thread.title, "Discuss · Harbor lamp");
+    assert!(thread.title_locked);
+    assert!(cabin.messages.iter().any(|(_, body)| {
+        body.contains("Post: Harbor lamp") && body.contains("fold the charts")
+    }));
+    let stuck = cabin.updates.iter().find(|c| c.id == id).expect("card");
+    assert_eq!(stuck.status, grokhub_core::UpdateStatus::Opened);
+    assert!(stuck.discuss_thread.is_some());
+}
+
