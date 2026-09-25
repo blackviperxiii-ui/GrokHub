@@ -7570,3 +7570,32 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn view_plan_opens_a_stored_plan() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("view-plan");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.new_thread(false);
+
+    cabin.threads[cabin.thread_idx].plan_body.clear();
+    cabin.run_slash(super::Slash::ViewPlan);
+    assert_eq!(cabin.status, "No plan yet — use Plan mode");
+    assert!(!cabin.plan_open);
+    assert!(!cabin.running);
+
+    cabin.threads[cabin.thread_idx].plan_body = " \n\t ".into();
+    cabin.run_slash(super::Slash::ViewPlan);
+    assert_eq!(cabin.status, "No plan yet — use Plan mode");
+    assert!(!cabin.plan_open);
+    assert!(!cabin.running);
+
+    cabin.threads[cabin.thread_idx].plan_body = "Ship the harbor".into();
+    cabin.run_slash(super::Slash::ViewPlan);
+    assert!(cabin.plan_open);
+    assert_eq!(cabin.status, "View plan");
+    assert!(!cabin.running);
+}
+
