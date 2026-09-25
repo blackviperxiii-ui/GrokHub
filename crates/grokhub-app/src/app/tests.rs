@@ -7570,3 +7570,42 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn delete_all_history_leaves_one_empty_chat() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("delete-all-history");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.new_thread(false);
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), "note".into())]);
+    cabin.new_thread(false);
+    cabin.cfg.goal_pin = "harbor".into();
+    let seeded = cabin
+        .threads
+        .iter()
+        .position(|t| !t.messages.is_empty())
+        .expect("seeded message");
+    cabin.threads[seeded].grok_session = Some("sess".into());
+    assert!(cabin.threads.len() >= 2);
+    assert!(cabin.threads.iter().any(|t| t.grok_session.as_deref() == Some("sess")));
+    assert_eq!(cabin.cfg.goal_pin, "harbor");
+    assert!(!cabin.running);
+
+    cabin.delete_all_history();
+
+    assert_eq!(cabin.status, "Deleted all chats");
+    assert_eq!(cabin.threads.len(), 1);
+    assert_eq!(cabin.threads[0].title, "Chat");
+    assert!(cabin.threads[0].messages.is_empty());
+    assert!(cabin.messages.is_empty());
+    assert!(cabin.cfg.goal_pin.is_empty());
+    assert!(cabin.grok_sessions.is_empty());
+    assert!(!cabin.running);
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
