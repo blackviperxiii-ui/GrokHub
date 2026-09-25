@@ -1106,4 +1106,19 @@ mod tests {
             "/project bind . must not inherit the cabin process cwd"
         );
     }
+
+    #[test]
+    fn create_folder_rejects_a_parent_and_an_empty_name() {
+        let mut nodes = Vec::new();
+        assert_eq!(
+            create_folder(&mut nodes, "folder-1", "Notes", Some("parent")),
+            Err("folders stay at the root")
+        );
+        assert!(nodes.is_empty());
+        assert_eq!(
+            create_folder(&mut nodes, "folder-1", "", None),
+            Err("need a folder name")
+        );
+        assert!(nodes.is_empty());
+    }
 }
