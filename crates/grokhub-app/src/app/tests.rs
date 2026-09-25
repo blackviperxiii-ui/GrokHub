@@ -7570,3 +7570,126 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn session_title_sync_keeps_locks_and_placeholders() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("title-sync");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("title-sync config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+
+    struct Seed {
+        cabin_title: &'static str,
+        locked: bool,
+        session: Option<&'static str>,
+        grok_title: Option<&'static str>,
+        expect: &'static str,
+    }
+    let seeds = [
+        Seed {
+            cabin_title: "Locked cabin",
+            locked: true,
+            session: Some("sess-locked"),
+            grok_title: Some("Replacement title"),
+            expect: "Locked cabin",
+        },
+        Seed {
+            cabin_title: "Local only",
+            locked: false,
+            session: None,
+            grok_title: None,
+            expect: "Local only",
+        },
+        Seed {
+            cabin_title: "No summary cabin",
+            locked: false,
+            session: Some("sess-nosum"),
+            grok_title: Some("(no summary)"),
+            expect: "No summary cabin",
+        },
+        Seed {
+            cabin_title: "No label cabin",
+            locked: false,
+            session: Some("sess-nolabel"),
+            grok_title: Some("(no label)"),
+            expect: "No label cabin",
+        },
+        Seed {
+            cabin_title: "Session word cabin",
+            locked: false,
+            session: Some("sess-word"),
+            grok_title: Some("session"),
+            expect: "Session word cabin",
+        },
+        Seed {
+            cabin_title: "Plan cabin",
+            locked: false,
+            session: Some("sess-plan"),
+            grok_title: Some("Plan"),
+            expect: "Plan cabin",
+        },
+        Seed {
+            cabin_title: "Blank title cabin",
+            locked: false,
+            session: Some("sess-blank"),
+            grok_title: Some(""),
+            expect: "Blank title cabin",
+        },
+        Seed {
+            cabin_title: "Same id cabin",
+            locked: false,
+            session: Some("sess-equals-id"),
+            grok_title: Some("sess-equals-id"),
+            expect: "Same id cabin",
+        },
+        Seed {
+            cabin_title: "Unlocked cabin",
+            locked: false,
+            session: Some("sess-real"),
+            grok_title: Some("Dock layout notes"),
+            expect: "Dock layout notes",
+        },
+        Seed {
+            cabin_title: "Missing session cabin",
+            locked: false,
+            session: Some("sess-missing"),
+            grok_title: None,
+            expect: "Missing session cabin",
+        },
+    ];
+
+    cabin.threads = seeds
+        .iter()
+        .map(|c| {
+            let mut thread = crate::threads::ChatThread::new(c.cabin_title, false);
+            thread.title_locked = c.locked;
+            thread.grok_session = c.session.map(str::to_string);
+            thread
+        })
+        .collect();
+    cabin.grok_sessions = seeds
+        .iter()
+        .filter_map(|c| {
+            let id = c.session?;
+            let title = c.grok_title?;
+            Some(grokhub_acp::GrokSession {
+                id: id.to_string(),
+                title: title.to_string(),
+                path: None,
+                cwd: None,
+                cabin: false,
+            })
+        })
+        .collect();
+
+    cabin.sync_unlocked_titles_from_sessions();
+
+    for (i, c) in seeds.iter().enumerate() {
+        assert_eq!(cabin.threads[i].title, c.expect, "{}", c.cabin_title);
+    }
+    assert!(!cabin.running);
+}
+
