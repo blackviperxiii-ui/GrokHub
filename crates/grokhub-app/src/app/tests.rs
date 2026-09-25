@@ -7570,3 +7570,27 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn skills_connectors_and_sessions_without_grok() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("skills-sessions");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_GROK", "/tmp/grokhub-no-such-grok");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/skills");
+    assert!(matches!(cabin.nav, Nav::Skills));
+    assert!(!cabin.skills_tab_connectors);
+    assert_eq!(cabin.status, crate::build_agent::grok_banner());
+    assert!(cabin.grok_catalog_loaded);
+    assert!(cabin.grok_catalog_rx.is_none());
+    cabin.run_slash_line("/connectors");
+    assert!(matches!(cabin.nav, Nav::Connectors));
+    assert!(cabin.skills_tab_connectors);
+    assert_eq!(cabin.status, crate::build_agent::grok_banner());
+    cabin.run_slash_line("/dashboard");
+    assert!(matches!(cabin.nav, Nav::History));
+    assert_eq!(cabin.status, crate::build_agent::grok_banner());
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
+    std::env::remove_var("GROKHUB_GROK");
+}
