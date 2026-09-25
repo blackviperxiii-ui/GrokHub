@@ -7570,3 +7570,29 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn learn_reflects_nothing_new_and_scratch_refuses() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("learn-reflect");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/learn");
+    assert_eq!(cabin.status, "Reflecting…");
+    assert!(cabin.reflect_rx.is_some());
+    cabin.run_slash_line("/learn");
+    assert_eq!(cabin.status, "Reflecting…");
+    let start = std::time::Instant::now();
+    while cabin.reflect_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(2) {
+        cabin.poll_reflect();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(cabin.status, "Reflect: nothing new");
+    assert!(cabin.reflect_rx.is_none());
+    assert!(!cabin.running);
+    cabin.run_slash_line("/scratch");
+    cabin.run_slash_line("/learn");
+    assert_eq!(cabin.status, "Scratch — no reflect");
+    assert!(cabin.reflect_rx.is_none());
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
