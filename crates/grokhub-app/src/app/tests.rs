@@ -7570,3 +7570,24 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn undo_retry_and_context_on_an_empty_chat() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("undo-retry");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.messages = std::sync::Arc::new(Vec::new());
+    if let Some(t) = cabin.threads.get_mut(cabin.thread_idx) {
+        t.messages = cabin.messages.clone();
+    }
+    cabin.run_slash_line("/undo");
+    assert_eq!(cabin.status, "Nothing to undo");
+    assert!(!cabin.running);
+    cabin.run_slash_line("/retry");
+    assert_eq!(cabin.status, "Nothing to retry");
+    assert!(!cabin.running);
+    cabin.run_slash_line("/context");
+    assert_eq!(cabin.status, "0 turns · 0 tokens · 0% · pin none");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
