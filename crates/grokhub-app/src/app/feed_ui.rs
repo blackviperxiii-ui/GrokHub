@@ -349,7 +349,7 @@ impl Cabin {
         }
     }
 
-    fn open_feed_card(&mut self, id: &str) {
+    pub(super) fn open_feed_card(&mut self, id: &str) {
         let kind = self.updates.iter().find(|c| c.id == id).map(|c| c.kind);
         if matches!(kind, Some(UpdateKind::Idea)) {
             let built = self.updates.iter().any(|c| c.id == id && c.built);
@@ -368,7 +368,7 @@ impl Cabin {
         self.follow_update_action(action);
     }
 
-    fn dismiss_feed_card(&mut self, id: &str) {
+    pub(super) fn dismiss_feed_card(&mut self, id: &str) {
         let idea = self
             .updates
             .iter()

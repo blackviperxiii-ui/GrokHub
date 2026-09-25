@@ -7570,3 +7570,24 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn feed_open_routes_an_idea_and_dismiss_removes_it() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("feed-open");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.open_feed_card("missing");
+    assert!(matches!(cabin.nav, Nav::Chat));
+    let card = grokhub_core::idea_card("harbor", "Harbor lamp", "fold the charts", 1);
+    let id = card.id.clone();
+    cabin.updates.push(card);
+    cabin.open_feed_card(&id);
+    assert!(matches!(cabin.nav, Nav::Ideas));
+    cabin.updates.iter_mut().find(|c| c.id == id).expect("card").built = true;
+    cabin.open_feed_card(&id);
+    assert!(matches!(cabin.nav, Nav::Workboard));
+    cabin.dismiss_feed_card(&id);
+    assert!(cabin.updates.iter().all(|c| c.id != id));
+    assert!(!cabin.running);
+}
+
