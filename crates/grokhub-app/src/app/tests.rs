@@ -7570,3 +7570,20 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn missing_recipe_does_not_replay() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("missing-recipe");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.replay_saved_recipe("harbor"));
+    assert_eq!(cabin.status, "No recipe harbor");
+    assert!(cabin.recipe_desk_rx.is_none());
+    assert!(!cabin.running);
+    assert!(!cabin.replay_saved_recipe("last"));
+    assert_eq!(cabin.status, "No recipe last");
+    assert!(cabin.recipe_desk_rx.is_none());
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
