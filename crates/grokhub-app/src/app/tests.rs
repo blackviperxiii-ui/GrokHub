@@ -7570,3 +7570,24 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn forget_topic_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("forget-topic");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.new_thread(false);
+    cabin.mem_name = "MEMORY.md".into();
+    let note = "harbor light at dusk".to_string();
+    cabin.mem_body = note.clone();
+
+    cabin.run_slash(grokhub_core::Slash::Forget(Some("harbor".into())));
+
+    assert_eq!(cabin.mem_body, grokhub_core::forget_topic(&note, "harbor"));
+    assert_eq!(cabin.status, "Forgot harbor");
+    assert!(!cabin.running);
+    assert!(cabin.nav == super::Nav::Chat);
+}
