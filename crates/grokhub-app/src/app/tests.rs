@@ -7570,3 +7570,26 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn context_slash_counts_an_empty_chat() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("context-slash");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    if cabin.threads.get(cabin.thread_idx).is_none() {
+        cabin.new_thread(false);
+    }
+    assert!(cabin.grok_usage.is_empty());
+    assert!(cabin.cfg.goal_pin.is_empty());
+    assert!(cabin.messages.is_empty());
+    assert!(!cabin.running);
+
+    cabin.run_slash(super::Slash::Context);
+
+    assert_eq!(cabin.status, "0 turns · 0 tokens · 0% · pin none");
+    assert!(!cabin.running);
+    assert!(cabin.messages.is_empty());
+}
+
