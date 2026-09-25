@@ -7570,3 +7570,111 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn set_nav_id_opens_each_page() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("set-nav");
+    let _ = std::fs::create_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(matches!(cabin.nav, super::Nav::Chat));
+
+    cabin.set_nav_id("settings");
+    assert!(matches!(cabin.nav, super::Nav::Settings));
+    assert!(matches!(cabin.settings_back, super::Nav::Chat));
+    assert!(matches!(cabin.settings_sec, super::SettingsSec::Account));
+    assert!(!cabin.running);
+    cabin.set_nav_id("settings");
+    assert!(matches!(cabin.nav, super::Nav::Settings));
+    assert!(matches!(cabin.settings_back, super::Nav::Chat));
+    assert!(matches!(cabin.settings_sec, super::SettingsSec::Account));
+    assert!(!cabin.running);
+
+    cabin.set_nav_id("history");
+    assert!(matches!(cabin.nav, super::Nav::History));
+    assert!(!cabin.running);
+
+    cabin.set_nav_id("imagine");
+    assert!(matches!(cabin.nav, super::Nav::Imagine));
+    assert!(cabin.imagine_want_focus);
+    assert!(!cabin.running);
+
+    cabin.set_nav_id("workboard");
+    assert!(matches!(cabin.nav, super::Nav::Workboard));
+    assert!(!cabin.running);
+
+    cabin.set_nav_id("skills");
+    assert!(matches!(cabin.nav, super::Nav::Skills));
+    assert!(!cabin.skills_tab_connectors);
+    assert!(!cabin.running);
+
+    cabin.set_nav_id("automations");
+    assert!(matches!(cabin.nav, super::Nav::Night));
+    assert!(!cabin.running);
+
+    cabin.set_nav_id("command");
+    assert!(matches!(cabin.nav, super::Nav::Command));
+    assert!(!cabin.running);
+
+    cabin.set_nav_id("queue");
+    assert!(matches!(cabin.nav, super::Nav::Agents));
+    assert!(!cabin.running);
+
+    cabin.set_nav_id("devices");
+    assert!(matches!(cabin.nav, super::Nav::Devices));
+    assert!(!cabin.running);
+
+    cabin.set_nav_id("memory");
+    assert!(matches!(cabin.nav, super::Nav::Memory));
+    assert!(!cabin.running);
+
+    cabin.set_nav_id("connectors");
+    assert!(matches!(cabin.nav, super::Nav::Connectors));
+    assert!(cabin.skills_tab_connectors);
+    assert!(!cabin.running);
+
+    let threads_before = cabin.threads.len();
+    let idx_before = cabin.thread_idx;
+    cabin.composer_want_focus = false;
+    cabin.chat_tail_frames = 0;
+    cabin.set_nav_id("eyes");
+    assert!(matches!(cabin.nav, super::Nav::Chat));
+    assert_eq!(cabin.threads.len(), threads_before);
+    assert_eq!(cabin.thread_idx, idx_before);
+    assert!(cabin.composer_want_focus);
+    assert_eq!(cabin.chat_tail_frames, grokhub_core::CHAT_TAIL_FRAMES);
+    assert!(!cabin.running);
+
+    let threads_before = cabin.threads.len();
+    let status_before = cabin.status.clone();
+    cabin.set_nav_id("not-a-page");
+    assert!(matches!(cabin.nav, super::Nav::Chat));
+    assert_eq!(cabin.threads.len(), threads_before);
+    assert_eq!(cabin.status, status_before);
+    assert!(cabin.messages.is_empty());
+    assert!(!cabin.running);
+
+    let draft = crate::threads::ChatThread::new("Chat", false);
+    let id = draft.id.clone();
+    cabin.threads.push(draft);
+    cabin.thread_idx = 0;
+    cabin.messages = std::sync::Arc::new(Vec::new());
+    let n = cabin.threads.len();
+    let io = cabin.persist_io.clone();
+    let block = io.lock().unwrap_or_else(|e| e.into_inner());
+    cabin.set_nav_id("chat");
+    drop(block);
+    assert!(matches!(cabin.nav, super::Nav::Chat));
+    assert_eq!(cabin.threads.len(), n);
+    assert_eq!(cabin.threads[0].id, id);
+    assert!(cabin.messages.is_empty());
+    assert_eq!(cabin.status, "New chat");
+    assert!(!cabin.running);
+
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    drop(io.lock().unwrap_or_else(|e| e.into_inner()));
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
