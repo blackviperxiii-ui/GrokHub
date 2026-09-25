@@ -7570,3 +7570,18 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn rename_thread_sets_locked_title() {
+    let _g = config::hold_test_config();
+    let root = config::test_config_root("rename-thread");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads.push(ChatThread::new("Chat", false));
+    cabin.rename_thread(0, "Harbor watch");
+    assert_eq!(cabin.threads[0].title, "Harbor watch");
+    assert!(cabin.threads[0].title_locked);
+    assert_eq!(cabin.status, "Renamed Harbor watch");
+    let _io = cabin.persist_io.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::remove_var("GROKHUB_CONFIG");
+}
