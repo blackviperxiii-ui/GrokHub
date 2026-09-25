@@ -1151,8 +1151,6 @@ impl Cabin {
         c
     }
 
-    /// Cabin with no installer, update probe, hotkey, or fresh-home side effects.
-    #[cfg(test)]
     pub(super) fn quiet_for_test() -> Self {
         let (grok_sessions_tx, grok_sessions_rx) = mpsc::channel();
         let cfg = AppConfig::default();
