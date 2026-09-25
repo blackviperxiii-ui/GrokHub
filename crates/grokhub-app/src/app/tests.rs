@@ -1,5 +1,6 @@
 use super::*;
 use eframe::egui;
+use grokhub_core::{ProjectKind, ProjectNode};
 
 fn cabin_src() -> String {
     concat!(
@@ -7568,5 +7569,42 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
             && !build.contains("idea.body.clone()"),
         "Idea Accept files the task line, not the raw message: {build}"
     );
+}
+
+#[test]
+fn remove_bound_project_unbinds() {
+    let _guard = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("unbind-remove");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    let path = "/tmp/grokhub-unbound-harbor";
+    cabin.projects.push(ProjectNode {
+        id: "p1".into(),
+        name: "Harbor".into(),
+        kind: ProjectKind::Project,
+        path: path.into(),
+        parent: None,
+        open: true,
+    });
+    assert!(matches!(
+        cabin.projects[0].kind,
+        ProjectKind::Project
+    ));
+    cabin.cfg.project_dir = path.into();
+    cabin.project_sel = Some("p1".into());
+    assert!(cabin
+        .threads
+        .iter()
+        .all(|t| !matches!(t.project_id.as_deref(), Some("p1"))));
+    assert!(!cabin.running);
+
+    cabin.remove_project_id("p1");
+
+    assert_eq!(cabin.status, "Removed Harbor · unbound");
+    assert!(cabin.projects.is_empty());
+    assert!(cabin.project_sel.is_none());
+    assert!(cabin.cfg.project_dir.is_empty());
+    assert!(!cabin.running);
 }
 
