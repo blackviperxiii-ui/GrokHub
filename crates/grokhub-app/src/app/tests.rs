@@ -1,5 +1,6 @@
 use super::*;
 use eframe::egui;
+use grokhub_core::{UpdateCard, UpdateKind, UpdateStatus};
 
 fn cabin_src() -> String {
     concat!(
@@ -7568,5 +7569,85 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
             && !build.contains("idea.body.clone()"),
         "Idea Accept files the task line, not the raw message: {build}"
     );
+}
+
+fn offer_card(id: &str, title: &str, status: UpdateStatus) -> UpdateCard {
+    UpdateCard {
+        id: id.to_string(),
+        kind: UpdateKind::AutomateOffer,
+        title: title.to_string(),
+        body: None,
+        created_at: 1,
+        status,
+        action: None,
+        expires_at: None,
+        held: false,
+        citations: Vec::new(),
+        reaction: None,
+        discuss_thread: None,
+        built: false,
+        board_id: None,
+        why: None,
+    }
+}
+
+fn card_status(cabin: &Cabin, id: &str) -> UpdateStatus {
+    cabin
+        .updates
+        .iter()
+        .find(|card| card.id == id)
+        .map(|card| card.status)
+        .unwrap_or_else(|| panic!("missing card {id}"))
+}
+
+#[test]
+fn automate_offer_files_a_daily_job() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("automate-offer");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.automations.clear();
+    cabin.updates = vec![
+        offer_card("plain", "what is rust", UpdateStatus::Unread),
+        offer_card(
+            "daily",
+            "every day at 9, summarize the board",
+            UpdateStatus::Unread,
+        ),
+        offer_card(
+            "gone",
+            "every day at 9, summarize the board",
+            UpdateStatus::Dismissed,
+        ),
+    ];
+
+    cabin.accept_automate_offer("missing");
+    assert!(cabin.automations.is_empty());
+    assert!(!cabin.running);
+
+    cabin.accept_automate_offer("gone");
+    assert!(cabin.automations.is_empty());
+    assert!(!cabin.running);
+    assert_eq!(card_status(&cabin, "gone"), UpdateStatus::Dismissed);
+
+    cabin.accept_automate_offer("plain");
+    assert_eq!(card_status(&cabin, "plain"), UpdateStatus::Opened);
+    assert!(cabin.automations.is_empty());
+    assert!(!cabin.running);
+
+    cabin.accept_automate_offer("daily");
+    assert_eq!(card_status(&cabin, "daily"), UpdateStatus::Opened);
+    assert_eq!(cabin.automations.len(), 1);
+    assert!(!cabin.running);
+
+    cabin.accept_automate_offer("daily");
+    assert_eq!(cabin.automations.len(), 2);
+    assert!(!cabin.running);
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
 }
 

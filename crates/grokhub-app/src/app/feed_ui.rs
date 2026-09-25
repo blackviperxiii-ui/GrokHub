@@ -286,7 +286,7 @@ impl Cabin {
         self.persist_updates();
     }
 
-    fn accept_automate_offer(&mut self, id: &str) {
+    pub(super) fn accept_automate_offer(&mut self, id: &str) {
         if !mark_update_opened(&mut self.updates, id) {
             return;
         }
