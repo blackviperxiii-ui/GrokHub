@@ -7570,3 +7570,73 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn react_and_archive_stay_on_the_card() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("react-archive");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.updates = vec![
+        feed_card("idea-1", grokhub_core::UpdateKind::Idea, false),
+        feed_card("digest-1", grokhub_core::UpdateKind::Digest, true),
+        feed_card("event-1", grokhub_core::UpdateKind::AutomationDone, false),
+    ];
+
+    cabin.react_card("idea-1", grokhub_core::CardReaction::Up);
+    let idea = cabin
+        .updates
+        .iter()
+        .find(|card| card.id == "idea-1")
+        .expect("idea");
+    assert_eq!(idea.reaction, Some(grokhub_core::CardReaction::Up));
+    assert!(!cabin.running);
+
+    cabin.react_card("event-1", grokhub_core::CardReaction::Down);
+    let event = cabin
+        .updates
+        .iter()
+        .find(|card| card.id == "event-1")
+        .expect("event");
+    assert!(event.reaction.is_none());
+
+    cabin.archive_feed_digest("digest-1");
+    let digest = cabin
+        .updates
+        .iter()
+        .find(|card| card.id == "digest-1")
+        .expect("digest stays");
+    assert_eq!(digest.status, grokhub_core::UpdateStatus::Dismissed);
+    assert!(!digest.held);
+    assert!(!cabin.running);
+
+    cabin.archive_feed_digest("idea-1");
+    let idea = cabin
+        .updates
+        .iter()
+        .find(|card| card.id == "idea-1")
+        .expect("idea stays");
+    assert_ne!(idea.status, grokhub_core::UpdateStatus::Dismissed);
+}
+
+fn feed_card(id: &str, kind: grokhub_core::UpdateKind, held: bool) -> grokhub_core::UpdateCard {
+    grokhub_core::UpdateCard {
+        id: id.to_string(),
+        kind,
+        title: id.to_string(),
+        body: None,
+        created_at: 1,
+        status: grokhub_core::UpdateStatus::Unread,
+        action: None,
+        expires_at: None,
+        held,
+        citations: Vec::new(),
+        reaction: None,
+        discuss_thread: None,
+        built: false,
+        board_id: None,
+        why: None,
+    }
+}
+

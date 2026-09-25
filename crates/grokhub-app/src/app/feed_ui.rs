@@ -302,7 +302,7 @@ impl Cabin {
         }
     }
 
-    fn react_card(&mut self, id: &str, reaction: CardReaction) {
+    pub(super) fn react_card(&mut self, id: &str, reaction: CardReaction) {
         let Some(card) = self.updates.iter_mut().find(|c| c.id == id) else {
             return;
         };
@@ -343,7 +343,7 @@ impl Cabin {
         self.persist();
     }
 
-    fn archive_feed_digest(&mut self, id: &str) {
+    pub(super) fn archive_feed_digest(&mut self, id: &str) {
         if archive_digest(&mut self.updates, id) {
             self.persist_updates();
         }
