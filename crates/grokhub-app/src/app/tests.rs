@@ -7570,3 +7570,28 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn empty_undo_and_retry_stay_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("empty-undo-retry");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    assert!(cabin.messages.is_empty());
+    assert!(!cabin.running);
+
+    cabin.run_slash(super::Slash::Undo);
+    assert_eq!(cabin.status, "Nothing to undo");
+    assert!(cabin.messages.is_empty());
+    assert!(!cabin.running);
+
+    cabin.run_slash(super::Slash::Retry);
+    assert_eq!(cabin.status, "Nothing to retry");
+    assert!(cabin.messages.is_empty());
+    assert!(!cabin.running);
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
