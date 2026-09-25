@@ -7686,7 +7686,10 @@ fn kick_imagine_local_send_stores_harbor_url() {
         }
     });
 
-    let mut cabin = Cabin::new(true);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
     cabin.secrets.api_key = "xai-local-console".into();
     cabin.cfg.api_key.clear();
     cabin.imagine_prompt = "harbor at dusk".into();
