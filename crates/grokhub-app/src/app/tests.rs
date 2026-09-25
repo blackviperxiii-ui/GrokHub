@@ -7570,3 +7570,29 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn btw_sets_a_side_ask() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("btw-side-ask");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    cabin.run_slash(Slash::Btw);
+
+    assert!(matches!(cabin.session_mode, SessionMode::Ask));
+    assert_eq!(cabin.cfg.session_mode, "ask");
+    assert!(!cabin.running);
+    assert_eq!(cabin.status, "btw — look-safe side ask");
+    assert_eq!(cabin_default_session_id(&cabin.cfg.session_mode), "ask");
+    let persisted = cabin
+        .cfg_slot
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .cfg
+        .session_mode
+        .clone();
+    assert_eq!(persisted, "ask");
+}
+
