@@ -7570,3 +7570,36 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn set_permission_mode_saves_auto_and_always() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("permission-mode");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.set_permission_mode(PermissionMode::Auto);
+    assert_eq!(cabin.permission_mode, PermissionMode::Auto);
+    assert_eq!(cabin.cfg.permission_mode, "auto");
+    cabin.set_permission_mode(PermissionMode::AlwaysApprove);
+    assert_eq!(cabin.permission_mode, PermissionMode::AlwaysApprove);
+    assert_eq!(cabin.cfg.permission_mode, "ask");
+    cabin.set_permission_mode(PermissionMode::Ask);
+    assert_eq!(cabin.permission_mode, PermissionMode::Ask);
+    assert_eq!(cabin.cfg.permission_mode, "ask");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn halt_work_stops_a_running_turn() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("halt-work");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.running = true;
+    cabin.imagine_pending = true;
+    cabin.halt_work("Stopped");
+    assert!(!cabin.running);
+    assert!(!cabin.imagine_pending);
+    assert_eq!(cabin.status, "Stopped");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
