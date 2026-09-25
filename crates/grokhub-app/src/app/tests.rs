@@ -7570,3 +7570,69 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn bind_empty_project_stays_off_a_run() {
+    let _cfg = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("bind-empty");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.projects = vec![
+        ProjectNode {
+            id: "f1".into(),
+            name: "Notes".into(),
+            kind: ProjectKind::Folder,
+            path: String::new(),
+            parent: None,
+            open: true,
+        },
+        ProjectNode {
+            id: "p1".into(),
+            name: "Harbor".into(),
+            kind: ProjectKind::Project,
+            path: String::new(),
+            parent: None,
+            open: true,
+        },
+    ];
+    assert!(!cabin.running);
+
+    let status = cabin.status.clone();
+    let project_sel = cabin.project_sel.clone();
+    let projects = cabin.projects.clone();
+
+    cabin.bind_project_id("missing");
+    assert_eq!(cabin.status, status);
+    assert_eq!(cabin.project_sel, project_sel);
+    assert!(cabin.projects == projects);
+    assert!(!cabin.running);
+
+    cabin.bind_project_id("f1");
+    assert_eq!(cabin.status, status);
+    assert_eq!(cabin.project_sel, project_sel);
+    assert!(cabin.projects == projects);
+    assert!(!cabin.running);
+    let folder = cabin.projects.iter().find(|n| n.id == "f1").expect("folder");
+    assert!(matches!(folder.kind, ProjectKind::Folder) && folder.open);
+
+    let threads = cabin.threads.len();
+    cabin.nav = Nav::Workboard;
+    cabin.bind_project_id("p1");
+    assert_eq!(cabin.status, "Bound Harbor");
+    assert_eq!(cabin.project_sel.as_deref(), Some("p1"));
+    assert!(cabin.cfg.project_dir.is_empty());
+    assert!(matches!(cabin.nav, Nav::Chat));
+    assert!(!cabin.running);
+    let folder = cabin.projects.iter().find(|n| n.id == "f1").expect("folder");
+    assert!(matches!(folder.kind, ProjectKind::Folder) && folder.open);
+    assert_eq!(
+        cabin
+            .projects
+            .iter()
+            .filter(|n| matches!(n.kind, ProjectKind::Project))
+            .count(),
+        1
+    );
+    assert_eq!(cabin.threads.len(), threads);
+}
+
