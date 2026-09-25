@@ -7800,3 +7800,83 @@ fn queue_run_starts_the_origin_thread() {
     release_isolated(&root, cabin);
 }
 
+#[test]
+fn shell_echo_lands_on_the_open_chat() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("shell-echo");
+    let dir = root.join("proj");
+    std::fs::create_dir_all(&dir).unwrap();
+    cabin.cfg.host_on = true;
+    cabin.cfg.project_dir = dir.display().to_string();
+    let thread = crate::threads::ChatThread::new("Shell", false);
+    cabin.threads = vec![thread];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+
+    cabin.queue_sh("echo grokhub-proof".into());
+    let start = std::time::Instant::now();
+    while cabin.running && start.elapsed() < std::time::Duration::from_secs(5) {
+        cabin.poll_job();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(!cabin.running, "echo should finish, status {}", cabin.status);
+    let text = cabin.messages.iter().map(|m| m.1.clone()).collect::<Vec<_>>().join("\n");
+    assert!(
+        text.contains("grokhub-proof"),
+        "the shell output should land on the chat: {text}"
+    );
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn session_menu_sits_left_of_minimize() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("menu-place");
+    let ctx = egui::Context::default();
+    let raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(900.0, 80.0),
+        )),
+        ..Default::default()
+    };
+    let mut menu = egui::Rect::NOTHING;
+    let mut mini = egui::Rect::NOTHING;
+    let _ = ctx.run(raw, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                mini = titlebar_chrome_btn(ui, ChromeBtn::Minimize).rect;
+                menu = cabin.paint_session_actions_menu(ui);
+            });
+        });
+    });
+    assert!(
+        menu.right() <= mini.left() + 0.5,
+        "the session menu must sit left of Minimize: menu {menu:?} minimize {mini:?}"
+    );
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn kick_without_grok_does_not_start_a_run() {
+    assert!(
+        grokhub_acp::find_grok().is_none(),
+        "this call is the offline refusal; a machine with grok must not spawn it from this test"
+    );
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("kick-offline");
+    let thread = crate::threads::ChatThread::new("Chat", false);
+    cabin.threads = vec![thread];
+    cabin.thread_idx = 0;
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), "hello".into())]);
+    cabin.kick_model(false);
+    assert!(!cabin.running, "no grok binary must not start a run");
+    assert!(
+        cabin.status.contains("Install Grok Build"),
+        "offline kick tells the user to install: {}",
+        cabin.status
+    );
+    release_isolated(&root, cabin);
+}
+
