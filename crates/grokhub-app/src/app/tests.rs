@@ -1808,11 +1808,28 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("SettingsSec::Behavior => {").next())
             .expect("Appearance");
         assert!(
-            appearance.contains("self.persist_cfg()")
+            appearance.contains("self.choose_theme(")
                 && !appearance.contains("save = true")
                 && !appearance.contains("self.persist()")
                 && !appearance.contains("persist_snap"),
             "Appearance must not clone every thread just to write app.json: {appearance}"
+        );
+        let choose_theme = fn_src(&src, "choose_theme");
+        assert!(
+            choose_theme.contains("self.persist_cfg()") && !choose_theme.contains("self.persist()"),
+            "choose_theme must write app.json without cloning every thread: {choose_theme}"
+        );
+        let set_close_to_tray = fn_src(&src, "set_close_to_tray");
+        assert!(
+            set_close_to_tray.contains("self.persist_cfg()")
+                && !set_close_to_tray.contains("self.persist()"),
+            "set_close_to_tray must write app.json without cloning every thread: {set_close_to_tray}"
+        );
+        let set_living_wall = fn_src(&src, "set_living_wall");
+        assert!(
+            set_living_wall.contains("self.persist_cfg()")
+                && !set_living_wall.contains("self.persist()"),
+            "set_living_wall must write app.json without cloning every thread: {set_living_wall}"
         );
         let behavior = src
             .split("SettingsSec::Behavior => {")
@@ -1820,7 +1837,9 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("SettingsSec::Update => {").next())
             .expect("Behavior");
         assert!(
-            behavior.contains("self.persist_cfg()")
+            behavior.contains("self.set_close_to_tray(")
+                && behavior.contains("self.set_living_wall(")
+                && behavior.contains("self.persist_cfg()")
                 && !behavior.contains("save = true")
                 && !behavior.contains("self.persist()")
                 && !behavior.contains("persist_snap"),
