@@ -7570,3 +7570,53 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn leaving_a_chat_clears_attach_and_asks() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("leave-chrome");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("isolated config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.running = false;
+    cabin.attach_name = Some("shot.png".into());
+    cabin.hands_attach = true;
+    cabin.eyes_attach = true;
+    cabin.elicit_draft = "name the shot".into();
+    cabin.perm_ask = Some(grokhub_acp::PermissionAsk {
+        rpc_id: serde_json::Value::Null,
+        session_id: "sess".into(),
+        title: "Run".into(),
+        tool_call_id: "tool".into(),
+        action: "shot.png".into(),
+        reason: "attach".into(),
+    });
+    cabin.elicit_ask = Some(grokhub_acp::ElicitAsk {
+        rpc_id: serde_json::Value::Null,
+        session_id: "sess".into(),
+        tool_call_id: "tool".into(),
+        server_name: "form".into(),
+        message: "need a name".into(),
+        mode: "form".into(),
+        url: String::new(),
+        elicitation_id: "elicit".into(),
+        field_name: Some("name".into()),
+        field_title: "Name".into(),
+        secret: false,
+    });
+
+    cabin.drop_leaving_thread_chrome();
+
+    assert!(cabin.attach_name.is_none());
+    assert!(!cabin.hands_attach);
+    assert!(!cabin.eyes_attach);
+    assert!(cabin.elicit_draft.is_empty());
+    assert!(cabin.perm_ask.is_none());
+    assert!(cabin.elicit_ask.is_none());
+    assert!(cabin.acp.is_none());
+    assert!(!cabin.running);
+
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
