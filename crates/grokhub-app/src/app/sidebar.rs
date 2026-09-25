@@ -336,12 +336,9 @@ impl Cabin {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let plus =
                             crate::theme::felt_icon_hit(ui, "+", 22.0, crate::theme::muted(), 16.0)
-                                .on_hover_text("New project or folder");
-                        let plus_pos = plus.rect.left_bottom();
+                                .on_hover_text("New folder");
                         if plus.clicked() {
-                            self.proj_plus_open = true;
-                            self.proj_plus_pos = plus_pos;
-                            self.proj_ignore_close = true;
+                            self.stage_new_folder();
                         }
                     });
                 });

@@ -183,7 +183,6 @@ pub enum ProjectMenuAct {
     Rename,
     AddToFolder,
     RemoveFromFolder,
-    NewHere,
     NewChat,
     Delete,
 }
@@ -200,7 +199,6 @@ pub fn project_menu_acts(kind: ProjectKind) -> &'static [ProjectMenuAct] {
         ProjectKind::Folder => &[
             ProjectMenuAct::NewChat,
             ProjectMenuAct::Rename,
-            ProjectMenuAct::NewHere,
             ProjectMenuAct::Delete,
         ],
     }
@@ -211,7 +209,6 @@ pub fn project_menu_label(act: ProjectMenuAct) -> &'static str {
         ProjectMenuAct::Rename => "Rename",
         ProjectMenuAct::AddToFolder => "Add to folder",
         ProjectMenuAct::RemoveFromFolder => "Remove from folder",
-        ProjectMenuAct::NewHere => "New project here",
         ProjectMenuAct::NewChat => "New chat",
         ProjectMenuAct::Delete => "Delete",
     }
@@ -927,7 +924,11 @@ mod tests {
         let fold = project_menu_acts(ProjectKind::Folder);
         assert!(fold.contains(&ProjectMenuAct::Rename));
         assert!(fold.contains(&ProjectMenuAct::Delete));
-        assert!(fold.contains(&ProjectMenuAct::NewHere));
+        assert!(
+            !fold
+                .iter()
+                .any(|act| project_menu_label(*act) == "New project here")
+        );
         assert!(fold.contains(&ProjectMenuAct::NewChat));
         assert!(proj.contains(&ProjectMenuAct::NewChat));
         assert_eq!(project_menu_label(ProjectMenuAct::NewChat), "New chat");

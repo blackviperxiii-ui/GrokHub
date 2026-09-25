@@ -1062,6 +1062,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             switch.contains("pin_chat_tail"),
             "the pane keeps the offset of the chat you left unless the swap re-pins it: {switch}"
         );
+        assert!(
+            !switch.contains("stamp_current_access") && !switch.contains("accessed_ms"),
+            "opening a History row is not activity and must not move it: {switch}"
+        );
         let show = src
             .split("fn poll_session_show(")
             .nth(1)
@@ -4019,8 +4023,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "deleting an unbound project must not clone every thread just to write projects.json: {drop_proj}"
         );
         let folders = format!(
-            "{}{}{}{}{}{}{}",
-            fn_src(&src, "stage_new_project"),
+            "{}{}{}{}{}{}",
             fn_src(&src, "make_folder"),
             fn_src(&src, "stage_new_folder"),
             fn_src(&src, "begin_proj_rename"),
@@ -4037,13 +4040,22 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let menu = src
             .split("fn apply_project_menu(")
             .nth(1)
-            .and_then(|s| s.split("fn stage_new_project(").next())
+            .and_then(|s| s.split("fn make_folder(").next())
             .expect("apply_project_menu");
         assert!(
             menu.contains("self.flush_projects()")
                 && !menu.contains("self.persist()")
                 && !menu.contains("persist_snap"),
             "Remove from folder must not clone every thread just to write projects.json: {menu}"
+        );
+        let overlays = fn_src(&src, "ui_project_overlays");
+        assert!(
+            !overlays.contains("New project") && !src.contains("New project or folder"),
+            "the projects section does not offer New project"
+        );
+        assert!(
+            src.contains("on_hover_text(\"New folder\")") && src.contains("self.stage_new_folder()"),
+            "projects + creates a folder"
         );
         let rename = src
             .split("Slash::ProjectRename")
@@ -7128,8 +7140,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("HeartbeatAct::Inbox =>").next())
             .expect("housekeep");
         assert!(
-            house.contains("stamp_current_access") && house.contains("Nav::Chat"),
-            "Housekeep stamps access while sitting on Chat: {house}"
+            !house.contains("stamp_current_access"),
+            "sitting on a chat is not activity and must not move that History row: {house}"
         );
         let idle = src
             .split("HeartbeatAct::Reflect =>")
@@ -7456,10 +7468,8 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
         .and_then(|s| s.split("HeartbeatAct::Inbox =>").next())
         .expect("housekeep");
     assert!(
-        house.contains("tick_feed_pulse")
-            && house.contains("stamp_current_access")
-            && house.contains("Nav::Chat"),
-        "expiry, quiet release, and the digest clock run on Housekeep: {house}"
+        house.contains("tick_feed_pulse") && !house.contains("stamp_current_access"),
+        "expiry, quiet release, and the digest clock run on Housekeep without moving History: {house}"
     );
     let tick = src
         .split("fn tick_review(")

@@ -165,7 +165,6 @@ impl Cabin {
                     self.flush_projects();
                 }
             }
-            ProjectMenuAct::NewHere => self.stage_new_project(Some(&id)),
             ProjectMenuAct::NewChat => self.new_chat_under(&id),
             ProjectMenuAct::Delete => self.remove_project_id(&id),
         }
@@ -190,25 +189,6 @@ impl Cabin {
         self.new_thread(false);
         self.nav = Nav::Chat;
         self.composer_want_focus = true;
-    }
-
-    pub(super) fn stage_new_project(&mut self, parent: Option<&str>) {
-        let id = uid("proj");
-        match stage_project(&mut self.projects, &id, "Project", parent) {
-            Ok(_) => {
-                if let Some(pid) = parent {
-                    if let Some(f) = self.projects.iter_mut().find(|n| n.id == pid) {
-                        f.open = true;
-                    }
-                }
-                self.begin_proj_rename(id.clone(), String::new());
-                self.proj_staged = Some(id);
-                self.status = "Name this project".into();
-                self.touch_projects();
-                self.flush_projects();
-            }
-            Err(e) => self.status = e.into(),
-        }
     }
 
     pub(super) fn make_folder(&mut self, name: &str) {
@@ -346,41 +326,6 @@ impl Cabin {
     }
 
     pub(super) fn ui_project_overlays(&mut self, ctx: &egui::Context) {
-        if self.proj_plus_open {
-            let mut pick: Option<&'static str> = None;
-            let mut menu_rect = egui::Rect::NOTHING;
-            egui::Area::new(egui::Id::new("proj-plus"))
-                .fixed_pos(self.proj_plus_pos + egui::vec2(0.0, 4.0))
-                .order(egui::Order::Foreground)
-                .show(ctx, |ui| {
-                    egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.set_min_width(160.0);
-                        if ui.selectable_label(false, "New project").clicked() {
-                            pick = Some("project");
-                        }
-                        if ui.selectable_label(false, "New folder").clicked() {
-                            pick = Some("folder");
-                        }
-                        menu_rect = ui.min_rect();
-                    });
-                });
-            if let Some(kind) = pick {
-                self.proj_plus_open = false;
-                match kind {
-                    "project" => self.stage_new_project(None),
-                    "folder" => self.stage_new_folder(),
-                    _ => {}
-                }
-            } else if self.proj_ignore_close {
-                self.proj_ignore_close = false;
-            } else if ctx.input(|i| i.pointer.any_click()) {
-                if let Some(pos) = ctx.pointer_interact_pos() {
-                    if !menu_rect.expand(8.0).contains(pos) {
-                        self.proj_plus_open = false;
-                    }
-                }
-            }
-        }
         if let Some(pid) = self.proj_add_for.clone() {
             let folders = folder_choices(&self.projects);
             let mut picked: Option<Option<String>> = None;
