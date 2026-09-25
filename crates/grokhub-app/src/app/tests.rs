@@ -7570,3 +7570,108 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn chip_apply_mode_and_help_stay_off_a_run() {
+    struct RestoreEnv {
+        config: Option<std::ffi::OsString>,
+        grok: Option<std::ffi::OsString>,
+    }
+    impl Drop for RestoreEnv {
+        fn drop(&mut self) {
+            match self.config.take() {
+                Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+                None => std::env::remove_var("GROKHUB_CONFIG"),
+            }
+            match self.grok.take() {
+                Some(v) => std::env::set_var("GROKHUB_GROK", v),
+                None => std::env::remove_var("GROKHUB_GROK"),
+            }
+            grokhub_acp::invalidate_grok_bin_cache();
+        }
+    }
+
+    fn chip(id: &str, value: &str, kind: super::ChipKind) -> super::QuickChip {
+        super::QuickChip {
+            id: id.into(),
+            label: id.into(),
+            value: value.into(),
+            kind,
+            score: 1.0,
+            hint: String::new(),
+            primary: false,
+        }
+    }
+
+    fn settle(cabin: &super::Cabin) {
+        let _io = cabin
+            .persist_io
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+    }
+
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("chip-apply");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    let _restore = RestoreEnv {
+        config: std::env::var_os("GROKHUB_CONFIG"),
+        grok: std::env::var_os("GROKHUB_GROK"),
+    };
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_GROK", "/no/such/grok-binary-xyz");
+    grokhub_acp::invalidate_grok_bin_cache();
+    assert!(
+        grokhub_acp::find_grok().is_none(),
+        "a missing GROKHUB_GROK must hide the binary before any chip runs"
+    );
+
+    let mut mode = super::Cabin::quiet_for_test();
+    mode.apply_chip(chip("mode-fast", "__mode:fast", super::ChipKind::Mode));
+    assert_eq!(mode.cfg.mode, "fast");
+    assert_eq!(
+        mode.status,
+        super::mode_status_line("fast", &mode.cfg.model)
+    );
+    assert!(!mode.running);
+
+    let mut typed_help = super::Cabin::quiet_for_test();
+    typed_help.send_from_composer("/help".into());
+    let mut help = super::Cabin::quiet_for_test();
+    help.apply_chip(chip("help", "/help", super::ChipKind::Chat));
+    assert_eq!(help.status, typed_help.status);
+    assert!(!help.running);
+    assert!(!typed_help.running);
+    let help_body = super::mark_slash_result(&super::slash_help());
+    assert_eq!(
+        help.messages
+            .last()
+            .map(|(role, text)| (role.as_str(), text.as_str())),
+        Some(("assistant", help_body.as_str()))
+    );
+    assert_eq!(help.messages.last(), typed_help.messages.last());
+
+    let sentence = "Tell me about the harbor.";
+    let mut typed_chat = super::Cabin::quiet_for_test();
+    typed_chat.send_from_composer(sentence.into());
+    let mut chat = super::Cabin::quiet_for_test();
+    chat.apply_chip(chip("say", sentence, super::ChipKind::Chat));
+    assert_eq!(
+        chat.status, typed_chat.status,
+        "a plain chip must refuse with the composer install/connect status"
+    );
+    assert_eq!(
+        chat.status,
+        "Install Grok Build (x.ai/cli) or Connect Grok in Settings"
+    );
+    assert!(!chat.running);
+    assert!(!typed_chat.running);
+    assert!(chat.messages.is_empty());
+    assert!(typed_chat.messages.is_empty());
+
+    settle(&mode);
+    settle(&typed_help);
+    settle(&help);
+    settle(&typed_chat);
+    settle(&chat);
+}
+
