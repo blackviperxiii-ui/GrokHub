@@ -7570,24 +7570,47 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
-
 #[test]
-fn remove_project_id_drops_folder() {
+fn remove_project_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("remove-project");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
     let mut cabin = Cabin::quiet_for_test();
-    cabin.make_folder("Harbor folder");
-    let id = cabin
-        .projects
-        .iter()
-        .find(|n| n.name == "Harbor folder")
-        .expect("folder row")
-        .id
-        .clone();
-    cabin.remove_project_id(&id);
-    assert!(
-        cabin.projects.iter().all(|n| n.id != id),
-        "folder id should be gone"
-    );
-    assert_eq!(cabin.status, "Removed Harbor folder");
-    cabin.remove_project_id("missing-id");
+    cabin.remove_project_id("missing");
     assert_eq!(cabin.status, "Project not found");
+    assert!(cabin.projects.is_empty());
+    assert!(!cabin.running);
+
+    cabin.projects = vec![
+        ProjectNode {
+            id: "f1".into(),
+            name: "Notes".into(),
+            kind: ProjectKind::Folder,
+            path: String::new(),
+            parent: None,
+            open: true,
+        },
+        ProjectNode {
+            id: "p1".into(),
+            name: "Harbor".into(),
+            kind: ProjectKind::Project,
+            path: String::new(),
+            parent: None,
+            open: true,
+        },
+    ];
+    cabin.project_sel = Some("p1".into());
+    assert!(cabin.cfg.project_dir.is_empty());
+
+    cabin.remove_project_id("p1");
+    assert_eq!(cabin.status, "Removed Harbor");
+    assert_eq!(cabin.projects.len(), 1);
+    assert_eq!(cabin.projects[0].id, "f1");
+    assert_eq!(cabin.projects[0].name, "Notes");
+    assert!(matches!(cabin.projects[0].kind, ProjectKind::Folder));
+    assert!(cabin.project_sel.is_none());
+    assert!(cabin.cfg.project_dir.is_empty());
+    assert!(!cabin.running);
 }
+
