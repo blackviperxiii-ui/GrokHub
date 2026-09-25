@@ -7570,3 +7570,18 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn effort_slash_sets_extra_high_and_rejects_a_bad_level() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("effort-slash");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/effort xhigh");
+    assert_eq!(cabin.cfg.reasoning_effort, "xhigh");
+    assert_eq!(cabin.status, "Effort Extra High");
+    cabin.run_slash_line("/effort banana");
+    assert_eq!(cabin.status, "Effort: none | minimal | low | medium | high | xhigh");
+    assert_eq!(cabin.cfg.reasoning_effort, "xhigh");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
