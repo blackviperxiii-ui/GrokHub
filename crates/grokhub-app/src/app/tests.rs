@@ -7570,3 +7570,55 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn build_idea_files_one_todo() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("build-idea");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.board.clear();
+    cabin.updates = vec![grokhub_core::UpdateCard {
+        id: "idea-1".into(),
+        kind: grokhub_core::UpdateKind::Idea,
+        title: "Ship the harbor".into(),
+        body: Some(String::new()),
+        created_at: 0,
+        status: grokhub_core::UpdateStatus::Unread,
+        action: None,
+        expires_at: None,
+        held: false,
+        citations: Vec::new(),
+        reaction: None,
+        discuss_thread: None,
+        built: false,
+        board_id: None,
+        why: None,
+    }];
+
+    cabin.build_idea("nope");
+    assert!(cabin.board.is_empty());
+    assert!(!cabin.running);
+
+    cabin.build_idea("idea-1");
+    assert_eq!(cabin.board.len(), 1);
+    assert_eq!(
+        cabin.board[0].title,
+        grokhub_core::idea_todo_title("Ship the harbor", "")
+    );
+    assert_eq!(cabin.board[0].status, grokhub_core::BoardStatus::Todo);
+    assert!(cabin.updates[0].built);
+    assert_eq!(
+        cabin.updates[0].board_id.as_deref(),
+        Some(cabin.board[0].id.as_str())
+    );
+    assert!(!cabin.running);
+
+    cabin.build_idea("idea-1");
+    assert_eq!(cabin.board.len(), 1);
+    assert!(matches!(cabin.nav, super::Nav::Workboard));
+    assert!(!cabin.running);
+}
+
