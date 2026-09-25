@@ -7570,3 +7570,47 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn recall_finds_a_memory_line_and_reports_a_miss() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("recall");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.mem_name = "MEMORY.md".into();
+    cabin.mem_body = "harbor light\n".into();
+    cabin.run_slash_line("/recall harbor");
+    assert_eq!(cabin.status, "Recalling…");
+    let start = std::time::Instant::now();
+    while !cabin.messages.iter().any(|m| m.1.contains("harbor light"))
+        && start.elapsed() < std::time::Duration::from_secs(2)
+    {
+        cabin.poll_recall();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        cabin
+            .messages
+            .iter()
+            .any(|m| m.0 == "assistant" && m.1.contains("MEMORY.md:1: harbor light")),
+        "recall missed the memory line: {:?}",
+        cabin.messages
+    );
+    cabin.run_slash_line("/recall zzznone");
+    let start = std::time::Instant::now();
+    while !cabin.messages.iter().any(|m| m.1.contains("No recall for zzznone"))
+        && start.elapsed() < std::time::Duration::from_secs(2)
+    {
+        cabin.poll_recall();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        cabin
+            .messages
+            .iter()
+            .any(|m| m.0 == "assistant" && m.1.contains("No recall for zzznone")),
+        "recall miss did not land: {:?}",
+        cabin.messages
+    );
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
