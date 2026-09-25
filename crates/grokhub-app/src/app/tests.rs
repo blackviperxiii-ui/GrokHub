@@ -7570,3 +7570,48 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn ask_denied_without_acp_stays_off_a_run() {
+    struct RestoreConfig(Option<String>);
+    impl Drop for RestoreConfig {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+                None => std::env::remove_var("GROKHUB_CONFIG"),
+            }
+        }
+    }
+
+    let _cfg = crate::config::hold_test_config();
+    let _restore = RestoreConfig(std::env::var("GROKHUB_CONFIG").ok());
+    let root = crate::config::test_config_root("ask-denied");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.running = true;
+    cabin.pending_kick = Some(true);
+    cabin.chat_job_thread = Some("job".into());
+
+    let denied =
+        "Ask needs ACP so Allow / Deny can show. Grok Build agent is down — turn denied.";
+    cabin.fail_ask_without_acp("");
+    assert!(
+        cabin.status.contains(denied),
+        "status must contain the Ask deny sentence, got {}",
+        cabin.status
+    );
+    assert!(!cabin.running);
+    assert!(cabin.pending_kick.is_none());
+    assert!(cabin.chat_job_thread.is_none());
+
+    cabin.fail_ask_without_acp("timeout");
+    assert!(
+        cabin.status.contains(denied) && cabin.status.contains("timeout"),
+        "timeout detail stays on the deny sentence, got {}",
+        cabin.status
+    );
+    assert!(!cabin.running);
+}
+
