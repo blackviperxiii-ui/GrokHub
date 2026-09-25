@@ -7570,3 +7570,34 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+
+#[test]
+fn fix_opens_about_and_dream_refuses_without_login() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("fix-dream");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("HOME", &root);
+    std::env::set_var("GROKHUB_GROK", "/tmp/grokhub-no-such-grok");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.api_key.clear();
+    cabin.running = true;
+    cabin.imagine_pending = true;
+    cabin.run_slash_line("/fix");
+    assert!(matches!(cabin.nav, Nav::Settings));
+    assert!(matches!(cabin.settings_sec, SettingsSec::About));
+    assert!(!cabin.running, "fix must halt a live job");
+    assert!(!cabin.imagine_pending, "fix must clear a pending imagine");
+    assert_eq!(cabin.status, cabin.doctor_text());
+    assert!(!cabin.llm_ready(), "this test must have no key and no grok binary");
+    cabin.run_slash_line("/dream");
+    assert_eq!(
+        cabin.status,
+        "Run grok login, or Connect Grok in Settings."
+    );
+    assert!(matches!(cabin.nav, Nav::Settings));
+    assert!(!cabin.imagine_want_focus);
+    std::env::remove_var("GROKHUB_CONFIG");
+    std::env::remove_var("GROKHUB_GROK");
+}
+
