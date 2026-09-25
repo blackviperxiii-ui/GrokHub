@@ -7570,3 +7570,26 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn sync_writes_a_local_hub_snapshot() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("sync-local");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.device_name = "harbor".into();
+    cabin.run_slash_line("/sync");
+    assert_eq!(cabin.status, "Syncing…");
+    assert!(cabin.sync_rx.is_some());
+    cabin.run_slash_line("/sync");
+    assert_eq!(cabin.status, "Syncing…");
+    let start = std::time::Instant::now();
+    while cabin.sync_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(2) {
+        cabin.poll_sync();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(matches!(cabin.nav, Nav::Devices));
+    assert_eq!(cabin.status, "Merged hub snapshot from harbor");
+    assert!(cabin.sync_rx.is_none());
+    std::env::remove_var("GROKHUB_CONFIG");
+}
