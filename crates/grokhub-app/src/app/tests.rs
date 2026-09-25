@@ -1,4 +1,5 @@
 use super::*;
+use super::pages::BoardAct;
 use eframe::egui;
 
 fn cabin_src() -> String {
