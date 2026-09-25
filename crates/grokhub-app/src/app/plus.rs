@@ -13,11 +13,11 @@ pub(super) enum PlusPick {
 
 
 pub(super) struct PlusReady {
-    kind: AttachKind,
-    name: String,
-    raw: String,
-    image_url: Option<String>,
-    text: Option<String>,
+    pub(super) kind: AttachKind,
+    pub(super) name: String,
+    pub(super) raw: String,
+    pub(super) image_url: Option<String>,
+    pub(super) text: Option<String>,
 }
 
 

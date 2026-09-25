@@ -313,7 +313,7 @@ impl Cabin {
         self.persist_updates();
     }
 
-    fn discuss_card(&mut self, id: &str) {
+    pub(super) fn discuss_card(&mut self, id: &str) {
         let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() else {
             return;
         };

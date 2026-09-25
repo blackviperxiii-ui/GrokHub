@@ -7758,3 +7758,359 @@ fn apply_board_act_add_files_one_todo() {
     quiet.settle();
 }
 
+fn wait_for(label: &str, mut ready: impl FnMut() -> bool) {
+    for _ in 0..80 {
+        if ready() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    panic!("{label}");
+}
+
+#[test]
+fn apply_plus_ready_image_and_pasted_text() {
+    let mut quiet = QuietCabin::boot("plus-ready");
+    let cabin = &mut quiet.cabin;
+    cabin.apply_plus_ready(
+        grokhub_core::PlusTarget::Chat,
+        super::plus::PlusReady {
+            kind: grokhub_core::AttachKind::Image,
+            name: "harbor.png".into(),
+            raw: "/tmp/harbor.png".into(),
+            image_url: Some("data:image/png;base64,aGFyYm9y".into()),
+            text: None,
+        },
+    );
+    assert_eq!(cabin.attach_name.as_deref(), Some("harbor.png"));
+    assert_eq!(
+        cabin.attach_url.as_deref(),
+        Some("data:image/png;base64,aGFyYm9y")
+    );
+    assert_eq!(
+        cabin.status, "Attached harbor.png — sends with the next message",
+        "an image attach must show the chip status"
+    );
+    assert!(!cabin.running);
+    assert!(cabin.composer.is_empty(), "an image must not dump into the composer");
+
+    cabin.apply_plus_ready(
+        grokhub_core::PlusTarget::Chat,
+        super::plus::PlusReady {
+            kind: grokhub_core::AttachKind::Text,
+            name: "notes.txt".into(),
+            raw: "notes.txt".into(),
+            image_url: None,
+            text: Some("pasted harbor line".into()),
+        },
+    );
+    assert!(
+        cabin.composer.contains("pasted harbor line"),
+        "pasted text must land in the composer, got {}",
+        cabin.composer
+    );
+    assert_eq!(cabin.status, "Pasted notes.txt");
+    assert!(!cabin.running);
+    quiet.settle();
+}
+
+#[test]
+fn run_slash_help_export_and_clear() {
+    let mut quiet = QuietCabin::boot("slash-help-export-clear");
+    let cabin = &mut quiet.cabin;
+    cabin.run_slash(grokhub_core::Slash::Help);
+    assert!(
+        cabin
+            .messages
+            .iter()
+            .any(|m| m.0 == "assistant" && m.1.contains("/help — this list")),
+        " /help must write the help list on the open chat, got {:?}",
+        cabin.messages
+    );
+    assert!(!cabin.running);
+
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), "harbor export line".into())]);
+    cabin.cfg.project_dir.clear();
+    cabin.run_slash(grokhub_core::Slash::Export);
+    let path = cabin
+        .status
+        .strip_prefix("Wrote ")
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        path.ends_with("export.md"),
+        " /export must name export.md, got {}",
+        cabin.status
+    );
+    wait_for("export.md must contain the chat line", || {
+        std::fs::read_to_string(&path)
+            .unwrap_or_default()
+            .contains("harbor export line")
+    });
+
+    cabin.run_slash(grokhub_core::Slash::Clear);
+    assert!(
+        cabin.messages.is_empty(),
+        " /clear must empty the transcript, got {:?}",
+        cabin.messages
+    );
+    assert_eq!(cabin.status, "Cleared");
+    assert!(!cabin.running);
+    quiet.settle();
+}
+
+#[test]
+fn apply_board_act_move_archive_restore_and_link() {
+    let mut quiet = QuietCabin::boot("board-acts");
+    let cabin = &mut quiet.cabin;
+    cabin.board_title = "Move the buoy".into();
+    assert!(cabin.apply_board_act(Some(super::pages::BoardAct::Add)));
+    let id = cabin.board[0].id.clone();
+    let thread = cabin.threads[cabin.thread_idx].id.clone();
+
+    assert!(cabin.apply_board_act(Some(super::pages::BoardAct::Move {
+        id: id.clone(),
+        status: grokhub_core::BoardStatus::InProgress,
+    })));
+    assert_eq!(
+        cabin.board[0].status.column(),
+        Some(grokhub_core::KanbanColumn::Doing)
+    );
+
+    assert!(cabin.apply_board_act(Some(super::pages::BoardAct::Archive(id.clone()))));
+    assert_eq!(cabin.board[0].status, grokhub_core::BoardStatus::Dismissed);
+    assert!(cabin.board[0].status.column().is_none());
+
+    assert!(cabin.apply_board_act(Some(super::pages::BoardAct::Restore(id.clone()))));
+    assert_eq!(
+        cabin.board[0].status.column(),
+        Some(grokhub_core::KanbanColumn::Todo)
+    );
+
+    assert!(cabin.apply_board_act(Some(super::pages::BoardAct::Link(id.clone()))));
+    assert_eq!(cabin.board[0].thread_id.as_deref(), Some(thread.as_str()));
+
+    assert!(cabin.apply_board_act(Some(super::pages::BoardAct::Unlink(id))));
+    assert!(cabin.board[0].thread_id.is_none());
+    quiet.settle();
+}
+
+#[test]
+fn add_automation_seed_daily_clock_and_loop() {
+    let mut quiet = QuietCabin::boot("auto-seed");
+    let root = quiet.boot.root.clone();
+    let cabin = &mut quiet.cabin;
+    cabin.add_automation_seed("every day at 9, summarize the board");
+    assert_eq!(cabin.automations.len(), 1, "a daily clock must land in automations");
+    assert!(
+        cabin.grok_loops.is_empty(),
+        "a clock time must not become a /loop"
+    );
+    assert!(
+        cabin.status.contains("Automation added") && cabin.status.contains("09:00"),
+        "the cabin must show the 09:00 automation, got {}",
+        cabin.status
+    );
+    wait_for("automations.json must record the daily clock", || {
+        std::fs::read_to_string(root.join("automations.json"))
+            .unwrap_or_default()
+            .contains("09")
+    });
+
+    cabin.add_automation_seed("/loop 30m check deploy");
+    assert_eq!(cabin.grok_loops.len(), 1);
+    assert_eq!(cabin.automations.len(), 1, "the clock row must stay");
+    assert!(
+        cabin.status.contains("Loop added") && cabin.status.contains("30m"),
+        " /loop must show the interval, got {}",
+        cabin.status
+    );
+    wait_for("loops.json must record the 30m loop", || {
+        std::fs::read_to_string(root.join("loops.json"))
+            .unwrap_or_default()
+            .contains("30m")
+    });
+    quiet.settle();
+}
+
+#[test]
+fn take_chip_act_nav_and_dismiss() {
+    let mut quiet = QuietCabin::boot("chips");
+    let cabin = &mut quiet.cabin;
+    let nav = grokhub_core::QuickChip {
+        id: "nav-board".into(),
+        label: "Workboard".into(),
+        value: "__nav:workboard".into(),
+        kind: grokhub_core::ChipKind::Nav,
+        score: 1.0,
+        hint: String::new(),
+        primary: false,
+    };
+    assert!(matches!(cabin.nav, super::Nav::Chat));
+    cabin.take_chip_act(crate::cards::ChipRowAct::Apply(0), &[nav]);
+    assert!(matches!(cabin.nav, super::Nav::Workboard));
+
+    let dismiss = grokhub_core::QuickChip {
+        id: "nav-ideas".into(),
+        label: "Ideas".into(),
+        value: "__nav:ideas".into(),
+        kind: grokhub_core::ChipKind::Nav,
+        score: 1.0,
+        hint: String::new(),
+        primary: false,
+    };
+    cabin.chip_busy = true;
+    cabin.take_chip_act(crate::cards::ChipRowAct::Dismiss(0), &[dismiss]);
+    assert!(cabin.chip_dismissed.iter().any(|d| d == "nav-ideas"));
+    assert!(cabin.chip_dismissed.iter().any(|d| d == "__nav:ideas"));
+    assert!(
+        cabin.visible_chips.iter().all(|c| c.id != "nav-ideas"),
+        "dismiss must drop that chip from the row, got {:?}",
+        cabin.visible_chips.iter().map(|c| c.id.as_str()).collect::<Vec<_>>()
+    );
+    assert!(matches!(cabin.nav, super::Nav::Workboard));
+    quiet.settle();
+}
+
+#[test]
+fn open_memory_file_flushes_the_editor_you_left() {
+    let mut quiet = QuietCabin::boot("memory-file");
+    let cabin = &mut quiet.cabin;
+    assert_eq!(cabin.mem_name, "SOUL.md");
+    cabin.mem_body = "typed soul line for the switch".into();
+    cabin.open_memory_file("USER.md");
+    assert_eq!(cabin.mem_name, "USER.md");
+    assert!(
+        cabin.mem_body.contains("Who you are"),
+        "the next file must show in the editor, got {}",
+        cabin.mem_body
+    );
+    assert!(
+        !cabin.mem_body.contains("typed soul line"),
+        "switching tabs must not wipe the unsaved line into the next file"
+    );
+    wait_for("leaving SOUL must flush the unsaved typing", || {
+        crate::config::read_memory("SOUL.md").contains("typed soul line for the switch")
+    });
+    assert_eq!(cabin.mem_name, "USER.md");
+    quiet.settle();
+}
+
+#[test]
+fn set_session_mode_ask_and_chat() {
+    let mut quiet = QuietCabin::boot("session-mode");
+    quiet.settle();
+    let app_json = quiet.boot.root.join("app.json");
+    let cabin = &mut quiet.cabin;
+    cabin.set_session_mode(grokhub_acp::SessionMode::Ask);
+    assert_eq!(cabin.session_mode, grokhub_acp::SessionMode::Ask);
+    assert_eq!(cabin.cfg.session_mode, "ask");
+    wait_for("Ask must be saved", || {
+        std::fs::read_to_string(&app_json)
+            .unwrap_or_default()
+            .contains("\"sessionMode\": \"ask\"")
+    });
+
+    cabin.set_session_mode(grokhub_acp::SessionMode::Chat);
+    assert_eq!(cabin.session_mode, grokhub_acp::SessionMode::Chat);
+    assert_eq!(cabin.cfg.session_mode, "chat");
+    wait_for("Chat must be saved", || {
+        std::fs::read_to_string(&app_json)
+            .unwrap_or_default()
+            .contains("\"sessionMode\": \"chat\"")
+    });
+    quiet.settle();
+}
+
+#[test]
+fn delete_thread_at_removes_that_row() {
+    let mut quiet = QuietCabin::boot("delete-thread");
+    let cabin = &mut quiet.cabin;
+    let keep = cabin.threads[cabin.thread_idx].title.clone();
+    cabin.threads.push(crate::threads::ChatThread::new("Harbor", false));
+    let idx = cabin.threads.len() - 1;
+    cabin.threads[idx].messages =
+        std::sync::Arc::new(vec![("user".into(), "harbor row".into())]);
+    cabin.delete_thread_at(idx);
+    assert!(
+        cabin.threads.iter().all(|t| t.title != "Harbor"),
+        "deleting that chat must remove its sidebar row, left {:?}",
+        cabin.threads.iter().map(|t| t.title.as_str()).collect::<Vec<_>>()
+    );
+    assert!(cabin.threads.iter().any(|t| t.title == keep));
+    assert_eq!(cabin.status, "Deleted Harbor");
+    quiet.settle();
+}
+
+#[test]
+fn discuss_card_opens_one_local_chat() {
+    let mut quiet = QuietCabin::boot("discuss");
+    let root = quiet.boot.root.clone();
+    let cabin = &mut quiet.cabin;
+    cabin.updates.push(grokhub_core::UpdateCard {
+        id: "idea-harbor".into(),
+        kind: grokhub_core::UpdateKind::Idea,
+        title: "Cover F1".into(),
+        body: Some("the night race".into()),
+        created_at: 1,
+        status: grokhub_core::UpdateStatus::Unread,
+        action: None,
+        expires_at: None,
+        held: false,
+        citations: Vec::new(),
+        reaction: None,
+        discuss_thread: None,
+        built: false,
+        board_id: None,
+        why: Some("because the tide turned".into()),
+    });
+    cabin.discuss_card("idea-harbor");
+    assert!(matches!(cabin.nav, super::Nav::Chat));
+    let open = &cabin.threads[cabin.thread_idx];
+    assert_eq!(open.title, "Discuss · Cover F1");
+    assert_eq!(
+        cabin
+            .threads
+            .iter()
+            .filter(|t| t.title == "Discuss · Cover F1")
+            .count(),
+        1
+    );
+    let body = cabin
+        .messages
+        .iter()
+        .find(|m| m.0 == "assistant")
+        .map(|m| m.1.as_str())
+        .unwrap_or("");
+    assert!(
+        body.contains("Post: Cover F1")
+            && body.contains("the night race")
+            && body.contains("Why: because the tide turned"),
+        "Discuss must open the card context on that chat, got {body}"
+    );
+    assert_eq!(cabin.updates[0].status, grokhub_core::UpdateStatus::Opened);
+    assert!(cabin.updates[0].discuss_thread.is_some());
+    assert!(!cabin.running);
+    wait_for("the discuss card must be saved opened", || {
+        std::fs::read_to_string(root.join("updates.json"))
+            .unwrap_or_default()
+            .contains("idea-harbor")
+    });
+    quiet.settle();
+}
+
+#[test]
+fn clear_profile_picture_removes_the_saved_picture() {
+    let mut quiet = QuietCabin::boot("clear-picture");
+    let dest = quiet.boot.root.join("profile.png");
+    let cabin = &mut quiet.cabin;
+    std::fs::write(&dest, b"not-a-real-png").expect("picture");
+    cabin.cfg.profile_picture = dest.display().to_string();
+    cabin.clear_profile_picture();
+    assert!(cabin.cfg.profile_picture.is_empty());
+    assert_eq!(cabin.status, "Saved");
+    assert!(cabin.profile_photo.is_none());
+    wait_for("Remove must delete profile.png", || !dest.exists());
+    quiet.settle();
+}
+

@@ -2273,7 +2273,7 @@ impl Cabin {
 
     /// The composer pills survive a restart: Ask/Auto/Plan is a preference, not a per-run
     /// choice. Always-approve is the exception — `config::load` drops it back to Ask.
-    fn set_session_mode(&mut self, mode: SessionMode) {
+    pub(super) fn set_session_mode(&mut self, mode: SessionMode) {
         self.session_mode = mode;
         self.cfg.session_mode = mode.as_str().to_string();
         self.persist_cfg();
