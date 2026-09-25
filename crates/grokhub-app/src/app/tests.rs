@@ -7570,3 +7570,18 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn session_pills_save_chat_and_ask() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("session-pills");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.set_session_mode(SessionMode::Chat);
+    assert_eq!(cabin.session_mode, SessionMode::Chat);
+    assert_eq!(cabin.cfg.session_mode, "chat");
+    cabin.set_session_mode(SessionMode::Ask);
+    assert_eq!(cabin.session_mode, SessionMode::Ask);
+    assert_eq!(cabin.cfg.session_mode, "ask");
+    assert!(!cabin.running);
+}
+
