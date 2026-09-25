@@ -7570,3 +7570,61 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+fn collect_shape_text(shape: &egui::Shape, out: &mut Vec<String>) {
+    match shape {
+        egui::Shape::Text(text) => out.push(text.galley.job.text.clone()),
+        egui::Shape::Vec(shapes) => {
+            for shape in shapes {
+                collect_shape_text(shape, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn empty_queue_keeps_nothing_queued_label() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("empty-queue");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(cabin.followup_queue.is_empty());
+
+    let chips = cabin.composer_chips();
+    assert!(
+        chips.is_empty(),
+        "a quiet cabin with an empty follow-up queue has an empty chip row"
+    );
+
+    let mut texts = Vec::new();
+    let ctx = egui::Context::default();
+    let _ = ctx.run(Default::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            assert!(crate::cards::quick_chip_row(ui, &chips).is_none());
+            let layer = ui.layer_id();
+            ui.ctx().graphics(|layers| {
+                if let Some(list) = layers.get(layer) {
+                    for clipped in list.all_entries() {
+                        collect_shape_text(&clipped.shape, &mut texts);
+                    }
+                }
+            });
+        });
+    });
+
+    assert_eq!(crate::cards::CHIP_EMPTY_LABEL, "Nothing queued");
+    assert_eq!(
+        texts,
+        vec![crate::cards::CHIP_EMPTY_LABEL.to_string()],
+        "an empty follow-up queue shows exactly the empty-queue label"
+    );
+    assert!(!cabin.running);
+    assert!(cabin.followup_queue.is_empty());
+
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
