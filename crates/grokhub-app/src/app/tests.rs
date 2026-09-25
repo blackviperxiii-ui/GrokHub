@@ -7570,3 +7570,38 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn board_add_move_archive_restore_and_link() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("board-acts");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.new_thread(false);
+    let thread_id = cabin.threads[cabin.thread_idx].id.clone();
+    cabin.board_title = "Harbor lamp".into();
+    cabin.board_notes = "fold the charts".into();
+    assert!(cabin.apply_board_act(Some(BoardAct::Add)));
+    assert_eq!(cabin.board.len(), 1);
+    let id = cabin.board[0].id.clone();
+    assert_eq!(cabin.board[0].title, "Harbor lamp");
+    assert_eq!(cabin.board[0].detail, "fold the charts");
+    assert_eq!(cabin.board[0].status, grokhub_core::BoardStatus::Todo);
+    assert!(cabin.board_title.is_empty());
+    assert!(!cabin.board_compose);
+    assert!(cabin.board[0].thread_id.is_none());
+    assert!(cabin.apply_board_act(Some(BoardAct::Move {
+        id: id.clone(),
+        status: grokhub_core::BoardStatus::InProgress,
+    })));
+    assert_eq!(cabin.board[0].status, grokhub_core::BoardStatus::InProgress);
+    assert!(cabin.apply_board_act(Some(BoardAct::Archive(id.clone()))));
+    assert_eq!(cabin.board[0].status, grokhub_core::BoardStatus::Dismissed);
+    assert!(cabin.apply_board_act(Some(BoardAct::Restore(id.clone()))));
+    assert_eq!(cabin.board[0].status, grokhub_core::BoardStatus::Todo);
+    assert!(cabin.apply_board_act(Some(BoardAct::Link(id.clone()))));
+    assert_eq!(cabin.board[0].thread_id.as_deref(), Some(thread_id.as_str()));
+    assert!(cabin.apply_board_act(Some(BoardAct::Unlink(id))));
+    assert!(cabin.board[0].thread_id.is_none());
+    assert!(!cabin.running);
+}
+
