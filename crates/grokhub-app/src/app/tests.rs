@@ -7570,3 +7570,51 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn new_chat_under_folder_stays_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("folder-chat");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.projects.push(ProjectNode {
+        id: "f1".into(),
+        name: "Notes".into(),
+        kind: ProjectKind::Folder,
+        path: String::new(),
+        parent: None,
+        open: false,
+    });
+    cabin.apply_project_menu("f1".into(), ProjectMenuAct::NewChat);
+
+    assert_eq!(cabin.status, "New chat");
+    assert_eq!(cabin.projects.len(), 1);
+    let folder = &cabin.projects[0];
+    assert_eq!(folder.id, "f1");
+    assert_eq!(folder.name, "Notes");
+    assert!(folder.path.is_empty());
+    assert!(folder.parent.is_none());
+    assert!(folder.open);
+    assert!(matches!(folder.kind, ProjectKind::Folder));
+    assert!(cabin
+        .projects
+        .iter()
+        .all(|n| matches!(n.kind, ProjectKind::Folder)));
+    assert_eq!(cabin.project_sel.as_deref(), Some("f1"));
+    assert!(matches!(cabin.nav, Nav::Chat));
+    assert!(cabin.composer_want_focus);
+    assert!(!cabin.running);
+    assert!(cabin.cfg.goal_pin.is_empty());
+    let thread = cabin
+        .threads
+        .get(cabin.thread_idx)
+        .expect("current thread");
+    assert_eq!(thread.title, "Chat");
+    assert!(!thread.scratch);
+    assert_eq!(thread.project_id.as_deref(), Some("f1"));
+
+    std::env::remove_var("GROKHUB_CONFIG");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
