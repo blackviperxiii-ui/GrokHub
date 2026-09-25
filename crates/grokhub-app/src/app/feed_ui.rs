@@ -383,7 +383,7 @@ impl Cabin {
         }
     }
 
-    fn follow_update_action(&mut self, action: Option<UpdateAction>) {
+    pub(super) fn follow_update_action(&mut self, action: Option<UpdateAction>) {
         match action {
             Some(UpdateAction::OpenSession { thread_id }) => {
                 if let Some(idx) = self.threads.iter().position(|t| t.id == thread_id) {
