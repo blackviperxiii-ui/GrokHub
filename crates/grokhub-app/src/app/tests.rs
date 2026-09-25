@@ -7570,3 +7570,21 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn board_slash_opens_the_workboard_and_scratch_blocks_memory() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("board-scratch");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.board.clear();
+    cabin.run_slash_line("/board");
+    assert!(matches!(cabin.nav, Nav::Workboard));
+    assert_eq!(cabin.status, "0 cards");
+    if let Some(t) = cabin.threads.get_mut(cabin.thread_idx) {
+        t.scratch = true;
+    }
+    cabin.run_slash_line("/remember harbor note");
+    assert_eq!(cabin.status, "Scratch — no memory writes");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
