@@ -7570,3 +7570,56 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn add_to_folder_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("add-folder");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.projects.push(ProjectNode {
+        id: "p1".into(),
+        name: "Harbor".into(),
+        kind: ProjectKind::Project,
+        path: String::new(),
+        parent: None,
+        open: true,
+    });
+    cabin.project_sel = Some("p1".into());
+
+    cabin.move_sel_to_folder_name("Notes");
+    assert_eq!(cabin.status, "No folder Notes");
+    let harbor = cabin.projects.iter().find(|n| n.id == "p1").expect("harbor");
+    assert!(matches!(harbor.kind, ProjectKind::Project));
+    assert!(matches!(harbor.parent, None));
+    assert!(!cabin.running);
+
+    cabin.projects.push(ProjectNode {
+        id: "f1".into(),
+        name: "Notes".into(),
+        kind: ProjectKind::Folder,
+        path: String::new(),
+        parent: None,
+        open: false,
+    });
+    cabin.move_sel_to_folder_name("Notes");
+    assert_eq!(cabin.status, "Added to Notes");
+    let harbor = cabin.projects.iter().find(|n| n.id == "p1").expect("harbor");
+    assert!(matches!(harbor.parent.as_deref(), Some("f1")));
+    assert!(harbor.path.is_empty());
+    let folder = cabin.projects.iter().find(|n| n.id == "f1").expect("notes");
+    assert!(matches!(folder.kind, ProjectKind::Folder));
+    assert!(folder.open);
+    let projects = cabin
+        .projects
+        .iter()
+        .filter(|n| matches!(n.kind, ProjectKind::Project))
+        .count();
+    let folders = cabin
+        .projects
+        .iter()
+        .filter(|n| matches!(n.kind, ProjectKind::Folder))
+        .count();
+    assert_eq!((projects, folders), (1, 1));
+    assert!(!cabin.running);
+}
+
