@@ -441,6 +441,69 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         });
     }
 
+    fn row_ends_with_short_fragment(row: &str, words: &[&str]) -> Option<String> {
+        let last = row.split_whitespace().last().unwrap_or("");
+        let letters = last.chars().count();
+        if letters == 0 || letters > 2 {
+            return None;
+        }
+        if words.contains(&last) {
+            return None;
+        }
+        let fragment = words.iter().any(|word| {
+            word.chars().count() > letters && (word.starts_with(last) || word.ends_with(last))
+        });
+        if fragment {
+            Some(last.to_owned())
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn ordinary_words_stay_whole_inside_a_narrow_bubble() {
+        let body = "harbor light stays on the dock tonight";
+        let words: Vec<&str> = body.split_whitespace().collect();
+        with_fonts_ui(|ui| {
+            let wrap = grokhub_core::bubble_wrap_width(280.0, grokhub_core::BUBBLE_PAD_X);
+            let job = crate::markdown::wrapped_job(ui, body, wrap, egui::Color32::WHITE);
+            let galley = ui.fonts(|fonts| fonts.layout_job(job));
+            let rows: Vec<String> = galley.rows.iter().map(|row| row.text()).collect();
+            for row in &rows {
+                assert!(
+                    row_ends_with_short_fragment(row, &words).is_none(),
+                    "galley row ends with a 1- or 2-letter fragment of a longer word: {row:?} in {rows:?}"
+                );
+            }
+            for word in &words {
+                assert!(
+                    rows.iter().any(|row| row.contains(word)),
+                    "word {word} was split across galley rows: {rows:?}"
+                );
+            }
+            ui.allocate_ui(egui::vec2(280.0, 420.0), |ui| {
+                ui.set_max_width(280.0);
+                let row = ui.max_rect();
+                let user = super::paint_speech_bubble(ui, body, true, false);
+                let assistant = super::paint_speech_bubble(ui, body, false, true);
+                assert!(
+                    user.rect.max.x <= row.max.x + 1.0 && user.rect.height() > 16.0,
+                    "user bubble {} x {} h {}",
+                    user.rect.max.x,
+                    row.max.x,
+                    user.rect.height()
+                );
+                assert!(
+                    assistant.rect.max.x <= row.max.x + 1.0 && assistant.rect.height() > 16.0,
+                    "assistant bubble {} x {} h {}",
+                    assistant.rect.max.x,
+                    row.max.x,
+                    assistant.rect.height()
+                );
+            });
+        });
+    }
+
     #[test]
     fn short_user_bubble_sits_on_the_right() {
         with_fonts_ui(|ui| {

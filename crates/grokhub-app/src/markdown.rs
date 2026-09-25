@@ -26,7 +26,9 @@ pub fn wrapped_job(ui: &Ui, text: &str, wrap: f32, color: Color32) -> LayoutJob 
     let font = TextStyle::Body.resolve(ui.style());
     let wrap = wrap.max(1.0);
     let mut job = LayoutJob::simple(text.to_owned(), font, color, wrap);
-    job.wrap.break_anywhere = true;
+    // Word boundaries first. A token wider than the row still breaks
+    // (epaint falls through space, dash, punctuation, then any glyph).
+    job.wrap.break_anywhere = false;
     job
 }
 
