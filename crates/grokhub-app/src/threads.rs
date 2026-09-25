@@ -172,12 +172,60 @@ pub fn session_list_order(keys: &[SessionSortKey]) -> Vec<usize> {
     history_order(&pinned, &accessed, &pinned_ms)
 }
 
-/// Sidebar History filter. No selection shows global chats. A project shows only that folder.
-pub fn session_in_chat_folder(thread_project: Option<&str>, selected: Option<&str>) -> bool {
-    match selected {
-        Some(id) => thread_project == Some(id),
-        None => thread_project.is_none(),
-    }
+fn listed_user_chat(
+    thread: &ChatThread,
+    index: usize,
+    live_idx: Option<usize>,
+    live_empty: bool,
+) -> bool {
+    let empty = if Some(index) == live_idx {
+        live_empty
+    } else {
+        thread.messages.is_empty()
+    };
+    let has_session = thread
+        .grok_session
+        .as_deref()
+        .is_some_and(|s| !s.trim().is_empty());
+    user_history_row(thread.background, &thread.title, empty, has_session)
+}
+
+/// Chat section. Project selection is not an input, so a project click cannot
+/// filter, hide, or remove these rows. Project chats stay in the project section.
+pub fn chat_section_indices(
+    threads: &[ChatThread],
+    live_idx: Option<usize>,
+    live_empty: bool,
+) -> Vec<usize> {
+    threads
+        .iter()
+        .enumerate()
+        .filter(|(i, t)| t.project_id.is_none() && listed_user_chat(t, *i, live_idx, live_empty))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Chats under one project or folder. They are not the chat section.
+pub fn project_section_chat_indices(
+    threads: &[ChatThread],
+    project_id: &str,
+    live_idx: Option<usize>,
+    live_empty: bool,
+) -> Vec<usize> {
+    threads
+        .iter()
+        .enumerate()
+        .filter(|(i, t)| {
+            t.project_id.as_deref() == Some(project_id)
+                && listed_user_chat(t, *i, live_idx, live_empty)
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Clicking a chat in the project section leaves the chat section's rows as they were.
+pub fn project_chat_click_keeps_chat_section(before: &[usize], after: &[usize]) -> bool {
+    before == after
 }
 
 /// Extra History row for a project folder. Grok session rows are painted separately.
@@ -203,34 +251,6 @@ pub fn user_history_row(background: bool, title: &str, empty: bool, has_session:
     !empty_chat_draft(empty, has_session)
 }
 
-/// Indices of user History rows. `selected` None is global chats; Some is that project.
-pub fn cabin_history_indices(
-    threads: &[ChatThread],
-    selected: Option<&str>,
-    live_idx: Option<usize>,
-    live_empty: bool,
-) -> Vec<usize> {
-    threads
-        .iter()
-        .enumerate()
-        .filter(|(i, t)| {
-            if !session_in_chat_folder(t.project_id.as_deref(), selected) {
-                return false;
-            }
-            let empty = if Some(*i) == live_idx {
-                live_empty
-            } else {
-                t.messages.is_empty()
-            };
-            let has_session = t
-                .grok_session
-                .as_deref()
-                .is_some_and(|s| !s.trim().is_empty());
-            user_history_row(t.background, &t.title, empty, has_session)
-        })
-        .map(|(i, _)| i)
-        .collect()
-}
 
 /// User chats that exist, ignoring the project filter. Creating a project must not drop these.
 pub fn history_corpus(threads: &[ChatThread]) -> Vec<(String, usize)> {
@@ -249,7 +269,7 @@ pub fn history_corpus(threads: &[ChatThread]) -> Vec<(String, usize)> {
 
 /// Most recently used user chat in a project. Leaving and coming back opens this row.
 pub fn project_return_index(threads: &[ChatThread], project_id: &str) -> Option<usize> {
-    let rows = cabin_history_indices(threads, Some(project_id), None, false);
+    let rows = project_section_chat_indices(threads, project_id, None, false);
     rows.into_iter()
         .max_by_key(|i| (threads[*i].accessed_ms, *i))
 }
@@ -556,7 +576,7 @@ mod tests {
     }
 
     #[test]
-    fn project_folder_filters_sidebar_and_delete_returns_chats() {
+    fn project_and_chat_sections_stay_separate() {
         let mut global = ChatThread::new("Global", false);
         global.messages_mut().push(("user".into(), "keep-global".into()));
         let mut filed = ChatThread::new("Lab notes", false);
@@ -567,16 +587,25 @@ mod tests {
         other.messages_mut().push(("assistant".into(), "stay".into()));
         let threads = vec![global, filed, other];
 
-        let visible = |selected: Option<&str>| {
-            threads
-                .iter()
-                .filter(|t| session_in_chat_folder(t.project_id.as_deref(), selected))
-                .map(|t| t.title.as_str())
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(visible(None), ["Global"]);
-        assert_eq!(visible(Some("proj-lab")), ["Lab notes"]);
-        assert!(visible(Some("proj-lab")).iter().all(|t| *t != "Global"));
+        let chat = chat_section_indices(&threads, None, false);
+        assert_eq!(
+            chat.iter().map(|&i| threads[i].title.as_str()).collect::<Vec<_>>(),
+            ["Global"]
+        );
+        let lab = project_section_chat_indices(&threads, "proj-lab", None, false);
+        assert_eq!(
+            lab.iter().map(|&i| threads[i].title.as_str()).collect::<Vec<_>>(),
+            ["Lab notes"]
+        );
+        assert!(
+            !lab.iter().any(|&i| threads[i].title == "Global"),
+            "a project chat list must not take the chat section"
+        );
+        let opened = chat_section_indices(&threads, Some(lab[0]), false);
+        assert!(
+            project_chat_click_keeps_chat_section(&chat, &opened),
+            "clicking the project chat must not filter, hide, or remove chat-section rows"
+        );
 
         let mut owned = threads.clone();
         let n = release_project_chats(&mut owned, "proj-lab");
@@ -586,7 +615,9 @@ mod tests {
         assert_eq!(owned[0].messages[0].1, "keep-global");
         assert_eq!(owned[2].project_id.as_deref(), Some("proj-other"));
         assert_eq!(owned.len(), 3);
-        assert!(session_in_chat_folder(owned[1].project_id.as_deref(), None));
+        let back = chat_section_indices(&owned, None, false);
+        assert!(back.iter().any(|&i| owned[i].title == "Lab notes"));
+        assert!(back.iter().any(|&i| owned[i].title == "Global"));
 
         let legacy: ChatThread = serde_json::from_str(r#"{"id":"t1","title":"legacy"}"#).unwrap();
         assert!(legacy.project_id.is_none());
@@ -659,29 +690,32 @@ mod tests {
     }
 
     #[test]
-    fn project_filter_keeps_pin_and_title() {
+    fn project_section_keeps_pin_and_title() {
         let mut night = ChatThread::new("Night watch", false);
         night.pinned = true;
         night.pinned_ms = 40;
         night.title_locked = true;
+        night.messages_mut().push(("user".into(), "night".into()));
         night.project_id = Some("lab".into());
         let mut day = ChatThread::new("Day plan", false);
         day.pinned = true;
         day.pinned_ms = 80;
         day.title_locked = true;
-        day.project_id = Some("other".into());
+        day.messages_mut().push(("user".into(), "day".into()));
         let threads = [night, day];
-        let shown: Vec<_> = threads
-            .iter()
-            .filter(|t| session_in_chat_folder(t.project_id.as_deref(), Some("lab")))
-            .collect();
-        assert_eq!(shown.len(), 1);
-        assert_eq!(shown[0].title, "Night watch");
-        assert!(shown[0].pinned);
-        assert_eq!(shown[0].pinned_ms, 40);
-        assert!(threads[1].pinned);
+        let chat = chat_section_indices(&threads, None, false);
+        assert_eq!(chat, vec![1]);
         assert_eq!(threads[1].title, "Day plan");
+        assert!(threads[1].pinned);
         assert_eq!(threads[1].pinned_ms, 80);
+        let project = project_section_chat_indices(&threads, "lab", Some(0), false);
+        assert_eq!(project, vec![0]);
+        assert_eq!(threads[0].title, "Night watch");
+        assert!(threads[0].pinned);
+        assert_eq!(threads[0].pinned_ms, 40);
+        assert!(threads[0].title_locked);
+        let still = chat_section_indices(&threads, Some(0), false);
+        assert!(project_chat_click_keeps_chat_section(&chat, &still));
         let legacy: ChatThread = serde_json::from_str(r#"{"id":"t1","title":"legacy"}"#).unwrap();
         assert_eq!(legacy.pinned_ms, 0);
         assert!(!legacy.pinned);
@@ -713,14 +747,19 @@ mod tests {
         assert_eq!(before_threads[1].messages[0].1, "stay");
         assert!(before_threads[0].pinned);
         assert_eq!(before_threads[1].grok_session.as_deref().unwrap().len(), 36);
-        let global = cabin_history_indices(&before_threads, None, None, false);
+        let global = chat_section_indices(&before_threads, None, false);
         assert_eq!(global.len(), 1);
         assert_eq!(before_threads[global[0]].title, "Night watch");
         assert!(
-            !cabin_history_indices(&before_threads, Some("brand-new"), None, false)
+            !project_section_chat_indices(&before_threads, "brand-new", None, false)
                 .iter()
                 .any(|&i| before_threads[i].title == "Night watch"),
-            "a new project folder is empty; the global chat is still in the corpus"
+            "a new project is empty; the chat section still holds Night watch"
+        );
+        assert_eq!(
+            chat_section_indices(&before_threads, None, false),
+            global,
+            "creating a project must not change the chat section"
         );
     }
 
@@ -748,7 +787,7 @@ mod tests {
         let mut real = ChatThread::new("Night watch", false);
         real.messages_mut().push(("user".into(), "hello".into()));
         let threads = vec![leaked, flagged, real];
-        let rows = cabin_history_indices(&threads, None, None, false);
+        let rows = chat_section_indices(&threads, None, false);
         assert_eq!(rows, vec![2]);
         assert_eq!(threads[rows[0]].title, "Night watch");
         assert!(history_corpus(&threads)
@@ -788,9 +827,16 @@ mod tests {
             "a second return opens the same chat"
         );
         assert!(project_return_index(&threads, "missing").is_none());
-        let folder = cabin_history_indices(&threads, Some("lab"), None, false);
+        let folder = project_section_chat_indices(&threads, "lab", None, false);
         assert!(folder.contains(&back));
         assert!(!folder.iter().any(|&i| threads[i].background));
+        let chat_before = chat_section_indices(&threads, None, false);
+        let chat_after = chat_section_indices(&threads, Some(back), false);
+        assert!(
+            project_chat_click_keeps_chat_section(&chat_before, &chat_after),
+            "returning to the project chat must leave History rows in place"
+        );
+        assert!(chat_after.iter().any(|&i| threads[i].title == "Global"));
     }
 
     #[test]

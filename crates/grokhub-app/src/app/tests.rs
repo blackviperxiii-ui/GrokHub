@@ -1276,16 +1276,60 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let rail = src
             .split("id_salt(\"rail-history\")")
             .nth(1)
-            .and_then(|s| s.split("fn cached_chat_views(").next())
+            .and_then(|s| s.split("fn page_nav(").next())
             .expect("rail-history");
         assert!(
-            rail.contains("cabin_history_indices"),
-            "project History is cabin chats, and skips empty drafts: {rail}"
+            rail.contains("chat_section_indices") && !rail.contains("project_sel"),
+            "the chat section lists cabin chats and does not read the project selection: {rail}"
+        );
+        let projects = src
+            .split("RichText::new(\"Projects\")")
+            .nth(1)
+            .and_then(|s| s.split("id_salt(\"rail-history\")").next())
+            .expect("project section");
+        assert!(
+            projects.contains("project_section_chat_indices"),
+            "project chats stay under the project: {projects}"
+        );
+        assert!(
+            !projects.contains("open_project_chat") && !projects.contains("switch_thread"),
+            "a folder or project click must not open a chat or replace History: {projects}"
+        );
+        assert!(
+            projects.contains("RailIcon::Folder")
+                && projects.contains("RailIcon::File")
+                && !projects.contains("RailIcon::Chat"),
+            "a folder looks like a folder and a project row is not a chat: {projects}"
+        );
+        assert!(
+            projects.contains("paint_folder_caret") && projects.contains("if open"),
+            "opening a folder or project lists its chats underneath: {projects}"
+        );
+        let paint = fn_src(&src, "paint_section_chats");
+        assert!(
+            paint.contains("TabAct::Switch") && !paint.contains("project_sel"),
+            "clicking a listed chat must not change the other section: {paint}"
+        );
+        let filed = fn_src(&src, "new_chat_under");
+        assert!(
+            filed.contains("new_thread")
+                && !filed.contains("threads.clear")
+                && !filed.contains("messages.clear"),
+            "a new chat under a folder must not wipe History: {filed}"
         );
         let row = include_str!("../threads.rs");
         assert!(
             row.contains("fn project_folder_history_row") && row.contains("empty_chat_draft"),
             "project History rows must use empty_chat_draft"
+        );
+        let chat_fn = row
+            .split("fn chat_section_indices(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn project_section_chat_indices").next())
+            .expect("chat_section_indices");
+        assert!(
+            !chat_fn.contains("selected"),
+            "the chat section has no project filter argument: {chat_fn}"
         );
     }
 
@@ -2924,7 +2968,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("fn cached_chat_views(").next())
             .expect("rail-history");
         assert!(
-            rail.contains("cabin_history_indices") && rail.contains("TabAct::Switch"),
+            rail.contains("chat_section_indices") && rail.contains("TabAct::Switch"),
             "sidebar History is cabin chats, not grok sessions list: {rail}"
         );
         assert!(
@@ -2952,7 +2996,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("fn ui_board(").next())
             .expect("history chats section");
         assert!(
-            page.contains("thread_rail_title") && page.contains("cabin_history_indices"),
+            page.contains("thread_rail_title") && page.contains("chat_section_indices"),
             "History page must paint cabin chats: {page}"
         );
         assert!(
@@ -7034,10 +7078,15 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             !side.contains("\"New chat\"") && !side.contains("RailIcon::Compose"),
             "sidebar must not keep a separate New chat button: {side}"
         );
-        assert!(
-            side.contains("composer_want_focus = true") && side.contains("OpenGrok"),
-            "sidebar History clicks must focus the composer: {side}"
-        );
+    assert!(
+        side.contains("apply_tab_act"),
+        "sidebar History clicks go through the shared chat-row action: {side}"
+    );
+    let tab_act = fn_src(&src, "apply_tab_act");
+    assert!(
+        tab_act.contains("composer_want_focus = true") && tab_act.contains("OpenGrok"),
+        "sidebar History clicks must focus the composer: {tab_act}"
+    );
         let palette = src
             .split("fn run_palette(")
             .nth(1)
