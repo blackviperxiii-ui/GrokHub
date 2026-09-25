@@ -112,7 +112,7 @@ use grokhub_core::{
     suggestions_from_sessions, surgical_memory_edit, take_ui_text, teach_routine, teachable_steps, theme_id, theme_label,
     thought_body_key, thought_control_act, thought_fold_controls, thought_fold_draws,
     thought_shows_acts, thought_shows_label, thread_goal_prompt, thread_host_receipts,
-    thread_host_receipts_from, toggle_folder, toggle_pin, token_delta, top_habit_labels,
+    thread_host_receipts_from, toggle_pin, token_delta, top_habit_labels,
     trajectory_jsonl_line, transcribe_route, trim_result_bodies_in_place, uid, unified_diff_cite,
     unknown_cabin_slash, update_check_due, update_chip_label, update_pending, update_wipes_config,
     upsert_assistant_turn, upsert_bound, usage_line, user_asked_to_schedule, user_pref_facts,
