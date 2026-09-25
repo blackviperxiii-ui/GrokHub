@@ -7570,3 +7570,30 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn appearance_theme_tray_and_wall_save() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("appearance");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    assert_eq!(cabin.cfg.theme, "dark");
+    assert!(cabin.cfg.close_to_tray);
+    assert!(cabin.cfg.imagine_wall);
+    cabin.choose_theme(grokhub_core::ThemeChoice::Light);
+    assert_eq!(cabin.cfg.theme, "light");
+    assert_eq!(cabin.status, "Saved");
+    cabin.choose_theme(grokhub_core::ThemeChoice::Light);
+    assert_eq!(cabin.cfg.theme, "light");
+    cabin.choose_theme(grokhub_core::ThemeChoice::System);
+    assert_eq!(cabin.cfg.theme, "system");
+    assert_eq!(cabin.status, "Saved");
+    cabin.set_close_to_tray(false);
+    assert!(!cabin.cfg.close_to_tray);
+    assert_eq!(cabin.status, "Saved");
+    cabin.set_living_wall(false);
+    assert!(!cabin.cfg.imagine_wall);
+    assert_eq!(cabin.status, "Saved");
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
