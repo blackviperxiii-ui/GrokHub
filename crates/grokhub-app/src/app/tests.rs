@@ -7570,3 +7570,45 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn project_show_and_clear_stay_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("project-show");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.cfg.project_dir.is_empty());
+    assert!(!cabin.running);
+
+    cabin.run_slash(Slash::ProjectShow);
+    assert_eq!(cabin.status, "No bound project");
+    assert!(!cabin.running);
+
+    cabin.cfg.project_dir = r"D:\Work\Harbor".to_string();
+    cabin.run_slash(Slash::ProjectShow);
+    assert_eq!(cabin.status, r"Project D:\Work\Harbor");
+    assert!(!cabin.running);
+
+    cabin.new_thread(false);
+    {
+        let thread = cabin
+            .threads
+            .get_mut(cabin.thread_idx)
+            .expect("seeded thread");
+        thread.grok_session = Some("sess".into());
+        thread.grok_cwd = Some(r"D:\Work\Harbor".into());
+    }
+    cabin.project_sel = Some("bound".into());
+
+    cabin.run_slash(Slash::ProjectClear);
+    assert!(cabin.cfg.project_dir.is_empty());
+    assert_eq!(cabin.project_sel, None);
+    let thread = cabin.threads.get(cabin.thread_idx).expect("seeded thread");
+    assert_eq!(thread.grok_session, None);
+    assert_eq!(thread.grok_cwd, None);
+    assert_eq!(cabin.status, "Unbound — full desktop");
+    assert!(!cabin.running);
+}
+
