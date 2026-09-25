@@ -7570,3 +7570,44 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn hub_and_memory_show_stay_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("hub-memory");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+
+    cabin.run_slash(Slash::Hub);
+    assert!(matches!(cabin.nav, Nav::Devices));
+    assert_eq!(cabin.status, "Start share on Devices");
+    assert!(!cabin.hub_on);
+    assert!(!cabin.running);
+    let sharing = cabin.hub.lock().expect("hub").sharing;
+    assert!(!sharing);
+
+    cabin.hub_on = true;
+    cabin.run_slash(Slash::Hub);
+    assert_eq!(cabin.status, "Hub sharing");
+    assert!(!cabin.running);
+    let sharing = cabin.hub.lock().expect("hub").sharing;
+    assert!(!sharing);
+
+    cabin.run_slash(Slash::MemoryShow);
+    assert!(matches!(cabin.nav, Nav::Memory));
+    assert_eq!(cabin.status, "Memory");
+    assert!(!cabin.running);
+
+    cabin.threads.push(crate::threads::ChatThread::new("Scratch", true));
+    cabin.thread_idx = cabin.threads.len() - 1;
+    assert!(cabin.scratch());
+    cabin.mem_body = "sentinel-memory".into();
+    let mem_body = cabin.mem_body.clone();
+    cabin.run_slash(Slash::Forget(None));
+    assert_eq!(cabin.status, "Scratch — no memory writes");
+    assert_eq!(cabin.mem_body, mem_body);
+    assert!(!cabin.running);
+}
+
