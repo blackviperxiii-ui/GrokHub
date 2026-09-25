@@ -7570,3 +7570,28 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn rename_pin_and_delete_the_open_chat() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("rename-pin");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/scratch");
+    assert_eq!(cabin.threads.len(), 1);
+    cabin.run_slash_line("/rename Harbor");
+    assert_eq!(cabin.status, "Renamed Harbor");
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Harbor");
+    assert!(cabin.threads[cabin.thread_idx].title_locked);
+    cabin.run_slash_line("/pin");
+    assert_eq!(cabin.status, "Pinned Harbor");
+    assert!(cabin.threads[cabin.thread_idx].pinned);
+    cabin.run_slash_line("/pin");
+    assert_eq!(cabin.status, "Unpinned Harbor");
+    assert!(!cabin.threads[cabin.thread_idx].pinned);
+    cabin.run_slash_line("/delete");
+    assert_eq!(cabin.status, "Chat deleted");
+    assert_eq!(cabin.threads.len(), 1);
+    assert_eq!(cabin.threads[0].title, "Chat");
+    assert!(!cabin.threads[0].scratch);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
