@@ -1288,8 +1288,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("id_salt(\"rail-history\")").next())
             .expect("project section");
         assert!(
-            projects.contains("project_section_chat_indices"),
-            "chats filed on a folder stay under that folder: {projects}"
+            projects.contains("folder_chat_indices"),
+            "every chat in an open folder is listed there: {projects}"
         );
         assert!(
             projects.contains("open_project_chat")

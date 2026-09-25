@@ -435,12 +435,38 @@ impl Cabin {
                         }
                     });
                     if kind == ProjectKind::Folder && open {
+                        let child_ids: Vec<String> = self
+                            .projects
+                            .iter()
+                            .filter(|n| {
+                                n.kind == ProjectKind::Project
+                                    && n.parent.as_deref() == Some(nid.as_str())
+                            })
+                            .map(|n| n.id.clone())
+                            .collect();
+                        let child_refs: Vec<&str> = child_ids.iter().map(|s| s.as_str()).collect();
                         let chat_indent = 20.0 * (depth as f32 + 1.0);
                         if let Some(act) = self.paint_section_chats(
                             ui,
-                            &threads::project_section_chat_indices(
+                            &threads::folder_chat_indices(
                                 &self.threads,
                                 &nid,
+                                &child_refs,
+                                Some(self.thread_idx),
+                                live_empty,
+                            ),
+                            chat_indent,
+                        ) {
+                            section_act = Some(act);
+                        }
+                    } else if kind == ProjectKind::Project && self.projects[idx].parent.is_none() {
+                        let chat_indent = 20.0 * (depth as f32 + 1.0);
+                        if let Some(act) = self.paint_section_chats(
+                            ui,
+                            &threads::folder_chat_indices(
+                                &self.threads,
+                                &nid,
+                                &[],
                                 Some(self.thread_idx),
                                 live_empty,
                             ),

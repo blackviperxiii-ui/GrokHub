@@ -205,6 +205,27 @@ pub fn chat_section_indices(
         .collect()
 }
 
+/// Chats that belong to this folder or to a project inside it.
+/// They are listed under the open folder. They are not the chat section.
+pub fn folder_chat_indices(
+    threads: &[ChatThread],
+    folder_id: &str,
+    child_project_ids: &[&str],
+    live_idx: Option<usize>,
+    live_empty: bool,
+) -> Vec<usize> {
+    threads
+        .iter()
+        .enumerate()
+        .filter(|(i, t)| {
+            let filed = t.project_id.as_deref();
+            (filed == Some(folder_id) || filed.is_some_and(|id| child_project_ids.contains(&id)))
+                && listed_user_chat(t, *i, live_idx, live_empty)
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
 /// Chats under one project or folder. They are not the chat section.
 pub fn project_section_chat_indices(
     threads: &[ChatThread],
@@ -674,6 +695,50 @@ mod tests {
             project_chat_click_keeps_chat_section(&before, &collapsed),
             "collapsing the folder must not change History"
         );
+    }
+
+    #[test]
+    fn every_chat_in_a_folder_is_listed_under_that_folder() {
+        let mut global = ChatThread::new("Global", false);
+        global.messages_mut().push(("user".into(), "stay".into()));
+        let mut on_folder = ChatThread::new("Folder notes", false);
+        on_folder.project_id = Some("fold".into());
+        on_folder.messages_mut().push(("user".into(), "folder".into()));
+        let mut older = ChatThread::new("Older lab", false);
+        older.project_id = Some("proj-lab".into());
+        older.accessed_ms = 10;
+        older.messages_mut().push(("user".into(), "old".into()));
+        older.pinned = true;
+        older.pinned_ms = 3;
+        let mut newer = ChatThread::new("Newer lab", false);
+        newer.project_id = Some("proj-lab".into());
+        newer.accessed_ms = 80;
+        newer.messages_mut().push(("user".into(), "new".into()));
+        let mut dawn = ChatThread::new("Dawn", false);
+        dawn.project_id = Some("proj-dawn".into());
+        dawn.messages_mut().push(("user".into(), "other-folder".into()));
+        let threads = vec![global, on_folder, older, newer, dawn];
+        let listed = folder_chat_indices(&threads, "fold", &["proj-lab"], None, false);
+        let titles: Vec<_> = listed.iter().map(|&i| threads[i].title.as_str()).collect();
+        assert!(
+            titles.contains(&"Folder notes")
+                && titles.contains(&"Older lab")
+                && titles.contains(&"Newer lab"),
+            "every chat in the folder or its projects is listed: {titles:?}"
+        );
+        assert!(
+            !titles.contains(&"Global") && !titles.contains(&"Dawn"),
+            "History and another folder stay out of this list: {titles:?}"
+        );
+        assert_eq!(threads[2].messages[0].1, "old");
+        assert!(threads[2].pinned);
+        let history = chat_section_indices(&threads, None, false);
+        let opened = chat_section_indices(&threads, Some(2), false);
+        assert_eq!(
+            history.iter().map(|&i| threads[i].title.as_str()).collect::<Vec<_>>(),
+            ["Global"]
+        );
+        assert!(project_chat_click_keeps_chat_section(&history, &opened));
     }
 
     #[test]

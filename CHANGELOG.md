@@ -4,7 +4,7 @@
 
 ## 2.10.27 — 2026-09-25
 
-A project is a chat. It lives in its folder in the project section and does not also appear in History. Clicking it opens that chat. A folder is the only collapsible container. Clicking it lists the projects underneath and does not open a chat. Collapsing the folder hides those chats in the tree. Expanding it shows them again. History does not gain, lose, or filter rows because a folder was collapsed or a project chat was opened. Pins and transcripts stay. A project click does not open the Workboard.
+A project is a chat. It lives in its folder in the project section and does not also appear in History. Clicking it opens that chat. Every chat that belongs to the folder or to a project inside it is listed under the open folder. A folder is the only collapsible container. Clicking it lists those chats and does not open a chat. Collapsing the folder hides them. Expanding it shows them again. History does not gain, lose, or filter rows because a folder was collapsed or a project chat was opened. Pins and transcripts stay. A project click does not open the Workboard.
 
 - Linux: `grokhub-linux-v2.10.27.tar.gz` and AUR `pkgver=2.10.27`.
 - Windows: `GrokHub-Setup-2.10.27.exe` and `grokhub-windows-v2.10.27.zip`.
