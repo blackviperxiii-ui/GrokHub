@@ -7570,3 +7570,22 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn open_board_thread_opens_the_linked_chat() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("board-open");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.open_board_thread("missing");
+    assert_eq!(cabin.status, "Linked chat is gone");
+    assert!(cabin.threads.is_empty());
+    assert!(!cabin.running);
+    cabin.new_thread(false);
+    let id = cabin.threads[cabin.thread_idx].id.clone();
+    cabin.nav = Nav::Workboard;
+    cabin.open_board_thread(&id);
+    assert!(matches!(cabin.nav, Nav::Chat));
+    assert_eq!(cabin.threads[cabin.thread_idx].id, id);
+    assert!(!cabin.running);
+}
+
