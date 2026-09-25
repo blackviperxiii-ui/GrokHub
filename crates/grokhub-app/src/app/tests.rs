@@ -7570,3 +7570,27 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn export_writes_a_chat_and_empty_video_does_not_send() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("export-video");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/scratch");
+    cabin.cfg.project_dir.clear();
+    cabin.run_slash_line("/export");
+    assert!(
+        cabin.status.starts_with("Wrote ") && cabin.status.ends_with("export.md"),
+        "export status was {}",
+        cabin.status
+    );
+    cabin.imagine_prompt.clear();
+    cabin.run_slash_line("/imagine-video");
+    assert!(matches!(cabin.nav, Nav::Imagine));
+    assert!(matches!(cabin.imagine_kind, grokhub_core::ImagineKind::Video));
+    assert!(cabin.imagine_want_focus);
+    assert!(cabin.imagine_prompt.is_empty());
+    assert!(!cabin.running);
+    assert!(!cabin.imagine_pending);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
