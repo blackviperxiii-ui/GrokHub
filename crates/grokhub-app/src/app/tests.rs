@@ -7570,3 +7570,36 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn permission_slashes_arm_always_and_set_auto() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("permission-slash");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(matches!(cabin.permission_mode, PermissionMode::Ask));
+    cabin.run_slash_line("/always-approve");
+    assert_eq!(cabin.status, "Confirm Always…");
+    assert!(matches!(
+        cabin.confirm,
+        Some(super::confirm::ConfirmKind::AlwaysSession)
+    ));
+    assert!(matches!(cabin.permission_mode, PermissionMode::Ask));
+    assert!(!cabin.running);
+    cabin.apply_session_always();
+    assert!(matches!(cabin.permission_mode, PermissionMode::AlwaysApprove));
+    assert_eq!(cabin.cfg.permission_mode, "ask");
+    assert_eq!(cabin.status, "Permission always-approve");
+    assert!(cabin.confirm.is_none());
+    cabin.run_slash_line("/always-approve");
+    assert!(matches!(cabin.permission_mode, PermissionMode::Ask));
+    assert_eq!(cabin.cfg.permission_mode, "ask");
+    assert_eq!(cabin.status, "Permission ask");
+    cabin.run_slash_line("/auto");
+    assert!(matches!(cabin.permission_mode, PermissionMode::Auto));
+    assert_eq!(cabin.cfg.permission_mode, "auto");
+    assert_eq!(cabin.status, "Permission auto");
+    assert!(cabin.confirm.is_none());
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
