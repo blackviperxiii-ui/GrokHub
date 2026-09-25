@@ -7570,3 +7570,42 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn grok_catalog_load_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("grok-catalog");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    let prev = std::env::var("GROKHUB_CONFIG").ok();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running, "a quiet cabin is not a run");
+
+    cabin.reload_grok_catalog();
+    assert!(!cabin.running, "catalog load must stay off a run");
+
+    if grokhub_acp::find_grok().is_none() {
+        assert_eq!(cabin.status, crate::build_agent::grok_banner());
+        assert!(cabin.grok_catalog_loaded);
+        assert!(
+            cabin.grok_catalog_rx.is_none(),
+            "a missing grok binary must not open a catalog channel"
+        );
+    } else {
+        assert_eq!(cabin.status, "Loading Grok Build catalog…");
+        assert!(cabin.grok_catalog_rx.is_some());
+        assert!(!cabin.running);
+        cabin.status = "catalog-stay".into();
+        cabin.reload_grok_catalog();
+        assert_eq!(cabin.status, "catalog-stay");
+        assert!(cabin.grok_catalog_rx.is_some());
+    }
+    assert!(!cabin.running);
+
+    match prev {
+        Some(p) => std::env::set_var("GROKHUB_CONFIG", p),
+        None => std::env::remove_var("GROKHUB_CONFIG"),
+    }
+}
+
