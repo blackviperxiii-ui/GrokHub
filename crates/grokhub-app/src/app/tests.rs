@@ -7570,3 +7570,34 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn palette_opens_and_diagnostics_stay_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("palette-diag");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.open_palette();
+    assert!(cabin.palette_open);
+    assert!(cabin.palette_focus);
+    assert!(cabin.palette_q.is_empty());
+    assert!(cabin.palette_file_rx.is_none());
+    assert!(!cabin.settings_menu_open);
+    assert!(!cabin.running);
+
+    cabin.run_palette("diag");
+    assert!(!cabin.palette_open);
+    assert!(cabin.status.contains("app GrokHub"));
+    assert!(cabin.status.contains("version 2.10.27"));
+    assert!(!cabin.running);
+
+    cabin.run_palette("nav:night");
+    assert!(matches!(cabin.nav, Nav::Night));
+    assert!(!cabin.palette_open);
+    assert!(!cabin.running);
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
