@@ -7570,3 +7570,25 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn voice_without_login_stays_off_and_profile_clears() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("voice-profile");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let old_path = std::env::var_os("PATH");
+    std::env::set_var("PATH", "");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.api_key.clear();
+    cabin.listen_voice();
+    assert_eq!(cabin.status, "Connect Grok OAuth for STT/TTS.");
+    assert!(!cabin.running, "voice must not start a listen job");
+    cabin.cfg.profile_picture = "harbor.png".into();
+    cabin.clear_profile_picture();
+    assert!(cabin.cfg.profile_picture.is_empty());
+    assert_eq!(cabin.status, "Saved");
+    match old_path {
+        Some(p) => std::env::set_var("PATH", p),
+        None => std::env::remove_var("PATH"),
+    }
+    std::env::remove_var("GROKHUB_CONFIG");
+}
