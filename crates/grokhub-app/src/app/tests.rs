@@ -7570,3 +7570,25 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn forget_clears_memory_off_a_run() {
+    let _guard = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("forget-off-run");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.new_thread(false);
+    cabin.mem_name = "MEMORY.md".into();
+    cabin.mem_body = "wifi stays until forget".into();
+    assert!(!cabin.scratch());
+    assert!(!cabin.running);
+
+    cabin.run_slash(Slash::Forget(None));
+
+    assert_eq!(cabin.status, "Forgot MEMORY.md");
+    assert!(cabin.mem_name == "MEMORY.md" && cabin.mem_body.is_empty());
+    assert!(!cabin.running);
+}
+
