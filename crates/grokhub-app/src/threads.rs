@@ -808,6 +808,53 @@ mod tests {
     }
 
     #[test]
+    fn opening_a_history_row_keeps_its_place() {
+        let older = SessionSortKey {
+            pinned: false,
+            pinned_ms: 0,
+            accessed_ms: 100,
+            list_rank: 0,
+        };
+        let newer = SessionSortKey {
+            pinned: false,
+            pinned_ms: 0,
+            accessed_ms: 500,
+            list_rank: 0,
+        };
+        let before = session_list_order(&[older, newer]);
+        assert_eq!(before, vec![1, 0]);
+        assert_eq!(
+            session_list_order(&[older, newer]),
+            before,
+            "selecting or opening the older row leaves its activity stamp"
+        );
+        let mut messaged = older;
+        messaged.accessed_ms = 900;
+        assert_eq!(
+            session_list_order(&[messaged, newer]),
+            vec![0, 1],
+            "a new message moves that row"
+        );
+        let pin_old = SessionSortKey {
+            pinned: true,
+            pinned_ms: 10,
+            accessed_ms: 900,
+            list_rank: 0,
+        };
+        let pin_new = SessionSortKey {
+            pinned: true,
+            pinned_ms: 50,
+            accessed_ms: 1,
+            list_rank: 0,
+        };
+        assert_eq!(
+            session_list_order(&[pin_old, pin_new, older]),
+            vec![1, 0, 2],
+            "pins stay last-pinned-first when another chat is opened"
+        );
+    }
+
+    #[test]
     fn project_section_keeps_pin_and_title() {
         let mut night = ChatThread::new("Night watch", false);
         night.pinned = true;

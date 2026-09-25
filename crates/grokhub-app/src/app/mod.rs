@@ -107,7 +107,7 @@ use grokhub_core::{
     should_refresh_llm, should_seed_sidebar, should_send_screenshot, should_trim_result_bodies,
     should_update_cli_alpha, apply_skill_follow, skill_follow_block, skill_from_suggestion,
     skill_offer_chip, skill_use_in_chat_prompt,
-    skip_night_check_receipt, slash_help, slash_kind, stage_project, start_hub_rotates_pair,
+    skip_night_check_receipt, slash_help, slash_kind, start_hub_rotates_pair,
     state_for_disk, stretch_saved_skill, strip_thinking, summarize_trajectory, summarize_write,
     suggestions_from_sessions, surgical_memory_edit, take_ui_text, teach_routine, teachable_steps, theme_id, theme_label,
     thought_body_key, thought_control_act, thought_fold_controls, thought_fold_draws,
@@ -595,8 +595,6 @@ pub struct Cabin {
     projects: Vec<ProjectNode>,
     project_sel: Option<String>,
     proj_menu_pos: egui::Pos2,
-    proj_plus_open: bool,
-    proj_plus_pos: egui::Pos2,
     proj_add_for: Option<String>,
     proj_rename: Option<String>,
     proj_rename_buf: String,
@@ -1036,8 +1034,6 @@ impl Cabin {
             projects,
             project_sel,
             proj_menu_pos: egui::Pos2::ZERO,
-            proj_plus_open: false,
-            proj_plus_pos: egui::Pos2::ZERO,
             proj_add_for: None,
             proj_rename: None,
             proj_rename_buf: String::new(),
@@ -2466,9 +2462,6 @@ impl Cabin {
             match act {
                 HeartbeatAct::Housekeep => {
                     self.roll_today();
-                    if self.nav == Nav::Chat && !self.scratch() {
-                        self.stamp_current_access();
-                    }
                     self.tick_feed_pulse();
                     if self.last_persist.elapsed() > Duration::from_secs(2) {
                         self.persist_bg();
