@@ -7570,3 +7570,18 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn sign_out_oauth_clears_the_session() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("sign-out");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.imagine_pending = true;
+    cabin.sign_out_oauth();
+    assert_eq!(cabin.status, "Signed out");
+    assert!(cabin.secrets.oauth.is_none());
+    assert!(!cabin.imagine_pending);
+    assert!(cabin.oauth_pending.is_none());
+    std::env::remove_var("GROKHUB_CONFIG");
+}
