@@ -7570,3 +7570,26 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn chip_nav_changes_page_and_dismiss_drops_it() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("chip-acts");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    let chips = vec![grokhub_core::QuickChip {
+        id: "nav-ideas".into(),
+        label: "Ideas".into(),
+        value: "__nav:ideas".into(),
+        kind: grokhub_core::ChipKind::Nav,
+        score: 1.0,
+        hint: String::new(),
+        primary: false,
+    }];
+    cabin.take_chip_act(crate::cards::ChipRowAct::Apply(0), &chips);
+    assert!(matches!(cabin.nav, Nav::Ideas));
+    assert!(!cabin.running);
+    cabin.take_chip_act(crate::cards::ChipRowAct::Dismiss(0), &chips);
+    assert!(cabin.chip_dismissed.iter().any(|d| d == "nav-ideas"));
+    assert!(cabin.chip_dismissed.iter().any(|d| d == "__nav:ideas"));
+}
