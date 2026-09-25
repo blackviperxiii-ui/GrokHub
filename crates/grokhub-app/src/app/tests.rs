@@ -7570,3 +7570,79 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+fn grok_process_ids() -> Vec<u32> {
+    let mut ids = Vec::new();
+    let Ok(dir) = std::fs::read_dir("/proc") else {
+        return ids;
+    };
+    for entry in dir.flatten() {
+        let name = entry.file_name();
+        let Some(pid_str) = name.to_str() else {
+            continue;
+        };
+        let Ok(pid) = pid_str.parse::<u32>() else {
+            continue;
+        };
+        let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+        let comm_is_grok = comm.trim() == "grok";
+        let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+        let argv0 = cmdline.split(|b| *b == 0).next().unwrap_or(&[]);
+        let exe_is_grok = std::path::Path::new(std::str::from_utf8(argv0).unwrap_or(""))
+            .file_name()
+            .and_then(|s| s.to_str())
+            == Some("grok");
+        if comm_is_grok || exe_is_grok {
+            ids.push(pid);
+        }
+    }
+    ids.sort_unstable();
+    ids
+}
+
+#[test]
+fn help_slash_lists_commands_without_a_run() {
+    struct RestoreConfig(Option<String>);
+    impl Drop for RestoreConfig {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+                None => std::env::remove_var("GROKHUB_CONFIG"),
+            }
+        }
+    }
+
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("help-slash");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    let _restore = RestoreConfig(std::env::var("GROKHUB_CONFIG").ok());
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    assert!(!cabin.running, "help starts from an idle cabin");
+    let before = cabin.messages.len();
+    let grok_before = grok_process_ids();
+    cabin.run_slash(Slash::Help);
+    let gained: Vec<&(String, String)> = cabin.messages.iter().skip(before).collect();
+    assert!(
+        matches!(
+            gained.as_slice(),
+            [(role, text)] if role == "assistant" && text.contains("/help — this list")
+        ),
+        "transcript must gain one assistant line containing /help — this list, got {gained:?}"
+    );
+    assert!(!cabin.running, "help must not start a run");
+    assert!(
+        cabin.grok_p_pid.is_none(),
+        "help must not record a grok pid"
+    );
+    assert_eq!(
+        grok_before,
+        grok_process_ids(),
+        "help must not start a grok process"
+    );
+}
+
