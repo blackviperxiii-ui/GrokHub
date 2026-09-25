@@ -7570,3 +7570,45 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn model_slash_saves_without_a_run() {
+    let _hold = config::hold_test_config();
+    let root = config::test_config_root("model-slash");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    cabin.run_slash(Slash::Model("grok-4.7".into()));
+
+    assert_eq!(cabin.cfg.model, "grok-4.7");
+    assert_eq!(cabin.status, "grok --model grok-4.7");
+    assert!(!cabin.running);
+
+    let path = root.join("app.json");
+    let started = Instant::now();
+    let mut body = String::new();
+    while started.elapsed() < Duration::from_secs(3) {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            body = text;
+            if body.contains("\"model\": \"grok-4.7\"") {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        path.starts_with(&root),
+        "model file must stay under the test config root"
+    );
+    assert!(
+        body.contains("\"model\": \"grok-4.7\""),
+        "model was not persisted under {}: {body}",
+        path.display()
+    );
+    assert_eq!(config::load().model, "grok-4.7");
+
+    std::env::remove_var("GROKHUB_CONFIG");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
