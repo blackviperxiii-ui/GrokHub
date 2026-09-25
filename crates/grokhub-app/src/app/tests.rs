@@ -7570,3 +7570,17 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn health_slash_opens_about_and_writes_the_doctor_line() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("health-slash");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/health");
+    assert!(matches!(cabin.nav, Nav::Settings));
+    assert!(matches!(cabin.settings_sec, SettingsSec::About));
+    assert_eq!(cabin.status, cabin.doctor_text());
+    assert!(cabin.status.contains("ok ") || cabin.status.contains("ERR "));
+    std::env::remove_var("GROKHUB_CONFIG");
+}
