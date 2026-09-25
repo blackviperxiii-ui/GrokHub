@@ -7570,3 +7570,17 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn command_palette_opens_and_navigates() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.open_palette();
+    assert!(cabin.palette_open);
+    assert!(cabin.palette_q.is_empty());
+    cabin.run_palette("nav:board");
+    assert!(matches!(cabin.nav, Nav::Workboard));
+    assert!(!cabin.palette_open);
+    cabin.open_palette();
+    cabin.run_palette("nav:history");
+    assert!(matches!(cabin.nav, Nav::History));
+}
