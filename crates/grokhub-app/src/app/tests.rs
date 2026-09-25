@@ -1,5 +1,6 @@
 use super::*;
 use eframe::egui;
+use grokhub_core::UpdateAction;
 
 fn cabin_src() -> String {
     concat!(
@@ -7568,5 +7569,75 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
             && !build.contains("idea.body.clone()"),
         "Idea Accept files the task line, not the raw message: {build}"
     );
+}
+
+#[test]
+fn feed_actions_open_pages_without_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("feed-actions");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    assert!(!cabin.running);
+
+    cabin.new_thread(false);
+    cabin.live_mut().push(("user".into(), "keep".into()));
+    let older = cabin.threads[cabin.thread_idx].id.clone();
+    cabin.new_thread(false);
+    let newer = cabin.threads[cabin.thread_idx].id.clone();
+    assert_ne!(older, newer);
+    assert!(!cabin.running);
+
+    cabin.follow_update_action(Some(UpdateAction::OpenWorkboard));
+    assert!(matches!(cabin.nav, super::Nav::Workboard));
+    assert!(!cabin.running);
+    let nav_before_unknown = cabin.nav;
+
+    cabin.follow_update_action(Some(UpdateAction::OpenSession {
+        thread_id: "missing-session".into(),
+    }));
+    assert!(cabin.nav == nav_before_unknown);
+    assert!(matches!(cabin.nav, super::Nav::Workboard));
+    assert!(!cabin.running);
+
+    cabin.follow_update_action(Some(UpdateAction::OpenSession {
+        thread_id: older.clone(),
+    }));
+    assert_eq!(cabin.threads[cabin.thread_idx].id, older);
+    assert!(matches!(cabin.nav, super::Nav::Chat));
+    assert!(!cabin.running);
+
+    cabin.follow_update_action(Some(UpdateAction::OpenWorkboard));
+    assert!(matches!(cabin.nav, super::Nav::Workboard));
+    assert!(!cabin.running);
+
+    cabin.follow_update_action(Some(UpdateAction::OpenAutomations));
+    assert!(matches!(cabin.nav, super::Nav::Night));
+    assert!(!cabin.running);
+
+    cabin.follow_update_action(Some(UpdateAction::DeepLink {
+        href: "https://example.test/harbor".into(),
+    }));
+    assert_eq!(cabin.status, "https://example.test/harbor");
+    assert!(matches!(cabin.nav, super::Nav::Night));
+    assert!(!cabin.running);
+
+    let status_before_blank = cabin.status.clone();
+    cabin.follow_update_action(Some(UpdateAction::DeepLink {
+        href: "   ".into(),
+    }));
+    assert_eq!(cabin.status, status_before_blank);
+    assert!(matches!(cabin.nav, super::Nav::Night));
+    assert!(!cabin.running);
+
+    let nav_before_none = cabin.nav;
+    let status_before_none = cabin.status.clone();
+    cabin.follow_update_action(None);
+    assert!(cabin.nav == nav_before_none);
+    assert!(matches!(cabin.nav, super::Nav::Night));
+    assert_eq!(cabin.status, status_before_none);
+    assert!(!cabin.running);
 }
 
