@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 2.10.31 — 2026-09-26
+
+Startup keeps a chat that still has a Grok session, plan, or goal, even when the transcript has not been copied into the thread yet. Sessions saved under `~/.grok` that History no longer points at show up again. A save that shrinks history copies the previous `threads.json` to `threads.json.bak` and does not replace that backup with a smaller file. Opening one of those rows loads the session transcript.
+
 ## 2.10.30 — 2026-09-26
 
 Auto and Always stay on `grok -p`. Routing them through agent stdio loaded `~/.grok` MCP servers, the child was SIGTERM'd, and the cabin retried that forever while the status stayed on Thinking. A killed turn is retried once.

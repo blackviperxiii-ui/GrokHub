@@ -72,7 +72,8 @@ use grokhub_core::{
     is_openclaw_workspace, is_plain_text, is_rewind_copy_cmd, is_rewind_copy_cmd_in,
     is_thinking_status, is_voice_error, is_workload_user, job_error_goes_to_chat, job_is_scratch,
     keep_last_rewinds,
-    lan_bind_in_use, last_imagine_receipt, last_user_scan, last_user_text, leftover_empty_thread, load_hub_state,
+    keep_loaded_thread, lan_bind_in_use, last_imagine_receipt, last_user_scan, last_user_text,
+    leftover_empty_thread, load_hub_state,
     local_greeting, lock_blocks_hands, mark_automation_ran, mark_automation_skipped, mark_loop_ran,
     mark_slash_result, match_skill, merge_hub_snapshots, merge_imported_memory,
     merge_suggestion_store, merge_thinking_capped, mint_host_halt, mode_from_chip_value,
@@ -751,6 +752,9 @@ impl Cabin {
                 t.messages = Arc::new(config::load_chat());
                 threads.push(t);
             }
+            let adopted = threads::adopt_sessions_from(&threads, &threads::grok_session_homes());
+            let adopted_n = adopted.len();
+            threads.extend(adopted);
             let keep_id = threads
                 .iter()
                 .find(|t| t.id == cfg.current_thread)
@@ -758,14 +762,26 @@ impl Cabin {
                 .or_else(|| threads.first().map(|t| t.id.clone()));
             let before = threads.len();
             threads.retain(|t| {
-                keep_id.as_deref() == Some(t.id.as_str())
-                    || t.pinned
-                    || !leftover_empty_thread(&t.title, t.scratch, t.messages.is_empty())
+                let has_session = t
+                    .grok_session
+                    .as_deref()
+                    .is_some_and(|s| !s.trim().is_empty());
+                keep_loaded_thread(
+                    keep_id.as_deref() == Some(t.id.as_str()),
+                    t.pinned,
+                    &t.title,
+                    t.scratch,
+                    t.messages.is_empty(),
+                    has_session,
+                    !t.retired_sessions.is_empty(),
+                    !t.plan_body.trim().is_empty(),
+                    !t.goal.label.trim().is_empty(),
+                )
             });
             if threads.is_empty() {
                 threads.push(ChatThread::new("Chat", false));
             }
-            let dropped_leftover = threads.len() != before;
+            let dropped_leftover = adopted_n > 0 || threads.len() != before;
             let thread_idx = threads
                 .iter()
                 .position(|t| keep_id.as_deref() == Some(t.id.as_str()))

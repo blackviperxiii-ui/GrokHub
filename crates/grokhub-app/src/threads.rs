@@ -1,4 +1,4 @@
-use grokhub_core::{empty_chat_draft, history_order, uid, ThreadGoal};
+use grokhub_core::{clean_tab_title, empty_chat_draft, history_order, uid, ThreadGoal};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -141,7 +141,136 @@ pub fn save(threads: &[ChatThread]) -> Result<(), String> {
         rows.push(row);
     }
     let s = serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?;
-    config::atomic_write(&threads_path(), s.as_bytes())
+    let path = threads_path();
+    // A bad in-memory list must not be the only remaining copy of a long history.
+    if let Ok(prev) = std::fs::metadata(&path) {
+        let prev_len = prev.len() as usize;
+        if prev_len > 8 * 1024 && prev_len > s.len().saturating_mul(4) {
+            let bak = path.with_file_name("threads.json.bak");
+            let bak_len = std::fs::metadata(&bak).map(|m| m.len()).unwrap_or(0) as usize;
+            if bak_len < prev_len {
+                let _ = std::fs::copy(&path, &bak);
+            }
+        }
+    }
+    config::atomic_write(&path, s.as_bytes())
+}
+
+/// Grok homes whose saved sessions should reappear in History when no cabin thread
+/// points at them. Tests keep this empty so a dev machine's `~/.grok` cannot leak in.
+pub fn grok_session_homes() -> Vec<(std::path::PathBuf, bool)> {
+    #[cfg(test)]
+    {
+        Vec::new()
+    }
+    #[cfg(not(test))]
+    {
+        let mut homes = Vec::new();
+        if let Some(home) = grokhub_acp::grok_home() {
+            homes.push((home, true));
+        }
+        if let Some(home) = grokhub_acp::cabin_grok_home() {
+            homes.push((home, false));
+        }
+        homes
+    }
+}
+
+/// Sessions on disk that History no longer points at. Empty stubs (no summary) stay out.
+/// `user_home` is true when the files live under `~/.grok`.
+pub fn adopt_sessions_from(
+    threads: &[ChatThread],
+    homes: &[(std::path::PathBuf, bool)],
+) -> Vec<ChatThread> {
+    let mut known = std::collections::HashSet::new();
+    for t in threads {
+        if let Some(id) = t
+            .grok_session
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            known.insert(id.to_string());
+        }
+        for id in &t.retired_sessions {
+            let id = id.trim();
+            if !id.is_empty() {
+                known.insert(id.to_string());
+            }
+        }
+    }
+    let mut found: Vec<(u64, ChatThread)> = Vec::new();
+    for (home, user_home) in homes {
+        let Ok(cwd_dirs) = std::fs::read_dir(home.join("sessions")) else {
+            continue;
+        };
+        for cwd in cwd_dirs.flatten() {
+            if !cwd.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let Ok(sids) = std::fs::read_dir(cwd.path()) else {
+                continue;
+            };
+            for sid in sids.flatten() {
+                let dir = sid.path();
+                if !dir.is_dir() {
+                    continue;
+                }
+                let summary_path = dir.join("summary.json");
+                let Ok(meta) = std::fs::metadata(&summary_path) else {
+                    continue;
+                };
+                let Ok(text) = std::fs::read_to_string(&summary_path) else {
+                    continue;
+                };
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+                    continue;
+                };
+                let summary = v
+                    .get("session_summary")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("")
+                    .trim();
+                if summary.is_empty() {
+                    continue;
+                }
+                let id = v
+                    .pointer("/info/id")
+                    .and_then(|s| s.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| sid.file_name().to_string_lossy().trim().to_string());
+                if id.is_empty() || !known.insert(id.clone()) {
+                    continue;
+                }
+                let title =
+                    clean_tab_title(summary).unwrap_or_else(|| id.chars().take(24).collect());
+                let mut created = ChatThread::new(&title, false);
+                created.grok_session = Some(id);
+                created.grok_user_home = *user_home;
+                created.grok_show_pending = true;
+                created.grok_cwd = v
+                    .pointer("/info/cwd")
+                    .and_then(|s| s.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
+                created.accessed_ms = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+                    .unwrap_or(0);
+                found.push((created.accessed_ms, created));
+            }
+        }
+    }
+    found.sort_by_key(|(ms, _)| *ms);
+    if found.len() > 80 {
+        found.drain(0..found.len() - 80);
+    }
+    found.into_iter().map(|(_, t)| t).collect()
 }
 
 /// One History row for [`session_list_order`].
@@ -488,6 +617,68 @@ mod tests {
         assert_eq!(load()[0].messages.len(), 1);
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn shrinking_history_keeps_the_previous_file() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("shrink-bak");
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let mut big = ChatThread::new("Night watch", false);
+        big.messages_mut()
+            .push(("user".into(), "x".repeat(12_000)));
+        save(&[big]).expect("save big");
+        let path = threads_path();
+        let before = fs::metadata(&path).expect("meta").len();
+        assert!(before > 8 * 1024);
+        save(&[ChatThread::new("Chat", false)]).expect("save small");
+        let bak = path.with_file_name("threads.json.bak");
+        let kept = fs::read(&bak).expect("bak");
+        assert!(kept.len() as u64 >= before);
+        assert!(String::from_utf8_lossy(&kept).contains("Night watch"));
+        save(&[ChatThread::new("Chat", false)]).expect("save small again");
+        assert_eq!(fs::metadata(&bak).expect("bak2").len(), kept.len() as u64);
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn adopt_sessions_from_skips_stubs_and_known_ids() {
+        let root = crate::config::test_config_root("adopt-sess");
+        let _ = fs::remove_dir_all(&root);
+        let sid_dir = root
+            .join("sessions")
+            .join("cwd")
+            .join("01a0aaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee");
+        fs::create_dir_all(&sid_dir).expect("dir");
+        fs::write(
+            sid_dir.join("summary.json"),
+            r#"{"info":{"id":"01a0aaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee","cwd":"/work"},"session_summary":"Harbor lights"}"#,
+        )
+        .expect("summary");
+        let stub = root.join("sessions").join("cwd").join("stub");
+        fs::create_dir_all(&stub).expect("stub dir");
+        fs::write(
+            stub.join("summary.json"),
+            r#"{"info":{"id":"stub"},"session_summary":""}"#,
+        )
+        .expect("stub");
+        let mut known = ChatThread::new("Kept", false);
+        known.grok_session = Some("01a0aaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee".into());
+        assert!(adopt_sessions_from(&[known], &[(root.clone(), true)]).is_empty());
+        let adopted = adopt_sessions_from(&[], &[(root.clone(), true)]);
+        assert_eq!(adopted.len(), 1);
+        assert_eq!(adopted[0].title, "Harbor lights");
+        assert_eq!(
+            adopted[0].grok_session.as_deref(),
+            Some("01a0aaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee")
+        );
+        assert!(adopted[0].grok_user_home);
+        assert!(adopted[0].grok_show_pending);
+        assert_eq!(adopted[0].grok_cwd.as_deref(), Some("/work"));
+        assert!(adopted[0].messages.is_empty());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

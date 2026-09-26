@@ -6,6 +6,15 @@ impl Cabin {
 
     pub(super) fn switch_thread(&mut self, idx: usize) {
         self.apply_switch_thread(idx);
+        if let Some(id) = self.threads.get(self.thread_idx).and_then(|t| {
+            if t.grok_show_pending && t.messages.is_empty() {
+                t.grok_session.clone()
+            } else {
+                None
+            }
+        }) {
+            self.kick_session_show(&id);
+        }
         self.persist_bg();
     }
 

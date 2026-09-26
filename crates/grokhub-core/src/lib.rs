@@ -348,7 +348,8 @@ pub use tui_gaps::{
 pub use thread_tab::{
     apply_auto_title, apply_auto_title_in, apply_manual_rename, auto_title_blocked,
     clean_tab_title, default_thread_title, delete_thread, display_tab_title, empty_chat_draft,
-    history_order, history_row_visible, leftover_empty_thread, reuse_empty_thread_idx,
+    history_order, history_row_visible, keep_loaded_thread, leftover_empty_thread,
+    reuse_empty_thread_idx,
     short_auto_title, toggle_pin, DeleteOutcome, ThreadReuseView, ThreadTab, AUTO_TITLE_MAX,
 };
 pub use trajectory::{
