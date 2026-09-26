@@ -201,7 +201,7 @@ use sidebar::*;
 #[allow(unused_imports)]
 use persist::*;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Nav {
     Chat,
     Devices,
