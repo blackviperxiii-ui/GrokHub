@@ -7570,3 +7570,20 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn unparsed_teach_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("unparsed-teach");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.teach_nl = "every banana check".into();
+    cabin.teach_watched_routine();
+    assert_eq!(
+        cabin.status,
+        "Need `/loop 30m …`, `every 2h …`, or `every day at 9 …`"
+    );
+    assert!(cabin.automations.is_empty());
+    assert!(cabin.grok_loops.is_empty());
+    assert!(!cabin.running);
+}
+
