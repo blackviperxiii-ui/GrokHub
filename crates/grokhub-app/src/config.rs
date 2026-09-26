@@ -390,7 +390,39 @@ impl Default for AppConfig {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static TEST_CONFIG_DIR: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Pin `config_dir` on this thread. The worker that writes `app.json` captures
+/// the directory at schedule time, so another test's `GROKHUB_CONFIG` cannot
+/// move the file.
+#[cfg(test)]
+pub struct TestConfigDir {
+    prev: Option<PathBuf>,
+}
+
+#[cfg(test)]
+impl TestConfigDir {
+    pub fn set(dir: PathBuf) -> Self {
+        let prev = TEST_CONFIG_DIR.with(|slot| slot.borrow_mut().replace(dir));
+        Self { prev }
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestConfigDir {
+    fn drop(&mut self) {
+        TEST_CONFIG_DIR.with(|slot| *slot.borrow_mut() = self.prev.take());
+    }
+}
+
 pub fn config_dir() -> PathBuf {
+    #[cfg(test)]
+    if let Some(dir) = TEST_CONFIG_DIR.with(|slot| slot.borrow().clone()) {
+        return dir;
+    }
     if let Ok(p) = std::env::var("GROKHUB_CONFIG") {
         return PathBuf::from(p);
     }
@@ -507,11 +539,17 @@ pub fn ensure_memory_seeds() {
 }
 
 pub fn save(cfg: &AppConfig) -> Result<(), String> {
+    save_in(&config_dir(), cfg)
+}
+
+/// Write `app.json` under `dir`. Callers that spawn a thread capture `dir`
+/// first so a later `GROKHUB_CONFIG` change cannot move the file.
+pub fn save_in(dir: &std::path::Path, cfg: &AppConfig) -> Result<(), String> {
     let mut cfg = cfg.clone();
     // Console key lives in secrets.json. Never rewrite a leftover into app.json.
     cfg.api_key.clear();
     let s = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
-    atomic_write(&config_dir().join("app.json"), s.as_bytes())
+    atomic_write(&dir.join("app.json"), s.as_bytes())
 }
 
 pub fn read_file_capped(path: &Path, cap: usize) -> String {

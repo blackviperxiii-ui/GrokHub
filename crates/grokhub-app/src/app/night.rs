@@ -543,10 +543,25 @@ impl Cabin {
         let prompt = row.prompt.clone();
         let resume = row.session_id.clone().filter(|s| !s.is_empty());
         let perm_args = self.permission_mode.scheduled_args();
-        let (tx, rx) = mpsc::channel();
-        self.grok_loop_rx = Some((row.id.clone(), rx));
         let title: String = row.prompt.chars().take(48).collect();
         self.status = format!("Loop: {title}");
+        if self.acp.is_some() && !self.running {
+            let prompt = row.prompt.clone();
+            let idx = self.ensure_background_history_thread();
+            if let Some(t) = self.threads.get(idx) {
+                self.chat_job_thread = Some(t.id.clone());
+            }
+            if let Some(h) = &self.acp {
+                if h.prompt(&prompt).is_ok() {
+                    self.loop_acp_id = Some(row.id.clone());
+                    self.running = true;
+                    return;
+                }
+            }
+            self.chat_job_thread = None;
+        }
+        let (tx, rx) = mpsc::channel();
+        self.grok_loop_rx = Some((row.id.clone(), rx));
         std::thread::spawn(move || {
             let mut args = vec![
                 "--no-auto-update".into(),
@@ -565,7 +580,7 @@ impl Cabin {
             }
             let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
             let text =
-                grokhub_acp::grok_user_stdout_timeout(&bin, &cwd, &refs, 300).unwrap_or_else(|e| e);
+                grokhub_acp::grok_user_stdout_wait(&bin, &cwd, &refs).unwrap_or_else(|e| e);
             let _ = tx.send(text);
         });
     }

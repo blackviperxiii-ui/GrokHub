@@ -212,6 +212,7 @@ impl Cabin {
     }
 
     pub(super) fn apply_session_always(&mut self) {
+        self.confirm = None;
         self.set_permission_mode(PermissionMode::AlwaysApprove);
         if self.running {
             self.halt_in_flight();
