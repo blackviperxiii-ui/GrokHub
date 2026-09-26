@@ -7570,3 +7570,13 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn profile_name_clips_at_sixty_four() {
+    assert_eq!(super::clip_profile_name("  Ada  "), "Ada");
+    assert_eq!(super::clip_profile_name("   "), "");
+    let long: String = "a".repeat(70);
+    let clipped = super::clip_profile_name(&long);
+    assert_eq!(clipped.chars().count(), 64);
+    assert_eq!(clipped, "a".repeat(64));
+}
+
