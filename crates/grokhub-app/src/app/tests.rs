@@ -7570,3 +7570,20 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn cancel_project_drops_the_staged_one() {
+    let mut app = Cabin::quiet_for_test();
+    app.stage_new_project(None);
+    let id = app.proj_staged.clone().expect("staged");
+    app.cancel_proj_rename();
+    assert!(app.proj_staged.is_none());
+    assert!(app.proj_rename.is_none());
+    assert!(!app.proj_rename_focus);
+    assert!(app.proj_rename_lock.is_none());
+    assert!(app.proj_rename_buf.is_empty());
+    assert!(app.projects.iter().all(|n| n.id != id));
+    assert_eq!(app.status, "Name this project");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
