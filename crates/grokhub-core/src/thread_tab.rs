@@ -165,6 +165,28 @@ pub fn leftover_empty_thread(title: &str, scratch: bool, empty: bool) -> bool {
             .eq_ignore_ascii_case(default_thread_title(scratch))
 }
 
+/// Boot may drop an unused Chat/Scratch draft. A session, plan, or goal is a real chat
+/// even when the transcript has not been copied into `messages` yet.
+pub fn keep_loaded_thread(
+    is_current: bool,
+    pinned: bool,
+    title: &str,
+    scratch: bool,
+    empty: bool,
+    has_session: bool,
+    has_retired: bool,
+    has_plan: bool,
+    has_goal: bool,
+) -> bool {
+    is_current
+        || pinned
+        || has_session
+        || has_retired
+        || has_plan
+        || has_goal
+        || !leftover_empty_thread(title, scratch, empty)
+}
+
 /// One Chat-button draft: no dialogue and no Grok session yet.
 pub fn empty_chat_draft(empty: bool, has_session: bool) -> bool {
     empty && !has_session
@@ -316,6 +338,17 @@ mod tests {
         assert!(empty_chat_draft(true, false));
         assert!(!empty_chat_draft(true, true));
         assert!(!empty_chat_draft(false, false));
+        assert!(
+            keep_loaded_thread(false, false, "Chat", false, true, true, false, false, false),
+            "an unloaded Grok session must survive boot"
+        );
+        assert!(
+            !keep_loaded_thread(false, false, "Chat", false, true, false, false, false, false),
+            "a blank Chat draft is the leftover boot drops"
+        );
+        assert!(keep_loaded_thread(
+            false, false, "Chat", false, true, false, false, true, false
+        ));
         assert!(history_row_visible("Chat", false, true, true, false));
         assert!(!history_row_visible("Chat", false, true, false, false));
         assert!(history_row_visible("Chat", false, true, false, true));

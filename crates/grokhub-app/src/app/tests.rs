@@ -4277,8 +4277,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "first run must seed Memory files and a device name: {boot}"
         );
         assert!(
-            boot.contains("leftover_empty_thread"),
-            "boot must drop leftover empty Chat tabs: {boot}"
+            boot.contains("keep_loaded_thread"),
+            "boot must drop leftover empty Chat tabs and keep a chat that still has a Grok session: {boot}"
         );
         assert!(
             !boot.contains("threads::save"),
