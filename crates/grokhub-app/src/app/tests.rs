@@ -7570,3 +7570,23 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+
+#[test]
+fn stage_project_asks_for_a_name() {
+    let mut app = Cabin::quiet_for_test();
+    let before = app.projects.len();
+    app.stage_new_project(None);
+    assert_eq!(app.status, "Name this project");
+    assert_eq!(app.projects.len(), before + 1);
+    let id = app.proj_staged.clone().expect("staged");
+    assert_eq!(app.proj_rename.as_deref(), Some(id.as_str()));
+    assert!(app.proj_rename_buf.is_empty());
+    assert!(app.proj_rename_focus);
+    assert!(app.proj_rename_lock.is_none());
+    let node = app.projects.iter().find(|n| n.id == id).expect("node");
+    assert_eq!(node.name, "Project");
+    assert!(node.path.is_empty());
+    assert_eq!(node.kind, ProjectKind::Project);
+    assert!(!app.running);
+    assert!(app.chat_job.is_none());
+}
