@@ -77,17 +77,16 @@ impl PermissionMode {
         matches!(self, Self::AlwaysApprove | Self::Auto)
     }
 
-    /// Composer chats keep one `grok agent stdio` process. Ask shows Allow / Deny.
-    /// Auto and Always answer those prompts in the cabin (`auto_allows`).
-    /// A one-shot `grok -p` exits at the end of the turn and takes background
-    /// tasks, monitors, and loops with it. Scheduled night and phone work
-    /// still uses the headless flags when no session is live.
+    /// Ask needs a live ACP session so Allow / Deny can show.
+    /// Auto and Always stay on headless `grok -p`. Agent stdio against
+    /// `~/.grok` is SIGTERM'd (exit 143) while MCP servers start, and retrying
+    /// that path leaves the cabin on Thinking.
     pub fn uses_acp(self) -> bool {
-        matches!(self, Self::Ask | Self::Auto | Self::AlwaysApprove)
+        matches!(self, Self::Ask)
     }
 
-    /// Headless `grok -p` leftover for scheduled work. Interactive chats use
-    /// ACP (`uses_acp`) and do not reach this. Ask matches [`Self::scheduled_flags`]
+    /// Composer `grok -p` for Auto and Always. Interactive Ask uses ACP
+    /// (`uses_acp`) and does not reach this. Ask matches [`Self::scheduled_flags`]
     /// so a skipped ACP arm cannot pass `--always-approve`.
     pub fn composer_headless_flags(self) -> (bool, bool) {
         match self {
@@ -1366,8 +1365,8 @@ mod tests {
         assert!(PermissionMode::Auto.auto_allows());
         assert!(!PermissionMode::Ask.auto_allows());
         assert!(PermissionMode::Ask.uses_acp());
-        assert!(PermissionMode::Auto.uses_acp());
-        assert!(PermissionMode::AlwaysApprove.uses_acp());
+        assert!(!PermissionMode::Auto.uses_acp());
+        assert!(!PermissionMode::AlwaysApprove.uses_acp());
         let down = ask_denied_without_acp("");
         assert!(
             down.contains("Allow / Deny")

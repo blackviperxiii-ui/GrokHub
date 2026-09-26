@@ -8264,10 +8264,9 @@ fn kick_with_fake_grok_runs_the_prompt() {
     );
 
     cabin.permission_mode = PermissionMode::Auto;
-    cabin.scheduled_perm = true;
     assert!(
-        cabin.permission_mode.uses_acp(),
-        "Auto keeps an ACP session"
+        !cabin.permission_mode.uses_acp(),
+        "Auto stays on headless grok -p"
     );
     cabin.session_mode = SessionMode::Chat;
     cabin.cfg.project_dir = root.display().to_string();
@@ -8286,7 +8285,7 @@ fn kick_with_fake_grok_runs_the_prompt() {
     assert!(child.is_some(), "headless kick should record a pid");
     assert!(
         cabin.acp.is_none() && cabin.acp_spawn_rx.is_none(),
-        "a scheduled kick stays on grok -p"
+        "Auto must not enter ACP"
     );
 
     let start = std::time::Instant::now();
@@ -13242,6 +13241,7 @@ fn quiet_cabin() -> Cabin {
         messages: std::sync::Arc::new(Vec::new()),
         status: String::new(),
         running: false,
+        turn_retried: false,
         host_halt: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         rx: None,
         chat_job_thread: None,

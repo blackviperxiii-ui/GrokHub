@@ -361,6 +361,9 @@ pub struct Cabin {
     messages: Arc<Vec<(String, String)>>,
     status: String,
     running: bool,
+    /// One SIGTERM retry per user send. kick_model sets Thinking, so the
+    /// status text cannot be the guard or the cabin retries forever.
+    turn_retried: bool,
     host_halt: Arc<AtomicBool>,
     rx: Option<mpsc::Receiver<JobOut>>,
     chat_job_thread: Option<String>,
@@ -835,6 +838,7 @@ impl Cabin {
             messages,
             status: String::new(),
             running: false,
+            turn_retried: false,
             host_halt: Arc::new(AtomicBool::new(false)),
             rx: None,
             chat_job_thread: None,
@@ -1209,6 +1213,7 @@ impl Cabin {
             messages: Arc::new(Vec::new()),
             status: String::new(),
             running: false,
+            turn_retried: false,
             host_halt: Arc::new(AtomicBool::new(false)),
             rx: None,
             chat_job_thread: None,
@@ -1783,6 +1788,7 @@ impl Cabin {
         self.rx = None;
         self.voice_hold_rx = None;
         self.running = false;
+        self.turn_retried = false;
         self.imagine_pending = false;
         if self.host_reserved > 0 {
             self.host_hour_count = refund_host_reserved(self.host_hour_count, self.host_reserved);
