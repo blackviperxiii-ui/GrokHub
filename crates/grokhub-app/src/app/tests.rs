@@ -1,5 +1,6 @@
 use super::*;
 use eframe::egui;
+use std::sync::Arc;
 
 fn cabin_src() -> String {
     concat!(
@@ -7568,5 +7569,36 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
             && !build.contains("idea.body.clone()"),
         "Idea Accept files the task line, not the raw message: {build}"
     );
+}
+
+#[test]
+fn delete_one_chat_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("delete-one-chat");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    cabin.threads[cabin.thread_idx].title = "Harbor".into();
+    cabin.messages = Arc::new(vec![("user".into(), "hello".into())]);
+    cabin.new_thread(false);
+
+    let harbor = cabin
+        .threads
+        .iter()
+        .position(|t| t.title == "Harbor")
+        .expect("Harbor");
+    cabin.delete_thread_at(harbor);
+
+    assert_eq!(cabin.status, "Deleted Harbor");
+    assert!(cabin.threads.iter().all(|t| t.title != "Harbor"));
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Chat");
+    assert!(!cabin.running);
+    assert!(cabin.messages.is_empty());
+
+    std::env::remove_var("GROKHUB_CONFIG");
 }
 
