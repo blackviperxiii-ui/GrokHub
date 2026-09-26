@@ -7570,3 +7570,24 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn plan_pill_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("plan-pill");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Chat");
+    assert!(!cabin.threads[cabin.thread_idx].title_locked);
+    cabin.select_plan_without_rename();
+    assert_eq!(cabin.status, "Session plan");
+    assert!(matches!(cabin.session_mode, SessionMode::Plan));
+    assert_eq!(cabin.cfg.session_mode, "plan");
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Chat");
+    assert!(!cabin.threads[cabin.thread_idx].title_locked);
+    assert!(cabin.acp.is_none());
+    assert!(!cabin.running);
+}
+
