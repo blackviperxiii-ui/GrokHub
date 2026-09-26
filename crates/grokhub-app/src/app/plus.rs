@@ -13,11 +13,11 @@ pub(super) enum PlusPick {
 
 
 pub(super) struct PlusReady {
-    kind: AttachKind,
-    name: String,
-    raw: String,
-    image_url: Option<String>,
-    text: Option<String>,
+    pub(super) kind: AttachKind,
+    pub(super) name: String,
+    pub(super) raw: String,
+    pub(super) image_url: Option<String>,
+    pub(super) text: Option<String>,
 }
 
 
@@ -228,7 +228,8 @@ impl Cabin {
         let keep_run = self.running && !halt;
         // grok -p, including the hidden background thread, is not the ACP
         // session. Drop a stale handle without SIGTERM of that process.
-        let keep_acp = keep_run && self.grok_p_rx.is_none() && !self.job_on_background_thread();
+        let keep_acp = self.background_tasks_open()
+            || (keep_run && self.grok_p_rx.is_none() && !self.job_on_background_thread());
         self.attach_url = None;
         self.attach_name = None;
         self.followup_step = 0;

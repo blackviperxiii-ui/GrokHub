@@ -21,7 +21,12 @@ use std::time::{Duration, Instant};
 
 /// Default cap on `initialize` / `authenticate` / `session/new` so a silent
 /// `grok` cannot freeze the cabin UI thread.
-pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(12);
+/// Chrome DevTools and other MCP servers may use a 90s startup. A 12s
+/// handshake killed the child before `initialize` came back, so the cabin
+/// never saw the user's connectors.
+pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(120);
+/// One extra wait when stderr still says an MCP server is starting.
+const HANDSHAKE_STARTUP_GRACE: Duration = Duration::from_secs(60);
 
 /// Pull the human message out of a JSON-RPC error object or string.
 pub fn jsonrpc_error_text(err: &Value) -> String {
@@ -689,15 +694,44 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
             return Err(explain_handshake_error(&e, &cwd_path));
         }
         Err(_) => {
-            let _ = child.kill();
-            thread::spawn(move || {
-                let _ = child.wait();
-            });
-            let msg = "ACP handshake timed out — grok never answered initialize".to_string();
-            return Err(match &stderr_tail {
-                Some(t) => with_stderr(msg, t),
-                None => msg,
-            });
+            if stderr_still_starting(&stderr_tail) {
+                if let Ok(late) = rx.recv_timeout(HANDSHAKE_STARTUP_GRACE) {
+                    match late {
+                        Ok(hs) => hs,
+                        Err(e) => {
+                            let _ = child.kill();
+                            thread::spawn(move || {
+                                let _ = child.wait();
+                            });
+                            let e = match &stderr_tail {
+                                Some(t) => with_stderr(e, t),
+                                None => e,
+                            };
+                            return Err(explain_handshake_error(&e, &cwd_path));
+                        }
+                    }
+                } else {
+                    let _ = child.kill();
+                    thread::spawn(move || {
+                        let _ = child.wait();
+                    });
+                    let msg = "ACP handshake timed out — grok never answered initialize".to_string();
+                    return Err(match &stderr_tail {
+                        Some(t) => with_stderr(msg, t),
+                        None => msg,
+                    });
+                }
+            } else {
+                let _ = child.kill();
+                thread::spawn(move || {
+                    let _ = child.wait();
+                });
+                let msg = "ACP handshake timed out — grok never answered initialize".to_string();
+                return Err(match &stderr_tail {
+                    Some(t) => with_stderr(msg, t),
+                    None => msg,
+                });
+            }
         }
     };
     let HandshakeOk {
@@ -1414,18 +1448,16 @@ fn grok_p_once(
         false,
         false,
     )?;
-    let pid = child.id();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let _ = tx.send(child.wait_with_output());
     });
-    let out = match rx.recv_timeout(Duration::from_secs(600)) {
+    // A wall clock here used to SIGKILL the turn at 10 minutes. Long tasks
+    // and monitors wait until grok exits. Stop still kills the streamed pid.
+    let out = match rx.recv() {
         Ok(Ok(o)) => o,
         Ok(Err(e)) => return Err(e.to_string()),
-        Err(_) => {
-            crate::stream::kill_pid(pid);
-            return Err("grok -p timed out".into());
-        }
+        Err(_) => return Err("grok -p ended".into()),
     };
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -1465,6 +1497,27 @@ pub fn cabin_has_session(id: &str) -> bool {
         return false;
     };
     session_id_in_home(&home, id)
+}
+
+/// User `~/.grok` holds MCP servers, plugins, and skills. A session id that
+/// already lives under the cabin home must stay there so `--resume` finds it.
+pub fn use_user_grok_home(thread_flag: bool, resume_in_cabin: bool) -> bool {
+    thread_flag || !resume_in_cabin
+}
+
+fn stderr_still_starting(tail: &Option<Arc<Mutex<String>>>) -> bool {
+    let Some(tail) = tail else {
+        return false;
+    };
+    let text = tail
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let l = text.to_ascii_lowercase();
+    let mcp = l.contains("mcp") || l.contains("server");
+    let starting = l.contains("start") || l.contains("connect") || l.contains("initial");
+    let failed = l.contains("failed") || l.contains("error");
+    mcp && starting && !failed
 }
 
 fn dir_has_named_session(dir: &Path, id: &str, depth: u8) -> bool {
@@ -2505,6 +2558,14 @@ mod tests {
             "cabin GROK_HOME miss plus remote 404 must drop --resume: {err}"
         );
         assert!(!session_resume_is_missing("grok -p timed out"));
+        assert!(use_user_grok_home(false, false));
+        assert!(use_user_grok_home(true, true));
+        assert!(!use_user_grok_home(false, true));
+        assert!(HANDSHAKE_TIMEOUT >= Duration::from_secs(120));
+        assert!(
+            include_str!("client.rs").contains("stderr_still_starting"),
+            "handshake must wait while an MCP server is still starting"
+        );
         assert!(!is_session_cwd_error(err));
         let root = std::env::temp_dir().join(format!(
             "grokhub-sess-home-{}",

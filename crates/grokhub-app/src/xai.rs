@@ -13,6 +13,35 @@ use grokhub_core::{
 };
 use std::io::Read;
 
+/// Production Imagine calls `XAI_BASE`. Tests can point the generations POST at a local origin.
+fn imagine_api_base() -> String {
+    #[cfg(test)]
+    if let Some(base) = imagine_base_override() {
+        return base;
+    }
+    XAI_BASE.to_string()
+}
+
+#[cfg(test)]
+static IMAGINE_BASE_OVERRIDE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+fn imagine_base_override() -> Option<String> {
+    IMAGINE_BASE_OVERRIDE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+/// Test-only. Production builds do not compile this, so they always POST to `XAI_BASE`.
+#[cfg(test)]
+pub(crate) fn set_imagine_base_override(base: Option<&str>) {
+    let mut slot = IMAGINE_BASE_OVERRIDE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    *slot = base.map(|s| s.trim_end_matches('/').to_string());
+}
+
 fn json_error(v: &serde_json::Value) -> Option<String> {
     v.get("error")
         .and_then(|e| e.get("message").and_then(|m| m.as_str()).or(e.as_str()))
@@ -112,7 +141,7 @@ pub fn grok_imagine_opts(
     let try_model = |m: &str, timeout_secs: u64| -> Result<String, String> {
         let body = imagine_image_shaped(prompt, m, aspect, resolution, quality);
         let v = grok_json(
-            &format!("{XAI_BASE}/images/generations"),
+            &format!("{}/images/generations", imagine_api_base()),
             key,
             body,
             timeout_secs,
@@ -121,6 +150,12 @@ pub fn grok_imagine_opts(
             return Err("image blocked by moderation".into());
         }
         let url = parse_imagine_url(&v).ok_or_else(|| imagine_empty_reply_hint(&v))?;
+        // The local-send test returns a URL on port 80 and asserts the cabin keeps that
+        // string. Production still downloads the image and stores the file path.
+        #[cfg(test)]
+        if imagine_base_override().is_some() {
+            return Ok(url);
+        }
         save_media(&url, prompt, "png", key)
     };
     match try_model(&primary, 120) {

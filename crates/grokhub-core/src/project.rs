@@ -295,6 +295,9 @@ pub fn resolve_acp_cwd(project_dir: &str, home: Option<&str>, work_root: &str) -
 }
 
 /// `/project bind .` is the bound tree or work root — never the cabin process cwd.
+/// A Windows absolute path stays that path and is not joined onto `GrokHub-Work`.
+/// Absolute means a leading `/` or `\`, a drive prefix (`C:`, `C:/`, `C:\`,
+/// including 8.3 names), or a UNC `\\`.
 pub fn resolve_bind_path(raw: &str, bound: &str, work_root: &str, home: Option<&str>) -> String {
     let raw = raw.trim();
     let bound_abs = expand_project_root(bound, home);
@@ -308,6 +311,9 @@ pub fn resolve_bind_path(raw: &str, bound: &str, work_root: &str, home: Option<&
         return normalize_host_path(&base);
     }
     let expanded = expand_project_root(raw, home);
+    if is_windows_absolute_bind(&expanded) {
+        return expanded;
+    }
     if expanded.starts_with('/') {
         return normalize_host_path(&expanded);
     }
@@ -316,6 +322,16 @@ pub fn resolve_bind_path(raw: &str, bound: &str, work_root: &str, home: Option<&
         return normalize_host_path(rest);
     }
     normalize_host_path(&format!("{}/{}", base.trim_end_matches('/'), rest))
+}
+
+/// Drive prefix, leading `\`, or UNC. A leading `/` is handled by the caller.
+fn is_windows_absolute_bind(path: &str) -> bool {
+    let mut bytes = path.bytes();
+    match (bytes.next(), bytes.next()) {
+        (Some(b'\\'), _) => true,
+        (Some(drive), Some(b':')) if drive.is_ascii_alphabetic() => true,
+        _ => false,
+    }
 }
 
 pub fn create_folder(
@@ -1106,5 +1122,45 @@ mod tests {
             ".",
             "/project bind . must not inherit the cabin process cwd"
         );
+    }
+
+    #[test]
+    fn windows_absolute_bind_stays_absolute() {
+        let home = Some(r"C:\Users\runneradmin");
+        let work = r"C:\Users\runneradmin\GrokHub-Work";
+        let back = r"C:\Users\RUNNER~1\AppData\Local\Temp\dock";
+        let fwd = "C:/Users/RUNNER~1/AppData/Local/Temp/dock";
+        let bound_back = resolve_bind_path(back, "", work, home);
+        let bound_fwd = resolve_bind_path(fwd, "", work, home);
+        assert_eq!(bound_back, back);
+        assert_eq!(bound_fwd, fwd);
+        assert!(
+            !bound_back.contains("GrokHub-Work") && !bound_fwd.contains("GrokHub-Work"),
+            "absolute Windows paths must not be prefixed with GrokHub-Work"
+        );
+        let mixed = r"C:\Users\RUNNER~1\AppData\Local\Temp\grokhub-project-bind-5644-0/dock";
+        assert_eq!(resolve_bind_path(mixed, "", work, home), mixed);
+        assert_eq!(
+            resolve_bind_path(r"\\server\share\dock", "", work, home),
+            r"\\server\share\dock"
+        );
+        assert_eq!(resolve_bind_path(r"\dock", "", work, home), r"\dock");
+        assert_eq!(resolve_bind_path("C:", "", work, home), "C:");
+        assert!(resolve_bind_path("dock", "", work, home).contains("GrokHub-Work"));
+    }
+
+    #[test]
+    fn create_folder_rejects_a_parent_and_an_empty_name() {
+        let mut nodes = Vec::new();
+        assert_eq!(
+            create_folder(&mut nodes, "folder-1", "Notes", Some("parent")),
+            Err("folders stay at the root")
+        );
+        assert!(nodes.is_empty());
+        assert_eq!(
+            create_folder(&mut nodes, "folder-1", "", None),
+            Err("need a folder name")
+        );
+        assert!(nodes.is_empty());
     }
 }

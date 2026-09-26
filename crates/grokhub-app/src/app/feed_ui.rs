@@ -31,7 +31,7 @@ pub(super) fn home_feed_count(cards: &[UpdateCard]) -> usize {
     home_feed_n(cards)
 }
 
-enum FeedAct {
+pub(super) enum FeedAct {
     Open(String),
     Dismiss(String),
     Build(String),
@@ -248,7 +248,7 @@ impl Cabin {
             });
     }
 
-    fn apply_feed_act(&mut self, act: Option<FeedAct>) {
+    pub(super) fn apply_feed_act(&mut self, act: Option<FeedAct>) {
         match act {
             Some(FeedAct::Dismiss(id)) => self.dismiss_feed_card(&id),
             Some(FeedAct::Build(id)) => self.build_idea(&id),
@@ -286,7 +286,7 @@ impl Cabin {
         self.persist_updates();
     }
 
-    fn accept_automate_offer(&mut self, id: &str) {
+    pub(super) fn accept_automate_offer(&mut self, id: &str) {
         if !mark_update_opened(&mut self.updates, id) {
             return;
         }
@@ -302,7 +302,7 @@ impl Cabin {
         }
     }
 
-    fn react_card(&mut self, id: &str, reaction: CardReaction) {
+    pub(super) fn react_card(&mut self, id: &str, reaction: CardReaction) {
         let Some(card) = self.updates.iter_mut().find(|c| c.id == id) else {
             return;
         };
@@ -313,7 +313,7 @@ impl Cabin {
         self.persist_updates();
     }
 
-    fn discuss_card(&mut self, id: &str) {
+    pub(super) fn discuss_card(&mut self, id: &str) {
         let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() else {
             return;
         };
@@ -343,13 +343,13 @@ impl Cabin {
         self.persist();
     }
 
-    fn archive_feed_digest(&mut self, id: &str) {
+    pub(super) fn archive_feed_digest(&mut self, id: &str) {
         if archive_digest(&mut self.updates, id) {
             self.persist_updates();
         }
     }
 
-    fn open_feed_card(&mut self, id: &str) {
+    pub(super) fn open_feed_card(&mut self, id: &str) {
         let kind = self.updates.iter().find(|c| c.id == id).map(|c| c.kind);
         if matches!(kind, Some(UpdateKind::Idea)) {
             let built = self.updates.iter().any(|c| c.id == id && c.built);
@@ -368,7 +368,7 @@ impl Cabin {
         self.follow_update_action(action);
     }
 
-    fn dismiss_feed_card(&mut self, id: &str) {
+    pub(super) fn dismiss_feed_card(&mut self, id: &str) {
         let idea = self
             .updates
             .iter()
@@ -383,7 +383,7 @@ impl Cabin {
         }
     }
 
-    fn follow_update_action(&mut self, action: Option<UpdateAction>) {
+    pub(super) fn follow_update_action(&mut self, action: Option<UpdateAction>) {
         match action {
             Some(UpdateAction::OpenSession { thread_id }) => {
                 if let Some(idx) = self.threads.iter().position(|t| t.id == thread_id) {

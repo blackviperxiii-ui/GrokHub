@@ -14,6 +14,7 @@ pub use catalog::{
 };
 pub use client::{
     cabin_has_session, connect, delete_session, discover_session_files, discover_session_files_in,
+    use_user_grok_home, HANDSHAKE_TIMEOUT,
     ensure_session_cwd, load_session_signals, session_id_in_home, session_resume_is_missing,
     explain_handshake_error, inspect_json, is_placeholder_session_title, is_session_cwd_error,
     is_sigterm_status, jsonrpc_error_text, list_sessions, merge_grok_sessions, parse_session_list,
@@ -35,7 +36,8 @@ pub use locate::{
     doctor_line_busy, doctor_missing_hint, find_grok, grok_auth_path, grok_bin_looks_complete,
     grok_cli_channel, grok_cli_is_runnable, grok_cli_key, grok_cli_known_good, grok_home,
     grok_marked_unusable,
-    grok_stdout, grok_stdout_timeout, grok_user_stdout_timeout, grok_version, hide_windows_console,
+    grok_stdout, grok_stdout_timeout, grok_user_stdout_timeout, grok_user_stdout_wait, grok_version,
+    hide_windows_console,
     invalidate_grok_bin_cache, invalidate_grok_key_cache, is_cli_hard_failure, mark_grok_unusable,
     parse_grok_auth_key, prepare_cabin_grok_home, silence_windows_hard_errors, single_turn_args,
     single_turn_args_full, which, write_cli_auth_if_needed,

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.10.29 — 2026-09-26
+
+Ask, Auto, and Always keep one Grok process for the chat. A background task, monitor, or `/loop` stays up after the turn, and a new message prompts that session instead of killing it. Stop still ends it. Connector commands use `~/.grok` and wait through MCP startup. The cabin leader socket stays private. Night and phone tasks stay headless and are not killed at 300 seconds.
+
+- Linux: `grokhub-linux-v2.10.29.tar.gz` and AUR `pkgver=2.10.29`.
+- Windows: `GrokHub-Setup-2.10.29.exe` and `grokhub-windows-v2.10.29.zip`.
+
 ## 2.10.28 — 2026-09-25
 
 The projects section `+` makes a folder. It does not offer New project, and a folder menu does not offer New project here. Folders, collapse, and the chats listed under a folder stay. Those chats stay out of History. Clicking a chat in History opens it and leaves that row where it is. A new message moves the row. Selecting, focusing, or opening a row is not activity. Pins stay last-pinned-first. A project click does not open the Workboard.

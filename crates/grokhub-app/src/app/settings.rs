@@ -82,6 +82,33 @@ fn choice_label(choices: &[(&str, &str)], id: &str, fallback: &str) -> String {
 }
 
 impl Cabin {
+    pub(super) fn choose_theme(&mut self, choice: grokhub_core::ThemeChoice) {
+        let current = grokhub_core::parse_theme(&self.cfg.theme);
+        if let Some(next) = grokhub_core::pick_theme(current, choice) {
+            self.cfg.theme = grokhub_core::theme_id(next).into();
+            self.persist_cfg();
+            self.status = "Saved".into();
+        }
+    }
+
+    pub(super) fn set_close_to_tray(&mut self, on: bool) {
+        if self.cfg.close_to_tray == on {
+            return;
+        }
+        self.cfg.close_to_tray = on;
+        self.persist_cfg();
+        self.status = "Saved".into();
+    }
+
+    pub(super) fn set_living_wall(&mut self, on: bool) {
+        if self.cfg.imagine_wall == on {
+            return;
+        }
+        self.cfg.imagine_wall = on;
+        self.persist_cfg();
+        self.status = "Saved".into();
+    }
+
     pub(super) fn ui_settings_menu(&mut self, ctx: &egui::Context) {
         if !self.settings_menu_open {
             return;
@@ -400,31 +427,25 @@ impl Cabin {
                                                                         on,
                                                                         preview,
                                                                     ) {
-                                                                        if let Some(next) =
-                                                                            pick_theme(current, *choice)
-                                                                        {
-                                                                            self.cfg.theme = theme_id(next).into();
-                                                                            self.persist_cfg();
-                                                                            self.status = "Saved".into();
-                                                                        }
+                                                                        self.choose_theme(*choice);
                                                                     }
                                                                     ui.add_space(10.0);
                                                                 }
                                                             });
                                                         }
                                                         SettingsSec::Behavior => {
-                                                            if crate::cards::settings_toggle(ui, "Close to tray", "The cabin keeps working in the background.", &mut self.cfg.close_to_tray) {
-                                                                self.persist_cfg();
-                                                                self.status = "Saved".into();
+                                                            let mut close_to_tray = self.cfg.close_to_tray;
+                                                            if crate::cards::settings_toggle(ui, "Close to tray", "The cabin keeps working in the background.", &mut close_to_tray) {
+                                                                self.set_close_to_tray(close_to_tray);
                                                             }
+                                                            let mut living_wall = self.cfg.imagine_wall;
                                                             if crate::cards::settings_toggle(
                                                                 ui,
                                                                 "Living wall",
                                                                 "Every few hours the cabin paints a new cover. Twenty live. Oldest leaves first.",
-                                                                &mut self.cfg.imagine_wall,
+                                                                &mut living_wall,
                                                             ) {
-                                                                self.persist_cfg();
-                                                                self.status = "Saved".into();
+                                                                self.set_living_wall(living_wall);
                                                             }
                                                             let quiet_menu = quiet_hours_menu(
                                                                 &self.cfg.quiet_start,
