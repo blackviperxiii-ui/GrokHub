@@ -132,7 +132,7 @@ impl Cabin {
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                         }
                         // RTL: allocated after minimize, so it sits immediately to its left.
-                        self.paint_session_actions_menu(ui);
+                        let _ = self.paint_session_actions_menu(ui);
                         let (_rect, drag) = ui.allocate_exact_size(
                             ui.available_size(),
                             egui::Sense::click_and_drag(),
@@ -336,12 +336,9 @@ impl Cabin {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let plus =
                             crate::theme::felt_icon_hit(ui, "+", 22.0, crate::theme::muted(), 16.0)
-                                .on_hover_text("New project or folder");
-                        let plus_pos = plus.rect.left_bottom();
+                                .on_hover_text("New folder");
                         if plus.clicked() {
-                            self.proj_plus_open = true;
-                            self.proj_plus_pos = plus_pos;
-                            self.proj_ignore_close = true;
+                            self.stage_new_folder();
                         }
                     });
                 });
@@ -410,19 +407,7 @@ impl Cabin {
                         );
                     } else if row.clicked() {
                         let id = self.projects[idx].id.clone();
-                        match kind {
-                            ProjectKind::Folder => {
-                                if let Some(n) = self.projects.iter_mut().find(|n| n.id == id) {
-                                    n.open = !n.open;
-                                }
-                                self.touch_projects();
-                                self.flush_projects();
-                            }
-                            ProjectKind::Project => {
-                                self.bind_project_id(&id);
-                                self.open_project_chat(&id);
-                            }
-                        }
+                        self.activate_project_row(&id);
                     }
                     let nid = self.projects[idx].id.clone();
                     let row_pos = row.rect.left_bottom();
@@ -617,6 +602,25 @@ impl Cabin {
             }
             _ => Nav::Chat,
         };
+    }
+
+    /// Folder click toggles the tree. Project click opens that project's chat.
+    pub(super) fn activate_project_row(&mut self, id: &str) {
+        let kind = self.projects.iter().find(|n| n.id == id).map(|n| n.kind);
+        match kind {
+            Some(ProjectKind::Folder) => {
+                if let Some(n) = self.projects.iter_mut().find(|n| n.id == id) {
+                    n.open = !n.open;
+                }
+                self.touch_projects();
+                self.flush_projects();
+            }
+            Some(ProjectKind::Project) => {
+                self.bind_project_id(id);
+                self.open_project_chat(id);
+            }
+            None => {}
+        }
     }
 
     /// One sidebar chat list. The project section and the chat section both use this.
