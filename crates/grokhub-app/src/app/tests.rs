@@ -7570,3 +7570,32 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn land_on_real_chat_leaves_scratch() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("land-chat");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    cabin.new_thread(true);
+    let current = &cabin.threads[cabin.thread_idx];
+    assert_eq!(current.title, "Scratch");
+    assert!(current.scratch);
+    assert!(cabin.threads.iter().enumerate().any(|(i, t)| {
+        i != cabin.thread_idx && t.title == "Chat" && !t.scratch
+    }));
+    assert_eq!(cabin.status, "Scratch — no memory writes");
+    cabin.land_on_real_chat();
+    let current = &cabin.threads[cabin.thread_idx];
+    assert_eq!(current.title, "Chat");
+    assert!(!current.scratch);
+    assert!(matches!(cabin.nav, Nav::Chat));
+    assert!(cabin.threads.iter().enumerate().any(|(i, t)| {
+        i != cabin.thread_idx && t.title == "Scratch" && t.scratch
+    }));
+    assert_eq!(cabin.status, "Scratch — no memory writes");
+    assert!(!cabin.running);
+}
+
