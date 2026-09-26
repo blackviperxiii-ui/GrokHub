@@ -7570,3 +7570,33 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn fresh_home_keeps_the_old_chat() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("fresh-home");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), "hello".into())]);
+
+    cabin.open_fresh_home();
+
+    assert_eq!(cabin.status, "New chat");
+    assert!(cabin.messages.is_empty());
+    let kept = cabin.threads.iter().enumerate().any(|(i, thread)| {
+        i != cabin.thread_idx
+            && thread
+                .messages
+                .iter()
+                .any(|(role, line)| role == "user" && line == "hello")
+    });
+    assert!(kept);
+    assert!(!cabin.running);
+    assert!(matches!(cabin.nav, Nav::Chat));
+}
+
