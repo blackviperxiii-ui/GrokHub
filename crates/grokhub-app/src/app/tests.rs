@@ -7570,3 +7570,55 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn remove_folder_returns_its_project() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("drop-folder");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.projects = vec![
+        ProjectNode {
+            id: "f1".into(),
+            name: "Notes".into(),
+            kind: ProjectKind::Folder,
+            path: String::new(),
+            parent: None,
+            open: true,
+        },
+        ProjectNode {
+            id: "p1".into(),
+            name: "Harbor".into(),
+            kind: ProjectKind::Project,
+            path: String::new(),
+            parent: Some("f1".into()),
+            open: true,
+        },
+    ];
+    assert!(cabin.cfg.project_dir.is_empty());
+    assert!(cabin.project_sel.is_none());
+    assert!(
+        !cabin
+            .threads
+            .iter()
+            .any(|t| t.project_id.as_deref() == Some("f1"))
+    );
+    cabin.remove_project_id("f1");
+    assert_eq!(cabin.status, "Removed Notes");
+    assert!(cabin.projects.iter().all(|n| n.id != "f1"));
+    assert!(
+        !cabin
+            .projects
+            .iter()
+            .any(|n| matches!(n.kind, ProjectKind::Folder))
+    );
+    assert_eq!(cabin.projects.len(), 1);
+    let harbor = &cabin.projects[0];
+    assert_eq!(harbor.id, "p1");
+    assert_eq!(harbor.name, "Harbor");
+    assert!(matches!(harbor.kind, ProjectKind::Project));
+    assert!(harbor.path.is_empty());
+    assert!(harbor.parent.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.cfg.project_dir.is_empty());
+}
+
