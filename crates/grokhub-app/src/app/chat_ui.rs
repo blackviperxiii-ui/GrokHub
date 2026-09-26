@@ -1926,26 +1926,35 @@ impl Cabin {
                         let cluster = crate::cards::composer_go_cluster_w();
                         let go_sz = crate::cards::composer_go_hit_w();
                         let mid = crate::cards::composer_mid_w(inner);
-                        let rows = (self.composer.matches('\n').count() + 1).min(8);
-                        let bar_h = crate::theme::QUERY_MIN_H - 16.0;
+                        let rows = (self.composer.matches('\n').count() + 1).clamp(1, 6);
+                        let bar_h = (rows as f32 * 22.0 + 12.0)
+                            .clamp(crate::theme::QUERY_MIN_H - 16.0, 6.0 * 22.0 + 12.0);
                         ui.allocate_ui_with_layout(
                             egui::vec2(mid, bar_h),
                             egui::Layout::left_to_right(egui::Align::Center),
                             |ui| {
                                 ui.spacing_mut().item_spacing.x = 8.0;
                                 let text_w = (ui.available_width() - cluster + go_sz).max(80.0);
-                                let edit = ui.add(
-                                    egui::TextEdit::multiline(&mut self.composer)
-                                        .id(composer_id)
-                                        .desired_width(text_w)
-                                        .desired_rows(rows)
-                                        .frame(false)
-                                        .hint_text("Ask anything")
-                                        .return_key(Some(egui::KeyboardShortcut::new(
-                                            egui::Modifiers::COMMAND,
-                                            egui::Key::Enter,
-                                        ))),
-                                );
+                                let edit = egui::ScrollArea::vertical()
+                                    .id_salt("chat-composer-scroll")
+                                    .max_height(bar_h)
+                                    .auto_shrink([false, true])
+                                    .show(ui, |ui| {
+                                        ui.set_max_height(bar_h);
+                                        ui.add(
+                                            egui::TextEdit::multiline(&mut self.composer)
+                                                .id(composer_id)
+                                                .desired_width(text_w)
+                                                .desired_rows(rows)
+                                                .frame(false)
+                                                .hint_text("Ask anything")
+                                                .return_key(Some(egui::KeyboardShortcut::new(
+                                                    egui::Modifiers::COMMAND,
+                                                    egui::Key::Enter,
+                                                ))),
+                                        )
+                                    })
+                                    .inner;
                                 if let Some(t) = take_focused_composer(
                                     ui,
                                     &mut self.composer,

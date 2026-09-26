@@ -33,8 +33,8 @@ use grokhub_acp::{
 use grokhub_core::{
     add_to_folder, add_tokens, anticipate_consumes_slot, anticipated_need, appearance_choices,
     appearance_hint, append_composer, append_say, append_thought, append_tool, apply_auto_title_in,
-    apply_job_error, apply_manual_rename, attach_kind, attach_name,
-    attach_prompt_line, automation_blocked_by_policy, automation_schedule_label,
+    apply_job_error, apply_manual_rename, attach_chip_label, attach_kind, attach_name,
+    attach_prompt_line, attach_send_line, automation_blocked_by_policy, automation_schedule_label,
     automation_summary_line, blend_thread_goal, bound_scan, btw_queues_without_interrupt,
     bubble_outer_width, bubble_wrap_width,
     build_hub_snapshot, build_quick_chips, build_review_digest, build_windshield, bump_skill_run,
@@ -424,6 +424,8 @@ pub struct Cabin {
     saw_minimized: bool,
     brief_buf: String,
     ideas_q: String,
+    /// Useful setup ideas were offered once this launch. Refresh clears it.
+    ideas_filled: bool,
     tray_saw_unfocused: bool,
     tray_hid_at: Instant,
     want_quit: bool,
@@ -525,6 +527,7 @@ pub struct Cabin {
     rename_lock: Option<String>,
     chip_memory: ChipMemory,
     chip_dismissed: Vec<String>,
+    idea_pop: Option<feed_ui::IdeaPop>,
     llm_chips: Vec<QuickChip>,
     visible_chips: Vec<QuickChip>,
     chip_rx: Option<mpsc::Receiver<Vec<QuickChip>>>,
@@ -590,6 +593,8 @@ pub struct Cabin {
     wall_busy: bool,
     attach_url: Option<String>,
     attach_name: Option<String>,
+    attach_path: Option<String>,
+    attach_kind: Option<AttachKind>,
     imagine_ref: Option<String>,
     plus_menu: Option<PlusTarget>,
     plus_anchor: egui::Pos2,
@@ -755,10 +760,27 @@ impl Cabin {
             let adopted = threads::adopt_sessions_from(&threads, &threads::grok_session_homes());
             let adopted_n = adopted.len();
             threads.extend(adopted);
+            let mut parked_learn = false;
+            for t in &mut threads {
+                if threads::is_learn_map_title(&t.title) {
+                    t.background = true;
+                    parked_learn = true;
+                }
+            }
+            let user_chat = |t: &ChatThread| {
+                !t.background && !threads::is_background_history_title(&t.title)
+            };
             let keep_id = threads
                 .iter()
-                .find(|t| t.id == cfg.current_thread)
+                .find(|t| t.id == cfg.current_thread && user_chat(t))
                 .map(|t| t.id.clone())
+                .or_else(|| {
+                    threads
+                        .iter()
+                        .filter(|t| user_chat(t))
+                        .max_by_key(|t| (t.accessed_ms, t.id.clone()))
+                        .map(|t| t.id.clone())
+                })
                 .or_else(|| threads.first().map(|t| t.id.clone()));
             let before = threads.len();
             threads.retain(|t| {
@@ -781,7 +803,7 @@ impl Cabin {
             if threads.is_empty() {
                 threads.push(ChatThread::new("Chat", false));
             }
-            let dropped_leftover = adopted_n > 0 || threads.len() != before;
+            let dropped_leftover = adopted_n > 0 || threads.len() != before || parked_learn;
             let thread_idx = threads
                 .iter()
                 .position(|t| keep_id.as_deref() == Some(t.id.as_str()))
@@ -803,6 +825,16 @@ impl Cabin {
             let (threads, dropped_leftover, thread_idx) = load_saved(&cfg);
             (threads, dropped_leftover, thread_idx, false)
         };
+        if let Some(id) = threads.get(thread_idx).map(|t| t.id.clone()) {
+            if !threads::is_background_history_title(
+                threads
+                    .get(thread_idx)
+                    .map(|t| t.title.as_str())
+                    .unwrap_or(""),
+            ) {
+                cfg.current_thread = id;
+            }
+        }
         let messages = threads
             .get(thread_idx)
             .map(|t| t.messages.clone())
@@ -916,6 +948,7 @@ impl Cabin {
             saw_minimized: false,
             brief_buf,
             ideas_q: String::new(),
+            ideas_filled: false,
             tray_saw_unfocused: false,
             tray_hid_at: Instant::now(),
             want_quit: false,
@@ -1009,6 +1042,7 @@ impl Cabin {
             rename_lock: None,
             chip_memory: crate::store::load_chips(),
             chip_dismissed: vec![],
+            idea_pop: None,
             llm_chips: vec![],
             visible_chips: vec![],
             chip_rx: None,
@@ -1074,6 +1108,8 @@ impl Cabin {
             wall_busy: false,
             attach_url: None,
             attach_name: None,
+            attach_path: None,
+            attach_kind: None,
             imagine_ref: None,
             plus_menu: None,
             plus_anchor: egui::Pos2::ZERO,
@@ -1187,6 +1223,7 @@ impl Cabin {
             if dropped_leftover {
                 c.persist_bg();
             }
+            c.ensure_useful_ideas();
             grokhub_acp::silence_windows_hard_errors();
             // Official alpha when missing/unusable; pin a working CLI. UAC is expected on Windows.
             c.grok_install_wait =
@@ -1287,6 +1324,7 @@ impl Cabin {
             saw_minimized: false,
             brief_buf: String::new(),
             ideas_q: String::new(),
+            ideas_filled: false,
             tray_saw_unfocused: false,
             tray_hid_at: Instant::now(),
             want_quit: false,
@@ -1380,6 +1418,7 @@ impl Cabin {
             rename_lock: None,
             chip_memory: Default::default(),
             chip_dismissed: Vec::new(),
+            idea_pop: None,
             llm_chips: Vec::new(),
             visible_chips: Vec::new(),
             chip_rx: None,
@@ -1445,6 +1484,8 @@ impl Cabin {
             wall_busy: false,
             attach_url: None,
             attach_name: None,
+            attach_path: None,
+            attach_kind: None,
             imagine_ref: None,
             plus_menu: None,
             plus_anchor: egui::Pos2::ZERO,
@@ -1863,6 +1904,80 @@ impl Cabin {
 
     fn scrub_transcript(&self, content: String) -> String {
         redact_held_secrets(&content, &self.secret_hold)
+    }
+
+    /// Remember a short preference from this turn without a separate reflect pass.
+    fn absorb_turn_learning(&mut self, assistant: &str) {
+        if self.job_is_idea_talk() || !self.policy().learns() {
+            return;
+        }
+        let mut facts = Vec::new();
+        if let Some((_, text)) = self.messages.iter().rev().find(|(role, _)| role == "user") {
+            facts.extend(fact_candidates_from([("user", text.as_str())]));
+            let lower = text.to_ascii_lowercase();
+            if lower.contains("shorter")
+                || lower.contains("too long")
+                || lower.contains("keep it short")
+                || lower.contains("be brief")
+            {
+                grokhub_core::note_part(
+                    &mut self.learning,
+                    "chat",
+                    "style:short",
+                    "They want short replies.",
+                );
+            }
+        }
+        for line in assistant.lines() {
+            let Some(fact) = line.trim().strip_prefix("USER_FACT:") else {
+                continue;
+            };
+            let fact = fact.trim();
+            if (8..200).contains(&fact.len()) {
+                facts.push(fact.to_string());
+            }
+        }
+        if facts.is_empty() {
+            return;
+        }
+        extract_insights(&mut self.learning, &facts);
+        for fact in &facts {
+            let key = format!("pref:{}", grokhub_core::engine_slug(fact));
+            grokhub_core::note_part(&mut self.learning, "chat", &key, fact);
+        }
+        grokhub_core::absorb_cabin(&mut self.learning);
+        for fact in &facts {
+            if grokhub_core::offer_learned_setup(
+                &mut self.updates,
+                &mut self.cfg.feed_pulse,
+                now_ms(),
+                fact,
+            ) {
+                self.persist_updates();
+                self.persist_cfg();
+                break;
+            }
+        }
+        let learning = self.learning.clone();
+        let io = self.persist_io.clone();
+        std::thread::spawn(move || {
+            if let Ok(_g) = io.lock() {
+                let _ = crate::store::save_learning(&learning);
+            }
+        });
+    }
+
+    /// One part's own observation. The engine then decides who else should change.
+    pub(super) fn engine_note(&mut self, part: &str, key: &str, text: &str) {
+        grokhub_core::note_part(&mut self.learning, part, key, text);
+        grokhub_core::absorb_cabin(&mut self.learning);
+        let learning = self.learning.clone();
+        let io = self.persist_io.clone();
+        std::thread::spawn(move || {
+            if let Ok(_g) = io.lock() {
+                let _ = crate::store::save_learning(&learning);
+            }
+        });
     }
 
     fn scrub_live_blocks(&mut self) {
@@ -4332,6 +4447,7 @@ impl eframe::App for Cabin {
         self.poll_acp_spawn();
         self.poll_single();
         self.poll_pick();
+        self.take_dropped_attach(ctx);
         self.poll_pick_list();
         self.poll_eyes_cap();
         self.poll_recipe_cap();
@@ -4561,6 +4677,7 @@ impl eframe::App for Cabin {
         self.ui_plus_overlays(ctx);
         self.ui_imagine_overlays(ctx);
         self.ui_project_overlays(ctx);
+        self.paint_idea_talk(ctx);
     }
 }
 

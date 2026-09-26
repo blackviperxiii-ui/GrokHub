@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 2.10.32 — 2026-09-26
+
+The Ideas page is a scroll of cards, with no brief box and no search. Accept opens a small centered talk that stays off History. The home feed pins at most three ideas once. Dismissing one there leaves it on the board. The board holds twenty. Untouched cards sink, and a learned setup can replace a stale one.
+
+Quick chips learn from use and from the hour they were dismissed. A new empty home teaches. A fluent session stays quiet. A model is asked for chip ideas only in the middle pace, after two user turns, and at most once every thirty minutes.
+
+Ideas, chat, Imagine, skills, automations, and the workboard each keep their own notes. One engine reads those notes and tells the other parts what to change. A later contradiction replaces the old instruction. Chips do not feed that engine. The nightly model review waits until eight new turns.
+
+Upload shows every file. A selected file stays on a chip and the next message tells the agent where it is. The contents are not pasted into the box. The box stops growing after six lines. Learn-map sessions stay off History. Project chats nest under their folder.
+
+- Linux: `grokhub-linux-v2.10.32.tar.gz` and AUR `pkgver=2.10.32`.
+- Windows: `GrokHub-Setup-2.10.32.exe` and `grokhub-windows-v2.10.32.zip`.
+
 ## 2.10.31 — 2026-09-26
 
 Startup keeps a chat that still has a Grok session, plan, or goal, even when the transcript has not been copied into the thread yet. Sessions saved under `~/.grok` that History no longer points at show up again. A save that shrinks history copies the previous `threads.json` to `threads.json.bak` and does not replace that backup with a smaller file. Opening one of those rows loads the session transcript.

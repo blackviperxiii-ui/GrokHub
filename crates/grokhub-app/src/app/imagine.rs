@@ -101,6 +101,7 @@ impl Cabin {
             self.status = self.imagine_error.clone();
             return;
         }
+        self.engine_note("imagine", "generated", "They generate images.");
         let aspect = imagine_aspect_label(self.imagine_aspect).to_string();
         let resolution = imagine_image_resolution(self.imagine_quality).to_string();
         let video_res =

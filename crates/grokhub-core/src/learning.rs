@@ -21,6 +21,52 @@ pub struct LearningState {
     pub total_turns: u32,
     #[serde(default)]
     pub last_reflection_at: u64,
+    /// `total_turns` the last time a model review was spent. Quiet days stay free.
+    #[serde(default)]
+    pub reviewed_turns: u32,
+    /// What each part has seen for itself. The engine is the only reader that
+    /// turns these into directives for other parts.
+    #[serde(default)]
+    pub part_notes: Vec<crate::cabin_engine::PartNote>,
+    #[serde(default)]
+    pub directives: Vec<crate::cabin_engine::CabinDirective>,
+}
+
+/// A paid nightly review is worth it after several new turns. Otherwise the
+/// local chip lessons are the whole improvement loop.
+pub fn review_worth_tokens(total_turns: u32, reviewed_turns: u32) -> bool {
+    total_turns.saturating_sub(reviewed_turns) >= 8
+}
+
+/// Keep lessons the chips still support. Drop habit and skip lines whose evidence is gone.
+pub fn apply_local_lessons(state: &mut LearningState, lessons: &[crate::chips::LocalLesson]) {
+    let keep: Vec<&crate::chips::LocalLesson> = lessons.iter().filter(|l| !l.drop).collect();
+    for lesson in &keep {
+        if !crate::is_plain_text(&lesson.text) || lesson.key.is_empty() || lesson.text.len() < 8 {
+            continue;
+        }
+        if let Some(found) = state.insights.iter_mut().find(|i| i.key == lesson.key) {
+            if found.text != lesson.text {
+                found.text = lesson.text.clone();
+                found.hits = found.hits.saturating_add(1);
+            }
+        } else {
+            state.insights.push(LearningInsight {
+                key: lesson.key.clone(),
+                text: lesson.text.clone(),
+                hits: 1,
+            });
+        }
+    }
+    let kept: Vec<&str> = keep.iter().map(|l| l.key.as_str()).collect();
+    state.insights.retain(|i| {
+        let managed = i.key.starts_with("habit:") || i.key.starts_with("skip:");
+        !managed || kept.iter().any(|k| *k == i.key)
+    });
+    if state.insights.len() > 40 {
+        let overflow = state.insights.len() - 40;
+        state.insights.drain(0..overflow);
+    }
 }
 
 pub fn upsert_insight(state: &mut LearningState, key: &str, text: &str) {
@@ -55,6 +101,50 @@ pub fn insight_pin(state: &LearningState) -> String {
         .map(|i| format!("- {}", i.text))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Short brief for every surface that should know this person. Habits and
+/// skips first. Capped so a turn does not grow with the whole memory.
+pub fn serve_brief(state: &LearningState) -> String {
+    let mut rows: Vec<&LearningInsight> = state
+        .insights
+        .iter()
+        .filter(|i| lesson_line_ok(&i.text))
+        .collect();
+    rows.sort_by_key(|i| {
+        let pri = if i.key.starts_with("habit:") || i.key.starts_with("skip:") {
+            0
+        } else if i.key.starts_with("pref:") {
+            1
+        } else {
+            2
+        };
+        (pri, std::cmp::Reverse(i.hits))
+    });
+    let mut out = String::new();
+    for row in rows.into_iter().take(4) {
+        let line = row.text.trim();
+        if out.len() + line.len() + 1 > 360 {
+            break;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(line);
+    }
+    out
+}
+
+fn lesson_line_ok(text: &str) -> bool {
+    let t = text.trim();
+    if t.len() < 8 || !crate::is_plain_text(t) {
+        return false;
+    }
+    let lower = t.to_ascii_lowercase();
+    !lower.contains("sk-")
+        && !lower.contains("password")
+        && !lower.contains("api key")
+        && !lower.contains("token ")
 }
 
 pub fn record_turn(state: &mut LearningState) {
@@ -238,5 +328,30 @@ mod tests {
         assert_eq!(s.insights.len(), 1);
         assert!(s.insights[0].text.contains("helix"));
         assert!(!prune_ephemeral_insights(&mut s));
+    }
+
+    #[test]
+    fn serve_brief_is_short_and_a_skip_blocks_that_idea() {
+        let mut s = LearningState::default();
+        upsert_insight(&mut s, "habit:21:id:think", "Around 21:00 they use Think Harder.");
+        upsert_insight(&mut s, "skip:21:night", "Around 21:00 they skip night.");
+        upsert_insight(&mut s, "secret", "token sk-abcdefghijklmnopqrstuvwx");
+        let brief = serve_brief(&s);
+        assert!(brief.contains("Think Harder"));
+        assert!(brief.contains("skip night"));
+        assert!(!brief.contains("sk-"));
+        assert!(brief.len() <= 360);
+        assert!(crate::update_feed::setup_blocked_by_lessons(
+            "Nightly wrap-up",
+            &brief
+        ));
+        assert!(!crate::update_feed::setup_blocked_by_lessons(
+            "Morning reminder",
+            &brief
+        ));
+        assert_eq!(
+            crate::update_feed::lesson_rank_delta("Nightly wrap-up", &brief),
+            -800
+        );
     }
 }

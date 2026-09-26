@@ -900,13 +900,26 @@ pub fn single_turn_args_full(
         a.push("--sandbox".into());
         a.push("off".into());
         a.push("--rules".into());
-        a.push(CABIN_DESKTOP_RULES.into());
+        a.push(cabin_rules(""));
     }
     a
 }
 
-/// Headless GrokHub chat is Grok Build on this Linux box, not grok.com.
-pub const CABIN_DESKTOP_RULES: &str = "You are Grok Build running on this Linux desktop through GrokHub. You have full local filesystem, shell, and computer-use tools. Never say you lack access to this computer, files, or desktop. Do the work with tools.";
+/// Base rules, plus a short learned brief when the cabin already knows them.
+/// Empty brief stays byte-identical to `CABIN_DESKTOP_RULES`.
+pub fn cabin_rules(learned: &str) -> String {
+    let learned: String = learned.trim().chars().take(360).collect();
+    if learned.is_empty() {
+        return CABIN_DESKTOP_RULES.to_string();
+    }
+    format!(
+        "{CABIN_DESKTOP_RULES}\nWhat you have learned about them. Use it. Do not recite it.\n{learned}"
+    )
+}
+
+/// Headless GrokHub chat is the cabin assistant on this Linux box, not grok.com.
+/// One argv for `grok -p --rules`. Look mode (btw) does not receive this.
+pub const CABIN_DESKTOP_RULES: &str = "You are the cabin assistant on this Linux desktop through GrokHub. You can do what this computer can do: files, shell, browser, and the desktop. Never say you lack access to this computer, files, or desktop. Do the next step with tools. Ask only before sending a message, paying, or deleting something they did not name. Be brief and warm. Do not repeat the chat. Do not paste code, diffs, or logs unless they asked to see it. When they hand you work, track it with WORK_PIN and WORK_UPDATE and keep going. A paused workboard card is still yours. Resume it. A stable preference or routine is one line: USER_FACT: what you learned.";
 
 /// Swap `-p <prompt>` for `--prompt-json` when a still is attached.
 pub fn with_prompt_json(mut args: Vec<String>, json: &str) -> Vec<String> {
@@ -1256,6 +1269,18 @@ mod tests {
         assert!(
             ask.windows(2).any(|w| w[0] == "--rules" && w[1] == CABIN_DESKTOP_RULES),
             "cabin grok -p must tell Grok it has this computer: {ask:?}"
+        );
+        assert_eq!(cabin_rules(""), CABIN_DESKTOP_RULES);
+        let with = cabin_rules("Around 21:00 they skip night.");
+        assert!(with.starts_with(CABIN_DESKTOP_RULES));
+        assert!(with.contains("skip night"));
+        assert!(with.contains("Do not recite"));
+        assert!(
+            CABIN_DESKTOP_RULES.contains("this computer")
+                && CABIN_DESKTOP_RULES.contains("WORK_PIN")
+                && CABIN_DESKTOP_RULES.contains("Resume it")
+                && CABIN_DESKTOP_RULES.contains("USER_FACT:"),
+            "desktop rules must stay a proactive assistant: {CABIN_DESKTOP_RULES}"
         );
         let look = single_turn_args_full(
             "hi",

@@ -11,6 +11,8 @@ use crate::skill::{match_skill, skill_use_in_chat_prompt, SkillMd};
 pub const CHIP_VISIBLE_MAX: usize = 5;
 pub const CHIP_HARD_MAX: usize = 8;
 pub const CHIP_LLM_DEBOUNCE_MS: u64 = 1200;
+/// How long the cabin waits before spending tokens on another chip suggestion.
+pub const CHIP_LLM_SPEND_MS: u64 = 30 * 60 * 1000;
 pub const CHIP_LLM_MODE: &str = "fast";
 const CHIP_SCAN_CAP: usize = 4096;
 const MAX_HITS: usize = 80;
@@ -141,6 +143,11 @@ pub struct ChipHit {
     pub context_tags: Vec<String>,
     #[serde(default)]
     pub dismisses: u32,
+    /// Dismissals by hour of day. Separate from uses, so a 9pm no is not a 9pm habit.
+    #[serde(default)]
+    pub dismiss_hours: Vec<u32>,
+    #[serde(default)]
+    pub last_dismissed_at: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -448,6 +455,128 @@ pub fn should_refresh_llm(
     busy: bool,
 ) -> bool {
     has_auth && !busy && next_fp != prev_fp && now_ms.saturating_sub(last_llm_at) >= CHIP_LLM_DEBOUNCE_MS
+}
+
+/// How the cabin should sit with this person. Local only. No model call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CabinPace {
+    /// Just arrived. A few plain steps, then stop talking.
+    Guide,
+    /// Working together. Chips follow the chat and what they actually do.
+    With,
+    /// Already fluent. Stay quiet. Offer only a repeated action.
+    Quiet,
+}
+
+pub fn cabin_pace(input: &ChipInput<'_>) -> CabinPace {
+    let uses: u32 = input.memory.hits.iter().map(|h| h.uses).sum();
+    let mode = input.session_mode.trim().to_ascii_lowercase();
+    let familiar = !input.last_slash.trim().is_empty()
+        || !input.last_surface.trim().is_empty()
+        || !input.last_project.trim().is_empty()
+        || uses >= 2
+        || input.skill_count > 0
+        || input.usage_messages >= 20
+        || (!mode.is_empty() && mode != "chat" && mode != "auto");
+    let touring = input.chat.iter().all(|(role, _)| role != "user");
+    let drafting = !input.draft.trim().is_empty();
+    let waved_off = guide_dismisses(input.memory) >= 1;
+    if touring && !familiar && !waved_off && !drafting && (input.first_run || input.usage_messages < 8) {
+        return CabinPace::Guide;
+    }
+    let advanced = input.skill_count >= 2
+        || input.usage_messages >= 40
+        || uses >= 8
+        || (waved_off && familiar);
+    if advanced {
+        CabinPace::Quiet
+    } else {
+        CabinPace::With
+    }
+}
+
+/// Chip suggestions that call a model. Guide and quiet never spend. A working
+/// session spends at most once per `CHIP_LLM_SPEND_MS`, and only after they
+/// have actually said something.
+pub fn chip_spend_allowed(pace: CabinPace, user_turns: usize) -> bool {
+    matches!(pace, CabinPace::With) && user_turns >= 2
+}
+
+fn guide_dismisses(memory: &ChipMemory) -> u32 {
+    memory
+        .hits
+        .iter()
+        .filter(|h| h.dismisses > 0 && chip_family(&h.key, &h.value, &h.label) == "guide")
+        .map(|h| h.dismisses)
+        .sum()
+}
+
+fn chip_family(id: &str, value: &str, label: &str) -> &'static str {
+    let blob = format!("{id} {value} {label}").to_ascii_lowercase();
+    if blob.contains("guide-") || blob.contains("start here") || blob.contains("what you can do") {
+        return "guide";
+    }
+    if blob.contains("imagine") || blob.contains("draw a logo") || blob.contains("logo") {
+        return "imagine";
+    }
+    if blob.contains("night") {
+        return "night";
+    }
+    if blob.contains("history") || blob.contains("recent chat") {
+        return "history";
+    }
+    ""
+}
+
+fn family_quiet_this_hour(memory: &ChipMemory, id: &str, value: &str, label: &str, hour: u8) -> bool {
+    let family = chip_family(id, value, label);
+    if family.is_empty() {
+        return false;
+    }
+    let hour_i = (hour as usize).min(23);
+    memory.hits.iter().any(|hit| {
+        chip_family(&hit.key, &hit.value, &hit.label) == family
+            && hit.dismiss_hours.get(hour_i).copied().unwrap_or(0) > 0
+    })
+}
+
+fn guide_chips(connected: bool) -> Vec<QuickChip> {
+    let mut out = Vec::new();
+    if !connected {
+        out.push(chip(
+            "guide-connect",
+            "Connect",
+            "__nav:settings",
+            ChipKind::Nav,
+            130.0,
+            "Sign in first",
+        ));
+    }
+    out.push(chip(
+        "guide-start",
+        "Start here",
+        "Walk me through this app in a few short steps. Plain words. One step at a time.",
+        ChipKind::Chat,
+        120.0,
+        "New here",
+    ));
+    out.push(chip(
+        "guide-can",
+        "What you can do",
+        "Tell me three things you can do on this computer for me. Short and plain.",
+        ChipKind::Chat,
+        110.0,
+        "New here",
+    ));
+    out.push(chip(
+        "guide-ideas",
+        "Show Ideas",
+        "Explain the Ideas board in two sentences, then tell me how to open it.",
+        ChipKind::Chat,
+        100.0,
+        "New here",
+    ));
+    out
 }
 
 pub fn predict_intents(chat: &[(String, String)], draft: &str) -> BTreeMap<PredictedIntent, f32> {
@@ -945,8 +1074,14 @@ fn upsert_hit(
         h.kind = kind;
         h.uses = h.uses.saturating_add(uses_delta);
         h.typed_uses = h.typed_uses.saturating_add(typed_delta);
-        h.last_used_at = now_ms;
-        h.hour_hits = bump_hour(&h.hour_hits, hour);
+        if uses_delta > 0 || typed_delta > 0 {
+            h.last_used_at = now_ms;
+            h.hour_hits = bump_hour(&h.hour_hits, hour);
+        }
+        if dismiss_delta > 0 {
+            h.dismiss_hours = bump_hour(&h.dismiss_hours, hour);
+            h.last_dismissed_at = now_ms;
+        }
         h.dismisses = h.dismisses.saturating_add(dismiss_delta);
         if let Some(tag) = context_tag {
             if !h.context_tags.iter().any(|t| t == tag) {
@@ -964,12 +1099,26 @@ fn upsert_hit(
                 kind,
                 uses: uses_delta,
                 typed_uses: typed_delta,
-                last_used_at: now_ms,
-                hour_hits: bump_hour(&[], hour),
+                last_used_at: if uses_delta > 0 || typed_delta > 0 {
+                    now_ms
+                } else {
+                    0
+                },
+                hour_hits: if uses_delta > 0 || typed_delta > 0 {
+                    bump_hour(&[], hour)
+                } else {
+                    vec![0; 24]
+                },
                 successes: 0,
                 failures: 0,
                 context_tags: context_tag.map(|t| vec![t.to_string()]).unwrap_or_default(),
                 dismisses: dismiss_delta,
+                dismiss_hours: if dismiss_delta > 0 {
+                    bump_hour(&[], hour)
+                } else {
+                    vec![0; 24]
+                },
+                last_dismissed_at: if dismiss_delta > 0 { now_ms } else { 0 },
             },
         );
     }
@@ -1024,6 +1173,17 @@ pub fn remember_chip_click(
         hour,
     );
     record_transition(memory, from, key);
+}
+
+/// One dismiss is enough. The chip stays out of later rows, including after a restart.
+pub fn chip_dismissed_for_good(memory: &ChipMemory, chip: &QuickChip) -> bool {
+    let key = chip_memory_key(chip);
+    let value = chip.value.trim();
+    memory.hits.iter().any(|hit| {
+        hit.dismisses >= 1
+            && (hit.key == key
+                || (!value.is_empty() && hit.value.trim().eq_ignore_ascii_case(value)))
+    })
 }
 
 pub fn remember_chip_dismiss(memory: &mut ChipMemory, chip: &QuickChip, now_ms: u64, hour: u8) {
@@ -1200,6 +1360,16 @@ fn home_signal_chips(input: &ChipInput<'_>) -> Vec<QuickChip> {
             out.push(c);
         }
     }
+    if input.skill_count > 0 || input.last_surface.trim().eq_ignore_ascii_case("skills") {
+        out.push(chip(
+            "home-skills",
+            "Skills",
+            "__nav:skills",
+            ChipKind::Nav,
+            90.0,
+            "Skills you have",
+        ));
+    }
     if input.first_run && input.grok_connected {
         out.push(chip(
             "home-first-next",
@@ -1273,6 +1443,85 @@ fn apply_home_signal_boost(chips: &mut [QuickChip], input: &ChipInput<'_>) {
     }
 }
 
+/// One lesson the cabin learned from its own chips. `drop` means the evidence is gone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalLesson {
+    pub key: String,
+    pub text: String,
+    pub drop: bool,
+}
+
+/// Habits and skips from chip use and dismiss hour. No model call.
+/// A lesson disappears when the person later does the opposite.
+pub fn local_lessons(memory: &ChipMemory) -> Vec<LocalLesson> {
+    let mut out = Vec::new();
+    for hit in &memory.hits {
+        if hit.dismisses > 0 || hit.uses < 2 || hit.successes < 1 || hit.label.trim().is_empty() {
+            continue;
+        }
+        let Some((hour, n)) = best_hour(&hit.hour_hits) else {
+            continue;
+        };
+        if n < 2 {
+            continue;
+        }
+        out.push(LocalLesson {
+            key: format!("habit:{hour}:{}", hit.key),
+            text: format!("Around {hour}:00 they use {}.", hit.label),
+            drop: false,
+        });
+    }
+    let mut families: Vec<&str> = Vec::new();
+    for hit in &memory.hits {
+        let family = chip_family(&hit.key, &hit.value, &hit.label);
+        if !family.is_empty() && !families.contains(&family) {
+            families.push(family);
+        }
+    }
+    for family in families {
+        for hour in 0..24 {
+            let dismissed: u32 = memory
+                .hits
+                .iter()
+                .filter(|h| chip_family(&h.key, &h.value, &h.label) == family)
+                .map(|h| h.dismiss_hours.get(hour).copied().unwrap_or(0))
+                .sum();
+            if dismissed < 2 {
+                continue;
+            }
+            let used_later = memory.hits.iter().any(|h| {
+                chip_family(&h.key, &h.value, &h.label) == family
+                    && h.successes > 0
+                    && h.hour_hits.get(hour).copied().unwrap_or(0) > 0
+            });
+            if used_later {
+                continue;
+            }
+            let name = if family == "guide" { "the tour" } else { family };
+            out.push(LocalLesson {
+                key: format!("skip:{hour}:{family}"),
+                text: format!("Around {hour}:00 they skip {name}."),
+                drop: false,
+            });
+        }
+    }
+    out.truncate(6);
+    out
+}
+
+fn best_hour(hours: &[u32]) -> Option<(u8, u32)> {
+    let mut best: Option<(u8, u32)> = None;
+    for (i, n) in hours.iter().copied().enumerate().take(24) {
+        if n == 0 {
+            continue;
+        }
+        if best.is_none_or(|(_, b)| n > b) {
+            best = Some((i as u8, n));
+        }
+    }
+    best
+}
+
 pub fn remember_chip_outcome(memory: &mut ChipMemory, success: bool, now_ms: u64) {
     let Some(key) = memory.last_chip_key.clone() else {
         return;
@@ -1339,7 +1588,7 @@ fn learned_chips_from_memory(memory: &ChipMemory, now_ms: u64) -> Vec<QuickChip>
         .iter()
         .filter(|h| h.uses >= 1 && !h.value.trim().is_empty())
         .filter(|h| matches!(h.kind, ChipKind::Chat | ChipKind::Shell))
-        .filter(|h| h.dismisses < 2)
+        .filter(|h| h.dismisses == 0)
         .filter(|h| !retired_host_copy(&h.key, &h.label, &h.value))
         .map(|h| {
             let age_days = now_ms.saturating_sub(h.last_used_at) as f32 / 86_400_000.0;
@@ -1364,7 +1613,7 @@ fn learned_chips_from_memory(memory: &ChipMemory, now_ms: u64) -> Vec<QuickChip>
 
 pub fn top_habit_labels(memory: &ChipMemory, n: usize) -> Vec<String> {
     let mut hits = memory.hits.clone();
-    hits.retain(|h| h.uses >= 1 && h.dismisses < 2);
+    hits.retain(|h| h.uses >= 1 && h.dismisses == 0);
     hits.sort_by(|a, b| {
         let sa = a.uses * 2 + a.successes * 3 - a.failures * 2 - a.dismisses * 4;
         let sb = b.uses * 2 + b.successes * 3 - b.failures * 2 - b.dismisses * 4;
@@ -1604,74 +1853,70 @@ fn stage_chips(stage: ChipStage, mode: &str) -> Vec<QuickChip> {
     }
 }
 
-fn default_chips(mode: &str) -> Vec<QuickChip> {
-    vec![
+/// Suggestions for one idea pop-out. They follow the card and that talk, not the home row.
+pub fn idea_talk_chips(title: &str, body: &str, chat: &[(String, String)]) -> Vec<QuickChip> {
+    let blob = format!("{title} {body}").to_ascii_lowercase();
+    let mut out = vec![
         chip(
-            "def-help",
-            "What can you help with?",
-            "What can you help me with in GrokHub right now? Keep it to a short capability list.",
+            "idea-sit",
+            "When I sit down",
+            "Run this when I open the cabin.",
             ChipKind::Chat,
-            24.0,
-            "Default",
-        ),
-        routing_chip("def-route", mode, 24.0),
-        chip(
-            "def-imagine",
-            "Open Imagine",
-            "__nav:imagine",
-            ChipKind::Nav,
-            22.0,
-            "Images",
+            96.0,
+            "This idea",
         ),
         chip(
-            "def-brief",
-            "Cabin brief",
-            "Give me a short cabin brief: bound project, recent chats, and the next useful step.",
+            "idea-weekday",
+            "Weekday morning",
+            "Set this for weekday mornings and save the time I give you.",
             ChipKind::Chat,
-            21.0,
-            "Default",
+            94.0,
+            "This idea",
         ),
         chip(
-            "def-night",
-            "Set a night job",
-            "Help me set a night automation. Ask one question, then propose a real schedule I can save.",
+            "idea-done",
+            "Tell me when it's done",
+            "When this runs, post the result on the home feed.",
             ChipKind::Chat,
-            20.0,
-            "Default",
+            90.0,
+            "This idea",
         ),
-        chip(
-            "def-board",
-            "Open workboard",
-            "__nav:workboard",
-            ChipKind::Nav,
-            19.0,
-            "Default",
-        ),
-        chip(
-            "def-history",
-            "Recent chats",
-            "__nav:history",
-            ChipKind::Nav,
-            18.0,
-            "Default",
-        ),
-        chip(
-            "def-github",
-            "GitHub whoami",
-            "If a GitHub PAT is set, run CONNECTOR_CMD github user and summarize who I am. If not, tell me how to add one in Settings.",
+    ];
+    if blob.contains("night") || blob.contains("wrap") {
+        out.push(chip(
+            "idea-night",
+            "After I stop",
+            "Run this once I am done for the day.",
             ChipKind::Chat,
-            17.0,
-            "Default",
-        ),
-        chip(
-            "def-skills",
-            "Skills",
-            "__nav:skills",
-            ChipKind::Nav,
-            16.0,
-            "Default",
-        ),
-    ]
+            92.0,
+            "This idea",
+        ));
+    }
+    if blob.contains("remind") || blob.contains("ping") || blob.contains("later") {
+        out.push(chip(
+            "idea-once",
+            "Remind me once",
+            "Remind me once, at the time I name.",
+            ChipKind::Chat,
+            93.0,
+            "This idea",
+        ));
+    }
+    if let Some((_, last)) = chat.iter().rev().find(|(role, _)| role == "assistant") {
+        let lower = last.to_ascii_lowercase();
+        if lower.contains("time") || lower.contains("when") || lower.contains("often") {
+            out.push(chip(
+                "idea-eight",
+                "Weekdays at 8",
+                "Use 8:00 on weekdays.",
+                ChipKind::Chat,
+                98.0,
+                "This conversation",
+            ));
+        }
+    }
+    out.truncate(4);
+    out
 }
 
 fn is_stale_connect_chip(c: &QuickChip) -> bool {
@@ -1780,6 +2025,23 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         .map(|s| s.trim().to_ascii_lowercase())
         .filter(|s| !s.is_empty())
         .collect();
+    let pace = cabin_pace(&input);
+    if pace == CabinPace::Guide {
+        let mut chips = guide_chips(input.grok_connected);
+        chips.retain(|c| {
+            let id = c.id.to_ascii_lowercase();
+            let val = c.value.trim().to_ascii_lowercase();
+            !dismissed.contains(&id)
+                && !dismissed.contains(&val)
+                && !chip_dismissed_for_good(input.memory, c)
+                && !family_quiet_this_hour(input.memory, &c.id, &c.value, &c.label, input.hour)
+        });
+        chips.truncate(3);
+        if let Some(first) = chips.first_mut() {
+            first.primary = true;
+        }
+        return chips;
+    }
     let stage = detect_chip_stage(input.chat, input.last_failed);
     let ctx = detect_chip_context(input.chat);
     let intents = predict_intents(input.chat, input.draft);
@@ -1817,7 +2079,7 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
                     continue;
                 }
                 if let Some(hit) = input.memory.hits.iter().find(|h| &h.key == key) {
-                    if hit.dismisses >= 2 || hit.value.is_empty() {
+                    if hit.dismisses >= 1 || hit.value.is_empty() {
                         continue;
                     }
                     chips.push(chip(
@@ -1876,7 +2138,12 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         ));
     }
     chips.extend(stage_chips(stage, input.mode));
-    chips.extend(default_chips(input.mode));
+    if input.first_run {
+        chips.retain(|c| {
+            let label = c.label.to_ascii_lowercase();
+            !c.id.contains("night") && !label.contains("night job")
+        });
+    }
     if ctx.imagine {
         chips.push(chip(
             "ctx-imagine",
@@ -1926,6 +2193,8 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         let val = c.value.trim().to_ascii_lowercase();
         !dismissed.contains(&id)
             && !dismissed.contains(&val)
+            && !chip_dismissed_for_good(input.memory, c)
+            && !family_quiet_this_hour(input.memory, &c.id, &c.value, &c.label, input.hour)
             && is_plain_text(&c.value)
             && !is_desk_takeover_chip(c)
     });
@@ -2010,6 +2279,19 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
         }
     }
     picked.truncate(max);
+    if pace == CabinPace::Quiet && stage == ChipStage::Empty && input.draft.trim().is_empty() {
+        picked.retain(|c| {
+            let id = c.id.as_str();
+            id.starts_with("home-")
+                || id.starts_with("pred-tod")
+                || id.starts_with("pred-tx")
+                || id.starts_with("pred-habit")
+                || id.starts_with("learn-")
+                || id.starts_with("skill-")
+                || c.value.starts_with('/')
+        });
+        picked.truncate(2);
+    }
     if let Some(first) = picked.first_mut() {
         first.primary = true;
         if first.hint.is_empty() {
@@ -2336,12 +2618,12 @@ mod tests {
         let chips = build_quick_chips(input(&[], "", &mem, &[], &[]));
         let labels: Vec<_> = chips.iter().map(|c| c.label.as_str()).collect();
         assert!(
-            labels.contains(&"Open Imagine"),
-            "empty {:?}",
+            labels.contains(&"Start here"),
+            "a new empty home teaches instead of touring the menus: {:?}",
             labels
         );
         assert!(
-            labels.iter().any(|l| *l == "Cabin brief" || *l == "Recent chats" || *l == "What's next"),
+            labels.iter().all(|l| *l != "Open Imagine" && !l.to_ascii_lowercase().contains("night")),
             "empty {:?}",
             labels
         );
@@ -2587,6 +2869,96 @@ mod tests {
     }
 
     #[test]
+    fn a_dismiss_at_this_hour_quiets_that_family() {
+        let mut mem = ChipMemory::default();
+        let draw = chip(
+            "ctx-draw",
+            "Draw a logo",
+            "Draw a logo for the project.",
+            ChipKind::Chat,
+            10.0,
+            "",
+        );
+        remember_chip_dismiss(&mut mem, &draw, 1_000, 21);
+        let chat = [
+            msg("user", "imagine a logo"),
+            msg("assistant", "I can do that."),
+        ];
+        let mut night = input(&chat, "", &mem, &[], &[]);
+        night.hour = 21;
+        let hidden = build_quick_chips(night);
+        assert!(
+            hidden.iter().all(|c| c.id != "ctx-imagine"),
+            "9pm dismiss hides imagine chips at 9pm: {:?}",
+            labels(&hidden)
+        );
+        let mut morning = input(&chat, "", &mem, &[], &[]);
+        morning.hour = 9;
+        morning.usage_messages = 12;
+        let shown = build_quick_chips(morning);
+        assert!(
+            shown.iter().any(|c| c.id == "ctx-imagine"),
+            "the same dismiss does not block imagine chips in the morning: {:?}",
+            labels(&shown)
+        );
+    }
+
+    #[test]
+    fn quiet_users_get_no_tour_and_no_chip_model() {
+        let mem = ChipMemory::default();
+        let mut inp = input(&[], "", &mem, &[], &[]);
+        inp.usage_messages = 80;
+        inp.skill_count = 3;
+        assert_eq!(cabin_pace(&inp), CabinPace::Quiet);
+        let chips = build_quick_chips(inp);
+        assert!(chips.len() <= 2, "{:?}", labels(&chips));
+        assert!(
+            chips.iter().all(|c| !c.id.starts_with("guide-") && !c.id.starts_with("empty-")),
+            "{:?}",
+            labels(&chips)
+        );
+        assert!(!chip_spend_allowed(CabinPace::Quiet, 4));
+        assert!(!chip_spend_allowed(CabinPace::Guide, 4));
+        assert!(chip_spend_allowed(CabinPace::With, 2));
+        assert!(!chip_spend_allowed(CabinPace::With, 1));
+    }
+
+    #[test]
+    fn a_repeated_success_becomes_a_lesson_and_a_dismiss_removes_it() {
+        let mut mem = ChipMemory::default();
+        let think = chip(
+            "route-think",
+            "Think Harder",
+            "__mode:think",
+            ChipKind::Mode,
+            10.0,
+            "",
+        );
+        remember_chip_click(&mut mem, &think, None, 1_000, 21);
+        remember_chip_click(&mut mem, &think, None, 2_000, 21);
+        remember_chip_outcome(&mut mem, true, 3_000);
+        let lessons = local_lessons(&mem);
+        assert!(
+            lessons.iter().any(|l| l.text.contains("21:00") && l.text.contains("Think Harder")),
+            "{lessons:?}"
+        );
+        remember_chip_dismiss(&mut mem, &think, 4_000, 21);
+        let gone = local_lessons(&mem);
+        assert!(
+            gone.iter().all(|l| !l.text.contains("Think Harder")),
+            "a later no removes the lesson: {gone:?}"
+        );
+        let mut state = crate::learning::LearningState::default();
+        crate::learning::apply_local_lessons(&mut state, &lessons);
+        assert!(state.insights.iter().any(|i| i.key.starts_with("habit:")));
+        crate::learning::apply_local_lessons(&mut state, &gone);
+        assert!(state.insights.iter().all(|i| !i.key.starts_with("habit:")));
+        assert!(!crate::learning::review_worth_tokens(3, 0));
+        assert!(crate::learning::review_worth_tokens(8, 0));
+        assert!(!crate::learning::review_worth_tokens(10, 8));
+    }
+
+    #[test]
     fn mode_and_nav_values() {
         assert_eq!(mode_from_chip_value("__mode:max"), Some("max"));
         assert_eq!(mode_from_chip_value("__mode:auto"), Some("auto"));
@@ -2684,6 +3056,27 @@ mod tests {
             "no filler chips if ranking yields none: {:?}",
             labels(&rest)
         );
+    }
+
+    #[test]
+    fn a_dismissed_chip_stays_gone_without_the_session_list() {
+        let mut mem = ChipMemory::default();
+        let first = build_quick_chips(input(&[], "", &mem, &[], &[]));
+        let gone = first[0].clone();
+        remember_chip_dismiss(&mut mem, &gone, 5, 8);
+        let again = build_quick_chips(input(&[], "", &mem, &[], &[]));
+        assert!(
+            again.iter().all(|c| c.id != gone.id && !c.value.eq_ignore_ascii_case(&gone.value)),
+            "dismissed chip came back: {:?} still in {:?}",
+            gone.label,
+            labels(&again)
+        );
+        let hit = mem.hits.iter().find(|h| h.key == chip_memory_key(&gone)).unwrap();
+        assert_eq!(hit.dismiss_hours.get(8).copied().unwrap_or(0), 1);
+        assert_eq!(hit.hour_hits.get(8).copied().unwrap_or(0), 0, "a dismiss is not a use");
+        let talk = idea_talk_chips("Morning reminder", "weekday", &[]);
+        assert!(talk.iter().all(|c| c.hint == "This idea" || c.hint == "This conversation"));
+        assert!(talk.iter().all(|c| !c.value.contains("__nav:")));
     }
 
     #[test]
@@ -3052,11 +3445,10 @@ mod tests {
         first.first_run = true;
         let chips = build_quick_chips(first);
         let shown = labels(&chips);
-        assert!(shown.iter().any(|l| *l == "What's next"), "{shown:?}");
-        assert!(shown.iter().any(|l| *l == "Open Imagine"), "{shown:?}");
+        assert!(shown.iter().any(|l| *l == "Start here"), "{shown:?}");
         assert!(
-            !shown.iter().any(|l| l.contains("night job")),
-            "first-run must not lead with night jobs: {shown:?}"
+            shown.iter().all(|l| *l != "Open Imagine" && !l.to_ascii_lowercase().contains("night")),
+            "first-run teaches, it does not open the tool menu: {shown:?}"
         );
 
         let mut skills = input(&[], "", &mem, &[], &[]);

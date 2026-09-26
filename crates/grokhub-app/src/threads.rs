@@ -89,11 +89,11 @@ impl ChatThread {
 
 /// Highest `accessed_ms`. Skip scratch when another thread exists.
 pub fn most_recently_accessed_index(threads: &[ChatThread]) -> Option<usize> {
-    let has_real = threads.iter().any(|t| !t.scratch);
+    let has_real = threads.iter().any(|t| !t.scratch && !t.background);
     threads
         .iter()
         .enumerate()
-        .filter(|(_, t)| !has_real || !t.scratch)
+        .filter(|(_, t)| !t.background && (!has_real || !t.scratch))
         .max_by_key(|(i, t)| (t.accessed_ms, *i))
         .map(|(i, _)| i)
 }
@@ -247,6 +247,7 @@ pub fn adopt_sessions_from(
                 let title =
                     clean_tab_title(summary).unwrap_or_else(|| id.chars().take(24).collect());
                 let mut created = ChatThread::new(&title, false);
+                created.background = is_learn_map_title(&title);
                 created.grok_session = Some(id);
                 created.grok_user_home = *user_home;
                 created.grok_show_pending = true;
@@ -384,8 +385,19 @@ pub fn project_folder_history_row(already_listed: bool, empty: bool, has_session
     !already_listed && !empty_chat_draft(empty, has_session)
 }
 
+/// Learn-map batches are headless session walks. They stay on disk and off the chat.
+pub fn is_learn_map_title(title: &str) -> bool {
+    let t = title.trim().to_ascii_lowercase();
+    t.starts_with("learn mapper")
+        || t.contains("learn map")
+        || (t.contains("map session") && t.contains("learn"))
+}
+
 /// Workboard summarize and the same family of headless jobs are not user chats.
 pub fn is_background_history_title(title: &str) -> bool {
+    if is_learn_map_title(title) {
+        return true;
+    }
     let t = title.trim().to_ascii_lowercase();
     t == "summarize the workboard"
         || t.starts_with("summarize the workboard ")
@@ -1080,6 +1092,11 @@ mod tests {
             "summarize the workboard and last host receipt"
         ));
         assert!(!is_background_history_title("Night watch"));
+        assert!(is_learn_map_title("Learn map sessions 0000-0009"));
+        assert!(is_learn_map_title("Map sessions 0010-0019 for learn"));
+        assert!(is_learn_map_title("Learn mapper 0000-0009 session records"));
+        assert!(is_background_history_title("Map sessions 0040-0049 learn signals"));
+        assert!(!is_learn_map_title("Update all computer software and packages"));
         assert!(!user_history_row(
             false,
             "summarize the workboard",

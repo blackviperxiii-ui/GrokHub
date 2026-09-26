@@ -1236,6 +1236,7 @@ pub fn spawn_grok_p_stream(
     fork: bool,
     skip_cabin_home: bool,
     worktree: bool,
+    learned: &str,
 ) -> Result<(u32, mpsc::Receiver<crate::stream::GrokPEvent>), String> {
     let mut child = grok_p_child(
         prompt,
@@ -1250,6 +1251,7 @@ pub fn spawn_grok_p_stream(
         fork,
         skip_cabin_home,
         worktree,
+        learned,
     )?;
     let pid = child.id();
     let stdout = child.stdout.take().ok_or("grok -p stdout")?;
@@ -1366,6 +1368,7 @@ fn grok_p_child(
     fork: bool,
     skip_cabin_home: bool,
     worktree: bool,
+    learned: &str,
 ) -> Result<Child, String> {
     let program = find_grok().ok_or_else(|| {
         "Grok Build CLI missing — install from x.ai/cli or set GROKHUB_GROK".to_string()
@@ -1384,6 +1387,11 @@ fn grok_p_child(
         effort,
         mode,
     );
+    if let Some(i) = args.iter().position(|a| a == "--rules") {
+        if i + 1 < args.len() {
+            args[i + 1] = crate::locate::cabin_rules(learned);
+        }
+    }
     if image.is_some() {
         args = crate::locate::with_prompt_json(args, &crate::stream::prompt_json(prompt, image));
     }
@@ -1447,6 +1455,7 @@ fn grok_p_once(
         fork,
         false,
         false,
+        "",
     )?;
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
