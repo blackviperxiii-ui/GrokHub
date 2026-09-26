@@ -1360,8 +1360,9 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("id_salt(\"rail-history\")").next())
             .expect("project section");
         assert!(
-            projects.contains("folder_chat_indices"),
-            "every chat in an open folder is listed there: {projects}"
+            projects.contains("project_section_chat_indices")
+                && projects.contains("paint_tree_gutter"),
+            "chats nest under the folder or project they belong to: {projects}"
         );
         assert!(
             projects.contains("activate_project_row")
@@ -8806,11 +8807,13 @@ fn apply_plus_ready_image_and_pasted_text() {
         },
     );
     assert!(
-        cabin.composer.contains("pasted harbor line"),
-        "pasted text must land in the composer, got {}",
+        cabin.composer.is_empty(),
+        "a file must stay attached, not pasted, got {}",
         cabin.composer
     );
-    assert_eq!(cabin.status, "Pasted notes.txt");
+    assert_eq!(cabin.attach_name.as_deref(), Some("notes.txt"));
+    assert_eq!(cabin.attach_path.as_deref(), Some("notes.txt"));
+    assert_eq!(cabin.status, "File notes.txt — the agent will read it");
     assert!(!cabin.running);
     quiet.settle();
 }
@@ -9064,11 +9067,21 @@ fn discuss_card_opens_one_local_chat() {
         built: false,
         board_id: None,
         why: Some("because the tide turned".into()),
+        feed_pin: false,
+        feed_kept: false,
     });
     cabin.discuss_card("idea-harbor");
-    assert!(matches!(cabin.nav, super::Nav::Chat));
-    let open = &cabin.threads[cabin.thread_idx];
-    assert_eq!(open.title, "Discuss · Cover F1");
+    let open_id = cabin
+        .threads
+        .iter()
+        .find(|t| t.title == "Discuss · Cover F1")
+        .expect("idea pop thread")
+        .id
+        .clone();
+    let open = cabin.threads.iter().find(|t| t.id == open_id).unwrap();
+    assert!(open.background);
+    assert_ne!(cabin.threads[cabin.thread_idx].id, open_id);
+    assert!(cabin.idea_pop.is_some());
     assert_eq!(
         cabin
             .threads
@@ -9077,12 +9090,19 @@ fn discuss_card_opens_one_local_chat() {
             .count(),
         1
     );
+    assert!(crate::threads::chat_section_indices(&cabin.threads, None, false)
+        .iter()
+        .all(|&i| cabin.threads[i].id != open_id));
     let body = cabin
+        .threads
+        .iter()
+        .find(|t| t.id == open_id)
+        .unwrap()
         .messages
         .iter()
         .find(|m| m.0 == "assistant")
-        .map(|m| m.1.as_str())
-        .unwrap_or("");
+        .map(|m| m.1.clone())
+        .unwrap_or_default();
     assert!(
         body.contains("Post: Cover F1")
             && body.contains("the night race")
@@ -10434,14 +10454,24 @@ fn discuss_card_opens_a_local_chat() {
     let id = card.id.clone();
     cabin.updates.push(card);
     cabin.discuss_card(&id);
-    assert!(matches!(cabin.nav, Nav::Chat));
+    assert!(cabin.idea_pop.is_some());
     assert!(!cabin.running);
-    let thread = cabin.threads.get(cabin.thread_idx).expect("discuss thread");
-    assert_eq!(thread.title, "Discuss · Harbor lamp");
-    assert!(thread.title_locked);
-    assert!(cabin.messages.iter().any(|(_, body)| {
-        body.contains("Post: Harbor lamp") && body.contains("fold the charts")
-    }));
+    let thread_id = cabin
+        .threads
+        .iter()
+        .find(|t| t.title == "Discuss · Harbor lamp")
+        .expect("discuss thread")
+        .id
+        .clone();
+    {
+        let thread = cabin.threads.iter().find(|t| t.id == thread_id).unwrap();
+        assert!(thread.background);
+        assert!(thread.title_locked);
+        assert!(thread.messages.iter().any(|(_, body)| {
+            body.contains("Post: Harbor lamp") && body.contains("fold the charts")
+        }));
+    }
+    assert_ne!(cabin.threads[cabin.thread_idx].id, thread_id);
     let stuck = cabin.updates.iter().find(|c| c.id == id).expect("card");
     assert_eq!(stuck.status, grokhub_core::UpdateStatus::Opened);
     assert!(stuck.discuss_thread.is_some());
@@ -10631,8 +10661,10 @@ fn attach_sets_the_chip_and_paste_lands_in_the_composer() {
             text: Some("fold the charts".into()),
         },
     );
-    assert_eq!(cabin.composer, "hello\nharbor light\nfold the charts");
-    assert_eq!(cabin.status, "Pasted note.txt");
+    assert_eq!(cabin.composer, "hello\nharbor light");
+    assert_eq!(cabin.attach_name.as_deref(), Some("note.txt"));
+    assert_eq!(cabin.attach_path.as_deref(), Some("/tmp/note.txt"));
+    assert_eq!(cabin.status, "File note.txt — the agent will read it");
     assert!(!cabin.running);
     assert!(cabin.messages.is_empty());
 }
@@ -10649,13 +10681,29 @@ fn feed_open_routes_an_idea_and_dismiss_removes_it() {
     let card = grokhub_core::idea_card("harbor", "Harbor lamp", "fold the charts", 1);
     let id = card.id.clone();
     cabin.updates.push(card);
+    cabin.updates.last_mut().unwrap().feed_pin = true;
     cabin.open_feed_card(&id);
-    assert!(matches!(cabin.nav, Nav::Ideas));
-    cabin.updates.iter_mut().find(|c| c.id == id).expect("card").built = true;
+    assert!(cabin.idea_pop.is_some());
+    assert!(cabin
+        .threads
+        .iter()
+        .any(|t| t.background && t.title == "Discuss · Harbor lamp"));
+    assert_ne!(
+        cabin.threads[cabin.thread_idx].title,
+        "Discuss · Harbor lamp"
+    );
     cabin.open_feed_card(&id);
-    assert!(matches!(cabin.nav, Nav::Workboard));
+    assert_eq!(
+        cabin
+            .threads
+            .iter()
+            .filter(|t| t.title == "Discuss · Harbor lamp")
+            .count(),
+        1
+    );
     cabin.dismiss_feed_card(&id);
-    assert!(cabin.updates.iter().all(|c| c.id != id));
+    let kept = cabin.updates.iter().find(|c| c.id == id).expect("stays on the board");
+    assert!(!kept.feed_pin && kept.feed_kept);
     assert!(!cabin.running);
 }
 
@@ -12472,6 +12520,8 @@ fn build_idea_files_one_todo() {
         built: false,
         board_id: None,
         why: None,
+        feed_pin: false,
+        feed_kept: false,
     }];
 
     cabin.build_idea("nope");
@@ -12605,6 +12655,8 @@ fn feed_card(id: &str, kind: grokhub_core::UpdateKind, held: bool) -> grokhub_co
         built: false,
         board_id: None,
         why: None,
+        feed_pin: false,
+        feed_kept: false,
     }
 }
 
@@ -12697,6 +12749,8 @@ fn offer_card(id: &str, title: &str, status: UpdateStatus) -> UpdateCard {
         built: false,
         board_id: None,
         why: None,
+        feed_pin: false,
+        feed_kept: false,
     }
 }
 
@@ -13299,6 +13353,7 @@ fn quiet_cabin() -> Cabin {
         saw_minimized: false,
         brief_buf: String::new(),
         ideas_q: String::new(),
+        ideas_filled: false,
         tray_saw_unfocused: false,
         tray_hid_at: std::time::Instant::now(),
         want_quit: false,
@@ -13392,6 +13447,7 @@ fn quiet_cabin() -> Cabin {
         rename_lock: None,
         chip_memory: grokhub_core::ChipMemory::default(),
         chip_dismissed: Vec::new(),
+        idea_pop: None,
         llm_chips: Vec::new(),
         visible_chips: Vec::new(),
         chip_rx: None,
@@ -13457,6 +13513,8 @@ fn quiet_cabin() -> Cabin {
         wall_busy: false,
         attach_url: None,
         attach_name: None,
+        attach_path: None,
+        attach_kind: None,
         imagine_ref: None,
         plus_menu: None,
         plus_anchor: egui::Pos2::ZERO,

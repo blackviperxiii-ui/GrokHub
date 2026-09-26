@@ -346,13 +346,18 @@ impl Cabin {
                 let mut proj_act: Option<(String, ProjectMenuAct, egui::Pos2)> = None;
                 let mut section_act: Option<TabAct> = None;
                 let live_empty = self.messages.is_empty();
+                let proj_h = (ui.available_height() * 0.46).clamp(96.0, 320.0);
+                egui::ScrollArea::vertical()
+                    .id_salt("rail-projects")
+                    .auto_shrink([false, true])
+                    .max_height(proj_h)
+                    .show(ui, |ui| {
                 for (depth, idx) in tree {
                     let kind = self.projects[idx].kind;
                     let open = self.projects[idx].open;
-                    let indent = 20.0 * depth as f32;
                     if self.proj_rename.as_deref() == Some(self.projects[idx].id.as_str()) {
                         ui.horizontal(|ui| {
-                            ui.add_space(indent);
+                            crate::icons::paint_tree_gutter(ui, depth);
                             let edit = ui.add(
                                 egui::TextEdit::singleline(&mut self.proj_rename_buf)
                                     .desired_width(ui.available_width() - 8.0)
@@ -391,21 +396,24 @@ impl Cabin {
                         kind == ProjectKind::Project,
                         self.nav,
                     );
-                    let row = ui
-                        .horizontal(|ui| {
-                            ui.add_space(indent);
-                            if kind == ProjectKind::Folder {
-                                crate::icons::paint_folder_caret(ui, open, crate::theme::subtle());
-                            }
-                            Self::nav_row(ui, active, icon, &self.projects[idx].name, false)
-                        })
-                        .inner;
+                    let painted = ui.horizontal(|ui| {
+                        crate::icons::paint_tree_gutter(ui, depth);
+                        if kind == ProjectKind::Folder {
+                            crate::icons::paint_folder_caret(ui, open, crate::theme::subtle());
+                        }
+                        Self::nav_row(ui, active, icon, &self.projects[idx].name, false)
+                    });
+                    let row = painted.inner;
                     if row.double_clicked() {
                         self.begin_proj_rename(
                             self.projects[idx].id.clone(),
                             self.projects[idx].name.clone(),
                         );
-                    } else if row.clicked() {
+                    } else if row.clicked()
+                        || (kind == ProjectKind::Folder
+                            && painted.response.clicked()
+                            && !painted.response.double_clicked())
+                    {
                         let id = self.projects[idx].id.clone();
                         self.activate_project_row(&id);
                     }
@@ -419,48 +427,26 @@ impl Cabin {
                             }
                         }
                     });
-                    if kind == ProjectKind::Folder && open {
-                        let child_ids: Vec<String> = self
-                            .projects
-                            .iter()
-                            .filter(|n| {
-                                n.kind == ProjectKind::Project
-                                    && n.parent.as_deref() == Some(nid.as_str())
-                            })
-                            .map(|n| n.id.clone())
-                            .collect();
-                        let child_refs: Vec<&str> = child_ids.iter().map(|s| s.as_str()).collect();
-                        let chat_indent = 20.0 * (depth as f32 + 1.0);
+                    let show_chats = match kind {
+                        ProjectKind::Folder => open,
+                        ProjectKind::Project => true,
+                    };
+                    if show_chats {
                         if let Some(act) = self.paint_section_chats(
                             ui,
-                            &threads::folder_chat_indices(
+                            &threads::project_section_chat_indices(
                                 &self.threads,
                                 &nid,
-                                &child_refs,
                                 Some(self.thread_idx),
                                 live_empty,
                             ),
-                            chat_indent,
-                        ) {
-                            section_act = Some(act);
-                        }
-                    } else if kind == ProjectKind::Project && self.projects[idx].parent.is_none() {
-                        let chat_indent = 20.0 * (depth as f32 + 1.0);
-                        if let Some(act) = self.paint_section_chats(
-                            ui,
-                            &threads::folder_chat_indices(
-                                &self.threads,
-                                &nid,
-                                &[],
-                                Some(self.thread_idx),
-                                live_empty,
-                            ),
-                            chat_indent,
+                            depth.saturating_add(1),
                         ) {
                             section_act = Some(act);
                         }
                     }
                 }
+                    });
                 if let Some(act) = section_act {
                     self.apply_tab_act(act);
                 }
@@ -521,7 +507,7 @@ impl Cabin {
                                         .contains(&q)
                             })
                             .collect();
-                        if let Some(act) = self.paint_section_chats(ui, &listed, 0.0) {
+                        if let Some(act) = self.paint_section_chats(ui, &listed, 0) {
                             self.apply_tab_act(act);
                         }
                     });
@@ -630,7 +616,7 @@ impl Cabin {
         &mut self,
         ui: &mut egui::Ui,
         listed: &[usize],
-        indent: f32,
+        depth: u8,
     ) -> Option<TabAct> {
         struct Row {
             title: String,
@@ -662,16 +648,12 @@ impl Cabin {
             let pinned = rows[pos].key.pinned;
             let i = rows[pos].idx;
             if self.rename_idx == Some(i) {
-                if indent > 0.0 {
-                    ui.horizontal(|ui| {
-                        ui.add_space(indent);
-                        if let Some(next) = self.chat_rename_act(ui, i) {
-                            act = Some(next);
-                        }
-                    });
-                } else if let Some(next) = self.chat_rename_act(ui, i) {
-                    act = Some(next);
-                }
+                ui.horizontal(|ui| {
+                    crate::icons::paint_tree_gutter(ui, depth);
+                    if let Some(next) = self.chat_rename_act(ui, i) {
+                        act = Some(next);
+                    }
+                });
                 continue;
             }
             let icon = if pinned {
@@ -680,15 +662,12 @@ impl Cabin {
                 crate::icons::RailIcon::Chat
             };
             let on = i == self.thread_idx && self.nav == Nav::Chat;
-            let resp = if indent > 0.0 {
-                ui.horizontal(|ui| {
-                    ui.add_space(indent);
+            let resp = ui
+                .horizontal(|ui| {
+                    crate::icons::paint_tree_gutter(ui, depth);
                     Self::nav_row(ui, on, icon, &title, false)
                 })
-                .inner
-            } else {
-                Self::nav_row(ui, on, icon, &title, false)
-            };
+                .inner;
             if resp.clicked() {
                 act = Some(TabAct::Switch(i));
             }

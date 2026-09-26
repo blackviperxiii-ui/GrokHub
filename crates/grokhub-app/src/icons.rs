@@ -384,6 +384,31 @@ pub fn paint_rail_icon_at(painter: &egui::Painter, rect: egui::Rect, icon: RailI
     }
 }
 
+/// Indent gutter for a sidebar tree row. One spine per depth, with a branch on the deepest.
+pub fn paint_tree_gutter(ui: &mut egui::Ui, depth: u8) {
+    if depth == 0 {
+        return;
+    }
+    let step = 16.0_f32;
+    let w = step * depth as f32;
+    let h = crate::theme::NAV_ROW_H;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h), Sense::hover());
+    let stroke = Stroke::new(1.0_f32, crate::theme::border());
+    for level in 1..=depth {
+        let x = rect.left() + step * (level as f32 - 0.45);
+        ui.painter().line_segment(
+            [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
+            stroke,
+        );
+        if level == depth {
+            ui.painter().line_segment(
+                [Pos2::new(x, rect.center().y), Pos2::new(rect.right() - 2.0, rect.center().y)],
+                stroke,
+            );
+        }
+    }
+}
+
 pub fn paint_folder_caret(ui: &mut egui::Ui, open: bool, color: egui::Color32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 12.0), Sense::hover());
     let c = rect.center();

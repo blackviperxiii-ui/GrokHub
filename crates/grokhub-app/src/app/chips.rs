@@ -227,6 +227,13 @@ impl Cabin {
                 Self::last_project_title_from(&last_night, &self.continue_hint, &self.cfg.goal_pin);
             let first_run = is_cabin_first_run(self.cfg.get_started_done, self.has_real_history());
             let signed_in = self.cabin_signed_in();
+            let paused = self
+                .board
+                .iter()
+                .rev()
+                .find(|c| c.run && c.status == BoardStatus::Blocked)
+                .map(|c| c.title.clone())
+                .unwrap_or_default();
             let input = GreetingInput {
                 user_md,
                 memory_md,
@@ -237,6 +244,7 @@ impl Cabin {
                 signed_in,
                 first_run,
                 last_project: &last_project,
+                paused_task: &paused,
             };
             let fp = greeting_fingerprint(&input);
             let local = local_greeting(&input);
@@ -508,6 +516,8 @@ impl Cabin {
             session_mode: &session_mode,
         };
         let mode = input.mode;
+        let user_turns = chat.iter().filter(|(role, _)| role == "user").count();
+        let pace = grokhub_core::cabin_pace(&input);
         self.visible_chips = build_quick_chips(input);
         let mut fp = context_fingerprint(&chat, &self.composer, last_failed, hour, mode);
         if !others.is_empty() {
@@ -519,7 +529,10 @@ impl Cabin {
                 .join(",");
             fp = format!("{fp}+o:{extra}");
         }
-        if should_refresh_llm(
+        let spend_ready = grokhub_core::chip_spend_allowed(pace, user_turns)
+            && now_ms().saturating_sub(self.chip_llm_at) >= grokhub_core::CHIP_LLM_SPEND_MS;
+        if spend_ready
+            && should_refresh_llm(
             &self.chip_fp,
             &fp,
             self.chip_llm_at,
@@ -549,12 +562,19 @@ impl Cabin {
             .unwrap_or_default();
         let habits = top_habit_labels(&self.chip_memory, 6);
         let others = self.other_chip_threads();
+        let mut dismissed = self.chip_dismissed.clone();
+        for hit in &self.chip_memory.hits {
+            if hit.dismisses >= 1 {
+                dismissed.push(hit.value.clone());
+                dismissed.push(hit.label.clone());
+            }
+        }
         let prompt = chip_suggest_prompt(
             &chat,
             &title,
             &self.composer,
             &habits,
-            &self.chip_dismissed,
+            &dismissed,
             &others,
         );
         let (tx, rx) = mpsc::channel();
@@ -572,10 +592,11 @@ impl Cabin {
     pub(super) fn composer_chips(&self) -> Vec<QuickChip> {
         let mut chips = self.visible_chips.clone();
         if let Some(c) = skill_offer_chip(&self.composer, &self.skill_list) {
-            let gone = self
-                .chip_dismissed
-                .iter()
-                .any(|d| d == &c.id || d == &c.value);
+            let gone = grokhub_core::chip_dismissed_for_good(&self.chip_memory, &c)
+                || self
+                    .chip_dismissed
+                    .iter()
+                    .any(|d| d == &c.id || d == &c.value);
             if !gone && chips.iter().all(|x| x.id != c.id) {
                 chips.insert(0, c);
             }
@@ -667,6 +688,9 @@ impl Cabin {
     /// A Doing card is filed only when the ask is a task. Ordinary chat does not.
     /// Writes `workboard.json` through `flush_board` when the card changes.
     pub(super) fn note_inflight_card(&mut self, ask: &str, thread_label: &str) {
+        if self.job_is_idea_talk() {
+            return;
+        }
         let Some(id) = self.chat_job_thread.clone() else {
             return;
         };
@@ -696,6 +720,15 @@ impl Cabin {
         }
         if changed {
             self.flush_board();
+            if let Some(title) = self
+                .board
+                .iter()
+                .find(|c| c.thread_id.as_deref() == Some(id.as_str()) && c.status == grokhub_core::BoardStatus::Done)
+                .map(|c| c.title.clone())
+            {
+                let key = format!("done:{}", grokhub_core::engine_slug(&title));
+                self.engine_note("workboard", &key, &title);
+            }
         }
     }
 
@@ -710,6 +743,15 @@ impl Cabin {
         };
         if abandon_inflight_card(&mut self.board, &id) {
             self.flush_board();
+            if let Some(title) = self
+                .board
+                .iter()
+                .find(|c| c.thread_id.as_deref() == Some(id.as_str()) && c.status == grokhub_core::BoardStatus::Blocked)
+                .map(|c| c.title.clone())
+            {
+                let key = format!("paused:{}", grokhub_core::engine_slug(&title));
+                self.engine_note("workboard", &key, &title);
+            }
         }
     }
 
