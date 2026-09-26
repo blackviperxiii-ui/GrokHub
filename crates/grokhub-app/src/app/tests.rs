@@ -7570,3 +7570,25 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn recent_chat_stays_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("recent-chat");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    let idx = cabin.thread_idx;
+    assert_eq!(cabin.threads[idx].title, "Chat");
+    assert_eq!(cabin.status, "New chat");
+    cabin.open_recent_chat();
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Chat");
+    assert_eq!(cabin.thread_idx, idx);
+    assert!(cabin.composer_want_focus);
+    assert_eq!(cabin.status, "New chat");
+    assert!(!cabin.running);
+    assert_eq!(cabin.threads.len(), 1);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
