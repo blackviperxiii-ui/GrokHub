@@ -7570,3 +7570,14 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn clear_confirm_drops_the_sheet() {
+    let mut app = Cabin::quiet_for_test();
+    app.confirm = Some(ConfirmKind::DestructiveHost { cmd: "rm foo.txt".into() });
+    app.perm_always_confirm = Some(serde_json::json!({"rpc": 1}));
+    app.clear_confirm();
+    assert!(app.confirm.is_none());
+    assert!(app.perm_always_confirm.is_none());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
