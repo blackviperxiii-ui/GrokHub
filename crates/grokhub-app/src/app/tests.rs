@@ -7588,5 +7588,5 @@ fn stage_project_asks_for_a_name() {
     assert!(node.path.is_empty());
     assert_eq!(node.kind, ProjectKind::Project);
     assert!(!app.running);
-    assert!(app.chat_job.is_none());
+    assert!(app.chat_job_thread.is_none());
 }
