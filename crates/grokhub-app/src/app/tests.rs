@@ -7570,3 +7570,13 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn empty_project_name_is_refused() {
+    let mut app = Cabin::quiet_for_test();
+    let before = app.projects.len();
+    app.make_project("   ", None);
+    assert_eq!(app.status, "need a project name");
+    assert_eq!(app.projects.len(), before);
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
