@@ -7570,3 +7570,22 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn empty_update_plan_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("empty-update-plan");
+    let prev = std::env::var("GROKHUB_CONFIG").ok();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut app = Cabin::quiet_for_test();
+    app.start_overlay_update(Vec::new());
+    assert_eq!(app.status, "Update plan empty");
+    assert!(matches!(app.nav, Nav::Settings));
+    assert!(matches!(app.settings_sec, SettingsSec::Update));
+    assert!(!app.running);
+    assert!(app.queued_overlay.is_none());
+    match prev {
+        Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+        None => std::env::remove_var("GROKHUB_CONFIG"),
+    }
+}
+
