@@ -7570,3 +7570,33 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn full_automation_list_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("full-auto");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.automations = (0..50)
+        .map(|i| grokhub_core::Automation {
+            id: format!("job-{i}"),
+            name: "Job".into(),
+            schedule: "daily".into(),
+            time: "09:00".into(),
+            times: Vec::new(),
+            instructions: "check".into(),
+            heartbeat_every_min: 0,
+            check_command: String::new(),
+            enabled: true,
+            last_run: None,
+            next_run: None,
+            run_count: 0,
+        })
+        .collect();
+    cabin.add_automation_seed("every day at 9, summarize the board");
+    assert_eq!(cabin.status, "Maximum 50 scheduled automations");
+    assert_eq!(cabin.automations.len(), 50);
+    assert!(cabin.grok_loops.is_empty());
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
