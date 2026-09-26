@@ -7570,3 +7570,34 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn switch_chat_keeps_the_line() {
+    let _cfg = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("switch-chat-keeps");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut app = Cabin::quiet_for_test();
+    let mut held = crate::threads::ChatThread::new("Chat", false);
+    held.messages = std::sync::Arc::new(vec![("user".into(), "older line".into())]);
+    app.threads.push(held);
+    app.thread_idx = 0;
+    app.messages = app.threads[0].messages.clone();
+    app.new_thread(false);
+    let left = app.thread_idx;
+    assert!(left > 0);
+    app.live_mut().push(("user".into(), "harbor line".into()));
+    app.apply_switch_thread(0);
+    assert_eq!(app.thread_idx, 0);
+    assert!(app.messages.iter().all(|(_, c)| c != "harbor line"));
+    assert!(app.threads[left].messages.iter().any(|(_, c)| c == "harbor line"));
+    assert!(app.composer_want_focus);
+    assert!(app.rename_idx.is_none());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+    assert_eq!(app.status, "New chat");
+
+    std::env::remove_var("GROKHUB_CONFIG");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
