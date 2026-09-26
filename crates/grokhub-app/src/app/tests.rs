@@ -7570,3 +7570,20 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn full_loop_list_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("full-loop-list");
+    let _ = std::fs::create_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.grok_loops = (0..50)
+        .map(|_| grokhub_core::new_loop("30m".into(), "check".into(), 0))
+        .collect();
+    cabin.add_automation_seed("/loop 30m check deploy");
+    assert_eq!(cabin.status, "Maximum 50 scheduled loops");
+    assert_eq!(cabin.grok_loops.len(), 50);
+    assert!(cabin.automations.is_empty());
+    assert!(!cabin.running);
+}
+
