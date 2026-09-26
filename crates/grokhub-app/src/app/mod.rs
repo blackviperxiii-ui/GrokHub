@@ -107,7 +107,7 @@ use grokhub_core::{
     should_refresh_llm, should_seed_sidebar, should_send_screenshot, should_trim_result_bodies,
     should_update_cli_alpha, apply_skill_follow, skill_follow_block, skill_from_suggestion,
     skill_offer_chip, skill_use_in_chat_prompt,
-    skip_night_check_receipt, slash_help, slash_kind, stage_project, start_hub_rotates_pair,
+    skip_night_check_receipt, slash_help, slash_kind, start_hub_rotates_pair,
     state_for_disk, stretch_saved_skill, strip_thinking, summarize_trajectory, summarize_write,
     suggestions_from_sessions, surgical_memory_edit, take_ui_text, teach_routine, teachable_steps, theme_id, theme_label,
     thought_body_key, thought_control_act, thought_fold_controls, thought_fold_draws,
@@ -200,8 +200,11 @@ use settings::*;
 use sidebar::*;
 #[allow(unused_imports)]
 use persist::*;
+#[cfg(test)]
+#[allow(unused_imports)]
+use pages::BoardAct;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Nav {
     Chat,
     Devices,
@@ -595,8 +598,6 @@ pub struct Cabin {
     projects: Vec<ProjectNode>,
     project_sel: Option<String>,
     proj_menu_pos: egui::Pos2,
-    proj_plus_open: bool,
-    proj_plus_pos: egui::Pos2,
     proj_add_for: Option<String>,
     proj_rename: Option<String>,
     proj_rename_buf: String,
@@ -645,6 +646,8 @@ pub struct Cabin {
     tokens_seen: (u64, u64, u64),
     grok_commands: Vec<SlashHit>,
     grok_tasks: Vec<(String, String, bool)>,
+    /// Cabin `/loop` that was prompted on the live ACP session.
+    loop_acp_id: Option<String>,
     followup_queue: Vec<String>,
     /// btw questions waiting until the live turn ends. They do not cancel it.
     side_ask_queue: Vec<String>,
@@ -696,6 +699,10 @@ pub struct Cabin {
     grok_catalog_loaded: bool,
     grok_catalog_rx: Option<mpsc::Receiver<Result<grokhub_acp::GrokCatalog, String>>>,
     grok_ext_rx: Option<mpsc::Receiver<String>>,
+    /// Connector commands waiting while one `grok mcp` / `grok plugin` is running.
+    grok_ext_q: Vec<Vec<String>>,
+    /// Last connector command output, shown on the Connectors page.
+    connector_note: String,
 }
 
 fn fork_explainer_path() -> PathBuf {
@@ -706,6 +713,12 @@ fn fork_explainer_seen_on_disk() -> bool {
     std::fs::read_to_string(fork_explainer_path())
         .map(|s| s.trim() == "1")
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+thread_local! {
+    static QUIET_THREADS: std::cell::RefCell<Option<(Vec<ChatThread>, usize)>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 impl Cabin {
@@ -728,32 +741,49 @@ impl Cabin {
         let mem_body = config::read_memory(&mem_name);
         let mem_cache_at = [config::memory_updated_at("SOUL.md"), 0, 0];
         let mem_cache_body = [mem_body.clone(), String::new(), String::new()];
-        let mut threads = threads::load();
-        if threads.is_empty() {
-            let mut t = ChatThread::new("Chat", false);
-            t.messages = Arc::new(config::load_chat());
-            threads.push(t);
-        }
-        let keep_id = threads
-            .iter()
-            .find(|t| t.id == cfg.current_thread)
-            .map(|t| t.id.clone())
-            .or_else(|| threads.first().map(|t| t.id.clone()));
-        let before = threads.len();
-        threads.retain(|t| {
-            keep_id.as_deref() == Some(t.id.as_str())
-                || t.pinned
-                || !leftover_empty_thread(&t.title, t.scratch, t.messages.is_empty())
-        });
-        if threads.is_empty() {
-            threads.push(ChatThread::new("Chat", false));
-        }
-        let dropped_leftover = threads.len() != before;
-        let thread_idx = threads
-            .iter()
-            .position(|t| keep_id.as_deref() == Some(t.id.as_str()))
-            .or_else(|| threads.iter().position(|t| t.id == cfg.current_thread))
-            .unwrap_or(0);
+        let load_saved = |cfg: &AppConfig| -> (Vec<ChatThread>, bool, usize) {
+            let mut threads = threads::load();
+            if threads.is_empty() {
+                let mut t = ChatThread::new("Chat", false);
+                t.messages = Arc::new(config::load_chat());
+                threads.push(t);
+            }
+            let keep_id = threads
+                .iter()
+                .find(|t| t.id == cfg.current_thread)
+                .map(|t| t.id.clone())
+                .or_else(|| threads.first().map(|t| t.id.clone()));
+            let before = threads.len();
+            threads.retain(|t| {
+                keep_id.as_deref() == Some(t.id.as_str())
+                    || t.pinned
+                    || !leftover_empty_thread(&t.title, t.scratch, t.messages.is_empty())
+            });
+            if threads.is_empty() {
+                threads.push(ChatThread::new("Chat", false));
+            }
+            let dropped_leftover = threads.len() != before;
+            let thread_idx = threads
+                .iter()
+                .position(|t| keep_id.as_deref() == Some(t.id.as_str()))
+                .or_else(|| threads.iter().position(|t| t.id == cfg.current_thread))
+                .unwrap_or(0);
+            (threads, dropped_leftover, thread_idx)
+        };
+        #[cfg(test)]
+        let (threads, dropped_leftover, thread_idx, quiet) =
+            if let Some((threads, idx)) = QUIET_THREADS.with(|slot| slot.borrow_mut().take()) {
+                let thread_idx = idx.min(threads.len().saturating_sub(1));
+                (threads, false, thread_idx, true)
+            } else {
+                let (threads, dropped_leftover, thread_idx) = load_saved(&cfg);
+                (threads, dropped_leftover, thread_idx, false)
+            };
+        #[cfg(not(test))]
+        let (threads, dropped_leftover, thread_idx, quiet) = {
+            let (threads, dropped_leftover, thread_idx) = load_saved(&cfg);
+            (threads, dropped_leftover, thread_idx, false)
+        };
         let messages = threads
             .get(thread_idx)
             .map(|t| t.messages.clone())
@@ -1036,8 +1066,6 @@ impl Cabin {
             projects,
             project_sel,
             proj_menu_pos: egui::Pos2::ZERO,
-            proj_plus_open: false,
-            proj_plus_pos: egui::Pos2::ZERO,
             proj_add_for: None,
             proj_rename: None,
             proj_rename_buf: String::new(),
@@ -1078,6 +1106,7 @@ impl Cabin {
             tokens_seen: (0, 0, 0),
             grok_commands: Vec::new(),
             grok_tasks: Vec::new(),
+            loop_acp_id: None,
             followup_queue: Vec::new(),
             side_ask_queue: Vec::new(),
             side_ask_kick: false,
@@ -1120,36 +1149,381 @@ impl Cabin {
             grok_catalog_loaded: false,
             grok_catalog_rx: None,
             grok_ext_rx: None,
+            grok_ext_q: Vec::new(),
+            connector_note: String::new(),
         };
-        if let Ok(mgr) = GlobalHotKeyManager::new() {
-            let hey = HotKey::new(Some(Modifiers::SUPER), Code::KeyG);
-            let halt = HotKey::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Escape);
-            let hey_id = hey.id();
-            let halt_id = halt.id();
-            if mgr.register(hey).is_ok() && mgr.register(halt).is_ok() {
-                c.hotkey_hey = hey_id;
-                c.hotkey_halt = halt_id;
-                c.hotkeys = Some(mgr);
+        if !quiet {
+            if let Ok(mgr) = GlobalHotKeyManager::new() {
+                let hey = HotKey::new(Some(Modifiers::SUPER), Code::KeyG);
+                let halt = HotKey::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Escape);
+                let hey_id = hey.id();
+                let halt_id = halt.id();
+                if mgr.register(hey).is_ok() && mgr.register(halt).is_ok() {
+                    c.hotkey_hey = hey_id;
+                    c.hotkey_halt = halt_id;
+                    c.hotkeys = Some(mgr);
+                }
             }
+            if dropped_leftover {
+                c.persist_bg();
+            }
+            grokhub_acp::silence_windows_hard_errors();
+            // Official alpha when missing/unusable; pin a working CLI. UAC is expected on Windows.
+            c.grok_install_wait =
+                grokhub_core::should_kick_alpha_install(grokhub_acp::find_grok().is_some());
+            c.official_cli_session = c.grok_install_wait;
+            c.grok_install_rx = Some(grokhub_acp::begin_ensure_grok_alpha());
+            c.sync_cli_auth_from_oauth();
+            if grokhub_acp::grok_cli_key().is_some() && !c.official_cli_session {
+                c.mark_get_started_done();
+            }
+            c.last_update_probe = Some(Instant::now());
+            c.update_probe_rx = Some(crate::update::begin_update_probe());
+            c.open_fresh_home();
         }
-        if dropped_leftover {
-            c.persist_bg();
-        }
-        grokhub_acp::silence_windows_hard_errors();
-        // Official alpha when missing/unusable; pin a working CLI. UAC is expected on Windows.
-        c.grok_install_wait =
-            grokhub_core::should_kick_alpha_install(grokhub_acp::find_grok().is_some());
-        c.official_cli_session = c.grok_install_wait;
-        c.grok_install_rx = Some(grokhub_acp::begin_ensure_grok_alpha());
-        c.sync_cli_auth_from_oauth();
-        if grokhub_acp::grok_cli_key().is_some() && !c.official_cli_session {
-            c.mark_get_started_done();
-        }
-        c.last_update_probe = Some(Instant::now());
-        c.update_probe_rx = Some(crate::update::begin_update_probe());
-        c.open_fresh_home();
         c
     }
+
+    /// A cabin with the given chats already loaded. No install, update probe, or
+    /// fresh-home stamp. `GROKHUB_CONFIG` must already point at a test root.
+    #[cfg(test)]
+    pub(super) fn quiet_cabin(threads: Vec<ChatThread>, thread_idx: usize) -> Self {
+        struct Clear;
+        impl Drop for Clear {
+            fn drop(&mut self) {
+                QUIET_THREADS.with(|slot| *slot.borrow_mut() = None);
+            }
+        }
+        QUIET_THREADS.with(|slot| *slot.borrow_mut() = Some((threads, thread_idx)));
+        let _clear = Clear;
+        Self::new(true)
+    }
+
+    pub(super) fn quiet_for_test() -> Self {
+        let (grok_sessions_tx, grok_sessions_rx) = mpsc::channel();
+        let cfg = AppConfig::default();
+        Self {
+            nav: Nav::Chat,
+            cfg: cfg.clone(),
+            composer: String::new(),
+            messages: Arc::new(Vec::new()),
+            status: String::new(),
+            running: false,
+            host_halt: Arc::new(AtomicBool::new(false)),
+            rx: None,
+            chat_job_thread: None,
+            inflight_open: false,
+            hub: Arc::new(Mutex::new(grokhub_core::HubState::empty())),
+            hub_on: false,
+            hub_port: grokhub_core::DEFAULT_PORT,
+            task_prompt: String::new(),
+            mem_name: String::new(),
+            mem_body: String::new(),
+            mem_cache_at: [0, 0, 0],
+            mem_cache_body: [String::new(), String::new(), String::new()],
+            last_persist: Instant::now(),
+            persist_idle_key: String::new(),
+            persist_rx: None,
+            persist_io: Arc::new(Mutex::new(())),
+            cfg_slot: Arc::new(Mutex::new(CfgSlot { gen: 0, cfg })),
+            board: Vec::new(),
+            board_title: String::new(),
+            board_notes: String::new(),
+            imagine_prompt: String::new(),
+            imagine_last: String::new(),
+            skill_name: String::new(),
+            skill_body: String::new(),
+            skill_list: Vec::new(),
+            eyes_text: String::new(),
+            last_host: Vec::new(),
+            last_frame_url: None,
+            hands_attach: false,
+            eyes_attach: false,
+            speak_next: false,
+            verify_ok_turn: false,
+            verify_chip: String::new(),
+            reflect_diff: String::new(),
+            last_activity: Instant::now(),
+            reflected_idle: false,
+            last_recipe: None,
+            update_pct: None,
+            update_can_restart: false,
+            secrets: Secrets::default(),
+            threads: Vec::new(),
+            thread_idx: 0,
+            oauth_pending: None,
+            oauth_next_poll: Instant::now(),
+            oauth_start_rx: None,
+            oauth_poll_rx: None,
+            host_hour_count: 0,
+            host_hour_at: Instant::now(),
+            host_reserved: 0,
+            plan_pending: None,
+            tray: None,
+            tray_rx: None,
+            window_visible: true,
+            resume_fresh: false,
+            saw_minimized: false,
+            brief_buf: String::new(),
+            ideas_q: String::new(),
+            tray_saw_unfocused: false,
+            tray_hid_at: Instant::now(),
+            want_quit: false,
+            told_tray: false,
+            pending_hub_task: None,
+            automations: Vec::new(),
+            grok_loops: Vec::new(),
+            updates: Vec::new(),
+            grok_loop_rx: None,
+            night_nl: String::new(),
+            watch_once: false,
+            watched_steps: Vec::new(),
+            teach_nl: String::new(),
+            chat_tail_frames: 0,
+            cap_auto_buf: String::new(),
+            cap_host_buf: String::new(),
+            quiet_start_buf: String::new(),
+            quiet_end_buf: String::new(),
+            history_q: String::new(),
+            history_q_seen: String::new(),
+            history_q_at: None,
+            history_hits: Vec::new(),
+            last_receipt_ok: None,
+            last_receipts: Vec::new(),
+            try_again: false,
+            last_rewind_id: None,
+            rewind_rows: Vec::new(),
+            host_live: String::new(),
+            daily_auto_used: 0,
+            daily_auto_day: String::new(),
+            slash_pick: 0,
+            slash_filter_n: 0,
+            slash_filter_first: String::new(),
+            last_window_title: String::new(),
+            voice_orb: String::new(),
+            last_night_tick: Instant::now(),
+            last_auto_tick: Instant::now(),
+            last_heartbeat: Instant::now(),
+            night_check_rx: None,
+            learning: Default::default(),
+            suggestions: Default::default(),
+            review_rx: None,
+            review_busy: false,
+            usage: Default::default(),
+            palette_open: false,
+            palette_q: String::new(),
+            palette_pick: 0,
+            palette_focus: false,
+            palette_files: Vec::new(),
+            palette_files_q: String::new(),
+            palette_files_root: String::new(),
+            palette_file_rx: None,
+            shortcuts_open: false,
+            active_skill_follow: None,
+            last_anticipate_ms: 0,
+            goal_step: 0,
+            followup_step: 0,
+            stream_buf: String::new(),
+            thought_buf: String::new(),
+            chat_views: Vec::new(),
+            chat_view_tid: String::new(),
+            chat_view_n: 0,
+            chat_view_last: 0,
+            presence_ring: Vec::new(),
+            voice_sock: None,
+            voice_state: VoiceState::Idle,
+            voice_ready_at: None,
+            voice_hold_rx: None,
+            cmd_line: String::new(),
+            cmd_hist: Vec::new(),
+            agents: Vec::new(),
+            last_live: Instant::now(),
+            live_cap_rx: None,
+            eyes_cap_rx: None,
+            kick_cap_rx: None,
+            pending_kick: None,
+            kick_frame: None,
+            kick_skip: false,
+            recipe_cap_rx: None,
+            recipe_desk_rx: None,
+            host_diff_rx: None,
+            host_diff_kick: false,
+            verify_rx: None,
+            hotkeys: None,
+            hotkey_hey: 0,
+            hotkey_halt: 0,
+            sidebar_q: String::new(),
+            rename_idx: None,
+            rename_buf: String::new(),
+            rename_focus: false,
+            rename_lock: None,
+            chip_memory: Default::default(),
+            chip_dismissed: Vec::new(),
+            llm_chips: Vec::new(),
+            visible_chips: Vec::new(),
+            chip_rx: None,
+            chip_busy: false,
+            chip_fp: String::new(),
+            chip_paint_key: String::new(),
+            chip_llm_at: 0,
+            greeting: String::new(),
+            greeting_fp: String::new(),
+            greeting_user_at: 0,
+            greeting_memory_at: 0,
+            greeting_user_md: String::new(),
+            greeting_memory_md: String::new(),
+            greeting_files_rx: None,
+            greeting_flush_name: String::new(),
+            greeting_flush_len: 0,
+            greeting_llm_fp: String::new(),
+            greeting_rx: None,
+            greeting_busy: false,
+            greeting_llm_at: 0,
+            continue_hint: String::new(),
+            skills_tab_connectors: false,
+            skill_q: String::new(),
+            mcp_nl: String::new(),
+            mcp_compose: false,
+            pending_connectors: Vec::new(),
+            auto_compose: false,
+            board_compose: false,
+            board_edit: None,
+            board_link: false,
+            settings_menu_open: false,
+            settings_menu_ignore: false,
+            win_max: false,
+            geom_dirty: false,
+            geom_applied: false,
+            geom_apply_frames: 0,
+            imagine_want_focus: false,
+            composer_want_focus: false,
+            settings_sec: SettingsSec::Account,
+            settings_back: Nav::Chat,
+            imagine_aspect: 0,
+            imagine_quality: false,
+            imagine_kind: ImagineKind::Image,
+            imagine_style: 0,
+            imagine_video_res: 0,
+            imagine_video_dur: 0,
+            imagine_video_audio: false,
+            imagine_aspect_open: false,
+            imagine_style_open: false,
+            imagine_menu_ignore: false,
+            imagine_style_anchor: egui::Rect::NOTHING,
+            imagine_aspect_anchor: egui::Rect::NOTHING,
+            imagine_expand: false,
+            imagine_job_prompt: String::new(),
+            imagine_error: String::new(),
+            imagine_pending: false,
+            imagine_save_rx: None,
+            goal_rx: None,
+            goal_busy: false,
+            goal_stale: false,
+            wall: Default::default(),
+            wall_rx: None,
+            wall_busy: false,
+            attach_url: None,
+            attach_name: None,
+            imagine_ref: None,
+            plus_menu: None,
+            plus_anchor: egui::Pos2::ZERO,
+            plus_ignore_close: false,
+            file_pick: None,
+            pick_rx: None,
+            pick_list_rx: None,
+            pick_dir: String::new(),
+            pick_cache: None,
+            projects: Vec::new(),
+            project_sel: None,
+            proj_menu_pos: egui::Pos2::ZERO,
+            proj_add_for: None,
+            proj_rename: None,
+            proj_rename_buf: String::new(),
+            proj_rename_focus: false,
+            proj_rename_lock: None,
+            proj_staged: None,
+            proj_ignore_close: false,
+            projects_dirty: false,
+            oauth_photo: None,
+            oauth_photo_key: String::new(),
+            oauth_photo_rx: None,
+            oauth_photo_busy: false,
+            oauth_profile_tried: false,
+            profile_photo: None,
+            profile_photo_key: String::new(),
+            profile_photo_rx: None,
+            profile_photo_busy: false,
+            profile_pick_rx: None,
+            profile_pick_token: Arc::new(AtomicU64::new(0)),
+            profile_file_io: Arc::new(Mutex::new(())),
+            grok_install_rx: None,
+            grok_install_err: String::new(),
+            grok_install_wait: false,
+            official_cli_session: false,
+            cabin_latest: None,
+            cli_alpha: None,
+            cli_installed: None,
+            last_update_probe: None,
+            update_probe_rx: None,
+            cabin_overlay_done: false,
+            queued_overlay: None,
+            update_cabin_note: None,
+            acp: None,
+            acp_spawn_rx: None,
+            grok_p_rx: None,
+            grok_p_pid: None,
+            grok_usage: Default::default(),
+            tokens_seen: (0, 0, 0),
+            grok_commands: Vec::new(),
+            grok_tasks: Vec::new(),
+            loop_acp_id: None,
+            followup_queue: Vec::new(),
+            side_ask_queue: Vec::new(),
+            side_ask_kick: false,
+            plan_open: false,
+            fork_explainer_seen: false,
+            tool_cards: Vec::new(),
+            live_blocks: Vec::new(),
+            desk_frame: None,
+            perm_ask: None,
+            perm_always_confirm: None,
+            confirm: None,
+            jump_last_you: false,
+            elicit_ask: None,
+            elicit_draft: String::new(),
+            secret_hold: Vec::new(),
+            session_mode: SessionMode::Chat,
+            permission_mode: PermissionMode::Ask,
+            scheduled_perm: false,
+            grok_sessions: Vec::new(),
+            grok_sessions_loaded: false,
+            grok_sessions_tx,
+            grok_sessions_rx,
+            grok_list_gen: 0,
+            grok_sessions_inflight: 0,
+            grok_sessions_refresh_pending: false,
+            last_grok_list_at: Instant::now(),
+            pending_grok_deletes: HashSet::new(),
+            inspect_rx: None,
+            history_rx: None,
+            mem_restore_rx: None,
+            mem_file_rx: None,
+            recall_rx: None,
+            sync_rx: None,
+            inhabit_rx: None,
+            reflect_rx: None,
+            session_show_rx: None,
+            import_rx: None,
+            inspect_text: String::new(),
+            grok_catalog: Default::default(),
+            grok_catalog_loaded: false,
+            grok_catalog_rx: None,
+            grok_ext_rx: None,
+            grok_ext_q: Vec::new(),
+            connector_note: String::new(),
+        }
+    }
+
 
     fn apply_saved_geom(&mut self, ctx: &egui::Context) {
         let g = crate::window::clamp_geom(self.cfg.window);
@@ -1289,6 +1663,11 @@ impl Cabin {
     /// Live thought/say/tool chrome belongs to the thread that owns the stream.
     fn stream_here(&self) -> bool {
         chat_stream_is_visible(self.chat_job_thread.as_deref(), &self.visible_thread_id())
+    }
+
+    /// A Grok background task, monitor, or loop is still attached to the session.
+    fn background_tasks_open(&self) -> bool {
+        self.grok_tasks.iter().any(|(_, _, done)| !*done)
     }
 
     /// Night, inbox, and workboard runs live on the hidden background thread.
@@ -2202,12 +2581,13 @@ impl Cabin {
         let exported_at = now_ms();
         let hub = self.hub.clone();
         let io = self.persist_io.clone();
+        let dir = config::config_dir();
         let (tx, rx) = mpsc::channel();
         self.sync_rx = Some(rx);
         self.status = "Syncing…".into();
         std::thread::spawn(move || {
             if let Ok(_g) = io.lock() {
-                write_persist_disk(&snap);
+                write_persist_disk(&dir, &snap);
             }
             let mem = mem
                 .into_iter()
@@ -2266,7 +2646,7 @@ impl Cabin {
 
     /// The composer pills survive a restart: Ask/Auto/Plan is a preference, not a per-run
     /// choice. Always-approve is the exception — `config::load` drops it back to Ask.
-    fn set_session_mode(&mut self, mode: SessionMode) {
+    pub(super) fn set_session_mode(&mut self, mode: SessionMode) {
         self.session_mode = mode;
         self.cfg.session_mode = mode.as_str().to_string();
         self.persist_cfg();
@@ -2466,9 +2846,6 @@ impl Cabin {
             match act {
                 HeartbeatAct::Housekeep => {
                     self.roll_today();
-                    if self.nav == Nav::Chat && !self.scratch() {
-                        self.stamp_current_access();
-                    }
                     self.tick_feed_pulse();
                     if self.last_persist.elapsed() > Duration::from_secs(2) {
                         self.persist_bg();

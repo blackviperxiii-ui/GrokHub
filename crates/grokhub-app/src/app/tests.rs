@@ -1,5 +1,10 @@
 use super::*;
 use eframe::egui;
+use super::pages::BoardAct;
+use grokhub_core::UpdateAction;
+use grokhub_core::{UpdateCard, UpdateKind, UpdateStatus};
+use grokhub_core::{ProjectKind, ProjectNode};
+use std::sync::Arc;
 
 fn cabin_src() -> String {
     concat!(
@@ -436,6 +441,69 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                     "wide bubble actions must stay under the bubble, acts {} bubble {}",
                     acts.row.min.x,
                     bubble.rect.min.x
+                );
+            });
+        });
+    }
+
+    fn row_ends_with_short_fragment(row: &str, words: &[&str]) -> Option<String> {
+        let last = row.split_whitespace().last().unwrap_or("");
+        let letters = last.chars().count();
+        if letters == 0 || letters > 2 {
+            return None;
+        }
+        if words.contains(&last) {
+            return None;
+        }
+        let fragment = words.iter().any(|word| {
+            word.chars().count() > letters && (word.starts_with(last) || word.ends_with(last))
+        });
+        if fragment {
+            Some(last.to_owned())
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn ordinary_words_stay_whole_inside_a_narrow_bubble() {
+        let body = "harbor light stays on the dock tonight";
+        let words: Vec<&str> = body.split_whitespace().collect();
+        with_fonts_ui(|ui| {
+            let wrap = grokhub_core::bubble_wrap_width(280.0, grokhub_core::BUBBLE_PAD_X);
+            let job = crate::markdown::wrapped_job(ui, body, wrap, egui::Color32::WHITE);
+            let galley = ui.fonts(|fonts| fonts.layout_job(job));
+            let rows: Vec<String> = galley.rows.iter().map(|row| row.text()).collect();
+            for row in &rows {
+                assert!(
+                    row_ends_with_short_fragment(row, &words).is_none(),
+                    "galley row ends with a 1- or 2-letter fragment of a longer word: {row:?} in {rows:?}"
+                );
+            }
+            for word in &words {
+                assert!(
+                    rows.iter().any(|row| row.contains(word)),
+                    "word {word} was split across galley rows: {rows:?}"
+                );
+            }
+            ui.allocate_ui(egui::vec2(280.0, 420.0), |ui| {
+                ui.set_max_width(280.0);
+                let row = ui.max_rect();
+                let user = super::paint_speech_bubble(ui, body, true, false);
+                let assistant = super::paint_speech_bubble(ui, body, false, true);
+                assert!(
+                    user.rect.max.x <= row.max.x + 1.0 && user.rect.height() > 16.0,
+                    "user bubble {} x {} h {}",
+                    user.rect.max.x,
+                    row.max.x,
+                    user.rect.height()
+                );
+                assert!(
+                    assistant.rect.max.x <= row.max.x + 1.0 && assistant.rect.height() > 16.0,
+                    "assistant bubble {} x {} h {}",
+                    assistant.rect.max.x,
+                    row.max.x,
+                    assistant.rect.height()
                 );
             });
         });
@@ -1062,6 +1130,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             switch.contains("pin_chat_tail"),
             "the pane keeps the offset of the chat you left unless the swap re-pins it: {switch}"
         );
+        assert!(
+            !switch.contains("stamp_current_access") && !switch.contains("accessed_ms"),
+            "opening a History row is not activity and must not move it: {switch}"
+        );
         let show = src
             .split("fn poll_session_show(")
             .nth(1)
@@ -1292,9 +1364,17 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "every chat in an open folder is listed there: {projects}"
         );
         assert!(
-            projects.contains("open_project_chat")
-                && projects.contains("ProjectKind::Project =>"),
+            projects.contains("activate_project_row")
+                && projects.contains("ProjectKind::Project"),
             "a project row is a chat: clicking it opens that chat: {projects}"
+        );
+        let activate = fn_src(&src, "activate_project_row");
+        assert!(
+            activate.contains("open_project_chat")
+                && activate.contains("ProjectKind::Project")
+                && activate.contains("n.open = !n.open")
+                && activate.contains("ProjectKind::Folder"),
+            "folder click only toggles open; project click opens the chat: {activate}"
         );
         assert!(
             projects.contains("RailIcon::Folder")
@@ -1808,11 +1888,28 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("SettingsSec::Behavior => {").next())
             .expect("Appearance");
         assert!(
-            appearance.contains("self.persist_cfg()")
+            appearance.contains("self.choose_theme(")
                 && !appearance.contains("save = true")
                 && !appearance.contains("self.persist()")
                 && !appearance.contains("persist_snap"),
             "Appearance must not clone every thread just to write app.json: {appearance}"
+        );
+        let choose_theme = fn_src(&src, "choose_theme");
+        assert!(
+            choose_theme.contains("self.persist_cfg()") && !choose_theme.contains("self.persist()"),
+            "choose_theme must write app.json without cloning every thread: {choose_theme}"
+        );
+        let set_close_to_tray = fn_src(&src, "set_close_to_tray");
+        assert!(
+            set_close_to_tray.contains("self.persist_cfg()")
+                && !set_close_to_tray.contains("self.persist()"),
+            "set_close_to_tray must write app.json without cloning every thread: {set_close_to_tray}"
+        );
+        let set_living_wall = fn_src(&src, "set_living_wall");
+        assert!(
+            set_living_wall.contains("self.persist_cfg()")
+                && !set_living_wall.contains("self.persist()"),
+            "set_living_wall must write app.json without cloning every thread: {set_living_wall}"
         );
         let behavior = src
             .split("SettingsSec::Behavior => {")
@@ -1820,7 +1917,9 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("SettingsSec::Update => {").next())
             .expect("Behavior");
         assert!(
-            behavior.contains("self.persist_cfg()")
+            behavior.contains("self.set_close_to_tray(")
+                && behavior.contains("self.set_living_wall(")
+                && behavior.contains("self.persist_cfg()")
                 && !behavior.contains("save = true")
                 && !behavior.contains("self.persist()")
                 && !behavior.contains("persist_snap"),
@@ -3389,7 +3488,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         );
         assert!(
             kick.contains("spawn_grok_p_stream") && kick.contains("grok_p_rx"),
-            "Auto/Always stay on grok -p: {kick}"
+            "scheduled work stays on grok -p when no ACP session is live: {kick}"
         );
         assert!(
             kick.contains("parse_reasoning_effort") && kick.contains("cfg.reasoning_effort"),
@@ -3441,7 +3540,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && ask_kick.contains("composer_headless_flags")
                 && ask_kick.contains("self.session_mode")
                 && ask_kick[grok_p..].contains("spawn_grok_p_stream"),
-            "Look + Auto/Always stay on grok -p with look-only flags: {ask_kick}"
+            "scheduled night and phone stay on grok -p with the PermissionMode flags: {ask_kick}"
         );
         assert!(
             ask_kick.contains("apply_skill_follow") && ask_kick.contains("active_skill_follow"),
@@ -3714,12 +3813,14 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "voice STT must not slurp a huge wav: {listen}"
         );
         let queue = fn_src(&src, "ui_agents");
+        let queued = fn_src(&src, "start_queued_job");
         assert!(
             !queue.contains("send_chat")
-                && queue.contains("chat_job_thread")
-                && queue.contains("push_bound_msg")
-                && queue.contains("kick_model"),
-            "Queue Run must kick the origin thread, not send_chat on the visible tab: {queue}"
+                && queue.contains("kick_model")
+                && queued.contains("chat_job_thread")
+                && queued.contains("push_bound_msg")
+                && !queued.contains("kick_model"),
+            "Queue Run must kick the origin thread, not send_chat on the visible tab: {queue} {queued}"
         );
         assert!(
             src.contains("finish_hub_dispatch"),
@@ -4019,8 +4120,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "deleting an unbound project must not clone every thread just to write projects.json: {drop_proj}"
         );
         let folders = format!(
-            "{}{}{}{}{}{}{}",
-            fn_src(&src, "stage_new_project"),
+            "{}{}{}{}{}{}",
             fn_src(&src, "make_folder"),
             fn_src(&src, "stage_new_folder"),
             fn_src(&src, "begin_proj_rename"),
@@ -4037,13 +4137,22 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let menu = src
             .split("fn apply_project_menu(")
             .nth(1)
-            .and_then(|s| s.split("fn stage_new_project(").next())
+            .and_then(|s| s.split("fn make_folder(").next())
             .expect("apply_project_menu");
         assert!(
             menu.contains("self.flush_projects()")
                 && !menu.contains("self.persist()")
                 && !menu.contains("persist_snap"),
             "Remove from folder must not clone every thread just to write projects.json: {menu}"
+        );
+        let overlays = fn_src(&src, "ui_project_overlays");
+        assert!(
+            !overlays.contains("New project") && !src.contains("New project or folder"),
+            "the projects section does not offer New project"
+        );
+        assert!(
+            src.contains("on_hover_text(\"New folder\")") && src.contains("self.stage_new_folder()"),
+            "projects + creates a folder"
         );
         let rename = src
             .split("Slash::ProjectRename")
@@ -6863,7 +6972,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("fn tick_night(").next())
             .expect("fire_loop");
         assert!(
-            fire.contains("grok_user_stdout_timeout")
+            fire.contains("grok_user_stdout_wait")
+                && !fire.contains("grok_user_stdout_timeout")
                 && fire.contains("-p")
                 && fire.contains("--verbatim")
                 && fire.contains("thread::spawn")
@@ -7128,8 +7238,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("HeartbeatAct::Inbox =>").next())
             .expect("housekeep");
         assert!(
-            house.contains("stamp_current_access") && house.contains("Nav::Chat"),
-            "Housekeep stamps access while sitting on Chat: {house}"
+            !house.contains("stamp_current_access"),
+            "sitting on a chat is not activity and must not move that History row: {house}"
         );
         let idle = src
             .split("HeartbeatAct::Reflect =>")
@@ -7456,10 +7566,8 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
         .and_then(|s| s.split("HeartbeatAct::Inbox =>").next())
         .expect("housekeep");
     assert!(
-        house.contains("tick_feed_pulse")
-            && house.contains("stamp_current_access")
-            && house.contains("Nav::Chat"),
-        "expiry, quiet release, and the digest clock run on Housekeep: {house}"
+        house.contains("tick_feed_pulse") && !house.contains("stamp_current_access"),
+        "expiry, quiet release, and the digest clock run on Housekeep without moving History: {house}"
     );
     let tick = src
         .split("fn tick_review(")
@@ -7570,3 +7678,6927 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+/// Sidebar History order: pins last-pinned-first, then last used.
+fn history_row_titles(cabin: &Cabin) -> Vec<String> {
+    let listed = crate::threads::chat_section_indices(
+        &cabin.threads,
+        Some(cabin.thread_idx),
+        cabin.messages.is_empty(),
+    );
+    let keys: Vec<crate::threads::SessionSortKey> = listed
+        .iter()
+        .map(|&i| {
+            let t = &cabin.threads[i];
+            crate::threads::SessionSortKey {
+                pinned: t.pinned,
+                pinned_ms: t.pinned_ms,
+                accessed_ms: t.accessed_ms,
+                list_rank: 0,
+            }
+        })
+        .collect();
+    crate::threads::session_list_order(&keys)
+        .into_iter()
+        .map(|pos| cabin.threads[listed[pos]].title.clone())
+        .collect()
+}
+
+struct RestoreEnv {
+    key: &'static str,
+    prev: Option<String>,
+}
+
+impl RestoreEnv {
+    fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let prev = std::env::var(key).ok();
+        std::env::set_var(key, value);
+        Self { key, prev }
+    }
+}
+
+impl Drop for RestoreEnv {
+    fn drop(&mut self) {
+        match self.prev.take() {
+            Some(value) => std::env::set_var(self.key, value),
+            None => std::env::remove_var(self.key),
+        }
+    }
+}
+
+fn spoke(title: &str, accessed_ms: u64) -> crate::threads::ChatThread {
+    let mut thread = crate::threads::ChatThread::new(title, false);
+    thread.accessed_ms = accessed_ms;
+    thread
+        .messages_mut()
+        .push(("user".into(), format!("keep {title}")));
+    thread
+}
+
+#[test]
+fn opening_a_history_row_keeps_its_place() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("history-click");
+    let _ = std::fs::remove_dir_all(&root);
+    let _cfg = RestoreEnv::set("GROKHUB_CONFIG", &root);
+    let _tray = RestoreEnv::set("GROKHUB_TRAY", "0");
+
+    let mut last_pin = spoke("Last pin", 1);
+    last_pin.pinned = true;
+    last_pin.pinned_ms = 80;
+    let mut earlier_pin = spoke("Earlier pin", 9_000);
+    earlier_pin.pinned = true;
+    earlier_pin.pinned_ms = 20;
+    let newer = spoke("Newer chat", 500);
+    let older = spoke("Older chat", 100);
+    let earlier_idx = 1;
+    let newer_idx = 2;
+    let older_idx = 3;
+    let mut cabin = Cabin::quiet_cabin(vec![last_pin, earlier_pin, newer, older], newer_idx);
+    assert!(!cabin.running, "the cabin is quiet before the click");
+
+    let before = history_row_titles(&cabin);
+    assert_eq!(
+        before,
+        ["Last pin", "Earlier pin", "Newer chat", "Older chat"],
+        "pins stay last-pinned-first, then last used: {before:?}"
+    );
+    let opened_at = before.iter().position(|t| t == "Older chat").unwrap();
+    assert_ne!(opened_at, 0, "the chat we open is not already first");
+    let older_accessed = cabin.threads[older_idx].accessed_ms;
+    let earlier_pin_ms = cabin.threads[earlier_idx].pinned_ms;
+    let earlier_accessed = cabin.threads[earlier_idx].accessed_ms;
+
+    cabin.switch_thread(older_idx);
+    let after_click = history_row_titles(&cabin);
+    assert_eq!(
+        after_click, before,
+        "switch_thread is the History click and must not move the row: {after_click:?}"
+    );
+    assert_eq!(cabin.thread_idx, older_idx);
+    assert_eq!(
+        cabin.threads[older_idx].accessed_ms, older_accessed,
+        "the click must not bump accessed_ms"
+    );
+
+    // send_chat stamps the open thread with stamp_current_access. That is the
+    // sent-turn bump. The click above did not call it.
+    cabin.stamp_current_access();
+    let after_stamp = history_row_titles(&cabin);
+    assert_eq!(
+        after_stamp,
+        ["Last pin", "Earlier pin", "Older chat", "Newer chat"],
+        "a sent turn moves that chat up, under the pins: {after_stamp:?}"
+    );
+    let stamped_at = after_stamp
+        .iter()
+        .position(|t| t == "Older chat")
+        .unwrap();
+    assert!(stamped_at < opened_at, "the messaged chat moved up");
+    assert!(cabin.threads[older_idx].accessed_ms > older_accessed);
+
+    let pins_before: Vec<_> = after_stamp
+        .iter()
+        .filter(|title| {
+            cabin
+                .threads
+                .iter()
+                .any(|t| t.title == **title && t.pinned)
+        })
+        .cloned()
+        .collect();
+    assert_eq!(pins_before, ["Last pin", "Earlier pin"]);
+    cabin.switch_thread(earlier_idx);
+    let after_pin_click = history_row_titles(&cabin);
+    let pins_after: Vec<_> = after_pin_click
+        .iter()
+        .take(2)
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        pins_after, pins_before,
+        "clicking a pinned chat leaves the pin group last-pinned-first: {after_pin_click:?}"
+    );
+    assert!(cabin.threads[earlier_idx].pinned);
+    assert_eq!(cabin.threads[earlier_idx].pinned_ms, earlier_pin_ms);
+    assert_eq!(
+        cabin.threads[earlier_idx].accessed_ms, earlier_accessed,
+        "clicking a pin is not activity"
+    );
+    assert_eq!(
+        after_pin_click, after_stamp,
+        "the pin click does not reorder History"
+    );
+
+    let start = std::time::Instant::now();
+    while cabin.persist_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(5) {
+        cabin.poll_persist();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+
+// Landed from PR #89.
+#[test]
+fn queue_rows_label_done_failed_and_running() {
+    let rows = [
+        ("job-done", "Flash the pi", true),
+        ("job-fail", "Failed · boot", false),
+        ("job-run", "Write the image", false),
+    ];
+    let painted: Vec<(&str, String)> = rows
+        .iter()
+        .map(|(id, title, done)| {
+            let st = super::pages::queue_task_label(title, *done);
+            (st, format!("{st} · {id}"))
+        })
+        .collect();
+    assert_eq!(
+        painted,
+        vec![
+            ("done", "done · job-done".into()),
+            ("failed", "failed · job-fail".into()),
+            ("running", "running · job-run".into()),
+        ]
+    );
+}
+
+#[test]
+fn park_fresh_chat_keeps_the_running_reply_and_opens_an_empty_chat() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("park-fresh");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut live = crate::threads::ChatThread::new("Night watch", false);
+    live.pinned = true;
+    live.messages = std::sync::Arc::new(vec![
+        ("user".into(), "keep this reply".into()),
+        ("assistant".into(), "still writing".into()),
+    ]);
+    let live_id = live.id.clone();
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.threads = vec![live];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.running = true;
+    cabin.chat_job_thread = Some(live_id.clone());
+    cabin.grok_p_pid = Some(4242);
+
+    cabin.park_fresh_chat();
+
+    assert!(cabin.running, "parking must not halt the reply");
+    assert_eq!(cabin.chat_job_thread.as_deref(), Some(live_id.as_str()));
+    assert_eq!(cabin.grok_p_pid, Some(4242));
+    assert!(
+        cabin.messages.is_empty(),
+        "the open pane must be an empty chat"
+    );
+    assert_ne!(
+        cabin.threads[cabin.thread_idx].id, live_id,
+        "the empty chat must not be the thread that is still replying"
+    );
+    let old = cabin
+        .threads
+        .iter()
+        .find(|t| t.id == live_id)
+        .expect("the running thread stays in the list");
+    assert!(old.pinned);
+    assert_eq!(old.title, "Night watch");
+    assert_eq!(
+        old.messages.as_slice(),
+        [
+            ("user".into(), "keep this reply".into()),
+            ("assistant".into(), "still writing".into()),
+        ]
+    );
+
+    let io = cabin.persist_io.clone();
+    drop(cabin);
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(3) {
+        if io.try_lock().is_ok() {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            if io.try_lock().is_ok() {
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+fn isolated_cabin(label: &str) -> (std::path::PathBuf, super::Cabin) {
+    let root = crate::config::test_config_root(label);
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    (root, super::Cabin::quiet_for_test())
+}
+
+fn release_isolated(root: &std::path::Path, cabin: super::Cabin) {
+    let io = cabin.persist_io.clone();
+    drop(cabin);
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(3) {
+        if io.try_lock().is_ok() {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            if io.try_lock().is_ok() {
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let _ = std::fs::remove_dir_all(root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn selecting_plan_leaves_the_title_and_sets_plan() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("plan-title");
+    let mut thread = crate::threads::ChatThread::new("Night watch", false);
+    thread.messages = std::sync::Arc::new(vec![("user".into(), "dock".into())]);
+    cabin.threads = vec![thread];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.session_mode = SessionMode::Chat;
+
+    cabin.select_plan_without_rename();
+
+    assert_eq!(cabin.threads[0].title, "Night watch");
+    assert_eq!(cabin.session_mode, SessionMode::Plan);
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn feed_accept_files_one_todo() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("idea-accept");
+    let card = grokhub_core::idea_card("src", "More F1", "from the brief", 1);
+    let id = card.id.clone();
+    cabin.updates = vec![card];
+
+    cabin.apply_feed_act(Some(FeedAct::Build(id)));
+
+    assert_eq!(cabin.board.len(), 1);
+    assert_eq!(cabin.board[0].status, grokhub_core::BoardStatus::Todo);
+    assert_eq!(cabin.board[0].title, "Cover F1");
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn folder_click_toggles_and_project_click_opens_the_chat() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("project-row");
+    cabin.projects = vec![
+        ProjectNode {
+            id: "fold".into(),
+            name: "Apps".into(),
+            kind: ProjectKind::Folder,
+            path: String::new(),
+            parent: None,
+            open: false,
+        },
+        ProjectNode {
+            id: "proj".into(),
+            name: "Lab".into(),
+            kind: ProjectKind::Project,
+            path: "/tmp/grokhub-proof-lab".into(),
+            parent: Some("fold".into()),
+            open: false,
+        },
+    ];
+    let before = cabin.threads.len();
+    cabin.activate_project_row("fold");
+    assert!(cabin.projects.iter().find(|n| n.id == "fold").unwrap().open);
+    assert_eq!(cabin.threads.len(), before, "a folder click does not open a chat");
+
+    cabin.activate_project_row("proj");
+    assert!(matches!(cabin.nav, Nav::Chat));
+    assert!(
+        cabin.threads.iter().any(|t| t.project_id.as_deref() == Some("proj")),
+        "a project click opens that project's chat"
+    );
+    assert!(
+        cabin.projects.iter().find(|n| n.id == "fold").unwrap().open,
+        "opening a project chat does not collapse the folder"
+    );
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn queue_run_starts_the_origin_thread() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("queue-run");
+    let visible = crate::threads::ChatThread::new("Visible", false);
+    let mut origin = crate::threads::ChatThread::new("Origin", false);
+    let origin_id = origin.id.clone();
+    origin.messages = std::sync::Arc::new(Vec::new());
+    cabin.threads = vec![visible, origin];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.agents.push(AgentJob {
+        title: "Flash the pi".into(),
+        status: "queued".into(),
+        prompt: "write the image".into(),
+        thread_id: origin_id.clone(),
+    });
+
+    assert!(cabin.start_queued_job(0));
+    assert!(!cabin.running, "the state change does not spawn grok");
+    assert_eq!(cabin.agents[0].status, "running");
+    assert_eq!(cabin.chat_job_thread.as_deref(), Some(origin_id.as_str()));
+    assert!(matches!(cabin.nav, Nav::Chat));
+    let origin = cabin.threads.iter().find(|t| t.id == origin_id).unwrap();
+    assert_eq!(
+        origin.messages.as_slice(),
+        [("user".into(), "write the image".into())]
+    );
+    assert!(cabin.threads[0].messages.is_empty());
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn shell_echo_lands_on_the_open_chat() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("shell-echo");
+    let dir = root.join("proj");
+    std::fs::create_dir_all(&dir).unwrap();
+    cabin.cfg.host_on = true;
+    cabin.cfg.project_dir = dir.display().to_string();
+    let thread = crate::threads::ChatThread::new("Shell", false);
+    cabin.threads = vec![thread];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+
+    cabin.queue_sh("echo grokhub-proof".into());
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(5) {
+        cabin.poll_job();
+        let so_far = cabin
+            .messages
+            .iter()
+            .map(|m| m.1.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if so_far.contains("grokhub-proof") {
+            break;
+        }
+        if !cabin.running {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    cabin.halt_in_flight();
+    assert!(!cabin.running, "echo should finish, status {}", cabin.status);
+    let text = cabin.messages.iter().map(|m| m.1.clone()).collect::<Vec<_>>().join("\n");
+    assert!(
+        text.contains("grokhub-proof"),
+        "the shell output should land on the chat: {text}"
+    );
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn session_menu_sits_left_of_minimize() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("menu-place");
+    let ctx = egui::Context::default();
+    let raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(900.0, 80.0),
+        )),
+        ..Default::default()
+    };
+    let mut menu = egui::Rect::NOTHING;
+    let mut mini = egui::Rect::NOTHING;
+    let _ = ctx.run(raw, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                mini = titlebar_chrome_btn(ui, ChromeBtn::Minimize).rect;
+                menu = cabin.paint_session_actions_menu(ui);
+            });
+        });
+    });
+    assert!(
+        menu.right() <= mini.left() + 0.5,
+        "the session menu must sit left of Minimize: menu {menu:?} minimize {mini:?}"
+    );
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn kick_without_grok_does_not_start_a_run() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("kick-offline");
+    let _restore = GrokPathRestore {
+        path: std::env::var_os("PATH"),
+        grok: std::env::var_os("GROKHUB_GROK"),
+    };
+    let empty = root.join("empty-bin");
+    std::fs::create_dir_all(&empty).unwrap();
+    std::env::set_var("PATH", &empty);
+    std::env::set_var("GROKHUB_GROK", root.join("no-such-grok"));
+    grokhub_acp::invalidate_grok_bin_cache();
+    assert!(
+        grokhub_acp::find_grok().is_none(),
+        "a missing GROKHUB_GROK must hide any grok already on the machine"
+    );
+    let thread = crate::threads::ChatThread::new("Chat", false);
+    cabin.threads = vec![thread];
+    cabin.thread_idx = 0;
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), "hello".into())]);
+    cabin.kick_model(false);
+    assert!(!cabin.running, "no grok binary must not start a run");
+    assert!(
+        cabin.status.contains("Install Grok Build"),
+        "offline kick tells the user to install: {}",
+        cabin.status
+    );
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn kick_imagine_empty_stays_idle_and_no_key_refuses() {
+    const NO_KEY: &str = "Add an xAI console API key in Settings, or run grok login.";
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("imagine-nokey");
+    assert!(
+        cabin.console_key().trim().is_empty(),
+        "no console key"
+    );
+    assert!(
+        grokhub_acp::grok_cli_key()
+            .map(|k| k.trim().is_empty())
+            .unwrap_or(true),
+        "no bearer; this test must not POST"
+    );
+    assert!(cabin.secrets.oauth.is_none(), "no oauth bearer");
+
+    cabin.imagine_prompt.clear();
+    cabin.kick_imagine();
+    assert!(!cabin.running, "an empty prompt must not start Imagine");
+    assert!(cabin.rx.is_none(), "an empty prompt must not spawn a job");
+    assert!(cabin.imagine_error.is_empty());
+
+    cabin.imagine_prompt = "harbor at dusk".into();
+    cabin.kick_imagine();
+    assert!(!cabin.running, "no key must not start Imagine");
+    assert_eq!(cabin.status, NO_KEY);
+    assert_eq!(cabin.imagine_error, NO_KEY);
+    assert!(cabin.rx.is_none(), "no-key refusal must not spawn a job");
+    release_isolated(&root, cabin);
+}
+
+/// Restores `PATH` and `GROKHUB_GROK` after a test that points `find_grok` at a fake.
+struct GrokPathRestore {
+    path: Option<std::ffi::OsString>,
+    grok: Option<std::ffi::OsString>,
+}
+
+impl Drop for GrokPathRestore {
+    fn drop(&mut self) {
+        match self.path.take() {
+            Some(p) => std::env::set_var("PATH", p),
+            None => std::env::remove_var("PATH"),
+        }
+        match self.grok.take() {
+            Some(p) => std::env::set_var("GROKHUB_GROK", p),
+            None => std::env::remove_var("GROKHUB_GROK"),
+        }
+        grokhub_acp::invalidate_grok_bin_cache();
+    }
+}
+
+#[cfg(unix)]
+fn fake_child_still_up(pid: u32, fake: &std::path::Path) -> bool {
+    let Ok(cmd) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
+        return false;
+    };
+    String::from_utf8_lossy(&cmd).contains(&fake.display().to_string())
+}
+
+/// Linux is the reference. Windows `find_grok` only accepts an MZ `grok.exe`, so a shell stub cannot prove the spawn there.
+#[cfg(unix)]
+#[test]
+fn kick_with_fake_grok_runs_the_prompt() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("kick-fake-grok");
+    let prompt = "proof-fake-grok-harbor";
+    let bin_dir = root.join("bin");
+    let argv_path = root.join("argv.txt");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let fake = bin_dir.join("grok");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{}'\nexit 0\n",
+        argv_path.display()
+    );
+    std::fs::write(&fake, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perm = std::fs::metadata(&fake).unwrap().permissions();
+        perm.set_mode(0o755);
+        std::fs::set_permissions(&fake, perm).unwrap();
+    }
+
+    let restore = GrokPathRestore {
+        path: std::env::var_os("PATH"),
+        grok: std::env::var_os("GROKHUB_GROK"),
+    };
+    let mut path = std::ffi::OsString::from(bin_dir.as_os_str());
+    path.push(":");
+    if let Some(old) = restore.path.as_ref() {
+        path.push(old);
+    }
+    std::env::set_var("PATH", &path);
+    std::env::remove_var("GROKHUB_GROK");
+    grokhub_acp::invalidate_grok_bin_cache();
+    assert_eq!(
+        grokhub_acp::find_grok().as_deref(),
+        Some(fake.as_path()),
+        "find_grok must see the fake"
+    );
+
+    cabin.permission_mode = PermissionMode::Auto;
+    cabin.scheduled_perm = true;
+    assert!(
+        cabin.permission_mode.uses_acp(),
+        "Auto keeps an ACP session"
+    );
+    cabin.session_mode = SessionMode::Chat;
+    cabin.cfg.project_dir = root.display().to_string();
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), prompt.into())]);
+    cabin.threads[0].messages = cabin.messages.clone();
+
+    cabin.kick_model(false);
+    assert!(
+        cabin.running,
+        "kick with the fake on PATH should start a run: {}",
+        cabin.status
+    );
+    let child = cabin.grok_p_pid;
+    assert!(child.is_some(), "headless kick should record a pid");
+    assert!(
+        cabin.acp.is_none() && cabin.acp_spawn_rx.is_none(),
+        "a scheduled kick stays on grok -p"
+    );
+
+    let start = std::time::Instant::now();
+    while cabin.running && start.elapsed() < std::time::Duration::from_secs(5) {
+        cabin.poll_single();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    if cabin.running {
+        if let Some(pid) = child {
+            #[cfg(unix)]
+            if fake_child_still_up(pid, &fake) {
+                grokhub_acp::kill_pid(pid);
+            }
+            #[cfg(not(unix))]
+            grokhub_acp::kill_pid(pid);
+        }
+        panic!(
+            "fake grok still running after 5s; status {}",
+            cabin.status
+        );
+    }
+
+    let argv = std::fs::read_to_string(&argv_path).unwrap_or_default();
+    assert!(
+        argv_path.is_file() && (argv.contains("-p") || argv.contains(prompt)),
+        "fake grok argv must contain -p or the prompt: {argv:?} status={}",
+        cabin.status
+    );
+    eprintln!("FAKE_GROK_ARGV_BEGIN\n{argv}FAKE_GROK_ARGV_END");
+    drop(restore);
+    release_isolated(&root, cabin);
+}
+
+// Landed from PR #90.
+#[test]
+fn update_queues_while_a_job_is_running() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("update-queue");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.running = true;
+    cabin.start_overlay_update(vec!["echo grokhub-update-queued".into()]);
+    assert!(matches!(cabin.nav, Nav::Settings));
+    assert_eq!(cabin.settings_sec, SettingsSec::Update);
+    assert_eq!(
+        cabin.status,
+        "Update queued — it starts when this job finishes."
+    );
+    assert_eq!(
+        cabin.queued_overlay,
+        Some(vec!["echo grokhub-update-queued".into()])
+    );
+    assert!(cabin.running);
+    assert!(cabin.rx.is_none(), "a busy cabin must not start the update");
+    drop(cabin);
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #91.
+#[test]
+fn kick_imagine_local_send_stores_harbor_url() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    struct RestoreEnv {
+        config: Option<String>,
+        tray: Option<String>,
+        proxies: Vec<(String, String)>,
+    }
+    impl Drop for RestoreEnv {
+        fn drop(&mut self) {
+            crate::xai::set_imagine_base_override(None);
+            match self.config.take() {
+                Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+                None => std::env::remove_var("GROKHUB_CONFIG"),
+            }
+            match self.tray.take() {
+                Some(v) => std::env::set_var("GROKHUB_TRAY", v),
+                None => std::env::remove_var("GROKHUB_TRAY"),
+            }
+            for (k, v) in self.proxies.drain(..) {
+                std::env::set_var(k, v);
+            }
+        }
+    }
+
+    let _cfg = crate::config::hold_test_config();
+    let mut restore = RestoreEnv {
+        config: std::env::var("GROKHUB_CONFIG").ok(),
+        tray: std::env::var("GROKHUB_TRAY").ok(),
+        proxies: Vec::new(),
+    };
+    for key in [
+        "http_proxy",
+        "https_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "all_proxy",
+        "ALL_PROXY",
+    ] {
+        if let Ok(v) = std::env::var(key) {
+            restore.proxies.push((key.to_string(), v));
+            std::env::remove_var(key);
+        }
+    }
+    let root = crate::config::test_config_root("imagine-local");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_TRAY", "0");
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let origin = format!("http://127.0.0.1:{port}");
+    crate::xai::set_imagine_base_override(Some(&origin));
+
+    let hits: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorded = hits.clone();
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking");
+    std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .expect("timeout");
+                    let mut buf = Vec::new();
+                    let mut tmp = [0u8; 8192];
+                    let header_end = loop {
+                        let n = stream.read(&mut tmp).expect("request headers");
+                        assert!(n > 0, "eof before imagine headers");
+                        buf.extend_from_slice(&tmp[..n]);
+                        if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                            break i + 4;
+                        }
+                        assert!(buf.len() < 1_000_000, "imagine headers too large");
+                    };
+                    let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
+                    let mut len = 0usize;
+                    for line in head.lines() {
+                        if let Some(rest) = line.to_ascii_lowercase().strip_prefix("content-length:")
+                        {
+                            len = rest.trim().parse().expect("content-length");
+                        }
+                    }
+                    while buf.len() < header_end + len {
+                        let n = stream.read(&mut tmp).expect("request body");
+                        assert!(n > 0, "eof before imagine body");
+                        buf.extend_from_slice(&tmp[..n]);
+                    }
+                    let body = String::from_utf8_lossy(&buf[header_end..header_end + len]).to_string();
+                    recorded
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push((head, body));
+                    let json = r#"{"data":[{"url":"http://127.0.0.1/harbor.png"}]}"#;
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{json}",
+                        json.len()
+                    );
+                    stream.write_all(resp.as_bytes()).expect("response");
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => panic!("accept: {e}"),
+            }
+        }
+    });
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.secrets.api_key = "xai-local-console".into();
+    cabin.cfg.api_key.clear();
+    cabin.imagine_prompt = "harbor at dusk".into();
+    assert!(
+        !cabin.running,
+        "imagine send must start from an idle cabin"
+    );
+    cabin.kick_imagine();
+    assert!(
+        cabin.running,
+        "console key and prompt must start the imagine send, status={}",
+        cabin.status
+    );
+
+    let started = Instant::now();
+    while cabin.running && started.elapsed() < Duration::from_secs(8) {
+        cabin.poll_job();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        !cabin.running,
+        "running stayed stuck: status={} err={}",
+        cabin.status, cabin.imagine_error
+    );
+    assert_eq!(
+        cabin.imagine_last, "http://127.0.0.1/harbor.png",
+        "cabin must keep the URL the local server returned, status={} err={}",
+        cabin.status, cabin.imagine_error
+    );
+    assert!(
+        cabin
+            .messages
+            .iter()
+            .any(|(_, text)| text.contains("http://127.0.0.1/harbor.png")),
+        "transcript must keep the image URL: {:?}",
+        cabin.messages
+    );
+
+    let got = hits.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    assert_eq!(got.len(), 1, "expected one imagine POST, got {got:?}");
+    let (head, body) = &got[0];
+    assert!(
+        !head.to_ascii_lowercase().contains("api.x.ai") && !body.contains("api.x.ai"),
+        "request host must not be api.x.ai: {head}"
+    );
+    let host = head
+        .lines()
+        .find(|l| l.to_ascii_lowercase().starts_with("host:"))
+        .unwrap_or("");
+    assert!(
+        host.contains("127.0.0.1"),
+        "POST host must be the local server: {host}"
+    );
+    assert!(
+        head.lines().next().unwrap_or("").starts_with("POST "),
+        "imagine send must POST: {head}"
+    );
+    let json: serde_json::Value = serde_json::from_str(body).expect("json body");
+    assert_eq!(json["model"], "grok-imagine-image-2.0");
+    let prompt = json["prompt"].as_str().unwrap_or("");
+    assert!(
+        prompt.contains("harbor at dusk"),
+        "prompt must include harbor at dusk: {prompt}"
+    );
+    let _ = std::fs::write(
+        "/opt/cursor/artifacts/imagine-local-post.json",
+        body.as_bytes(),
+    );
+    let _ = restore;
+}
+
+// Landed from PR #92.
+/// Isolated cabin. Skips the grok installer and the update probe. Restores env on drop.
+struct QuietCabin {
+    cabin: super::Cabin,
+    boot: QuietBoot,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+struct QuietBoot {
+    root: std::path::PathBuf,
+    prev_config: Option<std::ffi::OsString>,
+    prev_grok: Option<std::ffi::OsString>,
+    prev_quiet: Option<std::ffi::OsString>,
+    prev_tray: Option<std::ffi::OsString>,
+    restored: bool,
+}
+
+impl QuietBoot {
+    fn apply(label: &str) -> Self {
+        let prev_config = std::env::var_os("GROKHUB_CONFIG");
+        let prev_grok = std::env::var_os("GROKHUB_GROK");
+        let prev_quiet = std::env::var_os("GROKHUB_QUIET_BOOT");
+        let prev_tray = std::env::var_os("GROKHUB_TRAY");
+        let root = crate::config::test_config_root(label);
+        let _ = std::fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        std::env::set_var("GROKHUB_GROK", "/no/such/grok-binary-xyz");
+        std::env::set_var("GROKHUB_QUIET_BOOT", "1");
+        std::env::set_var("GROKHUB_TRAY", "0");
+        Self {
+            root,
+            prev_config,
+            prev_grok,
+            prev_quiet,
+            prev_tray,
+            restored: false,
+        }
+    }
+
+    fn restore(&mut self) {
+        if self.restored {
+            return;
+        }
+        self.restored = true;
+        restore_env("GROKHUB_CONFIG", self.prev_config.take());
+        restore_env("GROKHUB_GROK", self.prev_grok.take());
+        restore_env("GROKHUB_QUIET_BOOT", self.prev_quiet.take());
+        restore_env("GROKHUB_TRAY", self.prev_tray.take());
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+fn restore_env(key: &str, prev: Option<std::ffi::OsString>) {
+    match prev {
+        Some(v) => std::env::set_var(key, v),
+        None => std::env::remove_var(key),
+    }
+}
+
+impl Drop for QuietBoot {
+    fn drop(&mut self) {
+        self.restore();
+    }
+}
+
+impl QuietCabin {
+    fn boot(label: &str) -> Self {
+        let lock = crate::config::hold_test_config();
+        let boot = QuietBoot::apply(label);
+        let mut cabin = super::Cabin::quiet_for_test();
+        // `Cabin::new` loaded this isolated config and opened one chat. Keep that
+        // home without the installer, tray, hotkey, or update probe.
+        let mut cfg = crate::config::load();
+        if cfg.device_name.trim().is_empty() {
+            cfg.device_name = crate::config::default_device_name();
+            let _ = crate::config::save(&cfg);
+        }
+        crate::config::ensure_memory_seeds();
+        cabin.mem_name = "SOUL.md".into();
+        cabin.mem_body = crate::config::read_memory(&cabin.mem_name);
+        cabin.mem_cache_at = [crate::config::memory_updated_at("SOUL.md"), 0, 0];
+        cabin.mem_cache_body = [cabin.mem_body.clone(), String::new(), String::new()];
+        let mut threads = crate::threads::load();
+        if threads.is_empty() {
+            let mut thread = crate::threads::ChatThread::new("Chat", false);
+            thread.messages = std::sync::Arc::new(crate::config::load_chat());
+            threads.push(thread);
+        }
+        cabin.messages = threads
+            .first()
+            .map(|t| t.messages.clone())
+            .unwrap_or_else(|| std::sync::Arc::new(Vec::new()));
+        cabin.threads = threads;
+        cabin.thread_idx = 0;
+        cabin.session_mode = grokhub_acp::SessionMode::parse(&cfg.session_mode)
+            .unwrap_or(grokhub_acp::SessionMode::Chat);
+        cabin.permission_mode = grokhub_acp::PermissionMode::parse(&cfg.permission_mode)
+            .unwrap_or(grokhub_acp::PermissionMode::Ask);
+        cabin.cfg = cfg.clone();
+        if let Ok(mut slot) = cabin.cfg_slot.lock() {
+            slot.cfg = cfg;
+        }
+        Self {
+            cabin,
+            boot,
+            _lock: lock,
+        }
+    }
+
+    /// Let background config writes finish before the config dir changes.
+    fn settle(&self) {
+        let io = self.cabin.persist_io.clone();
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        for _ in 0..8 {
+            drop(io.lock().ok());
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+    }
+}
+
+impl Drop for QuietCabin {
+    fn drop(&mut self) {
+        self.settle();
+        // The config lock field is still held until this Drop returns.
+        self.boot.restore();
+    }
+}
+
+#[test]
+fn send_from_composer_runs_help_and_refuses_without_grok() {
+    let mut quiet = QuietCabin::boot("send-help");
+    let cabin = &mut quiet.cabin;
+    cabin.send_from_composer("/help".into());
+    let help = cabin
+        .messages
+        .iter()
+        .find(|m| m.0 == "assistant" && m.1.contains("/help — this list"));
+    assert!(
+        help.is_some(),
+        " /help must land on the open chat, got {:?}",
+        cabin.messages
+    );
+    assert!(
+        !cabin.running,
+        "a local slash must not start a run: {}",
+        cabin.status
+    );
+
+    let before = cabin.messages.len();
+    cabin.send_from_composer("paint the harbor".into());
+    assert!(
+        !cabin.running,
+        "no grok binary must refuse before a run starts"
+    );
+    assert_eq!(
+        cabin.status,
+        "Install Grok Build (x.ai/cli) or Connect Grok in Settings"
+    );
+    assert_eq!(
+        cabin.messages.len(),
+        before,
+        "the refused line must not be written onto the chat"
+    );
+    assert!(
+        cabin
+            .messages
+            .iter()
+            .all(|m| !m.1.contains("paint the harbor")),
+        "the refused prompt must stay off the transcript"
+    );
+    quiet.settle();
+}
+
+#[test]
+fn run_slash_pin_flips_the_pin() {
+    let mut quiet = QuietCabin::boot("slash-pin");
+    let cabin = &mut quiet.cabin;
+    let idx = cabin.thread_idx;
+    let title = cabin.threads[idx].title.clone();
+    assert!(!cabin.threads[idx].pinned);
+    cabin.run_slash(grokhub_core::Slash::Pin);
+    assert!(cabin.threads[idx].pinned, " /pin must pin the open chat");
+    assert!(cabin.threads[idx].pinned_ms > 0);
+    assert_eq!(cabin.status, format!("Pinned {title}"));
+    quiet.settle();
+}
+
+#[test]
+fn pin_thread_flips_the_pin() {
+    let mut quiet = QuietCabin::boot("pin-thread");
+    let cabin = &mut quiet.cabin;
+    let idx = cabin.thread_idx;
+    let title = cabin.threads[idx].title.clone();
+    assert!(!cabin.threads[idx].pinned);
+    cabin.pin_thread(idx);
+    assert!(cabin.threads[idx].pinned, "the pin control must pin this chat");
+    assert!(cabin.threads[idx].pinned_ms > 0);
+    assert_eq!(cabin.status, format!("Pinned {title}"));
+    quiet.settle();
+}
+
+#[test]
+fn apply_board_act_add_files_one_todo() {
+    let mut quiet = QuietCabin::boot("board-add");
+    let cabin = &mut quiet.cabin;
+    assert!(cabin.board.is_empty());
+    cabin.board_title = "Cover the dock".into();
+    cabin.board_notes = "night shift".into();
+    assert!(cabin.apply_board_act(Some(super::pages::BoardAct::Add)));
+    assert_eq!(cabin.board.len(), 1);
+    assert_eq!(cabin.board[0].title, "Cover the dock");
+    assert_eq!(cabin.board[0].detail, "night shift");
+    assert_eq!(cabin.board[0].status, grokhub_core::BoardStatus::Todo);
+    assert_eq!(
+        cabin.board[0].status.column(),
+        Some(grokhub_core::KanbanColumn::Todo)
+    );
+    assert!(cabin.board_title.is_empty());
+    quiet.settle();
+}
+
+fn wait_for(label: &str, mut ready: impl FnMut() -> bool) {
+    for _ in 0..80 {
+        if ready() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    panic!("{label}");
+}
+
+#[test]
+fn apply_plus_ready_image_and_pasted_text() {
+    let mut quiet = QuietCabin::boot("plus-ready");
+    let cabin = &mut quiet.cabin;
+    cabin.apply_plus_ready(
+        grokhub_core::PlusTarget::Chat,
+        super::plus::PlusReady {
+            kind: grokhub_core::AttachKind::Image,
+            name: "harbor.png".into(),
+            raw: "/tmp/harbor.png".into(),
+            image_url: Some("data:image/png;base64,aGFyYm9y".into()),
+            text: None,
+        },
+    );
+    assert_eq!(cabin.attach_name.as_deref(), Some("harbor.png"));
+    assert_eq!(
+        cabin.attach_url.as_deref(),
+        Some("data:image/png;base64,aGFyYm9y")
+    );
+    assert_eq!(
+        cabin.status, "Attached harbor.png — sends with the next message",
+        "an image attach must show the chip status"
+    );
+    assert!(!cabin.running);
+    assert!(cabin.composer.is_empty(), "an image must not dump into the composer");
+
+    cabin.apply_plus_ready(
+        grokhub_core::PlusTarget::Chat,
+        super::plus::PlusReady {
+            kind: grokhub_core::AttachKind::Text,
+            name: "notes.txt".into(),
+            raw: "notes.txt".into(),
+            image_url: None,
+            text: Some("pasted harbor line".into()),
+        },
+    );
+    assert!(
+        cabin.composer.contains("pasted harbor line"),
+        "pasted text must land in the composer, got {}",
+        cabin.composer
+    );
+    assert_eq!(cabin.status, "Pasted notes.txt");
+    assert!(!cabin.running);
+    quiet.settle();
+}
+
+#[test]
+fn run_slash_help_export_and_clear() {
+    let mut quiet = QuietCabin::boot("slash-help-export-clear");
+    let cabin = &mut quiet.cabin;
+    cabin.run_slash(grokhub_core::Slash::Help);
+    assert!(
+        cabin
+            .messages
+            .iter()
+            .any(|m| m.0 == "assistant" && m.1.contains("/help — this list")),
+        " /help must write the help list on the open chat, got {:?}",
+        cabin.messages
+    );
+    assert!(!cabin.running);
+
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), "harbor export line".into())]);
+    cabin.cfg.project_dir.clear();
+    cabin.run_slash(grokhub_core::Slash::Export);
+    let path = cabin
+        .status
+        .strip_prefix("Wrote ")
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        path.ends_with("export.md"),
+        " /export must name export.md, got {}",
+        cabin.status
+    );
+    wait_for("export.md must contain the chat line", || {
+        std::fs::read_to_string(&path)
+            .unwrap_or_default()
+            .contains("harbor export line")
+    });
+
+    cabin.run_slash(grokhub_core::Slash::Clear);
+    assert!(
+        cabin.messages.is_empty(),
+        " /clear must empty the transcript, got {:?}",
+        cabin.messages
+    );
+    assert_eq!(cabin.status, "Cleared");
+    assert!(!cabin.running);
+    quiet.settle();
+}
+
+#[test]
+fn apply_board_act_move_archive_restore_and_link() {
+    let mut quiet = QuietCabin::boot("board-acts");
+    let cabin = &mut quiet.cabin;
+    cabin.board_title = "Move the buoy".into();
+    assert!(cabin.apply_board_act(Some(super::pages::BoardAct::Add)));
+    let id = cabin.board[0].id.clone();
+    let thread = cabin.threads[cabin.thread_idx].id.clone();
+
+    assert!(cabin.apply_board_act(Some(super::pages::BoardAct::Move {
+        id: id.clone(),
+        status: grokhub_core::BoardStatus::InProgress,
+    })));
+    assert_eq!(
+        cabin.board[0].status.column(),
+        Some(grokhub_core::KanbanColumn::Doing)
+    );
+
+    assert!(cabin.apply_board_act(Some(super::pages::BoardAct::Archive(id.clone()))));
+    assert_eq!(cabin.board[0].status, grokhub_core::BoardStatus::Dismissed);
+    assert!(cabin.board[0].status.column().is_none());
+
+    assert!(cabin.apply_board_act(Some(super::pages::BoardAct::Restore(id.clone()))));
+    assert_eq!(
+        cabin.board[0].status.column(),
+        Some(grokhub_core::KanbanColumn::Todo)
+    );
+
+    assert!(cabin.apply_board_act(Some(super::pages::BoardAct::Link(id.clone()))));
+    assert_eq!(cabin.board[0].thread_id.as_deref(), Some(thread.as_str()));
+
+    assert!(cabin.apply_board_act(Some(super::pages::BoardAct::Unlink(id))));
+    assert!(cabin.board[0].thread_id.is_none());
+    quiet.settle();
+}
+
+#[test]
+fn add_automation_seed_daily_clock_and_loop() {
+    let mut quiet = QuietCabin::boot("auto-seed");
+    let root = quiet.boot.root.clone();
+    let cabin = &mut quiet.cabin;
+    cabin.add_automation_seed("every day at 9, summarize the board");
+    assert_eq!(cabin.automations.len(), 1, "a daily clock must land in automations");
+    assert!(
+        cabin.grok_loops.is_empty(),
+        "a clock time must not become a /loop"
+    );
+    assert!(
+        cabin.status.contains("Automation added") && cabin.status.contains("09:00"),
+        "the cabin must show the 09:00 automation, got {}",
+        cabin.status
+    );
+    wait_for("automations.json must record the daily clock", || {
+        std::fs::read_to_string(root.join("automations.json"))
+            .unwrap_or_default()
+            .contains("09")
+    });
+
+    cabin.add_automation_seed("/loop 30m check deploy");
+    assert_eq!(cabin.grok_loops.len(), 1);
+    assert_eq!(cabin.automations.len(), 1, "the clock row must stay");
+    assert!(
+        cabin.status.contains("Loop added") && cabin.status.contains("30m"),
+        " /loop must show the interval, got {}",
+        cabin.status
+    );
+    wait_for("loops.json must record the 30m loop", || {
+        std::fs::read_to_string(root.join("loops.json"))
+            .unwrap_or_default()
+            .contains("30m")
+    });
+    quiet.settle();
+}
+
+#[test]
+fn take_chip_act_nav_and_dismiss() {
+    let mut quiet = QuietCabin::boot("chips");
+    let cabin = &mut quiet.cabin;
+    let nav = grokhub_core::QuickChip {
+        id: "nav-board".into(),
+        label: "Workboard".into(),
+        value: "__nav:workboard".into(),
+        kind: grokhub_core::ChipKind::Nav,
+        score: 1.0,
+        hint: String::new(),
+        primary: false,
+    };
+    assert!(matches!(cabin.nav, super::Nav::Chat));
+    cabin.take_chip_act(crate::cards::ChipRowAct::Apply(0), &[nav]);
+    assert!(matches!(cabin.nav, super::Nav::Workboard));
+
+    let dismiss = grokhub_core::QuickChip {
+        id: "nav-ideas".into(),
+        label: "Ideas".into(),
+        value: "__nav:ideas".into(),
+        kind: grokhub_core::ChipKind::Nav,
+        score: 1.0,
+        hint: String::new(),
+        primary: false,
+    };
+    cabin.chip_busy = true;
+    cabin.take_chip_act(crate::cards::ChipRowAct::Dismiss(0), &[dismiss]);
+    assert!(cabin.chip_dismissed.iter().any(|d| d == "nav-ideas"));
+    assert!(cabin.chip_dismissed.iter().any(|d| d == "__nav:ideas"));
+    assert!(
+        cabin.visible_chips.iter().all(|c| c.id != "nav-ideas"),
+        "dismiss must drop that chip from the row, got {:?}",
+        cabin.visible_chips.iter().map(|c| c.id.as_str()).collect::<Vec<_>>()
+    );
+    assert!(matches!(cabin.nav, super::Nav::Workboard));
+    quiet.settle();
+}
+
+#[test]
+fn open_memory_file_flushes_the_editor_you_left() {
+    let mut quiet = QuietCabin::boot("memory-file");
+    let cabin = &mut quiet.cabin;
+    assert_eq!(cabin.mem_name, "SOUL.md");
+    cabin.mem_body = "typed soul line for the switch".into();
+    cabin.open_memory_file("USER.md");
+    assert_eq!(cabin.mem_name, "USER.md");
+    assert!(
+        cabin.mem_body.contains("Who you are"),
+        "the next file must show in the editor, got {}",
+        cabin.mem_body
+    );
+    assert!(
+        !cabin.mem_body.contains("typed soul line"),
+        "switching tabs must not wipe the unsaved line into the next file"
+    );
+    wait_for("leaving SOUL must flush the unsaved typing", || {
+        crate::config::read_memory("SOUL.md").contains("typed soul line for the switch")
+    });
+    assert_eq!(cabin.mem_name, "USER.md");
+    quiet.settle();
+}
+
+#[test]
+fn set_session_mode_ask_and_chat() {
+    let mut quiet = QuietCabin::boot("session-mode");
+    quiet.settle();
+    let app_json = quiet.boot.root.join("app.json");
+    let cabin = &mut quiet.cabin;
+    cabin.set_session_mode(grokhub_acp::SessionMode::Ask);
+    assert_eq!(cabin.session_mode, grokhub_acp::SessionMode::Ask);
+    assert_eq!(cabin.cfg.session_mode, "ask");
+    wait_for("Ask must be saved", || {
+        std::fs::read_to_string(&app_json)
+            .unwrap_or_default()
+            .contains("\"sessionMode\": \"ask\"")
+    });
+
+    cabin.set_session_mode(grokhub_acp::SessionMode::Chat);
+    assert_eq!(cabin.session_mode, grokhub_acp::SessionMode::Chat);
+    assert_eq!(cabin.cfg.session_mode, "chat");
+    wait_for("Chat must be saved", || {
+        std::fs::read_to_string(&app_json)
+            .unwrap_or_default()
+            .contains("\"sessionMode\": \"chat\"")
+    });
+    quiet.settle();
+}
+
+#[test]
+fn delete_thread_at_removes_that_row() {
+    let mut quiet = QuietCabin::boot("delete-thread");
+    let cabin = &mut quiet.cabin;
+    let keep = cabin.threads[cabin.thread_idx].title.clone();
+    cabin.threads.push(crate::threads::ChatThread::new("Harbor", false));
+    let idx = cabin.threads.len() - 1;
+    cabin.threads[idx].messages =
+        std::sync::Arc::new(vec![("user".into(), "harbor row".into())]);
+    cabin.delete_thread_at(idx);
+    assert!(
+        cabin.threads.iter().all(|t| t.title != "Harbor"),
+        "deleting that chat must remove its sidebar row, left {:?}",
+        cabin.threads.iter().map(|t| t.title.as_str()).collect::<Vec<_>>()
+    );
+    assert!(cabin.threads.iter().any(|t| t.title == keep));
+    assert_eq!(cabin.status, "Deleted Harbor");
+    quiet.settle();
+}
+
+#[test]
+fn discuss_card_opens_one_local_chat() {
+    let mut quiet = QuietCabin::boot("discuss");
+    let root = quiet.boot.root.clone();
+    let cabin = &mut quiet.cabin;
+    cabin.updates.push(grokhub_core::UpdateCard {
+        id: "idea-harbor".into(),
+        kind: grokhub_core::UpdateKind::Idea,
+        title: "Cover F1".into(),
+        body: Some("the night race".into()),
+        created_at: 1,
+        status: grokhub_core::UpdateStatus::Unread,
+        action: None,
+        expires_at: None,
+        held: false,
+        citations: Vec::new(),
+        reaction: None,
+        discuss_thread: None,
+        built: false,
+        board_id: None,
+        why: Some("because the tide turned".into()),
+    });
+    cabin.discuss_card("idea-harbor");
+    assert!(matches!(cabin.nav, super::Nav::Chat));
+    let open = &cabin.threads[cabin.thread_idx];
+    assert_eq!(open.title, "Discuss · Cover F1");
+    assert_eq!(
+        cabin
+            .threads
+            .iter()
+            .filter(|t| t.title == "Discuss · Cover F1")
+            .count(),
+        1
+    );
+    let body = cabin
+        .messages
+        .iter()
+        .find(|m| m.0 == "assistant")
+        .map(|m| m.1.as_str())
+        .unwrap_or("");
+    assert!(
+        body.contains("Post: Cover F1")
+            && body.contains("the night race")
+            && body.contains("Why: because the tide turned"),
+        "Discuss must open the card context on that chat, got {body}"
+    );
+    assert_eq!(cabin.updates[0].status, grokhub_core::UpdateStatus::Opened);
+    assert!(cabin.updates[0].discuss_thread.is_some());
+    assert!(!cabin.running);
+    wait_for("the discuss card must be saved opened", || {
+        std::fs::read_to_string(root.join("updates.json"))
+            .unwrap_or_default()
+            .contains("idea-harbor")
+    });
+    quiet.settle();
+}
+
+#[test]
+fn clear_profile_picture_removes_the_saved_picture() {
+    let mut quiet = QuietCabin::boot("clear-picture");
+    let dest = quiet.boot.root.join("profile.png");
+    let cabin = &mut quiet.cabin;
+    std::fs::write(&dest, b"not-a-real-png").expect("picture");
+    cabin.cfg.profile_picture = dest.display().to_string();
+    cabin.clear_profile_picture();
+    assert!(cabin.cfg.profile_picture.is_empty());
+    assert_eq!(cabin.status, "Saved");
+    assert!(cabin.profile_photo.is_none());
+    wait_for("Remove must delete profile.png", || !dest.exists());
+    quiet.settle();
+}
+
+// Landed from PR #93.
+struct IsolatedConfig {
+    prev: Option<std::ffi::OsString>,
+    root: std::path::PathBuf,
+}
+
+impl IsolatedConfig {
+    fn arm(label: &str) -> Self {
+        let root = crate::config::test_config_root(label);
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("config root");
+        let prev = std::env::var_os("GROKHUB_CONFIG");
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        Self { prev, root }
+    }
+}
+
+impl Drop for IsolatedConfig {
+    fn drop(&mut self) {
+        match self.prev.take() {
+            Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+            None => std::env::remove_var("GROKHUB_CONFIG"),
+        }
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+struct HideGrok {
+    path: Option<std::ffi::OsString>,
+    grok: Option<std::ffi::OsString>,
+}
+
+impl HideGrok {
+    fn arm() -> Self {
+        let path = std::env::var_os("PATH");
+        let grok = std::env::var_os("GROKHUB_GROK");
+        std::env::set_var("PATH", "");
+        std::env::set_var("GROKHUB_GROK", "/no/such/grok-binary-for-delete-all");
+        grokhub_acp::invalidate_grok_bin_cache();
+        Self { path, grok }
+    }
+}
+
+impl Drop for HideGrok {
+    fn drop(&mut self) {
+        match self.path.take() {
+            Some(v) => std::env::set_var("PATH", v),
+            None => std::env::remove_var("PATH"),
+        }
+        match self.grok.take() {
+            Some(v) => std::env::set_var("GROKHUB_GROK", v),
+            None => std::env::remove_var("GROKHUB_GROK"),
+        }
+        grokhub_acp::invalidate_grok_bin_cache();
+    }
+}
+
+fn wait_file_has(path: &std::path::Path, needle: &str) -> String {
+    let start = std::time::Instant::now();
+    loop {
+        if let Ok(body) = std::fs::read_to_string(path) {
+            if body.contains(needle) {
+                return body;
+            }
+        }
+        if start.elapsed() > std::time::Duration::from_secs(5) {
+            panic!("{} never contained {needle}", path.display());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(15));
+    }
+}
+
+fn wait_tree_contains(root: &std::path::Path, needle: &str) {
+    let start = std::time::Instant::now();
+    loop {
+        if let Ok(rd) = std::fs::read_dir(root) {
+            for ent in rd.filter_map(|e| e.ok()) {
+                let path = ent.path();
+                if !path.is_file() {
+                    continue;
+                }
+                if std::fs::read_to_string(&path)
+                    .ok()
+                    .is_some_and(|body| body.contains(needle))
+                {
+                    return;
+                }
+            }
+        }
+        if start.elapsed() > std::time::Duration::from_secs(5) {
+            panic!("{} never contained {needle}", root.display());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(15));
+    }
+}
+
+fn join_persist(io: &std::sync::Arc<std::sync::Mutex<()>>) {
+    drop(io.lock().unwrap_or_else(|e| e.into_inner()));
+}
+
+#[test]
+fn make_folder_saves_harbor_notes() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("make-folder");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.make_folder("Harbor notes");
+    let saved = wait_file_has(&crate::store::projects_path(), "Harbor notes");
+    join_persist(&cabin.persist_io);
+    let folders: Vec<_> = cabin
+        .projects
+        .iter()
+        .filter(|n| n.kind == ProjectKind::Folder && n.name == "Harbor notes")
+        .collect();
+    assert_eq!(folders.len(), 1, "one folder row named Harbor notes");
+    assert!(
+        cabin.status.starts_with("Folder "),
+        "status {status}",
+        status = cabin.status
+    );
+    assert!(
+        saved.contains("Harbor notes"),
+        "projects file must contain the folder name"
+    );
+    drop(cfg);
+}
+
+#[test]
+fn delete_all_history_clears_seeded_chats() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("delete-all");
+    let hide = HideGrok::arm();
+    assert!(
+        grokhub_acp::find_grok().is_none(),
+        "hidden grok must not resolve to a binary"
+    );
+    let mut cabin = Cabin::quiet_for_test();
+    let mut pier = crate::threads::ChatThread::new("Pier light", false);
+    pier.messages_mut()
+        .push(("user".into(), "bring the lamp".into()));
+    let mut salt = crate::threads::ChatThread::new("Salt lane", false);
+    salt.messages_mut()
+        .push(("user".into(), "walk the lane".into()));
+    cabin.threads = vec![pier, salt];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.delete_all_history();
+    let listed = cabin
+        .grok_sessions_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("delete-all session sweep");
+    assert!(
+        matches!(listed, GrokSessMsg::Listed { error: None, .. }),
+        "hidden grok must not report a delete error"
+    );
+    wait_tree_contains(&cfg.root, "Chat");
+    join_persist(&cabin.persist_io);
+    assert!(
+        cabin.threads.iter().all(|t| t.title != "Pier light"),
+        "Pier light must be gone"
+    );
+    assert!(
+        cabin.threads.iter().all(|t| t.title != "Salt lane"),
+        "Salt lane must be gone"
+    );
+    assert_eq!(cabin.status, "Deleted all chats");
+    assert_eq!(cabin.threads.len(), 1, "the fresh chat is the only row");
+    assert_eq!(cabin.threads[0].title, "Chat");
+    assert!(
+        cabin.threads[0].messages.is_empty(),
+        "the fresh chat has no transcript"
+    );
+    drop(hide);
+    drop(cfg);
+}
+
+#[test]
+fn react_card_keeps_the_reaction() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("react-card");
+    let mut cabin = Cabin::quiet_for_test();
+    let card = grokhub_core::idea_card("harbor", "Harbor lamp", "fold the charts", 1);
+    let id = card.id.clone();
+    assert!(card.reaction.is_none());
+    cabin.updates.push(card);
+    cabin.react_card(&id, grokhub_core::CardReaction::Up);
+    wait_tree_contains(&cfg.root, "Harbor lamp");
+    let stuck = cabin
+        .updates
+        .iter()
+        .find(|c| c.id == id)
+        .expect("reaction card");
+    assert_eq!(stuck.reaction, Some(grokhub_core::CardReaction::Up));
+    assert_eq!(stuck.kind, grokhub_core::UpdateKind::Idea);
+    drop(cfg);
+}
+
+#[test]
+fn archive_feed_digest_drops_the_digest() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("archive-digest");
+    let mut cabin = Cabin::quiet_for_test();
+    let card = grokhub_core::digest_card("week", "Week notes", "rolled up", 2);
+    let id = card.id.clone();
+    cabin.updates.push(card);
+    assert!(
+        grokhub_core::visible_digests(&cabin.updates)
+            .iter()
+            .any(|c| c.id == id),
+        "the digest starts on the live feed"
+    );
+    cabin.archive_feed_digest(&id);
+    wait_tree_contains(&cfg.root, "Week notes");
+    assert!(
+        grokhub_core::visible_digests(&cabin.updates)
+            .iter()
+            .all(|c| c.id != id),
+        "archive drops the digest from the live feed"
+    );
+    assert!(
+        grokhub_core::archived_digests(&cabin.updates)
+            .iter()
+            .any(|c| c.id == id),
+        "the dropped digest is the archived row"
+    );
+    assert_eq!(
+        cabin.updates.iter().find(|c| c.id == id).map(|c| c.status),
+        Some(grokhub_core::UpdateStatus::Dismissed)
+    );
+    drop(cfg);
+}
+
+// Landed from PR #94.
+#[test]
+fn rename_thread_sets_locked_title() {
+    let _g = config::hold_test_config();
+    let root = config::test_config_root("rename-thread");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads.push(ChatThread::new("Chat", false));
+    cabin.rename_thread(0, "Harbor watch");
+    assert_eq!(cabin.threads[0].title, "Harbor watch");
+    assert!(cabin.threads[0].title_locked);
+    assert_eq!(cabin.status, "Renamed Harbor watch");
+    let _io = cabin.persist_io.lock().unwrap_or_else(|e| e.into_inner());
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #95.
+#[test]
+fn command_palette_opens_and_navigates() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.open_palette();
+    assert!(cabin.palette_open);
+    assert!(cabin.palette_q.is_empty());
+    cabin.run_palette("nav:board");
+    assert!(matches!(cabin.nav, Nav::Workboard));
+    assert!(!cabin.palette_open);
+    cabin.open_palette();
+    cabin.run_palette("nav:history");
+    assert!(matches!(cabin.nav, Nav::History));
+}
+
+// Landed from PR #96.
+#[test]
+fn teach_watched_routine_saves_a_daily_job_and_rejects_a_plain_line() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.teach_nl = "every day at 9, summarize the board".into();
+    cabin.teach_watched_routine();
+    assert!(
+        cabin.status.contains("added"),
+        "status should record the saved job: {}",
+        cabin.status
+    );
+    assert!(
+        cabin.status.contains("09:00"),
+        "status should name the clock time: {}",
+        cabin.status
+    );
+    assert!(cabin.teach_nl.is_empty());
+
+    cabin.teach_nl = "hello".into();
+    cabin.teach_watched_routine();
+    assert_eq!(
+        cabin.status,
+        "A job is saved only when you ask to schedule it."
+    );
+}
+
+// Landed from PR #97.
+#[test]
+fn remove_project_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("remove-project");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.remove_project_id("missing");
+    assert_eq!(cabin.status, "Project not found");
+    assert!(cabin.projects.is_empty());
+    assert!(!cabin.running);
+
+    cabin.projects = vec![
+        ProjectNode {
+            id: "f1".into(),
+            name: "Notes".into(),
+            kind: ProjectKind::Folder,
+            path: String::new(),
+            parent: None,
+            open: true,
+        },
+        ProjectNode {
+            id: "p1".into(),
+            name: "Harbor".into(),
+            kind: ProjectKind::Project,
+            path: String::new(),
+            parent: None,
+            open: true,
+        },
+    ];
+    cabin.project_sel = Some("p1".into());
+    assert!(cabin.cfg.project_dir.is_empty());
+
+    cabin.remove_project_id("p1");
+    assert_eq!(cabin.status, "Removed Harbor");
+    assert_eq!(cabin.projects.len(), 1);
+    assert_eq!(cabin.projects[0].id, "f1");
+    assert_eq!(cabin.projects[0].name, "Notes");
+    assert!(matches!(cabin.projects[0].kind, ProjectKind::Folder));
+    assert!(cabin.project_sel.is_none());
+    assert!(cabin.cfg.project_dir.is_empty());
+    assert!(!cabin.running);
+}
+
+// Landed from PR #98.
+#[test]
+fn rename_folder_and_move_project_into_folder() {
+    let mut app = Cabin::quiet_for_test();
+    app.make_folder("Harbor notes");
+    let harbor_id = app
+        .projects
+        .iter()
+        .find(|n| n.name == "Harbor notes")
+        .expect("Harbor notes")
+        .id
+        .clone();
+    app.begin_proj_rename(harbor_id.clone(), "Dock notes".to_string());
+    app.finish_proj_rename();
+    let renamed = app
+        .projects
+        .iter()
+        .find(|n| n.id == harbor_id)
+        .expect("renamed folder");
+    assert_eq!(renamed.name, "Dock notes");
+    assert_eq!(app.status, "Renamed Dock notes");
+
+    app.move_sel_to_folder_name("Lab");
+    assert_eq!(app.status, "Select a project first");
+
+    app.make_folder("Lab");
+    app.make_project("Pier", None);
+    let lab_id = app
+        .projects
+        .iter()
+        .find(|n| n.name == "Lab")
+        .expect("Lab")
+        .id
+        .clone();
+    let pier_id = app
+        .projects
+        .iter()
+        .find(|n| n.name == "Pier")
+        .expect("Pier")
+        .id
+        .clone();
+    app.project_sel = Some(pier_id.clone());
+    app.move_sel_to_folder_name("Lab");
+    assert_eq!(app.status, "Added to Lab");
+    let lab_open = app
+        .projects
+        .iter()
+        .find(|n| n.id == lab_id)
+        .expect("Lab")
+        .open;
+    assert!(lab_open);
+    let pier_parent = app
+        .projects
+        .iter()
+        .find(|n| n.id == pier_id)
+        .expect("Pier")
+        .parent
+        .clone();
+    assert_eq!(pier_parent.as_deref(), Some(lab_id.as_str()));
+}
+
+// Landed from PR #99.
+#[test]
+fn clear_chat_attach_clears_name_url_and_status() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.attach_name = Some("harbor.png".into());
+    cabin.attach_url = Some("file://harbor.png".into());
+    cabin.status = "Attached harbor.png".into();
+    cabin.clear_chat_attach();
+    assert!(cabin.attach_name.is_none());
+    assert!(cabin.attach_url.is_none());
+    assert!(cabin.status.is_empty());
+}
+
+// Landed from PR #100.
+#[test]
+fn sign_out_oauth_clears_the_session() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("sign-out");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.imagine_pending = true;
+    cabin.sign_out_oauth();
+    assert_eq!(cabin.status, "Signed out");
+    assert!(cabin.secrets.oauth.is_none());
+    assert!(!cabin.imagine_pending);
+    assert!(cabin.oauth_pending.is_none());
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #101.
+#[test]
+fn new_thread_opens_another_chat_when_the_current_one_has_a_message() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("new-chat");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.threads.push(crate::threads::ChatThread::new("Harbor", false));
+        cabin.thread_idx = 0;
+    }
+    let line = std::sync::Arc::new(vec![("user".into(), "paint the harbor".into())]);
+    for t in &mut cabin.threads {
+        t.messages = line.clone();
+    }
+    cabin.messages = line;
+    let before = cabin.threads.len();
+    cabin.new_thread(false);
+    assert_eq!(cabin.threads.len(), before + 1);
+    assert_eq!(cabin.status, "New chat");
+    assert!(cabin.messages.is_empty());
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Chat");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #102.
+#[test]
+fn open_history_hit_opens_pier_and_a_memory_file() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("history-open");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads.clear();
+    let mut harbor = crate::threads::ChatThread::new("Harbor", false);
+    let mut pier = crate::threads::ChatThread::new("Pier", false);
+    let line = std::sync::Arc::new(vec![("user".into(), "paint the harbor".into())]);
+    harbor.messages = line.clone();
+    pier.messages = line.clone();
+    let pier_id = pier.id.clone();
+    cabin.threads.push(harbor);
+    cabin.threads.push(pier);
+    cabin.thread_idx = 0;
+    cabin.messages = line;
+    cabin.open_history_hit(&format!("thread:{pier_id}"));
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Pier");
+    assert!(matches!(cabin.nav, Nav::Chat));
+    cabin.open_history_hit("thread:missing");
+    assert_eq!(cabin.status, "That chat is gone");
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Pier");
+    cabin.open_history_hit("mem:USER.md");
+    assert!(matches!(cabin.nav, Nav::Memory));
+    assert_eq!(cabin.status, "USER.md");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #103.
+#[test]
+fn set_permission_mode_saves_auto_and_always() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("permission-mode");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.set_permission_mode(PermissionMode::Auto);
+    assert_eq!(cabin.permission_mode, PermissionMode::Auto);
+    assert_eq!(cabin.cfg.permission_mode, "auto");
+    cabin.set_permission_mode(PermissionMode::AlwaysApprove);
+    assert_eq!(cabin.permission_mode, PermissionMode::AlwaysApprove);
+    assert_eq!(cabin.cfg.permission_mode, "ask");
+    cabin.set_permission_mode(PermissionMode::Ask);
+    assert_eq!(cabin.permission_mode, PermissionMode::Ask);
+    assert_eq!(cabin.cfg.permission_mode, "ask");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn halt_work_stops_a_running_turn() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("halt-work");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.running = true;
+    cabin.imagine_pending = true;
+    cabin.halt_work("Stopped");
+    assert!(!cabin.running);
+    assert!(!cabin.imagine_pending);
+    assert_eq!(cabin.status, "Stopped");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #104.
+#[test]
+fn save_settings_stores_quiet_hours_and_clears_the_key() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("save-settings");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.api_key = "secret-key".into();
+    cabin.quiet_start_buf = "22:00".into();
+    cabin.quiet_end_buf = "07:00".into();
+    cabin.cap_auto_buf = "12".into();
+    cabin.cap_host_buf = "4".into();
+    cabin.save_settings();
+    assert_eq!(cabin.status, "Saved");
+    assert!(cabin.cfg.api_key.is_empty());
+    assert_eq!(cabin.cfg.quiet_start, "22:00");
+    assert_eq!(cabin.cfg.quiet_end, "07:00");
+    assert_eq!(cabin.cfg.daily_auto_cap, 12);
+    assert_eq!(cabin.cfg.host_hour_cap, 4);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #105.
+#[test]
+fn effort_slash_sets_extra_high_and_rejects_a_bad_level() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("effort-slash");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/effort xhigh");
+    assert_eq!(cabin.cfg.reasoning_effort, "xhigh");
+    assert_eq!(cabin.status, "Effort Extra High");
+    cabin.run_slash_line("/effort banana");
+    assert_eq!(cabin.status, "Effort: none | minimal | low | medium | high | xhigh");
+    assert_eq!(cabin.cfg.reasoning_effort, "xhigh");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #106.
+#[test]
+fn health_slash_opens_about_and_writes_the_doctor_line() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("health-slash");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/health");
+    assert!(matches!(cabin.nav, Nav::Settings));
+    assert!(matches!(cabin.settings_sec, SettingsSec::About));
+    assert_eq!(cabin.status, cabin.doctor_text());
+    assert!(cabin.status.contains("ok ") || cabin.status.contains("ERR "));
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #107.
+#[test]
+fn undo_retry_and_context_on_an_empty_chat() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("undo-retry");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.messages = std::sync::Arc::new(Vec::new());
+    if let Some(t) = cabin.threads.get_mut(cabin.thread_idx) {
+        t.messages = cabin.messages.clone();
+    }
+    cabin.run_slash_line("/undo");
+    assert_eq!(cabin.status, "Nothing to undo");
+    assert!(!cabin.running);
+    cabin.run_slash_line("/retry");
+    assert_eq!(cabin.status, "Nothing to retry");
+    assert!(!cabin.running);
+    cabin.run_slash_line("/context");
+    assert_eq!(cabin.status, "0 turns · 0 tokens · 0% · pin none");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #108.
+#[test]
+fn mode_slash_sets_think_and_auto() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("mode-slash");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.model.clear();
+    cabin.run_slash_line("/mode think");
+    assert_eq!(cabin.cfg.mode, "think");
+    assert_eq!(cabin.status, "Mode think → grok-4.7 · high");
+    cabin.cfg.model.clear();
+    cabin.run_slash_line("/mode auto");
+    assert_eq!(cabin.cfg.mode, "auto");
+    assert_eq!(cabin.status, "Mode auto — routes Fast / Balance / Think / Max");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #109.
+#[test]
+fn usage_and_host_slashes_set_status_without_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("usage-host");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/usage");
+    assert!(cabin.status.starts_with("today "));
+    assert!(cabin.status.contains(" · chat "));
+    assert!(cabin.status.contains(" · imagine "));
+    assert!(cabin.inspect_rx.is_none());
+    assert!(!cabin.running);
+    cabin.run_slash_line("/host");
+    assert_eq!(cabin.status, crate::build_agent::grok_banner());
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #110.
+#[test]
+fn board_slash_opens_the_workboard_and_scratch_blocks_memory() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("board-scratch");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.board.clear();
+    cabin.run_slash_line("/board");
+    assert!(matches!(cabin.nav, Nav::Workboard));
+    assert_eq!(cabin.status, "0 cards");
+    cabin.threads = vec![crate::threads::ChatThread::new("Scratch", true)];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.run_slash_line("/remember harbor note");
+    assert_eq!(cabin.status, "Scratch — no memory writes");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #112.
+#[test]
+fn fix_opens_about_and_dream_refuses_without_login() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("fix-dream");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("HOME", &root);
+    std::env::set_var("GROKHUB_GROK", "/tmp/grokhub-no-such-grok");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.api_key.clear();
+    cabin.running = true;
+    cabin.imagine_pending = true;
+    cabin.run_slash_line("/fix");
+    assert!(matches!(cabin.nav, Nav::Settings));
+    assert!(matches!(cabin.settings_sec, SettingsSec::About));
+    assert!(!cabin.running, "fix must halt a live job");
+    assert!(!cabin.imagine_pending, "fix must clear a pending imagine");
+    assert_eq!(cabin.status, cabin.doctor_text());
+    assert!(!cabin.llm_ready(), "this test must have no key and no grok binary");
+    cabin.run_slash_line("/dream");
+    assert_eq!(
+        cabin.status,
+        "Run grok login, or Connect Grok in Settings."
+    );
+    assert!(matches!(cabin.nav, Nav::Settings));
+    assert!(!cabin.imagine_want_focus);
+    std::env::remove_var("GROKHUB_CONFIG");
+    std::env::remove_var("GROKHUB_GROK");
+}
+
+// Landed from PR #113.
+#[test]
+fn remember_appends_memory_and_refuses_a_secret() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("remember-write");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.mem_name = "MEMORY.md".into();
+    cabin.mem_body.clear();
+    cabin.run_slash_line("/remember harbor light");
+    assert_eq!(cabin.status, "Wrote MEMORY.md");
+    assert!(
+        cabin.mem_body.contains("harbor light"),
+        "memory body was {}",
+        cabin.mem_body
+    );
+    let before = cabin.mem_body.clone();
+    cabin.run_slash_line("/remember sk-abcdefghijklmnopqrst");
+    assert_eq!(cabin.status, "Secrets never in markdown");
+    assert_eq!(cabin.mem_body, before);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #114.
+#[test]
+fn memory_goal_model_loop_forget_and_empty_imagine() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("memory-goal");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.mem_name = "MEMORY.md".into();
+    cabin.mem_body = "harbor light\nkeep the dock\n".into();
+    cabin.run_slash_line("/memory");
+    assert!(matches!(cabin.nav, Nav::Memory));
+    assert_eq!(cabin.status, "Memory");
+    cabin.run_slash_line("/goal migrate auth");
+    assert_eq!(cabin.cfg.goal_pin, "migrate auth");
+    assert_eq!(cabin.status, "Goal: migrate auth");
+    cabin.run_slash_line("/goal");
+    assert_eq!(cabin.status, "Goal: migrate auth");
+    cabin.run_slash_line("/goal clear");
+    assert!(cabin.cfg.goal_pin.is_empty());
+    assert_eq!(cabin.status, "Goal cleared");
+    cabin.run_slash_line("/model grok-4.7");
+    assert_eq!(cabin.cfg.model, "grok-4.7");
+    assert_eq!(cabin.status, "grok --model grok-4.7");
+    cabin.run_slash_line("/loop");
+    assert!(matches!(cabin.nav, Nav::Night));
+    assert!(cabin.auto_compose);
+    cabin.run_slash_line("/forget harbor");
+    assert_eq!(cabin.status, "Forgot harbor");
+    assert!(!cabin.mem_body.to_ascii_lowercase().contains("harbor"));
+    assert!(cabin.mem_body.contains("keep the dock"));
+    cabin.run_slash_line("/forget");
+    assert_eq!(cabin.status, "Forgot MEMORY.md");
+    assert!(cabin.mem_body.is_empty());
+    cabin.imagine_prompt.clear();
+    cabin.run_slash_line("/imagine");
+    assert!(matches!(cabin.nav, Nav::Imagine));
+    assert!(cabin.imagine_want_focus);
+    assert!(!cabin.running);
+    assert!(!cabin.imagine_pending);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #115.
+#[test]
+fn skill_hub_help_and_clear() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("skill-hub");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.hub_on = false;
+    cabin.skill_list.clear();
+    cabin.run_slash_line("/skill missing-harbor");
+    assert_eq!(cabin.status, "No skill missing-harbor");
+    assert!(matches!(cabin.nav, Nav::Chat) || !matches!(cabin.nav, Nav::Devices));
+    cabin.run_slash_line("/hub");
+    assert!(matches!(cabin.nav, Nav::Devices));
+    assert_eq!(cabin.status, "Start share on Devices");
+    assert!(!cabin.hub_on);
+    cabin.run_slash_line("/help");
+    assert!(
+        cabin
+            .messages
+            .iter()
+            .any(|m| m.0 == "assistant" && m.1.contains("/clear")),
+        "help did not land on the transcript"
+    );
+    cabin.running = true;
+    cabin.imagine_pending = true;
+    cabin.live_mut().push(("user".into(), "harbor".into()));
+    cabin.run_slash_line("/clear");
+    assert!(!cabin.running, "clear must halt a live job");
+    assert!(!cabin.imagine_pending);
+    assert!(cabin.messages.is_empty());
+    assert_eq!(cabin.status, "Cleared");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #116.
+#[test]
+fn rename_pin_and_delete_the_open_chat() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("rename-pin");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/scratch");
+    assert_eq!(cabin.threads.len(), 1);
+    cabin.run_slash_line("/rename Harbor");
+    assert_eq!(cabin.status, "Renamed Harbor");
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Harbor");
+    assert!(cabin.threads[cabin.thread_idx].title_locked);
+    cabin.run_slash_line("/pin");
+    assert_eq!(cabin.status, "Pinned Harbor");
+    assert!(cabin.threads[cabin.thread_idx].pinned);
+    cabin.run_slash_line("/pin");
+    assert_eq!(cabin.status, "Unpinned Harbor");
+    assert!(!cabin.threads[cabin.thread_idx].pinned);
+    cabin.run_slash_line("/delete");
+    assert_eq!(cabin.status, "Chat deleted");
+    assert_eq!(cabin.threads.len(), 1);
+    assert_eq!(cabin.threads[0].title, "Chat");
+    assert!(!cabin.threads[0].scratch);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #117.
+#[test]
+fn export_writes_a_chat_and_empty_video_does_not_send() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("export-video");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/scratch");
+    cabin.cfg.project_dir.clear();
+    cabin.run_slash_line("/export");
+    assert!(
+        cabin.status.starts_with("Wrote ") && cabin.status.ends_with("export.md"),
+        "export status was {}",
+        cabin.status
+    );
+    cabin.imagine_prompt.clear();
+    cabin.run_slash_line("/imagine-video");
+    assert!(matches!(cabin.nav, Nav::Imagine));
+    assert!(matches!(cabin.imagine_kind, grokhub_core::ImagineKind::Video));
+    assert!(cabin.imagine_want_focus);
+    assert!(cabin.imagine_prompt.is_empty());
+    assert!(!cabin.running);
+    assert!(!cabin.imagine_pending);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #118.
+#[test]
+fn voice_without_login_stays_off_and_profile_clears() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("voice-profile");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let old_path = std::env::var_os("PATH");
+    std::env::set_var("PATH", "");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.api_key.clear();
+    cabin.listen_voice();
+    assert_eq!(cabin.status, "Connect Grok OAuth for STT/TTS.");
+    assert!(!cabin.running, "voice must not start a listen job");
+    cabin.cfg.profile_picture = "harbor.png".into();
+    cabin.clear_profile_picture();
+    assert!(cabin.cfg.profile_picture.is_empty());
+    assert_eq!(cabin.status, "Saved");
+    match old_path {
+        Some(p) => std::env::set_var("PATH", p),
+        None => std::env::remove_var("PATH"),
+    }
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #119.
+#[test]
+fn scratch_btw_worktree_plan_and_fork() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("scratch-btw");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.running = false;
+    cabin.run_slash_line("/view-plan");
+    assert_eq!(cabin.status, "No plan yet — use Plan mode");
+    assert!(!cabin.plan_open);
+    cabin.run_slash_line("/btw");
+    assert!(matches!(cabin.session_mode, SessionMode::Ask));
+    assert_eq!(cabin.cfg.session_mode, "ask");
+    assert_eq!(cabin.status, "btw — look-safe side ask");
+    cabin.run_slash_line("/scratch");
+    assert_eq!(cabin.status, "Scratch — no memory writes");
+    assert!(cabin.scratch());
+    assert!(cabin.composer_want_focus);
+    cabin.run_slash_line("/worktree");
+    assert_eq!(cabin.status, "Next chat uses --worktree");
+    assert!(cabin.threads[cabin.thread_idx].grok_worktree);
+    cabin.run_slash_line("/worktree");
+    assert_eq!(cabin.status, "Worktree off");
+    assert!(!cabin.threads[cabin.thread_idx].grok_worktree);
+    cabin.threads[cabin.thread_idx].grok_session = Some("sess-harbor".into());
+    cabin.run_slash_line("/fork");
+    assert_eq!(
+        cabin.status,
+        "Forked — next send starts a new Grok session from this history"
+    );
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Fork");
+    assert!(cabin.threads[cabin.thread_idx].grok_fork);
+    assert_eq!(
+        cabin.threads[cabin.thread_idx].grok_session.as_deref(),
+        Some("sess-harbor")
+    );
+    cabin.threads[cabin.thread_idx].plan_body = "harbor steps".into();
+    cabin.run_slash_line("/view-plan");
+    assert!(cabin.plan_open);
+    assert_eq!(cabin.status, "View plan");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #120.
+#[test]
+fn import_without_openclaw_and_consult_without_login() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("import-consult");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("HOME", &root);
+    std::env::set_var("GROKHUB_GROK", "/tmp/grokhub-no-such-grok");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.api_key.clear();
+    cabin.run_slash_line("/import");
+    assert_eq!(cabin.status, "Importing OpenClaw…");
+    let start = std::time::Instant::now();
+    while cabin.status == "Importing OpenClaw…"
+        && start.elapsed() < std::time::Duration::from_secs(2)
+    {
+        cabin.poll_import_openclaw();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(
+        cabin.status,
+        "No OpenClaw workspace (~/.openclaw/workspace)"
+    );
+    assert!(!matches!(cabin.nav, Nav::Memory));
+    assert!(!cabin.llm_ready(), "consult must have no key and no grok binary");
+    cabin.run_slash_line("/consult harbor");
+    assert_eq!(
+        cabin.status,
+        "Run grok login, or Connect Grok in Settings."
+    );
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
+    std::env::remove_var("GROKHUB_GROK");
+}
+
+// Landed from PR #121.
+#[test]
+fn recall_finds_a_memory_line_and_reports_a_miss() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("recall");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.mem_name = "MEMORY.md".into();
+    cabin.mem_body = "harbor light\n".into();
+    cabin.run_slash_line("/recall harbor");
+    assert_eq!(cabin.status, "Recalling…");
+    let start = std::time::Instant::now();
+    while !cabin.messages.iter().any(|m| m.1.contains("harbor light"))
+        && start.elapsed() < std::time::Duration::from_secs(2)
+    {
+        cabin.poll_recall();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        cabin
+            .messages
+            .iter()
+            .any(|m| m.0 == "assistant" && m.1.contains("MEMORY.md:1: harbor light")),
+        "recall missed the memory line: {:?}",
+        cabin.messages
+    );
+    cabin.run_slash_line("/recall zzznone");
+    let start = std::time::Instant::now();
+    while !cabin.messages.iter().any(|m| m.1.contains("No recall for zzznone"))
+        && start.elapsed() < std::time::Duration::from_secs(2)
+    {
+        cabin.poll_recall();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        cabin
+            .messages
+            .iter()
+            .any(|m| m.0 == "assistant" && m.1.contains("No recall for zzznone")),
+        "recall miss did not land: {:?}",
+        cabin.messages
+    );
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #122.
+#[test]
+fn skills_connectors_and_sessions_without_grok() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("skills-sessions");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_GROK", "/tmp/grokhub-no-such-grok");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/skills");
+    assert!(matches!(cabin.nav, Nav::Skills));
+    assert!(!cabin.skills_tab_connectors);
+    assert_eq!(cabin.status, crate::build_agent::grok_banner());
+    assert!(cabin.grok_catalog_loaded);
+    assert!(cabin.grok_catalog_rx.is_none());
+    cabin.run_slash_line("/connectors");
+    assert!(matches!(cabin.nav, Nav::Connectors));
+    assert!(cabin.skills_tab_connectors);
+    assert_eq!(cabin.status, crate::build_agent::grok_banner());
+    cabin.run_slash_line("/dashboard");
+    assert!(matches!(cabin.nav, Nav::History));
+    assert_eq!(cabin.status, crate::build_agent::grok_banner());
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
+    std::env::remove_var("GROKHUB_GROK");
+}
+
+// Landed from PR #123.
+#[test]
+fn sync_writes_a_local_hub_snapshot() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("sync-local");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.device_name = "harbor".into();
+    cabin.run_slash_line("/sync");
+    assert_eq!(cabin.status, "Syncing…");
+    assert!(cabin.sync_rx.is_some());
+    cabin.run_slash_line("/sync");
+    assert_eq!(cabin.status, "Syncing…");
+    let start = std::time::Instant::now();
+    while cabin.sync_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(2) {
+        cabin.poll_sync();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(matches!(cabin.nav, Nav::Devices));
+    assert_eq!(cabin.status, "Merged hub snapshot from harbor");
+    assert!(cabin.sync_rx.is_none());
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #124.
+#[test]
+fn room_binds_a_work_tree_and_rewind_files_needs_a_project() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("room");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let home_s = home.display().to_string().trim_end_matches('/').to_string();
+    let prev_home = std::env::var("HOME").ok();
+    std::env::set_var("HOME", &home_s);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/rewind --files");
+    assert_eq!(cabin.status, "Bind a project first — /project bind");
+    assert!(!cabin.running);
+    cabin.run_slash_line("/room harbor");
+    let bound = format!("{home_s}/GrokHub-Work/harbor");
+    assert_eq!(cabin.cfg.project_dir, bound);
+    assert!(cabin.project_sel.is_some());
+    assert_eq!(cabin.status, format!("Room harbor → {bound}"));
+    assert!(!cabin.running);
+    assert!(
+        cabin
+            .messages
+            .iter()
+            .any(|m| m.0 == "user" && m.1.contains("blocked: outside bound project")),
+        "room host script should stay inside the host rail: {:?}",
+        cabin.messages
+    );
+    let dir = std::path::PathBuf::from(&bound);
+    let start = std::time::Instant::now();
+    while !dir.is_dir() && start.elapsed() < std::time::Duration::from_secs(2) {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(dir.is_dir(), "room directory was not created");
+    std::env::remove_var("GROKHUB_CONFIG");
+    match prev_home {
+        Some(h) => std::env::set_var("HOME", h),
+        None => std::env::remove_var("HOME"),
+    }
+}
+
+// Landed from PR #125.
+#[test]
+fn inhabit_refuses_a_phone_and_a_missing_peer() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("inhabit");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/inhabit phone");
+    assert_eq!(cabin.status, "will not inhabit onto the phone");
+    assert!(!cabin.running);
+    assert!(cabin.inhabit_rx.is_none());
+    cabin.run_slash_line("/inhabit cabin-2");
+    assert_eq!(cabin.status, "No paired peer named cabin-2");
+    assert!(!cabin.running);
+    assert!(cabin.inhabit_rx.is_none());
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #126.
+#[test]
+fn rewind_and_compact_stay_closed_without_grok() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("rewind-compact");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_GROK", "/tmp/grokhub-no-such-grok");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.live_mut().push(("user".into(), "harbor".into()));
+    cabin.live_mut().push(("assistant".into(), "light".into()));
+    cabin.run_slash_line("/rewind");
+    assert!(
+        cabin.messages.iter().any(|m| m.0 == "assistant" && m.1 == "light"),
+        "rewind dropped the reply without a grok agent: {:?}",
+        cabin.messages
+    );
+    assert!(!cabin.running);
+    assert!(
+        cabin.status.contains("Ask is fail-closed") && cabin.status.contains("Turn denied"),
+        "rewind status was {}",
+        cabin.status
+    );
+    assert_ne!(cabin.status, "Rewinding Grok conversation…");
+    cabin.live_mut().clear();
+    for i in 0..9 {
+        cabin.live_mut().push(("user".into(), format!("turn-{i}")));
+    }
+    cabin.run_slash_line("/compact");
+    assert!(
+        cabin.messages.iter().any(|m| m.1 == "turn-0"),
+        "compact dropped history without a grok agent: {:?}",
+        cabin.messages
+    );
+    assert_eq!(cabin.messages.len(), 9);
+    assert!(!cabin.running);
+    assert!(
+        cabin.status.contains("Ask is fail-closed") && cabin.status.contains("Turn denied"),
+        "compact status was {}",
+        cabin.status
+    );
+    assert_ne!(cabin.status, "Compacting Grok context…");
+    std::env::remove_var("GROKHUB_CONFIG");
+    std::env::remove_var("GROKHUB_GROK");
+}
+
+// Landed from PR #127.
+#[test]
+fn project_bind_show_and_clear() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("project-bind");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let home_s = home.display().to_string().trim_end_matches('/').to_string();
+    let prev_home = std::env::var("HOME").ok();
+    std::env::set_var("HOME", &home_s);
+    let dock = format!("{}/dock", root.display().to_string().trim_end_matches('/'));
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/project");
+    assert_eq!(cabin.status, "No bound project");
+    cabin.run_slash_line(&format!("/project bind {dock}"));
+    assert_eq!(cabin.cfg.project_dir, dock);
+    assert!(cabin.project_sel.is_some());
+    assert_eq!(cabin.status, format!("Bound {dock}"));
+    assert!(!cabin.running);
+    let dir = std::path::PathBuf::from(&dock);
+    let start = std::time::Instant::now();
+    while !dir.is_dir() && start.elapsed() < std::time::Duration::from_secs(2) {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(dir.is_dir(), "bind did not create the project directory");
+    cabin.run_slash_line("/project show");
+    assert_eq!(cabin.status, format!("Project {dock}"));
+    cabin.run_slash_line("/project clear");
+    assert!(cabin.cfg.project_dir.is_empty());
+    assert!(cabin.project_sel.is_none());
+    assert_eq!(cabin.status, "Unbound — full desktop");
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
+    match prev_home {
+        Some(h) => std::env::set_var("HOME", h),
+        None => std::env::remove_var("HOME"),
+    }
+}
+
+// Landed from PR #128.
+#[test]
+fn models_and_inspect_without_grok() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("models-inspect");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_GROK", "/tmp/grokhub-no-such-grok");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/models");
+    assert!(
+        cabin.messages.iter().any(|m| {
+            m.0 == "assistant" && m.1.contains("grok-4.7 — Grok 4.7 (chat)")
+        }),
+        "models catalog did not land: {:?}",
+        cabin.messages
+    );
+    assert!(cabin.inspect_rx.is_none());
+    assert!(!cabin.running);
+    cabin.run_slash_line("/inspect");
+    assert!(matches!(cabin.nav, Nav::Connectors));
+    assert_eq!(cabin.status, crate::build_agent::grok_banner());
+    assert_eq!(cabin.inspect_text, crate::build_agent::grok_banner());
+    assert!(cabin.inspect_rx.is_none());
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
+    std::env::remove_var("GROKHUB_GROK");
+}
+
+// Landed from PR #129.
+#[test]
+fn permission_slashes_arm_always_and_set_auto() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("permission-slash");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(matches!(cabin.permission_mode, PermissionMode::Ask));
+    cabin.run_slash_line("/always-approve");
+    assert_eq!(cabin.status, "Confirm Always…");
+    assert!(matches!(
+        cabin.confirm,
+        Some(super::confirm::ConfirmKind::AlwaysSession)
+    ));
+    assert!(matches!(cabin.permission_mode, PermissionMode::Ask));
+    assert!(!cabin.running);
+    cabin.apply_session_always();
+    assert!(matches!(cabin.permission_mode, PermissionMode::AlwaysApprove));
+    assert_eq!(cabin.cfg.permission_mode, "ask");
+    assert_eq!(cabin.status, "Permission always-approve");
+    assert!(cabin.confirm.is_none());
+    cabin.run_slash_line("/always-approve");
+    assert!(matches!(cabin.permission_mode, PermissionMode::Ask));
+    assert_eq!(cabin.cfg.permission_mode, "ask");
+    assert_eq!(cabin.status, "Permission ask");
+    cabin.run_slash_line("/auto");
+    assert!(matches!(cabin.permission_mode, PermissionMode::Auto));
+    assert_eq!(cabin.cfg.permission_mode, "auto");
+    assert_eq!(cabin.status, "Permission auto");
+    assert!(cabin.confirm.is_none());
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #130.
+#[test]
+fn learn_reflects_nothing_new_and_scratch_refuses() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("learn-reflect");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/learn");
+    assert_eq!(cabin.status, "Reflecting…");
+    assert!(cabin.reflect_rx.is_some());
+    cabin.run_slash_line("/learn");
+    assert_eq!(cabin.status, "Reflecting…");
+    let start = std::time::Instant::now();
+    while cabin.reflect_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(2) {
+        cabin.poll_reflect();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(cabin.status, "Reflect: nothing new");
+    assert!(cabin.reflect_rx.is_none());
+    assert!(!cabin.running);
+    cabin.run_slash_line("/scratch");
+    cabin.run_slash_line("/learn");
+    assert_eq!(cabin.status, "Scratch — no reflect");
+    assert!(cabin.reflect_rx.is_none());
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #131.
+#[test]
+fn appearance_theme_tray_and_wall_save() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("appearance");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    assert_eq!(cabin.cfg.theme, "dark");
+    assert!(cabin.cfg.close_to_tray);
+    assert!(cabin.cfg.imagine_wall);
+    cabin.choose_theme(grokhub_core::ThemeChoice::Light);
+    assert_eq!(cabin.cfg.theme, "light");
+    assert_eq!(cabin.status, "Saved");
+    cabin.choose_theme(grokhub_core::ThemeChoice::Light);
+    assert_eq!(cabin.cfg.theme, "light");
+    cabin.choose_theme(grokhub_core::ThemeChoice::System);
+    assert_eq!(cabin.cfg.theme, "system");
+    assert_eq!(cabin.status, "Saved");
+    cabin.set_close_to_tray(false);
+    assert!(!cabin.cfg.close_to_tray);
+    assert_eq!(cabin.status, "Saved");
+    cabin.set_living_wall(false);
+    assert!(!cabin.cfg.imagine_wall);
+    assert_eq!(cabin.status, "Saved");
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #132.
+#[test]
+fn missing_recipe_does_not_replay() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("missing-recipe");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.replay_saved_recipe("harbor"));
+    assert_eq!(cabin.status, "No recipe harbor");
+    assert!(cabin.recipe_desk_rx.is_none());
+    assert!(!cabin.running);
+    assert!(!cabin.replay_saved_recipe("last"));
+    assert_eq!(cabin.status, "No recipe last");
+    assert!(cabin.recipe_desk_rx.is_none());
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #133.
+#[test]
+fn discuss_card_opens_a_local_chat() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("discuss-card");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.discuss_card("missing");
+    assert!(cabin.threads.is_empty());
+    assert!(!cabin.running);
+    let card = grokhub_core::idea_card("harbor", "Harbor lamp", "fold the charts", 1);
+    let id = card.id.clone();
+    cabin.updates.push(card);
+    cabin.discuss_card(&id);
+    assert!(matches!(cabin.nav, Nav::Chat));
+    assert!(!cabin.running);
+    let thread = cabin.threads.get(cabin.thread_idx).expect("discuss thread");
+    assert_eq!(thread.title, "Discuss · Harbor lamp");
+    assert!(thread.title_locked);
+    assert!(cabin.messages.iter().any(|(_, body)| {
+        body.contains("Post: Harbor lamp") && body.contains("fold the charts")
+    }));
+    let stuck = cabin.updates.iter().find(|c| c.id == id).expect("card");
+    assert_eq!(stuck.status, grokhub_core::UpdateStatus::Opened);
+    assert!(stuck.discuss_thread.is_some());
+}
+
+// Landed from PR #134.
+#[test]
+fn composer_slash_runs_and_plain_text_refuses_without_grok() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("composer-send");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let missing = root.join("no-grok");
+    let prev_grok = std::env::var_os("GROKHUB_GROK");
+    std::env::set_var("GROKHUB_GROK", &missing);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.send_from_composer("/help".into());
+    assert!(!cabin.running);
+    assert!(
+        cabin.messages.iter().any(|(_, body)| body.contains("/clear")),
+        "help lands on the open chat"
+    );
+    let before = cabin.messages.len();
+    cabin.send_from_composer("hello harbor".into());
+    assert_eq!(
+        cabin.status,
+        "Install Grok Build (x.ai/cli) or Connect Grok in Settings"
+    );
+    assert!(!cabin.running);
+    assert_eq!(cabin.messages.len(), before);
+    assert!(cabin.messages.iter().all(|(role, _)| role != "user"));
+    match prev_grok {
+        Some(v) => std::env::set_var("GROKHUB_GROK", v),
+        None => std::env::remove_var("GROKHUB_GROK"),
+    }
+}
+
+// Landed from PR #135.
+#[test]
+fn board_add_move_archive_restore_and_link() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("board-acts");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.new_thread(false);
+    let thread_id = cabin.threads[cabin.thread_idx].id.clone();
+    cabin.board_title = "Harbor lamp".into();
+    cabin.board_notes = "fold the charts".into();
+    assert!(cabin.apply_board_act(Some(BoardAct::Add)));
+    assert_eq!(cabin.board.len(), 1);
+    let id = cabin.board[0].id.clone();
+    assert_eq!(cabin.board[0].title, "Harbor lamp");
+    assert_eq!(cabin.board[0].detail, "fold the charts");
+    assert_eq!(cabin.board[0].status, grokhub_core::BoardStatus::Todo);
+    assert!(cabin.board_title.is_empty());
+    assert!(!cabin.board_compose);
+    assert!(cabin.board[0].thread_id.is_none());
+    assert!(cabin.apply_board_act(Some(BoardAct::Move {
+        id: id.clone(),
+        status: grokhub_core::BoardStatus::InProgress,
+    })));
+    assert_eq!(cabin.board[0].status, grokhub_core::BoardStatus::InProgress);
+    assert!(cabin.apply_board_act(Some(BoardAct::Archive(id.clone()))));
+    assert_eq!(cabin.board[0].status, grokhub_core::BoardStatus::Dismissed);
+    assert!(cabin.apply_board_act(Some(BoardAct::Restore(id.clone()))));
+    assert_eq!(cabin.board[0].status, grokhub_core::BoardStatus::Todo);
+    assert!(cabin.apply_board_act(Some(BoardAct::Link(id.clone()))));
+    assert_eq!(cabin.board[0].thread_id.as_deref(), Some(thread_id.as_str()));
+    assert!(cabin.apply_board_act(Some(BoardAct::Unlink(id))));
+    assert!(cabin.board[0].thread_id.is_none());
+    assert!(!cabin.running);
+}
+
+// Landed from PR #136.
+#[test]
+fn memory_switch_flushes_the_file_you_left() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("memory-switch");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.mem_name = "MEMORY.md".into();
+    cabin.mem_body = "harbor light".into();
+    cabin.open_memory_file("SOUL.md");
+    assert_eq!(cabin.mem_name, "SOUL.md");
+    assert_eq!(cabin.mem_body, "");
+    assert!(!cabin.running);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while !crate::config::read_memory("MEMORY.md").contains("harbor light") {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "MEMORY.md was not flushed"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(crate::config::read_memory("SOUL.md"), "");
+}
+
+// Landed from PR #137.
+#[test]
+fn night_add_lands_a_daily_job_and_a_loop() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("night-add");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.add_automation_seed("every day at 9, summarize the board");
+    assert_eq!(cabin.status, "Automation added · daily at 09:00");
+    assert_eq!(cabin.automations.len(), 1);
+    assert_eq!(cabin.automations[0].schedule, "daily");
+    assert_eq!(cabin.automations[0].time, "09:00");
+    assert!(cabin.grok_loops.is_empty());
+    cabin.add_automation_seed("/loop 30m check deploy");
+    assert_eq!(cabin.status, "Loop added · every 30m");
+    assert_eq!(cabin.grok_loops.len(), 1);
+    assert_eq!(cabin.grok_loops[0].interval, "30m");
+    cabin.add_automation_seed("what is rust");
+    assert_eq!(
+        cabin.status,
+        "Need `/loop 30m …`, `every 2h …`, or `every day at 9 …`"
+    );
+    assert_eq!(cabin.automations.len(), 1);
+    assert_eq!(cabin.grok_loops.len(), 1);
+    assert!(!cabin.running);
+}
+
+// Landed from PR #138.
+#[test]
+fn chip_nav_changes_page_and_dismiss_drops_it() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("chip-acts");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    let chips = vec![grokhub_core::QuickChip {
+        id: "nav-ideas".into(),
+        label: "Ideas".into(),
+        value: "__nav:ideas".into(),
+        kind: grokhub_core::ChipKind::Nav,
+        score: 1.0,
+        hint: String::new(),
+        primary: false,
+    }];
+    cabin.take_chip_act(crate::cards::ChipRowAct::Apply(0), &chips);
+    assert!(matches!(cabin.nav, Nav::Ideas));
+    assert!(!cabin.running);
+    cabin.take_chip_act(crate::cards::ChipRowAct::Dismiss(0), &chips);
+    assert!(cabin.chip_dismissed.iter().any(|d| d == "nav-ideas"));
+    assert!(cabin.chip_dismissed.iter().any(|d| d == "__nav:ideas"));
+}
+
+// Landed from PR #139.
+#[test]
+fn attach_sets_the_chip_and_paste_lands_in_the_composer() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("plus-attach");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.apply_plus_ready(
+        grokhub_core::PlusTarget::Chat,
+        PlusReady {
+            kind: grokhub_core::AttachKind::Image,
+            name: "harbor.png".into(),
+            raw: "/tmp/harbor.png".into(),
+            image_url: Some("data:image/png;base64,aGk=".into()),
+            text: None,
+        },
+    );
+    assert_eq!(cabin.attach_name.as_deref(), Some("harbor.png"));
+    assert_eq!(
+        cabin.attach_url.as_deref(),
+        Some("data:image/png;base64,aGk=")
+    );
+    assert_eq!(
+        cabin.status,
+        "Attached harbor.png — sends with the next message"
+    );
+    assert!(!cabin.running);
+    assert!(cabin.messages.is_empty());
+    cabin.composer = "hello".into();
+    cabin.apply_clipboard(grokhub_core::PlusTarget::Chat, "harbor light\n");
+    assert_eq!(cabin.composer, "hello\nharbor light");
+    assert_eq!(cabin.status, "Pasted clipboard");
+    cabin.apply_plus_ready(
+        grokhub_core::PlusTarget::Chat,
+        PlusReady {
+            kind: grokhub_core::AttachKind::Text,
+            name: "note.txt".into(),
+            raw: "/tmp/note.txt".into(),
+            image_url: None,
+            text: Some("fold the charts".into()),
+        },
+    );
+    assert_eq!(cabin.composer, "hello\nharbor light\nfold the charts");
+    assert_eq!(cabin.status, "Pasted note.txt");
+    assert!(!cabin.running);
+    assert!(cabin.messages.is_empty());
+}
+
+// Landed from PR #140.
+#[test]
+fn feed_open_routes_an_idea_and_dismiss_removes_it() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("feed-open");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.open_feed_card("missing");
+    assert!(matches!(cabin.nav, Nav::Chat));
+    let card = grokhub_core::idea_card("harbor", "Harbor lamp", "fold the charts", 1);
+    let id = card.id.clone();
+    cabin.updates.push(card);
+    cabin.open_feed_card(&id);
+    assert!(matches!(cabin.nav, Nav::Ideas));
+    cabin.updates.iter_mut().find(|c| c.id == id).expect("card").built = true;
+    cabin.open_feed_card(&id);
+    assert!(matches!(cabin.nav, Nav::Workboard));
+    cabin.dismiss_feed_card(&id);
+    assert!(cabin.updates.iter().all(|c| c.id != id));
+    assert!(!cabin.running);
+}
+
+// Landed from PR #141.
+#[test]
+fn session_pills_save_chat_and_ask() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("session-pills");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.set_session_mode(SessionMode::Chat);
+    assert_eq!(cabin.session_mode, SessionMode::Chat);
+    assert_eq!(cabin.cfg.session_mode, "chat");
+    cabin.set_session_mode(SessionMode::Ask);
+    assert_eq!(cabin.session_mode, SessionMode::Ask);
+    assert_eq!(cabin.cfg.session_mode, "ask");
+    assert!(!cabin.running);
+}
+
+// Landed from PR #142.
+#[test]
+fn open_board_thread_opens_the_linked_chat() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("board-open");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.open_board_thread("missing");
+    assert_eq!(cabin.status, "Linked chat is gone");
+    assert!(cabin.threads.is_empty());
+    assert!(!cabin.running);
+    cabin.new_thread(false);
+    let id = cabin.threads[cabin.thread_idx].id.clone();
+    cabin.nav = Nav::Workboard;
+    cabin.open_board_thread(&id);
+    assert!(matches!(cabin.nav, Nav::Chat));
+    assert_eq!(cabin.threads[cabin.thread_idx].id, id);
+    assert!(!cabin.running);
+}
+
+// Landed from PR #143.
+#[test]
+fn store_session_plan_opens_once_and_keeps_the_first() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("session-plan");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.store_session_plan("   ", true);
+    assert!(cabin.threads.is_empty());
+    assert!(!cabin.plan_open);
+    cabin.new_thread(false);
+    cabin.store_session_plan("  fold the charts  ", false);
+    assert!(cabin.plan_open);
+    assert_eq!(cabin.threads[cabin.thread_idx].plan_body, "fold the charts");
+    cabin.store_session_plan("other plan", false);
+    assert_eq!(cabin.threads[cabin.thread_idx].plan_body, "fold the charts");
+    cabin.store_session_plan("other plan", true);
+    assert_eq!(cabin.threads[cabin.thread_idx].plan_body, "other plan");
+    assert!(cabin.plan_open);
+    assert!(!cabin.running);
+}
+
+// Landed from PR #144.
+#[test]
+fn board_edit_fills_the_form_and_save_writes_it() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("board-edit");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.apply_board_act(Some(BoardAct::Edit("missing".into()))));
+    assert!(!cabin.board_compose);
+    cabin.new_thread(false);
+    let thread_id = cabin.threads[cabin.thread_idx].id.clone();
+    cabin.board_title = "Harbor lamp".into();
+    cabin.board_notes = "fold the charts".into();
+    assert!(cabin.apply_board_act(Some(BoardAct::Add)));
+    let id = cabin.board[0].id.clone();
+    assert!(!cabin.apply_board_act(Some(BoardAct::Edit(id.clone()))));
+    assert!(cabin.board_compose);
+    assert_eq!(cabin.board_edit.as_deref(), Some(id.as_str()));
+    assert_eq!(cabin.board_title, "Harbor lamp");
+    assert_eq!(cabin.board_notes, "fold the charts");
+    assert!(!cabin.board_link);
+    cabin.board_title = "  Harbor dock  ".into();
+    cabin.board_notes = "  tie the lines  ".into();
+    cabin.board_link = true;
+    assert!(cabin.apply_board_act(Some(BoardAct::Save(id))));
+    assert_eq!(cabin.board[0].title, "Harbor dock");
+    assert_eq!(cabin.board[0].detail, "tie the lines");
+    assert_eq!(cabin.board[0].thread_id.as_deref(), Some(thread_id.as_str()));
+    assert!(!cabin.board_compose);
+    assert!(cabin.board_edit.is_none());
+    assert!(cabin.board_title.is_empty());
+    assert!(!cabin.running);
+}
+
+// Landed from PR #145.
+#[test]
+fn bubble_reply_quotes_into_the_composer() {
+    fn reply_like_the_button(cabin: &mut Cabin, body: &str) {
+        cabin.composer = append_composer(&cabin.composer, &quote_for_reply(body));
+        if !cabin.composer.ends_with('\n') {
+            cabin.composer.push('\n');
+        }
+        cabin.composer_want_focus = true;
+    }
+
+    let mut plain = Cabin::quiet_for_test();
+    plain.composer = "notes for later".into();
+    assert!(!plain.running);
+    assert!(!plain.composer_want_focus);
+    reply_like_the_button(&mut plain, "Ship the harbor");
+    assert_eq!(plain.composer, "notes for later\n> Ship the harbor\n");
+    assert!(plain.composer.starts_with("notes for later\n"));
+    assert!(plain.composer_want_focus);
+    assert!(!plain.running);
+
+    let mut marked = Cabin::quiet_for_test();
+    marked.composer = "notes for later".into();
+    assert!(!marked.running);
+    assert!(!marked.composer_want_focus);
+    reply_like_the_button(&mut marked, "> already quoted");
+    assert_eq!(marked.composer, "notes for later\n> > already quoted\n");
+    assert!(marked.composer.starts_with("notes for later\n"));
+    assert!(marked.composer_want_focus);
+    assert!(!marked.running);
+}
+
+// Landed from PR #146.
+#[test]
+fn grok_history_open_and_delete_stay_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("grok-hist");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let id = "sess-quiet-known";
+    let title = "Known cabin title";
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.grok_sessions.push(grokhub_acp::GrokSession {
+        id: id.to_string(),
+        title: title.to_string(),
+        path: None,
+        cwd: None,
+        cabin: false,
+    });
+
+    cabin.open_grok_session(id);
+    assert_eq!(cabin.threads.len(), 1);
+    assert_eq!(cabin.threads[0].grok_session.as_deref(), Some(id));
+    assert_eq!(cabin.threads[0].title, title);
+    assert!(cabin.nav == super::Nav::Chat);
+    assert_eq!(cabin.status, format!("Opened {title}"));
+    assert!(!cabin.running);
+
+    cabin.open_grok_session(id);
+    assert_eq!(cabin.threads.len(), 1);
+    assert_eq!(cabin.threads[0].grok_session.as_deref(), Some(id));
+    assert!(!cabin.running);
+
+    cabin.delete_grok_history(id);
+    assert!(cabin
+        .threads
+        .iter()
+        .all(|t| t.grok_session.as_deref() != Some(id)));
+    assert!(!cabin.running);
+
+    let threads_after = cabin.threads.len();
+    let missing = "not-a-thread-and-not-open";
+    cabin.delete_grok_history(missing);
+    assert_eq!(cabin.status, "Deleting session…");
+    assert_eq!(cabin.threads.len(), threads_after);
+    assert!(cabin
+        .threads
+        .iter()
+        .all(|t| t.grok_session.as_deref() != Some(missing)));
+    assert!(!cabin.running);
+}
+
+// Landed from PR #147.
+#[test]
+fn grok_tasks_and_commands_stay_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("grok-tasks");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+
+    cabin.apply_grok_task("task-1".into(), "Draft the note".into(), false);
+    assert_eq!(
+        cabin.grok_tasks,
+        vec![("task-1".into(), "Draft the note".into(), false)]
+    );
+    assert!(!cabin.running);
+
+    cabin.apply_grok_task("task-1".into(), "Note is filed".into(), true);
+    assert_eq!(
+        cabin.grok_tasks,
+        vec![("task-1".into(), "Note is filed".into(), true)]
+    );
+    assert!(!cabin.running);
+
+    let owned = grokhub_core::filter_slash_commands("/")
+        .first()
+        .expect("cabin slash")
+        .cmd
+        .to_string();
+    let foreign = "create-skill".to_string();
+    let names = vec![foreign.clone(), "   ".into(), String::new(), owned.clone()];
+    let hits = grokhub_core::grok_command_hits(&names);
+    cabin.apply_grok_commands(names);
+    assert_eq!(cabin.grok_commands, hits);
+    assert!(
+        cabin
+            .grok_commands
+            .iter()
+            .any(|h| h.cmd == format!("/{foreign}")),
+        "a name the cabin does not own stays"
+    );
+    assert!(
+        cabin.grok_commands.iter().all(|h| {
+            let name = h.cmd.trim_start_matches('/').trim();
+            !name.is_empty() && h.cmd != owned
+        }),
+        "a blank name and a cabin-owned slash are dropped"
+    );
+    assert!(!cabin.running);
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #148.
+#[test]
+fn chip_apply_mode_and_help_stay_off_a_run() {
+    struct RestoreEnv148 {
+        config: Option<std::ffi::OsString>,
+        grok: Option<std::ffi::OsString>,
+    }
+    impl Drop for RestoreEnv148 {
+        fn drop(&mut self) {
+            match self.config.take() {
+                Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+                None => std::env::remove_var("GROKHUB_CONFIG"),
+            }
+            match self.grok.take() {
+                Some(v) => std::env::set_var("GROKHUB_GROK", v),
+                None => std::env::remove_var("GROKHUB_GROK"),
+            }
+            grokhub_acp::invalidate_grok_bin_cache();
+        }
+    }
+
+    fn chip(id: &str, value: &str, kind: super::ChipKind) -> super::QuickChip {
+        super::QuickChip {
+            id: id.into(),
+            label: id.into(),
+            value: value.into(),
+            kind,
+            score: 1.0,
+            hint: String::new(),
+            primary: false,
+        }
+    }
+
+    fn settle(cabin: &super::Cabin) {
+        let _io = cabin
+            .persist_io
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+    }
+
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("chip-apply");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    let _restore = RestoreEnv148 {
+        config: std::env::var_os("GROKHUB_CONFIG"),
+        grok: std::env::var_os("GROKHUB_GROK"),
+    };
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_GROK", "/no/such/grok-binary-xyz");
+    grokhub_acp::invalidate_grok_bin_cache();
+    assert!(
+        grokhub_acp::find_grok().is_none(),
+        "a missing GROKHUB_GROK must hide the binary before any chip runs"
+    );
+
+    let mut mode = super::Cabin::quiet_for_test();
+    mode.apply_chip(chip("mode-fast", "__mode:fast", super::ChipKind::Mode));
+    assert_eq!(mode.cfg.mode, "fast");
+    assert_eq!(
+        mode.status,
+        super::mode_status_line("fast", &mode.cfg.model)
+    );
+    assert!(!mode.running);
+
+    let mut typed_help = super::Cabin::quiet_for_test();
+    typed_help.send_from_composer("/help".into());
+    let mut help = super::Cabin::quiet_for_test();
+    help.apply_chip(chip("help", "/help", super::ChipKind::Chat));
+    assert_eq!(help.status, typed_help.status);
+    assert!(!help.running);
+    assert!(!typed_help.running);
+    let help_body = super::mark_slash_result(&super::slash_help());
+    assert_eq!(
+        help.messages
+            .last()
+            .map(|(role, text)| (role.as_str(), text.as_str())),
+        Some(("assistant", help_body.as_str()))
+    );
+    assert_eq!(help.messages.last(), typed_help.messages.last());
+
+    let sentence = "Tell me about the harbor.";
+    let mut typed_chat = super::Cabin::quiet_for_test();
+    typed_chat.send_from_composer(sentence.into());
+    let mut chat = super::Cabin::quiet_for_test();
+    chat.apply_chip(chip("say", sentence, super::ChipKind::Chat));
+    assert_eq!(
+        chat.status, typed_chat.status,
+        "a plain chip must refuse with the composer install/connect status"
+    );
+    assert_eq!(
+        chat.status,
+        "Install Grok Build (x.ai/cli) or Connect Grok in Settings"
+    );
+    assert!(!chat.running);
+    assert!(!typed_chat.running);
+    assert!(chat.messages.is_empty());
+    assert!(typed_chat.messages.is_empty());
+
+    settle(&mode);
+    settle(&typed_help);
+    settle(&help);
+    settle(&typed_chat);
+    settle(&chat);
+}
+
+// Landed from PR #149.
+#[test]
+fn session_title_sync_keeps_locks_and_placeholders() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("title-sync");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("title-sync config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+
+    struct Seed {
+        cabin_title: &'static str,
+        locked: bool,
+        session: Option<&'static str>,
+        grok_title: Option<&'static str>,
+        expect: &'static str,
+    }
+    let seeds = [
+        Seed {
+            cabin_title: "Locked cabin",
+            locked: true,
+            session: Some("sess-locked"),
+            grok_title: Some("Replacement title"),
+            expect: "Locked cabin",
+        },
+        Seed {
+            cabin_title: "Local only",
+            locked: false,
+            session: None,
+            grok_title: None,
+            expect: "Local only",
+        },
+        Seed {
+            cabin_title: "No summary cabin",
+            locked: false,
+            session: Some("sess-nosum"),
+            grok_title: Some("(no summary)"),
+            expect: "No summary cabin",
+        },
+        Seed {
+            cabin_title: "No label cabin",
+            locked: false,
+            session: Some("sess-nolabel"),
+            grok_title: Some("(no label)"),
+            expect: "No label cabin",
+        },
+        Seed {
+            cabin_title: "Session word cabin",
+            locked: false,
+            session: Some("sess-word"),
+            grok_title: Some("session"),
+            expect: "Session word cabin",
+        },
+        Seed {
+            cabin_title: "Plan cabin",
+            locked: false,
+            session: Some("sess-plan"),
+            grok_title: Some("Plan"),
+            expect: "Plan cabin",
+        },
+        Seed {
+            cabin_title: "Blank title cabin",
+            locked: false,
+            session: Some("sess-blank"),
+            grok_title: Some(""),
+            expect: "Blank title cabin",
+        },
+        Seed {
+            cabin_title: "Same id cabin",
+            locked: false,
+            session: Some("sess-equals-id"),
+            grok_title: Some("sess-equals-id"),
+            expect: "Same id cabin",
+        },
+        Seed {
+            cabin_title: "Unlocked cabin",
+            locked: false,
+            session: Some("sess-real"),
+            grok_title: Some("Dock layout notes"),
+            expect: "Dock layout notes",
+        },
+        Seed {
+            cabin_title: "Missing session cabin",
+            locked: false,
+            session: Some("sess-missing"),
+            grok_title: None,
+            expect: "Missing session cabin",
+        },
+    ];
+
+    cabin.threads = seeds
+        .iter()
+        .map(|c| {
+            let mut thread = crate::threads::ChatThread::new(c.cabin_title, false);
+            thread.title_locked = c.locked;
+            thread.grok_session = c.session.map(str::to_string);
+            thread
+        })
+        .collect();
+    cabin.grok_sessions = seeds
+        .iter()
+        .filter_map(|c| {
+            let id = c.session?;
+            let title = c.grok_title?;
+            Some(grokhub_acp::GrokSession {
+                id: id.to_string(),
+                title: title.to_string(),
+                path: None,
+                cwd: None,
+                cabin: false,
+            })
+        })
+        .collect();
+
+    cabin.sync_unlocked_titles_from_sessions();
+
+    for (i, c) in seeds.iter().enumerate() {
+        assert_eq!(cabin.threads[i].title, c.expect, "{}", c.cabin_title);
+    }
+    assert!(!cabin.running);
+}
+
+// Landed from PR #150.
+#[test]
+fn set_nav_id_opens_each_page() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("set-nav");
+    let _ = std::fs::create_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(matches!(cabin.nav, super::Nav::Chat));
+
+    cabin.set_nav_id("settings");
+    assert!(matches!(cabin.nav, super::Nav::Settings));
+    assert!(matches!(cabin.settings_back, super::Nav::Chat));
+    assert!(matches!(cabin.settings_sec, super::SettingsSec::Account));
+    assert!(!cabin.running);
+    cabin.set_nav_id("settings");
+    assert!(matches!(cabin.nav, super::Nav::Settings));
+    assert!(matches!(cabin.settings_back, super::Nav::Chat));
+    assert!(matches!(cabin.settings_sec, super::SettingsSec::Account));
+    assert!(!cabin.running);
+
+    cabin.set_nav_id("history");
+    assert!(matches!(cabin.nav, super::Nav::History));
+    assert!(!cabin.running);
+
+    cabin.set_nav_id("imagine");
+    assert!(matches!(cabin.nav, super::Nav::Imagine));
+    assert!(cabin.imagine_want_focus);
+    assert!(!cabin.running);
+
+    cabin.set_nav_id("workboard");
+    assert!(matches!(cabin.nav, super::Nav::Workboard));
+    assert!(!cabin.running);
+
+    cabin.set_nav_id("skills");
+    assert!(matches!(cabin.nav, super::Nav::Skills));
+    assert!(!cabin.skills_tab_connectors);
+    assert!(!cabin.running);
+
+    cabin.set_nav_id("automations");
+    assert!(matches!(cabin.nav, super::Nav::Night));
+    assert!(!cabin.running);
+
+    cabin.set_nav_id("command");
+    assert!(matches!(cabin.nav, super::Nav::Command));
+    assert!(!cabin.running);
+
+    cabin.set_nav_id("queue");
+    assert!(matches!(cabin.nav, super::Nav::Agents));
+    assert!(!cabin.running);
+
+    cabin.set_nav_id("devices");
+    assert!(matches!(cabin.nav, super::Nav::Devices));
+    assert!(!cabin.running);
+
+    cabin.set_nav_id("memory");
+    assert!(matches!(cabin.nav, super::Nav::Memory));
+    assert!(!cabin.running);
+
+    cabin.set_nav_id("connectors");
+    assert!(matches!(cabin.nav, super::Nav::Connectors));
+    assert!(cabin.skills_tab_connectors);
+    assert!(!cabin.running);
+
+    let threads_before = cabin.threads.len();
+    let idx_before = cabin.thread_idx;
+    cabin.composer_want_focus = false;
+    cabin.chat_tail_frames = 0;
+    cabin.set_nav_id("eyes");
+    assert!(matches!(cabin.nav, super::Nav::Chat));
+    assert_eq!(cabin.threads.len(), threads_before);
+    assert_eq!(cabin.thread_idx, idx_before);
+    assert!(cabin.composer_want_focus);
+    assert_eq!(cabin.chat_tail_frames, grokhub_core::CHAT_TAIL_FRAMES);
+    assert!(!cabin.running);
+
+    let threads_before = cabin.threads.len();
+    let status_before = cabin.status.clone();
+    cabin.set_nav_id("not-a-page");
+    assert!(matches!(cabin.nav, super::Nav::Chat));
+    assert_eq!(cabin.threads.len(), threads_before);
+    assert_eq!(cabin.status, status_before);
+    assert!(cabin.messages.is_empty());
+    assert!(!cabin.running);
+
+    let draft = crate::threads::ChatThread::new("Chat", false);
+    let id = draft.id.clone();
+    cabin.threads.push(draft);
+    cabin.thread_idx = 0;
+    cabin.messages = std::sync::Arc::new(Vec::new());
+    let n = cabin.threads.len();
+    let io = cabin.persist_io.clone();
+    let block = io.lock().unwrap_or_else(|e| e.into_inner());
+    cabin.set_nav_id("chat");
+    drop(block);
+    assert!(matches!(cabin.nav, super::Nav::Chat));
+    assert_eq!(cabin.threads.len(), n);
+    assert_eq!(cabin.threads[0].id, id);
+    assert!(cabin.messages.is_empty());
+    assert_eq!(cabin.status, "New chat");
+    assert!(!cabin.running);
+
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    drop(io.lock().unwrap_or_else(|e| e.into_inner()));
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #151.
+#[test]
+fn project_menu_rename_move_and_delete() {
+    let _guard = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("proj-menu");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    let work = root.join("work");
+    create_folder(&mut cabin.projects, "fold-menu", "Notes", None).expect("folder");
+    create_project(
+        &mut cabin.projects,
+        "proj-menu",
+        "Harbor",
+        Some("fold-menu"),
+        &work.display().to_string(),
+    )
+    .expect("project");
+    let name = cabin
+        .projects
+        .iter()
+        .find(|n| n.id == "proj-menu")
+        .expect("seeded project")
+        .name
+        .clone();
+    assert_eq!(
+        cabin
+            .projects
+            .iter()
+            .find(|n| n.id == "proj-menu")
+            .and_then(|n| n.parent.clone())
+            .as_deref(),
+        Some("fold-menu")
+    );
+
+    let io = cabin.persist_io.clone();
+    let _held = io.lock().unwrap_or_else(|e| e.into_inner());
+
+    cabin.apply_project_menu("proj-menu".into(), ProjectMenuAct::Rename);
+    assert_eq!(cabin.proj_rename.as_deref(), Some("proj-menu"));
+    assert_eq!(cabin.proj_rename_buf, name);
+    assert!(!cabin.running);
+
+    cabin.apply_project_menu("proj-menu".into(), ProjectMenuAct::AddToFolder);
+    assert_eq!(cabin.proj_add_for.as_deref(), Some("proj-menu"));
+    assert_eq!(cabin.project_sel.as_deref(), Some("proj-menu"));
+    assert!(cabin.proj_ignore_close);
+    assert!(!cabin.running);
+
+    cabin.apply_project_menu("proj-menu".into(), ProjectMenuAct::RemoveFromFolder);
+    assert!(cabin
+        .projects
+        .iter()
+        .find(|n| n.id == "proj-menu")
+        .and_then(|n| n.parent.as_ref())
+        .is_none());
+    assert_eq!(cabin.status, "Moved to Projects");
+    assert!(!cabin.running);
+
+    cabin.apply_project_menu("proj-menu".into(), ProjectMenuAct::Delete);
+    assert!(cabin.projects.iter().all(|n| n.id != "proj-menu"));
+    assert!(!cabin.running);
+
+    let projects = cabin.projects.clone();
+    let status = cabin.status.clone();
+    let proj_rename = cabin.proj_rename.clone();
+    let proj_rename_buf = cabin.proj_rename_buf.clone();
+    let running = cabin.running;
+    cabin.apply_project_menu("missing-proj".into(), ProjectMenuAct::Rename);
+    assert_eq!(cabin.projects, projects);
+    assert_eq!(cabin.status, status);
+    assert_eq!(cabin.proj_rename, proj_rename);
+    assert_eq!(cabin.proj_rename_buf, proj_rename_buf);
+    assert_eq!(cabin.running, running);
+    assert!(!cabin.running);
+
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    drop(_held);
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    let _done = io.lock().unwrap_or_else(|e| e.into_inner());
+    drop(_done);
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #152.
+#[test]
+fn followup_queue_drains_one_and_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("followup-queue");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_GROK", root.join("missing-grok"));
+
+    let mut composer = Cabin::quiet_for_test();
+    assert!(!composer.running);
+    composer.send_chat("/help".into());
+    let help_status = composer.status.clone();
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+
+    cabin.drain_followup_queue();
+    assert!(cabin.followup_queue.is_empty());
+    assert!(!cabin.running);
+
+    let second = "second line stays queued".to_string();
+    cabin.followup_queue = vec!["/help".into(), second.clone()];
+    cabin.drain_followup_queue();
+    assert_eq!(cabin.followup_queue, vec![second]);
+    assert_eq!(cabin.status, help_status);
+    assert_eq!(cabin.messages.as_ref(), composer.messages.as_ref());
+    assert!(!cabin.running);
+
+    cabin.followup_queue = vec!["/approve".into()];
+    cabin.drain_followup_queue();
+    assert_eq!(cabin.status, "Unknown command — /help");
+    assert!(!cabin.running);
+
+    let sentence = "plain sentence with no grok".to_string();
+    cabin.followup_queue = vec![sentence.clone()];
+    cabin.drain_followup_queue();
+    assert_eq!(
+        cabin.status,
+        "Install Grok Build (x.ai/cli) or Connect Grok in Settings"
+    );
+    assert!(
+        cabin.messages.iter().all(|(_, body)| !body.contains(&sentence)),
+        "the plain sentence must stay off the chat"
+    );
+    assert!(!cabin.running);
+
+    std::env::remove_var("GROKHUB_GROK");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #153.
+#[test]
+fn thinking_status_shows_context_when_usage_is_present() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("thinking-status");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert_eq!(cabin.thinking_status(), "Thinking…");
+
+    let usage = GrokUsage {
+        context_tokens_used: 26000,
+        context_window_tokens: 500000,
+        ..GrokUsage::default()
+    };
+    cabin.grok_usage = usage.clone();
+    let line = grok_context_line(&usage);
+    assert_eq!(cabin.thinking_status(), format!("Thinking… {line}"));
+    assert!(!cabin.running);
+}
+
+// Landed from PR #154.
+#[test]
+fn grok_session_list_applies_the_matching_generation() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("grok-sess-list");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let row = |id: &str, title: &str| grokhub_acp::GrokSession {
+        id: id.to_string(),
+        title: title.to_string(),
+        path: None,
+        cwd: None,
+        cabin: false,
+    };
+    let ids = |cabin: &Cabin| -> Vec<String> {
+        cabin.grok_sessions.iter().map(|s| s.id.clone()).collect()
+    };
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.nav = Nav::History;
+    cabin.running = false;
+    cabin.grok_list_gen = 4;
+    cabin.grok_sessions_loaded = false;
+    cabin.grok_sessions = vec![row("keep-a", "Kept A"), row("keep-b", "Kept B")];
+
+    cabin.apply_grok_sess_msg(GrokSessMsg::Listed {
+        gen: 3,
+        rows: vec![row("stale", "Stale")],
+        done: Vec::new(),
+        error: None,
+    });
+    assert_eq!(ids(&cabin), ["keep-a".to_string(), "keep-b".to_string()]);
+    assert!(!cabin.grok_sessions_loaded);
+    assert!(!cabin.running);
+    assert!(matches!(cabin.nav, Nav::History));
+
+    cabin.apply_grok_sess_msg(GrokSessMsg::Listed {
+        gen: 4,
+        rows: vec![row("one", "One"), row("two", "Two")],
+        done: Vec::new(),
+        error: None,
+    });
+    assert_eq!(ids(&cabin), ["one".to_string(), "two".to_string()]);
+    assert!(cabin.grok_sessions_loaded);
+    assert_eq!(cabin.status, "2 Grok sessions");
+    assert!(!cabin.running);
+    assert!(matches!(cabin.nav, Nav::History));
+
+    cabin.apply_grok_sess_msg(GrokSessMsg::Listed {
+        gen: 4,
+        rows: vec![row("one", "One")],
+        done: vec!["two".to_string()],
+        error: None,
+    });
+    assert_eq!(cabin.status, "Deleted session");
+    assert!(!cabin.running);
+
+    cabin.apply_grok_sess_msg(GrokSessMsg::Listed {
+        gen: 4,
+        rows: vec![row("one", "One")],
+        done: Vec::new(),
+        error: Some("missing on disk".to_string()),
+    });
+    assert_eq!(cabin.status, "Could not delete session: missing on disk");
+    assert!(!cabin.running);
+}
+
+// Landed from PR #155.
+#[test]
+fn grok_catalog_load_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("grok-catalog");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    let prev = std::env::var("GROKHUB_CONFIG").ok();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running, "a quiet cabin is not a run");
+
+    cabin.reload_grok_catalog();
+    assert!(!cabin.running, "catalog load must stay off a run");
+
+    if grokhub_acp::find_grok().is_none() {
+        assert_eq!(cabin.status, crate::build_agent::grok_banner());
+        assert!(cabin.grok_catalog_loaded);
+        assert!(
+            cabin.grok_catalog_rx.is_none(),
+            "a missing grok binary must not open a catalog channel"
+        );
+    } else {
+        assert_eq!(cabin.status, "Loading Grok Build catalog…");
+        assert!(cabin.grok_catalog_rx.is_some());
+        assert!(!cabin.running);
+        cabin.status = "catalog-stay".into();
+        cabin.reload_grok_catalog();
+        assert_eq!(cabin.status, "catalog-stay");
+        assert!(cabin.grok_catalog_rx.is_some());
+    }
+    assert!(!cabin.running);
+
+    match prev {
+        Some(p) => std::env::set_var("GROKHUB_CONFIG", p),
+        None => std::env::remove_var("GROKHUB_CONFIG"),
+    }
+}
+
+// Landed from PR #156.
+#[test]
+fn shell_chip_stays_off_a_run_when_host_is_blocked() {
+    let _guard = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("shell-chip");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let project = root.join("proj");
+    std::fs::create_dir_all(&project).expect("project");
+    let project_dir = project.to_string_lossy().into_owned();
+    let cmd = "cat /etc/passwd".to_string();
+    assert!(
+        grokhub_core::host_cmd_leaves_project(&cmd, &project_dir),
+        "cat /etc/passwd must leave the bound project"
+    );
+
+    let chip = grokhub_core::QuickChip {
+        id: "shell".into(),
+        label: "Shell".into(),
+        value: cmd,
+        kind: grokhub_core::ChipKind::Shell,
+        score: 1.0,
+        hint: String::new(),
+        primary: false,
+    };
+
+    let mut off = super::Cabin::quiet_for_test();
+    off.cfg.host_on = false;
+    off.cfg.project_dir = project_dir.clone();
+    off.permission_mode = grokhub_acp::PermissionMode::Ask;
+    off.running = false;
+    off.apply_chip(chip.clone());
+    assert_eq!(off.status, "Host off — /host on");
+    assert!(!off.running);
+
+    let mut ask = super::Cabin::quiet_for_test();
+    ask.cfg.host_on = true;
+    ask.cfg.project_dir = project_dir;
+    ask.permission_mode = grokhub_acp::PermissionMode::Ask;
+    ask.running = false;
+    ask.apply_chip(chip);
+    assert!(
+        !ask.running,
+        "running became true; the command was inside the project"
+    );
+    let chat = ask
+        .messages
+        .iter()
+        .map(|(_, body)| body.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        chat.contains("blocked: outside bound project"),
+        "chat missing outside-project block: {chat}"
+    );
+}
+
+// Landed from PR #157.
+#[test]
+fn feed_pulse_ticks_without_a_chat() {
+    let _cfg = crate::config::hold_test_config();
+    let prev_config = std::env::var("GROKHUB_CONFIG").ok();
+    let root = crate::config::test_config_root("feed-pulse");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    // Whole-day quiet so Housekeep holds the digest clock and does not post a card.
+    cabin.cfg.quiet_start = "00:00".into();
+    cabin.cfg.quiet_end = "23:59".into();
+    let before = cabin.cfg.feed_pulse.clone();
+    assert!(!cabin.running);
+    assert!(
+        cabin.updates.is_empty() && !grokhub_core::feed_visible(&cabin.updates),
+        "an empty feed stays hidden"
+    );
+
+    cabin.tick_feed_pulse();
+    assert_ne!(
+        cabin.cfg.feed_pulse, before,
+        "one tick advances the stored FeedPulse"
+    );
+    assert!(!cabin.running, "the feed pulse must not start a run");
+    assert!(
+        cabin.updates.is_empty() && !grokhub_core::feed_visible(&cabin.updates),
+        "an empty feed stays hidden"
+    );
+
+    let advanced = cabin.cfg.feed_pulse.clone();
+    cabin.tick_feed_pulse();
+    assert!(!cabin.running, "a second tick does not start a run");
+    assert_eq!(
+        cabin.cfg.feed_pulse, advanced,
+        "a second tick does not start a run"
+    );
+    assert!(
+        cabin.updates.is_empty() && !grokhub_core::feed_visible(&cabin.updates),
+        "an empty feed stays hidden"
+    );
+
+    let io = cabin.persist_io.clone();
+    let path = root.join("app.json");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while std::time::Instant::now() < deadline {
+        if std::fs::read_to_string(&path)
+            .map(|body| body.contains("feedPulse"))
+            .unwrap_or(false)
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let _disk = std::mem::ManuallyDrop::new(io.lock().unwrap_or_else(|e| e.into_inner()));
+    match prev_config {
+        Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+        None => std::env::remove_var("GROKHUB_CONFIG"),
+    }
+}
+
+// Landed from PR #158.
+#[test]
+fn composer_action_chips_stay_off_a_run() {
+    let _hold = config::hold_test_config();
+    let root = config::test_config_root("composer-action-chips");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(matches!(cabin.nav, Nav::Chat));
+    assert!(!cabin.running);
+
+    const SENT: &str = "Install Grok Build (x.ai/cli) or Connect Grok in Settings";
+
+    fn click(cabin: &mut Cabin, label: &str) {
+        cabin.refresh_chips();
+        let chips = cabin.composer_chips();
+        let chip = chips
+            .iter()
+            .find(|c| c.label == label)
+            .cloned()
+            .unwrap_or_else(|| {
+                let labels: Vec<_> = chips.iter().map(|c| c.label.as_str()).collect();
+                panic!("missing {label} among {labels:?}");
+            });
+        assert!(matches!(chip.kind, ChipKind::Chat), "{label}");
+        let before = cabin.messages.len();
+        let value = chip.value.clone();
+        cabin.apply_chip(chip);
+        if grokhub_acp::find_grok().is_some() {
+            cabin.halt_in_flight();
+        }
+        assert!(!cabin.running, "{label}");
+        assert!(matches!(cabin.nav, Nav::Chat));
+        if grokhub_acp::find_grok().is_none() {
+            assert_eq!(cabin.messages.len(), before, "{label} transcript");
+        }
+        assert!(
+            cabin.messages.iter().all(|(_, line)| line != SENT),
+            "{label} transcript gained the status line"
+        );
+        if cabin.composer.is_empty() {
+            if grokhub_acp::find_grok().is_none() {
+                assert_eq!(cabin.status, SENT, "{label}");
+            }
+        } else {
+            assert_eq!(cabin.composer, value, "{label}");
+        }
+    }
+
+    cabin.composer = "paint the north wall".into();
+    click(&mut cabin, "Expand & send");
+
+    cabin.messages = Arc::new(vec![
+        ("user".into(), "We started the cabin wall.".into()),
+        (
+            "assistant".into(),
+            "The north wall has one coat already.".into(),
+        ),
+    ]);
+    cabin.composer.clear();
+    cabin.chip_paint_key.clear();
+    click(&mut cabin, "Continue");
+
+    cabin.messages = Arc::new(vec![
+        ("user".into(), "Look at the cabin logs.".into()),
+        (
+            "assistant".into(),
+            "I'll check the cabin logs and then run a short probe.".into(),
+        ),
+    ]);
+    cabin.composer.clear();
+    cabin.chip_paint_key.clear();
+    click(&mut cabin, "Finish — run tools now");
+    click(&mut cabin, "Finish the job");
+}
+
+// Landed from PR #159.
+#[test]
+fn housekeep_expires_ideas_after_two_weeks() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("idea-expiry");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(
+        !grokhub_core::feed_visible(&cabin.updates),
+        "an empty feed stays hidden"
+    );
+
+    let now = grokhub_core::now_ms();
+    let stale_at = now
+        .saturating_sub(grokhub_core::IDEA_TTL_MS)
+        .saturating_sub(1);
+    let stale = grokhub_core::idea_card("old", "Stale idea", "aged out", stale_at);
+    let fresh = grokhub_core::idea_card("new", "Fresh idea", "still good", now);
+    assert!(!stale.kind.event() && !fresh.kind.event());
+    crate::feed::save(&[stale.clone(), fresh.clone()]).expect("updates.json");
+    cabin.updates = crate::feed::load();
+
+    cabin.tick_feed_pulse();
+
+    assert!(
+        cabin
+            .updates
+            .iter()
+            .all(|card| card.status != grokhub_core::UpdateStatus::Dismissed),
+        "housekeep expiry is the age path, not a dismiss"
+    );
+    assert!(
+        !cabin.updates.iter().any(|card| card.id == stale.id),
+        "an idea older than about two weeks is gone after housekeep"
+    );
+    assert!(
+        cabin.updates.iter().any(|card| card.id == fresh.id),
+        "a fresh idea stays"
+    );
+    assert!(!cabin.running);
+    assert!(
+        grokhub_core::visible_updates(&cabin.updates).is_empty(),
+        "ideas must not invent event rows or take the paint cap of 4"
+    );
+    assert_eq!(
+        grokhub_core::visible_ideas(&cabin.updates)
+            .iter()
+            .filter(|card| card.id == fresh.id)
+            .count(),
+        1
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #160.
+#[test]
+fn fork_and_worktree_stay_off_a_send() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("fork-worktree");
+    let _ = std::fs::create_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.new_thread(false);
+    let seeded = cabin
+        .threads
+        .get_mut(cabin.thread_idx)
+        .expect("quiet cabin needs one thread before fork");
+    seeded.grok_session = Some("sess".into());
+
+    let before = cabin.threads.len();
+    cabin.run_slash(super::Slash::Fork);
+
+    assert!(cabin.threads.len() > before);
+    let fork = cabin
+        .threads
+        .get(cabin.thread_idx)
+        .expect("fork chat");
+    assert_eq!(fork.title, "Fork");
+    assert_eq!(fork.grok_session.as_deref(), Some("sess"));
+    assert!(fork.grok_fork);
+    assert!(cabin.acp.is_none());
+    assert_eq!(
+        cabin.status,
+        "Forked — next send starts a new Grok session from this history"
+    );
+    assert!(!cabin.running);
+    assert!(matches!(cabin.nav, super::Nav::Chat));
+
+    cabin.run_slash(super::Slash::Worktree);
+    let worked = cabin
+        .threads
+        .get(cabin.thread_idx)
+        .expect("worktree chat");
+    assert!(worked.grok_worktree);
+    assert_eq!(cabin.status, "Next chat uses --worktree");
+    assert!(!cabin.running);
+
+    cabin.run_slash(super::Slash::Worktree);
+    let off = cabin
+        .threads
+        .get(cabin.thread_idx)
+        .expect("worktree chat");
+    assert!(!off.grok_worktree);
+    assert_eq!(cabin.status, "Worktree off");
+    assert!(!cabin.running);
+}
+
+// Landed from PR #161.
+#[test]
+fn model_slash_saves_without_a_run() {
+    let _hold = config::hold_test_config();
+    let root = config::test_config_root("model-slash");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    cabin.run_slash(Slash::Model("grok-4.7".into()));
+
+    assert_eq!(cabin.cfg.model, "grok-4.7");
+    assert_eq!(cabin.status, "grok --model grok-4.7");
+    assert!(!cabin.running);
+
+    let path = root.join("app.json");
+    let started = Instant::now();
+    let mut body = String::new();
+    while started.elapsed() < Duration::from_secs(3) {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            body = text;
+            if body.contains("\"model\": \"grok-4.7\"") {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        path.starts_with(&root),
+        "model file must stay under the test config root"
+    );
+    assert!(
+        body.contains("\"model\": \"grok-4.7\""),
+        "model was not persisted under {}: {body}",
+        path.display()
+    );
+    assert_eq!(config::load().model, "grok-4.7");
+
+    std::env::remove_var("GROKHUB_CONFIG");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// Landed from PR #162.
+fn collect_shape_text(shape: &egui::Shape, out: &mut Vec<String>) {
+    match shape {
+        egui::Shape::Text(text) => out.push(text.galley.job.text.clone()),
+        egui::Shape::Vec(shapes) => {
+            for shape in shapes {
+                collect_shape_text(shape, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn empty_queue_keeps_nothing_queued_label() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("empty-queue");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(cabin.followup_queue.is_empty());
+
+    let chips = cabin.composer_chips();
+    assert!(
+        chips.is_empty(),
+        "a quiet cabin with an empty follow-up queue has an empty chip row"
+    );
+
+    let mut texts = Vec::new();
+    let ctx = egui::Context::default();
+    let _ = ctx.run(Default::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            assert!(crate::cards::quick_chip_row(ui, &chips).is_none());
+            let layer = ui.layer_id();
+            ui.ctx().graphics(|layers| {
+                if let Some(list) = layers.get(layer) {
+                    for clipped in list.all_entries() {
+                        collect_shape_text(&clipped.shape, &mut texts);
+                    }
+                }
+            });
+        });
+    });
+
+    assert_eq!(crate::cards::CHIP_EMPTY_LABEL, "Nothing queued");
+    assert_eq!(
+        texts,
+        vec![crate::cards::CHIP_EMPTY_LABEL.to_string()],
+        "an empty follow-up queue shows exactly the empty-queue label"
+    );
+    assert!(!cabin.running);
+    assert!(cabin.followup_queue.is_empty());
+
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #163.
+#[test]
+fn hub_and_memory_show_stay_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("hub-memory");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+
+    cabin.run_slash(Slash::Hub);
+    assert!(matches!(cabin.nav, Nav::Devices));
+    assert_eq!(cabin.status, "Start share on Devices");
+    assert!(!cabin.hub_on);
+    assert!(!cabin.running);
+    let sharing = cabin.hub.lock().expect("hub").sharing;
+    assert!(!sharing);
+
+    cabin.hub_on = true;
+    cabin.run_slash(Slash::Hub);
+    assert_eq!(cabin.status, "Hub sharing");
+    assert!(!cabin.running);
+    let sharing = cabin.hub.lock().expect("hub").sharing;
+    assert!(!sharing);
+
+    cabin.run_slash(Slash::MemoryShow);
+    assert!(matches!(cabin.nav, Nav::Memory));
+    assert_eq!(cabin.status, "Memory");
+    assert!(!cabin.running);
+
+    cabin.threads.push(crate::threads::ChatThread::new("Scratch", true));
+    cabin.thread_idx = cabin.threads.len() - 1;
+    assert!(cabin.scratch());
+    cabin.mem_body = "sentinel-memory".into();
+    let mem_body = cabin.mem_body.clone();
+    cabin.run_slash(Slash::Forget(None));
+    assert_eq!(cabin.status, "Scratch — no memory writes");
+    assert_eq!(cabin.mem_body, mem_body);
+    assert!(!cabin.running);
+}
+
+// Landed from PR #164.
+#[test]
+fn palette_opens_and_diagnostics_stay_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("palette-diag");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.open_palette();
+    assert!(cabin.palette_open);
+    assert!(cabin.palette_focus);
+    assert!(cabin.palette_q.is_empty());
+    assert!(cabin.palette_file_rx.is_none());
+    assert!(!cabin.settings_menu_open);
+    assert!(!cabin.running);
+
+    cabin.run_palette("diag");
+    assert!(!cabin.palette_open);
+    assert!(cabin.status.contains("app GrokHub"));
+    assert!(cabin.status.contains(env!("CARGO_PKG_VERSION")));
+    assert!(!cabin.running);
+
+    cabin.run_palette("nav:night");
+    assert!(matches!(cabin.nav, Nav::Night));
+    assert!(!cabin.palette_open);
+    assert!(!cabin.running);
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #165.
+fn grok_process_ids() -> Vec<u32> {
+    let mut ids = Vec::new();
+    let Ok(dir) = std::fs::read_dir("/proc") else {
+        return ids;
+    };
+    for entry in dir.flatten() {
+        let name = entry.file_name();
+        let Some(pid_str) = name.to_str() else {
+            continue;
+        };
+        let Ok(pid) = pid_str.parse::<u32>() else {
+            continue;
+        };
+        let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+        let comm_is_grok = comm.trim() == "grok";
+        let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+        let argv0 = cmdline.split(|b| *b == 0).next().unwrap_or(&[]);
+        let exe_is_grok = std::path::Path::new(std::str::from_utf8(argv0).unwrap_or(""))
+            .file_name()
+            .and_then(|s| s.to_str())
+            == Some("grok");
+        if comm_is_grok || exe_is_grok {
+            ids.push(pid);
+        }
+    }
+    ids.sort_unstable();
+    ids
+}
+
+#[test]
+fn help_slash_lists_commands_without_a_run() {
+    struct RestoreConfig(Option<String>);
+    impl Drop for RestoreConfig {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+                None => std::env::remove_var("GROKHUB_CONFIG"),
+            }
+        }
+    }
+
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("help-slash");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    let _restore = RestoreConfig(std::env::var("GROKHUB_CONFIG").ok());
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    assert!(!cabin.running, "help starts from an idle cabin");
+    let before = cabin.messages.len();
+    let grok_before = grok_process_ids();
+    cabin.run_slash(Slash::Help);
+    let gained: Vec<&(String, String)> = cabin.messages.iter().skip(before).collect();
+    assert!(
+        matches!(
+            gained.as_slice(),
+            [(role, text)] if role == "assistant" && text.contains("/help — this list")
+        ),
+        "transcript must gain one assistant line containing /help — this list, got {gained:?}"
+    );
+    assert!(!cabin.running, "help must not start a run");
+    assert!(
+        cabin.grok_p_pid.is_none(),
+        "help must not record a grok pid"
+    );
+    assert_eq!(
+        grok_before,
+        grok_process_ids(),
+        "help must not start a grok process"
+    );
+}
+
+// Landed from PR #166.
+#[test]
+fn heartbeat_pulse_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("heartbeat_pulse_stays_off_a_run");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.hub_on = false;
+    cabin.automations.clear();
+    cabin.running = false;
+    cabin.last_activity = std::time::Instant::now();
+    cabin.last_heartbeat = std::time::Instant::now()
+        .checked_sub(std::time::Duration::from_secs(30))
+        .expect("age last_heartbeat");
+
+    cabin.tick_heartbeat();
+
+    assert!(!cabin.running);
+    assert!(cabin.pending_hub_task.is_none());
+    assert!(cabin.night_check_rx.is_none());
+    assert!(cabin.last_heartbeat.elapsed() < std::time::Duration::from_secs(5));
+
+    let stamped = cabin.last_heartbeat;
+    cabin.tick_heartbeat();
+
+    assert!(!cabin.running);
+    assert!(cabin.pending_hub_task.is_none());
+    assert!(cabin.night_check_rx.is_none());
+    assert_eq!(cabin.last_heartbeat, stamped);
+}
+
+// Landed from PR #167.
+#[test]
+fn unknown_slash_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("unknown-slash");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+
+    let status = cabin.status.clone();
+    let transcript = cabin.messages.clone();
+    let running = cabin.running;
+
+    cabin.send_chat(String::new());
+    assert_eq!(cabin.status, status);
+    assert_eq!(&*cabin.messages, &*transcript);
+    assert_eq!(cabin.running, running);
+
+    cabin.send_chat("/not-a-command".to_string());
+    if grokhub_acp::find_grok().is_none() {
+        assert_eq!(
+            cabin.status,
+            "Install Grok Build (x.ai/cli) or Connect Grok in Settings"
+        );
+        assert_eq!(&*cabin.messages, &*transcript);
+    } else {
+        cabin.halt_in_flight();
+    }
+    assert!(!cabin.running);
+    let transcript = cabin.messages.clone();
+
+    cabin.send_chat("/approve".to_string());
+    assert_eq!(cabin.status, "Unknown command — /help");
+    assert_eq!(&*cabin.messages, &*transcript);
+    assert!(!cabin.running);
+}
+
+// Landed from PR #168.
+#[test]
+fn slash_pick_fills_or_returns_the_command() {
+    let mut composer = String::new();
+    let run = super::slash_pick_take(&mut composer, "/help", true);
+    assert_eq!(run.as_deref(), Some("/help"));
+    assert!(composer.is_empty());
+
+    let mut composer = String::new();
+    let run = super::slash_pick_take(&mut composer, "/model ", false);
+    assert!(run.is_none());
+    assert_eq!(composer, "/model ");
+
+    assert_eq!(super::slash_pick_step(0, 3, 1), 1);
+    assert_eq!(super::slash_pick_step(2, 3, 1), 2);
+    assert_eq!(super::slash_pick_step(0, 3, -1), 0);
+    assert_eq!(super::slash_pick_step(0, 0, 1), 0);
+
+    assert_eq!(super::slash_pick_retain(2, true, 5), 0);
+    assert_eq!(super::slash_pick_retain(2, false, 5), 2);
+}
+
+// Landed from PR #169.
+#[test]
+fn settings_section_titles_match_the_page() {
+    assert_eq!(
+        super::settings::settings_sec_title(super::SettingsSec::Account),
+        "Account"
+    );
+    assert_eq!(
+        super::settings::settings_sec_title(super::SettingsSec::Appearance),
+        "Appearance"
+    );
+    assert_eq!(
+        super::settings::settings_sec_title(super::SettingsSec::Behavior),
+        "Behavior"
+    );
+    assert_eq!(
+        super::settings::settings_sec_title(super::SettingsSec::Update),
+        "Update"
+    );
+    assert_eq!(
+        super::settings::settings_sec_title(super::SettingsSec::About),
+        "About"
+    );
+    assert!(matches!(
+        super::settings::settings_group_home(super::SettingsGroup::General),
+        super::SettingsSec::Account
+    ));
+    assert!(matches!(
+        super::settings::settings_group_home(super::SettingsGroup::About),
+        super::SettingsSec::Update
+    ));
+}
+
+// Landed from PR #170.
+#[test]
+fn ask_denied_without_acp_stays_off_a_run() {
+    struct RestoreConfig170(Option<String>);
+    impl Drop for RestoreConfig170 {
+        fn drop(&mut self) {
+            match self.0.take() {
+                Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+                None => std::env::remove_var("GROKHUB_CONFIG"),
+            }
+        }
+    }
+
+    let _cfg = crate::config::hold_test_config();
+    let _restore = RestoreConfig170(std::env::var("GROKHUB_CONFIG").ok());
+    let root = crate::config::test_config_root("ask-denied");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.running = true;
+    cabin.pending_kick = Some(true);
+    cabin.chat_job_thread = Some("job".into());
+
+    let denied = "Ask is fail-closed: Allow / Deny needs a live Grok Build agent. Turn denied. Install Grok Build CLI or Start agent in Settings → Update.";
+    cabin.fail_ask_without_acp("");
+    assert_eq!(cabin.status, denied);
+    assert!(!cabin.running);
+    assert!(cabin.pending_kick.is_none());
+    assert!(cabin.chat_job_thread.is_none());
+
+    cabin.fail_ask_without_acp("timeout");
+    assert!(
+        cabin.status.contains(denied) && cabin.status.contains("timeout"),
+        "timeout detail stays on the deny sentence, got {}",
+        cabin.status
+    );
+    assert!(!cabin.running);
+    assert!(cabin.pending_kick.is_none());
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Landed from PR #171.
+#[test]
+fn history_hit_opens_memory_or_chat() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("history-hit");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+
+    cabin.open_history_hit("mem:MEMORY.md");
+    assert!(matches!(cabin.nav, Nav::Memory));
+    assert_eq!(cabin.status, "MEMORY.md");
+    assert_eq!(cabin.mem_name, "MEMORY.md");
+    assert!(!cabin.running);
+
+    cabin.open_history_hit("thread:nope");
+    assert_eq!(cabin.status, "That chat is gone");
+    assert!(!cabin.running);
+
+    cabin.new_thread(false);
+    cabin.new_thread(false);
+    let id = cabin
+        .threads
+        .get(cabin.thread_idx)
+        .map(|t| t.id.clone())
+        .expect("seeded thread");
+    cabin.open_history_hit(&format!("thread:{id}"));
+    assert_eq!(cabin.threads[cabin.thread_idx].id, id);
+    assert!(matches!(cabin.nav, Nav::Chat));
+    assert!(!cabin.running);
+}
+
+// Landed from PR #172.
+#[test]
+fn delete_all_history_leaves_one_empty_chat() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("delete-all-history");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.new_thread(false);
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), "note".into())]);
+    cabin.new_thread(false);
+    cabin.cfg.goal_pin = "harbor".into();
+    let seeded = cabin
+        .threads
+        .iter()
+        .position(|t| !t.messages.is_empty())
+        .expect("seeded message");
+    cabin.threads[seeded].grok_session = Some("sess".into());
+    assert!(cabin.threads.len() >= 2);
+    assert!(cabin.threads.iter().any(|t| t.grok_session.as_deref() == Some("sess")));
+    assert_eq!(cabin.cfg.goal_pin, "harbor");
+    assert!(!cabin.running);
+
+    cabin.delete_all_history();
+
+    assert_eq!(cabin.status, "Deleted all chats");
+    assert_eq!(cabin.threads.len(), 1);
+    assert_eq!(cabin.threads[0].title, "Chat");
+    assert!(cabin.threads[0].messages.is_empty());
+    assert!(cabin.messages.is_empty());
+    assert!(cabin.cfg.goal_pin.is_empty());
+    assert!(cabin.grok_sessions.is_empty());
+    assert!(!cabin.running);
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #173.
+#[test]
+fn clear_profile_picture_saves_without_a_dialog() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("clear-profile");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    cabin.cfg.profile_picture = "profile.png".into();
+    cabin.clear_profile_picture();
+
+    assert!(cabin.cfg.profile_picture.is_empty());
+    assert!(cabin.profile_photo.is_none());
+    assert_eq!(cabin.status, "Saved");
+    assert!(!cabin.running);
+}
+
+// Landed from PR #174.
+#[test]
+fn leaving_a_chat_clears_attach_and_asks() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("leave-chrome");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("isolated config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.running = false;
+    cabin.attach_name = Some("shot.png".into());
+    cabin.hands_attach = true;
+    cabin.eyes_attach = true;
+    cabin.elicit_draft = "name the shot".into();
+    cabin.perm_ask = Some(grokhub_acp::PermissionAsk {
+        rpc_id: serde_json::Value::Null,
+        session_id: "sess".into(),
+        title: "Run".into(),
+        tool_call_id: "tool".into(),
+        action: "shot.png".into(),
+        reason: "attach".into(),
+    });
+    cabin.elicit_ask = Some(grokhub_acp::ElicitAsk {
+        rpc_id: serde_json::Value::Null,
+        session_id: "sess".into(),
+        tool_call_id: "tool".into(),
+        server_name: "form".into(),
+        message: "need a name".into(),
+        mode: "form".into(),
+        url: String::new(),
+        elicitation_id: "elicit".into(),
+        field_name: Some("name".into()),
+        field_title: "Name".into(),
+        secret: false,
+    });
+
+    cabin.drop_leaving_thread_chrome();
+
+    assert!(cabin.attach_name.is_none());
+    assert!(!cabin.hands_attach);
+    assert!(!cabin.eyes_attach);
+    assert!(cabin.elicit_draft.is_empty());
+    assert!(cabin.perm_ask.is_none());
+    assert!(cabin.elicit_ask.is_none());
+    assert!(cabin.acp.is_none());
+    assert!(!cabin.running);
+
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #175.
+#[test]
+fn clear_slash_empties_the_chat() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("clear-slash");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.new_thread(false);
+    let idx = cabin.thread_idx;
+    let thread_id = cabin.threads[idx].id.clone();
+    {
+        let thread = &mut cabin.threads[idx];
+        thread.messages_mut().push(("user".into(), "hello".into()));
+        thread.grok_session = Some("sess".into());
+    }
+    cabin.messages = cabin.threads[idx].messages.clone();
+    assert!(!cabin.running);
+
+    cabin.run_slash(Slash::Clear);
+
+    assert_eq!(cabin.status, "Cleared");
+    assert!(cabin.messages.is_empty());
+    let thread = cabin
+        .threads
+        .iter()
+        .find(|t| t.id == thread_id)
+        .expect("seeded thread");
+    assert!(thread.messages.is_empty());
+    assert!(thread.grok_session.as_deref().unwrap_or("").is_empty());
+    assert!(!cabin.running);
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #176.
+#[test]
+fn context_slash_counts_an_empty_chat() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("context-slash");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    if cabin.threads.get(cabin.thread_idx).is_none() {
+        cabin.new_thread(false);
+    }
+    assert!(cabin.grok_usage.is_empty());
+    assert!(cabin.cfg.goal_pin.is_empty());
+    assert!(cabin.messages.is_empty());
+    assert!(!cabin.running);
+
+    cabin.run_slash(super::Slash::Context);
+
+    assert_eq!(cabin.status, "0 turns · 0 tokens · 0% · pin none");
+    assert!(!cabin.running);
+    assert!(cabin.messages.is_empty());
+}
+
+// Landed from PR #177.
+#[test]
+fn build_idea_files_one_todo() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("build-idea");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.board.clear();
+    cabin.updates = vec![grokhub_core::UpdateCard {
+        id: "idea-1".into(),
+        kind: grokhub_core::UpdateKind::Idea,
+        title: "Ship the harbor".into(),
+        body: Some(String::new()),
+        created_at: 0,
+        status: grokhub_core::UpdateStatus::Unread,
+        action: None,
+        expires_at: None,
+        held: false,
+        citations: Vec::new(),
+        reaction: None,
+        discuss_thread: None,
+        built: false,
+        board_id: None,
+        why: None,
+    }];
+
+    cabin.build_idea("nope");
+    assert!(cabin.board.is_empty());
+    assert!(!cabin.running);
+
+    cabin.build_idea("idea-1");
+    assert_eq!(cabin.board.len(), 1);
+    assert_eq!(
+        cabin.board[0].title,
+        grokhub_core::idea_todo_title("Ship the harbor", "")
+    );
+    assert_eq!(cabin.board[0].status, grokhub_core::BoardStatus::Todo);
+    assert!(cabin.updates[0].built);
+    assert_eq!(
+        cabin.updates[0].board_id.as_deref(),
+        Some(cabin.board[0].id.as_str())
+    );
+    assert!(!cabin.running);
+
+    cabin.build_idea("idea-1");
+    assert_eq!(cabin.board.len(), 1);
+    assert!(matches!(cabin.nav, super::Nav::Workboard));
+    assert!(!cabin.running);
+}
+
+// Landed from PR #178.
+#[test]
+fn plan_and_empty_video_stay_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("plan-video");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.new_thread(false);
+    {
+        let thread = cabin
+            .threads
+            .get_mut(cabin.thread_idx)
+            .expect("seeded thread");
+        thread.grok_session = Some("sess".into());
+    }
+
+    cabin.run_slash(super::Slash::Plan);
+    assert_eq!(cabin.status, "Plan mode — Grok Build will plan first");
+    assert!(matches!(cabin.session_mode, super::SessionMode::Plan));
+    assert_eq!(cabin.cfg.session_mode, "plan");
+    assert!(cabin.acp.is_none());
+    let session = cabin
+        .threads
+        .get(cabin.thread_idx)
+        .and_then(|t| t.grok_session.as_deref())
+        .unwrap_or("");
+    assert!(session.is_empty());
+    assert!(!cabin.running);
+
+    cabin.run_slash(super::Slash::ImagineVideo(String::new()));
+    assert!(matches!(cabin.nav, super::Nav::Imagine));
+    assert!(matches!(cabin.imagine_kind, super::ImagineKind::Video));
+    assert!(cabin.imagine_want_focus);
+    assert!(!cabin.running);
+}
+
+// Landed from PR #179.
+#[test]
+fn react_and_archive_stay_on_the_card() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("react-archive");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.updates = vec![
+        feed_card("idea-1", grokhub_core::UpdateKind::Idea, false),
+        feed_card("digest-1", grokhub_core::UpdateKind::Digest, true),
+        feed_card("event-1", grokhub_core::UpdateKind::AutomationDone, false),
+    ];
+
+    cabin.react_card("idea-1", grokhub_core::CardReaction::Up);
+    let idea = cabin
+        .updates
+        .iter()
+        .find(|card| card.id == "idea-1")
+        .expect("idea");
+    assert_eq!(idea.reaction, Some(grokhub_core::CardReaction::Up));
+    assert!(!cabin.running);
+
+    cabin.react_card("event-1", grokhub_core::CardReaction::Down);
+    let event = cabin
+        .updates
+        .iter()
+        .find(|card| card.id == "event-1")
+        .expect("event");
+    assert!(event.reaction.is_none());
+
+    cabin.archive_feed_digest("digest-1");
+    let digest = cabin
+        .updates
+        .iter()
+        .find(|card| card.id == "digest-1")
+        .expect("digest stays");
+    assert_eq!(digest.status, grokhub_core::UpdateStatus::Dismissed);
+    assert!(!digest.held);
+    assert!(!cabin.running);
+
+    cabin.archive_feed_digest("idea-1");
+    let idea = cabin
+        .updates
+        .iter()
+        .find(|card| card.id == "idea-1")
+        .expect("idea stays");
+    assert_ne!(idea.status, grokhub_core::UpdateStatus::Dismissed);
+}
+
+fn feed_card(id: &str, kind: grokhub_core::UpdateKind, held: bool) -> grokhub_core::UpdateCard {
+    grokhub_core::UpdateCard {
+        id: id.to_string(),
+        kind,
+        title: id.to_string(),
+        body: None,
+        created_at: 1,
+        status: grokhub_core::UpdateStatus::Unread,
+        action: None,
+        expires_at: None,
+        held,
+        citations: Vec::new(),
+        reaction: None,
+        discuss_thread: None,
+        built: false,
+        board_id: None,
+        why: None,
+    }
+}
+
+// Landed from PR #180.
+#[test]
+fn feed_actions_open_pages_without_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("feed-actions");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    assert!(!cabin.running);
+
+    cabin.new_thread(false);
+    cabin.live_mut().push(("user".into(), "keep".into()));
+    let older = cabin.threads[cabin.thread_idx].id.clone();
+    cabin.new_thread(false);
+    let newer = cabin.threads[cabin.thread_idx].id.clone();
+    assert_ne!(older, newer);
+    assert!(!cabin.running);
+
+    cabin.follow_update_action(Some(UpdateAction::OpenWorkboard));
+    assert!(matches!(cabin.nav, super::Nav::Workboard));
+    assert!(!cabin.running);
+    let nav_before_unknown = cabin.nav;
+
+    cabin.follow_update_action(Some(UpdateAction::OpenSession {
+        thread_id: "missing-session".into(),
+    }));
+    assert!(cabin.nav == nav_before_unknown);
+    assert!(matches!(cabin.nav, super::Nav::Workboard));
+    assert!(!cabin.running);
+
+    cabin.follow_update_action(Some(UpdateAction::OpenSession {
+        thread_id: older.clone(),
+    }));
+    assert_eq!(cabin.threads[cabin.thread_idx].id, older);
+    assert!(matches!(cabin.nav, super::Nav::Chat));
+    assert!(!cabin.running);
+
+    cabin.follow_update_action(Some(UpdateAction::OpenWorkboard));
+    assert!(matches!(cabin.nav, super::Nav::Workboard));
+    assert!(!cabin.running);
+
+    cabin.follow_update_action(Some(UpdateAction::OpenAutomations));
+    assert!(matches!(cabin.nav, super::Nav::Night));
+    assert!(!cabin.running);
+
+    cabin.follow_update_action(Some(UpdateAction::DeepLink {
+        href: "https://example.test/harbor".into(),
+    }));
+    assert_eq!(cabin.status, "https://example.test/harbor");
+    assert!(matches!(cabin.nav, super::Nav::Night));
+    assert!(!cabin.running);
+
+    let status_before_blank = cabin.status.clone();
+    cabin.follow_update_action(Some(UpdateAction::DeepLink {
+        href: "   ".into(),
+    }));
+    assert_eq!(cabin.status, status_before_blank);
+    assert!(matches!(cabin.nav, super::Nav::Night));
+    assert!(!cabin.running);
+
+    let nav_before_none = cabin.nav;
+    let status_before_none = cabin.status.clone();
+    cabin.follow_update_action(None);
+    assert!(cabin.nav == nav_before_none);
+    assert!(matches!(cabin.nav, super::Nav::Night));
+    assert_eq!(cabin.status, status_before_none);
+    assert!(!cabin.running);
+}
+
+// Landed from PR #181.
+fn offer_card(id: &str, title: &str, status: UpdateStatus) -> UpdateCard {
+    UpdateCard {
+        id: id.to_string(),
+        kind: UpdateKind::AutomateOffer,
+        title: title.to_string(),
+        body: None,
+        created_at: 1,
+        status,
+        action: None,
+        expires_at: None,
+        held: false,
+        citations: Vec::new(),
+        reaction: None,
+        discuss_thread: None,
+        built: false,
+        board_id: None,
+        why: None,
+    }
+}
+
+fn card_status(cabin: &Cabin, id: &str) -> UpdateStatus {
+    cabin
+        .updates
+        .iter()
+        .find(|card| card.id == id)
+        .map(|card| card.status)
+        .unwrap_or_else(|| panic!("missing card {id}"))
+}
+
+#[test]
+fn automate_offer_files_a_daily_job() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("automate-offer");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.automations.clear();
+    cabin.updates = vec![
+        offer_card("plain", "what is rust", UpdateStatus::Unread),
+        offer_card(
+            "daily",
+            "every day at 9, summarize the board",
+            UpdateStatus::Unread,
+        ),
+        offer_card(
+            "gone",
+            "every day at 9, summarize the board",
+            UpdateStatus::Dismissed,
+        ),
+    ];
+
+    cabin.accept_automate_offer("missing");
+    assert!(cabin.automations.is_empty());
+    assert!(!cabin.running);
+
+    cabin.accept_automate_offer("gone");
+    assert!(cabin.automations.is_empty());
+    assert!(!cabin.running);
+    assert_eq!(card_status(&cabin, "gone"), UpdateStatus::Dismissed);
+
+    cabin.accept_automate_offer("plain");
+    assert_eq!(card_status(&cabin, "plain"), UpdateStatus::Opened);
+    assert!(cabin.automations.is_empty());
+    assert!(!cabin.running);
+
+    cabin.accept_automate_offer("daily");
+    assert_eq!(card_status(&cabin, "daily"), UpdateStatus::Opened);
+    assert_eq!(cabin.automations.len(), 1);
+    assert!(!cabin.running);
+
+    cabin.accept_automate_offer("daily");
+    assert_eq!(cabin.automations.len(), 2);
+    assert!(!cabin.running);
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #182.
+#[test]
+fn empty_imagine_opens_without_a_run() {
+    struct RestoreEnv182 {
+        config: Option<String>,
+        tray: Option<String>,
+    }
+    impl Drop for RestoreEnv182 {
+        fn drop(&mut self) {
+            match self.config.take() {
+                Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+                None => std::env::remove_var("GROKHUB_CONFIG"),
+            }
+            match self.tray.take() {
+                Some(v) => std::env::set_var("GROKHUB_TRAY", v),
+                None => std::env::remove_var("GROKHUB_TRAY"),
+            }
+        }
+    }
+
+    let _cfg = crate::config::hold_test_config();
+    let restore = RestoreEnv182 {
+        config: std::env::var("GROKHUB_CONFIG").ok(),
+        tray: std::env::var("GROKHUB_TRAY").ok(),
+    };
+    let root = crate::config::test_config_root("empty-imagine");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_TRAY", "0");
+
+    let mut cabin = Cabin::quiet_for_test();
+    let kind_before = cabin.imagine_kind;
+    assert!(cabin.imagine_prompt.is_empty());
+    assert!(!cabin.running);
+
+    cabin.run_slash(Slash::Imagine(String::new()));
+    assert!(matches!(cabin.nav, Nav::Imagine));
+    assert!(cabin.imagine_want_focus);
+    assert!(cabin.imagine_prompt.is_empty());
+    assert_eq!(cabin.imagine_kind, kind_before);
+    assert!(!cabin.running);
+
+    cabin.run_slash(Slash::Imagine("   ".into()));
+    assert!(matches!(cabin.nav, Nav::Imagine));
+    assert!(cabin.imagine_want_focus);
+    assert!(cabin.imagine_prompt.is_empty());
+    assert_eq!(cabin.imagine_kind, kind_before);
+    assert!(!cabin.running);
+
+    drop(restore);
+}
+
+// Landed from PR #183.
+#[test]
+fn view_plan_opens_a_stored_plan() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("view-plan");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.new_thread(false);
+
+    cabin.threads[cabin.thread_idx].plan_body.clear();
+    cabin.run_slash(super::Slash::ViewPlan);
+    assert_eq!(cabin.status, "No plan yet — use Plan mode");
+    assert!(!cabin.plan_open);
+    assert!(!cabin.running);
+
+    cabin.threads[cabin.thread_idx].plan_body = " \n\t ".into();
+    cabin.run_slash(super::Slash::ViewPlan);
+    assert_eq!(cabin.status, "No plan yet — use Plan mode");
+    assert!(!cabin.plan_open);
+    assert!(!cabin.running);
+
+    cabin.threads[cabin.thread_idx].plan_body = "Ship the harbor".into();
+    cabin.run_slash(super::Slash::ViewPlan);
+    assert!(cabin.plan_open);
+    assert_eq!(cabin.status, "View plan");
+    assert!(!cabin.running);
+}
+
+// Landed from PR #184.
+#[test]
+fn rewind_files_asks_for_a_bind() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("rewind-bind");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    if !cabin.cfg.project_dir.is_empty() {
+        cabin.cfg.project_dir = String::new();
+    }
+    cabin.run_slash(Slash::RewindFiles);
+    assert_eq!(cabin.status, "Bind a project first — /project bind");
+    assert!(
+        cabin.rewind_rows.is_empty(),
+        "empty project dir must not snapshot"
+    );
+    assert!(!cabin.running, "empty project dir must not queue a shell");
+    assert!(cabin.cfg.project_dir.is_empty());
+}
+
+// Landed from PR #185.
+#[test]
+fn goal_pin_sets_and_clears() {
+    let _hold = config::hold_test_config();
+    let root = config::test_config_root("goal-pin");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let _pin = config::TestConfigDir::set(root.clone());
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.goal_pin.clear();
+    assert!(cabin.cfg.goal_pin.is_empty());
+    assert!(!cabin.running);
+
+    let pin_file = root.join("app.json");
+    let wait_pin = move |want: &str| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut last = String::new();
+        while std::time::Instant::now() < deadline {
+            last = std::fs::read_to_string(&pin_file)
+                .ok()
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .and_then(|v| v.get("goalPin").and_then(|p| p.as_str()).map(|s| s.to_string()))
+                .unwrap_or_default();
+            if last == want {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("persisted goal_pin {last:?}, want {want:?}");
+    };
+
+    for raw in ["", "   ", "\t", "\n  ", "status", "STATUS", "Status"] {
+        cabin.run_slash(Slash::Goal(raw.to_string()));
+        assert_eq!(cabin.status, "No goal pin", "input {raw:?}");
+        assert!(cabin.cfg.goal_pin.is_empty(), "input {raw:?}");
+        assert!(!cabin.running);
+    }
+
+    cabin.run_slash(Slash::Goal("Ship the harbor".to_string()));
+    assert_eq!(cabin.cfg.goal_pin, "Ship the harbor");
+    assert_eq!(cabin.status, "Goal: Ship the harbor");
+    assert!(!cabin.running);
+    wait_pin("Ship the harbor");
+
+    for raw in ["status", "STATUS", "Status"] {
+        cabin.run_slash(Slash::Goal(raw.to_string()));
+        assert_eq!(cabin.status, "Goal: Ship the harbor", "input {raw:?}");
+        assert_eq!(cabin.cfg.goal_pin, "Ship the harbor");
+        assert!(!cabin.running);
+    }
+
+    for raw in ["clear", "CLEAR", "Clear"] {
+        if cabin.cfg.goal_pin.is_empty() {
+            cabin.run_slash(Slash::Goal("Ship the harbor".to_string()));
+            assert_eq!(cabin.cfg.goal_pin, "Ship the harbor");
+            wait_pin("Ship the harbor");
+        }
+        cabin.run_slash(Slash::Goal(raw.to_string()));
+        assert!(cabin.cfg.goal_pin.is_empty(), "input {raw:?}");
+        assert_eq!(cabin.status, "Goal cleared", "input {raw:?}");
+        assert!(!cabin.running);
+        wait_pin("");
+    }
+
+    cabin.run_slash(Slash::Goal("status".to_string()));
+    assert_eq!(cabin.status, "No goal pin");
+    assert!(cabin.cfg.goal_pin.is_empty());
+    assert!(!cabin.running);
+}
+
+// Landed from PR #186.
+#[test]
+fn btw_sets_a_side_ask() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("btw-side-ask");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    cabin.run_slash(Slash::Btw);
+
+    assert!(matches!(cabin.session_mode, SessionMode::Ask));
+    assert_eq!(cabin.cfg.session_mode, "ask");
+    assert!(!cabin.running);
+    assert_eq!(cabin.status, "btw — look-safe side ask");
+    assert_eq!(cabin_default_session_id(&cabin.cfg.session_mode), "ask");
+    let persisted = cabin
+        .cfg_slot
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .cfg
+        .session_mode
+        .clone();
+    assert_eq!(persisted, "ask");
+}
+
+// Landed from PR #187.
+#[test]
+fn project_show_and_clear_stay_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("project-show");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.cfg.project_dir.is_empty());
+    assert!(!cabin.running);
+
+    cabin.run_slash(Slash::ProjectShow);
+    assert_eq!(cabin.status, "No bound project");
+    assert!(!cabin.running);
+
+    cabin.cfg.project_dir = r"D:\Work\Harbor".to_string();
+    cabin.run_slash(Slash::ProjectShow);
+    assert_eq!(cabin.status, r"Project D:\Work\Harbor");
+    assert!(!cabin.running);
+
+    cabin.new_thread(false);
+    {
+        let thread = cabin
+            .threads
+            .get_mut(cabin.thread_idx)
+            .expect("seeded thread");
+        thread.grok_session = Some("sess".into());
+        thread.grok_cwd = Some(r"D:\Work\Harbor".into());
+    }
+    cabin.project_sel = Some("bound".into());
+
+    cabin.run_slash(Slash::ProjectClear);
+    assert!(cabin.cfg.project_dir.is_empty());
+    assert_eq!(cabin.project_sel, None);
+    let thread = cabin.threads.get(cabin.thread_idx).expect("seeded thread");
+    assert_eq!(thread.grok_session, None);
+    assert_eq!(thread.grok_cwd, None);
+    assert_eq!(cabin.status, "Unbound — full desktop");
+    assert!(!cabin.running);
+}
+
+// Landed from PR #188.
+#[test]
+fn missing_skill_stays_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("missing-skill");
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash(grokhub_core::Slash::Skill("harbor".into()));
+    assert_eq!(cabin.status, "No skill harbor");
+    assert!(matches!(cabin.nav, super::Nav::Chat));
+    assert!(!cabin.running);
+    assert!(cabin.messages.is_empty());
+}
+
+// Landed from PR #189.
+#[test]
+fn empty_undo_and_retry_stay_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("empty-undo-retry");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    assert!(cabin.messages.is_empty());
+    assert!(!cabin.running);
+
+    cabin.run_slash(super::Slash::Undo);
+    assert_eq!(cabin.status, "Nothing to undo");
+    assert!(cabin.messages.is_empty());
+    assert!(!cabin.running);
+
+    cabin.run_slash(super::Slash::Retry);
+    assert_eq!(cabin.status, "Nothing to retry");
+    assert!(cabin.messages.is_empty());
+    assert!(!cabin.running);
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #190.
+#[test]
+fn project_acts_need_a_selection() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("project-need-sel");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    assert!(cabin.project_sel.is_none());
+    assert!(cabin.projects.is_empty());
+    assert!(!cabin.running);
+
+    cabin.run_slash(Slash::ProjectRename("Harbor".into()));
+    assert_eq!(cabin.status, "Select a project first");
+    assert!(cabin.project_sel.is_none());
+    assert!(cabin.projects.is_empty());
+    assert!(!cabin.running);
+
+    cabin.run_slash(Slash::ProjectMove("Notes".into()));
+    assert_eq!(cabin.status, "Select a project first");
+    assert!(cabin.project_sel.is_none());
+    assert!(cabin.projects.is_empty());
+    assert!(!cabin.running);
+
+    cabin.run_slash(Slash::ProjectDelete);
+    assert_eq!(cabin.status, "Select a project first");
+    assert!(cabin.project_sel.is_none());
+    assert!(cabin.projects.is_empty());
+    assert!(!cabin.running);
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #191.
+#[test]
+fn forget_clears_memory_off_a_run() {
+    let _guard = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("forget-off-run");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.new_thread(false);
+    cabin.mem_name = "MEMORY.md".into();
+    cabin.mem_body = "wifi stays until forget".into();
+    assert!(!cabin.scratch());
+    assert!(!cabin.running);
+
+    cabin.run_slash(Slash::Forget(None));
+
+    assert_eq!(cabin.status, "Forgot MEMORY.md");
+    assert!(cabin.mem_name == "MEMORY.md" && cabin.mem_body.is_empty());
+    assert!(!cabin.running);
+}
+
+// Landed from PR #192.
+#[test]
+fn stage_new_folder_asks_for_a_name() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("stage-folder");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    cabin.stage_new_folder();
+
+    assert_eq!(cabin.projects.len(), 1);
+    let id = cabin.projects[0].id.clone();
+    assert_eq!(cabin.projects[0].name, "Folder");
+    assert!(matches!(cabin.projects[0].kind, ProjectKind::Folder));
+    assert!(!cabin
+        .projects
+        .iter()
+        .any(|n| matches!(n.kind, ProjectKind::Project)));
+    assert_eq!(cabin.proj_staged.as_deref(), Some(id.as_str()));
+    assert_eq!(cabin.proj_rename.as_deref(), Some(id.as_str()));
+    assert_eq!(cabin.status, "Name this folder");
+    assert!(!cabin.running);
+}
+
+// Landed from PR #193.
+#[test]
+fn forget_topic_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("forget-topic");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.new_thread(false);
+    cabin.mem_name = "MEMORY.md".into();
+    let note = "harbor light at dusk".to_string();
+    cabin.mem_body = note.clone();
+
+    cabin.run_slash(grokhub_core::Slash::Forget(Some("harbor".into())));
+
+    assert_eq!(cabin.mem_body, grokhub_core::forget_topic(&note, "harbor"));
+    assert_eq!(cabin.status, "Forgot harbor");
+    assert!(!cabin.running);
+    assert!(cabin.nav == super::Nav::Chat);
+}
+
+// Landed from PR #194.
+#[test]
+fn cancel_staged_folder_drops_it() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("cancel-folder");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    cabin.stage_new_folder();
+    assert_eq!(cabin.projects.len(), 1);
+    assert!(matches!(
+        cabin.projects[0].kind,
+        super::ProjectKind::Folder
+    ));
+    assert_eq!(cabin.projects[0].name, "Folder");
+    assert!(cabin.proj_staged.is_some());
+    assert_eq!(cabin.status, "Name this folder");
+    assert!(!cabin.running);
+
+    cabin.cancel_proj_rename();
+    assert!(cabin.projects.is_empty());
+    assert!(cabin.proj_staged.is_none());
+    assert!(cabin.proj_rename.is_none());
+    assert_eq!(cabin.status, "Name this folder");
+    assert!(!cabin.running);
+}
+
+// Landed from PR #196.
+#[test]
+fn finish_staged_folder_renames_it() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("finish-folder");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+
+    cabin.stage_new_folder();
+    cabin.proj_rename_buf.clear();
+    cabin.finish_proj_rename();
+    assert_eq!(cabin.status, "need a name");
+    assert!(cabin.projects.is_empty());
+    assert!(cabin.proj_staged.is_none());
+    assert!(!cabin.running);
+
+    cabin.stage_new_folder();
+    cabin.proj_rename_buf = "Harbor".into();
+    cabin.finish_proj_rename();
+    assert_eq!(cabin.status, "Renamed Harbor");
+    assert!(
+        matches!(
+            cabin.projects.as_slice(),
+            [node]
+                if node.name == "Harbor"
+                    && node.path.is_empty()
+                    && matches!(node.kind, grokhub_core::ProjectKind::Folder)
+        ),
+        "status={} projects={}",
+        cabin.status,
+        cabin.projects.len()
+    );
+    assert!(
+        cabin
+            .projects
+            .iter()
+            .all(|node| !matches!(node.kind, grokhub_core::ProjectKind::Project))
+    );
+    assert!(cabin.proj_staged.is_none());
+    assert!(cabin.proj_rename.is_none());
+    assert!(!cabin.running);
+}
+
+// Landed from PR #197.
+#[allow(clippy::too_many_lines)]
+fn quiet_cabin() -> Cabin {
+    let cfg = crate::config::AppConfig::default();
+    let (grok_sessions_tx, grok_sessions_rx) = std::sync::mpsc::channel();
+    Cabin {
+        nav: super::Nav::Chat,
+        cfg: cfg.clone(),
+        composer: String::new(),
+        messages: std::sync::Arc::new(Vec::new()),
+        status: String::new(),
+        running: false,
+        host_halt: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        rx: None,
+        chat_job_thread: None,
+        inflight_open: false,
+        hub: std::sync::Arc::new(std::sync::Mutex::new(grokhub_core::HubState::empty())),
+        hub_on: false,
+        hub_port: grokhub_core::DEFAULT_PORT,
+        task_prompt: String::new(),
+        mem_name: String::new(),
+        mem_body: String::new(),
+        mem_cache_at: [0, 0, 0],
+        mem_cache_body: [String::new(), String::new(), String::new()],
+        last_persist: std::time::Instant::now(),
+        persist_idle_key: String::new(),
+        persist_rx: None,
+        persist_io: std::sync::Arc::new(std::sync::Mutex::new(())),
+        cfg_slot: std::sync::Arc::new(std::sync::Mutex::new(super::CfgSlot { gen: 0, cfg })),
+        board: Vec::new(),
+        board_title: String::new(),
+        board_notes: String::new(),
+        imagine_prompt: String::new(),
+        imagine_last: String::new(),
+        skill_name: String::new(),
+        skill_body: String::new(),
+        skill_list: Vec::new(),
+        eyes_text: String::new(),
+        last_host: Vec::new(),
+        last_frame_url: None,
+        hands_attach: false,
+        eyes_attach: false,
+        speak_next: false,
+        verify_ok_turn: false,
+        verify_chip: String::new(),
+        reflect_diff: String::new(),
+        last_activity: std::time::Instant::now(),
+        reflected_idle: false,
+        last_recipe: None,
+        update_pct: None,
+        update_can_restart: false,
+        secrets: crate::secrets::Secrets::default(),
+        threads: Vec::new(),
+        thread_idx: 0,
+        oauth_pending: None,
+        oauth_next_poll: std::time::Instant::now(),
+        oauth_start_rx: None,
+        oauth_poll_rx: None,
+        host_hour_count: 0,
+        host_hour_at: std::time::Instant::now(),
+        host_reserved: 0,
+        plan_pending: None,
+        tray: None,
+        tray_rx: None,
+        window_visible: true,
+        resume_fresh: false,
+        saw_minimized: false,
+        brief_buf: String::new(),
+        ideas_q: String::new(),
+        tray_saw_unfocused: false,
+        tray_hid_at: std::time::Instant::now(),
+        want_quit: false,
+        told_tray: false,
+        pending_hub_task: None,
+        automations: Vec::new(),
+        grok_loops: Vec::new(),
+        updates: Vec::new(),
+        grok_loop_rx: None,
+        night_nl: String::new(),
+        watch_once: false,
+        watched_steps: Vec::new(),
+        teach_nl: String::new(),
+        chat_tail_frames: 0,
+        cap_auto_buf: String::new(),
+        cap_host_buf: String::new(),
+        quiet_start_buf: String::new(),
+        quiet_end_buf: String::new(),
+        history_q: String::new(),
+        history_q_seen: String::new(),
+        history_q_at: None,
+        history_hits: Vec::new(),
+        last_receipt_ok: None,
+        last_receipts: Vec::new(),
+        try_again: false,
+        last_rewind_id: None,
+        rewind_rows: Vec::new(),
+        host_live: String::new(),
+        daily_auto_used: 0,
+        daily_auto_day: String::new(),
+        slash_pick: 0,
+        slash_filter_n: 0,
+        slash_filter_first: String::new(),
+        last_window_title: String::new(),
+        voice_orb: String::new(),
+        last_night_tick: std::time::Instant::now(),
+        last_auto_tick: std::time::Instant::now(),
+        last_heartbeat: std::time::Instant::now(),
+        night_check_rx: None,
+        learning: grokhub_core::LearningState::default(),
+        suggestions: grokhub_core::SuggestionStore::default(),
+        review_rx: None,
+        review_busy: false,
+        usage: grokhub_core::UsageDay::default(),
+        palette_open: false,
+        palette_q: String::new(),
+        palette_pick: 0,
+        palette_focus: false,
+        palette_files: Vec::new(),
+        palette_files_q: String::new(),
+        palette_files_root: String::new(),
+        palette_file_rx: None,
+        shortcuts_open: false,
+        active_skill_follow: None,
+        last_anticipate_ms: 0,
+        goal_step: 0,
+        followup_step: 0,
+        stream_buf: String::new(),
+        thought_buf: String::new(),
+        chat_views: Vec::new(),
+        chat_view_tid: String::new(),
+        chat_view_n: 0,
+        chat_view_last: 0,
+        presence_ring: Vec::new(),
+        voice_sock: None,
+        voice_state: grokhub_core::VoiceState::Idle,
+        voice_ready_at: None,
+        voice_hold_rx: None,
+        cmd_line: String::new(),
+        cmd_hist: Vec::new(),
+        agents: Vec::new(),
+        last_live: std::time::Instant::now(),
+        live_cap_rx: None,
+        eyes_cap_rx: None,
+        kick_cap_rx: None,
+        pending_kick: None,
+        kick_frame: None,
+        kick_skip: false,
+        recipe_cap_rx: None,
+        recipe_desk_rx: None,
+        host_diff_rx: None,
+        host_diff_kick: false,
+        verify_rx: None,
+        hotkeys: None,
+        hotkey_hey: 0,
+        hotkey_halt: 0,
+        sidebar_q: String::new(),
+        rename_idx: None,
+        rename_buf: String::new(),
+        rename_focus: false,
+        rename_lock: None,
+        chip_memory: grokhub_core::ChipMemory::default(),
+        chip_dismissed: Vec::new(),
+        llm_chips: Vec::new(),
+        visible_chips: Vec::new(),
+        chip_rx: None,
+        chip_busy: false,
+        chip_fp: String::new(),
+        chip_paint_key: String::new(),
+        chip_llm_at: 0,
+        greeting: String::new(),
+        greeting_fp: String::new(),
+        greeting_user_at: 0,
+        greeting_memory_at: 0,
+        greeting_user_md: String::new(),
+        greeting_memory_md: String::new(),
+        greeting_files_rx: None,
+        greeting_flush_name: String::new(),
+        greeting_flush_len: 0,
+        greeting_llm_fp: String::new(),
+        greeting_rx: None,
+        greeting_busy: false,
+        greeting_llm_at: 0,
+        continue_hint: String::new(),
+        skills_tab_connectors: false,
+        skill_q: String::new(),
+        mcp_nl: String::new(),
+        mcp_compose: false,
+        pending_connectors: Vec::new(),
+        auto_compose: false,
+        board_compose: false,
+        board_edit: None,
+        board_link: false,
+        settings_menu_open: false,
+        settings_menu_ignore: false,
+        win_max: false,
+        geom_dirty: false,
+        geom_applied: false,
+        geom_apply_frames: 0,
+        imagine_want_focus: false,
+        composer_want_focus: false,
+        settings_sec: super::SettingsSec::Account,
+        settings_back: super::Nav::Chat,
+        imagine_aspect: 0,
+        imagine_quality: false,
+        imagine_kind: grokhub_core::ImagineKind::Image,
+        imagine_style: 0,
+        imagine_video_res: 0,
+        imagine_video_dur: 0,
+        imagine_video_audio: false,
+        imagine_aspect_open: false,
+        imagine_style_open: false,
+        imagine_menu_ignore: false,
+        imagine_style_anchor: egui::Rect::NOTHING,
+        imagine_aspect_anchor: egui::Rect::NOTHING,
+        imagine_expand: false,
+        imagine_job_prompt: String::new(),
+        imagine_error: String::new(),
+        imagine_pending: false,
+        imagine_save_rx: None,
+        goal_rx: None,
+        goal_busy: false,
+        goal_stale: false,
+        wall: grokhub_core::ImagineWall::default(),
+        wall_rx: None,
+        wall_busy: false,
+        attach_url: None,
+        attach_name: None,
+        imagine_ref: None,
+        plus_menu: None,
+        plus_anchor: egui::Pos2::ZERO,
+        plus_ignore_close: false,
+        file_pick: None,
+        pick_rx: None,
+        pick_list_rx: None,
+        pick_dir: String::new(),
+        pick_cache: None,
+        projects: Vec::new(),
+        project_sel: None,
+        proj_menu_pos: egui::Pos2::ZERO,
+        proj_add_for: None,
+        proj_rename: None,
+        proj_rename_buf: String::new(),
+        proj_rename_focus: false,
+        proj_rename_lock: None,
+        proj_staged: None,
+        proj_ignore_close: false,
+        projects_dirty: false,
+        oauth_photo: None,
+        oauth_photo_key: String::new(),
+        oauth_photo_rx: None,
+        oauth_photo_busy: false,
+        oauth_profile_tried: false,
+        profile_photo: None,
+        profile_photo_key: String::new(),
+        profile_photo_rx: None,
+        profile_photo_busy: false,
+        profile_pick_rx: None,
+        profile_pick_token: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        profile_file_io: std::sync::Arc::new(std::sync::Mutex::new(())),
+        grok_install_rx: None,
+        grok_install_err: String::new(),
+        grok_install_wait: false,
+        official_cli_session: false,
+        cabin_latest: None,
+        cli_alpha: None,
+        cli_installed: None,
+        last_update_probe: None,
+        update_probe_rx: None,
+        cabin_overlay_done: false,
+        queued_overlay: None,
+        update_cabin_note: None,
+        acp: None,
+        acp_spawn_rx: None,
+        grok_p_rx: None,
+        grok_p_pid: None,
+        grok_usage: grokhub_acp::GrokUsage::default(),
+        tokens_seen: (0, 0, 0),
+        grok_commands: Vec::new(),
+        grok_tasks: Vec::new(),
+        loop_acp_id: None,
+        followup_queue: Vec::new(),
+        side_ask_queue: Vec::new(),
+        side_ask_kick: false,
+        plan_open: false,
+        fork_explainer_seen: false,
+        tool_cards: Vec::new(),
+        live_blocks: Vec::new(),
+        desk_frame: None,
+        perm_ask: None,
+        perm_always_confirm: None,
+        confirm: None,
+        jump_last_you: false,
+        elicit_ask: None,
+        elicit_draft: String::new(),
+        secret_hold: Vec::new(),
+        session_mode: grokhub_acp::SessionMode::Chat,
+        permission_mode: grokhub_acp::PermissionMode::Ask,
+        scheduled_perm: false,
+        grok_sessions: Vec::new(),
+        grok_sessions_loaded: false,
+        grok_sessions_tx,
+        grok_sessions_rx,
+        grok_list_gen: 0,
+        grok_sessions_inflight: 0,
+        grok_sessions_refresh_pending: false,
+        last_grok_list_at: std::time::Instant::now(),
+        pending_grok_deletes: std::collections::HashSet::new(),
+        inspect_rx: None,
+        history_rx: None,
+        mem_restore_rx: None,
+        mem_file_rx: None,
+        recall_rx: None,
+        sync_rx: None,
+        inhabit_rx: None,
+        reflect_rx: None,
+        session_show_rx: None,
+        import_rx: None,
+        inspect_text: String::new(),
+        grok_catalog: grokhub_acp::GrokCatalog::default(),
+        grok_catalog_loaded: false,
+        grok_catalog_rx: None,
+        grok_ext_rx: None,
+        grok_ext_q: Vec::new(),
+        connector_note: String::new(),
+    }
+}
+
+fn settle_project_flush(cabin: &Cabin) {
+    let start = std::time::Instant::now();
+    loop {
+        if cabin.persist_io.try_lock().is_err() {
+            let _guard = cabin.persist_io.lock().unwrap_or_else(|e| e.into_inner());
+            return;
+        }
+        if start.elapsed() > std::time::Duration::from_millis(500) {
+            return;
+        }
+        std::thread::yield_now();
+    }
+}
+
+#[test]
+fn make_folder_names_a_folder() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("make-folder");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = quiet_cabin();
+    assert!(!cabin.running);
+    assert!(cabin.projects.is_empty());
+
+    cabin.make_folder("");
+    assert_eq!(cabin.status, "need a folder name");
+    assert!(cabin.projects.is_empty());
+    assert!(!cabin.running);
+
+    cabin.make_folder("Harbor");
+    assert_eq!(cabin.status, "Folder Harbor");
+    assert_eq!(cabin.projects.len(), 1);
+    assert!(matches!(
+        cabin.projects[0].kind,
+        grokhub_core::ProjectKind::Folder
+    ));
+    assert_eq!(cabin.projects[0].name, "Harbor");
+    assert!(cabin.projects[0].path.is_empty());
+    assert!(!cabin
+        .projects
+        .iter()
+        .any(|n| matches!(n.kind, grokhub_core::ProjectKind::Project)));
+    assert!(!cabin.running);
+
+    settle_project_flush(&cabin);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #198.
+#[test]
+fn new_chat_under_folder_stays_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("folder-chat");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.projects.push(ProjectNode {
+        id: "f1".into(),
+        name: "Notes".into(),
+        kind: ProjectKind::Folder,
+        path: String::new(),
+        parent: None,
+        open: false,
+    });
+    cabin.apply_project_menu("f1".into(), ProjectMenuAct::NewChat);
+
+    assert_eq!(cabin.status, "New chat");
+    assert_eq!(cabin.projects.len(), 1);
+    let folder = &cabin.projects[0];
+    assert_eq!(folder.id, "f1");
+    assert_eq!(folder.name, "Notes");
+    assert!(folder.path.is_empty());
+    assert!(folder.parent.is_none());
+    assert!(folder.open);
+    assert!(matches!(folder.kind, ProjectKind::Folder));
+    assert!(cabin
+        .projects
+        .iter()
+        .all(|n| matches!(n.kind, ProjectKind::Folder)));
+    assert_eq!(cabin.project_sel.as_deref(), Some("f1"));
+    assert!(matches!(cabin.nav, Nav::Chat));
+    assert!(cabin.composer_want_focus);
+    assert!(!cabin.running);
+    assert!(cabin.cfg.goal_pin.is_empty());
+    let thread = cabin
+        .threads
+        .get(cabin.thread_idx)
+        .expect("current thread");
+    assert_eq!(thread.title, "Chat");
+    assert!(!thread.scratch);
+    assert_eq!(thread.project_id.as_deref(), Some("f1"));
+
+    std::env::remove_var("GROKHUB_CONFIG");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// Landed from PR #199.
+#[test]
+fn remove_from_folder_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("remove-folder");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.projects = vec![
+        ProjectNode {
+            id: "f1".into(),
+            name: "Notes".into(),
+            kind: ProjectKind::Folder,
+            path: String::new(),
+            parent: None,
+            open: true,
+        },
+        ProjectNode {
+            id: "p1".into(),
+            name: "Harbor".into(),
+            kind: ProjectKind::Project,
+            path: String::new(),
+            parent: Some("f1".into()),
+            open: true,
+        },
+    ];
+
+    let status = cabin.status.clone();
+    cabin.apply_project_menu("f1".into(), ProjectMenuAct::RemoveFromFolder);
+    assert_eq!(cabin.status, status);
+    let harbor = cabin.projects.iter().find(|n| n.id == "p1").expect("harbor");
+    assert_eq!(harbor.parent.as_deref(), Some("f1"));
+    assert!(matches!(harbor.kind, ProjectKind::Project));
+    assert!(!cabin.running);
+
+    cabin.apply_project_menu("p1".into(), ProjectMenuAct::RemoveFromFolder);
+    assert_eq!(cabin.status, "Moved to Projects");
+    let harbor = cabin.projects.iter().find(|n| n.id == "p1").expect("harbor");
+    assert!(harbor.parent.is_none());
+    assert!(matches!(harbor.kind, ProjectKind::Project));
+    assert!(harbor.path.is_empty());
+    assert!(cabin.projects.iter().any(|n| {
+        n.id == "f1" && n.name == "Notes" && matches!(n.kind, ProjectKind::Folder)
+    }));
+    assert_eq!(
+        cabin
+            .projects
+            .iter()
+            .filter(|n| matches!(n.kind, ProjectKind::Project))
+            .count(),
+        1
+    );
+    assert!(!cabin.running);
+}
+
+// Landed from PR #200.
+#[test]
+fn add_to_folder_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("add-folder");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.projects.push(ProjectNode {
+        id: "p1".into(),
+        name: "Harbor".into(),
+        kind: ProjectKind::Project,
+        path: String::new(),
+        parent: None,
+        open: true,
+    });
+    cabin.project_sel = Some("p1".into());
+
+    cabin.move_sel_to_folder_name("Notes");
+    assert_eq!(cabin.status, "No folder Notes");
+    let harbor = cabin.projects.iter().find(|n| n.id == "p1").expect("harbor");
+    assert!(matches!(harbor.kind, ProjectKind::Project));
+    assert!(harbor.parent.is_none());
+    assert!(!cabin.running);
+
+    cabin.projects.push(ProjectNode {
+        id: "f1".into(),
+        name: "Notes".into(),
+        kind: ProjectKind::Folder,
+        path: String::new(),
+        parent: None,
+        open: false,
+    });
+    cabin.move_sel_to_folder_name("Notes");
+    assert_eq!(cabin.status, "Added to Notes");
+    let harbor = cabin.projects.iter().find(|n| n.id == "p1").expect("harbor");
+    assert!(matches!(harbor.parent.as_deref(), Some("f1")));
+    assert!(harbor.path.is_empty());
+    let folder = cabin.projects.iter().find(|n| n.id == "f1").expect("notes");
+    assert!(matches!(folder.kind, ProjectKind::Folder));
+    assert!(folder.open);
+    let projects = cabin
+        .projects
+        .iter()
+        .filter(|n| matches!(n.kind, ProjectKind::Project))
+        .count();
+    let folders = cabin
+        .projects
+        .iter()
+        .filter(|n| matches!(n.kind, ProjectKind::Folder))
+        .count();
+    assert_eq!((projects, folders), (1, 1));
+    assert!(!cabin.running);
+}
+
+// Landed from PR #201.
+#[test]
+fn bind_empty_project_stays_off_a_run() {
+    let _cfg = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("bind-empty");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.projects = vec![
+        ProjectNode {
+            id: "f1".into(),
+            name: "Notes".into(),
+            kind: ProjectKind::Folder,
+            path: String::new(),
+            parent: None,
+            open: true,
+        },
+        ProjectNode {
+            id: "p1".into(),
+            name: "Harbor".into(),
+            kind: ProjectKind::Project,
+            path: String::new(),
+            parent: None,
+            open: true,
+        },
+    ];
+    assert!(!cabin.running);
+
+    let status = cabin.status.clone();
+    let project_sel = cabin.project_sel.clone();
+    let projects = cabin.projects.clone();
+
+    cabin.bind_project_id("missing");
+    assert_eq!(cabin.status, status);
+    assert_eq!(cabin.project_sel, project_sel);
+    assert!(cabin.projects == projects);
+    assert!(!cabin.running);
+
+    cabin.bind_project_id("f1");
+    assert_eq!(cabin.status, status);
+    assert_eq!(cabin.project_sel, project_sel);
+    assert!(cabin.projects == projects);
+    assert!(!cabin.running);
+    let folder = cabin.projects.iter().find(|n| n.id == "f1").expect("folder");
+    assert!(matches!(folder.kind, ProjectKind::Folder) && folder.open);
+
+    let threads = cabin.threads.len();
+    cabin.nav = Nav::Workboard;
+    cabin.bind_project_id("p1");
+    assert_eq!(cabin.status, "Bound Harbor");
+    assert_eq!(cabin.project_sel.as_deref(), Some("p1"));
+    assert!(cabin.cfg.project_dir.is_empty());
+    assert!(matches!(cabin.nav, Nav::Chat));
+    assert!(!cabin.running);
+    let folder = cabin.projects.iter().find(|n| n.id == "f1").expect("folder");
+    assert!(matches!(folder.kind, ProjectKind::Folder) && folder.open);
+    assert_eq!(
+        cabin
+            .projects
+            .iter()
+            .filter(|n| matches!(n.kind, ProjectKind::Project))
+            .count(),
+        1
+    );
+    assert_eq!(cabin.threads.len(), threads);
+}
+
+// Landed from PR #202.
+#[test]
+fn remove_project_returns_chats() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("remove-chats");
+    let prev = std::env::var("GROKHUB_CONFIG").ok();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.cfg.project_dir.is_empty());
+    assert!(!cabin.running);
+
+    cabin.projects.push(ProjectNode {
+        id: "p1".into(),
+        name: "Harbor".into(),
+        kind: ProjectKind::Project,
+        path: String::new(),
+        parent: None,
+        open: true,
+    });
+    assert!(cabin.projects.iter().any(|n| {
+        n.id == "p1" && n.name == "Harbor" && n.path.is_empty() && n.parent.is_none() && n.open
+            && matches!(n.kind, ProjectKind::Project)
+    }));
+
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    let idx = cabin.thread_idx;
+    let thread_id = cabin.threads[idx].id.clone();
+    cabin.threads[idx].project_id = Some("p1".into());
+
+    cabin.remove_project_id("p1");
+
+    assert_eq!(cabin.status, "Removed Harbor · chats back in History");
+    assert!(cabin.projects.is_empty());
+    let thread = cabin
+        .threads
+        .iter()
+        .find(|t| t.id == thread_id)
+        .expect("current thread");
+    assert!(thread.project_id.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.cfg.project_dir.is_empty());
+
+    match prev {
+        Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+        None => std::env::remove_var("GROKHUB_CONFIG"),
+    }
+}
+
+// Landed from PR #203.
+#[test]
+fn empty_skill_tile_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("empty-skill-tile");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let tile = grokhub_core::LearnedSuggestion {
+        kind: grokhub_core::SuggestionKind::Skill,
+        title: String::new(),
+        body: String::new(),
+        name: None,
+        seed: None,
+        trigger: None,
+        instructions: None,
+        provider: None,
+        tool: None,
+    };
+    assert!(matches!(tile.kind, grokhub_core::SuggestionKind::Skill));
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    assert!(cabin.suggestions.skills.is_empty());
+    assert!(!cabin.running);
+    assert!(matches!(cabin.nav, super::Nav::Chat));
+
+    cabin.add_suggested_skill(&tile);
+
+    assert_eq!(cabin.status, "Need a cabin-real skill name and steps");
+    assert!(cabin.suggestions.skills.is_empty());
+    assert!(!cabin.running);
+    assert!(matches!(cabin.nav, super::Nav::Chat));
+}
+
+// Landed from PR #204.
+#[test]
+fn remove_bound_project_unbinds() {
+    let _guard = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("unbind-remove");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    let path = "/tmp/grokhub-unbound-harbor";
+    cabin.projects.push(ProjectNode {
+        id: "p1".into(),
+        name: "Harbor".into(),
+        kind: ProjectKind::Project,
+        path: path.into(),
+        parent: None,
+        open: true,
+    });
+    assert!(matches!(
+        cabin.projects[0].kind,
+        ProjectKind::Project
+    ));
+    cabin.cfg.project_dir = path.into();
+    cabin.project_sel = Some("p1".into());
+    assert!(cabin
+        .threads
+        .iter()
+        .all(|t| !matches!(t.project_id.as_deref(), Some("p1"))));
+    assert!(!cabin.running);
+
+    cabin.remove_project_id("p1");
+
+    assert_eq!(cabin.status, "Removed Harbor · unbound");
+    assert!(cabin.projects.is_empty());
+    assert!(cabin.project_sel.is_none());
+    assert!(cabin.cfg.project_dir.is_empty());
+    assert!(!cabin.running);
+}
+
+// Landed from PR #205.
+#[test]
+fn full_loop_list_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("full-loop-list");
+    let _ = std::fs::create_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.grok_loops = (0..50)
+        .map(|_| grokhub_core::new_loop("30m".into(), "check".into(), 0))
+        .collect();
+    cabin.add_automation_seed("/loop 30m check deploy");
+    assert_eq!(cabin.status, "Maximum 50 scheduled loops");
+    assert_eq!(cabin.grok_loops.len(), 50);
+    assert!(cabin.automations.is_empty());
+    assert!(!cabin.running);
+}
+
+// Landed from PR #206.
+#[test]
+fn remove_folder_returns_its_project() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("drop-folder");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.projects = vec![
+        ProjectNode {
+            id: "f1".into(),
+            name: "Notes".into(),
+            kind: ProjectKind::Folder,
+            path: String::new(),
+            parent: None,
+            open: true,
+        },
+        ProjectNode {
+            id: "p1".into(),
+            name: "Harbor".into(),
+            kind: ProjectKind::Project,
+            path: String::new(),
+            parent: Some("f1".into()),
+            open: true,
+        },
+    ];
+    assert!(cabin.cfg.project_dir.is_empty());
+    assert!(cabin.project_sel.is_none());
+    assert!(
+        !cabin
+            .threads
+            .iter()
+            .any(|t| t.project_id.as_deref() == Some("f1"))
+    );
+    cabin.remove_project_id("f1");
+    assert_eq!(cabin.status, "Removed Notes");
+    assert!(cabin.projects.iter().all(|n| n.id != "f1"));
+    assert!(
+        !cabin
+            .projects
+            .iter()
+            .any(|n| matches!(n.kind, ProjectKind::Folder))
+    );
+    assert_eq!(cabin.projects.len(), 1);
+    let harbor = &cabin.projects[0];
+    assert_eq!(harbor.id, "p1");
+    assert_eq!(harbor.name, "Harbor");
+    assert!(matches!(harbor.kind, ProjectKind::Project));
+    assert!(harbor.path.is_empty());
+    assert!(harbor.parent.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.cfg.project_dir.is_empty());
+}
+
+// Landed from PR #207.
+#[test]
+fn full_automation_list_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("full-auto");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.automations = (0..50)
+        .map(|i| grokhub_core::Automation {
+            id: format!("job-{i}"),
+            name: "Job".into(),
+            schedule: "daily".into(),
+            time: "09:00".into(),
+            times: Vec::new(),
+            instructions: "check".into(),
+            heartbeat_every_min: 0,
+            check_command: String::new(),
+            enabled: true,
+            last_run: None,
+            next_run: None,
+            run_count: 0,
+        })
+        .collect();
+    cabin.add_automation_seed("every day at 9, summarize the board");
+    assert_eq!(cabin.status, "Maximum 50 scheduled automations");
+    assert_eq!(cabin.automations.len(), 50);
+    assert!(cabin.grok_loops.is_empty());
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #208.
+#[test]
+fn plain_teach_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("plain-teach");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.teach_nl = "follow along".to_string();
+    assert!(cabin.watched_steps.is_empty());
+    assert!(!cabin.teach_nl.contains("every ") && !cabin.teach_nl.contains("/loop"));
+    assert!(cabin.automations.is_empty());
+    assert!(cabin.grok_loops.is_empty());
+    assert!(!cabin.running);
+
+    cabin.teach_watched_routine();
+
+    assert_eq!(
+        cabin.status,
+        "A job is saved only when you ask to schedule it."
+    );
+    assert!(cabin.automations.is_empty());
+    assert!(cabin.grok_loops.is_empty());
+    assert!(!cabin.running);
+
+    std::env::remove_var("GROKHUB_CONFIG");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// Landed from PR #209.
+#[test]
+fn imagine_while_busy_stays_halted() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("imagine-busy");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.imagine_prompt = "a red boat".into();
+    cabin.running = true;
+    cabin.kick_imagine();
+    assert_eq!(
+        cabin.status,
+        "Halt the live job before Imagine, or wait."
+    );
+    assert!(cabin.running);
+    assert!(cabin.imagine_error.is_empty());
+}
+
+// Landed from PR #210.
+#[test]
+fn empty_update_plan_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("empty-update-plan");
+    let prev = std::env::var("GROKHUB_CONFIG").ok();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut app = Cabin::quiet_for_test();
+    app.start_overlay_update(Vec::new());
+    assert_eq!(app.status, "Update plan empty");
+    assert!(matches!(app.nav, Nav::Settings));
+    assert!(matches!(app.settings_sec, SettingsSec::Update));
+    assert!(!app.running);
+    assert!(app.queued_overlay.is_none());
+    match prev {
+        Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+        None => std::env::remove_var("GROKHUB_CONFIG"),
+    }
+}
+
+// Landed from PR #211.
+#[test]
+fn unparsed_teach_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("unparsed-teach");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.teach_nl = "every banana check".into();
+    cabin.teach_watched_routine();
+    assert_eq!(
+        cabin.status,
+        "Need `/loop 30m …`, `every 2h …`, or `every day at 9 …`"
+    );
+    assert!(cabin.automations.is_empty());
+    assert!(cabin.grok_loops.is_empty());
+    assert!(!cabin.running);
+}
+
+// Landed from PR #212.
+#[test]
+fn imagine_without_key_stays_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("imagine-key");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.imagine_prompt = "a red boat".into();
+
+    cabin.kick_imagine();
+
+    let expected = "Add an xAI console API key in Settings, or run grok login.";
+    assert_eq!(cabin.status, expected);
+    assert_eq!(cabin.imagine_error, expected);
+    assert!(!cabin.running);
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #213.
+#[test]
+fn busy_update_stays_queued() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("busy_update_stays_queued");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.running = true;
+    cabin.start_overlay_update(vec!["echo hi".into()]);
+    assert_eq!(
+        cabin.status,
+        "Update queued — it starts when this job finishes."
+    );
+    assert_eq!(cabin.queued_overlay, Some(vec!["echo hi".into()]));
+    assert!(cabin.running);
+    assert!(matches!(cabin.nav, Nav::Settings));
+    assert!(matches!(cabin.settings_sec, SettingsSec::Update));
+}
+
+// Landed from PR #214.
+#[test]
+fn rename_chat_stays_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("rename-chat");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    let prev = std::env::var("GROKHUB_CONFIG").ok();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    let thread_idx = cabin.thread_idx;
+    assert_eq!(cabin.threads[thread_idx].title, "Chat");
+    assert!(!cabin.running);
+
+    cabin.rename_thread(thread_idx, "");
+    assert_eq!(cabin.status, "Kept Chat");
+    assert_eq!(cabin.threads[thread_idx].title, "Chat");
+    assert!(!cabin.threads[thread_idx].title_locked);
+
+    cabin.rename_thread(thread_idx, "Harbor");
+    assert_eq!(cabin.status, "Renamed Harbor");
+    assert_eq!(cabin.threads[thread_idx].title, "Harbor");
+    assert!(cabin.threads[thread_idx].title_locked);
+    assert!(!cabin.running);
+
+    match prev {
+        Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+        None => std::env::remove_var("GROKHUB_CONFIG"),
+    }
+}
+
+// Landed from PR #215.
+#[test]
+fn pin_chat_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("pin-chat");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Chat");
+    assert!(!cabin.running);
+
+    cabin.pin_thread(cabin.thread_idx);
+    assert_eq!(cabin.status, "Pinned Chat");
+    assert!(cabin.threads[cabin.thread_idx].pinned);
+    assert!(!cabin.running);
+
+    cabin.pin_thread(cabin.thread_idx);
+    assert_eq!(cabin.status, "Unpinned Chat");
+    assert!(!cabin.threads[cabin.thread_idx].pinned);
+    assert!(!cabin.running);
+}
+
+// Landed from PR #216.
+#[test]
+fn fresh_home_keeps_the_old_chat() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("fresh-home");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), "hello".into())]);
+
+    cabin.open_fresh_home();
+
+    assert_eq!(cabin.status, "New chat");
+    assert!(cabin.messages.is_empty());
+    let kept = cabin.threads.iter().enumerate().any(|(i, thread)| {
+        i != cabin.thread_idx
+            && thread
+                .messages
+                .iter()
+                .any(|(role, line)| role == "user" && line == "hello")
+    });
+    assert!(kept);
+    assert!(!cabin.running);
+    assert!(matches!(cabin.nav, Nav::Chat));
+}
+
+// Landed from PR #217.
+#[test]
+fn delete_one_chat_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("delete-one-chat");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    cabin.threads[cabin.thread_idx].title = "Harbor".into();
+    cabin.messages = Arc::new(vec![("user".into(), "hello".into())]);
+    cabin.new_thread(false);
+
+    let harbor = cabin
+        .threads
+        .iter()
+        .position(|t| t.title == "Harbor")
+        .expect("Harbor");
+    cabin.delete_thread_at(harbor);
+
+    assert_eq!(cabin.status, "Deleted Harbor");
+    assert!(cabin.threads.iter().all(|t| t.title != "Harbor"));
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Chat");
+    assert!(!cabin.running);
+    assert!(cabin.messages.is_empty());
+
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #218.
+#[test]
+fn scratch_chat_stays_off_a_run() {
+    let _guard = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("scratch-chat");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    cabin.new_thread(true);
+    assert_eq!(cabin.status, "Scratch — no memory writes");
+    let thread = cabin
+        .threads
+        .get(cabin.thread_idx)
+        .expect("current thread");
+    assert_eq!(thread.title, "Scratch");
+    assert!(thread.scratch);
+    assert!(!cabin.running);
+}
+
+// Landed from PR #219.
+#[test]
+fn delete_last_chat_stays_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("delete-last");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    cabin.delete_thread_at(0);
+    assert_eq!(cabin.status, "Chat deleted");
+    assert_eq!(cabin.threads.len(), 1);
+    assert_eq!(cabin.threads[0].title, "Chat");
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #220.
+#[test]
+fn land_on_real_chat_leaves_scratch() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("land-chat");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    cabin.new_thread(true);
+    let current = &cabin.threads[cabin.thread_idx];
+    assert_eq!(current.title, "Scratch");
+    assert!(current.scratch);
+    assert!(cabin.threads.iter().enumerate().any(|(i, t)| {
+        i != cabin.thread_idx && t.title == "Chat" && !t.scratch
+    }));
+    assert_eq!(cabin.status, "Scratch — no memory writes");
+    cabin.land_on_real_chat();
+    let current = &cabin.threads[cabin.thread_idx];
+    assert_eq!(current.title, "Chat");
+    assert!(!current.scratch);
+    assert!(matches!(cabin.nav, Nav::Chat));
+    assert!(cabin.threads.iter().enumerate().any(|(i, t)| {
+        i != cabin.thread_idx && t.title == "Scratch" && t.scratch
+    }));
+    assert_eq!(cabin.status, "Scratch — no memory writes");
+    assert!(!cabin.running);
+}
+
+// Landed from PR #221.
+#[test]
+fn plan_pill_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("plan-pill");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Chat");
+    assert!(!cabin.threads[cabin.thread_idx].title_locked);
+    cabin.select_plan_without_rename();
+    assert_eq!(cabin.status, "Session plan");
+    assert!(matches!(cabin.session_mode, SessionMode::Plan));
+    assert_eq!(cabin.cfg.session_mode, "plan");
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Chat");
+    assert!(!cabin.threads[cabin.thread_idx].title_locked);
+    assert!(cabin.acp.is_none());
+    assert!(!cabin.running);
+}
+
+// Landed from PR #222.
+#[test]
+fn recent_chat_stays_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("recent-chat");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    let idx = cabin.thread_idx;
+    assert_eq!(cabin.threads[idx].title, "Chat");
+    assert_eq!(cabin.status, "New chat");
+    cabin.open_recent_chat();
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Chat");
+    assert_eq!(cabin.thread_idx, idx);
+    assert!(cabin.composer_want_focus);
+    assert_eq!(cabin.status, "New chat");
+    assert!(!cabin.running);
+    assert_eq!(cabin.threads.len(), 1);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Landed from PR #223.
+#[test]
+fn begin_rename_stays_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("begin-rename");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    let thread_idx = cabin.thread_idx;
+    assert_eq!(cabin.threads[thread_idx].title, "Chat");
+    assert!(!cabin.threads[thread_idx].title_locked);
+    assert_eq!(cabin.status, "New chat");
+    assert!(!cabin.running);
+    cabin.begin_chat_rename(thread_idx);
+    assert_eq!(cabin.rename_idx, Some(thread_idx));
+    assert!(cabin.rename_focus);
+    assert_eq!(cabin.rename_buf, "Chat");
+    assert_eq!(cabin.rename_lock, Some("Chat".into()));
+    assert_eq!(cabin.threads[thread_idx].title, "Chat");
+    assert!(!cabin.threads[thread_idx].title_locked);
+    assert_eq!(cabin.status, "New chat");
+    assert!(!cabin.running);
+}
+
+// Landed from PR #224.
+#[test]
+fn imagine_page_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    app.set_nav_id("imagine");
+    assert_eq!(app.nav, Nav::Imagine);
+    assert!(app.imagine_want_focus);
+    assert_eq!(app.nav_id(), "imagine");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+    app.set_nav_id("history");
+    assert_eq!(app.nav, Nav::History);
+    assert_eq!(app.nav_id(), "history");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Landed from PR #225.
+#[test]
+fn profile_name_clips_at_sixty_four() {
+    assert_eq!(super::clip_profile_name("  Ada  "), "Ada");
+    assert_eq!(super::clip_profile_name("   "), "");
+    let long: String = "a".repeat(70);
+    let clipped = super::clip_profile_name(&long);
+    assert_eq!(clipped.chars().count(), 64);
+    assert_eq!(clipped, "a".repeat(64));
+}
+
+// Landed from PR #226.
+#[test]
+fn switch_chat_keeps_the_line() {
+    let _cfg = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("switch-chat-keeps");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut app = Cabin::quiet_for_test();
+    let mut held = crate::threads::ChatThread::new("Chat", false);
+    held.messages = std::sync::Arc::new(vec![("user".into(), "older line".into())]);
+    app.threads.push(held);
+    app.thread_idx = 0;
+    app.messages = app.threads[0].messages.clone();
+    app.new_thread(false);
+    let left = app.thread_idx;
+    assert!(left > 0);
+    app.live_mut().push(("user".into(), "harbor line".into()));
+    app.apply_switch_thread(0);
+    assert_eq!(app.thread_idx, 0);
+    assert!(app.messages.iter().all(|(_, c)| c != "harbor line"));
+    assert!(app.threads[left].messages.iter().any(|(_, c)| c == "harbor line"));
+    assert!(app.composer_want_focus);
+    assert!(app.rename_idx.is_none());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+    assert_eq!(app.status, "New chat");
+
+    std::env::remove_var("GROKHUB_CONFIG");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// Landed from PR #227.
+#[test]
+fn stage_project_asks_for_a_name() {
+    let mut app = Cabin::quiet_for_test();
+    let before = app.projects.len();
+    app.stage_new_folder();
+    assert_eq!(app.status, "Name this folder");
+    assert_eq!(app.projects.len(), before + 1);
+    let id = app.proj_staged.clone().expect("staged");
+    assert_eq!(app.proj_rename.as_deref(), Some(id.as_str()));
+    assert!(app.proj_rename_buf.is_empty());
+    assert!(app.proj_rename_focus);
+    assert!(app.proj_rename_lock.is_none());
+    let node = app.projects.iter().find(|n| n.id == id).expect("node");
+    assert_eq!(node.name, "Folder");
+    assert!(node.path.is_empty());
+    assert_eq!(node.kind, ProjectKind::Folder);
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Landed from PR #228.
+#[test]
+fn blank_project_name_drops_it() {
+    let mut app = Cabin::quiet_for_test();
+    app.stage_new_folder();
+    let id = app.proj_staged.clone().expect("staged");
+    app.finish_proj_rename();
+    assert_eq!(app.status, "need a name");
+    assert!(app.proj_staged.is_none());
+    assert!(app.proj_rename.is_none());
+    assert!(!app.proj_rename_focus);
+    assert!(app.projects.iter().all(|n| n.id != id));
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Landed from PR #229.
+#[test]
+fn clear_confirm_drops_the_sheet() {
+    let mut app = Cabin::quiet_for_test();
+    app.confirm = Some(ConfirmKind::DestructiveHost { cmd: "rm foo.txt".into() });
+    app.perm_always_confirm = Some(serde_json::json!({"rpc": 1}));
+    app.clear_confirm();
+    assert!(app.confirm.is_none());
+    assert!(app.perm_always_confirm.is_none());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Landed from PR #230.
+#[test]
+fn cancel_project_drops_the_staged_one() {
+    let mut app = Cabin::quiet_for_test();
+    app.stage_new_folder();
+    let id = app.proj_staged.clone().expect("staged");
+    app.cancel_proj_rename();
+    assert!(app.proj_staged.is_none());
+    assert!(app.proj_rename.is_none());
+    assert!(!app.proj_rename_focus);
+    assert!(app.proj_rename_lock.is_none());
+    assert!(app.proj_rename_buf.is_empty());
+    assert!(app.projects.iter().all(|n| n.id != id));
+    assert_eq!(app.status, "Name this folder");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Landed from PR #231.
+#[test]
+fn make_project_keeps_harbor() {
+    let mut app = Cabin::quiet_for_test();
+    let before = app.projects.len();
+    app.make_project("Harbor", None);
+    assert_eq!(app.status, "Project Harbor");
+    assert_eq!(app.projects.len(), before + 1);
+    let node = app.projects.iter().find(|n| n.name == "Harbor").expect("harbor");
+    assert_eq!(node.kind, ProjectKind::Project);
+    assert!(!node.path.trim().is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Landed from PR #232.
+#[test]
+fn empty_project_name_is_refused() {
+    let mut app = Cabin::quiet_for_test();
+    let before = app.projects.len();
+    app.make_project("   ", None);
+    assert_eq!(app.status, "need a project name");
+    assert_eq!(app.projects.len(), before);
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}

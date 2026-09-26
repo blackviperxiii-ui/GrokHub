@@ -44,6 +44,11 @@ impl Cabin {
             }
             ChatSendKind::Fresh => {
                 if self.running && self.chat_job_thread.is_some() {
+                    if self.acp.is_some() || self.background_tasks_open() {
+                        self.followup_queue.push(text);
+                        self.status = format!("Queued ({})", self.followup_queue.len());
+                        return;
+                    }
                     self.halt_in_flight();
                     self.finish_hub_dispatch("Interrupted", false);
                 }
@@ -129,6 +134,8 @@ impl Cabin {
 
     pub(super) fn kick_model(&mut self, consume_attach: bool) {
         if !self.can_agent() {
+            self.running = false;
+            self.chat_job_thread = None;
             self.status = "Install Grok Build (x.ai/cli) or Connect Grok in Settings".into();
             return;
         }
@@ -299,12 +306,13 @@ impl Cabin {
         let resume_in_cabin = resume
             .as_deref()
             .is_some_and(grokhub_acp::cabin_has_session);
-        let user_home = self
-            .threads
-            .get(idx)
-            .map(|t| t.grok_user_home)
-            .unwrap_or(true)
-            || !resume_in_cabin;
+        let user_home = grokhub_acp::use_user_grok_home(
+            self.threads
+                .get(idx)
+                .map(|t| t.grok_user_home)
+                .unwrap_or(false),
+            resume_in_cabin,
+        );
         let fork = self.threads.get(idx).map(|t| t.grok_fork).unwrap_or(false);
         let mode = if self.side_ask_kick {
             SessionMode::Ask

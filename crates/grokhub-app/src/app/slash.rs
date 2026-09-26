@@ -230,6 +230,10 @@ impl Cabin {
             }
             Slash::RewindFiles => self.rewind_project(),
             Slash::Compact => {
+                self.send_grok_slash("/compact");
+                if !self.running {
+                    return;
+                }
                 let pin = self.cfg.goal_pin.trim().to_string();
                 let start = compact_keep_start_from(
                     self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())),
@@ -250,7 +254,6 @@ impl Cabin {
                 }
                 self.stamp_current_access();
                 self.persist();
-                self.send_grok_slash("/compact");
                 self.status = "Compacting Grok context…".into();
             }
             Slash::Skill(name) => {
@@ -638,10 +641,13 @@ impl Cabin {
             }
             Slash::Inhabit(peer) => self.queue_inhabit(peer),
             Slash::Rewind => {
+                self.send_grok_slash("/rewind");
+                if !self.running {
+                    return;
+                }
                 if let Some(i) = self.messages.iter().rposition(|m| m.0 == "assistant") {
                     self.live_mut().remove(i);
                 }
-                self.send_grok_slash("/rewind");
                 self.status = "Rewinding Grok conversation…".into();
             }
             Slash::Room(name) => {
