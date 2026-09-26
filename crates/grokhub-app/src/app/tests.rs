@@ -7570,3 +7570,21 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn scratch_chat_stays_off_a_run() {
+    let _guard = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("scratch-chat");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    cabin.new_thread(true);
+    assert_eq!(cabin.status, "Scratch — no memory writes");
+    let thread = cabin
+        .threads
+        .get(cabin.thread_idx)
+        .expect("current thread");
+    assert_eq!(thread.title, "Scratch");
+    assert!(thread.scratch);
+    assert!(!cabin.running);
+}
+
