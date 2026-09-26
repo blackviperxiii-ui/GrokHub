@@ -23,7 +23,7 @@ pub(super) struct PersistSnap {
 }
 
 
-pub(super) fn write_persist_disk(snap: &PersistSnap) {
+pub(super) fn write_persist_disk(dir: &std::path::Path, snap: &PersistSnap) {
     let _ = threads::save(&snap.threads);
     let msgs = snap
         .threads
@@ -46,7 +46,7 @@ pub(super) fn write_persist_disk(snap: &PersistSnap) {
     if let Some(p) = &snap.projects {
         let _ = crate::store::save_projects(p);
     }
-    let _ = config::save(&snap.cfg);
+    let _ = config::save_in(dir, &snap.cfg);
     if let Some(s) = &snap.secrets {
         let _ = secrets::save(s);
     }
@@ -71,9 +71,10 @@ impl Cabin {
         self.last_persist = Instant::now();
         self.geom_dirty = false;
         let io = self.persist_io.clone();
+        let dir = config::config_dir();
         std::thread::spawn(move || {
             if let Ok(_g) = io.lock() {
-                write_persist_disk(&snap);
+                write_persist_disk(&dir, &snap);
             }
         });
     }
@@ -158,11 +159,12 @@ impl Cabin {
         self.last_persist = Instant::now();
         self.geom_dirty = false;
         let io = self.persist_io.clone();
+        let dir = config::config_dir();
         let (tx, rx) = mpsc::channel();
         self.persist_rx = Some(rx);
         std::thread::spawn(move || {
             if let Ok(_g) = io.lock() {
-                write_persist_disk(&snap);
+                write_persist_disk(&dir, &snap);
             }
             let _ = tx.send(());
         });
@@ -196,6 +198,7 @@ impl Cabin {
     pub(super) fn persist_cfg(&self) {
         let io = self.persist_io.clone();
         let slot = self.cfg_slot.clone();
+        let dir = config::config_dir();
         let mut cfg = self.cfg.clone();
         cfg.api_key.clear();
         let gen = match slot.lock() {
@@ -211,7 +214,7 @@ impl Cabin {
                 Err(_) => return,
             };
             if let Some(cfg) = cfg {
-                let _ = config::save(&cfg);
+                let _ = config::save_in(&dir, &cfg);
             }
         });
     }

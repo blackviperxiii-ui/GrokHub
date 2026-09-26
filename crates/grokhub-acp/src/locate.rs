@@ -682,7 +682,7 @@ pub fn grok_stdout(bin: &Path, cwd: &Path, args: &[&str]) -> Result<String, Stri
 
 /// Run `grok` and cap how long we wait so History cannot freeze the cabin.
 pub fn grok_stdout_timeout(bin: &Path, cwd: &Path, args: &[&str], secs: u64) -> Result<String, String> {
-    grok_stdout_inner(bin, cwd, args, secs, true)
+    grok_stdout_inner(bin, cwd, args, Some(secs), true)
 }
 
 /// Skills / MCP / marketplace live in the user's `~/.grok`, not cabin GROK_HOME.
@@ -692,14 +692,20 @@ pub fn grok_user_stdout_timeout(
     args: &[&str],
     secs: u64,
 ) -> Result<String, String> {
-    grok_stdout_inner(bin, cwd, args, secs, false)
+    grok_stdout_inner(bin, cwd, args, Some(secs), false)
+}
+
+/// Same as [`grok_user_stdout_timeout`] but the child runs until it exits.
+/// Cabin `/loop` used to die at 300 seconds.
+pub fn grok_user_stdout_wait(bin: &Path, cwd: &Path, args: &[&str]) -> Result<String, String> {
+    grok_stdout_inner(bin, cwd, args, None, false)
 }
 
 fn grok_stdout_inner(
     bin: &Path,
     cwd: &Path,
     args: &[&str],
-    secs: u64,
+    kill_after: Option<u64>,
     isolate_cabin: bool,
 ) -> Result<String, String> {
     if grok_marked_unusable(bin) {
@@ -741,32 +747,39 @@ fn grok_stdout_inner(
         let out = child.wait_with_output();
         let _ = tx.send(out);
     });
-    let out = match rx.recv_timeout(Duration::from_secs(secs.max(1))) {
-        Ok(Ok(o)) => o,
-        Ok(Err(e)) => return Err(e.to_string()),
-        Err(_) => {
-            #[cfg(windows)]
-            {
-                let mut kill = Command::new("taskkill");
-                kill.args(["/PID", &pid.to_string(), "/T", "/F"])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null());
-                hide_windows_console(&mut kill);
-                let _ = kill.status();
+    let out = match kill_after {
+        None => match rx.recv() {
+            Ok(Ok(o)) => o,
+            Ok(Err(e)) => return Err(e.to_string()),
+            Err(_) => return Err(format!("grok {} ended", args.join(" "))),
+        },
+        Some(secs) => match rx.recv_timeout(Duration::from_secs(secs.max(1))) {
+            Ok(Ok(o)) => o,
+            Ok(Err(e)) => return Err(e.to_string()),
+            Err(_) => {
+                #[cfg(windows)]
+                {
+                    let mut kill = Command::new("taskkill");
+                    kill.args(["/PID", &pid.to_string(), "/T", "/F"])
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null());
+                    hide_windows_console(&mut kill);
+                    let _ = kill.status();
+                }
+                #[cfg(not(windows))]
+                {
+                    let _ = Command::new("kill")
+                        .args(["-TERM", &pid.to_string()])
+                        .status();
+                    thread::sleep(Duration::from_millis(80));
+                    let _ = Command::new("kill")
+                        .args(["-KILL", &pid.to_string()])
+                        .status();
+                }
+                return Err(format!("grok {} timed out", args.join(" ")));
             }
-            #[cfg(not(windows))]
-            {
-                let _ = Command::new("kill")
-                    .args(["-TERM", &pid.to_string()])
-                    .status();
-                thread::sleep(Duration::from_millis(80));
-                let _ = Command::new("kill")
-                    .args(["-KILL", &pid.to_string()])
-                    .status();
-            }
-            return Err(format!("grok {} timed out", args.join(" ")));
-        }
+        },
     };
     let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -1662,6 +1675,8 @@ mod tests {
         let (always, auto) = PermissionMode::Ask.composer_headless_flags();
         assert!(!always && !auto);
         assert!(PermissionMode::Ask.uses_acp(), "Ask stays on the ACP path");
+        assert!(PermissionMode::Auto.uses_acp());
+        assert!(PermissionMode::AlwaysApprove.uses_acp());
         let ask = single_turn_args_full(
             "hi",
             "/tmp/work",
