@@ -7570,3 +7570,32 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn plain_teach_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("plain-teach");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.teach_nl = "follow along".to_string();
+    assert!(cabin.watched_steps.is_empty());
+    assert!(!cabin.teach_nl.contains("every ") && !cabin.teach_nl.contains("/loop"));
+    assert!(cabin.automations.is_empty());
+    assert!(cabin.grok_loops.is_empty());
+    assert!(!cabin.running);
+
+    cabin.teach_watched_routine();
+
+    assert_eq!(
+        cabin.status,
+        "A job is saved only when you ask to schedule it."
+    );
+    assert!(cabin.automations.is_empty());
+    assert!(cabin.grok_loops.is_empty());
+    assert!(!cabin.running);
+
+    std::env::remove_var("GROKHUB_CONFIG");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
