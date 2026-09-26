@@ -5,6 +5,7 @@ use super::*;
 impl Cabin {
 
     pub(super) fn send_chat(&mut self, text: String) {
+        self.turn_retried = false;
         let mut text = text.trim().to_string();
         if text.is_empty() {
             return;

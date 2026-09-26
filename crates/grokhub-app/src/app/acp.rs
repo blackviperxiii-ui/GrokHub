@@ -207,19 +207,13 @@ impl Cabin {
                     .unwrap_or(true)
             })
             .unwrap_or(true);
-        let resume_in_cabin = resume
-            .as_deref()
-            .is_some_and(grokhub_acp::cabin_has_session);
-        let user_home = grokhub_acp::use_user_grok_home(
-            self.threads
-                .get(idx)
-                .map(|t| t.grok_user_home)
-                .unwrap_or(false),
-            resume_in_cabin,
-        );
-        if let Some(t) = self.threads.get_mut(idx) {
-            t.grok_user_home = user_home;
-        }
+        // Agent stdio must not inherit ~/.grok. That home loads chrome-devtools
+        // and the leader SIGTERMs the child. Imported CLI chats opt in.
+        let user_home = self
+            .threads
+            .get(idx)
+            .map(|t| t.grok_user_home)
+            .unwrap_or(false);
         let worktree = self
             .threads
             .get(idx)
@@ -508,7 +502,8 @@ impl Cabin {
                     }
                     self.running = false;
                     self.acp = None;
-                    if grokhub_acp::is_sigterm_status(&e) {
+                    if grokhub_acp::is_sigterm_status(&e) && !self.turn_retried {
+                        self.turn_retried = true;
                         self.status = "Retrying…".into();
                         self.kick_model(false);
                         continue;
@@ -731,7 +726,8 @@ impl Cabin {
                 let paints = self.stream_here();
                 if grokhub_acp::is_sigterm_status(&e) {
                     let empty = self.stream_buf.is_empty() && self.thought_buf.is_empty();
-                    if empty && self.status != "Retrying…" {
+                    if empty && !self.turn_retried {
+                        self.turn_retried = true;
                         if paints {
                             self.status = "Retrying…".into();
                         }
