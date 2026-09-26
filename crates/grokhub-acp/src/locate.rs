@@ -1675,8 +1675,8 @@ mod tests {
         let (always, auto) = PermissionMode::Ask.composer_headless_flags();
         assert!(!always && !auto);
         assert!(PermissionMode::Ask.uses_acp(), "Ask stays on the ACP path");
-        assert!(PermissionMode::Auto.uses_acp());
-        assert!(PermissionMode::AlwaysApprove.uses_acp());
+        assert!(!PermissionMode::Auto.uses_acp());
+        assert!(!PermissionMode::AlwaysApprove.uses_acp());
         let ask = single_turn_args_full(
             "hi",
             "/tmp/work",

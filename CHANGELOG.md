@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 2.10.30 — 2026-09-26
+
+Auto and Always stay on `grok -p`. Routing them through agent stdio loaded `~/.grok` MCP servers, the child was SIGTERM'd, and the cabin retried that forever while the status stayed on Thinking. A killed turn is retried once.
+
 ## 2.10.29 — 2026-09-26
 
 Ask, Auto, and Always keep one Grok process for the chat. A background task, monitor, or `/loop` stays up after the turn, and a new message prompts that session instead of killing it. Stop still ends it. Connector commands use `~/.grok` and wait through MCP startup. The cabin leader socket stays private. Night and phone tasks stay headless and are not killed at 300 seconds.
