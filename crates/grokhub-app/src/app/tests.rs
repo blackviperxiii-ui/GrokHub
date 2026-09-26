@@ -7570,3 +7570,24 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn imagine_without_key_stays_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("imagine-key");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.imagine_prompt = "a red boat".into();
+
+    cabin.kick_imagine();
+
+    let expected = "Add an xAI console API key in Settings, or run grok login.";
+    assert_eq!(cabin.status, expected);
+    assert_eq!(cabin.imagine_error, expected);
+    assert!(!cabin.running);
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
