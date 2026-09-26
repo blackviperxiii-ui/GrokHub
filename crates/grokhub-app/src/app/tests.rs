@@ -7570,3 +7570,28 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn pin_chat_stays_off_a_run() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("pin-chat");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    assert_eq!(cabin.threads[cabin.thread_idx].title, "Chat");
+    assert!(!cabin.running);
+
+    cabin.pin_thread(cabin.thread_idx);
+    assert_eq!(cabin.status, "Pinned Chat");
+    assert!(cabin.threads[cabin.thread_idx].pinned);
+    assert!(!cabin.running);
+
+    cabin.pin_thread(cabin.thread_idx);
+    assert_eq!(cabin.status, "Unpinned Chat");
+    assert!(!cabin.threads[cabin.thread_idx].pinned);
+    assert!(!cabin.running);
+}
+
