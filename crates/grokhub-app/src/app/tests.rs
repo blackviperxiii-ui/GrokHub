@@ -7570,3 +7570,17 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn make_project_keeps_harbor() {
+    let mut app = Cabin::quiet_for_test();
+    let before = app.projects.len();
+    app.make_project("Harbor", None);
+    assert_eq!(app.status, "Project Harbor");
+    assert_eq!(app.projects.len(), before + 1);
+    let node = app.projects.iter().find(|n| n.name == "Harbor").expect("harbor");
+    assert_eq!(node.kind, ProjectKind::Project);
+    assert!(!node.path.trim().is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
