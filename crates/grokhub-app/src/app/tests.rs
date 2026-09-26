@@ -7570,3 +7570,19 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn imagine_page_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    app.set_nav_id("imagine");
+    assert_eq!(app.nav, Nav::Imagine);
+    assert!(app.imagine_want_focus);
+    assert_eq!(app.nav_id(), "imagine");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+    app.set_nav_id("history");
+    assert_eq!(app.nav, Nav::History);
+    assert_eq!(app.nav_id(), "history");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
