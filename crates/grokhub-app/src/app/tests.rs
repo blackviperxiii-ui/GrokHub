@@ -7570,3 +7570,21 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn busy_update_stays_queued() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("busy_update_stays_queued");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.running = true;
+    cabin.start_overlay_update(vec!["echo hi".into()]);
+    assert_eq!(
+        cabin.status,
+        "Update queued — it starts when this job finishes."
+    );
+    assert_eq!(cabin.queued_overlay, Some(vec!["echo hi".into()]));
+    assert!(cabin.running);
+    assert!(matches!(cabin.nav, Nav::Settings));
+    assert!(matches!(cabin.settings_sec, SettingsSec::Update));
+}
+
