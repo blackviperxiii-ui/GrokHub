@@ -7570,3 +7570,20 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn imagine_while_busy_stays_halted() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("imagine-busy");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.imagine_prompt = "a red boat".into();
+    cabin.running = true;
+    cabin.kick_imagine();
+    assert_eq!(
+        cabin.status,
+        "Halt the live job before Imagine, or wait."
+    );
+    assert!(cabin.running);
+    assert!(cabin.imagine_error.is_empty());
+}
+
