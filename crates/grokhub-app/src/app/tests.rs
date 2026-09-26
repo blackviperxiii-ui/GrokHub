@@ -7570,3 +7570,22 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn delete_last_chat_stays_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("delete-last");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    cabin.delete_thread_at(0);
+    assert_eq!(cabin.status, "Chat deleted");
+    assert_eq!(cabin.threads.len(), 1);
+    assert_eq!(cabin.threads[0].title, "Chat");
+    assert!(!cabin.running);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
