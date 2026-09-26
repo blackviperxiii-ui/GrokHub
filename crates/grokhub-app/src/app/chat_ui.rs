@@ -1607,8 +1607,9 @@ impl Cabin {
     }
 
     /// Compact, Copy session, and Export. Titlebar, immediately left of minimize.
-    pub(super) fn paint_session_actions_menu(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn paint_session_actions_menu(&mut self, ui: &mut egui::Ui) -> egui::Rect {
         let resp = titlebar_chrome_btn(ui, ChromeBtn::Menu);
+        let placed = resp.rect;
         let id = ui.make_persistent_id("session-actions-menu");
         if titlebar_chrome_hit(&resp) {
             ui.memory_mut(|m| m.toggle_popup(id));
@@ -1637,6 +1638,7 @@ impl Cabin {
                 }
             },
         );
+        placed
     }
 
     pub(super) fn ui_composer_stack(&mut self, ui: &mut egui::Ui) {

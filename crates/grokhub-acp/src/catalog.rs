@@ -232,16 +232,21 @@ pub fn skill_source_label(skill: &GrokSkillRow) -> String {
     }
 }
 
+/// MCP startup (chrome-devtools is 90s in `~/.grok`) must finish before the
+/// Connectors page decides the list is empty.
+const CATALOG_CMD_SECS: u64 = 120;
+
 pub fn load_grok_catalog(bin: &Path, cwd: &Path) -> Result<GrokCatalog, String> {
-    let inspect = grok_user_stdout_timeout(bin, cwd, &["inspect", "--json"], 20)?;
+    let inspect = grok_user_stdout_timeout(bin, cwd, &["inspect", "--json"], CATALOG_CMD_SECS)?;
     let inspect_v: Value = serde_json::from_str(inspect.trim()).unwrap_or(Value::Null);
     let mcp_text =
-        grok_user_stdout_timeout(bin, cwd, &["mcp", "list", "--json"], 20).unwrap_or_default();
+        grok_user_stdout_timeout(bin, cwd, &["mcp", "list", "--json"], CATALOG_CMD_SECS)
+            .unwrap_or_default();
     let plug_text = grok_user_stdout_timeout(
         bin,
         cwd,
         &["plugin", "list", "--json", "--available"],
-        45,
+        CATALOG_CMD_SECS,
     )
     .unwrap_or_default();
     let skills = parse_inspect_skills(&inspect_v);

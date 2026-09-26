@@ -138,6 +138,9 @@ impl Cabin {
         if grokhub_acp::find_grok().is_none() {
             return Err("Grok Build CLI is not on PATH".into());
         }
+        if self.background_tasks_open() && self.acp.is_some() {
+            return Ok(());
+        }
         let idx = self
             .chat_job_thread
             .as_deref()
@@ -204,11 +207,19 @@ impl Cabin {
                     .unwrap_or(true)
             })
             .unwrap_or(true);
-        let user_home = self
-            .threads
-            .get(idx)
-            .map(|t| t.grok_user_home)
-            .unwrap_or(false);
+        let resume_in_cabin = resume
+            .as_deref()
+            .is_some_and(grokhub_acp::cabin_has_session);
+        let user_home = grokhub_acp::use_user_grok_home(
+            self.threads
+                .get(idx)
+                .map(|t| t.grok_user_home)
+                .unwrap_or(false),
+            resume_in_cabin,
+        );
+        if let Some(t) = self.threads.get_mut(idx) {
+            t.grok_user_home = user_home;
+        }
         let worktree = self
             .threads
             .get(idx)
@@ -539,6 +550,21 @@ impl Cabin {
         }
         if here {
             self.status.clear();
+        }
+        if let Some(id) = self.loop_acp_id.take() {
+            let prompt = self
+                .grok_loops
+                .iter()
+                .find(|x| x.id == id)
+                .map(|r| r.prompt.clone())
+                .unwrap_or_default();
+            self.note_automation_done(&id, &prompt, &text);
+        }
+        if self.background_tasks_open() {
+            let n = self.grok_tasks.iter().filter(|t| !t.2).count();
+            if here {
+                self.status = format!("{n} still running");
+            }
         }
         remember_chip_outcome(&mut self.chip_memory, true, now_ms());
         record_turn(&mut self.learning);
@@ -881,11 +907,19 @@ impl Cabin {
             .get(idx)
             .and_then(|t| t.grok_session.clone())
             .filter(|s| !s.trim().is_empty());
-        let user_home = self
-            .threads
-            .get(idx)
-            .map(|t| t.grok_user_home)
-            .unwrap_or(false);
+        let resume_in_cabin = resume
+            .as_deref()
+            .is_some_and(grokhub_acp::cabin_has_session);
+        let user_home = grokhub_acp::use_user_grok_home(
+            self.threads
+                .get(idx)
+                .map(|t| t.grok_user_home)
+                .unwrap_or(false),
+            resume_in_cabin,
+        );
+        if let Some(t) = self.threads.get_mut(idx) {
+            t.grok_user_home = user_home;
+        }
         let worktree = self
             .threads
             .get(idx)
@@ -1356,20 +1390,30 @@ impl Cabin {
 
     pub(super) fn run_grok_user_cmd(&mut self, args: Vec<String>) {
         if self.grok_ext_rx.is_some() {
+            let line = format!("grok {}", args.join(" "));
+            self.grok_ext_q.push(args);
+            self.connector_note = format!("Queued {line}");
             return;
         }
+        self.spawn_grok_user_cmd(args);
+    }
+
+    fn spawn_grok_user_cmd(&mut self, args: Vec<String>) {
         let Some(bin) = grokhub_acp::find_grok() else {
             self.status = build_agent::grok_banner();
+            self.connector_note = build_agent::grok_banner();
             return;
         };
         let cwd = self.grok_cwd();
         let (tx, rx) = mpsc::channel();
         self.grok_ext_rx = Some(rx);
-        self.status = format!("grok {}", args.join(" "));
+        let shown = format!("grok {}", args.join(" "));
+        self.status = shown.clone();
+        self.connector_note = shown;
         std::thread::spawn(move || {
             let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-            let text =
-                grokhub_acp::grok_user_stdout_timeout(&bin, &cwd, &refs, 90).unwrap_or_else(|e| e);
+            let text = grokhub_acp::grok_user_stdout_timeout(&bin, &cwd, &refs, 120)
+                .unwrap_or_else(|e| e);
             let _ = tx.send(text);
         });
     }
@@ -1380,11 +1424,16 @@ impl Cabin {
         };
         match rx.try_recv() {
             Ok(text) => {
+                self.connector_note = text.clone();
                 let clip: String = text.chars().take(160).collect();
                 if !clip.is_empty() {
                     self.status = clip;
                 }
                 self.reload_grok_catalog();
+                if !self.grok_ext_q.is_empty() {
+                    let next = self.grok_ext_q.remove(0);
+                    self.spawn_grok_user_cmd(next);
+                }
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.grok_ext_rx = Some(rx);

@@ -2,7 +2,20 @@
 
 use super::*;
 
-enum BoardAct {
+/// Queue tile status. A finished task is done. A live task whose title starts
+/// with "failed" is failed. Every other live task is running.
+pub(super) fn queue_task_label(title: &str, done: bool) -> &'static str {
+    let failed = title.to_ascii_lowercase().starts_with("failed");
+    if done {
+        "done"
+    } else if failed {
+        "failed"
+    } else {
+        "running"
+    }
+}
+
+pub(super) enum BoardAct {
     Add,
     Save(String),
     Move { id: String, status: BoardStatus },
@@ -135,14 +148,7 @@ impl Cabin {
                     crate::cards::section_label(ui, "Grok tasks");
                     ui.add_space(8.0);
                     for (id, title, done) in &self.grok_tasks {
-                        let failed = title.to_ascii_lowercase().starts_with("failed");
-                        let st = if *done {
-                            "done"
-                        } else if failed {
-                            "failed"
-                        } else {
-                            "running"
-                        };
+                        let st = queue_task_label(title, *done);
                         crate::cards::grok_tile(
                             ui,
                             crate::icons::TileIcon::Bolt,
@@ -178,24 +184,33 @@ impl Cabin {
                     }
                 }
                 if let Some(i) = run_at {
-                    if i < self.agents.len() {
-                        if self.running {
-                            self.status = "Busy — wait, then run".into();
-                        } else {
-                            self.agents[i].status = "running".into();
-                            let p = self.agents[i].prompt.clone();
-                            let tid = self.agents[i].thread_id.clone();
-                            self.nav = Nav::Chat;
-                            if !tid.is_empty() {
-                                self.chat_job_thread = Some(tid);
-                            }
-                            self.push_bound_msg("user", p);
-                            self.persist();
-                            self.kick_model(false);
-                        }
+                    if self.start_queued_job(i) {
+                        self.kick_model(false);
                     }
                 }
             });
+    }
+
+    /// Queue Run state. True when the caller should kick the model.
+    /// This call does not spawn grok.
+    pub(super) fn start_queued_job(&mut self, i: usize) -> bool {
+        if i >= self.agents.len() {
+            return false;
+        }
+        if self.running {
+            self.status = "Busy — wait, then run".into();
+            return false;
+        }
+        self.agents[i].status = "running".into();
+        let p = self.agents[i].prompt.clone();
+        let tid = self.agents[i].thread_id.clone();
+        self.nav = Nav::Chat;
+        if !tid.is_empty() {
+            self.chat_job_thread = Some(tid);
+        }
+        self.push_bound_msg("user", p);
+        self.persist();
+        true
     }
 
     pub(super) fn ui_devices(&mut self, ctx: &egui::Context) {
@@ -844,7 +859,7 @@ impl Cabin {
         }
     }
 
-    fn apply_board_act(&mut self, act: Option<BoardAct>) -> bool {
+    pub(super) fn apply_board_act(&mut self, act: Option<BoardAct>) -> bool {
         let Some(act) = act else {
             return false;
         };
@@ -985,6 +1000,14 @@ impl Cabin {
             let mut plugin_uninstall: Option<String> = None;
             egui::ScrollArea::vertical().show(ui, |ui| {
             if self.skills_tab_connectors {
+                if !self.connector_note.is_empty() {
+                    ui.label(
+                        RichText::new(&self.connector_note)
+                            .size(12.0)
+                            .color(crate::theme::muted()),
+                    );
+                    ui.add_space(12.0);
+                }
                 crate::cards::section_label(ui, "GitHub");
                 ui.label(
                     RichText::new("Read-only. Who am I and List repos use the PAT via run_connector. No writes. No other websites.")
