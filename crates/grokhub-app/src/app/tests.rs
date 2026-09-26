@@ -7570,3 +7570,37 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     );
 }
 
+#[test]
+fn rename_chat_stays_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("rename-chat");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    let prev = std::env::var("GROKHUB_CONFIG").ok();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.new_thread(false);
+    }
+    let thread_idx = cabin.thread_idx;
+    assert_eq!(cabin.threads[thread_idx].title, "Chat");
+    assert!(!cabin.running);
+
+    cabin.rename_thread(thread_idx, "");
+    assert_eq!(cabin.status, "Kept Chat");
+    assert_eq!(cabin.threads[thread_idx].title, "Chat");
+    assert!(!cabin.threads[thread_idx].title_locked);
+
+    cabin.rename_thread(thread_idx, "Harbor");
+    assert_eq!(cabin.status, "Renamed Harbor");
+    assert_eq!(cabin.threads[thread_idx].title, "Harbor");
+    assert!(cabin.threads[thread_idx].title_locked);
+    assert!(!cabin.running);
+
+    match prev {
+        Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
+        None => std::env::remove_var("GROKHUB_CONFIG"),
+    }
+}
+
