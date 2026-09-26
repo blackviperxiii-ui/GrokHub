@@ -561,8 +561,11 @@ impl Cabin {
                 self.status = format!("{n} still running");
             }
         }
-        remember_chip_outcome(&mut self.chip_memory, true, now_ms());
-        record_turn(&mut self.learning);
+        if !self.job_is_idea_talk() {
+            remember_chip_outcome(&mut self.chip_memory, true, now_ms());
+            record_turn(&mut self.learning);
+            self.absorb_turn_learning(&text);
+        }
         bump_usage(&mut self.usage, "message");
         if self.session_mode == SessionMode::Plan {
             self.store_session_plan(&text, false);
@@ -935,6 +938,7 @@ impl Cabin {
             false,
             user_home,
             worktree,
+            &grokhub_core::brief_for(&self.learning, "chat"),
         ) {
             self.grok_p_pid = Some(pid);
             self.grok_p_rx = Some(rx);

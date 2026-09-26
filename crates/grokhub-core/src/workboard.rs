@@ -426,6 +426,21 @@ pub fn upsert_inflight_card(cards: &mut Vec<BoardCard>, thread_id: &str, title: 
         return false;
     }
     if let Some(c) = cards.iter_mut().rev().find(|c| {
+        c.run && c.thread_id.as_deref() == Some(thread_id) && c.status == BoardStatus::Blocked
+    }) {
+        let next_title: String = title.chars().take(120).collect();
+        c.undo = Some(InflightUndo::Reused {
+            title: c.title.clone(),
+            status: BoardStatus::Blocked,
+        });
+        if !next_title.is_empty() {
+            c.title = next_title;
+        }
+        c.detail.clear();
+        c.status = BoardStatus::InProgress;
+        return true;
+    }
+    if let Some(c) = cards.iter_mut().rev().find(|c| {
         c.run
             && c.thread_id.as_deref() == Some(thread_id)
             && matches!(c.status, BoardStatus::InProgress | BoardStatus::Done)
@@ -494,7 +509,9 @@ pub fn abandon_inflight_card(cards: &mut Vec<BoardCard>, thread_id: &str) -> boo
     };
     match cards[idx].undo.take() {
         Some(InflightUndo::Created) => {
-            cards.remove(idx);
+            cards[idx].undo = None;
+            cards[idx].status = BoardStatus::Blocked;
+            cards[idx].detail = "Paused. This is where to resume.".into();
             true
         }
         Some(InflightUndo::Reused { title, status }) => {
@@ -778,11 +795,18 @@ mod tests {
     }
 
     #[test]
-    fn abandon_drops_a_new_card_and_restores_a_reused_one() {
+    fn abandon_parks_a_new_card_and_restores_a_reused_one() {
         let mut cards = Vec::new();
         assert!(upsert_inflight_card(&mut cards, "thr-1", "Flash the pi"));
         assert!(abandon_inflight_card(&mut cards, "thr-1"));
-        assert!(cards.is_empty());
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].title, "Flash the pi");
+        assert_eq!(cards[0].status, BoardStatus::Blocked);
+        assert!(cards[0].detail.contains("resume"));
+        assert!(upsert_inflight_card(&mut cards, "thr-1", "Flash the pi"));
+        assert_eq!(cards[0].status, BoardStatus::InProgress);
+        assert!(settle_inflight_card(&mut cards, "thr-1"));
+        cards.clear();
 
         assert!(upsert_inflight_card(&mut cards, "thr-1", "Flash the pi"));
         assert!(settle_inflight_card(&mut cards, "thr-1"));

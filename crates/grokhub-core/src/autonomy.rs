@@ -156,7 +156,16 @@ pub fn cabin_system_prompt(
     hands: &str,
     insights: &str,
 ) -> String {
-    let mut sys = String::new();
+    let mut sys = String::from(
+        "You are the cabin assistant. You can do what this computer can do: files, shell, browser, and the desktop. \
+Do the next step. Ask only before sending a message, paying, or deleting something they did not name. \
+Be brief, warm, and direct. \
+Do not repeat the conversation or the user's words. \
+Do not paste code, diffs, logs, or tool output unless they asked to see it. \
+When they hand you work, track it with WORK_PIN and WORK_UPDATE and keep going. \
+A paused workboard card is still yours. Resume it. \
+A stable preference or routine is one line: USER_FACT: what you learned.",
+    );
     push_block(&mut sys, "SOUL.md", soul);
     push_block(&mut sys, "USER.md", &cap_md(user_md));
     push_block(&mut sys, "MEMORY.md", &cap_md(memory_md));
@@ -292,6 +301,9 @@ mod tests {
         assert!(sys.contains("Learned:"));
         assert!(sys.contains("hands"));
         let empty = cabin_system_prompt("", "", "", "", None, "", "", "", "", "");
-        assert!(empty.is_empty());
+        assert!(empty.contains("cabin assistant"));
+        assert!(empty.contains("WORK_PIN"));
+        assert!(empty.contains("this computer"));
+        assert!(empty.contains("Resume it"));
     }
 }

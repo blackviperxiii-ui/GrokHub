@@ -5,6 +5,8 @@ use std::borrow::Cow;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttachKind {
     Image,
+    Video,
+    Doc,
     Text,
     Other,
 }
@@ -92,9 +94,14 @@ pub fn attach_kind(path: &str) -> AttachKind {
         .unwrap_or("")
         .to_ascii_lowercase();
     match ext.as_str() {
-        "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" => AttachKind::Image,
+        "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "svg" => AttachKind::Image,
+        "mp4" | "webm" | "mov" | "mkv" | "m4v" => AttachKind::Video,
+        "pdf" | "doc" | "docx" | "odt" | "rtf" => AttachKind::Doc,
         "txt" | "md" | "rs" | "toml" | "json" | "log" | "csv" | "xml" | "yaml" | "yml" | "sh"
-        | "py" | "js" | "ts" | "html" | "css" => AttachKind::Text,
+        | "py" | "js" | "ts" | "tsx" | "jsx" | "html" | "css" | "go" | "c" | "h" | "cpp" | "hpp"
+        | "java" | "rb" | "php" | "sql" | "ini" | "conf" | "lock" | "rst" | "tex" => {
+            AttachKind::Text
+        }
         _ => AttachKind::Other,
     }
 }
@@ -109,7 +116,10 @@ pub fn parse_picker_stdout(stdout: &str) -> Option<String> {
 
 pub fn picker_args(bin: &str) -> Option<Vec<String>> {
     match bin {
-        "zenity" | "qarma" => Some(vec!["--file-selection".into(), "--title=Upload".into()]),
+        "zenity" | "qarma" => Some(vec![
+            "--file-selection".into(),
+            "--title=Add to chat".into(),
+        ]),
         "kdialog" => Some(vec![
             "--getopenfilename".into(),
             ".".into(),
@@ -167,9 +177,41 @@ pub fn attach_name(path: &str) -> String {
 pub fn attach_prompt_line(kind: AttachKind, name: &str) -> String {
     match kind {
         AttachKind::Image => format!("from reference {name}"),
+        AttachKind::Video => format!("from video {name}"),
+        AttachKind::Doc => format!("from document {name}"),
         AttachKind::Text => format!("from file {name}"),
         AttachKind::Other => format!("file {name}"),
     }
+}
+
+/// What the user message should say when a file is waiting on the composer.
+/// Pictures stay a short reference. Video and documents name the path so the
+/// cabin can open them on this computer.
+pub fn attach_send_line(kind: AttachKind, name: &str, path: &str) -> String {
+    let path = path.trim();
+    match kind {
+        AttachKind::Image => attach_prompt_line(kind, name),
+        AttachKind::Video if !path.is_empty() => {
+            format!("Video {name} is on this computer at {path}. Look at it.")
+        }
+        AttachKind::Doc if !path.is_empty() => {
+            format!("Document {name} is on this computer at {path}. Read it.")
+        }
+        AttachKind::Text | AttachKind::Other if !path.is_empty() => {
+            format!("File {name} is on this computer at {path}. Read it yourself. Do not ask for the contents to be pasted.")
+        }
+        other => attach_prompt_line(other, name),
+    }
+}
+
+pub fn attach_chip_label(kind: AttachKind, name: &str) -> String {
+    let word = match kind {
+        AttachKind::Image => "Picture",
+        AttachKind::Video => "Video",
+        AttachKind::Doc => "Document",
+        AttachKind::Text | AttachKind::Other => "File",
+    };
+    format!("{word} {name}")
 }
 
 pub fn append_composer(existing: &str, incoming: &str) -> String {
@@ -264,8 +306,10 @@ pub fn imagine_ref_status(name: &str) -> String {
 pub fn chat_attach_status(kind: AttachKind, name: &str) -> String {
     match kind {
         AttachKind::Image => format!("Attached {name} — sends with the next message"),
-        AttachKind::Text => format!("Pasted {name}"),
-        AttachKind::Other => format!("Added path {name}"),
+        AttachKind::Video => format!("Video {name} — the agent will read it"),
+        AttachKind::Doc => format!("Document {name} — the agent will read it"),
+        AttachKind::Text => format!("File {name} — the agent will read it"),
+        AttachKind::Other => format!("File {name} — the agent will read it"),
     }
 }
 
@@ -309,6 +353,15 @@ mod tests {
         assert_eq!(attach_kind("Cargo.toml"), AttachKind::Text);
         assert_eq!(attach_kind("bin.elf"), AttachKind::Other);
         assert_eq!(attach_kind("noext"), AttachKind::Other);
+        assert_eq!(attach_kind("clip.MP4"), AttachKind::Video);
+        assert_eq!(attach_kind("/tmp/notes.pdf"), AttachKind::Doc);
+        assert_eq!(attach_kind("main.go"), AttachKind::Text);
+        assert!(attach_send_line(AttachKind::Video, "clip.mp4", "/tmp/clip.mp4").contains("/tmp/clip.mp4"));
+        assert!(attach_send_line(AttachKind::Doc, "notes.pdf", "/tmp/notes.pdf").contains("Read it"));
+        assert_eq!(
+            attach_send_line(AttachKind::Image, "ref.png", ""),
+            "from reference ref.png"
+        );
     }
 
     #[test]

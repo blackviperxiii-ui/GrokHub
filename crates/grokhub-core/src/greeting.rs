@@ -19,6 +19,8 @@ pub struct GreetingInput<'a> {
     pub signed_in: bool,
     pub first_run: bool,
     pub last_project: &'a str,
+    /// A paused workboard task. Empty when nothing is waiting.
+    pub paused_task: &'a str,
 }
 
 /// Why this empty-home line was chosen. Tests lock the ranker, not the adjectives.
@@ -162,12 +164,13 @@ fn clean_name(s: &str) -> String {
     }
 }
 
-fn time_word(hour: u8) -> &'static str {
+/// Spoken time of day. Night stays "Hey" so it does not sound like goodbye.
+fn hello_phrase(hour: u8) -> &'static str {
     match hour {
-        5..=11 => "Morning",
-        12..=16 => "Afternoon",
-        17..=21 => "Evening",
-        _ => "Night",
+        5..=11 => "Good morning",
+        12..=16 => "Good afternoon",
+        17..=21 => "Good evening",
+        _ => "Hey",
     }
 }
 
@@ -226,46 +229,68 @@ pub fn classify_greeting(input: &GreetingInput) -> GreetingKind {
 
 pub fn local_greeting(input: &GreetingInput) -> String {
     let name = greeting_name(input.user_md, input.display_name);
-    let tod = time_word(input.hour);
+    let hello = hello_phrase(input.hour);
     let project = clean_project_title(input.last_project);
     let line = match classify_greeting(input) {
-        GreetingKind::FirstRunUnsigned => format!("{tod}. Connect Grok to start."),
+        GreetingKind::FirstRunUnsigned => {
+            format!("{hello}. Connect Grok and I'll be right here.")
+        }
         GreetingKind::FirstRunSigned => {
             if name.is_empty() {
-                format!("{tod}. The cabin is ready.")
+                format!("{hello}. I'm here whenever you are.")
             } else {
-                format!("{tod}, {name}. The cabin is ready.")
+                format!("{hello}, {name}. I'm here whenever you are.")
             }
         }
-        GreetingKind::ReturningUnsigned => format!("{tod}. Sign in to pick up."),
+        GreetingKind::ReturningUnsigned => {
+            format!("{hello}. Sign in and we can pick up where we left off.")
+        }
         GreetingKind::ReturningProject => {
-            if name.is_empty() {
-                format!("{tod}. {project} is still open.")
+            if let Some(line) = paused_line(hello, &name, input.paused_task) {
+                line
+            } else if name.is_empty() {
+                format!("{hello}. {project} is still open if you want it.")
             } else {
-                format!("{tod}, {name}. {project} is still open.")
+                format!("{hello}, {name}. {project} is still open if you want it.")
             }
         }
         GreetingKind::ReturningQuiet => {
-            if name.is_empty() {
-                format!("{tod}. The cabin is ready.")
+            if let Some(line) = paused_line(hello, &name, input.paused_task) {
+                line
+            } else if name.is_empty() {
+                format!("{hello}. I'm here.")
             } else {
-                format!("{tod}, {name}.")
+                format!("{hello}, {name}. I'm here.")
             }
         }
     };
     clip_greeting(&line)
 }
 
+fn paused_line(hello: &str, name: &str, task: &str) -> Option<String> {
+    let task = task.trim();
+    if task.is_empty() || !is_plain_text(task) || is_product_name(task) {
+        return None;
+    }
+    let task: String = task.chars().take(36).collect();
+    Some(if name.is_empty() {
+        format!("{hello}. {task} is paused. I'll pick it up.")
+    } else {
+        format!("{hello}, {name}. {task} is paused. I'll pick it up.")
+    })
+}
+
 pub fn greeting_prompt(input: &GreetingInput) -> String {
     let name = greeting_name(input.user_md, input.display_name);
     let mut lines = vec![
-        "Write one quiet greeting line for an empty cabin chat.".into(),
+        "Write one greeting line the way a calm assistant would say it when someone sits down.".into(),
         format!(
-            "One sentence, at most {GREETING_MAX_CHARS} characters. No markdown, no emoji, no quotes, no secrets."
+            "One sentence, at most {GREETING_MAX_CHARS} characters. No markdown, no emoji, no quotes, no secrets, no question mark."
         ),
-        "Address the user by name if known. Invite without shouting.".into(),
-        "Do not quote USER.md or MEMORY.md. Do not mention the machine, hostname, or GrokHub.".into(),
-        "If a last project is set, you may name it once. First-run stays a start line; returning stays a sit-down line.".into(),
+        "Use their name if you know it. Sound like you already know them, not like a status screen.".into(),
+        "Do not say the cabin is ready. Do not say welcome. Do not quote USER.md or MEMORY.md.".into(),
+        "Do not mention the machine, hostname, or GrokHub.".into(),
+        "If a last project is set, offer it once, lightly. First run is a start. Returning is picking up.".into(),
         "Reply with only the line.".into(),
         String::new(),
         format!("Hour: {}", input.hour),
@@ -438,6 +463,7 @@ mod tests {
             signed_in: true,
             first_run: false,
             last_project: "",
+            paused_task: "",
         }
     }
 
@@ -665,32 +691,35 @@ mod tests {
         first.signed_in = false;
         assert_eq!(classify_greeting(&first), GreetingKind::FirstRunUnsigned);
         let g = local_greeting(&first);
-        assert_eq!(g, "Morning. Connect Grok to start.");
+        assert_eq!(g, "Good morning. Connect Grok and I'll be right here.");
 
         first.signed_in = true;
         first.display_name = "Jeremy";
         assert_eq!(classify_greeting(&first), GreetingKind::FirstRunSigned);
         let g = local_greeting(&first);
         assert!(g.contains("Jeremy"), "{g}");
-        assert!(g.contains("ready"), "{g}");
+        assert!(g.contains("I'm here"), "{g}");
         assert!(!g.contains('?'), "{g}");
 
         let mut back = input("Name: Viper\n", "", &[], "Viper", 21);
         back.signed_in = false;
         assert_eq!(classify_greeting(&back), GreetingKind::ReturningUnsigned);
-        assert_eq!(local_greeting(&back), "Evening. Sign in to pick up.");
+        assert_eq!(
+            local_greeting(&back),
+            "Good evening. Sign in and we can pick up where we left off."
+        );
 
         back.signed_in = true;
         back.last_project = "Continue Night cabin";
         assert_eq!(clean_project_title(back.last_project), "Night cabin");
         assert_eq!(classify_greeting(&back), GreetingKind::ReturningProject);
         let g = local_greeting(&back);
-        assert!(g.starts_with("Evening, Viper."), "{g}");
+        assert!(g.starts_with("Good evening, Viper."), "{g}");
         assert!(g.contains("Night cabin is still open"), "{g}");
 
         back.last_project = "failed: host snapshot";
         assert_eq!(classify_greeting(&back), GreetingKind::ReturningQuiet);
-        assert_eq!(local_greeting(&back), "Evening, Viper.");
+        assert_eq!(local_greeting(&back), "Good evening, Viper. I'm here.");
 
         assert_eq!(project_title_from_hint("Continue Night cabin"), "Night cabin");
         assert!(clean_project_title("CachyOS").is_empty());

@@ -10,6 +10,10 @@ impl Cabin {
         if text.is_empty() {
             return;
         }
+        if self.running && self.job_is_idea_talk() {
+            self.status = "The idea talk is still going".into();
+            return;
+        }
         if let Some(slash) = parse_slash(&text) {
             self.run_slash(slash);
             return;
@@ -70,18 +74,32 @@ impl Cabin {
             self.status = "Install Grok Build (x.ai/cli) or Connect Grok in Settings".into();
             return;
         }
-        if let Some(name) = self.attach_name.as_deref() {
+        if let Some(name) = self.attach_name.clone() {
             if !name.trim().is_empty() {
-                text = append_composer(&text, &attach_prompt_line(AttachKind::Image, name));
+                let kind = self.attach_kind.unwrap_or(AttachKind::Image);
+                let path = self.attach_path.clone().unwrap_or_default();
+                let line = if kind == AttachKind::Image {
+                    attach_prompt_line(AttachKind::Image, &name)
+                } else {
+                    attach_send_line(kind, &name, &path)
+                };
+                text = append_composer(&text, &line);
             }
         }
         self.verify_ok_turn = verify_ok_after_user_turn(self.verify_ok_turn, true);
         self.active_skill_follow = None;
-        if let Some(sk) = match_skill(&text, &self.skill_list) {
-            self.skill_name = sk.name.clone();
-            self.status = format!("Skill {}", sk.name);
-            if self.policy().injects_skill() {
-                self.active_skill_follow = Some(skill_follow_block(sk));
+        let matched = match_skill(&text, &self.skill_list).map(|sk| {
+            (
+                sk.name.clone(),
+                self.policy().injects_skill().then(|| skill_follow_block(sk)),
+            )
+        });
+        if let Some((skill_ran, follow)) = matched {
+            self.skill_name = skill_ran.clone();
+            self.engine_note("skills", &format!("ran:{skill_ran}"), &skill_ran);
+            self.status = format!("Skill {skill_ran}");
+            if let Some(follow) = follow {
+                self.active_skill_follow = Some(follow);
             }
         }
         self.eyes_attach = false;
@@ -260,6 +278,8 @@ impl Cabin {
                 next_chat_image(self.attach_url.as_deref(), cabin.as_deref()).map(str::to_string);
             self.attach_url = None;
             self.attach_name = None;
+            self.attach_path = None;
+            self.attach_kind = None;
             url
         } else {
             None
@@ -339,6 +359,7 @@ impl Cabin {
             fork,
             user_home,
             worktree,
+            &grokhub_core::brief_for(&self.learning, "chat"),
         ) {
             Ok((pid, rx)) => {
                 self.grok_p_pid = Some(pid);

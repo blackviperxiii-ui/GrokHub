@@ -10,6 +10,7 @@ pub mod chat;
 pub mod chat_bubble;
 pub mod chat_job;
 pub mod chat_view;
+pub mod cabin_engine;
 pub mod chips;
 pub mod connector;
 pub mod consult;
@@ -68,7 +69,8 @@ pub use appearance::{
     theme_id, theme_label, ThemeChoice,
 };
 pub use attach::{
-    append_composer, attach_kind, attach_name, attach_prompt_line, bound_scan,
+    append_composer, attach_chip_label, attach_kind, attach_name, attach_prompt_line,
+    attach_send_line, bound_scan,
     cabin_eyes_request_text, cabin_frame_only, chat_attach_status, clip_image_args,
     image_pixels_ok, imagine_ref_status, kick_consumes_attach, list_pick_names, next_chat_image,
     parse_picker_stdout, picker_args, picker_save_args, plus_empty_status, plus_menu_rows,
@@ -136,14 +138,19 @@ pub use chat_view::{
     ChatView, ThoughtFold, ThoughtFoldAct, CHAT_BLOCK_GAP, CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK,
     SKILL_SAVED_MARK, SKILL_SAVED_NOTE, THOUGHT_CLUSTER_GAP, THOUGHT_ROW_LABEL,
 };
+pub use cabin_engine::{absorb_cabin, brief_for, engine_slug, note_part, CabinDirective, PartNote};
 pub use chips::{
-    build_quick_chips, chip_memory_key, chip_scan, chip_suggest_prompt, chip_thread_from_messages,
+    build_quick_chips, cabin_pace, chip_dismissed_for_good, chip_memory_key, chip_scan,
+    local_lessons,
+    chip_spend_allowed, chip_suggest_prompt,
+    chip_thread_from_messages, idea_talk_chips,
     context_fingerprint, detect_chip_context, detect_chip_stage, empty_chip_memory, home_slash_cmd,
     home_surface_from_nav, mode_from_chip_value, nav_from_chip_value, parse_llm_chips,
     predict_intents, prune_retired_chip_memory, remember_chip_click, remember_chip_dismiss,
     remember_chip_outcome, remember_home_slash, remember_home_surface, remember_typed_prompt,
     should_refresh_llm, skill_offer_chip, top_habit_labels, ChipInput, ChipKind, ChipMemory,
-    ChipStage, ChipThread, PredictedIntent, QuickChip, CHIP_LLM_DEBOUNCE_MS, CHIP_LLM_MODE,
+    CabinPace, ChipStage, ChipThread, PredictedIntent, QuickChip, CHIP_LLM_DEBOUNCE_MS,
+    CHIP_LLM_MODE, CHIP_LLM_SPEND_MS,
     CHIP_VISIBLE_MAX,
 };
 pub use connector::{
@@ -238,9 +245,10 @@ pub use inhabit::{
     can_inhabit, inhabit_bundle_usable, inhabit_claim_allowed, inhabit_ready, InhabitBundle,
 };
 pub use learning::{
-    extract_insights, insight_key_for_fact, insight_pin, is_actionable_need, is_durable_fact,
-    looks_like_user_pref, prune_ephemeral_insights, record_turn, upsert_insight, user_pref_facts,
-    LearningInsight, LearningState,
+    apply_local_lessons, extract_insights, insight_key_for_fact, insight_pin, is_actionable_need,
+    is_durable_fact, looks_like_user_pref, prune_ephemeral_insights, record_turn,
+    review_worth_tokens, serve_brief, upsert_insight, user_pref_facts, LearningInsight,
+    LearningState,
 };
 pub use models::{catalog_line, sanitize_chat_model, MODEL_CATALOG};
 pub use oauth::{
@@ -409,12 +417,16 @@ pub use windshield::{
 pub use update_feed::{
     archive_digest, archived_digests, automate_offer_card, automation_done_card, card_matches,
     digest_card, digest_topic_refused, discuss_context, dismiss_idea, dismiss_update, expire_ideas,
-    feed_visible, hold_if_quiet, home_feed_n, idea_card, links_from_research, mark_update_opened,
+    feed_ideas, feed_visible, fill_useful_ideas, hold_if_quiet, home_feed_n, idea_card, idea_rank,
+    lesson_rank_delta, setup_blocked_by_lessons,
+    offer_learned_setup,
+    idea_touched, links_from_research, unpin_feed_idea,
+    mark_update_opened,
     post_update, release_quiet_hold, resume_needs_fresh_chat, schedule_created_card,
     suggestion_card, tick_feed_pulse, visible_digests, visible_ideas, visible_updates,
     CardReaction, CitedLink, DigestMaterial, FeedPulse, PulseNow, PulseTick, TasteNote,
     UpdateAction, UpdateCard, UpdateKind, UpdateStatus, DIGEST_PAINT_MAX, FEED_PAINT_MAX,
-    IDEA_DISCOVERY_MAX, IDEA_TTL_MS,
+    IDEA_BOARD_MAX, IDEA_DISCOVERY_MAX, IDEA_TTL_MS,
 };
 pub use workboard::{
     abandon_inflight_card, apply_assistant_work_marks, apply_work_update, extract_work_pins,

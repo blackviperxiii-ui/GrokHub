@@ -455,11 +455,116 @@ fn is_protocol_line(line: &str) -> bool {
         || t.starts_with("GOAL_BLOCKED")
         || t.starts_with("CONSULT:")
         || t.starts_with("IMAGINE_PROMPT:")
+        || t.starts_with("USER_FACT:")
 }
 
-/// User-visible assistant prose. Thinking and HOST_CMD lines do not count.
+/// User-visible assistant prose. Thinking, protocol, replayed transcripts, and tool dumps do not count.
 pub fn assistant_prose(text: &str) -> String {
-    visible_assistant(&strip_thinking(text))
+    shape_assistant_reply(&visible_assistant(&strip_thinking(text)))
+}
+
+/// The new answer only. A replay of the chat, or a fenced tool dump, stays off the bubble.
+fn shape_assistant_reply(text: &str) -> String {
+    let text = newest_reply(text);
+    let (text, dropped) = without_gibberish_fences(&text);
+    let text = text.trim().to_string();
+    if text.is_empty() && dropped {
+        "Done. I kept the code and logs off this chat.".into()
+    } else {
+        text
+    }
+}
+
+fn is_role_header(line: &str) -> bool {
+    let t = line.trim().trim_end_matches(':').trim();
+    let t = t.trim_start_matches('#').trim();
+    matches!(
+        t.to_ascii_lowercase().as_str(),
+        "user" | "human" | "assistant" | "grok"
+    ) && (line.trim().ends_with(':') || line.trim().starts_with('#'))
+}
+
+fn newest_reply(text: &str) -> String {
+    let mut last_assistant: Option<usize> = None;
+    let lines: Vec<&str> = text.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim().trim_start_matches('#').trim().to_ascii_lowercase();
+        let role = t.trim_end_matches(':').trim();
+        if is_role_header(line) && (role == "assistant" || role == "grok") {
+            last_assistant = Some(i);
+        }
+    }
+    if let Some(i) = last_assistant {
+        return lines[i + 1..].join("\n");
+    }
+    text.to_string()
+}
+
+fn without_gibberish_fences(text: &str) -> (String, bool) {
+    let mut out = String::new();
+    let mut lang = String::new();
+    let mut body = String::new();
+    let mut in_fence = false;
+    let mut dropped = false;
+    for line in text.lines() {
+        let t = line.trim();
+        if !in_fence && t.starts_with("```") {
+            in_fence = true;
+            lang = t.trim_start_matches('`').trim().to_ascii_lowercase();
+            body.clear();
+            continue;
+        }
+        if in_fence && t.starts_with("```") {
+            in_fence = false;
+            if gibberish_fence(&lang, &body) {
+                dropped = true;
+            } else {
+                out.push_str("```");
+                if !lang.is_empty() {
+                    out.push_str(&lang);
+                }
+                out.push('\n');
+                out.push_str(&body);
+                if !body.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str("```\n");
+            }
+            lang.clear();
+            body.clear();
+            continue;
+        }
+        if in_fence {
+            body.push_str(line);
+            body.push('\n');
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if in_fence && gibberish_fence(&lang, &body) {
+        dropped = true;
+    } else if in_fence {
+        out.push_str(&body);
+    }
+    (out, dropped)
+}
+
+fn gibberish_fence(lang: &str, body: &str) -> bool {
+    let lang = lang.trim();
+    if matches!(lang, "json" | "diff" | "patch" | "log" | "toml") {
+        return true;
+    }
+    let lower = body.to_ascii_lowercase();
+    if lower.contains("\"tool_call\"")
+        || lower.contains("tool_use")
+        || lower.contains("host_cmd")
+        || lower.contains("host_result")
+    {
+        return true;
+    }
+    body.lines().count() > 24
+        && (lower.contains("\nfn ") || lower.contains("pub struct ") || lower.contains("\nimport "))
 }
 
 fn visible_assistant(text: &str) -> String {
@@ -685,6 +790,25 @@ mod tests {
 
     fn kinds(v: &[ChatView]) -> Vec<ChatKind> {
         v.iter().map(|x| x.kind).collect()
+    }
+
+    #[test]
+    fn reply_drops_a_replayed_transcript_and_a_tool_dump() {
+        let replay = "User:\nfix the cabin\nAssistant:\nI already started.\nAssistant:\nThe fix is in. Open the workboard to resume.";
+        assert_eq!(
+            assistant_prose(replay),
+            "The fix is in. Open the workboard to resume."
+        );
+        let dump = "Here is the short version.\n```json\n{\"tool_call\": true}\n```\nThat is all.";
+        let prose = assistant_prose(dump);
+        assert!(prose.contains("short version"));
+        assert!(prose.contains("That is all."));
+        assert!(!prose.contains("tool_call"));
+        assert_eq!(
+            assistant_prose("```diff\n- old\n+ new\n```"),
+            "Done. I kept the code and logs off this chat."
+        );
+        assert!(!assistant_prose("USER_FACT: prefers short answers").contains("USER_FACT"));
     }
 
     #[test]

@@ -36,7 +36,7 @@ pub(super) fn plus_from_path(target: PlusTarget, path: PathBuf) -> PlusPick {
             }),
             Err(e) => PlusPick::Err(e),
         },
-        AttachKind::Text => match read_text_capped(&path) {
+        AttachKind::Text if target == PlusTarget::Imagine => match read_text_capped(&path) {
             Ok(t) => PlusPick::Ready(PlusReady {
                 kind,
                 name,
@@ -162,17 +162,16 @@ impl Cabin {
                     if let Some(url) = ready.image_url {
                         self.attach_url = Some(url);
                         self.attach_name = Some(ready.name.clone());
+                        self.attach_path = Some(ready.raw);
+                        self.attach_kind = Some(ready.kind);
                         self.status = chat_attach_status(ready.kind, &ready.name);
                     }
                 }
-                AttachKind::Text => {
-                    if let Some(t) = ready.text {
-                        self.composer = append_composer(&self.composer, &t);
-                        self.status = chat_attach_status(ready.kind, &ready.name);
-                    }
-                }
-                AttachKind::Other => {
-                    self.composer = append_composer(&self.composer, &ready.raw);
+                AttachKind::Text | AttachKind::Video | AttachKind::Doc | AttachKind::Other => {
+                    self.attach_url = None;
+                    self.attach_name = Some(ready.name.clone());
+                    self.attach_path = Some(ready.raw);
+                    self.attach_kind = Some(ready.kind);
                     self.status = chat_attach_status(ready.kind, &ready.name);
                 }
             },
@@ -189,8 +188,9 @@ impl Cabin {
                         self.status = chat_attach_status(ready.kind, &ready.name);
                     }
                 }
-                AttachKind::Other => {
-                    self.imagine_prompt = append_composer(&self.imagine_prompt, &ready.raw);
+                AttachKind::Video | AttachKind::Doc | AttachKind::Other => {
+                    let hint = attach_prompt_line(ready.kind, &ready.name);
+                    self.imagine_prompt = append_composer(&self.imagine_prompt, &hint);
                     self.status = chat_attach_status(ready.kind, &ready.name);
                 }
             },
@@ -214,7 +214,29 @@ impl Cabin {
     pub(super) fn clear_chat_attach(&mut self) {
         self.attach_url = None;
         self.attach_name = None;
+        self.attach_path = None;
+        self.attach_kind = None;
         self.status.clear();
+    }
+
+    /// A file dropped on the window becomes the next chat attachment.
+    /// On Imagine it becomes the reference hint instead.
+    pub(super) fn take_dropped_attach(&mut self, ctx: &egui::Context) {
+        let path = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .find_map(|f| f.path.clone())
+        });
+        let Some(path) = path else {
+            return;
+        };
+        let target = if self.page_nav() == Nav::Imagine {
+            PlusTarget::Imagine
+        } else {
+            PlusTarget::Chat
+        };
+        self.start_plus_path(target, path);
     }
 
     pub(super) fn drop_leaving_thread_chrome(&mut self) {
@@ -232,6 +254,8 @@ impl Cabin {
             || (keep_run && self.grok_p_rx.is_none() && !self.job_on_background_thread());
         self.attach_url = None;
         self.attach_name = None;
+        self.attach_path = None;
+        self.attach_kind = None;
         self.followup_step = 0;
         self.active_skill_follow = None;
         self.hands_attach = false;
@@ -505,9 +529,10 @@ impl Cabin {
         match target {
             PlusTarget::Chat => {
                 if let Some(name) = self.attach_name.clone() {
+                    let kind = self.attach_kind.unwrap_or(AttachKind::Image);
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new(format!("Attached {name}"))
+                            RichText::new(attach_chip_label(kind, &name))
                                 .size(12.0)
                                 .color(crate::theme::fg()),
                         );

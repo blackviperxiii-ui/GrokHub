@@ -625,6 +625,13 @@ impl Cabin {
         if !self.llm_ready() {
             return;
         }
+        if !grokhub_core::review_worth_tokens(
+            self.learning.total_turns,
+            self.learning.reviewed_turns,
+        ) {
+            return;
+        }
+        self.learning.reviewed_turns = self.learning.total_turns;
         self.spawn_review();
     }
 
@@ -810,8 +817,17 @@ impl Cabin {
     }
 
     pub(super) fn mark_auto_ran(&mut self, id: &str, now: u64) {
+        let name = self
+            .automations
+            .iter()
+            .find(|x| x.id == id)
+            .map(|a| a.name.clone())
+            .unwrap_or_default();
         if let Some(a) = self.automations.iter_mut().find(|x| x.id == id) {
             *a = mark_automation_ran(a.clone(), now);
+        }
+        if !name.is_empty() {
+            self.engine_note("automations", &format!("ran:{name}"), &name);
         }
         let list = self.automations.clone();
         std::thread::spawn(move || {
@@ -821,8 +837,17 @@ impl Cabin {
 
     pub(super) fn mark_auto_skipped(&mut self, id: &str, now: u64) {
         let clock = Self::local_clock();
+        let name = self
+            .automations
+            .iter()
+            .find(|x| x.id == id)
+            .map(|a| a.name.clone())
+            .unwrap_or_default();
         if let Some(a) = self.automations.iter_mut().find(|x| x.id == id) {
             *a = mark_automation_skipped(a.clone(), now, clock);
+        }
+        if !name.is_empty() {
+            self.engine_note("automations", &format!("skipped:{name}"), &name);
         }
         let list = self.automations.clone();
         std::thread::spawn(move || {
