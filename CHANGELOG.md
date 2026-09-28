@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.10.33 — 2026-09-28
+
+On the chat screen, ideas and suggestions sit in a pile of three with a count. Hover opens every card one above the next, on top of the chat box, with no scroll. A card behind the front one lifts out to full size and stays up until the pointer returns to the pile. The front card stays put. The Ideas page is still a scroll.
+
+- Linux: `grokhub-linux-v2.10.33.tar.gz` and AUR `pkgver=2.10.33`.
+- Windows: `GrokHub-Setup-2.10.33.exe` and `grokhub-windows-v2.10.33.zip`.
+
 ## 2.10.32 — 2026-09-26
 
 The Ideas page is a scroll of cards, with no brief box and no search. Accept opens a small centered talk that stays off History. The home feed pins at most three ideas once. Dismissing one there leaves it on the board. The board holds twenty. Untouched cards sink, and a learned setup can replace a stale one.
