@@ -190,11 +190,6 @@ impl Cabin {
         label: &str,
         outline: bool,
     ) -> egui::Response {
-        let fill = if active {
-            crate::theme::nav_active()
-        } else {
-            egui::Color32::TRANSPARENT
-        };
         let color = if active {
             crate::theme::fg()
         } else {
@@ -203,8 +198,8 @@ impl Cabin {
         let w = ui.available_width();
         let (_rect, resp) =
             ui.allocate_exact_size(egui::vec2(w, crate::theme::NAV_ROW_H), egui::Sense::click());
-        let (resp, rect, fill) = crate::theme::feel_button(ui, resp, fill);
-        crate::theme::paint_glass_chrome(ui.painter(), rect, fill);
+        let (resp, rect, _) = crate::theme::feel_response(ui, resp, egui::Color32::TRANSPARENT);
+        crate::theme::glide_candidate(ui, "rail", rect, resp.hovered(), active);
         if outline {
             ui.painter().rect_stroke(
                 rect,
@@ -305,6 +300,7 @@ impl Cabin {
             )
             .show(ctx, |ui| {
                 ui.add_space(4.0);
+                crate::theme::glide_paint(ui, "rail");
                 if Self::nav_row(ui, false, crate::icons::RailIcon::Search, "Search", false)
                     .clicked()
                 {
@@ -516,6 +512,7 @@ impl Cabin {
                         self.settings_menu_ignore = true;
                     }
                 });
+                crate::theme::glide_aim(ui, "rail");
             });
     }
 
