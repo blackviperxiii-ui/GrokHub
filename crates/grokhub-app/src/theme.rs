@@ -546,43 +546,88 @@ fn button_channel(ui: &egui::Ui, id: egui::Id, on: bool, secs: f32) -> f32 {
     )
 }
 
-pub fn glass_solid(color: egui::Color32) -> egui::Color32 {
-    egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 214)
+/// Quiet control fill. Same corner on every labeled button.
+pub fn paint_quiet_chrome(painter: &egui::Painter, rect: egui::Rect, fill: egui::Color32) {
+    painter.rect_filled(rect, 8.0, fill);
 }
 
-pub fn glass_ghost() -> egui::Color32 {
-    if USE_LIGHT.load(Ordering::Relaxed) {
-        egui::Color32::from_black_alpha(14)
-    } else {
-        egui::Color32::from_white_alpha(16)
+#[derive(Clone, Copy, Debug, Default)]
+struct GlidePick {
+    hover: Option<egui::Rect>,
+    selected: Option<egui::Rect>,
+}
+
+fn glide_id(group: &str) -> egui::Id {
+    egui::Id::new(("cabin-glide", group))
+}
+
+/// Paint last frame's highlight before the row's labels, so it sits behind them.
+pub fn glide_paint(ui: &egui::Ui, group: &str) {
+    let id = glide_id(group);
+    ui.data_mut(|d| d.insert_temp(id.with("pick"), GlidePick::default()));
+    let Some(rect) = ui.data(|d| d.get_temp::<egui::Rect>(id.with("rect"))) else {
+        return;
+    };
+    let alpha = ui.data(|d| d.get_temp::<f32>(id.with("alpha"))).unwrap_or(0.0);
+    if alpha < 0.02 || rect.width() < 1.0 {
+        return;
     }
+    let base = nav_active();
+    let fill = egui::Color32::from_rgba_unmultiplied(
+        base.r(),
+        base.g(),
+        base.b(),
+        (base.a() as f32 * alpha).round() as u8,
+    );
+    ui.painter().rect_filled(rect, 8.0, fill);
 }
 
-/// Glass pill: faint fill, hairline ring, and a 1px top highlight.
-pub fn paint_glass_chrome(painter: &egui::Painter, rect: egui::Rect, fill: egui::Color32) {
-    let radius = (rect.height() * 0.5).max(1.0);
-    painter.rect_filled(rect, radius, fill);
-    let light = USE_LIGHT.load(Ordering::Relaxed);
-    let ring = if light {
-        egui::Color32::from_black_alpha(40)
-    } else {
-        egui::Color32::from_white_alpha(46)
-    };
-    painter.rect_stroke(rect.shrink(0.5), radius, egui::Stroke::new(1.0_f32, ring));
-    let highlight = if light {
-        egui::Color32::from_white_alpha(180)
-    } else {
-        egui::Color32::from_white_alpha(72)
-    };
-    let y = rect.top() + 1.0;
-    let inset = radius.min(rect.width() * 0.22).max(6.0);
-    painter.line_segment(
-        [
-            egui::pos2(rect.left() + inset, y),
-            egui::pos2(rect.right() - inset, y),
-        ],
-        egui::Stroke::new(1.0_f32, highlight),
+/// Remember a row item. Hover wins over the resting selection.
+pub fn glide_candidate(ui: &egui::Ui, group: &str, rect: egui::Rect, hovered: bool, selected: bool) {
+    let id = glide_id(group).with("pick");
+    let mut pick = ui.data(|d| d.get_temp::<GlidePick>(id)).unwrap_or_default();
+    if hovered {
+        pick.hover = Some(rect);
+    }
+    if selected && pick.selected.is_none() {
+        pick.selected = Some(rect);
+    }
+    ui.data_mut(|d| d.insert_temp(id, pick));
+}
+
+/// Move the highlight toward this frame's target. The paint shows it next frame.
+pub fn glide_aim(ui: &egui::Ui, group: &str) {
+    let id = glide_id(group);
+    let pick = ui
+        .data(|d| d.get_temp::<GlidePick>(id.with("pick")))
+        .unwrap_or_default();
+    let target = pick.hover.or(pick.selected);
+    let show = ui.ctx().animate_bool_with_time_and_easing(
+        id.with("show"),
+        target.is_some(),
+        0.12,
+        egui::emath::easing::quadratic_out,
     );
+    let last = ui
+        .data(|d| d.get_temp::<egui::Rect>(id.with("last")))
+        .unwrap_or(egui::Rect::NOTHING);
+    let goal = target.unwrap_or(last);
+    if goal.width() < 1.0 {
+        return;
+    }
+    let secs = 0.16;
+    let x = ui.ctx().animate_value_with_time(id.with("x"), goal.min.x, secs);
+    let y = ui.ctx().animate_value_with_time(id.with("y"), goal.min.y, secs);
+    let w = ui.ctx().animate_value_with_time(id.with("w"), goal.width(), secs);
+    let h = ui.ctx().animate_value_with_time(id.with("h"), goal.height(), secs);
+    let rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h));
+    ui.data_mut(|d| {
+        d.insert_temp(id.with("rect"), rect);
+        d.insert_temp(id.with("alpha"), show);
+        if target.is_some() {
+            d.insert_temp(id.with("last"), goal);
+        }
+    });
 }
 
 /// Soft shadow under a rising button. Resting controls stay flat.
@@ -624,8 +669,10 @@ pub fn felt_label_button(
     );
     let (_rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
     let (resp, rect, fill) = feel_button(ui, resp, base_fill);
-    let _ = (rounding, stroke);
-    paint_glass_chrome(ui.painter(), rect, fill);
+    ui.painter().rect_filled(rect, rounding, fill);
+    if let Some(s) = stroke {
+        ui.painter().rect_stroke(rect, rounding, s);
+    }
     ui.painter().galley(rect.min + pad, galley, text_color);
     pointing(resp)
 }
@@ -720,8 +767,7 @@ pub fn feel_button(
     resp: egui::Response,
     fill: Color32,
 ) -> (egui::Response, egui::Rect, Color32) {
-    let (resp, rect, fill, hover_t, press_t) = feel_motion(ui, resp, fill, true);
-    paint_button_shadow(ui.painter(), rect, hover_t, press_t);
+    let (resp, rect, fill, _, _) = feel_motion(ui, resp, fill, true);
     (resp, rect, fill)
 }
 

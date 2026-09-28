@@ -52,7 +52,7 @@ pub fn titlebar_chrome_btn(ui: &mut egui::Ui, kind: ChromeBtn) -> egui::Response
     let (_rect, resp) = ui.allocate_exact_size(titlebar_chrome_size(), egui::Sense::click_and_drag());
     let (resp, rect, wash) = crate::theme::feel_button(ui, resp, egui::Color32::TRANSPARENT);
     if wash.a() > 0 {
-        crate::theme::paint_glass_chrome(ui.painter(), rect, wash);
+        ui.painter().rect_filled(rect, 6.0, wash);
     }
     let color = if resp.hovered() {
         crate::theme::fg()

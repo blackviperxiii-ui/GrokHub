@@ -91,6 +91,11 @@ pub(super) fn greeting_galley_h(ui: &egui::Ui, text: &str, wrap_w: f32) -> f32 {
     galley.size().y.max(crate::theme::GREET_HERO)
 }
 
+/// Empty-composer placeholder. Sits on the pill fill, quieter than secondary text.
+pub(super) fn composer_hint_ink() -> egui::Color32 {
+    crate::theme::blend_color(crate::theme::elevated(), crate::theme::subtle(), 0.55)
+}
+
 pub(super) fn consume_enter_keys(ui: &mut egui::Ui) {
     ui.input_mut(|i| {
         i.events.retain(|ev| match ev {
@@ -1451,12 +1456,7 @@ impl Cabin {
         let feed_h = collapsed_stack_h(feed_n);
         let device_on = pulse_on && device_glance(self.hub_on, self.last_frame_url.as_deref()).is_some();
         let device_h = if device_on { 26.0 } else { 0.0 };
-        let slot_gap = if (feed_n > 0 || device_on) && greet_on {
-            8.0
-        } else {
-            0.0
-        };
-        let block_h = greet_h + slot_gap + feed_h + device_h;
+        let block_h = greet_h;
         let greet_top = empty_home_greet_top(composer_top, block_h, 12.0);
         if greet_on || pulse_on {
             let greet_rect = egui::Rect::from_min_size(
@@ -1482,20 +1482,6 @@ impl Cabin {
                                     .color(crate::theme::muted()),
                             );
                         }
-                        if pulse_on && (feed_n > 0 || device_on) {
-                            if greet_on {
-                                ui.add_space(8.0);
-                            }
-                            if feed_n > 0 {
-                                self.paint_update_feed(ui, pane_w);
-                            }
-                            if device_on {
-                                if feed_n > 0 {
-                                    ui.add_space(4.0);
-                                }
-                                self.paint_device_glance_row(ui, pane_w);
-                            }
-                        }
                     },
                 );
             });
@@ -1517,6 +1503,20 @@ impl Cabin {
                         self.paint_elicit_ask(ui);
                     }
                     self.paint_try_again(ui);
+                    if pulse_on && (feed_n > 0 || device_on) {
+                        let below = feed_h + device_h + if feed_n > 0 && device_on { 4.0 } else { 0.0 };
+                        let gap = ui.available_height();
+                        ui.add_space(((gap - below) * 0.5).max(0.0));
+                        if feed_n > 0 {
+                            self.paint_update_feed(ui, pane_w);
+                        }
+                        if device_on {
+                            if feed_n > 0 {
+                                ui.add_space(4.0);
+                            }
+                            self.paint_device_glance_row(ui, pane_w);
+                        }
+                    }
                 },
             );
         });
@@ -1886,131 +1886,158 @@ impl Cabin {
             }
             let composer_id = egui::Id::new("chat-composer");
             let focused = ui.memory(|m| m.has_focus(composer_id));
+            let rows = (self.composer.matches('\n').count() + 1).clamp(1, 6);
+            let pad_l = 20.0;
+            let pad_r = 24.0;
+            let pill_h = if rows == 1 {
+                crate::theme::QUERY_MIN_H
+            } else {
+                (rows as f32 * 22.0 + 28.0).max(crate::theme::QUERY_MIN_H)
+            };
             ui.allocate_ui_with_layout(
-                egui::vec2(cap, crate::theme::QUERY_MIN_H),
-                egui::Layout::top_down(egui::Align::Min),
+                egui::vec2(cap, pill_h),
+                egui::Layout::left_to_right(egui::Align::Center),
                 |ui| {
-                    ui.set_width(cap);
-                    ui.set_max_width(cap);
-            egui::Frame::none()
-                .fill(crate::theme::elevated())
-                .rounding(crate::theme::QUERY_RADIUS)
-                .stroke(crate::theme::composer_chrome_stroke(focused))
-                .inner_margin(egui::Margin::same(7.0))
-                .show(ui, |ui| {
-                    let inner = (cap - 14.0).max(200.0);
-                    ui.set_width(inner);
-                    ui.set_max_width(inner);
-                    ui.set_min_height(crate::theme::QUERY_MIN_H - 16.0);
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    ui.horizontal(|ui| {
-                        let plus = crate::icons::paint_bar_icon(
-                            ui,
-                            crate::icons::BarIcon::Plus,
-                            22.0,
-                            crate::theme::muted(),
-                        )
-                        .on_hover_text("Upload a file or paste clipboard");
-                        if plus.clicked() {
-                            self.open_plus(PlusTarget::Chat, plus.rect.left_bottom());
-                        }
-                        if self.composer_want_focus {
-                            ui.memory_mut(|m| m.request_focus(composer_id));
-                            self.composer_want_focus = false;
-                        }
-                        let focused = ui.memory(|m| m.has_focus(composer_id));
-                        if let Some(t) =
-                            take_focused_composer(ui, &mut self.composer, focused)
-                        {
-                            self.send_from_composer(t);
-                        }
-                        let cluster = crate::cards::composer_go_cluster_w();
-                        let go_sz = crate::cards::composer_go_hit_w();
-                        let mid = crate::cards::composer_mid_w(inner);
-                        let rows = (self.composer.matches('\n').count() + 1).clamp(1, 6);
-                        let bar_h = (rows as f32 * 22.0 + 12.0)
-                            .clamp(crate::theme::QUERY_MIN_H - 16.0, 6.0 * 22.0 + 12.0);
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(mid, bar_h),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                ui.spacing_mut().item_spacing.x = 8.0;
-                                let text_w = (ui.available_width() - cluster + go_sz).max(80.0);
-                                let edit = egui::ScrollArea::vertical()
-                                    .id_salt("chat-composer-scroll")
-                                    .max_height(bar_h)
-                                    .auto_shrink([false, true])
-                                    .show(ui, |ui| {
-                                        ui.set_max_height(bar_h);
-                                        ui.add(
-                                            egui::TextEdit::multiline(&mut self.composer)
-                                                .id(composer_id)
-                                                .desired_width(text_w)
-                                                .desired_rows(rows)
-                                                .frame(false)
-                                                .hint_text("Ask anything")
-                                                .return_key(Some(egui::KeyboardShortcut::new(
-                                                    egui::Modifiers::COMMAND,
-                                                    egui::Key::Enter,
-                                                ))),
-                                        )
-                                    })
-                                    .inner;
-                                if let Some(t) = take_focused_composer(
-                                    ui,
-                                    &mut self.composer,
-                                    edit.has_focus(),
-                                ) {
-                                    self.send_from_composer(t);
-                                }
-                                self.paint_voice_mic(ui, 22.0);
-                            },
-                        );
-                        let ready = !self.composer.trim().is_empty();
-                        let go = composer_go(self.thinking_here(), ready);
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(go_sz, bar_h),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                let send = crate::icons::paint_bar_icon(
-                                    ui,
-                                    match go {
-                                        ComposerGo::Stop => crate::icons::BarIcon::Stop,
-                                        ComposerGo::Send => crate::icons::BarIcon::Send,
-                                        ComposerGo::Idle => crate::icons::BarIcon::ArrowUp,
-                                    },
-                                    match go {
-                                        ComposerGo::Idle => 22.0,
-                                        ComposerGo::Send | ComposerGo::Stop => 28.0,
-                                    },
-                                    match go {
-                                        ComposerGo::Idle => crate::theme::muted(),
-                                        ComposerGo::Send | ComposerGo::Stop => {
-                                            crate::theme::fg()
-                                        }
-                                    },
-                                )
-                                .on_hover_text(composer_go_tip(self.thinking_here()));
-                                let go_hit = send.clicked()
-                                    || (send.is_pointer_button_down_on()
-                                        && ui.input(|i| i.pointer.primary_pressed()));
+                    ui.set_min_size(egui::vec2(cap, pill_h));
+                    let pill_rect =
+                        egui::Rect::from_min_size(ui.max_rect().min, egui::vec2(cap, pill_h));
+                    ui.painter().rect(
+                        pill_rect,
+                        crate::theme::QUERY_RADIUS,
+                        crate::theme::elevated(),
+                        crate::theme::composer_chrome_stroke(focused),
+                    );
+                    let inner = (cap - pad_l - pad_r).max(200.0);
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.add_space(pad_l);
+                    let plus = crate::icons::paint_bar_icon(
+                        ui,
+                        crate::icons::BarIcon::Plus,
+                        22.0,
+                        crate::theme::muted(),
+                    )
+                    .on_hover_text("Upload a file or paste clipboard");
+                    if plus.clicked() {
+                        self.open_plus(PlusTarget::Chat, plus.rect.left_bottom());
+                    }
+                    if self.composer_want_focus {
+                        ui.memory_mut(|m| m.request_focus(composer_id));
+                        self.composer_want_focus = false;
+                    }
+                    let focused = ui.memory(|m| m.has_focus(composer_id));
+                    if let Some(t) = take_focused_composer(ui, &mut self.composer, focused) {
+                        self.send_from_composer(t);
+                    }
+                    ui.add_space(8.0);
+                    let cluster = crate::cards::composer_go_cluster_w();
+                    let go_sz = crate::cards::composer_go_hit_w();
+                    let mid = crate::cards::composer_mid_w(inner);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(mid, pill_h),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            let text_w = (ui.available_width() - cluster + go_sz).max(80.0);
+                            let edit = egui::ScrollArea::vertical()
+                                .id_salt("chat-composer-scroll")
+                                .max_height(pill_h)
+                                .auto_shrink([false, true])
+                                .show(ui, |ui| {
+                                    ui.set_min_height(pill_h);
+                                    ui.set_max_height(pill_h);
+                                    let hint_align = if rows == 1 {
+                                        egui::Align::Center
+                                    } else {
+                                        egui::Align::Min
+                                    };
+                                    ui.add(
+                                        egui::TextEdit::multiline(&mut self.composer)
+                                            .id(composer_id)
+                                            .desired_width(text_w)
+                                            .desired_rows(rows)
+                                            .min_size(egui::vec2(
+                                                text_w,
+                                                if rows == 1 { pill_h } else { 0.0 },
+                                            ))
+                                            .frame(false)
+                                            .margin(egui::Margin::symmetric(2.0, 0.0))
+                                            .vertical_align(hint_align)
+                                            .font(egui::FontId::new(
+                                                15.0,
+                                                egui::FontFamily::Proportional,
+                                            ))
+                                            .text_color(crate::theme::fg())
+                                            .hint_text("")
+                                            .return_key(Some(egui::KeyboardShortcut::new(
+                                                egui::Modifiers::COMMAND,
+                                                egui::Key::Enter,
+                                            ))),
+                                    )
+                                })
+                                .inner;
+                            if self.composer.is_empty() && !edit.has_focus() {
+                                let ghost = composer_hint_ink();
+                                let hint_font =
+                                    egui::FontId::new(15.0, egui::FontFamily::Proportional);
+                                let hint = ui.fonts(|f| {
+                                    f.layout_no_wrap("Ask anything".to_string(), hint_font, ghost)
+                                });
+                                let hint_pos = egui::pos2(
+                                    edit.rect.left() + 2.0,
+                                    edit.rect.center().y - hint.size().y * 0.5,
+                                );
+                                ui.painter().galley(hint_pos, hint, ghost);
+                            }
+                            if let Some(t) =
+                                take_focused_composer(ui, &mut self.composer, edit.has_focus())
+                            {
+                                self.send_from_composer(t);
+                            }
+                            self.paint_voice_mic(ui, 22.0);
+                        },
+                    );
+                    ui.add_space(8.0);
+                    let ready = !self.composer.trim().is_empty();
+                    let go = composer_go(self.thinking_here(), ready);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(go_sz, pill_h),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            let send = crate::icons::paint_bar_icon(
+                                ui,
                                 match go {
-                                    ComposerGo::Stop => {
-                                        if go_hit {
-                                            self.run_slash(Slash::Stop);
-                                        }
-                                    }
-                                    ComposerGo::Send | ComposerGo::Idle => {
-                                        if go_hit {
-                                            let t = std::mem::take(&mut self.composer);
-                                            self.send_from_composer(t);
-                                        }
+                                    ComposerGo::Stop => crate::icons::BarIcon::Stop,
+                                    ComposerGo::Send => crate::icons::BarIcon::Send,
+                                    ComposerGo::Idle => crate::icons::BarIcon::ArrowUp,
+                                },
+                                match go {
+                                    ComposerGo::Idle => 22.0,
+                                    ComposerGo::Send | ComposerGo::Stop => 28.0,
+                                },
+                                match go {
+                                    ComposerGo::Idle => crate::theme::muted(),
+                                    ComposerGo::Send | ComposerGo::Stop => crate::theme::fg(),
+                                },
+                            )
+                            .on_hover_text(composer_go_tip(self.thinking_here()));
+                            let go_hit = send.clicked()
+                                || (send.is_pointer_button_down_on()
+                                    && ui.input(|i| i.pointer.primary_pressed()));
+                            match go {
+                                ComposerGo::Stop => {
+                                    if go_hit {
+                                        self.run_slash(Slash::Stop);
                                     }
                                 }
-                            },
-                        );
-                    });
-                });
+                                ComposerGo::Send | ComposerGo::Idle => {
+                                    if go_hit {
+                                        let t = std::mem::take(&mut self.composer);
+                                        self.send_from_composer(t);
+                                    }
+                                }
+                            }
+                        },
+                    );
                 },
             );
                     }

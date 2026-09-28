@@ -402,25 +402,25 @@ pub enum PillStyle {
 pub fn felt_pill(ui: &mut egui::Ui, label: &str, style: PillStyle) -> bool {
     let (base_fill, text_color, rounding, min_size, stroke, strong) = match style {
         PillStyle::Solid => (
-            crate::theme::glass_solid(crate::theme::fg()),
+            crate::theme::fg(),
             crate::theme::bg(),
-            14.0,
+            8.0,
             egui::vec2(0.0, 28.0),
             None,
             true,
         ),
         PillStyle::Ghost => (
-            crate::theme::glass_ghost(),
+            Color32::TRANSPARENT,
             crate::theme::muted(),
-            14.0,
+            8.0,
             egui::vec2(0.0, 28.0),
-            None,
+            Some(Stroke::new(1.0_f32, crate::theme::border())),
             false,
         ),
         PillStyle::Danger => (
-            crate::theme::glass_solid(crate::theme::offline()),
+            crate::theme::offline(),
             crate::theme::bg(),
-            14.0,
+            8.0,
             egui::vec2(0.0, 28.0),
             None,
             true,
@@ -524,11 +524,17 @@ fn felt_segment_styled(
     let base_fill =
         crate::theme::blend_color(Color32::TRANSPARENT, permission_risk_fill(true), on_t);
     let text_color = crate::theme::blend_color(crate::theme::muted(), crate::theme::fg(), on_t);
-    let (resp, rect, fill) = crate::theme::feel_button(ui, resp, base_fill);
-    crate::theme::paint_glass_chrome(ui.painter(), rect, fill);
+    let (resp, rect, _) = crate::theme::feel_response(ui, resp, Color32::TRANSPARENT);
     if let Some(stroke) = stroke {
-        ui.painter().rect_stroke(rect, rect.height() * 0.5, stroke);
+        ui.painter().rect_stroke(rect, 8.0, stroke);
+    } else {
+        ui.painter().rect_stroke(
+            rect,
+            8.0,
+            Stroke::new(1.0_f32, crate::theme::border()),
+        );
     }
+    let _ = base_fill;
     ui.painter().galley(
         egui::pos2(
             rect.center().x - galley.size().x * 0.5,
@@ -555,9 +561,9 @@ pub fn felt_tab(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     let text_color = crate::theme::blend_color(crate::theme::muted(), crate::theme::bg(), on_t);
     let stroke_color = crate::theme::blend_color(crate::theme::border(), crate::theme::fg(), on_t);
     let (resp, rect, fill) = crate::theme::feel_button(ui, resp, base_fill);
-    crate::theme::paint_glass_chrome(ui.painter(), rect, fill);
+    ui.painter().rect_filled(rect, 8.0, fill);
     ui.painter()
-        .rect_stroke(rect, rect.height() * 0.5, Stroke::new(1.0_f32, stroke_color));
+        .rect_stroke(rect, 8.0, Stroke::new(1.0_f32, stroke_color));
     ui.painter()
         .galley(rect.min + pad, galley, text_color);
     resp.clicked()
@@ -834,9 +840,18 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> S
     };
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 3.0;
+        crate::theme::glide_paint(ui, "session-mode");
+        let mut mode_hover = None;
+        let mut mode_on = None;
         for (id, label) in composer_modes() {
             let on = *id == mode;
             let mut resp = felt_segment(ui, label, on);
+            if resp.hovered() {
+                mode_hover = Some(resp.rect);
+            }
+            if on {
+                mode_on = Some(resp.rect);
+            }
             if let Some((title, body)) = composer_session_tip(id) {
                 resp = with_composer_tip(resp, title, body);
             }
@@ -844,6 +859,14 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> S
                 out.mode = Some((*id).to_string());
             }
         }
+        crate::theme::glide_candidate(
+            ui,
+            "session-mode",
+            mode_hover.or(mode_on).unwrap_or(egui::Rect::NOTHING),
+            mode_hover.is_some(),
+            mode_on.is_some(),
+        );
+        crate::theme::glide_aim(ui, "session-mode");
         ui.add_space(4.0);
         ui.label(
             RichText::new("|")
@@ -851,9 +874,18 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> S
                 .color(crate::theme::subtle()),
         );
         ui.add_space(4.0);
+        crate::theme::glide_paint(ui, "session-perm");
+        let mut perm_hover = None;
+        let mut perm_on = None;
         for (id, label) in permission_modes() {
             let on = *id == perm;
             let mut resp = felt_perm_segment(ui, label, on, id);
+            if resp.hovered() {
+                perm_hover = Some(resp.rect);
+            }
+            if on {
+                perm_on = Some(resp.rect);
+            }
             if let Some((title, body)) = composer_perm_tip(id) {
                 resp = with_composer_tip(resp, title, body);
             }
@@ -861,6 +893,14 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> S
                 out.perm = Some((*id).to_string());
             }
         }
+        crate::theme::glide_candidate(
+            ui,
+            "session-perm",
+            perm_hover.or(perm_on).unwrap_or(egui::Rect::NOTHING),
+            perm_hover.is_some(),
+            perm_on.is_some(),
+        );
+        crate::theme::glide_aim(ui, "session-perm");
         ui.add_space(4.0);
         ui.label(
             RichText::new("|")
@@ -1174,6 +1214,8 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
         |ui| {
             ui.set_max_width(max_w);
             ui.spacing_mut().item_spacing = egui::vec2(CHIP_GAP, 0.0);
+            crate::theme::glide_paint(ui, "quick-chips");
+            let mut chip_hover: Option<egui::Rect> = None;
             #[cfg(test)]
             begin_chip_dismiss_hits(ui);
             let mut used = 0.0f32;
@@ -1206,8 +1248,10 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                 let tip = chip_why_tip(why, &c.label);
                 let (rect, hit_resp) =
                     ui.allocate_exact_size(egui::vec2(pill_w, CHIP_ROW_H), Sense::click());
-                let (hit_resp, _, wash) = crate::theme::feel_button(ui, hit_resp, fill);
-                paint_chip_pill(ui, rect, wash, c.primary);
+                if hit_resp.hovered() {
+                    chip_hover = Some(rect);
+                }
+                paint_chip_pill(ui, rect, fill, c.primary);
                 let text_pos = egui::pos2(
                     rect.left() + CHIP_PAD_X,
                     rect.center().y - galley.size().y * 0.5,
@@ -1258,6 +1302,10 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                     });
                 }
             }
+            if let Some(rect) = chip_hover {
+                crate::theme::glide_candidate(ui, "quick-chips", rect, true, false);
+            }
+            crate::theme::glide_aim(ui, "quick-chips");
         },
     );
     act
@@ -1304,7 +1352,7 @@ pub fn settings_switch(ui: &mut egui::Ui, on: bool) -> bool {
     let on_t = crate::theme::animate_selection(ui, resp.id.with("sw-on"), on);
     let base_fill = crate::theme::blend_color(crate::theme::panel(), crate::theme::fg(), on_t);
     let (resp, rect, fill) = crate::theme::feel_button(ui, resp, base_fill);
-    crate::theme::paint_glass_chrome(ui.painter(), rect, fill);
+    ui.painter().rect_filled(rect, 8.0, fill);
     if on_t < 0.98 {
         ui.painter()
             .rect_stroke(
@@ -1468,7 +1516,7 @@ pub fn settings_nav(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
         crate::theme::blend_color(Color32::TRANSPARENT, crate::theme::nav_active(), on_t);
     let text_color = crate::theme::blend_color(crate::theme::muted(), crate::theme::fg(), on_t);
     let (resp, rect, fill) = crate::theme::feel_button(ui, resp, base_fill);
-    crate::theme::paint_glass_chrome(ui.painter(), rect, fill);
+    ui.painter().rect_filled(rect, 8.0, fill);
     ui.painter().text(
         rect.left_center() + egui::vec2(12.0, 0.0),
         Align2::LEFT_CENTER,

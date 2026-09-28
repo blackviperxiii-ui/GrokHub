@@ -636,7 +636,6 @@ pub fn paint_composer_stop(
     };
     let motion = composer_motion(hover_t, press_t, live_t, breath);
     let glyph = risen_glyph(alloc, hover_t, press_t);
-    crate::theme::paint_button_shadow(ui.painter(), glyph, hover_t, press_t);
     paint_stop_glyph(ui.painter(), glyph, motion);
     follow_composer_frame(ui, &resp, running, &[hover_t, press_t, live_t]);
     (resp, motion)
@@ -670,7 +669,6 @@ pub fn paint_composer_mic(
     let speak_phase = speak_t * breath + (1.0 - speak_t) * breath * 0.35 * live_t;
     let motion = composer_motion(hover_t, press_t, live_t, speak_phase);
     let glyph = risen_glyph(alloc, hover_t, press_t);
-    crate::theme::paint_button_shadow(ui.painter(), glyph, hover_t, press_t);
     paint_mic_glyph(ui.painter(), glyph, mic_ink(mood, motion.fill), motion);
     follow_composer_frame(
         ui,
@@ -679,6 +677,145 @@ pub fn paint_composer_mic(
         &[hover_t, press_t, live_t, speak_t],
     );
     (resp, motion)
+}
+
+/// Rest lean, in radians. Negative tips the top of the clip to the left.
+pub fn paperclip_tilt(hover_t: f32, press_t: f32) -> f32 {
+    let hover = hover_t.clamp(0.0, 1.0);
+    let press = press_t.clamp(0.0, 1.0);
+    const REST: f32 = -0.14;
+    const HOVER: f32 = -0.42;
+    const PRESS: f32 = -0.08;
+    REST + (HOVER - REST) * hover + (PRESS - HOVER) * hover * press
+}
+
+/// How far the wire ends spread, as a fraction of the glyph.
+pub fn paperclip_open(hover_t: f32, press_t: f32) -> f32 {
+    let hover = hover_t.clamp(0.0, 1.0);
+    let press = press_t.clamp(0.0, 1.0);
+    0.14 * hover * (1.0 - 0.55 * press)
+}
+
+fn spin_about(origin: Pos2, point: Pos2, ang: f32) -> Pos2 {
+    let (s, co) = ang.sin_cos();
+    let dx = point.x - origin.x;
+    let dy = point.y - origin.y;
+    Pos2::new(
+        origin.x + dx * co - dy * s,
+        origin.y + dx * s + dy * co,
+    )
+}
+
+fn paper_pt(center: Pos2, scale: f32, ang: f32, x: f32, y: f32) -> Pos2 {
+    spin_about(
+        center,
+        Pos2::new(center.x + x * scale, center.y + y * scale),
+        ang,
+    )
+}
+
+fn paint_paperclip_glyph(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    ink: egui::Color32,
+    hover_t: f32,
+    press_t: f32,
+    breath: f32,
+) {
+    let center = rect.center();
+    let scale = rect.width();
+    let tilt = paperclip_tilt(hover_t, press_t);
+    let open = paperclip_open(hover_t, press_t) + 0.035 * breath * hover_t.clamp(0.0, 1.0);
+    let stroke = Stroke::new(1.45 + 0.2 * hover_t.clamp(0.0, 1.0), ink);
+    let p = |x: f32, y: f32| paper_pt(center, scale, tilt, x, y);
+    let outer_l = -0.34;
+    let outer_r = 0.34;
+    let inner_l = -0.08 - open * 0.25;
+    let inner_r = 0.12;
+    let top_o = -0.46;
+    let top_i = -0.18;
+    let bot_o = 0.40;
+    let inner_end = 0.06 + open;
+    let outer_end = 0.28 + open * 0.8;
+    let start = p(inner_l, inner_end);
+    let inner_shoulder = p(inner_l, top_i + 0.10);
+    let inner_right_top = p(inner_r, top_i + 0.10);
+    let inner_right_low = p(inner_r, bot_o - 0.14);
+    let outer_right_low = p(outer_r, bot_o - 0.16);
+    let outer_right_top = p(outer_r, top_o + 0.14);
+    let outer_left_top = p(outer_l, top_o + 0.14);
+    let end = p(outer_l, outer_end);
+    painter.line_segment([start, inner_shoulder], stroke);
+    painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
+        [inner_shoulder, p(inner_l, top_i), p(inner_r, top_i), inner_right_top],
+        false,
+        egui::Color32::TRANSPARENT,
+        stroke,
+    ));
+    painter.line_segment([inner_right_top, inner_right_low], stroke);
+    painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
+        [
+            inner_right_low,
+            p(inner_r, bot_o),
+            p(outer_r, bot_o),
+            outer_right_low,
+        ],
+        false,
+        egui::Color32::TRANSPARENT,
+        stroke,
+    ));
+    painter.line_segment([outer_right_low, outer_right_top], stroke);
+    painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
+        [
+            outer_right_top,
+            p(outer_r, top_o),
+            p(outer_l, top_o),
+            outer_left_top,
+        ],
+        false,
+        egui::Color32::TRANSPARENT,
+        stroke,
+    ));
+    painter.line_segment([outer_left_top, end], stroke);
+    let cap = stroke.width * 0.5;
+    painter.circle_filled(start, cap, ink);
+    painter.circle_filled(end, cap, ink);
+}
+
+/// Attach control. One wire, leaning further and opening while the pointer is on it.
+pub fn paint_composer_paperclip(
+    ui: &mut egui::Ui,
+    size: f32,
+    color: egui::Color32,
+) -> egui::Response {
+    let (_alloc, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    let (resp, rect, wash) = crate::theme::feel_button(ui, resp, egui::Color32::TRANSPARENT);
+    if wash.a() > 0 {
+        ui.painter()
+            .circle_filled(rect.center(), rect.width() * 0.55, wash);
+    }
+    let (hover_t, press_t) = composer_pointer_ease(ui, &resp);
+    let breath = if resp.hovered() || channel_moving(hover_t) {
+        composer_breath(ui.ctx().input(|i| i.time) as f32)
+    } else {
+        0.0
+    };
+    let grow = rect.width() / size.max(1.0);
+    let optical = (crate::theme::ICON_CHROME + 2.0) * grow;
+    let glyph = egui::Rect::from_center_size(rect.center(), Vec2::splat(optical));
+    let ink = crate::theme::blend_color(
+        color,
+        crate::theme::fg(),
+        (hover_t * 0.72 * (1.0 - 0.35 * press_t)).clamp(0.0, 1.0),
+    );
+    paint_paperclip_glyph(ui.painter(), glyph, ink, hover_t, press_t, breath);
+    follow_composer_frame(
+        ui,
+        &resp,
+        resp.hovered(),
+        &[hover_t, press_t, breath],
+    );
+    resp
 }
 
 pub fn paint_bar_icon(
@@ -691,7 +828,8 @@ pub fn paint_bar_icon(
         // Stop is only chosen while a reply is running (`composer_go`).
         BarIcon::Stop => return paint_composer_stop(ui, size, true).0,
         BarIcon::Mic => return paint_composer_mic(ui, size, MicMood::Idle).0,
-        BarIcon::Plus | BarIcon::Send | BarIcon::ArrowUp | BarIcon::ArrowDown | BarIcon::Search => {}
+        BarIcon::Plus => return paint_composer_paperclip(ui, size, color),
+        BarIcon::Send | BarIcon::ArrowUp | BarIcon::ArrowDown | BarIcon::Search => {}
     }
     let (_rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
     let (resp, rect, wash) = crate::theme::feel_button(ui, resp, egui::Color32::TRANSPARENT);
@@ -708,16 +846,8 @@ pub fn paint_bar_icon(
     let w = glyph.width();
     let stroke = Stroke::new(crate::theme::ICON_STROKE, color);
     match icon {
-        BarIcon::Plus => {
-            painter.line_segment(
-                [Pos2::new(c.x, c.y - w * 0.22), Pos2::new(c.x, c.y + w * 0.22)],
-                stroke,
-            );
-            painter.line_segment(
-                [Pos2::new(c.x - w * 0.22, c.y), Pos2::new(c.x + w * 0.22, c.y)],
-                stroke,
-            );
-        }
+        // Painted above, before this allocate. Kept so the match stays exhaustive.
+        BarIcon::Plus => {}
         BarIcon::Send => {
             painter.circle_filled(c, w * 0.46, crate::theme::send_on());
             let arrow = Stroke::new(1.8_f32, crate::theme::send_on_ink());
@@ -1116,6 +1246,22 @@ mod tests {
         assert!(
             mic_fills.windows(2).any(|w| (w[0] - w[1]).abs() > 1e-3),
             "mic fill must change across frames, not a static color: {mic_fills:?}"
+        );
+    }
+
+    #[test]
+    fn paperclip_leans_on_hover_and_opens() {
+        let rest = paperclip_tilt(0.0, 0.0);
+        let hover = paperclip_tilt(1.0, 0.0);
+        let press = paperclip_tilt(1.0, 1.0);
+        assert!(hover < rest, "hover tips the clip further");
+        assert!(press > hover, "press settles the lean");
+        assert!(paperclip_open(0.0, 0.0) == 0.0);
+        assert!(paperclip_open(1.0, 0.0) > paperclip_open(1.0, 1.0));
+        let src = include_str!("icons.rs");
+        assert!(
+            src.contains("BarIcon::Plus => return paint_composer_paperclip"),
+            "the attach control is the paperclip"
         );
     }
 

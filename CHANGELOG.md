@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.10.36 — 2026-09-28
+
+Shared buttons stay quiet. Hover scales to 1.035, rises 1px, and eases out over 120ms. One highlight glides across the quick chips, the session and permission segments, and the sidebar rail. On an empty chat the idea deck rests in the gap under the composer, centered between the chat box and the bottom of the window. Hover still slides it up over that composer, and it stays inside the chat pane. The attach control is a paperclip that leans open while the pointer is on it. Ask anything is a faint placeholder. The paperclip, that line, the mic, and send share the pill's vertical center, with more room inside the rounded ends.
+
+- Linux: `grokhub-linux-v2.10.36.tar.gz` and AUR `pkgver=2.10.36`.
+- Windows: `GrokHub-Setup-2.10.36.exe` and `grokhub-windows-v2.10.36.zip`.
+
 ## 2.10.35 — 2026-09-28
 
 Buttons share one glass pill: a faint fill, a hairline ring, and a 1px highlight on the top edge. Solid, ghost, and danger are the same shape. Hover scales to 1.035, rises 2.5px, and eases out over 280ms. The open idea deck stays inside the home chat. It covers the composer there and does not paint over the sidebar, titlebar, or other windows.
