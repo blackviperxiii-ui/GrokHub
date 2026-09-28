@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.10.34 — 2026-09-28
+
+On the chat screen the idea and suggestion cards rest as a deck. The front card stays full size. Two cards sit just behind it, shifted down and slightly smaller, and a count shows how many are in the deck. Hover slides those cards up, over half a second, until each one is full size and stacked above the one in front. The open deck paints on top of the chat box. Hover a card that has slid up and it lifts a little further, and it stays there until the pointer returns to the deck. The Ideas page is still a scroll.
+
+- Linux: `grokhub-linux-v2.10.34.tar.gz` and AUR `pkgver=2.10.34`.
+- Windows: `GrokHub-Setup-2.10.34.exe` and `grokhub-windows-v2.10.34.zip`.
+
 ## 2.10.33 — 2026-09-28
 
 On the chat screen, ideas and suggestions sit in a pile of three with a count. Hover opens every card one above the next, on top of the chat box, with no scroll. A card behind the front one lifts out to full size and stays up until the pointer returns to the pile. The front card stays put. The Ideas page is still a scroll.
