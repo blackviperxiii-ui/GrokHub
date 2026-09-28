@@ -1,6 +1,10 @@
 //! Home update feed in the slot that held the Coding / Life chip and the
 //! under-bar workboard summary. The event slot is hidden when it has nothing
 //! to paint. Idea and digest cards use the same store and do not take event rows.
+//!
+//! On the chat screen the cards sit in a pile three deep. Hovering the pile
+//! opens every card, one above the next, on top of the chat box. A hovered
+//! card lifts out of that pile and stays up until the pointer is back on the pile.
 
 use super::*;
 use grokhub_core::{
@@ -26,6 +30,12 @@ pub(super) struct IdeaPop {
 
 const FEED_CARD_H: f32 = 64.0;
 const FEED_GAP: f32 = 6.0;
+/// Collapsed chat pile shows this many cards. The rest stay in the count.
+pub(super) const HOME_STACK_SHOW: usize = 3;
+/// Visible edge of each card tucked behind the front of the pile.
+pub(super) const STACK_PEEK: f32 = 16.0;
+/// How far a hovered card lifts out of the pile.
+const STACK_POP: f32 = 12.0;
 
 pub(super) fn stacked_feed_h(n: usize) -> f32 {
     if n == 0 {
@@ -33,6 +43,120 @@ pub(super) fn stacked_feed_h(n: usize) -> f32 {
     }
     let n = n as f32;
     n * FEED_CARD_H + (n - 1.0) * FEED_GAP
+}
+
+/// Height of the collapsed pile. Three cards never grow the slot past two peeks.
+pub(super) fn collapsed_stack_h(n: usize) -> f32 {
+    if n == 0 {
+        return 0.0;
+    }
+    let peeks = n.min(HOME_STACK_SHOW).saturating_sub(1) as f32;
+    FEED_CARD_H + peeks * STACK_PEEK
+}
+
+/// Open pile: every card at full size, one above the next.
+pub(super) fn expanded_stack_h(n: usize) -> f32 {
+    stacked_feed_h(n)
+}
+
+pub(super) fn collapsed_front_top(stack: egui::Rect, shown: usize) -> f32 {
+    stack.top() + shown.saturating_sub(1) as f32 * STACK_PEEK
+}
+
+pub(super) fn collapsed_card_rect(stack: egui::Rect, shown: usize, index: usize) -> egui::Rect {
+    let top = stack.top() + (shown.saturating_sub(1).saturating_sub(index)) as f32 * STACK_PEEK;
+    egui::Rect::from_min_size(
+        egui::pos2(stack.left(), top),
+        egui::vec2(stack.width(), FEED_CARD_H),
+    )
+}
+
+/// Front card is fully visible. Cards behind it show only their top edge.
+pub(super) fn collapsed_visible_rect(stack: egui::Rect, shown: usize, index: usize) -> egui::Rect {
+    let full = collapsed_card_rect(stack, shown, index);
+    if index == 0 {
+        full
+    } else {
+        egui::Rect::from_min_size(full.min, egui::vec2(full.width(), STACK_PEEK))
+    }
+}
+
+pub(super) fn expanded_card_rect(origin: egui::Pos2, width: f32, index: usize) -> egui::Rect {
+    let y = origin.y + index as f32 * (FEED_CARD_H + FEED_GAP);
+    egui::Rect::from_min_size(egui::pos2(origin.x, y), egui::vec2(width, FEED_CARD_H))
+}
+
+pub(super) fn popped_card_rect(slot: egui::Rect) -> egui::Rect {
+    slot.translate(egui::vec2(0.0, -STACK_POP))
+}
+
+/// Keeps the open pile on screen. The front card stays put until the column would run off the bottom.
+pub(super) fn stack_overlay_origin(front: egui::Pos2, height: f32, screen: egui::Rect) -> egui::Pos2 {
+    let margin = 8.0;
+    let mut y = front.y;
+    let bottom = screen.bottom() - margin;
+    if y + height > bottom {
+        y = (bottom - height).max(screen.top() + margin);
+    }
+    egui::pos2(front.x, y)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum StackHit {
+    /// Pointer is on the lifted card.
+    Card,
+    /// Pointer is on the pile, not on the lifted card.
+    Pile,
+    /// Pointer is elsewhere.
+    Away,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct StackHover {
+    pub on_card: bool,
+    pub on_pile: bool,
+}
+
+pub(super) fn stack_hit(hover: StackHover) -> StackHit {
+    if hover.on_card {
+        StackHit::Card
+    } else if hover.on_pile {
+        StackHit::Pile
+    } else {
+        StackHit::Away
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct StackView {
+    pub expanded: bool,
+    pub popped: Option<String>,
+}
+
+/// Cards behind the front one lift. The front card is already full size, so it stays put.
+pub(super) fn pile_pop_target(front_id: Option<&str>, hovered: Option<String>) -> Option<String> {
+    match hovered.as_deref() {
+        Some(id) if Some(id) != front_id => hovered,
+        _ => None,
+    }
+}
+
+/// Hover opens the pile. A lifted card stays up until the pointer is back on the pile.
+pub(super) fn next_feed_stack(prev: &StackView, hit: StackHit, hovered: Option<String>) -> StackView {
+    match hit {
+        StackHit::Card => StackView {
+            expanded: prev.expanded,
+            popped: prev.popped.clone().or(hovered),
+        },
+        StackHit::Pile => StackView {
+            expanded: true,
+            popped: hovered,
+        },
+        StackHit::Away => StackView {
+            expanded: false,
+            popped: prev.popped.clone(),
+        },
+    }
 }
 
 pub(super) fn update_feed_h(n: usize) -> f32 {
@@ -169,27 +293,92 @@ impl Cabin {
 
     pub(super) fn paint_update_feed(&mut self, ui: &mut egui::Ui, pane_w: f32) {
         self.ensure_useful_ideas();
+        let mem_id = ui.id().with("home-feed-stack");
         if !feed_visible(&self.updates) {
+            ui.ctx().data_mut(|d| d.insert_temp(mem_id, FeedStackMem::default()));
             return;
         }
-        let events: Vec<UpdateCard> = visible_updates(&self.updates)
-            .into_iter()
-            .take(FEED_PAINT_MAX)
-            .collect();
-        let ideas = feed_ideas(&self.updates, now_ms());
-        let digests: Vec<UpdateCard> = visible_digests(&self.updates)
-            .into_iter()
-            .take(DIGEST_PAINT_MAX)
-            .collect();
-        let mut act = None;
-        ui.vertical(|ui| {
-            ui.set_width(pane_w);
-            ui.spacing_mut().item_spacing.y = FEED_GAP;
-            for card in events.iter().chain(ideas.iter()).chain(digests.iter()) {
-                if let Some(next) = paint_feed_card(ui, card, pane_w, false) {
+        let cards = home_stack_cards(&self.updates, now_ms());
+        if cards.is_empty() {
+            ui.ctx().data_mut(|d| d.insert_temp(mem_id, FeedStackMem::default()));
+            return;
+        }
+        let shown = cards.len().min(HOME_STACK_SHOW);
+        let (stack, _) = ui.allocate_exact_size(
+            egui::vec2(pane_w, collapsed_stack_h(cards.len())),
+            egui::Sense::hover(),
+        );
+        let prev: FeedStackMem = ui.ctx().data(|d| d.get_temp(mem_id)).unwrap_or_default();
+        let pointer = ui.ctx().input(|i| i.pointer.hover_pos());
+        let on_card = prev
+            .popped_rect
+            .is_some_and(|rect| pointer.is_some_and(|p| rect.contains(p)));
+        let on_pile = pointer.is_some_and(|p| {
+            stack.contains(p) || prev.column.is_some_and(|rect| rect.contains(p))
+        });
+        let hit = stack_hit(StackHover { on_card, on_pile });
+        let hovered = hovered_stack_card(pointer, &cards, stack, prev.column);
+        // The front card is already full size. Cards tucked behind it are the ones that lift.
+        let front_id = cards.first().map(|card| card.id.as_str());
+        let hovered_for = if hit == StackHit::Pile {
+            pile_pop_target(front_id, hovered)
+        } else {
+            hovered
+        };
+        let view = drop_missing_pop(
+            &cards,
+            next_feed_stack(&prev.view(), hit, hovered_for),
+        );
+
+        let mut column = None;
+        let mut popped_rect = prev.popped_rect;
+        let act = if view.expanded {
+            let painted = paint_open_stack(
+                ui.ctx(),
+                &cards,
+                stack,
+                shown,
+                pane_w,
+                view.popped.as_deref(),
+            );
+            column = Some(painted.column);
+            if let Some(rect) = painted.popped_rect {
+                popped_rect = Some(rect);
+            }
+            painted.act
+        } else {
+            let front_id = cards.first().map(|card| card.id.as_str());
+            let front_floating = view.popped.as_deref() == front_id;
+            let mut act = paint_collapsed_pile(ui, &cards, stack, !front_floating);
+            if let Some(card) = view
+                .popped
+                .as_deref()
+                .and_then(|id| cards.iter().find(|card| card.id == id))
+            {
+                let rect = popped_rect.unwrap_or_else(|| {
+                    popped_card_rect(collapsed_card_rect(stack, shown, 0))
+                });
+                let floating = paint_floating_card(ui.ctx(), card, rect);
+                if let Some(next) = floating.act {
                     act = Some(next);
                 }
+                popped_rect = Some(floating.rect);
             }
+            act
+        };
+        if cards.len() > 1 {
+            paint_count_badge(ui.painter(), count_badge_rect(stack), cards.len());
+        }
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(
+                mem_id,
+                FeedStackMem {
+                    expanded: view.expanded,
+                    popped: view.popped.clone(),
+                    column,
+                    popped_rect: view.popped.as_ref().and(popped_rect),
+                },
+            );
         });
         self.apply_feed_act(act);
     }
@@ -682,6 +871,284 @@ impl Cabin {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+struct FeedStackMem {
+    expanded: bool,
+    popped: Option<String>,
+    column: Option<egui::Rect>,
+    popped_rect: Option<egui::Rect>,
+}
+
+impl FeedStackMem {
+    fn view(&self) -> StackView {
+        StackView {
+            expanded: self.expanded,
+            popped: self.popped.clone(),
+        }
+    }
+}
+
+struct OpenPaint {
+    act: Option<FeedAct>,
+    column: egui::Rect,
+    popped_rect: Option<egui::Rect>,
+}
+
+struct FloatPaint {
+    act: Option<FeedAct>,
+    rect: egui::Rect,
+}
+
+fn home_stack_cards(cards: &[UpdateCard], now: u64) -> Vec<UpdateCard> {
+    let mut out: Vec<UpdateCard> = visible_updates(cards)
+        .into_iter()
+        .take(FEED_PAINT_MAX)
+        .collect();
+    out.extend(feed_ideas(cards, now));
+    out.extend(visible_digests(cards).into_iter().take(DIGEST_PAINT_MAX));
+    out
+}
+
+fn drop_missing_pop(cards: &[UpdateCard], mut view: StackView) -> StackView {
+    if view
+        .popped
+        .as_ref()
+        .is_some_and(|id| cards.iter().all(|card| &card.id != id))
+    {
+        view.popped = None;
+    }
+    view
+}
+
+fn hovered_stack_card(
+    pointer: Option<egui::Pos2>,
+    cards: &[UpdateCard],
+    stack: egui::Rect,
+    column: Option<egui::Rect>,
+) -> Option<String> {
+    let pointer = pointer?;
+    if let Some(column) = column {
+        if column.contains(pointer) {
+            let index = (0..cards.len()).find(|&i| {
+                expanded_card_rect(column.min, column.width(), i).contains(pointer)
+            })?;
+            return Some(cards[index].id.clone());
+        }
+    }
+    let shown = cards.len().min(HOME_STACK_SHOW);
+    (0..shown)
+        .find(|&index| collapsed_visible_rect(stack, shown, index).contains(pointer))
+        .map(|index| cards[index].id.clone())
+}
+
+fn count_badge_rect(stack: egui::Rect) -> egui::Rect {
+    // Sits in the top peek so it does not cover the front card's buttons.
+    egui::Rect::from_min_size(
+        egui::pos2(stack.right() - 40.0, stack.top() + 1.0),
+        egui::vec2(30.0, 14.0),
+    )
+}
+
+fn paint_count_badge(painter: &egui::Painter, rect: egui::Rect, n: usize) {
+    painter.rect_filled(rect, 9.0, crate::theme::fg());
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        n.to_string(),
+        egui::FontId::proportional(11.0),
+        crate::theme::bg(),
+    );
+}
+
+fn stack_line(kind: &str, title: &str, width: f32) -> String {
+    let raw = if kind.is_empty() {
+        title.to_string()
+    } else {
+        format!("{kind} · {title}")
+    };
+    let max = ((width / 7.0).floor() as usize).max(4);
+    if raw.chars().count() <= max {
+        return raw;
+    }
+    let head: String = raw.chars().take(max.saturating_sub(1)).collect();
+    format!("{head}…")
+}
+
+fn paint_stack_shadow(painter: &egui::Painter, rect: egui::Rect) {
+    let shadow = rect.translate(egui::vec2(0.0, 6.0)).expand(2.0);
+    painter.rect_filled(
+        shadow,
+        crate::theme::CARD_RADIUS,
+        egui::Color32::from_black_alpha(64),
+    );
+}
+
+fn paint_card_at(ui: &mut egui::Ui, card: &UpdateCard, rect: egui::Rect) -> Option<FeedAct> {
+    let mut act = None;
+    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+        ui.set_min_size(rect.size());
+        ui.set_width(rect.width());
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 4.0);
+        act = paint_feed_card(ui, card, rect.width(), false);
+    });
+    act
+}
+
+fn paint_peek_face(ui: &mut egui::Ui, card: &UpdateCard, card_rect: egui::Rect, strip: egui::Rect) {
+    let painter = ui.painter().with_clip_rect(strip);
+    painter.rect(
+        card_rect,
+        crate::theme::CARD_RADIUS,
+        crate::theme::elevated(),
+        egui::Stroke::new(1.0_f32, crate::theme::border()),
+    );
+    painter.text(
+        egui::pos2(strip.left() + 10.0, strip.center().y),
+        egui::Align2::LEFT_CENTER,
+        stack_line(card.kind.label(), &card.title, strip.width() - 56.0),
+        egui::FontId::proportional(crate::theme::FONT_BODY),
+        crate::theme::fg(),
+    );
+}
+
+fn paint_static_card(ui: &mut egui::Ui, card: &UpdateCard, rect: egui::Rect) {
+    ui.painter().rect(
+        rect,
+        crate::theme::CARD_RADIUS,
+        crate::theme::elevated(),
+        egui::Stroke::new(1.0_f32, crate::theme::border()),
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + 10.0, rect.top() + 18.0),
+        egui::Align2::LEFT_CENTER,
+        stack_line(card.kind.label(), &card.title, rect.width() - 24.0),
+        egui::FontId::proportional(crate::theme::FONT_BODY),
+        crate::theme::fg(),
+    );
+    if let Some(body) = card.body.as_deref() {
+        ui.painter().text(
+            egui::pos2(rect.left() + 10.0, rect.top() + 40.0),
+            egui::Align2::LEFT_CENTER,
+            stack_line("", body, rect.width() - 24.0),
+            egui::FontId::proportional(crate::theme::FONT_TIP),
+            crate::theme::muted(),
+        );
+    }
+}
+
+fn paint_collapsed_pile(
+    ui: &mut egui::Ui,
+    cards: &[UpdateCard],
+    stack: egui::Rect,
+    live_front: bool,
+) -> Option<FeedAct> {
+    let shown = cards.len().min(HOME_STACK_SHOW);
+    let mut act = None;
+    for index in (0..shown).rev() {
+        let card_rect = collapsed_card_rect(stack, shown, index);
+        if index == 0 {
+            if live_front {
+                act = paint_card_at(ui, &cards[0], card_rect);
+            } else {
+                paint_static_card(ui, &cards[0], card_rect);
+            }
+        } else {
+            let strip = collapsed_visible_rect(stack, shown, index);
+            paint_peek_face(ui, &cards[index], card_rect, strip);
+        }
+    }
+    act
+}
+
+fn paint_open_stack(
+    ctx: &egui::Context,
+    cards: &[UpdateCard],
+    stack: egui::Rect,
+    shown: usize,
+    width: f32,
+    popped: Option<&str>,
+) -> OpenPaint {
+    let front = egui::pos2(stack.left(), collapsed_front_top(stack, shown));
+    let height = expanded_stack_h(cards.len());
+    let origin = stack_overlay_origin(front, height, ctx.screen_rect());
+    let response = egui::Area::new(egui::Id::new("home-feed-open-stack"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(origin)
+        .constrain(false)
+        .movable(false)
+        .fade_in(false)
+        .interactable(true)
+        .show(ctx, |ui| {
+            ui.set_clip_rect(ctx.screen_rect());
+            ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+            let (column, _) = ui.allocate_exact_size(
+                egui::vec2(width, height),
+                egui::Sense::click(),
+            );
+            paint_stack_shadow(ui.painter(), column);
+            ui.painter().rect_filled(
+                column.expand(4.0),
+                crate::theme::CARD_RADIUS,
+                crate::theme::bg(),
+            );
+            let mut act = None;
+            let mut lift = None;
+            for (index, card) in cards.iter().enumerate() {
+                let slot = expanded_card_rect(column.min, width, index);
+                if popped == Some(card.id.as_str()) {
+                    lift = Some(slot);
+                    continue;
+                }
+                if let Some(next) = paint_card_at(ui, card, slot) {
+                    act = Some(next);
+                }
+            }
+            let popped_rect = if let Some(slot) = lift {
+                cards
+                    .iter()
+                    .find(|card| popped == Some(card.id.as_str()))
+                    .map(|card| {
+                        let lifted = popped_card_rect(slot);
+                        paint_stack_shadow(ui.painter(), lifted);
+                        if let Some(next) = paint_card_at(ui, card, lifted) {
+                            act = Some(next);
+                        }
+                        lifted.union(slot)
+                    })
+            } else {
+                None
+            };
+            if cards.len() > 1 {
+                paint_count_badge(ui.painter(), count_badge_rect(stack), cards.len());
+            }
+            OpenPaint {
+                act,
+                column,
+                popped_rect,
+            }
+        });
+    response.inner
+}
+
+fn paint_floating_card(ctx: &egui::Context, card: &UpdateCard, rect: egui::Rect) -> FloatPaint {
+    let response = egui::Area::new(egui::Id::new(("home-feed-pop", card.id.clone())))
+        .order(egui::Order::Foreground)
+        .fixed_pos(rect.min)
+        .constrain(false)
+        .movable(false)
+        .fade_in(false)
+        .interactable(true)
+        .show(ctx, |ui| {
+            ui.set_clip_rect(ctx.screen_rect());
+            paint_stack_shadow(ui.painter(), rect);
+            FloatPaint {
+                act: paint_card_at(ui, card, rect),
+                rect,
+            }
+        });
+    response.inner
+}
+
 fn paint_feed_card(
     ui: &mut egui::Ui,
     card: &UpdateCard,
@@ -798,4 +1265,120 @@ fn paint_feed_card(
         });
     });
     act
+}
+
+#[cfg(test)]
+mod stack_tests {
+    use super::{
+        collapsed_card_rect, collapsed_stack_h, collapsed_visible_rect, expanded_stack_h,
+        next_feed_stack, stack_hit, stack_overlay_origin, stacked_feed_h, StackHit, StackHover,
+        StackView, FEED_CARD_H, HOME_STACK_SHOW, STACK_PEEK,
+    };
+    use eframe::egui;
+
+    fn view(expanded: bool, popped: Option<&str>) -> StackView {
+        StackView {
+            expanded,
+            popped: popped.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn collapsed_pile_stays_three_cards_tall() {
+        assert_eq!(HOME_STACK_SHOW, 3);
+        assert_eq!(collapsed_stack_h(0), 0.0);
+        assert_eq!(collapsed_stack_h(1), FEED_CARD_H);
+        assert_eq!(collapsed_stack_h(2), FEED_CARD_H + STACK_PEEK);
+        let three = FEED_CARD_H + 2.0 * STACK_PEEK;
+        assert_eq!(collapsed_stack_h(3), three);
+        assert_eq!(collapsed_stack_h(9), three);
+        assert!(collapsed_stack_h(9) < stacked_feed_h(4));
+    }
+
+    #[test]
+    fn expanded_pile_is_every_card_at_full_size() {
+        assert_eq!(expanded_stack_h(1), FEED_CARD_H);
+        assert_eq!(expanded_stack_h(4), stacked_feed_h(4));
+        assert!(expanded_stack_h(8) > collapsed_stack_h(8));
+    }
+
+    #[test]
+    fn front_card_sits_at_the_bottom_of_the_pile() {
+        let stack = egui::Rect::from_min_size(
+            egui::pos2(10.0, 100.0),
+            egui::vec2(300.0, collapsed_stack_h(5)),
+        );
+        let front = collapsed_card_rect(stack, 3, 0);
+        let peek = collapsed_visible_rect(stack, 3, 2);
+        assert!(peek.top() < front.top());
+        assert_eq!(front.height(), FEED_CARD_H);
+        assert_eq!(peek.height(), STACK_PEEK);
+        assert!((front.bottom() - stack.bottom()).abs() < 0.5);
+    }
+
+    #[test]
+    fn open_pile_moves_up_instead_of_leaving_the_screen() {
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 400.0));
+        let pos = stack_overlay_origin(egui::pos2(40.0, 300.0), 200.0, screen);
+        assert!(pos.y < 300.0);
+        assert!(pos.y + 200.0 <= screen.bottom() - 7.0);
+        let fits = stack_overlay_origin(egui::pos2(40.0, 20.0), 100.0, screen);
+        assert_eq!(fits.y, 20.0);
+        let too_tall = stack_overlay_origin(egui::pos2(40.0, 300.0), 500.0, screen);
+        assert_eq!(too_tall.y, screen.top() + 8.0);
+    }
+
+    #[test]
+    fn lifted_card_stays_until_the_pointer_returns_to_the_pile() {
+        let prev = view(true, Some("idea"));
+        let on_card = next_feed_stack(
+            &prev,
+            stack_hit(StackHover {
+                on_card: true,
+                on_pile: false,
+            }),
+            None,
+        );
+        assert!(on_card.expanded);
+        assert_eq!(on_card.popped.as_deref(), Some("idea"));
+
+        let away = next_feed_stack(
+            &on_card,
+            stack_hit(StackHover {
+                on_card: false,
+                on_pile: false,
+            }),
+            None,
+        );
+        assert!(!away.expanded);
+        assert_eq!(away.popped.as_deref(), Some("idea"));
+
+        let back = next_feed_stack(
+            &away,
+            stack_hit(StackHover {
+                on_card: false,
+                on_pile: true,
+            }),
+            Some("other".into()),
+        );
+        assert!(back.expanded);
+        assert_eq!(back.popped.as_deref(), Some("other"));
+        assert_eq!(
+            stack_hit(StackHover {
+                on_card: false,
+                on_pile: false,
+            }),
+            StackHit::Away
+        );
+    }
+
+    #[test]
+    fn front_card_does_not_lift_out_of_the_open_pile() {
+        use super::pile_pop_target;
+        assert_eq!(pile_pop_target(Some("front"), Some("front".into())), None);
+        assert_eq!(
+            pile_pop_target(Some("front"), Some("peek".into())).as_deref(),
+            Some("peek")
+        );
+    }
 }

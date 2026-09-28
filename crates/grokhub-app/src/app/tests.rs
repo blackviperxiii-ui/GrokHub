@@ -7300,6 +7300,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             home.contains("paint_update_feed")
                 && home.contains("paint_device_glance_row")
+                && home.contains("collapsed_stack_h")
+                && !home.contains("stacked_feed_h")
                 && !home.contains("paint_lane_chip")
                 && !home.contains("No updates"),
             "empty home paints the update feed only when a card exists, plus a fail-soft device glance: {home}"
@@ -7313,6 +7315,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             feed.contains("note_automation_done")
                 && feed.contains("note_schedule_created")
                 && feed.contains("feed_visible")
+                && feed.contains("Order::Foreground")
+                && feed.contains("HOME_STACK_SHOW")
                 && !feed.contains("No updates")
                 && !feed.contains("interest_update"),
             "feed hook is typed and hidden when empty: {feed}"
