@@ -248,7 +248,7 @@ pub fn imagine_seg_chip(ui: &mut egui::Ui, selected: bool, add: impl FnOnce(&mut
         })
         .response
         .interact(Sense::click());
-    let (resp, felt, wash) = crate::theme::feel_response(ui, resp, Color32::TRANSPARENT);
+    let (resp, felt, wash) = crate::theme::feel_button(ui, resp, Color32::TRANSPARENT);
     if wash.a() > 0 {
         ui.painter()
             .rect_filled(felt, crate::theme::IMAGINE_HIT, wash);
@@ -402,26 +402,26 @@ pub enum PillStyle {
 pub fn felt_pill(ui: &mut egui::Ui, label: &str, style: PillStyle) -> bool {
     let (base_fill, text_color, rounding, min_size, stroke, strong) = match style {
         PillStyle::Solid => (
-            crate::theme::fg(),
+            crate::theme::glass_solid(crate::theme::fg()),
             crate::theme::bg(),
-            crate::theme::HIT,
-            egui::vec2(0.0, crate::theme::HIT),
+            14.0,
+            egui::vec2(0.0, 28.0),
             None,
             true,
         ),
         PillStyle::Ghost => (
-            Color32::TRANSPARENT,
+            crate::theme::glass_ghost(),
             crate::theme::muted(),
             14.0,
-            egui::vec2(0.0, 0.0),
-            Some(Stroke::new(1.0_f32, crate::theme::border())),
+            egui::vec2(0.0, 28.0),
+            None,
             false,
         ),
         PillStyle::Danger => (
-            crate::theme::offline(),
+            crate::theme::glass_solid(crate::theme::offline()),
             crate::theme::bg(),
-            crate::theme::HIT,
-            egui::vec2(0.0, crate::theme::HIT),
+            14.0,
+            egui::vec2(0.0, 28.0),
             None,
             true,
         ),
@@ -524,10 +524,10 @@ fn felt_segment_styled(
     let base_fill =
         crate::theme::blend_color(Color32::TRANSPARENT, permission_risk_fill(true), on_t);
     let text_color = crate::theme::blend_color(crate::theme::muted(), crate::theme::fg(), on_t);
-    let (resp, rect, fill) = crate::theme::feel_response(ui, resp, base_fill);
-    ui.painter().rect_filled(rect, 14.0, fill);
+    let (resp, rect, fill) = crate::theme::feel_button(ui, resp, base_fill);
+    crate::theme::paint_glass_chrome(ui.painter(), rect, fill);
     if let Some(stroke) = stroke {
-        ui.painter().rect_stroke(rect, 14.0, stroke);
+        ui.painter().rect_stroke(rect, rect.height() * 0.5, stroke);
     }
     ui.painter().galley(
         egui::pos2(
@@ -554,10 +554,10 @@ pub fn felt_tab(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     let base_fill = crate::theme::blend_color(Color32::TRANSPARENT, crate::theme::fg(), on_t);
     let text_color = crate::theme::blend_color(crate::theme::muted(), crate::theme::bg(), on_t);
     let stroke_color = crate::theme::blend_color(crate::theme::border(), crate::theme::fg(), on_t);
-    let (resp, rect, fill) = crate::theme::feel_response(ui, resp, base_fill);
-    ui.painter().rect_filled(rect, 18.0, fill);
+    let (resp, rect, fill) = crate::theme::feel_button(ui, resp, base_fill);
+    crate::theme::paint_glass_chrome(ui.painter(), rect, fill);
     ui.painter()
-        .rect_stroke(rect, 18.0, Stroke::new(1.0_f32, stroke_color));
+        .rect_stroke(rect, rect.height() * 0.5, Stroke::new(1.0_f32, stroke_color));
     ui.painter()
         .galley(rect.min + pad, galley, text_color);
     resp.clicked()
@@ -1206,7 +1206,7 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                 let tip = chip_why_tip(why, &c.label);
                 let (rect, hit_resp) =
                     ui.allocate_exact_size(egui::vec2(pill_w, CHIP_ROW_H), Sense::click());
-                let (hit_resp, _, wash) = crate::theme::feel_response(ui, hit_resp, fill);
+                let (hit_resp, _, wash) = crate::theme::feel_button(ui, hit_resp, fill);
                 paint_chip_pill(ui, rect, wash, c.primary);
                 let text_pos = egui::pos2(
                     rect.left() + CHIP_PAD_X,
@@ -1303,11 +1303,15 @@ pub fn settings_switch(ui: &mut egui::Ui, on: bool) -> bool {
     let (_rect, resp) = ui.allocate_exact_size(egui::vec2(40.0, 24.0), Sense::click());
     let on_t = crate::theme::animate_selection(ui, resp.id.with("sw-on"), on);
     let base_fill = crate::theme::blend_color(crate::theme::panel(), crate::theme::fg(), on_t);
-    let (resp, rect, fill) = crate::theme::feel_response(ui, resp, base_fill);
-    ui.painter().rect_filled(rect, 12.0, fill);
+    let (resp, rect, fill) = crate::theme::feel_button(ui, resp, base_fill);
+    crate::theme::paint_glass_chrome(ui.painter(), rect, fill);
     if on_t < 0.98 {
         ui.painter()
-            .rect_stroke(rect, 12.0, Stroke::new(1.0_f32, crate::theme::border_strong()));
+            .rect_stroke(
+                rect,
+                rect.height() * 0.5,
+                Stroke::new(1.0_f32, crate::theme::border_strong()),
+            );
     }
     let knob_x = grokhub_core::lerp_f32(rect.left() + 12.0, rect.right() - 12.0, on_t);
     let knob = crate::theme::blend_color(crate::theme::muted(), crate::theme::bg(), on_t);
@@ -1463,8 +1467,8 @@ pub fn settings_nav(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     let base_fill =
         crate::theme::blend_color(Color32::TRANSPARENT, crate::theme::nav_active(), on_t);
     let text_color = crate::theme::blend_color(crate::theme::muted(), crate::theme::fg(), on_t);
-    let (resp, rect, fill) = crate::theme::feel_response(ui, resp, base_fill);
-    ui.painter().rect_filled(rect, 10.0, fill);
+    let (resp, rect, fill) = crate::theme::feel_button(ui, resp, base_fill);
+    crate::theme::paint_glass_chrome(ui.painter(), rect, fill);
     ui.painter().text(
         rect.left_center() + egui::vec2(12.0, 0.0),
         Align2::LEFT_CENTER,
@@ -1493,7 +1497,7 @@ pub fn appearance_card(ui: &mut egui::Ui, label: &str, selected: bool, preview: 
     };
     let (_rect, resp) =
         ui.allocate_exact_size(egui::vec2(108.0, 96.0), Sense::click_and_drag());
-    let (resp, rect, fill) = crate::theme::feel_response(ui, resp, fill);
+    let (resp, rect, fill) = crate::theme::feel_button(ui, resp, fill);
     ui.painter().rect_filled(rect, 12.0, fill);
     ui.painter()
         .rect_stroke(rect, 12.0, Stroke::new(1.0_f32, stroke));

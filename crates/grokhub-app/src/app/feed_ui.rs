@@ -316,14 +316,20 @@ impl Cabin {
 
     pub(super) fn paint_update_feed(&mut self, ui: &mut egui::Ui, pane_w: f32) {
         self.ensure_useful_ideas();
-        let mem_id = ui.id().with("home-feed-stack");
+        let mem_id = egui::Id::new("home-feed-stack");
         if !feed_visible(&self.updates) {
-            ui.ctx().data_mut(|d| d.insert_temp(mem_id, FeedStackMem::default()));
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(mem_id, FeedStackMem::default());
+                d.insert_temp(egui::Id::new("home-deck-defer"), None::<DeckDefer>);
+            });
             return;
         }
         let cards = home_stack_cards(&self.updates, now_ms());
         if cards.is_empty() {
-            ui.ctx().data_mut(|d| d.insert_temp(mem_id, FeedStackMem::default()));
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(mem_id, FeedStackMem::default());
+                d.insert_temp(egui::Id::new("home-deck-defer"), None::<DeckDefer>);
+            });
             return;
         }
         let (stack, _) = ui.allocate_exact_size(
@@ -347,15 +353,42 @@ impl Cabin {
             hovered
         };
         let view = drop_missing_pop(&cards, next_feed_stack(&prev.view(), hit, hovered_for));
-        let painted = paint_slide_deck(ui, &cards, stack, pane_w, &view);
+        // Paint later, after the home composer, so the open deck covers that
+        // box and stays inside the chat pane.
         ui.ctx().data_mut(|d| {
             d.insert_temp(
-                mem_id,
+                egui::Id::new("home-deck-defer"),
+                Some(DeckDefer {
+                    stack,
+                    width: pane_w,
+                    view,
+                }),
+            );
+        });
+    }
+
+    /// Open deck for the empty home chat. Call after the composer in that pane.
+    pub(super) fn paint_home_deck_over_chat(&mut self, ui: &mut egui::Ui) {
+        let deferred = ui
+            .ctx()
+            .data_mut(|d| d.remove_temp::<Option<DeckDefer>>(egui::Id::new("home-deck-defer")))
+            .flatten();
+        let Some(deferred) = deferred else {
+            return;
+        };
+        let cards = home_stack_cards(&self.updates, now_ms());
+        if cards.is_empty() {
+            return;
+        }
+        let painted = paint_slide_deck(ui, &cards, deferred.stack, deferred.width, &deferred.view);
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(
+                egui::Id::new("home-feed-stack"),
                 FeedStackMem {
-                    expanded: view.expanded,
-                    popped: view.popped.clone(),
+                    expanded: deferred.view.expanded,
+                    popped: deferred.view.popped.clone(),
                     hits: painted.hits,
-                    popped_rect: view.popped.as_ref().and(painted.popped_rect),
+                    popped_rect: deferred.view.popped.as_ref().and(painted.popped_rect),
                 },
             );
         });
@@ -851,6 +884,13 @@ impl Cabin {
 }
 
 #[derive(Clone, Debug)]
+struct DeckDefer {
+    stack: egui::Rect,
+    width: f32,
+    view: StackView,
+}
+
+#[derive(Clone, Debug)]
 struct SlideHit {
     id: String,
     index: usize,
@@ -1025,7 +1065,6 @@ fn paint_slide_deck(
         .iter()
         .map(|place| slide_rect(front, width, place.pose))
         .collect();
-    let rising = rects.iter().any(|rect| rect.top() < stack.top() - 0.5);
     let mut act = None;
     let mut hits = Vec::new();
     let mut popped_rect = None;
@@ -1072,26 +1111,7 @@ fn paint_slide_deck(
             paint_count_badge(ui.painter(), badge, cards.len());
         }
     };
-    if rising || view.popped.is_some() {
-        let mut union = stack;
-        for rect in &rects {
-            union = union.union(*rect);
-        }
-        egui::Area::new(egui::Id::new("home-feed-open-stack"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(union.min)
-            .constrain(false)
-            .movable(false)
-            .fade_in(false)
-            .interactable(true)
-            .show(ui.ctx(), |ui| {
-                ui.set_clip_rect(ui.ctx().screen_rect());
-                let _ = ui.allocate_exact_size(union.size(), egui::Sense::click());
-                paint_one(ui);
-            });
-    } else {
-        paint_one(ui);
-    }
+    paint_one(ui);
     SlidePaint {
         act,
         hits,

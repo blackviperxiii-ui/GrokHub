@@ -4,13 +4,16 @@ pub const HOVER_GROW: f32 = 0.035;
 pub const PRESS_SHRINK: f32 = 0.045;
 pub const HOVER_WASH: f32 = 0.10;
 pub const PRESS_WASH: f32 = 0.18;
-pub const HOVER_SECS: f32 = 0.12;
+/// Same family as the chat-deck lift: a short rise that eases out.
+pub const HOVER_SECS: f32 = 0.28;
 /// Extra scale and wash while a control has keyboard focus.
 pub const FOCUS_GROW: f32 = 0.01;
 pub const FOCUS_WASH: f32 = 0.06;
-pub const PRESS_SECS: f32 = 0.05;
-/// Selection / knob slide — ~120ms, between egui hover and KDE widget motion.
-pub const SELECT_SECS: f32 = 0.12;
+pub const PRESS_SECS: f32 = 0.08;
+/// Selection / knob slide. Same clock as button hover.
+pub const SELECT_SECS: f32 = 0.28;
+/// How far a button rises on hover, in points. Press brings it back down.
+pub const BUTTON_LIFT: f32 = 2.5;
 pub const HOVER_EXPANSION: f32 = 1.0;
 pub const PRESS_EXPANSION: f32 = -1.5;
 
@@ -22,6 +25,13 @@ pub fn feel_scale(hover_t: f32, press_t: f32) -> f32 {
     let hover = hover_t.clamp(0.0, 1.0);
     let press = press_t.clamp(0.0, 1.0);
     1.0 + HOVER_GROW * hover - PRESS_SHRINK * press
+}
+
+/// Upward travel for a button. Press settles it back toward the row.
+pub fn feel_lift(hover_t: f32, press_t: f32) -> f32 {
+    let hover = hover_t.clamp(0.0, 1.0);
+    let press = press_t.clamp(0.0, 1.0);
+    BUTTON_LIFT * hover * (1.0 - 0.7 * press)
 }
 
 pub fn felt_rect(x: f32, y: f32, w: f32, h: f32, scale: f32) -> (f32, f32, f32, f32) {
@@ -116,6 +126,14 @@ mod tests {
     fn hover_scale_is_one_point_zero_three_five() {
         let full = feel_scale(1.0, 0.0);
         assert!((full - 1.035).abs() < 1e-5, "full hover scale {full}");
+    }
+
+    #[test]
+    fn hover_lifts_and_press_settles() {
+        assert_eq!(feel_lift(0.0, 0.0), 0.0);
+        assert!((feel_lift(1.0, 0.0) - BUTTON_LIFT).abs() < 1e-6);
+        assert!(feel_lift(1.0, 1.0) < feel_lift(1.0, 0.0));
+        assert!(feel_lift(0.4, 0.0) < feel_lift(0.8, 0.0));
     }
 
     #[test]

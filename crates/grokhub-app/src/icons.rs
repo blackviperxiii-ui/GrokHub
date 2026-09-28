@@ -488,17 +488,23 @@ pub fn composer_motion(
 }
 
 fn composer_pointer_ease(ui: &egui::Ui, resp: &egui::Response) -> (f32, f32) {
-    let hover_t = ui.ctx().animate_bool_with_time(
+    let hover_t = ui.ctx().animate_bool_with_time_and_easing(
         resp.id.with("feel-h"),
         resp.hovered(),
         grokhub_core::HOVER_SECS,
+        egui::emath::easing::quadratic_out,
     );
-    let press_t = ui.ctx().animate_bool_with_time(
+    let press_t = ui.ctx().animate_bool_with_time_and_easing(
         resp.id.with("feel-p"),
         resp.is_pointer_button_down_on(),
         grokhub_core::PRESS_SECS,
+        egui::emath::easing::quadratic_out,
     );
     (hover_t, press_t)
+}
+
+fn risen_glyph(rect: egui::Rect, hover_t: f32, press_t: f32) -> egui::Rect {
+    rect.translate(egui::vec2(0.0, -grokhub_core::feel_lift(hover_t, press_t)))
 }
 
 fn channel_moving(t: f32) -> bool {
@@ -629,7 +635,9 @@ pub fn paint_composer_stop(
         0.0
     };
     let motion = composer_motion(hover_t, press_t, live_t, breath);
-    paint_stop_glyph(ui.painter(), alloc, motion);
+    let glyph = risen_glyph(alloc, hover_t, press_t);
+    crate::theme::paint_button_shadow(ui.painter(), glyph, hover_t, press_t);
+    paint_stop_glyph(ui.painter(), glyph, motion);
     follow_composer_frame(ui, &resp, running, &[hover_t, press_t, live_t]);
     (resp, motion)
 }
@@ -661,7 +669,9 @@ pub fn paint_composer_mic(
     };
     let speak_phase = speak_t * breath + (1.0 - speak_t) * breath * 0.35 * live_t;
     let motion = composer_motion(hover_t, press_t, live_t, speak_phase);
-    paint_mic_glyph(ui.painter(), alloc, mic_ink(mood, motion.fill), motion);
+    let glyph = risen_glyph(alloc, hover_t, press_t);
+    crate::theme::paint_button_shadow(ui.painter(), glyph, hover_t, press_t);
+    paint_mic_glyph(ui.painter(), glyph, mic_ink(mood, motion.fill), motion);
     follow_composer_frame(
         ui,
         &resp,
@@ -684,7 +694,7 @@ pub fn paint_bar_icon(
         BarIcon::Plus | BarIcon::Send | BarIcon::ArrowUp | BarIcon::ArrowDown | BarIcon::Search => {}
     }
     let (_rect, resp) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
-    let (resp, rect, wash) = crate::theme::feel_response(ui, resp, egui::Color32::TRANSPARENT);
+    let (resp, rect, wash) = crate::theme::feel_button(ui, resp, egui::Color32::TRANSPARENT);
     let painter = ui.painter();
     if wash.a() > 0 {
         painter.circle_filled(rect.center(), rect.width() * 0.55, wash);

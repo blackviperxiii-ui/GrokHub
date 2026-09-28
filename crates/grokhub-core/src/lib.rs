@@ -171,8 +171,10 @@ pub use doctor::{
     doctor_ok, hub_kind_from_health, DoctorLine,
 };
 pub use feel::{
-    clamp_rect_to_slot, feel_scale, felt_inside_slot, felt_rect, hover_alpha, hover_mix, lerp_f32,
-    lift_rgb, mix_channel, FOCUS_GROW, FOCUS_WASH, HOVER_EXPANSION, HOVER_SECS, HOVER_WASH,
+    clamp_rect_to_slot, feel_lift, feel_scale, felt_inside_slot, felt_rect, hover_alpha, hover_mix,
+    lerp_f32,
+    lift_rgb, mix_channel, BUTTON_LIFT, FOCUS_GROW, FOCUS_WASH, HOVER_EXPANSION, HOVER_SECS,
+    HOVER_WASH,
     PRESS_EXPANSION, PRESS_SECS, SELECT_SECS,
 };
 pub use frame::{

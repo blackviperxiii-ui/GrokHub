@@ -7315,7 +7315,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             feed.contains("note_automation_done")
                 && feed.contains("note_schedule_created")
                 && feed.contains("feed_visible")
-                && feed.contains("Order::Foreground")
+                && feed.contains("paint_home_deck_over_chat")
+                && !feed.contains("Order::Foreground")
                 && feed.contains("HOME_STACK_SHOW")
                 && !feed.contains("No updates")
                 && !feed.contains("interest_update"),
