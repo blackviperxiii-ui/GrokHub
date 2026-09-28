@@ -4,16 +4,16 @@ pub const HOVER_GROW: f32 = 0.035;
 pub const PRESS_SHRINK: f32 = 0.045;
 pub const HOVER_WASH: f32 = 0.10;
 pub const PRESS_WASH: f32 = 0.18;
-/// Same family as the chat-deck lift: a short rise that eases out.
-pub const HOVER_SECS: f32 = 0.28;
+/// Quiet button hover. Fast, no bounce, same ease-out family as the deck.
+pub const HOVER_SECS: f32 = 0.12;
 /// Extra scale and wash while a control has keyboard focus.
 pub const FOCUS_GROW: f32 = 0.01;
 pub const FOCUS_WASH: f32 = 0.06;
 pub const PRESS_SECS: f32 = 0.08;
-/// Selection / knob slide. Same clock as button hover.
-pub const SELECT_SECS: f32 = 0.28;
-/// How far a button rises on hover, in points. Press brings it back down.
-pub const BUTTON_LIFT: f32 = 2.5;
+/// Selection fill and the gliding row highlight.
+pub const SELECT_SECS: f32 = 0.16;
+/// One point of rise. Press brings the button back down.
+pub const BUTTON_LIFT: f32 = 1.0;
 pub const HOVER_EXPANSION: f32 = 1.0;
 pub const PRESS_EXPANSION: f32 = -1.5;
 
