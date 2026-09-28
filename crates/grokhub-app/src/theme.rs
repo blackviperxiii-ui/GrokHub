@@ -7,7 +7,8 @@ use eframe::egui::{
     TextureHandle, TextureOptions,
 };
 use grokhub_core::{
-    clamp_rect_to_slot, feel_scale, felt_rect, hover_alpha, hover_mix, lift_rgb, mix_channel,
+    clamp_rect_to_slot, feel_lift, feel_scale, felt_rect, hover_alpha, hover_mix, lift_rgb,
+    mix_channel,
     os_prefers_dark, HOVER_EXPANSION, HOVER_SECS, HOVER_WASH, PRESS_EXPANSION, PRESS_SECS,
     SELECT_SECS,
 };
@@ -526,9 +527,77 @@ pub fn blend_color(from: Color32, to: Color32, t: f32) -> Color32 {
     )
 }
 
-/// Animated on/off for toggles and segment selection (~120ms on CachyOS).
+/// Animated on/off for toggles and segment selection. Same ease as button hover.
 pub fn animate_selection(ui: &egui::Ui, id: egui::Id, on: bool) -> f32 {
-    ui.ctx().animate_bool_with_time(id, on, SELECT_SECS)
+    ui.ctx().animate_bool_with_time_and_easing(
+        id,
+        on,
+        SELECT_SECS,
+        egui::emath::easing::quadratic_out,
+    )
+}
+
+fn button_channel(ui: &egui::Ui, id: egui::Id, on: bool, secs: f32) -> f32 {
+    ui.ctx().animate_bool_with_time_and_easing(
+        id,
+        on,
+        secs,
+        egui::emath::easing::quadratic_out,
+    )
+}
+
+pub fn glass_solid(color: egui::Color32) -> egui::Color32 {
+    egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 214)
+}
+
+pub fn glass_ghost() -> egui::Color32 {
+    if USE_LIGHT.load(Ordering::Relaxed) {
+        egui::Color32::from_black_alpha(14)
+    } else {
+        egui::Color32::from_white_alpha(16)
+    }
+}
+
+/// Glass pill: faint fill, hairline ring, and a 1px top highlight.
+pub fn paint_glass_chrome(painter: &egui::Painter, rect: egui::Rect, fill: egui::Color32) {
+    let radius = (rect.height() * 0.5).max(1.0);
+    painter.rect_filled(rect, radius, fill);
+    let light = USE_LIGHT.load(Ordering::Relaxed);
+    let ring = if light {
+        egui::Color32::from_black_alpha(40)
+    } else {
+        egui::Color32::from_white_alpha(46)
+    };
+    painter.rect_stroke(rect.shrink(0.5), radius, egui::Stroke::new(1.0_f32, ring));
+    let highlight = if light {
+        egui::Color32::from_white_alpha(180)
+    } else {
+        egui::Color32::from_white_alpha(72)
+    };
+    let y = rect.top() + 1.0;
+    let inset = radius.min(rect.width() * 0.22).max(6.0);
+    painter.line_segment(
+        [
+            egui::pos2(rect.left() + inset, y),
+            egui::pos2(rect.right() - inset, y),
+        ],
+        egui::Stroke::new(1.0_f32, highlight),
+    );
+}
+
+/// Soft shadow under a rising button. Resting controls stay flat.
+pub fn paint_button_shadow(painter: &egui::Painter, rect: egui::Rect, hover_t: f32, press_t: f32) {
+    let t = (hover_t * (1.0 - 0.45 * press_t)).clamp(0.0, 1.0);
+    if t < 0.04 {
+        return;
+    }
+    let alpha = (56.0 * t) as u8;
+    let shadow = rect.translate(egui::vec2(0.0, 2.0 + 2.0 * t));
+    painter.rect_filled(
+        shadow,
+        rect.height().min(20.0) * 0.5,
+        egui::Color32::from_black_alpha(alpha),
+    );
 }
 
 /// Painted label button with hover grow / press shrink (Plasma-style pointer feedback).
@@ -554,11 +623,9 @@ pub fn felt_label_button(
         (galley.size().y + pad.y * 2.0).max(min_size.y),
     );
     let (_rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
-    let (resp, rect, fill) = feel_response(ui, resp, base_fill);
-    ui.painter().rect_filled(rect, rounding, fill);
-    if let Some(s) = stroke {
-        ui.painter().rect_stroke(rect, rounding, s);
-    }
+    let (resp, rect, fill) = feel_button(ui, resp, base_fill);
+    let _ = (rounding, stroke);
+    paint_glass_chrome(ui.painter(), rect, fill);
     ui.painter().galley(rect.min + pad, galley, text_color);
     pointing(resp)
 }
@@ -572,7 +639,7 @@ pub fn felt_icon_hit(
     font_size: f32,
 ) -> egui::Response {
     let (_rect, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
-    let (resp, rect, wash) = feel_response(ui, resp, Color32::TRANSPARENT);
+    let (resp, rect, wash) = feel_button(ui, resp, Color32::TRANSPARENT);
     if wash.a() > 0 {
         ui.painter().rect_filled(rect, 6.0, wash);
     }
@@ -615,35 +682,51 @@ pub fn lift_fill(fill: Color32, mix: f32) -> Color32 {
     )
 }
 
-pub fn feel_response(
+fn feel_motion(
     ui: &egui::Ui,
     resp: egui::Response,
     fill: Color32,
-) -> (egui::Response, egui::Rect, Color32) {
+    rise: bool,
+) -> (egui::Response, egui::Rect, Color32, f32, f32) {
     let hovered = resp.hovered();
     let pressed = resp.is_pointer_button_down_on();
     let focused = resp.has_focus();
     let id = resp.id;
     let base = resp.rect;
     let resp = pointing(resp);
-    let hover_t = ui
-        .ctx()
-        .animate_bool_with_time(id.with("feel-h"), hovered, HOVER_SECS);
-    let press_t = ui
-        .ctx()
-        .animate_bool_with_time(id.with("feel-p"), pressed, PRESS_SECS);
-    let focus_t = ui
-        .ctx()
-        .animate_bool_with_time(id.with("feel-f"), focused, SELECT_SECS);
+    let hover_t = button_channel(ui, id.with("feel-h"), hovered, HOVER_SECS);
+    let press_t = button_channel(ui, id.with("feel-p"), pressed, PRESS_SECS);
+    let focus_t = button_channel(ui, id.with("feel-f"), focused, SELECT_SECS);
     let scale = feel_scale(hover_t, press_t) + 0.01 * focus_t;
     let mix = hover_mix(hover_t, press_t) + grokhub_core::FOCUS_WASH * focus_t;
     let (x, y, w, h) = felt_rect(base.min.x, base.min.y, base.width(), base.height(), scale);
-    let rect = egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h));
-    (resp, rect, lift_fill(fill, mix))
+    let lift = if rise { feel_lift(hover_t, press_t) } else { 0.0 };
+    let rect = egui::Rect::from_min_size(egui::pos2(x, y - lift), egui::vec2(w, h));
+    (resp, rect, lift_fill(fill, mix), hover_t, press_t)
+}
+
+pub fn feel_response(
+    ui: &egui::Ui,
+    resp: egui::Response,
+    fill: Color32,
+) -> (egui::Response, egui::Rect, Color32) {
+    let (resp, rect, fill, _, _) = feel_motion(ui, resp, fill, false);
+    (resp, rect, fill)
+}
+
+/// Pill, tab, rail, and chrome controls. Same scale as cards, plus the deck's rise and shadow.
+pub fn feel_button(
+    ui: &egui::Ui,
+    resp: egui::Response,
+    fill: Color32,
+) -> (egui::Response, egui::Rect, Color32) {
+    let (resp, rect, fill, hover_t, press_t) = feel_motion(ui, resp, fill, true);
+    paint_button_shadow(ui.painter(), rect, hover_t, press_t);
+    (resp, rect, fill)
 }
 
 /// Same clock and wash as [`feel_response`], clamped to the widget slot.
-/// Cards and the Imagine wall use this. Buttons keep [`feel_response`].
+/// Cards and the Imagine wall use this. Buttons use [`feel_button`].
 pub fn feel_response_in_slot(
     ui: &egui::Ui,
     resp: egui::Response,

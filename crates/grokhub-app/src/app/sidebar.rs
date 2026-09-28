@@ -203,13 +203,12 @@ impl Cabin {
         let w = ui.available_width();
         let (_rect, resp) =
             ui.allocate_exact_size(egui::vec2(w, crate::theme::NAV_ROW_H), egui::Sense::click());
-        let (resp, rect, fill) = crate::theme::feel_response(ui, resp, fill);
-        ui.painter()
-            .rect_filled(rect, crate::theme::CHROME_RADIUS, fill);
+        let (resp, rect, fill) = crate::theme::feel_button(ui, resp, fill);
+        crate::theme::paint_glass_chrome(ui.painter(), rect, fill);
         if outline {
             ui.painter().rect_stroke(
                 rect,
-                crate::theme::CHROME_RADIUS,
+                rect.height() * 0.5,
                 egui::Stroke::new(1.0_f32, crate::theme::border_strong()),
             );
         }
@@ -261,7 +260,7 @@ impl Cabin {
             egui::vec2(ui.available_width(), RAIL_FOOTER_H),
             egui::Sense::click(),
         );
-        let (resp, rect, wash) = crate::theme::feel_response(ui, resp, egui::Color32::TRANSPARENT);
+        let (resp, rect, wash) = crate::theme::feel_button(ui, resp, egui::Color32::TRANSPARENT);
         if wash.a() > 0 {
             ui.painter().rect_filled(rect, 10.0, wash);
         }

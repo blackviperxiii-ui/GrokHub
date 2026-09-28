@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.10.35 — 2026-09-28
+
+Buttons share one glass pill: a faint fill, a hairline ring, and a 1px highlight on the top edge. Solid, ghost, and danger are the same shape. Hover scales to 1.035, rises 2.5px, and eases out over 280ms. The open idea deck stays inside the home chat. It covers the composer there and does not paint over the sidebar, titlebar, or other windows.
+
+- Linux: `grokhub-linux-v2.10.35.tar.gz` and AUR `pkgver=2.10.35`.
+- Windows: `GrokHub-Setup-2.10.35.exe` and `grokhub-windows-v2.10.35.zip`.
+
 ## 2.10.34 — 2026-09-28
 
 On the chat screen the idea and suggestion cards rest as a deck. The front card stays full size. Two cards sit just behind it, shifted down and slightly smaller, and a count shows how many are in the deck. Hover slides those cards up, over half a second, until each one is full size and stacked above the one in front. The open deck paints on top of the chat box. Hover a card that has slid up and it lifts a little further, and it stays there until the pointer returns to the deck. The Ideas page is still a scroll.

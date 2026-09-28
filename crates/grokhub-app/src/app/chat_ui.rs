@@ -1520,6 +1520,7 @@ impl Cabin {
                 },
             );
         });
+        self.paint_home_deck_over_chat(ui);
     }
 
     /// Export, view plan, and the recommended fork offer. Not slash-only.
