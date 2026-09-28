@@ -2,9 +2,9 @@
 //! under-bar workboard summary. The event slot is hidden when it has nothing
 //! to paint. Idea and digest cards use the same store and do not take event rows.
 //!
-//! On the chat screen the cards sit in a pile three deep. Hovering the pile
-//! opens every card, one above the next, on top of the chat box. A hovered
-//! card lifts out of that pile and stays up until the pointer is back on the pile.
+//! On the chat screen the cards sit in a three-deep deck. Hover slides them
+//! up to full size, one above the next, on top of the chat box. A card behind
+//! the front one can lift out and stays up until the pointer is back on the deck.
 
 use super::*;
 use grokhub_core::{
@@ -30,12 +30,19 @@ pub(super) struct IdeaPop {
 
 const FEED_CARD_H: f32 = 64.0;
 const FEED_GAP: f32 = 6.0;
-/// Collapsed chat pile shows this many cards. The rest stay in the count.
+/// Collapsed chat deck shows this many edges. The rest stay in the count.
 pub(super) const HOME_STACK_SHOW: usize = 3;
-/// Visible edge of each card tucked behind the front of the pile.
-pub(super) const STACK_PEEK: f32 = 16.0;
-/// How far a hovered card lifts out of the pile.
-const STACK_POP: f32 = 12.0;
+/// Second card, tucked under the front. Same offsets as a slide-up deck at rest.
+pub(super) const STACK_REST_DY_1: f32 = 8.0;
+pub(super) const STACK_REST_SCALE_1: f32 = 0.95;
+/// Third card, and every card still hidden in that slot.
+pub(super) const STACK_REST_DY_2: f32 = 16.0;
+pub(super) const STACK_REST_SCALE_2: f32 = 0.90;
+/// Open step. 110% of the card height leaves a small gap, then the card is full size.
+const SLIDE_UP: f32 = 1.10;
+/// Extra lift once a card has left the deck.
+const STACK_POP: f32 = 14.0;
+const SLIDE_SECS: f32 = 0.50;
 
 pub(super) fn stacked_feed_h(n: usize) -> f32 {
     if n == 0 {
@@ -45,60 +52,76 @@ pub(super) fn stacked_feed_h(n: usize) -> f32 {
     n * FEED_CARD_H + (n - 1.0) * FEED_GAP
 }
 
-/// Height of the collapsed pile. Three cards never grow the slot past two peeks.
+pub(super) fn slide_stride() -> f32 {
+    FEED_CARD_H * SLIDE_UP
+}
+
+/// Height of the resting deck. The front card is full size. Two edges stick out below it.
 pub(super) fn collapsed_stack_h(n: usize) -> f32 {
     if n == 0 {
         return 0.0;
     }
-    let peeks = n.min(HOME_STACK_SHOW).saturating_sub(1) as f32;
-    FEED_CARD_H + peeks * STACK_PEEK
+    let peek = match n {
+        1 => 0.0,
+        2 => STACK_REST_DY_1,
+        _ => STACK_REST_DY_2,
+    };
+    FEED_CARD_H + peek
 }
 
-/// Open pile: every card at full size, one above the next.
-pub(super) fn expanded_stack_h(n: usize) -> f32 {
-    stacked_feed_h(n)
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct SlidePose {
+    /// From the front card's top. Negative is up.
+    pub dy: f32,
+    pub scale: f32,
 }
 
-pub(super) fn collapsed_front_top(stack: egui::Rect, shown: usize) -> f32 {
-    stack.top() + shown.saturating_sub(1) as f32 * STACK_PEEK
-}
-
-pub(super) fn collapsed_card_rect(stack: egui::Rect, shown: usize, index: usize) -> egui::Rect {
-    let top = stack.top() + (shown.saturating_sub(1).saturating_sub(index)) as f32 * STACK_PEEK;
-    egui::Rect::from_min_size(
-        egui::pos2(stack.left(), top),
-        egui::vec2(stack.width(), FEED_CARD_H),
-    )
-}
-
-/// Front card is fully visible. Cards behind it show only their top edge.
-pub(super) fn collapsed_visible_rect(stack: egui::Rect, shown: usize, index: usize) -> egui::Rect {
-    let full = collapsed_card_rect(stack, shown, index);
-    if index == 0 {
-        full
-    } else {
-        egui::Rect::from_min_size(full.min, egui::vec2(full.width(), STACK_PEEK))
+pub(super) fn rest_slide(index: usize) -> SlidePose {
+    match index {
+        0 => SlidePose { dy: 0.0, scale: 1.0 },
+        1 => SlidePose {
+            dy: STACK_REST_DY_1,
+            scale: STACK_REST_SCALE_1,
+        },
+        _ => SlidePose {
+            dy: STACK_REST_DY_2,
+            scale: STACK_REST_SCALE_2,
+        },
     }
 }
 
-pub(super) fn expanded_card_rect(origin: egui::Pos2, width: f32, index: usize) -> egui::Rect {
-    let y = origin.y + index as f32 * (FEED_CARD_H + FEED_GAP);
-    egui::Rect::from_min_size(egui::pos2(origin.x, y), egui::vec2(width, FEED_CARD_H))
-}
-
-pub(super) fn popped_card_rect(slot: egui::Rect) -> egui::Rect {
-    slot.translate(egui::vec2(0.0, -STACK_POP))
-}
-
-/// Keeps the open pile on screen. The front card stays put until the column would run off the bottom.
-pub(super) fn stack_overlay_origin(front: egui::Pos2, height: f32, screen: egui::Rect) -> egui::Pos2 {
-    let margin = 8.0;
-    let mut y = front.y;
-    let bottom = screen.bottom() - margin;
-    if y + height > bottom {
-        y = (bottom - height).max(screen.top() + margin);
+/// Open pose. Card 0 stays. Each card behind it sits one stride higher, at full size.
+pub(super) fn open_slide(index: usize) -> SlidePose {
+    SlidePose {
+        dy: -(index as f32) * slide_stride(),
+        scale: 1.0,
     }
-    egui::pos2(front.x, y)
+}
+
+pub(super) fn mix_slide(rest: SlidePose, open: SlidePose, t: f32) -> SlidePose {
+    let t = t.clamp(0.0, 1.0);
+    SlidePose {
+        dy: rest.dy + (open.dy - rest.dy) * t,
+        scale: rest.scale + (open.scale - rest.scale) * t,
+    }
+}
+
+/// How far to push the open deck down so the top card stays on screen.
+pub(super) fn slide_up_shift(front_y: f32, n: usize, screen_top: f32) -> f32 {
+    if n <= 1 {
+        return 0.0;
+    }
+    let top = front_y + open_slide(n - 1).dy;
+    let min_top = screen_top + 8.0;
+    (min_top - top).max(0.0)
+}
+
+pub(super) fn slide_rect(front: egui::Pos2, width: f32, pose: SlidePose) -> egui::Rect {
+    let w = width * pose.scale;
+    let h = FEED_CARD_H * pose.scale;
+    let x = front.x + (width - w) * 0.5;
+    let y = front.y + pose.dy + (FEED_CARD_H - h) * 0.5;
+    egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -303,7 +326,6 @@ impl Cabin {
             ui.ctx().data_mut(|d| d.insert_temp(mem_id, FeedStackMem::default()));
             return;
         }
-        let shown = cards.len().min(HOME_STACK_SHOW);
         let (stack, _) = ui.allocate_exact_size(
             egui::vec2(pane_w, collapsed_stack_h(cards.len())),
             egui::Sense::hover(),
@@ -314,73 +336,30 @@ impl Cabin {
             .popped_rect
             .is_some_and(|rect| pointer.is_some_and(|p| rect.contains(p)));
         let on_pile = pointer.is_some_and(|p| {
-            stack.contains(p) || prev.column.is_some_and(|rect| rect.contains(p))
+            stack.contains(p) || prev.hits.iter().any(|hit| hit.rect.contains(p))
         });
         let hit = stack_hit(StackHover { on_card, on_pile });
-        let hovered = hovered_stack_card(pointer, &cards, stack, prev.column);
-        // The front card is already full size. Cards tucked behind it are the ones that lift.
+        let hovered = hovered_slide_card(pointer, &prev.hits);
         let front_id = cards.first().map(|card| card.id.as_str());
         let hovered_for = if hit == StackHit::Pile {
             pile_pop_target(front_id, hovered)
         } else {
             hovered
         };
-        let view = drop_missing_pop(
-            &cards,
-            next_feed_stack(&prev.view(), hit, hovered_for),
-        );
-
-        let mut column = None;
-        let mut popped_rect = prev.popped_rect;
-        let act = if view.expanded {
-            let painted = paint_open_stack(
-                ui.ctx(),
-                &cards,
-                stack,
-                shown,
-                pane_w,
-                view.popped.as_deref(),
-            );
-            column = Some(painted.column);
-            if let Some(rect) = painted.popped_rect {
-                popped_rect = Some(rect);
-            }
-            painted.act
-        } else {
-            let front_id = cards.first().map(|card| card.id.as_str());
-            let front_floating = view.popped.as_deref() == front_id;
-            let mut act = paint_collapsed_pile(ui, &cards, stack, !front_floating);
-            if let Some(card) = view
-                .popped
-                .as_deref()
-                .and_then(|id| cards.iter().find(|card| card.id == id))
-            {
-                let rect = popped_rect.unwrap_or_else(|| {
-                    popped_card_rect(collapsed_card_rect(stack, shown, 0))
-                });
-                let floating = paint_floating_card(ui.ctx(), card, rect);
-                if let Some(next) = floating.act {
-                    act = Some(next);
-                }
-                popped_rect = Some(floating.rect);
-            }
-            act
-        };
-        if cards.len() > 1 {
-            paint_count_badge(ui.painter(), count_badge_rect(stack), cards.len());
-        }
+        let view = drop_missing_pop(&cards, next_feed_stack(&prev.view(), hit, hovered_for));
+        let painted = paint_slide_deck(ui, &cards, stack, pane_w, &view);
         ui.ctx().data_mut(|d| {
             d.insert_temp(
                 mem_id,
                 FeedStackMem {
                     expanded: view.expanded,
                     popped: view.popped.clone(),
-                    column,
-                    popped_rect: view.popped.as_ref().and(popped_rect),
+                    hits: painted.hits,
+                    popped_rect: view.popped.as_ref().and(painted.popped_rect),
                 },
             );
         });
-        self.apply_feed_act(act);
+        self.apply_feed_act(painted.act);
     }
 
     pub(super) fn ui_ideas(&mut self, ctx: &egui::Context) {
@@ -871,11 +850,18 @@ impl Cabin {
     }
 }
 
+#[derive(Clone, Debug)]
+struct SlideHit {
+    id: String,
+    index: usize,
+    rect: egui::Rect,
+}
+
 #[derive(Clone, Debug, Default)]
 struct FeedStackMem {
     expanded: bool,
     popped: Option<String>,
-    column: Option<egui::Rect>,
+    hits: Vec<SlideHit>,
     popped_rect: Option<egui::Rect>,
 }
 
@@ -888,15 +874,10 @@ impl FeedStackMem {
     }
 }
 
-struct OpenPaint {
+struct SlidePaint {
     act: Option<FeedAct>,
-    column: egui::Rect,
+    hits: Vec<SlideHit>,
     popped_rect: Option<egui::Rect>,
-}
-
-struct FloatPaint {
-    act: Option<FeedAct>,
-    rect: egui::Rect,
 }
 
 fn home_stack_cards(cards: &[UpdateCard], now: u64) -> Vec<UpdateCard> {
@@ -920,32 +901,29 @@ fn drop_missing_pop(cards: &[UpdateCard], mut view: StackView) -> StackView {
     view
 }
 
-fn hovered_stack_card(
-    pointer: Option<egui::Pos2>,
-    cards: &[UpdateCard],
-    stack: egui::Rect,
-    column: Option<egui::Rect>,
-) -> Option<String> {
+fn hovered_slide_card(pointer: Option<egui::Pos2>, hits: &[SlideHit]) -> Option<String> {
     let pointer = pointer?;
-    if let Some(column) = column {
-        if column.contains(pointer) {
-            let index = (0..cards.len()).find(|&i| {
-                expanded_card_rect(column.min, column.width(), i).contains(pointer)
-            })?;
-            return Some(cards[index].id.clone());
-        }
-    }
-    let shown = cards.len().min(HOME_STACK_SHOW);
-    (0..shown)
-        .find(|&index| collapsed_visible_rect(stack, shown, index).contains(pointer))
-        .map(|index| cards[index].id.clone())
+    hits.iter()
+        .rev()
+        .find(|hit| hit.rect.contains(pointer))
+        .map(|hit| hit.id.clone())
 }
 
-fn count_badge_rect(stack: egui::Rect) -> egui::Rect {
-    // Sits in the top peek so it does not cover the front card's buttons.
-    egui::Rect::from_min_size(
-        egui::pos2(stack.right() - 40.0, stack.top() + 1.0),
-        egui::vec2(30.0, 14.0),
+fn slide_spread(ctx: &egui::Context, index: usize, open: bool) -> f32 {
+    ctx.animate_bool_with_time_and_easing(
+        egui::Id::new(("home-feed-slide", index)),
+        open,
+        SLIDE_SECS,
+        egui::emath::easing::quadratic_out,
+    )
+}
+
+fn slide_lift(ctx: &egui::Context, index: usize, popped: bool) -> f32 {
+    ctx.animate_bool_with_time_and_easing(
+        egui::Id::new(("home-feed-lift", index)),
+        popped,
+        0.28,
+        egui::emath::easing::quadratic_out,
     )
 }
 
@@ -958,20 +936,6 @@ fn paint_count_badge(painter: &egui::Painter, rect: egui::Rect, n: usize) {
         egui::FontId::proportional(11.0),
         crate::theme::bg(),
     );
-}
-
-fn stack_line(kind: &str, title: &str, width: f32) -> String {
-    let raw = if kind.is_empty() {
-        title.to_string()
-    } else {
-        format!("{kind} · {title}")
-    };
-    let max = ((width / 7.0).floor() as usize).max(4);
-    if raw.chars().count() <= max {
-        return raw;
-    }
-    let head: String = raw.chars().take(max.saturating_sub(1)).collect();
-    format!("{head}…")
 }
 
 fn paint_stack_shadow(painter: &egui::Painter, rect: egui::Rect) {
@@ -994,159 +958,145 @@ fn paint_card_at(ui: &mut egui::Ui, card: &UpdateCard, rect: egui::Rect) -> Opti
     act
 }
 
-fn paint_peek_face(ui: &mut egui::Ui, card: &UpdateCard, card_rect: egui::Rect, strip: egui::Rect) {
-    let painter = ui.painter().with_clip_rect(strip);
-    painter.rect(
-        card_rect,
-        crate::theme::CARD_RADIUS,
-        crate::theme::elevated(),
-        egui::Stroke::new(1.0_f32, crate::theme::border()),
-    );
-    painter.text(
-        egui::pos2(strip.left() + 10.0, strip.center().y),
-        egui::Align2::LEFT_CENTER,
-        stack_line(card.kind.label(), &card.title, strip.width() - 56.0),
-        egui::FontId::proportional(crate::theme::FONT_BODY),
-        crate::theme::fg(),
-    );
+fn tucked_slide(index: usize, spread: f32) -> bool {
+    index > 0 && spread < 0.42
 }
 
-fn paint_static_card(ui: &mut egui::Ui, card: &UpdateCard, rect: egui::Rect) {
-    ui.painter().rect(
+struct SlidePlacement {
+    pose: SlidePose,
+    spread: f32,
+    popped: bool,
+}
+
+fn slide_placements(
+    ctx: &egui::Context,
+    cards: &[UpdateCard],
+    view: &StackView,
+    front_y: f32,
+    screen_top: f32,
+) -> Vec<SlidePlacement> {
+    let shift = slide_up_shift(front_y, cards.len(), screen_top);
+    cards
+        .iter()
+        .enumerate()
+        .map(|(index, card)| {
+            let popped = view.popped.as_deref() == Some(card.id.as_str());
+            let spread = slide_spread(ctx, index, view.expanded || popped);
+            let lift = slide_lift(ctx, index, popped);
+            let mut pose = mix_slide(rest_slide(index), open_slide(index), spread);
+            pose.dy += shift * spread;
+            pose.dy -= STACK_POP * lift;
+            SlidePlacement {
+                pose,
+                spread,
+                popped,
+            }
+        })
+        .collect()
+}
+
+fn paint_tucked_edge(ui: &mut egui::Ui, rect: egui::Rect, cover: egui::Rect) {
+    let visible = rect.intersect(egui::Rect::from_min_max(
+        egui::pos2(rect.left(), cover.bottom() - 1.0),
+        rect.right_bottom(),
+    ));
+    if visible.height() < 1.0 {
+        return;
+    }
+    let painter = ui.painter().with_clip_rect(visible);
+    painter.rect(
         rect,
         crate::theme::CARD_RADIUS,
         crate::theme::elevated(),
         egui::Stroke::new(1.0_f32, crate::theme::border()),
     );
-    ui.painter().text(
-        egui::pos2(rect.left() + 10.0, rect.top() + 18.0),
-        egui::Align2::LEFT_CENTER,
-        stack_line(card.kind.label(), &card.title, rect.width() - 24.0),
-        egui::FontId::proportional(crate::theme::FONT_BODY),
-        crate::theme::fg(),
-    );
-    if let Some(body) = card.body.as_deref() {
-        ui.painter().text(
-            egui::pos2(rect.left() + 10.0, rect.top() + 40.0),
-            egui::Align2::LEFT_CENTER,
-            stack_line("", body, rect.width() - 24.0),
-            egui::FontId::proportional(crate::theme::FONT_TIP),
-            crate::theme::muted(),
-        );
-    }
 }
 
-fn paint_collapsed_pile(
+fn paint_slide_deck(
     ui: &mut egui::Ui,
     cards: &[UpdateCard],
     stack: egui::Rect,
-    live_front: bool,
-) -> Option<FeedAct> {
-    let shown = cards.len().min(HOME_STACK_SHOW);
-    let mut act = None;
-    for index in (0..shown).rev() {
-        let card_rect = collapsed_card_rect(stack, shown, index);
-        if index == 0 {
-            if live_front {
-                act = paint_card_at(ui, &cards[0], card_rect);
-            } else {
-                paint_static_card(ui, &cards[0], card_rect);
-            }
-        } else {
-            let strip = collapsed_visible_rect(stack, shown, index);
-            paint_peek_face(ui, &cards[index], card_rect, strip);
-        }
-    }
-    act
-}
-
-fn paint_open_stack(
-    ctx: &egui::Context,
-    cards: &[UpdateCard],
-    stack: egui::Rect,
-    shown: usize,
     width: f32,
-    popped: Option<&str>,
-) -> OpenPaint {
-    let front = egui::pos2(stack.left(), collapsed_front_top(stack, shown));
-    let height = expanded_stack_h(cards.len());
-    let origin = stack_overlay_origin(front, height, ctx.screen_rect());
-    let response = egui::Area::new(egui::Id::new("home-feed-open-stack"))
-        .order(egui::Order::Foreground)
-        .fixed_pos(origin)
-        .constrain(false)
-        .movable(false)
-        .fade_in(false)
-        .interactable(true)
-        .show(ctx, |ui| {
-            ui.set_clip_rect(ctx.screen_rect());
-            ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-            let (column, _) = ui.allocate_exact_size(
-                egui::vec2(width, height),
-                egui::Sense::click(),
-            );
-            paint_stack_shadow(ui.painter(), column);
-            ui.painter().rect_filled(
-                column.expand(4.0),
-                crate::theme::CARD_RADIUS,
-                crate::theme::bg(),
-            );
-            let mut act = None;
-            let mut lift = None;
-            for (index, card) in cards.iter().enumerate() {
-                let slot = expanded_card_rect(column.min, width, index);
-                if popped == Some(card.id.as_str()) {
-                    lift = Some(slot);
-                    continue;
-                }
-                if let Some(next) = paint_card_at(ui, card, slot) {
-                    act = Some(next);
-                }
+    view: &StackView,
+) -> SlidePaint {
+    let front = stack.left_top();
+    let placements = slide_placements(ui.ctx(), cards, view, front.y, ui.ctx().screen_rect().top());
+    let rects: Vec<egui::Rect> = placements
+        .iter()
+        .map(|place| slide_rect(front, width, place.pose))
+        .collect();
+    let rising = rects.iter().any(|rect| rect.top() < stack.top() - 0.5);
+    let mut act = None;
+    let mut hits = Vec::new();
+    let mut popped_rect = None;
+    let mut paint_one = |ui: &mut egui::Ui| {
+        let mut order: Vec<usize> = (0..cards.len()).collect();
+        order.sort_by_key(|&index| std::cmp::Reverse(index));
+        if let Some(popped) = view.popped.as_deref() {
+            if let Some(pos) = order.iter().position(|&index| cards[index].id == popped) {
+                let index = order.remove(pos);
+                order.push(index);
             }
-            let popped_rect = if let Some(slot) = lift {
-                cards
-                    .iter()
-                    .find(|card| popped == Some(card.id.as_str()))
-                    .map(|card| {
-                        let lifted = popped_card_rect(slot);
-                        paint_stack_shadow(ui.painter(), lifted);
-                        if let Some(next) = paint_card_at(ui, card, lifted) {
-                            act = Some(next);
-                        }
-                        lifted.union(slot)
-                    })
-            } else {
+        }
+        for index in order {
+            let place = &placements[index];
+            let rect = rects[index];
+            if place.popped || place.spread > 0.2 {
+                paint_stack_shadow(ui.painter(), rect);
+            }
+            let card_act = if tucked_slide(index, place.spread) {
+                paint_tucked_edge(ui, rect, rects[0]);
                 None
+            } else {
+                paint_card_at(ui, &cards[index], rect)
             };
-            if cards.len() > 1 {
-                paint_count_badge(ui.painter(), count_badge_rect(stack), cards.len());
+            if card_act.is_some() {
+                act = card_act;
             }
-            OpenPaint {
-                act,
-                column,
-                popped_rect,
+            let mut bridge = rect;
+            if place.popped {
+                bridge.set_bottom(bridge.bottom() + STACK_POP);
+                popped_rect = Some(bridge);
             }
-        });
-    response.inner
-}
-
-fn paint_floating_card(ctx: &egui::Context, card: &UpdateCard, rect: egui::Rect) -> FloatPaint {
-    let response = egui::Area::new(egui::Id::new(("home-feed-pop", card.id.clone())))
-        .order(egui::Order::Foreground)
-        .fixed_pos(rect.min)
-        .constrain(false)
-        .movable(false)
-        .fade_in(false)
-        .interactable(true)
-        .show(ctx, |ui| {
-            ui.set_clip_rect(ctx.screen_rect());
-            paint_stack_shadow(ui.painter(), rect);
-            FloatPaint {
-                act: paint_card_at(ui, card, rect),
-                rect,
-            }
-        });
-    response.inner
+            hits.push(SlideHit {
+                id: cards[index].id.clone(),
+                index,
+                rect: bridge,
+            });
+        }
+        if cards.len() > 1 {
+            let badge = egui::Rect::from_min_size(
+                egui::pos2(rects[0].right() - 36.0, rects[0].bottom() - 8.0),
+                egui::vec2(28.0, 16.0),
+            );
+            paint_count_badge(ui.painter(), badge, cards.len());
+        }
+    };
+    if rising || view.popped.is_some() {
+        let mut union = stack;
+        for rect in &rects {
+            union = union.union(*rect);
+        }
+        egui::Area::new(egui::Id::new("home-feed-open-stack"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(union.min)
+            .constrain(false)
+            .movable(false)
+            .fade_in(false)
+            .interactable(true)
+            .show(ui.ctx(), |ui| {
+                ui.set_clip_rect(ui.ctx().screen_rect());
+                let _ = ui.allocate_exact_size(union.size(), egui::Sense::click());
+                paint_one(ui);
+            });
+    } else {
+        paint_one(ui);
+    }
+    SlidePaint {
+        act,
+        hits,
+        popped_rect,
+    }
 }
 
 fn paint_feed_card(
@@ -1270,11 +1220,10 @@ fn paint_feed_card(
 #[cfg(test)]
 mod stack_tests {
     use super::{
-        collapsed_card_rect, collapsed_stack_h, collapsed_visible_rect, expanded_stack_h,
-        next_feed_stack, stack_hit, stack_overlay_origin, stacked_feed_h, StackHit, StackHover,
-        StackView, FEED_CARD_H, HOME_STACK_SHOW, STACK_PEEK,
+        collapsed_stack_h, mix_slide, next_feed_stack, open_slide, rest_slide, slide_up_shift,
+        stack_hit, stacked_feed_h, StackHit, StackHover, StackView, FEED_CARD_H, HOME_STACK_SHOW,
+        STACK_REST_DY_1, STACK_REST_DY_2, STACK_REST_SCALE_1, STACK_REST_SCALE_2,
     };
-    use eframe::egui;
 
     fn view(expanded: bool, popped: Option<&str>) -> StackView {
         StackView {
@@ -1288,44 +1237,44 @@ mod stack_tests {
         assert_eq!(HOME_STACK_SHOW, 3);
         assert_eq!(collapsed_stack_h(0), 0.0);
         assert_eq!(collapsed_stack_h(1), FEED_CARD_H);
-        assert_eq!(collapsed_stack_h(2), FEED_CARD_H + STACK_PEEK);
-        let three = FEED_CARD_H + 2.0 * STACK_PEEK;
-        assert_eq!(collapsed_stack_h(3), three);
-        assert_eq!(collapsed_stack_h(9), three);
+        assert_eq!(collapsed_stack_h(2), FEED_CARD_H + STACK_REST_DY_1);
+        assert_eq!(collapsed_stack_h(3), FEED_CARD_H + STACK_REST_DY_2);
+        assert_eq!(collapsed_stack_h(9), collapsed_stack_h(3));
         assert!(collapsed_stack_h(9) < stacked_feed_h(4));
     }
 
     #[test]
-    fn expanded_pile_is_every_card_at_full_size() {
-        assert_eq!(expanded_stack_h(1), FEED_CARD_H);
-        assert_eq!(expanded_stack_h(4), stacked_feed_h(4));
-        assert!(expanded_stack_h(8) > collapsed_stack_h(8));
+    fn slide_up_opens_full_cards_above_the_front() {
+        let front = open_slide(0);
+        let second = open_slide(1);
+        let third = open_slide(2);
+        assert_eq!(front.dy, 0.0);
+        assert_eq!(front.scale, 1.0);
+        assert!(second.dy < front.dy);
+        assert!(third.dy < second.dy);
+        assert_eq!(second.scale, 1.0);
+        assert_eq!(third.scale, 1.0);
+        assert!((second.dy - third.dy) > FEED_CARD_H);
+        let rest = rest_slide(1);
+        assert_eq!(rest.dy, STACK_REST_DY_1);
+        assert_eq!(rest.scale, STACK_REST_SCALE_1);
+        assert_eq!(rest_slide(4).dy, STACK_REST_DY_2);
+        assert_eq!(rest_slide(4).scale, STACK_REST_SCALE_2);
+        let mid = mix_slide(rest_slide(1), open_slide(1), 0.0);
+        assert_eq!(mid.dy, STACK_REST_DY_1);
+        let opened = mix_slide(rest_slide(1), open_slide(1), 1.0);
+        assert_eq!(opened.dy, open_slide(1).dy);
+        assert!(open_slide(8).dy < open_slide(1).dy);
     }
 
     #[test]
-    fn front_card_sits_at_the_bottom_of_the_pile() {
-        let stack = egui::Rect::from_min_size(
-            egui::pos2(10.0, 100.0),
-            egui::vec2(300.0, collapsed_stack_h(5)),
-        );
-        let front = collapsed_card_rect(stack, 3, 0);
-        let peek = collapsed_visible_rect(stack, 3, 2);
-        assert!(peek.top() < front.top());
-        assert_eq!(front.height(), FEED_CARD_H);
-        assert_eq!(peek.height(), STACK_PEEK);
-        assert!((front.bottom() - stack.bottom()).abs() < 0.5);
-    }
-
-    #[test]
-    fn open_pile_moves_up_instead_of_leaving_the_screen() {
-        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 400.0));
-        let pos = stack_overlay_origin(egui::pos2(40.0, 300.0), 200.0, screen);
-        assert!(pos.y < 300.0);
-        assert!(pos.y + 200.0 <= screen.bottom() - 7.0);
-        let fits = stack_overlay_origin(egui::pos2(40.0, 20.0), 100.0, screen);
-        assert_eq!(fits.y, 20.0);
-        let too_tall = stack_overlay_origin(egui::pos2(40.0, 300.0), 500.0, screen);
-        assert_eq!(too_tall.y, screen.top() + 8.0);
+    fn slide_up_stays_on_screen() {
+        assert_eq!(slide_up_shift(300.0, 1, 0.0), 0.0);
+        assert_eq!(slide_up_shift(300.0, 2, 0.0), 0.0);
+        let tall = slide_up_shift(40.0, 8, 0.0);
+        assert!(tall > 0.0);
+        let top = 40.0 + open_slide(7).dy + tall;
+        assert!((top - 8.0).abs() < 0.5);
     }
 
     #[test]
