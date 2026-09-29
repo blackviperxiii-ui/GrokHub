@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.10.39 — 2026-09-29
+
+Skills → Workflows can pause, resume, and stop a run. `/workflow pause`, `/workflow resume`, and `/workflow stop` follow the permission pill. Empty `/workflow` and `/workflows` open Skills on the Workflows section. Grok Build does not list live runs here yet.
+
+- Linux: `grokhub-linux-v2.10.39.tar.gz` and AUR `pkgver=2.10.39`.
+- Windows: `GrokHub-Setup-2.10.39.exe` and `grokhub-windows-v2.10.39.zip`.
+
 ## 2.10.38 — 2026-09-29
 
 Quick chips keep a hand cursor on the ×. Hover stays in the chip's slot. A background save writes threads into the config directory captured when it was scheduled, so the next cabin does not load that chat. A shell echo on Windows waits out PowerShell startup and still lands on the open chat.

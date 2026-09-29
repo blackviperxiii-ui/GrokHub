@@ -7036,6 +7036,36 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && !slash.contains("true,\n            false,"),
             "/workflow /compact /rewind must honor the PermissionMode pill: {slash}"
         );
+        let ctl = fn_src(&src, "send_workflow_ctl");
+        assert!(
+            ctl.contains("send_grok_slash")
+                && ctl.contains("ensure_acp")
+                && !ctl.contains("spawn_grok_p_stream")
+                && !ctl.contains("Command::new")
+                && !ctl.contains("find_grok"),
+            "workflow pause/resume/stop must go through send_grok_slash: {ctl}"
+        );
+        let skills = src
+            .split("fn ui_skills(")
+            .nth(1)
+            .and_then(|s| s.split("fn project_row_active(").next())
+            .expect("ui_skills");
+        let live_at = skills
+            .find("workflow_status_live")
+            .expect("Runs strip status flag");
+        let gap_at = skills
+            .find("Grok Build doesn't list live runs to the cabin yet — type a workflow name or run id.")
+            .expect("live-run gap line");
+        assert!(
+            skills.contains("send_workflow_ctl")
+                && skills.contains("Workflow name or run id")
+                && skills.contains("TileHit::Body")
+                && skills.contains("add_enabled_ui")
+                && live_at < gap_at
+                && skills[live_at..gap_at].contains("self.status")
+                && skills[live_at..gap_at].contains("theme::fg()"),
+            "Workflows Runs strip must fill from the tile body, show status, and stay off a live-run list: {skills}"
+        );
     }
 
     #[test]
@@ -11480,6 +11510,332 @@ fn followup_queue_drains_one_and_stays_off_a_run() {
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
+#[test]
+fn workflow_ctl_queues_while_running_then_sends() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("workflow-ctl-queue");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_GROK", root.join("missing-grok"));
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.permission_mode = grokhub_acp::PermissionMode::Ask;
+    cabin.running = true;
+    cabin.send_workflow_ctl(grokhub_core::WorkflowVerb::Pause, "review-changes-2");
+    assert_eq!(
+        cabin.workflow_ctl_queue,
+        vec!["/workflow pause review-changes-2".to_string()]
+    );
+    assert!(
+        cabin.status.contains("queued"),
+        "a live turn queues the verb: {}",
+        cabin.status
+    );
+    assert!(cabin.workflow_status_live);
+    assert!(cabin.running);
+
+    cabin.running = false;
+    cabin.drain_followup_queue();
+    assert!(cabin.workflow_ctl_queue.is_empty());
+    assert!(!cabin.running);
+    assert!(
+        cabin.status.contains("Ask is fail-closed")
+            && cabin.status.contains("Grok Build CLI is not on PATH"),
+        "queue-then-send must fail closed through send_grok_slash: {}",
+        cabin.status
+    );
+    assert!(
+        !cabin.status.contains("— sent"),
+        "the fail-closed error must replace the sent line: {}",
+        cabin.status
+    );
+
+    std::env::remove_var("GROKHUB_GROK");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn workflow_ctl_send_fails_closed_when_idle() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("workflow-ctl-idle");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_GROK", root.join("missing-grok"));
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.permission_mode = grokhub_acp::PermissionMode::Ask;
+    assert!(!cabin.running);
+    cabin.send_workflow_ctl(grokhub_core::WorkflowVerb::Stop, "review-changes-2");
+    assert!(cabin.workflow_ctl_queue.is_empty());
+    assert!(!cabin.running);
+    assert!(
+        cabin.status.contains("Ask is fail-closed")
+            && cabin.status.contains("Grok Build CLI is not on PATH"),
+        "an idle Ask verb must show the fail-closed error, not stay on sent: {}",
+        cabin.status
+    );
+    assert!(!cabin.status.contains("— sent"), "{}", cabin.status);
+    assert!(cabin.workflow_status_live);
+    cabin.send_chat("a new chat turn".into());
+    assert!(
+        !cabin.workflow_status_live,
+        "a new chat turn clears the Runs status line"
+    );
+
+    std::env::remove_var("GROKHUB_GROK");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn workflow_usage_and_workflows_slash_do_not_forward() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("workflow-usage");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_GROK", root.join("missing-grok"));
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.running = true;
+    cabin.run_slash_line("/workflow pause");
+    assert_eq!(
+        cabin.status,
+        "Usage: /workflow <verb> <name-or-run-id>"
+    );
+    assert!(cabin.workflow_status_live);
+    assert!(cabin.workflow_ctl_queue.is_empty());
+    assert!(cabin.running, "a missing target must not touch the live turn");
+
+    cabin.running = false;
+    cabin.skills_tab_connectors = true;
+    cabin.run_slash_line("/workflows");
+    assert!(matches!(cabin.nav, Nav::Skills));
+    assert!(!cabin.skills_tab_connectors);
+    assert!(cabin.scroll_to_workflows);
+    assert!(cabin.workflow_ctl_queue.is_empty());
+    assert!(!cabin.running);
+
+    cabin.run_slash_line("/workflow");
+    assert!(matches!(cabin.nav, Nav::Skills));
+    assert!(!cabin.skills_tab_connectors);
+    assert!(cabin.scroll_to_workflows);
+
+    cabin.run_slash_line("/mcps");
+    assert!(matches!(cabin.nav, Nav::Connectors));
+    assert!(cabin.skills_tab_connectors);
+    cabin.run_slash_line("/plugins");
+    assert!(matches!(cabin.nav, Nav::Connectors));
+    cabin.run_slash_line("/marketplace");
+    assert!(matches!(cabin.nav, Nav::Connectors));
+    cabin.run_slash_line("/connectors");
+    assert!(matches!(cabin.nav, Nav::Connectors));
+    cabin.run_slash_line("/hooks");
+    assert!(matches!(cabin.nav, Nav::Connectors));
+    assert!(cabin.workflow_ctl_queue.is_empty());
+    assert!(!cabin.running);
+
+    std::env::remove_var("GROKHUB_GROK");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn workflow_ctl_releases_after_stop_without_drain() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("workflow-ctl-stop");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_GROK", root.join("missing-grok"));
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.permission_mode = grokhub_acp::PermissionMode::Ask;
+    cabin.running = true;
+    cabin.send_workflow_ctl(grokhub_core::WorkflowVerb::Resume, "review-changes-2");
+    assert_eq!(
+        cabin.workflow_ctl_queue,
+        vec!["/workflow resume review-changes-2".to_string()]
+    );
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.acp_spawn_rx = Some(rx);
+    cabin.running = false;
+    cabin.release_workflow_ctl_if_idle();
+    assert_eq!(
+        cabin.workflow_ctl_queue,
+        vec!["/workflow resume review-changes-2".to_string()],
+        "an in-flight ACP handshake must not send the queued verb"
+    );
+    drop(tx);
+    cabin.acp_spawn_rx = None;
+
+    cabin.release_workflow_ctl_if_idle();
+    assert!(cabin.workflow_ctl_queue.is_empty());
+    assert!(!cabin.running);
+    assert!(
+        cabin.status.contains("Ask is fail-closed")
+            && cabin.status.contains("Grok Build CLI is not on PATH"),
+        "Stop must release the verb through send_grok_slash: {}",
+        cabin.status
+    );
+    let status = cabin.status.clone();
+    cabin.release_workflow_ctl_if_idle();
+    assert!(cabin.workflow_ctl_queue.is_empty());
+    assert!(!cabin.running);
+    assert_eq!(cabin.status, status);
+
+    std::env::remove_var("GROKHUB_GROK");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn workflow_ctl_waits_for_acp_handshake_then_fails_closed_once() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("workflow-ctl-handshake");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_GROK", root.join("missing-grok"));
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.permission_mode = grokhub_acp::PermissionMode::Ask;
+    assert!(cabin.acp.is_none());
+    assert!(!cabin.running);
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.acp_spawn_rx = Some(rx);
+
+    cabin.send_workflow_ctl(grokhub_core::WorkflowVerb::Pause, "review-changes-2");
+    assert_eq!(
+        cabin.workflow_ctl_queue,
+        vec!["/workflow pause review-changes-2".to_string()]
+    );
+    assert!(cabin.workflow_ctl_await_acp);
+    assert!(
+        cabin.status.contains("queued until Grok Build connects"),
+        "an in-flight handshake queues the verb: {}",
+        cabin.status
+    );
+    assert!(!cabin.running);
+    assert!(!cabin.status.contains("— sent"), "{}", cabin.status);
+
+    let queued = cabin.workflow_ctl_queue.clone();
+    cabin.release_workflow_ctl_if_idle();
+    cabin.drain_followup_queue();
+    assert_eq!(cabin.workflow_ctl_queue, queued);
+    assert!(cabin.workflow_ctl_await_acp);
+    assert!(cabin.acp_spawn_rx.is_some());
+
+    cabin.send_workflow_ctl(grokhub_core::WorkflowVerb::Resume, "nightly-review");
+    assert_eq!(
+        cabin.workflow_ctl_queue,
+        vec![
+            "/workflow pause review-changes-2".to_string(),
+            "/workflow resume nightly-review".to_string(),
+        ]
+    );
+    assert!(cabin.workflow_ctl_await_acp);
+    assert!(!cabin.running);
+    assert!(
+        cabin.status.contains("queued until Grok Build connects"),
+        "{}",
+        cabin.status
+    );
+    assert!(!cabin.status.contains("— sent"), "{}", cabin.status);
+
+    drop(tx);
+    cabin.poll_acp_spawn();
+    assert!(cabin.acp_spawn_rx.is_none());
+    assert!(
+        cabin.workflow_ctl_queue.is_empty(),
+        "poll_acp_spawn drops the queue when the handshake dies"
+    );
+    assert!(!cabin.workflow_ctl_await_acp);
+    assert!(
+        cabin.status.contains("Ask is fail-closed")
+            && cabin.status.contains("Grok Build session missing"),
+        "a dropped handshake paints the session-missing deny: {}",
+        cabin.status
+    );
+    assert!(
+        !cabin.status.contains("not on PATH") && !cabin.status.contains("— sent"),
+        "{}",
+        cabin.status
+    );
+
+    let status = cabin.status.clone();
+    cabin.release_workflow_ctl_if_idle();
+    assert!(cabin.workflow_ctl_queue.is_empty());
+    assert!(!cabin.workflow_ctl_await_acp);
+    assert!(!cabin.running);
+    assert!(cabin.acp_spawn_rx.is_none());
+    assert!(cabin.acp.is_none());
+    assert_eq!(cabin.status, status);
+    assert!(
+        cabin.status.contains("Ask is fail-closed")
+            && cabin.status.contains("Grok Build session missing"),
+        "a failed handshake must not start another agent: {}",
+        cabin.status
+    );
+    cabin.release_workflow_ctl_if_idle();
+    assert!(cabin.workflow_ctl_queue.is_empty());
+    assert!(!cabin.workflow_ctl_await_acp);
+    assert!(!cabin.running);
+    assert!(cabin.acp_spawn_rx.is_none());
+    assert_eq!(cabin.status, status);
+
+    std::env::remove_var("GROKHUB_GROK");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn workflow_ctl_stale_await_does_not_drop_queue() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("workflow-ctl-stale-await");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_GROK", root.join("missing-grok"));
+
+    let queued = vec![
+        "/workflow stop review-changes-2".to_string(),
+        "/workflow pause nightly".to_string(),
+    ];
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.permission_mode = grokhub_acp::PermissionMode::Ask;
+    assert!(cabin.acp.is_none());
+    assert!(cabin.acp_spawn_rx.is_none());
+    cabin.workflow_ctl_await_acp = true;
+    cabin.workflow_ctl_queue = queued.clone();
+
+    cabin.release_workflow_ctl_if_idle();
+    assert_eq!(
+        cabin.workflow_ctl_queue,
+        vec!["/workflow pause nightly".to_string()]
+    );
+    assert!(!cabin.running);
+    assert!(cabin.acp_spawn_rx.is_none());
+    assert!(
+        cabin.status.contains("Ask is fail-closed")
+            && cabin.status.contains("Grok Build CLI is not on PATH"),
+        "a stale flag still sends the front verb: {}",
+        cabin.status
+    );
+    assert!(!cabin.status.contains("— sent"), "{}", cabin.status);
+
+    cabin.running = true;
+    cabin.workflow_ctl_await_acp = true;
+    cabin.workflow_ctl_queue = queued.clone();
+    cabin.release_workflow_ctl_queue();
+    cabin.drain_followup_queue();
+    assert_eq!(cabin.workflow_ctl_queue, queued);
+    assert!(cabin.running);
+    assert!(cabin.workflow_ctl_await_acp);
+
+    std::env::remove_var("GROKHUB_GROK");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
 // Landed from PR #153.
 #[test]
 fn thinking_status_shows_context_when_usage_is_present() {
@@ -13633,6 +13989,11 @@ fn quiet_cabin() -> Cabin {
         grok_tasks: Vec::new(),
         loop_acp_id: None,
         followup_queue: Vec::new(),
+        workflow_ctl_queue: Vec::new(),
+        workflow_target: String::new(),
+        scroll_to_workflows: false,
+        workflow_status_live: false,
+        workflow_ctl_await_acp: false,
         side_ask_queue: Vec::new(),
         side_ask_kick: false,
         plan_open: false,
