@@ -841,7 +841,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         with_fonts_ui(|ui| {
             ui.allocate_ui(egui::vec2(800.0, 900.0), |ui| {
                 ui.set_max_width(800.0);
-                let body = "## Heading\n\n- bullet one\n- bullet two\n\nClosing line.";
+                let body = "# Title\n## Heading\n\n- bullet one\n- bullet two\n\n```sh\nls -la\n```\n\nClosing line.";
                 let wrap = grokhub_core::bubble_wrap_width(800.0, grokhub_core::BUBBLE_PAD_X);
                 let measured = crate::markdown::measure_text(ui, body, wrap);
                 let mut md_h = 0.0;

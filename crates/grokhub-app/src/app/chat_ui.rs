@@ -195,8 +195,12 @@ pub(super) fn paint_speech_bubble(
     let mark_w = if user { 0.0 } else { 22.0 };
     let bubble_avail = (avail - mark_w).max(1.0);
     let wrap = bubble_wrap_width(bubble_avail, BUBBLE_PAD_X);
-    let content = crate::markdown::measure_text(ui, body, wrap);
-    let inner_w = content.x.max(1.0).min(wrap);
+    let content_w = if markdown && !user {
+        crate::markdown::measure_markdown_width(ui, body, wrap)
+    } else {
+        crate::markdown::measure_text(ui, body, wrap).x
+    };
+    let inner_w = content_w.max(1.0).min(wrap);
     let mut outer_w = bubble_outer_width(bubble_avail, inner_w, BUBBLE_PAD_X);
     let gap = if user {
         ui.spacing().item_spacing.x.max(0.0)
@@ -979,6 +983,9 @@ impl Cabin {
                                 chat_run_label(phase),
                                 &chat_run_hint(phase, &self.run_action_here()),
                             );
+                        }
+                        if let Some(code) = crate::markdown::take_code_copy(ui.ctx()) {
+                            act = ChatBlockAct::Copy(code);
                         }
                         match act {
                             ChatBlockAct::Copy(body) => {

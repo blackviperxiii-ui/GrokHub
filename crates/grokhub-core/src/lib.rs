@@ -34,6 +34,7 @@ pub mod hygiene;
 pub mod imagine;
 pub mod inhabit;
 pub mod learning;
+pub mod md;
 pub mod models;
 pub mod oauth;
 pub mod openclaw;
@@ -114,6 +115,10 @@ pub use chat::{
     parse_responses_text, reasoning_effort_for_mode, resolve_chat_model, responses_request_body,
     responses_url, route_auto_mode, settings_pin_blocks_auto, should_failover_status,
     CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, DEFAULT_MODEL, REASONING_EFFORTS, XAI_BASE,
+};
+pub use md::{
+    code_tokens, md_blocks, md_link_ok, md_plain, md_spans, md_table_cells, md_wants_full_width,
+    CodeTok, MdAlign, MdBlock, MdSpan,
 };
 pub use chat_bubble::{
     bubble_max_width, bubble_outer_height, bubble_outer_width, bubble_wrap_width,

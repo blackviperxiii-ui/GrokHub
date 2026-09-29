@@ -167,7 +167,7 @@ pub fn due_automations(list: &[Automation], now_ms: u64) -> Vec<Automation> {
 }
 
 pub fn automation_blocked_by_policy(quiet: bool, destructive: bool, autonomy: u8) -> bool {
-    (quiet && destructive) || (autonomy == 0 && destructive)
+    destructive && (quiet || autonomy == 0)
 }
 
 /// Replay that did not start must not consume the night slot.
