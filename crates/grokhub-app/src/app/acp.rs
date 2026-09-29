@@ -987,16 +987,35 @@ impl Cabin {
     }
 
     /// One queued workflow verb, before chat follow-ups. A live send stops the drain.
+    /// Never pops during a handshake. A failed Ask handshake drops the queue.
     pub(super) fn release_workflow_ctl_queue(&mut self) {
-        if self.running {
+        if self.running || self.acp_spawn_rx.is_some() {
             return;
+        }
+        if self.workflow_ctl_await_acp {
+            self.workflow_ctl_await_acp = false;
+            if self.permission_mode.uses_acp() && self.acp.is_none() {
+                self.workflow_ctl_queue.clear();
+                return;
+            }
         }
         let Some(cmd) = self.workflow_ctl_queue.first().cloned() else {
             return;
         };
         self.workflow_ctl_queue.remove(0);
-        if let Some(Slash::WorkflowCtl { verb, target }) = parse_slash(&cmd) {
-            self.send_workflow_ctl(verb, &target);
+        let Some(Slash::WorkflowCtl { verb, target }) = parse_slash(&cmd) else {
+            return;
+        };
+        // Ask with no agent re-queues at the back. Put this verb back at the front.
+        let queued = self.workflow_ctl_queue.len();
+        self.send_workflow_ctl(verb, &target);
+        if self.workflow_ctl_await_acp
+            && self.workflow_ctl_queue.len() == queued + 1
+            && self.workflow_ctl_queue.last().is_some_and(|s| s == &cmd)
+        {
+            if let Some(held) = self.workflow_ctl_queue.pop() {
+                self.workflow_ctl_queue.insert(0, held);
+            }
         }
     }
 

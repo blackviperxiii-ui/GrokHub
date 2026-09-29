@@ -793,7 +793,8 @@ impl Cabin {
         }
     }
 
-    /// Forward `/workflow <verb> <target>` through `send_grok_slash`. A live turn queues it.
+    /// Forward `/workflow <verb> <target>` through `send_grok_slash`.
+    /// A live turn queues it. Ask with no agent waits out the ACP handshake.
     pub(super) fn send_workflow_ctl(&mut self, verb: WorkflowVerb, target: &str) {
         let target = target.trim();
         self.workflow_status_live = true;
@@ -810,6 +811,25 @@ impl Cabin {
                 target
             );
             return;
+        }
+        if self.permission_mode.uses_acp() && self.acp.is_none() {
+            if self.acp_spawn_rx.is_none() {
+                if let Err(e) = self.ensure_acp() {
+                    self.status = format!("Workflow {} {} — sent", verb.as_str(), target);
+                    self.fail_ask_without_acp(&e);
+                    return;
+                }
+            }
+            if self.acp.is_none() {
+                self.workflow_ctl_queue.push(cmd);
+                self.workflow_ctl_await_acp = true;
+                self.status = format!(
+                    "Workflow {} {} — queued until Grok Build connects",
+                    verb.as_str(),
+                    target
+                );
+                return;
+            }
         }
         self.status = format!("Workflow {} {} — sent", verb.as_str(), target);
         self.send_grok_slash(&cmd);

@@ -667,6 +667,8 @@ pub struct Cabin {
     scroll_to_workflows: bool,
     /// Skills Runs strip mirrors `status` until the next chat send. Not saved.
     workflow_status_live: bool,
+    /// Queued verb is waiting on an Ask ACP handshake, not a live turn. Not saved.
+    workflow_ctl_await_acp: bool,
     /// btw questions waiting until the live turn ends. They do not cancel it.
     side_ask_queue: Vec<String>,
     /// Next kick uses SessionMode::Ask even if the pill changes before spawn.
@@ -1177,6 +1179,7 @@ impl Cabin {
             workflow_target: String::new(),
             scroll_to_workflows: false,
             workflow_status_live: false,
+            workflow_ctl_await_acp: false,
             side_ask_queue: Vec::new(),
             side_ask_kick: false,
             plan_open: false,
@@ -1557,6 +1560,7 @@ impl Cabin {
             workflow_target: String::new(),
             scroll_to_workflows: false,
             workflow_status_live: false,
+            workflow_ctl_await_acp: false,
             side_ask_queue: Vec::new(),
             side_ask_kick: false,
             plan_open: false,

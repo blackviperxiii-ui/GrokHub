@@ -7039,6 +7039,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let ctl = fn_src(&src, "send_workflow_ctl");
         assert!(
             ctl.contains("send_grok_slash")
+                && ctl.contains("ensure_acp")
                 && !ctl.contains("spawn_grok_p_stream")
                 && !ctl.contains("Command::new")
                 && !ctl.contains("find_grok"),
@@ -11688,6 +11689,101 @@ fn workflow_ctl_releases_after_stop_without_drain() {
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
+#[test]
+fn workflow_ctl_waits_for_acp_handshake_then_fails_closed_once() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("workflow-ctl-handshake");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_GROK", root.join("missing-grok"));
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.permission_mode = grokhub_acp::PermissionMode::Ask;
+    assert!(cabin.acp.is_none());
+    assert!(!cabin.running);
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.acp_spawn_rx = Some(rx);
+
+    cabin.send_workflow_ctl(grokhub_core::WorkflowVerb::Pause, "review-changes-2");
+    assert_eq!(
+        cabin.workflow_ctl_queue,
+        vec!["/workflow pause review-changes-2".to_string()]
+    );
+    assert!(cabin.workflow_ctl_await_acp);
+    assert!(
+        cabin.status.contains("queued until Grok Build connects"),
+        "an in-flight handshake queues the verb: {}",
+        cabin.status
+    );
+    assert!(!cabin.running);
+    assert!(!cabin.status.contains("— sent"), "{}", cabin.status);
+
+    let queued = cabin.workflow_ctl_queue.clone();
+    cabin.release_workflow_ctl_if_idle();
+    cabin.drain_followup_queue();
+    assert_eq!(cabin.workflow_ctl_queue, queued);
+    assert!(cabin.workflow_ctl_await_acp);
+    assert!(cabin.acp_spawn_rx.is_some());
+
+    cabin.send_workflow_ctl(grokhub_core::WorkflowVerb::Resume, "nightly-review");
+    assert_eq!(
+        cabin.workflow_ctl_queue,
+        vec![
+            "/workflow pause review-changes-2".to_string(),
+            "/workflow resume nightly-review".to_string(),
+        ]
+    );
+    assert!(cabin.workflow_ctl_await_acp);
+    assert!(!cabin.running);
+    assert!(
+        cabin.status.contains("queued until Grok Build connects"),
+        "{}",
+        cabin.status
+    );
+    assert!(!cabin.status.contains("— sent"), "{}", cabin.status);
+
+    drop(tx);
+    cabin.poll_acp_spawn();
+    assert!(cabin.acp_spawn_rx.is_none());
+    assert_eq!(cabin.workflow_ctl_queue.len(), 2);
+    assert!(cabin.workflow_ctl_await_acp);
+    assert!(
+        cabin.status.contains("Ask is fail-closed")
+            && cabin.status.contains("Grok Build session missing"),
+        "a dropped handshake paints the session-missing deny: {}",
+        cabin.status
+    );
+
+    cabin.release_workflow_ctl_if_idle();
+    assert!(cabin.workflow_ctl_queue.is_empty());
+    assert!(!cabin.workflow_ctl_await_acp);
+    assert!(!cabin.running);
+    assert!(cabin.acp_spawn_rx.is_none());
+    assert!(cabin.acp.is_none());
+    assert!(
+        cabin.status.contains("Ask is fail-closed")
+            && cabin.status.contains("Grok Build session missing"),
+        "a failed handshake must not start another agent: {}",
+        cabin.status
+    );
+    assert!(
+        !cabin.status.contains("not on PATH") && !cabin.status.contains("— sent"),
+        "{}",
+        cabin.status
+    );
+    let status = cabin.status.clone();
+    cabin.release_workflow_ctl_if_idle();
+    assert!(cabin.workflow_ctl_queue.is_empty());
+    assert!(!cabin.workflow_ctl_await_acp);
+    assert!(!cabin.running);
+    assert!(cabin.acp_spawn_rx.is_none());
+    assert_eq!(cabin.status, status);
+
+    std::env::remove_var("GROKHUB_GROK");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
 // Landed from PR #153.
 #[test]
 fn thinking_status_shows_context_when_usage_is_present() {
@@ -13845,6 +13941,7 @@ fn quiet_cabin() -> Cabin {
         workflow_target: String::new(),
         scroll_to_workflows: false,
         workflow_status_live: false,
+        workflow_ctl_await_acp: false,
         side_ask_queue: Vec::new(),
         side_ask_kick: false,
         plan_open: false,
