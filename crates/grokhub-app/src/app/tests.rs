@@ -14164,6 +14164,7 @@ fn quiet_cabin() -> Cabin {
         perm_always_confirm: None,
         confirm: None,
         jump_last_you: false,
+        find: super::chat_ui::ChatFind::default(),
         elicit_ask: None,
         elicit_draft: String::new(),
         secret_hold: Vec::new(),
@@ -15294,4 +15295,78 @@ fn user_act_row_with_edit_stays_inside_a_narrow_pane() {
             });
         });
     }
+}
+
+fn find_views(bodies: &[(&str, &str)]) -> Vec<ChatView> {
+    grokhub_core::visible_chat_refs(bodies.iter().copied())
+}
+
+#[test]
+fn chat_find_starts_on_the_newest_hit_and_wraps() {
+    let views = find_views(&[
+        ("user", "build the cabin"),
+        ("assistant", "Building it."),
+        ("user", "now test"),
+        ("assistant", "Tests pass. Build is green."),
+    ]);
+    let mut find = super::chat_ui::ChatFind::default();
+    find.toggle();
+    assert!(find.open && find.want_focus);
+    find.query = "BUILD".into();
+    find.refresh("t1", &views);
+    let hits = find.hits().to_vec();
+    assert_eq!(hits.len(), 3, "{hits:?}");
+    assert_eq!(find.current_row(), hits.last().copied());
+    assert!(find.jump, "a new query scrolls to its hit");
+    assert_eq!(find.label(), "3 of 3");
+    find.jump = false;
+    find.step(true);
+    assert_eq!(find.current_row(), Some(hits[0]));
+    assert!(find.jump);
+    find.step(false);
+    assert_eq!(find.label(), "3 of 3");
+    // Same query, same transcript: no recount, pick stays.
+    find.step(false);
+    find.refresh("t1", &views);
+    assert_eq!(find.label(), "2 of 3");
+    find.query = "zzz".into();
+    find.refresh("t1", &views);
+    assert_eq!(find.label(), "No matches");
+    assert!(find.current_row().is_none());
+    find.close();
+    assert!(!find.open && !find.focused);
+    assert!(find.hits().is_empty(), "a closed find marks nothing");
+}
+
+#[test]
+fn chat_find_is_ctrl_f_on_chat_and_owns_enter_over_a_permission_card() {
+    let src = cabin_src();
+    assert!(src.contains("egui::Key::F"), "Ctrl+F must open find");
+    assert!(src.contains("self.find.toggle()"));
+    let chat = fn_src(&src, "ui_chat");
+    assert!(chat.contains("paint_find_bar"), "{chat}");
+    assert!(chat.contains("find_jump && find_row == Some(i)"), "{chat}");
+    assert!(
+        src.contains("self.palette_open || self.nav == Nav::Settings || self.find.focused"),
+        "Enter in the find box must not allow a tool"
+    );
+    let confirm = include_str!("confirm.rs");
+    assert!(confirm.contains("self.find.focused"), "Enter in the find box must not confirm a sheet");
+    assert!(grokhub_core::shortcut_help().contains("Ctrl+F"));
+}
+
+#[test]
+fn chat_find_bar_paints_and_steps_with_the_arrows() {
+    let mut app = Cabin::quiet_for_test();
+    app.find.toggle();
+    app.find.query = "x".into();
+    let views = find_views(&[("user", "x one"), ("assistant", "x two")]);
+    app.find.refresh("t", &views);
+    let ctx = egui::Context::default();
+    let _ = ctx.run(Default::default(), |ctx| {
+        crate::theme::apply(ctx, true);
+        app.paint_find_bar(ctx, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)));
+    });
+    assert!(app.find.open);
+    assert_eq!(app.find.label(), "2 of 2");
 }

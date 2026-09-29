@@ -134,6 +134,7 @@ pub use chat_job::{
     ChatSendKind,
 };
 pub use chat_view::{
+    chat_find_label, chat_find_rows, chat_find_step,
     apply_session_thought_act, assistant_prose, cluster_gap, effective_thought_fold,
     is_skill_saved_mark, is_workload_user, merge_thinking, merge_thinking_capped, quote_for_reply,
     refresh_last_stretch, scrolled_off_tail, scrub_thought, session_thoughts_start_collapsed,

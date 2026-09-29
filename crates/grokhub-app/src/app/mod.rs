@@ -687,6 +687,8 @@ pub struct Cabin {
     confirm: Option<ConfirmKind>,
     /// History "Last you" scroll once the thread is open.
     jump_last_you: bool,
+    /// Ctrl+F in the open chat.
+    find: ChatFind,
     elicit_ask: Option<grokhub_acp::ElicitAsk>,
     elicit_draft: String,
     /// Secret values typed into an elicit. Memory only — never persisted.
@@ -1197,6 +1199,7 @@ impl Cabin {
             perm_always_confirm: None,
             confirm: None,
             jump_last_you: false,
+            find: ChatFind::default(),
             elicit_ask: None,
             elicit_draft: String::new(),
             secret_hold: Vec::new(),
@@ -1581,6 +1584,7 @@ impl Cabin {
             perm_always_confirm: None,
             confirm: None,
             jump_last_you: false,
+            find: ChatFind::default(),
             elicit_ask: None,
             elicit_draft: String::new(),
             secret_hold: Vec::new(),
@@ -4563,6 +4567,15 @@ impl eframe::App for Cabin {
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::N) && !i.modifiers.shift) {
             self.new_thread(false);
+        }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F) && !i.modifiers.shift)
+            && self.nav == Nav::Chat
+            && !self.messages.is_empty()
+        {
+            self.find.toggle();
+        }
+        if self.find.open && (self.nav != Nav::Chat || self.messages.is_empty()) {
+            self.find.close();
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::K) && !i.modifiers.shift) {
             if self.palette_open {

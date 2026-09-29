@@ -1,6 +1,7 @@
 //! Chat pane, composer, and bubbles.
 
 use super::*;
+use grokhub_core::{chat_find_label, chat_find_rows, chat_find_step};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ChatJump {
@@ -19,6 +20,103 @@ pub(super) enum ComposerStackSlot {
     Attach,
     Voice,
     Pill,
+}
+
+/// Ctrl+F inside the open chat. Hits are transcript rows, newest picked first.
+#[derive(Default)]
+pub(super) struct ChatFind {
+    pub open: bool,
+    pub query: String,
+    pub pick: usize,
+    pub want_focus: bool,
+    /// Scroll the picked row into view on the next paint.
+    pub jump: bool,
+    /// The find box had focus last frame. Enter / Esc belong to it, not a permission card.
+    pub focused: bool,
+    key: (String, String, usize, usize),
+    hits: Vec<usize>,
+}
+
+impl ChatFind {
+    pub fn toggle(&mut self) {
+        if self.open {
+            self.close();
+        } else {
+            self.open = true;
+            self.want_focus = true;
+            self.jump = !self.hits.is_empty();
+        }
+    }
+
+    pub fn close(&mut self) {
+        self.open = false;
+        self.focused = false;
+        self.jump = false;
+    }
+
+    /// Recount only when the query or the transcript changed.
+    pub fn refresh(&mut self, thread_id: &str, views: &[ChatView]) {
+        let last = views.last().map(|v| v.body.len()).unwrap_or(0);
+        let key = (self.query.clone(), thread_id.to_string(), views.len(), last);
+        if key == self.key {
+            return;
+        }
+        let query_changed = key.0 != self.key.0 || key.1 != self.key.1;
+        self.key = key;
+        self.hits = chat_find_rows(views.iter().map(|v| v.body.as_str()), &self.query);
+        if query_changed {
+            // Start at the newest hit: the pane is usually parked at the bottom.
+            self.pick = self.hits.len().saturating_sub(1);
+            self.jump = !self.hits.is_empty();
+        } else {
+            self.pick = self.pick.min(self.hits.len().saturating_sub(1));
+        }
+    }
+
+    pub fn step(&mut self, forward: bool) {
+        self.pick = chat_find_step(self.pick, self.hits.len(), forward);
+        self.jump = !self.hits.is_empty();
+    }
+
+    pub fn hits(&self) -> &[usize] {
+        if self.open {
+            &self.hits
+        } else {
+            &[]
+        }
+    }
+
+    pub fn current_row(&self) -> Option<usize> {
+        self.hits().get(self.pick).copied()
+    }
+
+    pub fn label(&self) -> String {
+        chat_find_label(self.pick, self.hits.len(), &self.query)
+    }
+}
+
+/// Mark a find hit. The picked row gets a ring; the rest a quiet bar.
+fn paint_find_mark(ui: &egui::Ui, row: egui::Rect, current: bool) {
+    if row.height() <= 0.0 {
+        return;
+    }
+    let bar = egui::Rect::from_min_max(
+        egui::pos2(row.min.x - 6.0, row.min.y + 2.0),
+        egui::pos2(row.min.x - 3.0, row.max.y - 2.0),
+    );
+    let ink = if current {
+        crate::theme::link()
+    } else {
+        crate::theme::border_strong()
+    };
+    ui.painter().rect_filled(bar, 1.5, ink);
+    if current {
+        ui.painter().rect_stroke(
+            row.expand2(egui::vec2(2.0, 2.0)),
+            8.0,
+            egui::Stroke::new(1.2, crate::theme::link().gamma_multiply(0.7)),
+        );
+    }
 }
 
 /// Compact, Copy session, Export. Same gates the composer pills used.
@@ -813,6 +911,20 @@ impl Cabin {
                 }
                 let avail = clamp_row_width(ui.available_width());
                 let pane = avail;
+                if self.find.open {
+                    let tid = self.visible_thread_id();
+                    self.cached_chat_views();
+                    let (views, find) = (&self.chat_views, &mut self.find);
+                    find.refresh(&tid, views);
+                    if find.jump {
+                        // A find jump wins over pinning the tail this frame.
+                        self.chat_tail_frames = 0;
+                    }
+                }
+                let find_hits = self.find.hits().to_vec();
+                let find_row = self.find.current_row();
+                let find_jump = self.find.jump;
+                let mut find_jumped = false;
                 let pin_tail = self.chat_tail_frames > 0;
                 let out = egui::ScrollArea::vertical()
                     .stick_to_bottom(true)
@@ -917,6 +1029,14 @@ impl Cabin {
                                         ui.scroll_to_rect(slot, Some(egui::Align::Center));
                                         jumped_you = true;
                                     }
+                                    if find_jump && find_row == Some(i) {
+                                        let slot = egui::Rect::from_min_size(
+                                            origin,
+                                            egui::vec2(row_w, cached_h),
+                                        );
+                                        ui.scroll_to_rect(slot, Some(egui::Align::Center));
+                                        find_jumped = true;
+                                    }
                                     continue;
                                 }
                                 let y0 = ui.cursor().min.y;
@@ -933,6 +1053,16 @@ impl Cabin {
                                 if jump_you && last_you_i == Some(i) {
                                     ui.scroll_to_rect(painted.response.rect, Some(egui::Align::Center));
                                     jumped_you = true;
+                                }
+                                if find_hits.contains(&i) {
+                                    paint_find_mark(ui, painted.response.rect, find_row == Some(i));
+                                    if find_jump && find_row == Some(i) {
+                                        ui.scroll_to_rect(
+                                            painted.response.rect,
+                                            Some(egui::Align::Center),
+                                        );
+                                        find_jumped = true;
+                                    }
                                 }
                                 let painted = painted.inner;
                                 if block.kind == ChatKind::Thought {
@@ -962,6 +1092,9 @@ impl Cabin {
                         }
                         if jumped_you {
                             self.jump_last_you = false;
+                        }
+                        if find_jumped {
+                            self.find.jump = false;
                         }
                         if live {
                             match self.paint_live_blocks(
@@ -1036,6 +1169,9 @@ impl Cabin {
                         }
                     });
                 self.chat_tail_frames = self.chat_tail_frames.saturating_sub(1);
+                if self.find.open {
+                    self.paint_find_bar(ctx, out.inner_rect);
+                }
                 if scrolled_off_tail(
                     out.state.offset.y,
                     out.content_size.y,
@@ -1049,6 +1185,115 @@ impl Cabin {
                     }
                 }
             });
+    }
+
+    /// Floating find box at the top right of the transcript.
+    pub(super) fn paint_find_bar(&mut self, ctx: &egui::Context, pane: egui::Rect) {
+        let w = 340.0_f32.min((pane.width() - 16.0).max(200.0));
+        let pos = egui::pos2(pane.max.x - w - 8.0, pane.min.y + 6.0);
+        let label = self.find.label();
+        let has_hits = !self.find.hits().is_empty();
+        let mut step: Option<bool> = None;
+        let mut close = false;
+        egui::Area::new(egui::Id::new("chat-find"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(pos)
+            .show(ctx, |ui| {
+                egui::Frame::none()
+                    .fill(crate::theme::panel())
+                    .stroke(egui::Stroke::new(1.0, crate::theme::border()))
+                    .rounding(10.0)
+                    .shadow(crate::theme::sheet_shadow())
+                    .inner_margin(egui::Margin::symmetric(8.0, 6.0))
+                    .show(ui, |ui| {
+                        ui.set_width(w - 16.0);
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            let edit = egui::TextEdit::singleline(&mut self.find.query)
+                                .id(egui::Id::new("chat-find-input"))
+                                .hint_text("Find in this chat")
+                                .desired_width((w - 16.0 - 170.0).max(80.0))
+                                .frame(false);
+                            let resp = ui.add(edit);
+                            if self.find.want_focus {
+                                resp.request_focus();
+                                self.find.want_focus = false;
+                            }
+                            let (enter, shift, esc) = ui.input(|i| {
+                                (
+                                    i.key_pressed(egui::Key::Enter),
+                                    i.modifiers.shift,
+                                    i.key_pressed(egui::Key::Escape),
+                                )
+                            });
+                            let owns_keys = resp.has_focus() || resp.lost_focus();
+                            if owns_keys && enter {
+                                step = Some(!shift);
+                                resp.request_focus();
+                            }
+                            if owns_keys && esc {
+                                close = true;
+                            }
+                            self.find.focused = resp.has_focus();
+                            ui.label(
+                                RichText::new(&label)
+                                    .size(crate::theme::FONT_TIP)
+                                    .color(crate::theme::muted()),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let x = crate::theme::felt_label_button(
+                                        ui,
+                                        "×",
+                                        egui::Color32::TRANSPARENT,
+                                        crate::theme::muted(),
+                                        6.0,
+                                        egui::vec2(22.0, 22.0),
+                                        None,
+                                        false,
+                                    )
+                                    .on_hover_text("Close (Esc)");
+                                    if x.clicked() {
+                                        close = true;
+                                    }
+                                    let ink = if has_hits {
+                                        crate::theme::fg()
+                                    } else {
+                                        crate::theme::subtle()
+                                    };
+                                    let down = crate::icons::paint_bar_icon(
+                                        ui,
+                                        crate::icons::BarIcon::ArrowDown,
+                                        22.0,
+                                        ink,
+                                    )
+                                    .on_hover_text("Next (Enter)");
+                                    if down.clicked() && has_hits {
+                                        step = Some(true);
+                                    }
+                                    let up = crate::icons::paint_bar_icon(
+                                        ui,
+                                        crate::icons::BarIcon::ArrowUp,
+                                        22.0,
+                                        ink,
+                                    )
+                                    .on_hover_text("Previous (Shift+Enter)");
+                                    if up.clicked() && has_hits {
+                                        step = Some(false);
+                                    }
+                                },
+                            );
+                        });
+                    });
+            });
+        if let Some(forward) = step {
+            self.find.step(forward);
+        }
+        if close {
+            self.find.close();
+            ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        }
     }
 
     /// One down-arrow: click = latest. Last you is secondary / long-press only.
@@ -1310,7 +1555,7 @@ impl Cabin {
                     ui.input(|i| i.key_pressed(egui::Key::Enter)),
                     ui.input(|i| i.key_pressed(egui::Key::Escape)),
                     !self.composer.trim().is_empty(),
-                    self.palette_open || self.nav == Nav::Settings,
+                    self.palette_open || self.nav == Nav::Settings || self.find.focused,
                 );
                 ui.horizontal(|ui| {
                     if crate::cards::white_pill(ui, "Allow") || key == Some(PermKey::Allow) {
