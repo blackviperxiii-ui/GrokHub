@@ -682,7 +682,7 @@ pub fn grok_stdout(bin: &Path, cwd: &Path, args: &[&str]) -> Result<String, Stri
 
 /// Run `grok` and cap how long we wait so History cannot freeze the cabin.
 pub fn grok_stdout_timeout(bin: &Path, cwd: &Path, args: &[&str], secs: u64) -> Result<String, String> {
-    grok_stdout_inner(bin, cwd, args, Some(secs), true)
+    grok_stdout_inner(bin, cwd, args, Some(secs), true, false)
 }
 
 /// Skills / MCP / marketplace live in the user's `~/.grok`, not cabin GROK_HOME.
@@ -692,13 +692,25 @@ pub fn grok_user_stdout_timeout(
     args: &[&str],
     secs: u64,
 ) -> Result<String, String> {
-    grok_stdout_inner(bin, cwd, args, Some(secs), false)
+    grok_stdout_inner(bin, cwd, args, Some(secs), false, false)
 }
 
 /// Same as [`grok_user_stdout_timeout`] but the child runs until it exits.
 /// Cabin `/loop` used to die at 300 seconds.
 pub fn grok_user_stdout_wait(bin: &Path, cwd: &Path, args: &[&str]) -> Result<String, String> {
-    grok_stdout_inner(bin, cwd, args, None, false)
+    grok_stdout_inner(bin, cwd, args, None, false, false)
+}
+
+/// Like [`grok_user_stdout_timeout`], but a non-zero exit still returns output
+/// when the CLI did not hard-fail. `grok mcp doctor --json` exits 1 and prints
+/// JSON on stdout. Stdout wins over stderr so that JSON is not dropped.
+pub fn grok_user_stdout_allow_fail(
+    bin: &Path,
+    cwd: &Path,
+    args: &[&str],
+    secs: u64,
+) -> Result<String, String> {
+    grok_stdout_inner(bin, cwd, args, Some(secs), false, true)
 }
 
 fn grok_stdout_inner(
@@ -707,6 +719,7 @@ fn grok_stdout_inner(
     args: &[&str],
     kill_after: Option<u64>,
     isolate_cabin: bool,
+    keep_fail_stdout: bool,
 ) -> Result<String, String> {
     if grok_marked_unusable(bin) {
         return Err(doctor_broken_hint().into());
@@ -785,15 +798,18 @@ fn grok_stdout_inner(
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
     if !out.status.success() {
         let detail = if !stderr.is_empty() {
-            stderr
+            stderr.clone()
         } else if !stdout.is_empty() {
-            stdout
+            stdout.clone()
         } else {
             format!("grok {} failed", args.join(" "))
         };
         if is_cli_hard_failure(out.status.code(), &detail) {
             mark_grok_unusable(&bin, &detail);
             return Err(doctor_broken_hint().into());
+        }
+        if keep_fail_stdout {
+            return Ok(if stdout.is_empty() { stderr } else { stdout });
         }
         return Err(detail);
     }
@@ -1119,6 +1135,29 @@ mod tests {
         assert!(
             inner.contains("if !out.status.success()") && !inner.contains("&& stdout.is_empty()"),
             "grok sessions delete must fail on a non-zero exit even when it printed a reason: {inner}"
+        );
+    }
+
+    #[test]
+    fn doctor_stdout_survives_nonzero_exit() {
+        let src = include_str!("locate.rs");
+        let allow = src
+            .split("pub fn grok_user_stdout_allow_fail(")
+            .nth(1)
+            .and_then(|s| s.split("fn grok_stdout_inner(").next())
+            .expect("grok_user_stdout_allow_fail");
+        assert!(
+            allow.contains("keep") || allow.contains("true"),
+            "doctor must ask for stdout on a non-zero exit: {allow}"
+        );
+        let inner = src
+            .split("fn grok_stdout_inner(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn agent_args(").next())
+            .expect("inner");
+        assert!(
+            inner.contains("keep_fail_stdout") && inner.contains("if !out.status.success()"),
+            "a non-zero doctor exit must still be able to return stdout: {inner}"
         );
     }
 

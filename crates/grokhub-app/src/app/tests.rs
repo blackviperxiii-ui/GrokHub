@@ -11641,6 +11641,165 @@ fn workflow_usage_and_workflows_slash_do_not_forward() {
 }
 
 #[test]
+fn hooks_slash_opens_connectors_on_the_hooks_section() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("hooks-slash");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_GROK", root.join("missing-grok"));
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/mcps");
+    assert!(matches!(cabin.nav, Nav::Connectors));
+    assert!(cabin.skills_tab_connectors);
+    assert!(!cabin.scroll_to_hooks);
+    cabin.run_slash_line("/plugins");
+    assert!(matches!(cabin.nav, Nav::Connectors));
+    assert!(!cabin.scroll_to_hooks);
+    cabin.run_slash_line("/marketplace");
+    assert!(matches!(cabin.nav, Nav::Connectors));
+    assert!(!cabin.scroll_to_hooks);
+    cabin.run_slash_line("/connectors");
+    assert!(matches!(cabin.nav, Nav::Connectors));
+    assert!(!cabin.scroll_to_hooks);
+    cabin.run_slash_line("/hooks");
+    assert!(matches!(cabin.nav, Nav::Connectors));
+    assert!(cabin.skills_tab_connectors);
+    assert!(cabin.scroll_to_hooks);
+
+    std::env::remove_var("GROKHUB_GROK");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn mcp_doctor_fills_status_off_the_ui_and_ignores_a_second_click() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("mcp-doctor");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_GROK", root.join("missing-grok"));
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.mcp_status.is_empty());
+    cabin.apply_mcp_doctor_result("nope".into(), None);
+    assert!(cabin.mcp_status.is_empty(), "bad doctor output leaves rows unchecked");
+    assert_eq!(cabin.connector_note, "nope");
+
+    let raw = r#"{"servers":[{"name":"linear","healthy":false,"checks":[{"label":"handshake failed","passed":false,"detail":"Auth required"}]}]}"#;
+    let parsed = grokhub_acp::parse_mcp_doctor(raw).expect("doctor json");
+    cabin
+        .mcp_status
+        .insert("fs".into(), grokhub_acp::McpDoctorStatus::Connected);
+    cabin.apply_mcp_doctor_result(raw.into(), Some(parsed));
+    assert_eq!(
+        cabin.mcp_status.get("linear").map(|s| s.label()),
+        Some("Needs sign-in".to_string())
+    );
+    assert!(
+        !cabin.mcp_status.contains_key("fs"),
+        "a finished doctor replaces the previous map"
+    );
+    let snapshot = cabin.mcp_status.clone();
+    cabin.grok_catalog = grokhub_acp::GrokCatalog::default();
+    assert_eq!(cabin.mcp_status, snapshot, "catalog reload must not clear status");
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.mcp_doctor_rx = Some(rx);
+    cabin.connector_note = "in flight".into();
+    cabin.run_mcp_doctor();
+    assert_eq!(cabin.connector_note, "in flight");
+    assert!(cabin.mcp_doctor_rx.is_some());
+    drop(tx);
+
+    std::env::remove_var("GROKHUB_GROK");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn connectors_hooks_and_doctor_do_not_write_grok_home() {
+    let src = cabin_src();
+    let mut blob = String::new();
+    for name in [
+        "ui_connector_home_note",
+        "ui_hooks_section",
+        "ui_mcp_row_status",
+        "run_mcp_doctor",
+        "apply_mcp_doctor_result",
+        "poll_mcp_doctor",
+    ] {
+        blob.push_str(fn_src(&src, name));
+        blob.push('\n');
+    }
+    for forbidden in [
+        "config.toml",
+        "mcp_credentials.json",
+        "trusted_folders",
+        "fs::write",
+        "File::create",
+        "OpenOptions",
+    ] {
+        assert!(
+            !blob.contains(forbidden),
+            "{forbidden} must not appear in the new connectors code"
+        );
+    }
+    let hooks = fn_src(&src, "ui_hooks_section");
+    assert!(hooks.contains("No hooks in ~/.grok/hooks or this project's .grok/hooks."));
+    assert!(hooks.contains(
+        "Project hooks stay hidden until this folder is trusted in Grok Build (/hooks-trust)."
+    ));
+    assert!(hooks.contains("scroll_to_me") && hooks.contains("scroll_to_hooks"));
+    assert!(hooks.contains("Align::TOP"));
+    assert!(!hooks.contains("ghost_pill") && !hooks.contains("white_pill"));
+    let status = fn_src(&src, "ui_mcp_row_status");
+    assert!(status.contains("Sign in from Grok Build: run grok, open /mcps, press i on {name}"));
+    assert!(!status.contains("open_url"));
+    let home = fn_src(&src, "ui_connector_home_note");
+    assert!(home.contains("cabin_grok_home") && home.contains("~/.grok"));
+    let doctor = fn_src(&src, "run_mcp_doctor");
+    let spawn = doctor.find("thread::spawn").expect("doctor off the UI thread");
+    let call = doctor
+        .find("grok_user_stdout_allow_fail")
+        .expect("doctor keeps stdout");
+    assert!(spawn < call, "{doctor}");
+    assert!(doctor.contains("mcp_doctor_rx.is_some()"));
+    assert!(!doctor.contains("Command::new") && !doctor.contains("open_url"));
+    let poll_cat = fn_src(&src, "poll_grok_catalog");
+    assert!(
+        !poll_cat.contains("mcp_status"),
+        "catalog reload must not clear doctor status: {poll_cat}"
+    );
+    let live = src
+        .split("let live = wants_live_repaint(")
+        .nth(1)
+        .and_then(|s| s.split("ctx.request_repaint_after").next())
+        .expect("wants_live_repaint call");
+    assert!(
+        live.contains("mcp_doctor_rx.is_some()"),
+        "doctor must keep repainting until the status lands: {live}"
+    );
+    let skills = fn_src(&src, "ui_skills");
+    let doctor_btn = skills
+        .split("ghost_pill(ui, \"Doctor\")")
+        .nth(1)
+        .expect("Doctor button");
+    let start = doctor_btn
+        .find("run_mcp_doctor()")
+        .expect("run_mcp_doctor");
+    let after = doctor_btn[start + "run_mcp_doctor()".len()..].trim_start();
+    let after_stmt = after
+        .strip_prefix(';')
+        .map(str::trim_start)
+        .unwrap_or(after);
+    assert!(
+        after_stmt.starts_with("ui.ctx().request_repaint()"),
+        "Doctor must request a repaint right after run_mcp_doctor: {after_stmt}"
+    );
+}
+
+#[test]
 fn workflow_ctl_releases_after_stop_without_drain() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("workflow-ctl-stop");
@@ -14037,6 +14196,9 @@ fn quiet_cabin() -> Cabin {
         grok_ext_rx: None,
         grok_ext_q: Vec::new(),
         connector_note: String::new(),
+        mcp_doctor_rx: None,
+        mcp_status: HashMap::new(),
+        scroll_to_hooks: false,
     }
 }
 

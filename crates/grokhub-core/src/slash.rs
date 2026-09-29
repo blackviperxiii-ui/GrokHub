@@ -86,6 +86,8 @@ pub enum Slash {
     Loop(String),
     GrokSkills,
     GrokConnectors,
+    /// `/hooks` — Connectors tab, Hooks section.
+    GrokHooks,
     /// Empty `/workflow` and `/workflows` — Skills tab, Workflows section.
     GrokWorkflows,
     Model(String),
@@ -169,9 +171,8 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/worktree" => Some(Slash::Worktree),
         "/skills" => Some(Slash::GrokSkills),
         "/workflows" => Some(Slash::GrokWorkflows),
-        "/plugins" | "/marketplace" | "/mcps" | "/hooks" | "/connectors" => {
-            Some(Slash::GrokConnectors)
-        }
+        "/plugins" | "/marketplace" | "/mcps" | "/connectors" => Some(Slash::GrokConnectors),
+        "/hooks" => Some(Slash::GrokHooks),
         "/model" | "/m" if !rest.is_empty() => Some(Slash::Model(rest.to_string())),
         "/goal" => Some(Slash::Goal(rest.to_string())),
         "/dashboard" | "/agents-dashboard" => Some(Slash::Sessions),
@@ -403,6 +404,7 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Loop(_) => "loop",
         Slash::GrokSkills => "grok_skills",
         Slash::GrokConnectors => "grok_connectors",
+        Slash::GrokHooks => "grok_hooks",
         Slash::GrokWorkflows => "grok_workflows",
         Slash::Model(_) => "model",
         Slash::ImagineVideo(_) => "imagine_video",
@@ -493,6 +495,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/skills", hint: "Grok Build skills", insert: "/skills", run_on_pick: true },
     SlashDef { cmd: "/plugins", hint: "Grok Build plugins and marketplace", insert: "/plugins", run_on_pick: true },
     SlashDef { cmd: "/mcps", hint: "Grok Build MCP servers", insert: "/mcps", run_on_pick: true },
+    SlashDef { cmd: "/hooks", hint: "Grok Build hooks", insert: "/hooks", run_on_pick: true },
     SlashDef { cmd: "/model", hint: "Set grok -p --model…", insert: "/model ", run_on_pick: false },
     SlashDef { cmd: "/imagine-video", hint: "Open Imagine video", insert: "/imagine-video ", run_on_pick: false },
     SlashDef { cmd: "/goal", hint: "Pin a Grok goal…", insert: "/goal ", run_on_pick: false },
@@ -635,6 +638,7 @@ pub fn slash_help() -> String {
         "every weekday at 9, <task> — clock job on Automations; saving it posts a schedule card on the home update feed",
         "/skills — skills catalog: cabin skills and the Grok Build list",
         "/plugins /marketplace /mcps — connectors",
+        "/hooks — open Connectors with the Hooks section in view",
         "/model <id> — grok -p --model",
         "/imagine-video <prompt> — Imagine video",
         "/goal <objective> — pin a Grok goal",
@@ -1028,7 +1032,7 @@ mod tests {
         assert_eq!(parse_slash("/plugins"), Some(Slash::GrokConnectors));
         assert_eq!(parse_slash("/marketplace"), Some(Slash::GrokConnectors));
         assert_eq!(parse_slash("/connectors"), Some(Slash::GrokConnectors));
-        assert_eq!(parse_slash("/hooks"), Some(Slash::GrokConnectors));
+        assert_eq!(parse_slash("/hooks"), Some(Slash::GrokHooks));
         assert_eq!(
             parse_slash("/workflow pause review-changes-2")
                 .as_ref()
@@ -1057,5 +1061,22 @@ mod tests {
         assert!(slash_help().contains("/workflows — open Skills with the Workflows section in view"));
         assert!(!unknown_cabin_slash("/workflow pause review-changes-2"));
         assert!(!unknown_cabin_slash("/workflow pause"));
+    }
+
+    #[test]
+    fn hooks_slash_parses_to_grok_hooks() {
+        assert_eq!(parse_slash("/hooks"), Some(Slash::GrokHooks));
+        assert_eq!(parse_slash("/HOOKS"), Some(Slash::GrokHooks));
+        assert_eq!(
+            parse_slash("/hooks").as_ref().map(slash_kind),
+            Some("grok_hooks")
+        );
+        assert_eq!(slash_kind(&Slash::GrokHooks), "grok_hooks");
+        assert_eq!(parse_slash("/mcps"), Some(Slash::GrokConnectors));
+        assert_eq!(parse_slash("/plugins"), Some(Slash::GrokConnectors));
+        assert_eq!(parse_slash("/marketplace"), Some(Slash::GrokConnectors));
+        assert_eq!(parse_slash("/connectors"), Some(Slash::GrokConnectors));
+        assert!(slash_help().contains("/hooks — open Connectors with the Hooks section in view"));
+        assert!(!unknown_cabin_slash("/hooks"));
     }
 }
