@@ -2,6 +2,26 @@
 
 use super::*;
 
+/// Tests pin `config_dir` to the directory captured when the write was scheduled.
+/// A worker blocked on `persist_io` must keep that directory after `GROKHUB_CONFIG` moves.
+struct ScheduledDir {
+    #[cfg(test)]
+    _pin: crate::config::TestConfigDir,
+}
+
+fn pin_scheduled_dir(dir: std::path::PathBuf) -> ScheduledDir {
+    #[cfg(test)]
+    {
+        ScheduledDir {
+            _pin: crate::config::TestConfigDir::set(dir),
+        }
+    }
+    #[cfg(not(test))]
+    {
+        let _ = dir;
+        ScheduledDir {}
+    }
+}
 
 pub(super) struct PersistSnap {
     pub(super) threads: Vec<ChatThread>,
@@ -73,6 +93,7 @@ impl Cabin {
         let io = self.persist_io.clone();
         let dir = config::config_dir();
         std::thread::spawn(move || {
+            let _pin = pin_scheduled_dir(dir.clone());
             if let Ok(_g) = io.lock() {
                 write_persist_disk(&dir, &snap);
             }
@@ -163,6 +184,7 @@ impl Cabin {
         let (tx, rx) = mpsc::channel();
         self.persist_rx = Some(rx);
         std::thread::spawn(move || {
+            let _pin = pin_scheduled_dir(dir.clone());
             if let Ok(_g) = io.lock() {
                 write_persist_disk(&dir, &snap);
             }
@@ -185,7 +207,9 @@ impl Cabin {
     pub(super) fn persist_hub(&self) {
         let hub = self.hub.clone();
         let io = self.persist_io.clone();
+        let dir = config::config_dir();
         std::thread::spawn(move || {
+            let _pin = pin_scheduled_dir(dir);
             if let Ok(_g) = io.lock() {
                 let disk = hub.lock().ok().map(|st| state_for_disk(&st));
                 if let Some(disk) = disk {
@@ -206,6 +230,7 @@ impl Cabin {
             Err(_) => return,
         };
         std::thread::spawn(move || {
+            let _pin = pin_scheduled_dir(dir.clone());
             let Ok(_disk) = io.lock() else {
                 return;
             };
@@ -231,7 +256,9 @@ impl Cabin {
     pub(super) fn persist_secrets(&self) {
         let io = self.persist_io.clone();
         let secrets = self.secrets.clone();
+        let dir = config::config_dir();
         std::thread::spawn(move || {
+            let _pin = pin_scheduled_dir(dir);
             if let Ok(_g) = io.lock() {
                 let _ = secrets::save(&secrets);
             }
@@ -241,7 +268,9 @@ impl Cabin {
     pub(super) fn persist_usage(&self) {
         let io = self.persist_io.clone();
         let usage = self.usage.clone();
+        let dir = config::config_dir();
         std::thread::spawn(move || {
+            let _pin = pin_scheduled_dir(dir);
             if let Ok(_g) = io.lock() {
                 let _ = crate::store::save_usage(&usage);
             }
@@ -250,7 +279,9 @@ impl Cabin {
 
     pub(super) fn persist_loops(&mut self) {
         let list = self.grok_loops.clone();
+        let dir = config::config_dir();
         std::thread::spawn(move || {
+            let _pin = pin_scheduled_dir(dir);
             let _ = crate::loops::save(&list);
         });
         self.persist_idle_key = self.persist_idle_now();
@@ -258,7 +289,9 @@ impl Cabin {
 
     pub(super) fn persist_suggestions(&mut self) {
         let suggestions = self.suggestions.clone();
+        let dir = config::config_dir();
         std::thread::spawn(move || {
+            let _pin = pin_scheduled_dir(dir);
             let _ = crate::store::save_suggestions(&suggestions);
         });
         self.persist_idle_key = self.persist_idle_now();
@@ -266,7 +299,9 @@ impl Cabin {
 
     pub(super) fn persist_automations(&mut self) {
         let list = self.automations.clone();
+        let dir = config::config_dir();
         std::thread::spawn(move || {
+            let _pin = pin_scheduled_dir(dir);
             let _ = crate::night::save(&list);
         });
         self.persist_idle_key = self.persist_idle_now();
@@ -274,7 +309,9 @@ impl Cabin {
 
     pub(super) fn persist_updates(&mut self) {
         let list = self.updates.clone();
+        let dir = config::config_dir();
         std::thread::spawn(move || {
+            let _pin = pin_scheduled_dir(dir);
             let _ = crate::feed::save(&list);
         });
         self.persist_idle_key = self.persist_idle_now();
