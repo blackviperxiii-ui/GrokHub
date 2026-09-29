@@ -417,7 +417,9 @@ fn steer_cover(line: &str) -> Option<String> {
 
 /// Run-start hook. One Doing or Done run card per thread.
 /// Pins and linked user cards share `thread_id` and are left alone.
-/// Proposed, Todo, and Blocked cards are never moved into Doing.
+/// Proposed and Todo cards are never moved into Doing.
+/// A blocked run card resumes only when the new ask is that same title.
+/// A different ask leaves the blocked card and starts a new one.
 /// A finished run card for that thread is reused and retitled from the new ask.
 pub fn upsert_inflight_card(cards: &mut Vec<BoardCard>, thread_id: &str, title: &str) -> bool {
     let thread_id = thread_id.trim();
@@ -425,17 +427,17 @@ pub fn upsert_inflight_card(cards: &mut Vec<BoardCard>, thread_id: &str, title: 
     if thread_id.is_empty() || title.is_empty() {
         return false;
     }
+    let next_title: String = title.chars().take(120).collect();
     if let Some(c) = cards.iter_mut().rev().find(|c| {
-        c.run && c.thread_id.as_deref() == Some(thread_id) && c.status == BoardStatus::Blocked
+        c.run
+            && c.thread_id.as_deref() == Some(thread_id)
+            && c.status == BoardStatus::Blocked
+            && c.title.eq_ignore_ascii_case(&next_title)
     }) {
-        let next_title: String = title.chars().take(120).collect();
         c.undo = Some(InflightUndo::Reused {
             title: c.title.clone(),
             status: BoardStatus::Blocked,
         });
-        if !next_title.is_empty() {
-            c.title = next_title;
-        }
         c.detail.clear();
         c.status = BoardStatus::InProgress;
         return true;

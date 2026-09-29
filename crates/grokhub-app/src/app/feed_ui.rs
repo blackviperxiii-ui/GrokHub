@@ -8,9 +8,9 @@
 
 use super::*;
 use grokhub_core::{
-    archive_digest, automation_done_card, discuss_context, dismiss_idea,
+    archive_digest, automation_done_card, dismiss_idea,
     dismiss_update, feed_ideas, feed_visible, file_idea_todo, fill_useful_ideas, hold_if_quiet,
-    home_feed_n, idea_rank, idea_talk_chips, unpin_feed_idea,
+    home_feed_n, idea_dialogue, idea_open_line, idea_rank, idea_talk_chips, unpin_feed_idea,
     idea_todo_title,
     links_from_research, mark_update_opened, post_update, quiet_hours_active, route_schedule,
     schedule_created_card, tick_feed_pulse, visible_digests, visible_ideas, visible_updates,
@@ -582,10 +582,7 @@ impl Cabin {
                 return;
             }
         }
-        let context = format!(
-            "{}\n\nHow do you want this set up? Tell me the time, how often, and what done looks like.",
-            discuss_context(&card)
-        );
+        let context = idea_open_line(&card);
         let title = format!("Discuss · {}", card.title);
         self.new_thread(false);
         let thread_id = self
@@ -626,7 +623,7 @@ impl Cabin {
         self.idea_pop = Some(IdeaPop {
             card_id: card.id.clone(),
             thread_id,
-            composer: String::new(),
+            composer: idea_dialogue(&card),
             placed: false,
         });
         let key = format!("opened:{}", grokhub_core::engine_slug(&card.title));
@@ -640,10 +637,7 @@ impl Cabin {
         let mut thread = crate::threads::ChatThread::new(&format!("Discuss · {}", card.title), false);
         thread.background = true;
         thread.title_locked = true;
-        let context = format!(
-            "{}\n\nHow do you want this set up? Tell me the time, how often, and what done looks like.",
-            discuss_context(card)
-        );
+        let context = idea_open_line(card);
         thread.messages_mut().push(("assistant".into(), context));
         let id = thread.id.clone();
         let alone = self.threads.is_empty();
@@ -776,7 +770,7 @@ impl Cabin {
                 ui.add_space(6.0);
                 let edit = ui.add(
                     egui::TextEdit::multiline(&mut composer)
-                        .desired_rows(2)
+                        .desired_rows(4)
                         .hint_text("How should this work?")
                         .desired_width(f32::INFINITY),
                 );

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 2.10.37 — 2026-09-29
+
+Welcome, quick chips, ideas, skills, and automations read why a turn happened. A reminder, a Friday routine, a failure, or a next step becomes a chip, a skill, and an automation in the cabin's own words. A chip, a greeting, or a nightly suggestion that repeats the sentence is dropped. Accept on an idea still opens the small talk. The note is already filled with the why and the help, and you can edit it before sending. It does not open on its own after every message.
+
+The sidebar highlight stays with the pointer. The history search, the Projects header, and the new-folder plus are not rows. Crossing them moves the bar to the nearest page, project, or chat instead of jumping back to the open page. Leaving the sidebar rests the bar on that page.
+
+A blocked workboard card resumes when the next ask has the same title. A different ask leaves that card and starts a new one.
+
+- Linux: `grokhub-linux-v2.10.37.tar.gz` and AUR `pkgver=2.10.37`.
+- Windows: `GrokHub-Setup-2.10.37.exe` and `grokhub-windows-v2.10.37.zip`.
+
 ## 2.10.36 — 2026-09-28
 
 Shared buttons stay quiet. Hover scales to 1.035, rises 1px, and eases out over 120ms. One highlight glides across the quick chips, the session and permission segments, and the sidebar rail. On an empty chat the idea deck rests in the gap under the composer, centered between the chat box and the bottom of the window. Hover still slides it up over that composer, and it stays inside the chat pane. The attach control is a paperclip that leans open while the pointer is on it. Ask anything is a faint placeholder. The paperclip, that line, the mic, and send share the pill's vertical center, with more room inside the rounded ends.
