@@ -729,6 +729,8 @@ pub struct Cabin {
     mcp_status: acp::McpStatusMap,
     /// Scroll the Connectors page to Hooks once.
     scroll_to_hooks: bool,
+    /// Last frame's composer pill, mic, and Send/Stop disc. Not saved.
+    composer_geom: Option<(egui::Rect, egui::Rect, egui::Rect)>,
 }
 
 fn fork_explainer_path() -> PathBuf {
@@ -1232,6 +1234,7 @@ impl Cabin {
             mcp_doctor_rx: None,
             mcp_status: HashMap::new(),
             scroll_to_hooks: false,
+            composer_geom: None,
         };
         if !quiet {
             if let Ok(mgr) = GlobalHotKeyManager::new() {
@@ -1616,6 +1619,7 @@ impl Cabin {
             mcp_doctor_rx: None,
             mcp_status: HashMap::new(),
             scroll_to_hooks: false,
+            composer_geom: None,
         }
     }
 
