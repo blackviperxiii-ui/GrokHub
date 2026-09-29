@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.10.41 — 2026-09-29
+
+The Send/Stop disc sits inside the composer pill, beside the mic. The text field leaves room for the mic, so the disc is no longer drawn on the rounded end.
+
+- Linux: `grokhub-linux-v2.10.41.tar.gz` and AUR `pkgver=2.10.41`.
+- Windows: `GrokHub-Setup-2.10.41.exe` and `grokhub-windows-v2.10.41.zip`.
+
 ## 2.10.40 — 2026-09-29
 
 Connectors lists Grok Build hooks and whether each MCP server is connected or needs sign-in. `/hooks` opens that Hooks section. Doctor still runs from the button. Sign-in stays a note that points at Grok Build.
