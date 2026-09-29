@@ -11746,25 +11746,15 @@ fn workflow_ctl_waits_for_acp_handshake_then_fails_closed_once() {
     drop(tx);
     cabin.poll_acp_spawn();
     assert!(cabin.acp_spawn_rx.is_none());
-    assert_eq!(cabin.workflow_ctl_queue.len(), 2);
-    assert!(cabin.workflow_ctl_await_acp);
+    assert!(
+        cabin.workflow_ctl_queue.is_empty(),
+        "poll_acp_spawn drops the queue when the handshake dies"
+    );
+    assert!(!cabin.workflow_ctl_await_acp);
     assert!(
         cabin.status.contains("Ask is fail-closed")
             && cabin.status.contains("Grok Build session missing"),
         "a dropped handshake paints the session-missing deny: {}",
-        cabin.status
-    );
-
-    cabin.release_workflow_ctl_if_idle();
-    assert!(cabin.workflow_ctl_queue.is_empty());
-    assert!(!cabin.workflow_ctl_await_acp);
-    assert!(!cabin.running);
-    assert!(cabin.acp_spawn_rx.is_none());
-    assert!(cabin.acp.is_none());
-    assert!(
-        cabin.status.contains("Ask is fail-closed")
-            && cabin.status.contains("Grok Build session missing"),
-        "a failed handshake must not start another agent: {}",
         cabin.status
     );
     assert!(
@@ -11772,13 +11762,75 @@ fn workflow_ctl_waits_for_acp_handshake_then_fails_closed_once() {
         "{}",
         cabin.status
     );
+
     let status = cabin.status.clone();
     cabin.release_workflow_ctl_if_idle();
     assert!(cabin.workflow_ctl_queue.is_empty());
     assert!(!cabin.workflow_ctl_await_acp);
     assert!(!cabin.running);
     assert!(cabin.acp_spawn_rx.is_none());
+    assert!(cabin.acp.is_none());
     assert_eq!(cabin.status, status);
+    assert!(
+        cabin.status.contains("Ask is fail-closed")
+            && cabin.status.contains("Grok Build session missing"),
+        "a failed handshake must not start another agent: {}",
+        cabin.status
+    );
+    cabin.release_workflow_ctl_if_idle();
+    assert!(cabin.workflow_ctl_queue.is_empty());
+    assert!(!cabin.workflow_ctl_await_acp);
+    assert!(!cabin.running);
+    assert!(cabin.acp_spawn_rx.is_none());
+    assert_eq!(cabin.status, status);
+
+    std::env::remove_var("GROKHUB_GROK");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn workflow_ctl_stale_await_does_not_drop_queue() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("workflow-ctl-stale-await");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    std::env::set_var("GROKHUB_GROK", root.join("missing-grok"));
+
+    let queued = vec![
+        "/workflow stop review-changes-2".to_string(),
+        "/workflow pause nightly".to_string(),
+    ];
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.permission_mode = grokhub_acp::PermissionMode::Ask;
+    assert!(cabin.acp.is_none());
+    assert!(cabin.acp_spawn_rx.is_none());
+    cabin.workflow_ctl_await_acp = true;
+    cabin.workflow_ctl_queue = queued.clone();
+
+    cabin.release_workflow_ctl_if_idle();
+    assert_eq!(
+        cabin.workflow_ctl_queue,
+        vec!["/workflow pause nightly".to_string()]
+    );
+    assert!(!cabin.running);
+    assert!(cabin.acp_spawn_rx.is_none());
+    assert!(
+        cabin.status.contains("Ask is fail-closed")
+            && cabin.status.contains("Grok Build CLI is not on PATH"),
+        "a stale flag still sends the front verb: {}",
+        cabin.status
+    );
+    assert!(!cabin.status.contains("— sent"), "{}", cabin.status);
+
+    cabin.running = true;
+    cabin.workflow_ctl_await_acp = true;
+    cabin.workflow_ctl_queue = queued.clone();
+    cabin.release_workflow_ctl_queue();
+    cabin.drain_followup_queue();
+    assert_eq!(cabin.workflow_ctl_queue, queued);
+    assert!(cabin.running);
+    assert!(cabin.workflow_ctl_await_acp);
 
     std::env::remove_var("GROKHUB_GROK");
     std::env::remove_var("GROKHUB_CONFIG");

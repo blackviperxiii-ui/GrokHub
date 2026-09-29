@@ -90,6 +90,9 @@ impl Cabin {
                 }
                 self.acp = Some(h);
                 self.persist();
+                if self.workflow_ctl_await_acp {
+                    self.workflow_ctl_await_acp = false;
+                }
             }
             Ok(Err(e)) => {
                 if self.permission_mode.uses_acp() {
@@ -102,6 +105,10 @@ impl Cabin {
                     self.abandon_turn_card();
                     self.chat_job_thread = None;
                     self.persist();
+                }
+                if self.workflow_ctl_await_acp {
+                    self.workflow_ctl_await_acp = false;
+                    self.workflow_ctl_queue.clear();
                 }
             }
             Err(mpsc::TryRecvError::Empty) => {
@@ -118,6 +125,10 @@ impl Cabin {
                     self.abandon_turn_card();
                     self.chat_job_thread = None;
                     self.persist();
+                }
+                if self.workflow_ctl_await_acp {
+                    self.workflow_ctl_await_acp = false;
+                    self.workflow_ctl_queue.clear();
                 }
             }
         }
@@ -987,17 +998,10 @@ impl Cabin {
     }
 
     /// One queued workflow verb, before chat follow-ups. A live send stops the drain.
-    /// Never pops during a handshake. A failed Ask handshake drops the queue.
+    /// Never pops during a handshake.
     pub(super) fn release_workflow_ctl_queue(&mut self) {
         if self.running || self.acp_spawn_rx.is_some() {
             return;
-        }
-        if self.workflow_ctl_await_acp {
-            self.workflow_ctl_await_acp = false;
-            if self.permission_mode.uses_acp() && self.acp.is_none() {
-                self.workflow_ctl_queue.clear();
-                return;
-            }
         }
         let Some(cmd) = self.workflow_ctl_queue.first().cloned() else {
             return;
