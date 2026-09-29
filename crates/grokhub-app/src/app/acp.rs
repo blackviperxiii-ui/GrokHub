@@ -4,6 +4,9 @@ use super::*;
 use grokhub_acp::ask_denied_without_acp;
 
 
+pub(super) type McpStatusMap = HashMap<String, grokhub_acp::McpDoctorStatus>;
+pub(super) type McpDoctorMsg = (String, Option<McpStatusMap>);
+
 pub(super) enum GrokSessMsg {
     Listed {
         gen: u64,
@@ -1401,9 +1404,10 @@ impl Cabin {
                 self.grok_catalog = cat;
                 self.grok_catalog_loaded = true;
                 self.status = format!(
-                    "{} skills · {} MCP · {} plugins · {} workflows",
+                    "{} skills · {} MCP · {} hooks · {} plugins · {} workflows",
                     self.grok_catalog.skills.len(),
                     self.grok_catalog.mcp.len(),
+                    self.grok_catalog.hooks.len(),
                     self.grok_catalog.plugins.len(),
                     self.grok_catalog.workflows.len()
                 );
@@ -1505,6 +1509,65 @@ impl Cabin {
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.grok_ext_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {}
+        }
+    }
+
+    pub(super) fn run_mcp_doctor(&mut self) {
+        if self.mcp_doctor_rx.is_some() {
+            return;
+        }
+        let Some(bin) = grokhub_acp::find_grok() else {
+            self.status = build_agent::grok_banner();
+            self.connector_note = build_agent::grok_banner();
+            return;
+        };
+        let cwd = self.grok_cwd();
+        let (tx, rx) = mpsc::channel();
+        self.mcp_doctor_rx = Some(rx);
+        let shown = "grok mcp doctor --json".to_string();
+        self.status = shown.clone();
+        self.connector_note = shown;
+        std::thread::spawn(move || {
+            let text = grokhub_acp::grok_user_stdout_allow_fail(
+                &bin,
+                &cwd,
+                &["mcp", "doctor", "--json"],
+                120,
+            )
+            .unwrap_or_else(|e| e);
+            let parsed = grokhub_acp::parse_mcp_doctor(&text);
+            let _ = tx.send((text, parsed));
+        });
+    }
+
+    pub(super) fn apply_mcp_doctor_result(
+        &mut self,
+        text: String,
+        parsed: Option<McpStatusMap>,
+    ) {
+        self.connector_note = text.clone();
+        let clip: String = text.chars().take(160).collect();
+        if !clip.is_empty() {
+            self.status = clip;
+        }
+        if let Some(map) = parsed {
+            self.mcp_status = map;
+        }
+    }
+
+    pub(super) fn poll_mcp_doctor(&mut self) {
+        let Some(rx) = self.mcp_doctor_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok((text, parsed)) => {
+                self.apply_mcp_doctor_result(text, parsed);
+                self.reload_grok_catalog();
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.mcp_doctor_rx = Some(rx);
             }
             Err(mpsc::TryRecvError::Disconnected) => {}
         }

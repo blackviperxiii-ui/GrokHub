@@ -723,6 +723,12 @@ pub struct Cabin {
     grok_ext_q: Vec<Vec<String>>,
     /// Last connector command output, shown on the Connectors page.
     connector_note: String,
+    /// Doctor output waiting to land on MCP rows. Not saved.
+    mcp_doctor_rx: Option<mpsc::Receiver<acp::McpDoctorMsg>>,
+    /// Per-server doctor status. Not saved. Survives a catalog reload.
+    mcp_status: acp::McpStatusMap,
+    /// Scroll the Connectors page to Hooks once.
+    scroll_to_hooks: bool,
 }
 
 fn fork_explainer_path() -> PathBuf {
@@ -1223,6 +1229,9 @@ impl Cabin {
             grok_ext_rx: None,
             grok_ext_q: Vec::new(),
             connector_note: String::new(),
+            mcp_doctor_rx: None,
+            mcp_status: HashMap::new(),
+            scroll_to_hooks: false,
         };
         if !quiet {
             if let Ok(mgr) = GlobalHotKeyManager::new() {
@@ -1604,6 +1613,9 @@ impl Cabin {
             grok_ext_rx: None,
             grok_ext_q: Vec::new(),
             connector_note: String::new(),
+            mcp_doctor_rx: None,
+            mcp_status: HashMap::new(),
+            scroll_to_hooks: false,
         }
     }
 
@@ -4466,6 +4478,7 @@ impl eframe::App for Cabin {
         self.poll_inspect();
         self.poll_grok_catalog();
         self.poll_grok_ext();
+        self.poll_mcp_doctor();
         self.poll_history_search();
         self.poll_palette_search();
         self.poll_mem_restore();

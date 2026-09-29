@@ -2,6 +2,7 @@
 
 use crate::locate::{grok_home, grok_user_stdout_timeout};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Default)]
@@ -10,6 +11,9 @@ pub struct GrokCatalog {
     pub mcp: Vec<GrokMcpRow>,
     pub plugins: Vec<GrokPluginRow>,
     pub workflows: Vec<GrokWorkflowRow>,
+    pub hooks: Vec<GrokHookRow>,
+    /// `None` when inspect omitted `projectTrusted`. The untrusted note stays off.
+    pub project_trusted: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +30,57 @@ pub struct GrokMcpRow {
     pub name: String,
     pub enabled: bool,
     pub target: String,
+}
+
+/// Where a hook file was loaded from. Unknown `source.type` values are `Other`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookOrigin {
+    User,
+    Project,
+    Other,
+}
+
+impl HookOrigin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Project => "project",
+            Self::Other => "other",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrokHookRow {
+    pub event: String,
+    pub hook_type: String,
+    pub target: String,
+    pub origin: HookOrigin,
+    pub path: String,
+    pub matcher: Option<String>,
+}
+
+/// One MCP row after `grok mcp doctor --json`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum McpDoctorStatus {
+    Connected,
+    NeedsSignIn,
+    Error(String),
+}
+
+const MCP_DOCTOR_DETAIL_MAX: usize = 120;
+
+impl McpDoctorStatus {
+    /// `Connected`, `Needs sign-in`, or `Error: ` plus at most 120 characters.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Connected => "Connected".to_string(),
+            Self::NeedsSignIn => "Needs sign-in".to_string(),
+            Self::Error(detail) => {
+                format!("Error: {}", clip_chars(detail.trim(), MCP_DOCTOR_DETAIL_MAX))
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +139,117 @@ pub fn parse_inspect_skills(v: &Value) -> Vec<GrokSkillRow> {
             })
         })
         .collect()
+}
+
+pub fn parse_inspect_hooks(v: &Value) -> Vec<GrokHookRow> {
+    let Some(arr) = v.get("hooks").and_then(|x| x.as_array()) else {
+        return Vec::new();
+    };
+    arr.iter().filter_map(hook_row).collect()
+}
+
+fn hook_row(h: &Value) -> Option<GrokHookRow> {
+    let event = h.get("event").and_then(|x| x.as_str()).unwrap_or("").trim();
+    if event.is_empty() {
+        return None;
+    }
+    let src = h.get("source").cloned().unwrap_or(Value::Null);
+    let kind = src.get("type").and_then(|x| x.as_str()).unwrap_or("");
+    let origin = match kind {
+        "user" => HookOrigin::User,
+        "project" => HookOrigin::Project,
+        _ => HookOrigin::Other,
+    };
+    let matcher = match h.get("matcher") {
+        Some(Value::String(s)) => {
+            let t = s.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            }
+        }
+        _ => None,
+    };
+    Some(GrokHookRow {
+        event: event.to_string(),
+        hook_type: h
+            .get("hookType")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+        target: h
+            .get("target")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+        origin,
+        path: src
+            .get("path")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
+        matcher,
+    })
+}
+
+pub fn parse_inspect_project_trusted(v: &Value) -> Option<bool> {
+    v.get("projectTrusted").and_then(|x| x.as_bool())
+}
+
+/// `grok mcp doctor --json`. `None` when `text` is not a JSON object with a
+/// `servers` array (leading or trailing noise included). A failed check whose
+/// detail contains "Auth required" is sign-in. `healthy: true` is connected.
+pub fn parse_mcp_doctor(text: &str) -> Option<HashMap<String, McpDoctorStatus>> {
+    let v: Value = serde_json::from_str(text.trim()).ok()?;
+    let servers = v.get("servers")?.as_array()?;
+    let mut out = HashMap::new();
+    for server in servers {
+        let Some(name) = server
+            .get("name")
+            .and_then(|x| x.as_str())
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+        else {
+            continue;
+        };
+        out.insert(name.to_string(), mcp_doctor_status(server));
+    }
+    Some(out)
+}
+
+fn mcp_doctor_status(server: &Value) -> McpDoctorStatus {
+    if server.get("healthy").and_then(|x| x.as_bool()) == Some(true) {
+        return McpDoctorStatus::Connected;
+    }
+    let mut auth = false;
+    let mut first_fail: Option<String> = None;
+    if let Some(checks) = server.get("checks").and_then(|x| x.as_array()) {
+        for check in checks {
+            if check.get("passed").and_then(|x| x.as_bool()).unwrap_or(true) {
+                continue;
+            }
+            let detail = check
+                .get("detail")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .trim();
+            if detail.to_ascii_lowercase().contains("auth required") {
+                auth = true;
+            }
+            if first_fail.is_none() && !detail.is_empty() {
+                first_fail = Some(clip_chars(detail, MCP_DOCTOR_DETAIL_MAX));
+            }
+        }
+    }
+    if auth {
+        return McpDoctorStatus::NeedsSignIn;
+    }
+    McpDoctorStatus::Error(first_fail.unwrap_or_else(|| "doctor reported unhealthy".to_string()))
+}
+
+fn clip_chars(s: &str, max: usize) -> String {
+    s.chars().take(max).collect()
 }
 
 pub fn parse_mcp_list(text: &str) -> Vec<GrokMcpRow> {
@@ -250,12 +416,16 @@ pub fn load_grok_catalog(bin: &Path, cwd: &Path) -> Result<GrokCatalog, String> 
     )
     .unwrap_or_default();
     let skills = parse_inspect_skills(&inspect_v);
+    let hooks = parse_inspect_hooks(&inspect_v);
+    let project_trusted = parse_inspect_project_trusted(&inspect_v);
     let workflows = parse_workflows(&skills, grok_home(), cwd);
     Ok(GrokCatalog {
         skills,
         mcp: parse_mcp_list(&mcp_text),
         plugins: parse_plugin_list(&plug_text),
         workflows,
+        hooks,
+        project_trusted,
     })
 }
 
@@ -392,5 +562,179 @@ mod tests {
         assert!(rows.iter().any(|w| w.name == "nightly"), "{rows:?}");
         assert!(!rows.iter().any(|w| w.name == "review"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_inspect_hooks_reads_user_null_project_and_other() {
+        let fixture = serde_json::json!({
+            "event": "pre_tool_use",
+            "hookType": "command",
+            "target": "echo hi",
+            "source": {"type": "user", "path": "~/.grok/hooks"},
+            "matcher": "Bash"
+        });
+        let null_matcher = serde_json::json!({
+            "event": "post_tool_use",
+            "hookType": "http",
+            "target": "https://example.test/hook",
+            "source": {"type": "user", "path": "~/.grok/hooks"},
+            "matcher": null
+        });
+        let v = serde_json::json!({
+            "projectTrusted": false,
+            "hooks": [
+                fixture,
+                null_matcher,
+                {
+                    "event": "session_start",
+                    "hookType": "command",
+                    "target": "echo project",
+                    "source": {"type": "project", "path": ".grok/hooks"},
+                    "matcher": "Edit"
+                },
+                {
+                    "event": "stop",
+                    "hookType": "command",
+                    "target": "echo other",
+                    "source": {"type": "plugin", "path": "/tmp/x"},
+                    "matcher": "Read"
+                }
+            ]
+        });
+        let rows = parse_inspect_hooks(&v);
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0].event, "pre_tool_use");
+        assert_eq!(rows[0].hook_type, "command");
+        assert_eq!(rows[0].target, "echo hi");
+        assert_eq!(rows[0].origin, HookOrigin::User);
+        assert_eq!(rows[0].path, "~/.grok/hooks");
+        assert_eq!(rows[0].matcher.as_deref(), Some("Bash"));
+        assert_eq!(rows[1].hook_type, "http");
+        assert_eq!(rows[1].matcher, None);
+        assert_eq!(rows[1].origin, HookOrigin::User);
+        assert_eq!(rows[2].origin, HookOrigin::Project);
+        assert_eq!(rows[2].path, ".grok/hooks");
+        assert_eq!(rows[3].origin, HookOrigin::Other);
+        assert_eq!(parse_inspect_project_trusted(&v), Some(false));
+        assert_eq!(
+            parse_inspect_project_trusted(&serde_json::json!({"projectTrusted": true})),
+            Some(true)
+        );
+        assert_eq!(parse_inspect_project_trusted(&serde_json::json!({})), None);
+        assert!(parse_inspect_hooks(&serde_json::json!({})).is_empty());
+    }
+
+    #[test]
+    fn load_grok_catalog_reads_hooks_from_the_same_inspect() {
+        let src = include_str!("catalog.rs");
+        let load = src
+            .split("pub fn load_grok_catalog(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn parse_workflows(").next())
+            .expect("load_grok_catalog");
+        assert_eq!(
+            load.matches("\"inspect\"").count(),
+            1,
+            "hooks must come from the inspect call already made: {load}"
+        );
+        assert!(load.contains("parse_inspect_hooks"), "{load}");
+        assert!(load.contains("parse_inspect_project_trusted"), "{load}");
+    }
+
+    #[test]
+    fn parse_mcp_doctor_maps_healthy_auth_required_and_errors() {
+        let healthy = r#"{"name":"fs","transport":"stdio","target":"npx -y @modelcontextprotocol/server-filesystem /tmp","source":"config","checks":[{"label":"server started","passed":true,"detail":"0.1s"},{"label":"handshake","passed":true,"detail":"ok"}],"healthy":true}"#;
+        let auth = r#"{"sources":[],"servers":[{"name":"linear","transport":"http","target":"https://mcp.linear.app/mcp","source":"config","checks":[{"label":"server started","passed":true,"detail":"0.2s"},{"label":"handshake failed","passed":false,"detail":"Send message error Transport [rmcp::transport::worker::WorkerTransport<rmcp::transport::streamable_http_client::StreamableHttpClientWorker<xai_grok_mcp::mcp_http_client::McpHttpClient<rmcp::transport::auth::AuthClient<reqwest::async_impl::client::Client>>>>] error: Auth required, when send initialize request","hint":"check server logs"}],"healthy":false}],"healthy_count":0,"failing_count":1}"#;
+        let healthy_doc = format!(r#"{{"servers":[{healthy}]}}"#);
+        let map = parse_mcp_doctor(&healthy_doc).expect("healthy json");
+        assert_eq!(map["fs"].label(), "Connected");
+        let auth_map = parse_mcp_doctor(auth).expect("auth json");
+        assert_eq!(auth_map["linear"], McpDoctorStatus::NeedsSignIn);
+        assert_eq!(auth_map["linear"].label(), "Needs sign-in");
+
+        let shouted = serde_json::json!({
+            "servers": [{
+                "name": "linear",
+                "healthy": false,
+                "checks": [{"label": "handshake failed", "passed": false, "detail": "AUTH REQUIRED"}]
+            }]
+        });
+        let shouted_map = parse_mcp_doctor(&shouted.to_string()).unwrap();
+        assert_eq!(shouted_map["linear"].label(), "Needs sign-in");
+
+        let refused = serde_json::json!({
+            "servers": [{
+                "name": "db",
+                "healthy": false,
+                "checks": [{"label": "connect", "passed": false, "detail": "connection refused"}]
+            }]
+        });
+        let refused_map = parse_mcp_doctor(&refused.to_string()).unwrap();
+        assert_eq!(refused_map["db"].label(), "Error: connection refused");
+
+        let long = "你".repeat(180);
+        let clipped = serde_json::json!({
+            "servers": [{
+                "name": "bad",
+                "healthy": false,
+                "checks": [{"label": "connect", "passed": false, "detail": long}]
+            }]
+        });
+        let clipped_map = parse_mcp_doctor(&clipped.to_string()).unwrap();
+        let label = clipped_map["bad"].label();
+        let shown = label.strip_prefix("Error: ").expect("error prefix");
+        assert_eq!(shown.chars().count(), 120);
+        assert!(shown.chars().all(|c| c == '你'), "{shown}");
+
+        let bare = serde_json::json!({
+            "servers": [{
+                "name": "z",
+                "healthy": false,
+                "checks": [{"label": "server started", "passed": true, "detail": "0.1s"}]
+            }]
+        });
+        let bare_map = parse_mcp_doctor(&bare.to_string()).unwrap();
+        assert_eq!(bare_map["z"].label(), "Error: doctor reported unhealthy");
+        let no_checks = serde_json::json!({"servers": [{"name": "z", "healthy": false}]});
+        assert_eq!(
+            parse_mcp_doctor(&no_checks.to_string()).unwrap()["z"].label(),
+            "Error: doctor reported unhealthy"
+        );
+
+        let auth_later = serde_json::json!({
+            "servers": [{
+                "name": "linear",
+                "healthy": false,
+                "checks": [
+                    {"passed": false, "detail": "connection refused"},
+                    {"passed": false, "detail": "Auth required, when send initialize request"}
+                ]
+            }]
+        });
+        assert_eq!(
+            parse_mcp_doctor(&auth_later.to_string()).unwrap()["linear"].label(),
+            "Needs sign-in"
+        );
+        let auth_on_pass = serde_json::json!({
+            "servers": [{
+                "name": "db",
+                "healthy": false,
+                "checks": [
+                    {"passed": true, "detail": "Auth required"},
+                    {"passed": false, "detail": "connection refused"}
+                ]
+            }]
+        });
+        assert_eq!(
+            parse_mcp_doctor(&auth_on_pass.to_string()).unwrap()["db"].label(),
+            "Error: connection refused"
+        );
+
+        assert!(parse_mcp_doctor("not json").is_none());
+        assert!(parse_mcp_doctor("").is_none());
+        assert!(parse_mcp_doctor("{\"servers\":1}").is_none());
+        assert!(parse_mcp_doctor("ok\n{\"servers\":[]}").is_none());
+        assert!(parse_mcp_doctor("{\"servers\":[]}\ntrailing").is_none());
+        assert!(parse_mcp_doctor("  {\"servers\":[]}  ").unwrap().is_empty());
     }
 }

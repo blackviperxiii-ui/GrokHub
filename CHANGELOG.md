@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.10.40 — 2026-09-29
+
+Connectors lists Grok Build hooks and whether each MCP server is connected or needs sign-in. `/hooks` opens that Hooks section. Doctor still runs from the button. Sign-in stays a note that points at Grok Build.
+
+- Linux: `grokhub-linux-v2.10.40.tar.gz` and AUR `pkgver=2.10.40`.
+- Windows: `GrokHub-Setup-2.10.40.exe` and `grokhub-windows-v2.10.40.zip`.
+
 ## 2.10.39 — 2026-09-29
 
 Skills → Workflows can pause, resume, and stop a run. `/workflow pause`, `/workflow resume`, and `/workflow stop` follow the permission pill. Empty `/workflow` and `/workflows` open Skills on the Workflows section. Grok Build does not list live runs here yet.

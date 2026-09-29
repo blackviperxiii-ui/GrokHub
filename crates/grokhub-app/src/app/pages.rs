@@ -122,6 +122,123 @@ impl Cabin {
         self.ui_skills(ctx);
     }
 
+    fn ui_connector_home_note(&self, ui: &mut egui::Ui) {
+        let path = grokhub_acp::cabin_grok_home()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "the cabin Grok home".to_string());
+        ui.label(
+            RichText::new(format!(
+                "MCP servers and hooks here come from your Grok Build home (~/.grok). Ask chats run in the cabin's own Grok home ({path}), so they don't see these yet."
+            ))
+            .size(12.0)
+            .color(crate::theme::muted()),
+        );
+    }
+
+    fn ui_hooks_section(&mut self, ui: &mut egui::Ui, q: &str) {
+        let hooks_section = ui
+            .vertical(|ui| {
+                crate::cards::section_label(ui, "Hooks");
+                if self.grok_catalog.project_trusted == Some(false) {
+                    ui.label(
+                        RichText::new(
+                            "Project hooks stay hidden until this folder is trusted in Grok Build (/hooks-trust).",
+                        )
+                        .size(12.0)
+                        .color(crate::theme::muted()),
+                    );
+                    ui.add_space(6.0);
+                }
+                let hooks: Vec<_> = self
+                    .grok_catalog
+                    .hooks
+                    .iter()
+                    .filter(|h| {
+                        q.is_empty()
+                            || h.event.to_ascii_lowercase().contains(q)
+                            || h.target.to_ascii_lowercase().contains(q)
+                            || h.matcher
+                                .as_ref()
+                                .is_some_and(|m| m.to_ascii_lowercase().contains(q))
+                    })
+                    .cloned()
+                    .collect();
+                if self.grok_catalog.hooks.is_empty() {
+                    ui.label(
+                        RichText::new(
+                            "No hooks in ~/.grok/hooks or this project's .grok/hooks.",
+                        )
+                        .color(crate::theme::muted()),
+                    );
+                } else if hooks.is_empty() {
+                    ui.label(RichText::new("None matched.").color(crate::theme::muted()));
+                } else {
+                    for h in &hooks {
+                        ui.add_space(8.0);
+                        ui.label(RichText::new(&h.event).size(14.0).color(crate::theme::fg()));
+                        let target_line = match (h.hook_type.is_empty(), h.target.is_empty()) {
+                            (true, true) => String::new(),
+                            (true, false) => h.target.clone(),
+                            (false, true) => h.hook_type.clone(),
+                            (false, false) => format!("{} {}", h.hook_type, h.target),
+                        };
+                        if !target_line.is_empty() {
+                            ui.label(
+                                RichText::new(target_line)
+                                    .size(13.0)
+                                    .color(crate::theme::fg()),
+                            );
+                        }
+                        let origin = if h.path.is_empty() {
+                            h.origin.as_str().to_string()
+                        } else {
+                            format!("{} · {}", h.origin.as_str(), h.path)
+                        };
+                        ui.label(
+                            RichText::new(origin)
+                                .size(12.0)
+                                .color(crate::theme::muted()),
+                        );
+                        let matcher = h.matcher.as_deref().unwrap_or("any");
+                        ui.label(
+                            RichText::new(format!("matcher {matcher}"))
+                                .size(12.0)
+                                .color(crate::theme::muted()),
+                        );
+                    }
+                }
+            })
+            .response;
+        if self.scroll_to_hooks {
+            hooks_section.scroll_to_me(Some(egui::Align::TOP));
+            self.scroll_to_hooks = false;
+        }
+    }
+
+    fn ui_mcp_row_status(
+        &self,
+        ui: &mut egui::Ui,
+        name: &str,
+        status: &grokhub_acp::McpDoctorStatus,
+    ) {
+        let color = match status {
+            grokhub_acp::McpDoctorStatus::Connected => crate::theme::live(),
+            grokhub_acp::McpDoctorStatus::NeedsSignIn | grokhub_acp::McpDoctorStatus::Error(_) => {
+                crate::theme::setup()
+            }
+        };
+        ui.label(RichText::new(status.label()).size(12.0).color(color));
+        if matches!(status, grokhub_acp::McpDoctorStatus::NeedsSignIn) {
+            ui.label(
+                RichText::new(format!(
+                    "Sign in from Grok Build: run grok, open /mcps, press i on {name}"
+                ))
+                .size(12.0)
+                .color(crate::theme::muted()),
+            );
+        }
+    }
+
     pub(super) fn ui_agents(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
             .frame(
@@ -1009,6 +1126,8 @@ impl Cabin {
                     );
                     ui.add_space(12.0);
                 }
+                self.ui_connector_home_note(ui);
+                ui.add_space(12.0);
                 crate::cards::section_label(ui, "GitHub");
                 ui.label(
                     RichText::new("Read-only. Who am I and List repos use the PAT via run_connector. No writes. No other websites.")
@@ -1048,11 +1167,7 @@ impl Cabin {
                     crate::cards::section_label(ui, "MCP servers");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if crate::cards::ghost_pill(ui, "Doctor") {
-                            self.run_grok_user_cmd(vec![
-                                "mcp".into(),
-                                "doctor".into(),
-                                "--json".into(),
-                            ]);
+                            self.run_mcp_doctor();
                         }
                         if crate::cards::white_pill(ui, "Add MCP") {
                             self.mcp_compose = true;
@@ -1092,7 +1207,10 @@ impl Cabin {
                             || s.name.to_ascii_lowercase().contains(&q)
                             || s.target.to_ascii_lowercase().contains(&q)
                     })
-                    .cloned()
+                    .map(|s| {
+                        let status = self.mcp_status.get(&s.name).cloned();
+                        (s.clone(), status)
+                    })
                     .collect();
                 if mcp.is_empty() {
                     ui.label(
@@ -1101,7 +1219,7 @@ impl Cabin {
                     );
                 } else {
                     crate::cards::tile_row(ui, mcp.len(), |ui, i| {
-                        let s = &mcp[i];
+                        let (s, status) = &mcp[i];
                         let add = if s.enabled { "Disable" } else { "Enable" };
                         let body = if s.target.is_empty() {
                             if s.enabled { "Enabled" } else { "Disabled" }.into()
@@ -1122,8 +1240,14 @@ impl Cabin {
                         if crate::cards::ghost_pill(ui, "Remove") {
                             mcp_remove = Some(s.name.clone());
                         }
+                        if let Some(status) = status {
+                            ui.add_space(4.0);
+                            self.ui_mcp_row_status(ui, &s.name, status);
+                        }
                     });
                 }
+                ui.add_space(20.0);
+                self.ui_hooks_section(ui, &q);
                 ui.add_space(20.0);
                 ui.horizontal(|ui| {
                     crate::cards::section_label(ui, "Plugins");
