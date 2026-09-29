@@ -137,6 +137,15 @@ pub(super) fn take_focused_composer(
     }
 }
 
+/// Edit puts your message in the composer. A draft already there stays on top.
+pub(super) fn edit_into_composer(draft: &str, body: &str) -> String {
+    if draft.trim().is_empty() {
+        body.to_string()
+    } else {
+        format!("{}\n\n{body}", draft.trim_end())
+    }
+}
+
 pub(super) fn slash_pick_step(pick: usize, len: usize, dir: i8) -> usize {
     if len == 0 {
         return 0;
@@ -176,6 +185,8 @@ pub(super) enum ChatBlockAct {
     None,
     Copy(String),
     Reply(String),
+    /// Your own message back into the composer to fix and send again.
+    Edit(String),
 }
 
 pub(super) struct ChatBlockPaint {
@@ -304,10 +315,22 @@ fn label_hit_width(ui: &egui::Ui, label: &str) -> f32 {
     galley.size().x + pad * 2.0
 }
 
-/// Copy, the gap, and Reply. A short user bubble is narrower than this row.
-pub(super) fn msg_acts_row_width(ui: &egui::Ui) -> f32 {
+/// Quiet actions under a bubble. Your own messages also get Edit.
+pub(super) fn msg_act_labels(user: bool) -> &'static [&'static str] {
+    if user {
+        &["Copy", "Edit", "Reply"]
+    } else {
+        &["Copy", "Reply"]
+    }
+}
+
+/// Copy, the gaps, and Reply (plus Edit on your own message). A short user
+/// bubble is narrower than this row.
+pub(super) fn msg_acts_row_width(ui: &egui::Ui, user: bool) -> f32 {
     let gap = ui.spacing().item_spacing.x.max(0.0);
-    label_hit_width(ui, "Copy") + gap + label_hit_width(ui, "Reply")
+    let labels = msg_act_labels(user);
+    labels.iter().map(|l| label_hit_width(ui, l)).sum::<f32>()
+        + gap * labels.len().saturating_sub(1) as f32
 }
 
 pub(super) fn paint_msg_acts(
@@ -320,45 +343,40 @@ pub(super) fn paint_msg_acts(
     let mut act = ChatBlockAct::None;
     let mut bounds: Option<egui::Rect> = None;
     let mut paint = |ui: &mut egui::Ui| {
-        let copy = crate::theme::felt_label_button(
-            ui,
-            "Copy",
-            egui::Color32::TRANSPARENT,
-            crate::theme::muted(),
-            6.0,
-            egui::vec2(0.0, 0.0),
-            None,
-            false,
-        );
-        if copy.clicked() {
-            act = ChatBlockAct::Copy(body.to_string());
-        }
-        bounds = Some(match bounds {
-            Some(rect) => rect.union(copy.rect),
-            None => copy.rect,
-        });
-        let reply = crate::theme::felt_label_button(
-            ui,
-            "Reply",
-            egui::Color32::TRANSPARENT,
-            crate::theme::muted(),
-            6.0,
-            egui::vec2(0.0, 0.0),
-            None,
-            false,
-        );
-        if reply.clicked() {
-            act = ChatBlockAct::Reply(body.to_string());
-        }
-        if let Some(rect) = bounds {
-            bounds = Some(rect.union(reply.rect));
+        for &label in msg_act_labels(user) {
+            let resp = crate::theme::felt_label_button(
+                ui,
+                label,
+                egui::Color32::TRANSPARENT,
+                crate::theme::muted(),
+                6.0,
+                egui::vec2(0.0, 0.0),
+                None,
+                false,
+            );
+            let resp = if label == "Edit" {
+                resp.on_hover_text("Put this message back in the composer to fix and send again")
+            } else {
+                resp
+            };
+            if resp.clicked() {
+                act = match label {
+                    "Copy" => ChatBlockAct::Copy(body.to_string()),
+                    "Edit" => ChatBlockAct::Edit(body.to_string()),
+                    _ => ChatBlockAct::Reply(body.to_string()),
+                };
+            }
+            bounds = Some(match bounds {
+                Some(rect) => rect.union(resp.rect),
+                None => resp.rect,
+            });
         }
     };
     // User bubbles sit on the right. Copy+Reply is wider than a short bubble
     // ("hey"). A fixed 96px floor still let Reply draw past the window.
     // Size the lead from the real row so Reply ends on the bubble's right edge.
     let gap = ui.spacing().item_spacing.x.max(0.0);
-    let acts_w = msg_acts_row_width(ui);
+    let acts_w = msg_acts_row_width(ui, user);
     ui.scope(|ui| {
         ui.set_max_width(avail);
         ui.horizontal(|ui| {
@@ -999,6 +1017,11 @@ impl Cabin {
                                     self.composer.push('\n');
                                 }
                                 self.composer_want_focus = true;
+                            }
+                            ChatBlockAct::Edit(body) => {
+                                self.composer = edit_into_composer(&self.composer, &body);
+                                self.composer_want_focus = true;
+                                self.status = "Edit and send to ask again".into();
                             }
                             ChatBlockAct::None => {}
                         }

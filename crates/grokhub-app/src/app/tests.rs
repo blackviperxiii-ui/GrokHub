@@ -15247,3 +15247,51 @@ fn empty_project_name_is_refused() {
     assert!(!app.running);
     assert!(app.chat_job_thread.is_none());
 }
+
+#[test]
+fn edit_puts_your_message_back_without_dropping_a_draft() {
+    assert_eq!(super::chat_ui::edit_into_composer("", "fix the tests"), "fix the tests");
+    assert_eq!(super::chat_ui::edit_into_composer("  \n", "fix the tests"), "fix the tests");
+    assert_eq!(
+        super::chat_ui::edit_into_composer("half typed\n", "fix the tests"),
+        "half typed\n\nfix the tests"
+    );
+    assert_eq!(super::chat_ui::msg_act_labels(true), &["Copy", "Edit", "Reply"]);
+    assert_eq!(super::chat_ui::msg_act_labels(false), &["Copy", "Reply"]);
+    let src = cabin_src();
+    let chat = fn_src(&src, "ui_chat");
+    assert!(chat.contains("ChatBlockAct::Edit(body)"), "{chat}");
+    assert!(chat.contains("edit_into_composer"), "{chat}");
+}
+
+#[test]
+fn user_act_row_with_edit_stays_inside_a_narrow_pane() {
+    for width in [300.0_f32, 360.0, 800.0] {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            crate::theme::apply(ctx, true);
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.allocate_ui(egui::vec2(width, 200.0), |ui| {
+                    ui.set_max_width(width);
+                    let row = ui.max_rect();
+                    let bubble = super::chat_ui::paint_speech_bubble(ui, "hey", true, false);
+                    let acts = super::chat_ui::paint_msg_acts(
+                        ui,
+                        true,
+                        "hey",
+                        row.width(),
+                        bubble.rect.width(),
+                    );
+                    assert!(acts.row.min.x >= row.min.x - 0.5, "width {width}: {:?}", acts.row);
+                    assert!(acts.row.max.x <= row.max.x + 1.0, "width {width}: {:?}", acts.row);
+                    let want = super::chat_ui::msg_acts_row_width(ui, true);
+                    assert!(
+                        acts.row.width() + 1.0 >= want,
+                        "width {width}: Edit row clipped {} < {want}",
+                        acts.row.width()
+                    );
+                });
+            });
+        });
+    }
+}
