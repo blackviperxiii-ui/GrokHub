@@ -1,5 +1,32 @@
 //! Composer slash commands. Local — they never go to the model.
 
+/// `pause` / `resume` / `stop` on `/workflow`. Matched case-insensitively.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowVerb {
+    Pause,
+    Resume,
+    Stop,
+}
+
+impl WorkflowVerb {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pause => "pause",
+            Self::Resume => "resume",
+            Self::Stop => "stop",
+        }
+    }
+
+    pub fn parse(token: &str) -> Option<Self> {
+        match token.trim().to_ascii_lowercase().as_str() {
+            "pause" => Some(Self::Pause),
+            "resume" => Some(Self::Resume),
+            "stop" => Some(Self::Stop),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Slash {
     Forget(Option<String>),
@@ -59,11 +86,17 @@ pub enum Slash {
     Loop(String),
     GrokSkills,
     GrokConnectors,
+    /// Empty `/workflow` and `/workflows` — Skills tab, Workflows section.
+    GrokWorkflows,
     Model(String),
     ImagineVideo(String),
     Goal(String),
     Fork,
     Workflow(String),
+    /// `/workflow pause|resume|stop <name-or-run-id>`.
+    WorkflowCtl { verb: WorkflowVerb, target: String },
+    /// `/workflow pause|resume|stop` with no target. Not forwarded.
+    WorkflowUsage,
     RewindFiles,
     Worktree,
     /// Select the btw side-ask pill. Persist id stays `ask`.
@@ -131,11 +164,12 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/fork" => Some(Slash::Fork),
         "/btw" => Some(Slash::Btw),
         "/view-plan" | "/show-plan" | "/plan-view" => Some(Slash::ViewPlan),
-        "/workflow" if rest.is_empty() => Some(Slash::GrokConnectors),
-        "/workflow" if !rest.is_empty() => Some(Slash::Workflow(rest.to_string())),
+        "/workflow" if rest.is_empty() => Some(Slash::GrokWorkflows),
+        "/workflow" => Some(parse_workflow_arg(rest)),
         "/worktree" => Some(Slash::Worktree),
         "/skills" => Some(Slash::GrokSkills),
-        "/plugins" | "/marketplace" | "/mcps" | "/hooks" | "/connectors" | "/workflows" => {
+        "/workflows" => Some(Slash::GrokWorkflows),
+        "/plugins" | "/marketplace" | "/mcps" | "/hooks" | "/connectors" => {
             Some(Slash::GrokConnectors)
         }
         "/model" | "/m" if !rest.is_empty() => Some(Slash::Model(rest.to_string())),
@@ -241,6 +275,21 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/room" if !rest.is_empty() => Some(Slash::Room(rest.to_string())),
         "/export" => Some(Slash::Export),
         _ => None,
+    }
+}
+
+/// `/workflow pause|resume|stop <target>`, or a launch name when the first word is not a verb.
+fn parse_workflow_arg(rest: &str) -> Slash {
+    let mut parts = rest.splitn(2, char::is_whitespace);
+    let head = parts.next().unwrap_or("");
+    let target = parts.next().unwrap_or("").trim();
+    match WorkflowVerb::parse(head) {
+        Some(_) if target.is_empty() => Slash::WorkflowUsage,
+        Some(verb) => Slash::WorkflowCtl {
+            verb,
+            target: target.to_string(),
+        },
+        None => Slash::Workflow(rest.to_string()),
     }
 }
 
@@ -354,11 +403,14 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Loop(_) => "loop",
         Slash::GrokSkills => "grok_skills",
         Slash::GrokConnectors => "grok_connectors",
+        Slash::GrokWorkflows => "grok_workflows",
         Slash::Model(_) => "model",
         Slash::ImagineVideo(_) => "imagine_video",
         Slash::Goal(_) => "goal",
         Slash::Fork => "fork",
         Slash::Workflow(_) => "workflow",
+        Slash::WorkflowCtl { .. } => "workflow_ctl",
+        Slash::WorkflowUsage => "workflow_usage",
         Slash::RewindFiles => "rewind_files",
         Slash::Worktree => "worktree",
         Slash::Btw => "btw",
@@ -420,6 +472,9 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/view-plan", hint: "Show the plan from Plan mode", insert: "/view-plan", run_on_pick: true },
     SlashDef { cmd: "/worktree", hint: "Next chat in a git worktree", insert: "/worktree", run_on_pick: true },
     SlashDef { cmd: "/workflow", hint: "Launch a Grok workflow…", insert: "/workflow ", run_on_pick: false },
+    SlashDef { cmd: "/workflow pause", hint: "Pause a Grok workflow run…", insert: "/workflow pause ", run_on_pick: false },
+    SlashDef { cmd: "/workflow resume", hint: "Resume a Grok workflow run…", insert: "/workflow resume ", run_on_pick: false },
+    SlashDef { cmd: "/workflow stop", hint: "Stop a Grok workflow run…", insert: "/workflow stop ", run_on_pick: false },
     SlashDef { cmd: "/room", hint: "Speak the room — stage a project", insert: "/room ", run_on_pick: false },
     SlashDef { cmd: "/dream", hint: "Imagine last night’s job", insert: "/dream", run_on_pick: true },
     SlashDef { cmd: "/inhabit", hint: "Hand this Grok to another box", insert: "/inhabit ", run_on_pick: false },
@@ -612,6 +667,8 @@ pub fn slash_help() -> String {
         "/view-plan — show the plan from Plan mode (/show-plan and /plan-view too)",
         "/worktree — next chat starts in a git worktree",
         "/workflow <name> — launch a Grok Build workflow",
+        "/workflow pause|resume|stop <name-or-run-id> — pause, resume, or stop that run",
+        "/workflows — open Skills with the Workflows section in view",
         "/room <name> — speak the room",
         "/export — write this chat as markdown",
         "/rename <title> — name this chat (permanent)",
@@ -929,5 +986,76 @@ mod tests {
         ));
         assert!(!is_cabin_slash_turn("assistant", "Hello Viper"));
         assert!(is_cabin_slash_turn("user", "/help"));
+    }
+
+    #[test]
+    fn workflow_ctl_parses_verbs_run_id_and_missing_target() {
+        assert_eq!(
+            parse_slash("/workflow PAUSE x"),
+            Some(Slash::WorkflowCtl {
+                verb: WorkflowVerb::Pause,
+                target: "x".into(),
+            })
+        );
+        assert_eq!(
+            parse_slash("/workflow resume review"),
+            Some(Slash::WorkflowCtl {
+                verb: WorkflowVerb::Resume,
+                target: "review".into(),
+            })
+        );
+        assert_eq!(
+            parse_slash("/workflow stop review-changes-2"),
+            Some(Slash::WorkflowCtl {
+                verb: WorkflowVerb::Stop,
+                target: "review-changes-2".into(),
+            })
+        );
+        assert_eq!(
+            parse_slash("/workflow PaUsE review-changes-2"),
+            Some(Slash::WorkflowCtl {
+                verb: WorkflowVerb::Pause,
+                target: "review-changes-2".into(),
+            })
+        );
+        assert_eq!(parse_slash("/workflow pause"), Some(Slash::WorkflowUsage));
+        assert_eq!(parse_slash("/workflow RESUME"), Some(Slash::WorkflowUsage));
+        assert_eq!(parse_slash("/workflow stop"), Some(Slash::WorkflowUsage));
+        assert_eq!(parse_slash("/workflow review"), Some(Slash::Workflow("review".into())));
+        assert_eq!(parse_slash("/workflow"), Some(Slash::GrokWorkflows));
+        assert_eq!(parse_slash("/workflows"), Some(Slash::GrokWorkflows));
+        assert_eq!(parse_slash("/mcps"), Some(Slash::GrokConnectors));
+        assert_eq!(parse_slash("/plugins"), Some(Slash::GrokConnectors));
+        assert_eq!(parse_slash("/marketplace"), Some(Slash::GrokConnectors));
+        assert_eq!(parse_slash("/connectors"), Some(Slash::GrokConnectors));
+        assert_eq!(parse_slash("/hooks"), Some(Slash::GrokConnectors));
+        assert_eq!(
+            parse_slash("/workflow pause review-changes-2")
+                .as_ref()
+                .map(slash_kind),
+            Some("workflow_ctl")
+        );
+        assert_eq!(slash_kind(&Slash::WorkflowUsage), "workflow_usage");
+        assert_eq!(slash_kind(&Slash::GrokWorkflows), "grok_workflows");
+        assert_eq!(WorkflowVerb::Pause.as_str(), "pause");
+        assert_eq!(WorkflowVerb::Resume.as_str(), "resume");
+        assert_eq!(WorkflowVerb::Stop.as_str(), "stop");
+        for cmd in ["/workflow pause", "/workflow resume", "/workflow stop"] {
+            let hit = SLASH_COMMANDS
+                .iter()
+                .find(|s| s.cmd == cmd)
+                .unwrap_or_else(|| panic!("missing palette hint {cmd}"));
+            assert!(!hit.run_on_pick, "{cmd} must not run on pick");
+            assert!(hit.insert.ends_with(' '), "{cmd} insert leaves room for a target");
+        }
+        let hits = filter_slash_commands("/workflow pause");
+        assert!(
+            hits.iter().any(|s| s.cmd == "/workflow pause" && !s.run_on_pick),
+            "{hits:?}"
+        );
+        assert!(slash_help().contains("/workflow pause|resume|stop <name-or-run-id>"));
+        assert!(slash_help().contains("/workflows — open Skills with the Workflows section in view"));
+        assert!(!unknown_cabin_slash("/workflow pause review-changes-2"));
+        assert!(!unknown_cabin_slash("/workflow pause"));
     }
 }

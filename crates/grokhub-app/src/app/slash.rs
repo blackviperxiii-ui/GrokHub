@@ -122,6 +122,12 @@ impl Cabin {
                 self.skills_tab_connectors = false;
                 self.reload_grok_catalog();
             }
+            Slash::GrokWorkflows => {
+                self.nav = Nav::Skills;
+                self.skills_tab_connectors = false;
+                self.scroll_to_workflows = true;
+                self.reload_grok_catalog();
+            }
             Slash::GrokConnectors => {
                 self.nav = Nav::Connectors;
                 self.skills_tab_connectors = true;
@@ -197,6 +203,13 @@ impl Cabin {
             Slash::Workflow(name) => {
                 self.send_grok_slash(&format!("/workflow {name}"));
                 self.status = format!("Workflow {name}");
+            }
+            Slash::WorkflowCtl { verb, target } => {
+                self.send_workflow_ctl(verb, &target);
+            }
+            Slash::WorkflowUsage => {
+                self.workflow_status_live = true;
+                self.status = "Usage: /workflow <verb> <name-or-run-id>".into();
             }
             Slash::Worktree => {
                 if let Some(t) = self.threads.get_mut(self.thread_idx) {
@@ -778,6 +791,28 @@ impl Cabin {
                 });
             }
         }
+    }
+
+    /// Forward `/workflow <verb> <target>` through `send_grok_slash`. A live turn queues it.
+    pub(super) fn send_workflow_ctl(&mut self, verb: WorkflowVerb, target: &str) {
+        let target = target.trim();
+        self.workflow_status_live = true;
+        if target.is_empty() {
+            self.status = "Usage: /workflow <verb> <name-or-run-id>".into();
+            return;
+        }
+        let cmd = format!("/workflow {} {}", verb.as_str(), target);
+        if self.running {
+            self.workflow_ctl_queue.push(cmd);
+            self.status = format!(
+                "Workflow {} {} — queued until the current turn ends",
+                verb.as_str(),
+                target
+            );
+            return;
+        }
+        self.status = format!("Workflow {} {} — sent", verb.as_str(), target);
+        self.send_grok_slash(&cmd);
     }
 
     pub(super) fn run_slash_line(&mut self, line: &str) {

@@ -515,6 +515,9 @@ impl Cabin {
                     self.chat_job_thread = None;
                     self.persist();
                     self.maybe_continue_ptt();
+                    if !self.running {
+                        self.release_workflow_ctl_queue();
+                    }
                 }
             }
         }
@@ -747,7 +750,7 @@ impl Cabin {
                 } else {
                     self.scheduled_perm = false;
                     let status = self.apply_job_fail(&rewrite_truncation_error(&e));
-                    if paints {
+                    if paints || self.chat_job_thread.is_none() {
                         self.status = status;
                     }
                     self.abandon_turn_card();
@@ -755,6 +758,9 @@ impl Cabin {
                     self.persist();
                 }
                 self.maybe_continue_ptt();
+                if !self.running {
+                    self.release_workflow_ctl_queue();
+                }
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.grok_p_rx = Some(rx);
@@ -777,12 +783,15 @@ impl Cabin {
                     self.scheduled_perm = false;
                     let paints = self.stream_here();
                     let status = self.apply_job_fail("Grok Build session missing");
-                    if paints {
+                    if paints || self.chat_job_thread.is_none() {
                         self.status = status;
                     }
                     self.abandon_turn_card();
                     self.chat_job_thread = None;
                     self.persist();
+                }
+                if !self.running {
+                    self.release_workflow_ctl_queue();
                 }
             }
         }
@@ -925,7 +934,7 @@ impl Cabin {
             .map(|t| t.grok_worktree)
             .unwrap_or(false);
         let (yolo, auto) = self.permission_mode.composer_headless_flags();
-        if let Ok((pid, rx)) = grokhub_acp::spawn_grok_p_stream(
+        match grokhub_acp::spawn_grok_p_stream(
             cmd,
             &cwd,
             resume.as_deref(),
@@ -942,9 +951,17 @@ impl Cabin {
             user_home,
             worktree,
         ) {
-            self.grok_p_pid = Some(pid);
-            self.grok_p_rx = Some(rx);
-            self.running = true;
+            Ok((pid, rx)) => {
+                self.grok_p_pid = Some(pid);
+                self.grok_p_rx = Some(rx);
+                self.running = true;
+            }
+            Err(e) => {
+                self.grok_p_pid = None;
+                self.grok_p_rx = None;
+                self.running = false;
+                self.status = format!("Grok Build could not start: {e}");
+            }
         }
     }
 
@@ -961,7 +978,33 @@ impl Cabin {
         }
     }
 
+    /// One queued verb after the turn is gone, including Stop. Skips an ACP handshake.
+    pub(super) fn release_workflow_ctl_if_idle(&mut self) {
+        if self.running || self.workflow_ctl_queue.is_empty() || self.acp_spawn_rx.is_some() {
+            return;
+        }
+        self.release_workflow_ctl_queue();
+    }
+
+    /// One queued workflow verb, before chat follow-ups. A live send stops the drain.
+    pub(super) fn release_workflow_ctl_queue(&mut self) {
+        if self.running {
+            return;
+        }
+        let Some(cmd) = self.workflow_ctl_queue.first().cloned() else {
+            return;
+        };
+        self.workflow_ctl_queue.remove(0);
+        if let Some(Slash::WorkflowCtl { verb, target }) = parse_slash(&cmd) {
+            self.send_workflow_ctl(verb, &target);
+        }
+    }
+
     pub(super) fn drain_followup_queue(&mut self) {
+        if self.running {
+            return;
+        }
+        self.release_workflow_ctl_queue();
         if self.running {
             return;
         }
