@@ -11771,6 +11771,32 @@ fn connectors_hooks_and_doctor_do_not_write_grok_home() {
         !poll_cat.contains("mcp_status"),
         "catalog reload must not clear doctor status: {poll_cat}"
     );
+    let live = src
+        .split("let live = wants_live_repaint(")
+        .nth(1)
+        .and_then(|s| s.split("ctx.request_repaint_after").next())
+        .expect("wants_live_repaint call");
+    assert!(
+        live.contains("mcp_doctor_rx.is_some()"),
+        "doctor must keep repainting until the status lands: {live}"
+    );
+    let skills = fn_src(&src, "ui_skills");
+    let doctor_btn = skills
+        .split("ghost_pill(ui, \"Doctor\")")
+        .nth(1)
+        .expect("Doctor button");
+    let start = doctor_btn
+        .find("run_mcp_doctor()")
+        .expect("run_mcp_doctor");
+    let after = doctor_btn[start + "run_mcp_doctor()".len()..].trim_start();
+    let after_stmt = after
+        .strip_prefix(';')
+        .map(str::trim_start)
+        .unwrap_or(after);
+    assert!(
+        after_stmt.starts_with("ui.ctx().request_repaint()"),
+        "Doctor must request a repaint right after run_mcp_doctor: {after_stmt}"
+    );
 }
 
 #[test]

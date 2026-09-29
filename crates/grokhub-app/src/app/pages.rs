@@ -1168,6 +1168,7 @@ impl Cabin {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if crate::cards::ghost_pill(ui, "Doctor") {
                             self.run_mcp_doctor();
+                            ui.ctx().request_repaint();
                         }
                         if crate::cards::white_pill(ui, "Add MCP") {
                             self.mcp_compose = true;

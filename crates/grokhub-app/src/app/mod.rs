@@ -4602,6 +4602,7 @@ impl eframe::App for Cabin {
                 || self.inspect_rx.is_some()
                 || self.grok_catalog_rx.is_some()
                 || self.grok_ext_rx.is_some()
+                || self.mcp_doctor_rx.is_some()
                 || self.grok_loop_rx.is_some()
                 || self.history_rx.is_some()
                 || self.mem_restore_rx.is_some()
