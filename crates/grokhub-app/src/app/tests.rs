@@ -8075,8 +8075,11 @@ fn shell_echo_lands_on_the_open_chat() {
     cabin.messages = cabin.threads[0].messages.clone();
 
     cabin.queue_sh("echo grokhub-proof".into());
+    // PowerShell on a loaded Windows runner can sit past 5s before the first
+    // line. Same 45s budget as `echo_ok`. The product host cap is 90s.
+    let budget = std::time::Duration::from_secs(if cfg!(windows) { 45 } else { 5 });
     let start = std::time::Instant::now();
-    while start.elapsed() < std::time::Duration::from_secs(5) {
+    while start.elapsed() < budget {
         cabin.poll_job();
         let so_far = cabin
             .messages
@@ -8092,6 +8095,7 @@ fn shell_echo_lands_on_the_open_chat() {
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
+    cabin.poll_job();
     cabin.halt_in_flight();
     assert!(!cabin.running, "echo should finish, status {}", cabin.status);
     let text = cabin.messages.iter().map(|m| m.1.clone()).collect::<Vec<_>>().join("\n");
@@ -8739,6 +8743,65 @@ fn pin_thread_flips_the_pin() {
     assert!(cabin.threads[idx].pinned_ms > 0);
     assert_eq!(cabin.status, format!("Pinned {title}"));
     quiet.settle();
+}
+
+#[test]
+fn persist_keeps_threads_in_the_dir_it_was_scheduled_with() {
+    let _g = crate::config::hold_test_config();
+    let first = crate::config::test_config_root("persist-pin-a");
+    let second = crate::config::test_config_root("persist-pin-b");
+    let prev = std::env::var_os("GROKHUB_CONFIG");
+    struct Restore {
+        prev: Option<std::ffi::OsString>,
+        roots: Vec<std::path::PathBuf>,
+    }
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            restore_env("GROKHUB_CONFIG", self.prev.take());
+            for root in &self.roots {
+                let _ = std::fs::remove_dir_all(root);
+            }
+        }
+    }
+    let _restore = Restore {
+        prev,
+        roots: vec![first.clone(), second.clone()],
+    };
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &first);
+    let mut cabin = super::Cabin::quiet_for_test();
+    let mut thread = crate::threads::ChatThread::new("PinnedLeak", false);
+    thread.pinned = true;
+    cabin.threads = vec![thread];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    let io = cabin.persist_io.clone();
+    let hold = io.lock().unwrap_or_else(|e| e.into_inner());
+    cabin.persist();
+    std::env::set_var("GROKHUB_CONFIG", &second);
+    drop(hold);
+    let scheduled = first.join("threads.json");
+    let moved = second.join("threads.json");
+    let mut landed = String::new();
+    for _ in 0..80 {
+        if let Ok(body) = std::fs::read_to_string(&scheduled) {
+            if body.contains("PinnedLeak") {
+                landed = body;
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    let leaked = std::fs::read_to_string(&moved).unwrap_or_default();
+    assert!(
+        landed.contains("PinnedLeak"),
+        "scheduled persist must write threads.json into the captured config dir; the later dir has {leaked}"
+    );
+    assert!(
+        !leaked.contains("PinnedLeak"),
+        "a later GROKHUB_CONFIG must not receive that threads.json: {leaked}"
+    );
 }
 
 #[test]

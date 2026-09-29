@@ -20,7 +20,7 @@ pub use client::{
     is_sigterm_status, jsonrpc_error_text, list_sessions, merge_grok_sessions, parse_session_list,
     history_label_after_plan, parse_session_markdown, parse_single_turn, preferred_history_title,
     run_single_turn, title_after_selecting_plan,
-    run_single_turn_full, spawn_grok_p_stream, session_usage,
+    run_single_turn_full, spawn_grok_p_stream, session_usage, GrokPAttach,
     session_title_from_chat_history,
     show_session, split_session_row, wait_event, AcpHandle, GrokSession, SingleTurn, SpawnOpts,
 };

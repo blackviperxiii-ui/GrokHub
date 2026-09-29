@@ -208,7 +208,7 @@ fn wants_automation(user: &str) -> bool {
 
 fn has_token(text: &str, tokens: &[&str]) -> bool {
     text.split(|c: char| !c.is_ascii_alphanumeric())
-        .any(|word| tokens.iter().any(|token| word == *token))
+        .any(|word| tokens.contains(&word))
 }
 
 fn word_count(text: &str) -> usize {

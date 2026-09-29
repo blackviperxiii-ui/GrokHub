@@ -1248,6 +1248,8 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                 let tip = chip_why_tip(why, &c.label);
                 let (rect, hit_resp) =
                     ui.allocate_exact_size(egui::vec2(pill_w, CHIP_ROW_H), Sense::click());
+                // Quiet chips stay in their slot. Hover still sets the hand cursor.
+                let hit_resp = crate::theme::pointing(hit_resp);
                 if hit_resp.hovered() {
                     chip_hover = Some(rect);
                 }

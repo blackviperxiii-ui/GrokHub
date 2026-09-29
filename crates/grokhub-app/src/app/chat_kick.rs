@@ -355,11 +355,13 @@ impl Cabin {
             Some(model.as_str()),
             effort,
             mode,
-            image.as_deref(),
+            grokhub_acp::GrokPAttach {
+                image: image.as_deref(),
+                learned: &grokhub_core::brief_for(&self.learning, "chat"),
+            },
             fork,
             user_home,
             worktree,
-            &grokhub_core::brief_for(&self.learning, "chat"),
         ) {
             Ok((pid, rx)) => {
                 self.grok_p_pid = Some(pid);
