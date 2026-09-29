@@ -289,6 +289,8 @@ pub fn greeting_prompt(input: &GreetingInput) -> String {
         ),
         "Use their name if you know it. Sound like you already know them, not like a status screen.".into(),
         "Do not say the cabin is ready. Do not say welcome. Do not quote USER.md or MEMORY.md.".into(),
+        "Do not repeat a sentence from USER.md, MEMORY.md, Insights, or Last night.".into(),
+        "If an insight says what they were doing, greet them as someone who already knows. Use your own words.".into(),
         "Do not mention the machine, hostname, or GrokHub.".into(),
         "If a last project is set, offer it once, lightly. First run is a start. Returning is picking up.".into(),
         "Reply with only the line.".into(),
@@ -387,9 +389,16 @@ fn is_product_greeting(s: &str) -> bool {
 }
 
 pub fn pick_greeting(local: &str, llm: Option<&str>) -> String {
+    pick_greeting_against(local, llm, &[])
+}
+
+/// Keep the local line when the model greeting quotes memory, an insight, or a chat.
+pub fn pick_greeting_against(local: &str, llm: Option<&str>, sources: &[String]) -> String {
     if let Some(raw) = llm {
         if let Some(g) = parse_llm_greeting(raw) {
-            return g;
+            if !sources.iter().any(|source| crate::situation::echoes_source(&g, source)) {
+                return g;
+            }
         }
     }
     local.to_string()
@@ -564,6 +573,7 @@ mod tests {
             "Viper",
             22,
         ));
+        assert!(prompt.contains("Do not repeat"), "{prompt}");
         assert!(prompt.contains("Viper"), "{prompt}");
         assert!(prompt.contains("Paint the wall"), "{prompt}");
         assert!(
@@ -654,6 +664,16 @@ mod tests {
         assert_eq!(
             pick_greeting(local, Some("token sk-abcdefghijklmnopqrstuv")),
             local
+        );
+        let quoted = "Evening, Viper. Paint the wall tonight before you stop.";
+        assert_eq!(
+            pick_greeting_against(
+                local,
+                Some(quoted),
+                &["Paint the wall tonight before you stop.".into()]
+            ),
+            local,
+            "a greeting that quotes memory stays on the local line"
         );
     }
 

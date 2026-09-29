@@ -551,10 +551,11 @@ pub fn paint_quiet_chrome(painter: &egui::Painter, rect: egui::Rect, fill: egui:
     painter.rect_filled(rect, 8.0, fill);
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct GlidePick {
     hover: Option<egui::Rect>,
     selected: Option<egui::Rect>,
+    rows: Vec<egui::Rect>,
 }
 
 fn glide_id(group: &str) -> egui::Id {
@@ -586,6 +587,9 @@ pub fn glide_paint(ui: &egui::Ui, group: &str) {
 pub fn glide_candidate(ui: &egui::Ui, group: &str, rect: egui::Rect, hovered: bool, selected: bool) {
     let id = glide_id(group).with("pick");
     let mut pick = ui.data(|d| d.get_temp::<GlidePick>(id)).unwrap_or_default();
+    if rect.width() >= 1.0 && rect.height() >= 1.0 && ui.clip_rect().intersects(rect) {
+        pick.rows.push(rect);
+    }
     if hovered {
         pick.hover = Some(rect);
     }
@@ -595,13 +599,70 @@ pub fn glide_candidate(ui: &egui::Ui, group: &str, rect: egui::Rect, hovered: bo
     ui.data_mut(|d| d.insert_temp(id, pick));
 }
 
+fn rect_gap(rect: egui::Rect, pointer: egui::Pos2) -> f32 {
+    let dx = (rect.min.x - pointer.x).max(pointer.x - rect.max.x).max(0.0);
+    let dy = (rect.min.y - pointer.y).max(pointer.y - rect.max.y).max(0.0);
+    dx.hypot(dy)
+}
+
+fn same_glide_row(a: egui::Rect, b: egui::Rect) -> bool {
+    (a.min.x - b.min.x).abs() < 0.5
+        && (a.min.y - b.min.y).abs() < 0.5
+        && (a.width() - b.width()).abs() < 0.5
+        && (a.height() - b.height()).abs() < 0.5
+}
+
+/// Closest real row to the pointer. A near tie stays on `stick` so the bar does not flicker.
+fn nearest_glide_row(
+    rows: &[egui::Rect],
+    pointer: egui::Pos2,
+    stick: Option<egui::Rect>,
+) -> Option<egui::Rect> {
+    let mut best: Option<(egui::Rect, f32)> = None;
+    let mut stick_dist = None;
+    for rect in rows {
+        if rect.width() < 1.0 || rect.height() < 1.0 {
+            continue;
+        }
+        let dist = rect_gap(*rect, pointer);
+        if stick.is_some_and(|kept| same_glide_row(kept, *rect)) {
+            stick_dist = Some(dist);
+        }
+        match best {
+            Some((_, nearer)) if dist >= nearer => {}
+            _ => best = Some((*rect, dist)),
+        }
+    }
+    let (rect, dist) = best?;
+    if let (Some(kept), Some(kept_dist)) = (stick, stick_dist) {
+        if kept_dist <= dist + 8.0 {
+            return Some(kept);
+        }
+    }
+    Some(rect)
+}
+
 /// Move the highlight toward this frame's target. The paint shows it next frame.
 pub fn glide_aim(ui: &egui::Ui, group: &str) {
     let id = glide_id(group);
     let pick = ui
         .data(|d| d.get_temp::<GlidePick>(id.with("pick")))
         .unwrap_or_default();
-    let target = pick.hover.or(pick.selected);
+    let stick = ui.data(|d| d.get_temp::<egui::Rect>(id.with("last")));
+    let target = if let Some(hover) = pick.hover {
+        Some(hover)
+    } else if pick.rows.len() > 1 {
+        // A gap in the rail (search field, section header, plus) is not a row.
+        // Stay on the option nearest the pointer instead of the selected page.
+        match ui.input(|i| i.pointer.hover_pos()) {
+            Some(pos) if ui.clip_rect().contains(pos) => {
+                nearest_glide_row(&pick.rows, pos, stick).or(pick.selected)
+            }
+            _ => pick.selected,
+        }
+    } else {
+        pick.hover.or(pick.selected)
+    };
     let show = ui.ctx().animate_bool_with_time_and_easing(
         id.with("show"),
         target.is_some(),
@@ -834,6 +895,21 @@ pub fn mark(ctx: &egui::Context) -> TextureHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn glide_gap_stays_on_the_near_row() {
+        let selected = egui::Rect::from_min_size(egui::pos2(8.0, 4.0), egui::vec2(200.0, 28.0));
+        let above = egui::Rect::from_min_size(egui::pos2(8.0, 40.0), egui::vec2(200.0, 28.0));
+        let below = egui::Rect::from_min_size(egui::pos2(8.0, 120.0), egui::vec2(200.0, 28.0));
+        let rows = [selected, above, below];
+        let near_below = nearest_glide_row(&rows, egui::pos2(40.0, 108.0), None).unwrap();
+        assert_eq!(near_below, below, "a gap just above the next row stays there");
+        let near_above = nearest_glide_row(&rows, egui::pos2(40.0, 76.0), None).unwrap();
+        assert_eq!(near_above, above, "a gap just under a row stays on that row");
+        assert_ne!(near_below, selected);
+        let held = nearest_glide_row(&rows, egui::pos2(40.0, 94.0), Some(above)).unwrap();
+        assert_eq!(held, above, "the midpoint keeps the row the pointer already reached");
+    }
 
     #[test]
     fn blend_color_endpoints() {

@@ -978,11 +978,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(src.contains("quote_for_reply"));
         assert!(src.contains("composer_want_focus"));
         assert!(src.contains("copy_text"));
-        let block = src
-            .split("fn paint_chat_block(")
-            .nth(1)
-            .and_then(|s| s.split("fn screen_from_rows(").next())
-            .expect("paint_chat_block");
+        let block = fn_src(&src, "paint_chat_block");
         assert!(
             !block.contains("resp.hovered()"),
             "Copy/Reply must stay visible when the pointer leaves the bubble: {block}"

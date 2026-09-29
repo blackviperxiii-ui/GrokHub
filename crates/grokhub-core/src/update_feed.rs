@@ -580,6 +580,30 @@ pub fn discuss_context(card: &UpdateCard) -> String {
     out
 }
 
+/// Opening line for the idea talk. The note under it is the editable draft.
+pub fn idea_open_line(card: &UpdateCard) -> String {
+    format!(
+        "{}\n\nThis draft is what would help next time: why it came up, a quick chip, a skill, and an automation. Change the note if that is wrong. Do not copy the earlier chat back.",
+        discuss_context(card)
+    )
+}
+
+/// Editable note for the idea talk. The person can change it before it is sent.
+pub fn idea_dialogue(card: &UpdateCard) -> String {
+    let mut out = String::new();
+    if let Some(why) = card.why.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        out.push_str("Why: ");
+        out.push_str(why);
+        out.push_str("\n\n");
+    }
+    if let Some(body) = card.body.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        out.push_str(body);
+        out.push_str("\n\n");
+    }
+    out.push_str("Edit this, then send. Keep the chip, the skill, or the automation you want.");
+    out
+}
+
 /// URLs that appeared in a research payload. Tokens that are not http(s) are ignored.
 pub fn links_from_research(payload: &str) -> Vec<CitedLink> {
     let mut out = Vec::new();
@@ -739,21 +763,35 @@ pub fn fill_useful_ideas(
     let recover = idea_rows(cards) == 0;
     for (source, title, body) in USEFUL_SETUPS {
         if post_useful_idea(
-            cards, pulse, now, source, title, body, have_names, recover, lessons,
+            cards, pulse, now, source, title, body, have_names, recover, lessons, "",
         ) {
             posted += 1;
         }
     }
-    let body = "Turn this into a reminder or an automation that fits how you work.";
     let mut posted_profile = false;
     for raw in [user_md, memory_md, soul_md] {
         for line in useful_profile_lines(raw) {
             if digest_topic_refused(&line) {
                 continue;
             }
-            let title = clip_line(&format!("Set up: {line}"), TITLE_CHARS);
+            let Some(learned) = crate::situation::learn_from_turns(&line, "") else {
+                continue;
+            };
+            if echoes_profile(&learned.idea_title, &line) || echoes_profile(&learned.idea_body, &line)
+            {
+                continue;
+            }
             if post_useful_idea(
-                cards, pulse, now, "profile", &title, body, have_names, recover, lessons,
+                cards,
+                pulse,
+                now,
+                "profile",
+                &learned.idea_title,
+                &learned.idea_body,
+                have_names,
+                recover,
+                lessons,
+                &learned.why,
             ) {
                 posted += 1;
                 posted_profile = true;
@@ -780,9 +818,42 @@ pub fn offer_learned_setup(
     if !setup_fact(fact) {
         return false;
     }
-    let title = clip_line(&format!("Set up: {fact}"), TITLE_CHARS);
-    let body = "Turn this into a reminder or an automation that fits how you work.";
-    post_useful_idea(cards, pulse, now, "profile", &title, body, &[], false, "")
+    let Some(learned) = crate::situation::learn_from_turns(fact, "") else {
+        return false;
+    };
+    if echoes_profile(&learned.idea_title, fact) {
+        return false;
+    }
+    offer_learned_move(cards, pulse, now, &learned)
+}
+
+/// One inferred situation becomes an Ideas-board card. The title is the help,
+/// not the sentence that was said.
+pub fn offer_learned_move(
+    cards: &mut Vec<UpdateCard>,
+    pulse: &mut FeedPulse,
+    now: u64,
+    learned: &crate::situation::LearnedMove,
+) -> bool {
+    if learned.idea_title.trim().is_empty() || learned.idea_body.trim().is_empty() {
+        return false;
+    }
+    post_useful_idea(
+        cards,
+        pulse,
+        now,
+        "profile",
+        &learned.idea_title,
+        &learned.idea_body,
+        &[],
+        false,
+        "",
+        &learned.why,
+    )
+}
+
+fn echoes_profile(proposal: &str, source: &str) -> bool {
+    crate::situation::echoes_source(proposal, source)
 }
 
 fn setup_fact(fact: &str) -> bool {
@@ -823,6 +894,7 @@ fn post_useful_idea(
     have_names: &[&str],
     recover: bool,
     lessons: &str,
+    why: &str,
 ) -> bool {
     if setup_blocked_by_lessons(title, lessons) {
         return false;
@@ -858,7 +930,11 @@ fn post_useful_idea(
         return false;
     }
     let mut card = idea_card(source, title, body, now);
-    card.why = Some("A way this cabin can work for you.".into());
+    card.why = Some(if why.trim().is_empty() {
+        "A way this cabin can work for you.".into()
+    } else {
+        why.trim().to_string()
+    });
     let kept = card.title.clone();
     post_update(cards, card);
     remember_idea_title(pulse, &kept);
@@ -988,8 +1064,8 @@ fn compose_digest(
     {
         parts.push(format!("You marked down {}", note.title));
     }
-    if let Some(note) = taste.iter().find(|n| !n.said.trim().is_empty()) {
-        parts.push(format!("You said {}", clip_line(&note.said, 80)));
+    if taste.iter().any(|n| !n.said.trim().is_empty()) {
+        parts.push("You left a note on that post.".into());
     }
     let allowed: Vec<String> = links.iter().map(|l| l.url.clone()).collect();
     for link in &links {
@@ -1022,28 +1098,47 @@ fn compose_idea(
     if brief.is_empty() || digest_topic_refused(brief) {
         return None;
     }
-    let title = clip_line(brief, TITLE_CHARS);
+    let learned = crate::situation::learn_from_turns(brief, "");
+    let (title, body, why) = if let Some(learned) = learned.as_ref() {
+        if echoes_profile(&learned.idea_title, brief) || echoes_profile(&learned.idea_body, brief) {
+            (
+                "A next step from the brief",
+                "A chip, a skill, or an automation can carry this so you do not have to ask again.",
+                "The brief pointed at work worth setting up.",
+            )
+        } else {
+            (
+                learned.idea_title.as_str(),
+                learned.idea_body.as_str(),
+                learned.why.as_str(),
+            )
+        }
+    } else {
+        (
+            "A next step from the brief",
+            "A chip, a skill, or an automation can carry this so you do not have to ask again.",
+            "The brief pointed at work worth setting up.",
+        )
+    };
     if title.is_empty() {
         return None;
     }
-    if pulse
-        .idea_titles
-        .iter()
-        .any(|t| t.eq_ignore_ascii_case(&title))
-    {
+    if pulse.idea_titles.iter().any(|t| {
+        t.eq_ignore_ascii_case(title) || t.eq_ignore_ascii_case(brief)
+    }) {
         return None;
     }
-    if cards
-        .iter()
-        .any(|c| c.kind == UpdateKind::Idea && c.title.eq_ignore_ascii_case(&title))
-    {
+    if cards.iter().any(|c| {
+        c.kind == UpdateKind::Idea
+            && (c.title.eq_ignore_ascii_case(title) || c.title.eq_ignore_ascii_case(brief))
+    }) {
         return None;
     }
     if pulse.idea_titles.len() >= IDEA_TITLE_MEMORY {
         return None;
     }
-    let mut card = idea_card("brief", &title, brief, now);
-    card.why = Some("From your brief.".into());
+    let mut card = idea_card("brief", title, body, now);
+    card.why = Some(why.to_string());
     Some(card)
 }
 
@@ -1612,7 +1707,8 @@ mod tests {
         );
         assert!(n >= 4);
         assert!(cards.iter().any(|c| c.kind == UpdateKind::Idea && c.title == "Morning reminder"));
-        assert!(cards.iter().any(|c| c.title.starts_with("Set up:")));
+        assert!(cards.iter().any(|c| c.title == "A Friday routine"));
+        assert!(cards.iter().all(|c| !c.title.contains("Ships on Friday")));
         let again = fill_useful_ideas(
             &mut cards,
             &mut pulse,
@@ -1704,7 +1800,10 @@ mod tests {
             "remind me to start the stream checklist on Fridays"
         ));
         assert!(cards.iter().any(|c| {
-            c.kind == UpdateKind::Idea && c.title.contains("stream checklist") && !c.feed_pin
+            c.kind == UpdateKind::Idea
+                && c.title == "A reminder that runs on its own"
+                && !c.title.to_ascii_lowercase().contains("stream")
+                && !c.feed_pin
         }));
         assert_eq!(
             cards.iter().filter(|c| c.kind == UpdateKind::Idea).count(),
@@ -1727,13 +1826,13 @@ mod tests {
         let notes = "Ships on Friday nights.\nA nightly wrap of what got done.";
         let n = fill_useful_ideas(&mut cards, &mut pulse, 40, notes, "", "", &[], "");
         assert!(n >= 4);
-        assert!(cards.iter().any(|c| c.title == "Set up: Ships on Friday nights."));
-        assert!(cards.iter().all(|c| !c.title.contains("nightly wrap")));
+        assert!(cards.iter().any(|c| c.title == "A Friday routine"));
+        assert!(cards.iter().all(|c| !c.title.to_ascii_lowercase().contains("what got done")));
         let again = fill_useful_ideas(&mut cards, &mut pulse, 80, notes, "", "", &[], "");
         assert_eq!(again, 1);
         assert!(cards
             .iter()
-            .any(|c| c.title.contains("nightly wrap") && !c.feed_pin));
+            .any(|c| c.title == "An end-of-day wrap" && !c.feed_pin));
         assert_eq!(pulse.feed_slots_spent, 3);
     }
 
@@ -1805,7 +1904,8 @@ mod tests {
             .find(|c| c.kind == UpdateKind::Digest && c.created_at == 30)
             .unwrap();
         assert!(digest.body.as_deref().unwrap().contains("marked up"));
-        assert!(digest.body.as_deref().unwrap().contains("You said"));
+        assert!(digest.body.as_deref().unwrap().contains("left a note"));
+        assert!(!digest.body.as_deref().unwrap().contains("more of that"));
     }
 
     #[test]

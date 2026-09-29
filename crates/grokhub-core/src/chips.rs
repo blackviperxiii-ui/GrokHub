@@ -692,21 +692,6 @@ fn chip(
     }
 }
 
-fn shorten(s: &str, n: usize) -> String {
-    let t = s.split_whitespace().collect::<Vec<_>>().join(" ");
-    if t.chars().count() <= n {
-        return t;
-    }
-    let mut out = String::new();
-    for (i, ch) in t.chars().enumerate() {
-        if i + 1 >= n {
-            break;
-        }
-        out.push(ch);
-    }
-    format!("{}…", out.trim_end())
-}
-
 /// Visible chip label: collapse whitespace, drop mid-phrase `…`. Paint wraps.
 fn chip_label(s: &str) -> String {
     s.split_whitespace()
@@ -887,18 +872,10 @@ fn chips_from_other_threads(threads: &[ChipThread]) -> Vec<QuickChip> {
             continue;
         }
         let label = chip_label(&format!("Continue {}", t.title.trim()));
-        let value = if !last_user.is_empty() {
-            format!(
-                "Continue the work from the chat \"{}\". Last ask: {}. Pick up where we left off and act now.",
-                t.title.trim(),
-                shorten(last_user, 160)
-            )
-        } else {
-            format!(
-                "Continue the work from the chat \"{}\". Pick up where we left off and act now.",
-                t.title.trim()
-            )
-        };
+        let value = format!(
+            "Continue the work from the chat \"{}\". Pick up the unfinished step and act now.",
+            t.title.trim()
+        );
         if !is_plain_text(&value) {
             continue;
         }
@@ -916,9 +893,8 @@ fn chips_from_other_threads(threads: &[ChipThread]) -> Vec<QuickChip> {
                 c.id = format!("prev-act-{i}");
                 c.score = 84.0 - (i as f32);
                 c.value = format!(
-                    "In the previous chat \"{}\": {}. {}",
+                    "In the previous chat \"{}\", take the next step. {}",
                     t.title.trim(),
-                    shorten(if last_user.is_empty() { last_asst } else { last_user }, 80),
                     c.value
                 );
                 c.hint = format!("From a previous reply in {}", t.title.trim());
@@ -1858,6 +1834,22 @@ pub fn idea_talk_chips(title: &str, body: &str, chat: &[(String, String)]) -> Ve
     let blob = format!("{title} {body}").to_ascii_lowercase();
     let mut out = vec![
         chip(
+            "idea-skill",
+            "Save a skill",
+            "Save a skill for this situation. Use the why in the note. Do not copy my earlier words.",
+            ChipKind::Chat,
+            99.0,
+            "This idea",
+        ),
+        chip(
+            "idea-auto",
+            "Automate this",
+            "Turn this into an automation so I do not have to ask again. Keep the time I write in the note.",
+            ChipKind::Chat,
+            98.0,
+            "This idea",
+        ),
+        chip(
             "idea-sit",
             "When I sit down",
             "Run this when I open the cabin.",
@@ -2045,7 +2037,23 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
     let stage = detect_chip_stage(input.chat, input.last_failed);
     let ctx = detect_chip_context(input.chat);
     let intents = predict_intents(input.chat, input.draft);
+    let said = last_of(input.chat, "user");
+    let heard = last_of(input.chat, "assistant");
     let mut chips = vec![];
+    if let Some(learned) = crate::situation::learn_from_turns(&said, &heard) {
+        if !crate::situation::echoes_source(&learned.chip_value, &said)
+            && !crate::situation::echoes_source(&learned.chip_label, &said)
+        {
+            chips.push(chip(
+                &format!("learn-{}", learned.kind.as_str()),
+                &learned.chip_label,
+                &learned.chip_value,
+                ChipKind::Chat,
+                94.0,
+                &learned.chip_hint,
+            ));
+        }
+    }
 
     if !input.grok_connected {
         chips.push(chip(
@@ -2167,6 +2175,11 @@ pub fn build_quick_chips(input: ChipInput<'_>) -> Vec<QuickChip> {
 
     for c in input.llm_chips {
         if !is_plain_text(&c.value) || !is_plain_text(&c.label) {
+            continue;
+        }
+        if crate::situation::echoes_source(&c.label, &said)
+            || crate::situation::echoes_source(&c.value, &said)
+        {
             continue;
         }
         let mut copy = c.clone();
@@ -2369,6 +2382,10 @@ pub fn chip_suggest_prompt(
         "- value: a concrete instruction the user would send (1–2 sentences max)".into(),
         "- Prefer next steps grounded in the transcript (not generic tips)".into(),
         "- Predict what the user will want NEXT, not a recap of what already happened".into(),
+        "- Do not copy the user's words or a sentence from the transcript.".into(),
+        "- Each chip is the action that would have helped in this situation.".into(),
+        "- hint is why they needed it, in your own words.".into(),
+        "- One chip may save a skill for this kind of chat. One may automate a step so they do not have to ask again.".into(),
         "- If user is mid-typing (draft shown), align chips with that draft".into(),
         "- Also use previous chats, habits, and actions taken on earlier replies".into(),
         "- Avoid chips the user dismissed".into(),
@@ -2717,6 +2734,8 @@ mod tests {
         let mem = ChipMemory::default();
         let mut inp = input(&[], "", &mem, &[], &[]);
         inp.grok_connected = false;
+        // A brand-new empty home is the guide, which has its own connect chip.
+        inp.usage_messages = 12;
         let chips = build_quick_chips(inp);
         assert_eq!(chips[0].id, "ctx-connect");
         assert_eq!(chips[0].value, "__nav:settings");
@@ -3172,6 +3191,40 @@ mod tests {
     }
 
     #[test]
+    fn a_chip_that_copies_the_user_is_dropped() {
+        let mem = ChipMemory::default();
+        let chat = [
+            msg("user", "paint the wall tonight please"),
+            msg("assistant", "I can start the first coat."),
+        ];
+        let llm = [QuickChip {
+            id: "llm-echo".into(),
+            label: "paint the wall tonight please".into(),
+            value: "paint the wall tonight please and keep going".into(),
+            kind: ChipKind::Chat,
+            score: 200.0,
+            hint: "Suggested".into(),
+            primary: true,
+        }];
+        let chips = build_quick_chips(input(&chat, "", &mem, &[], &llm));
+        let blob = chips
+            .iter()
+            .map(|c| format!("{} {}", c.label, c.value))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .to_ascii_lowercase();
+        assert!(
+            !blob.contains("paint the wall tonight"),
+            "chips must not quote the ask: {blob}"
+        );
+        assert!(
+            chips.iter().any(|c| c.id == "learn-next"),
+            "the turn should offer the next-step chip: {:?}",
+            labels(&chips)
+        );
+    }
+
+    #[test]
     fn chip_suggest_prompt_asks_for_five() {
         let prompt = chip_suggest_prompt(&[], "Chat", "", &[], &[], &[]);
         assert!(
@@ -3234,11 +3287,12 @@ mod tests {
             last_assistant: "I can sketch the first coat next.".into(),
         }];
         let mut inp = input(&[], "", &mem, &[], &[]);
+        inp.usage_messages = 12;
         inp.other_threads = &others;
         let chips = build_quick_chips(inp);
         assert!(
             chips.iter().any(|c| {
-                c.label.contains("Night cabin") || c.value.contains("paint the wall")
+                c.label.contains("Night cabin") || c.value.contains("Night cabin")
             }),
             "expected a continue chip from the other chat, got {:?}",
             labels(&chips)
@@ -3255,6 +3309,7 @@ mod tests {
                 .into(),
         }];
         let mut inp = input(&[], "", &mem, &[], &[]);
+        inp.usage_messages = 12;
         inp.other_threads = &others;
         let chips = build_quick_chips(inp);
         let prev_act = chips

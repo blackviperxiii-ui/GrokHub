@@ -276,7 +276,19 @@ pub fn prefer_patch(existing: &[SkillMd], proposed: &SkillMd) -> Option<String> 
 pub fn propose_skill_from_turn(user_text: &str, assistant_text: &str, host_commands: &[String]) -> SkillMd {
     let user = user_text.replace('\n', " ");
     let user: String = user.chars().take(120).collect();
-    let name = skill_dir_name(if user.is_empty() { "saved-run" } else { &user });
+    let learned = crate::situation::learn_from_turns(&user, assistant_text);
+    let name = skill_dir_name(
+        learned
+            .as_ref()
+            .map(|item| item.skill_name.as_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("saved-run"),
+    );
+    let name = if name.is_empty() {
+        "saved-run".to_string()
+    } else {
+        name
+    };
     let first_word = user
         .split_whitespace()
         .find(|w| w.chars().filter(|c| c.is_ascii_alphabetic()).count() >= 3)
@@ -288,8 +300,11 @@ pub fn propose_skill_from_turn(user_text: &str, assistant_text: &str, host_comma
         })
         .unwrap_or_else(|| name.replace('-', "").chars().take(24).collect());
     let steps = if host_commands.is_empty() {
-        let bit: String = assistant_text.chars().take(200).collect();
-        format!("1. {}", if bit.is_empty() { "repeat the successful host steps" } else { &bit })
+        learned
+            .as_ref()
+            .map(|item| item.skill_steps.clone())
+            .filter(|steps| !steps.trim().is_empty())
+            .unwrap_or_else(|| "1. Do the kind of step that already worked.".into())
     } else {
         host_commands
             .iter()
@@ -302,15 +317,21 @@ pub fn propose_skill_from_turn(user_text: &str, assistant_text: &str, host_comma
         .last()
         .cloned()
         .unwrap_or_else(|| "echo ok".into());
+    let description = learned
+        .as_ref()
+        .map(|item| item.skill_description.clone())
+        .filter(|text| !text.trim().is_empty() && !crate::situation::echoes_source(text, &user))
+        .unwrap_or_else(|| "Saved host procedure".into());
+    let trigger = learned
+        .as_ref()
+        .map(|item| item.skill_trigger.clone())
+        .filter(|text| !text.trim().is_empty() && !crate::situation::echoes_source(text, &user))
+        .unwrap_or_else(|| "this kind of step comes up again".into());
     SkillMd {
         name: name.clone(),
-        description: if user.is_empty() {
-            "Saved host procedure".into()
-        } else {
-            user.clone()
-        },
+        description,
         slash: format!("/{}", if first_word.is_empty() { "skill" } else { &first_word }),
-        trigger: if user.is_empty() { name } else { user },
+        trigger,
         instructions: steps,
         pitfalls: "Do not run destructive commands without a receipt and confirm.".into(),
         verify: format!("{verify} exits 0"),
@@ -376,6 +397,9 @@ mod tests {
         );
         let proposed = propose_skill_from_turn("flash the pi", "ok", &["dd if=a".into()]);
         assert_eq!(proposed.slash, "/flash");
+        assert_ne!(proposed.description, "flash the pi");
+        assert!(!proposed.trigger.contains("flash the pi"));
+        assert!(!proposed.instructions.contains("flash the pi"));
         assert_eq!(prefer_patch(std::slice::from_ref(&flash), &proposed), Some("flash-pi".into()));
         let patched = patch_skill(&flash, &proposed);
         assert_eq!(patched.name, "flash-pi");

@@ -769,6 +769,32 @@ impl Cabin {
         }
     }
 
+    fn recent_user_lines(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut push = |text: &str| {
+            if out.len() >= 40 {
+                return;
+            }
+            let line: String = text.chars().take(280).collect();
+            if !line.trim().is_empty() {
+                out.push(line);
+            }
+        };
+        for (role, text) in self.messages.iter() {
+            if role == "user" {
+                push(text);
+            }
+        }
+        for thread in &self.threads {
+            for (role, text) in thread.messages.iter() {
+                if role == "user" {
+                    push(text);
+                }
+            }
+        }
+        out
+    }
+
     pub(super) fn apply_review_reply(&mut self, raw: Result<String, String>) {
         match raw {
             Ok(text) => {
@@ -781,8 +807,9 @@ impl Cabin {
                     .iter()
                     .map(|t| (*t).to_string())
                     .collect();
+                let said = self.recent_user_lines();
                 let items = dedupe_suggestions(
-                    parse_suggest_lines(&text),
+                    grokhub_core::drop_echoed_suggestions(parse_suggest_lines(&text), &said),
                     &skill_names,
                     &auto_names,
                     &live_tools,

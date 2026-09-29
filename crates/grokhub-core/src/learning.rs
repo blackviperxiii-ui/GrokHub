@@ -194,7 +194,7 @@ pub fn looks_like_user_pref(fact: &str) -> bool {
         || l.contains("project")
 }
 
-fn is_greeting_chitchat(fact: &str) -> bool {
+pub fn is_greeting_chitchat(fact: &str) -> bool {
     let mut l = fact.trim().to_ascii_lowercase();
     while l.ends_with(['!', '?', '.', ',']) {
         l.pop();

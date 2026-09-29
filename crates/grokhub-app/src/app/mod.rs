@@ -86,7 +86,8 @@ use grokhub_core::{
     parse_theme, parse_trajectory_jsonl, partition_suggestions, patch_skill,
     pending_for_manual_update, perm_key,
     palette_file_shown, palette_forget_stale_walk, palette_row_action,
-    palette_search_is_saved, persist_user_turn, pick_fresh_seed, pick_greeting, pick_lan_ipv4, pick_theme, plan_room,
+    palette_search_is_saved, persist_user_turn, pick_fresh_seed, pick_greeting, pick_greeting_against,
+    pick_lan_ipv4, pick_theme, plan_room,
     plus_empty_status, plus_menu_rows, push_stream_capped, prefer_patch, presence_should_stream,
     project_menu_acts, project_menu_label, project_title_from_hint, propose_skill_from_turn,
     prune_live_suggestions, ptt_after_speak, ptt_after_stt, quiet_hours_active,
@@ -1906,26 +1907,47 @@ impl Cabin {
         redact_held_secrets(&content, &self.secret_hold)
     }
 
-    /// Remember a short preference from this turn without a separate reflect pass.
+    /// Remember why this turn happened, not a copy of the words.
     fn absorb_turn_learning(&mut self, assistant: &str) {
         if self.job_is_idea_talk() || !self.policy().learns() {
             return;
         }
+        let user = self
+            .messages
+            .iter()
+            .rev()
+            .find(|(role, _)| role == "user")
+            .map(|(_, text)| text.clone())
+            .unwrap_or_default();
         let mut facts = Vec::new();
-        if let Some((_, text)) = self.messages.iter().rev().find(|(role, _)| role == "user") {
-            facts.extend(fact_candidates_from([("user", text.as_str())]));
-            let lower = text.to_ascii_lowercase();
-            if lower.contains("shorter")
-                || lower.contains("too long")
-                || lower.contains("keep it short")
-                || lower.contains("be brief")
-            {
-                grokhub_core::note_part(
-                    &mut self.learning,
-                    "chat",
-                    "style:short",
-                    "They want short replies.",
-                );
+        let mut noted = false;
+        let lower = user.to_ascii_lowercase();
+        if lower.contains("shorter")
+            || lower.contains("too long")
+            || lower.contains("keep it short")
+            || lower.contains("be brief")
+        {
+            grokhub_core::note_part(
+                &mut self.learning,
+                "chat",
+                "style:short",
+                "They want short replies.",
+            );
+            noted = true;
+        }
+        if let Some(learned) = grokhub_core::learn_from_turns(&user, assistant) {
+            facts.push(learned.why.clone());
+            let key = format!("pref:{}", grokhub_core::engine_slug(&learned.idea_title));
+            grokhub_core::note_part(&mut self.learning, "chat", &key, &learned.why);
+            noted = true;
+            if grokhub_core::offer_learned_move(
+                &mut self.updates,
+                &mut self.cfg.feed_pulse,
+                now_ms(),
+                &learned,
+            ) {
+                self.persist_updates();
+                self.persist_cfg();
             }
         }
         for line in assistant.lines() {
@@ -1933,31 +1955,21 @@ impl Cabin {
                 continue;
             };
             let fact = fact.trim();
-            if (8..200).contains(&fact.len()) {
+            if (8..200).contains(&fact.len()) && !grokhub_core::echoes_source(fact, &user) {
                 facts.push(fact.to_string());
             }
         }
-        if facts.is_empty() {
+        if facts.is_empty() && !noted {
             return;
         }
-        extract_insights(&mut self.learning, &facts);
-        for fact in &facts {
-            let key = format!("pref:{}", grokhub_core::engine_slug(fact));
-            grokhub_core::note_part(&mut self.learning, "chat", &key, fact);
-        }
-        grokhub_core::absorb_cabin(&mut self.learning);
-        for fact in &facts {
-            if grokhub_core::offer_learned_setup(
-                &mut self.updates,
-                &mut self.cfg.feed_pulse,
-                now_ms(),
-                fact,
-            ) {
-                self.persist_updates();
-                self.persist_cfg();
-                break;
+        if !facts.is_empty() {
+            extract_insights(&mut self.learning, &facts);
+            for fact in &facts {
+                let key = format!("pref:{}", grokhub_core::engine_slug(fact));
+                grokhub_core::note_part(&mut self.learning, "chat", &key, fact);
             }
         }
+        grokhub_core::absorb_cabin(&mut self.learning);
         let learning = self.learning.clone();
         let io = self.persist_io.clone();
         std::thread::spawn(move || {
