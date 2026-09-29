@@ -8,9 +8,10 @@ mod stream;
 pub mod protocol;
 
 pub use catalog::{
-    inspect_advisory, load_grok_catalog, parse_inspect_skills, parse_mcp_list, parse_models_list,
-    parse_plugin_list, parse_workflows, skill_source_label,
-    GrokCatalog, GrokMcpRow, GrokPluginRow, GrokSkillRow, GrokWorkflowRow,
+    inspect_advisory, load_grok_catalog, parse_inspect_hooks, parse_inspect_project_trusted,
+    parse_inspect_skills, parse_mcp_doctor, parse_mcp_list, parse_models_list, parse_plugin_list,
+    parse_workflows, skill_source_label, GrokCatalog, GrokHookRow, GrokMcpRow, GrokPluginRow,
+    GrokSkillRow, GrokWorkflowRow, HookOrigin, McpDoctorStatus,
 };
 pub use client::{
     cabin_has_session, connect, delete_session, discover_session_files, discover_session_files_in,
@@ -36,7 +37,8 @@ pub use locate::{
     doctor_line_busy, doctor_missing_hint, find_grok, grok_auth_path, grok_bin_looks_complete,
     grok_cli_channel, grok_cli_is_runnable, grok_cli_key, grok_cli_known_good, grok_home,
     grok_marked_unusable,
-    grok_stdout, grok_stdout_timeout, grok_user_stdout_timeout, grok_user_stdout_wait, grok_version,
+    grok_stdout, grok_stdout_timeout, grok_user_stdout_allow_fail, grok_user_stdout_timeout,
+    grok_user_stdout_wait, grok_version,
     hide_windows_console,
     invalidate_grok_bin_cache, invalidate_grok_key_cache, is_cli_hard_failure, mark_grok_unusable,
     parse_grok_auth_key, prepare_cabin_grok_home, silence_windows_hard_errors, single_turn_args,
