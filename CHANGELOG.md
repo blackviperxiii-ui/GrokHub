@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.10.38 — 2026-09-29
+
+Quick chips keep a hand cursor on the ×. Hover stays in the chip's slot. A background save writes threads into the config directory captured when it was scheduled, so the next cabin does not load that chat. A shell echo on Windows waits out PowerShell startup and still lands on the open chat.
+
+- Linux: `grokhub-linux-v2.10.38.tar.gz` and AUR `pkgver=2.10.38`.
+- Windows: `GrokHub-Setup-2.10.38.exe` and `grokhub-windows-v2.10.38.zip`.
+
 ## 2.10.37 — 2026-09-29
 
 Welcome, quick chips, ideas, skills, and automations read why a turn happened. A reminder, a Friday routine, a failure, or a next step becomes a chip, a skill, and an automation in the cabin's own words. A chip, a greeting, or a nightly suggestion that repeats the sentence is dropped. Accept on an idea still opens the small talk. The note is already filled with the why and the help, and you can edit it before sending. It does not open on its own after every message.

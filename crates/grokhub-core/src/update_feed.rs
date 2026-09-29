@@ -296,7 +296,7 @@ pub fn feed_ideas(cards: &[UpdateCard], now: u64) -> Vec<UpdateCard> {
         .filter(|c| c.kind == UpdateKind::Idea && c.feed_pin && surfaced(c))
         .cloned()
         .collect();
-    out.sort_by(|a, b| idea_rank(b, now).cmp(&idea_rank(a, now)));
+    out.sort_by_key(|card| std::cmp::Reverse(idea_rank(card, now)));
     out.truncate(IDEA_DISCOVERY_MAX);
     out
 }

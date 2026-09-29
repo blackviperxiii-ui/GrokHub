@@ -1222,6 +1222,13 @@ pub fn run_single_turn_full(
     }
 }
 
+/// Image and learned brief for one `grok -p` turn.
+/// One argument, so the spawner stays at a dozen.
+pub struct GrokPAttach<'a> {
+    pub image: Option<&'a str>,
+    pub learned: &'a str,
+}
+
 /// Live `grok -p --output-format streaming-json`. Halt kills `pid`.
 pub fn spawn_grok_p_stream(
     prompt: &str,
@@ -1232,11 +1239,10 @@ pub fn spawn_grok_p_stream(
     model: Option<&str>,
     effort: Option<&str>,
     mode: SessionMode,
-    image: Option<&str>,
+    attach: GrokPAttach<'_>,
     fork: bool,
     skip_cabin_home: bool,
     worktree: bool,
-    learned: &str,
 ) -> Result<(u32, mpsc::Receiver<crate::stream::GrokPEvent>), String> {
     let mut child = grok_p_child(
         prompt,
@@ -1247,11 +1253,10 @@ pub fn spawn_grok_p_stream(
         model,
         effort,
         mode,
-        image,
+        attach,
         fork,
         skip_cabin_home,
         worktree,
-        learned,
     )?;
     let pid = child.id();
     let stdout = child.stdout.take().ok_or("grok -p stdout")?;
@@ -1364,12 +1369,12 @@ fn grok_p_child(
     model: Option<&str>,
     effort: Option<&str>,
     mode: SessionMode,
-    image: Option<&str>,
+    attach: GrokPAttach<'_>,
     fork: bool,
     skip_cabin_home: bool,
     worktree: bool,
-    learned: &str,
 ) -> Result<Child, String> {
+    let GrokPAttach { image, learned } = attach;
     let program = find_grok().ok_or_else(|| {
         "Grok Build CLI missing — install from x.ai/cli or set GROKHUB_GROK".to_string()
     })?;
@@ -1451,11 +1456,13 @@ fn grok_p_once(
         model,
         effort,
         mode,
-        image,
+        GrokPAttach {
+            image,
+            learned: "",
+        },
         fork,
         false,
         false,
-        "",
     )?;
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
