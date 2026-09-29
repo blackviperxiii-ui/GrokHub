@@ -934,11 +934,13 @@ impl Cabin {
             None,
             None,
             self.session_mode,
-            None,
+            grokhub_acp::GrokPAttach {
+                image: None,
+                learned: &grokhub_core::brief_for(&self.learning, "chat"),
+            },
             false,
             user_home,
             worktree,
-            &grokhub_core::brief_for(&self.learning, "chat"),
         ) {
             self.grok_p_pid = Some(pid);
             self.grok_p_rx = Some(rx);

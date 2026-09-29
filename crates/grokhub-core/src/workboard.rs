@@ -499,7 +499,7 @@ pub fn settle_inflight_card(cards: &mut [BoardCard], thread_id: &str) -> bool {
 
 /// The turn never finished. A card this hook created is removed.
 /// A reused card returns to the title and status it had before Doing.
-pub fn abandon_inflight_card(cards: &mut Vec<BoardCard>, thread_id: &str) -> bool {
+pub fn abandon_inflight_card(cards: &mut [BoardCard], thread_id: &str) -> bool {
     let thread_id = thread_id.trim();
     if thread_id.is_empty() {
         return false;
