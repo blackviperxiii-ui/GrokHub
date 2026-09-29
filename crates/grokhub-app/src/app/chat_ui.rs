@@ -1931,13 +1931,8 @@ impl Cabin {
                     ui.add_space(8.0);
                     let cluster = crate::cards::composer_go_cluster_w();
                     let go_sz = crate::cards::composer_go_hit_w();
-                    debug_assert!(
-                        8.0 + 22.0 + 8.0 + go_sz <= cluster,
-                        "mic + Send/Stop must fit the reserved cluster"
-                    );
                     let mid = crate::cards::composer_mid_w(inner);
-                    let mut mic_rect = egui::Rect::NOTHING;
-                    let mut go_rect = egui::Rect::NOTHING;
+                    let (mut mic_rect, mut go_rect) = (egui::Rect::NOTHING, egui::Rect::NOTHING);
                     ui.allocate_ui_with_layout(
                         egui::vec2(mid, pill_h),
                         egui::Layout::left_to_right(egui::Align::Center),
@@ -2045,6 +2040,10 @@ impl Cabin {
                                 }
                             }
                         },
+                    );
+                    debug_assert!(
+                        8.0 + 22.0 + 8.0 + go_sz <= cluster,
+                        "mic + Send/Stop must fit the reserved cluster"
                     );
                     self.composer_geom = Some((pill_rect, mic_rect, go_rect));
                 },
