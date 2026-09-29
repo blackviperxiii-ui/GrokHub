@@ -14165,6 +14165,7 @@ fn quiet_cabin() -> Cabin {
         confirm: None,
         jump_last_you: false,
         find: super::chat_ui::ChatFind::default(),
+        auto_run: None,
         elicit_ask: None,
         elicit_draft: String::new(),
         secret_hold: Vec::new(),
@@ -14692,6 +14693,7 @@ fn full_automation_list_stays_off_a_run() {
             last_run: None,
             next_run: None,
             run_count: 0,
+            health: Default::default(),
         })
         .collect();
     cabin.add_automation_seed("every day at 9, summarize the board");
@@ -15369,4 +15371,83 @@ fn chat_find_bar_paints_and_steps_with_the_arrows() {
     });
     assert!(app.find.open);
     assert_eq!(app.find.label(), "2 of 2");
+}
+
+fn health_job(id: &str) -> grokhub_core::Automation {
+    grokhub_core::Automation {
+        id: id.into(),
+        name: "Board summary".into(),
+        schedule: "daily".into(),
+        time: "09:00".into(),
+        times: Vec::new(),
+        instructions: "summarize the board".into(),
+        heartbeat_every_min: 0,
+        check_command: String::new(),
+        enabled: true,
+        last_run: None,
+        next_run: None,
+        run_count: 0,
+        health: Default::default(),
+    }
+}
+
+#[test]
+fn a_failed_scheduled_turn_marks_the_job_and_posts_one_card() {
+    let root = config::test_config_root("auto-health");
+    let _ = std::fs::remove_dir_all(&root);
+    let _pin = config::TestConfigDir::set(root.clone());
+    let mut app = Cabin::quiet_for_test();
+    app.automations = vec![health_job("a1")];
+    let cards_before = app.updates.len();
+
+    app.auto_run = Some(("a1".into(), Some("t-auto".into())));
+    // A turn on another chat does not settle the job.
+    app.settle_auto_run(super::night::AutoEnd::Failed("other chat"), Some("t-other"));
+    assert!(app.auto_run.is_some());
+    assert!(app.automations[0].health.is_clear());
+
+    app.settle_auto_run(super::night::AutoEnd::Failed("Error: credit limit"), Some("t-auto"));
+    assert!(app.auto_run.is_none());
+    assert_eq!(app.automations[0].health.outcome, grokhub_core::AutoOutcome::Failed);
+    assert_eq!(app.automations[0].health.error, "credit limit");
+    assert_eq!(app.updates.len(), cards_before + 1);
+    assert!(app.updates.iter().any(|c| c.title == "Board summary failed"));
+
+    // A second failure in the streak updates the job, not the feed.
+    app.auto_run = Some(("a1".into(), None));
+    app.settle_auto_run(super::night::AutoEnd::Failed("again"), Some("anything"));
+    assert_eq!(app.automations[0].health.fail_streak, 2);
+    assert_eq!(app.updates.len(), cards_before + 1);
+
+    // A halt is not a failure and not a success.
+    app.auto_run = Some(("a1".into(), None));
+    app.settle_auto_run(super::night::AutoEnd::Stopped, None);
+    assert_eq!(app.automations[0].health.outcome, grokhub_core::AutoOutcome::Stopped);
+    assert_eq!(app.automations[0].health.fail_streak, 2);
+
+    app.auto_run = Some(("a1".into(), None));
+    app.settle_auto_run(super::night::AutoEnd::Ok, None);
+    assert!(!app.automations[0].health.failing());
+    assert_eq!(app.automations[0].health.fail_streak, 0);
+
+    // Nothing in flight: a turn end touches no job.
+    app.settle_auto_run(super::night::AutoEnd::Failed("x"), None);
+    assert_eq!(app.automations[0].health.fail_streak, 0);
+}
+
+#[test]
+fn scheduled_turns_settle_on_every_turn_end() {
+    let src = cabin_src();
+    let fail = fn_src(&src, "apply_job_fail");
+    assert!(fail.contains("AutoEnd::Failed(err)"), "{fail}");
+    assert!(fail.contains("AutoEnd::Stopped"), "{fail}");
+    let finish = fn_src(&src, "finish_acp_turn");
+    assert!(finish.contains("AutoEnd::Ok"), "{finish}");
+    let halt = fn_src(&src, "halt_work");
+    assert!(halt.contains("AutoEnd::Stopped"), "{halt}");
+    let fire = fn_src(&src, "fire_night");
+    assert!(fire.contains("self.auto_run = Some("), "{fire}");
+    assert!(fire.contains("note_auto_failed"), "{fire}");
+    let page = fn_src(&src, "ui_scheduled_automations");
+    assert!(page.contains("automation_health_line"), "{page}");
 }

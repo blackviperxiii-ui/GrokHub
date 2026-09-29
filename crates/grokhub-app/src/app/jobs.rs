@@ -177,6 +177,7 @@ impl Cabin {
                 let job_prompt = self.imagine_job_prompt.clone();
                 self.pin_generation_to_wall(&url, &job_prompt);
                 self.push_bound_msg("assistant", format!("IMAGINE: {url}"));
+                self.settle_auto_run(AutoEnd::Ok, self.chat_job_thread.clone().as_deref());
                 self.finish_hub_dispatch(&format!("IMAGINE: {url}"), true);
                 self.abandon_turn_card();
                 self.chat_job_thread = None;

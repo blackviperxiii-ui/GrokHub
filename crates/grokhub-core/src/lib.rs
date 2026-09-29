@@ -80,6 +80,8 @@ pub use attach::{
     IMAGE_FILE_CAP, IMAGE_PIXEL_CAP, MEDIA_FILE_CAP, TEXT_FILE_CAP,
 };
 pub use automation::{
+    automation_health_line, mark_automation_failed, mark_automation_ok, mark_automation_stopped,
+    AutoHealth, AutoOutcome,
     automation_blocked_by_policy, automation_schedule_label, automation_summary_line,
     chat_may_save_automation, compute_next_run, due_automations, ensure_automation_schedule,
     mark_automation_ran, mark_automation_skipped, night_check_command, night_check_exit_code,
@@ -429,6 +431,7 @@ pub use windshield::{
     windshield_browser_line, windshield_prompt, AtspiRow, PendingStep, WindshieldFrame,
 };
 pub use update_feed::{
+    automation_failed_card,
     archive_digest, archived_digests, automate_offer_card, automation_done_card, card_matches,
     digest_card, digest_topic_refused, discuss_context, dismiss_idea, dismiss_update, expire_ideas,
     feed_ideas, feed_visible, fill_useful_ideas, hold_if_quiet, home_feed_n, idea_card, idea_dialogue,

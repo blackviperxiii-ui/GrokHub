@@ -58,6 +58,7 @@ mod tests {
             last_run: None,
             next_run: None,
             run_count: 0,
+            health: Default::default(),
         };
         save(&[a]).expect("save");
         let loaded = load();

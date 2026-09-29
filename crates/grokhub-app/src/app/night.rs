@@ -1,6 +1,18 @@
 //! Automations, loops, and night review.
 
 use super::*;
+use grokhub_core::{
+    automation_failed_card, automation_health_line, hold_if_quiet, mark_automation_failed,
+    mark_automation_ok, mark_automation_stopped,
+};
+
+/// How a scheduled turn ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AutoEnd<'a> {
+    Ok,
+    Stopped,
+    Failed(&'a str),
+}
 
 impl Cabin {
 
@@ -278,10 +290,16 @@ impl Cabin {
                 name => name.to_string(),
             };
             let body = automation_summary_line(&self.automations[i], now);
+            let health = automation_health_line(&self.automations[i]);
+            let ring = if health.is_some() {
+                crate::theme::offline().gamma_multiply(0.6)
+            } else {
+                crate::theme::border()
+            };
             egui::Frame::none()
                 .fill(crate::theme::elevated())
                 .rounding(14.0)
-                .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
+                .stroke(egui::Stroke::new(1.0_f32, ring))
                 .inner_margin(egui::Margin::same(12.0))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -296,6 +314,16 @@ impl Cabin {
                                 .wrap(),
                             );
                             ui.label(RichText::new(&body).size(12.0).color(crate::theme::muted()));
+                            if let Some(line) = &health {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(line)
+                                            .size(12.0)
+                                            .color(crate::theme::offline()),
+                                    )
+                                    .wrap(),
+                                );
+                            }
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if crate::cards::ghost_pill(ui, "Remove") {
@@ -422,6 +450,7 @@ impl Cabin {
         if night_unauth_should_skip(self.llm_ready()) {
             self.mark_auto_skipped(&a.id, now_ms);
             self.status = "Connect Grok OAuth in Settings".into();
+            self.note_auto_failed(&a.id, "Not signed in — Connect Grok in Settings");
             return;
         }
         let replay =
@@ -433,11 +462,13 @@ impl Cabin {
         if replay.is_none() && !self.can_agent() {
             self.mark_auto_skipped(&a.id, now_ms);
             self.status = "Install Grok Build (x.ai/cli) or Connect Grok in Settings".into();
+            self.note_auto_failed(&a.id, "Grok Build is not installed or not connected");
             return;
         }
         self.status = format!("Night: {}", a.name);
         if replay.is_some() {
             self.mark_auto_ran(&a.id, now_ms);
+            self.update_auto_health(&a.id, mark_automation_ok);
             self.note_automation_done(&a.id, &a.name, &a.instructions);
             bump_usage(&mut self.usage, "automation");
             self.daily_auto_used = self.usage.automation;
@@ -449,6 +480,7 @@ impl Cabin {
         self.send_scheduled_chat(a.instructions);
         if self.running || self.pending_kick.is_some() || self.grok_p_rx.is_some() {
             self.mark_auto_ran(&a.id, now_ms);
+            self.auto_run = Some((a.id.clone(), self.chat_job_thread.clone()));
             bump_usage(&mut self.usage, "automation");
             self.daily_auto_used = self.usage.automation;
             self.daily_auto_day = self.usage.day.clone();
@@ -456,6 +488,57 @@ impl Cabin {
         } else {
             self.mark_auto_skipped(&a.id, now_ms);
             self.status = format!("Night skipped {} (kick did not start)", a.name);
+            self.note_auto_failed(&a.id, "The run did not start");
+        }
+    }
+
+    /// A scheduled turn ended. Only the job recorded in `auto_run` is touched, and
+    /// only when the ending turn is on that job's chat (or the thread is unknown).
+    pub(super) fn settle_auto_run(&mut self, end: AutoEnd, job_thread: Option<&str>) {
+        let Some((id, thread)) = self.auto_run.clone() else {
+            return;
+        };
+        if let (Some(want), Some(got)) = (thread.as_deref(), job_thread) {
+            if want != got {
+                return;
+            }
+        }
+        self.auto_run = None;
+        match end {
+            AutoEnd::Ok => self.update_auto_health(&id, mark_automation_ok),
+            AutoEnd::Stopped => self.update_auto_health(&id, mark_automation_stopped),
+            AutoEnd::Failed(why) => self.note_auto_failed(&id, why),
+        }
+    }
+
+    pub(super) fn update_auto_health(&mut self, id: &str, f: fn(Automation) -> Automation) {
+        let Some(a) = self.automations.iter_mut().find(|x| x.id == id) else {
+            return;
+        };
+        let before = a.health.clone();
+        *a = f(a.clone());
+        if a.health != before {
+            self.persist_automations();
+        }
+    }
+
+    /// Record the failure on the job. The first failure in a streak posts one feed card.
+    pub(super) fn note_auto_failed(&mut self, id: &str, why: &str) {
+        let Some(a) = self.automations.iter_mut().find(|x| x.id == id) else {
+            return;
+        };
+        *a = mark_automation_failed(a.clone(), why);
+        let first = a.health.fail_streak == 1;
+        let name = match a.name.trim() {
+            "" => a.instructions.clone(),
+            n => n.to_string(),
+        };
+        let error = a.health.error.clone();
+        self.persist_automations();
+        if first {
+            let mut card = automation_failed_card(id, &name, &error, now_ms());
+            hold_if_quiet(&mut card, self.quiet_now());
+            self.post_feed_card(card);
         }
     }
 
