@@ -139,7 +139,7 @@ impl Cabin {
                         ui.label(RichText::new("New job").strong());
                         let edit = ui.add(
                             egui::TextEdit::singleline(&mut self.night_nl)
-                                .hint_text("/loop 30m check deploy · every weekday at 9, summarize the board")
+                                .hint_text(crate::theme::hint("/loop 30m check deploy · every weekday at 9, summarize the board"))
                                 .desired_width(f32::INFINITY),
                         );
                         let enter = edit.lost_focus()

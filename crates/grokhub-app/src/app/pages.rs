@@ -75,7 +75,7 @@ impl Cabin {
                         let enter = ui
                             .add(
                                 egui::TextEdit::singleline(&mut self.cmd_line)
-                                    .hint_text("$ ls — bound project is the working tree")
+                                    .hint_text(crate::theme::hint("$ ls — bound project is the working tree"))
                                     .desired_width(f32::INFINITY)
                                     .frame(false),
                             )
@@ -454,7 +454,7 @@ impl Cabin {
                                 .desired_rows(3)
                                 .desired_width(f32::INFINITY)
                                 .frame(false)
-                                .hint_text("What should this computer do?"),
+                                .hint_text(crate::theme::hint("What should this computer do?")),
                         );
                     });
                 ui.add_space(8.0);
@@ -573,11 +573,13 @@ impl Cabin {
         }
         if show_install {
             let body = if !installing && !self.grok_install_err.is_empty() {
-                format!(
-                    "{}\n{}",
-                    self.grok_install_err,
-                    grokhub_acp::grok_cli_install_cmd()
-                )
+                let cmd = grokhub_acp::grok_cli_install_cmd();
+                // Some install errors already end with the command; do not print it twice.
+                if self.grok_install_err.contains(cmd.trim()) {
+                    self.grok_install_err.clone()
+                } else {
+                    format!("{}\n{}", self.grok_install_err, cmd)
+                }
             } else {
                 "Installing Grok Build CLI (alpha)…".to_string()
             };
@@ -821,14 +823,14 @@ impl Cabin {
                         .show(ui, |ui| {
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.board_title)
-                                    .hint_text("Card title")
+                                    .hint_text(crate::theme::hint("Card title"))
                                     .desired_width(f32::INFINITY)
                                     .frame(false),
                             );
                             ui.add_space(8.0);
                             ui.add(
                                 egui::TextEdit::multiline(&mut self.board_notes)
-                                    .hint_text("Notes")
+                                    .hint_text(crate::theme::hint("Notes"))
                                     .desired_width(f32::INFINITY)
                                     .desired_rows(3)
                                     .frame(false),
@@ -1242,7 +1244,7 @@ impl Cabin {
                     ui.add_space(8.0);
                     ui.add(
                         egui::TextEdit::singleline(&mut self.mcp_nl)
-                            .hint_text("name npx -y package   or   remove name")
+                            .hint_text(crate::theme::hint("name npx -y package   or   remove name"))
                             .desired_width(f32::INFINITY),
                     );
                     ui.horizontal(|ui| {
@@ -1490,7 +1492,7 @@ impl Cabin {
                         let field_w = (ui.available_width() - 248.0).clamp(180.0, 420.0);
                         ui.add(
                             egui::TextEdit::singleline(&mut self.workflow_target)
-                                .hint_text("Workflow name or run id")
+                                .hint_text(crate::theme::hint("Workflow name or run id"))
                                 .desired_width(field_w),
                         );
                         let ready = !self.workflow_target.trim().is_empty();
