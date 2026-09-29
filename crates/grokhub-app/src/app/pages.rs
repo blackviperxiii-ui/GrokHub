@@ -27,6 +27,21 @@ pub(super) enum BoardAct {
     Edit(String),
 }
 
+/// Drag payload for a workboard card: its id.
+pub(super) struct BoardDrag(pub String);
+
+/// Dropping a card on a column moves it there. The column it already sits in is a no-op.
+pub(super) fn board_drop_move(from: BoardStatus, onto: KanbanColumn) -> Option<BoardStatus> {
+    if from.column() == Some(onto) {
+        None
+    } else {
+        Some(onto.status())
+    }
+}
+
+/// A column takes drops below its last card, not only on the cards.
+pub(super) const BOARD_DROP_MIN_H: f32 = 180.0;
+
 impl Cabin {
 
     pub(super) fn ui_command(&mut self, ctx: &egui::Context) {
@@ -862,6 +877,8 @@ impl Cabin {
                         ui.columns(KanbanColumn::ALL.len(), |cols| {
                             for (i, col) in KanbanColumn::ALL.iter().enumerate() {
                                 let ui = &mut cols[i];
+                                let col_top = ui.cursor().min;
+                                let col_w = ui.available_width();
                                 crate::cards::section_label(ui, col.label());
                                 ui.add_space(6.0);
                                 let ids: Vec<String> = self
@@ -885,65 +902,106 @@ impl Cabin {
                                     let detail = card.detail.clone();
                                     let linked = card.thread_id.clone();
                                     let status = card.status;
-                                    egui::Frame::none()
-                                        .fill(crate::theme::elevated())
-                                        .rounding(16.0)
-                                        .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                                        .inner_margin(egui::Margin::same(12.0))
-                                        .show(ui, |ui| {
-                                            ui.label(
-                                                RichText::new(title)
-                                                    .size(crate::theme::FONT_BODY)
-                                                    .color(crate::theme::fg()),
-                                            );
-                                            if !detail.trim().is_empty() {
-                                                ui.add_space(4.0);
+                                    let drag_id = egui::Id::new(("board-card", id.as_str()));
+                                    ui.dnd_drag_source(drag_id, BoardDrag(id.clone()), |ui| {
+                                        egui::Frame::none()
+                                            .fill(crate::theme::elevated())
+                                            .rounding(16.0)
+                                            .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
+                                            .inner_margin(egui::Margin::same(12.0))
+                                            .show(ui, |ui| {
+                                                ui.set_width(ui.available_width());
                                                 ui.label(
-                                                    RichText::new(
-                                                        detail
-                                                            .chars()
-                                                            .take(160)
-                                                            .collect::<String>(),
-                                                    )
-                                                    .size(crate::theme::FONT_TIP)
-                                                    .color(crate::theme::muted()),
+                                                    RichText::new(title)
+                                                        .size(crate::theme::FONT_BODY)
+                                                        .color(crate::theme::fg()),
                                                 );
-                                            }
-                                            ui.add_space(8.0);
-                                            ui.horizontal_wrapped(|ui| {
-                                                for dest in KanbanColumn::ALL {
-                                                    if status.column() == Some(dest) {
-                                                        continue;
-                                                    }
-                                                    if crate::cards::ghost_pill(ui, dest.label()) {
-                                                        act = Some(BoardAct::Move {
-                                                            id: id.clone(),
-                                                            status: dest.status(),
-                                                        });
-                                                    }
+                                                if !detail.trim().is_empty() {
+                                                    ui.add_space(4.0);
+                                                    ui.label(
+                                                        RichText::new(
+                                                            detail
+                                                                .chars()
+                                                                .take(160)
+                                                                .collect::<String>(),
+                                                        )
+                                                        .size(crate::theme::FONT_TIP)
+                                                        .color(crate::theme::muted()),
+                                                    );
                                                 }
+                                                ui.add_space(8.0);
+                                                ui.horizontal_wrapped(|ui| {
+                                                    for dest in KanbanColumn::ALL {
+                                                        if status.column() == Some(dest) {
+                                                            continue;
+                                                        }
+                                                        if crate::cards::ghost_pill(ui, dest.label()) {
+                                                            act = Some(BoardAct::Move {
+                                                                id: id.clone(),
+                                                                status: dest.status(),
+                                                            });
+                                                        }
+                                                    }
+                                                });
+                                                ui.horizontal_wrapped(|ui| {
+                                                    if crate::cards::ghost_pill(ui, "Edit") {
+                                                        act = Some(BoardAct::Edit(id.clone()));
+                                                    }
+                                                    if crate::cards::ghost_pill(ui, "Archive") {
+                                                        act = Some(BoardAct::Archive(id.clone()));
+                                                    }
+                                                    if linked.is_some() {
+                                                        if crate::cards::ghost_pill(ui, "Open chat") {
+                                                            act = Some(BoardAct::Open(id.clone()));
+                                                        }
+                                                        if crate::cards::ghost_pill(ui, "Unlink") {
+                                                            act = Some(BoardAct::Unlink(id.clone()));
+                                                        }
+                                                    } else if crate::cards::ghost_pill(ui, "Link chat")
+                                                    {
+                                                        act = Some(BoardAct::Link(id.clone()));
+                                                    }
+                                                });
                                             });
-                                            ui.horizontal_wrapped(|ui| {
-                                                if crate::cards::ghost_pill(ui, "Edit") {
-                                                    act = Some(BoardAct::Edit(id.clone()));
-                                                }
-                                                if crate::cards::ghost_pill(ui, "Archive") {
-                                                    act = Some(BoardAct::Archive(id.clone()));
-                                                }
-                                                if linked.is_some() {
-                                                    if crate::cards::ghost_pill(ui, "Open chat") {
-                                                        act = Some(BoardAct::Open(id.clone()));
-                                                    }
-                                                    if crate::cards::ghost_pill(ui, "Unlink") {
-                                                        act = Some(BoardAct::Unlink(id.clone()));
-                                                    }
-                                                } else if crate::cards::ghost_pill(ui, "Link chat")
-                                                {
-                                                    act = Some(BoardAct::Link(id.clone()));
-                                                }
-                                            });
-                                        });
+                                    })
+                                    .response
+                                    .on_hover_cursor(egui::CursorIcon::Grab);
                                     ui.add_space(8.0);
+                                }
+                                let bottom = ui.cursor().min.y.max(col_top.y + BOARD_DROP_MIN_H);
+                                let zone_rect = egui::Rect::from_min_max(
+                                    col_top,
+                                    egui::pos2(col_top.x + col_w, bottom),
+                                );
+                                let zone = ui.interact(
+                                    zone_rect,
+                                    egui::Id::new(("board-drop", i)),
+                                    egui::Sense::hover(),
+                                );
+                                let from = |drag: &BoardDrag| {
+                                    self.board.iter().find(|c| c.id == drag.0).map(|c| c.status)
+                                };
+                                if let Some(drag) = zone.dnd_hover_payload::<BoardDrag>() {
+                                    if from(&drag)
+                                        .and_then(|st| board_drop_move(st, *col))
+                                        .is_some()
+                                    {
+                                        ui.painter().rect_stroke(
+                                            zone_rect.shrink(1.0),
+                                            16.0,
+                                            egui::Stroke::new(1.5, crate::theme::link()),
+                                        );
+                                    }
+                                }
+                                if let Some(drag) = zone.dnd_release_payload::<BoardDrag>() {
+                                    if let Some(status) =
+                                        from(&drag).and_then(|st| board_drop_move(st, *col))
+                                    {
+                                        act = Some(BoardAct::Move {
+                                            id: drag.0.clone(),
+                                            status,
+                                        });
+                                    }
                                 }
                             }
                         });

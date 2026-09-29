@@ -15451,3 +15451,20 @@ fn scheduled_turns_settle_on_every_turn_end() {
     let page = fn_src(&src, "ui_scheduled_automations");
     assert!(page.contains("automation_health_line"), "{page}");
 }
+
+#[test]
+fn board_drop_moves_to_another_column_only() {
+    use grokhub_core::KanbanColumn;
+    for col in KanbanColumn::ALL {
+        let st = col.status();
+        assert_eq!(super::pages::board_drop_move(st, col), None, "{col:?}");
+        for other in KanbanColumn::ALL.into_iter().filter(|c| *c != col) {
+            assert_eq!(super::pages::board_drop_move(st, other), Some(other.status()));
+        }
+    }
+    let src = cabin_src();
+    let board = fn_src(&src, "ui_board");
+    assert!(board.contains("dnd_drag_source"), "cards must be draggable");
+    assert!(board.contains("dnd_release_payload::<BoardDrag>"), "columns must take drops");
+    assert!(board.contains("BoardAct::Move"), "a drop is the same Move the buttons use");
+}
