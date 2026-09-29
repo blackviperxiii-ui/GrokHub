@@ -133,6 +133,12 @@ impl Cabin {
                 self.skills_tab_connectors = true;
                 self.reload_grok_catalog();
             }
+            Slash::GrokHooks => {
+                self.nav = Nav::Connectors;
+                self.skills_tab_connectors = true;
+                self.scroll_to_hooks = true;
+                self.reload_grok_catalog();
+            }
             Slash::Model(name) => {
                 let name = name.trim();
                 let (id, effort) = name
