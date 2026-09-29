@@ -48,6 +48,7 @@ pub mod review;
 pub mod rewind;
 pub mod shortcuts;
 pub mod skill;
+pub mod situation;
 pub mod slash;
 pub mod state;
 pub mod stream;
@@ -190,7 +191,8 @@ pub use goal::{
 };
 pub use greeting::{
     classify_greeting, clean_project_title, greeting_fingerprint, greeting_name, greeting_prompt,
-    is_cabin_first_run, local_greeting, parse_llm_greeting, pick_greeting, project_title_from_hint,
+    is_cabin_first_run, local_greeting, parse_llm_greeting, pick_greeting, pick_greeting_against,
+    project_title_from_hint,
     should_paint_greeting, should_refresh_greeting, GreetingInput, GreetingKind,
     GREETING_LLM_DEBOUNCE_MS, GREETING_LLM_MODE, GREETING_MAX_CHARS,
 };
@@ -249,7 +251,8 @@ pub use inhabit::{
 pub use learning::{
     apply_local_lessons, extract_insights, insight_key_for_fact, insight_pin, is_actionable_need,
     is_durable_fact, looks_like_user_pref, prune_ephemeral_insights, record_turn,
-    review_worth_tokens, serve_brief, upsert_insight, user_pref_facts, LearningInsight,
+    is_greeting_chitchat, review_worth_tokens, serve_brief, upsert_insight, user_pref_facts,
+    LearningInsight,
     LearningState,
 };
 pub use models::{catalog_line, sanitize_chat_model, MODEL_CATALOG};
@@ -314,6 +317,7 @@ pub use reflect::{
 };
 pub use review::{
     build_review_digest, cabin_real_text, dedupe_suggestions, digest_line_from,
+    drop_echoed_suggestions,
     dismiss_accepted_auto, merge_suggestion_store, parse_suggest_lines, parse_suggest_skill_patches,
     partition_suggestions, prune_live_suggestions, review_due, review_status_line,
     review_system_prompt, skill_from_suggestion, suggestions_from_sessions, DigestLine,
@@ -334,6 +338,7 @@ pub use skill::{
     prefer_patch, propose_skill_from_turn, render_skill_md, skill_dir_name, skill_follow_block,
     skill_safe, skill_use_in_chat_prompt, SkillMd,
 };
+pub use situation::{echoes_source, learn_from_turns, LearnedMove, MoveKind};
 pub use slash::{
     filter_slash_commands, filter_slash_hits, grok_command_hits, is_cabin_slash_turn,
     mark_slash_result, parse_slash, resolve_mode_arg, slash_help, slash_kind, strip_slash_result,
@@ -419,8 +424,8 @@ pub use windshield::{
 pub use update_feed::{
     archive_digest, archived_digests, automate_offer_card, automation_done_card, card_matches,
     digest_card, digest_topic_refused, discuss_context, dismiss_idea, dismiss_update, expire_ideas,
-    feed_ideas, feed_visible, fill_useful_ideas, hold_if_quiet, home_feed_n, idea_card, idea_rank,
-    lesson_rank_delta, setup_blocked_by_lessons,
+    feed_ideas, feed_visible, fill_useful_ideas, hold_if_quiet, home_feed_n, idea_card, idea_dialogue,
+    idea_open_line, idea_rank, lesson_rank_delta, setup_blocked_by_lessons, offer_learned_move,
     offer_learned_setup,
     idea_touched, links_from_research, unpin_feed_idea,
     mark_update_opened,

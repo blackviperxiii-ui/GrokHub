@@ -245,7 +245,11 @@ pub fn review_system_prompt() -> &'static str {
      SUGGEST_SKILL: name | title | body | trigger | instructions\n\
      SUGGEST_SKILL_PATCH: name | trigger | improved instructions\n\
      SUGGEST_CONNECTOR: title | body | github <tool>\n\
-     Keep titles short. Propose at most 6 of each kind. Skip anything already \
+     Keep titles short. Name the help, not a sentence from the chat. \
+     Do not copy a chat line into a title, body, trigger, seed, or instruction. \
+     For a repeated ask, say why they asked, then a skill that would help the next \
+     chat, and an automation so they do not have to ask again. \
+     Propose at most 6 of each kind. Skip anything already \
      listed as existing. SUGGEST_SKILL_PATCH only for an existing skill name. \
      If nothing useful, output nothing."
 }
@@ -640,6 +644,32 @@ pub fn skill_from_suggestion(s: &LearnedSuggestion) -> Option<SkillMd> {
     })
 }
 
+/// Drop suggestions that quote a line the person already said.
+pub fn drop_echoed_suggestions(
+    items: Vec<LearnedSuggestion>,
+    said: &[String],
+) -> Vec<LearnedSuggestion> {
+    items
+        .into_iter()
+        .filter(|item| {
+            let fields = [
+                Some(item.title.as_str()),
+                Some(item.body.as_str()),
+                item.seed.as_deref(),
+                item.trigger.as_deref(),
+                item.instructions.as_deref(),
+                item.name.as_deref(),
+            ];
+            !said.iter().any(|source| {
+                fields
+                    .iter()
+                    .flatten()
+                    .any(|field| crate::situation::echoes_source(field, source))
+            })
+        })
+        .collect()
+}
+
 /// Drop a Suggested automation after Accept saved it. Matches title or seed.
 pub fn dismiss_accepted_auto(store: &mut SuggestionStore, seed: &str, title: &str) {
     let mut keys = Vec::new();
@@ -979,6 +1009,21 @@ SUGGEST_AUTO: Night wrap | Close the day | every day at 21, say good night
             "Accept must drop the matching Suggested auto from the store"
         );
         assert_eq!(store.skills.len(), 1, "skills stay");
+    }
+
+    #[test]
+    fn a_suggestion_that_quotes_the_chat_is_dropped() {
+        let said = "remind me to start the stream checklist on Fridays".to_string();
+        let items = parse_suggest_lines(
+            "SUGGEST_AUTO: remind me to start the stream checklist on Fridays | Run it | every day at 21, run the checklist\n\
+             SUGGEST_AUTO: Friday routine | Run the Friday step on a clock you choose. | every weekday at 9, run the Friday step\n",
+        );
+        let kept = drop_echoed_suggestions(items, std::slice::from_ref(&said));
+        assert!(
+            kept.iter().all(|item| !item.title.to_ascii_lowercase().contains("stream")),
+            "{kept:?}"
+        );
+        assert!(kept.iter().any(|item| item.title == "Friday routine"));
     }
 
     #[test]

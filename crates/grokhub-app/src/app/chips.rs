@@ -142,7 +142,18 @@ impl Cabin {
         match rx.try_recv() {
             Ok(raw) => {
                 self.greeting_busy = false;
-                self.greeting = pick_greeting(&self.greeting, Some(&raw));
+                let mut sources = vec![
+                    self.greeting_user_md.clone(),
+                    self.greeting_memory_md.clone(),
+                    self.last_night_hint(),
+                ];
+                if self.mem_name == "USER.md" || self.mem_name == "MEMORY.md" {
+                    sources.push(self.mem_body.clone());
+                }
+                for insight in &self.learning.insights {
+                    sources.push(insight.text.clone());
+                }
+                self.greeting = pick_greeting_against(&self.greeting, Some(&raw), &sources);
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.greeting_rx = Some(rx);

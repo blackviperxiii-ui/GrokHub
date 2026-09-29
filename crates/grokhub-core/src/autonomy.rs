@@ -164,7 +164,7 @@ Do not repeat the conversation or the user's words. \
 Do not paste code, diffs, logs, or tool output unless they asked to see it. \
 When they hand you work, track it with WORK_PIN and WORK_UPDATE and keep going. \
 A paused workboard card is still yours. Resume it. \
-A stable preference or routine is one line: USER_FACT: what you learned.",
+A stable preference or routine is one line: USER_FACT: why they asked and what would help next time, not a copy of their sentence.",
     );
     push_block(&mut sys, "SOUL.md", soul);
     push_block(&mut sys, "USER.md", &cap_md(user_md));
