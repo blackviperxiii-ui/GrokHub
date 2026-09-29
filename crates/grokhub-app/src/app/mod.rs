@@ -133,9 +133,9 @@ use grokhub_core::{
     MintRealtimeFn, PermKey, PlusAct, PlusTarget, Policy, PresenceFrame, ProjectKind,
     ProjectMenuAct, ProjectNode, PttLine, QuickChip, Recipe, ReplayOp, ReviewDigest, RewindRecord,
     ScheduleRoute, SkillMd, Slash, SlashHit, StreamTokenKind, SuggestionStore, ThreadReuseView,
-    ThreadTab, ThoughtFold, TranscribeRoute, UpdatePending, UsageDay,
-    VerifyResult, VoiceEvent, VoiceState,
-    WallGif, BUBBLE_PAD_X, BUBBLE_PAD_Y, CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, CABIN_GITHUB_TOOLS,
+    ThreadTab, ThoughtFold, TranscribeRoute, UpdatePending, UsageDay, VerifyResult, VoiceEvent,
+    VoiceState, WallGif, WorkflowVerb, BUBBLE_PAD_X, BUBBLE_PAD_Y, CABIN_FAST_FALLBACK,
+    CABIN_FAST_MODEL, CABIN_GITHUB_TOOLS,
     CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, CHIP_VISIBLE_MAX, CONTEXT_BUDGET_TOKENS, FOLLOWUP_MAX_STEPS,
     FORK_EXPLAINER,
     FOLLOWUP_PROMPT, FRAME_CAP, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HEARTBEAT_MS, HUB_KIND,
@@ -659,6 +659,16 @@ pub struct Cabin {
     /// Cabin `/loop` that was prompted on the live ACP session.
     loop_acp_id: Option<String>,
     followup_queue: Vec<String>,
+    /// `/workflow pause|resume|stop` waiting until the live turn ends. Not saved.
+    workflow_ctl_queue: Vec<String>,
+    /// Skills → Workflows name or run id. Not saved.
+    workflow_target: String,
+    /// Scroll the Skills page to Workflows once.
+    scroll_to_workflows: bool,
+    /// Skills Runs strip mirrors `status` until the next chat send. Not saved.
+    workflow_status_live: bool,
+    /// Queued verb is waiting on an Ask ACP handshake, not a live turn. Not saved.
+    workflow_ctl_await_acp: bool,
     /// btw questions waiting until the live turn ends. They do not cancel it.
     side_ask_queue: Vec<String>,
     /// Next kick uses SessionMode::Ask even if the pill changes before spawn.
@@ -1165,6 +1175,11 @@ impl Cabin {
             grok_tasks: Vec::new(),
             loop_acp_id: None,
             followup_queue: Vec::new(),
+            workflow_ctl_queue: Vec::new(),
+            workflow_target: String::new(),
+            scroll_to_workflows: false,
+            workflow_status_live: false,
+            workflow_ctl_await_acp: false,
             side_ask_queue: Vec::new(),
             side_ask_kick: false,
             plan_open: false,
@@ -1541,6 +1556,11 @@ impl Cabin {
             grok_tasks: Vec::new(),
             loop_acp_id: None,
             followup_queue: Vec::new(),
+            workflow_ctl_queue: Vec::new(),
+            workflow_target: String::new(),
+            scroll_to_workflows: false,
+            workflow_status_live: false,
+            workflow_ctl_await_acp: false,
             side_ask_queue: Vec::new(),
             side_ask_kick: false,
             plan_open: false,
@@ -4690,6 +4710,7 @@ impl eframe::App for Cabin {
         self.ui_imagine_overlays(ctx);
         self.ui_project_overlays(ctx);
         self.paint_idea_talk(ctx);
+        self.release_workflow_ctl_if_idle();
     }
 }
 

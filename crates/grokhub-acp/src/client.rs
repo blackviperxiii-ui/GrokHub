@@ -1329,17 +1329,23 @@ pub fn spawn_grok_p_stream(
             }
         }
         let status = child.wait();
-        if session_id.is_empty() {
-            let st = status
-                .ok()
-                .map(format_exit_status)
-                .unwrap_or_else(|| "grok -p missing sessionId".into());
-            if is_sigterm_status(&st) {
+        let exit_line = match &status {
+            Ok(st) => format_exit_status(*st),
+            Err(_) => "grok -p missing sessionId".into(),
+        };
+        let hard_fail = match &status {
+            Ok(st) => st.code().is_some_and(|code| code != 0) && !is_sigterm_status(&exit_line),
+            Err(_) => false,
+        };
+        let no_reply = text.trim().is_empty() && thought.trim().is_empty();
+        // No session, or a non-zero exit with nothing to show: surface the exit text.
+        if session_id.is_empty() || (hard_fail && no_reply) {
+            if is_sigterm_status(&exit_line) {
                 return;
             }
             let st = match stderr_tail.as_ref() {
-                Some(tail) => with_stderr(st, tail),
-                None => st,
+                Some(tail) => with_stderr(exit_line, tail),
+                None => exit_line,
             };
             let _ = tx.send(crate::stream::GrokPEvent::Err(st));
             return;

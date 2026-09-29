@@ -342,7 +342,8 @@ pub use situation::{echoes_source, learn_from_turns, LearnedMove, MoveKind};
 pub use slash::{
     filter_slash_commands, filter_slash_hits, grok_command_hits, is_cabin_slash_turn,
     mark_slash_result, parse_slash, resolve_mode_arg, slash_help, slash_kind, strip_slash_result,
-    unknown_cabin_slash, Slash, SlashDef, SlashHit, SLASH_COMMANDS, SLASH_RESULT_PREFIX,
+    unknown_cabin_slash, Slash, SlashDef, SlashHit, WorkflowVerb, SLASH_COMMANDS,
+    SLASH_RESULT_PREFIX,
 };
 pub use state::{
     clear_pending_after_complete, inbox_claim_ready, load_hub_state, merge_put_snapshot,

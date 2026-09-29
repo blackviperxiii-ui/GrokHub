@@ -989,6 +989,7 @@ impl Cabin {
             ui.add_space(16.0);
             let q = self.skill_q.to_ascii_lowercase();
             let mut use_skill: Option<String> = None;
+            let mut workflow_verb: Option<WorkflowVerb> = None;
             let mut use_cabin_skill: Option<(String, String)> = None;
             let mut add_skill: Option<grokhub_core::LearnedSuggestion> = None;
             let mut run_gh: Option<String> = None;
@@ -1264,29 +1265,90 @@ impl Cabin {
                 })
                 .cloned()
                 .collect();
-            if !workflows.is_empty() {
-                crate::cards::section_label(ui, "Workflows");
-                ui.label(
-                    RichText::new("Grok Build `/workflow` skills and `*.rhai` under ~/.grok/workflows.")
+            let workflows_section = ui
+                .vertical(|ui| {
+                    crate::cards::section_label(ui, "Workflows");
+                    ui.label(
+                        RichText::new(
+                            "Grok Build `/workflow` skills and `*.rhai` under ~/.grok/workflows.",
+                        )
                         .size(12.0)
                         .color(crate::theme::muted()),
-                );
-                ui.add_space(8.0);
-                crate::cards::tile_row(ui, workflows.len(), |ui, i| {
-                    let w = &workflows[i];
-                    if crate::cards::grok_tile(
-                        ui,
-                        crate::icons::TileIcon::Bolt,
-                        &w.name,
-                        &format!("{} · {}", w.source, w.description),
-                        Some("Use in chat"),
-                        false,
-                    ) == crate::cards::TileHit::Add
-                    {
-                        use_skill = Some(w.name.clone());
+                    );
+                    ui.add_space(8.0);
+                    if !workflows.is_empty() {
+                        crate::cards::tile_row(ui, workflows.len(), |ui, i| {
+                            let w = &workflows[i];
+                            match crate::cards::grok_tile(
+                                ui,
+                                crate::icons::TileIcon::Bolt,
+                                &w.name,
+                                &format!("{} · {}", w.source, w.description),
+                                Some("Use in chat"),
+                                false,
+                            ) {
+                                crate::cards::TileHit::Add => use_skill = Some(w.name.clone()),
+                                crate::cards::TileHit::Body => {
+                                    self.workflow_target = w.name.clone();
+                                }
+                                crate::cards::TileHit::None => {}
+                            }
+                        });
+                        ui.add_space(8.0);
                     }
-                });
-                ui.add_space(16.0);
+                    ui.label(
+                        RichText::new("Runs")
+                            .size(13.0)
+                            .strong()
+                            .color(crate::theme::subtle()),
+                    );
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        let field_w = (ui.available_width() - 248.0).clamp(180.0, 420.0);
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.workflow_target)
+                                .hint_text("Workflow name or run id")
+                                .desired_width(field_w),
+                        );
+                        let ready = !self.workflow_target.trim().is_empty();
+                        ui.add_enabled_ui(ready, |ui| {
+                            if crate::cards::ghost_pill(ui, "Pause") {
+                                workflow_verb = Some(WorkflowVerb::Pause);
+                            }
+                            if crate::cards::ghost_pill(ui, "Resume") {
+                                workflow_verb = Some(WorkflowVerb::Resume);
+                            }
+                            if crate::cards::ghost_pill(ui, "Stop") {
+                                workflow_verb = Some(WorkflowVerb::Stop);
+                            }
+                        });
+                    });
+                    if let Some(verb) = workflow_verb.take() {
+                        let target = self.workflow_target.trim().to_string();
+                        self.send_workflow_ctl(verb, &target);
+                    }
+                    ui.add_space(6.0);
+                    if self.workflow_status_live && !self.status.is_empty() {
+                        ui.label(
+                            RichText::new(self.status.as_str())
+                                .size(13.0)
+                                .color(crate::theme::fg()),
+                        );
+                        ui.add_space(6.0);
+                    }
+                    ui.label(
+                        RichText::new(
+                            "Grok Build doesn't list live runs to the cabin yet — type a workflow name or run id.",
+                        )
+                        .size(12.0)
+                        .color(crate::theme::muted()),
+                    );
+                    ui.add_space(16.0);
+                })
+                .response;
+            if self.scroll_to_workflows {
+                workflows_section.scroll_to_me(Some(egui::Align::TOP));
+                self.scroll_to_workflows = false;
             }
             let cabin_skills: Vec<_> = self
                 .skill_list
