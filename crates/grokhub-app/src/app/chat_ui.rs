@@ -1211,7 +1211,9 @@ impl Cabin {
                             ui.spacing_mut().item_spacing.x = 4.0;
                             let edit = egui::TextEdit::singleline(&mut self.find.query)
                                 .id(egui::Id::new("chat-find-input"))
-                                .hint_text("Find in this chat")
+                                .hint_text(
+                                    RichText::new("Find in this chat").color(crate::theme::muted()),
+                                )
                                 .desired_width((w - 16.0 - 170.0).max(80.0))
                                 .frame(false);
                             let resp = ui.add(edit);

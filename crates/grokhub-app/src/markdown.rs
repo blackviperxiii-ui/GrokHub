@@ -249,22 +249,23 @@ fn table(
     rows: &[Vec<String>],
     wrap: f32,
 ) {
-    let cols = header.len().max(1);
     let spacing = Vec2::new(14.0, 6.0);
-    let col_w = ((wrap - spacing.x * (cols as f32 - 1.0)) / cols as f32).max(24.0);
+    let widths = table_col_widths(ui, header, rows, wrap, spacing.x);
     ui.add_space(2.0);
+    // No stripes: the theme's faint fill is opaque and a stripe painted for row 1
+    // covered the header's descenders. The header gets a hairline instead.
     egui::Grid::new(ui.id().with(("md-table", key)))
-        .striped(true)
+        .striped(false)
         .spacing(spacing)
-        .max_col_width(col_w)
+        .min_col_width(0.0)
         .show(ui, |ui| {
             for (c, cell) in header.iter().enumerate() {
-                cell_label(ui, cell, align.get(c).copied(), col_w, true);
+                cell_label(ui, cell, align.get(c).copied(), widths[c], true);
             }
             ui.end_row();
             for row in rows {
-                for (c, cell) in row.iter().enumerate() {
-                    cell_label(ui, cell, align.get(c).copied(), col_w, false);
+                for (c, cell) in row.iter().enumerate().take(widths.len()) {
+                    cell_label(ui, cell, align.get(c).copied(), widths[c], false);
                 }
                 ui.end_row();
             }
@@ -272,16 +273,91 @@ fn table(
     ui.add_space(2.0);
 }
 
+/// Natural width per column (widest cell, markers stripped). A table wider than
+/// the bubble shrinks every column by the same share so cells wrap instead of
+/// running into the next column.
+pub(crate) fn table_col_widths(
+    ui: &Ui,
+    header: &[String],
+    rows: &[Vec<String>],
+    wrap: f32,
+    gap: f32,
+) -> Vec<f32> {
+    const MIN_COL: f32 = 24.0;
+    let cols = header.len().max(1);
+    let font = TextStyle::Body.resolve(ui.style());
+    let measure = |t: &str| {
+        ui.fonts(|f| {
+            f.layout_no_wrap(md_plain(t), font.clone(), Color32::WHITE)
+                .size()
+                .x
+        })
+    };
+    let mut widths = vec![MIN_COL; cols];
+    for (c, h) in header.iter().enumerate() {
+        widths[c] = widths[c].max(measure(h).ceil());
+    }
+    for row in rows {
+        for (c, cell) in row.iter().enumerate().take(cols) {
+            widths[c] = widths[c].max(measure(cell).ceil());
+        }
+    }
+    let gaps = gap * (cols as f32 - 1.0);
+    let room = (wrap - gaps).max(MIN_COL * cols as f32);
+    let natural: f32 = widths.iter().sum();
+    if natural > room {
+        // Columns that would shrink below MIN_COL are pinned there, and their
+        // share comes out of the wide columns, so the total still fits.
+        let mut pinned = vec![false; cols];
+        loop {
+            let fixed = MIN_COL * pinned.iter().filter(|p| **p).count() as f32;
+            let flex: f32 = widths
+                .iter()
+                .zip(&pinned)
+                .filter(|(_, p)| !**p)
+                .map(|(w, _)| *w)
+                .sum();
+            let scale = (room - fixed).max(0.0) / flex.max(1.0);
+            let mut changed = false;
+            for c in 0..cols {
+                if !pinned[c] && widths[c] * scale < MIN_COL {
+                    pinned[c] = true;
+                    changed = true;
+                }
+            }
+            if !changed {
+                for c in 0..cols {
+                    widths[c] = if pinned[c] {
+                        MIN_COL
+                    } else {
+                        (widths[c] * scale).floor()
+                    };
+                }
+                break;
+            }
+        }
+    }
+    widths
+}
+
+/// Each cell gets exactly its column width, so right and center alignment stay inside it.
 fn cell_label(ui: &mut Ui, cell: &str, align: Option<MdAlign>, col_w: f32, head: bool) {
     let layout = match align.unwrap_or(MdAlign::Left) {
         MdAlign::Left => Layout::top_down(Align::LEFT),
         MdAlign::Center => Layout::top_down(Align::Center),
         MdAlign::Right => Layout::top_down(Align::RIGHT),
     };
-    ui.with_layout(layout, |ui| {
+    ui.allocate_ui_with_layout(Vec2::new(col_w, 0.0), layout, |ui| {
+        ui.set_min_width(col_w);
         ui.set_max_width(col_w);
         if head {
             wrapping_label(ui, RichText::new(md_plain(cell)).strong(), col_w);
+            let r = ui.min_rect();
+            ui.painter().hline(
+                r.left()..=r.left() + col_w,
+                r.bottom() + 3.0,
+                Stroke::new(1.0, crate::theme::border_strong()),
+            );
         } else {
             inline(ui, cell, col_w);
         }
@@ -328,7 +404,12 @@ fn code_block(ui: &mut Ui, key: usize, lang: &str, body: &str, wrap: f32) {
             let inner = (wrap - pad.x * 2.0 - 2.0).max(1.0);
             ui.set_width(inner);
             ui.set_max_width(inner);
-            ui.horizontal(|ui| {
+            let head_h = 24.0;
+            ui.allocate_ui_with_layout(
+                Vec2::new(inner, head_h),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                ui.set_min_height(head_h);
                 let tag = if lang.is_empty() { "code" } else { lang };
                 ui.label(
                     RichText::new(tag)
@@ -355,7 +436,8 @@ fn code_block(ui: &mut Ui, key: usize, lang: &str, body: &str, wrap: f32) {
                         }
                     });
                 });
-            });
+                },
+            );
             ui.add_space(2.0);
             let job = code_job(ui, lang, body, inner);
             ui.add(Label::new(job).wrap().selectable(true));
@@ -619,6 +701,22 @@ mod tests {
         });
     }
 
+    #[test]
+    fn table_columns_fit_their_widest_cell_and_shrink_to_the_bubble() {
+        with_fonts_ui(|ui| {
+            let header = vec!["Step".to_string(), "Time".to_string(), "Owner".to_string()];
+            let rows = vec![vec!["Build".to_string(), "4m".to_string(), "CI".to_string()]];
+            let w = super::table_col_widths(ui, &header, &rows, 600.0, 14.0);
+            assert_eq!(w.len(), 3);
+            assert!(w.iter().sum::<f32>() + 28.0 < 600.0, "short table hugs: {w:?}");
+            assert!(w[0] >= w[2] - 20.0 && w.iter().all(|x| *x >= 24.0), "{w:?}");
+            let long = vec![vec!["word ".repeat(60), "x".into(), "y".into()]];
+            let w = super::table_col_widths(ui, &header, &long, 300.0, 14.0);
+            assert!(w.iter().sum::<f32>() + 28.0 <= 300.0 + 1.0, "wide table shrinks to the bubble: {w:?}");
+            assert!(w.iter().all(|x| *x >= 24.0), "{w:?}");
+        });
+    }
+
     fn with_fonts_ui(mut add: impl FnMut(&mut eframe::egui::Ui)) {
         let ctx = eframe::egui::Context::default();
         let _ = ctx.run(Default::default(), |ctx| {
@@ -626,3 +724,4 @@ mod tests {
         });
     }
 }
+
