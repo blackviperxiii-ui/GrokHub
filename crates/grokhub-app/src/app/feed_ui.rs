@@ -771,7 +771,7 @@ impl Cabin {
                 let edit = ui.add(
                     egui::TextEdit::multiline(&mut composer)
                         .desired_rows(4)
-                        .hint_text("How should this work?")
+                        .hint_text(crate::theme::hint("How should this work?"))
                         .desired_width(f32::INFINITY),
                 );
                 let enter = edit.has_focus()
