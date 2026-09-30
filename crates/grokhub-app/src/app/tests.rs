@@ -8061,6 +8061,254 @@ fn release_isolated(root: &std::path::Path, cabin: super::Cabin) {
 }
 
 #[test]
+fn chat_view_fold_keys_follow_the_views_as_the_chat_changes() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("view-keys");
+    let expect = |cabin: &mut super::Cabin| -> Vec<u64> {
+        cabin
+            .cached_chat_views()
+            .iter()
+            .map(|v| {
+                if v.kind == grokhub_core::ChatKind::Thought {
+                    grokhub_core::thought_body_key(&v.body)
+                } else {
+                    0
+                }
+            })
+            .collect()
+    };
+    let mut dock = crate::threads::ChatThread::new("Dock", false);
+    dock.messages = std::sync::Arc::new(vec![
+        ("user".into(), "fix the dock".into()),
+        (
+            "assistant".into(),
+            "THINKING:\nThe dock wraps early.\n\nHOST_CMD ls".into(),
+        ),
+        ("user".into(), "HOST_RESULT\nsrc".into()),
+        (
+            "assistant".into(),
+            "THINKING:\nNow patch it.\n\nDone.".into(),
+        ),
+    ]);
+    let mut other = crate::threads::ChatThread::new("Other", false);
+    other.messages = std::sync::Arc::new(vec![
+        ("user".into(), "hello".into()),
+        (
+            "assistant".into(),
+            "THINKING:\nA different thought.\n\nHi.".into(),
+        ),
+    ]);
+    cabin.threads = vec![dock, other];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+
+    let first = expect(&mut cabin);
+    assert!(
+        first.iter().any(|&k| k != 0),
+        "the dock chat has thoughts: {first:?}"
+    );
+    assert_eq!(cabin.chat_view_keys, first, "keys are built with the views");
+    assert_eq!(
+        cabin.session_size(),
+        (1, estimate_messages(&cabin.messages))
+    );
+
+    // A stream delta grows the last message: only the trailing stretch rekeys.
+    if let Some(last) = cabin.live_mut().last_mut() {
+        last.1 = "THINKING:\nNow patch it and run the tests.\n\nDone.".into();
+    }
+    let grown = expect(&mut cabin);
+    assert_ne!(grown, first, "the grown thought has a new key");
+    assert_eq!(cabin.chat_view_keys, grown, "a grown thought rekeys");
+    assert_eq!(
+        cabin.session_size(),
+        (1, estimate_messages(&cabin.messages))
+    );
+
+    cabin
+        .live_mut()
+        .push(("user".into(), "and the rail".into()));
+    cabin.live_mut().push((
+        "assistant".into(),
+        "THINKING:\nCheck the rail.\n\nFixed.".into(),
+    ));
+    let turn = expect(&mut cabin);
+    assert_eq!(cabin.chat_view_keys, turn, "a new turn keys its views");
+    assert_eq!(
+        cabin.session_size(),
+        (2, estimate_messages(&cabin.messages))
+    );
+
+    cabin.apply_switch_thread(1);
+    let switched = expect(&mut cabin);
+    assert_eq!(
+        cabin.chat_view_keys, switched,
+        "another chat rebuilds its keys"
+    );
+    assert_eq!(
+        cabin.session_size(),
+        (1, estimate_messages(&cabin.messages))
+    );
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn in_place_edit_refreshes_session_size_and_chat_views() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("view-rev");
+    let last = "THINKING:\nNow patch it.\n\nDone.";
+    let mut dock = crate::threads::ChatThread::new("Dock", false);
+    dock.messages = std::sync::Arc::new(vec![
+        ("user".into(), "fix the dock".into()),
+        (
+            "assistant".into(),
+            "THINKING:\nThe dock wraps early.\n\nDone early.".into(),
+        ),
+        ("user".into(), "and the rail".into()),
+        ("assistant".into(), last.into()),
+    ]);
+    cabin.threads = vec![dock];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+
+    let fold_keys = |views: &[grokhub_core::ChatView]| -> Vec<u64> {
+        views
+            .iter()
+            .map(|v| {
+                if v.kind == grokhub_core::ChatKind::Thought {
+                    grokhub_core::thought_body_key(&v.body)
+                } else {
+                    0
+                }
+            })
+            .collect()
+    };
+
+    let _ = cabin.cached_chat_views();
+    let before_keys = cabin.chat_view_keys.clone();
+    let before_size = cabin.session_size();
+    let before_rev = cabin.messages_rev;
+    assert_eq!(
+        before_size,
+        (
+            visible_turn_count(&cabin.messages),
+            estimate_messages(&cabin.messages),
+        )
+    );
+    assert!(
+        before_keys.iter().any(|&k| k != 0),
+        "the first turn has a thought: {before_keys:?}"
+    );
+
+    let count = cabin.messages.len();
+    let last_len = cabin.messages.last().map(|m| m.1.len()).unwrap_or(0);
+    cabin.live_mut()[1].1 =
+        "THINKING:\nThe title clips past the rail and the dock wraps.\n\nDone early.".into();
+    assert_eq!(cabin.messages.len(), count, "the edit keeps the message count");
+    assert_eq!(
+        cabin.messages.last().map(|m| m.1.len()).unwrap_or(0),
+        last_len,
+        "the edit keeps the last message length"
+    );
+    assert_eq!(cabin.messages_rev, before_rev.wrapping_add(1));
+
+    let fresh = grokhub_core::visible_chat(&cabin.messages);
+    let fresh_keys = fold_keys(&fresh);
+    assert_ne!(fresh_keys, before_keys, "the earlier thought must rekey");
+    assert!(
+        fresh.iter().any(|v| {
+            v.kind == grokhub_core::ChatKind::Thought && v.body.contains("clips past the rail")
+        }),
+        "the edited thought must be visible: {fresh:?}"
+    );
+    assert_eq!(cabin.cached_chat_views(), fresh.as_slice());
+    assert_eq!(cabin.chat_view_keys, fresh_keys);
+    assert_eq!(cabin.chat_view_rev, cabin.messages_rev);
+    assert_ne!(estimate_messages(&cabin.messages), before_size.1);
+    assert_eq!(
+        cabin.session_size(),
+        (
+            visible_turn_count(&cabin.messages),
+            estimate_messages(&cabin.messages),
+        )
+    );
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn idle_chat_caches_keep_the_message_revision() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("view-idle");
+    let mut dock = crate::threads::ChatThread::new("Dock", false);
+    dock.messages = std::sync::Arc::new(vec![
+        ("user".into(), "fix the dock".into()),
+        (
+            "assistant".into(),
+            "THINKING:\nThe dock wraps early.\n\nDone.".into(),
+        ),
+    ]);
+    cabin.threads = vec![dock];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+
+    let _ = cabin.cached_chat_views();
+    let _ = cabin.session_size();
+    let rev = cabin.messages_rev;
+    let view_rev = cabin.chat_view_rev;
+    let keys = cabin.chat_view_keys.clone();
+    let views = cabin.chat_views.clone();
+    let cached_key = cabin.session_size.0.clone();
+    let cached_val = cabin.session_size.1;
+    let views_ptr = cabin.chat_views.as_ptr();
+    assert_eq!(cabin.session_size(), cached_val);
+    assert_eq!(cabin.cached_chat_views().as_ptr(), views_ptr);
+    assert_eq!(cabin.messages_rev, rev);
+    assert_eq!(cabin.chat_view_rev, view_rev);
+    assert_eq!(cabin.chat_view_keys, keys);
+    assert_eq!(cabin.chat_views, views);
+    assert_eq!(cabin.session_size.0, cached_key);
+    assert_eq!(cabin.session_size.1, cached_val);
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn scrub_live_blocks_clears_live_keys_when_redaction_keeps_length() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("live-key-redact");
+    let secret = "TenCharSec";
+    assert_eq!(secret.len(), "[redacted]".len());
+    let body = format!("look at {secret} please");
+    let len = body.len();
+    cabin.live_blocks.push(grokhub_core::LiveBlock {
+        kind: grokhub_core::LiveKind::Thought,
+        body,
+        tool_id: String::new(),
+        tool_title: String::new(),
+        tool_status: String::new(),
+        tool_detail: String::new(),
+        fold_slot: 4,
+    });
+    cabin.live_keys = vec![(4, len, 99)];
+    cabin.secret_hold.push(secret.to_string());
+    cabin.scrub_live_blocks();
+    assert!(
+        cabin.live_keys.is_empty(),
+        "same-length [redacted] must not keep the cached thought key"
+    );
+    assert_eq!(cabin.live_blocks[0].body.len(), len);
+    assert!(cabin.live_blocks[0].body.contains("[redacted]"));
+    assert!(!cabin.live_blocks[0].body.contains(secret));
+    cabin.live_keys = vec![(4, len, 7)];
+    cabin.scrub_live_blocks();
+    assert_eq!(
+        cabin.live_keys,
+        vec![(4, len, 7)],
+        "a scrub that does not change a body must leave the keys"
+    );
+    release_isolated(&root, cabin);
+}
+
+#[test]
 fn selecting_plan_leaves_the_title_and_sets_plan() {
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("plan-title");
@@ -14015,6 +14263,7 @@ fn quiet_cabin() -> Cabin {
         cfg: cfg.clone(),
         composer: String::new(),
         messages: std::sync::Arc::new(Vec::new()),
+        messages_rev: 0,
         status: String::new(),
         running: false,
         turn_retried: false,
@@ -14139,9 +14388,12 @@ fn quiet_cabin() -> Cabin {
         stream_buf: String::new(),
         thought_buf: String::new(),
         chat_views: Vec::new(),
+        chat_view_keys: Vec::new(),
+        session_size: ((String::new(), usize::MAX, usize::MAX, u64::MAX), (0, 0)),
         chat_view_tid: String::new(),
         chat_view_n: 0,
         chat_view_last: 0,
+        chat_view_rev: 0,
         presence_ring: Vec::new(),
         voice_sock: None,
         voice_state: grokhub_core::VoiceState::Idle,
@@ -14306,6 +14558,7 @@ fn quiet_cabin() -> Cabin {
         fork_explainer_seen: false,
         tool_cards: Vec::new(),
         live_blocks: Vec::new(),
+        live_keys: Vec::new(),
         desk_frame: None,
         perm_ask: None,
         perm_always_confirm: None,

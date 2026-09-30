@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 2.10.47 — 2026-09-30
+
+A long chat stays smooth. Frame time in the Chat pane no longer grows with the transcript: a 150-turn chat drops from about 37 ms to under 1 ms per frame. Each thought is keyed once when the chat changes, not scrubbed and hashed on every frame, and a row scrolled out of view no longer resolves its fold. The fork offer's turn count and token estimate are worked out when the chat changes, a live thought rekeys only while it grows, tool cards are no longer copied every frame, and a chat scrolled out of the rail skips laying out its title. Folds, the fork offer, and the rail look and behave the same.
+
+An edit inside the transcript that keeps the message count and the last message's length still refreshes the chat and the token estimate, and a secret redacted inside a live thought rekeys that thought.
+
+- Linux: `grokhub-linux-v2.10.47.tar.gz` and AUR `pkgver=2.10.47`.
+- Windows: `GrokHub-Setup-2.10.47.exe` and `grokhub-windows-v2.10.47.zip`.
+
 ## 2.10.46 — 2026-09-30
 
 Ideas are short cards you can read at a glance: the type (Skill, Automation, or Suggestion), a title, and one short line. Hover a card, or click it, and it opens in place with the details, the action Apply runs, and a chat with the agent about that card. The agent answers inside the card and can rewrite the action; nothing runs until you press Apply. Move away and the card folds back, keeping your edits and the chat.
