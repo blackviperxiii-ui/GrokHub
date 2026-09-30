@@ -98,8 +98,11 @@ impl Cabin {
                     }
                     if !job_scratch {
                         let user = self.last_user_on_job();
-                        let proposed = propose_skill_from_turn(&user, &block, &self.last_host);
-                        self.commit_proposed_skill(proposed);
+                        if let Some(proposed) =
+                            propose_skill_from_turn(&user, &block, &self.last_host)
+                        {
+                            self.commit_proposed_skill(proposed);
+                        }
                     }
                 }
                 self.plan_pending = retain_held_plan(self.plan_pending.take(), &self.last_host);
@@ -128,8 +131,11 @@ impl Cabin {
                 }
                 if !any_hands && is_hard_run(self.last_host.len() as u32, !ok, false, job_scratch) {
                     let user = self.last_user_on_job();
-                    let proposed = propose_skill_from_turn(&user, &block, &self.last_host);
-                    self.commit_proposed_skill(proposed);
+                    if let Some(proposed) =
+                        propose_skill_from_turn(&user, &block, &self.last_host)
+                    {
+                        self.commit_proposed_skill(proposed);
+                    }
                 }
                 self.append_host_trajectory(ok, &block);
                 self.trim_job_result_dumps();

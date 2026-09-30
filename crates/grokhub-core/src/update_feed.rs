@@ -132,6 +132,9 @@ pub struct UpdateCard {
     /// Taken off the home feed. The slot stays empty. The card remains on the Ideas board.
     #[serde(default, skip_serializing_if = "is_false")]
     pub feed_kept: bool,
+    /// Generated ideas: the exact message that does it. Accept fills the draft with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
 }
 
 fn is_false(v: &bool) -> bool {
@@ -169,6 +172,9 @@ pub struct FeedPulse {
     /// Home-feed idea slots already used. Dismissing one does not free a slot.
     #[serde(default)]
     pub feed_slots_spent: u8,
+    /// Last time the model was asked for ideas (`crate::ideas`).
+    #[serde(default)]
+    pub last_ideas_ms: u64,
 }
 
 fn default_on() -> bool {
@@ -202,6 +208,7 @@ impl Default for FeedPulse {
             digest_held: false,
             idea_titles: Vec::new(),
             feed_slots_spent: 0,
+            last_ideas_ms: 0,
         }
     }
 }
@@ -247,7 +254,6 @@ pub struct PulseTick {
     pub expired: usize,
     pub released: usize,
     pub digest_posted: bool,
-    pub idea_posted: bool,
     pub digest_held: bool,
     pub cards_changed: bool,
     pub pulse_changed: bool,
@@ -582,6 +588,12 @@ pub fn discuss_context(card: &UpdateCard) -> String {
 
 /// Opening line for the idea talk. The note under it is the editable draft.
 pub fn idea_open_line(card: &UpdateCard) -> String {
+    if card.prompt.is_some() {
+        return format!(
+            "{}\n\nThe draft below does it. Send it as is, or change it first.",
+            discuss_context(card)
+        );
+    }
     format!(
         "{}\n\nThis draft is what would help next time: why it came up, a quick chip, a skill, and an automation. Change the note if that is wrong. Do not copy the earlier chat back.",
         discuss_context(card)
@@ -590,6 +602,9 @@ pub fn idea_open_line(card: &UpdateCard) -> String {
 
 /// Editable note for the idea talk. The person can change it before it is sent.
 pub fn idea_dialogue(card: &UpdateCard) -> String {
+    if let Some(prompt) = card.prompt.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        return prompt.to_string();
+    }
     let mut out = String::new();
     if let Some(why) = card.why.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         out.push_str("Why: ");
@@ -652,7 +667,6 @@ pub fn tick_feed_pulse(
         expired: 0,
         released: 0,
         digest_posted: false,
-        idea_posted: false,
         digest_held: pulse.digest_held,
         cards_changed: false,
         pulse_changed: false,
@@ -704,12 +718,6 @@ pub fn tick_feed_pulse(
             post_update(cards, card);
             tick.digest_posted = true;
             tick.cards_changed = true;
-            if let Some(idea) = compose_idea(cards, pulse, now.now_ms, material.brief) {
-                let title = idea.title.clone();
-                post_update(cards, idea);
-                remember_idea_title(pulse, &title);
-                tick.idea_posted = true;
-            }
             pulse.last_digest_ms = now.now_ms;
             pulse.digest_held = false;
             tick.digest_held = false;
@@ -723,165 +731,69 @@ pub fn tick_feed_pulse(
     tick
 }
 
-const USEFUL_SETUPS: &[(&str, &str, &str)] = &[
-    (
-        "morning-reminder",
-        "Morning reminder",
-        "A weekday reminder that opens a chat with what you wanted to remember.",
-    ),
-    (
-        "nightly-wrap",
-        "Nightly wrap-up",
-        "An automation that summarizes the day and posts it on the home feed.",
-    ),
-    (
-        "remind-later",
-        "Remind me later",
-        "Say it once. The cabin reminds you at the time you pick.",
-    ),
-    (
-        "when-i-sit-down",
-        "Ping me when I sit down",
-        "A reminder that waits until you open the cabin, then starts the chat.",
-    ),
-];
-
-/// Ideas for how the cabin can work for this person: reminders and automations.
-/// Skips a title already on the feed, already dismissed, or already saved as an automation.
-/// Returns how many cards were added.
-pub fn fill_useful_ideas(
+/// Post ideas the model wrote (see `crate::ideas`). Skips a title already on the
+/// board, already turned down, or already an automation. Returns how many posted.
+pub fn post_generated_ideas(
     cards: &mut Vec<UpdateCard>,
     pulse: &mut FeedPulse,
     now: u64,
-    user_md: &str,
-    memory_md: &str,
-    soul_md: &str,
+    seeds: &[crate::ideas::IdeaSeed],
     have_names: &[&str],
     lessons: &str,
 ) -> usize {
     let mut posted = 0usize;
-    let recover = idea_rows(cards) == 0;
-    for (source, title, body) in USEFUL_SETUPS {
+    for seed in seeds {
+        // One id per idea: the source alone collides for ideas posted in one pass.
+        let source = format!(
+            "{}-{}",
+            crate::ideas::IDEA_SOURCE_GENERATED,
+            crate::cabin_engine::engine_slug(&seed.title)
+        );
         if post_useful_idea(
-            cards, pulse, now, source, title, body, have_names, recover, lessons, "",
+            cards,
+            pulse,
+            now,
+            &source,
+            &seed.title,
+            &seed.body,
+            have_names,
+            false,
+            lessons,
+            seed.kind.why_label(),
         ) {
-            posted += 1;
-        }
-    }
-    let mut posted_profile = false;
-    for raw in [user_md, memory_md, soul_md] {
-        for line in useful_profile_lines(raw) {
-            if digest_topic_refused(&line) {
-                continue;
-            }
-            let Some(learned) = crate::situation::learn_from_turns(&line, "") else {
-                continue;
-            };
-            if echoes_profile(&learned.idea_title, &line) || echoes_profile(&learned.idea_body, &line)
+            if let Some(card) = cards
+                .iter_mut()
+                .find(|c| c.kind == UpdateKind::Idea && c.title.eq_ignore_ascii_case(seed.title.trim()))
             {
-                continue;
+                card.prompt = Some(seed.prompt.trim().to_string());
             }
-            if post_useful_idea(
-                cards,
-                pulse,
-                now,
-                "profile",
-                &learned.idea_title,
-                &learned.idea_body,
-                have_names,
-                recover,
-                lessons,
-                &learned.why,
-            ) {
-                posted += 1;
-                posted_profile = true;
-                break;
-            }
-        }
-        if posted_profile {
-            break;
+            posted += 1;
         }
     }
     seal_feed_ideas(cards, pulse, now);
     posted
 }
 
-/// One learned routine becomes an Ideas-board card. It does not take a home-feed slot.
-/// A stale untouched card is the one that makes room.
-pub fn offer_learned_setup(
-    cards: &mut Vec<UpdateCard>,
-    pulse: &mut FeedPulse,
-    now: u64,
-    fact: &str,
-) -> bool {
-    let fact = fact.trim();
-    if !setup_fact(fact) {
-        return false;
-    }
-    let Some(learned) = crate::situation::learn_from_turns(fact, "") else {
-        return false;
-    };
-    if echoes_profile(&learned.idea_title, fact) {
-        return false;
-    }
-    offer_learned_move(cards, pulse, now, &learned)
+/// Generated ideas still live on the board (not accepted, not turned down).
+pub fn live_generated_ideas(cards: &[UpdateCard]) -> usize {
+    cards
+        .iter()
+        .filter(|c| c.kind == UpdateKind::Idea && c.prompt.is_some() && !c.built)
+        .count()
 }
 
-/// One inferred situation becomes an Ideas-board card. The title is the help,
-/// not the sentence that was said.
-pub fn offer_learned_move(
-    cards: &mut Vec<UpdateCard>,
-    pulse: &mut FeedPulse,
-    now: u64,
-    learned: &crate::situation::LearnedMove,
-) -> bool {
-    if learned.idea_title.trim().is_empty() || learned.idea_body.trim().is_empty() {
-        return false;
-    }
-    post_useful_idea(
-        cards,
-        pulse,
-        now,
-        "profile",
-        &learned.idea_title,
-        &learned.idea_body,
-        &[],
-        false,
-        "",
-        &learned.why,
-    )
-}
-
-fn echoes_profile(proposal: &str, source: &str) -> bool {
-    crate::situation::echoes_source(proposal, source)
-}
-
-fn setup_fact(fact: &str) -> bool {
-    let n = fact.chars().count();
-    if !(8..160).contains(&n) || digest_topic_refused(fact) {
-        return false;
-    }
-    if crate::learning::is_actionable_need(fact) {
-        return true;
-    }
-    let lower = fact.to_ascii_lowercase();
-    const NEEDLES: &[&str] = &[
-        "remind",
-        "reminder",
-        "every morning",
-        "every night",
-        "every weekday",
-        "nightly",
-        "when i sit",
-        "ping me",
-        "automate",
-        "automation",
-        "routine",
-        "wrap-up",
-        "wrap up",
-        "schedule",
-    ];
-    NEEDLES.iter().any(|needle| lower.contains(needle))
+/// Cards the old template generators wrote ("Set up: …", "A chip for …") go,
+/// unless you already built or discussed one. Returns how many were removed.
+pub fn purge_template_ideas(cards: &mut Vec<UpdateCard>) -> usize {
+    let before = cards.len();
+    cards.retain(|c| {
+        !(c.kind == UpdateKind::Idea
+            && c.prompt.is_none()
+            && !c.built
+            && c.discuss_thread.is_none()
+            && crate::ideas::is_template_idea_title(&c.title))
+    });
+    before - cards.len()
 }
 
 fn post_useful_idea(
@@ -1088,60 +1000,6 @@ fn compose_digest(
     Some(card)
 }
 
-fn compose_idea(
-    cards: &[UpdateCard],
-    pulse: &FeedPulse,
-    now: u64,
-    brief: &str,
-) -> Option<UpdateCard> {
-    let brief = brief.trim();
-    if brief.is_empty() || digest_topic_refused(brief) {
-        return None;
-    }
-    let learned = crate::situation::learn_from_turns(brief, "");
-    let (title, body, why) = if let Some(learned) = learned.as_ref() {
-        if echoes_profile(&learned.idea_title, brief) || echoes_profile(&learned.idea_body, brief) {
-            (
-                "A next step from the brief",
-                "A chip, a skill, or an automation can carry this so you do not have to ask again.",
-                "The brief pointed at work worth setting up.",
-            )
-        } else {
-            (
-                learned.idea_title.as_str(),
-                learned.idea_body.as_str(),
-                learned.why.as_str(),
-            )
-        }
-    } else {
-        (
-            "A next step from the brief",
-            "A chip, a skill, or an automation can carry this so you do not have to ask again.",
-            "The brief pointed at work worth setting up.",
-        )
-    };
-    if title.is_empty() {
-        return None;
-    }
-    if pulse.idea_titles.iter().any(|t| {
-        t.eq_ignore_ascii_case(title) || t.eq_ignore_ascii_case(brief)
-    }) {
-        return None;
-    }
-    if cards.iter().any(|c| {
-        c.kind == UpdateKind::Idea
-            && (c.title.eq_ignore_ascii_case(title) || c.title.eq_ignore_ascii_case(brief))
-    }) {
-        return None;
-    }
-    if pulse.idea_titles.len() >= IDEA_TITLE_MEMORY {
-        return None;
-    }
-    let mut card = idea_card("brief", title, body, now);
-    card.why = Some(why.to_string());
-    Some(card)
-}
-
 fn real_links(links: &[CitedLink]) -> Vec<CitedLink> {
     let mut out = Vec::new();
     for link in links {
@@ -1160,35 +1018,6 @@ fn real_links(links: &[CitedLink]) -> Vec<CitedLink> {
                 label
             },
         });
-    }
-    out
-}
-
-/// Personal lines worth turning into a setup idea, in file order. Skips the
-/// memory templates, machine inventory, and dated compaction notes.
-fn useful_profile_lines(raw: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for line in raw.lines() {
-        let line = line.trim().trim_start_matches(['-', '*']).trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let lower = line.to_ascii_lowercase();
-        if lower.starts_with("who you are")
-            || lower.starts_with("who this cabin")
-            || lower.starts_with("durable facts")
-            || lower.starts_with("long-term")
-            || lower.starts_with("edited by you")
-            || lower.starts_with("os:")
-            || lower.starts_with("shell:")
-            || lower.starts_with("path:")
-            || lower.starts_with("20")
-            || lower.contains("edit this")
-            || lower.contains("preferred tools")
-        {
-            continue;
-        }
-        out.push(clip_line(line, BODY_CHARS));
     }
     out
 }
@@ -1280,6 +1109,7 @@ fn blank_card(
         why: None,
         feed_pin: false,
         feed_kept: false,
+        prompt: None,
     }
 }
 
@@ -1663,11 +1493,13 @@ mod tests {
             material("more F1", &[], &[]),
         );
         assert!(tick.digest_posted);
-        assert!(tick.idea_posted);
         assert_eq!(pulse.last_digest_ms, 200);
         assert!(!pulse.digest_held);
         assert!(cards.iter().any(|c| c.kind == UpdateKind::Digest));
-        assert!(cards.iter().any(|c| c.kind == UpdateKind::Idea));
+        assert!(
+            !cards.iter().any(|c| c.kind == UpdateKind::Idea),
+            "the digest no longer posts a template idea beside it"
+        );
         assert!(visible_updates(&cards).is_empty());
     }
 
@@ -1717,70 +1549,52 @@ mod tests {
         assert_eq!(pulse.last_digest_ms, 0);
     }
 
+    fn seed(kind: crate::ideas::IdeaKind, title: &str) -> crate::ideas::IdeaSeed {
+        crate::ideas::IdeaSeed {
+            kind,
+            title: title.into(),
+            body: format!("{title} saves you the repeat ask every week."),
+            prompt: format!("every weekday at 9, {}", title.to_ascii_lowercase()),
+        }
+    }
+
+    fn seeds() -> Vec<crate::ideas::IdeaSeed> {
+        use crate::ideas::IdeaKind::*;
+        vec![
+            seed(Automation, "Morning test run"),
+            seed(Skill, "AUR release checklist"),
+            seed(Reminder, "Stream prep reminder"),
+            seed(Try, "Triage open issues"),
+        ]
+    }
+
     #[test]
-    fn useful_setups_fill_the_feed_once_and_skip_what_you_already_run() {
+    fn generated_ideas_post_once_with_their_prompt_and_skip_what_you_run() {
         let mut cards = Vec::new();
         let mut pulse = FeedPulse::default();
-        let n = fill_useful_ideas(
-            &mut cards,
-            &mut pulse,
-            40,
-            "Ships on Friday nights.",
-            "",
-            "",
-            &[],
-            "",
+        let n = post_generated_ideas(&mut cards, &mut pulse, 40, &seeds(), &["Stream prep reminder"], "");
+        assert_eq!(n, 3, "a title you already run is skipped");
+        let test_run = cards.iter().find(|c| c.title == "Morning test run").expect("posted");
+        assert_eq!(test_run.prompt.as_deref(), Some("every weekday at 9, morning test run"));
+        assert_eq!(test_run.why.as_deref(), Some("An automation you can turn on"));
+        assert_eq!(idea_dialogue(test_run), "every weekday at 9, morning test run", "Accept fills the draft");
+        assert!(idea_open_line(test_run).contains("The draft below does it"));
+        assert_eq!(live_generated_ideas(&cards), 3);
+        assert_eq!(post_generated_ideas(&mut cards, &mut pulse, 50, &seeds(), &[], ""), 1, "only the new one");
+        let gone = cards.iter().find(|c| c.title == "Triage open issues").unwrap().id.clone();
+        dismiss_idea(&mut cards, &gone);
+        assert_eq!(
+            post_generated_ideas(&mut cards, &mut pulse, 60, &seeds(), &[], ""),
+            0,
+            "a turned-down title does not come back"
         );
-        assert!(n >= 4);
-        assert!(cards.iter().any(|c| c.kind == UpdateKind::Idea && c.title == "Morning reminder"));
-        assert!(cards.iter().any(|c| c.title == "A Friday routine"));
-        assert!(cards.iter().all(|c| !c.title.contains("Ships on Friday")));
-        let again = fill_useful_ideas(
-            &mut cards,
-            &mut pulse,
-            50,
-            "Ships on Friday nights.",
-            "",
-            "",
-            &[],
-            "",
-        );
-        assert_eq!(again, 0);
-        let mut fresh = Vec::new();
-        let mut pulse = FeedPulse::default();
-        let n = fill_useful_ideas(
-            &mut fresh,
-            &mut pulse,
-            40,
-            "",
-            "",
-            "",
-            &["Morning reminder"],
-            "",
-        );
-        assert!(fresh.iter().all(|c| c.title != "Morning reminder"));
-        assert!(n >= 3);
-        let wrap = fresh
-            .iter()
-            .find(|c| c.title == "Nightly wrap-up")
-            .unwrap()
-            .id
-            .clone();
-        dismiss_idea(&mut fresh, &wrap);
-        let titled = pulse.idea_titles.clone();
-        let mut pulse = FeedPulse {
-            idea_titles: titled,
-            ..FeedPulse::default()
-        };
-        let _ = fill_useful_ideas(&mut fresh, &mut pulse, 60, "", "", "", &[], "");
-        assert!(fresh.iter().all(|c| c.title != "Nightly wrap-up"));
     }
 
     #[test]
     fn feed_pins_three_once_and_a_dismiss_does_not_backfill() {
         let mut cards = Vec::new();
         let mut pulse = FeedPulse::default();
-        let n = fill_useful_ideas(&mut cards, &mut pulse, 1_000, "", "", "", &[], "");
+        let n = post_generated_ideas(&mut cards, &mut pulse, 1_000, &seeds(), &[], "");
         assert!(n >= 3);
         assert_eq!(feed_ideas(&cards, 1_000).len(), 3);
         assert_eq!(pulse.feed_slots_spent, 3);
@@ -1805,61 +1619,28 @@ mod tests {
     }
 
     #[test]
-    fn learned_setup_replaces_a_stale_untouched_card_and_stays_off_the_feed() {
-        let mut cards = Vec::new();
-        let mut pulse = FeedPulse::default();
-        let n = fill_useful_ideas(&mut cards, &mut pulse, 1_000, "", "", "", &[], "");
-        assert!(n >= 3);
-        let pinned = feed_ideas(&cards, 1_000).len();
-        let ideas_before = cards.iter().filter(|c| c.kind == UpdateKind::Idea).count();
-        let stale_now = 1_000 + 3 * 24 * 60 * 60 * 1000 + 5_000;
-        assert!(!offer_learned_setup(
-            &mut cards,
-            &mut pulse,
-            stale_now,
-            "prefer nvim"
-        ));
-        assert!(offer_learned_setup(
-            &mut cards,
-            &mut pulse,
-            stale_now,
-            "remind me to start the stream checklist on Fridays"
-        ));
-        assert!(cards.iter().any(|c| {
-            c.kind == UpdateKind::Idea
-                && c.title == "A reminder that runs on its own"
-                && !c.title.to_ascii_lowercase().contains("stream")
-                && !c.feed_pin
-        }));
-        assert_eq!(
-            cards.iter().filter(|c| c.kind == UpdateKind::Idea).count(),
-            ideas_before
-        );
-        assert_eq!(feed_ideas(&cards, stale_now).len(), pinned);
-        assert_eq!(pulse.feed_slots_spent, 3);
-        assert!(!offer_learned_setup(
-            &mut cards,
-            &mut pulse,
-            stale_now,
-            "remind me to start the stream checklist on Fridays"
-        ));
+    fn template_cards_are_purged_unless_you_used_them() {
+        let mut cards = vec![
+            idea_card("profile", "A chip for the next slice", "A chip does the next slice.", 1),
+            idea_card("profile", "Set up: exit 1 · 9ms", "Turn this into a reminder.", 1),
+            idea_card("remind-later", "Remind me later", "Say it once.", 1),
+            idea_card("gen", "Morning test run", "Runs your tests before you sit down.", 1),
+            digest_card("d", "Digest", "brief", 1),
+        ];
+        cards[2].built = true;
+        assert_eq!(purge_template_ideas(&mut cards), 2);
+        let titles: Vec<&str> = cards.iter().map(|c| c.title.as_str()).collect();
+        assert_eq!(titles, vec!["Remind me later", "Morning test run", "Digest"]);
+        assert_eq!(purge_template_ideas(&mut cards), 0);
     }
 
     #[test]
-    fn next_profile_line_fills_when_the_first_is_already_a_card() {
-        let mut cards = Vec::new();
-        let mut pulse = FeedPulse::default();
-        let notes = "Ships on Friday nights.\nA nightly wrap of what got done.";
-        let n = fill_useful_ideas(&mut cards, &mut pulse, 40, notes, "", "", &[], "");
-        assert!(n >= 4);
-        assert!(cards.iter().any(|c| c.title == "A Friday routine"));
-        assert!(cards.iter().all(|c| !c.title.to_ascii_lowercase().contains("what got done")));
-        let again = fill_useful_ideas(&mut cards, &mut pulse, 80, notes, "", "", &[], "");
-        assert_eq!(again, 1);
-        assert!(cards
-            .iter()
-            .any(|c| c.title == "An end-of-day wrap" && !c.feed_pin));
-        assert_eq!(pulse.feed_slots_spent, 3);
+    fn older_updates_json_loads_without_a_prompt() {
+        let raw = r#"[{"id":"i1","kind":"idea","title":"Old idea","createdAt":1,"status":"unread"}]"#;
+        let cards: Vec<UpdateCard> = serde_json::from_str(raw).expect("old feed loads");
+        assert!(cards[0].prompt.is_none());
+        let back = serde_json::to_string(&cards[0]).unwrap();
+        assert!(!back.contains("prompt"), "{back}");
     }
 
     #[test]
