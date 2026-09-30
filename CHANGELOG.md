@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 2.10.42 — 2026-09-30
+## 2.10.43 — 2026-09-30
 
 Replies render numbered lists, task lists, tables, quotes, rules, links, and strikethrough. Code blocks are coloured by language and each one has its own Copy. Links open only for http and https. Your own messages get Edit, which puts the text back in the composer; a draft you already typed stays on top. Ctrl+F finds text in the open chat: Enter and Shift+Enter step through the matches, the picked message gets a ring, and Esc closes it. Enter in the find box does not answer a permission card.
 
@@ -11,6 +11,13 @@ Automations remember how their last run ended. A failed run shows a red line on 
 Settings → Behavior has a daily token budget. The cabin warns once at 80% and once when it is used up. With Pause scheduled work over budget on, night jobs, loops, and anticipate wait until tomorrow; chat still sends. `/usage` shows the budget. Grok Build reports tokens, not prices, so the budget is in tokens.
 
 Drag a workboard card onto another column to move it. While a file is dragged over the cabin, a card says what the drop will do, and a drop of several files says how many were left out. `/export html` writes a standalone page and `/export json` writes the raw transcript, next to `export.md`.
+
+- Linux: `grokhub-linux-v2.10.43.tar.gz` and AUR `pkgver=2.10.43`.
+- Windows: `GrokHub-Setup-2.10.43.exe` and `grokhub-windows-v2.10.43.zip`.
+
+## 2.10.42 — 2026-09-29
+
+Cabin tests that never ask the agent set `GROKHUB_GROK` to a missing path. The suite stays on the offline path and leaves the real Grok CLI idle.
 
 - Linux: `grokhub-linux-v2.10.42.tar.gz` and AUR `pkgver=2.10.42`.
 - Windows: `GrokHub-Setup-2.10.42.exe` and `grokhub-windows-v2.10.42.zip`.
