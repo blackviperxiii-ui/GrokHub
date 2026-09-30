@@ -473,6 +473,46 @@ impl Cabin {
                                                                     self.status = "Saved".into();
                                                                 }
                                                             }
+                                                            let budgets = grokhub_core::TOKEN_BUDGETS;
+                                                            let budget_labels: Vec<String> = budgets
+                                                                .iter()
+                                                                .map(|b| grokhub_core::token_budget_label(*b))
+                                                                .collect();
+                                                            let budget_hint = format!(
+                                                                "Warns at 80% and when used up, once a day. {}.",
+                                                                grokhub_core::budget_line(
+                                                                    &self.usage,
+                                                                    self.cfg.daily_token_budget,
+                                                                )
+                                                            );
+                                                            if let Some(i) = crate::cards::settings_dropdown(
+                                                                ui,
+                                                                "Daily token budget",
+                                                                &budget_hint,
+                                                                &grokhub_core::token_budget_label(
+                                                                    self.cfg.daily_token_budget,
+                                                                ),
+                                                                &budget_labels,
+                                                            ) {
+                                                                if let Some(b) = budgets.get(i) {
+                                                                    self.cfg.daily_token_budget = *b;
+                                                                    self.persist_cfg();
+                                                                    self.status = "Saved".into();
+                                                                }
+                                                            }
+                                                            if self.cfg.daily_token_budget > 0 {
+                                                                let mut pause = self.cfg.budget_pauses_scheduled;
+                                                                if crate::cards::settings_toggle(
+                                                                    ui,
+                                                                    "Pause scheduled work over budget",
+                                                                    "Night jobs, loops, and anticipate wait until tomorrow. Chat still sends.",
+                                                                    &mut pause,
+                                                                ) {
+                                                                    self.cfg.budget_pauses_scheduled = pause;
+                                                                    self.persist_cfg();
+                                                                    self.status = "Saved".into();
+                                                                }
+                                                            }
                                                         }
                                                         SettingsSec::Update => {
                                                             if let Some(notice) = cli_notice.as_deref() {

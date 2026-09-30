@@ -157,6 +157,33 @@ pub fn offline() -> Color32 {
     OFFLINE
 }
 
+/// Code keyword. Muted blue-violet so a reply does not read as a rainbow.
+pub fn code_keyword() -> Color32 {
+    tok(
+        Color32::from_rgb(0xc6, 0x92, 0xf0),
+        Color32::from_rgb(0x7c, 0x3a, 0xb8),
+    )
+}
+pub fn code_string() -> Color32 {
+    tok(
+        Color32::from_rgb(0x9e, 0xce, 0x86),
+        Color32::from_rgb(0x2f, 0x7d, 0x32),
+    )
+}
+pub fn code_number() -> Color32 {
+    tok(
+        Color32::from_rgb(0xe8, 0xb0, 0x74),
+        Color32::from_rgb(0xa6, 0x55, 0x00),
+    )
+}
+pub fn code_comment() -> Color32 {
+    subtle()
+}
+/// Code block well. Sits one step below the bubble fill.
+pub fn code_well() -> Color32 {
+    tok(BG, LIGHT_ELEVATED)
+}
+
 /// Quiet sheet elevation. Light is a soft drop; dark is a faint lift on OLED `#000`.
 pub fn sheet_shadow() -> egui::Shadow {
     if USE_LIGHT.load(Ordering::Relaxed) {

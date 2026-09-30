@@ -89,6 +89,7 @@ pub struct Shortcut {
 pub const SHORTCUTS: &[Shortcut] = &[
     Shortcut { keys: "Ctrl+K", action: "Command palette", scope: "Global" },
     Shortcut { keys: "Ctrl+N", action: "New chat", scope: "Global" },
+    Shortcut { keys: "Ctrl+F", action: "Find in this chat (Enter next, Shift+Enter previous, Esc close)", scope: "Chat" },
     Shortcut { keys: "Ctrl+G", action: "Hey Grok (listen or halt)", scope: "Global" },
     Shortcut { keys: "Super+G", action: "Hey Grok when unfocused", scope: "System" },
     Shortcut { keys: "Ctrl+Shift+Esc", action: "Halt", scope: "Global" },

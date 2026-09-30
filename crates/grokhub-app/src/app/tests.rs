@@ -841,7 +841,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         with_fonts_ui(|ui| {
             ui.allocate_ui(egui::vec2(800.0, 900.0), |ui| {
                 ui.set_max_width(800.0);
-                let body = "## Heading\n\n- bullet one\n- bullet two\n\nClosing line.";
+                let body = "# Title\n## Heading\n\n- bullet one\n- bullet two\n\n```sh\nls -la\n```\n\nClosing line.";
                 let wrap = grokhub_core::bubble_wrap_width(800.0, grokhub_core::BUBBLE_PAD_X);
                 let measured = crate::markdown::measure_text(ui, body, wrap);
                 let mut md_h = 0.0;
@@ -6630,7 +6630,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                     );
                     if state != "stop" {
                         assert!(
-                            !cabin.composer.trim().is_empty() == (state == "send"),
+                            cabin.composer.trim().is_empty() != (state == "send"),
                             "{state} rows={row_n} width={width}: composer={:?}",
                             cabin.composer
                         );
@@ -14200,6 +14200,7 @@ fn quiet_cabin() -> Cabin {
         plus_ignore_close: false,
         file_pick: None,
         pick_rx: None,
+        drop_extra: 0,
         pick_list_rx: None,
         pick_dir: String::new(),
         pick_cache: None,
@@ -14264,6 +14265,8 @@ fn quiet_cabin() -> Cabin {
         perm_always_confirm: None,
         confirm: None,
         jump_last_you: false,
+        find: super::chat_ui::ChatFind::default(),
+        auto_run: None,
         elicit_ask: None,
         elicit_draft: String::new(),
         secret_hold: Vec::new(),
@@ -14792,6 +14795,7 @@ fn full_automation_list_stays_off_a_run() {
             last_run: None,
             next_run: None,
             run_count: 0,
+            health: Default::default(),
         })
         .collect();
     cabin.add_automation_seed("every day at 9, summarize the board");
@@ -15347,4 +15351,346 @@ fn empty_project_name_is_refused() {
     assert_eq!(app.projects.len(), before);
     assert!(!app.running);
     assert!(app.chat_job_thread.is_none());
+}
+
+#[test]
+fn edit_puts_your_message_back_without_dropping_a_draft() {
+    assert_eq!(super::chat_ui::edit_into_composer("", "fix the tests"), "fix the tests");
+    assert_eq!(super::chat_ui::edit_into_composer("  \n", "fix the tests"), "fix the tests");
+    assert_eq!(
+        super::chat_ui::edit_into_composer("half typed\n", "fix the tests"),
+        "half typed\n\nfix the tests"
+    );
+    assert_eq!(super::chat_ui::msg_act_labels(true), &["Copy", "Edit", "Reply"]);
+    assert_eq!(super::chat_ui::msg_act_labels(false), &["Copy", "Reply"]);
+    let src = cabin_src();
+    let chat = fn_src(&src, "ui_chat");
+    assert!(chat.contains("ChatBlockAct::Edit(body)"), "{chat}");
+    assert!(chat.contains("edit_into_composer"), "{chat}");
+}
+
+#[test]
+fn user_act_row_with_edit_stays_inside_a_narrow_pane() {
+    for width in [300.0_f32, 360.0, 800.0] {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(Default::default(), |ctx| {
+            crate::theme::apply(ctx, true);
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.allocate_ui(egui::vec2(width, 200.0), |ui| {
+                    ui.set_max_width(width);
+                    let row = ui.max_rect();
+                    let bubble = super::chat_ui::paint_speech_bubble(ui, "hey", true, false);
+                    let acts = super::chat_ui::paint_msg_acts(
+                        ui,
+                        true,
+                        "hey",
+                        row.width(),
+                        bubble.rect.width(),
+                    );
+                    assert!(acts.row.min.x >= row.min.x - 0.5, "width {width}: {:?}", acts.row);
+                    assert!(acts.row.max.x <= row.max.x + 1.0, "width {width}: {:?}", acts.row);
+                    let want = super::chat_ui::msg_acts_row_width(ui, true);
+                    assert!(
+                        acts.row.width() + 1.0 >= want,
+                        "width {width}: Edit row clipped {} < {want}",
+                        acts.row.width()
+                    );
+                });
+            });
+        });
+    }
+}
+
+fn find_views(bodies: &[(&str, &str)]) -> Vec<ChatView> {
+    grokhub_core::visible_chat_refs(bodies.iter().copied())
+}
+
+#[test]
+fn chat_find_starts_on_the_newest_hit_and_wraps() {
+    let views = find_views(&[
+        ("user", "build the cabin"),
+        ("assistant", "Building it."),
+        ("user", "now test"),
+        ("assistant", "Tests pass. Build is green."),
+    ]);
+    let mut find = super::chat_ui::ChatFind::default();
+    find.toggle();
+    assert!(find.open && find.want_focus);
+    find.query = "BUILD".into();
+    find.refresh("t1", &views);
+    let hits = find.hits().to_vec();
+    assert_eq!(hits.len(), 3, "{hits:?}");
+    assert_eq!(find.current_row(), hits.last().copied());
+    assert!(find.jump, "a new query scrolls to its hit");
+    assert_eq!(find.label(), "3 of 3");
+    find.jump = false;
+    find.step(true);
+    assert_eq!(find.current_row(), Some(hits[0]));
+    assert!(find.jump);
+    find.step(false);
+    assert_eq!(find.label(), "3 of 3");
+    // Same query, same transcript: no recount, pick stays.
+    find.step(false);
+    find.refresh("t1", &views);
+    assert_eq!(find.label(), "2 of 3");
+    find.query = "zzz".into();
+    find.refresh("t1", &views);
+    assert_eq!(find.label(), "No matches");
+    assert!(find.current_row().is_none());
+    find.close();
+    assert!(!find.open && !find.focused);
+    assert!(find.hits().is_empty(), "a closed find marks nothing");
+}
+
+#[test]
+fn chat_find_is_ctrl_f_on_chat_and_owns_enter_over_a_permission_card() {
+    let src = cabin_src();
+    assert!(src.contains("egui::Key::F"), "Ctrl+F must open find");
+    assert!(src.contains("self.find.toggle()"));
+    let chat = fn_src(&src, "ui_chat");
+    assert!(chat.contains("paint_find_bar"), "{chat}");
+    assert!(chat.contains("find_jump && find_row == Some(i)"), "{chat}");
+    assert!(
+        src.contains("self.palette_open || self.nav == Nav::Settings || self.find.focused"),
+        "Enter in the find box must not allow a tool"
+    );
+    let confirm = include_str!("confirm.rs");
+    assert!(confirm.contains("self.find.focused"), "Enter in the find box must not confirm a sheet");
+    assert!(grokhub_core::shortcut_help().contains("Ctrl+F"));
+}
+
+#[test]
+fn chat_find_bar_paints_and_steps_with_the_arrows() {
+    let mut app = Cabin::quiet_for_test();
+    app.find.toggle();
+    app.find.query = "x".into();
+    let views = find_views(&[("user", "x one"), ("assistant", "x two")]);
+    app.find.refresh("t", &views);
+    let ctx = egui::Context::default();
+    let _ = ctx.run(Default::default(), |ctx| {
+        crate::theme::apply(ctx, true);
+        app.paint_find_bar(ctx, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)));
+    });
+    assert!(app.find.open);
+    assert_eq!(app.find.label(), "2 of 2");
+}
+
+fn health_job(id: &str) -> grokhub_core::Automation {
+    grokhub_core::Automation {
+        id: id.into(),
+        name: "Board summary".into(),
+        schedule: "daily".into(),
+        time: "09:00".into(),
+        times: Vec::new(),
+        instructions: "summarize the board".into(),
+        heartbeat_every_min: 0,
+        check_command: String::new(),
+        enabled: true,
+        last_run: None,
+        next_run: None,
+        run_count: 0,
+        health: Default::default(),
+    }
+}
+
+#[test]
+fn a_failed_scheduled_turn_marks_the_job_and_posts_one_card() {
+    let root = config::test_config_root("auto-health");
+    let _ = std::fs::remove_dir_all(&root);
+    let _pin = config::TestConfigDir::set(root.clone());
+    let mut app = Cabin::quiet_for_test();
+    app.automations = vec![health_job("a1")];
+    let cards_before = app.updates.len();
+
+    app.auto_run = Some(("a1".into(), Some("t-auto".into())));
+    // A turn on another chat does not settle the job.
+    app.settle_auto_run(super::night::AutoEnd::Failed("other chat"), Some("t-other"));
+    assert!(app.auto_run.is_some());
+    assert!(app.automations[0].health.is_clear());
+
+    app.settle_auto_run(super::night::AutoEnd::Failed("Error: credit limit"), Some("t-auto"));
+    assert!(app.auto_run.is_none());
+    assert_eq!(app.automations[0].health.outcome, grokhub_core::AutoOutcome::Failed);
+    assert_eq!(app.automations[0].health.error, "credit limit");
+    assert_eq!(app.updates.len(), cards_before + 1);
+    assert!(app.updates.iter().any(|c| c.title == "Board summary failed"));
+
+    // A second failure in the streak updates the job, not the feed.
+    app.auto_run = Some(("a1".into(), None));
+    app.settle_auto_run(super::night::AutoEnd::Failed("again"), Some("anything"));
+    assert_eq!(app.automations[0].health.fail_streak, 2);
+    assert_eq!(app.updates.len(), cards_before + 1);
+
+    // A halt is not a failure and not a success.
+    app.auto_run = Some(("a1".into(), None));
+    app.settle_auto_run(super::night::AutoEnd::Stopped, None);
+    assert_eq!(app.automations[0].health.outcome, grokhub_core::AutoOutcome::Stopped);
+    assert_eq!(app.automations[0].health.fail_streak, 2);
+
+    app.auto_run = Some(("a1".into(), None));
+    app.settle_auto_run(super::night::AutoEnd::Ok, None);
+    assert!(!app.automations[0].health.failing());
+    assert_eq!(app.automations[0].health.fail_streak, 0);
+
+    // Nothing in flight: a turn end touches no job.
+    app.settle_auto_run(super::night::AutoEnd::Failed("x"), None);
+    assert_eq!(app.automations[0].health.fail_streak, 0);
+}
+
+#[test]
+fn scheduled_turns_settle_on_every_turn_end() {
+    let src = cabin_src();
+    let fail = fn_src(&src, "apply_job_fail");
+    assert!(fail.contains("AutoEnd::Failed(err)"), "{fail}");
+    assert!(fail.contains("AutoEnd::Stopped"), "{fail}");
+    let finish = fn_src(&src, "finish_acp_turn");
+    assert!(finish.contains("AutoEnd::Ok"), "{finish}");
+    let halt = fn_src(&src, "halt_work");
+    assert!(halt.contains("AutoEnd::Stopped"), "{halt}");
+    let fire = fn_src(&src, "fire_night");
+    assert!(fire.contains("self.auto_run = Some("), "{fire}");
+    assert!(fire.contains("note_auto_failed"), "{fire}");
+    let page = fn_src(&src, "ui_scheduled_automations");
+    assert!(page.contains("automation_health_line"), "{page}");
+}
+
+#[test]
+fn board_drop_moves_to_another_column_only() {
+    use grokhub_core::KanbanColumn;
+    for col in KanbanColumn::ALL {
+        let st = col.status();
+        assert_eq!(super::pages::board_drop_move(st, col), None, "{col:?}");
+        for other in KanbanColumn::ALL.into_iter().filter(|c| *c != col) {
+            assert_eq!(super::pages::board_drop_move(st, other), Some(other.status()));
+        }
+    }
+    let src = cabin_src();
+    let board = fn_src(&src, "ui_board");
+    assert!(board.contains("dnd_drag_source"), "cards must be draggable");
+    assert!(board.contains("dnd_release_payload::<BoardDrag>"), "columns must take drops");
+    assert!(board.contains("BoardAct::Move"), "a drop is the same Move the buttons use");
+}
+
+#[test]
+fn token_budget_warns_once_and_holds_scheduled_work() {
+    let root = config::test_config_root("token-budget");
+    let _ = std::fs::remove_dir_all(&root);
+    let _pin = config::TestConfigDir::set(root.clone());
+    let mut app = Cabin::quiet_for_test();
+    // Quiet all day so the test never pings the desktop.
+    app.cfg.quiet_start = "00:00".into();
+    app.cfg.quiet_end = "23:59".into();
+    app.cfg.daily_token_budget = 1_000;
+    app.cfg.budget_pauses_scheduled = true;
+    app.usage.day = Cabin::local_day();
+
+    let mut u = GrokUsage {
+        input_tokens: 500,
+        ..Default::default()
+    };
+    app.merge_grok_usage(&u);
+    assert!(!app.status.contains("Token budget"), "{}", app.status);
+    assert!(!app.budget_holds_scheduled());
+
+    u.input_tokens = 850;
+    app.merge_grok_usage(&u);
+    assert!(app.status.starts_with("Token budget at 80%"), "{}", app.status);
+    app.status.clear();
+    u.input_tokens = 900;
+    app.merge_grok_usage(&u);
+    assert!(app.status.is_empty(), "near warns once: {}", app.status);
+
+    u.input_tokens = 1_200;
+    app.merge_grok_usage(&u);
+    assert!(app.status.starts_with("Token budget used up"), "{}", app.status);
+    assert!(app.status.contains("waits until tomorrow"), "{}", app.status);
+    assert!(app.budget_holds_scheduled());
+    app.cfg.budget_pauses_scheduled = false;
+    assert!(!app.budget_holds_scheduled(), "pause off: warn only");
+    app.cfg.budget_pauses_scheduled = true;
+    app.cfg.daily_token_budget = 0;
+    assert!(!app.budget_holds_scheduled(), "no budget: never hold");
+
+    let (title, body) =
+        super::token_budget_notice(grokhub_core::BudgetLevel::Over, "1.2k of 1000 tokens today (120%)", false);
+    assert_eq!(title, "Token budget used up");
+    assert!(!body.contains("tomorrow"), "{body}");
+}
+
+#[test]
+fn over_budget_holds_night_loops_and_anticipate() {
+    let src = cabin_src();
+    for f in ["tick_night", "tick_loops"] {
+        let body = fn_src(&src, f);
+        assert!(body.contains("self.budget_holds_scheduled()"), "{f}: {body}");
+    }
+    let anticipate_hold = src.matches("if self.budget_holds_scheduled() {").count();
+    assert!(anticipate_hold >= 3, "night, loops, and anticipate: {anticipate_hold}");
+    let settings = include_str!("settings.rs");
+    assert!(settings.contains("Daily token budget"));
+    assert!(settings.contains("Pause scheduled work over budget"));
+    let old: config::AppConfig = serde_json::from_str("{}").expect("empty app.json loads");
+    assert_eq!(old.daily_token_budget, 0);
+    assert!(old.budget_pauses_scheduled);
+    let saved = serde_json::to_string(&config::AppConfig::default()).unwrap();
+    assert!(!saved.contains("dailyTokenBudget") && !saved.contains("daily_token_budget"), "off writes nothing");
+}
+
+#[test]
+fn dropping_files_says_what_happens() {
+    use super::plus::{drop_extra_note, drop_hint_line};
+    assert_eq!(drop_hint_line(false, 1), "Drop to attach to your next message");
+    assert_eq!(drop_hint_line(true, 1), "Drop to use as the Imagine reference");
+    assert!(drop_hint_line(false, 3).ends_with("the first of 3 files"));
+    assert_eq!(drop_extra_note(0), None);
+    assert!(drop_extra_note(1).unwrap().contains("The other one was left out"));
+    assert!(drop_extra_note(4).unwrap().contains("4 others were left out"));
+    let app = Cabin::quiet_for_test();
+    let ctx = egui::Context::default();
+    let mut input = egui::RawInput::default();
+    input.hovered_files.push(egui::HoveredFile::default());
+    let out = ctx.run(input, |ctx| {
+        crate::theme::apply(ctx, true);
+        app.paint_drop_hint(ctx);
+    });
+    assert!(!out.shapes.is_empty(), "hovering a file paints the drop hint");
+    let quiet = ctx.run(egui::RawInput::default(), |ctx| app.paint_drop_hint(ctx));
+    assert!(quiet.shapes.is_empty(), "no hover, no overlay");
+    let src = cabin_src();
+    assert!(fn_src(&src, "take_dropped_attach").contains("self.drop_extra"));
+}
+
+#[test]
+fn export_writes_html_and_json_next_to_export_md() {
+    let mut quiet = QuietCabin::boot("slash-export-formats");
+    let cabin = &mut quiet.cabin;
+    cabin.messages = std::sync::Arc::new(vec![
+        ("user".into(), "harbor <b>export</b> line".into()),
+        ("assistant".into(), "1. **one**\n2. two".into()),
+    ]);
+    cabin.cfg.project_dir.clear();
+
+    cabin.run_slash_line("/export html");
+    let html_path = cabin.status.strip_prefix("Wrote ").unwrap_or("").to_string();
+    assert!(html_path.ends_with("export.html"), "{}", cabin.status);
+    wait_for("export.html must hold the escaped chat", || {
+        let page = std::fs::read_to_string(&html_path).unwrap_or_default();
+        page.contains("harbor &lt;b&gt;export&lt;/b&gt; line") && page.contains("<strong>one</strong>")
+    });
+
+    cabin.run_slash_line("/export json");
+    let json_path = cabin.status.strip_prefix("Wrote ").unwrap_or("").to_string();
+    assert!(json_path.ends_with("export.json"), "{}", cabin.status);
+    wait_for("export.json must parse and keep both turns", || {
+        std::fs::read_to_string(&json_path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .is_some_and(|v| v["messages"].as_array().is_some_and(|m| m.len() == 2))
+    });
+
+    cabin.run_slash_line("/export md");
+    assert!(cabin.status.ends_with("export.md"), "{}", cabin.status);
+    cabin.run_slash_line("/export pdf");
+    assert_eq!(cabin.status, grokhub_core::EXPORT_FORMATS_HINT);
+    assert!(!cabin.running);
 }

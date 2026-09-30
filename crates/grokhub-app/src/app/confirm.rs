@@ -172,7 +172,7 @@ impl Cabin {
                 (destructive_host_spec(), cmd.as_str())
             }
         };
-        let overlay_open = self.palette_open || self.nav == Nav::Settings;
+        let overlay_open = self.palette_open || self.nav == Nav::Settings || self.find.focused;
         let steal = confirm_key(
             ctx.input(|i| i.key_pressed(egui::Key::Enter)),
             ctx.input(|i| i.key_pressed(egui::Key::Escape)),

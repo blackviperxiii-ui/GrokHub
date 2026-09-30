@@ -262,6 +262,12 @@ pub struct AppConfig {
     pub quiet_end: String,
     #[serde(default = "default_daily_auto")]
     pub daily_auto_cap: u32,
+    /// Grok Build tokens a day before the cabin warns. 0 is off.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub daily_token_budget: u64,
+    /// Over budget, night jobs, loops, and anticipate wait for tomorrow.
+    #[serde(default = "default_budget_pause")]
+    pub budget_pauses_scheduled: bool,
     #[serde(default)]
     pub goal_pin: String,
     /// Cabin paints a new Imagine cover every few hours.
@@ -318,6 +324,14 @@ fn default_daily_auto() -> u32 {
 
 fn default_imagine_wall() -> bool {
     true
+}
+
+fn default_budget_pause() -> bool {
+    true
+}
+
+fn is_zero_u64(n: &u64) -> bool {
+    *n == 0
 }
 
 fn default_theme() -> String {
@@ -377,6 +391,8 @@ impl Default for AppConfig {
             quiet_start: default_quiet_start(),
             quiet_end: default_quiet_end(),
             daily_auto_cap: default_daily_auto(),
+            daily_token_budget: 0,
+            budget_pauses_scheduled: default_budget_pause(),
             goal_pin: String::new(),
             imagine_wall: default_imagine_wall(),
             theme: default_theme(),
