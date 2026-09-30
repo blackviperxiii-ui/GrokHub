@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 2.10.45 — 2026-09-30
+
+The welcome line is a greeting again. The fast model call printed its own reasoning ("I'll use the user's name if known…") and the cabin painted that; it now reads only the reply, and a line that talks about the task never paints.
+
+Quick chips stop echoing what you just typed. A typed prompt becomes a chip after you have typed it three times; a chip you picked still counts right away.
+
+Skills are written only for a reusable procedure: at least two commands, a task rather than feedback on the last try, and a fix, build, or routine worth repeating. They are named after what they run (`fix-the-cause-cargo`), not the sentence you typed. Leftover auto-made skills that never ran move to `skills/.retired` on launch; nothing is deleted.
+
+Ideas are written by the model from your own work: your notes, recent asks, open cards, and the automations and skills you already have. Each one is an automation, a reminder, a skill, or something to try, with the exact message that does it; Accept puts that message in the draft. Suggest ideas on the Ideas page asks now. The template cards ("A chip for the next step", "Set up: …", "Remind me later") are gone.
+
+- Linux: `grokhub-linux-v2.10.45.tar.gz` and AUR `pkgver=2.10.45`.
+- Windows: `GrokHub-Setup-2.10.45.exe` and `grokhub-windows-v2.10.45.zip`.
+
 ## 2.10.44 — 2026-09-30
 
 Arrows, checks, math signs, and Cyrillic or Greek paint instead of a tofu box ("Settings → Update"): an unsubset Inter Regular sits behind the latin statics as a fallback. Every text box placeholder is muted, so an empty field no longer reads as typed text, and the composer placeholder is a little easier to read. The rail footer is pinned: in a short window History clips before the avatar, which is the rail's door to Settings. The session row wraps, so a narrow pane drops Effort to its own line instead of clipping it, and the dividers are hairlines. Model and effort pills size to their label and show a down chevron. Light borders are one step darker so card edges show on the panel, and text selection uses its own colour instead of the hover fill. An install error that already names the install command does not print it twice.
