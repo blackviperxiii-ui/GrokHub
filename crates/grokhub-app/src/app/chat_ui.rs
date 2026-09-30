@@ -189,9 +189,9 @@ pub(super) fn greeting_galley_h(ui: &egui::Ui, text: &str, wrap_w: f32) -> f32 {
     galley.size().y.max(crate::theme::GREET_HERO)
 }
 
-/// Empty-composer placeholder. Sits on the pill fill, quieter than secondary text.
+/// Empty-composer placeholder. Sits on the pill fill: quiet, but still legible (~3:1).
 pub(super) fn composer_hint_ink() -> egui::Color32 {
-    crate::theme::blend_color(crate::theme::elevated(), crate::theme::subtle(), 0.55)
+    crate::theme::blend_color(crate::theme::subtle(), crate::theme::muted(), 0.5)
 }
 
 pub(super) fn consume_enter_keys(ui: &mut egui::Ui) {
@@ -1642,7 +1642,7 @@ impl Cabin {
                         p.field_title.as_str()
                     };
                     let mut edit = egui::TextEdit::singleline(&mut self.elicit_draft)
-                        .hint_text(hint)
+                        .hint_text(crate::theme::hint(hint))
                         .desired_width(ui.available_width());
                     if p.secret {
                         edit = edit.password(true);

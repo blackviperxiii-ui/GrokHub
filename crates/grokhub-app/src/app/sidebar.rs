@@ -159,7 +159,7 @@ impl Cabin {
         let edit = ui.add(
             egui::TextEdit::singleline(&mut self.rename_buf)
                 .desired_width(ui.available_width())
-                .hint_text("Name this chat"),
+                .hint_text(crate::theme::hint("Name this chat")),
         );
         if self.rename_focus {
             edit.request_focus();
@@ -299,6 +299,20 @@ impl Cabin {
                     .inner_margin(egui::Margin::same(8.0)),
             )
             .show(ctx, |ui| {
+                // Footer first so a short window clips History, never the avatar
+                // (the avatar menu is the rail's only door to Settings).
+                egui::TopBottomPanel::bottom("rail-footer")
+                    .frame(egui::Frame::none())
+                    .show_separator_line(false)
+                    .exact_height(RAIL_FOOTER_H)
+                    .show_inside(ui, |ui| {
+                        if Self::cabin_avatar(ui, &chrome.name, photo.as_ref()).clicked() {
+                            self.settings_menu_open = !self.settings_menu_open;
+                            self.settings_menu_ignore = true;
+                        }
+                    });
+                let rest = ui.available_rect_before_wrap();
+                ui.set_clip_rect(rest.intersect(ui.clip_rect()));
                 ui.add_space(4.0);
                 crate::theme::glide_paint(ui, "rail");
                 if Self::nav_row(ui, false, crate::icons::RailIcon::Search, "Search", false)
@@ -341,7 +355,7 @@ impl Cabin {
                 let mut proj_act: Option<(String, ProjectMenuAct, egui::Pos2)> = None;
                 let mut section_act: Option<TabAct> = None;
                 let live_empty = self.messages.is_empty();
-                let proj_h = (ui.available_height() * 0.46).clamp(96.0, 320.0);
+                let proj_h = (ui.available_height() * 0.46).clamp(40.0, 320.0);
                 egui::ScrollArea::vertical()
                     .id_salt("rail-projects")
                     .auto_shrink([false, true])
@@ -356,7 +370,7 @@ impl Cabin {
                             let edit = ui.add(
                                 egui::TextEdit::singleline(&mut self.proj_rename_buf)
                                     .desired_width(ui.available_width() - 8.0)
-                                    .hint_text("Name")
+                                    .hint_text(crate::theme::hint("Name"))
                                     .font(egui::FontId::proportional(13.0)),
                             );
                             if self.proj_rename_focus {
@@ -479,7 +493,7 @@ impl Cabin {
                     "Filter chats…",
                     (ui.available_width() - 8.0).max(80.0),
                 );
-                let hist_h = (ui.available_height() - RAIL_FOOTER_H).max(36.0);
+                let hist_h = ui.available_height().max(0.0);
                 egui::ScrollArea::vertical()
                     .id_salt("rail-history")
                     .auto_shrink([false, true])
@@ -506,12 +520,6 @@ impl Cabin {
                             self.apply_tab_act(act);
                         }
                     });
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                    if Self::cabin_avatar(ui, &chrome.name, photo.as_ref()).clicked() {
-                        self.settings_menu_open = !self.settings_menu_open;
-                        self.settings_menu_ignore = true;
-                    }
-                });
                 crate::theme::glide_aim(ui, "rail");
             });
     }

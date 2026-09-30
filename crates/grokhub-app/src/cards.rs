@@ -764,6 +764,34 @@ fn with_composer_tip(resp: egui::Response, title: &str, body: &str) -> egui::Res
     resp.on_hover_ui_at_pointer(|ui| show_composer_tip(ui, title, body))
 }
 
+/// Room for the label, both pads, and the chevron so "Extra High" never runs under it.
+fn dropdown_pill_w(ui: &egui::Ui, label: &str) -> f32 {
+    let label_w = ui.fonts(|f| {
+        f.layout_no_wrap(
+            label.to_owned(),
+            FontId::proportional(crate::theme::FONT_CHROME),
+            Color32::PLACEHOLDER,
+        )
+        .size()
+        .x
+    });
+    (label_w + ui.style().spacing.button_padding.x * 2.0 + 14.0).max(MODE_PILL_W)
+}
+
+/// Small down chevron at the right of a dropdown pill, so it reads as a menu.
+fn paint_dropdown_chevron(ui: &egui::Ui, rect: egui::Rect, color: Color32) {
+    let c = egui::pos2(rect.right() - 14.0, rect.center().y + 1.0);
+    let (w, h) = (3.5_f32, 2.0_f32);
+    ui.painter().add(egui::Shape::line(
+        vec![
+            egui::pos2(c.x - w, c.y - h),
+            egui::pos2(c.x, c.y + h),
+            egui::pos2(c.x + w, c.y - h),
+        ],
+        Stroke::new(crate::theme::ICON_STROKE, color),
+    ));
+}
+
 fn catalog_pill(
     ui: &mut egui::Ui,
     popup_id: &'static str,
@@ -774,16 +802,18 @@ fn catalog_pill(
 ) -> Option<String> {
     let mut next = None;
     let id = ui.make_persistent_id(popup_id);
+    let pill_w = dropdown_pill_w(ui, label);
     let mut resp = crate::theme::felt_label_button(
         ui,
         label,
         Color32::TRANSPARENT,
         crate::theme::muted(),
         14.0,
-        egui::vec2(MODE_PILL_W, 28.0),
+        egui::vec2(pill_w, 28.0),
         Some(Stroke::new(1.0_f32, crate::theme::border())),
         false,
     );
+    paint_dropdown_chevron(ui, resp.rect, crate::theme::muted());
     if let Some((title, body)) = tip {
         resp = with_composer_tip(resp, title, body);
     }
@@ -838,7 +868,8 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> S
         perm: None,
         effort: None,
     };
-    ui.horizontal(|ui| {
+    // Wrapped so a narrow pane drops Effort to a second line instead of clipping it.
+    ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 3.0;
         crate::theme::glide_paint(ui, "session-mode");
         let mut mode_hover = None;
@@ -867,13 +898,7 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> S
             mode_on.is_some(),
         );
         crate::theme::glide_aim(ui, "session-mode");
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new("|")
-                .size(crate::theme::FONT_TIP)
-                .color(crate::theme::subtle()),
-        );
-        ui.add_space(4.0);
+        session_row_divider(ui);
         crate::theme::glide_paint(ui, "session-perm");
         let mut perm_hover = None;
         let mut perm_on = None;
@@ -901,19 +926,35 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> S
             perm_on.is_some(),
         );
         crate::theme::glide_aim(ui, "session-perm");
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new("|")
-                .size(crate::theme::FONT_TIP)
-                .color(crate::theme::subtle()),
-        );
-        ui.add_space(4.0);
+        // Effort drops to its own line as a unit; no divider left dangling at a line end.
+        let effort_id = grokhub_core::parse_reasoning_effort(effort).unwrap_or("high");
+        let effort_w = dropdown_pill_w(ui, effort_label(effort_id));
+        let gap = ui.spacing().item_spacing.x;
+        // Inside horizontal_wrapped, available_width() is the whole row; use the cursor.
+        let left_on_line = ui.max_rect().right() - ui.cursor().min.x;
+        if left_on_line < SESSION_DIVIDER_W + effort_w + gap * 2.0 + 1.0 {
+            ui.end_row();
+        } else {
+            session_row_divider(ui);
+        }
         if let Some(next) = effort_pill(ui, effort) {
             out.effort = Some(next);
         }
     });
     ui.add_space(8.0);
     out
+}
+
+/// Hairline between the session, permission, and effort groups.
+const SESSION_DIVIDER_W: f32 = 9.0;
+
+fn session_row_divider(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(SESSION_DIVIDER_W, 16.0), Sense::hover());
+    ui.painter().vline(
+        rect.center().x,
+        rect.y_range(),
+        Stroke::new(1.0_f32, crate::theme::border_strong()),
+    );
 }
 
 /// Live Voice strip: state label + Stop. Caller hides this when idle.
@@ -1582,7 +1623,7 @@ pub fn search_bar(ui: &mut egui::Ui, q: &mut String, hint: &str, width: f32) {
                 icons::paint_bar_icon(ui, icons::BarIcon::Search, 16.0, crate::theme::subtle());
                 ui.add(
                     egui::TextEdit::singleline(q)
-                        .hint_text(hint.to_owned())
+                        .hint_text(crate::theme::hint(hint.to_owned()))
                         .desired_width(width)
                         .frame(false),
                 );
