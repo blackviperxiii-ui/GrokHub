@@ -379,6 +379,8 @@ pub struct Cabin {
     cfg: AppConfig,
     composer: String,
     messages: Arc<Vec<(String, String)>>,
+    /// Bumped in `live_mut`. An in-place edit can keep the count and the last length.
+    messages_rev: u64,
     status: String,
     running: bool,
     /// One SIGTERM retry per user send. kick_model sets Thinking, so the
@@ -520,11 +522,13 @@ pub struct Cabin {
     chat_views: Vec<ChatView>,
     /// Fold key per `chat_views` row (0 for non-thoughts). Built with the views.
     chat_view_keys: Vec<u64>,
-    /// `(thread, message count, last length)` → `(visible turns, token estimate)`.
-    session_size: ((String, usize, usize), (usize, u32)),
+    /// `(thread, message count, last length, messages_rev)` → `(visible turns, token estimate)`.
+    session_size: ((String, usize, usize, u64), (usize, u32)),
     chat_view_tid: String,
     chat_view_n: usize,
     chat_view_last: usize,
+    /// `messages_rev` the cached views were built from.
+    chat_view_rev: u64,
     presence_ring: Vec<(u64, String)>,
     voice_sock: Option<crate::voice_ws::VoiceSock>,
     voice_state: VoiceState,
@@ -940,6 +944,7 @@ impl Cabin {
             cfg,
             composer: String::new(),
             messages,
+            messages_rev: 0,
             status: String::new(),
             running: false,
             turn_retried: false,
@@ -1074,10 +1079,11 @@ impl Cabin {
             thought_buf: String::new(),
             chat_views: vec![],
             chat_view_keys: vec![],
-            session_size: ((String::new(), usize::MAX, usize::MAX), (0, 0)),
+            session_size: ((String::new(), usize::MAX, usize::MAX, u64::MAX), (0, 0)),
             chat_view_tid: String::new(),
             chat_view_n: usize::MAX,
             chat_view_last: usize::MAX,
+            chat_view_rev: 0,
             presence_ring: vec![],
             voice_sock: None,
             voice_state: VoiceState::Idle,
@@ -1343,6 +1349,7 @@ impl Cabin {
             cfg: cfg.clone(),
             composer: String::new(),
             messages: Arc::new(Vec::new()),
+            messages_rev: 0,
             status: String::new(),
             running: false,
             turn_retried: false,
@@ -1468,10 +1475,11 @@ impl Cabin {
             thought_buf: String::new(),
             chat_views: Vec::new(),
             chat_view_keys: Vec::new(),
-            session_size: ((String::new(), usize::MAX, usize::MAX), (0, 0)),
+            session_size: ((String::new(), usize::MAX, usize::MAX, u64::MAX), (0, 0)),
             chat_view_tid: String::new(),
             chat_view_n: 0,
             chat_view_last: 0,
+            chat_view_rev: 0,
             presence_ring: Vec::new(),
             voice_sock: None,
             voice_state: VoiceState::Idle,
@@ -2083,9 +2091,16 @@ impl Cabin {
         if self.secret_hold.is_empty() {
             return;
         }
+        let mut body_changed = false;
         for b in &mut self.live_blocks {
             if !b.body.is_empty() {
-                b.body = redact_held_secrets(&b.body, &self.secret_hold);
+                let next = redact_held_secrets(&b.body, &self.secret_hold);
+                // `[redacted]` can match the secret's byte length, so the live key
+                // (fold slot, body len) would keep a hash of the secret.
+                if next != b.body {
+                    b.body = next;
+                    body_changed = true;
+                }
             }
             if !b.tool_title.is_empty() {
                 b.tool_title = redact_held_secrets(&b.tool_title, &self.secret_hold);
@@ -2093,6 +2108,9 @@ impl Cabin {
             if !b.tool_detail.is_empty() {
                 b.tool_detail = redact_held_secrets(&b.tool_detail, &self.secret_hold);
             }
+        }
+        if body_changed {
+            self.live_keys.clear();
         }
     }
 

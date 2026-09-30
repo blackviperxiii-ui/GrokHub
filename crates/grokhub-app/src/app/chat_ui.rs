@@ -2321,11 +2321,13 @@ impl Cabin {
 
     /// Visible turns and the token estimate behind the fork offer. Scanning the whole
     /// transcript every frame cost more than painting it, so key it like the chat views.
+    /// `messages_rev` catches an in-place edit that keeps the count and the last length.
     pub(super) fn session_size(&mut self) -> (usize, u32) {
         let key = (
             self.visible_thread_id(),
             self.messages.len(),
             self.messages.last().map_or(0, |m| m.1.len()),
+            self.messages_rev,
         );
         if self.session_size.0 != key {
             let msgs = || self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str()));
@@ -2342,7 +2344,12 @@ impl Cabin {
         let tid = self.visible_thread_id();
         let n = self.messages.len();
         let last = self.messages.last().map(|m| m.1.len()).unwrap_or(0);
-        if self.chat_view_tid == tid && self.chat_view_n == n && self.chat_view_last == last {
+        let rev = self.messages_rev;
+        if self.chat_view_tid == tid
+            && self.chat_view_n == n
+            && self.chat_view_last == last
+            && self.chat_view_rev == rev
+        {
             return &self.chat_views;
         }
         let refs: Vec<(&str, &str)> = self
@@ -2350,13 +2357,18 @@ impl Cabin {
             .iter()
             .map(|m| (m.0.as_str(), m.1.as_str()))
             .collect();
-        let kept =
-            if self.chat_view_tid == tid && self.chat_view_n == n && !self.chat_views.is_empty() {
-                refresh_last_stretch(&mut self.chat_views, &refs)
-            } else {
-                self.chat_views = visible_chat_refs(refs.iter().copied());
-                0
-            };
+        // Same count and last length used to miss an edit anywhere in the transcript.
+        // A stream delta still changes the last length, so only that stretch rekeys.
+        let kept = if self.chat_view_tid == tid
+            && self.chat_view_n == n
+            && self.chat_view_last != last
+            && !self.chat_views.is_empty()
+        {
+            refresh_last_stretch(&mut self.chat_views, &refs)
+        } else {
+            self.chat_views = visible_chat_refs(refs.iter().copied());
+            0
+        };
         // `thought_body_key` scrubs and hashes a whole thought. Key each view once here,
         // not every thought in the transcript on every frame.
         self.chat_view_keys.truncate(kept);
@@ -2365,6 +2377,7 @@ impl Cabin {
         self.chat_view_tid = tid;
         self.chat_view_n = n;
         self.chat_view_last = last;
+        self.chat_view_rev = rev;
         &self.chat_views
     }
 }
