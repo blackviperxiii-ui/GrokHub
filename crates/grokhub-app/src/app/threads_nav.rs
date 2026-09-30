@@ -19,6 +19,7 @@ impl Cabin {
     }
 
     pub(super) fn live_mut(&mut self) -> &mut Vec<(String, String)> {
+        self.messages_rev = self.messages_rev.wrapping_add(1);
         Arc::make_mut(&mut self.messages)
     }
 

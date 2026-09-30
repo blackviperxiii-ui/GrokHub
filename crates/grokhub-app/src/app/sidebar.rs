@@ -200,6 +200,11 @@ impl Cabin {
             ui.allocate_exact_size(egui::vec2(w, crate::theme::NAV_ROW_H), egui::Sense::click());
         let (resp, rect, _) = crate::theme::feel_response(ui, resp, egui::Color32::TRANSPARENT);
         crate::theme::glide_candidate(ui, "rail", rect, resp.hovered(), active);
+        // Every chat in the list gets a row. One scrolled out of the rail keeps its slot
+        // and response, but skips fitting and painting its title.
+        if !ui.is_rect_visible(rect) {
+            return resp;
+        }
         if outline {
             ui.painter().rect_stroke(
                 rect,
