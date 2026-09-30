@@ -151,7 +151,7 @@ impl Cabin {
         }
     }
 
-    pub(super) fn paint_voice_mic(&mut self, ui: &mut egui::Ui, size: f32) {
+    pub(super) fn paint_voice_mic(&mut self, ui: &mut egui::Ui, size: f32) -> egui::Rect {
         let on = self.voice_is_on();
         let mood = match self.voice_state {
             VoiceState::Speaking => crate::icons::MicMood::Speaking,
@@ -165,13 +165,13 @@ impl Cabin {
             }
         };
         let tip = if on { "Leave voice" } else { "Hey Grok" };
-        if crate::icons::paint_composer_mic(ui, size, mood)
+        let resp = crate::icons::paint_composer_mic(ui, size, mood)
             .0
-            .on_hover_text(tip)
-            .clicked()
-        {
+            .on_hover_text(tip);
+        if resp.clicked() {
             self.listen_voice();
         }
+        resp.rect
     }
 
     pub(super) fn poll_voice(&mut self) {

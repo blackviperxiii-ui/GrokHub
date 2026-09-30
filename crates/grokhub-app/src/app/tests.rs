@@ -6596,6 +6596,86 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     }
 
     #[test]
+    fn composer_go_disc_stays_inside_the_pill_beside_the_mic() {
+        let _paint = crate::theme::hold_paint_test();
+        let states = ["send", "stop", "idle"];
+        for width in [1280.0_f32, 900.0, 1920.0] {
+            for row_n in [1_usize, 3] {
+                for state in states {
+                    let mut cabin = quiet_cabin();
+                    let thread = crate::threads::ChatThread::new("Chat", false);
+                    let tid = thread.id.clone();
+                    cabin.threads = vec![thread];
+                    cabin.thread_idx = 0;
+                    cabin.composer = match (state, row_n) {
+                        ("idle", 1) | ("stop", 1) => String::new(),
+                        ("idle", _) | ("stop", _) => "\n\n".into(),
+                        (_, 1) => "hello".into(),
+                        _ => "one\ntwo\nthree".into(),
+                    };
+                    let rows = (cabin.composer.matches('\n').count() + 1).clamp(1, 6);
+                    assert_eq!(rows, row_n, "{state} at {width} did not build {row_n} rows");
+                    if state == "stop" {
+                        cabin.running = true;
+                        cabin.chat_job_thread = Some(tid);
+                    } else {
+                        cabin.running = false;
+                        cabin.chat_job_thread = None;
+                    }
+                    assert_eq!(
+                        cabin.thinking_here(),
+                        state == "stop",
+                        "{state} rows={row_n} width={width}: thinking_here={}",
+                        cabin.thinking_here()
+                    );
+                    if state != "stop" {
+                        assert!(
+                            cabin.composer.trim().is_empty() != (state == "send"),
+                            "{state} rows={row_n} width={width}: composer={:?}",
+                            cabin.composer
+                        );
+                    }
+                    let ctx = egui::Context::default();
+                    let raw = egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 760.0),
+                        )),
+                        ..Default::default()
+                    };
+                    for _ in 0..2 {
+                        let _ = ctx.run(raw.clone(), |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                cabin.ui_composer_stack(ui);
+                            });
+                        });
+                    }
+                    let (pill, mic, go) = cabin.composer_geom.expect("composer geom");
+                    assert!(
+                        go.right() <= pill.right() - 24.0 + 0.5,
+                        "{state} rows={row_n} width={width}: go.right()={} pill.right()={} (go.right()-pill.right()={})",
+                        go.right(),
+                        pill.right(),
+                        go.right() - pill.right()
+                    );
+                    assert!(
+                        mic.right() + 8.0 <= go.left() + 0.5,
+                        "{state} rows={row_n} width={width}: mic.right()={} go.left()={}",
+                        mic.right(),
+                        go.left()
+                    );
+                    assert!(
+                        go.left() > mic.left(),
+                        "{state} rows={row_n} width={width}: go.left()={} mic.left()={}",
+                        go.left(),
+                        mic.left()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn nightly_review_stays_quiet() {
         let src = cabin_src();
         let tick = src
@@ -14202,6 +14282,7 @@ fn quiet_cabin() -> Cabin {
         mcp_doctor_rx: None,
         mcp_status: HashMap::new(),
         scroll_to_hooks: false,
+        composer_geom: None,
     }
 }
 
