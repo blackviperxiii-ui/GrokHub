@@ -368,14 +368,18 @@ pub fn refresh_last_stretch(views: &mut Vec<ChatView>, messages: &[(&str, &str)]
 }
 
 fn hop_is_work(rest: &str) -> bool {
-    rest.lines().any(|line| {
-        let t = line.trim();
-        t.starts_with("HOST_CMD")
-            || t.starts_with("COMPUTER_CMD")
-            || t.starts_with("CONNECTOR_CMD")
-            || t.starts_with("IMAGINE:")
-            || t.starts_with("IMAGINE_PROMPT:")
-    })
+    crate::turn_timeline::hop_is_work(rest)
+}
+
+/// The last reply in a timeline is a work hop, so it is not the answer and a
+/// pending reply stays pending until the stretch ends or a real reply lands.
+fn timeline_ends_on_work(parts: &[crate::turn_timeline::TurnPart]) -> bool {
+    for part in parts.iter().rev() {
+        if let crate::turn_timeline::TurnPart::Say(body) = part {
+            return hop_is_work(view_text(body));
+        }
+    }
+    false
 }
 
 fn push_thought(out: &mut Vec<ChatView>, body: String) {
@@ -404,11 +408,15 @@ fn emit_stretch(out: &mut Vec<ChatView>, stretch: &[(&str, &str)], ask: &str) {
         // thoughts and tools cannot cut off the reply at its end.
         if role == "assistant" {
             if let Some(parts) = crate::turn_timeline::decode_turn(content) {
-                if let Some(prev) = last_final.take() {
-                    push_thought(out, prev);
+                if timeline_ends_on_work(&parts) {
+                    last_was_work = true;
+                } else {
+                    if let Some(prev) = last_final.take() {
+                        push_thought(out, prev);
+                    }
+                    last_was_work = false;
                 }
                 emit_turn(out, parts);
-                last_was_work = false;
                 continue;
             }
         }
@@ -501,14 +509,19 @@ fn emit_turn(out: &mut Vec<ChatView>, parts: Vec<crate::turn_timeline::TurnPart>
                 }
             }
             TurnPart::Say(body) => {
-                let prose = visible_assistant(view_text(&body));
+                let raw = view_text(&body);
+                let prose = visible_assistant(raw);
                 if !prose.is_empty() {
                     flush(out, &mut tools);
-                    out.push(ChatView {
-                        kind: ChatKind::Assistant,
-                        title: String::new(),
-                        body: prose,
-                    });
+                    if hop_is_work(raw) {
+                        push_thought(out, prose);
+                    } else {
+                        out.push(ChatView {
+                            kind: ChatKind::Assistant,
+                            title: String::new(),
+                            body: prose,
+                        });
+                    }
                 }
             }
         }
@@ -1784,5 +1797,79 @@ mod tests {
             assistant_prose(&encode_turn(&b)),
             "I'll find the app, then write up what I hit.\n\nWalked GrokHub."
         );
+    }
+
+    #[test]
+    fn timeline_imagine_hop_stays_off_the_assistant_bubble() {
+        use crate::turn_timeline::{append_say, append_thought, encode_turn};
+        let mut b = Vec::new();
+        append_thought(&mut b, "Painting a still.");
+        append_say(&mut b, "IMAGINE: a cabin at night\nHOST_CMD: true");
+        let v = visible_chat(&[("assistant".into(), encode_turn(&b))]);
+        assert!(
+            !v.iter().any(|x| x.kind == ChatKind::Assistant),
+            "a work hop is not the answer: {v:?}"
+        );
+        assert!(
+            !v.iter().any(|x| x.body.contains("HOST_CMD")),
+            "protocol lines stay off the pane: {v:?}"
+        );
+        assert!(v.iter().any(|x| x.kind == ChatKind::Thought && x.body.contains("IMAGINE:")));
+        assert!(!v.iter().any(|x| x.body == "true"));
+    }
+
+    #[test]
+    fn timeline_work_hop_then_final_reply_is_one_bubble() {
+        use crate::turn_timeline::{append_say, append_thought, encode_turn};
+        let mut hop = Vec::new();
+        append_thought(&mut hop, "Need a snapshot.");
+        append_say(&mut hop, "I'll look.\nHOST_CMD: uname -a");
+        let v = visible_chat(&[
+            ("user".into(), "check the machine".into()),
+            ("assistant".into(), encode_turn(&hop)),
+            (
+                "user".into(),
+                "HOST_RESULT (facts only):\n$ uname -a\nLinux cabin 6.12\nexit 0".into(),
+            ),
+            ("assistant".into(), "You're on Linux cabin.".into()),
+        ]);
+        let replies: Vec<&str> = v
+            .iter()
+            .filter(|x| x.kind == ChatKind::Assistant)
+            .map(|x| x.body.as_str())
+            .collect();
+        assert_eq!(replies, vec!["You're on Linux cabin."]);
+        assert!(v.iter().any(|x| x.kind == ChatKind::Thought && x.body == "I'll look."));
+        assert!(!v.iter().any(|x| x.body.contains("HOST_CMD")));
+        assert!(!v.iter().any(|x| x.body.contains("HOST_RESULT")));
+        assert!(!v.iter().any(|x| x.body.contains("uname")));
+    }
+
+    #[test]
+    fn timeline_work_hop_folds_a_pending_reply_like_a_plain_hop() {
+        use crate::turn_timeline::{append_say, append_thought, encode_turn};
+        let mut hop = Vec::new();
+        append_thought(&mut hop, "Need a snapshot.");
+        append_say(&mut hop, "I'll look.\nHOST_CMD: uname -a");
+        let v = visible_chat(&[
+            ("user".into(), "check the box".into()),
+            ("assistant".into(), "Checking the system.".into()),
+            ("assistant".into(), encode_turn(&hop)),
+        ]);
+        assert_eq!(
+            kinds(&v),
+            vec![
+                ChatKind::User,
+                ChatKind::Thought,
+                ChatKind::Thought,
+                ChatKind::Thought,
+            ]
+        );
+        assert_eq!(v[1].body, "Need a snapshot.");
+        assert_eq!(v[2].body, "I'll look.");
+        assert_eq!(v[3].body, "Checking the system.");
+        assert!(!v.iter().any(|x| x.kind == ChatKind::Assistant));
+        assert!(!v.iter().any(|x| x.body.contains("HOST_CMD")));
+        assert!(!v.iter().any(|x| x.body.contains("uname")));
     }
 }

@@ -145,9 +145,25 @@ pub fn append_tool(blocks: &mut Vec<LiveBlock>, id: &str, title: &str, status: &
     blocks.push(tool_block(id, title, status, detail));
 }
 
+/// A grok work hop: `HOST_CMD`, `COMPUTER_CMD`, `CONNECTOR_CMD`, `IMAGINE:`,
+/// or `IMAGINE_PROMPT:`. The stream buffer is parsed for these lines, including
+/// heredocs, so a sentence seam must not rewrite it.
+pub(crate) fn hop_is_work(text: &str) -> bool {
+    text.lines().any(|line| {
+        let t = line.trim();
+        t.starts_with("HOST_CMD")
+            || t.starts_with("COMPUTER_CMD")
+            || t.starts_with("CONNECTOR_CMD")
+            || t.starts_with("IMAGINE:")
+            || t.starts_with("IMAGINE_PROMPT:")
+    })
+}
+
 /// What goes between a stream buffer and its next chunk.
 /// Grok sends each message after a tool call, and each thought summary, with no
 /// leading space. Joined raw they read `hit.GrokHub`; this keeps them apart.
+/// A buffer that already holds a work-protocol line stays exact. The seam after
+/// a tool call still opens a new paragraph.
 pub fn chunk_seam(prev: &str, next: &str, after_tool: bool) -> &'static str {
     let (Some(last), Some(first)) = (prev.chars().next_back(), next.chars().next()) else {
         return "";
@@ -158,7 +174,11 @@ pub fn chunk_seam(prev: &str, next: &str, after_tool: bool) -> &'static str {
     if after_tool {
         return "\n\n";
     }
-    if matches!(last, '.' | '!' | '?') && starts_sentence(next) && !in_code(prev) {
+    if matches!(last, '.' | '!' | '?')
+        && starts_sentence(next)
+        && !in_code(prev)
+        && !hop_is_work(prev)
+    {
         return "\n\n";
     }
     ""
@@ -209,6 +229,10 @@ pub const TURN_THOUGHT: &str = "TURN_THOUGHT:";
 pub const TURN_TOOL: &str = "TURN_TOOL:";
 pub const TURN_SAY: &str = "TURN_SAY:";
 
+/// Persisted tool rows stay short. ACP titles can be a whole command or heredoc.
+const STORED_TOOL_TITLE_CHARS: usize = 160;
+const STORED_TOOL_DETAIL_CHARS: usize = 240;
+
 fn is_turn_marker(line: &str) -> bool {
     line.starts_with(TURN_THOUGHT) || line.starts_with(TURN_TOOL) || line.starts_with(TURN_SAY)
 }
@@ -254,14 +278,15 @@ pub fn encode_turn(blocks: &[LiveBlock]) -> String {
                 push_turn_body(&mut out, &b.body);
             }
             LiveKind::Tool => {
-                let title = one_line(&b.tool_title);
+                let title = clip_chars(&one_line(&b.tool_title), STORED_TOOL_TITLE_CHARS);
+                let detail = clip_chars(&one_line(&b.tool_detail), STORED_TOOL_DETAIL_CHARS);
                 out.push_str(TURN_TOOL);
                 out.push(' ');
                 out.push_str(&one_line(&b.tool_status));
                 out.push('\t');
                 out.push_str(if title.is_empty() { "Work" } else { &title });
                 out.push('\t');
-                out.push_str(&one_line(&b.tool_detail));
+                out.push_str(&detail);
                 out.push('\n');
             }
         }
@@ -540,6 +565,51 @@ mod tests {
         // Code stays exact.
         assert_eq!(chunk_seam("Use `React.", "Component`", false), "");
         assert_eq!(chunk_seam("```rust\nlet x = a.", "Foo;", false), "");
+    }
+
+    #[test]
+    fn chunk_seam_leaves_work_protocol_intact() {
+        assert_eq!(
+            chunk_seam("I'll look.\nHOST_CMD: rm -rf /tmp/foo.", "Bar", false),
+            ""
+        );
+        assert_eq!(
+            chunk_seam("HOST_CMD: cat <<'EOF'\nrm -rf /tmp/foo.", "Bar", false),
+            ""
+        );
+        assert_eq!(
+            chunk_seam("I'll look.\nHOST_CMD: cat <<'EOF'\necho hi.", "There", false),
+            ""
+        );
+        // A tool call still opens a paragraph, even when the buffer holds a command.
+        assert_eq!(
+            chunk_seam("I'll look.\nHOST_CMD: rm -rf /tmp/foo.", "Bar", true),
+            "\n\n"
+        );
+    }
+
+    #[test]
+    fn stored_tool_row_clips_long_multibyte_title_and_detail() {
+        let grain = "🔧я";
+        let title = grain.repeat(120);
+        let detail = grain.repeat(180);
+        assert!(title.chars().count() > STORED_TOOL_TITLE_CHARS);
+        assert!(detail.chars().count() > STORED_TOOL_DETAIL_CHARS);
+        let mut b = Vec::new();
+        append_tool(&mut b, "t1", &title, "completed", &detail);
+        let parts = decode_turn(&encode_turn(&b)).expect("timeline");
+        let TurnPart::Tool(row) = &parts[0] else {
+            panic!("tool row");
+        };
+        assert_eq!(row.title.chars().count(), STORED_TOOL_TITLE_CHARS);
+        assert_eq!(row.detail.chars().count(), STORED_TOOL_DETAIL_CHARS);
+        assert!(row.title.ends_with('…'));
+        assert!(row.detail.ends_with('…'));
+        let title_prefix: String = title.chars().take(STORED_TOOL_TITLE_CHARS - 1).collect();
+        let detail_prefix: String = detail.chars().take(STORED_TOOL_DETAIL_CHARS - 1).collect();
+        assert_eq!(row.title, format!("{title_prefix}…"));
+        assert_eq!(row.detail, format!("{detail_prefix}…"));
+        assert_eq!(row.status, "completed");
     }
 
     #[test]

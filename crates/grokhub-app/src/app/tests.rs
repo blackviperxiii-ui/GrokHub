@@ -16248,14 +16248,17 @@ fn idea_card_edits_stop_at_ten_in_progress() {
 #[test]
 fn a_finished_turn_keeps_each_reply_and_tool_run_apart() {
     let _g = crate::config::hold_test_config();
-    let root = crate::config::test_config_root("turn-timeline");
-    let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
+    let (root, mut cabin) = isolated_cabin("turn-timeline");
+    let _restore = GrokPathRestore {
+        path: std::env::var_os("PATH"),
+        grok: std::env::var_os("GROKHUB_GROK"),
+    };
+    std::env::set_var("GROKHUB_GROK", root.join("no-such-grok"));
+    grokhub_acp::invalidate_grok_bin_cache();
 
     let mut t = crate::threads::ChatThread::new("Bug pass", false);
     t.messages = Arc::new(vec![("user".into(), "check yourself for bugs".into())]);
     let tid = t.id.clone();
-    let mut cabin = super::Cabin::quiet_for_test();
     cabin.threads = vec![t];
     cabin.thread_idx = 0;
     cabin.messages = cabin.threads[0].messages.clone();
@@ -16335,6 +16338,5 @@ fn a_finished_turn_keeps_each_reply_and_tool_run_apart() {
         .map(|v| v.title.as_str())
         .collect();
     assert_eq!(tools, vec!["2 steps · Grep, Read file", "Screenshot"]);
-    let _ = std::fs::remove_dir_all(&root);
-    std::env::remove_var("GROKHUB_CONFIG");
+    release_isolated(&root, cabin);
 }
