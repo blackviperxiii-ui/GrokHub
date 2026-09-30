@@ -527,8 +527,8 @@ impl Cabin {
         self.persist_updates();
     }
 
-    /// Once per launch: clear the old template cards, then ask the model for ideas
-    /// when the board is thin (see `maybe_suggest_ideas`).
+    /// Once per launch: purge template idea cards. The automatic model ask comes
+    /// from the heartbeat (`tick_feed_pulse` → `maybe_suggest_ideas`).
     pub(super) fn ensure_useful_ideas(&mut self) {
         if self.ideas_filled {
             return;
@@ -537,12 +537,12 @@ impl Cabin {
         if grokhub_core::purge_template_ideas(&mut self.updates) > 0 {
             self.persist_updates();
         }
-        self.maybe_suggest_ideas(false);
     }
 
-    /// Ask the model for ideas grounded in this person's work. Runs when the board
-    /// has fewer than a handful of generated ideas and the last ask is hours old,
-    /// never in quiet hours or over the token budget. `force` is the Refresh button.
+    /// Ask the model for ideas grounded in this person's work. The automatic ask
+    /// comes from the heartbeat (`tick_feed_pulse`). Runs when the board has fewer
+    /// than a handful of generated ideas and the last ask is hours old, never in
+    /// quiet hours or over the token budget. `force` is the Suggest ideas button.
     pub(super) fn maybe_suggest_ideas(&mut self, force: bool) {
         if self.ideas_rx.is_some() || !self.llm_ready() {
             return;

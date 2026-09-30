@@ -8,9 +8,11 @@ The welcome line is a greeting again. The fast model call printed its own reason
 
 Quick chips stop echoing what you just typed. A typed prompt becomes a chip after you have typed it three times; a chip you picked still counts right away.
 
-Skills are written only for a reusable procedure: at least two commands, a task rather than feedback on the last try, and a fix, build, or routine worth repeating. They are named after what they run (`fix-the-cause-cargo`), not the sentence you typed. Leftover auto-made skills that never ran move to `skills/.retired` on launch; nothing is deleted.
+Skills are written only for a reusable procedure: at least two commands, a task rather than feedback on the last try, and a fix, build, or routine worth repeating. They are named after what they run (`fix-the-cause-cargo`), not the sentence you typed. Leftover auto-made skills that never ran move to `skills/.retired` on launch; a skill you wrote yourself stays, and nothing is deleted.
 
 Ideas are written by the model from your own work: your notes, recent asks, open cards, and the automations and skills you already have. Each one is an automation, a reminder, a skill, or something to try, with the exact message that does it; Accept puts that message in the draft. Suggest ideas on the Ideas page asks now. The template cards ("A chip for the next step", "Set up: …", "Remind me later") are gone.
+
+A memory file you switch away from is saved into the config directory it was opened from, like the other background saves.
 
 - Linux: `grokhub-linux-v2.10.45.tar.gz` and AUR `pkgver=2.10.45`.
 - Windows: `GrokHub-Setup-2.10.45.exe` and `grokhub-windows-v2.10.45.zip`.

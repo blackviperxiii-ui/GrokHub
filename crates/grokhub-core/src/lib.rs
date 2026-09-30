@@ -351,7 +351,7 @@ pub use shortcuts::{
     shortcut_help, ComposerEnter, ComposerGo, PermKey, SHORTCUTS,
 };
 pub use skill::{
-    is_feedback_ask, is_junk_skill,
+    is_feedback_ask, is_junk_skill, AUTO_SKILL_PITFALL,
     apply_skill_follow, bump_skill_run, is_hard_run, match_skill, parse_skill_md, patch_skill,
     prefer_patch, propose_skill_from_turn, render_skill_md, skill_dir_name, skill_follow_block,
     skill_safe, skill_use_in_chat_prompt, SkillMd,

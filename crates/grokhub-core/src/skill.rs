@@ -274,6 +274,9 @@ pub fn prefer_patch(existing: &[SkillMd], proposed: &SkillMd) -> Option<String> 
 }
 
 /// Feedback on the last try ("actually still no…", "good job now…") is not a new task.
+/// A prefix that ends in a letter or digit matches only at a word boundary
+/// ("stop" is feedback, "stopwatch" is not). Prefixes that already end in a
+/// space, comma, apostrophe, or colon keep matching as a raw prefix.
 pub fn is_feedback_ask(user: &str) -> bool {
     let t = user.trim().to_ascii_lowercase();
     const STARTS: &[&str] = &[
@@ -282,7 +285,17 @@ pub fn is_feedback_ask(user: &str) -> bool {
         "wrong", "not ", "stop", "wait", "again", "lets try", "let's try", "try again", "retry",
         "continue", "keep going", "go on", "yes", "yep", "new update", "update:",
     ];
-    STARTS.iter().any(|p| t.starts_with(p))
+    STARTS.iter().any(|prefix| {
+        let Some(rest) = t.strip_prefix(prefix) else {
+            return false;
+        };
+        match prefix.chars().next_back() {
+            Some(c) if c.is_ascii_alphanumeric() => {
+                !rest.chars().next().is_some_and(|n| n.is_ascii_alphanumeric())
+            }
+            _ => true,
+        }
+    })
 }
 
 /// Program a host command runs (`cargo`, `git`, `systemctl`), for naming a skill.
@@ -302,6 +315,7 @@ fn command_tool(cmd: &str) -> Option<String> {
 /// a situation worth repeating (a fix, a build, a routine), and an ask that is a
 /// task, not feedback on the last try. Mouse and keyboard driving is never saved:
 /// those turns were the source of skills named after whole corrections.
+/// Pitfalls on the skill are [`AUTO_SKILL_PITFALL`], the auto-made marker.
 pub fn propose_skill_from_turn(
     user_text: &str,
     assistant_text: &str,
@@ -363,11 +377,17 @@ pub fn propose_skill_from_turn(
         slash: format!("/{name}"),
         trigger: learned.skill_trigger.clone(),
         instructions: steps,
-        pitfalls: "Do not run destructive commands without a receipt and confirm.".into(),
+        pitfalls: AUTO_SKILL_PITFALL.into(),
         verify: format!("{verify} exits 0"),
         runs: 0,
     })
 }
+
+/// Pitfalls line every skill from [`propose_skill_from_turn`] carries.
+/// `is_junk_skill` retires only skills that still contain it, so a hand-written
+/// skill with empty or custom pitfalls stays put.
+pub const AUTO_SKILL_PITFALL: &str =
+    "Do not run destructive commands without a receipt and confirm.";
 
 /// Generic skill names the cabin used to write from a template, with no real steps.
 const TEMPLATE_SKILLS: &[&str] = &[
@@ -384,9 +404,14 @@ const TEMPLATE_SKILLS: &[&str] = &[
 
 /// An auto-made skill that never ran and holds nothing reusable: a template name,
 /// a name that is a whole sentence someone typed, or a description that is that
-/// sentence copied. The cabin moves these aside instead of listing them.
+/// sentence copied. Auto-made means `pitfalls` contains [`AUTO_SKILL_PITFALL`].
+/// A hand-written skill stays, and so does any skill that has already run.
+/// The cabin moves junk aside instead of listing it.
 pub fn is_junk_skill(s: &SkillMd) -> bool {
     if s.runs > 0 {
+        return false;
+    }
+    if !s.pitfalls.trim().contains(AUTO_SKILL_PITFALL) {
         return false;
     }
     let name = s.name.trim().to_ascii_lowercase();
@@ -517,6 +542,7 @@ mod tests {
         assert_eq!(s.name, "fix-the-cause-cargo");
         assert_eq!(s.slash, "/fix-the-cause-cargo");
         assert!(s.instructions.contains("1. `cargo build"), "{}", s.instructions);
+        assert!(s.pitfalls.contains(AUTO_SKILL_PITFALL));
         assert!(!is_junk_skill(&s));
         assert!(propose_skill_from_turn("what is a lifetime", "It is…", &cmds).is_none(), "an explanation is not a procedure");
     }
@@ -529,7 +555,7 @@ mod tests {
             slash: "/x".into(),
             trigger: String::new(),
             instructions: "1. x".into(),
-            pitfalls: String::new(),
+            pitfalls: AUTO_SKILL_PITFALL.into(),
             verify: String::new(),
             runs,
         };
@@ -544,5 +570,52 @@ mod tests {
         assert!(!is_junk_skill(&mk("board-status", "List open workboard cards and the next concrete step.", 0)));
         assert!(!is_junk_skill(&mk("deploy-user-install", "Sync and restart the user GrokHub install", 0)));
         assert!(!is_junk_skill(&mk("take-the-next-step", "x", 3)), "a skill that ran is kept");
+        let mut hand = mk(
+            "actually-still-no-you-moved-the-mouse-yes-but-you-moved-it-to-the-left-monitor",
+            "actually still no you moved the mouse yes but",
+            0,
+        );
+        hand.pitfalls.clear();
+        assert!(
+            !is_junk_skill(&hand),
+            "the same junk-looking name with empty pitfalls is hand-written"
+        );
+        hand.pitfalls = "do not wipe the boot disk".into();
+        assert!(
+            !is_junk_skill(&hand),
+            "the same junk-looking name with hand-written pitfalls is not junk"
+        );
+        let mut stop = mk(
+            "stop-the-staging-server-and-clear-the-cache-now",
+            "stop the staging server and clear the cache now",
+            0,
+        );
+        stop.pitfalls.clear();
+        assert!(
+            !is_junk_skill(&stop),
+            "a hand-written skill whose name starts with stop stays"
+        );
+    }
+
+    #[test]
+    fn feedback_prefixes_need_a_word_boundary() {
+        for u in [
+            "actually still no you moved the mouse yes but you moved it to the left monitor",
+            "good job now use the mouse to close one tab of firefox",
+            "continue",
+            "no, the other one",
+            "stop",
+            "you're close",
+        ] {
+            assert!(is_feedback_ask(u), "{u}");
+        }
+        for u in [
+            "yesterday's build log",
+            "closed issues report",
+            "stopwatch for the build",
+            "nicely format the log",
+        ] {
+            assert!(!is_feedback_ask(u), "{u}");
+        }
     }
 }

@@ -402,8 +402,11 @@ pub fn is_model_planning(line: &str) -> bool {
 /// "Greeting: Evening, Viper." → "Evening, Viper."
 fn strip_answer_label(line: &str) -> &str {
     for label in ["greeting:", "answer:", "line:", "final:", "output:"] {
-        if line.len() > label.len() && line[..label.len()].eq_ignore_ascii_case(label) {
-            return line[label.len()..].trim();
+        // `get`: `label.len()` can sit inside a multibyte char ("line:" into 👋 / ß).
+        if let (Some(head), Some(rest)) = (line.get(..label.len()), line.get(label.len()..)) {
+            if !rest.is_empty() && head.eq_ignore_ascii_case(label) {
+                return rest.trim();
+            }
         }
     }
     line
@@ -799,6 +802,15 @@ mod tests {
         assert_eq!(pick_greeting("Evening, Viper.", Some(leaked)), "Evening, Viper.");
         for ok in ["Evening, Viper.", "Morning, Sam. The deploy notes are where you left them.", "Back again, Ana."] {
             assert!(!is_model_planning(ok), "{ok}");
+        }
+    }
+
+    #[test]
+    fn parse_llm_greeting_does_not_panic_on_a_multibyte_boundary() {
+        // "line:" is 5 bytes. In these lines that index sits inside 👋 / ß.
+        for line in ["Hi, 👋 Sam.", "Grüße, Sam."] {
+            assert_eq!(strip_answer_label(line), line, "{line}");
+            assert_eq!(parse_llm_greeting(line).as_deref(), Some(line), "{line}");
         }
     }
 }

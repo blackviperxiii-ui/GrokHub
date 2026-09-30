@@ -12429,6 +12429,8 @@ fn housekeep_expires_ideas_after_two_weeks() {
     std::env::set_var("GROKHUB_CONFIG", &root);
 
     let mut cabin = super::Cabin::quiet_for_test();
+    // Heartbeat must not ask the real model from a test.
+    cabin.cfg.feed_pulse.last_ideas_ms = grokhub_core::now_ms();
     assert!(!cabin.running);
     assert!(
         !grokhub_core::feed_visible(&cabin.updates),
@@ -12446,6 +12448,10 @@ fn housekeep_expires_ideas_after_two_weeks() {
     cabin.updates = crate::feed::load();
 
     cabin.tick_feed_pulse();
+    assert!(
+        cabin.ideas_rx.is_none(),
+        "housekeep must not start the ideas model call"
+    );
 
     assert!(
         cabin
@@ -12802,6 +12808,8 @@ fn heartbeat_pulse_stays_off_a_run() {
     std::env::set_var("GROKHUB_CONFIG", &root);
 
     let mut cabin = Cabin::quiet_for_test();
+    // Heartbeat must not ask the real model from a test.
+    cabin.cfg.feed_pulse.last_ideas_ms = grokhub_core::now_ms();
     cabin.hub_on = false;
     cabin.automations.clear();
     cabin.running = false;
@@ -12812,6 +12820,10 @@ fn heartbeat_pulse_stays_off_a_run() {
 
     cabin.tick_heartbeat();
 
+    assert!(
+        cabin.ideas_rx.is_none(),
+        "heartbeat must not start the ideas model call"
+    );
     assert!(!cabin.running);
     assert!(cabin.pending_hub_task.is_none());
     assert!(cabin.night_check_rx.is_none());
@@ -12820,6 +12832,10 @@ fn heartbeat_pulse_stays_off_a_run() {
     let stamped = cabin.last_heartbeat;
     cabin.tick_heartbeat();
 
+    assert!(
+        cabin.ideas_rx.is_none(),
+        "heartbeat must not start the ideas model call"
+    );
     assert!(!cabin.running);
     assert!(cabin.pending_hub_task.is_none());
     assert!(cabin.night_check_rx.is_none());
@@ -15769,6 +15785,9 @@ fn ideas_come_from_the_model_with_their_work_and_post_with_a_prompt() {
 
 #[test]
 fn launch_clears_template_ideas_and_chat_turns_no_longer_post_them() {
+    let root = config::test_config_root("launch-clears-template-ideas");
+    let _ = std::fs::remove_dir_all(&root);
+    let _pin = config::TestConfigDir::set(root.clone());
     let mut app = Cabin::quiet_for_test();
     app.updates = vec![
         grokhub_core::idea_card("profile", "A chip for the next slice", "A chip does the next slice.", 1),
@@ -15776,7 +15795,12 @@ fn launch_clears_template_ideas_and_chat_turns_no_longer_post_them() {
     ];
     app.ensure_useful_ideas();
     assert!(app.updates.is_empty(), "{:?}", app.updates);
+    assert!(
+        app.ideas_rx.is_none(),
+        "launch must not start the model call"
+    );
     let src = cabin_src();
     assert!(!src.contains("offer_learned_move"), "a chat turn must not post a template idea");
     assert!(!src.contains("fill_useful_ideas"));
+    let _ = std::fs::remove_dir_all(&root);
 }

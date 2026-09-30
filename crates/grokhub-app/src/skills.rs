@@ -34,8 +34,9 @@ pub fn list_skills() -> Vec<SkillMd> {
 }
 
 /// Auto-made skills that never ran and hold nothing reusable (see
-/// `is_junk_skill`) move to `skills/.retired/<name>`. Nothing is deleted: moving
-/// a folder back restores it. Returns the names that moved.
+/// `is_junk_skill`: pitfalls contain `AUTO_SKILL_PITFALL`) move to
+/// `skills/.retired/<name>`. A hand-written skill stays. Nothing is deleted:
+/// moving a folder back restores it. Returns the names that moved.
 pub fn retire_junk_skills() -> Vec<String> {
     let dir = skills_dir();
     let Ok(rd) = fs::read_dir(&dir) else {
@@ -332,7 +333,7 @@ mod tests {
             slash: "/x".into(),
             trigger: "t".into(),
             instructions: "1. `echo ok`".into(),
-            pitfalls: String::new(),
+            pitfalls: grokhub_core::AUTO_SKILL_PITFALL.into(),
             verify: String::new(),
             runs: 0,
         };
@@ -346,6 +347,26 @@ mod tests {
         assert_eq!(names, vec!["board-status".to_string()]);
         assert!(skills_dir().join(".retired").join("take-the-next-step").join("SKILL.md").exists());
         assert!(retire_junk_skills().is_empty(), "a second pass moves nothing");
+        save_skill(&SkillMd {
+            name: "stop-the-staging-server-and-clear-the-cache-now".into(),
+            description: "Stop the staging server and clear the cache now".into(),
+            slash: "/x".into(),
+            trigger: "t".into(),
+            instructions: "1. `echo ok`".into(),
+            pitfalls: String::new(),
+            verify: String::new(),
+            runs: 0,
+        })
+        .unwrap();
+        assert!(
+            retire_junk_skills().is_empty(),
+            "a hand-written skill is not moved aside"
+        );
+        let names: Vec<String> = list_skills().into_iter().map(|s| s.name).collect();
+        assert!(
+            names.iter().any(|n| n == "stop-the-staging-server-and-clear-the-cache-now"),
+            "a hand-written skill with empty pitfalls stays listed: {names:?}"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 }
