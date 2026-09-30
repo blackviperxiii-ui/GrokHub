@@ -460,6 +460,7 @@ pub use update_feed::{
     IDEA_BOARD_MAX, IDEA_DISCOVERY_MAX, IDEA_TTL_MS,
 };
 pub use workboard::{
+    card_notes_hash, card_work_prompt, clean_card_notes, take_card_notes_block, CARD_NOTES_MAX,
     abandon_inflight_card, apply_assistant_work_marks, apply_work_update, extract_work_pins,
     extract_work_updates, file_idea_todo, idea_todo_title, inflight_card_title, parse_work_pin,
     parse_work_update, release_inflight_card, settle_inflight_card, todo_task_line,

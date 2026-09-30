@@ -14114,6 +14114,8 @@ fn quiet_cabin() -> Cabin {
         palette_file_rx: None,
         shortcuts_open: false,
         active_skill_follow: None,
+        card_notes_follow: None,
+        board_notes_edit: None,
         last_anticipate_ms: 0,
         goal_step: 0,
         followup_step: 0,
@@ -15593,7 +15595,7 @@ fn board_drop_moves_to_another_column_only() {
     }
     let src = cabin_src();
     let board = fn_src(&src, "ui_board");
-    assert!(board.contains("dnd_drag_source"), "cards must be draggable");
+    assert!(board.contains("DragAndDrop::set_payload(") && board.contains("BoardDrag(id.clone())"), "cards must be draggable by the title row");
     assert!(board.contains("dnd_release_payload::<BoardDrag>"), "columns must take drops");
     assert!(board.contains("BoardAct::Move"), "a drop is the same Move the buttons use");
 }
@@ -15803,4 +15805,41 @@ fn launch_clears_template_ideas_and_chat_turns_no_longer_post_them() {
     assert!(!src.contains("offer_learned_move"), "a chat turn must not post a template idea");
     assert!(!src.contains("fill_useful_ideas"));
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn board_card_notes_edit_save_and_ride_the_next_turn() {
+    let root = config::test_config_root("board-notes");
+    let _ = std::fs::remove_dir_all(&root);
+    let _pin = config::TestConfigDir::set(root.clone());
+    let mut app = Cabin::quiet_for_test();
+    let mut card = grokhub_core::BoardCard::new("Ship the AUR release", "", "");
+    card.status = grokhub_core::BoardStatus::Todo;
+    let id = card.id.clone();
+    app.board.push(card);
+    assert!(!app.apply_board_act(Some(BoardAct::EditNotes(id.clone()))));
+    assert_eq!(app.board_notes_edit.as_ref().map(|(i, _)| i.as_str()), Some(id.as_str()));
+    assert!(app.apply_board_act(Some(BoardAct::SaveNotes {
+        id: id.clone(),
+        notes: "  bump pkgver, then makepkg  ".into(),
+    })));
+    assert!(app.board_notes_edit.is_none());
+    assert_eq!(app.board[0].notes, "bump pkgver, then makepkg");
+    assert!(app.board[0].detail.is_empty(), "notes never land in the run status line");
+
+    // Work on it needs an agent; without one it says so and changes nothing.
+    app.work_on_card(&id);
+    assert!(app.status.contains("Grok"), "{}", app.status);
+    assert_eq!(app.board[0].status, grokhub_core::BoardStatus::Todo);
+
+    let src = cabin_src();
+    let kick = fn_src(&src, "kick_model");
+    assert!(kick.contains("self.card_notes_follow.as_deref()"), "notes reach the agent's prompt: {kick}");
+    let send = fn_src(&src, "send_chat");
+    assert!(send.contains("take_card_notes_block"), "{send}");
+    let work = fn_src(&src, "work_on_card");
+    assert!(work.contains("card_work_prompt") && work.contains("c.run = true"), "{work}");
+    let board = fn_src(&src, "ui_board");
+    assert!(!board.contains("dnd_drag_source"), "the whole card must not be a drag source again");
+    assert!(board.contains("egui::DragAndDrop::set_payload"), "the title row drags");
 }
