@@ -251,7 +251,8 @@ impl Cabin {
             }
         };
         let with_notes = apply_skill_follow(&raw_ask, self.card_notes_follow.as_deref());
-        let last_user = apply_skill_follow(&with_notes, self.active_skill_follow.as_deref());
+        let with_skill = apply_skill_follow(&with_notes, self.active_skill_follow.as_deref());
+        let last_user = apply_skill_follow(&with_skill, self.idea_talk_brief().as_deref());
         if self.grok_p_rx.is_some() {
             return;
         }

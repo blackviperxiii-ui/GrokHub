@@ -164,11 +164,13 @@ impl UpdateCard {
             .unwrap_or("Suggestion")
     }
 
-    /// What Apply does: your draft if you changed it, else the original action.
+    /// What Apply does: your draft if you changed it, else the original action
+    /// (a Skill idea's steps).
     pub fn idea_action(&self) -> String {
         self.draft
             .as_deref()
             .or(self.prompt.as_deref())
+            .or(self.skill.as_ref().and_then(|k| k.instructions.as_deref()))
             .map(str::trim)
             .unwrap_or("")
             .to_string()
@@ -1021,6 +1023,72 @@ pub fn set_idea_draft(cards: &mut [UpdateCard], id: &str, draft: &str) -> Result
         };
     }
     Ok(())
+}
+
+/// The line the agent ends an idea-card reply with to rewrite the card's action.
+pub const CARD_ACTION_TAG: &str = "CARD_ACTION:";
+/// What the chat shows once the card took the new action.
+pub const CARD_ACTION_DONE: &str = "↳ Updated the card's action.";
+
+/// First line of the chat inside an idea card.
+pub fn idea_chat_open_line(card: &UpdateCard) -> String {
+    let what = match card.idea_type_label() {
+        "Skill" => "this skill",
+        "Automation" => "this automation",
+        _ => "this suggestion",
+    };
+    format!(
+        "Want to change {what}? I can explain it, tighten the action, or fit it to how you work. Nothing runs until you press Apply."
+    )
+}
+
+/// Hidden brief sent with every turn of an idea card's chat.
+pub fn idea_card_brief(card: &UpdateCard) -> String {
+    let mut out = format!(
+        "You are helping the person refine one idea card in GrokHub before they apply it.\nType: {}\nTitle: {}",
+        card.idea_type_label(),
+        card.title
+    );
+    if let Some(body) = card.body.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        out.push_str("\nSummary: ");
+        out.push_str(body);
+    }
+    if let Some(details) = card.details.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        out.push_str("\nDetails: ");
+        out.push_str(details);
+    }
+    let action = card.idea_action();
+    if !action.is_empty() {
+        out.push_str("\nCurrent action (what Apply does): ");
+        out.push_str(&action);
+    }
+    out.push_str(&format!(
+        "\n\nAnswer briefly. Do not carry out the action yourself; the person applies it from the card. When you both settle a change to the action, end your reply with one line that starts with {CARD_ACTION_TAG} followed by the whole new action on that line."
+    ));
+    out
+}
+
+/// Pull a `CARD_ACTION:` line out of an agent reply. Returns the reply with that
+/// line swapped for a short note, and the new action. `None` when there is none.
+pub fn take_card_action(reply: &str) -> Option<(String, String)> {
+    let mut action = None;
+    let mut kept: Vec<String> = Vec::new();
+    for line in reply.lines() {
+        let t = line.trim().trim_start_matches(['*', '`', '-', ' ']);
+        if action.is_none() {
+            if let Some(rest) = t.strip_prefix(CARD_ACTION_TAG) {
+                let a = rest.trim().trim_matches(['*', '`', '"']).trim();
+                if !a.is_empty() {
+                    action = Some(a.chars().take(2000).collect::<String>());
+                    kept.push(CARD_ACTION_DONE.to_string());
+                    continue;
+                }
+            }
+        }
+        kept.push(line.to_string());
+    }
+    let action = action?;
+    Some((kept.join("\n").trim_end().to_string(), action))
 }
 
 /// Newest ideas first, with the ones you are working on at the top.
@@ -2007,5 +2075,30 @@ mod tests {
         assert!(blank.body.is_some());
         let done = automation_done_card("a1", "Board summary", "ok", 5);
         assert_ne!(c.id, done.id, "a failure must not replace the done card");
+    }
+
+    #[test]
+    fn card_action_line_rewrites_the_action_once() {
+        let reply = "Sure, weekdays only.\n\n**CARD_ACTION: every weekday at 8 summarize my inbox**";
+        let (clean, action) = take_card_action(reply).expect("action");
+        assert_eq!(action, "every weekday at 8 summarize my inbox");
+        assert!(clean.contains("weekdays only"));
+        assert!(clean.contains(CARD_ACTION_DONE));
+        assert!(!clean.contains(CARD_ACTION_TAG));
+        assert!(take_card_action(&clean).is_none(), "second pass finds nothing");
+        assert!(take_card_action("CARD_ACTION:   ").is_none());
+    }
+
+    #[test]
+    fn idea_card_brief_names_type_action_and_tag() {
+        let mut c = idea_card("i1", "Inbox sweep", "Sort mail at 8", 1);
+        c.idea_kind = Some(crate::ideas::IdeaKind::Automation);
+        c.prompt = Some("every day at 8 sort my inbox".into());
+        c.draft = Some("every weekday at 8 sort my inbox".into());
+        let brief = idea_card_brief(&c);
+        assert!(brief.contains("Type: Automation"));
+        assert!(brief.contains("every weekday at 8 sort my inbox"));
+        assert!(brief.contains(CARD_ACTION_TAG));
+        assert!(idea_chat_open_line(&c).contains("this automation"));
     }
 }

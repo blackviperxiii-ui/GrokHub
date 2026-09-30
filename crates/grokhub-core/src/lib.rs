@@ -445,7 +445,8 @@ pub use windshield::{
     windshield_browser_line, windshield_prompt, AtspiRow, PendingStep, WindshieldFrame,
 };
 pub use update_feed::{
-    ideas_board, mark_idea_modified, modified_ideas, post_skill_idea, set_idea_draft,
+    ideas_board, idea_card_brief, idea_chat_open_line, mark_idea_modified, take_card_action,
+    CARD_ACTION_DONE, CARD_ACTION_TAG, modified_ideas, post_skill_idea, set_idea_draft,
     IDEA_MODIFIED_MAX,
     live_generated_ideas, post_generated_ideas, purge_template_ideas,
     automation_failed_card,
