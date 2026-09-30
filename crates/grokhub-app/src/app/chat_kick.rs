@@ -90,6 +90,14 @@ impl Cabin {
         }
         self.verify_ok_turn = verify_ok_after_user_turn(self.verify_ok_turn, true);
         self.active_skill_follow = None;
+        // Notes typed on a workboard card linked to this chat go with this turn,
+        // once per change. The chat pane shows your message, not the block.
+        let notes_thread = self.visible_thread_id();
+        self.card_notes_follow =
+            grokhub_core::take_card_notes_block(&mut self.board, &notes_thread);
+        if self.card_notes_follow.is_some() {
+            self.flush_board();
+        }
         let matched = match_skill(&text, &self.skill_list).map(|sk| {
             (
                 sk.name.clone(),
@@ -242,7 +250,9 @@ impl Cabin {
                     })
             }
         };
-        let last_user = apply_skill_follow(&raw_ask, self.active_skill_follow.as_deref());
+        let with_notes = apply_skill_follow(&raw_ask, self.card_notes_follow.as_deref());
+        let with_skill = apply_skill_follow(&with_notes, self.active_skill_follow.as_deref());
+        let last_user = apply_skill_follow(&with_skill, self.idea_talk_brief().as_deref());
         if self.grok_p_rx.is_some() {
             return;
         }

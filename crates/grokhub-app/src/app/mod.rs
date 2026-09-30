@@ -165,6 +165,7 @@ mod night;
 mod chat_ui;
 mod pulse;
 mod feed_ui;
+mod ideas_ui;
 mod confirm;
 mod glance;
 mod sidebar;
@@ -507,6 +508,10 @@ pub struct Cabin {
     palette_file_rx: Option<mpsc::Receiver<(String, String, Vec<String>)>>,
     shortcuts_open: bool,
     active_skill_follow: Option<String>,
+    /// Changed notes from workboard cards linked to this chat, sent with this turn.
+    card_notes_follow: Option<String>,
+    /// Card whose notes are open for editing, and the text being typed.
+    board_notes_edit: Option<(String, String)>,
     last_anticipate_ms: u64,
     goal_step: u32,
     followup_step: u32,
@@ -547,7 +552,7 @@ pub struct Cabin {
     rename_lock: Option<String>,
     chip_memory: ChipMemory,
     chip_dismissed: Vec<String>,
-    idea_pop: Option<feed_ui::IdeaPop>,
+    idea_board: ideas_ui::IdeaBoardView,
     llm_chips: Vec<QuickChip>,
     visible_chips: Vec<QuickChip>,
     chip_rx: Option<mpsc::Receiver<Vec<QuickChip>>>,
@@ -1053,6 +1058,8 @@ impl Cabin {
             palette_file_rx: None,
             shortcuts_open: false,
             active_skill_follow: None,
+            card_notes_follow: None,
+            board_notes_edit: None,
             last_anticipate_ms: 0,
             goal_step,
             followup_step: 0,
@@ -1092,7 +1099,7 @@ impl Cabin {
             rename_lock: None,
             chip_memory: crate::store::load_chips(),
             chip_dismissed: vec![],
-            idea_pop: None,
+            idea_board: Default::default(),
             llm_chips: vec![],
             visible_chips: vec![],
             chip_rx: None,
@@ -1442,6 +1449,8 @@ impl Cabin {
             palette_file_rx: None,
             shortcuts_open: false,
             active_skill_follow: None,
+            card_notes_follow: None,
+            board_notes_edit: None,
             last_anticipate_ms: 0,
             goal_step: 0,
             followup_step: 0,
@@ -1481,7 +1490,7 @@ impl Cabin {
             rename_lock: None,
             chip_memory: Default::default(),
             chip_dismissed: Vec::new(),
-            idea_pop: None,
+            idea_board: Default::default(),
             llm_chips: Vec::new(),
             visible_chips: Vec::new(),
             chip_rx: None,
@@ -4799,7 +4808,7 @@ impl eframe::App for Cabin {
         self.ui_plus_overlays(ctx);
         self.ui_imagine_overlays(ctx);
         self.ui_project_overlays(ctx);
-        self.paint_idea_talk(ctx);
+        self.sync_idea_card_actions();
         self.release_workflow_ctl_if_idle();
     }
 }

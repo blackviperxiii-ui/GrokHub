@@ -124,7 +124,7 @@ pub use export::{
     chat_export_html, chat_export_json, html_escape, md_to_html, ChatExport, EXPORT_FORMATS_HINT,
 };
 pub use ideas::{
-    idea_prompt, ideas_refresh_due, is_template_idea_title, parse_ideas, IdeaContext, IdeaKind, IdeaSeed,
+    idea_prompt, ideas_refresh_due, SHORT_CHARS as IDEA_SHORT_CHARS, is_template_idea_title, parse_ideas, IdeaContext, IdeaKind, IdeaSeed,
     IDEAS_LIVE_ENOUGH, IDEAS_PER_RUN, IDEAS_REFRESH_MS, IDEA_SOURCE_GENERATED,
 };
 pub use md::{
@@ -445,6 +445,9 @@ pub use windshield::{
     windshield_browser_line, windshield_prompt, AtspiRow, PendingStep, WindshieldFrame,
 };
 pub use update_feed::{
+    ideas_board, idea_card_brief, idea_chat_open_line, mark_idea_modified, take_card_action,
+    CARD_ACTION_DONE, CARD_ACTION_TAG, modified_ideas, post_skill_idea, set_idea_draft,
+    IDEA_MODIFIED_MAX,
     live_generated_ideas, post_generated_ideas, purge_template_ideas,
     automation_failed_card,
     archive_digest, archived_digests, automate_offer_card, automation_done_card, card_matches,
@@ -460,6 +463,7 @@ pub use update_feed::{
     IDEA_BOARD_MAX, IDEA_DISCOVERY_MAX, IDEA_TTL_MS,
 };
 pub use workboard::{
+    card_notes_hash, card_work_prompt, clean_card_notes, take_card_notes_block, CARD_NOTES_MAX,
     abandon_inflight_card, apply_assistant_work_marks, apply_work_update, extract_work_pins,
     extract_work_updates, file_idea_todo, idea_todo_title, inflight_card_title, parse_work_pin,
     parse_work_update, release_inflight_card, settle_inflight_card, todo_task_line,

@@ -42,10 +42,6 @@ impl Cabin {
         });
         self.remember_skill(parsed.clone());
         let name = parsed.name.clone();
-        self.suggestions
-            .skills
-            .retain(|s| s.name.as_deref() != Some(name.as_str()));
-        self.persist_suggestions();
         self.status = format!("Wrote skill {name}");
     }
 
@@ -694,6 +690,35 @@ impl Cabin {
             let incoming = partition_suggestions(items);
             self.suggestions = merge_suggestion_store(&self.suggestions, incoming);
         }
+        self.skill_suggestions_to_ideas();
+        self.persist_suggestions();
+    }
+
+    /// Suggested skills live on the Ideas board now, as Skill ideas, not on the
+    /// Skills page. Each one moves over once; Apply on the card saves the skill.
+    pub(super) fn skill_suggestions_to_ideas(&mut self) {
+        if self.suggestions.skills.is_empty() {
+            return;
+        }
+        let have: Vec<String> = self.skill_list.iter().map(|s| s.name.clone()).collect();
+        let have: Vec<&str> = have.iter().map(String::as_str).collect();
+        let items = std::mem::take(&mut self.suggestions.skills);
+        let mut posted = 0;
+        for item in &items {
+            if grokhub_core::post_skill_idea(
+                &mut self.updates,
+                &mut self.cfg.feed_pulse,
+                now_ms(),
+                item,
+                &have,
+            ) {
+                posted += 1;
+            }
+        }
+        if posted > 0 {
+            self.persist_updates();
+            self.persist_cfg();
+        }
         self.persist_suggestions();
     }
 
@@ -915,6 +940,7 @@ impl Cabin {
                     self.suggestions = merge_suggestion_store(&self.suggestions, incoming);
                 }
                 prune_live_suggestions(&mut self.suggestions, &live_tools);
+                self.skill_suggestions_to_ideas();
                 let suggestions = self.suggestions.clone();
                 std::thread::spawn(move || {
                     let _ = crate::store::save_suggestions(&suggestions);

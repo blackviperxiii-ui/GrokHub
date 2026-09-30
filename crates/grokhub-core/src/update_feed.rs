@@ -19,10 +19,11 @@ use crate::review::cabin_real_text;
 pub const FEED_PAINT_MAX: usize = 4;
 /// Idea cards pinned on the home feed. The Ideas board keeps the rest, up to `IDEA_BOARD_MAX`.
 pub const IDEA_DISCOVERY_MAX: usize = 3;
-/// Ideas the user can come back to. Older untouched cards are replaced first.
-pub const IDEA_BOARD_MAX: usize = 20;
-/// An untouched idea this old can be replaced when the cabin has learned something new.
-const IDEA_STALE_MS: u64 = 3 * 24 * 60 * 60 * 1000;
+/// Ideas on the board you have not worked on. A newer card pushes out the oldest.
+pub const IDEA_BOARD_MAX: usize = 15;
+/// Ideas you changed (edited the action or talked about). They stay until you delete
+/// or apply them, never pushed out, and do not count toward `IDEA_BOARD_MAX`.
+pub const IDEA_MODIFIED_MAX: usize = 10;
 /// Digest cards painted beside the event slot. They do not consume `FEED_PAINT_MAX`.
 pub const DIGEST_PAINT_MAX: usize = 2;
 const FEED_STORE_MAX: usize = 40;
@@ -135,6 +136,45 @@ pub struct UpdateCard {
     /// Generated ideas: the exact message that does it. Accept fills the draft with it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    /// Idea type: automation, reminder, skill, or try (shown as Suggestion).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idea_kind: Option<crate::ideas::IdeaKind>,
+    /// Full explanation shown when the card opens. `body` stays one short line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<String>,
+    /// Your edited action, kept until you apply it. `None` means the original `prompt`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft: Option<String>,
+    /// You worked on this card. It stays until deleted and is never pushed out.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub modified: bool,
+    /// Skill ideas from the nightly review: the skill Apply saves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill: Option<crate::review::LearnedSuggestion>,
+}
+
+impl UpdateCard {
+    /// Type shown first on an idea: Automation, Skill, or Suggestion.
+    pub fn idea_type_label(&self) -> &'static str {
+        if self.skill.is_some() {
+            return "Skill";
+        }
+        self.idea_kind
+            .map(crate::ideas::IdeaKind::type_label)
+            .unwrap_or("Suggestion")
+    }
+
+    /// What Apply does: your draft if you changed it, else the original action
+    /// (a Skill idea's steps).
+    pub fn idea_action(&self) -> String {
+        self.draft
+            .as_deref()
+            .or(self.prompt.as_deref())
+            .or(self.skill.as_ref().and_then(|k| k.instructions.as_deref()))
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string()
+    }
 }
 
 fn is_false(v: &bool) -> bool {
@@ -302,14 +342,16 @@ pub fn feed_ideas(cards: &[UpdateCard], now: u64) -> Vec<UpdateCard> {
         .filter(|c| c.kind == UpdateKind::Idea && c.feed_pin && surfaced(c))
         .cloned()
         .collect();
-    out.sort_by_key(|card| std::cmp::Reverse(idea_rank(card, now)));
+    let _ = now;
+    out.sort_by_key(|card| std::cmp::Reverse(card.created_at));
     out.truncate(IDEA_DISCOVERY_MAX);
     out
 }
 
 /// The user opened, discussed, built, or reacted. Untouched cards age down.
 pub fn idea_touched(card: &UpdateCard) -> bool {
-    card.built
+    card.modified
+        || card.built
         || card.discuss_thread.is_some()
         || card.reaction.is_some()
         || card.status == UpdateStatus::Opened
@@ -518,13 +560,14 @@ pub fn expire_ideas(cards: &mut Vec<UpdateCard>, now: u64) -> usize {
     before - cards.len()
 }
 
+/// Ideas do not time out: a newer card pushes out the oldest unmodified one
+/// (`IDEA_BOARD_MAX`), and a modified one stays until you delete it. Only a card
+/// with an explicit `expires_at` (older stores) still expires.
 pub fn idea_expired(card: &UpdateCard, now: u64) -> bool {
-    if card.kind != UpdateKind::Idea {
+    if card.kind != UpdateKind::Idea || card.modified || card.idea_kind.is_some() || card.skill.is_some() {
         return false;
     }
-    now >= card
-        .expires_at
-        .unwrap_or_else(|| card.created_at.saturating_add(IDEA_TTL_MS))
+    card.expires_at.is_some_and(|at| now >= at)
 }
 
 pub fn release_quiet_hold(cards: &mut [UpdateCard]) -> usize {
@@ -766,19 +809,83 @@ pub fn post_generated_ideas(
                 .find(|c| c.kind == UpdateKind::Idea && c.title.eq_ignore_ascii_case(seed.title.trim()))
             {
                 card.prompt = Some(seed.prompt.trim().to_string());
+                card.idea_kind = Some(seed.kind);
+                card.details = Some(seed.details.trim().to_string()).filter(|d| !d.is_empty());
+                // New ideas pop up on the home feed. Dismissing one there keeps it here.
+                card.feed_pin = true;
             }
             posted += 1;
         }
     }
-    seal_feed_ideas(cards, pulse, now);
     posted
+}
+
+/// A skill the nightly review suggested becomes a Skill idea. Apply saves it.
+pub fn post_skill_idea(
+    cards: &mut Vec<UpdateCard>,
+    pulse: &mut FeedPulse,
+    now: u64,
+    item: &crate::review::LearnedSuggestion,
+    have_skills: &[&str],
+) -> bool {
+    let name = item.name.as_deref().unwrap_or("").trim();
+    if name.is_empty()
+        || have_skills.iter().any(|s| s.eq_ignore_ascii_case(name))
+        || cards.iter().any(|c| {
+            c.skill
+                .as_ref()
+                .and_then(|k| k.name.as_deref())
+                .is_some_and(|n| n.eq_ignore_ascii_case(name))
+        })
+    {
+        return false;
+    }
+    let title = if item.title.trim().is_empty() {
+        name.to_string()
+    } else {
+        item.title.trim().to_string()
+    };
+    let source = format!("skill-{}", crate::cabin_engine::engine_slug(name));
+    if !post_useful_idea(
+        cards,
+        pulse,
+        now,
+        &source,
+        &title,
+        &item.body,
+        &[],
+        false,
+        "",
+        crate::ideas::IdeaKind::Skill.why_label(),
+    ) {
+        return false;
+    }
+    if let Some(card) = cards
+        .iter_mut()
+        .find(|c| c.kind == UpdateKind::Idea && c.title.eq_ignore_ascii_case(&title))
+    {
+        card.idea_kind = Some(crate::ideas::IdeaKind::Skill);
+        let mut details = item.body.trim().to_string();
+        if let Some(trigger) = item.trigger.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+            details.push_str(&format!("\n\nWhen it runs: {trigger}"));
+        }
+        if let Some(steps) = item.instructions.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+            details.push_str(&format!("\n\nSteps:\n{steps}"));
+        }
+        card.details = Some(details);
+        card.skill = Some(item.clone());
+        card.feed_pin = true;
+    }
+    true
 }
 
 /// Generated ideas still live on the board (not accepted, not turned down).
 pub fn live_generated_ideas(cards: &[UpdateCard]) -> usize {
     cards
         .iter()
-        .filter(|c| c.kind == UpdateKind::Idea && c.prompt.is_some() && !c.built)
+        .filter(|c| {
+            c.kind == UpdateKind::Idea && c.prompt.is_some() && c.skill.is_none() && !c.built && !c.modified
+        })
         .count()
 }
 
@@ -837,8 +944,7 @@ fn post_useful_idea(
     {
         return false;
     }
-    let learned = source == "profile";
-    if !make_room_for_idea(cards, now, learned) {
+    if !make_room_for_idea(cards) {
         return false;
     }
     let mut card = idea_card(source, title, body, now);
@@ -853,40 +959,147 @@ fn post_useful_idea(
     true
 }
 
-fn idea_rows(cards: &[UpdateCard]) -> usize {
-    cards.iter().filter(|c| c.kind == UpdateKind::Idea).count()
-}
-
-fn lowest_untouched(cards: &[UpdateCard], now: u64, stale_only: bool) -> Option<usize> {
-    cards
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| {
-            c.kind == UpdateKind::Idea && !idea_touched(c) && !c.feed_pin && {
-                !stale_only || now.saturating_sub(c.created_at) >= IDEA_STALE_MS
-            }
-        })
-        .min_by_key(|(_, c)| idea_rank(c, now))
-        .map(|(i, _)| i)
-}
-
-/// Room under the cap, or one stale untouched card given up for something newly learned.
-fn make_room_for_idea(cards: &mut Vec<UpdateCard>, now: u64, learned: bool) -> bool {
-    let n = idea_rows(cards);
-    if learned {
-        if let Some(i) = lowest_untouched(cards, now, true) {
-            cards.remove(i);
+/// Room for one more unmodified idea: at `IDEA_BOARD_MAX` the oldest unmodified card
+/// goes. Modified cards are outside the cap and never pushed out.
+fn make_room_for_idea(cards: &mut Vec<UpdateCard>) -> bool {
+    loop {
+        let unmodified: Vec<usize> = cards
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.kind == UpdateKind::Idea && !c.modified)
+            .map(|(i, _)| i)
+            .collect();
+        if unmodified.len() < IDEA_BOARD_MAX {
             return true;
         }
+        let Some(&oldest) = unmodified.iter().min_by_key(|&&i| cards[i].created_at) else {
+            return true;
+        };
+        cards.remove(oldest);
     }
-    if n < IDEA_BOARD_MAX {
-        return true;
+}
+
+/// Ideas you have worked on. At most `IDEA_MODIFIED_MAX`.
+pub fn modified_ideas(cards: &[UpdateCard]) -> usize {
+    cards
+        .iter()
+        .filter(|c| c.kind == UpdateKind::Idea && c.modified)
+        .count()
+}
+
+/// Mark an idea as worked on (you edited its action or talked about it). It leaves
+/// the push-out queue and the home feed. Refused when `IDEA_MODIFIED_MAX` are open.
+pub fn mark_idea_modified(cards: &mut [UpdateCard], id: &str) -> Result<(), String> {
+    let open = modified_ideas(cards);
+    let Some(card) = cards
+        .iter_mut()
+        .find(|c| c.id == id && c.kind == UpdateKind::Idea)
+    else {
+        return Err("That idea is gone".into());
+    };
+    if card.modified {
+        return Ok(());
     }
-    if let Some(i) = lowest_untouched(cards, now, false) {
-        cards.remove(i);
-        return true;
+    if open >= IDEA_MODIFIED_MAX {
+        return Err(format!(
+            "{IDEA_MODIFIED_MAX} ideas are already in progress. Apply or delete one first."
+        ));
     }
-    false
+    card.modified = true;
+    card.feed_pin = false;
+    card.status = UpdateStatus::Opened;
+    Ok(())
+}
+
+/// Keep your edited action on the card until it is applied.
+pub fn set_idea_draft(cards: &mut [UpdateCard], id: &str, draft: &str) -> Result<(), String> {
+    mark_idea_modified(cards, id)?;
+    if let Some(card) = cards.iter_mut().find(|c| c.id == id) {
+        let d = draft.trim();
+        card.draft = if d.is_empty() || Some(d) == card.prompt.as_deref().map(str::trim) {
+            None
+        } else {
+            Some(d.chars().take(2000).collect())
+        };
+    }
+    Ok(())
+}
+
+/// The line the agent ends an idea-card reply with to rewrite the card's action.
+pub const CARD_ACTION_TAG: &str = "CARD_ACTION:";
+/// What the chat shows once the card took the new action.
+pub const CARD_ACTION_DONE: &str = "↳ Updated the card's action.";
+
+/// First line of the chat inside an idea card.
+pub fn idea_chat_open_line(card: &UpdateCard) -> String {
+    let what = match card.idea_type_label() {
+        "Skill" => "this skill",
+        "Automation" => "this automation",
+        _ => "this suggestion",
+    };
+    format!(
+        "Want to change {what}? I can explain it, tighten the action, or fit it to how you work. Nothing runs until you press Apply."
+    )
+}
+
+/// Hidden brief sent with every turn of an idea card's chat.
+pub fn idea_card_brief(card: &UpdateCard) -> String {
+    let mut out = format!(
+        "You are helping the person refine one idea card in GrokHub before they apply it.\nType: {}\nTitle: {}",
+        card.idea_type_label(),
+        card.title
+    );
+    if let Some(body) = card.body.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        out.push_str("\nSummary: ");
+        out.push_str(body);
+    }
+    if let Some(details) = card.details.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        out.push_str("\nDetails: ");
+        out.push_str(details);
+    }
+    let action = card.idea_action();
+    if !action.is_empty() {
+        out.push_str("\nCurrent action (what Apply does): ");
+        out.push_str(&action);
+    }
+    out.push_str(&format!(
+        "\n\nAnswer briefly. Do not carry out the action yourself; the person applies it from the card. When you both settle a change to the action, end your reply with one line that starts with {CARD_ACTION_TAG} followed by the whole new action on that line."
+    ));
+    out
+}
+
+/// Pull a `CARD_ACTION:` line out of an agent reply. Returns the reply with that
+/// line swapped for a short note, and the new action. `None` when there is none.
+pub fn take_card_action(reply: &str) -> Option<(String, String)> {
+    let mut action = None;
+    let mut kept: Vec<String> = Vec::new();
+    for line in reply.lines() {
+        let t = line.trim().trim_start_matches(['*', '`', '-', ' ']);
+        if action.is_none() {
+            if let Some(rest) = t.strip_prefix(CARD_ACTION_TAG) {
+                let a = rest.trim().trim_matches(['*', '`', '"']).trim();
+                if !a.is_empty() {
+                    action = Some(a.chars().take(2000).collect::<String>());
+                    kept.push(CARD_ACTION_DONE.to_string());
+                    continue;
+                }
+            }
+        }
+        kept.push(line.to_string());
+    }
+    let action = action?;
+    Some((kept.join("\n").trim_end().to_string(), action))
+}
+
+/// Newest ideas first, with the ones you are working on at the top.
+pub fn ideas_board(cards: &[UpdateCard]) -> Vec<UpdateCard> {
+    let mut out = visible_ideas(cards);
+    out.sort_by(|a, b| {
+        b.modified
+            .cmp(&a.modified)
+            .then(b.created_at.cmp(&a.created_at))
+    });
+    out
 }
 
 fn remember_idea_title(pulse: &mut FeedPulse, title: &str) {
@@ -1110,6 +1323,11 @@ fn blank_card(
         feed_pin: false,
         feed_kept: false,
         prompt: None,
+        idea_kind: None,
+        details: None,
+        draft: None,
+        modified: false,
+        skill: None,
     }
 }
 
@@ -1266,7 +1484,6 @@ pub fn idea_card(source_id: &str, title: &str, body: &str, created_at: u64) -> U
         body,
         created_at,
     );
-    card.expires_at = Some(created_at.saturating_add(IDEA_TTL_MS));
     card.action = Some(UpdateAction::OpenWorkboard);
     card
 }
@@ -1554,6 +1771,7 @@ mod tests {
             kind,
             title: title.into(),
             body: format!("{title} saves you the repeat ask every week."),
+            details: format!("{title}: the full story of what it does and why it helps you."),
             prompt: format!("every weekday at 9, {}", title.to_ascii_lowercase()),
         }
     }
@@ -1591,31 +1809,114 @@ mod tests {
     }
 
     #[test]
-    fn feed_pins_three_once_and_a_dismiss_does_not_backfill() {
+    fn new_ideas_pop_on_home_and_a_home_dismiss_keeps_them_on_the_board() {
         let mut cards = Vec::new();
         let mut pulse = FeedPulse::default();
         let n = post_generated_ideas(&mut cards, &mut pulse, 1_000, &seeds(), &[], "");
-        assert!(n >= 3);
-        assert_eq!(feed_ideas(&cards, 1_000).len(), 3);
-        assert_eq!(pulse.feed_slots_spent, 3);
+        assert_eq!(n, 4);
+        assert!(cards.iter().all(|c| c.feed_pin), "every new idea pops up on the home feed");
+        assert_eq!(feed_ideas(&cards, 1_000).len(), IDEA_DISCOVERY_MAX, "home shows the newest few");
         let gone = feed_ideas(&cards, 1_000)[0].id.clone();
-        let title = feed_ideas(&cards, 1_000)[0].title.clone();
         assert!(unpin_feed_idea(&mut cards, &gone));
-        assert_eq!(feed_ideas(&cards, 1_000).len(), 2);
-        assert!(cards.iter().any(|c| c.title == title && c.feed_kept && !c.feed_pin));
-        seal_feed_ideas(&mut cards, &mut pulse, 2_000);
-        assert_eq!(feed_ideas(&cards, 2_000).len(), 2);
+        assert!(cards.iter().any(|c| c.id == gone && !c.feed_pin), "dismissed from home, still on the board");
+        assert_eq!(ideas_board(&cards).len(), 4);
+        let card = cards.iter().find(|c| c.title == "Morning test run").unwrap();
+        assert_eq!(card.idea_type_label(), "Automation");
+        assert!(card.details.as_deref().unwrap().contains("full story"));
+        assert_eq!(card.idea_action(), "every weekday at 9, morning test run");
         let day = 3_600_000u64;
         let now = 10 * 24 * day;
         let old = idea_card("old", "Old untouched", "body", 0);
         let young = idea_card("young", "Young untouched", "body", now - day);
         assert!(idea_rank(&old, now) < idea_rank(&young, now));
-        let touched = {
-            let mut c = young.clone();
-            c.discuss_thread = Some("thr".into());
-            c
+    }
+
+    fn many(n: usize, start: u64) -> Vec<crate::ideas::IdeaSeed> {
+        (0..n)
+            .map(|i| seed(crate::ideas::IdeaKind::Try, &format!("Idea number {:02}", start as usize + i)))
+            .collect()
+    }
+
+    #[test]
+    fn board_keeps_fifteen_and_newer_cards_push_out_the_oldest() {
+        let mut cards = Vec::new();
+        let mut pulse = FeedPulse::default();
+        for (i, s) in many(IDEA_BOARD_MAX, 0).iter().enumerate() {
+            post_generated_ideas(&mut cards, &mut pulse, 1_000 + i as u64, std::slice::from_ref(s), &[], "");
+        }
+        assert_eq!(ideas_board(&cards).len(), IDEA_BOARD_MAX);
+        let oldest = cards.iter().min_by_key(|c| c.created_at).unwrap().id.clone();
+        unpin_feed_idea(&mut cards, &oldest);
+        post_generated_ideas(&mut cards, &mut pulse, 5_000, &many(1, 50), &[], "");
+        assert_eq!(ideas_board(&cards).len(), IDEA_BOARD_MAX, "still fifteen");
+        assert!(!cards.iter().any(|c| c.id == oldest), "the oldest was pushed out");
+        assert!(ideas_board(&cards)[0].title == "Idea number 50", "newest first");
+        assert!(expire_ideas(&mut cards, u64::MAX) == 0, "ideas do not time out");
+    }
+
+    #[test]
+    fn modified_ideas_stay_outside_the_cap_up_to_ten() {
+        let mut cards = Vec::new();
+        let mut pulse = FeedPulse::default();
+        for (i, s) in many(IDEA_BOARD_MAX, 0).iter().enumerate() {
+            post_generated_ideas(&mut cards, &mut pulse, 1_000 + i as u64, std::slice::from_ref(s), &[], "");
+        }
+        let oldest = cards.iter().min_by_key(|c| c.created_at).unwrap().id.clone();
+        set_idea_draft(&mut cards, &oldest, "every day at 7, do it my way").unwrap();
+        let card = cards.iter().find(|c| c.id == oldest).unwrap();
+        assert!(card.modified && !card.feed_pin);
+        assert_eq!(card.idea_action(), "every day at 7, do it my way");
+        for i in 0..30u64 {
+            post_generated_ideas(&mut cards, &mut pulse, 10_000 + i, &many(1, 100 + i), &[], "");
+        }
+        assert!(cards.iter().any(|c| c.id == oldest), "a modified card is never pushed out");
+        assert_eq!(
+            cards.iter().filter(|c| c.kind == UpdateKind::Idea && !c.modified).count(),
+            IDEA_BOARD_MAX,
+            "fifteen unmodified beside it"
+        );
+        assert_eq!(ideas_board(&cards)[0].id, oldest, "the one you work on sits at the top");
+        let ids: Vec<String> = cards
+            .iter()
+            .filter(|c| !c.modified)
+            .take(IDEA_MODIFIED_MAX)
+            .map(|c| c.id.clone())
+            .collect();
+        for id in ids.iter().take(IDEA_MODIFIED_MAX - 1) {
+            mark_idea_modified(&mut cards, id).unwrap();
+        }
+        assert_eq!(modified_ideas(&cards), IDEA_MODIFIED_MAX);
+        let extra = cards.iter().find(|c| !c.modified).unwrap().id.clone();
+        assert!(mark_idea_modified(&mut cards, &extra).unwrap_err().contains("Apply or delete"));
+        assert!(mark_idea_modified(&mut cards, &oldest).is_ok(), "an open one stays editable");
+        set_idea_draft(&mut cards, &oldest, "  ").unwrap();
+        assert!(cards.iter().find(|c| c.id == oldest).unwrap().draft.is_none(), "blank goes back to the original");
+    }
+
+    #[test]
+    fn review_skills_become_skill_ideas_once() {
+        use crate::review::{LearnedSuggestion, SuggestionKind};
+        let item = LearnedSuggestion {
+            kind: SuggestionKind::Skill,
+            title: "Release checklist".into(),
+            body: "Bumps the version and tags the release in order.".into(),
+            seed: None,
+            name: Some("release-checklist".into()),
+            trigger: Some("cutting a release".into()),
+            instructions: Some("1. bump\n2. tag".into()),
+            provider: None,
+            tool: None,
         };
-        assert!(idea_rank(&touched, now) > idea_rank(&young, now));
+        let mut cards = Vec::new();
+        let mut pulse = FeedPulse::default();
+        assert!(post_skill_idea(&mut cards, &mut pulse, 10, &item, &[]));
+        assert!(!post_skill_idea(&mut cards, &mut pulse, 11, &item, &[]), "once");
+        let c = &cards[0];
+        assert_eq!(c.idea_type_label(), "Skill");
+        assert!(c.details.as_deref().unwrap().contains("Steps:\n1. bump"));
+        assert!(c.feed_pin);
+        let mut fresh = Vec::new();
+        assert!(!post_skill_idea(&mut fresh, &mut pulse, 12, &item, &["release-checklist"]), "you already have it");
     }
 
     #[test]
@@ -1774,5 +2075,30 @@ mod tests {
         assert!(blank.body.is_some());
         let done = automation_done_card("a1", "Board summary", "ok", 5);
         assert_ne!(c.id, done.id, "a failure must not replace the done card");
+    }
+
+    #[test]
+    fn card_action_line_rewrites_the_action_once() {
+        let reply = "Sure, weekdays only.\n\n**CARD_ACTION: every weekday at 8 summarize my inbox**";
+        let (clean, action) = take_card_action(reply).expect("action");
+        assert_eq!(action, "every weekday at 8 summarize my inbox");
+        assert!(clean.contains("weekdays only"));
+        assert!(clean.contains(CARD_ACTION_DONE));
+        assert!(!clean.contains(CARD_ACTION_TAG));
+        assert!(take_card_action(&clean).is_none(), "second pass finds nothing");
+        assert!(take_card_action("CARD_ACTION:   ").is_none());
+    }
+
+    #[test]
+    fn idea_card_brief_names_type_action_and_tag() {
+        let mut c = idea_card("i1", "Inbox sweep", "Sort mail at 8", 1);
+        c.idea_kind = Some(crate::ideas::IdeaKind::Automation);
+        c.prompt = Some("every day at 8 sort my inbox".into());
+        c.draft = Some("every weekday at 8 sort my inbox".into());
+        let brief = idea_card_brief(&c);
+        assert!(brief.contains("Type: Automation"));
+        assert!(brief.contains("every weekday at 8 sort my inbox"));
+        assert!(brief.contains(CARD_ACTION_TAG));
+        assert!(idea_chat_open_line(&c).contains("this automation"));
     }
 }
