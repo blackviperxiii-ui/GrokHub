@@ -392,8 +392,10 @@ pub use trajectory::{
     TRAJECTORY_MAX_BYTES,
 };
 pub use turn_timeline::{
-    append_say, append_thought, append_tool, split_at_last_sentence, views_up_to_last_user,
-    LiveBlock, LiveKind,
+    append_say, append_thought, append_tool, chunk_seam, decode_tool_rows, decode_turn,
+    encode_turn, last_say, split_at_last_sentence, tool_display_title, tool_group_label,
+    tool_status_failed, tool_status_running, turn_needs_timeline, turn_says, views_up_to_last_user,
+    LiveBlock, LiveKind, ToolRow, TurnPart,
 };
 pub use update::{
     cabin_overlay_step, cabin_update_notice, cabin_version_newer, cli_alpha_is_newer,

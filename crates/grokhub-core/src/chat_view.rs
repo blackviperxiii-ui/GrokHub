@@ -263,11 +263,21 @@ pub fn merge_thinking_capped(thought: &str, content: &str, cap: usize) -> String
         push_capped(&mut out, content, cap);
         return out;
     }
+    // The first blank line ends the thought, so a multi-paragraph thought
+    // must not carry one or its later paragraphs land in the reply bubble.
+    let thought = one_paragraph(thought);
     push_capped(&mut out, "THINKING:\n", cap);
-    push_capped(&mut out, thought, cap);
+    push_capped(&mut out, &thought, cap);
     push_capped(&mut out, "\n\n", cap);
     push_capped(&mut out, content, cap);
     out
+}
+
+fn one_paragraph(text: &str) -> String {
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn push_capped(buf: &mut String, part: &str, cap: usize) {
@@ -287,6 +297,9 @@ fn push_capped(buf: &mut String, part: &str, cap: usize) {
 }
 
 pub fn strip_thinking(content: &str) -> String {
+    if let Some(says) = crate::turn_timeline::turn_says(content) {
+        return says;
+    }
     let (thought, rest) = split_thought(content);
     if thought.is_empty() {
         rest.trim().to_string()
@@ -355,14 +368,18 @@ pub fn refresh_last_stretch(views: &mut Vec<ChatView>, messages: &[(&str, &str)]
 }
 
 fn hop_is_work(rest: &str) -> bool {
-    rest.lines().any(|line| {
-        let t = line.trim();
-        t.starts_with("HOST_CMD")
-            || t.starts_with("COMPUTER_CMD")
-            || t.starts_with("CONNECTOR_CMD")
-            || t.starts_with("IMAGINE:")
-            || t.starts_with("IMAGINE_PROMPT:")
-    })
+    crate::turn_timeline::hop_is_work(rest)
+}
+
+/// The last reply in a timeline is a work hop, so it is not the answer and a
+/// pending reply stays pending until the stretch ends or a real reply lands.
+fn timeline_ends_on_work(parts: &[crate::turn_timeline::TurnPart]) -> bool {
+    for part in parts.iter().rev() {
+        if let crate::turn_timeline::TurnPart::Say(body) = part {
+            return hop_is_work(view_text(body));
+        }
+    }
+    false
 }
 
 fn push_thought(out: &mut Vec<ChatView>, body: String) {
@@ -386,6 +403,22 @@ fn emit_stretch(out: &mut Vec<ChatView>, stretch: &[(&str, &str)], ask: &str) {
         if role == "user" && is_skill_saved_mark(content) {
             saved_skill = true;
             continue;
+        }
+        // A timeline caps each part, not the whole turn, so a long run of
+        // thoughts and tools cannot cut off the reply at its end.
+        if role == "assistant" {
+            if let Some(parts) = crate::turn_timeline::decode_turn(content) {
+                if timeline_ends_on_work(&parts) {
+                    last_was_work = true;
+                } else {
+                    if let Some(prev) = last_final.take() {
+                        push_thought(out, prev);
+                    }
+                    last_was_work = false;
+                }
+                emit_turn(out, parts);
+                continue;
+            }
         }
         let content = view_text(content);
         if role == "user" && teach {
@@ -443,6 +476,57 @@ fn emit_stretch(out: &mut Vec<ChatView>, stretch: &[(&str, &str)], ask: &str) {
             body: SKILL_SAVED_NOTE.into(),
         });
     }
+}
+
+/// A timeline turn paints the way it streamed: each thought, each run of
+/// tools as one row, and each reply as its own bubble.
+fn emit_turn(out: &mut Vec<ChatView>, parts: Vec<crate::turn_timeline::TurnPart>) {
+    use crate::turn_timeline::{encode_tool_rows, tool_group_label, TurnPart};
+    let mut tools = Vec::new();
+    let flush = |out: &mut Vec<ChatView>, tools: &mut Vec<crate::turn_timeline::ToolRow>| {
+        if tools.is_empty() {
+            return;
+        }
+        out.push(ChatView {
+            kind: ChatKind::Tool,
+            title: tool_group_label(
+                tools
+                    .iter()
+                    .map(|r| (r.title.as_str(), r.status.as_str(), r.detail.as_str())),
+            ),
+            body: encode_tool_rows(tools),
+        });
+        tools.clear();
+    };
+    for part in parts {
+        match part {
+            TurnPart::Tool(row) => tools.push(row),
+            TurnPart::Thought(body) => {
+                let thought = scrub_thought(view_text(&body));
+                if !thought.is_empty() {
+                    flush(out, &mut tools);
+                    push_thought(out, thought);
+                }
+            }
+            TurnPart::Say(body) => {
+                let raw = view_text(&body);
+                let prose = visible_assistant(raw);
+                if !prose.is_empty() {
+                    flush(out, &mut tools);
+                    if hop_is_work(raw) {
+                        push_thought(out, prose);
+                    } else {
+                        out.push(ChatView {
+                            kind: ChatKind::Assistant,
+                            title: String::new(),
+                            body: prose,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    flush(out, &mut tools);
 }
 
 fn is_protocol_line(line: &str) -> bool {
@@ -1660,5 +1744,132 @@ mod tests {
         assert_eq!(chat_find_label(1, 5, "x"), "2 of 5");
         assert_eq!(chat_find_label(0, 0, "x"), "No matches");
         assert_eq!(chat_find_label(0, 0, " "), "");
+    }
+
+    #[test]
+    fn multi_paragraph_thought_stays_out_of_the_reply() {
+        let merged = merge_thinking("Plan one.\n\nPlan two.\n\nPlan three.", "Here is the report.");
+        assert_eq!(strip_thinking(&merged), "Here is the report.");
+        let views = visible_chat(&[
+            ("user".into(), "check for bugs".into()),
+            ("assistant".into(), merged),
+        ]);
+        let reply = views.iter().find(|v| v.kind == ChatKind::Assistant).expect("reply");
+        assert_eq!(reply.body, "Here is the report.");
+        assert!(views
+            .iter()
+            .any(|v| v.kind == ChatKind::Thought && v.body.contains("Plan three")));
+    }
+
+    #[test]
+    fn finished_turn_keeps_each_reply_and_tool_run_apart() {
+        use crate::turn_timeline::{append_say, append_thought, append_tool, encode_turn};
+        let mut b = Vec::new();
+        append_thought(&mut b, "Rules say be brief.");
+        append_say(&mut b, "I'll find the app, then write up what I hit.");
+        append_tool(&mut b, "t1", "grep", "completed", "3 matches");
+        append_tool(&mut b, "t2", "read_file", "completed", "");
+        append_thought(&mut b, "The window is up.");
+        append_tool(&mut b, "t3", "screenshot", "completed", "");
+        append_say(&mut b, "Walked GrokHub.\nWORK_PIN: bug pass");
+        let views = visible_chat(&[
+            ("user".into(), "check yourself for bugs".into()),
+            ("assistant".into(), encode_turn(&b)),
+        ]);
+        let kinds: Vec<ChatKind> = views.iter().map(|v| v.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                ChatKind::User,
+                ChatKind::Thought,
+                ChatKind::Assistant,
+                ChatKind::Tool,
+                ChatKind::Thought,
+                ChatKind::Tool,
+                ChatKind::Assistant,
+            ]
+        );
+        assert_eq!(views[2].body, "I'll find the app, then write up what I hit.");
+        assert_eq!(views[3].title, "2 steps · Grep, Read file");
+        assert_eq!(views[5].title, "Screenshot");
+        assert_eq!(views[6].body, "Walked GrokHub.");
+        assert_eq!(
+            assistant_prose(&encode_turn(&b)),
+            "I'll find the app, then write up what I hit.\n\nWalked GrokHub."
+        );
+    }
+
+    #[test]
+    fn timeline_imagine_hop_stays_off_the_assistant_bubble() {
+        use crate::turn_timeline::{append_say, append_thought, encode_turn};
+        let mut b = Vec::new();
+        append_thought(&mut b, "Painting a still.");
+        append_say(&mut b, "IMAGINE: a cabin at night\nHOST_CMD: true");
+        let v = visible_chat(&[("assistant".into(), encode_turn(&b))]);
+        assert!(
+            !v.iter().any(|x| x.kind == ChatKind::Assistant),
+            "a work hop is not the answer: {v:?}"
+        );
+        assert!(
+            !v.iter().any(|x| x.body.contains("HOST_CMD")),
+            "protocol lines stay off the pane: {v:?}"
+        );
+        assert!(v.iter().any(|x| x.kind == ChatKind::Thought && x.body.contains("IMAGINE:")));
+        assert!(!v.iter().any(|x| x.body == "true"));
+    }
+
+    #[test]
+    fn timeline_work_hop_then_final_reply_is_one_bubble() {
+        use crate::turn_timeline::{append_say, append_thought, encode_turn};
+        let mut hop = Vec::new();
+        append_thought(&mut hop, "Need a snapshot.");
+        append_say(&mut hop, "I'll look.\nHOST_CMD: uname -a");
+        let v = visible_chat(&[
+            ("user".into(), "check the machine".into()),
+            ("assistant".into(), encode_turn(&hop)),
+            (
+                "user".into(),
+                "HOST_RESULT (facts only):\n$ uname -a\nLinux cabin 6.12\nexit 0".into(),
+            ),
+            ("assistant".into(), "You're on Linux cabin.".into()),
+        ]);
+        let replies: Vec<&str> = v
+            .iter()
+            .filter(|x| x.kind == ChatKind::Assistant)
+            .map(|x| x.body.as_str())
+            .collect();
+        assert_eq!(replies, vec!["You're on Linux cabin."]);
+        assert!(v.iter().any(|x| x.kind == ChatKind::Thought && x.body == "I'll look."));
+        assert!(!v.iter().any(|x| x.body.contains("HOST_CMD")));
+        assert!(!v.iter().any(|x| x.body.contains("HOST_RESULT")));
+        assert!(!v.iter().any(|x| x.body.contains("uname")));
+    }
+
+    #[test]
+    fn timeline_work_hop_folds_a_pending_reply_like_a_plain_hop() {
+        use crate::turn_timeline::{append_say, append_thought, encode_turn};
+        let mut hop = Vec::new();
+        append_thought(&mut hop, "Need a snapshot.");
+        append_say(&mut hop, "I'll look.\nHOST_CMD: uname -a");
+        let v = visible_chat(&[
+            ("user".into(), "check the box".into()),
+            ("assistant".into(), "Checking the system.".into()),
+            ("assistant".into(), encode_turn(&hop)),
+        ]);
+        assert_eq!(
+            kinds(&v),
+            vec![
+                ChatKind::User,
+                ChatKind::Thought,
+                ChatKind::Thought,
+                ChatKind::Thought,
+            ]
+        );
+        assert_eq!(v[1].body, "Need a snapshot.");
+        assert_eq!(v[2].body, "I'll look.");
+        assert_eq!(v[3].body, "Checking the system.");
+        assert!(!v.iter().any(|x| x.kind == ChatKind::Assistant));
+        assert!(!v.iter().any(|x| x.body.contains("HOST_CMD")));
+        assert!(!v.iter().any(|x| x.body.contains("uname")));
     }
 }
