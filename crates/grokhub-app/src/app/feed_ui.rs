@@ -228,7 +228,7 @@ impl Cabin {
         self.persist_updates();
     }
 
-    fn quiet_now(&self) -> bool {
+    pub(super) fn quiet_now(&self) -> bool {
         let clock = Self::local_clock();
         quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end)
     }

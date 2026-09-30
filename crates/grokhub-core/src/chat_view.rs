@@ -752,6 +752,44 @@ pub fn quote_for_reply(body: &str) -> String {
     out
 }
 
+/// Rows whose text holds `query`, ignoring case. A blank query finds nothing.
+pub fn chat_find_rows<'a>(bodies: impl IntoIterator<Item = &'a str>, query: &str) -> Vec<usize> {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+    bodies
+        .into_iter()
+        .enumerate()
+        .filter(|(_, body)| body.to_lowercase().contains(&needle))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Step through `len` hits. Wraps at both ends.
+pub fn chat_find_step(pick: usize, len: usize, forward: bool) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let pick = pick.min(len - 1);
+    if forward {
+        (pick + 1) % len
+    } else {
+        (pick + len - 1) % len
+    }
+}
+
+/// Count beside the find box: "2 of 5", "No matches", or nothing while blank.
+pub fn chat_find_label(pick: usize, len: usize, query: &str) -> String {
+    if query.trim().is_empty() {
+        String::new()
+    } else if len == 0 {
+        "No matches".into()
+    } else {
+        format!("{} of {len}", pick.min(len - 1) + 1)
+    }
+}
+
 #[cfg(test)]
 mod tail_tests {
     use super::*;
@@ -1595,5 +1633,26 @@ mod tests {
             assistant_prose("SLASH_RESULT:\nGrok 4.7 — chat"),
             "Grok 4.7 — chat"
         );
+    }
+
+    #[test]
+    fn chat_find_rows_ignore_case_and_blank_queries() {
+        let rows = ["Fix the Build", "nothing here", "build again", "BUILD"];
+        assert_eq!(chat_find_rows(rows, "build"), vec![0, 2, 3]);
+        assert_eq!(chat_find_rows(rows, "  "), Vec::<usize>::new());
+        assert_eq!(chat_find_rows(rows, "zzz"), Vec::<usize>::new());
+        assert_eq!(chat_find_rows(["Émile"], "émile"), vec![0]);
+    }
+
+    #[test]
+    fn chat_find_step_wraps_and_label_counts_from_one() {
+        assert_eq!(chat_find_step(0, 3, true), 1);
+        assert_eq!(chat_find_step(2, 3, true), 0);
+        assert_eq!(chat_find_step(0, 3, false), 2);
+        assert_eq!(chat_find_step(9, 3, false), 1);
+        assert_eq!(chat_find_step(0, 0, true), 0);
+        assert_eq!(chat_find_label(1, 5, "x"), "2 of 5");
+        assert_eq!(chat_find_label(0, 0, "x"), "No matches");
+        assert_eq!(chat_find_label(0, 0, " "), "");
     }
 }

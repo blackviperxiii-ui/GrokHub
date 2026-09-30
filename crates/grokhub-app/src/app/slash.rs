@@ -406,7 +406,13 @@ impl Cabin {
             Slash::Import => self.import_openclaw(),
             Slash::Consult(q) => self.run_consult(q),
             Slash::Usage => {
-                let cabin = usage_line(&self.usage);
+                let mut cabin = usage_line(&self.usage);
+                if self.cfg.daily_token_budget > 0 {
+                    cabin = format!(
+                        "{cabin} · budget {}",
+                        grokhub_core::budget_line(&self.usage, self.cfg.daily_token_budget)
+                    );
+                }
                 let grok = grok_usage_line(&self.grok_usage);
                 self.status = if grok.is_empty() {
                     cabin
@@ -717,6 +723,11 @@ impl Cabin {
                     self.status = format!("Wrote {status_path}");
                 }
             }
+            Slash::ExportAs(fmt) => match grokhub_core::ChatExport::parse(&fmt) {
+                Some(grokhub_core::ChatExport::Markdown) => self.run_slash(Slash::Export),
+                Some(format) => self.export_thread_as(format),
+                None => self.status = grokhub_core::EXPORT_FORMATS_HINT.into(),
+            },
             Slash::Recall(q) => {
                 if self.recall_rx.is_some() {
                     self.status = "Recalling…".into();
@@ -845,5 +856,43 @@ impl Cabin {
         if let Some(s) = parse_slash(line) {
             self.run_slash(s);
         }
+    }
+}
+
+impl Cabin {
+    /// `/export html` and `/export json` land next to `export.md`.
+    pub(super) fn export_dest(&self, file: &str) -> std::path::PathBuf {
+        if self.cfg.project_dir.trim().is_empty() {
+            config::config_dir().join(file)
+        } else {
+            std::path::PathBuf::from(expand_home(&self.cfg.project_dir)).join(file)
+        }
+    }
+
+    /// Flush the pane, then format and write off the UI thread.
+    pub(super) fn export_thread_as(&mut self, format: grokhub_core::ChatExport) {
+        self.persist();
+        let Some(t) = self.threads.get(self.thread_idx).cloned() else {
+            self.status = "Nothing to export".into();
+            return;
+        };
+        let dest = self.export_dest(format.file_name());
+        let status_path = dest.display().to_string();
+        let footer = format!("Exported from GrokHub {}", env!("CARGO_PKG_VERSION"));
+        let now = now_ms();
+        std::thread::spawn(move || {
+            let msgs = t.messages.iter().map(|m| (m.0.as_str(), m.1.as_str()));
+            let body = match format {
+                grokhub_core::ChatExport::Html => {
+                    grokhub_core::chat_export_html(&t.title, msgs, &footer)
+                }
+                grokhub_core::ChatExport::Json => {
+                    grokhub_core::chat_export_json(&t.title, &t.id, msgs, now)
+                }
+                grokhub_core::ChatExport::Markdown => threads::export_markdown(&t),
+            };
+            let _ = std::fs::write(&dest, body);
+        });
+        self.status = format!("Wrote {status_path}");
     }
 }

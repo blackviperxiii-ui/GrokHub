@@ -18,6 +18,7 @@ pub mod context;
 pub mod desktop_entry;
 pub mod diagnostics;
 pub mod doctor;
+pub mod export;
 pub mod feel;
 pub mod frame;
 pub mod goal;
@@ -34,6 +35,7 @@ pub mod hygiene;
 pub mod imagine;
 pub mod inhabit;
 pub mod learning;
+pub mod md;
 pub mod models;
 pub mod oauth;
 pub mod openclaw;
@@ -79,6 +81,8 @@ pub use attach::{
     IMAGE_FILE_CAP, IMAGE_PIXEL_CAP, MEDIA_FILE_CAP, TEXT_FILE_CAP,
 };
 pub use automation::{
+    automation_health_line, mark_automation_failed, mark_automation_ok, mark_automation_stopped,
+    AutoHealth, AutoOutcome,
     automation_blocked_by_policy, automation_schedule_label, automation_summary_line,
     chat_may_save_automation, compute_next_run, due_automations, ensure_automation_schedule,
     mark_automation_ran, mark_automation_skipped, night_check_command, night_check_exit_code,
@@ -115,6 +119,13 @@ pub use chat::{
     responses_url, route_auto_mode, settings_pin_blocks_auto, should_failover_status,
     CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, DEFAULT_MODEL, REASONING_EFFORTS, XAI_BASE,
 };
+pub use export::{
+    chat_export_html, chat_export_json, html_escape, md_to_html, ChatExport, EXPORT_FORMATS_HINT,
+};
+pub use md::{
+    code_tokens, md_blocks, md_link_ok, md_plain, md_spans, md_table_cells, md_wants_full_width,
+    CodeTok, MdAlign, MdBlock, MdSpan,
+};
 pub use chat_bubble::{
     bubble_max_width, bubble_outer_height, bubble_outer_width, bubble_wrap_width,
     clamp_bubble_outer, clamp_row_width, BUBBLE_MAX_FRAC, BUBBLE_PAD_X, BUBBLE_PAD_Y,
@@ -129,6 +140,7 @@ pub use chat_job::{
     ChatSendKind,
 };
 pub use chat_view::{
+    chat_find_label, chat_find_rows, chat_find_step,
     apply_session_thought_act, assistant_prose, cluster_gap, effective_thought_fold,
     is_skill_saved_mark, is_workload_user, merge_thinking, merge_thinking_capped, quote_for_reply,
     refresh_last_stretch, scrolled_off_tail, scrub_thought, session_thoughts_start_collapsed,
@@ -397,7 +409,11 @@ pub use update::{
     CLI_ALPHA_VERSION_FALLBACK, CLI_ALPHA_VERSION_URL, GITHUB_LATEST_API, GITHUB_REMOTE_URL,
     ORIGIN_REMOTE_URL, UPDATE_CHECK_EVERY,
 };
-pub use usage::{add_tokens, bump_usage, roll_usage_day, token_delta, usage_line, UsageDay};
+pub use usage::{
+    add_tokens, budget_holds_scheduled, budget_level, budget_line, bump_usage, roll_usage_day,
+    take_budget_note, token_budget_label, token_delta, tokens_today, usage_line, BudgetLevel,
+    UsageDay, BUDGET_NEAR_PCT, TOKEN_BUDGETS,
+};
 pub use verify::{
     can_mark_done, has_goal_complete, has_verify_ok, interpret_verify, verify_ok_after_user_turn,
     verify_script_path, VerifyResult,
@@ -423,6 +439,7 @@ pub use windshield::{
     windshield_browser_line, windshield_prompt, AtspiRow, PendingStep, WindshieldFrame,
 };
 pub use update_feed::{
+    automation_failed_card,
     archive_digest, archived_digests, automate_offer_card, automation_done_card, card_matches,
     digest_card, digest_topic_refused, discuss_context, dismiss_idea, dismiss_update, expire_ideas,
     feed_ideas, feed_visible, fill_useful_ideas, hold_if_quiet, home_feed_n, idea_card, idea_dialogue,

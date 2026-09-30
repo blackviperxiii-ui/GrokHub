@@ -623,6 +623,7 @@ impl Cabin {
         self.persist();
         if !self.running {
             self.scheduled_perm = false;
+            self.settle_auto_run(AutoEnd::Ok, origin.as_deref());
             self.finish_hub_dispatch(&text, hub_dispatch_ok(&text));
         }
         let vis = self.visible_thread_id();

@@ -55,6 +55,7 @@ impl Cabin {
                         self.status = format!("Queued ({})", self.followup_queue.len());
                         return;
                     }
+                    self.settle_auto_run(AutoEnd::Stopped, None);
                     self.halt_in_flight();
                     self.finish_hub_dispatch("Interrupted", false);
                 }
