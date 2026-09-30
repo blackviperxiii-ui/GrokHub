@@ -9248,6 +9248,11 @@ fn discuss_card_opens_one_local_chat() {
         feed_pin: false,
         feed_kept: false,
         prompt: None,
+        idea_kind: None,
+        details: None,
+        draft: None,
+        modified: false,
+        skill: None,
     });
     cabin.discuss_card("idea-harbor");
     let open_id = cabin
@@ -12422,7 +12427,7 @@ fn composer_action_chips_stay_off_a_run() {
 
 // Landed from PR #159.
 #[test]
-fn housekeep_expires_ideas_after_two_weeks() {
+fn housekeep_keeps_ideas_until_newer_ones_push_them_out() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("idea-expiry");
     let _ = std::fs::remove_dir_all(&root);
@@ -12461,8 +12466,8 @@ fn housekeep_expires_ideas_after_two_weeks() {
         "housekeep expiry is the age path, not a dismiss"
     );
     assert!(
-        !cabin.updates.iter().any(|card| card.id == stale.id),
-        "an idea older than about two weeks is gone after housekeep"
+        cabin.updates.iter().any(|card| card.id == stale.id),
+        "ideas no longer time out; a newer card pushes out the oldest instead"
     );
     assert!(
         cabin.updates.iter().any(|card| card.id == fresh.id),
@@ -13225,6 +13230,11 @@ fn build_idea_files_one_todo() {
         feed_pin: false,
         feed_kept: false,
         prompt: None,
+        idea_kind: None,
+        details: None,
+        draft: None,
+        modified: false,
+        skill: None,
     }];
 
     cabin.build_idea("nope");
@@ -13361,6 +13371,11 @@ fn feed_card(id: &str, kind: grokhub_core::UpdateKind, held: bool) -> grokhub_co
         feed_pin: false,
         feed_kept: false,
         prompt: None,
+        idea_kind: None,
+        details: None,
+        draft: None,
+        modified: false,
+        skill: None,
     }
 }
 
@@ -13456,6 +13471,11 @@ fn offer_card(id: &str, title: &str, status: UpdateStatus) -> UpdateCard {
         feed_pin: false,
         feed_kept: false,
         prompt: None,
+        idea_kind: None,
+        details: None,
+        draft: None,
+        modified: false,
+        skill: None,
     }
 }
 
@@ -15763,7 +15783,7 @@ fn ideas_come_from_the_model_with_their_work_and_post_with_a_prompt() {
     );
     let (prompt, sources, _) = app.idea_request();
     assert!(prompt.contains("- bump the AUR pkgver for the release"), "{prompt}");
-    assert!(prompt.contains("IDEA: kind | title | why it helps | what to send"));
+    assert!(prompt.contains("IDEA: kind | title | short description | details | what to send"));
 
     let (tx, rx) = std::sync::mpsc::channel();
     app.ideas_rx = Some((rx, sources, Vec::new()));

@@ -124,7 +124,7 @@ pub use export::{
     chat_export_html, chat_export_json, html_escape, md_to_html, ChatExport, EXPORT_FORMATS_HINT,
 };
 pub use ideas::{
-    idea_prompt, ideas_refresh_due, is_template_idea_title, parse_ideas, IdeaContext, IdeaKind, IdeaSeed,
+    idea_prompt, ideas_refresh_due, SHORT_CHARS as IDEA_SHORT_CHARS, is_template_idea_title, parse_ideas, IdeaContext, IdeaKind, IdeaSeed,
     IDEAS_LIVE_ENOUGH, IDEAS_PER_RUN, IDEAS_REFRESH_MS, IDEA_SOURCE_GENERATED,
 };
 pub use md::{
@@ -445,6 +445,8 @@ pub use windshield::{
     windshield_browser_line, windshield_prompt, AtspiRow, PendingStep, WindshieldFrame,
 };
 pub use update_feed::{
+    ideas_board, mark_idea_modified, modified_ideas, post_skill_idea, set_idea_draft,
+    IDEA_MODIFIED_MAX,
     live_generated_ideas, post_generated_ideas, purge_template_ideas,
     automation_failed_card,
     archive_digest, archived_digests, automate_offer_card, automation_done_card, card_matches,

@@ -6,6 +6,8 @@
 //! work. Ideas now come from one model call over their memory, recent asks, open
 //! cards, and what they already run, and every line is checked before it posts.
 
+use serde::{Deserialize, Serialize};
+
 use crate::redact::is_plain_text;
 use crate::situation::echoes_source;
 
@@ -15,10 +17,13 @@ pub const IDEAS_PER_RUN: usize = 4;
 pub const IDEAS_REFRESH_MS: u64 = 6 * 60 * 60 * 1000;
 /// With this many live generated ideas on the board, do not ask for more.
 pub const IDEAS_LIVE_ENOUGH: usize = 4;
+/// The short line under a card's title.
+pub const SHORT_CHARS: usize = 110;
 /// Source id on cards the model wrote.
 pub const IDEA_SOURCE_GENERATED: &str = "gen";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum IdeaKind {
     /// Runs on a clock or an interval.
     Automation,
@@ -41,6 +46,16 @@ impl IdeaKind {
         }
     }
 
+    /// The type shown first on a card: Automation, Skill, or Suggestion.
+    /// A reminder is a scheduled nudge, so it reads as an automation.
+    pub fn type_label(self) -> &'static str {
+        match self {
+            Self::Automation | Self::Reminder => "Automation",
+            Self::Skill => "Skill",
+            Self::Try => "Suggestion",
+        }
+    }
+
     /// Short line shown as the card's "why this" label.
     pub fn why_label(self) -> &'static str {
         match self {
@@ -56,8 +71,10 @@ impl IdeaKind {
 pub struct IdeaSeed {
     pub kind: IdeaKind,
     pub title: String,
-    /// Why it helps, in second person.
+    /// One short line under the title.
     pub body: String,
+    /// The full explanation shown when the card opens.
+    pub details: String,
     /// The exact message to send the cabin to do it.
     pub prompt: String,
 }
@@ -121,8 +138,9 @@ pub fn idea_prompt(ctx: &IdeaContext) -> String {
          tool, or routine it is about. Prefer an automation that removes an ask they keep repeating, a reminder \
          tied to real work, a skill for a procedure they redo, or one thing to try now that moves their work forward."
             .into(),
-        "Good: \"Morning test run | Every weekday at 8, run the GrokHub tests and post any failure to your feed, \
-         so you start on red instead of finding it later. | every weekday at 8, run cargo test in ~/GrokHub and \
+        "Good: \"automation | Morning test run | Your GrokHub tests run before you sit down. | Every weekday at 8 \
+         the cabin runs the GrokHub tests and posts any failure to your feed, so you start on red instead of \
+         finding it later. Needs the repo at ~/GrokHub. | every weekday at 8, run cargo test in ~/GrokHub and \
          summarize failures\"."
             .into(),
         "Bad: generic advice, anything about chips, restating a sentence they typed, \"Set up: ...\", \"A next step\", \
@@ -130,10 +148,11 @@ pub fn idea_prompt(ctx: &IdeaContext) -> String {
             .into(),
         String::new(),
         "Output only lines in exactly this form, nothing else:".into(),
-        "IDEA: kind | title | why it helps | what to send".into(),
+        "IDEA: kind | title | short description | details | what to send".into(),
         "- kind: automation, reminder, skill, or try".into(),
         "- title: at most 60 characters, names the help".into(),
-        "- why it helps: one or two sentences to them (\"you\"), at most 180 characters".into(),
+        "- short description: one line to them (\"you\"), at most 90 characters".into(),
+        "- details: two to four sentences: what it does, why it helps them, and what it needs, at most 500 characters".into(),
         "- what to send: the exact message to send GrokHub to do it. An automation starts with its schedule."
             .into(),
         "Do not copy their sentences. Do not repeat anything listed under Existing or Turned down. \
@@ -220,23 +239,36 @@ pub fn parse_ideas(raw: &str, sources: &[String], taken: &[String]) -> Vec<IdeaS
             Some(head) if head.eq_ignore_ascii_case("idea:") => &line[5..],
             _ => continue,
         };
-        let parts: Vec<&str> = rest.splitn(4, '|').map(str::trim).collect();
-        if parts.len() < 4 {
-            continue;
-        }
-        let Some(kind) = IdeaKind::parse(parts[0]) else {
+        let parts: Vec<&str> = rest.splitn(5, '|').map(str::trim).collect();
+        // Five fields; an older four-field reply has no separate details.
+        let (kind, title, body, details, prompt) = match parts.as_slice() {
+            [k, t, b, d, p] => (*k, *t, *b, *d, *p),
+            [k, t, b, p] => (*k, *t, *b, *b, *p),
+            _ => continue,
+        };
+        let Some(kind) = IdeaKind::parse(kind) else {
             continue;
         };
-        let title = parts[1].trim_matches(['"', '\'', '*']).trim().to_string();
-        let body = parts[2].trim_matches(['"', '\'']).trim().to_string();
-        let prompt = parts[3].trim_matches(['"', '\'', '`']).trim().to_string();
+        let title = title.trim_matches(['"', '\'', '*']).trim().to_string();
+        let body = clip(body.trim_matches(['"', '\'']).trim(), SHORT_CHARS);
+        let details = details.trim_matches(['"', '\'']).trim().to_string();
+        let prompt = prompt.trim_matches(['"', '\'', '`']).trim().to_string();
         let t_len = title.chars().count();
         let b_len = body.chars().count();
+        let d_len = details.chars().count();
         let p_len = prompt.chars().count();
-        if !(6..=70).contains(&t_len) || !(20..=240).contains(&b_len) || !(8..=400).contains(&p_len) {
+        if !(6..=70).contains(&t_len)
+            || !(12..=SHORT_CHARS).contains(&b_len)
+            || !(12..=700).contains(&d_len)
+            || !(8..=400).contains(&p_len)
+        {
             continue;
         }
-        if !is_plain_text(&title) || !is_plain_text(&body) || !is_plain_text(&prompt) {
+        if !is_plain_text(&title)
+            || !is_plain_text(&body)
+            || !is_plain_text(&details)
+            || !is_plain_text(&prompt)
+        {
             continue;
         }
         if generic_title(&title) {
@@ -266,6 +298,7 @@ pub fn parse_ideas(raw: &str, sources: &[String], taken: &[String]) -> Vec<IdeaS
             kind,
             title,
             body,
+            details,
             prompt,
         });
     }
@@ -299,7 +332,7 @@ mod tests {
         let asks = vec!["run the grokhub tests again".to_string(), "bump the AUR pkgver".to_string()];
         let autos = vec!["Nightly wrap".to_string()];
         let p = idea_prompt(&ctx(&asks, &autos));
-        assert!(p.contains("IDEA: kind | title | why it helps | what to send"));
+        assert!(p.contains("IDEA: kind | title | short description | details | what to send"));
         assert!(p.contains("- run the grokhub tests again"));
         assert!(p.contains("Automations they already run:\n- Nightly wrap"));
         assert!(p.contains("Builds GrokHub"));
@@ -355,5 +388,19 @@ IDEA: try | Morning test run | Duplicate title should be dropped by the parser. 
         assert!(!ideas_refresh_due(0, 10, IDEAS_LIVE_ENOUGH));
         assert!(!ideas_refresh_due(1_000, 1_000 + IDEAS_REFRESH_MS - 1, 0));
         assert!(ideas_refresh_due(1_000, 1_000 + IDEAS_REFRESH_MS, 0));
+    }
+
+    #[test]
+    fn five_field_ideas_keep_a_short_line_and_full_details() {
+        let raw = "IDEA: try | Triage open issues | Sort this week's GitHub issues by what blocks a release. | The cabin reads your open GrokHub issues, groups them by release impact, and files the top three as Todo cards so the next session starts on what matters. | list my open GrokHub issues and file the three that block the release as workboard cards";
+        let ideas = parse_ideas(raw, &[], &[]);
+        assert_eq!(ideas.len(), 1, "{ideas:?}");
+        assert_eq!(ideas[0].kind.type_label(), "Suggestion");
+        assert!(ideas[0].body.chars().count() <= SHORT_CHARS);
+        assert!(ideas[0].details.starts_with("The cabin reads your open GrokHub issues"));
+        assert_eq!(IdeaKind::Reminder.type_label(), "Automation");
+        assert_eq!(IdeaKind::Skill.type_label(), "Skill");
+        let json = serde_json::to_string(&IdeaKind::Try).unwrap();
+        assert_eq!(json, "\"try\"");
     }
 }
