@@ -276,6 +276,9 @@ impl Cabin {
         self.hands_attach = false;
         self.stream_buf.clear();
         self.thought_buf.clear();
+        self.turn_log.clear();
+        self.thought_seam = false;
+        self.say_seam = false;
         if self.stream_here() {
             self.tool_cards.clear();
             self.live_blocks.clear();

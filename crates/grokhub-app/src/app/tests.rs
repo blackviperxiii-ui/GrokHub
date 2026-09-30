@@ -7150,11 +7150,13 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     fn stream_deltas_do_not_grow_without_bound() {
         let src = cabin_src();
         let poll = fn_src(&src, "poll_single");
+        let ingest = fn_src(&src, "ingest_stream_chunk");
         assert!(
             poll.contains("GrokPEvent::Thought")
                 && poll.contains("GrokPEvent::Text")
-                && poll.contains("push_stream_capped")
-                && poll.contains("IMAGE_FILE_CAP"),
+                && poll.contains("ingest_stream_chunk")
+                && ingest.contains("push_stream_capped")
+                && ingest.contains("IMAGE_FILE_CAP"),
             "live grok -p thought and text deltas must not grow stream buffers without bound: {poll}"
         );
         let snap = fn_src(&src, "apply_assistant_snapshot");
@@ -14559,6 +14561,9 @@ fn quiet_cabin() -> Cabin {
         tool_cards: Vec::new(),
         live_blocks: Vec::new(),
         live_keys: Vec::new(),
+        turn_log: Vec::new(),
+        thought_seam: false,
+        say_seam: false,
         desk_frame: None,
         perm_ask: None,
         perm_always_confirm: None,
@@ -16238,4 +16243,98 @@ fn idea_card_edits_stop_at_ten_in_progress() {
     }
     assert!(grokhub_core::set_idea_draft(&mut cabin.updates, "idea-10", "changed").is_err());
     assert_eq!(grokhub_core::modified_ideas(&cabin.updates), 10);
+}
+
+#[test]
+fn a_finished_turn_keeps_each_reply_and_tool_run_apart() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("turn-timeline");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut t = crate::threads::ChatThread::new("Bug pass", false);
+    t.messages = Arc::new(vec![("user".into(), "check yourself for bugs".into())]);
+    let tid = t.id.clone();
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.threads = vec![t];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.running = true;
+    cabin.chat_job_thread = Some(tid);
+    let card = |id: &str, title: &str| grokhub_acp::ToolCard {
+        id: id.into(),
+        title: title.into(),
+        kind: String::new(),
+        status: "completed".into(),
+        detail: String::new(),
+        diff: String::new(),
+        image_data_url: None,
+    };
+
+    // Thought summaries and post-tool messages arrive with no leading space.
+    assert!(cabin.ingest_stream_chunk(LiveKind::Thought, "Rules say be brief."));
+    assert!(cabin.ingest_stream_chunk(LiveKind::Thought, "I will locate the app."));
+    cabin.ingest_stream_chunk(LiveKind::Say, "I'll find the app, then write up what I hit.");
+    cabin.ingest_tool_card(&card("t1", "grep"));
+    cabin.ingest_tool_card(&card("t2", "read_file"));
+    cabin.ingest_stream_chunk(LiveKind::Say, "GrokHub is running.");
+    cabin.upsert_stream_assistant();
+    cabin.ingest_tool_card(&card("t3", "screenshot"));
+    cabin.ingest_stream_chunk(LiveKind::Say, "Walked GrokHub.");
+    assert!(
+        !cabin.stream_buf.contains("hit.GrokHub"),
+        "messages split by a tool call must not glue: {}",
+        cabin.stream_buf
+    );
+    let live: Vec<LiveKind> = cabin.live_blocks.iter().map(|b| b.kind).collect();
+    assert_eq!(
+        live,
+        vec![
+            LiveKind::Thought,
+            LiveKind::Say,
+            LiveKind::Tool,
+            LiveKind::Tool,
+            LiveKind::Say,
+            LiveKind::Tool,
+            LiveKind::Say,
+        ]
+    );
+
+    let text = merge_thinking_capped(&cabin.thought_buf, &cabin.stream_buf, TEXT_FILE_CAP);
+    cabin.finish_acp_turn(text);
+    assert!(!cabin.running);
+    assert!(cabin.turn_log.is_empty());
+
+    let views = cabin.cached_chat_views().to_vec();
+    let replies: Vec<&str> = views
+        .iter()
+        .filter(|v| v.kind == grokhub_core::ChatKind::Assistant)
+        .map(|v| v.body.as_str())
+        .collect();
+    assert_eq!(
+        replies,
+        vec![
+            "I'll find the app, then write up what I hit.",
+            "GrokHub is running.",
+            "Walked GrokHub.",
+        ],
+        "a finished turn must not fold every reply into one bubble"
+    );
+    let thought = views
+        .iter()
+        .find(|v| v.kind == grokhub_core::ChatKind::Thought)
+        .expect("thought");
+    assert!(
+        thought.body.contains("Rules say be brief. I will locate the app."),
+        "thought summaries must not glue: {}",
+        thought.body
+    );
+    let tools: Vec<&str> = views
+        .iter()
+        .filter(|v| v.kind == grokhub_core::ChatKind::Tool)
+        .map(|v| v.title.as_str())
+        .collect();
+    assert_eq!(tools, vec!["2 steps · Grep, Read file", "Screenshot"]);
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
 }

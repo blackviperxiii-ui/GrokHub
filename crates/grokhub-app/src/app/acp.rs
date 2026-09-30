@@ -332,12 +332,9 @@ impl Cabin {
                     if !self.running {
                         continue;
                     }
-                    let changed = push_stream_capped(&mut self.thought_buf, &t, IMAGE_FILE_CAP);
-                    if changed {
-                        self.paint_text_delta(LiveKind::Thought, &t);
-                        if self.stream_here() {
-                            self.scrub_live_blocks();
-                        }
+                    let changed = self.ingest_stream_chunk(LiveKind::Thought, &t);
+                    if changed && self.stream_here() {
+                        self.scrub_live_blocks();
                     }
                     if self.stream_here() {
                         self.status = self.thinking_status();
@@ -350,12 +347,9 @@ impl Cabin {
                     if !self.running {
                         continue;
                     }
-                    let changed = push_stream_capped(&mut self.stream_buf, &t, IMAGE_FILE_CAP);
-                    if changed {
-                        self.paint_text_delta(LiveKind::Say, &t);
-                        if self.stream_here() {
-                            self.scrub_live_blocks();
-                        }
+                    let changed = self.ingest_stream_chunk(LiveKind::Say, &t);
+                    if changed && self.stream_here() {
+                        self.scrub_live_blocks();
                     }
                     if self.stream_here() {
                         self.status = self.thinking_status();
@@ -372,14 +366,8 @@ impl Cabin {
                         self.remember_last_frame(url);
                         self.store_hub_frame(url);
                     }
+                    self.ingest_tool_card(&card);
                     if self.stream_here() {
-                        append_tool(
-                            &mut self.live_blocks,
-                            &card.id,
-                            &card.title,
-                            &card.status,
-                            &card.detail,
-                        );
                         self.scrub_live_blocks();
                         if let Some(url) = &card.image_data_url {
                             self.desk_frame = Some(url.clone());
@@ -587,8 +575,14 @@ impl Cabin {
         if self.session_mode == SessionMode::Plan {
             self.store_session_plan(&text, false);
         }
-        self.apply_assistant_snapshot(text.clone());
-        let prose = grokhub_core::assistant_prose(&text);
+        let stored = self.turn_transcript(text.clone(), IMAGE_FILE_CAP);
+        self.apply_assistant_snapshot(stored);
+        // The newest reply only. Every reply of a long turn joined into the
+        // last bubble is what made a finished turn read as one wall of text.
+        let prose = match last_say(&self.turn_log) {
+            Some(say) => grokhub_core::assistant_prose(say),
+            None => grokhub_core::assistant_prose(&text),
+        };
         if here {
             if !prose.is_empty() {
                 match self.live_blocks.last_mut() {
@@ -604,6 +598,9 @@ impl Cabin {
         }
         self.thought_buf.clear();
         self.stream_buf.clear();
+        self.turn_log.clear();
+        self.thought_seam = false;
+        self.say_seam = false;
         self.settle_turn_card(&text);
         let origin = self.chat_job_thread.take();
         if here && self.speak_next {
@@ -649,8 +646,7 @@ impl Cabin {
                 // `append_thought` has no cap of its own, so it has to respect the buffer
                 // cap or the rendered blocks grow past IMAGE_FILE_CAP unbounded.
                 let paints = self.stream_here();
-                if push_stream_capped(&mut self.thought_buf, &d, IMAGE_FILE_CAP) && paints {
-                    self.paint_text_delta(LiveKind::Thought, &d);
+                if self.ingest_stream_chunk(LiveKind::Thought, &d) && paints {
                     self.scrub_live_blocks();
                 }
                 if paints {
@@ -661,8 +657,7 @@ impl Cabin {
             }
             Ok(GrokPEvent::Text(d)) => {
                 let paints = self.stream_here();
-                if push_stream_capped(&mut self.stream_buf, &d, IMAGE_FILE_CAP) && paints {
-                    self.paint_text_delta(LiveKind::Say, &d);
+                if self.ingest_stream_chunk(LiveKind::Say, &d) && paints {
                     self.scrub_live_blocks();
                 }
                 if paints {
@@ -679,14 +674,8 @@ impl Cabin {
                     self.remember_last_frame(url);
                     self.store_hub_frame(url);
                 }
+                self.ingest_tool_card(&card);
                 if self.stream_here() {
-                    append_tool(
-                        &mut self.live_blocks,
-                        &card.id,
-                        &card.title,
-                        &card.status,
-                        &card.detail,
-                    );
                     self.scrub_live_blocks();
                     if let Some(url) = &card.image_data_url {
                         self.desk_frame = Some(url.clone());
@@ -869,6 +858,13 @@ impl Cabin {
                 .and_then(|t| t.grok_cwd.clone())
                 .map(std::path::PathBuf::from);
             self.record_prompt_history(idx, open.as_deref(), &turn.session_id, &title, cwd);
+        }
+        // A reply that only came in the end event still belongs after this turn's tools.
+        if self.stream_buf.trim().is_empty() && !turn.text.trim().is_empty() {
+            if self.thought_buf.trim().is_empty() && !turn.thought.trim().is_empty() {
+                self.ingest_stream_chunk(LiveKind::Thought, &turn.thought);
+            }
+            self.ingest_stream_chunk(LiveKind::Say, &turn.text);
         }
         let streamed = if self.thought_buf.is_empty() {
             self.stream_buf.clone()
