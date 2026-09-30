@@ -131,6 +131,9 @@ pub struct ChipHit {
     pub uses: u32,
     #[serde(default)]
     pub typed_uses: u32,
+    /// Times this chip was picked from the row. Similar prompts bump `uses`, not this.
+    #[serde(default)]
+    pub picks: u32,
     #[serde(default)]
     pub last_used_at: u64,
     #[serde(default)]
@@ -1050,6 +1053,9 @@ fn upsert_hit(
         h.kind = kind;
         h.uses = h.uses.saturating_add(uses_delta);
         h.typed_uses = h.typed_uses.saturating_add(typed_delta);
+        if uses_delta > 0 && typed_delta == 0 {
+            h.picks = h.picks.saturating_add(uses_delta);
+        }
         if uses_delta > 0 || typed_delta > 0 {
             h.last_used_at = now_ms;
             h.hour_hits = bump_hour(&h.hour_hits, hour);
@@ -1075,6 +1081,7 @@ fn upsert_hit(
                 kind,
                 uses: uses_delta,
                 typed_uses: typed_delta,
+                picks: if typed_delta == 0 { uses_delta } else { 0 },
                 last_used_at: if uses_delta > 0 || typed_delta > 0 {
                     now_ms
                 } else {
@@ -1558,6 +1565,14 @@ fn memory_boost_for_chip(memory: &ChipMemory, chip: &QuickChip, now_ms: u64, hou
     boost
 }
 
+/// Typing something once is not a habit. A typed prompt earns a chip only after
+/// it came back `TYPED_HABIT_MIN` times. A chip you picked earns it right away.
+pub const TYPED_HABIT_MIN: u32 = 3;
+
+fn learned_hit_earned(h: &ChipHit) -> bool {
+    h.picks > 0 || h.typed_uses >= TYPED_HABIT_MIN
+}
+
 fn learned_chips_from_memory(memory: &ChipMemory, now_ms: u64) -> Vec<QuickChip> {
     let mut out: Vec<QuickChip> = memory
         .hits
@@ -1565,6 +1580,7 @@ fn learned_chips_from_memory(memory: &ChipMemory, now_ms: u64) -> Vec<QuickChip>
         .filter(|h| h.uses >= 1 && !h.value.trim().is_empty())
         .filter(|h| matches!(h.kind, ChipKind::Chat | ChipKind::Shell))
         .filter(|h| h.dismisses == 0)
+        .filter(|h| learned_hit_earned(h))
         .filter(|h| !retired_host_copy(&h.key, &h.label, &h.value))
         .map(|h| {
             let age_days = now_ms.saturating_sub(h.last_used_at) as f32 / 86_400_000.0;
@@ -3018,6 +3034,17 @@ mod tests {
             assert!(!blob.contains("supergrok"), "{}", c.id);
             assert!(!blob.contains("subscription"), "{}", c.id);
         }
+    }
+
+    #[test]
+    fn a_prompt_typed_once_or_twice_is_not_a_chip() {
+        let mut mem = ChipMemory::default();
+        remember_typed_prompt(&mut mem, "update grok bot, and fix the tray", 10, 8);
+        assert!(learned_chips_from_memory(&mem, 20).is_empty(), "typed once is not a habit");
+        remember_typed_prompt(&mut mem, "update grok bot, and fix the tray", 30, 8);
+        assert!(learned_chips_from_memory(&mem, 40).is_empty(), "typed twice is not a habit");
+        remember_typed_prompt(&mut mem, "update grok bot, and fix the tray", 50, 8);
+        assert_eq!(learned_chips_from_memory(&mem, 60).len(), 1, "the third time it is");
     }
 
     #[test]

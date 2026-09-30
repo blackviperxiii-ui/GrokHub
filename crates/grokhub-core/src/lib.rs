@@ -32,6 +32,7 @@ pub mod host_plan;
 pub mod host_safety;
 pub mod hub_sync;
 pub mod hygiene;
+pub mod ideas;
 pub mod imagine;
 pub mod inhabit;
 pub mod learning;
@@ -121,6 +122,10 @@ pub use chat::{
 };
 pub use export::{
     chat_export_html, chat_export_json, html_escape, md_to_html, ChatExport, EXPORT_FORMATS_HINT,
+};
+pub use ideas::{
+    idea_prompt, ideas_refresh_due, is_template_idea_title, parse_ideas, IdeaContext, IdeaKind, IdeaSeed,
+    IDEAS_LIVE_ENOUGH, IDEAS_PER_RUN, IDEAS_REFRESH_MS, IDEA_SOURCE_GENERATED,
 };
 pub use md::{
     code_tokens, md_blocks, md_link_ok, md_plain, md_spans, md_table_cells, md_wants_full_width,
@@ -346,6 +351,7 @@ pub use shortcuts::{
     shortcut_help, ComposerEnter, ComposerGo, PermKey, SHORTCUTS,
 };
 pub use skill::{
+    is_feedback_ask, is_junk_skill, AUTO_SKILL_PITFALL,
     apply_skill_follow, bump_skill_run, is_hard_run, match_skill, parse_skill_md, patch_skill,
     prefer_patch, propose_skill_from_turn, render_skill_md, skill_dir_name, skill_follow_block,
     skill_safe, skill_use_in_chat_prompt, SkillMd,
@@ -439,12 +445,12 @@ pub use windshield::{
     windshield_browser_line, windshield_prompt, AtspiRow, PendingStep, WindshieldFrame,
 };
 pub use update_feed::{
+    live_generated_ideas, post_generated_ideas, purge_template_ideas,
     automation_failed_card,
     archive_digest, archived_digests, automate_offer_card, automation_done_card, card_matches,
     digest_card, digest_topic_refused, discuss_context, dismiss_idea, dismiss_update, expire_ideas,
-    feed_ideas, feed_visible, fill_useful_ideas, hold_if_quiet, home_feed_n, idea_card, idea_dialogue,
-    idea_open_line, idea_rank, lesson_rank_delta, setup_blocked_by_lessons, offer_learned_move,
-    offer_learned_setup,
+    feed_ideas, feed_visible, hold_if_quiet, home_feed_n, idea_card, idea_dialogue,
+    idea_open_line, idea_rank, lesson_rank_delta, setup_blocked_by_lessons,
     idea_touched, links_from_research, unpin_feed_idea,
     mark_update_opened,
     post_update, release_quiet_hold, resume_needs_fresh_chat, schedule_created_card,

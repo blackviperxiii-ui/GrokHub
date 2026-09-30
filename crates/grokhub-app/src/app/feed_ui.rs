@@ -9,7 +9,7 @@
 use super::*;
 use grokhub_core::{
     archive_digest, automation_done_card, dismiss_idea,
-    dismiss_update, feed_ideas, feed_visible, file_idea_todo, fill_useful_ideas, hold_if_quiet,
+    dismiss_update, feed_ideas, feed_visible, file_idea_todo, hold_if_quiet,
     home_feed_n, idea_dialogue, idea_open_line, idea_rank, idea_talk_chips, unpin_feed_idea,
     idea_todo_title,
     links_from_research, mark_update_opened, post_update, quiet_hours_active, route_schedule,
@@ -235,6 +235,7 @@ impl Cabin {
 
     /// Housekeep: idea expiry, quiet release, digest clock. Not the nightly review.
     pub(super) fn tick_feed_pulse(&mut self) {
+        self.maybe_suggest_ideas(false);
         let now = now_ms();
         let quiet = self.quiet_now();
         let pulse = self.cfg.feed_pulse.clone();
@@ -410,12 +411,15 @@ impl Cabin {
                             .color(crate::theme::fg()),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::cards::ghost_pill(ui, "Refresh") {
-                            self.ideas_filled = false;
-                            self.ensure_useful_ideas();
-                            self.persist_updates();
-                            let _ = crate::feed::save(&self.updates);
-                            self.updates = crate::feed::load();
+                        let busy = self.ideas_rx.is_some();
+                        let label = if busy { "Thinking…" } else { "Suggest ideas" };
+                        if crate::cards::ghost_pill(ui, label) && !busy {
+                            if self.llm_ready() {
+                                self.maybe_suggest_ideas(true);
+                                self.status = "Thinking up ideas from your recent work…".into();
+                            } else {
+                                self.status = "Connect Grok in Settings to get ideas".into();
+                            }
                         }
                     });
                 });
@@ -523,34 +527,185 @@ impl Cabin {
         self.persist_updates();
     }
 
-    /// One pass per launch. Ideas are reminders and automations the cabin can set up.
+    /// Once per launch: purge template idea cards. The automatic model ask comes
+    /// from the heartbeat (`tick_feed_pulse` → `maybe_suggest_ideas`).
     pub(super) fn ensure_useful_ideas(&mut self) {
         if self.ideas_filled {
             return;
         }
         self.ideas_filled = true;
+        if grokhub_core::purge_template_ideas(&mut self.updates) > 0 {
+            self.persist_updates();
+        }
+    }
+
+    /// Ask the model for ideas grounded in this person's work. The automatic ask
+    /// comes from the heartbeat (`tick_feed_pulse`). Runs when the board has fewer
+    /// than a handful of generated ideas and the last ask is hours old, never in
+    /// quiet hours or over the token budget. `force` is the Suggest ideas button.
+    pub(super) fn maybe_suggest_ideas(&mut self, force: bool) {
+        if self.ideas_rx.is_some() || !self.llm_ready() {
+            return;
+        }
+        let now = now_ms();
+        if !force {
+            let live = grokhub_core::live_generated_ideas(&self.updates);
+            if !grokhub_core::ideas_refresh_due(self.cfg.feed_pulse.last_ideas_ms, now, live)
+                || self.quiet_now()
+                || self.budget_holds_scheduled()
+            {
+                return;
+            }
+        }
+        let (prompt, sources, taken) = self.idea_request();
+        self.cfg.feed_pulse.last_ideas_ms = now;
+        self.persist_cfg();
+        let key = self.bearer();
+        let (tx, rx) = mpsc::channel();
+        self.ideas_rx = Some((rx, sources, taken));
+        std::thread::spawn(move || {
+            let _ = tx.send(cabin_fast_llm(key, prompt));
+        });
+    }
+
+    /// The prompt plus what the reply must not copy (their own lines) or repeat.
+    pub(super) fn idea_request(&self) -> (String, Vec<String>, Vec<String>) {
         let user_md = crate::config::read_memory("USER.md");
         let memory_md = crate::config::read_memory("MEMORY.md");
-        let soul_md = crate::config::read_memory("SOUL.md");
-        let names: Vec<&str> = self
+        let asks = self.recent_asks(15);
+        let open_cards: Vec<String> = self
+            .board
+            .iter()
+            .filter(|c| c.status.column().is_some() && c.status != BoardStatus::Done)
+            .map(|c| c.title.clone())
+            .collect();
+        let automations: Vec<String> = self
             .automations
             .iter()
-            .map(|a| a.name.as_str())
-            .chain(self.grok_loops.iter().map(|l| l.prompt.as_str()))
+            .map(|a| match a.name.trim() {
+                "" => a.instructions.clone(),
+                n => n.to_string(),
+            })
+            .chain(self.grok_loops.iter().map(|l| l.prompt.clone()))
             .collect();
-        let n = fill_useful_ideas(
-            &mut self.updates,
-            &mut self.cfg.feed_pulse,
-            now_ms(),
-            &user_md,
-            &memory_md,
-            &soul_md,
-            &names,
-            &grokhub_core::brief_for(&self.learning, "ideas"),
+        let skills: Vec<String> = self.skill_list.iter().map(|s| s.name.clone()).collect();
+        let existing: Vec<String> = self
+            .updates
+            .iter()
+            .filter(|c| c.kind == UpdateKind::Idea)
+            .map(|c| c.title.clone())
+            .collect();
+        let rejected: Vec<String> = self
+            .cfg
+            .feed_pulse
+            .idea_titles
+            .iter()
+            .filter(|t| !existing.iter().any(|e| e.eq_ignore_ascii_case(t)))
+            .cloned()
+            .collect();
+        let clock = Self::local_clock();
+        let weekday = match clock.weekday {
+            0 => "Sunday",
+            1 => "Monday",
+            2 => "Tuesday",
+            3 => "Wednesday",
+            4 => "Thursday",
+            5 => "Friday",
+            _ => "Saturday",
+        };
+        let prompt = grokhub_core::idea_prompt(&grokhub_core::IdeaContext {
+            user_md: &user_md,
+            memory_md: &memory_md,
+            recent_asks: &asks,
+            open_cards: &open_cards,
+            automations: &automations,
+            skills: &skills,
+            existing: &existing,
+            rejected: &rejected,
+            hour: clock.hour as u8,
+            weekday,
+        });
+        let mut sources = asks;
+        sources.extend(
+            user_md
+                .lines()
+                .chain(memory_md.lines())
+                .map(str::trim)
+                .filter(|l| l.len() >= 12)
+                .map(str::to_string),
         );
-        if n > 0 {
-            self.persist_updates();
-            self.persist_cfg();
+        let mut taken = existing;
+        taken.extend(rejected);
+        taken.extend(automations);
+        (prompt, sources, taken)
+    }
+
+    /// What they asked lately, newest first: real asks only (no slash commands,
+    /// tool results, or "no, still…" feedback), each once.
+    pub(super) fn recent_asks(&self, n: usize) -> Vec<String> {
+        let mut threads: Vec<&crate::threads::ChatThread> =
+            self.threads.iter().filter(|t| !t.background).collect();
+        threads.sort_by_key(|t| std::cmp::Reverse(t.accessed_ms));
+        let open = self.messages.iter().rev();
+        let rest = threads
+            .into_iter()
+            .flat_map(|t| t.messages.iter().rev());
+        let mut out: Vec<String> = Vec::new();
+        for (role, text) in open.chain(rest) {
+            if out.len() >= n {
+                break;
+            }
+            if role != "user" {
+                continue;
+            }
+            let t = text.trim();
+            if t.len() < 8
+                || t.starts_with('/')
+                || grokhub_core::is_workload_user(t)
+                || grokhub_core::is_feedback_ask(t)
+                || !grokhub_core::is_plain_text(t)
+            {
+                continue;
+            }
+            let line: String = t.lines().next().unwrap_or("").chars().take(200).collect();
+            if !out.iter().any(|o| o.eq_ignore_ascii_case(&line)) {
+                out.push(line);
+            }
+        }
+        out
+    }
+
+    /// Post what came back. A reply that yields nothing leaves the board as it was.
+    pub(super) fn poll_ideas(&mut self) {
+        let Some((rx, sources, taken)) = self.ideas_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(raw) => {
+                let seeds = grokhub_core::parse_ideas(&raw, &sources, &taken);
+                let names: Vec<&str> = taken.iter().map(String::as_str).collect();
+                let n = grokhub_core::post_generated_ideas(
+                    &mut self.updates,
+                    &mut self.cfg.feed_pulse,
+                    now_ms(),
+                    &seeds,
+                    &names,
+                    &grokhub_core::brief_for(&self.learning, "ideas"),
+                );
+                if n > 0 {
+                    self.persist_updates();
+                    self.persist_cfg();
+                }
+                if self.nav == Nav::Ideas {
+                    self.status = match n {
+                        0 => "No new ideas this time".into(),
+                        1 => "1 new idea".into(),
+                        n => format!("{n} new ideas"),
+                    };
+                }
+            }
+            Err(mpsc::TryRecvError::Empty) => self.ideas_rx = Some((rx, sources, taken)),
+            Err(mpsc::TryRecvError::Disconnected) => {}
         }
     }
 

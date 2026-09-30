@@ -444,6 +444,8 @@ pub struct Cabin {
     ideas_q: String,
     /// Useful setup ideas were offered once this launch. Refresh clears it.
     ideas_filled: bool,
+    /// Model call for Ideas: reply, their own lines (no echo), titles already taken.
+    ideas_rx: Option<(mpsc::Receiver<String>, Vec<String>, Vec<String>)>,
     tray_saw_unfocused: bool,
     tray_hid_at: Instant,
     want_quit: bool,
@@ -953,7 +955,12 @@ impl Cabin {
             imagine_last,
             skill_name: String::new(),
             skill_body: String::new(),
-            skill_list: skills::list_skills(),
+            skill_list: {
+                // Leftover auto-made skills (template names, copied sentences) move to
+                // skills/.retired before the list is read.
+                let _ = skills::retire_junk_skills();
+                skills::list_skills()
+            },
             eyes_text: String::new(),
             last_host: vec![],
             last_frame_url: None,
@@ -991,6 +998,7 @@ impl Cabin {
             brief_buf,
             ideas_q: String::new(),
             ideas_filled: false,
+            ideas_rx: None,
             tray_saw_unfocused: false,
             tray_hid_at: Instant::now(),
             want_quit: false,
@@ -1379,6 +1387,7 @@ impl Cabin {
             brief_buf: String::new(),
             ideas_q: String::new(),
             ideas_filled: false,
+            ideas_rx: None,
             tray_saw_unfocused: false,
             tray_hid_at: Instant::now(),
             want_quit: false,
@@ -2005,15 +2014,6 @@ impl Cabin {
             let key = format!("pref:{}", grokhub_core::engine_slug(&learned.idea_title));
             grokhub_core::note_part(&mut self.learning, "chat", &key, &learned.why);
             noted = true;
-            if grokhub_core::offer_learned_move(
-                &mut self.updates,
-                &mut self.cfg.feed_pulse,
-                now_ms(),
-                &learned,
-            ) {
-                self.persist_updates();
-                self.persist_cfg();
-            }
         }
         for line in assistant.lines() {
             let Some(fact) = line.trim().strip_prefix("USER_FACT:") else {
@@ -4526,6 +4526,7 @@ impl eframe::App for Cabin {
         self.poll_chips();
         self.poll_review();
         self.poll_greeting();
+        self.poll_ideas();
         self.poll_goals();
         self.tick_home_surface();
         self.refresh_chips();
