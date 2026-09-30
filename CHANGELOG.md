@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.10.42 — 2026-09-29
+
+Cabin tests that never ask the agent set `GROKHUB_GROK` to a missing path. The suite stays on the offline path and leaves the real Grok CLI idle.
+
+- Linux: `grokhub-linux-v2.10.42.tar.gz` and AUR `pkgver=2.10.42`.
+- Windows: `GrokHub-Setup-2.10.42.exe` and `grokhub-windows-v2.10.42.zip`.
+
 ## 2.10.41 — 2026-09-29
 
 The Send/Stop disc sits inside the composer pill, beside the mic. The text field leaves room for the mic, so the disc is no longer drawn on the rounded end.
