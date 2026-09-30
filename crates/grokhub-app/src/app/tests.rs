@@ -15468,3 +15468,68 @@ fn board_drop_moves_to_another_column_only() {
     assert!(board.contains("dnd_release_payload::<BoardDrag>"), "columns must take drops");
     assert!(board.contains("BoardAct::Move"), "a drop is the same Move the buttons use");
 }
+
+#[test]
+fn token_budget_warns_once_and_holds_scheduled_work() {
+    let root = config::test_config_root("token-budget");
+    let _ = std::fs::remove_dir_all(&root);
+    let _pin = config::TestConfigDir::set(root.clone());
+    let mut app = Cabin::quiet_for_test();
+    // Quiet all day so the test never pings the desktop.
+    app.cfg.quiet_start = "00:00".into();
+    app.cfg.quiet_end = "23:59".into();
+    app.cfg.daily_token_budget = 1_000;
+    app.cfg.budget_pauses_scheduled = true;
+    app.usage.day = Cabin::local_day();
+
+    let mut u = GrokUsage {
+        input_tokens: 500,
+        ..Default::default()
+    };
+    app.merge_grok_usage(&u);
+    assert!(!app.status.contains("Token budget"), "{}", app.status);
+    assert!(!app.budget_holds_scheduled());
+
+    u.input_tokens = 850;
+    app.merge_grok_usage(&u);
+    assert!(app.status.starts_with("Token budget at 80%"), "{}", app.status);
+    app.status.clear();
+    u.input_tokens = 900;
+    app.merge_grok_usage(&u);
+    assert!(app.status.is_empty(), "near warns once: {}", app.status);
+
+    u.input_tokens = 1_200;
+    app.merge_grok_usage(&u);
+    assert!(app.status.starts_with("Token budget used up"), "{}", app.status);
+    assert!(app.status.contains("waits until tomorrow"), "{}", app.status);
+    assert!(app.budget_holds_scheduled());
+    app.cfg.budget_pauses_scheduled = false;
+    assert!(!app.budget_holds_scheduled(), "pause off: warn only");
+    app.cfg.budget_pauses_scheduled = true;
+    app.cfg.daily_token_budget = 0;
+    assert!(!app.budget_holds_scheduled(), "no budget: never hold");
+
+    let (title, body) =
+        super::token_budget_notice(grokhub_core::BudgetLevel::Over, "1.2k of 1000 tokens today (120%)", false);
+    assert_eq!(title, "Token budget used up");
+    assert!(!body.contains("tomorrow"), "{body}");
+}
+
+#[test]
+fn over_budget_holds_night_loops_and_anticipate() {
+    let src = cabin_src();
+    for f in ["tick_night", "tick_loops"] {
+        let body = fn_src(&src, f);
+        assert!(body.contains("self.budget_holds_scheduled()"), "{f}: {body}");
+    }
+    let anticipate_hold = src.matches("if self.budget_holds_scheduled() {").count();
+    assert!(anticipate_hold >= 3, "night, loops, and anticipate: {anticipate_hold}");
+    let settings = include_str!("settings.rs");
+    assert!(settings.contains("Daily token budget"));
+    assert!(settings.contains("Pause scheduled work over budget"));
+    let old: config::AppConfig = serde_json::from_str("{}").expect("empty app.json loads");
+    assert_eq!(old.daily_token_budget, 0);
+    assert!(old.budget_pauses_scheduled);
+    let saved = serde_json::to_string(&config::AppConfig::default()).unwrap();
+    assert!(!saved.contains("dailyTokenBudget") && !saved.contains("daily_token_budget"), "off writes nothing");
+}

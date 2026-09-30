@@ -181,6 +181,22 @@ use acp::*;
 #[allow(unused_imports)]
 use chat_ui::*;
 use night::AutoEnd;
+
+/// Title and body for a token budget warning.
+pub(super) fn token_budget_notice(
+    level: grokhub_core::BudgetLevel,
+    line: &str,
+    pauses: bool,
+) -> (&'static str, String) {
+    match level {
+        grokhub_core::BudgetLevel::Over if pauses => (
+            "Token budget used up",
+            format!("{line}. Scheduled work waits until tomorrow."),
+        ),
+        grokhub_core::BudgetLevel::Over => ("Token budget used up", format!("{line}.")),
+        _ => ("Token budget at 80%", format!("{line}.")),
+    }
+}
 #[allow(unused_imports)]
 use chips::*;
 #[allow(unused_imports)]
@@ -2901,7 +2917,32 @@ impl Cabin {
         }
         self.tokens_seen = now;
         add_tokens(&mut self.usage, spent.0, spent.1, spent.2);
+        self.note_token_budget();
         self.persist_usage();
+    }
+
+    /// Near and over the daily token budget each warn once a day: status line,
+    /// and a desktop ping outside quiet hours.
+    fn note_token_budget(&mut self) {
+        let cap = self.cfg.daily_token_budget;
+        let Some(level) = grokhub_core::take_budget_note(&mut self.usage, cap) else {
+            return;
+        };
+        let line = grokhub_core::budget_line(&self.usage, cap);
+        let (title, body) = token_budget_notice(level, &line, self.cfg.budget_pauses_scheduled);
+        self.status = format!("{title} — {body}");
+        if crate::notify::allow_ping(self.quiet_now()) {
+            crate::notify::ping(title, &body);
+        }
+    }
+
+    /// Over budget with pause on: scheduled work waits for tomorrow.
+    pub(super) fn budget_holds_scheduled(&self) -> bool {
+        grokhub_core::budget_holds_scheduled(
+            &self.usage,
+            self.cfg.daily_token_budget,
+            self.cfg.budget_pauses_scheduled,
+        )
     }
 
     fn poll_sync(&mut self) {
@@ -3100,6 +3141,9 @@ impl Cabin {
         };
         self.roll_today();
         if daily_units_blocked(self.usage.automation, self.cfg.daily_auto_cap) {
+            return;
+        }
+        if self.budget_holds_scheduled() {
             return;
         }
         if !anticipate_consumes_slot(self.can_agent()) {

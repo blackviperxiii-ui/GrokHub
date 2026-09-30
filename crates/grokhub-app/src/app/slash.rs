@@ -406,7 +406,13 @@ impl Cabin {
             Slash::Import => self.import_openclaw(),
             Slash::Consult(q) => self.run_consult(q),
             Slash::Usage => {
-                let cabin = usage_line(&self.usage);
+                let mut cabin = usage_line(&self.usage);
+                if self.cfg.daily_token_budget > 0 {
+                    cabin = format!(
+                        "{cabin} · budget {}",
+                        grokhub_core::budget_line(&self.usage, self.cfg.daily_token_budget)
+                    );
+                }
                 let grok = grok_usage_line(&self.grok_usage);
                 self.status = if grok.is_empty() {
                     cabin

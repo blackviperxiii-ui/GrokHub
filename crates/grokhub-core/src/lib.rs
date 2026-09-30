@@ -405,7 +405,11 @@ pub use update::{
     CLI_ALPHA_VERSION_FALLBACK, CLI_ALPHA_VERSION_URL, GITHUB_LATEST_API, GITHUB_REMOTE_URL,
     ORIGIN_REMOTE_URL, UPDATE_CHECK_EVERY,
 };
-pub use usage::{add_tokens, bump_usage, roll_usage_day, token_delta, usage_line, UsageDay};
+pub use usage::{
+    add_tokens, budget_holds_scheduled, budget_level, budget_line, bump_usage, roll_usage_day,
+    take_budget_note, token_budget_label, token_delta, tokens_today, usage_line, BudgetLevel,
+    UsageDay, BUDGET_NEAR_PCT, TOKEN_BUDGETS,
+};
 pub use verify::{
     can_mark_done, has_goal_complete, has_verify_ok, interpret_verify, verify_ok_after_user_turn,
     verify_script_path, VerifyResult,
