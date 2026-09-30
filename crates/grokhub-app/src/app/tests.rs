@@ -7083,10 +7083,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "Connectors must expose grok plugin uninstall/update: {skills}"
         );
         assert!(
-            skills.contains("Suggested")
-                && skills.contains("merge_suggested_skills")
-                && skills.contains("add_suggested_skill"),
-            "Skills Suggested tiles must Add via save_skill: {skills}"
+            !skills.contains("merge_suggested_skills") && !skills.contains("add_suggested_skill"),
+            "Suggested skills live on the Ideas board, not the Skills page: {skills}"
         );
         assert!(
             skills.contains("GITHUB_TILES")
@@ -7102,8 +7100,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             add_skill.contains("skill_from_suggestion")
                 && add_skill.contains("save_skill")
-                && add_skill.contains("thread::spawn")
-                && add_skill.contains("persist_suggestions"),
+                && add_skill.contains("thread::spawn"),
             "Suggested Add must write SKILL.md off the UI thread: {add_skill}"
         );
         let slash = fn_src(&src, "send_grok_slash");
@@ -15862,4 +15859,37 @@ fn board_card_notes_edit_save_and_ride_the_next_turn() {
     let board = fn_src(&src, "ui_board");
     assert!(!board.contains("dnd_drag_source"), "the whole card must not be a drag source again");
     assert!(board.contains("egui::DragAndDrop::set_payload"), "the title row drags");
+}
+
+#[test]
+fn skill_suggestions_move_onto_the_ideas_board() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("skill-ideas-move");
+    let _ = std::fs::remove_dir_all(&root);
+    let _dir = crate::config::TestConfigDir::set(root.clone());
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.updates.clear();
+    cabin.suggestions.skills = vec![grokhub_core::LearnedSuggestion {
+        kind: grokhub_core::SuggestionKind::Skill,
+        title: "Desk tidy".into(),
+        body: "Straighten windows".into(),
+        name: Some("desk-tidy".into()),
+        seed: None,
+        trigger: Some("when the desk is messy".into()),
+        instructions: Some("stack the windows".into()),
+        provider: None,
+        tool: None,
+    }];
+    cabin.skill_suggestions_to_ideas();
+    assert!(cabin.suggestions.skills.is_empty(), "suggestions drain into Ideas");
+    let ideas = grokhub_core::ideas_board(&cabin.updates);
+    assert_eq!(ideas.len(), 1);
+    assert_eq!(ideas[0].idea_type_label(), "Skill");
+    assert!(ideas[0].skill.is_some());
+    // A second pass never duplicates the card.
+    cabin.suggestions.skills = vec![ideas[0].skill.clone().unwrap()];
+    cabin.skill_suggestions_to_ideas();
+    assert_eq!(grokhub_core::ideas_board(&cabin.updates).len(), 1);
+    let _ = std::fs::remove_dir_all(&root);
 }

@@ -537,6 +537,8 @@ impl Cabin {
         if grokhub_core::purge_template_ideas(&mut self.updates) > 0 {
             self.persist_updates();
         }
+        // Skill suggestions saved by an older cabin move to the Ideas board once.
+        self.skill_suggestions_to_ideas();
     }
 
     /// Ask the model for ideas grounded in this person's work. The automatic ask
