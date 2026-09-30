@@ -40,33 +40,39 @@ pub(super) fn cabin_fast_llm(key: String, prompt: String) -> String {
     let picked = resolve_acp_cwd("", session.as_deref(), &work);
     let path = std::path::PathBuf::from(picked);
     let cwd = grokhub_acp::ensure_session_cwd(&path).unwrap_or(path);
-    let text = grokhub_acp::grok_stdout(
-        &bin,
-        &cwd,
-        &[
-            "--no-auto-update",
-            "--model",
-            CABIN_FAST_MODEL,
-            "-p",
-            &prompt,
-        ],
-    )
-    .unwrap_or_default();
-    if !text.trim().is_empty() {
-        return text;
+    for model in [CABIN_FAST_MODEL, CABIN_FAST_FALLBACK] {
+        let out = grokhub_acp::grok_stdout(
+            &bin,
+            &cwd,
+            &[
+                "--no-auto-update",
+                "--model",
+                model,
+                "--output-format",
+                "streaming-json",
+                "-p",
+                &prompt,
+            ],
+        )
+        .unwrap_or_default();
+        let text = fast_reply_text(&out);
+        if !text.trim().is_empty() {
+            return text;
+        }
     }
-    grokhub_acp::grok_stdout(
-        &bin,
-        &cwd,
-        &[
-            "--no-auto-update",
-            "--model",
-            CABIN_FAST_FALLBACK,
-            "-p",
-            &prompt,
-        ],
-    )
-    .unwrap_or_default()
+    String::new()
+}
+
+/// The reply only. Plain `grok -p` mixes the model's reasoning into stdout
+/// (a greeting once painted "I'll use the user's name if known…"), so the fast
+/// path asks for streaming-json and keeps the text events, never the thought.
+pub(super) fn fast_reply_text(stdout: &str) -> String {
+    match grokhub_acp::fold_stream(stdout) {
+        Ok(turn) => turn.text,
+        // An older CLI without streaming-json prints plain text.
+        Err(_) if !stdout.trim_start().starts_with('{') => stdout.to_string(),
+        Err(_) => String::new(),
+    }
 }
 
 impl Cabin {
