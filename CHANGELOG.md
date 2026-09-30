@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 2.10.46 — 2026-09-30
+
+Ideas are short cards you can read at a glance: the type (Skill, Automation, or Suggestion), a title, and one short line. Hover a card, or click it, and it opens in place with the details, the action Apply runs, and a chat with the agent about that card. The agent answers inside the card and can rewrite the action; nothing runs until you press Apply. Move away and the card folds back, keeping your edits and the chat.
+
+Apply follows the type: a Skill is saved, an Automation is scheduled (or set up in chat when it has no clear time), and a Suggestion is sent in a new chat. The board keeps the newest 15 ideas and newer ones push the oldest out. A card you edited or talked through stays until you apply or delete it, outside the 15, up to 10 at a time. New ideas pop up on the home feed; dismissing one there leaves it on the Ideas board.
+
+Suggested skills from the nightly review are Skill ideas now. The Skills page no longer has a Suggested section or an Add button.
+
+Workboard card buttons work again: drag a card by the grip beside its title. A card takes notes, and Work on it opens a new chat with the card and its notes; notes changed later reach that chat on its next turn.
+
+- Linux: `grokhub-linux-v2.10.46.tar.gz` and AUR `pkgver=2.10.46`.
+- Windows: `GrokHub-Setup-2.10.46.exe` and `grokhub-windows-v2.10.46.zip`.
+
 ## 2.10.45 — 2026-09-30
 
 The welcome line is a greeting again. The fast model call printed its own reasoning ("I'll use the user's name if known…") and the cabin painted that; it now reads only the reply, and a line that talks about the task never paints.
