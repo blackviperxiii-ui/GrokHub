@@ -788,6 +788,19 @@ pub(super) fn paint_chat_block(
     thought_acts: bool,
     thought_fold: ThoughtFold,
 ) -> ChatBlockPaint {
+    paint_chat_block_with(ui, block, thought_label, thought_acts, thought_fold, true)
+}
+
+/// A progress reply mid-turn is its own bubble, but only the turn's last
+/// reply carries Copy / Reply, so a busy turn is not a ladder of buttons.
+pub(super) fn paint_chat_block_with(
+    ui: &mut egui::Ui,
+    block: &ChatView,
+    thought_label: bool,
+    thought_acts: bool,
+    thought_fold: ThoughtFold,
+    reply_acts: bool,
+) -> ChatBlockPaint {
     let avail = clamp_row_width(ui.available_width().min(ui.max_rect().width()));
     let bubble_w = crate::markdown::bubble_width(avail);
     if !thought_fold_draws(block.kind, thought_fold) {
@@ -808,8 +821,13 @@ pub(super) fn paint_chat_block(
         }
         ChatKind::Assistant => {
             let resp = paint_speech_bubble(ui, &block.body, false, true);
+            let act = if reply_acts {
+                paint_msg_acts(ui, false, &block.body, avail, resp.rect.width()).act
+            } else {
+                ChatBlockAct::None
+            };
             ChatBlockPaint {
-                act: paint_msg_acts(ui, false, &block.body, avail, resp.rect.width()).act,
+                act,
                 drawn: true,
                 thought_fold,
             }
@@ -859,20 +877,29 @@ pub(super) fn paint_chat_block(
             } else {
                 block.title.as_str()
             };
+            let rows = decode_tool_rows(&block.body);
+            let failed = rows
+                .as_ref()
+                .is_some_and(|r| r.iter().any(|x| tool_status_failed(&x.status)));
             egui::CollapsingHeader::new(
                 RichText::new(title)
                     .size(crate::theme::FONT_META)
-                    .color(crate::theme::muted()),
+                    .color(tool_header_color(failed)),
             )
             .id_salt(("chat-tool", title, block.body.as_str()))
             .default_open(false)
             .show(ui, |ui| {
                 ui.set_max_width(bubble_w);
-                ui.label(
-                    RichText::new(&block.body)
-                        .size(crate::theme::FONT_META)
-                        .color(crate::theme::subtle()),
-                );
+                match rows.as_deref() {
+                    Some(rows) => paint_tool_rows(ui, rows),
+                    None => {
+                        ui.label(
+                            RichText::new(&block.body)
+                                .size(crate::theme::FONT_META)
+                                .color(crate::theme::subtle()),
+                        );
+                    }
+                }
             });
             ChatBlockPaint {
                 act: ChatBlockAct::None,
@@ -1020,14 +1047,21 @@ impl Cabin {
                                     ThoughtFold::Expanded
                                 };
                                 let y0 = ui.cursor().min.y;
+                                // Copy / Reply sit under the last reply before the next ask.
+                                let reply_acts = block.kind != ChatKind::Assistant
+                                    || !shown[i + 1..]
+                                        .iter()
+                                        .take_while(|v| v.kind != ChatKind::User)
+                                        .any(|v| v.kind == ChatKind::Assistant);
                                 let painted = ui
                                     .push_id(chat_row_id_salt(&thread_id, i), |ui| {
-                                        paint_chat_block(
+                                        paint_chat_block_with(
                                             ui,
                                             block,
                                             thought_shows_label(prev_expanded),
                                             thought_shows_acts(next_expanded),
                                             fold,
+                                            reply_acts,
                                         )
                                     });
                                 if jump_you && last_you_i == Some(i) {
@@ -1095,7 +1129,8 @@ impl Cabin {
                                         .color(crate::theme::muted()),
                                 );
                             }
-                        } else if self.thinking_here() || self.chat_job_thread.is_none() {
+                        } else if self.thinking_here() {
+                            // A finished turn keeps its tools inline in the transcript.
                             self.paint_tool_cards(ui);
                         }
                         if collapse_session {
@@ -1361,7 +1396,11 @@ impl Cabin {
         let mut act = ChatBlockAct::None;
         let thread_id = self.visible_thread_id();
         self.live_keys.resize(self.live_blocks.len(), (0, usize::MAX, 0));
+        let mut skip_to = 0;
         for (i, b) in self.live_blocks.iter().enumerate() {
+            if i < skip_to {
+                continue;
+            }
             let this_thought = b.kind == LiveKind::Thought;
             let prev_thought = i
                 .checked_sub(1)
@@ -1445,18 +1484,36 @@ impl Cabin {
                         title: String::new(),
                         body: b.body.clone(),
                     };
-                    match paint_chat_block(ui, &view, false, false, ThoughtFold::Expanded).act {
+                    let last_say = !self.live_blocks[i + 1..]
+                        .iter()
+                        .any(|x| x.kind == LiveKind::Say);
+                    match paint_chat_block_with(
+                        ui,
+                        &view,
+                        false,
+                        false,
+                        ThoughtFold::Expanded,
+                        last_say,
+                    )
+                    .act
+                    {
                         ChatBlockAct::None => {}
                         other => act = other,
                     }
                 }
                 LiveKind::Tool => {
-                    // Borrow the card. A clone per frame copied its diff and screenshot.
-                    let fallback;
-                    let card = match self.tool_cards.iter().find(|c| c.id == b.tool_id) {
-                        Some(card) => card,
-                        None => {
-                            fallback = ToolCard {
+                    // Back-to-back calls share one row, so a busy turn is not a wall of tool names.
+                    let run = self.live_blocks[i..]
+                        .iter()
+                        .take_while(|x| x.kind == LiveKind::Tool)
+                        .count();
+                    skip_to = i + run;
+                    // Borrow each card. A clone per frame copied its diff and screenshot.
+                    let cards: Vec<std::borrow::Cow<'_, ToolCard>> = self.live_blocks[i..skip_to]
+                        .iter()
+                        .map(|b| match self.tool_cards.iter().find(|c| c.id == b.tool_id) {
+                            Some(card) => std::borrow::Cow::Borrowed(card),
+                            None => std::borrow::Cow::Owned(ToolCard {
                                 id: b.tool_id.clone(),
                                 title: b.tool_title.clone(),
                                 kind: String::new(),
@@ -1464,11 +1521,10 @@ impl Cabin {
                                 detail: b.tool_detail.clone(),
                                 diff: String::new(),
                                 image_data_url: None,
-                            };
-                            &fallback
-                        }
-                    };
-                    paint_one_tool_card(ui, card);
+                            }),
+                        })
+                        .collect();
+                    paint_tool_group(ui, &cards);
                 }
             }
             if drawn {
