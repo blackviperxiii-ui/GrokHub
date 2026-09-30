@@ -638,17 +638,20 @@ pub fn glide_paint(ui: &egui::Ui, group: &str) {
 /// Remember a row item. Hover wins over the resting selection.
 pub fn glide_candidate(ui: &egui::Ui, group: &str, rect: egui::Rect, hovered: bool, selected: bool) {
     let id = glide_id(group).with("pick");
-    let mut pick = ui.data(|d| d.get_temp::<GlidePick>(id)).unwrap_or_default();
-    if rect.width() >= 1.0 && rect.height() >= 1.0 && ui.clip_rect().intersects(rect) {
-        pick.rows.push(rect);
-    }
-    if hovered {
-        pick.hover = Some(rect);
-    }
-    if selected && pick.selected.is_none() {
-        pick.selected = Some(rect);
-    }
-    ui.data_mut(|d| d.insert_temp(id, pick));
+    let visible = rect.width() >= 1.0 && rect.height() >= 1.0 && ui.clip_rect().intersects(rect);
+    // In place: every rail row calls this, and a copy out and back per row adds up.
+    ui.data_mut(|d| {
+        let pick = d.get_temp_mut_or_default::<GlidePick>(id);
+        if visible {
+            pick.rows.push(rect);
+        }
+        if hovered {
+            pick.hover = Some(rect);
+        }
+        if selected && pick.selected.is_none() {
+            pick.selected = Some(rect);
+        }
+    });
 }
 
 fn rect_gap(rect: egui::Rect, pointer: egui::Pos2) -> f32 {

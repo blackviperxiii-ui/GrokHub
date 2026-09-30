@@ -518,6 +518,10 @@ pub struct Cabin {
     stream_buf: String,
     thought_buf: String,
     chat_views: Vec<ChatView>,
+    /// Fold key per `chat_views` row (0 for non-thoughts). Built with the views.
+    chat_view_keys: Vec<u64>,
+    /// `(thread, message count, last length)` → `(visible turns, token estimate)`.
+    session_size: ((String, usize, usize), (usize, u32)),
     chat_view_tid: String,
     chat_view_n: usize,
     chat_view_last: usize,
@@ -705,6 +709,9 @@ pub struct Cabin {
     fork_explainer_seen: bool,
     tool_cards: Vec<ToolCard>,
     live_blocks: Vec<LiveBlock>,
+    /// `(fold_slot, body len, thought_body_key)` per live block, so a frame does not
+    /// rescrub every thought in the turn.
+    live_keys: Vec<(u64, usize, u64)>,
     desk_frame: Option<String>,
     perm_ask: Option<grokhub_acp::PermissionAsk>,
     /// Ask-card Always second beat for this `rpc_id` only. Not the composer pill.
@@ -1066,6 +1073,8 @@ impl Cabin {
             stream_buf: String::new(),
             thought_buf: String::new(),
             chat_views: vec![],
+            chat_view_keys: vec![],
+            session_size: ((String::new(), usize::MAX, usize::MAX), (0, 0)),
             chat_view_tid: String::new(),
             chat_view_n: usize::MAX,
             chat_view_last: usize::MAX,
@@ -1233,6 +1242,7 @@ impl Cabin {
             fork_explainer_seen: fork_explainer_seen_on_disk(),
             tool_cards: Vec::new(),
             live_blocks: Vec::new(),
+            live_keys: Vec::new(),
             desk_frame: None,
             perm_ask: None,
             perm_always_confirm: None,
@@ -1457,6 +1467,8 @@ impl Cabin {
             stream_buf: String::new(),
             thought_buf: String::new(),
             chat_views: Vec::new(),
+            chat_view_keys: Vec::new(),
+            session_size: ((String::new(), usize::MAX, usize::MAX), (0, 0)),
             chat_view_tid: String::new(),
             chat_view_n: 0,
             chat_view_last: 0,
@@ -1624,6 +1636,7 @@ impl Cabin {
             fork_explainer_seen: false,
             tool_cards: Vec::new(),
             live_blocks: Vec::new(),
+            live_keys: Vec::new(),
             desk_frame: None,
             perm_ask: None,
             perm_always_confirm: None,

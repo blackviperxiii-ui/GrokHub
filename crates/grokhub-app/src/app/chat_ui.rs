@@ -578,6 +578,15 @@ pub(super) fn reserve_offscreen_chat_row(ui: &mut egui::Ui, cached_h: f32) -> bo
     true
 }
 
+/// Stored-thought fold key for one view. Only thoughts fold; other rows get 0.
+fn view_fold_key(view: &ChatView) -> u64 {
+    if view.kind == ChatKind::Thought {
+        thought_body_key(&view.body)
+    } else {
+        0
+    }
+}
+
 /// `kind` is `"slot"` while the thought is a live block, `"body"` once it is stored.
 /// The body key is [`thought_body_key`], so a collapse survives that handoff.
 pub(super) fn thought_fold_id(thread_id: &str, kind: &str, key: u64) -> egui::Id {
@@ -946,72 +955,27 @@ impl Cabin {
                         {
                             let thread_id = fold_thread.clone();
                             let row_h_id = chat_row_height_id(&thread_id, pane);
-                            let views = self.cached_chat_views();
+                            self.cached_chat_views();
+                            let (views, keys) = (&self.chat_views, &self.chat_view_keys);
                             let shown = if live {
                                 views_up_to_last_user(views)
                             } else {
                                 views
+                            };
+                            let fold_ctx = ui.ctx().clone();
+                            // Stored thought fold for row `j`, from the cached body key.
+                            let fold_at = |j: usize| {
+                                resolve_thought_fold(
+                                    &fold_ctx,
+                                    thought_fold_id(&thread_id, "body", keys[j]),
+                                    start_collapsed,
+                                )
                             };
                             let last_you_i = shown.iter().rposition(|v| v.kind == ChatKind::User);
                             let prev_heights: Vec<f32> =
                                 ui.ctx().data(|d| d.get_temp(row_h_id)).unwrap_or_default();
                             let mut next_heights = Vec::with_capacity(shown.len());
                             for (i, block) in shown.iter().enumerate() {
-                                let prev_thought = i
-                                    .checked_sub(1)
-                                    .and_then(|p| shown.get(p))
-                                    .filter(|v| v.kind == ChatKind::Thought);
-                                let next_thought =
-                                    shown.get(i + 1).filter(|v| v.kind == ChatKind::Thought);
-                                let prev_expanded = prev_thought.is_some_and(|v| {
-                                    resolve_thought_fold(
-                                        ui.ctx(),
-                                        thought_fold_id(
-                                            &thread_id,
-                                            "body",
-                                            thought_body_key(&v.body),
-                                        ),
-                                        start_collapsed,
-                                    )
-                                    .paints_body()
-                                });
-                                let next_expanded = next_thought.is_some_and(|v| {
-                                    resolve_thought_fold(
-                                        ui.ctx(),
-                                        thought_fold_id(
-                                            &thread_id,
-                                            "body",
-                                            thought_body_key(&v.body),
-                                        ),
-                                        start_collapsed,
-                                    )
-                                    .paints_body()
-                                });
-                                let next_drawn_thought = next_thought.is_some_and(|v| {
-                                    resolve_thought_fold(
-                                        ui.ctx(),
-                                        thought_fold_id(
-                                            &thread_id,
-                                            "body",
-                                            thought_body_key(&v.body),
-                                        ),
-                                        start_collapsed,
-                                    )
-                                    .paints_row()
-                                });
-                                let fold = if block.kind == ChatKind::Thought {
-                                    resolve_thought_fold(
-                                        ui.ctx(),
-                                        thought_fold_id(
-                                            &thread_id,
-                                            "body",
-                                            thought_body_key(&block.body),
-                                        ),
-                                        start_collapsed,
-                                    )
-                                } else {
-                                    ThoughtFold::Expanded
-                                };
                                 let cached_h = prev_heights.get(i).copied().unwrap_or(0.0);
                                 let origin = ui.cursor().min;
                                 let row_w = ui.available_width().max(1.0);
@@ -1039,6 +1003,22 @@ impl Cabin {
                                     }
                                     continue;
                                 }
+                                // Neighbour folds only matter for a row that paints.
+                                let is_thought = |j: usize| {
+                                    shown.get(j).is_some_and(|v| v.kind == ChatKind::Thought)
+                                };
+                                let prev_expanded = i
+                                    .checked_sub(1)
+                                    .filter(|&p| is_thought(p))
+                                    .is_some_and(|p| fold_at(p).paints_body());
+                                let next_fold = Some(i + 1).filter(|&n| is_thought(n)).map(fold_at);
+                                let next_expanded = next_fold.is_some_and(|f| f.paints_body());
+                                let next_drawn_thought = next_fold.is_some_and(|f| f.paints_row());
+                                let fold = if block.kind == ChatKind::Thought {
+                                    fold_at(i)
+                                } else {
+                                    ThoughtFold::Expanded
+                                };
                                 let y0 = ui.cursor().min.y;
                                 let painted = ui
                                     .push_id(chat_row_id_salt(&thread_id, i), |ui| {
@@ -1070,7 +1050,7 @@ impl Cabin {
                                         ui.ctx(),
                                         &thread_id,
                                         None,
-                                        thought_body_key(&block.body),
+                                        keys[i],
                                         fold,
                                         painted.thought_fold,
                                         &mut collapse_session,
@@ -1372,7 +1352,7 @@ impl Cabin {
     }
 
     pub(super) fn paint_live_blocks(
-        &self,
+        &mut self,
         ui: &mut egui::Ui,
         _thinking: bool,
         start_collapsed: bool,
@@ -1380,6 +1360,7 @@ impl Cabin {
     ) -> ChatBlockAct {
         let mut act = ChatBlockAct::None;
         let thread_id = self.visible_thread_id();
+        self.live_keys.resize(self.live_blocks.len(), (0, usize::MAX, 0));
         for (i, b) in self.live_blocks.iter().enumerate() {
             let this_thought = b.kind == LiveKind::Thought;
             let prev_thought = i
@@ -1420,7 +1401,12 @@ impl Cabin {
                         body: b.body.clone(),
                     };
                     let slot_id = thought_fold_id(&thread_id, "slot", b.fold_slot);
-                    let body_key = thought_body_key(&b.body);
+                    // Only the thought still streaming grows. Rekey a block when it does.
+                    let cached = &mut self.live_keys[i];
+                    if cached.0 != b.fold_slot || cached.1 != b.body.len() {
+                        *cached = (b.fold_slot, b.body.len(), thought_body_key(&b.body));
+                    }
+                    let body_key = cached.2;
                     let body_id = thought_fold_id(&thread_id, "body", body_key);
                     let stored = ui.ctx().data(|d| {
                         d.get_temp::<ThoughtFold>(slot_id)
@@ -1465,21 +1451,24 @@ impl Cabin {
                     }
                 }
                 LiveKind::Tool => {
-                    let card = self
-                        .tool_cards
-                        .iter()
-                        .find(|c| c.id == b.tool_id)
-                        .cloned()
-                        .unwrap_or_else(|| ToolCard {
-                            id: b.tool_id.clone(),
-                            title: b.tool_title.clone(),
-                            kind: String::new(),
-                            status: b.tool_status.clone(),
-                            detail: b.tool_detail.clone(),
-                            diff: String::new(),
-                            image_data_url: None,
-                        });
-                    paint_one_tool_card(ui, &card);
+                    // Borrow the card. A clone per frame copied its diff and screenshot.
+                    let fallback;
+                    let card = match self.tool_cards.iter().find(|c| c.id == b.tool_id) {
+                        Some(card) => card,
+                        None => {
+                            fallback = ToolCard {
+                                id: b.tool_id.clone(),
+                                title: b.tool_title.clone(),
+                                kind: String::new(),
+                                status: b.tool_status.clone(),
+                                detail: b.tool_detail.clone(),
+                                diff: String::new(),
+                                image_data_url: None,
+                            };
+                            &fallback
+                        }
+                    };
+                    paint_one_tool_card(ui, card);
                 }
             }
             if drawn {
@@ -1807,12 +1796,11 @@ impl Cabin {
             .get(self.thread_idx)
             .map(|t| t.plan_body.clone())
             .unwrap_or_default();
-        let turns =
-            visible_turn_count_from(self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())));
+        let (turns, estimate) = self.session_size();
         let tokens = if self.grok_usage.context_tokens_used > 0 {
             self.grok_usage.context_used().min(u64::from(u32::MAX)) as u32
         } else {
-            estimate_messages_from(self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())))
+            estimate
         };
         let why = fork_offer_why(turns, tokens, CONTEXT_BUDGET_TOKENS);
         if plan.trim().is_empty() && why.is_none() {
@@ -2331,6 +2319,25 @@ impl Cabin {
             });
     }
 
+    /// Visible turns and the token estimate behind the fork offer. Scanning the whole
+    /// transcript every frame cost more than painting it, so key it like the chat views.
+    pub(super) fn session_size(&mut self) -> (usize, u32) {
+        let key = (
+            self.visible_thread_id(),
+            self.messages.len(),
+            self.messages.last().map_or(0, |m| m.1.len()),
+        );
+        if self.session_size.0 != key {
+            let msgs = || self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str()));
+            let size = (
+                visible_turn_count_from(msgs()),
+                estimate_messages_from(msgs()),
+            );
+            self.session_size = (key, size);
+        }
+        self.session_size.1
+    }
+
     pub(super) fn cached_chat_views(&mut self) -> &[ChatView] {
         let tid = self.visible_thread_id();
         let n = self.messages.len();
@@ -2343,11 +2350,18 @@ impl Cabin {
             .iter()
             .map(|m| (m.0.as_str(), m.1.as_str()))
             .collect();
-        if self.chat_view_tid == tid && self.chat_view_n == n && !self.chat_views.is_empty() {
-            refresh_last_stretch(&mut self.chat_views, &refs);
-        } else {
-            self.chat_views = visible_chat_refs(refs.iter().copied());
-        }
+        let kept =
+            if self.chat_view_tid == tid && self.chat_view_n == n && !self.chat_views.is_empty() {
+                refresh_last_stretch(&mut self.chat_views, &refs)
+            } else {
+                self.chat_views = visible_chat_refs(refs.iter().copied());
+                0
+            };
+        // `thought_body_key` scrubs and hashes a whole thought. Key each view once here,
+        // not every thought in the transcript on every frame.
+        self.chat_view_keys.truncate(kept);
+        let from = self.chat_view_keys.len();
+        self.chat_view_keys.extend(self.chat_views[from..].iter().map(view_fold_key));
         self.chat_view_tid = tid;
         self.chat_view_n = n;
         self.chat_view_last = last;

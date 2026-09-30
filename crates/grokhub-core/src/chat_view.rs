@@ -335,21 +335,23 @@ fn view_text(s: &str) -> &str {
 
 /// Rebuild only the trailing stretch after the last real user turn.
 /// Stream deltas must not clone earlier messages into a new view list.
-pub fn refresh_last_stretch(views: &mut Vec<ChatView>, messages: &[(&str, &str)]) {
+/// Returns how many leading views were kept, so per-view caches can keep theirs.
+pub fn refresh_last_stretch(views: &mut Vec<ChatView>, messages: &[(&str, &str)]) -> usize {
     let Some(user_i) = messages
         .iter()
         .rposition(|(role, content)| *role == "user" && !is_workload_user(content))
     else {
         *views = visible_chat_refs(messages.iter().copied());
-        return;
+        return 0;
     };
     let Some(view_i) = views.iter().rposition(|v| v.kind == ChatKind::User) else {
         *views = visible_chat_refs(messages.iter().copied());
-        return;
+        return 0;
     };
     let ask = messages[user_i].1;
     views.truncate(view_i + 1);
     emit_stretch(views, &messages[user_i + 1..], ask);
+    view_i + 1
 }
 
 fn hop_is_work(rest: &str) -> bool {
@@ -927,7 +929,11 @@ mod tests {
             ("user", ask),
             ("assistant", long),
         ];
-        refresh_last_stretch(&mut views, &msgs);
+        let kept = refresh_last_stretch(&mut views, &msgs);
+        assert_eq!(
+            kept, 3,
+            "the earlier turns and the last ask stay as they were"
+        );
         assert_eq!(views[0].body, user);
         assert_eq!(views[1].body, mid);
         assert_eq!(views[2].body, ask);
