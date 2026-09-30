@@ -18,6 +18,7 @@ pub mod context;
 pub mod desktop_entry;
 pub mod diagnostics;
 pub mod doctor;
+pub mod export;
 pub mod feel;
 pub mod frame;
 pub mod goal;
@@ -117,6 +118,9 @@ pub use chat::{
     parse_responses_text, reasoning_effort_for_mode, resolve_chat_model, responses_request_body,
     responses_url, route_auto_mode, settings_pin_blocks_auto, should_failover_status,
     CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, DEFAULT_MODEL, REASONING_EFFORTS, XAI_BASE,
+};
+pub use export::{
+    chat_export_html, chat_export_json, html_escape, md_to_html, ChatExport, EXPORT_FORMATS_HINT,
 };
 pub use md::{
     code_tokens, md_blocks, md_link_ok, md_plain, md_spans, md_table_cells, md_wants_full_width,

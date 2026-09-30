@@ -62,6 +62,8 @@ pub enum Slash {
     Rewind,
     Room(String),
     Export,
+    /// `/export html`, `/export json`, or `/export md`.
+    ExportAs(String),
     Rename(String),
     Context,
     Health,
@@ -274,7 +276,8 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         }
         "/rewind" => Some(Slash::Rewind),
         "/room" if !rest.is_empty() => Some(Slash::Room(rest.to_string())),
-        "/export" => Some(Slash::Export),
+        "/export" if rest.is_empty() => Some(Slash::Export),
+        "/export" => Some(Slash::ExportAs(rest.to_string())),
         _ => None,
     }
 }
@@ -380,6 +383,7 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Rewind => "rewind",
         Slash::Room(_) => "room",
         Slash::Export => "export",
+        Slash::ExportAs(_) => "export",
         Slash::Rename(_) => "rename",
         Slash::Context => "context",
         Slash::Health => "health",
@@ -442,7 +446,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/learn reflect", hint: "Run self-improve reflect", insert: "/learn reflect", run_on_pick: true },
     SlashDef { cmd: "/mode", hint: "Set mode…", insert: "/mode ", run_on_pick: false },
     SlashDef { cmd: "/imagine", hint: "Open Imagine", insert: "/imagine ", run_on_pick: false },
-    SlashDef { cmd: "/export", hint: "Export chat markdown", insert: "/export", run_on_pick: true },
+    SlashDef { cmd: "/export", hint: "Export chat (md, html, or json)", insert: "/export", run_on_pick: true },
     SlashDef { cmd: "/rename", hint: "Rename chat…", insert: "/rename ", run_on_pick: false },
     SlashDef { cmd: "/pin", hint: "Pin or unpin this chat", insert: "/pin", run_on_pick: true },
     SlashDef { cmd: "/delete", hint: "Delete this chat tab", insert: "/delete", run_on_pick: true },
@@ -674,7 +678,7 @@ pub fn slash_help() -> String {
         "/workflow pause|resume|stop <name-or-run-id> — pause, resume, or stop that run",
         "/workflows — open Skills with the Workflows section in view",
         "/room <name> — speak the room",
-        "/export — write this chat as markdown",
+        "/export — write this chat as markdown (/export html or /export json for those)",
         "/rename <title> — name this chat (permanent)",
         "/pin — pin or unpin this chat",
         "/delete — delete this chat tab",

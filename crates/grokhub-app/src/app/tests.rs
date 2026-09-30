@@ -15558,3 +15558,38 @@ fn dropping_files_says_what_happens() {
     let src = cabin_src();
     assert!(fn_src(&src, "take_dropped_attach").contains("self.drop_extra"));
 }
+
+#[test]
+fn export_writes_html_and_json_next_to_export_md() {
+    let mut quiet = QuietCabin::boot("slash-export-formats");
+    let cabin = &mut quiet.cabin;
+    cabin.messages = std::sync::Arc::new(vec![
+        ("user".into(), "harbor <b>export</b> line".into()),
+        ("assistant".into(), "1. **one**\n2. two".into()),
+    ]);
+    cabin.cfg.project_dir.clear();
+
+    cabin.run_slash_line("/export html");
+    let html_path = cabin.status.strip_prefix("Wrote ").unwrap_or("").to_string();
+    assert!(html_path.ends_with("export.html"), "{}", cabin.status);
+    wait_for("export.html must hold the escaped chat", || {
+        let page = std::fs::read_to_string(&html_path).unwrap_or_default();
+        page.contains("harbor &lt;b&gt;export&lt;/b&gt; line") && page.contains("<strong>one</strong>")
+    });
+
+    cabin.run_slash_line("/export json");
+    let json_path = cabin.status.strip_prefix("Wrote ").unwrap_or("").to_string();
+    assert!(json_path.ends_with("export.json"), "{}", cabin.status);
+    wait_for("export.json must parse and keep both turns", || {
+        std::fs::read_to_string(&json_path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .is_some_and(|v| v["messages"].as_array().is_some_and(|m| m.len() == 2))
+    });
+
+    cabin.run_slash_line("/export md");
+    assert!(cabin.status.ends_with("export.md"), "{}", cabin.status);
+    cabin.run_slash_line("/export pdf");
+    assert_eq!(cabin.status, grokhub_core::EXPORT_FORMATS_HINT);
+    assert!(!cabin.running);
+}
