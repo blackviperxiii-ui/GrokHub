@@ -131,6 +131,16 @@ pub fn session_transcript_unloaded(show_pending: bool, message_count: usize) -> 
     show_pending && message_count == 0
 }
 
+/// One row of `threads.json`. A thread serializes straight from the struct: going
+/// through `serde_json::Value` copied the whole history into a tree on every save.
+/// Only an unloaded Grok row takes that path, to drop its `messages` key.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum SavedRow<'a> {
+    Thread(&'a ChatThread),
+    Unloaded(serde_json::Value),
+}
+
 pub fn save(threads: &[ChatThread]) -> Result<(), String> {
     save_capped(threads, config::HISTORY_STORE_CAP)
 }
@@ -140,13 +150,15 @@ pub fn save(threads: &[ChatThread]) -> Result<(), String> {
 fn save_capped(threads: &[ChatThread], cap: usize) -> Result<(), String> {
     let mut rows = Vec::with_capacity(threads.len());
     for t in threads {
-        let mut row = serde_json::to_value(t).map_err(|e| e.to_string())?;
         if session_transcript_unloaded(t.grok_show_pending, t.messages.len()) {
+            let mut row = serde_json::to_value(t).map_err(|e| e.to_string())?;
             if let Some(obj) = row.as_object_mut() {
                 obj.remove("messages");
             }
+            rows.push(SavedRow::Unloaded(row));
+        } else {
+            rows.push(SavedRow::Thread(t));
         }
-        rows.push(row);
     }
     let mut rows = serde_json::Value::Array(rows);
     let (s, dropped) = config::fit_history_json(&mut rows, cap, thread_message_bodies)?;
@@ -704,6 +716,60 @@ mod tests {
         let old: ChatThread = serde_json::from_str(r#"{"id":"t1","title":"legacy"}"#).unwrap();
         assert_eq!(old.accessed_ms, 0);
         assert!(old.grok_cwd.is_none());
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn save_round_trips_loaded_and_unloaded_rows_together() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("save-mixed");
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let mut chat = ChatThread::new("Dock \"fix\"", false);
+        chat.messages = Arc::new(vec![
+            ("user".into(), "wrap the dock\nthen the rail — ✓".into()),
+            (
+                "assistant".into(),
+                "THINKING:\n\"quoted\" \\ path\n\nDone.".into(),
+            ),
+        ]);
+        chat.plan_body = "1. dock\n2. rail".into();
+        chat.retired_sessions = vec!["old-session".into()];
+        let mut pending = ChatThread::new("Night watch", false);
+        pending.grok_session = Some("01a01b0f-7e06-74b1-8f22-5236c9d57d45".into());
+        pending.grok_show_pending = true;
+        let empty = ChatThread::new("Blank", false);
+        save(&[chat.clone(), pending.clone(), empty.clone()]).expect("save");
+
+        let raw = fs::read_to_string(threads_path()).expect("threads.json");
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&raw).expect("an array of rows");
+        assert_eq!(rows.len(), 3);
+        assert!(
+            rows[0].get("messages").is_some(),
+            "a loaded chat keeps its transcript"
+        );
+        assert!(
+            rows[1].get("messages").is_none(),
+            "an unloaded row drops messages: {}",
+            rows[1]
+        );
+        assert!(
+            rows[2].get("messages").is_some(),
+            "an empty but loaded chat still says []"
+        );
+
+        let back = load();
+        assert_eq!(back.len(), 3);
+        assert_eq!(back[0].id, chat.id);
+        assert_eq!(back[0].title, chat.title);
+        assert_eq!(*back[0].messages, *chat.messages);
+        assert_eq!(back[0].plan_body, chat.plan_body);
+        assert_eq!(back[0].retired_sessions, chat.retired_sessions);
+        assert_eq!(back[1].id, pending.id);
+        assert!(back[1].grok_show_pending && back[1].messages.is_empty());
+        assert_eq!(back[1].grok_session, pending.grok_session);
+        assert_eq!(back[2].id, empty.id);
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }

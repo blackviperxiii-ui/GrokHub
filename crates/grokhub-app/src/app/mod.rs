@@ -261,6 +261,10 @@ enum SettingsGroup {
 
 const HIDDEN_HEARTBEAT_MS: u64 = 400;
 
+/// `(thread, message count, last length, messages_rev, messages_body_mark)`: the
+/// transcript a cache was built from.
+type TranscriptKey = (String, usize, usize, u64, (u64, usize));
+
 fn mode_status_line(mode: &str, pinned_model: &str) -> String {
     if matches!(mode, "auto" | "adaptive" | "smart") && !settings_pin_blocks_auto(pinned_model) {
         return "Mode auto — routes Fast / Balance / Think / Max".into();
@@ -383,6 +387,8 @@ pub struct Cabin {
     messages: Arc<Vec<(String, String)>>,
     /// Bumped in `live_mut`. An in-place edit can keep the count and the last length.
     messages_rev: u64,
+    /// Bumped by `live_mut` but not `live_tail_mut`: an edit before the last message.
+    messages_body_rev: u64,
     status: String,
     running: bool,
     /// One SIGTERM retry per user send. kick_model sets Thinking, so the
@@ -524,13 +530,15 @@ pub struct Cabin {
     chat_views: Vec<ChatView>,
     /// Fold key per `chat_views` row (0 for non-thoughts). Built with the views.
     chat_view_keys: Vec<u64>,
-    /// `(thread, message count, last length, messages_rev)` → `(visible turns, token estimate)`.
-    session_size: ((String, usize, usize, u64), (usize, u32)),
+    /// Transcript key → `(visible turns, token estimate)`.
+    session_size: (TranscriptKey, (usize, u32)),
     chat_view_tid: String,
     chat_view_n: usize,
     chat_view_last: usize,
     /// `messages_rev` the cached views were built from.
     chat_view_rev: u64,
+    /// `messages_body_mark` the cached views were built from.
+    chat_view_body: (u64, usize),
     presence_ring: Vec<(u64, String)>,
     voice_sock: Option<crate::voice_ws::VoiceSock>,
     voice_state: VoiceState,
@@ -956,6 +964,7 @@ impl Cabin {
             composer: String::new(),
             messages,
             messages_rev: 0,
+            messages_body_rev: 0,
             status: String::new(),
             running: false,
             turn_retried: false,
@@ -1090,11 +1099,12 @@ impl Cabin {
             thought_buf: String::new(),
             chat_views: vec![],
             chat_view_keys: vec![],
-            session_size: ((String::new(), usize::MAX, usize::MAX, u64::MAX), (0, 0)),
+            session_size: ((String::new(), usize::MAX, usize::MAX, u64::MAX, (0, 0)), (0, 0)),
             chat_view_tid: String::new(),
             chat_view_n: usize::MAX,
             chat_view_last: usize::MAX,
             chat_view_rev: 0,
+            chat_view_body: (0, 0),
             presence_ring: vec![],
             voice_sock: None,
             voice_state: VoiceState::Idle,
@@ -1365,6 +1375,7 @@ impl Cabin {
             composer: String::new(),
             messages: Arc::new(Vec::new()),
             messages_rev: 0,
+            messages_body_rev: 0,
             status: String::new(),
             running: false,
             turn_retried: false,
@@ -1490,11 +1501,12 @@ impl Cabin {
             thought_buf: String::new(),
             chat_views: Vec::new(),
             chat_view_keys: Vec::new(),
-            session_size: ((String::new(), usize::MAX, usize::MAX, u64::MAX), (0, 0)),
+            session_size: ((String::new(), usize::MAX, usize::MAX, u64::MAX, (0, 0)), (0, 0)),
             chat_view_tid: String::new(),
             chat_view_n: 0,
             chat_view_last: 0,
             chat_view_rev: 0,
+            chat_view_body: (0, 0),
             presence_ring: Vec::new(),
             voice_sock: None,
             voice_state: VoiceState::Idle,
@@ -2152,7 +2164,7 @@ impl Cabin {
         let vis = self.visible_thread_id();
         let job = self.chat_job_thread.as_deref();
         if job.is_none() || job == Some(vis.as_str()) {
-            let msgs = self.live_mut();
+            let msgs = self.live_tail_mut();
             if let Some(m) = msgs.last_mut() {
                 if m.0 == "assistant" {
                     m.1 = content;

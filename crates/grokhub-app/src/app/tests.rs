@@ -8070,6 +8070,269 @@ fn release_isolated(root: &std::path::Path, cabin: super::Cabin) {
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
+/// A live turn of `rows` reply/thought rows, each followed by a tool call.
+fn live_turn(rows: usize, tag: &str, lines: usize) -> Vec<grokhub_core::LiveBlock> {
+    let mut blocks = Vec::new();
+    for r in 0..rows {
+        let body = (0..lines)
+            .map(|l| {
+                format!("{tag} row {r} line {l}: the dock wraps and the rail keeps its footer.")
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        if r % 2 == 0 {
+            grokhub_core::append_say(&mut blocks, &body);
+        } else {
+            grokhub_core::append_thought(&mut blocks, &body);
+        }
+        grokhub_core::append_tool(
+            &mut blocks,
+            &format!("{tag}-t{r}"),
+            "Edit src/dock.rs",
+            "completed",
+            "",
+        );
+    }
+    blocks
+}
+
+/// Paint the live turn with only the top `clip_h` px visible.
+/// Returns the turn's height and the pane width it was laid out at.
+fn paint_live_clipped(ctx: &egui::Context, cabin: &mut super::Cabin, clip_h: f32) -> (f32, f32) {
+    let raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(900.0, 4000.0),
+        )),
+        ..Default::default()
+    };
+    let (mut height, mut width) = (0.0, 0.0);
+    let _ = ctx.run(raw, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let top = ui.cursor().min;
+            width = ui.available_width();
+            ui.set_clip_rect(egui::Rect::from_min_size(top, egui::vec2(900.0, clip_h)));
+            let mut collapse = false;
+            let _ = cabin.paint_live_blocks(ui, true, false, &mut collapse);
+            height = ui.cursor().min.y - top.y;
+        });
+    });
+    (height, width)
+}
+
+#[test]
+fn offscreen_live_rows_reserve_their_height_and_rekey_on_a_new_turn() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("live-cull");
+    let tid = cabin.visible_thread_id();
+    cabin.live_blocks = live_turn(20, "first", 3);
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    // Cold: nothing cached, every row lays out.
+    let (cold, pane_w) = paint_live_clipped(&ctx, &mut cabin, 200.0);
+    let row_h = |ctx: &egui::Context| -> Vec<(u64, u8, f32)> {
+        ctx.data(|d| d.get_temp(super::live_row_height_id(&tid, pane_w)))
+            .unwrap_or_default()
+    };
+    let cold_rows = row_h(&ctx);
+    assert_eq!(
+        cold_rows.len(),
+        cabin.live_blocks.len(),
+        "one slot per live block"
+    );
+    // Warm: rows below the clip reserve their cached height instead.
+    let (warm, _) = paint_live_clipped(&ctx, &mut cabin, 200.0);
+    assert!(cold > 1000.0, "the turn must run past the clip: {cold}");
+    assert!(
+        (warm - cold).abs() < 0.5,
+        "culled rows must reserve exactly their painted height: cold {cold} warm {warm}"
+    );
+    assert_eq!(
+        row_h(&ctx),
+        cold_rows,
+        "a steady turn keeps its row heights"
+    );
+    for (i, b) in cabin.live_blocks.iter().enumerate() {
+        let (ident, _, h) = cold_rows[i];
+        if b.kind == grokhub_core::LiveKind::Tool
+            && i > 0
+            && cabin.live_blocks[i - 1].kind == b.kind
+        {
+            continue;
+        }
+        assert_eq!(
+            ident,
+            super::live_row_ident(b),
+            "row {i} is keyed by its own block"
+        );
+        assert!(h > 0.0, "row {i} has a height");
+    }
+
+    // Minimize all while the turn streams: off-screen thoughts shrink too, so they
+    // must re-measure instead of reserving their expanded height.
+    for b in cabin
+        .live_blocks
+        .iter()
+        .filter(|b| b.kind == grokhub_core::LiveKind::Thought)
+    {
+        super::write_thought_fold(
+            &ctx,
+            super::thought_fold_id(&tid, "slot", b.fold_slot),
+            grokhub_core::ThoughtFold::Minimized,
+        );
+    }
+    let (folded, _) = paint_live_clipped(&ctx, &mut cabin, 200.0);
+    let (folded_truth, _) = paint_live_clipped(&ctx, &mut cabin, 10_000.0);
+    assert!(
+        folded < cold,
+        "minimized thoughts are shorter: {folded} vs {cold}"
+    );
+    assert!(
+        (folded - folded_truth).abs() < 0.5,
+        "a fold change must repaint off-screen rows: clipped {folded} painted {folded_truth}"
+    );
+    for b in cabin
+        .live_blocks
+        .iter()
+        .filter(|b| b.kind == grokhub_core::LiveKind::Thought)
+    {
+        super::write_thought_fold(
+            &ctx,
+            super::thought_fold_id(&tid, "slot", b.fold_slot),
+            grokhub_core::ThoughtFold::Expanded,
+        );
+    }
+
+    // The row still streaming grows below the clip and must still be measured.
+    let last_i = cabin
+        .live_blocks
+        .iter()
+        .rposition(|b| b.kind != grokhub_core::LiveKind::Tool)
+        .expect("text row");
+    cabin.live_blocks.truncate(last_i + 1);
+    let (before, _) = paint_live_clipped(&ctx, &mut cabin, 200.0);
+    let grown_body = "\n\nmore streamed text for the tail row.".repeat(12);
+    cabin.live_blocks[last_i].body.push_str(&grown_body);
+    let (after, _) = paint_live_clipped(&ctx, &mut cabin, 200.0);
+    assert!(
+        after > before + 100.0,
+        "the growing tail row must repaint off-screen: before {before} after {after}"
+    );
+
+    // Next turn: same row indices, new blocks and much shorter rows. No stale height.
+    cabin.live_blocks = live_turn(20, "second", 1);
+    let (reused, _) = paint_live_clipped(&ctx, &mut cabin, 200.0);
+    // Ground truth: nothing clipped, so every row paints and measures itself.
+    let (painted, _) = paint_live_clipped(&ctx, &mut cabin, 10_000.0);
+    assert!(
+        (reused - painted).abs() < 0.5,
+        "a new turn must not reserve the last turn's heights: reused {reused} painted {painted}"
+    );
+    assert!(
+        painted < cold,
+        "the second turn's rows are shorter: {painted} vs {cold}"
+    );
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn transcript_caches_hold_while_the_turn_streams_and_catch_up_after() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("stream-hold");
+    let mut t = crate::threads::ChatThread::new("Dock", false);
+    t.messages = std::sync::Arc::new(vec![
+        ("user".into(), "fix the dock".into()),
+        (
+            "assistant".into(),
+            "THINKING:\nThe dock wraps early.\n\nFixed it.".into(),
+        ),
+        ("user".into(), "and the rail".into()),
+        (
+            "assistant".into(),
+            "THINKING:\nCheck the rail.\n\nOn it".into(),
+        ),
+    ]);
+    cabin.threads = vec![t];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    let _ = cabin.cached_chat_views();
+    let _ = cabin.session_size();
+
+    // A turn streams here. The first delta unshares the transcript from its thread,
+    // so the views rebuild once.
+    cabin.running = true;
+    cabin.chat_job_thread = Some(cabin.visible_thread_id());
+    grokhub_core::append_say(&mut cabin.live_blocks, "On it, the rail");
+    if let Some(last) = cabin.live_tail_mut().last_mut() {
+        last.1.push_str(", the rail");
+    }
+    let streaming = cabin.cached_chat_views().to_vec();
+    let size = cabin.session_size();
+    // Later deltas only grow the last message, and the pane paints it from live
+    // blocks: neither cache rebuilds on them.
+    if let Some(last) = cabin.live_tail_mut().last_mut() {
+        last.1
+            .push_str(" now keeps its footer and the dock stops wrapping.");
+    }
+    assert_eq!(
+        cabin.cached_chat_views(),
+        &streaming[..],
+        "stream deltas skip the view rebuild"
+    );
+    assert_eq!(
+        cabin.session_size(),
+        size,
+        "stream deltas skip the estimate"
+    );
+
+    // An edit before the last message is not a stream delta: rebuild even mid-turn.
+    cabin.live_mut()[1].1 = "THINKING:\nThe dock wraps late.\n\nFixed it.".into();
+    let mid = cabin.cached_chat_views().to_vec();
+    assert!(
+        mid.iter().any(|v| v.body.contains("wraps late")),
+        "an earlier edit must rebuild the views while a turn streams: {mid:?}"
+    );
+    assert_ne!(
+        cabin.session_size(),
+        size,
+        "an earlier edit refreshes the estimate"
+    );
+
+    // The turn ends: the tail catches up once.
+    if let Some(last) = cabin.live_tail_mut().last_mut() {
+        last.1.push_str(" Done.");
+    }
+    cabin.running = false;
+    let after = cabin.cached_chat_views().to_vec();
+    assert!(
+        after.last().is_some_and(|v| v.body.ends_with("Done.")),
+        "the finished reply must reach the views: {after:?}"
+    );
+    assert!(
+        after.iter().any(|v| v.body.contains("wraps late")),
+        "the earlier edit survives the tail refresh: {after:?}"
+    );
+    assert_eq!(
+        cabin.session_size(),
+        (2, estimate_messages(&cabin.messages)),
+        "the estimate catches up when the turn ends"
+    );
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn live_row_height_cache_is_per_thread_and_width() {
+    let a = super::live_row_height_id("thread-a", 720.0);
+    assert_eq!(a, super::live_row_height_id("thread-a", 720.2));
+    assert_ne!(a, super::live_row_height_id("thread-a", 1100.0));
+    assert_ne!(a, super::live_row_height_id("thread-b", 720.0));
+    assert_ne!(
+        a,
+        super::chat_row_height_id("thread-a", 720.0),
+        "live rows must not share the stored rows' height list"
+    );
+}
+
 #[test]
 fn chat_view_fold_keys_follow_the_views_as_the_chat_changes() {
     let _g = crate::config::hold_test_config();
@@ -14438,6 +14701,7 @@ fn quiet_cabin() -> Cabin {
         composer: String::new(),
         messages: std::sync::Arc::new(Vec::new()),
         messages_rev: 0,
+        messages_body_rev: 0,
         status: String::new(),
         running: false,
         turn_retried: false,
@@ -14563,11 +14827,12 @@ fn quiet_cabin() -> Cabin {
         thought_buf: String::new(),
         chat_views: Vec::new(),
         chat_view_keys: Vec::new(),
-        session_size: ((String::new(), usize::MAX, usize::MAX, u64::MAX), (0, 0)),
+        session_size: ((String::new(), usize::MAX, usize::MAX, u64::MAX, (0, 0)), (0, 0)),
         chat_view_tid: String::new(),
         chat_view_n: 0,
         chat_view_last: 0,
         chat_view_rev: 0,
+        chat_view_body: (0, 0),
         presence_ring: Vec::new(),
         voice_sock: None,
         voice_state: grokhub_core::VoiceState::Idle,
