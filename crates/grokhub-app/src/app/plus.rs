@@ -112,6 +112,9 @@ impl Cabin {
         match rx.try_recv() {
             Ok((target, PlusPick::Ready(ready))) => {
                 self.apply_plus_ready(target, ready);
+                if let Some(note) = drop_extra_note(std::mem::take(&mut self.drop_extra)) {
+                    self.status = note;
+                }
             }
             Ok((target, PlusPick::NativeMiss)) => {
                 self.file_pick = Some(target);
@@ -126,6 +129,7 @@ impl Cabin {
                 self.status = plus_empty_status().into();
             }
             Ok((_, PlusPick::Err(e))) => {
+                self.drop_extra = 0;
                 self.status = e;
             }
             Err(mpsc::TryRecvError::Empty) => {
@@ -219,18 +223,48 @@ impl Cabin {
         self.status.clear();
     }
 
+    /// While a file is dragged over the window, say what a drop will do.
+    pub(super) fn paint_drop_hint(&self, ctx: &egui::Context) {
+        let n = ctx.input(|i| i.raw.hovered_files.len());
+        if n == 0 {
+            return;
+        }
+        let line = drop_hint_line(self.page_nav() == Nav::Imagine, n);
+        let screen = ctx.screen_rect();
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("cabin-drop-hint"),
+        ));
+        painter.rect_filled(screen, 0.0, crate::theme::bg().gamma_multiply(0.72));
+        let font = egui::FontId::proportional(crate::theme::FONT_SECTION);
+        let galley = painter.layout_no_wrap(line, font, crate::theme::fg());
+        let card = egui::Rect::from_center_size(
+            screen.center(),
+            galley.size() + egui::vec2(48.0, 32.0),
+        );
+        painter.rect(
+            card,
+            16.0,
+            crate::theme::elevated(),
+            egui::Stroke::new(1.5, crate::theme::link()),
+        );
+        painter.galley(card.center() - galley.size() * 0.5, galley, crate::theme::fg());
+    }
+
     /// A file dropped on the window becomes the next chat attachment.
     /// On Imagine it becomes the reference hint instead.
     pub(super) fn take_dropped_attach(&mut self, ctx: &egui::Context) {
-        let path = ctx.input(|i| {
+        let paths: Vec<PathBuf> = ctx.input(|i| {
             i.raw
                 .dropped_files
                 .iter()
-                .find_map(|f| f.path.clone())
+                .filter_map(|f| f.path.clone())
+                .collect()
         });
-        let Some(path) = path else {
+        let Some(path) = paths.first().cloned() else {
             return;
         };
+        self.drop_extra = paths.len() - 1;
         let target = if self.page_nav() == Nav::Imagine {
             PlusTarget::Imagine
         } else {
@@ -557,5 +591,30 @@ impl Cabin {
                 }
             }
         }
+    }
+}
+
+/// What a drop will do. The cabin takes one file per message.
+pub(super) fn drop_hint_line(imagine: bool, files: usize) -> String {
+    let what = if imagine {
+        "Drop to use as the Imagine reference"
+    } else {
+        "Drop to attach to your next message"
+    };
+    if files > 1 {
+        format!("{what} — the first of {files} files")
+    } else {
+        what.to_string()
+    }
+}
+
+/// Status after a multi-file drop attached only the first file.
+pub(super) fn drop_extra_note(extra: usize) -> Option<String> {
+    match extra {
+        0 => None,
+        1 => Some("Attached the first file. The other one was left out — one file per message.".into()),
+        n => Some(format!(
+            "Attached the first file. {n} others were left out — one file per message."
+        )),
     }
 }

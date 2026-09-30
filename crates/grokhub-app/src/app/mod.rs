@@ -619,6 +619,8 @@ pub struct Cabin {
     plus_ignore_close: bool,
     file_pick: Option<PlusTarget>,
     pick_rx: Option<mpsc::Receiver<(PlusTarget, PlusPick)>>,
+    /// Files past the first in the last drop. Only the first attaches.
+    drop_extra: usize,
     pick_list_rx: Option<mpsc::Receiver<PickList>>,
     pick_dir: String,
     pick_cache: Option<PickList>,
@@ -1154,6 +1156,7 @@ impl Cabin {
             plus_ignore_close: false,
             file_pick: None,
             pick_rx: None,
+            drop_extra: 0,
             pick_list_rx: None,
             pick_dir: std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()),
             pick_cache: None,
@@ -1540,6 +1543,7 @@ impl Cabin {
             plus_ignore_close: false,
             file_pick: None,
             pick_rx: None,
+            drop_extra: 0,
             pick_list_rx: None,
             pick_dir: String::new(),
             pick_cache: None,
@@ -4550,6 +4554,7 @@ impl eframe::App for Cabin {
         self.poll_single();
         self.poll_pick();
         self.take_dropped_attach(ctx);
+        self.paint_drop_hint(ctx);
         self.poll_pick_list();
         self.poll_eyes_cap();
         self.poll_recipe_cap();

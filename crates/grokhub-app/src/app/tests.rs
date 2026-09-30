@@ -14100,6 +14100,7 @@ fn quiet_cabin() -> Cabin {
         plus_ignore_close: false,
         file_pick: None,
         pick_rx: None,
+        drop_extra: 0,
         pick_list_rx: None,
         pick_dir: String::new(),
         pick_cache: None,
@@ -15532,4 +15533,28 @@ fn over_budget_holds_night_loops_and_anticipate() {
     assert!(old.budget_pauses_scheduled);
     let saved = serde_json::to_string(&config::AppConfig::default()).unwrap();
     assert!(!saved.contains("dailyTokenBudget") && !saved.contains("daily_token_budget"), "off writes nothing");
+}
+
+#[test]
+fn dropping_files_says_what_happens() {
+    use super::plus::{drop_extra_note, drop_hint_line};
+    assert_eq!(drop_hint_line(false, 1), "Drop to attach to your next message");
+    assert_eq!(drop_hint_line(true, 1), "Drop to use as the Imagine reference");
+    assert!(drop_hint_line(false, 3).ends_with("the first of 3 files"));
+    assert_eq!(drop_extra_note(0), None);
+    assert!(drop_extra_note(1).unwrap().contains("The other one was left out"));
+    assert!(drop_extra_note(4).unwrap().contains("4 others were left out"));
+    let app = Cabin::quiet_for_test();
+    let ctx = egui::Context::default();
+    let mut input = egui::RawInput::default();
+    input.hovered_files.push(egui::HoveredFile::default());
+    let out = ctx.run(input, |ctx| {
+        crate::theme::apply(ctx, true);
+        app.paint_drop_hint(ctx);
+    });
+    assert!(!out.shapes.is_empty(), "hovering a file paints the drop hint");
+    let quiet = ctx.run(egui::RawInput::default(), |ctx| app.paint_drop_hint(ctx));
+    assert!(quiet.shapes.is_empty(), "no hover, no overlay");
+    let src = cabin_src();
+    assert!(fn_src(&src, "take_dropped_attach").contains("self.drop_extra"));
 }
