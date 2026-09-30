@@ -2,9 +2,18 @@
 
 ## Unreleased
 
+## 2.10.48 — 2026-09-30
+
 A finished reply stays the way it streamed. Each message Grok sends between tool calls is its own bubble, thoughts stay in their own rows, and tool calls sit where they ran. Before, the end of a turn folded every progress line into one long bubble. Messages split by a tool call no longer run together (`hit.GrokHub`), and a thought with several paragraphs no longer spills into the reply.
 
 Back-to-back tool calls share one quiet row, `3 steps · Grep, Read file, Run terminal command`, that opens to each call. A single call says what it touched (`Read src/main.rs`, `Grep · 3 matches`), a failed call is marked, and the detached Work tree under a finished turn is gone. Copy and Reply sit under the last reply of a turn instead of under every progress line.
+
+A step that runs a host command or starts Imagine still shows as a thought, not as the answer, and the text of a command is never split to add a paragraph break. A saved tool row keeps a short title and detail, and a failed tool partway through a turn no longer switches the quick chips to error.
+
+Turns saved before this version keep their old single-bubble form.
+
+- Linux: `grokhub-linux-v2.10.48.tar.gz` and AUR `pkgver=2.10.48`.
+- Windows: `GrokHub-Setup-2.10.48.exe` and `grokhub-windows-v2.10.48.zip`.
 
 ## 2.10.47 — 2026-09-30
 
