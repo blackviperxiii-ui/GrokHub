@@ -87,7 +87,7 @@ impl Cabin {
                 ui.set_min_width(360.0);
                 let edit = ui.add(
                     egui::TextEdit::singleline(&mut self.palette_q)
-                        .hint_text("Go to…")
+                        .hint_text(crate::theme::hint("Go to…"))
                         .desired_width(360.0),
                 );
                 if self.palette_focus {

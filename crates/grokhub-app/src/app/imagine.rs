@@ -544,7 +544,7 @@ impl Cabin {
                         .desired_width(prompt_w)
                         .clip_text(true)
                         .frame(false)
-                        .hint_text("Type to imagine"),
+                        .hint_text(crate::theme::hint("Type to imagine")),
                 );
                 if self.imagine_want_focus {
                     edit.request_focus();

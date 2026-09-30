@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.10.44 — 2026-09-30
+
+Arrows, checks, math signs, and Cyrillic or Greek paint instead of a tofu box ("Settings → Update"): an unsubset Inter Regular sits behind the latin statics as a fallback. Every text box placeholder is muted, so an empty field no longer reads as typed text, and the composer placeholder is a little easier to read. The rail footer is pinned: in a short window History clips before the avatar, which is the rail's door to Settings. The session row wraps, so a narrow pane drops Effort to its own line instead of clipping it, and the dividers are hairlines. Model and effort pills size to their label and show a down chevron. Light borders are one step darker so card edges show on the panel, and text selection uses its own colour instead of the hover fill. An install error that already names the install command does not print it twice.
+
+- Linux: `grokhub-linux-v2.10.44.tar.gz` and AUR `pkgver=2.10.44`.
+- Windows: `GrokHub-Setup-2.10.44.exe` and `grokhub-windows-v2.10.44.zip`.
+
 ## 2.10.43 — 2026-09-30
 
 Replies render numbered lists, task lists, tables, quotes, rules, links, and strikethrough. Code blocks are coloured by language and each one has its own Copy. Links open only for http and https. Your own messages get Edit, which puts the text back in the composer; a draft you already typed stays on top. Ctrl+F finds text in the open chat: Enter and Shift+Enter step through the matches, the picked message gets a ring, and Esc closes it. Enter in the find box does not answer a permission card.

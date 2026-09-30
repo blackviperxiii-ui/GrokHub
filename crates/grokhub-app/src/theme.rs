@@ -67,11 +67,16 @@ pub const LIGHT_ELEVATED: Color32 = Color32::from_rgb(0xff, 0xff, 0xff);
 pub const LIGHT_FG: Color32 = Color32::from_rgb(0x0a, 0x0a, 0x0a);
 pub const LIGHT_MUTED: Color32 = Color32::from_rgb(0x73, 0x73, 0x73);
 pub const LIGHT_SUBTLE: Color32 = Color32::from_rgb(0x8a, 0x8a, 0x8a);
-pub const LIGHT_BORDER: Color32 = Color32::from_rgb(0xe4, 0xe4, 0xe7);
-pub const LIGHT_BORDER_STRONG: Color32 = Color32::from_rgb(0xd4, 0xd4, 0xd8);
+/// Hairline one step darker than `LIGHT_PANEL` so card and sheet edges still show on it.
+pub const LIGHT_BORDER: Color32 = Color32::from_rgb(0xd4, 0xd4, 0xd8);
+pub const LIGHT_BORDER_STRONG: Color32 = Color32::from_rgb(0xb4, 0xb4, 0xbb);
 pub const LIGHT_NAV_ACTIVE: Color32 = Color32::from_rgb(0xe4, 0xe4, 0xe7);
 pub const LIGHT_BUBBLE_USER: Color32 = Color32::from_rgb(0xe8, 0xe8, 0xea);
 pub const LIGHT_HOVER: Color32 = Color32::from_rgb(0xda, 0xda, 0xdd);
+/// Text selection and picked list rows. A cool slate so a selected span reads on
+/// the composer fill (hover alone is ~1.07:1 there).
+pub const SELECTION: Color32 = Color32::from_rgb(0x2a, 0x3a, 0x4d);
+pub const LIGHT_SELECTION: Color32 = Color32::from_rgb(0xcf, 0xdf, 0xf2);
 
 static USE_LIGHT: AtomicBool = AtomicBool::new(false);
 static LAST_PAINT: AtomicU8 = AtomicU8::new(255);
@@ -130,6 +135,9 @@ pub fn bubble_user() -> Color32 {
 }
 pub fn bubble_assistant() -> Color32 {
     bubble_user()
+}
+pub fn selection() -> Color32 {
+    tok(SELECTION, LIGHT_SELECTION)
 }
 pub fn surface_hover() -> Color32 {
     tok(SURFACE_HOVER, LIGHT_HOVER)
@@ -419,13 +427,24 @@ fn install_inter(ctx: &egui::Context) {
         "inter-bold".into(),
         FontData::from_static(include_bytes!("../assets/fonts/Inter-SemiBold.ttf")),
     );
+    // The latin statics are subset (no →, ✓, ≥, Cyrillic). The full face backs them.
+    fonts.font_data.insert(
+        "inter-full".into(),
+        FontData::from_static(include_bytes!("../assets/fonts/Inter-Full-Regular.ttf")),
+    );
     if let Some(fam) = fonts.families.get_mut(&FontFamily::Proportional) {
+        fam.insert(0, "inter-full".into());
         fam.insert(0, "inter-medium".into());
         fam.insert(0, "inter".into());
     }
     fonts.families.insert(
         FontFamily::Name("inter-bold".into()),
-        vec!["inter-bold".into(), "inter-medium".into(), "inter".into()],
+        vec![
+            "inter-bold".into(),
+            "inter-medium".into(),
+            "inter".into(),
+            "inter-full".into(),
+        ],
     );
     let mono = std::fs::read("/usr/share/fonts/TTF/JetBrainsMono-Regular.ttf")
         .or_else(|_| std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"))
@@ -473,7 +492,7 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     visuals.hyperlink_color = link();
     visuals.warn_fg_color = setup();
     visuals.error_fg_color = offline();
-    visuals.selection.bg_fill = hover;
+    visuals.selection.bg_fill = selection();
     visuals.selection.stroke = Stroke::new(1.0_f32, border_strong());
     visuals.widgets.noninteractive.bg_fill = surface();
     visuals.widgets.noninteractive.weak_bg_fill = bg();
@@ -539,6 +558,12 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     style.spacing.scroll.handle_min_length = 24.0;
     style.visuals = ctx.style().visuals.clone();
     ctx.set_style(style);
+}
+
+/// TextEdit placeholder. egui bakes `override_text_color` into a plain hint galley,
+/// so an uncolored hint paints in full `fg()` and reads as typed text.
+pub fn hint(text: impl Into<String>) -> egui::RichText {
+    egui::RichText::new(text).color(muted())
 }
 
 pub fn pointing(resp: egui::Response) -> egui::Response {
@@ -922,6 +947,36 @@ pub fn mark(ctx: &egui::Context) -> TextureHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn light_edges_and_selection_stay_visible() {
+        // A border that equals the panel fill draws nothing on it.
+        assert_ne!(LIGHT_BORDER, LIGHT_PANEL);
+        assert_ne!(LIGHT_BORDER, LIGHT_BG);
+        // Hover is ~1.07:1 on the composer; selection must not reuse it.
+        assert_ne!(SELECTION, HOVER);
+        assert_ne!(LIGHT_SELECTION, LIGHT_HOVER);
+        let _paint = hold_paint_test();
+        set_paint_dark(true);
+        assert_eq!(selection(), SELECTION);
+        set_paint_dark(false);
+        assert_eq!(selection(), LIGHT_SELECTION);
+        set_paint_dark(true);
+    }
+
+    #[test]
+    fn inter_full_backs_the_subset_statics() {
+        let src = include_str!("theme.rs");
+        let fonts = src
+            .split("fn install_inter(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn install_fonts(").next())
+            .expect("install_inter");
+        assert!(
+            fonts.contains("Inter-Full-Regular.ttf") && fonts.matches("\"inter-full\"").count() >= 3,
+            "→, ✓ and ≥ are not in the latin subset; the full face must back both families: {fonts}"
+        );
+    }
 
     #[test]
     fn glide_gap_stays_on_the_near_row() {
