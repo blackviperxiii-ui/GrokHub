@@ -33,6 +33,8 @@ use grokhub_acp::{
 use grokhub_core::{
     add_to_folder, add_tokens, anticipate_consumes_slot, anticipated_need, appearance_choices,
     appearance_hint, append_composer, append_say, append_thought, append_tool, apply_auto_title_in,
+    chunk_seam, decode_tool_rows, encode_turn, last_say, tool_display_title, tool_group_label,
+    tool_status_failed, tool_status_running, turn_needs_timeline,
     apply_job_error, apply_manual_rename, attach_chip_label, attach_kind, attach_name,
     attach_prompt_line, attach_send_line, automation_blocked_by_policy, automation_schedule_label,
     automation_summary_line, blend_thread_goal, bound_scan, btw_queues_without_interrupt,
@@ -716,6 +718,12 @@ pub struct Cabin {
     /// `(fold_slot, body len, thought_body_key)` per live block, so a frame does not
     /// rescrub every thought in the turn.
     live_keys: Vec<(u64, usize, u64)>,
+    /// This turn in the order it streamed, on any tab. The finished transcript
+    /// keeps it, so replies, thoughts, and tools stay apart after the turn ends.
+    turn_log: Vec<LiveBlock>,
+    /// A tool call ended the last thought / reply message; the next chunk starts a new one.
+    thought_seam: bool,
+    say_seam: bool,
     desk_frame: Option<String>,
     perm_ask: Option<grokhub_acp::PermissionAsk>,
     /// Ask-card Always second beat for this `rpc_id` only. Not the composer pill.
@@ -1249,6 +1257,9 @@ impl Cabin {
             tool_cards: Vec::new(),
             live_blocks: Vec::new(),
             live_keys: Vec::new(),
+            turn_log: Vec::new(),
+            thought_seam: false,
+            say_seam: false,
             desk_frame: None,
             perm_ask: None,
             perm_always_confirm: None,
@@ -1645,6 +1656,9 @@ impl Cabin {
             tool_cards: Vec::new(),
             live_blocks: Vec::new(),
             live_keys: Vec::new(),
+            turn_log: Vec::new(),
+            thought_seam: false,
+            say_seam: false,
             desk_frame: None,
             perm_ask: None,
             perm_always_confirm: None,
@@ -1862,8 +1876,8 @@ impl Cabin {
         )
     }
 
-    /// Paint the stream on this tab. A parked turn rebuilds from the buffers
-    /// so returning mid-reply does not show only the newest chunk.
+    /// Paint the stream on this tab. A parked turn rebuilds from the turn log
+    /// so returning mid-reply shows the whole turn, tools in place.
     fn paint_text_delta(&mut self, kind: LiveKind, delta: &str) {
         if !self.stream_here() {
             return;
@@ -1873,6 +1887,10 @@ impl Cabin {
             .iter()
             .any(|b| matches!(b.kind, LiveKind::Thought | LiveKind::Say));
         if !has_text && (!self.thought_buf.is_empty() || !self.stream_buf.is_empty()) {
+            if !self.turn_log.is_empty() {
+                self.live_blocks = self.turn_log.clone();
+                return;
+            }
             if !self.thought_buf.is_empty() {
                 append_thought(&mut self.live_blocks, &self.thought_buf);
             }
@@ -2171,11 +2189,83 @@ impl Cabin {
     }
 
     fn apply_live_assistant(&mut self) {
-        self.apply_assistant_snapshot(merge_thinking_capped(
-            &self.thought_buf,
-            &self.stream_buf,
-            TEXT_FILE_CAP,
-        ));
+        let content = self.turn_transcript(
+            merge_thinking_capped(&self.thought_buf, &self.stream_buf, TEXT_FILE_CAP),
+            TEXT_FILE_CAP as u64,
+        );
+        self.apply_assistant_snapshot(content);
+    }
+
+    /// Transcript form of this turn. A turn with thoughts or tools keeps its
+    /// order so each reply and tool run paints apart once it finishes.
+    fn turn_transcript(&self, merged: String, cap: u64) -> String {
+        if turn_needs_timeline(&self.turn_log) {
+            take_ui_text(encode_turn(&self.turn_log), cap)
+        } else {
+            merged
+        }
+    }
+
+    /// One stream chunk into its buffer, the turn log, and this tab's live blocks.
+    /// Returns false when the buffer is full and nothing changed.
+    fn ingest_stream_chunk(&mut self, kind: LiveKind, d: &str) -> bool {
+        let (buf, seam_flag) = match kind {
+            LiveKind::Thought => (&mut self.thought_buf, &mut self.thought_seam),
+            LiveKind::Say => (&mut self.stream_buf, &mut self.say_seam),
+            LiveKind::Tool => return false,
+        };
+        let seam = chunk_seam(buf, d, *seam_flag);
+        *seam_flag = false;
+        let before = buf.len();
+        let changed = if seam.is_empty() {
+            push_stream_capped(buf, d, IMAGE_FILE_CAP)
+        } else {
+            push_stream_capped(buf, &format!("{seam}{d}"), IMAGE_FILE_CAP)
+        };
+        if !changed {
+            return false;
+        }
+        let added = buf[before..].to_string();
+        match kind {
+            LiveKind::Thought => append_thought(&mut self.turn_log, &added),
+            _ => append_say(&mut self.turn_log, &added),
+        }
+        self.paint_text_delta(kind, &added);
+        true
+    }
+
+    /// A tool call into the turn log and this tab's live blocks. A new call ends
+    /// the current message, so the next thought or reply chunk opens a new paragraph.
+    fn ingest_tool_card(&mut self, card: &ToolCard) {
+        if self.stream_here() {
+            append_tool(
+                &mut self.live_blocks,
+                &card.id,
+                &card.title,
+                &card.status,
+                &card.detail,
+            );
+        }
+        // A late update after the turn ended must not leak into the next one.
+        if !self.running {
+            return;
+        }
+        let seen = !card.id.is_empty()
+            && self
+                .turn_log
+                .iter()
+                .any(|b| b.kind == LiveKind::Tool && b.tool_id == card.id);
+        if !seen {
+            self.thought_seam = true;
+            self.say_seam = true;
+        }
+        append_tool(
+            &mut self.turn_log,
+            &card.id,
+            &card.title,
+            &card.status,
+            &card.detail,
+        );
     }
 
     fn has_key(&self) -> bool {
@@ -4878,22 +4968,96 @@ fn paint_running(ui: &mut egui::Ui, label: &str, hint: &str) {
     crate::cards::paint_run_pulse(ui, label, hint)
 }
 
-fn paint_one_tool_card(ui: &mut egui::Ui, card: &ToolCard) {
-    let label = if card.title.is_empty() {
-        "Work"
+/// `Grep · 3 matches…` while it runs. The header says what the call touched,
+/// not just its tool name.
+fn tool_header_text(label: &str, running: bool) -> String {
+    if running {
+        format!("{label}…")
     } else {
-        card.title.as_str()
-    };
+        label.to_string()
+    }
+}
+
+fn tool_header_color(failed: bool) -> Color32 {
+    if failed {
+        crate::cards::chip_tone_color(crate::cards::ChipTone::Offline)
+    } else {
+        crate::theme::muted()
+    }
+}
+
+fn paint_one_tool_card(ui: &mut egui::Ui, card: &ToolCard) {
+    let label = tool_group_label([(card.title.as_str(), card.status.as_str(), card.detail.as_str())]);
     egui::CollapsingHeader::new(
-        RichText::new(label)
+        RichText::new(tool_header_text(&label, tool_status_running(&card.status)))
             .size(crate::theme::FONT_META)
-            .color(crate::theme::muted()),
+            .color(tool_header_color(tool_status_failed(&card.status))),
     )
-    .id_salt(("tool-card", card.id.as_str(), label))
+    .id_salt(("tool-card", card.id.as_str()))
     .default_open(false)
     .show(ui, |ui| {
         paint_tool_card_body(ui, card);
     });
+}
+
+/// A run of back-to-back tool calls is one quiet row. Open it for each call.
+fn paint_tool_group(ui: &mut egui::Ui, cards: &[std::borrow::Cow<'_, ToolCard>]) {
+    let [first, ..] = cards else {
+        return;
+    };
+    if cards.len() == 1 {
+        paint_one_tool_card(ui, first);
+        return;
+    }
+    let label = tool_group_label(
+        cards
+            .iter()
+            .map(|c| (c.title.as_str(), c.status.as_str(), c.detail.as_str())),
+    );
+    let running = cards.iter().any(|c| tool_status_running(&c.status));
+    let failed = cards.iter().any(|c| tool_status_failed(&c.status));
+    egui::CollapsingHeader::new(
+        RichText::new(tool_header_text(&label, running))
+            .size(crate::theme::FONT_META)
+            .color(tool_header_color(failed)),
+    )
+    .id_salt(("tool-group", first.id.as_str()))
+    .default_open(false)
+    .show(ui, |ui| {
+        for card in cards {
+            paint_tool_card_body(ui, card);
+            ui.add_space(4.0);
+        }
+    });
+}
+
+/// Stored tool rows of a finished turn: one line each, a failure marked.
+fn paint_tool_rows(ui: &mut egui::Ui, rows: &[grokhub_core::ToolRow]) {
+    for row in rows {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                RichText::new(tool_display_title(&row.title))
+                    .size(12.0)
+                    .color(crate::theme::fg()),
+            );
+            if tool_status_failed(&row.status) {
+                ui.label(
+                    RichText::new(row.status.trim())
+                        .size(12.0)
+                        .color(tool_header_color(true)),
+                );
+            }
+        });
+        let detail = row.detail.trim();
+        if !detail.is_empty() && !detail.starts_with('{') && !detail.starts_with('[') {
+            ui.label(
+                RichText::new(detail.chars().take(160).collect::<String>())
+                    .size(12.0)
+                    .color(crate::theme::muted()),
+            );
+        }
+        ui.add_space(4.0);
+    }
 }
 
 fn paint_tool_card_body(ui: &mut egui::Ui, card: &ToolCard) {

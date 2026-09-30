@@ -279,7 +279,16 @@ fn last_of(chat: &[(String, String)], role: &str) -> String {
     chat.iter()
         .rev()
         .find(|(r, c)| r == role && !c.trim().is_empty())
-        .map(|(_, c)| chip_scan(c).to_string())
+        .map(|(_, c)| {
+            // Cap before decoding. A timeline's replies are what the chips read;
+            // tool rows and TURN_ markers are not the reply.
+            let c = chip_scan(c);
+            if role == "assistant" {
+                crate::turn_timeline::turn_says(c).unwrap_or_else(|| c.to_string())
+            } else {
+                c.to_string()
+            }
+        })
         .unwrap_or_default()
 }
 
@@ -2377,7 +2386,13 @@ pub fn chip_suggest_prompt(
         .rev()
         .filter_map(|(role, content)| {
             let who = if role == "user" { "User" } else { "Asst" };
-            let content = chip_scan(content);
+            let capped = chip_scan(content);
+            let says = if role == "assistant" {
+                crate::turn_timeline::turn_says(capped)
+            } else {
+                None
+            };
+            let content = says.as_deref().unwrap_or(capped);
             let body: String = content.replace("```", "[code]").split_whitespace().collect::<Vec<_>>().join(" ");
             let body: String = body.chars().take(220).collect();
             if body.is_empty() {
@@ -2806,6 +2821,25 @@ mod tests {
         let mem = ChipMemory::default();
         let chips = build_quick_chips(input(&chat, "", &mem, &[], &[]));
         assert!(chips.iter().any(|c| c.id.contains("diagnose") || c.label.contains("fix") || c.label.contains("Root")));
+    }
+
+    #[test]
+    fn timeline_failed_tool_does_not_flip_chips_to_error() {
+        use crate::turn_timeline::{append_say, append_tool, encode_turn};
+        let mut blocks = Vec::new();
+        append_tool(&mut blocks, "t1", "run_terminal_command", "failed", "exit 1");
+        append_say(&mut blocks, "The window is back.");
+        let enc = encode_turn(&blocks);
+        assert!(enc.contains("failed"), "precondition: the tool row records the failure");
+        assert!(enc.contains("TURN_TOOL"), "precondition: timeline marker");
+        let chat = vec![msg("user", "check the window"), ("assistant".into(), enc)];
+        assert_ne!(detect_chip_stage(&chat, false), ChipStage::Error);
+        let prompt = chip_suggest_prompt(&chat, "Chat", "", &[], &[], &[]);
+        assert!(
+            !prompt.contains("TURN_"),
+            "chip prompt reads the reply, not the timeline: {prompt}"
+        );
+        assert!(prompt.contains("The window is back."), "{prompt}");
     }
 
     #[test]

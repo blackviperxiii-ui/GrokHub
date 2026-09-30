@@ -229,10 +229,25 @@ pub fn chat_export_html<'a>(
                 } else {
                     view.title.as_str()
                 };
+                let rows = match crate::turn_timeline::decode_tool_rows(&view.body) {
+                    Some(rows) => rows
+                        .iter()
+                        .map(|r| {
+                            let name = crate::turn_timeline::tool_display_title(&r.title);
+                            if r.detail.is_empty() {
+                                name
+                            } else {
+                                format!("{name} — {}", r.detail)
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    None => view.body.clone(),
+                };
                 body.push_str(&format!(
                     "<details><summary>{}</summary><div class=\"body\">{}</div></details>\n",
                     html_escape(t),
-                    html_escape(&view.body)
+                    html_escape(&rows)
                 ));
             }
         }
