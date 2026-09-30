@@ -10738,15 +10738,24 @@ fn memory_switch_flushes_the_file_you_left() {
     assert_eq!(cabin.mem_name, "SOUL.md");
     assert_eq!(cabin.mem_body, "");
     assert!(!cabin.running);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    while !crate::config::read_memory("MEMORY.md").contains("harbor light") {
+    // Read the file under this test's own root: the flush pins the directory it
+    // was scheduled in, so the check must not depend on the process env later.
+    let flushed = root.join("memory").join("MEMORY.md");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !std::fs::read_to_string(&flushed)
+        .unwrap_or_default()
+        .contains("harbor light")
+    {
         assert!(
             std::time::Instant::now() < deadline,
             "MEMORY.md was not flushed"
         );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    assert_eq!(crate::config::read_memory("SOUL.md"), "");
+    assert_eq!(
+        std::fs::read_to_string(root.join("memory").join("SOUL.md")).unwrap_or_default(),
+        ""
+    );
 }
 
 // Landed from PR #137.
@@ -15693,4 +15702,19 @@ fn export_writes_html_and_json_next_to_export_md() {
     cabin.run_slash_line("/export pdf");
     assert_eq!(cabin.status, grokhub_core::EXPORT_FORMATS_HINT);
     assert!(!cabin.running);
+}
+
+#[test]
+fn fast_reply_keeps_the_answer_and_drops_the_reasoning() {
+    let stream = concat!(
+        r#"{"type":"thought","data":"I'll use the user's name if known."}"#, "\n",
+        r#"{"type":"text","data":"Evening, Viper."}"#, "\n",
+        r#"{"type":"end","stopReason":"end_turn","sessionId":"01a0400f-2bbc-7501-ba65-578617720d19"}"#, "\n",
+    );
+    assert_eq!(super::chips::fast_reply_text(stream), "Evening, Viper.");
+    assert_eq!(super::chips::fast_reply_text("Evening, Viper."), "Evening, Viper.");
+    assert_eq!(super::chips::fast_reply_text(r#"{"type":"error","message":"404"}"#), "");
+    let src = cabin_src();
+    let fast = fn_src(&src, "cabin_fast_llm");
+    assert!(fast.contains("streaming-json") && fast.contains("fast_reply_text"), "{fast}");
 }

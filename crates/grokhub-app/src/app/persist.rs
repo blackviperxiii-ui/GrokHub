@@ -4,12 +4,12 @@ use super::*;
 
 /// Tests pin `config_dir` to the directory captured when the write was scheduled.
 /// A worker blocked on `persist_io` must keep that directory after `GROKHUB_CONFIG` moves.
-struct ScheduledDir {
+pub(super) struct ScheduledDir {
     #[cfg(test)]
     _pin: crate::config::TestConfigDir,
 }
 
-fn pin_scheduled_dir(dir: std::path::PathBuf) -> ScheduledDir {
+pub(super) fn pin_scheduled_dir(dir: std::path::PathBuf) -> ScheduledDir {
     #[cfg(test)]
     {
         ScheduledDir {
