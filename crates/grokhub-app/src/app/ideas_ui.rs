@@ -133,25 +133,17 @@ impl Cabin {
                     .inner_margin(egui::Margin::same(24.0)),
             )
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("Ideas")
-                            .size(crate::theme::FONT_HEADING)
-                            .color(crate::theme::fg()),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let busy = self.ideas_rx.is_some();
-                        let label = if busy { "Thinking up ideas…" } else { "Suggest ideas" };
-                        if crate::cards::ghost_pill(ui, label) && !busy {
-                            if self.llm_ready() {
-                                self.maybe_suggest_ideas(true);
-                                self.status = "Thinking up ideas from your recent work…".into();
-                            } else {
-                                self.status = "Connect Grok in Settings to get ideas".into();
-                            }
-                        }
-                    });
-                });
+                // Same header as Automations, Skills, and Workboards.
+                let busy = self.ideas_rx.is_some();
+                let label = if busy { "Thinking up ideas…" } else { "Suggest ideas" };
+                if crate::cards::page_header(ui, "Ideas", label) && !busy {
+                    if self.llm_ready() {
+                        self.maybe_suggest_ideas(true);
+                        self.status = "Thinking up ideas from your recent work…".into();
+                    } else {
+                        self.status = "Connect Grok in Settings to get ideas".into();
+                    }
+                }
                 self.ensure_useful_ideas();
                 let ideas = ideas_board(&self.updates);
                 let working = modified_ideas(&self.updates);

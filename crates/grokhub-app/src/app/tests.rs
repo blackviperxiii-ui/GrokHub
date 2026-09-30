@@ -967,6 +967,14 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     }
 
     #[test]
+    fn failed_turns_are_marked_as_errors() {
+        assert!(super::is_error_reply("Error: Ask is fail-closed"));
+        assert!(super::is_error_reply("  Error: 502 upstream"));
+        assert!(!super::is_error_reply("The error was in main.rs"));
+        assert!(!super::is_error_reply("Errors: none"));
+    }
+
+    #[test]
     fn chat_blocks_offer_copy_and_reply() {
         let src = cabin_src();
         let start = src.find("fn paint_msg_acts").expect("paint_msg_acts");

@@ -854,10 +854,9 @@ impl Cabin {
                     self.board_link = false;
                     self.board_compose = true;
                 }
-                ui.label(
-                    RichText::new("Tasks stay here. A project click does not change the chat list.")
-                        .size(crate::theme::FONT_TIP)
-                        .color(crate::theme::muted()),
+                crate::cards::help_text(
+                    ui,
+                    "Tasks from your chats and the ones you add, by status. Drag a card to move it.",
                 );
                 ui.add_space(12.0);
                 if self.board_compose {
@@ -910,18 +909,28 @@ impl Cabin {
                         });
                     ui.add_space(16.0);
                 }
-                if self.board.iter().all(|c| c.status.column().is_none()) {
-                    let _ = crate::cards::empty_prompt_tile(
+                // With no live card, the empty tile is the whole board: no row of "—" columns.
+                let board_empty = self.board.iter().all(|c| c.status.column().is_none());
+                if board_empty {
+                    if crate::cards::empty_prompt_tile(
                         ui,
                         crate::icons::TileIcon::Board,
                         "No cards yet",
-                        "A chat run files a card here, or add one.",
-                    );
+                        "A chat run files a card here, or click to add one.",
+                    ) && !self.board_compose
+                    {
+                        self.board_edit = None;
+                        self.board_title.clear();
+                        self.board_notes.clear();
+                        self.board_link = false;
+                        self.board_compose = true;
+                    }
                     ui.add_space(12.0);
                 }
                 egui::ScrollArea::vertical()
                     .id_salt("workboards")
                     .show(ui, |ui| {
+                        if !board_empty {
                         ui.columns(KanbanColumn::ALL.len(), |cols| {
                             for (i, col) in KanbanColumn::ALL.iter().enumerate() {
                                 let ui = &mut cols[i];
@@ -1140,6 +1149,7 @@ impl Cabin {
                                 }
                             }
                         });
+                        }
                         let archived: Vec<(String, String)> = self
                             .board
                             .iter()
@@ -1422,11 +1432,7 @@ impl Cabin {
                         }
                     });
                 });
-                ui.label(
-                    RichText::new("Grok Build `grok mcp` — add, enable, disable, or remove servers.")
-                        .size(12.0)
-                        .color(crate::theme::muted()),
-                );
+                crate::cards::help_text(ui, "Grok Build `grok mcp` — add, enable, disable, or remove servers.");
                 if self.mcp_compose {
                     ui.add_space(8.0);
                     ui.add(
@@ -1505,11 +1511,7 @@ impl Cabin {
                         }
                     });
                 });
-                ui.label(
-                    RichText::new("Installed from the Grok Build marketplace (`grok plugin list`).")
-                        .size(12.0)
-                        .color(crate::theme::muted()),
-                );
+                crate::cards::help_text(ui, "Installed from the Grok Build marketplace (`grok plugin list`).");
                 ui.add_space(8.0);
                 let installed: Vec<_> = self
                     .grok_catalog
@@ -1555,11 +1557,7 @@ impl Cabin {
                 }
                 ui.add_space(20.0);
                 crate::cards::section_label(ui, "Marketplace");
-                ui.label(
-                    RichText::new("xAI Official and other sources (`grok plugin marketplace`).")
-                        .size(12.0)
-                        .color(crate::theme::muted()),
-                );
+                crate::cards::help_text(ui, "xAI Official and other sources (`grok plugin marketplace`).");
                 ui.add_space(8.0);
                 let market: Vec<_> = self
                     .grok_catalog
@@ -1615,13 +1613,7 @@ impl Cabin {
             let workflows_section = ui
                 .vertical(|ui| {
                     crate::cards::section_label(ui, "Workflows");
-                    ui.label(
-                        RichText::new(
-                            "Grok Build `/workflow` skills and `*.rhai` under ~/.grok/workflows.",
-                        )
-                        .size(12.0)
-                        .color(crate::theme::muted()),
-                    );
+                    crate::cards::help_text(ui, "Grok Build `/workflow` skills and `*.rhai` under ~/.grok/workflows.");
                     ui.add_space(8.0);
                     if !workflows.is_empty() {
                         crate::cards::tile_row(ui, workflows.len(), |ui, i| {
@@ -1722,6 +1714,7 @@ impl Cabin {
                     } else {
                         "None matched."
                     })
+                    .size(crate::theme::FONT_BODY)
                     .color(crate::theme::muted()),
                 );
             } else {
@@ -1752,11 +1745,7 @@ impl Cabin {
             }
             ui.add_space(16.0);
             crate::cards::section_label(ui, "Grok Build skills");
-            ui.label(
-                RichText::new("Bundled skills and plugin skills from `grok inspect`. Use in chat sends /name.")
-                    .size(12.0)
-                    .color(crate::theme::muted()),
-            );
+            crate::cards::help_text(ui, "Bundled skills and plugin skills from `grok inspect`. Use in chat sends /name.");
             ui.add_space(8.0);
             let skills: Vec<_> = self
                 .grok_catalog
@@ -1771,8 +1760,16 @@ impl Cabin {
                 .cloned()
                 .collect();
             if skills.is_empty() {
+                let empty = if self.grok_catalog_rx.is_some() {
+                    "Loading Grok Build skills…"
+                } else if !q.is_empty() && !self.grok_catalog.skills.is_empty() {
+                    "None matched."
+                } else {
+                    "None found. Refresh after installing a plugin."
+                };
                 ui.label(
-                    RichText::new("Loading Grok Build skills… or none matched.")
+                    RichText::new(empty)
+                        .size(crate::theme::FONT_BODY)
                         .color(crate::theme::muted()),
                 );
             } else {

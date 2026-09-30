@@ -53,6 +53,8 @@ pub const LINK: Color32 = Color32::from_rgb(0x1d, 0x9b, 0xf0);
 pub const SEND_ON: Color32 = Color32::WHITE;
 pub const SEND_ON_INK: Color32 = Color32::BLACK;
 pub const LIVE: Color32 = Color32::from_rgb(0x22, 0xc5, 0x5e);
+/// Live on a light surface: `#22C55E` is ~2.3:1 on white; green-700 is ~5:1.
+pub const LIGHT_LIVE: Color32 = Color32::from_rgb(0x15, 0x80, 0x3d);
 pub const SETUP: Color32 = Color32::from_rgb(0xea, 0xb3, 0x08);
 /// Selected Always stroke only — dark OLED, ≥3:1 on `#16181C`.
 pub const ALWAYS_AMBER_DARK: Color32 = Color32::from_rgb(0xe8, 0xa8, 0x38);
@@ -152,7 +154,7 @@ pub fn send_on_ink() -> Color32 {
     tok(SEND_ON_INK, LIGHT_ELEVATED)
 }
 pub fn live() -> Color32 {
-    LIVE
+    tok(LIVE, LIGHT_LIVE)
 }
 pub fn setup() -> Color32 {
     SETUP
@@ -789,7 +791,9 @@ pub fn felt_label_button(
     if let Some(s) = stroke {
         ui.painter().rect_stroke(rect, rounding, s);
     }
-    ui.painter().galley(rect.min + pad, galley, text_color);
+    // Centre vertically: a layout can hand the pill more height than label + pad.
+    let text_pos = egui::pos2(rect.min.x + pad.x, rect.center().y - galley.size().y * 0.5);
+    ui.painter().galley(text_pos, galley, text_color);
     pointing(resp)
 }
 
@@ -965,6 +969,16 @@ mod tests {
         set_paint_dark(false);
         assert_eq!(selection(), LIGHT_SELECTION);
         set_paint_dark(true);
+    }
+
+    #[test]
+    fn live_green_is_readable_on_light() {
+        assert_ne!(LIGHT_LIVE, LIVE);
+        let _paint = hold_paint_test();
+        set_paint_dark(false);
+        assert_eq!(live(), LIGHT_LIVE);
+        set_paint_dark(true);
+        assert_eq!(live(), LIVE);
     }
 
     #[test]
