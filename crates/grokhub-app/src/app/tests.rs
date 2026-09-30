@@ -7759,12 +7759,9 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
         .nth(1)
         .and_then(|s| s.split("fn apply_feed_act(").next())
         .expect("ui_ideas");
-    let refresh = ideas.find("Refresh").expect("refresh");
-    let flushed = ideas[refresh..].find("persist_updates").expect("flush");
-    let reloaded = ideas[refresh..].find("feed::load").expect("reload");
     assert!(
-        flushed < reloaded,
-        "Ideas Refresh must flush updates before it reloads disk"
+        ideas.contains("Suggest ideas") && ideas.contains("maybe_suggest_ideas(true)"),
+        "the Ideas button asks the model for ideas now, not a disk reload: {ideas}"
     );
     let offer = pulse
         .split("fn accept_automate_offer(")
@@ -9250,6 +9247,7 @@ fn discuss_card_opens_one_local_chat() {
         why: Some("because the tide turned".into()),
         feed_pin: false,
         feed_kept: false,
+        prompt: None,
     });
     cabin.discuss_card("idea-harbor");
     let open_id = cabin
@@ -13210,6 +13208,7 @@ fn build_idea_files_one_todo() {
         why: None,
         feed_pin: false,
         feed_kept: false,
+        prompt: None,
     }];
 
     cabin.build_idea("nope");
@@ -13345,6 +13344,7 @@ fn feed_card(id: &str, kind: grokhub_core::UpdateKind, held: bool) -> grokhub_co
         why: None,
         feed_pin: false,
         feed_kept: false,
+        prompt: None,
     }
 }
 
@@ -13439,6 +13439,7 @@ fn offer_card(id: &str, title: &str, status: UpdateStatus) -> UpdateCard {
         why: None,
         feed_pin: false,
         feed_kept: false,
+        prompt: None,
     }
 }
 
@@ -14042,6 +14043,7 @@ fn quiet_cabin() -> Cabin {
         brief_buf: String::new(),
         ideas_q: String::new(),
         ideas_filled: false,
+        ideas_rx: None,
         tray_saw_unfocused: false,
         tray_hid_at: std::time::Instant::now(),
         want_quit: false,
@@ -15717,4 +15719,64 @@ fn fast_reply_keeps_the_answer_and_drops_the_reasoning() {
     let src = cabin_src();
     let fast = fn_src(&src, "cabin_fast_llm");
     assert!(fast.contains("streaming-json") && fast.contains("fast_reply_text"), "{fast}");
+}
+
+#[test]
+fn ideas_come_from_the_model_with_their_work_and_post_with_a_prompt() {
+    let root = config::test_config_root("ideas-gen");
+    let _ = std::fs::remove_dir_all(&root);
+    let _pin = config::TestConfigDir::set(root.clone());
+    let mut app = Cabin::quiet_for_test();
+    app.messages = std::sync::Arc::new(vec![
+        ("user".into(), "run the grokhub tests again and tell me what broke".into()),
+        ("assistant".into(), "Two failures in chips.rs.".into()),
+        ("user".into(), "actually still no, the other monitor".into()),
+        ("user".into(), "/compact".into()),
+        ("user".into(), "bump the AUR pkgver for the release".into()),
+    ]);
+    let asks = app.recent_asks(10);
+    assert_eq!(
+        asks,
+        vec![
+            "bump the AUR pkgver for the release".to_string(),
+            "run the grokhub tests again and tell me what broke".to_string(),
+        ],
+        "newest first, no slash commands, no feedback on the last try"
+    );
+    let (prompt, sources, _) = app.idea_request();
+    assert!(prompt.contains("- bump the AUR pkgver for the release"), "{prompt}");
+    assert!(prompt.contains("IDEA: kind | title | why it helps | what to send"));
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.ideas_rx = Some((rx, sources, Vec::new()));
+    tx.send(
+        "IDEA: automation | Morning test run | Every weekday at 8 your GrokHub tests run and failures land on your feed before you sit down. | every weekday at 8, run cargo test in ~/GrokHub and summarize failures\n\
+         IDEA: try | A chip for the next step | A chip takes the next step for you here. | take the next step\n"
+            .into(),
+    )
+    .unwrap();
+    app.poll_ideas();
+    let ideas: Vec<&UpdateCard> = app.updates.iter().filter(|c| c.kind == UpdateKind::Idea).collect();
+    assert_eq!(ideas.len(), 1, "the template-shaped line is dropped");
+    assert_eq!(ideas[0].title, "Morning test run");
+    assert_eq!(
+        grokhub_core::idea_dialogue(ideas[0]),
+        "every weekday at 8, run cargo test in ~/GrokHub and summarize failures",
+        "Accept puts the ready-to-send message in the draft"
+    );
+    assert!(app.ideas_rx.is_none());
+}
+
+#[test]
+fn launch_clears_template_ideas_and_chat_turns_no_longer_post_them() {
+    let mut app = Cabin::quiet_for_test();
+    app.updates = vec![
+        grokhub_core::idea_card("profile", "A chip for the next slice", "A chip does the next slice.", 1),
+        grokhub_core::idea_card("profile", "Set up: exit 1 · 9ms", "Turn this into a reminder.", 1),
+    ];
+    app.ensure_useful_ideas();
+    assert!(app.updates.is_empty(), "{:?}", app.updates);
+    let src = cabin_src();
+    assert!(!src.contains("offer_learned_move"), "a chat turn must not post a template idea");
+    assert!(!src.contains("fill_useful_ideas"));
 }
