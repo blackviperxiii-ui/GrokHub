@@ -8184,6 +8184,13 @@ fn shell_echo_lands_on_the_open_chat() {
     cabin.thread_idx = 0;
     cabin.messages = cabin.threads[0].messages.clone();
 
+    let _restore = GrokPathRestore {
+        path: std::env::var_os("PATH"),
+        grok: std::env::var_os("GROKHUB_GROK"),
+    };
+    std::env::set_var("GROKHUB_GROK", root.join("no-such-grok"));
+    grokhub_acp::invalidate_grok_bin_cache();
+
     cabin.queue_sh("echo grokhub-proof".into());
     // PowerShell on a loaded Windows runner can sit past 5s before the first
     // line. Same 45s budget as `echo_ok`. The product host cap is 90s.
@@ -12750,6 +12757,12 @@ fn help_slash_lists_commands_without_a_run() {
     }
     assert!(!cabin.running, "help starts from an idle cabin");
     let before = cabin.messages.len();
+    let _restore = GrokPathRestore {
+        path: std::env::var_os("PATH"),
+        grok: std::env::var_os("GROKHUB_GROK"),
+    };
+    std::env::set_var("GROKHUB_GROK", root.join("no-such-grok"));
+    grokhub_acp::invalidate_grok_bin_cache();
     let grok_before = grok_process_ids();
     cabin.run_slash(Slash::Help);
     let gained: Vec<&(String, String)> = cabin.messages.iter().skip(before).collect();
@@ -12818,6 +12831,13 @@ fn unknown_slash_stays_off_a_run() {
     if cabin.threads.is_empty() {
         cabin.new_thread(false);
     }
+
+    let _restore = GrokPathRestore {
+        path: std::env::var_os("PATH"),
+        grok: std::env::var_os("GROKHUB_GROK"),
+    };
+    std::env::set_var("GROKHUB_GROK", root.join("no-such-grok"));
+    grokhub_acp::invalidate_grok_bin_cache();
 
     let status = cabin.status.clone();
     let transcript = cabin.messages.clone();
