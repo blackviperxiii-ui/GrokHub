@@ -246,7 +246,7 @@ impl Cabin {
             card,
             16.0,
             crate::theme::elevated(),
-            egui::Stroke::new(1.5, crate::theme::link()),
+            egui::Stroke::new(1.5_f32, crate::theme::link()),
         );
         painter.galley(card.center() - galley.size() * 0.5, galley, crate::theme::fg());
     }

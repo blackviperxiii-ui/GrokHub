@@ -989,7 +989,7 @@ impl Cabin {
                                         ui.painter().rect_stroke(
                                             zone_rect.shrink(1.0),
                                             16.0,
-                                            egui::Stroke::new(1.5, crate::theme::link()),
+                                            egui::Stroke::new(1.5_f32, crate::theme::link()),
                                         );
                                     }
                                 }

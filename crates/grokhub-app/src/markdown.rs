@@ -161,7 +161,7 @@ fn list_item(ui: &mut Ui, depth: u8, marker: Marker, text: &str, wrap: f32) {
                 if depth == 0 {
                     ui.painter().circle_filled(c, r, ink);
                 } else {
-                    ui.painter().circle_stroke(c, r, Stroke::new(1.0, ink));
+                    ui.painter().circle_stroke(c, r, Stroke::new(1.0_f32, ink));
                 }
             }
             Marker::Num(n) => {
@@ -184,9 +184,9 @@ fn list_item(ui: &mut Ui, depth: u8, marker: Marker, text: &str, wrap: f32) {
                     egui::pos2(rect.min.x + side * 0.5 + 1.0, rect.center().y),
                     Vec2::splat(side),
                 );
-                ui.painter().rect_stroke(b, 2.5, Stroke::new(1.2, ink));
+                ui.painter().rect_stroke(b, 2.5, Stroke::new(1.2_f32, ink));
                 if done {
-                    let s = Stroke::new(1.6, crate::theme::live());
+                    let s = Stroke::new(1.6_f32, crate::theme::live());
                     ui.painter().line_segment(
                         [
                             egui::pos2(b.min.x + 2.5, b.center().y),
@@ -356,7 +356,7 @@ fn cell_label(ui: &mut Ui, cell: &str, align: Option<MdAlign>, col_w: f32, head:
             ui.painter().hline(
                 r.left()..=r.left() + col_w,
                 r.bottom() + 3.0,
-                Stroke::new(1.0, crate::theme::border_strong()),
+                Stroke::new(1.0_f32, crate::theme::border_strong()),
             );
         } else {
             inline(ui, cell, col_w);
@@ -397,7 +397,7 @@ fn code_block(ui: &mut Ui, key: usize, lang: &str, body: &str, wrap: f32) {
     ui.add_space(2.0);
     Frame::none()
         .fill(crate::theme::code_well())
-        .stroke(Stroke::new(1.0, crate::theme::border()))
+        .stroke(Stroke::new(1.0_f32, crate::theme::border()))
         .rounding(8.0)
         .inner_margin(Margin::symmetric(pad.x, pad.y))
         .show(ui, |ui| {
@@ -510,7 +510,7 @@ fn spans_job(ui: &Ui, spans: &[MdSpan], wrap: f32) -> LayoutJob {
             }
             MdSpan::Strike(t) => {
                 let mut f = TextFormat::simple(body.clone(), crate::theme::muted());
-                f.strikethrough = Stroke::new(1.0, crate::theme::muted());
+                f.strikethrough = Stroke::new(1.0_f32, crate::theme::muted());
                 (t.as_str(), f)
             }
             MdSpan::Code(t) => {
@@ -520,7 +520,7 @@ fn spans_job(ui: &Ui, spans: &[MdSpan], wrap: f32) -> LayoutJob {
             }
             MdSpan::Link { text, .. } => {
                 let mut f = TextFormat::simple(body.clone(), crate::theme::link());
-                f.underline = Stroke::new(1.0, crate::theme::link());
+                f.underline = Stroke::new(1.0_f32, crate::theme::link());
                 (text.as_str(), f)
             }
         };

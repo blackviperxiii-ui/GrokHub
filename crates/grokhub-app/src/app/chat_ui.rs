@@ -114,7 +114,7 @@ fn paint_find_mark(ui: &egui::Ui, row: egui::Rect, current: bool) {
         ui.painter().rect_stroke(
             row.expand2(egui::vec2(2.0, 2.0)),
             8.0,
-            egui::Stroke::new(1.2, crate::theme::link().gamma_multiply(0.7)),
+            egui::Stroke::new(1.2_f32, crate::theme::link().gamma_multiply(0.7)),
         );
     }
 }
@@ -1201,7 +1201,7 @@ impl Cabin {
             .show(ctx, |ui| {
                 egui::Frame::none()
                     .fill(crate::theme::panel())
-                    .stroke(egui::Stroke::new(1.0, crate::theme::border()))
+                    .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                     .rounding(10.0)
                     .shadow(crate::theme::sheet_shadow())
                     .inner_margin(egui::Margin::symmetric(8.0, 6.0))
