@@ -27,6 +27,7 @@ fn cabin_src() -> String {
         include_str!("chips.rs"),
         include_str!("voice.rs"),
         include_str!("threads_nav.rs"),
+        include_str!("ideas_ui.rs"),
     )
     .replace("pub(super) ", "")
 }
@@ -7062,7 +7063,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let skills = src
             .split("fn ui_skills(")
             .nth(1)
-            .and_then(|s| s.split("fn project_row_active(").next())
+            .and_then(|s| s.split("fn tick_history_search(").next())
             .expect("ui_skills");
         assert!(
             skills.contains("Marketplace")
@@ -7083,10 +7084,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "Connectors must expose grok plugin uninstall/update: {skills}"
         );
         assert!(
-            skills.contains("Suggested")
-                && skills.contains("merge_suggested_skills")
-                && skills.contains("add_suggested_skill"),
-            "Skills Suggested tiles must Add via save_skill: {skills}"
+            !skills.contains("merge_suggested_skills") && !skills.contains("add_suggested_skill"),
+            "Suggested skills live on the Ideas board, not the Skills page: {skills}"
         );
         assert!(
             skills.contains("GITHUB_TILES")
@@ -7102,8 +7101,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             add_skill.contains("skill_from_suggestion")
                 && add_skill.contains("save_skill")
-                && add_skill.contains("thread::spawn")
-                && add_skill.contains("persist_suggestions"),
+                && add_skill.contains("thread::spawn"),
             "Suggested Add must write SKILL.md off the UI thread: {add_skill}"
         );
         let slash = fn_src(&src, "send_grok_slash");
@@ -7754,10 +7752,10 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
         !pulse.contains("No updates") && !pulse.contains("Nothing queued"),
         "the feed must not paint an empty label"
     );
-    let ideas = pulse
+    let ideas = include_str!("ideas_ui.rs")
         .split("fn ui_ideas(")
         .nth(1)
-        .and_then(|s| s.split("fn apply_feed_act(").next())
+        .and_then(|s| s.split("fn paint_idea_open(").next())
         .expect("ui_ideas");
     assert!(
         ideas.contains("Suggest ideas") && ideas.contains("maybe_suggest_ideas(true)"),
@@ -9248,6 +9246,11 @@ fn discuss_card_opens_one_local_chat() {
         feed_pin: false,
         feed_kept: false,
         prompt: None,
+        idea_kind: None,
+        details: None,
+        draft: None,
+        modified: false,
+        skill: None,
     });
     cabin.discuss_card("idea-harbor");
     let open_id = cabin
@@ -9260,7 +9263,7 @@ fn discuss_card_opens_one_local_chat() {
     let open = cabin.threads.iter().find(|t| t.id == open_id).unwrap();
     assert!(open.background);
     assert_ne!(cabin.threads[cabin.thread_idx].id, open_id);
-    assert!(cabin.idea_pop.is_some());
+    assert!(cabin.idea_board.open.is_some() && cabin.nav == super::Nav::Ideas);
     assert_eq!(
         cabin
             .threads
@@ -9283,10 +9286,8 @@ fn discuss_card_opens_one_local_chat() {
         .map(|m| m.1.clone())
         .unwrap_or_default();
     assert!(
-        body.contains("Post: Cover F1")
-            && body.contains("the night race")
-            && body.contains("Why: because the tide turned"),
-        "Discuss must open the card context on that chat, got {body}"
+        body.contains("Nothing runs until you press Apply"),
+        "the card chat opens with a short line; the card itself shows the details, got {body}"
     );
     assert_eq!(cabin.updates[0].status, grokhub_core::UpdateStatus::Opened);
     assert!(cabin.updates[0].discuss_thread.is_some());
@@ -10633,7 +10634,7 @@ fn discuss_card_opens_a_local_chat() {
     let id = card.id.clone();
     cabin.updates.push(card);
     cabin.discuss_card(&id);
-    assert!(cabin.idea_pop.is_some());
+    assert!(cabin.idea_board.open.is_some() && cabin.nav == super::Nav::Ideas);
     assert!(!cabin.running);
     let thread_id = cabin
         .threads
@@ -10646,9 +10647,10 @@ fn discuss_card_opens_a_local_chat() {
         let thread = cabin.threads.iter().find(|t| t.id == thread_id).unwrap();
         assert!(thread.background);
         assert!(thread.title_locked);
-        assert!(thread.messages.iter().any(|(_, body)| {
-            body.contains("Post: Harbor lamp") && body.contains("fold the charts")
-        }));
+        assert!(thread
+            .messages
+            .iter()
+            .any(|(_, body)| body.contains("Nothing runs until you press Apply")));
     }
     assert_ne!(cabin.threads[cabin.thread_idx].id, thread_id);
     let stuck = cabin.updates.iter().find(|c| c.id == id).expect("card");
@@ -10871,7 +10873,7 @@ fn feed_open_routes_an_idea_and_dismiss_removes_it() {
     cabin.updates.push(card);
     cabin.updates.last_mut().unwrap().feed_pin = true;
     cabin.open_feed_card(&id);
-    assert!(cabin.idea_pop.is_some());
+    assert!(cabin.idea_board.open.is_some() && cabin.nav == super::Nav::Ideas);
     assert!(cabin
         .threads
         .iter()
@@ -12422,7 +12424,7 @@ fn composer_action_chips_stay_off_a_run() {
 
 // Landed from PR #159.
 #[test]
-fn housekeep_expires_ideas_after_two_weeks() {
+fn housekeep_keeps_ideas_until_newer_ones_push_them_out() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("idea-expiry");
     let _ = std::fs::remove_dir_all(&root);
@@ -12461,8 +12463,8 @@ fn housekeep_expires_ideas_after_two_weeks() {
         "housekeep expiry is the age path, not a dismiss"
     );
     assert!(
-        !cabin.updates.iter().any(|card| card.id == stale.id),
-        "an idea older than about two weeks is gone after housekeep"
+        cabin.updates.iter().any(|card| card.id == stale.id),
+        "ideas no longer time out; a newer card pushes out the oldest instead"
     );
     assert!(
         cabin.updates.iter().any(|card| card.id == fresh.id),
@@ -13225,6 +13227,11 @@ fn build_idea_files_one_todo() {
         feed_pin: false,
         feed_kept: false,
         prompt: None,
+        idea_kind: None,
+        details: None,
+        draft: None,
+        modified: false,
+        skill: None,
     }];
 
     cabin.build_idea("nope");
@@ -13361,6 +13368,11 @@ fn feed_card(id: &str, kind: grokhub_core::UpdateKind, held: bool) -> grokhub_co
         feed_pin: false,
         feed_kept: false,
         prompt: None,
+        idea_kind: None,
+        details: None,
+        draft: None,
+        modified: false,
+        skill: None,
     }
 }
 
@@ -13456,6 +13468,11 @@ fn offer_card(id: &str, title: &str, status: UpdateStatus) -> UpdateCard {
         feed_pin: false,
         feed_kept: false,
         prompt: None,
+        idea_kind: None,
+        details: None,
+        draft: None,
+        modified: false,
+        skill: None,
     }
 }
 
@@ -14114,6 +14131,8 @@ fn quiet_cabin() -> Cabin {
         palette_file_rx: None,
         shortcuts_open: false,
         active_skill_follow: None,
+        card_notes_follow: None,
+        board_notes_edit: None,
         last_anticipate_ms: 0,
         goal_step: 0,
         followup_step: 0,
@@ -14153,7 +14172,7 @@ fn quiet_cabin() -> Cabin {
         rename_lock: None,
         chip_memory: grokhub_core::ChipMemory::default(),
         chip_dismissed: Vec::new(),
-        idea_pop: None,
+        idea_board: Default::default(),
         llm_chips: Vec::new(),
         visible_chips: Vec::new(),
         chip_rx: None,
@@ -15593,7 +15612,7 @@ fn board_drop_moves_to_another_column_only() {
     }
     let src = cabin_src();
     let board = fn_src(&src, "ui_board");
-    assert!(board.contains("dnd_drag_source"), "cards must be draggable");
+    assert!(board.contains("DragAndDrop::set_payload(") && board.contains("BoardDrag(id.clone())"), "cards must be draggable by the title row");
     assert!(board.contains("dnd_release_payload::<BoardDrag>"), "columns must take drops");
     assert!(board.contains("BoardAct::Move"), "a drop is the same Move the buttons use");
 }
@@ -15761,7 +15780,7 @@ fn ideas_come_from_the_model_with_their_work_and_post_with_a_prompt() {
     );
     let (prompt, sources, _) = app.idea_request();
     assert!(prompt.contains("- bump the AUR pkgver for the release"), "{prompt}");
-    assert!(prompt.contains("IDEA: kind | title | why it helps | what to send"));
+    assert!(prompt.contains("IDEA: kind | title | short description | details | what to send"));
 
     let (tx, rx) = std::sync::mpsc::channel();
     app.ideas_rx = Some((rx, sources, Vec::new()));
@@ -15803,4 +15822,167 @@ fn launch_clears_template_ideas_and_chat_turns_no_longer_post_them() {
     assert!(!src.contains("offer_learned_move"), "a chat turn must not post a template idea");
     assert!(!src.contains("fill_useful_ideas"));
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn board_card_notes_edit_save_and_ride_the_next_turn() {
+    let root = config::test_config_root("board-notes");
+    let _ = std::fs::remove_dir_all(&root);
+    let _pin = config::TestConfigDir::set(root.clone());
+    let mut app = Cabin::quiet_for_test();
+    let mut card = grokhub_core::BoardCard::new("Ship the AUR release", "", "");
+    card.status = grokhub_core::BoardStatus::Todo;
+    let id = card.id.clone();
+    app.board.push(card);
+    assert!(!app.apply_board_act(Some(BoardAct::EditNotes(id.clone()))));
+    assert_eq!(app.board_notes_edit.as_ref().map(|(i, _)| i.as_str()), Some(id.as_str()));
+    assert!(app.apply_board_act(Some(BoardAct::SaveNotes {
+        id: id.clone(),
+        notes: "  bump pkgver, then makepkg  ".into(),
+    })));
+    assert!(app.board_notes_edit.is_none());
+    assert_eq!(app.board[0].notes, "bump pkgver, then makepkg");
+    assert!(app.board[0].detail.is_empty(), "notes never land in the run status line");
+
+    // Work on it needs an agent; without one it says so and changes nothing.
+    app.work_on_card(&id);
+    assert!(app.status.contains("Grok"), "{}", app.status);
+    assert_eq!(app.board[0].status, grokhub_core::BoardStatus::Todo);
+
+    let src = cabin_src();
+    let kick = fn_src(&src, "kick_model");
+    assert!(kick.contains("self.card_notes_follow.as_deref()"), "notes reach the agent's prompt: {kick}");
+    let send = fn_src(&src, "send_chat");
+    assert!(send.contains("take_card_notes_block"), "{send}");
+    let work = fn_src(&src, "work_on_card");
+    assert!(work.contains("card_work_prompt") && work.contains("c.run = true"), "{work}");
+    let board = fn_src(&src, "ui_board");
+    assert!(!board.contains("dnd_drag_source"), "the whole card must not be a drag source again");
+    assert!(board.contains("egui::DragAndDrop::set_payload"), "the title row drags");
+}
+
+#[test]
+fn skill_suggestions_move_onto_the_ideas_board() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("skill-ideas-move");
+    let _ = std::fs::remove_dir_all(&root);
+    let _dir = crate::config::TestConfigDir::set(root.clone());
+
+    let mut cabin = super::Cabin::quiet_for_test();
+    cabin.updates.clear();
+    cabin.suggestions.skills = vec![grokhub_core::LearnedSuggestion {
+        kind: grokhub_core::SuggestionKind::Skill,
+        title: "Desk tidy".into(),
+        body: "Straighten windows".into(),
+        name: Some("desk-tidy".into()),
+        seed: None,
+        trigger: Some("when the desk is messy".into()),
+        instructions: Some("stack the windows".into()),
+        provider: None,
+        tool: None,
+    }];
+    cabin.skill_suggestions_to_ideas();
+    assert!(cabin.suggestions.skills.is_empty(), "suggestions drain into Ideas");
+    let ideas = grokhub_core::ideas_board(&cabin.updates);
+    assert_eq!(ideas.len(), 1);
+    assert_eq!(ideas[0].idea_type_label(), "Skill");
+    assert!(ideas[0].skill.is_some());
+    // A second pass never duplicates the card.
+    cabin.suggestions.skills = vec![ideas[0].skill.clone().unwrap()];
+    cabin.skill_suggestions_to_ideas();
+    assert_eq!(grokhub_core::ideas_board(&cabin.updates).len(), 1);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+fn board_idea(id: &str, kind: grokhub_core::IdeaKind, prompt: &str, created_at: u64) -> grokhub_core::UpdateCard {
+    let mut c = grokhub_core::idea_card(id, &format!("Idea {id}"), "Short line", created_at);
+    c.id = id.into();
+    c.idea_kind = Some(kind);
+    c.prompt = Some(prompt.into());
+    c.details = Some("Longer details".into());
+    c
+}
+
+#[test]
+fn idea_card_chat_takes_the_agents_action_and_stays_on_the_board() {
+    let mut quiet = QuietCabin::boot("idea-card-chat");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    cabin.updates.push(board_idea(
+        "idea-a",
+        grokhub_core::IdeaKind::Automation,
+        "every day at 8 sort my inbox",
+        5,
+    ));
+    // Opening from the home feed lands on the Ideas board with the card open.
+    cabin.discuss_card("idea-a");
+    assert_eq!(cabin.nav, super::Nav::Ideas);
+    assert_eq!(cabin.idea_board.open.as_deref(), Some("idea-a"));
+    let tid = cabin.updates[0].discuss_thread.clone().expect("card chat");
+    // The agent's reply rewrites the action once and the raw line is hidden.
+    let thread = cabin.threads.iter_mut().find(|t| t.id == tid).unwrap();
+    thread.messages_mut().push(("user".into(), "weekdays only".into()));
+    thread.messages_mut().push((
+        "assistant".into(),
+        "Done.\nCARD_ACTION: every weekday at 8 sort my inbox".into(),
+    ));
+    cabin.sync_idea_card_actions();
+    let card = &cabin.updates[0];
+    assert_eq!(card.idea_action(), "every weekday at 8 sort my inbox");
+    assert!(card.modified, "a card you worked on stays until applied or deleted");
+    let last = cabin.threads.iter().find(|t| t.id == tid).unwrap().messages.last().cloned().unwrap();
+    assert!(last.1.contains(grokhub_core::CARD_ACTION_DONE) && !last.1.contains("CARD_ACTION:"));
+    // The brief for the next turn carries the new action.
+    cabin.chat_job_thread = Some(tid);
+    let brief = cabin.idea_talk_brief().expect("idea brief");
+    assert!(brief.contains("every weekday at 8 sort my inbox"));
+}
+
+#[test]
+fn idea_card_apply_and_delete_follow_the_type() {
+    let mut quiet = QuietCabin::boot("idea-card-apply");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    cabin.updates.push(board_idea(
+        "idea-auto",
+        grokhub_core::IdeaKind::Automation,
+        "every weekday at 9 summarize the workboard",
+        5,
+    ));
+    cabin.updates.push(board_idea("idea-try", grokhub_core::IdeaKind::Try, "draft my standup", 6));
+    let autos = cabin.automations.len() + cabin.grok_loops.len();
+    cabin.apply_idea("idea-auto");
+    assert_eq!(cabin.automations.len() + cabin.grok_loops.len(), autos + 1);
+    assert!(!cabin.updates.iter().any(|c| c.id == "idea-auto"), "applied cards leave the board");
+    // No Grok in this cabin: a Suggestion cannot run, so the card stays with a note.
+    cabin.apply_idea("idea-try");
+    assert!(cabin.updates.iter().any(|c| c.id == "idea-try"));
+    assert!(cabin
+        .idea_board
+        .note
+        .as_ref()
+        .is_some_and(|(id, _)| id == "idea-try"));
+    cabin.delete_idea("idea-try");
+    assert!(!cabin.updates.iter().any(|c| c.id == "idea-try"));
+    assert!(cabin.idea_board.note.is_none());
+}
+
+#[test]
+fn idea_card_edits_stop_at_ten_in_progress() {
+    let mut quiet = QuietCabin::boot("idea-card-cap");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    for i in 0..11u64 {
+        cabin.updates.push(board_idea(
+            &format!("idea-{i}"),
+            grokhub_core::IdeaKind::Try,
+            "draft my standup",
+            i,
+        ));
+    }
+    for i in 0..10 {
+        grokhub_core::set_idea_draft(&mut cabin.updates, &format!("idea-{i}"), "changed").unwrap();
+    }
+    assert!(grokhub_core::set_idea_draft(&mut cabin.updates, "idea-10", "changed").is_err());
+    assert_eq!(grokhub_core::modified_ideas(&cabin.updates), 10);
 }

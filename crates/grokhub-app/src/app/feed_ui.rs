@@ -8,25 +8,15 @@
 
 use super::*;
 use grokhub_core::{
-    archive_digest, automation_done_card, dismiss_idea,
+    archive_digest, automation_done_card,
     dismiss_update, feed_ideas, feed_visible, file_idea_todo, hold_if_quiet,
-    home_feed_n, idea_dialogue, idea_open_line, idea_rank, idea_talk_chips, unpin_feed_idea,
+    home_feed_n, idea_open_line, unpin_feed_idea,
     idea_todo_title,
     links_from_research, mark_update_opened, post_update, quiet_hours_active, route_schedule,
-    schedule_created_card, tick_feed_pulse, visible_digests, visible_ideas, visible_updates,
+    schedule_created_card, tick_feed_pulse, visible_digests, visible_updates,
     CardReaction, CitedLink, DigestMaterial, PulseNow, TasteNote, UpdateAction, UpdateCard,
     UpdateKind, UpdateStatus, DIGEST_PAINT_MAX, FEED_PAINT_MAX,
 };
-
-/// Short idea talk. It is not a History chat.
-#[derive(Clone, Debug)]
-pub(super) struct IdeaPop {
-    pub card_id: String,
-    pub thread_id: String,
-    pub composer: String,
-    /// First frame of this opening is centered. After that the window stays where you drag it.
-    pub placed: bool,
-}
 
 const FEED_CARD_H: f32 = 64.0;
 const FEED_GAP: f32 = 6.0;
@@ -396,57 +386,6 @@ impl Cabin {
         self.apply_feed_act(painted.act);
     }
 
-    pub(super) fn ui_ideas(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default()
-            .frame(
-                egui::Frame::none()
-                    .fill(crate::theme::bg())
-                    .inner_margin(egui::Margin::same(24.0)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("Ideas")
-                            .size(crate::theme::FONT_HEADING)
-                            .color(crate::theme::fg()),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let busy = self.ideas_rx.is_some();
-                        let label = if busy { "Thinking…" } else { "Suggest ideas" };
-                        if crate::cards::ghost_pill(ui, label) && !busy {
-                            if self.llm_ready() {
-                                self.maybe_suggest_ideas(true);
-                                self.status = "Thinking up ideas from your recent work…".into();
-                            } else {
-                                self.status = "Connect Grok in Settings to get ideas".into();
-                            }
-                        }
-                    });
-                });
-                ui.add_space(12.0);
-                self.ensure_useful_ideas();
-                let now = now_ms();
-                let mut ideas = visible_ideas(&self.updates);
-                let brief = grokhub_core::brief_for(&self.learning, "ideas");
-                ideas.sort_by(|a, b| {
-                    let ra = idea_rank(a, now) + grokhub_core::lesson_rank_delta(&a.title, &brief);
-                    let rb = idea_rank(b, now) + grokhub_core::lesson_rank_delta(&b.title, &brief);
-                    rb.cmp(&ra)
-                });
-                ideas.truncate(grokhub_core::IDEA_BOARD_MAX);
-                let mut act = None;
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    for card in &ideas {
-                        if let Some(next) = paint_feed_card(ui, card, ui.available_width(), true) {
-                            act = Some(next);
-                        }
-                        ui.add_space(FEED_GAP);
-                    }
-                });
-                self.apply_feed_act(act);
-            });
-    }
-
     pub(super) fn apply_feed_act(&mut self, act: Option<FeedAct>) {
         match act {
             Some(FeedAct::Dismiss(id)) => self.dismiss_feed_card(&id),
@@ -456,21 +395,7 @@ impl Cabin {
             Some(FeedAct::React(id, reaction)) => self.react_card(&id, reaction),
             Some(FeedAct::Discuss(id)) => self.discuss_card(&id),
             Some(FeedAct::Archive(id)) => self.archive_feed_digest(&id),
-            Some(FeedAct::Drop(id)) => {
-                let title = self
-                    .updates
-                    .iter()
-                    .find(|c| c.id == id)
-                    .map(|c| c.title.clone())
-                    .unwrap_or_default();
-                if dismiss_idea(&mut self.updates, &id) {
-                    self.persist_updates();
-                    if !title.is_empty() {
-                        let key = format!("rejected:{}", grokhub_core::engine_slug(&title));
-                        self.engine_note("ideas", &key, &title);
-                    }
-                }
-            }
+            Some(FeedAct::Drop(id)) => self.delete_idea(&id),
             None => {}
         }
     }
@@ -537,6 +462,8 @@ impl Cabin {
         if grokhub_core::purge_template_ideas(&mut self.updates) > 0 {
             self.persist_updates();
         }
+        // Skill suggestions saved by an older cabin move to the Ideas board once.
+        self.skill_suggestions_to_ideas();
     }
 
     /// Ask the model for ideas grounded in this person's work. The automatic ask
@@ -723,7 +650,7 @@ impl Cabin {
             return;
         };
         if card.kind == UpdateKind::Idea {
-            self.open_idea_talk(card);
+            self.open_idea_on_board(&card.id);
             return;
         }
         if !matches!(card.kind, UpdateKind::Digest) {
@@ -758,218 +685,6 @@ impl Cabin {
         self.nav = Nav::Chat;
         self.persist_updates();
         self.persist();
-    }
-
-    /// Accept opens this pop-out. The transcript stays off History.
-    fn open_idea_talk(&mut self, card: UpdateCard) {
-        let thread_id = if let Some(tid) = card.discuss_thread.clone() {
-            if self.threads.iter().any(|t| t.id == tid) {
-                tid
-            } else {
-                self.make_idea_thread(&card)
-            }
-        } else {
-            self.make_idea_thread(&card)
-        };
-        if let Some(saved) = self.updates.iter_mut().find(|c| c.id == card.id) {
-            saved.discuss_thread = Some(thread_id.clone());
-            saved.status = UpdateStatus::Opened;
-        }
-        self.idea_pop = Some(IdeaPop {
-            card_id: card.id.clone(),
-            thread_id,
-            composer: idea_dialogue(&card),
-            placed: false,
-        });
-        let key = format!("opened:{}", grokhub_core::engine_slug(&card.title));
-        let title = card.title.clone();
-        self.persist_updates();
-        self.persist();
-        self.engine_note("ideas", &key, &title);
-    }
-
-    fn make_idea_thread(&mut self, card: &UpdateCard) -> String {
-        let mut thread = crate::threads::ChatThread::new(&format!("Discuss · {}", card.title), false);
-        thread.background = true;
-        thread.title_locked = true;
-        let context = idea_open_line(card);
-        thread.messages_mut().push(("assistant".into(), context));
-        let id = thread.id.clone();
-        let alone = self.threads.is_empty();
-        self.threads.push(thread);
-        if alone {
-            let mut draft = crate::threads::ChatThread::new("Chat", false);
-            draft.accessed_ms = now_ms();
-            self.threads.insert(0, draft);
-            self.thread_idx = 0;
-            self.messages = std::sync::Arc::new(Vec::new());
-        }
-        id
-    }
-
-    pub(super) fn send_idea_talk(&mut self, text: String) {
-        let Some(pop) = self.idea_pop.clone() else {
-            return;
-        };
-        let text = text.trim().to_string();
-        if text.is_empty() {
-            return;
-        }
-        if self.running && self.chat_job_thread.as_deref() != Some(pop.thread_id.as_str()) {
-            self.status = "Finish the open chat first".into();
-            return;
-        }
-        if !self.can_agent() {
-            self.status = "Install Grok Build (x.ai/cli) or Connect Grok in Settings".into();
-            return;
-        }
-        self.chat_job_thread = Some(pop.thread_id);
-        self.push_bound_msg("user", text);
-        if let Some(pop) = self.idea_pop.as_mut() {
-            pop.composer.clear();
-        }
-        self.persist();
-        self.kick_model(false);
-    }
-
-    pub(super) fn paint_idea_talk(&mut self, ctx: &egui::Context) {
-        let Some(pop) = self.idea_pop.clone() else {
-            return;
-        };
-        let found = self
-            .threads
-            .iter()
-            .find(|t| t.id == pop.thread_id)
-            .map(|t| (t.messages.clone(), t.title.clone()));
-        let Some((messages, thread_title)) = found else {
-            self.idea_pop = None;
-            return;
-        };
-        let card = self.updates.iter().find(|c| c.id == pop.card_id).cloned();
-        let card_title = card
-            .as_ref()
-            .map(|c| c.title.clone())
-            .unwrap_or(thread_title);
-        let body = card.as_ref().and_then(|c| c.body.clone()).unwrap_or_default();
-        let pairs: Vec<(String, String)> = messages.iter().cloned().collect();
-        let mut chips = idea_talk_chips(&card_title, &body, &pairs);
-        chips.retain(|c| {
-            !grokhub_core::chip_dismissed_for_good(&self.chip_memory, c)
-                && !self
-                    .chip_dismissed
-                    .iter()
-                    .any(|d| d == &c.id || d == &c.value)
-        });
-        let thinking = self.running && self.chat_job_thread.as_deref() == Some(pop.thread_id.as_str());
-        let stream = if thinking {
-            self.stream_buf.clone()
-        } else {
-            String::new()
-        };
-        let mut composer = pop.composer.clone();
-        let mut open = true;
-        let mut send = None;
-        let mut chip_act = None;
-        let mut window = egui::Window::new(&card_title)
-            .id(egui::Id::new(("idea-talk", pop.card_id.clone())))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .movable(true)
-            .pivot(egui::Align2::CENTER_CENTER)
-            .default_width(440.0)
-            .default_height(540.0);
-        if !pop.placed {
-            window = window.current_pos(ctx.screen_rect().center());
-        }
-        window.show(ctx, |ui| {
-                ui.set_min_width(360.0);
-                let chip_h = if chips.is_empty() { 0.0 } else { 36.0 };
-                let input_h = 72.0;
-                let scroll_h = (ui.available_height() - chip_h - input_h - 12.0).max(160.0);
-                egui::ScrollArea::vertical()
-                    .stick_to_bottom(true)
-                    .max_height(scroll_h)
-                    .show(ui, |ui| {
-                        for (role, text) in messages.iter() {
-                            let mine = role == "user";
-                            let color = if mine {
-                                crate::theme::fg()
-                            } else {
-                                crate::theme::muted()
-                            };
-                            ui.label(
-                                RichText::new(if mine { "You" } else { "Cabin" })
-                                    .size(crate::theme::FONT_TIP)
-                                    .color(crate::theme::subtle()),
-                            );
-                            ui.label(RichText::new(text).size(crate::theme::FONT_BODY).color(color));
-                            ui.add_space(8.0);
-                        }
-                        if thinking {
-                            let live = if stream.trim().is_empty() {
-                                "Thinking…".to_string()
-                            } else {
-                                stream.clone()
-                            };
-                            ui.label(
-                                RichText::new(live)
-                                    .size(crate::theme::FONT_BODY)
-                                    .color(crate::theme::muted()),
-                            );
-                        }
-                    });
-                if let Some(act) = crate::cards::quick_chip_row(ui, &chips) {
-                    chip_act = Some(act);
-                }
-                ui.add_space(6.0);
-                let edit = ui.add(
-                    egui::TextEdit::multiline(&mut composer)
-                        .desired_rows(4)
-                        .hint_text(crate::theme::hint("How should this work?"))
-                        .desired_width(f32::INFINITY),
-                );
-                let enter = edit.has_focus()
-                    && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
-                if enter || crate::cards::ghost_pill(ui, "Send") {
-                    let text = composer.trim().to_string();
-                    if !text.is_empty() {
-                        send = Some(text);
-                    }
-                }
-            });
-        if thinking {
-            ctx.request_repaint();
-        }
-        if let Some(pop) = self.idea_pop.as_mut() {
-            pop.placed = true;
-            pop.composer = if send.is_some() {
-                String::new()
-            } else {
-                composer
-            };
-        }
-        if !open {
-            self.idea_pop = None;
-            return;
-        }
-        if let Some(act) = chip_act {
-            match act {
-                crate::cards::ChipRowAct::Apply(i) => {
-                    if let Some(chip) = chips.get(i) {
-                        self.send_idea_talk(chip.value.clone());
-                    }
-                }
-                crate::cards::ChipRowAct::Dismiss(i) => {
-                    if let Some(chip) = chips.get(i).cloned() {
-                        self.dismiss_chip(chip);
-                    }
-                }
-            }
-        }
-        if let Some(text) = send {
-            self.send_idea_talk(text);
-        }
     }
 
     pub(super) fn archive_feed_digest(&mut self, id: &str) {
@@ -1297,11 +1012,7 @@ fn paint_feed_card(
                 ui.set_width(text_w);
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                 let title = if card.kind == UpdateKind::Idea {
-                    if card.built {
-                        format!("{} · On the board", card.title)
-                    } else {
-                        card.title.clone()
-                    }
+                    format!("{} · {}", card.idea_type_label(), card.title)
                 } else if card.built {
                     format!("{} · {} · On the board", card.kind.label(), card.title)
                 } else {
@@ -1337,7 +1048,7 @@ fn paint_feed_card(
                         if !full && crate::cards::ghost_pill(ui, "Dismiss") {
                             act = Some(FeedAct::Dismiss(card.id.clone()));
                         }
-                        if crate::cards::ghost_pill(ui, "Accept") {
+                        if crate::cards::ghost_pill(ui, "Open") {
                             act = Some(FeedAct::Discuss(card.id.clone()));
                         }
                     }
