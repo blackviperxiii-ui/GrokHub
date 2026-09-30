@@ -1315,6 +1315,32 @@ pub fn automation_done_card(
     card
 }
 
+/// A scheduled job failed. Same kind as a finished one so older feeds still load;
+/// the title says it failed and the body says why.
+pub fn automation_failed_card(source_id: &str, name: &str, why: &str, created_at: u64) -> UpdateCard {
+    let name = clip_line(name, TITLE_CHARS.saturating_sub(8).max(8));
+    let title = if name.is_empty() {
+        "Automation failed".to_string()
+    } else {
+        format!("{name} failed")
+    };
+    let why = clip_line(why, BODY_CHARS);
+    let body = Some(if why.is_empty() {
+        "Open Automations to run it again.".to_string()
+    } else {
+        why
+    });
+    let mut card = blank_card(
+        feed_card_id("fail", source_id, created_at),
+        UpdateKind::AutomationDone,
+        title,
+        body,
+        created_at,
+    );
+    card.action = Some(UpdateAction::OpenAutomations);
+    card
+}
+
 /// User saved a clock job or an interval loop.
 pub fn schedule_created_card(
     source_id: &str,
@@ -1953,5 +1979,19 @@ mod tests {
         assert_eq!(archived_digests(&cards).len(), 1);
         assert!(visible_updates(&cards).is_empty());
         assert!(!feed_visible(&cards));
+    }
+
+    #[test]
+    fn failed_automation_card_names_the_job_and_why() {
+        let c = automation_failed_card("a1", "Board summary", "credit limit reached", 5);
+        assert_eq!(c.kind, UpdateKind::AutomationDone);
+        assert_eq!(c.title, "Board summary failed");
+        assert_eq!(c.body.as_deref(), Some("credit limit reached"));
+        assert_eq!(c.action, Some(UpdateAction::OpenAutomations));
+        let blank = automation_failed_card("a2", "", "", 5);
+        assert_eq!(blank.title, "Automation failed");
+        assert!(blank.body.is_some());
+        let done = automation_done_card("a1", "Board summary", "ok", 5);
+        assert_ne!(c.id, done.id, "a failure must not replace the done card");
     }
 }

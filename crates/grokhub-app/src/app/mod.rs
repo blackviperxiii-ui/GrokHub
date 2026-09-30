@@ -180,6 +180,23 @@ mod tests;
 use acp::*;
 #[allow(unused_imports)]
 use chat_ui::*;
+use night::AutoEnd;
+
+/// Title and body for a token budget warning.
+pub(super) fn token_budget_notice(
+    level: grokhub_core::BudgetLevel,
+    line: &str,
+    pauses: bool,
+) -> (&'static str, String) {
+    match level {
+        grokhub_core::BudgetLevel::Over if pauses => (
+            "Token budget used up",
+            format!("{line}. Scheduled work waits until tomorrow."),
+        ),
+        grokhub_core::BudgetLevel::Over => ("Token budget used up", format!("{line}.")),
+        _ => ("Token budget at 80%", format!("{line}.")),
+    }
+}
 #[allow(unused_imports)]
 use chips::*;
 #[allow(unused_imports)]
@@ -602,6 +619,8 @@ pub struct Cabin {
     plus_ignore_close: bool,
     file_pick: Option<PlusTarget>,
     pick_rx: Option<mpsc::Receiver<(PlusTarget, PlusPick)>>,
+    /// Files past the first in the last drop. Only the first attaches.
+    drop_extra: usize,
     pick_list_rx: Option<mpsc::Receiver<PickList>>,
     pick_dir: String,
     pick_cache: Option<PickList>,
@@ -687,6 +706,10 @@ pub struct Cabin {
     confirm: Option<ConfirmKind>,
     /// History "Last you" scroll once the thread is open.
     jump_last_you: bool,
+    /// Ctrl+F in the open chat.
+    find: ChatFind,
+    /// Scheduled job whose turn is running: (automation id, chat thread).
+    auto_run: Option<(String, Option<String>)>,
     elicit_ask: Option<grokhub_acp::ElicitAsk>,
     elicit_draft: String,
     /// Secret values typed into an elicit. Memory only — never persisted.
@@ -1135,6 +1158,7 @@ impl Cabin {
             plus_ignore_close: false,
             file_pick: None,
             pick_rx: None,
+            drop_extra: 0,
             pick_list_rx: None,
             pick_dir: std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()),
             pick_cache: None,
@@ -1199,6 +1223,8 @@ impl Cabin {
             perm_always_confirm: None,
             confirm: None,
             jump_last_you: false,
+            find: ChatFind::default(),
+            auto_run: None,
             elicit_ask: None,
             elicit_draft: String::new(),
             secret_hold: Vec::new(),
@@ -1520,6 +1546,7 @@ impl Cabin {
             plus_ignore_close: false,
             file_pick: None,
             pick_rx: None,
+            drop_extra: 0,
             pick_list_rx: None,
             pick_dir: String::new(),
             pick_cache: None,
@@ -1584,6 +1611,8 @@ impl Cabin {
             perm_always_confirm: None,
             confirm: None,
             jump_last_you: false,
+            find: ChatFind::default(),
+            auto_run: None,
             elicit_ask: None,
             elicit_draft: String::new(),
             secret_hold: Vec::new(),
@@ -2896,7 +2925,32 @@ impl Cabin {
         }
         self.tokens_seen = now;
         add_tokens(&mut self.usage, spent.0, spent.1, spent.2);
+        self.note_token_budget();
         self.persist_usage();
+    }
+
+    /// Near and over the daily token budget each warn once a day: status line,
+    /// and a desktop ping outside quiet hours.
+    fn note_token_budget(&mut self) {
+        let cap = self.cfg.daily_token_budget;
+        let Some(level) = grokhub_core::take_budget_note(&mut self.usage, cap) else {
+            return;
+        };
+        let line = grokhub_core::budget_line(&self.usage, cap);
+        let (title, body) = token_budget_notice(level, &line, self.cfg.budget_pauses_scheduled);
+        self.status = format!("{title} — {body}");
+        if crate::notify::allow_ping(self.quiet_now()) {
+            crate::notify::ping(title, &body);
+        }
+    }
+
+    /// Over budget with pause on: scheduled work waits for tomorrow.
+    pub(super) fn budget_holds_scheduled(&self) -> bool {
+        grokhub_core::budget_holds_scheduled(
+            &self.usage,
+            self.cfg.daily_token_budget,
+            self.cfg.budget_pauses_scheduled,
+        )
     }
 
     fn poll_sync(&mut self) {
@@ -3095,6 +3149,9 @@ impl Cabin {
         };
         self.roll_today();
         if daily_units_blocked(self.usage.automation, self.cfg.daily_auto_cap) {
+            return;
+        }
+        if self.budget_holds_scheduled() {
             return;
         }
         if !anticipate_consumes_slot(self.can_agent()) {
@@ -3637,9 +3694,12 @@ impl Cabin {
     }
 
     fn apply_job_fail(&mut self, err: &str) -> String {
+        let job = self.chat_job_thread.clone();
         if grokhub_acp::is_sigterm_status(err) {
+            self.settle_auto_run(AutoEnd::Stopped, job.as_deref());
             return "Stopped".into();
         }
+        self.settle_auto_run(AutoEnd::Failed(err), job.as_deref());
         if classify_stream_error(err) == StreamErrorKind::CreditLimit {
             self.try_again = true;
             self.last_receipt_ok = Some(false);
@@ -4230,6 +4290,7 @@ impl Cabin {
 
     fn halt_work(&mut self, status: impl Into<String>) {
         let status = status.into();
+        self.settle_auto_run(AutoEnd::Stopped, None);
         self.halt_in_flight();
         self.finish_hub_dispatch(&status, false);
         self.status = status;
@@ -4497,6 +4558,7 @@ impl eframe::App for Cabin {
         self.poll_single();
         self.poll_pick();
         self.take_dropped_attach(ctx);
+        self.paint_drop_hint(ctx);
         self.poll_pick_list();
         self.poll_eyes_cap();
         self.poll_recipe_cap();
@@ -4567,6 +4629,15 @@ impl eframe::App for Cabin {
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::N) && !i.modifiers.shift) {
             self.new_thread(false);
+        }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F) && !i.modifiers.shift)
+            && self.nav == Nav::Chat
+            && !self.messages.is_empty()
+        {
+            self.find.toggle();
+        }
+        if self.find.open && (self.nav != Nav::Chat || self.messages.is_empty()) {
+            self.find.close();
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::K) && !i.modifiers.shift) {
             if self.palette_open {

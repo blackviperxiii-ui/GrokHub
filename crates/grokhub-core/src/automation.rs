@@ -30,6 +30,113 @@ pub struct Automation {
     pub next_run: Option<u64>,
     #[serde(default)]
     pub run_count: u32,
+    /// How the last run ended. Older `automations.json` files load as clear.
+    #[serde(default, skip_serializing_if = "AutoHealth::is_clear")]
+    pub health: AutoHealth,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AutoOutcome {
+    #[default]
+    None,
+    /// The turn started and has not reported back (or the cabin quit mid-run).
+    Started,
+    Ok,
+    Failed,
+    /// You halted it. Not a failure.
+    Stopped,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoHealth {
+    #[serde(default)]
+    pub outcome: AutoOutcome,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub error: String,
+    /// Failed runs in a row. A good run resets it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub fail_streak: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+impl AutoHealth {
+    pub fn is_clear(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn failing(&self) -> bool {
+        self.outcome == AutoOutcome::Failed
+    }
+}
+
+/// Error text kept on the job. One line, clipped, secrets are not expected here
+/// (it is the stream error, not the transcript).
+pub const AUTO_ERROR_CHARS: usize = 160;
+
+fn clip_error(why: &str) -> String {
+    let line = why
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("")
+        .trim_start_matches("Error:")
+        .trim();
+    if line.chars().count() <= AUTO_ERROR_CHARS {
+        return line.to_string();
+    }
+    let mut out: String = line.chars().take(AUTO_ERROR_CHARS - 1).collect();
+    out.push('…');
+    out
+}
+
+/// The scheduled turn finished with a reply.
+pub fn mark_automation_ok(mut a: Automation) -> Automation {
+    a.health = AutoHealth {
+        outcome: AutoOutcome::Ok,
+        error: String::new(),
+        fail_streak: 0,
+    };
+    a
+}
+
+/// The run did not happen or errored. `why` is what the user needs to fix.
+pub fn mark_automation_failed(mut a: Automation, why: &str) -> Automation {
+    a.health.outcome = AutoOutcome::Failed;
+    a.health.error = clip_error(why);
+    if a.health.error.is_empty() {
+        a.health.error = "Run failed".into();
+    }
+    a.health.fail_streak = a.health.fail_streak.saturating_add(1);
+    a
+}
+
+/// You halted the run. The streak stays where it was.
+pub fn mark_automation_stopped(mut a: Automation) -> Automation {
+    a.health.outcome = AutoOutcome::Stopped;
+    a.health.error.clear();
+    a
+}
+
+/// Red line under a job on Automations. `None` while healthy.
+pub fn automation_health_line(a: &Automation) -> Option<String> {
+    if !a.health.failing() {
+        return None;
+    }
+    let why = if a.health.error.is_empty() {
+        "Run failed"
+    } else {
+        a.health.error.as_str()
+    };
+    Some(if a.health.fail_streak > 1 {
+        format!("Failed {} times in a row — {why}", a.health.fail_streak)
+    } else {
+        format!("Last run failed — {why}")
+    })
 }
 
 fn default_enabled() -> bool {
@@ -167,7 +274,7 @@ pub fn due_automations(list: &[Automation], now_ms: u64) -> Vec<Automation> {
 }
 
 pub fn automation_blocked_by_policy(quiet: bool, destructive: bool, autonomy: u8) -> bool {
-    (quiet && destructive) || (autonomy == 0 && destructive)
+    destructive && (quiet || autonomy == 0)
 }
 
 /// Replay that did not start must not consume the night slot.
@@ -201,6 +308,7 @@ pub fn replay_automation_target(instructions: &str) -> Option<&str> {
 pub fn mark_automation_ran(mut a: Automation, now_ms: u64) -> Automation {
     a.last_run = Some(now_ms);
     a.run_count = a.run_count.saturating_add(1);
+    a.health.outcome = AutoOutcome::Started;
     if a.schedule == "once" {
         a.enabled = false;
         a.next_run = None;
@@ -267,6 +375,7 @@ pub fn parse_nl_automation(text: &str) -> Option<Automation> {
             last_run: None,
             next_run: None,
             run_count: 0,
+            health: AutoHealth::default(),
         });
     }
     let lower = t.to_ascii_lowercase();
@@ -304,6 +413,7 @@ pub fn parse_nl_automation(text: &str) -> Option<Automation> {
         last_run: None,
         next_run: None,
         run_count: 0,
+        health: AutoHealth::default(),
     })
 }
 
@@ -743,6 +853,7 @@ mod tests {
                 last_run: None,
                 next_run: Some(500),
                 run_count: 0,
+                health: Default::default(),
             }],
             1_000,
         );
@@ -782,6 +893,7 @@ mod tests {
             last_run: None,
             next_run: Some(500),
             run_count: 0,
+            health: Default::default(),
         };
         assert!(automation_blocked_by_policy(false, true, 0));
         let skipped = mark_automation_skipped(blocked, 1_000, clock);
@@ -801,6 +913,7 @@ mod tests {
             last_run: None,
             next_run: Some(500),
             run_count: 0,
+            health: Default::default(),
         };
         let check_skip = mark_automation_skipped(once.clone(), 1_000, clock);
         assert!(check_skip.enabled, "a gated skip must not disable once jobs");
@@ -821,6 +934,7 @@ mod tests {
             last_run: None,
             next_run: None,
             run_count: 0,
+            health: Default::default(),
         };
         let after = LocalClock {
             now_ms: 1_000,
@@ -894,5 +1008,65 @@ mod tests {
         };
         assert!(!only.instructions.contains("cp -a"), "{}", only.instructions);
         assert!(!only.instructions.contains("Follow along:"), "{}", only.instructions);
+    }
+
+    fn job(id: &str) -> Automation {
+        Automation {
+            id: id.into(),
+            name: "Board summary".into(),
+            schedule: "daily".into(),
+            time: "09:00".into(),
+            times: Vec::new(),
+            instructions: "summarize the board".into(),
+            heartbeat_every_min: 0,
+            check_command: String::new(),
+            enabled: true,
+            last_run: None,
+            next_run: None,
+            run_count: 0,
+            health: AutoHealth::default(),
+        }
+    }
+
+    #[test]
+    fn older_automations_json_loads_clear_and_clear_is_not_written() {
+        let old = r#"[{"id":"a","name":"n","schedule":"daily","time":"09:00","instructions":"x","enabled":true,"runCount":3}]"#;
+        let list: Vec<Automation> = serde_json::from_str(old).expect("old file loads");
+        assert!(list[0].health.is_clear());
+        let back = serde_json::to_string(&list[0]).unwrap();
+        assert!(!back.contains("health"), "{back}");
+        let failed = mark_automation_failed(list[0].clone(), "boom");
+        let json = serde_json::to_string(&failed).unwrap();
+        assert!(json.contains(r#""outcome":"failed""#), "{json}");
+        let again: Automation = serde_json::from_str(&json).unwrap();
+        assert_eq!(again.health, failed.health);
+    }
+
+    #[test]
+    fn failures_streak_and_a_good_run_clears_them() {
+        let a = mark_automation_ran(job("a"), 1_000);
+        assert_eq!(a.health.outcome, AutoOutcome::Started);
+        assert!(automation_health_line(&a).is_none());
+        let a = mark_automation_failed(a, "Error: credit limit reached\nmore detail");
+        assert_eq!(a.health.error, "credit limit reached");
+        assert_eq!(
+            automation_health_line(&a).as_deref(),
+            Some("Last run failed — credit limit reached")
+        );
+        let a = mark_automation_failed(a, "");
+        assert_eq!(a.health.fail_streak, 2);
+        assert_eq!(
+            automation_health_line(&a).as_deref(),
+            Some("Failed 2 times in a row — Run failed")
+        );
+        let stopped = mark_automation_stopped(a.clone());
+        assert_eq!(stopped.health.fail_streak, 2, "a halt is not a success");
+        assert!(automation_health_line(&stopped).is_none());
+        let ok = mark_automation_ok(a);
+        assert!(ok.health.fail_streak == 0 && ok.health.error.is_empty());
+        assert!(automation_health_line(&ok).is_none());
+        let long = mark_automation_failed(job("b"), &"x".repeat(500));
+        assert_eq!(long.health.error.chars().count(), AUTO_ERROR_CHARS);
+        assert!(long.health.error.ends_with('…'));
     }
 }

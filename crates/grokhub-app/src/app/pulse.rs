@@ -285,6 +285,7 @@ mod tests {
             last_run: None,
             next_run: Some(when),
             run_count: 0,
+            health: Default::default(),
         }
     }
 

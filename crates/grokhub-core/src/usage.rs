@@ -17,6 +17,90 @@ pub struct UsageDay {
     pub tokens_out: u64,
     #[serde(default)]
     pub tokens_think: u64,
+    /// Highest budget warning already shown today (0 none, 1 near, 2 over).
+    #[serde(default)]
+    pub budget_noted: u8,
+}
+
+/// Settings presets for the daily token budget. 0 is off.
+pub const TOKEN_BUDGETS: &[u64] = &[
+    0,
+    250_000,
+    500_000,
+    1_000_000,
+    2_000_000,
+    5_000_000,
+    10_000_000,
+    25_000_000,
+];
+
+/// Warn once the day passes this share of the budget.
+pub const BUDGET_NEAR_PCT: u64 = 80;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BudgetLevel {
+    Under = 0,
+    Near = 1,
+    Over = 2,
+}
+
+/// Everything Grok Build reported today: input, output, and reasoning.
+pub fn tokens_today(day: &UsageDay) -> u64 {
+    day.tokens_in
+        .saturating_add(day.tokens_out)
+        .saturating_add(day.tokens_think)
+}
+
+/// `None` while the budget is off.
+pub fn budget_level(used: u64, cap: u64) -> Option<BudgetLevel> {
+    if cap == 0 {
+        return None;
+    }
+    Some(if used >= cap {
+        BudgetLevel::Over
+    } else if used.saturating_mul(100) >= cap.saturating_mul(BUDGET_NEAR_PCT) {
+        BudgetLevel::Near
+    } else {
+        BudgetLevel::Under
+    })
+}
+
+/// A warning not yet shown today. Marks it shown. Near then Over, each once a day.
+pub fn take_budget_note(day: &mut UsageDay, cap: u64) -> Option<BudgetLevel> {
+    let level = budget_level(tokens_today(day), cap)?;
+    if level == BudgetLevel::Under || (level as u8) <= day.budget_noted {
+        return None;
+    }
+    day.budget_noted = level as u8;
+    Some(level)
+}
+
+/// Scheduled work waits for tomorrow once today is over budget, when you asked it to.
+pub fn budget_holds_scheduled(day: &UsageDay, cap: u64, pause: bool) -> bool {
+    pause && budget_level(tokens_today(day), cap) == Some(BudgetLevel::Over)
+}
+
+/// "Off" or "1.0M tokens a day".
+pub fn token_budget_label(cap: u64) -> String {
+    if cap == 0 {
+        "Off".into()
+    } else {
+        format!("{} tokens a day", compact_tokens(cap))
+    }
+}
+
+/// "812k of 1.0M tokens today (81%)".
+pub fn budget_line(day: &UsageDay, cap: u64) -> String {
+    let used = tokens_today(day);
+    if cap == 0 {
+        return format!("{} tokens today", compact_tokens(used));
+    }
+    let pct = used.saturating_mul(100) / cap.max(1);
+    format!(
+        "{} of {} tokens today ({pct}%)",
+        compact_tokens(used),
+        compact_tokens(cap)
+    )
 }
 
 pub fn usage_day_key(clock_ymd: &str) -> String {
@@ -152,5 +236,46 @@ mod tests {
             !usage_line(&d).contains("tokens"),
             "a quiet day must not print an empty token line"
         );
+    }
+
+    #[test]
+    fn budget_warns_near_then_over_once_a_day() {
+        let mut d = UsageDay {
+            day: "2026-09-29".into(),
+            ..Default::default()
+        };
+        assert_eq!(budget_level(10, 0), None, "off");
+        assert_eq!(take_budget_note(&mut d, 0), None);
+        add_tokens(&mut d, 700_000, 50_000, 0);
+        assert_eq!(budget_level(tokens_today(&d), 1_000_000), Some(BudgetLevel::Under));
+        assert_eq!(take_budget_note(&mut d, 1_000_000), None);
+        add_tokens(&mut d, 0, 60_000, 0);
+        assert_eq!(take_budget_note(&mut d, 1_000_000), Some(BudgetLevel::Near));
+        assert_eq!(take_budget_note(&mut d, 1_000_000), None, "near shows once");
+        assert!(!budget_holds_scheduled(&d, 1_000_000, true));
+        add_tokens(&mut d, 0, 0, 200_000);
+        assert_eq!(take_budget_note(&mut d, 1_000_000), Some(BudgetLevel::Over));
+        assert_eq!(take_budget_note(&mut d, 1_000_000), None, "over shows once");
+        assert!(budget_holds_scheduled(&d, 1_000_000, true));
+        assert!(!budget_holds_scheduled(&d, 1_000_000, false), "pause is opt-in");
+        assert!(!budget_holds_scheduled(&d, 0, true), "no budget, no hold");
+        assert_eq!(budget_line(&d, 1_000_000), "1.0M of 1.0M tokens today (101%)");
+        roll_usage_day(&mut d, "2026-09-30");
+        assert_eq!(d.budget_noted, 0, "a new day warns again");
+        assert!(!budget_holds_scheduled(&d, 1_000_000, true));
+    }
+
+    #[test]
+    fn budget_jumps_straight_to_over_and_labels_read_plainly() {
+        let mut d = UsageDay::default();
+        add_tokens(&mut d, 3_000_000, 0, 0);
+        assert_eq!(take_budget_note(&mut d, 1_000_000), Some(BudgetLevel::Over));
+        assert_eq!(take_budget_note(&mut d, 1_000_000), None, "no late Near after Over");
+        assert_eq!(token_budget_label(0), "Off");
+        assert_eq!(token_budget_label(500_000), "500k tokens a day");
+        assert_eq!(token_budget_label(2_000_000), "2.0M tokens a day");
+        assert!(TOKEN_BUDGETS[0] == 0 && TOKEN_BUDGETS.windows(2).all(|w| w[0] < w[1]));
+        let old: UsageDay = serde_json::from_str(r#"{"day":"d","messages":1,"imagine":0,"host":0,"automation":0}"#).unwrap();
+        assert_eq!(old.budget_noted, 0);
     }
 }
