@@ -33,6 +33,44 @@ pub fn list_skills() -> Vec<SkillMd> {
     out
 }
 
+/// Auto-made skills that never ran and hold nothing reusable (see
+/// `is_junk_skill`) move to `skills/.retired/<name>`. Nothing is deleted: moving
+/// a folder back restores it. Returns the names that moved.
+pub fn retire_junk_skills() -> Vec<String> {
+    let dir = skills_dir();
+    let Ok(rd) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let retired = dir.join(".retired");
+    let mut moved = Vec::new();
+    for e in rd.flatten() {
+        let path = e.path();
+        if !path.is_dir() || e.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let Ok(raw) = crate::desktop::read_text_capped(&path.join("SKILL.md")) else {
+            continue;
+        };
+        let skill = parse_skill_md(&raw);
+        if !grokhub_core::is_junk_skill(&skill) {
+            continue;
+        }
+        if fs::create_dir_all(&retired).is_err() {
+            break;
+        }
+        let mut dest = retired.join(e.file_name());
+        let mut n = 1;
+        while dest.exists() {
+            n += 1;
+            dest = retired.join(format!("{}-{n}", e.file_name().to_string_lossy()));
+        }
+        if fs::rename(&path, &dest).is_ok() {
+            moved.push(skill.name);
+        }
+    }
+    moved
+}
+
 pub fn save_skill(s: &SkillMd) -> Result<PathBuf, String> {
     if !skill_safe(&s.instructions) || !skill_safe(&s.pitfalls) {
         return Err("Secrets never in markdown".into());
@@ -280,5 +318,34 @@ mod tests {
             list.contains("read_text_capped") && !list.contains("read_to_string"),
             "listing skills must not slurp a huge SKILL.md on the UI thread: {list}"
         );
+    }
+
+    #[test]
+    fn junk_skills_move_aside_and_real_ones_stay() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("retire-skills");
+        let _ = fs::remove_dir_all(&root);
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let mk = |name: &str, desc: &str| SkillMd {
+            name: name.into(),
+            description: desc.into(),
+            slash: "/x".into(),
+            trigger: "t".into(),
+            instructions: "1. `echo ok`".into(),
+            pitfalls: String::new(),
+            verify: String::new(),
+            runs: 0,
+        };
+        save_skill(&mk("good-job-now-use-the-mouse-to-close-one-tab-of-firefox", "good job now use the mouse to close one tab of firefox")).unwrap();
+        save_skill(&mk("take-the-next-step", "Takes the next concrete step for this kind of task.")).unwrap();
+        save_skill(&mk("board-status", "List open workboard cards and the next concrete step.")).unwrap();
+        let mut moved = retire_junk_skills();
+        moved.sort();
+        assert_eq!(moved.len(), 2, "{moved:?}");
+        let names: Vec<String> = list_skills().into_iter().map(|s| s.name).collect();
+        assert_eq!(names, vec!["board-status".to_string()]);
+        assert!(skills_dir().join(".retired").join("take-the-next-step").join("SKILL.md").exists());
+        assert!(retire_junk_skills().is_empty(), "a second pass moves nothing");
+        let _ = fs::remove_dir_all(&root);
     }
 }

@@ -953,7 +953,12 @@ impl Cabin {
             imagine_last,
             skill_name: String::new(),
             skill_body: String::new(),
-            skill_list: skills::list_skills(),
+            skill_list: {
+                // Leftover auto-made skills (template names, copied sentences) move to
+                // skills/.retired before the list is read.
+                let _ = skills::retire_junk_skills();
+                skills::list_skills()
+            },
             eyes_text: String::new(),
             last_host: vec![],
             last_frame_url: None,

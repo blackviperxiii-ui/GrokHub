@@ -273,70 +273,140 @@ pub fn prefer_patch(existing: &[SkillMd], proposed: &SkillMd) -> Option<String> 
     best.map(|s| s.name.clone())
 }
 
-pub fn propose_skill_from_turn(user_text: &str, assistant_text: &str, host_commands: &[String]) -> SkillMd {
+/// Feedback on the last try ("actually still no…", "good job now…") is not a new task.
+pub fn is_feedback_ask(user: &str) -> bool {
+    let t = user.trim().to_ascii_lowercase();
+    const STARTS: &[&str] = &[
+        "actually", "no ", "no,", "nope", "still", "ok so", "okay so", "hey", "good job",
+        "nice", "great", "thanks", "thank you", "that was", "you ", "you'", "almost", "close",
+        "wrong", "not ", "stop", "wait", "again", "lets try", "let's try", "try again", "retry",
+        "continue", "keep going", "go on", "yes", "yep", "new update", "update:",
+    ];
+    STARTS.iter().any(|p| t.starts_with(p))
+}
+
+/// Program a host command runs (`cargo`, `git`, `systemctl`), for naming a skill.
+fn command_tool(cmd: &str) -> Option<String> {
+    cmd.split_whitespace()
+        .map(|w| w.trim_matches(|c: char| c == '`' || c == '"' || c == '\''))
+        .find(|w| {
+            !w.is_empty()
+                && !w.contains('=')
+                && !matches!(*w, "sudo" | "env" | "cd" | "&&" | "time" | "nice" | "exec")
+        })
+        .map(|w| w.rsplit('/').next().unwrap_or(w).to_ascii_lowercase())
+        .filter(|w| w.len() >= 2 && w.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+}
+
+/// A skill only when a run left a reusable procedure: at least two host commands,
+/// a situation worth repeating (a fix, a build, a routine), and an ask that is a
+/// task, not feedback on the last try. Mouse and keyboard driving is never saved:
+/// those turns were the source of skills named after whole corrections.
+pub fn propose_skill_from_turn(
+    user_text: &str,
+    assistant_text: &str,
+    host_commands: &[String],
+) -> Option<SkillMd> {
+    use crate::situation::MoveKind;
     let user = user_text.replace('\n', " ");
     let user: String = user.chars().take(120).collect();
-    let learned = crate::situation::learn_from_turns(&user, assistant_text);
-    let name = skill_dir_name(
-        learned
-            .as_ref()
-            .map(|item| item.skill_name.as_str())
-            .filter(|name| !name.is_empty())
-            .unwrap_or("saved-run"),
-    );
-    let name = if name.is_empty() {
-        "saved-run".to_string()
-    } else {
-        name
-    };
-    let first_word = user
-        .split_whitespace()
-        .find(|w| w.chars().filter(|c| c.is_ascii_alphabetic()).count() >= 3)
-        .map(|w| {
-            w.chars()
-                .filter(|c| c.is_ascii_alphanumeric())
-                .flat_map(|c| c.to_lowercase())
-                .collect::<String>()
+    if is_feedback_ask(&user) {
+        return None;
+    }
+    let cmds: Vec<&String> = host_commands
+        .iter()
+        .filter(|c| !c.trim().is_empty())
+        .filter(|c| {
+            let l = c.to_ascii_lowercase();
+            !(l.contains("xdotool") || l.contains("ydotool") || l.contains("mousemove") || l.contains("click"))
         })
-        .unwrap_or_else(|| name.replace('-', "").chars().take(24).collect());
-    let steps = if host_commands.is_empty() {
-        learned
-            .as_ref()
-            .map(|item| item.skill_steps.clone())
-            .filter(|steps| !steps.trim().is_empty())
-            .unwrap_or_else(|| "1. Do the kind of step that already worked.".into())
-    } else {
-        host_commands
-            .iter()
-            .enumerate()
-            .map(|(i, c)| format!("{}. `{c}`", i + 1))
-            .collect::<Vec<_>>()
-            .join("\n")
+        .collect();
+    if cmds.len() < 2 {
+        return None;
+    }
+    let learned = crate::situation::learn_from_turns(&user, assistant_text)?;
+    if !matches!(
+        learned.kind,
+        MoveKind::Fix
+            | MoveKind::Build
+            | MoveKind::Wrap
+            | MoveKind::Friday
+            | MoveKind::Morning
+            | MoveKind::Night
+            | MoveKind::Automate
+    ) {
+        return None;
+    }
+    let tool = cmds.iter().find_map(|c| command_tool(c));
+    let base = learned.skill_name.trim();
+    let name = skill_dir_name(&match tool.as_deref() {
+        Some(t) => format!("{base}-{t}"),
+        None => base.to_string(),
+    });
+    if name.is_empty() {
+        return None;
+    }
+    let steps = cmds
+        .iter()
+        .enumerate()
+        .map(|(i, c)| format!("{}. `{c}`", i + 1))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let verify = cmds.last().map(|c| c.to_string()).unwrap_or_default();
+    let description = match tool.as_deref() {
+        Some(t) => format!("{} Uses `{t}`.", learned.skill_description.trim()),
+        None => learned.skill_description.clone(),
     };
-    let verify = host_commands
-        .last()
-        .cloned()
-        .unwrap_or_else(|| "echo ok".into());
-    let description = learned
-        .as_ref()
-        .map(|item| item.skill_description.clone())
-        .filter(|text| !text.trim().is_empty() && !crate::situation::echoes_source(text, &user))
-        .unwrap_or_else(|| "Saved host procedure".into());
-    let trigger = learned
-        .as_ref()
-        .map(|item| item.skill_trigger.clone())
-        .filter(|text| !text.trim().is_empty() && !crate::situation::echoes_source(text, &user))
-        .unwrap_or_else(|| "this kind of step comes up again".into());
-    SkillMd {
+    Some(SkillMd {
         name: name.clone(),
         description,
-        slash: format!("/{}", if first_word.is_empty() { "skill" } else { &first_word }),
-        trigger,
+        slash: format!("/{name}"),
+        trigger: learned.skill_trigger.clone(),
         instructions: steps,
         pitfalls: "Do not run destructive commands without a receipt and confirm.".into(),
         verify: format!("{verify} exits 0"),
         runs: 0,
+    })
+}
+
+/// Generic skill names the cabin used to write from a template, with no real steps.
+const TEMPLATE_SKILLS: &[&str] = &[
+    "take-the-next-step",
+    "saved-run",
+    "keep-this-way",
+    "explain-the-why",
+    "do-it-here",
+    "choose-and-start",
+    "do-the-next-slice",
+    "make-the-image",
+    "save-the-routine",
+];
+
+/// An auto-made skill that never ran and holds nothing reusable: a template name,
+/// a name that is a whole sentence someone typed, or a description that is that
+/// sentence copied. The cabin moves these aside instead of listing them.
+pub fn is_junk_skill(s: &SkillMd) -> bool {
+    if s.runs > 0 {
+        return false;
     }
+    let name = s.name.trim().to_ascii_lowercase();
+    if TEMPLATE_SKILLS.contains(&name.as_str()) {
+        return true;
+    }
+    let words = name.split('-').filter(|w| !w.is_empty()).count();
+    let spoken = name.replace('-', " ");
+    let desc: String = s
+        .description
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || c.is_whitespace())
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let desc_is_name = !desc.is_empty() && (desc.starts_with(&spoken) || spoken.starts_with(&desc));
+    words >= 7 || (words >= 3 && desc_is_name) || is_feedback_ask(&spoken)
+        || desc == "saved host procedure"
 }
 
 #[cfg(test)]
@@ -395,11 +465,20 @@ mod tests {
             "flash-pi",
             "anticipate / Use in chat must hit Follow skill <name>"
         );
-        let proposed = propose_skill_from_turn("flash the pi", "ok", &["dd if=a".into()]);
-        assert_eq!(proposed.slash, "/flash");
-        assert_ne!(proposed.description, "flash the pi");
-        assert!(!proposed.trigger.contains("flash the pi"));
-        assert!(!proposed.instructions.contains("flash the pi"));
+        assert!(
+            propose_skill_from_turn("flash the pi", "ok", &["dd if=a".into()]).is_none(),
+            "one command is not a reusable procedure"
+        );
+        let proposed = SkillMd {
+            name: "flash-pi".into(),
+            description: "Writes the image to the card.".into(),
+            slash: "/flash".into(),
+            trigger: String::new(),
+            instructions: "1. `dd if=a`".into(),
+            pitfalls: String::new(),
+            verify: String::new(),
+            runs: 0,
+        };
         assert_eq!(prefer_patch(std::slice::from_ref(&flash), &proposed), Some("flash-pi".into()));
         let patched = patch_skill(&flash, &proposed);
         assert_eq!(patched.name, "flash-pi");
@@ -414,5 +493,56 @@ mod tests {
             format!("{follow}\n\nflash the pi")
         );
         assert_eq!(apply_skill_follow("flash the pi", Some("  ")), "flash the pi");
+    }
+
+    #[test]
+    fn feedback_and_mouse_runs_do_not_become_skills() {
+        let mouse = vec!["xdotool mousemove 10 10".to_string(), "xdotool click 1".to_string()];
+        for u in [
+            "actually still no you moved the mouse yes but you moved it to the left monitor",
+            "good job now use the mouse to close one tab of firefox",
+            "continue",
+            "control my mouse and use it to move to the other side of the screen",
+        ] {
+            assert!(propose_skill_from_turn(u, "Done.", &mouse).is_none(), "{u}");
+        }
+        let one = vec!["cargo build".to_string()];
+        assert!(propose_skill_from_turn("fix the failing build", "error: E0425", &one).is_none(), "one command is not a procedure");
+    }
+
+    #[test]
+    fn a_real_fix_becomes_a_named_skill() {
+        let cmds = vec!["cargo build 2>&1 | tail -20".to_string(), "cargo test -p grokhub-core".to_string()];
+        let s = propose_skill_from_turn("fix the failing build in grokhub", "error[E0425] fixed", &cmds).expect("skill");
+        assert_eq!(s.name, "fix-the-cause-cargo");
+        assert_eq!(s.slash, "/fix-the-cause-cargo");
+        assert!(s.instructions.contains("1. `cargo build"), "{}", s.instructions);
+        assert!(!is_junk_skill(&s));
+        assert!(propose_skill_from_turn("what is a lifetime", "It is…", &cmds).is_none(), "an explanation is not a procedure");
+    }
+
+    #[test]
+    fn leftover_sentence_and_template_skills_are_junk() {
+        let mk = |name: &str, desc: &str, runs: u32| SkillMd {
+            name: name.into(),
+            description: desc.into(),
+            slash: "/x".into(),
+            trigger: String::new(),
+            instructions: "1. x".into(),
+            pitfalls: String::new(),
+            verify: String::new(),
+            runs,
+        };
+        assert!(is_junk_skill(&mk(
+            "actually-still-no-you-moved-the-mouse-yes-but-you-moved-it-to-the-left-monitor",
+            "actually still no you moved the mouse yes but",
+            0
+        )));
+        assert!(is_junk_skill(&mk("take-control-of-my-mouse-and-close-firefox", "take control of my mouse and close firefox", 0)));
+        assert!(is_junk_skill(&mk("continue", "continue", 0)));
+        assert!(is_junk_skill(&mk("take-the-next-step", "Takes the next concrete step for this kind of task.", 0)));
+        assert!(!is_junk_skill(&mk("board-status", "List open workboard cards and the next concrete step.", 0)));
+        assert!(!is_junk_skill(&mk("deploy-user-install", "Sync and restart the user GrokHub install", 0)));
+        assert!(!is_junk_skill(&mk("take-the-next-step", "x", 3)), "a skill that ran is kept");
     }
 }
