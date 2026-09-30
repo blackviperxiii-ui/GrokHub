@@ -106,9 +106,78 @@ pub struct BoardCard {
     /// thread so Open chat works, and are not this card.
     #[serde(default, skip_serializing_if = "is_false")]
     pub run: bool,
+    /// Your notes for the agent. Runs write status into `detail`; they never touch this.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub notes: String,
+    /// Fingerprint of the notes last handed to the linked chat, so each change goes once.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub notes_sent: u64,
     /// How this hook put the card in Doing. Cleared on settle. Not persisted.
     #[serde(skip)]
     undo: Option<InflightUndo>,
+}
+
+fn is_zero(v: &u64) -> bool {
+    *v == 0
+}
+
+/// Longest note kept on a card.
+pub const CARD_NOTES_MAX: usize = 4000;
+
+/// Stable fingerprint of a card's notes (FNV-1a). Empty notes are 0.
+pub fn card_notes_hash(notes: &str) -> u64 {
+    let t = notes.trim();
+    if t.is_empty() {
+        return 0;
+    }
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in t.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    h.max(1)
+}
+
+/// Clean notes typed on a card: trimmed and capped.
+pub fn clean_card_notes(notes: &str) -> String {
+    notes.trim().chars().take(CARD_NOTES_MAX).collect()
+}
+
+/// First message of "Work on it": the task, then your notes as instructions.
+pub fn card_work_prompt(card: &BoardCard) -> String {
+    let mut out = format!("Work on this workboard card: {}", card.title.trim());
+    let notes = card.notes.trim();
+    if !notes.is_empty() {
+        out.push_str("\n\nMy notes for this card (follow them):\n");
+        out.push_str(notes);
+    }
+    out.push_str("\n\nWhen it is done, say so in one line.");
+    out
+}
+
+/// Notes on cards linked to `thread_id` that changed since the chat last saw them.
+/// Returns the block to hand the agent with the next message, and marks them sent.
+pub fn take_card_notes_block(cards: &mut [BoardCard], thread_id: &str) -> Option<String> {
+    let mut parts = Vec::new();
+    for c in cards.iter_mut() {
+        if c.thread_id.as_deref() != Some(thread_id) || c.status == BoardStatus::Dismissed {
+            continue;
+        }
+        let h = card_notes_hash(&c.notes);
+        if h == 0 || h == c.notes_sent {
+            continue;
+        }
+        parts.push(format!("Notes on workboard card \"{}\":\n{}", c.title.trim(), c.notes.trim()));
+        c.notes_sent = h;
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "{}\n\nUse these notes for this work.",
+            parts.join("\n\n")
+        ))
+    }
 }
 
 fn is_false(v: &bool) -> bool {
@@ -131,6 +200,8 @@ impl BoardCard {
             priority: priority.trim().chars().take(16).collect(),
             thread_id: None,
             run: false,
+            notes: String::new(),
+            notes_sent: 0,
             undo: None,
         }
     }
@@ -823,5 +894,40 @@ mod tests {
         assert!(!abandon_inflight_card(&mut cards, "thr-1"));
         assert_eq!(cards[0].title, "Verify boot");
         assert_eq!(cards[0].status, BoardStatus::InProgress);
+    }
+
+    #[test]
+    fn card_notes_reach_the_linked_chat_once_per_change() {
+        let mut a = BoardCard::new("Ship the AUR release", "", "");
+        a.thread_id = Some("t1".into());
+        a.notes = "  bump pkgver, then run makepkg  ".into();
+        let mut other = BoardCard::new("Unrelated", "", "");
+        other.thread_id = Some("t2".into());
+        other.notes = "not for t1".into();
+        let mut cards = vec![a, other];
+        let block = take_card_notes_block(&mut cards, "t1").expect("fresh notes go");
+        assert!(block.contains("Ship the AUR release"), "{block}");
+        assert!(block.contains("bump pkgver, then run makepkg"), "{block}");
+        assert!(!block.contains("not for t1"));
+        assert!(take_card_notes_block(&mut cards, "t1").is_none(), "unchanged notes go once");
+        cards[0].notes = "bump pkgver, run makepkg, push the tag".into();
+        assert!(take_card_notes_block(&mut cards, "t1").is_some(), "a change goes again");
+        cards[0].notes.clear();
+        assert!(take_card_notes_block(&mut cards, "t1").is_none(), "empty notes send nothing");
+    }
+
+    #[test]
+    fn work_prompt_carries_the_title_and_notes() {
+        let mut c = BoardCard::new("Fix the tray icon", "Paused. This is where to resume.", "");
+        let bare = card_work_prompt(&c);
+        assert!(bare.starts_with("Work on this workboard card: Fix the tray icon"));
+        assert!(!bare.contains("Paused"), "run status is not an instruction");
+        c.notes = "Only on Windows; check the DPI scaling.".into();
+        assert!(card_work_prompt(&c).contains("My notes for this card (follow them):\nOnly on Windows"));
+        assert_eq!(card_notes_hash(""), 0);
+        assert_eq!(card_notes_hash(" a "), card_notes_hash("a"));
+        assert_eq!(clean_card_notes(&"x".repeat(5000)).len(), CARD_NOTES_MAX);
+        let old: BoardCard = serde_json::from_str(r#"{"id":"w1","title":"t","detail":"","status":"todo"}"#).unwrap();
+        assert!(old.notes.is_empty() && old.notes_sent == 0);
     }
 }
