@@ -16992,3 +16992,19 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn drop_extra_note_none_for_zero_extras() {
+    // Free fn: 0 → None; 1 → singular wording; n>1 → mentions n. Stay off spawn/network.
+    assert_eq!(drop_extra_note(0), None);
+    let one = drop_extra_note(1).expect("singular");
+    assert!(
+        one.contains("The other one was left out"),
+        "one extra uses singular wording: {one}"
+    );
+    let many = drop_extra_note(4).expect("plural");
+    assert!(
+        many.contains("4 others were left out"),
+        "n>1 extras mention n: {many}"
+    );
+}
