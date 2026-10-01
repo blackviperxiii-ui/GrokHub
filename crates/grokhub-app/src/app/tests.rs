@@ -16992,3 +16992,41 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn kick_local_day_stays_off_network() {
+    let cabin = Cabin::quiet_for_test();
+    // Seed LAST_DAY so kick marks inflight and refreshes via `day_now` / `date +%F`.
+    let _ = Cabin::local_day();
+    Cabin::kick_local_day();
+    // Date shell OK; wait for the worker to rewrite the cache. No grok/xAI.
+    let mut day = String::new();
+    for _ in 0..100 {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        day = Cabin::local_day();
+        let shaped = day.len() == 10
+            && day.as_bytes()[4] == b'-'
+            && day.as_bytes()[7] == b'-'
+            && day
+                .bytes()
+                .enumerate()
+                .all(|(i, b)| i == 4 || i == 7 || b.is_ascii_digit());
+        if shaped {
+            break;
+        }
+    }
+    let ok = day.len() == 10
+        && day.as_bytes()[4] == b'-'
+        && day.as_bytes()[7] == b'-'
+        && day
+            .bytes()
+            .enumerate()
+            .all(|(i, b)| i == 4 || i == 7 || b.is_ascii_digit());
+    assert!(
+        ok,
+        "kick_local_day must refresh/cache YYYY-MM-DD (date shell OK), got {day:?}"
+    );
+    assert!(!cabin.running, "kick_local_day must stay off grok/xAI");
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rx.is_none());
+}
