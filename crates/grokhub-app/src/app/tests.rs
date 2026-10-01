@@ -16992,3 +16992,34 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+/// A painted greeting leaves as soon as the chat has text, or the open thread is scratch.
+/// Both paths return before the memory flush and the USER/MEMORY file read.
+#[test]
+fn greeting_hides_once_the_chat_has_text() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.greeting = "Evening, Viper.".into();
+    cabin.messages = Arc::new(vec![("user".into(), "Harbor".into())]);
+    cabin.refresh_greeting();
+    assert!(
+        cabin.greeting.is_empty(),
+        "a chat that already has text must clear the greeting"
+    );
+    assert!(cabin.greeting_files_rx.is_none());
+    assert!(cabin.greeting_rx.is_none());
+    assert!(!cabin.greeting_busy);
+
+    cabin.greeting = "Evening, Viper.".into();
+    cabin.messages = Arc::new(Vec::new());
+    cabin.threads.push(ChatThread::new("Scratch", true));
+    cabin.thread_idx = cabin.threads.len() - 1;
+    cabin.refresh_greeting();
+    assert!(
+        cabin.greeting.is_empty(),
+        "a scratch thread must clear the greeting"
+    );
+    assert!(cabin.greeting_files_rx.is_none());
+    assert!(cabin.greeting_rx.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
