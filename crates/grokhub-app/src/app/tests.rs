@@ -16992,3 +16992,12 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn cabin_update_available_false_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.cabin_latest.is_none());
+    assert!(!cabin.cabin_overlay_done);
+    // Quiet idle: no probe, no spawn — available stays false.
+    assert!(!cabin.cabin_update_available());
+}
