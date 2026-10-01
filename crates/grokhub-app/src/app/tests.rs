@@ -16992,3 +16992,20 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn session_row_title_keeps_a_locked_name() {
+    let mut app = Cabin::quiet_for_test();
+    assert_eq!(app.session_row_title("sess-1", ""), "sess-1");
+    assert_eq!(app.session_row_title("sess-1", "sess-1"), "sess-1");
+    assert_eq!(app.session_row_title("sess-1", "Harbor"), "Harbor");
+
+    app.threads.push(crate::threads::ChatThread::new("Chat", false));
+    app.threads[0].grok_session = Some("sess-1".into());
+    app.threads[0].title_locked = true;
+    assert_eq!(app.session_row_title("sess-1", "Harbor"), "Chat");
+    app.threads[0].title_locked = false;
+    assert_eq!(app.session_row_title("sess-1", "Harbor"), "Harbor");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
