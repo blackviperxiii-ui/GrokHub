@@ -16992,3 +16992,26 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn stamp_current_access_updates_open_thread() {
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.threads.push(crate::threads::ChatThread::new("Chat", false));
+        cabin.thread_idx = 0;
+    }
+    cabin.status = "Harbor".into();
+    let idx = cabin.thread_idx;
+    cabin.threads[idx].accessed_ms = 1;
+    let before = cabin.threads[idx].accessed_ms;
+    cabin.stamp_current_access();
+    assert!(
+        cabin.threads[idx].accessed_ms > before,
+        "stamp_current_access must bump accessed_ms past {before}, got {}",
+        cabin.threads[idx].accessed_ms
+    );
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert_eq!(cabin.thread_idx, idx);
+}
