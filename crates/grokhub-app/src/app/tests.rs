@@ -21120,3 +21120,25 @@ fn chip_hour_returns_0_through_23() {
         "chip_hour must be 0..=23 (or noon fallback hour=12), got {hour}"
     );
 }
+
+#[test]
+fn palette_search_poll_clears_on_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_palette_search();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.palette_file_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<(String, String, Vec<String>)>();
+    cabin.palette_file_rx = Some(rx);
+    cabin.poll_palette_search();
+    assert!(cabin.palette_file_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_palette_search();
+    assert!(cabin.palette_file_rx.is_none());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
