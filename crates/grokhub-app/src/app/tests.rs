@@ -16992,3 +16992,32 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn chip_pairs_cap_a_long_reply() {
+    let mut cabin = Cabin::quiet_for_test();
+    let long = "a".repeat(8000);
+    cabin.messages = Arc::new(vec![
+        ("user".into(), "Harbor".into()),
+        ("assistant".into(), long.clone()),
+    ]);
+
+    let pairs = cabin.chat_pairs();
+    assert_eq!(pairs.len(), 2);
+    assert_eq!(pairs[0].0, "user");
+    assert_eq!(pairs[0].1, "Harbor");
+    assert_eq!(pairs[1].0, "assistant");
+    assert_eq!(pairs[1].1.len(), 8000);
+
+    let chips = cabin.chip_chat_pairs();
+    let scanned = grokhub_core::chip_scan(&long);
+    assert_eq!(chips.len(), 2);
+    assert_eq!(chips[0].0, "user");
+    assert_eq!(chips[0].1, "Harbor");
+    assert_eq!(chips[1].0, "assistant");
+    assert_eq!(chips[1].1.len(), scanned.len());
+    assert_eq!(scanned.len(), 4096);
+    assert!(chips[1].1.chars().all(|c| c == 'a'));
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
