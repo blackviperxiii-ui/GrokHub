@@ -16992,3 +16992,30 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn hub_sync_poll_reports_a_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    let nav = cabin.nav;
+
+    cabin.poll_sync();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.sync_rx.is_none());
+
+    let (tx, rx) =
+        std::sync::mpsc::channel::<(String, Vec<grokhub_core::HubMemoryFile>)>();
+    cabin.sync_rx = Some(rx);
+    cabin.poll_sync();
+    assert!(cabin.sync_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_sync();
+    assert!(cabin.sync_rx.is_none());
+    assert_eq!(cabin.status, "Hub sync failed");
+    assert_eq!(cabin.nav, nav);
+    assert!(!matches!(cabin.nav, Nav::Devices));
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
