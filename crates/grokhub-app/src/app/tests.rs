@@ -16992,3 +16992,41 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn cabin_lane_flip_reorders_chips() {
+    assert_eq!(persistable_cabin_lane(" life "), "life");
+    assert_eq!(persistable_cabin_lane("nope"), "coding");
+    assert_eq!(cabin_lane("life"), CabinLane::Life);
+    assert_eq!(cabin_lane("Coding"), CabinLane::Coding);
+    assert_eq!(cabin_lane_label(CabinLane::Life), "Life");
+    assert_eq!(cabin_lane_label(CabinLane::Coding), "Coding");
+    assert_eq!(flip_cabin_lane(CabinLane::Coding), CabinLane::Life);
+    assert_eq!(flip_cabin_lane(CabinLane::Life), CabinLane::Coding);
+
+    let shell = QuickChip {
+        id: "shell".into(),
+        label: "Shell".into(),
+        value: "/sh".into(),
+        kind: ChipKind::Shell,
+        score: 1.0,
+        hint: String::new(),
+        primary: false,
+    };
+    let imagine = QuickChip {
+        id: "imagine".into(),
+        label: "Imagine".into(),
+        value: "__nav:imagine".into(),
+        kind: ChipKind::Nav,
+        score: 1.0,
+        hint: String::new(),
+        primary: false,
+    };
+    let mut chips = vec![imagine, shell];
+    bias_chips_for_lane(&mut chips, CabinLane::Coding);
+    assert_eq!(chips[0].kind, ChipKind::Shell);
+    assert_eq!(chips[0].value, "/sh");
+    bias_chips_for_lane(&mut chips, CabinLane::Life);
+    assert_eq!(chips[0].kind, ChipKind::Nav);
+    assert_eq!(chips[0].value, "__nav:imagine");
+}
