@@ -16992,3 +16992,17 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn fork_explainer_seen_on_disk_false_when_missing() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("fork-seen-missing");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("temp config");
+    let _cfg = RestoreEnv::set("GROKHUB_CONFIG", &root);
+    let _ = std::fs::remove_file(root.join("fork_explainer_seen"));
+    assert!(
+        !super::fork_explainer_seen_on_disk(),
+        "a missing fork_explainer_seen marker must read as unseen"
+    );
+}
