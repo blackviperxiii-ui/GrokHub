@@ -16992,3 +16992,14 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn composer_hint_ink_blends_subtle_and_muted() {
+    let ink = super::composer_hint_ink();
+    assert_ne!(ink.a(), 0, "hint ink is not fully transparent: {ink:?}");
+    assert_eq!(
+        ink,
+        crate::theme::blend_color(crate::theme::subtle(), crate::theme::muted(), 0.5),
+        "hint ink is the subtle+muted mid blend"
+    );
+}
