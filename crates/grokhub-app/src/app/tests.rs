@@ -16992,3 +16992,12 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn home_feed_count_empty_and_one_event() {
+    // Real `home_feed_count` on a quiet slice — no cabin, spawn, or network.
+    assert_eq!(home_feed_count(&[]), 0);
+
+    let cards = vec![feed_card("event-1", UpdateKind::AutomationDone, false)];
+    assert_eq!(home_feed_count(&cards), 1);
+}
