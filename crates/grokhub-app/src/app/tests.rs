@@ -21120,3 +21120,17 @@ fn chip_hour_returns_0_through_23() {
         "chip_hour must be 0..=23 (or noon fallback hour=12), got {hour}"
     );
 }
+
+#[test]
+fn note_combined_update_landed_noop_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.last_host.is_empty());
+    assert!(cabin.cli_installed.is_none());
+    assert!(!cabin.cabin_overlay_done);
+    // Quiet idle: empty last_host — no cli/overlay flags flip, no spawn.
+    cabin.note_combined_update_landed();
+    assert!(cabin.cli_installed.is_none());
+    assert!(!cabin.cabin_overlay_done);
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
