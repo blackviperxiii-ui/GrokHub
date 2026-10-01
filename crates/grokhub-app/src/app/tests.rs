@@ -17003,6 +17003,9 @@ fn greeting_galley_h_drives_empty_home_greet_top() {
     assert!(cabin.chat_job_thread.is_none());
 
     let ctx = egui::Context::default();
+    // `title_font` is `inter-bold`, registered by `theme::apply`. Fonts load on
+    // the next pass, so install before the galley is laid out.
+    crate::theme::apply(&ctx, true);
     let _ = ctx.run(Default::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
             let mark_h = 40.0 + 12.0;

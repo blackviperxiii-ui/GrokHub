@@ -463,10 +463,14 @@ fn install_inter(ctx: &egui::Context) {
 }
 
 pub fn install_fonts(ctx: &egui::Context) {
-    static FONTS: AtomicBool = AtomicBool::new(false);
-    if !FONTS.swap(true, Ordering::SeqCst) {
-        install_inter(ctx);
+    // Once per context. A process-wide flag leaves later test contexts without
+    // `inter-bold`, and layout of that family panics.
+    let id = egui::Id::new("grokhub-inter-installed");
+    if ctx.data(|d| d.get_temp::<bool>(id).unwrap_or(false)) {
+        return;
     }
+    install_inter(ctx);
+    ctx.data_mut(|d| d.insert_temp(id, true));
 }
 
 pub fn apply(ctx: &egui::Context, dark: bool) {
