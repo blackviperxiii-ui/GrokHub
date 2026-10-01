@@ -16992,3 +16992,17 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn tool_header_color_failed_vs_ok() {
+    assert_eq!(
+        super::tool_header_color(true),
+        crate::cards::chip_tone_color(crate::cards::ChipTone::Offline),
+        "failed tool header uses Offline chip tone"
+    );
+    assert_eq!(
+        super::tool_header_color(false),
+        crate::theme::muted(),
+        "ok tool header uses muted"
+    );
+}
