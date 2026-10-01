@@ -16992,3 +16992,62 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn forget_grok_build_session_drops_entries() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("forget-grok-sess");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let _hide = HideGrok::arm();
+
+    let row = |id: &str, title: &str| grokhub_acp::GrokSession {
+        id: id.to_string(),
+        title: title.to_string(),
+        path: None,
+        cwd: None,
+        cabin: false,
+    };
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.grok_sessions = vec![
+        row("keep", "Keep me"),
+        row("drop-a", "Drop A"),
+        row("drop-b", "Drop B"),
+    ];
+    cabin.pending_grok_deletes.clear();
+    let gen_before = cabin.grok_list_gen;
+    let inflight_before = cabin.grok_sessions_inflight;
+
+    // Whitespace-only id/also: early return — no counter bump, no pending seed.
+    cabin.forget_grok_build_session("", &[]);
+    cabin.forget_grok_build_session("   ", &[String::new(), "  ".into()]);
+    assert_eq!(cabin.grok_list_gen, gen_before);
+    assert_eq!(cabin.grok_sessions_inflight, inflight_before);
+    assert!(cabin.pending_grok_deletes.is_empty());
+    assert_eq!(cabin.grok_sessions.len(), 3);
+
+    // Primary id + also slice: both rows drop; keep stays; pending records both.
+    let also = vec!["drop-b".to_string(), "drop-a".to_string()];
+    cabin.forget_grok_build_session("drop-a", &also);
+    let ids: Vec<&str> = cabin.grok_sessions.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(ids, ["keep"]);
+    assert!(cabin.pending_grok_deletes.contains("drop-a"));
+    assert!(cabin.pending_grok_deletes.contains("drop-b"));
+    assert!(!cabin.pending_grok_deletes.contains("keep"));
+    assert_eq!(cabin.grok_list_gen, gen_before.wrapping_add(1));
+
+    // Missing id: retain is a no-op on the kept row; pending still records it.
+    let keep_len = cabin.grok_sessions.len();
+    cabin.forget_grok_build_session("not-there", &[]);
+    assert_eq!(cabin.grok_sessions.len(), keep_len);
+    assert_eq!(cabin.grok_sessions[0].id, "keep");
+    assert!(cabin.pending_grok_deletes.contains("not-there"));
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rx.is_none());
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
