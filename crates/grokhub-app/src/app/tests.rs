@@ -16992,3 +16992,16 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn blank_composer_send_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    app.chat_tail_frames = 0;
+    app.send_from_composer("   ".into());
+    assert_eq!(app.chat_tail_frames, 3);
+    assert!(app.messages.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+    assert!(!app.workflow_status_live);
+    assert!(!app.turn_retried);
+}
