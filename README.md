@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.53** — Ideas pass: an idea card's chat shows the agent's replies only, and the action it proposes is read from its reply, never from its thinking. Apply or Delete takes the card's hidden chat and its Grok Build session with it. The chat box keeps focus after Send, and Suggest ideas stops saying Thinking… after three minutes without an answer.
+**v2.10.54** — Tool rows keep their names on a finished turn. Grok Build's tool updates carry no title, and each one renamed the row to the placeholder `Tool`, so a finished turn read `Tool · 32GB` instead of `run_terminal_command`. A replay of a real Grok Build 1.0.46 Auto turn now locks in separate replies and named tool rows, before and after a reload.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.53.tar.gz`, AUR | **v2.10.53** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.53.exe`, `grokhub-windows-v2.10.53.zip` | **v2.10.53** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.54.tar.gz`, AUR | **v2.10.54** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.54.exe`, `grokhub-windows-v2.10.54.zip` | **v2.10.54** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.

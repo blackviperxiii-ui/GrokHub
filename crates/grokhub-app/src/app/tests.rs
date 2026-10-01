@@ -16841,3 +16841,154 @@ fn a_hung_ideas_ask_stops_thinking() {
     cabin.poll_ideas();
     assert!(cabin.ideas_rx.is_none(), "an ask past the wait lets the button go back to Suggest ideas");
 }
+
+/// `grok -p --output-format streaming-json --permission-mode auto` from Grok Build 1.0.46,
+/// run against a local fake model: reply, `run_terminal_command`, reply,
+/// `run_terminal_command`, reply. Only `rawOutput` and `locations` are trimmed.
+const GROK_1_0_46_AUTO_TURN: &str = r#"
+{"type":"text","data":"First"}
+{"type":"text","data":" I"}
+{"type":"text","data":" will"}
+{"type":"text","data":" query"}
+{"type":"text","data":" memory."}
+{"type":"usage","usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"reasoning_tokens":0}}
+{"type":"tool_call","toolCallId":"call_1790871799935345478","title":"run_terminal_command","kind":"execute","status":"pending","toolName":"run_terminal_command","rawInput":{"command":"echo 32GB","description":"Check memory"},"content":[]}
+{"type":"tool_call_update","toolCallId":"call_1790871799935345478","status":null,"content":[{"type":"content","content":{"type":"text","text":"Check memory"}}]}
+{"type":"tool_call_update","toolCallId":"call_1790871799935345478","status":"in_progress","content":[{"type":"content","content":{"type":"text","text":""}}]}
+{"type":"tool_call_update","toolCallId":"call_1790871799935345478","status":"in_progress","content":[{"type":"content","content":{"type":"text","text":"32GB\n"}}]}
+{"type":"tool_call_update","toolCallId":"call_1790871799935345478","status":"completed","content":[{"type":"content","content":{"type":"text","text":"32GB\n"}}]}
+{"type":"text","data":"You"}
+{"type":"text","data":" have"}
+{"type":"text","data":" 32"}
+{"type":"text","data":" GB"}
+{"type":"text","data":" of"}
+{"type":"text","data":" RAM."}
+{"type":"usage","usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"reasoning_tokens":0}}
+{"type":"tool_call","toolCallId":"call_1790871800189797959","title":"run_terminal_command","kind":"execute","status":"pending","toolName":"run_terminal_command","rawInput":{"command":"echo 32GB","description":"Check memory"},"content":[]}
+{"type":"tool_call_update","toolCallId":"call_1790871800189797959","status":null,"content":[{"type":"content","content":{"type":"text","text":"Check memory"}}]}
+{"type":"tool_call_update","toolCallId":"call_1790871800189797959","status":"in_progress","content":[{"type":"content","content":{"type":"text","text":""}}]}
+{"type":"tool_call_update","toolCallId":"call_1790871800189797959","status":"in_progress","content":[{"type":"content","content":{"type":"text","text":"32GB\n"}}]}
+{"type":"tool_call_update","toolCallId":"call_1790871800189797959","status":"completed","content":[{"type":"content","content":{"type":"text","text":"32GB\n"}}]}
+{"type":"text","data":"All"}
+{"type":"text","data":" done,"}
+{"type":"text","data":" here"}
+{"type":"text","data":" is"}
+{"type":"text","data":" the"}
+{"type":"text","data":" summary."}
+{"type":"usage","usage":{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"reasoning_tokens":0}}
+{"type":"end","stopReason":"end_turn","sessionId":"01a0f847-0763-7282-8390-060cbeb704ee","usage":{"input_tokens":300,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":60,"reasoning_tokens":0,"total_tokens":360},"num_turns":3}
+"#;
+
+#[test]
+fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
+    let _hold = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("grok-1-0-46-turn");
+    std::fs::create_dir_all(&root).expect("isolated config root");
+
+    cabin.new_thread(false);
+    cabin
+        .live_mut()
+        .push(("user".into(), "check my memory".into()));
+    cabin.chat_job_thread = Some(cabin.visible_thread_id());
+    cabin.running = true;
+    // The same fold as the `spawn_grok_p_stream` reader: stream events pass through,
+    // and the end event leaves with the text it saw.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut text = String::new();
+    let mut session_id = String::new();
+    for line in GROK_1_0_46_AUTO_TURN.lines() {
+        match grokhub_acp::parse_stream_line(line) {
+            Some(GrokPEvent::Text(d)) => {
+                text.push_str(&d);
+                tx.send(GrokPEvent::Text(d)).expect("send text");
+            }
+            Some(GrokPEvent::End(t)) => session_id = t.session_id,
+            Some(ev) => tx.send(ev).expect("send event"),
+            None => {}
+        }
+    }
+    tx.send(GrokPEvent::End(grokhub_acp::SingleTurn {
+        session_id,
+        text: text.trim().to_string(),
+        thought: String::new(),
+        usage: Default::default(),
+        stop_reason: "end_turn".into(),
+    }))
+    .expect("send end");
+    cabin.grok_p_rx = Some(rx);
+    for _ in 0..100 {
+        if cabin.grok_p_rx.is_none() {
+            break;
+        }
+        cabin.poll_single();
+    }
+    assert!(!cabin.running, "the end event finishes the turn");
+
+    let views = cabin.cached_chat_views().to_vec();
+    let says: Vec<&str> = views
+        .iter()
+        .filter(|v| v.kind == ChatKind::Assistant)
+        .map(|v| v.body.as_str())
+        .collect();
+    assert_eq!(
+        says,
+        [
+            "First I will query memory.",
+            "You have 32 GB of RAM.",
+            "All done, here is the summary."
+        ],
+        "a finished turn keeps each reply in its own bubble: {views:?}"
+    );
+    let tools: Vec<&ChatView> = views.iter().filter(|v| v.kind == ChatKind::Tool).collect();
+    assert_eq!(tools.len(), 2, "{views:?}");
+    for t in tools {
+        assert!(
+            t.body.contains("run_terminal_command") && !t.body.contains("\tTool\t"),
+            "a title-less update must not rename the tool row to `Tool`: {t:?}"
+        );
+    }
+
+    // `new_thread` and the finished turn each spawn a persist. Hold the lock so a
+    // snapshot from before the reply cannot replace threads.json between save and load.
+    let tid = cabin.visible_thread_id();
+    let io = cabin.persist_io.clone();
+    let _io = io.lock().unwrap_or_else(|e| e.into_inner());
+    cabin.threads[cabin.thread_idx].messages = cabin.messages.clone();
+    crate::threads::save(&cabin.threads).expect("save threads");
+    let loaded = crate::threads::load();
+    drop(_io);
+    let thread = loaded.iter().find(|t| t.id == tid).expect("reloaded thread");
+    let refs: Vec<(&str, &str)> = thread
+        .messages
+        .iter()
+        .map(|m| (m.0.as_str(), m.1.as_str()))
+        .collect();
+    let reloaded = visible_chat_refs(refs.iter().copied());
+    let says: Vec<&str> = reloaded
+        .iter()
+        .filter(|v| v.kind == ChatKind::Assistant)
+        .map(|v| v.body.as_str())
+        .collect();
+    assert_eq!(
+        says,
+        [
+            "First I will query memory.",
+            "You have 32 GB of RAM.",
+            "All done, here is the summary."
+        ],
+        "a reloaded turn keeps each reply in its own bubble: {reloaded:?}"
+    );
+    let tools: Vec<&ChatView> = reloaded
+        .iter()
+        .filter(|v| v.kind == ChatKind::Tool)
+        .collect();
+    assert_eq!(tools.len(), 2, "{reloaded:?}");
+    for t in tools {
+        assert!(
+            t.body.contains("run_terminal_command") && !t.body.contains("\tTool\t"),
+            "a reloaded tool row must keep its name: {t:?}"
+        );
+    }
+
+    release_isolated(&root, cabin);
+}

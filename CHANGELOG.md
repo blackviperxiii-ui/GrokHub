@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 2.10.54 — 2026-09-30
+
+Tool rows keep their names on a finished turn. Grok Build sends `tool_call_update` events without a title, which parse as the placeholder `Tool`, and each update overwrote the real name in both the live rows and the saved turn, so every tool row read `Tool · 32GB` instead of `run_terminal_command`. An update with no title, or only the placeholder, now keeps the name from the call, the same rule the tool cards already follow. A real new title still replaces the old one. The status and detail still update.
+
+A replay of a real Grok Build 1.0.46 Auto-mode turn (reply, tool, reply, tool, reply) now checks that the finished turn keeps three separate replies and two named tool rows, and that they come back the same after History is saved and reloaded. The saved turn format is unchanged. Turns saved by 2.10.48–2.10.53 that already say `Tool` keep saying it, because the name was never stored.
+
+- Linux: `grokhub-linux-v2.10.54.tar.gz` and AUR `pkgver=2.10.54`.
+- Windows: `GrokHub-Setup-2.10.54.exe` and `grokhub-windows-v2.10.54.zip`.
+
 ## 2.10.53 — 2026-09-30
 
 An idea card's chat shows only the agent's replies. With replies now stored beside their thoughts and tool runs, the card was about to show those too. The new action the agent proposes (`CARD_ACTION:`) is read from its reply only and the newest one wins, so a thought that mentions the tag no longer rewrites the card.
