@@ -16992,3 +16992,22 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn cancelled_file_pick_clears_the_status() {
+    let mut app = Cabin::quiet_for_test();
+    app.status = "Harbor".into();
+    app.poll_pick();
+    assert_eq!(app.status, "Harbor");
+    assert!(app.pick_rx.is_none());
+
+    app.status = "Choose a file…".into();
+    let (tx, rx) = std::sync::mpsc::channel::<(PlusTarget, PlusPick)>();
+    drop(tx);
+    app.pick_rx = Some(rx);
+    app.poll_pick();
+    assert!(app.pick_rx.is_none());
+    assert!(app.status.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
