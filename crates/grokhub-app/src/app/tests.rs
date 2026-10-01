@@ -16992,3 +16992,21 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn plus_path_while_busy_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    let (_tx, rx) = std::sync::mpsc::channel::<(PlusTarget, PlusPick)>();
+    app.pick_rx = Some(rx);
+    app.status = "Harbor".into();
+    app.start_plus_path(PlusTarget::Chat, std::path::PathBuf::from("harbor.png"));
+    assert_eq!(app.status, "Reading file…");
+    assert!(app.pick_rx.is_some());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+    app.start_plus_path(PlusTarget::Imagine, std::path::PathBuf::from("sunset.png"));
+    assert_eq!(app.status, "Reading file…");
+    assert!(app.pick_rx.is_some());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
