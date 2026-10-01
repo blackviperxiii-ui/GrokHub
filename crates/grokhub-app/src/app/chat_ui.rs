@@ -331,6 +331,11 @@ pub(super) struct ChatBlockPaint {
     thought_fold: ThoughtFold,
 }
 
+/// Failed turns land as an assistant block that starts with `Error:` (chat_job / mod.rs).
+pub(super) fn is_error_reply(body: &str) -> bool {
+    body.trim_start().starts_with("Error:")
+}
+
 pub(super) fn paint_speech_bubble(
     ui: &mut egui::Ui,
     body: &str,
@@ -361,11 +366,20 @@ pub(super) fn paint_speech_bubble(
     let inner_w = inner_w.min((outer_w - BUBBLE_PAD_X * 2.0).max(1.0));
     // Pad with spaces, not Frame inner_margin: egui clips the rounded fill
     // against the content origin, which ate the first glyphs on Windows 2.10.6.
+    let error = !user && is_error_reply(body);
     let frame = egui::Frame::none()
         .fill(if user {
             crate::theme::bubble_user()
+        } else if error {
+            // A failed turn must not read as an answer: faint red wash plus a red hairline.
+            crate::theme::blend_color(crate::theme::bubble_assistant(), crate::theme::offline(), 0.08)
         } else {
             crate::theme::bubble_assistant()
+        })
+        .stroke(if error {
+            egui::Stroke::new(1.0_f32, crate::theme::blend_color(crate::theme::border(), crate::theme::offline(), 0.6))
+        } else {
+            egui::Stroke::NONE
         })
         .rounding(crate::theme::USER_BUBBLE_RADIUS)
         .inner_margin(egui::Margin::ZERO);
