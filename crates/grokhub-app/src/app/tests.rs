@@ -16096,6 +16096,18 @@ fn empty_project_name_is_refused() {
 }
 
 #[test]
+fn open_plus_menu_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    app.open_plus(PlusTarget::Chat, egui::pos2(4.0, 8.0));
+    assert!(matches!(app.plus_menu, Some(PlusTarget::Chat)));
+    assert_eq!(app.plus_anchor, egui::pos2(4.0, 8.0));
+    assert!(app.plus_ignore_close);
+    assert!(app.file_pick.is_none());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+#[test]
 fn edit_puts_your_message_back_without_dropping_a_draft() {
     assert_eq!(super::chat_ui::edit_into_composer("", "fix the tests"), "fix the tests");
     assert_eq!(super::chat_ui::edit_into_composer("  \n", "fix the tests"), "fix the tests");
