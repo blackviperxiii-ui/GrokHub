@@ -16992,3 +16992,32 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn connector_remove_queues_while_one_is_running() {
+    let mut app = Cabin::quiet_for_test();
+    let (_tx, rx) = std::sync::mpsc::channel::<String>();
+    app.grok_ext_rx = Some(rx);
+    app.submit_mcp_line("remove github");
+    assert_eq!(app.connector_note, "Queued grok mcp remove github");
+    assert_eq!(app.grok_ext_q.len(), 1);
+    assert_eq!(
+        app.grok_ext_q[0],
+        vec!["mcp".to_string(), "remove".into(), "github".into()]
+    );
+    assert!(app.grok_ext_rx.is_some());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+    app.submit_mcp_line("rm slack");
+    assert_eq!(app.connector_note, "Queued grok mcp remove slack");
+    assert_eq!(app.grok_ext_q.len(), 2);
+    assert_eq!(
+        app.grok_ext_q[1],
+        vec!["mcp".to_string(), "remove".into(), "slack".into()]
+    );
+    app.submit_mcp_line("   ");
+    assert_eq!(app.grok_ext_q.len(), 2);
+    assert_eq!(app.connector_note, "Queued grok mcp remove slack");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
