@@ -16992,3 +16992,25 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn oauth_start_poll_reports_a_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_oauth();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.oauth_start_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<DeviceCodeStart, String>>();
+    cabin.oauth_start_rx = Some(rx);
+    cabin.poll_oauth();
+    assert!(cabin.oauth_start_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_oauth();
+    assert!(cabin.oauth_start_rx.is_none());
+    assert_eq!(cabin.status, "Grok OAuth failed to start");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
