@@ -16992,3 +16992,25 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn apply_compact_status_sets_compacting_and_done() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+
+    cabin.apply_compact_status(true, GrokUsage::default(), None);
+    assert_eq!(cabin.status, "Compacting…");
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+
+    cabin.apply_compact_status(false, GrokUsage::default(), None);
+    assert_eq!(cabin.status, "Compacted");
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+
+    cabin.apply_compact_status(false, GrokUsage::default(), Some("disk full".into()));
+    assert_eq!(cabin.status, "Compact failed: disk full");
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+}
