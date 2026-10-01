@@ -16992,3 +16992,54 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn bias_chips_for_lane_orders_coding_first() {
+    fn chip(id: &str, label: &str, value: &str, kind: ChipKind) -> QuickChip {
+        QuickChip {
+            id: id.into(),
+            label: label.into(),
+            value: value.into(),
+            kind,
+            score: 1.0,
+            hint: String::new(),
+            primary: false,
+        }
+    }
+
+    // Life-leaning first in the input so Coding reorder is falsifiable.
+    let mut chips = vec![
+        chip(
+            "imagine",
+            "Open Imagine",
+            "__nav:imagine",
+            ChipKind::Nav,
+        ),
+        chip(
+            "plain",
+            "Cabin brief",
+            "Give me a short cabin brief.",
+            ChipKind::Chat,
+        ),
+        chip(
+            "ship",
+            "Ship it",
+            "Ship a minimal solid slice.",
+            ChipKind::Chat,
+        ),
+    ];
+
+    super::bias_chips_for_lane(&mut chips, super::CabinLane::Coding);
+    assert_eq!(
+        chips.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+        vec!["ship", "plain", "imagine"],
+        "Coding lane puts coding-leaning chips first: {chips:?}"
+    );
+
+    super::bias_chips_for_lane(&mut chips, super::CabinLane::Life);
+    assert_eq!(
+        chips.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+        vec!["imagine", "plain", "ship"],
+        "Life lane puts life-leaning chips first: {chips:?}"
+    );
+}
