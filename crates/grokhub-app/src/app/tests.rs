@@ -16992,3 +16992,21 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn chat_pairs_keeps_the_full_reply() {
+    let mut app = Cabin::quiet_for_test();
+    let long = "a".repeat(5000);
+    app.messages = std::sync::Arc::new(vec![
+        ("user".into(), "Harbor".into()),
+        ("assistant".into(), long.clone()),
+    ]);
+    let pairs = app.chat_pairs();
+    assert_eq!(pairs.len(), 2);
+    assert_eq!(pairs[0], ("user".into(), "Harbor".into()));
+    assert_eq!(pairs[1].0, "assistant");
+    assert_eq!(pairs[1].1.len(), 5000);
+    assert_eq!(pairs[1].1, long);
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
