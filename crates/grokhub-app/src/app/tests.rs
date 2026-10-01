@@ -16037,6 +16037,26 @@ fn blank_project_name_drops_it() {
     assert!(app.chat_job_thread.is_none());
 }
 
+#[test]
+fn name_project_keeps_harbor() {
+    let mut app = Cabin::quiet_for_test();
+    app.stage_new_folder();
+    let id = app.proj_staged.clone().expect("staged");
+    app.proj_rename_buf = "Harbor".into();
+    app.finish_proj_rename();
+    assert_eq!(app.status, "Renamed Harbor");
+    assert!(app.proj_staged.is_none());
+    assert!(app.proj_rename.is_none());
+    assert!(!app.proj_rename_focus);
+    assert!(app.proj_rename_buf.is_empty());
+    let node = app.projects.iter().find(|n| n.id == id).expect("named");
+    assert_eq!(node.name, "Harbor");
+    assert_eq!(node.kind, ProjectKind::Folder);
+    assert!(node.path.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
 // Landed from PR #229.
 #[test]
 fn clear_confirm_drops_the_sheet() {
