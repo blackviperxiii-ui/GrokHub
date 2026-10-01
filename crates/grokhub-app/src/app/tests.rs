@@ -16096,6 +16096,24 @@ fn empty_project_name_is_refused() {
 }
 
 #[test]
+fn clear_chat_attach_drops_pending_files() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.attach_url = Some("data:image/png;base64,aGFyYm9y".into());
+    cabin.attach_name = Some("harbor.png".into());
+    cabin.attach_path = Some("/tmp/harbor.png".into());
+    cabin.attach_kind = Some(grokhub_core::AttachKind::Image);
+    cabin.clear_chat_attach();
+    assert!(cabin.attach_url.is_none());
+    assert!(cabin.attach_name.is_none());
+    assert!(cabin.attach_path.is_none());
+    assert!(cabin.attach_kind.is_none());
+    assert!(cabin.status.is_empty());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+#[test]
 fn edit_puts_your_message_back_without_dropping_a_draft() {
     assert_eq!(super::chat_ui::edit_into_composer("", "fix the tests"), "fix the tests");
     assert_eq!(super::chat_ui::edit_into_composer("  \n", "fix the tests"), "fix the tests");
