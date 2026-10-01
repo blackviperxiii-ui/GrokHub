@@ -16992,3 +16992,29 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn doctor_poll_while_idle_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    app.connector_note = "Harbor".into();
+    app.poll_mcp_doctor();
+    assert_eq!(app.connector_note, "Harbor");
+    assert!(app.mcp_doctor_rx.is_none());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.mcp_doctor_rx = Some(rx);
+    app.poll_mcp_doctor();
+    assert!(app.mcp_doctor_rx.is_some());
+    assert_eq!(app.connector_note, "Harbor");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+
+    drop(tx);
+    app.poll_mcp_doctor();
+    assert!(app.mcp_doctor_rx.is_none());
+    assert_eq!(app.connector_note, "Harbor");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
