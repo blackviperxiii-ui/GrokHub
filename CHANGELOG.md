@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 2.10.55 — 2026-10-01
+
+Ideas need a reason now. One ask used to fan out into a pile of cards: the nightly review was told to answer "a repeated ask" with a skill and an automation, and the ideas call added up to four more, so installing a driver once could leave five cards about that driver. Now an automation, reminder, or skill idea needs work you repeat (two or more asks on the topic that are not one-time jobs) or lasting context (your memory, USER.md, an open workboard card). Installs, one-off fixes, and setups get nothing, even when they took several tries. The model sees your asks grouped by topic with counts and one-time jobs marked, writes a reason for each idea (shown on the card), and keeps to one idea per need. The cabin checks it again: one card per topic, none on a topic already on the board or turned down. The same check runs on the nightly review's skills and automations, and the generic "Session habit" skill that fired whenever you typed "when I" twice is gone. Untouched ideas that only answer a one-time job are cleared once at launch; cards you opened, changed, filed, or talked about stay.
+
+The home feed gets one new idea per batch instead of the whole batch, and nightly skill ideas wait on the Ideas board.
+
+Workboard cards are short now: a title, one line, and what the card has (a chat, notes, a new report). Hover a card, or click it, and it opens in place with its full text, notes, and a chat with the agent. The chat uses the Chat page's bubbles, markdown, thoughts, and tool rows, and streams the turn while it runs. Enter sends, Shift+Enter is a new line, and Stop ends the turn. Move, edit, notes, link, and archive moved into the card's ··· menu. Work on it starts the card's chat right there instead of sending you to Chat. Starting a drag folds an open card back, so it moves as one small card.
+
+New Follow up row above the columns. A scheduled run that leaves you something to read or act on (a report, summary, or check you asked for, a question, or a problem) files a Follow up card with its own chat that opens on the report. A chore that just did its job (e.g. "Cleaned 12 files") or a short "nothing new" files nothing. Each automation keeps one open card. A later run adds its report to the same chat, marks the card NEW, and hands the agent the new report with your next reply. The run's card on the home feed opens that Follow up card. Follow up chats are listed in History like any other chat.
+
+Also fixed: the shared Background chat for `/loop` runs could pick an idea card's hidden chat. Notes from your last Chat message could also ride along into an idea card's chat.
+
+- Linux: `grokhub-linux-v2.10.55.tar.gz` and AUR `pkgver=2.10.55`.
+- Windows: `GrokHub-Setup-2.10.55.exe` and `grokhub-windows-v2.10.55.zip`.
+
 ## 2.10.54 — 2026-09-30
 
 Tool rows keep their names on a finished turn. Grok Build sends `tool_call_update` events without a title, which parse as the placeholder `Tool`, and each update overwrote the real name in both the live rows and the saved turn, so every tool row read `Tool · 32GB` instead of `run_terminal_command`. An update with no title, or only the placeholder, now keeps the name from the call, the same rule the tool cards already follow. A real new title still replaces the old one. The status and detail still update.
