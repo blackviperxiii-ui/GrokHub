@@ -16992,3 +16992,14 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn confirm_keys_follow_the_sheet_rule() {
+    assert_eq!(confirm_key(true, false, false, false, true), Some(ConfirmAct::Confirm));
+    assert_eq!(confirm_key(false, true, false, false, true), Some(ConfirmAct::Cancel));
+    assert_eq!(confirm_key(true, true, false, false, true), Some(ConfirmAct::Cancel));
+    assert_eq!(confirm_key(true, false, true, false, true), None);
+    assert_eq!(confirm_key(true, false, false, true, true), None);
+    assert_eq!(confirm_key(true, false, false, false, false), None);
+    assert_eq!(confirm_key(false, false, false, false, true), None);
+}
