@@ -124,7 +124,9 @@ pub use export::{
     chat_export_html, chat_export_json, html_escape, md_to_html, ChatExport, EXPORT_FORMATS_HINT,
 };
 pub use ideas::{
-    idea_prompt, ideas_refresh_due, SHORT_CHARS as IDEA_SHORT_CHARS, is_template_idea_title, parse_ideas, IdeaContext, IdeaKind, IdeaSeed,
+    ask_patterns, idea_from_one_off, idea_has_reason, idea_prompt, idea_topic_text, ideas_refresh_due, is_one_off_ask,
+    keep_reasoned_ideas, same_topic, topic_words, SHORT_CHARS as IDEA_SHORT_CHARS,
+    is_template_idea_title, parse_ideas, AskPattern, IdeaContext, IdeaGround, IdeaKind, IdeaSeed,
     IDEAS_LIVE_ENOUGH, IDEAS_PER_RUN, IDEAS_REFRESH_MS, IDEA_SOURCE_GENERATED,
 };
 pub use md::{
@@ -450,7 +452,7 @@ pub use update_feed::{
     ideas_board, idea_card_brief, idea_chat_open_line, mark_idea_modified, take_card_action,
     CARD_ACTION_DONE, CARD_ACTION_TAG, modified_ideas, post_skill_idea, set_idea_draft,
     IDEA_MODIFIED_MAX,
-    live_generated_ideas, post_generated_ideas, purge_template_ideas,
+    board_covers_topic, live_generated_ideas, post_generated_ideas, purge_one_off_ideas, purge_template_ideas,
     automation_failed_card,
     archive_digest, archived_digests, automate_offer_card, automation_done_card, card_matches,
     digest_card, digest_topic_refused, discuss_context, dismiss_idea, dismiss_update, expire_ideas,
@@ -466,6 +468,7 @@ pub use update_feed::{
 };
 pub use workboard::{
     card_notes_hash, card_work_prompt, clean_card_notes, take_card_notes_block, CARD_NOTES_MAX,
+    automation_needs_follow_up, file_follow_up, follow_up_title, FOLLOW_UP_REPORT_MAX,
     abandon_inflight_card, apply_assistant_work_marks, apply_work_update, extract_work_pins,
     extract_work_updates, file_idea_todo, idea_todo_title, inflight_card_title, parse_work_pin,
     parse_work_update, release_inflight_card, settle_inflight_card, todo_task_line,

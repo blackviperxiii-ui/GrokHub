@@ -775,7 +775,9 @@ pub fn tick_feed_pulse(
 }
 
 /// Post ideas the model wrote (see `crate::ideas`). Skips a title already on the
-/// board, already turned down, or already an automation. Returns how many posted.
+/// board, already turned down, or already an automation, and an idea whose topic
+/// a live card already covers. Only the first new idea of a batch pops up on the
+/// home feed; the rest wait on the Ideas board. Returns how many posted.
 pub fn post_generated_ideas(
     cards: &mut Vec<UpdateCard>,
     pulse: &mut FeedPulse,
@@ -786,12 +788,20 @@ pub fn post_generated_ideas(
 ) -> usize {
     let mut posted = 0usize;
     for seed in seeds {
+        if board_covers_topic(cards, &crate::ideas::idea_topic_text(seed)) {
+            continue;
+        }
         // One id per idea: the source alone collides for ideas posted in one pass.
         let source = format!(
             "{}-{}",
             crate::ideas::IDEA_SOURCE_GENERATED,
             crate::cabin_engine::engine_slug(&seed.title)
         );
+        let why = if seed.reason.trim().is_empty() {
+            seed.kind.why_label()
+        } else {
+            seed.reason.trim()
+        };
         if post_useful_idea(
             cards,
             pulse,
@@ -802,7 +812,7 @@ pub fn post_generated_ideas(
             have_names,
             false,
             lessons,
-            seed.kind.why_label(),
+            why,
         ) {
             if let Some(card) = cards
                 .iter_mut()
@@ -811,13 +821,30 @@ pub fn post_generated_ideas(
                 card.prompt = Some(seed.prompt.trim().to_string());
                 card.idea_kind = Some(seed.kind);
                 card.details = Some(seed.details.trim().to_string()).filter(|d| !d.is_empty());
-                // New ideas pop up on the home feed. Dismissing one there keeps it here.
-                card.feed_pin = true;
+                // One new idea pops up on the home feed. Dismissing it there keeps it here.
+                card.feed_pin = posted == 0;
             }
             posted += 1;
         }
     }
     posted
+}
+
+/// A live idea on the board (not applied, not deleted) is already about this.
+pub fn board_covers_topic(cards: &[UpdateCard], text: &str) -> bool {
+    cards.iter().any(|c| {
+        c.kind == UpdateKind::Idea
+            && c.status != UpdateStatus::Dismissed
+            && crate::ideas::same_topic(
+                &format!(
+                    "{} {} {}",
+                    c.title,
+                    c.body.as_deref().unwrap_or(""),
+                    c.prompt.as_deref().unwrap_or("")
+                ),
+                text,
+            )
+    })
 }
 
 /// A skill the nightly review suggested becomes a Skill idea. Apply saves it.
@@ -845,6 +872,14 @@ pub fn post_skill_idea(
     } else {
         item.title.trim().to_string()
     };
+    let topic = format!(
+        "{title} {} {}",
+        item.body,
+        item.trigger.as_deref().unwrap_or("")
+    );
+    if board_covers_topic(cards, &topic) {
+        return false;
+    }
     let source = format!("skill-{}", crate::cabin_engine::engine_slug(name));
     if !post_useful_idea(
         cards,
@@ -874,7 +909,6 @@ pub fn post_skill_idea(
         }
         card.details = Some(details);
         card.skill = Some(item.clone());
-        card.feed_pin = true;
     }
     true
 }
@@ -899,6 +933,25 @@ pub fn purge_template_ideas(cards: &mut Vec<UpdateCard>) -> usize {
             && !c.built
             && c.discuss_thread.is_none()
             && crate::ideas::is_template_idea_title(&c.title))
+    });
+    before - cards.len()
+}
+
+/// Untouched ideas that only answer a one-time job (one driver install, one fix)
+/// go. Cards you opened, changed, filed, or talked about stay. Returns how many went.
+pub fn purge_one_off_ideas(cards: &mut Vec<UpdateCard>, ground: &crate::ideas::IdeaGround) -> usize {
+    let before = cards.len();
+    cards.retain(|c| {
+        if c.kind != UpdateKind::Idea || idea_touched(c) {
+            return true;
+        }
+        let text = format!(
+            "{} {} {}",
+            c.title,
+            c.body.as_deref().unwrap_or(""),
+            c.prompt.as_deref().unwrap_or("")
+        );
+        !crate::ideas::idea_from_one_off(&text, ground)
     });
     before - cards.len()
 }
@@ -1774,9 +1827,10 @@ mod tests {
         crate::ideas::IdeaSeed {
             kind,
             title: title.into(),
-            body: format!("{title} saves you the repeat ask every week."),
-            details: format!("{title}: the full story of what it does and why it helps you."),
+            body: format!("{title}."),
+            details: format!("{title}: the full story."),
             prompt: format!("every weekday at 9, {}", title.to_ascii_lowercase()),
+            reason: String::new(),
         }
     }
 
@@ -1818,8 +1872,12 @@ mod tests {
         let mut pulse = FeedPulse::default();
         let n = post_generated_ideas(&mut cards, &mut pulse, 1_000, &seeds(), &[], "");
         assert_eq!(n, 4);
-        assert!(cards.iter().all(|c| c.feed_pin), "every new idea pops up on the home feed");
-        assert_eq!(feed_ideas(&cards, 1_000).len(), IDEA_DISCOVERY_MAX, "home shows the newest few");
+        assert_eq!(
+            cards.iter().filter(|c| c.feed_pin).count(),
+            1,
+            "one new idea per batch pops up on the home feed, not the whole batch"
+        );
+        assert_eq!(feed_ideas(&cards, 1_000).len(), 1);
         let gone = feed_ideas(&cards, 1_000)[0].id.clone();
         assert!(unpin_feed_idea(&mut cards, &gone));
         assert!(cards.iter().any(|c| c.id == gone && !c.feed_pin), "dismissed from home, still on the board");
@@ -1837,7 +1895,7 @@ mod tests {
 
     fn many(n: usize, start: u64) -> Vec<crate::ideas::IdeaSeed> {
         (0..n)
-            .map(|i| seed(crate::ideas::IdeaKind::Try, &format!("Idea number {:02}", start as usize + i)))
+            .map(|i| seed(crate::ideas::IdeaKind::Try, &format!("Errand{:02}", start as usize + i)))
             .collect()
     }
 
@@ -1854,7 +1912,7 @@ mod tests {
         post_generated_ideas(&mut cards, &mut pulse, 5_000, &many(1, 50), &[], "");
         assert_eq!(ideas_board(&cards).len(), IDEA_BOARD_MAX, "still fifteen");
         assert!(!cards.iter().any(|c| c.id == oldest), "the oldest was pushed out");
-        assert!(ideas_board(&cards)[0].title == "Idea number 50", "newest first");
+        assert!(ideas_board(&cards)[0].title == "Errand50", "newest first");
         assert!(expire_ideas(&mut cards, u64::MAX) == 0, "ideas do not time out");
     }
 
@@ -1918,7 +1976,7 @@ mod tests {
         let c = &cards[0];
         assert_eq!(c.idea_type_label(), "Skill");
         assert!(c.details.as_deref().unwrap().contains("Steps:\n1. bump"));
-        assert!(c.feed_pin);
+        assert!(!c.feed_pin, "nightly skills wait on the Ideas board, not the home feed");
         let mut fresh = Vec::new();
         assert!(!post_skill_idea(&mut fresh, &mut pulse, 12, &item, &["release-checklist"]), "you already have it");
     }
