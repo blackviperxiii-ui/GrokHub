@@ -16882,12 +16882,9 @@ const GROK_1_0_46_AUTO_TURN: &str = r#"
 #[test]
 fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
     let _hold = crate::config::hold_test_config();
-    let root = crate::config::test_config_root("grok-1-0-46-turn");
-    let _ = std::fs::remove_dir_all(&root);
+    let (root, mut cabin) = isolated_cabin("grok-1-0-46-turn");
     std::fs::create_dir_all(&root).expect("isolated config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
 
-    let mut cabin = Cabin::quiet_for_test();
     cabin.new_thread(false);
     cabin
         .live_mut()
@@ -16951,5 +16948,47 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
         );
     }
 
-    std::env::remove_var("GROKHUB_CONFIG");
+    // `new_thread` and the finished turn each spawn a persist. Hold the lock so a
+    // snapshot from before the reply cannot replace threads.json between save and load.
+    let tid = cabin.visible_thread_id();
+    let io = cabin.persist_io.clone();
+    let _io = io.lock().unwrap_or_else(|e| e.into_inner());
+    cabin.threads[cabin.thread_idx].messages = cabin.messages.clone();
+    crate::threads::save(&cabin.threads).expect("save threads");
+    let loaded = crate::threads::load();
+    drop(_io);
+    let thread = loaded.iter().find(|t| t.id == tid).expect("reloaded thread");
+    let refs: Vec<(&str, &str)> = thread
+        .messages
+        .iter()
+        .map(|m| (m.0.as_str(), m.1.as_str()))
+        .collect();
+    let reloaded = visible_chat_refs(refs.iter().copied());
+    let says: Vec<&str> = reloaded
+        .iter()
+        .filter(|v| v.kind == ChatKind::Assistant)
+        .map(|v| v.body.as_str())
+        .collect();
+    assert_eq!(
+        says,
+        [
+            "First I will query memory.",
+            "You have 32 GB of RAM.",
+            "All done, here is the summary."
+        ],
+        "a reloaded turn keeps each reply in its own bubble: {reloaded:?}"
+    );
+    let tools: Vec<&ChatView> = reloaded
+        .iter()
+        .filter(|v| v.kind == ChatKind::Tool)
+        .collect();
+    assert_eq!(tools.len(), 2, "{reloaded:?}");
+    for t in tools {
+        assert!(
+            t.body.contains("run_terminal_command") && !t.body.contains("\tTool\t"),
+            "a reloaded tool row must keep its name: {t:?}"
+        );
+    }
+
+    release_isolated(&root, cabin);
 }

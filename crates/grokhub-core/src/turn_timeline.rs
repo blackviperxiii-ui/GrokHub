@@ -549,6 +549,20 @@ mod tests {
     }
 
     #[test]
+    fn title_less_tool_update_keeps_its_name_in_the_saved_turn() {
+        let mut b = Vec::new();
+        append_tool(&mut b, "t1", "run_terminal_command", "pending", "");
+        append_tool(&mut b, "t1", "Tool", "completed", "32GB");
+        let parts = decode_turn(&encode_turn(&b)).expect("timeline");
+        assert_eq!(parts.len(), 1, "{parts:?}");
+        let TurnPart::Tool(row) = &parts[0] else {
+            panic!("tool row");
+        };
+        assert_eq!(row.title, "run_terminal_command");
+        assert_eq!(row.status, "completed");
+    }
+
+    #[test]
     fn final_say_sits_after_tools() {
         let mut b = Vec::new();
         append_thought(&mut b, "Checking the session path.");
