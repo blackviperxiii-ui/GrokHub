@@ -16992,3 +16992,14 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn has_key_false_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.secrets.api_key.trim().is_empty());
+    assert!(cabin.cfg.api_key.trim().is_empty());
+    assert!(cabin.secrets.oauth.is_none());
+    // Quiet cabin with empty secrets/api key → has_auth → false. No network.
+    assert!(!cabin.has_key());
+}
