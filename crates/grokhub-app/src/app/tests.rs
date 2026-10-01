@@ -16992,3 +16992,90 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn feed_deck_hover_lifts_the_card_behind() {
+    let front = super::open_slide(0);
+    assert_eq!(front, super::SlidePose { dy: 0.0, scale: 1.0 });
+    let second = super::open_slide(1);
+    assert!(second.dy < 0.0);
+    assert_eq!(second.scale, 1.0);
+    assert!(super::open_slide(2).dy < second.dy);
+
+    let rest = super::rest_slide(1);
+    let open = super::open_slide(1);
+    assert!(rest.dy > front.dy);
+    assert!(rest.scale < front.scale);
+    assert_ne!(rest, open);
+    assert_eq!(super::mix_slide(rest, open, 0.0), rest);
+    assert_eq!(super::mix_slide(rest, open, 1.0), open);
+    let mid = super::mix_slide(rest, open, 0.5);
+    assert!(open.dy < mid.dy && mid.dy < rest.dy);
+    assert!(rest.scale < mid.scale && mid.scale < open.scale);
+    assert_eq!(super::mix_slide(rest, open, 1.5), open);
+    assert_eq!(super::mix_slide(rest, open, -0.25), rest);
+
+    let closed = super::StackView {
+        expanded: false,
+        popped: None,
+    };
+    let pile = super::next_feed_stack(&closed, super::StackHit::Pile, Some("back".into()));
+    assert_eq!(
+        pile,
+        super::StackView {
+            expanded: true,
+            popped: Some("back".into()),
+        }
+    );
+    let away = super::next_feed_stack(&pile, super::StackHit::Away, Some("other".into()));
+    assert_eq!(
+        away,
+        super::StackView {
+            expanded: false,
+            popped: Some("back".into()),
+        }
+    );
+    let on_card = super::next_feed_stack(&pile, super::StackHit::Card, Some("other".into()));
+    assert_eq!(on_card, pile);
+    let still_down = super::next_feed_stack(&away, super::StackHit::Card, Some("other".into()));
+    assert_eq!(still_down, away);
+    let cleared = super::next_feed_stack(&away, super::StackHit::Pile, None);
+    assert_eq!(
+        cleared,
+        super::StackView {
+            expanded: true,
+            popped: None,
+        }
+    );
+
+    assert_eq!(
+        super::pile_pop_target(Some("front"), Some("front".into())),
+        None
+    );
+    assert_eq!(
+        super::pile_pop_target(Some("front"), Some("back".into())),
+        Some("back".into())
+    );
+
+    assert_eq!(
+        super::stack_hit(super::StackHover {
+            on_card: true,
+            on_pile: true,
+        }),
+        super::StackHit::Card
+    );
+    assert_eq!(
+        super::stack_hit(super::StackHover {
+            on_card: false,
+            on_pile: true,
+        }),
+        super::StackHit::Pile
+    );
+    assert_eq!(
+        super::stack_hit(super::StackHover {
+            on_card: false,
+            on_pile: false,
+        }),
+        super::StackHit::Away
+    );
+}
