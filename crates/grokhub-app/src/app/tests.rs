@@ -16992,3 +16992,24 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn cabin_frame_poll_reports_skip_on_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+    cabin.kick_cap_rx = Some(rx);
+    assert!(matches!(cabin.poll_cabin_frame(), CabinFrame::Pending));
+    assert!(cabin.kick_cap_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.kick_skip);
+
+    drop(tx);
+    assert!(matches!(cabin.poll_cabin_frame(), CabinFrame::Skip));
+    assert!(cabin.kick_cap_rx.is_none());
+    assert!(cabin.kick_skip);
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
