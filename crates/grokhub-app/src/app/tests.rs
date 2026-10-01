@@ -16992,3 +16992,20 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+// Voice is on Ready and the cabin is not running, so leaving voice must not halt a run.
+#[test]
+fn leave_voice_while_idle_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    app.voice_state = grokhub_core::VoiceState::Ready;
+    app.voice_orb = "live".into();
+    app.leave_voice();
+    assert!(matches!(app.voice_state, grokhub_core::VoiceState::Idle));
+    assert_eq!(app.voice_orb, "idle");
+    assert_eq!(app.status, "Voice off");
+    assert!(app.voice_hold_rx.is_none());
+    assert!(app.voice_ready_at.is_none());
+    assert!(app.voice_sock.is_none());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
