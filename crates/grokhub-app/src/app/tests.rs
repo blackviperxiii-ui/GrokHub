@@ -21120,3 +21120,32 @@ fn chip_hour_returns_0_through_23() {
         "chip_hour must be 0..=23 (or noon fallback hour=12), got {hour}"
     );
 }
+
+#[test]
+fn inspect_poll_while_idle_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    app.inspect_text = "Harbor".into();
+    app.poll_inspect();
+    assert_eq!(app.inspect_text, "Harbor");
+    assert!(app.inspect_rx.is_none());
+    assert!(app.messages.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    app.inspect_rx = Some(rx);
+    app.poll_inspect();
+    assert!(app.inspect_rx.is_some());
+    assert_eq!(app.inspect_text, "Harbor");
+    assert!(app.messages.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+
+    drop(tx);
+    app.poll_inspect();
+    assert!(app.inspect_rx.is_none());
+    assert_eq!(app.inspect_text, "Harbor");
+    assert!(app.messages.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
