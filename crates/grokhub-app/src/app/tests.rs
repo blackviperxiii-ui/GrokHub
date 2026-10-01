@@ -16992,3 +16992,14 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn fallback_cabin_name_defaults_to_grok() {
+    let blank = super::fallback_cabin_name("");
+    assert!(!blank.is_empty());
+    assert_eq!(blank, "Grok");
+
+    let from_md = super::fallback_cabin_name("Name: Jeremy\n");
+    assert!(!from_md.is_empty());
+    assert_eq!(from_md, "Jeremy");
+}
