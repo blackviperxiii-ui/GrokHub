@@ -16992,3 +16992,25 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+fn eyes_cap_poll_stays_off_a_store() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+
+    assert!(cabin.poll_eyes_cap().is_none());
+    assert!(cabin.eyes_cap_rx.is_none());
+    assert_eq!(cabin.status, "Harbor");
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+    cabin.eyes_cap_rx = Some(rx);
+    assert!(cabin.poll_eyes_cap().is_none());
+    assert!(cabin.eyes_cap_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    assert!(cabin.poll_eyes_cap().is_none());
+    assert!(cabin.eyes_cap_rx.is_none());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
