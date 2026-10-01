@@ -16992,3 +16992,42 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn collect_pulse_rows_quiet_stable_rows() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.automations.is_empty());
+    assert!(cabin.grok_loops.is_empty());
+    assert!(cabin.cfg.goal_pin.is_empty());
+    assert!(cabin.board.is_empty());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+
+    let rows = cabin.collect_pulse_rows();
+
+    let seed = crate::cards::SUGGESTED_AUTOS
+        .iter()
+        .find(|s| s.title == "Morning brief")
+        .expect("Morning brief seed");
+    assert_eq!(
+        rows.len(),
+        2,
+        "quiet cabin yields seed Job + Usage only: {rows:?}"
+    );
+    assert_eq!(rows[0].kind, super::pulse::PulseRowKind::Job);
+    assert_eq!(rows[0].title, seed.title);
+    assert_eq!(rows[0].detail, seed.body);
+    assert_eq!(rows[0].nav, Some(super::pulse::PulseNav::Night));
+    assert_eq!(rows[1].kind, super::pulse::PulseRowKind::Usage);
+    assert_eq!(rows[1].title, grokhub_core::usage_line(&cabin.usage));
+    assert!(rows[1].detail.is_empty());
+    assert!(rows[1].nav.is_none());
+    assert!(!rows
+        .iter()
+        .any(|r| r.kind == super::pulse::PulseRowKind::Empty));
+    assert!(!rows
+        .iter()
+        .any(|r| r.kind == super::pulse::PulseRowKind::Goal));
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
