@@ -16992,3 +16992,52 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn memory_restore_poll_puts_the_body_back() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.mem_name = "USER.md".into();
+    cabin.mem_body = "old".into();
+    cabin.poll_mem_restore();
+    assert_eq!(cabin.status, "Harbor");
+    assert_eq!(cabin.mem_name, "USER.md");
+    assert_eq!(cabin.mem_body, "old");
+    assert!(cabin.mem_restore_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.mem_restore_rx = Some(rx);
+    cabin.poll_mem_restore();
+    assert!(cabin.mem_restore_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+    assert_eq!(cabin.mem_body, "old");
+
+    tx.send(("USER.md".into(), Ok("Night brief".into())))
+        .unwrap();
+    cabin.poll_mem_restore();
+    assert_eq!(cabin.mem_body, "Night brief");
+    assert_eq!(cabin.status, "Restored USER.md.prev");
+    assert!(cabin.mem_restore_rx.is_none());
+    // USER.md is cache slot 1. The body is the channel payload; the mtime slot
+    // is whatever `memory_updated_at` reads, so this test leaves that field alone.
+    assert_eq!(cabin.mem_cache_body[1], "Night brief");
+    assert!(cabin.mem_cache_body[0].is_empty());
+    assert!(cabin.mem_cache_body[2].is_empty());
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.mem_restore_rx = Some(rx);
+    tx.send(("USER.md".into(), Err("missing prev".into())))
+        .unwrap();
+    cabin.poll_mem_restore();
+    assert_eq!(cabin.status, "missing prev");
+    assert_eq!(cabin.mem_body, "Night brief");
+    assert_eq!(cabin.mem_cache_body[1], "Night brief");
+
+    let (tx, rx) = std::sync::mpsc::channel::<(String, Result<String, String>)>();
+    drop(tx);
+    cabin.mem_restore_rx = Some(rx);
+    cabin.poll_mem_restore();
+    assert!(cabin.mem_restore_rx.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
