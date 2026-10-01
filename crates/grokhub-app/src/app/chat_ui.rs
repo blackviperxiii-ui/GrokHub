@@ -207,6 +207,44 @@ pub(super) fn consume_enter_keys(ui: &mut egui::Ui) {
     });
 }
 
+/// A first, unmodified press of `key`. A held key's repeats and a chord such as
+/// Shift+Esc never answer a permission card.
+pub(super) fn bare_press(ui: &egui::Ui, key: egui::Key) -> bool {
+    ui.input(|i| {
+        i.events.iter().any(|ev| {
+            matches!(ev, egui::Event::Key {
+                key: k,
+                pressed: true,
+                repeat: false,
+                modifiers,
+                ..
+            } if *k == key && modifiers.is_none())
+        })
+    })
+}
+
+/// Drop this frame's presses of `key`: a field that used it (Esc cancels a rename,
+/// Enter commits one) must not also answer a permission card painted later.
+pub(super) fn drop_key(ui: &egui::Ui, key: egui::Key) {
+    ui.input_mut(|i| {
+        i.events
+            .retain(|ev| !matches!(ev, egui::Event::Key { key: k, .. } if *k == key))
+    });
+}
+
+/// A menu, popup or sheet is over the chat (this frame or the last), so Esc and
+/// Enter are its keys. The passive jump-to-latest pill does not count.
+pub(super) fn overlay_over_chat(ctx: &egui::Context) -> bool {
+    let jump = egui::Id::new("chat-jump");
+    ctx.memory(|m| {
+        m.any_popup_open()
+            || m.areas()
+                .visible_layer_ids()
+                .iter()
+                .any(|l| l.order == egui::Order::Foreground && l.id != jump)
+    })
+}
+
 /// Enter sends. Control+Enter is left for TextEdit (`return_key`) to insert a newline.
 pub(super) fn take_focused_composer(
     ui: &mut egui::Ui,
@@ -1597,32 +1635,57 @@ impl Cabin {
                             .color(crate::theme::muted()),
                     );
                 }
+                if !self.perm_queue.is_empty() {
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!("{} more waiting", self.perm_queue.len()))
+                            .size(12.0)
+                            .color(crate::theme::muted()),
+                    );
+                }
                 ui.add_space(8.0);
+                let overlay = self.palette_open || self.nav == Nav::Settings || self.find.focused;
                 let key = perm_key(
-                    ui.input(|i| i.key_pressed(egui::Key::Enter)),
-                    ui.input(|i| i.key_pressed(egui::Key::Escape)),
+                    bare_press(ui, egui::Key::Enter),
+                    bare_press(ui, egui::Key::Escape),
                     !self.composer.trim().is_empty(),
-                    self.palette_open || self.nav == Nav::Settings || self.find.focused,
+                    overlay || overlay_over_chat(ui.ctx()),
                 );
+                // One press answers one card, not the next one queued behind it.
+                match key {
+                    Some(PermKey::Allow) => {
+                        ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+                    }
+                    Some(PermKey::Deny) => {
+                        ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                    }
+                    None => false,
+                };
+                let mut answered = false;
                 ui.horizontal(|ui| {
                     if crate::cards::white_pill(ui, "Allow") || key == Some(PermKey::Allow) {
                         if let Some(h) = &self.acp {
                             let _ = h.answer_permission(p.rpc_id.clone(), true);
                         }
-                        self.perm_ask = None;
-                        self.perm_always_confirm = None;
-                    }
-                    if crate::cards::ghost_pill(ui, "Deny") || key == Some(PermKey::Deny) {
+                        answered = true;
+                    } else if crate::cards::ghost_pill(ui, "Deny") || key == Some(PermKey::Deny) {
+                        // Grok's own reject option: "denied", not "User cancelled".
                         if let Some(h) = &self.acp {
-                            let _ = h.answer_permission(p.rpc_id.clone(), false);
+                            let _ = h.reject_permission(&p);
                         }
-                        self.perm_ask = None;
-                        self.perm_always_confirm = None;
+                        answered = true;
                     }
-                    if self.perm_always_confirm.is_none() && crate::cards::ghost_pill(ui, "Always") {
+                    if !answered
+                        && self.perm_always_confirm.is_none()
+                        && crate::cards::ghost_pill(ui, "Always")
+                    {
                         self.perm_always_confirm = Some(p.rpc_id.clone());
                     }
                 });
+                if answered {
+                    self.next_perm_ask();
+                    return;
+                }
                 if always_confirm_matches_rpc(self.perm_always_confirm.as_ref(), &p.rpc_id) {
                     ui.add_space(8.0);
                     if let Some(act) =
@@ -1631,8 +1694,13 @@ impl Cabin {
                         match act {
                             ConfirmAct::Confirm => {
                                 self.set_permission_mode(PermissionMode::AlwaysApprove);
+                                // Always covers the asks already waiting, too.
+                                let queued: Vec<_> = self.perm_queue.drain(..).collect();
                                 if let Some(h) = &self.acp {
                                     let _ = h.answer_permission_always(p.rpc_id.clone());
+                                    for q in queued {
+                                        let _ = h.answer_permission_always(q.rpc_id);
+                                    }
                                 }
                                 self.perm_ask = None;
                                 self.perm_always_confirm = None;

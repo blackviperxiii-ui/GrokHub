@@ -284,6 +284,7 @@ impl Cabin {
             self.live_blocks.clear();
         }
         self.perm_ask = None;
+        self.perm_queue.clear();
         self.perm_always_confirm = None;
         self.confirm = None;
         self.elicit_ask = None;

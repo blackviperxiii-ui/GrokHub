@@ -13357,6 +13357,7 @@ fn leaving_a_chat_clears_attach_and_asks() {
         tool_call_id: "tool".into(),
         action: "shot.png".into(),
         reason: "attach".into(),
+        reject_option: None,
     });
     cabin.elicit_ask = Some(grokhub_acp::ElicitAsk {
         rpc_id: serde_json::Value::Null,
@@ -13384,6 +13385,169 @@ fn leaving_a_chat_clears_attach_and_asks() {
     assert!(!cabin.running);
 
     std::env::remove_var("GROKHUB_CONFIG");
+}
+
+fn perm_ask_for_test(id: u64, title: &str) -> grokhub_acp::PermissionAsk {
+    grokhub_acp::PermissionAsk {
+        rpc_id: serde_json::json!(id),
+        session_id: "sess".into(),
+        title: title.into(),
+        tool_call_id: format!("tool-{id}"),
+        action: title.into(),
+        reason: String::new(),
+        reject_option: Some("reject-once".into()),
+    }
+}
+
+#[test]
+fn a_second_ask_waits_its_turn_instead_of_cancelling_the_first() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("perm-queue");
+    cabin.running = true;
+    cabin.show_perm_ask(perm_ask_for_test(1, "Get-CimInstance"));
+    cabin.perm_always_confirm = Some(serde_json::json!(1));
+    cabin.show_perm_ask(perm_ask_for_test(2, "send_feedback"));
+    assert_eq!(
+        cabin.perm_ask.as_ref().map(|p| p.title.as_str()),
+        Some("Get-CimInstance"),
+        "a parallel ask must not replace (and cancel) the one on screen"
+    );
+    assert_eq!(
+        cabin.perm_always_confirm,
+        Some(serde_json::json!(1)),
+        "a queued ask leaves the Always beat for the card on screen"
+    );
+    assert_eq!(cabin.perm_queue.len(), 1);
+    cabin.next_perm_ask();
+    assert_eq!(
+        cabin.perm_ask.as_ref().map(|p| p.title.as_str()),
+        Some("send_feedback")
+    );
+    assert!(cabin.perm_always_confirm.is_none());
+    assert!(cabin.perm_queue.is_empty());
+    cabin.show_perm_ask(perm_ask_for_test(3, "third"));
+    cabin.withdraw_perm_asks();
+    assert!(cabin.perm_ask.is_none() && cabin.perm_queue.is_empty());
+    cabin.show_perm_ask(perm_ask_for_test(4, "four"));
+    cabin.show_perm_ask(perm_ask_for_test(5, "five"));
+    cabin.halt_in_flight();
+    assert!(
+        cabin.perm_ask.is_none() && cabin.perm_queue.is_empty(),
+        "Stop withdraws the queued asks too"
+    );
+
+    let src = cabin_src();
+    let ask = src
+        .split("fn paint_perm_ask(")
+        .nth(1)
+        .and_then(|s| s.split("fn paint_elicit_ask(").next())
+        .expect("paint_perm_ask");
+    assert!(
+        ask.contains("reject_permission(&p)")
+            && !ask.contains("answer_permission(p.rpc_id.clone(), false)"),
+        "Deny selects Grok's reject option; `cancelled` reads as \"User cancelled\": {ask}"
+    );
+    assert!(
+        ask.contains("next_perm_ask()") && ask.contains("perm_queue.drain(..)"),
+        "an answer brings up the next ask, and Always covers the queued ones: {ask}"
+    );
+    assert!(
+        ask.contains("bare_press(ui, egui::Key::Escape)")
+            && ask.contains("overlay_over_chat(")
+            && !ask.contains("key_pressed(egui::Key::Escape)"),
+        "only a bare Esc with nothing over the chat denies: {ask}"
+    );
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn only_a_bare_key_with_nothing_over_the_chat_answers_the_card() {
+    let key = |key, modifiers| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers,
+    };
+    // egui marks a repeat itself: a second press with no release in between.
+    let pressed = |ctx: &egui::Context, ev: egui::Event| {
+        let mut hit = (false, false);
+        let input = egui::RawInput {
+            events: vec![ev],
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                hit = (
+                    super::bare_press(ui, egui::Key::Escape),
+                    super::bare_press(ui, egui::Key::Enter),
+                );
+            });
+        });
+        hit
+    };
+    let esc = egui::Context::default();
+    assert_eq!(
+        pressed(&esc, key(egui::Key::Escape, egui::Modifiers::NONE)),
+        (true, false)
+    );
+    assert_eq!(
+        pressed(&esc, key(egui::Key::Escape, egui::Modifiers::NONE)),
+        (false, false),
+        "a held Esc's repeats must not deny the next card"
+    );
+    let enter = egui::Context::default();
+    assert_eq!(
+        pressed(&enter, key(egui::Key::Enter, egui::Modifiers::NONE)),
+        (false, true)
+    );
+    assert_eq!(
+        pressed(
+            &egui::Context::default(),
+            key(egui::Key::Escape, egui::Modifiers::SHIFT)
+        ),
+        (false, false),
+        "a chord is another shortcut's key"
+    );
+    let renamed = egui::Context::default();
+    let mut left = true;
+    let input = egui::RawInput {
+        events: vec![key(egui::Key::Escape, egui::Modifiers::NONE)],
+        ..Default::default()
+    };
+    let _ = renamed.run(input, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            super::drop_key(ui, egui::Key::Escape);
+            left = super::bare_press(ui, egui::Key::Escape);
+        });
+    });
+    assert!(!left, "Esc that cancelled a rename must not also deny the card");
+    let side = include_str!("sidebar.rs");
+    assert_eq!(
+        side.matches("drop_key(ui, egui::Key::Escape)").count(),
+        2,
+        "chat and project rename both keep their Esc: {side}"
+    );
+
+    let ctx = egui::Context::default();
+    let frame = |area: Option<&str>| {
+        let mut over = false;
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            if let Some(id) = area {
+                egui::Area::new(egui::Id::new(id))
+                    .order(egui::Order::Foreground)
+                    .show(ctx, |ui| ui.label("menu"));
+            }
+            over = super::overlay_over_chat(ctx);
+        });
+        over
+    };
+    frame(Some("chat-jump"));
+    assert!(!frame(Some("chat-jump")), "the jump pill is not an overlay");
+    frame(Some("plus-menu"));
+    assert!(frame(None), "Esc that closes a menu belongs to the menu");
+    frame(None);
+    assert!(!frame(None));
 }
 
 // Landed from PR #175.
@@ -14566,6 +14730,7 @@ fn quiet_cabin() -> Cabin {
         say_seam: false,
         desk_frame: None,
         perm_ask: None,
+        perm_queue: std::collections::VecDeque::new(),
         perm_always_confirm: None,
         confirm: None,
         jump_last_you: false,

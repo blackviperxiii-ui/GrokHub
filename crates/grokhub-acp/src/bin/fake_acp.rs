@@ -198,13 +198,19 @@ fn main() {
                     );
                 }
                 if want_perm {
+                    prompt_id = id.clone();
                     write_json(&json!({
                         "jsonrpc": "2.0",
                         "id": 9001,
                         "method": "session/request_permission",
                         "params": {
                             "sessionId": "sess-test",
-                            "toolCall": { "toolCallId": "tool-1", "title": "bash" }
+                            "toolCall": { "toolCallId": "tool-1", "title": "bash" },
+                            "options": [
+                                { "optionId": "allow-once", "name": "Allow", "kind": "allow_once" },
+                                { "optionId": "allow-always", "name": "Always", "kind": "allow_always" },
+                                { "optionId": "reject-once", "name": "Reject", "kind": "reject_once" }
+                            ]
                         }
                     }));
                     // wait for the client's permission reply before finishing
@@ -252,21 +258,25 @@ fn main() {
                     continue;
                 }
                 if msg.get("result").is_some() && want_perm {
+                    // Say what the client answered: `perm:<outcome>:<optionId>`.
+                    let outcome = &msg["result"]["outcome"];
+                    let heard = format!(
+                        "perm:{}:{}",
+                        outcome["outcome"].as_str().unwrap_or(""),
+                        outcome["optionId"].as_str().unwrap_or("")
+                    );
                     notify(
                         "session/update",
                         json!({
                             "sessionId": "sess-test",
                             "update": {
                                 "sessionUpdate": "agent_message_chunk",
-                                "content": { "text": text }
+                                "content": { "text": heard }
                             }
                         }),
                     );
-                    write_json(&json!({
-                        "jsonrpc": "2.0",
-                        "id": 2,
-                        "result": { "stopReason": "end_turn" }
-                    }));
+                    let id = prompt_id.clone().unwrap_or(json!(2));
+                    result(&id, json!({ "stopReason": "end_turn" }));
                 }
             }
         }
