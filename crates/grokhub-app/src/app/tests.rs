@@ -16992,3 +16992,22 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn date_out_formats_via_date() {
+    // Associated fn: shells `date` with fmt; empty on failure. No network/xAI.
+    let out = Cabin::date_out("+%F");
+    let ok = out.is_empty()
+        || (out.len() == 10
+            && out.as_bytes()[4] == b'-'
+            && out.as_bytes()[7] == b'-'
+            && out
+                .bytes()
+                .enumerate()
+                .all(|(i, b)| i == 4 || i == 7 || b.is_ascii_digit()));
+    assert!(
+        ok,
+        "date_out(+%F) must be YYYY-MM-DD shaped or empty on failure, got {out:?}"
+    );
+}
+
