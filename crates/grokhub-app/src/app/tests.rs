@@ -16992,3 +16992,22 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn apply_job_fail_returns_error_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    assert!(!cabin.try_again);
+    // No chat_job_thread → job_error_goes_to_chat is false; non-sigterm / non-credit
+    // err returns the string without chat paint or grok spawn.
+    let err = "host failed";
+    assert_eq!(cabin.apply_job_fail(err), err);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.messages.is_empty());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    assert!(!cabin.try_again);
+    assert!(cabin.persist_rx.is_none());
+}
