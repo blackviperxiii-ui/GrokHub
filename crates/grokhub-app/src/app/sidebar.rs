@@ -173,10 +173,12 @@ impl Cabin {
             }
         }
         if ui.input(|inp| inp.key_pressed(egui::Key::Escape)) {
+            drop_key(ui, egui::Key::Escape);
             Some(TabAct::CancelRename)
         } else if ui.input(|inp| inp.key_pressed(egui::Key::Enter))
             || (edit.lost_focus() && !self.rename_focus)
         {
+            drop_key(ui, egui::Key::Enter);
             Some(TabAct::CommitRename(idx))
         } else {
             None
@@ -392,10 +394,12 @@ impl Cabin {
                                 }
                             }
                             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                drop_key(ui, egui::Key::Escape);
                                 self.cancel_proj_rename();
                             } else if ui.input(|i| i.key_pressed(egui::Key::Enter))
                                 || (edit.lost_focus() && !self.proj_rename_focus)
                             {
+                                drop_key(ui, egui::Key::Enter);
                                 self.finish_proj_rename();
                             }
                         });

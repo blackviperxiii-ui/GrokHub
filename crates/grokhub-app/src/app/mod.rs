@@ -147,7 +147,7 @@ use grokhub_core::{
     WALL_GIF_MAX,
 };
 use grokhub_hub::serve_lan;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
@@ -726,6 +726,9 @@ pub struct Cabin {
     say_seam: bool,
     desk_frame: Option<String>,
     perm_ask: Option<grokhub_acp::PermissionAsk>,
+    /// Asks that came in while `perm_ask` was on screen, oldest first. Each waits
+    /// its turn on the card; none is answered for you.
+    perm_queue: VecDeque<grokhub_acp::PermissionAsk>,
     /// Ask-card Always second beat for this `rpc_id` only. Not the composer pill.
     perm_always_confirm: Option<serde_json::Value>,
     /// Session Always escalate / destructive host. Ask Always stays on `perm_always_confirm`.
@@ -1262,6 +1265,7 @@ impl Cabin {
             say_seam: false,
             desk_frame: None,
             perm_ask: None,
+            perm_queue: VecDeque::new(),
             perm_always_confirm: None,
             confirm: None,
             jump_last_you: false,
@@ -1661,6 +1665,7 @@ impl Cabin {
             say_seam: false,
             desk_frame: None,
             perm_ask: None,
+            perm_queue: VecDeque::new(),
             perm_always_confirm: None,
             confirm: None,
             jump_last_you: false,
@@ -1943,10 +1948,8 @@ impl Cabin {
 
     fn halt_in_flight(&mut self) {
         self.host_halt.store(true, Ordering::SeqCst);
+        self.withdraw_perm_asks();
         if let Some(h) = &self.acp {
-            if let Some(p) = self.perm_ask.take() {
-                let _ = h.answer_permission(p.rpc_id, false);
-            }
             self.perm_always_confirm = None;
             self.confirm = None;
             if let Some(p) = self.elicit_ask.take() {
@@ -1998,6 +2001,7 @@ impl Cabin {
         self.stream_buf.clear();
         self.thought_buf.clear();
         self.perm_ask = None;
+        self.perm_queue.clear();
         self.perm_always_confirm = None;
         self.confirm = None;
         self.elicit_ask = None;

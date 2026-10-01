@@ -310,3 +310,44 @@ fn session_load_permission_before_result_does_not_hang() {
         }
     }
 }
+
+/// Prompt, answer the one permission ask with `answer`, and return what the agent
+/// says it heard (`perm:<outcome>:<optionId>`).
+fn agent_hears(answer: impl Fn(&grokhub_acp::AcpHandle, grokhub_acp::PermissionAsk)) -> String {
+    let mut opts = fake_opts();
+    opts.always_approve = false;
+    opts.extra_env = vec![("FAKE_ACP_PERMISSION".into(), "1".into())];
+    let h = connect(opts).expect("connect");
+    h.prompt("run it").unwrap();
+    let mut text = String::new();
+    for _ in 0..40 {
+        match wait_event(&h.events, Duration::from_secs(2)) {
+            Ok(AcpEvent::Permission(p)) => answer(&h, p),
+            Ok(AcpEvent::Text(t)) => text.push_str(&t),
+            Ok(AcpEvent::Done { .. }) => break,
+            Ok(AcpEvent::Err(e)) => panic!("{e}"),
+            Ok(_) => {}
+            Err(e) => panic!("{e}"),
+        }
+    }
+    text
+}
+
+#[test]
+fn deny_is_a_reject_not_a_user_cancel() {
+    let heard = agent_hears(|h, p| {
+        assert_eq!(p.reject_option.as_deref(), Some("reject-once"));
+        h.reject_permission(&p).unwrap();
+    });
+    assert!(
+        heard.contains("perm:selected:reject-once"),
+        "Deny must select the agent's reject option: {heard}"
+    );
+    let heard = agent_hears(|h, p| h.answer_permission(p.rpc_id, true).unwrap());
+    assert!(heard.contains("perm:selected:allow-once"), "{heard}");
+    let heard = agent_hears(|h, p| h.answer_permission(p.rpc_id, false).unwrap());
+    assert!(
+        heard.contains("perm:cancelled:"),
+        "only a stopping turn withdraws the ask: {heard}"
+    );
+}
