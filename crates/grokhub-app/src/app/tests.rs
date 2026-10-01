@@ -16992,3 +16992,29 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn stream_here_false_when_job_elsewhere() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    // quiet_for_test: chat_job_thread None → stream_here false
+    // (chat_stream_is_visible: None => false).
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.stream_here());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+
+    // Job bound to another thread while viewing the first → false.
+    cabin
+        .threads
+        .push(crate::threads::ChatThread::new("Here", false));
+    cabin
+        .threads
+        .push(crate::threads::ChatThread::new("Elsewhere", false));
+    cabin.thread_idx = 0;
+    let other = cabin.threads[1].id.clone();
+    cabin.chat_job_thread = Some(other);
+    assert!(!cabin.stream_here());
+    assert!(!cabin.running);
+    assert_eq!(cabin.status, "Harbor");
+}
