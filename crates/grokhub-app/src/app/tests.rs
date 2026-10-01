@@ -16992,3 +16992,26 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn cabin_default_models_lists_known_ids() {
+    // Real fn: non-empty chat catalog plus Auto with known ids/labels. No spawn/network.
+    let models = cabin_default_models();
+    assert!(!models.is_empty());
+    let ids: Vec<&str> = models.iter().map(|(id, _)| *id).collect();
+    let labels: Vec<&str> = models.iter().map(|(_, label)| *label).collect();
+    assert!(ids.contains(&""), "missing Auto id: {ids:?}");
+    assert!(labels.contains(&"Auto"), "missing Auto label: {labels:?}");
+    for (want_id, want_label) in [
+        ("grok-4.7", "Grok 4.7"),
+        ("grok-4.6", "Grok 4.6"),
+        ("grok-4.3", "Grok 4.3"),
+        ("grok-3", "Grok 3"),
+    ] {
+        assert!(ids.contains(&want_id), "missing model id {want_id}: {ids:?}");
+        assert!(
+            labels.contains(&want_label),
+            "missing model label {want_label}: {labels:?}"
+        );
+    }
+}
