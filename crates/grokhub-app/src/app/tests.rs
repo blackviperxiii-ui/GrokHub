@@ -16992,3 +16992,16 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn note_token_budget_noop_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert_eq!(cabin.cfg.daily_token_budget, 0);
+    let before = cabin.status.clone();
+    // Default usage + budget off → take_budget_note is None → early return, no notify.
+    cabin.note_token_budget();
+    assert_eq!(cabin.status, before);
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
