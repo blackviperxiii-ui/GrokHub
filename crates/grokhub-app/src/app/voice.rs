@@ -200,12 +200,14 @@ impl Cabin {
                             }
                         } else {
                             let push = {
-                                let last =
-                                    self.live_mut().last_mut().map(|m| (m.0.as_str(), &mut m.1));
+                                let last = self
+                                    .live_tail_mut()
+                                    .last_mut()
+                                    .map(|m| (m.0.as_str(), &mut m.1));
                                 fold_stream_fields(last, role, text, kind)
                             };
                             if let Some((role, content)) = push {
-                                self.live_mut().push((role, content));
+                                self.live_tail_mut().push((role, content));
                             }
                             if matches!(kind, StreamTokenKind::Replace)
                                 && voice_log_role(&ev).is_some()

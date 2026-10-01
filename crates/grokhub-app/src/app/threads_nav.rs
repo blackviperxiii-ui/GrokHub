@@ -20,7 +20,22 @@ impl Cabin {
 
     pub(super) fn live_mut(&mut self) -> &mut Vec<(String, String)> {
         self.messages_rev = self.messages_rev.wrapping_add(1);
+        self.messages_body_rev = self.messages_body_rev.wrapping_add(1);
         Arc::make_mut(&mut self.messages)
+    }
+
+    /// [`Self::live_mut`] for a streaming reply: replace or extend the last message, or
+    /// push a new one. Nothing before the last message may change through this, so the
+    /// transcript caches rebuild only that stretch (and hold it while the turn streams).
+    pub(super) fn live_tail_mut(&mut self) -> &mut Vec<(String, String)> {
+        self.messages_rev = self.messages_rev.wrapping_add(1);
+        Arc::make_mut(&mut self.messages)
+    }
+
+    /// Everything before the last message: `live_mut` edits and wholesale swaps of
+    /// `messages` change it; a streaming reply through `live_tail_mut` does not.
+    pub(super) fn messages_body_mark(&self) -> (u64, usize) {
+        (self.messages_body_rev, Arc::as_ptr(&self.messages) as usize)
     }
 
     pub(super) fn apply_switch_thread(&mut self, idx: usize) {
