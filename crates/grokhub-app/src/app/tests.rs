@@ -16992,3 +16992,13 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn always_confirm_stays_only_for_the_same_ask() {
+    // The Always sheet stays up only while the Ask on screen still has the armed rpc id.
+    let one = serde_json::json!(1);
+    let two = serde_json::json!(2);
+    assert!(always_confirm_matches_rpc(Some(&one), &one));
+    assert!(!always_confirm_matches_rpc(None, &one));
+    assert!(!always_confirm_matches_rpc(Some(&one), &two));
+}
