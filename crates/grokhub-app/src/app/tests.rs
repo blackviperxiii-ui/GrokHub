@@ -13401,7 +13401,8 @@ fn perm_ask_for_test(id: u64, title: &str) -> grokhub_acp::PermissionAsk {
 
 #[test]
 fn a_second_ask_waits_its_turn_instead_of_cancelling_the_first() {
-    let mut cabin = Cabin::quiet_for_test();
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("perm-queue");
     cabin.running = true;
     cabin.show_perm_ask(perm_ask_for_test(1, "Get-CimInstance"));
     cabin.perm_always_confirm = Some(serde_json::json!(1));
@@ -13456,6 +13457,7 @@ fn a_second_ask_waits_its_turn_instead_of_cancelling_the_first() {
             && !ask.contains("key_pressed(egui::Key::Escape)"),
         "only a bare Esc with nothing over the chat denies: {ask}"
     );
+    release_isolated(&root, cabin);
 }
 
 #[test]

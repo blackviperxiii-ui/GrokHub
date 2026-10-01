@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 2.10.49 — 2026-09-30
+
+A tool ask no longer reads as "User cancelled". When Grok asked for two tools at once, the second permission card replaced the first and cancelled it, so the agent saw a cancel the user never made. Asks now queue: the card on screen stays until it is answered, then the next one shows.
+
+Deny now sends the agent's own `reject_once` option, so a refusal reads as a refusal, and falls back to cancel only when the agent offers no reject option. Stop, the end of a turn, a stream error, and a replay still cancel the card on screen and every queued ask, so a real cancel still reads as a cancel.
+
+The card's keys answer only on a bare key press with nothing over the chat: typing in the rename field, the find bar, a menu, or a confirm sheet no longer approves or denies a tool by accident.
+
+- Linux: `grokhub-linux-v2.10.49.tar.gz` and AUR `pkgver=2.10.49`.
+- Windows: `GrokHub-Setup-2.10.49.exe` and `grokhub-windows-v2.10.49.zip`.
+
 ## 2.10.48 — 2026-09-30
 
 A finished reply stays the way it streamed. Each message Grok sends between tool calls is its own bubble, thoughts stay in their own rows, and tool calls sit where they ran. Before, the end of a turn folded every progress line into one long bubble. Messages split by a tool call no longer run together (`hit.GrokHub`), and a thought with several paragraphs no longer spills into the reply.
