@@ -16992,3 +16992,22 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn job_on_background_thread_false_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    // quiet_for_test: chat_job_thread None → idle false.
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.job_on_background_thread());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+
+    // chat_job_thread pointing at a background=true thread → true.
+    let idx = cabin.ensure_background_history_thread();
+    let tid = cabin.threads[idx].id.clone();
+    assert!(cabin.threads[idx].background);
+    cabin.chat_job_thread = Some(tid);
+    assert!(cabin.job_on_background_thread());
+    assert!(!cabin.running);
+}
