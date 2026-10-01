@@ -16992,3 +16992,28 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn session_show_poll_while_idle_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    app.poll_session_show();
+    assert!(app.session_show_rx.is_none());
+    assert!(app.messages.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    app.session_show_rx = Some(("sess".into(), rx));
+    app.poll_session_show();
+    assert!(app.session_show_rx.is_some());
+    assert!(app.messages.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+
+    drop(tx);
+    app.poll_session_show();
+    assert!(app.session_show_rx.is_none());
+    assert!(app.messages.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
