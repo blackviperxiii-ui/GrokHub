@@ -16992,3 +16992,19 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn always_arm_opens_the_sheet() {
+    let mut app = Cabin::quiet_for_test();
+    app.status = "Harbor".into();
+    assert!(app.confirm.is_none());
+    app.arm_session_always();
+    assert!(matches!(
+        app.confirm,
+        Some(ConfirmKind::AlwaysSession)
+    ));
+    assert_eq!(app.status, "Confirm Always…");
+    assert!(matches!(app.permission_mode, PermissionMode::Ask));
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
