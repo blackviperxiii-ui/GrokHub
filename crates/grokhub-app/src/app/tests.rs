@@ -16992,3 +16992,39 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn apply_thread_goal_empty_topics_stays_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin
+        .threads
+        .push(crate::threads::ChatThread::new("Chat", false));
+    cabin.thread_idx = 0;
+    let tid = cabin.threads[0].id.clone();
+    assert!(!tid.is_empty());
+    assert!(!cabin.host_diff_kick);
+    assert!(!cabin.goal_busy);
+    assert!(!cabin.goal_stale);
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.goal_rx.is_none());
+    assert!(cabin.rx.is_none());
+
+    // Empty reply → empty topics → early return; no spawn/network/persist path.
+    cabin.apply_thread_goal(&tid, "");
+    assert!(
+        cabin.threads[0].goal.label.is_empty(),
+        "empty topics must leave the goal label alone"
+    );
+    assert!(
+        cabin.threads[0].goal.topics.is_empty(),
+        "empty topics must leave goal topics alone"
+    );
+    assert!(!cabin.host_diff_kick);
+    assert!(!cabin.goal_busy);
+    assert!(!cabin.goal_stale);
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.goal_rx.is_none());
+    assert!(cabin.rx.is_none());
+}
