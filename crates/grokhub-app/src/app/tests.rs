@@ -16992,3 +16992,20 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn absorb_turn_learning_noop_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.messages.is_empty());
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    let before = cabin.learning.clone();
+    cabin.absorb_turn_learning("All set. Nothing else to change.");
+    assert_eq!(cabin.learning, before);
+    assert!(cabin.messages.is_empty());
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    assert!(cabin.persist_rx.is_none());
+}
