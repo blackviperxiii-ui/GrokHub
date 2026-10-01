@@ -16992,3 +16992,45 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn grok_install_poll_reports_ok_and_err() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_grok_install();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.grok_install_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<std::path::PathBuf, String>>();
+    cabin.grok_install_rx = Some(rx);
+    cabin.poll_grok_install();
+    assert!(cabin.grok_install_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    cabin.grok_install_err = "stale".into();
+    cabin.grok_install_wait = true;
+    tx.send(Ok(std::path::PathBuf::from("/tmp/fake-grok")))
+        .expect("send ok");
+    cabin.poll_grok_install();
+    assert_eq!(cabin.status, "Grok Build CLI (alpha) installed");
+    assert!(!cabin.grok_install_wait);
+    assert!(cabin.grok_install_err.is_empty());
+    assert!(cabin.grok_install_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<std::path::PathBuf, String>>();
+    cabin.grok_install_rx = Some(rx);
+    tx.send(Err("npm failed".into())).expect("send err");
+    cabin.poll_grok_install();
+    assert_eq!(cabin.status, "npm failed");
+    assert_eq!(cabin.grok_install_err, "npm failed");
+    assert!(cabin.grok_install_wait);
+    assert!(cabin.grok_install_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<std::path::PathBuf, String>>();
+    cabin.grok_install_rx = Some(rx);
+    drop(tx);
+    cabin.poll_grok_install();
+    assert!(cabin.grok_install_rx.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
