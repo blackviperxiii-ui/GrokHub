@@ -1,6 +1,7 @@
 use super::*;
 use eframe::egui;
 use super::pages::BoardAct;
+use grokhub_core::ChatRunPhase;
 use grokhub_core::UpdateAction;
 use grokhub_core::{UpdateCard, UpdateKind, UpdateStatus};
 use grokhub_core::{ProjectKind, ProjectNode};
@@ -16991,4 +16992,3930 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
     }
 
     release_isolated(&root, cabin);
+}
+
+// ---- Folded Cursor test drafts (#251–#431, base v2.10.54). Each test notes its source PR. ----
+
+// ---- Cursor fold: Composer, plus menu, file pick and attach ----
+
+// Folded from PR #251.
+#[test]
+fn blank_composer_send_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    app.chat_tail_frames = 0;
+    app.send_from_composer("   ".into());
+    assert_eq!(app.chat_tail_frames, 3);
+    assert!(app.messages.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+    assert!(!app.workflow_status_live);
+    assert!(!app.turn_retried);
+}
+
+// Folded from PR #252.
+#[test]
+fn open_plus_menu_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    app.open_plus(PlusTarget::Chat, egui::pos2(4.0, 8.0));
+    assert!(matches!(app.plus_menu, Some(PlusTarget::Chat)));
+    assert_eq!(app.plus_anchor, egui::pos2(4.0, 8.0));
+    assert!(app.plus_ignore_close);
+    assert!(app.file_pick.is_none());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #256.
+#[test]
+fn cancelled_file_pick_clears_the_status() {
+    let mut app = Cabin::quiet_for_test();
+    app.status = "Harbor".into();
+    app.poll_pick();
+    assert_eq!(app.status, "Harbor");
+    assert!(app.pick_rx.is_none());
+
+    app.status = "Choose a file…".into();
+    let (tx, rx) = std::sync::mpsc::channel::<(PlusTarget, PlusPick)>();
+    drop(tx);
+    app.pick_rx = Some(rx);
+    app.poll_pick();
+    assert!(app.pick_rx.is_none());
+    assert!(app.status.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #258.
+/// A pick already in flight must not start another file dialog or clipboard read.
+#[test]
+fn plus_act_while_busy_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    let (_tx, rx) = std::sync::mpsc::channel::<(PlusTarget, PlusPick)>();
+    app.pick_rx = Some(rx);
+    app.run_plus_act(PlusTarget::Chat, PlusAct::Upload);
+    assert_eq!(app.status, "Choose a file…");
+    assert!(app.pick_rx.is_some());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+    let (_tx2, rx2) = std::sync::mpsc::channel::<(PlusTarget, PlusPick)>();
+    app.pick_rx = Some(rx2);
+    app.run_plus_act(PlusTarget::Imagine, PlusAct::Paste);
+    assert_eq!(app.status, "Reading clipboard…");
+    assert!(app.pick_rx.is_some());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #260.
+#[test]
+fn dropped_read_clears_the_status() {
+    let mut app = Cabin::quiet_for_test();
+    app.status = "Harbor".into();
+    let (tx, rx) = std::sync::mpsc::channel::<(PlusTarget, PlusPick)>();
+    drop(tx);
+    app.pick_rx = Some(rx);
+    app.poll_pick();
+    assert!(app.pick_rx.is_none());
+    assert_eq!(app.status, "Harbor");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+
+    app.status = "Reading clipboard…".into();
+    let (tx, rx) = std::sync::mpsc::channel::<(PlusTarget, PlusPick)>();
+    drop(tx);
+    app.pick_rx = Some(rx);
+    app.poll_pick();
+    assert!(app.pick_rx.is_none());
+    assert!(app.status.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+
+    app.status = "Reading file…".into();
+    let (tx, rx) = std::sync::mpsc::channel::<(PlusTarget, PlusPick)>();
+    drop(tx);
+    app.pick_rx = Some(rx);
+    app.poll_pick();
+    assert!(app.pick_rx.is_none());
+    assert!(app.status.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #262.
+#[test]
+fn plus_path_while_busy_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    let (_tx, rx) = std::sync::mpsc::channel::<(PlusTarget, PlusPick)>();
+    app.pick_rx = Some(rx);
+    app.status = "Harbor".into();
+    app.start_plus_path(PlusTarget::Chat, std::path::PathBuf::from("harbor.png"));
+    assert_eq!(app.status, "Reading file…");
+    assert!(app.pick_rx.is_some());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+    app.start_plus_path(PlusTarget::Imagine, std::path::PathBuf::from("sunset.png"));
+    assert_eq!(app.status, "Reading file…");
+    assert!(app.pick_rx.is_some());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #278.
+#[test]
+fn file_list_poll_keeps_the_matching_dir() {
+    let mut app = Cabin::quiet_for_test();
+    app.pick_dir = "/tmp/harbor".into();
+    app.poll_pick_list();
+    assert!(app.pick_list_rx.is_none());
+    assert!(app.pick_cache.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.pick_list_rx = Some(rx);
+    app.poll_pick_list();
+    assert!(app.pick_list_rx.is_some());
+    assert!(app.pick_cache.is_none());
+    assert_eq!(app.status, "");
+
+    tx.send((
+        "/tmp/other".into(),
+        vec![("a.txt".into(), false)],
+    ))
+    .unwrap();
+    app.poll_pick_list();
+    assert!(app.pick_list_rx.is_none());
+    assert!(app.pick_cache.is_none(), "a different dir must not fill the cache");
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.pick_list_rx = Some(rx);
+    tx.send((
+        "/tmp/harbor".into(),
+        vec![("shot.png".into(), false)],
+    ))
+    .unwrap();
+    app.poll_pick_list();
+    assert!(app.pick_list_rx.is_none());
+    let (dir, entries) = app.pick_cache.as_ref().expect("matching dir fills the cache");
+    assert_eq!(dir, "/tmp/harbor");
+    assert_eq!(entries, &vec![("shot.png".to_string(), false)]);
+
+    let (tx, rx) = std::sync::mpsc::channel::<(String, Vec<(String, bool)>)>();
+    drop(tx);
+    app.pick_list_rx = Some(rx);
+    app.poll_pick_list();
+    assert!(app.pick_list_rx.is_none());
+    assert!(app.pick_cache.is_some(), "a dropped list must not clear a filled cache");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #333.
+#[test]
+fn clear_chat_attach_drops_pending_files() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.attach_url = Some("data:image/png;base64,aGFyYm9y".into());
+    cabin.attach_name = Some("harbor.png".into());
+    cabin.attach_path = Some("/tmp/harbor.png".into());
+    cabin.attach_kind = Some(grokhub_core::AttachKind::Image);
+    cabin.clear_chat_attach();
+    assert!(cabin.attach_url.is_none());
+    assert!(cabin.attach_name.is_none());
+    assert!(cabin.attach_path.is_none());
+    assert!(cabin.attach_kind.is_none());
+    assert!(cabin.status.is_empty());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #334.
+#[test]
+fn drop_leaving_thread_chrome_clears_edit_state() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.running = false;
+    cabin.attach_name = Some("shot.png".into());
+    cabin.attach_url = Some("file://shot.png".into());
+    cabin.attach_path = Some("/tmp/shot.png".into());
+    cabin.attach_kind = Some(grokhub_core::AttachKind::Image);
+    cabin.followup_step = 3;
+    cabin.active_skill_follow = Some("follow".into());
+    cabin.hands_attach = true;
+    cabin.eyes_attach = true;
+    cabin.last_receipt_ok = Some(true);
+    cabin.elicit_draft = "typed".into();
+    cabin.tool_cards.push(grokhub_acp::ToolCard {
+        id: "t1".into(),
+        title: "grep".into(),
+        kind: String::new(),
+        status: "completed".into(),
+        detail: String::new(),
+        diff: String::new(),
+        image_data_url: None,
+    });
+    cabin.live_blocks.push(grokhub_core::LiveBlock {
+        kind: grokhub_core::LiveKind::Say,
+        body: "hello".into(),
+        tool_id: String::new(),
+        tool_title: String::new(),
+        tool_status: String::new(),
+        tool_detail: String::new(),
+        fold_slot: 1,
+    });
+
+    cabin.drop_leaving_thread_chrome();
+
+    assert!(cabin.attach_name.is_none());
+    assert!(cabin.attach_url.is_none());
+    assert!(cabin.attach_path.is_none());
+    assert!(cabin.attach_kind.is_none());
+    assert_eq!(cabin.followup_step, 0);
+    assert!(cabin.active_skill_follow.is_none());
+    assert!(!cabin.hands_attach);
+    assert!(!cabin.eyes_attach);
+    assert!(cabin.last_receipt_ok.is_none());
+    assert!(cabin.elicit_draft.is_empty());
+    assert!(cabin.tool_cards.is_empty());
+    assert!(cabin.live_blocks.is_empty());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #413.
+#[test]
+fn drop_hint_line_matches_shipped_wording() {
+    use super::plus::drop_hint_line;
+    assert_eq!(
+        drop_hint_line(false, 1),
+        "Drop to attach to your next message"
+    );
+    assert_eq!(
+        drop_hint_line(true, 1),
+        "Drop to use as the Imagine reference"
+    );
+    assert_eq!(
+        drop_hint_line(false, 3),
+        "Drop to attach to your next message — the first of 3 files"
+    );
+    assert_eq!(
+        drop_hint_line(true, 3),
+        "Drop to use as the Imagine reference — the first of 3 files"
+    );
+}
+
+// ---- Cursor fold: Connectors and Grok Build CLI polls ----
+
+// Folded from PR #257.
+#[test]
+fn connector_line_queues_while_one_is_running() {
+    let mut app = Cabin::quiet_for_test();
+    let (_tx, rx) = std::sync::mpsc::channel::<String>();
+    app.grok_ext_rx = Some(rx);
+    app.submit_mcp_line("github");
+    assert_eq!(app.connector_note, "Queued grok mcp add --scope user github");
+    assert_eq!(app.grok_ext_q.len(), 1);
+    assert!(app.grok_ext_rx.is_some());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+    app.submit_mcp_line("   ");
+    assert_eq!(app.grok_ext_q.len(), 1);
+    assert_eq!(app.connector_note, "Queued grok mcp add --scope user github");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #261.
+#[test]
+fn connector_remove_queues_while_one_is_running() {
+    let mut app = Cabin::quiet_for_test();
+    let (_tx, rx) = std::sync::mpsc::channel::<String>();
+    app.grok_ext_rx = Some(rx);
+    app.submit_mcp_line("remove github");
+    assert_eq!(app.connector_note, "Queued grok mcp remove github");
+    assert_eq!(app.grok_ext_q.len(), 1);
+    assert_eq!(
+        app.grok_ext_q[0],
+        vec!["mcp".to_string(), "remove".into(), "github".into()]
+    );
+    assert!(app.grok_ext_rx.is_some());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+    app.submit_mcp_line("rm slack");
+    assert_eq!(app.connector_note, "Queued grok mcp remove slack");
+    assert_eq!(app.grok_ext_q.len(), 2);
+    assert_eq!(
+        app.grok_ext_q[1],
+        vec!["mcp".to_string(), "remove".into(), "slack".into()]
+    );
+    app.submit_mcp_line("   ");
+    assert_eq!(app.grok_ext_q.len(), 2);
+    assert_eq!(app.connector_note, "Queued grok mcp remove slack");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #264.
+#[test]
+fn connector_poll_while_idle_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    app.connector_note = "Harbor".into();
+    app.poll_grok_ext();
+    assert_eq!(app.connector_note, "Harbor");
+    assert!(app.grok_ext_rx.is_none());
+    assert!(app.grok_ext_q.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    app.grok_ext_rx = Some(rx);
+    app.poll_grok_ext();
+    assert!(app.grok_ext_rx.is_some());
+    assert_eq!(app.connector_note, "Harbor");
+    assert!(app.grok_ext_q.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+
+    drop(tx);
+    app.poll_grok_ext();
+    assert!(app.grok_ext_rx.is_none());
+    assert_eq!(app.connector_note, "Harbor");
+    assert!(app.grok_ext_q.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #267.
+#[test]
+fn doctor_poll_while_idle_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    app.connector_note = "Harbor".into();
+    app.poll_mcp_doctor();
+    assert_eq!(app.connector_note, "Harbor");
+    assert!(app.mcp_doctor_rx.is_none());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.mcp_doctor_rx = Some(rx);
+    app.poll_mcp_doctor();
+    assert!(app.mcp_doctor_rx.is_some());
+    assert_eq!(app.connector_note, "Harbor");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+
+    drop(tx);
+    app.poll_mcp_doctor();
+    assert!(app.mcp_doctor_rx.is_none());
+    assert_eq!(app.connector_note, "Harbor");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #305.
+#[test]
+fn grok_install_poll_reports_ok_and_err() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_grok_install();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.grok_install_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<std::path::PathBuf, String>>();
+    cabin.grok_install_rx = Some(rx);
+    cabin.poll_grok_install();
+    assert!(cabin.grok_install_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    cabin.grok_install_err = "stale".into();
+    cabin.grok_install_wait = true;
+    tx.send(Ok(std::path::PathBuf::from("/tmp/fake-grok")))
+        .expect("send ok");
+    cabin.poll_grok_install();
+    assert_eq!(cabin.status, "Grok Build CLI (alpha) installed");
+    assert!(!cabin.grok_install_wait);
+    assert!(cabin.grok_install_err.is_empty());
+    assert!(cabin.grok_install_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<std::path::PathBuf, String>>();
+    cabin.grok_install_rx = Some(rx);
+    tx.send(Err("npm failed".into())).expect("send err");
+    cabin.poll_grok_install();
+    assert_eq!(cabin.status, "npm failed");
+    assert_eq!(cabin.grok_install_err, "npm failed");
+    assert!(cabin.grok_install_wait);
+    assert!(cabin.grok_install_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<std::path::PathBuf, String>>();
+    cabin.grok_install_rx = Some(rx);
+    drop(tx);
+    cabin.poll_grok_install();
+    assert!(cabin.grok_install_rx.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #306.
+#[test]
+fn grok_ext_poll_reports_a_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_grok_ext();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.grok_ext_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    cabin.grok_ext_rx = Some(rx);
+    cabin.poll_grok_ext();
+    assert!(cabin.grok_ext_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_grok_ext();
+    assert!(cabin.grok_ext_rx.is_none());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #312.
+#[test]
+fn grok_catalog_poll_marks_loaded_on_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_grok_catalog();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.grok_catalog_rx.is_none());
+    assert!(!cabin.grok_catalog_loaded);
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<grokhub_acp::GrokCatalog, String>>();
+    cabin.grok_catalog_rx = Some(rx);
+    cabin.poll_grok_catalog();
+    assert!(cabin.grok_catalog_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.grok_catalog_loaded);
+
+    drop(tx);
+    cabin.poll_grok_catalog();
+    assert!(cabin.grok_catalog_rx.is_none());
+    assert!(cabin.grok_catalog_loaded);
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #322.
+#[test]
+fn acp_spawn_poll_reports_a_drop() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("acp-spawn-drop");
+    cabin.status = "Harbor".into();
+    cabin.permission_mode = PermissionMode::Auto;
+
+    cabin.poll_acp_spawn();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.acp_spawn_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<grokhub_acp::AcpHandle, String>>();
+    cabin.acp_spawn_rx = Some(rx);
+    cabin.poll_acp_spawn();
+    assert!(cabin.acp_spawn_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    cabin.running = true;
+    cabin.pending_kick = Some(true);
+    drop(tx);
+    cabin.poll_acp_spawn();
+    assert!(cabin.acp_spawn_rx.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.pending_kick.is_none());
+    assert_eq!(cabin.status, "Grok Build session missing");
+    assert!(cabin.chat_job_thread.is_none());
+
+    release_isolated(&root, cabin);
+}
+
+// Folded from PR #323.
+#[test]
+fn single_poll_reports_a_drop() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("single-poll-drop");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    let _pin = crate::config::TestConfigDir::set(root.clone());
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    assert!(cabin.stream_buf.is_empty() && cabin.thought_buf.is_empty());
+
+    cabin.poll_single();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.grok_p_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<GrokPEvent>();
+    cabin.grok_p_rx = Some(rx);
+    cabin.running = true;
+    cabin.chat_job_thread = Some(cabin.visible_thread_id());
+    cabin.poll_single();
+    assert!(cabin.grok_p_rx.is_some());
+    assert!(cabin.running);
+    assert_eq!(cabin.status, "Harbor");
+
+    // Empty buffers → Disconnected else arm (not finish_acp_turn).
+    assert!(cabin.stream_buf.is_empty() && cabin.thought_buf.is_empty());
+    drop(tx);
+    cabin.poll_single();
+    assert!(cabin.grok_p_rx.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert_eq!(cabin.status, "Grok Build session missing");
+    assert!(cabin.stream_buf.is_empty() && cabin.thought_buf.is_empty());
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// Folded from PR #326.
+#[test]
+fn acp_poll_stays_off_without_handle() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    assert!(cabin.acp.is_none());
+    cabin.poll_acp();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.acp.is_none());
+}
+
+// Folded from PR #327.
+#[test]
+fn grok_sessions_poll_stays_off_when_empty() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.pending_grok_deletes.insert("keep-del".into());
+    cabin.grok_sessions.push(grokhub_acp::GrokSession {
+        id: "keep-a".into(),
+        title: "Kept A".into(),
+        path: None,
+        cwd: None,
+        cabin: false,
+    });
+    cabin.grok_sessions_loaded = true;
+
+    // quiet_for_test leaves grok_sessions_rx empty (sender still held); Empty break.
+    // Do not send Ok — that would apply a session list.
+    cabin.poll_grok_sessions();
+
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.pending_grok_deletes.contains("keep-del"));
+    assert_eq!(cabin.pending_grok_deletes.len(), 1);
+    assert_eq!(cabin.grok_sessions.len(), 1);
+    assert_eq!(cabin.grok_sessions[0].id, "keep-a");
+    assert!(cabin.grok_sessions_loaded);
+}
+
+// Folded from PR #361.
+#[test]
+fn can_agent_false_when_idle() {
+    let _g = crate::config::hold_test_config();
+    let _hide = HideGrok::arm();
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.secrets.api_key.trim().is_empty());
+    assert!(cabin.cfg.api_key.trim().is_empty());
+    assert!(cabin.secrets.oauth.is_none());
+    // Quiet cabin with no key: can_agent → build_agent::can_agent(has_key) →
+    // find_grok(). Without Grok Build on PATH that is false. No network.
+    assert!(!cabin.can_agent());
+}
+
+// Folded from PR #419.
+#[test]
+fn forget_grok_build_session_drops_entries() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("forget-grok-sess");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let _hide = HideGrok::arm();
+
+    let row = |id: &str, title: &str| grokhub_acp::GrokSession {
+        id: id.to_string(),
+        title: title.to_string(),
+        path: None,
+        cwd: None,
+        cabin: false,
+    };
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.grok_sessions = vec![
+        row("keep", "Keep me"),
+        row("drop-a", "Drop A"),
+        row("drop-b", "Drop B"),
+    ];
+    cabin.pending_grok_deletes.clear();
+    let gen_before = cabin.grok_list_gen;
+    let inflight_before = cabin.grok_sessions_inflight;
+
+    // Whitespace-only id/also: early return — no counter bump, no pending seed.
+    cabin.forget_grok_build_session("", &[]);
+    cabin.forget_grok_build_session("   ", &[String::new(), "  ".into()]);
+    assert_eq!(cabin.grok_list_gen, gen_before);
+    assert_eq!(cabin.grok_sessions_inflight, inflight_before);
+    assert!(cabin.pending_grok_deletes.is_empty());
+    assert_eq!(cabin.grok_sessions.len(), 3);
+
+    // Primary id + also slice: both rows drop; keep stays; pending records both.
+    let also = vec!["drop-b".to_string(), "drop-a".to_string()];
+    cabin.forget_grok_build_session("drop-a", &also);
+    let ids: Vec<&str> = cabin.grok_sessions.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(ids, ["keep"]);
+    assert!(cabin.pending_grok_deletes.contains("drop-a"));
+    assert!(cabin.pending_grok_deletes.contains("drop-b"));
+    assert!(!cabin.pending_grok_deletes.contains("keep"));
+    assert_eq!(cabin.grok_list_gen, gen_before.wrapping_add(1));
+
+    // Missing id: retain is a no-op on the kept row; pending still records it.
+    let keep_len = cabin.grok_sessions.len();
+    cabin.forget_grok_build_session("not-there", &[]);
+    assert_eq!(cabin.grok_sessions.len(), keep_len);
+    assert_eq!(cabin.grok_sessions[0].id, "keep");
+    assert!(cabin.pending_grok_deletes.contains("not-there"));
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rx.is_none());
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// ---- Cursor fold: Voice and hotkeys ----
+
+// Folded from PR #254.
+// Voice is on Ready and the cabin is not running, so leaving voice must not halt a run.
+#[test]
+fn leave_voice_while_idle_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    app.voice_state = grokhub_core::VoiceState::Ready;
+    app.voice_orb = "live".into();
+    app.leave_voice();
+    assert!(matches!(app.voice_state, grokhub_core::VoiceState::Idle));
+    assert_eq!(app.voice_orb, "idle");
+    assert_eq!(app.status, "Voice off");
+    assert!(app.voice_hold_rx.is_none());
+    assert!(app.voice_ready_at.is_none());
+    assert!(app.voice_sock.is_none());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #263.
+#[test]
+fn voice_hold_while_idle_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    app.voice_hold_rx = Some(rx);
+    app.voice_state = VoiceState::Idle;
+    app.poll_voice_hold();
+    assert!(app.voice_hold_rx.is_some());
+    assert!(matches!(app.voice_state, VoiceState::Idle));
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+    drop(tx);
+    app.poll_voice_hold();
+    assert!(app.voice_hold_rx.is_none());
+    assert!(matches!(app.voice_state, VoiceState::Idle));
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #290.
+#[test]
+fn voice_mode_is_on_when_ready() {
+    let mut app = Cabin::quiet_for_test();
+    app.voice_sock = None;
+    app.voice_state = VoiceState::Idle;
+    assert!(!app.voice_is_on());
+    app.voice_state = VoiceState::Ready;
+    assert!(app.voice_is_on());
+    app.voice_state = VoiceState::Idle;
+    assert!(!app.voice_is_on());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #307.
+#[test]
+fn global_hotkeys_poll_stays_off_without_manager() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    // quiet_for_test leaves hotkeys None — early return before listen_voice / halt_work.
+    assert!(cabin.hotkeys.is_none());
+    cabin.poll_global_hotkeys();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(matches!(cabin.voice_state, VoiceState::Idle));
+    assert!(!cabin.voice_is_on());
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// ---- Cursor fold: Background polls: empty keeps the receiver, a drop clears it ----
+
+// Folded from PR #276.
+#[test]
+fn pending_kick_waits_out_a_handshake() {
+    let mut app = Cabin::quiet_for_test();
+    app.poll_pending_kick();
+    assert!(app.pending_kick.is_none());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+
+    app.pending_kick = Some(false);
+    let (_tx, rx) = std::sync::mpsc::channel();
+    app.acp_spawn_rx = Some(rx);
+    app.poll_pending_kick();
+    assert_eq!(app.pending_kick, Some(false));
+    assert!(app.acp_spawn_rx.is_some());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #270.
+#[test]
+fn session_show_poll_while_idle_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    app.poll_session_show();
+    assert!(app.session_show_rx.is_none());
+    assert!(app.messages.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    app.session_show_rx = Some(("sess".into(), rx));
+    app.poll_session_show();
+    assert!(app.session_show_rx.is_some());
+    assert!(app.messages.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+
+    drop(tx);
+    app.poll_session_show();
+    assert!(app.session_show_rx.is_none());
+    assert!(app.messages.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #279.
+#[test]
+fn imagine_save_poll_reports_the_path() {
+    let mut app = Cabin::quiet_for_test();
+    app.status = "Harbor".into();
+    app.poll_imagine_save();
+    assert_eq!(app.status, "Harbor");
+    assert!(app.imagine_save_rx.is_none());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+    app.imagine_save_rx = Some(rx);
+    app.poll_imagine_save();
+    assert!(app.imagine_save_rx.is_some());
+    assert_eq!(app.status, "Harbor");
+    tx.send(Ok("/tmp/harbor.png".into())).unwrap();
+    app.poll_imagine_save();
+    assert!(app.imagine_save_rx.is_none());
+    assert_eq!(app.status, "Saved /tmp/harbor.png");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+    app.imagine_save_rx = Some(rx);
+    tx.send(Err("disk full".into())).unwrap();
+    app.poll_imagine_save();
+    assert!(app.imagine_save_rx.is_none());
+    assert_eq!(app.status, "disk full");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #281.
+#[test]
+fn chip_poll_drops_a_secret_label() {
+    fn chip(id: &str, label: &str, value: &str) -> QuickChip {
+        QuickChip {
+            id: id.into(),
+            label: label.into(),
+            value: value.into(),
+            kind: ChipKind::Chat,
+            score: 1.0,
+            hint: String::new(),
+            primary: false,
+        }
+    }
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.chip_busy = true;
+    cabin.poll_chips();
+    assert!(cabin.chip_rx.is_none());
+    assert!(cabin.chip_busy);
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.chip_rx = Some(rx);
+    cabin.poll_chips();
+    assert!(cabin.chip_rx.is_some());
+    assert!(cabin.chip_busy);
+    assert!(cabin.llm_chips.is_empty());
+
+    let secret_label = format!("sk-{}", "a".repeat(12));
+    let secret_value = format!("sk-{}", "b".repeat(12));
+    tx.send(vec![
+        chip("harbor", "Harbor", "/sh"),
+        chip("secret-label", &secret_label, "ok"),
+        chip("secret-value", "Night", &secret_value),
+    ])
+    .expect("chip send");
+    cabin.poll_chips();
+    assert!(!cabin.chip_busy);
+    assert!(cabin.chip_rx.is_none());
+    assert_eq!(cabin.llm_chips.len(), 1);
+    assert_eq!(cabin.llm_chips[0].label, "Harbor");
+    assert_eq!(cabin.llm_chips[0].value, "/sh");
+
+    cabin.chip_busy = true;
+    let (gone, rx) = std::sync::mpsc::channel();
+    drop(gone);
+    cabin.chip_rx = Some(rx);
+    cabin.poll_chips();
+    assert!(!cabin.chip_busy);
+    assert!(cabin.chip_rx.is_none());
+    assert_eq!(cabin.llm_chips.len(), 1);
+    assert_eq!(cabin.llm_chips[0].label, "Harbor");
+    assert_eq!(cabin.llm_chips[0].value, "/sh");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #283.
+#[test]
+fn greeting_poll_keeps_a_fresh_line() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.greeting = "Harbor is quiet tonight.".into();
+    cabin.greeting_busy = true;
+
+    cabin.poll_greeting();
+    assert!(cabin.greeting_files_rx.is_none());
+    assert!(cabin.greeting_rx.is_none());
+    assert!(cabin.greeting_busy);
+    assert_eq!(cabin.greeting, "Harbor is quiet tonight.");
+
+    let (files_tx, files_rx) = std::sync::mpsc::channel();
+    cabin.greeting_files_rx = Some(files_rx);
+    cabin.poll_greeting();
+    assert!(cabin.greeting_files_rx.is_some());
+    assert!(cabin.greeting_rx.is_none());
+    assert!(cabin.greeting_busy);
+    assert_eq!(cabin.greeting, "Harbor is quiet tonight.");
+
+    files_tx
+        .send((3, "user page".into(), 4, "memory page".into()))
+        .expect("send greeting files");
+    cabin.poll_greeting();
+    assert!(cabin.greeting_files_rx.is_none());
+    assert_eq!(cabin.greeting_user_at, 3);
+    assert_eq!(cabin.greeting_user_md, "user page");
+    assert_eq!(cabin.greeting_memory_at, 4);
+    assert_eq!(cabin.greeting_memory_md, "memory page");
+    assert!(cabin.greeting_rx.is_none());
+    assert!(cabin.greeting_busy);
+    assert_eq!(cabin.greeting, "Harbor is quiet tonight.");
+
+    let (greet_tx, greet_rx) = std::sync::mpsc::channel();
+    cabin.greeting_rx = Some(greet_rx);
+    cabin.poll_greeting();
+    assert!(cabin.greeting_rx.is_some());
+    assert!(cabin.greeting_busy);
+    assert_eq!(cabin.greeting, "Harbor is quiet tonight.");
+
+    greet_tx
+        .send("Evening, Viper. The dock light is on.".into())
+        .expect("send greeting");
+    cabin.poll_greeting();
+    assert!(cabin.greeting_rx.is_none());
+    assert!(!cabin.greeting_busy);
+    assert_eq!(cabin.greeting, "Evening, Viper. The dock light is on.");
+
+    cabin.greeting = "Harbor is quiet tonight.".into();
+    cabin.greeting_user_md = "the wall still wants a second coat tonight".into();
+    let (echo_tx, echo_rx) = std::sync::mpsc::channel();
+    cabin.greeting_rx = Some(echo_rx);
+    echo_tx
+        .send("Evening, Viper. the wall still wants a second coat tonight.".into())
+        .expect("send echoed greeting");
+    cabin.poll_greeting();
+    assert!(cabin.greeting_rx.is_none());
+    assert!(!cabin.greeting_busy);
+    assert_eq!(cabin.greeting, "Harbor is quiet tonight.");
+
+    cabin.greeting_busy = true;
+    let (drop_tx, drop_rx) = std::sync::mpsc::channel::<String>();
+    cabin.greeting_rx = Some(drop_rx);
+    drop(drop_tx);
+    cabin.poll_greeting();
+    assert!(cabin.greeting_rx.is_none());
+    assert!(cabin.greeting_files_rx.is_none());
+    assert!(!cabin.greeting_busy);
+    assert_eq!(cabin.greeting, "Harbor is quiet tonight.");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #285.
+#[test]
+fn wall_cover_poll_stays_off_a_spawn() {
+    let mut app = Cabin::quiet_for_test();
+    app.status = "Harbor".into();
+    app.wall_busy = true;
+    app.poll_wall();
+    assert!(app.wall_rx.is_none());
+    assert!(app.wall_busy);
+    assert_eq!(app.status, "Harbor");
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<grokhub_core::WallGif, String>>();
+    app.wall_rx = Some(rx);
+    app.poll_wall();
+    assert!(app.wall_rx.is_some());
+    assert!(app.wall_busy);
+    assert_eq!(app.status, "Harbor");
+
+    drop(tx);
+    app.poll_wall();
+    assert!(app.wall_rx.is_none());
+    assert!(!app.wall_busy);
+    assert_eq!(app.status, "Harbor");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #294.
+#[test]
+fn history_search_poll_keeps_matching_hits() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+
+    cabin.poll_history_search();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.history_rx.is_none());
+    assert!(cabin.history_hits.is_empty());
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.history_rx = Some(rx);
+    cabin.poll_history_search();
+    assert!(cabin.history_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    cabin.history_q = "harbor".into();
+    tx.send(("other".into(), vec![("a".into(), "b".into())]))
+        .expect("send other");
+    cabin.poll_history_search();
+    assert!(cabin.history_hits.is_empty());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.history_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.history_rx = Some(rx);
+    tx.send(("harbor".into(), vec![("Chat".into(), "sess-1".into())]))
+        .expect("send harbor");
+    cabin.poll_history_search();
+    assert_eq!(cabin.history_hits, vec![("Chat".into(), "sess-1".into())]);
+    assert_eq!(cabin.status, "1 hits");
+    assert!(cabin.history_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    drop(tx);
+    cabin.history_rx = Some(rx);
+    cabin.poll_history_search();
+    assert!(cabin.history_rx.is_none());
+    assert_eq!(cabin.history_hits, vec![("Chat".into(), "sess-1".into())]);
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #295.
+#[test]
+fn memory_restore_poll_puts_the_body_back() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("mem-restore-poll");
+    cabin.status = "Harbor".into();
+    cabin.mem_name = "USER.md".into();
+    cabin.mem_body = "old".into();
+    cabin.poll_mem_restore();
+    assert_eq!(cabin.status, "Harbor");
+    assert_eq!(cabin.mem_name, "USER.md");
+    assert_eq!(cabin.mem_body, "old");
+    assert!(cabin.mem_restore_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.mem_restore_rx = Some(rx);
+    cabin.poll_mem_restore();
+    assert!(cabin.mem_restore_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+    assert_eq!(cabin.mem_body, "old");
+
+    tx.send(("USER.md".into(), Ok("Night brief".into())))
+        .unwrap();
+    cabin.poll_mem_restore();
+    assert_eq!(cabin.mem_body, "Night brief");
+    assert_eq!(cabin.status, "Restored USER.md.prev");
+    assert!(cabin.mem_restore_rx.is_none());
+    // USER.md is cache slot 1. The body is the channel payload; the mtime slot
+    // is whatever `memory_updated_at` reads, so this test leaves that field alone.
+    assert_eq!(cabin.mem_cache_body[1], "Night brief");
+    assert!(cabin.mem_cache_body[0].is_empty());
+    assert!(cabin.mem_cache_body[2].is_empty());
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.mem_restore_rx = Some(rx);
+    tx.send(("USER.md".into(), Err("missing prev".into())))
+        .unwrap();
+    cabin.poll_mem_restore();
+    assert_eq!(cabin.status, "missing prev");
+    assert_eq!(cabin.mem_body, "Night brief");
+    assert_eq!(cabin.mem_cache_body[1], "Night brief");
+
+    let (tx, rx) = std::sync::mpsc::channel::<(String, Result<String, String>)>();
+    drop(tx);
+    cabin.mem_restore_rx = Some(rx);
+    cabin.poll_mem_restore();
+    assert!(cabin.mem_restore_rx.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    release_isolated(&root, cabin);
+}
+
+// Folded from PR #296.
+#[test]
+fn memory_file_poll_fills_the_open_page() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.mem_name = "USER.md".into();
+    cabin.mem_body = "old".into();
+    cabin.status = "Harbor".into();
+
+    cabin.poll_mem_file();
+    assert_eq!(cabin.mem_name, "USER.md");
+    assert_eq!(cabin.mem_body, "old");
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.mem_file_rx.is_none());
+    assert_eq!(cabin.mem_cache_at, [0, 0, 0]);
+    assert_eq!(
+        cabin.mem_cache_body,
+        [String::new(), String::new(), String::new()]
+    );
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.mem_file_rx = Some(("USER.md".into(), rx));
+    cabin.poll_mem_file();
+    assert!(cabin.mem_file_rx.as_ref().is_some_and(|(name, _)| name == "USER.md"));
+    assert_eq!(cabin.mem_body, "old");
+    assert_eq!(cabin.status, "Harbor");
+
+    tx.send((9, "Night brief".into())).expect("user file");
+    cabin.poll_mem_file();
+    assert_eq!(cabin.mem_body, "Night brief");
+    assert_eq!(cabin.mem_cache_at[1], 9);
+    assert_eq!(cabin.mem_cache_body[1], "Night brief");
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.mem_file_rx.is_none());
+
+    let (soul_tx, soul_rx) = std::sync::mpsc::channel();
+    cabin.mem_file_rx = Some(("SOUL.md".into(), soul_rx));
+    soul_tx.send((3, "soul text".into())).expect("soul file");
+    assert_eq!(cabin.mem_name, "USER.md");
+    cabin.poll_mem_file();
+    assert_eq!(cabin.mem_body, "Night brief");
+    assert_eq!(cabin.mem_cache_at[0], 3);
+    assert_eq!(cabin.mem_cache_body[0], "soul text");
+    assert_eq!(cabin.mem_cache_at[1], 9);
+    assert_eq!(cabin.mem_cache_body[1], "Night brief");
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.mem_file_rx.is_none());
+
+    let (gone_tx, gone_rx) = std::sync::mpsc::channel();
+    cabin.mem_file_rx = Some(("MEMORY.md".into(), gone_rx));
+    drop(gone_tx);
+    cabin.poll_mem_file();
+    assert!(cabin.mem_file_rx.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert_eq!(cabin.mem_body, "Night brief");
+    assert_eq!(cabin.status, "Harbor");
+}
+
+// Folded from PR #297.
+#[test]
+fn reflect_poll_reports_a_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_reflect();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.reflect_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<(
+        grokhub_core::MemoryEdit,
+        Option<grokhub_core::MemoryEdit>,
+    )>();
+    cabin.reflect_rx = Some(rx);
+    cabin.poll_reflect();
+    assert!(cabin.reflect_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_reflect();
+    assert!(cabin.reflect_rx.is_none());
+    assert_eq!(cabin.status, "Reflect failed");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #298.
+#[test]
+fn hub_sync_poll_reports_a_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    let nav = cabin.nav;
+
+    cabin.poll_sync();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.sync_rx.is_none());
+
+    let (tx, rx) =
+        std::sync::mpsc::channel::<(String, Vec<grokhub_core::HubMemoryFile>)>();
+    cabin.sync_rx = Some(rx);
+    cabin.poll_sync();
+    assert!(cabin.sync_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_sync();
+    assert!(cabin.sync_rx.is_none());
+    assert_eq!(cabin.status, "Hub sync failed");
+    assert_eq!(cabin.nav, nav);
+    assert!(!matches!(cabin.nav, Nav::Devices));
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #299.
+#[test]
+fn verify_poll_stays_off_a_skill_save() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    assert!(cabin.verify_chip.is_empty());
+    assert!(!cabin.verify_ok_turn);
+    assert!(cabin.verify_rx.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+
+    cabin.poll_verify();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.verify_chip.is_empty());
+    assert!(!cabin.verify_ok_turn);
+    assert!(cabin.verify_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.verify_rx = Some(rx);
+    cabin.poll_verify();
+    assert!(
+        cabin.verify_rx.is_some(),
+        "an empty poll keeps the receiver"
+    );
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.verify_chip.is_empty());
+    assert!(!cabin.verify_ok_turn);
+
+    tx.send(None).expect("send None");
+    cabin.poll_verify();
+    assert!(cabin.verify_rx.is_none());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.verify_chip.is_empty());
+    assert!(!cabin.verify_ok_turn);
+    assert!(
+        cabin.messages.is_empty(),
+        "None must not apply a verify result"
+    );
+
+    let (gone, rx) = std::sync::mpsc::channel();
+    drop(gone);
+    cabin.verify_rx = Some(rx);
+    cabin.poll_verify();
+    assert!(cabin.verify_rx.is_none());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.verify_chip.is_empty());
+    assert!(!cabin.verify_ok_turn);
+}
+
+// Folded from PR #300.
+#[test]
+fn eyes_cap_poll_stays_off_a_store() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+
+    assert!(cabin.poll_eyes_cap().is_none());
+    assert!(cabin.eyes_cap_rx.is_none());
+    assert_eq!(cabin.status, "Harbor");
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+    cabin.eyes_cap_rx = Some(rx);
+    assert!(cabin.poll_eyes_cap().is_none());
+    assert!(cabin.eyes_cap_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    assert!(cabin.poll_eyes_cap().is_none());
+    assert!(cabin.eyes_cap_rx.is_none());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #301.
+#[test]
+fn recipe_cap_poll_stays_off_a_store() {
+    let mut app = Cabin::quiet_for_test();
+    app.status = "Harbor".into();
+    app.eyes_text = "frame: capturing…\n".into();
+    app.poll_recipe_cap();
+    assert_eq!(app.status, "Harbor");
+    assert_eq!(app.eyes_text, "frame: capturing…\n");
+    assert!(app.recipe_cap_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+    app.recipe_cap_rx = Some(rx);
+    app.poll_recipe_cap();
+    assert!(app.recipe_cap_rx.is_some());
+    assert_eq!(app.status, "Harbor");
+    assert_eq!(app.eyes_text, "frame: capturing…\n");
+
+    drop(tx);
+    app.poll_recipe_cap();
+    assert!(app.recipe_cap_rx.is_none());
+    assert_eq!(app.status, "Harbor");
+    assert_eq!(app.eyes_text, "frame: capturing…\n");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #302.
+#[test]
+fn inhabit_poll_reports_a_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_inhabit();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.inhabit_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<grokhub_core::InhabitBundle>();
+    cabin.inhabit_rx = Some(rx);
+    cabin.poll_inhabit();
+    assert!(cabin.inhabit_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_inhabit();
+    assert!(cabin.inhabit_rx.is_none());
+    assert_eq!(cabin.status, "Inhabit failed");
+    assert!(!matches!(cabin.nav, Nav::Devices));
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #303.
+#[test]
+fn openclaw_import_poll_reports_a_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_import_openclaw();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.import_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.import_rx = Some(rx);
+    cabin.poll_import_openclaw();
+    assert!(cabin.import_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_import_openclaw();
+    assert!(cabin.import_rx.is_none());
+    assert_eq!(cabin.status, "OpenClaw import failed");
+    assert!(!matches!(cabin.nav, Nav::Memory));
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #304.
+#[test]
+fn recipe_replay_poll_reports_a_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_replay_desk();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.recipe_desk_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<super::ReplayDeskOut>();
+    cabin.recipe_desk_rx = Some(rx);
+    cabin.poll_replay_desk();
+    assert!(cabin.recipe_desk_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_replay_desk();
+    assert!(cabin.recipe_desk_rx.is_none());
+    assert_eq!(cabin.status, "Recipe replay failed");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #308.
+#[test]
+fn night_check_poll_reports_a_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+
+    assert!(!cabin.poll_night_check(0));
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.night_check_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<(String, i32)>();
+    cabin.night_check_rx = Some(("night-check".into(), rx));
+    assert!(cabin.poll_night_check(0));
+    assert!(cabin.night_check_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    assert!(!cabin.poll_night_check(0));
+    assert!(cabin.night_check_rx.is_none());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #309.
+#[test]
+fn persist_poll_clears_on_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_persist();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.persist_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    cabin.persist_rx = Some(rx);
+    cabin.poll_persist();
+    assert!(cabin.persist_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_persist();
+    assert!(cabin.persist_rx.is_none());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #310.
+#[test]
+fn goals_poll_clears_busy_on_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.goal_stale = false;
+    cabin.poll_goals();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.goal_rx.is_none());
+    assert!(!cabin.goal_busy);
+
+    cabin.goal_busy = true;
+    let (tx, rx) = std::sync::mpsc::channel::<(String, String)>();
+    cabin.goal_rx = Some(rx);
+    cabin.poll_goals();
+    assert!(cabin.goal_rx.is_some());
+    assert!(cabin.goal_busy);
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_goals();
+    assert!(cabin.goal_rx.is_none());
+    assert!(!cabin.goal_busy);
+    assert!(!cabin.goal_stale);
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #311.
+#[test]
+fn review_poll_clears_busy_on_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_review();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.review_rx.is_none());
+    assert!(!cabin.review_busy);
+
+    cabin.review_busy = true;
+    let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+    cabin.review_rx = Some(rx);
+    cabin.poll_review();
+    assert!(cabin.review_rx.is_some());
+    assert!(cabin.review_busy);
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_review();
+    assert!(cabin.review_rx.is_none());
+    assert!(!cabin.review_busy);
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #313.
+#[test]
+fn cabin_frame_poll_reports_skip_on_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+    cabin.kick_cap_rx = Some(rx);
+    assert!(matches!(cabin.poll_cabin_frame(), CabinFrame::Pending));
+    assert!(cabin.kick_cap_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.kick_skip);
+
+    drop(tx);
+    assert!(matches!(cabin.poll_cabin_frame(), CabinFrame::Skip));
+    assert!(cabin.kick_cap_rx.is_none());
+    assert!(cabin.kick_skip);
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #314.
+#[test]
+fn host_diff_poll_finishes_on_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_host_diff();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.host_diff_kick);
+
+    let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
+    cabin.host_diff_rx = Some(rx);
+    cabin.poll_host_diff();
+    assert!(cabin.host_diff_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.host_diff_kick);
+
+    drop(tx);
+    cabin.poll_host_diff();
+    assert!(cabin.host_diff_rx.is_none());
+    assert!(!cabin.host_diff_kick);
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #315.
+#[test]
+fn profile_pick_poll_clears_on_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_profile_pick();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.profile_pick_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<(u64, super::ProfilePick)>();
+    cabin.profile_pick_rx = Some(rx);
+    cabin.poll_profile_pick();
+    assert!(cabin.profile_pick_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_profile_pick();
+    assert!(cabin.profile_pick_rx.is_none());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #316.
+#[test]
+fn oauth_start_poll_reports_a_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_oauth();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.oauth_start_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<DeviceCodeStart, String>>();
+    cabin.oauth_start_rx = Some(rx);
+    cabin.poll_oauth();
+    assert!(cabin.oauth_start_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_oauth();
+    assert!(cabin.oauth_start_rx.is_none());
+    assert_eq!(cabin.status, "Grok OAuth failed to start");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #317.
+#[test]
+fn ideas_poll_clears_on_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_ideas();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.ideas_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    cabin.ideas_rx = Some((rx, Vec::new(), Vec::new()));
+    cabin.cfg.feed_pulse.last_ideas_ms = grokhub_core::now_ms();
+    cabin.poll_ideas();
+    assert!(cabin.ideas_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_ideas();
+    assert!(cabin.ideas_rx.is_none());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!matches!(cabin.nav, Nav::Ideas));
+}
+
+// Folded from PR #318.
+#[test]
+fn grok_loop_poll_reports_a_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    assert!(!cabin.poll_grok_loop());
+    assert_eq!(cabin.status, "Harbor");
+
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    cabin.grok_loop_rx = Some(("loop-1".into(), rx));
+    assert!(cabin.poll_grok_loop());
+    assert!(cabin.grok_loop_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    assert!(!cabin.poll_grok_loop());
+    assert!(cabin.grok_loop_rx.is_none());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #320.
+#[test]
+fn oauth_poll_rx_reports_a_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    assert!(cabin.oauth_start_rx.is_none());
+    assert!(cabin.oauth_pending.is_none());
+    cabin.poll_oauth();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.oauth_poll_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<grokhub_core::PollResult, String>>();
+    cabin.oauth_poll_rx = Some(rx);
+    cabin.poll_oauth();
+    assert!(cabin.oauth_poll_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.oauth_start_rx.is_none());
+    assert!(cabin.oauth_pending.is_none());
+
+    drop(tx);
+    cabin.poll_oauth();
+    assert!(cabin.oauth_poll_rx.is_none());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.oauth_start_rx.is_none());
+    assert!(cabin.oauth_pending.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #321.
+#[test]
+fn job_poll_reports_worker_gone_on_drop() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("job-worker-gone");
+    cabin.status = "Harbor".into();
+    cabin.poll_job();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.rx.is_none());
+
+    cabin.running = true;
+    let (tx, rx) = std::sync::mpsc::channel::<JobOut>();
+    cabin.rx = Some(rx);
+    cabin.poll_job();
+    assert!(cabin.rx.is_some());
+    assert!(cabin.running);
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_job();
+    assert!(cabin.rx.is_none());
+    assert!(!cabin.running);
+    assert_eq!(cabin.status, worker_gone_status());
+    assert!(cabin.chat_job_thread.is_none());
+    release_isolated(&root, cabin);
+}
+
+// Folded from PR #324.
+#[test]
+fn greeting_files_poll_clears_on_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    assert!(cabin.greeting_files_rx.is_none());
+    assert!(cabin.greeting_rx.is_none());
+    cabin.poll_greeting();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.greeting_files_rx.is_none());
+    assert!(cabin.greeting_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<(u64, String, u64, String)>();
+    cabin.greeting_files_rx = Some(rx);
+    cabin.poll_greeting();
+    assert!(cabin.greeting_files_rx.is_some());
+    assert!(cabin.greeting_rx.is_none());
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_greeting();
+    assert!(cabin.greeting_files_rx.is_none());
+    assert!(cabin.greeting_rx.is_none());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #325.
+#[test]
+fn chips_poll_clears_busy_on_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_chips();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.chip_busy);
+
+    cabin.chip_busy = true;
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<QuickChip>>();
+    cabin.chip_rx = Some(rx);
+    cabin.poll_chips();
+    assert!(cabin.chip_rx.is_some());
+    assert!(cabin.chip_busy);
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_chips();
+    assert!(cabin.chip_rx.is_none());
+    assert!(!cabin.chip_busy);
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// ---- Cursor fold: Chat state on an idle cabin ----
+
+// Folded from PR #272.
+#[test]
+fn session_row_title_keeps_a_locked_name() {
+    let mut app = Cabin::quiet_for_test();
+    assert_eq!(app.session_row_title("sess-1", ""), "sess-1");
+    assert_eq!(app.session_row_title("sess-1", "sess-1"), "sess-1");
+    assert_eq!(app.session_row_title("sess-1", "Harbor"), "Harbor");
+
+    app.threads.push(crate::threads::ChatThread::new("Chat", false));
+    app.threads[0].grok_session = Some("sess-1".into());
+    app.threads[0].title_locked = true;
+    assert_eq!(app.session_row_title("sess-1", "Harbor"), "Chat");
+    app.threads[0].title_locked = false;
+    assert_eq!(app.session_row_title("sess-1", "Harbor"), "Harbor");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #273.
+#[test]
+fn offscreen_chat_row_stays_outside_the_clip() {
+    let clip = egui::Rect::from_min_max(egui::pos2(0.0, 100.0), egui::pos2(200.0, 300.0));
+    assert!(chat_row_outside_clip(egui::pos2(0.0, 0.0), 100.0, 50.0, clip));
+    assert!(chat_row_outside_clip(egui::pos2(0.0, 300.0), 100.0, 40.0, clip));
+    assert!(chat_row_outside_clip(egui::pos2(-80.0, 120.0), 40.0, 40.0, clip));
+    assert!(chat_row_outside_clip(egui::pos2(200.0, 120.0), 40.0, 40.0, clip));
+    assert!(!chat_row_outside_clip(egui::pos2(10.0, 150.0), 100.0, 40.0, clip));
+}
+
+// Folded from PR #277.
+#[test]
+fn pinned_history_row_sorts_first() {
+    let mut app = Cabin::quiet_for_test();
+    app.threads.push(crate::threads::ChatThread::new("Chat", false));
+    app.threads[0].grok_session = Some("sess-1".into());
+    app.threads[0].pinned = true;
+    app.threads[0].pinned_ms = 9;
+    let pinned = app.session_sort_key("sess-1", 1);
+    assert!(pinned.pinned);
+    assert_eq!(pinned.pinned_ms, 9);
+    let missing = app.session_sort_key("other", 4);
+    assert!(!missing.pinned);
+    assert_eq!(missing.list_rank, 4);
+    assert_eq!(missing.accessed_ms, 0);
+    let order = crate::threads::session_list_order(&[missing, pinned]);
+    assert_eq!(order, vec![1, 0]);
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #282.
+#[test]
+fn chip_pairs_cap_a_long_reply() {
+    let mut cabin = Cabin::quiet_for_test();
+    let long = "a".repeat(8000);
+    cabin.messages = Arc::new(vec![
+        ("user".into(), "Harbor".into()),
+        ("assistant".into(), long.clone()),
+    ]);
+
+    let pairs = cabin.chat_pairs();
+    assert_eq!(pairs.len(), 2);
+    assert_eq!(pairs[0].0, "user");
+    assert_eq!(pairs[0].1, "Harbor");
+    assert_eq!(pairs[1].0, "assistant");
+    assert_eq!(pairs[1].1.len(), 8000);
+
+    let chips = cabin.chip_chat_pairs();
+    let scanned = grokhub_core::chip_scan(&long);
+    assert_eq!(chips.len(), 2);
+    assert_eq!(chips[0].0, "user");
+    assert_eq!(chips[0].1, "Harbor");
+    assert_eq!(chips[1].0, "assistant");
+    assert_eq!(chips[1].1.len(), scanned.len());
+    assert_eq!(scanned.len(), 4096);
+    assert!(chips[1].1.chars().all(|c| c == 'a'));
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #284.
+/// A painted greeting leaves as soon as the chat has text, or the open thread is scratch.
+/// Both paths return before the memory flush and the USER/MEMORY file read.
+#[test]
+fn greeting_hides_once_the_chat_has_text() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.greeting = "Evening, Viper.".into();
+    cabin.messages = Arc::new(vec![("user".into(), "Harbor".into())]);
+    cabin.refresh_greeting();
+    assert!(
+        cabin.greeting.is_empty(),
+        "a chat that already has text must clear the greeting"
+    );
+    assert!(cabin.greeting_files_rx.is_none());
+    assert!(cabin.greeting_rx.is_none());
+    assert!(!cabin.greeting_busy);
+
+    cabin.greeting = "Evening, Viper.".into();
+    cabin.messages = Arc::new(Vec::new());
+    cabin.threads.push(ChatThread::new("Scratch", true));
+    cabin.thread_idx = cabin.threads.len() - 1;
+    cabin.refresh_greeting();
+    assert!(
+        cabin.greeting.is_empty(),
+        "a scratch thread must clear the greeting"
+    );
+    assert!(cabin.greeting_files_rx.is_none());
+    assert!(cabin.greeting_rx.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #287.
+#[test]
+fn project_flush_stays_off_when_clean() {
+    let mut app = Cabin::quiet_for_test();
+    app.status = "Harbor".into();
+    assert!(!app.projects_dirty);
+    app.flush_projects();
+    assert!(!app.projects_dirty);
+    assert_eq!(app.status, "Harbor");
+
+    app.touch_projects();
+    assert!(app.projects_dirty);
+    assert_eq!(app.status, "Harbor");
+    // Leave dirty. Do not flush while dirty.
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #288.
+#[test]
+fn chat_pairs_keeps_the_full_reply() {
+    let mut app = Cabin::quiet_for_test();
+    let long = "a".repeat(5000);
+    app.messages = std::sync::Arc::new(vec![
+        ("user".into(), "Harbor".into()),
+        ("assistant".into(), long.clone()),
+    ]);
+    let pairs = app.chat_pairs();
+    assert_eq!(pairs.len(), 2);
+    assert_eq!(pairs[0], ("user".into(), "Harbor".into()));
+    assert_eq!(pairs[1].0, "assistant");
+    assert_eq!(pairs[1].1.len(), 5000);
+    assert_eq!(pairs[1].1, long);
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #329.
+#[test]
+fn abandon_turn_card_stays_off_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    assert!(!cabin.inflight_open);
+    assert!(cabin.board.is_empty());
+    cabin.abandon_turn_card();
+    assert!(!cabin.inflight_open);
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.board.is_empty());
+}
+
+// Folded from PR #332.
+#[test]
+fn ensure_background_history_thread_reuses_one_row() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    let first = cabin.ensure_background_history_thread();
+    let second = cabin.ensure_background_history_thread();
+    assert_eq!(first, second);
+    assert_eq!(
+        cabin.threads.iter().filter(|t| t.background).count(),
+        1,
+        "ensure must reuse one Background row"
+    );
+    let thread = &cabin.threads[first];
+    assert!(thread.background);
+    assert_eq!(thread.title, "Background");
+    assert!(!cabin.running);
+    assert_ne!(cabin.status, "Thinking…");
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #335.
+#[test]
+fn stamp_current_access_updates_open_thread() {
+    let mut cabin = Cabin::quiet_for_test();
+    if cabin.threads.is_empty() {
+        cabin.threads.push(crate::threads::ChatThread::new("Chat", false));
+        cabin.thread_idx = 0;
+    }
+    cabin.status = "Harbor".into();
+    let idx = cabin.thread_idx;
+    cabin.threads[idx].accessed_ms = 1;
+    let before = cabin.threads[idx].accessed_ms;
+    cabin.stamp_current_access();
+    assert!(
+        cabin.threads[idx].accessed_ms > before,
+        "stamp_current_access must bump accessed_ms past {before}, got {}",
+        cabin.threads[idx].accessed_ms
+    );
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert_eq!(cabin.thread_idx, idx);
+}
+
+// Folded from PR #336.
+#[test]
+fn pin_chat_tail_keeps_scroll_intent() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    assert_eq!(cabin.chat_tail_frames, 0);
+    cabin.pin_chat_tail();
+    assert_eq!(cabin.chat_tail_frames, grokhub_core::CHAT_TAIL_FRAMES);
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #337.
+#[test]
+fn job_on_background_thread_false_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    // quiet_for_test: chat_job_thread None → idle false.
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.job_on_background_thread());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+
+    // chat_job_thread pointing at a background=true thread → true.
+    let idx = cabin.ensure_background_history_thread();
+    let tid = cabin.threads[idx].id.clone();
+    assert!(cabin.threads[idx].background);
+    cabin.chat_job_thread = Some(tid);
+    assert!(cabin.job_on_background_thread());
+    assert!(!cabin.running);
+}
+
+// Folded from PR #338.
+#[test]
+fn background_tasks_open_false_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(!cabin.background_tasks_open());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.grok_tasks.is_empty());
+}
+
+// Folded from PR #339.
+#[test]
+fn stream_here_false_when_job_elsewhere() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    // quiet_for_test: chat_job_thread None → stream_here false
+    // (chat_stream_is_visible: None => false).
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.stream_here());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+
+    // Job bound to another thread while viewing the first → false.
+    cabin
+        .threads
+        .push(crate::threads::ChatThread::new("Here", false));
+    cabin
+        .threads
+        .push(crate::threads::ChatThread::new("Elsewhere", false));
+    cabin.thread_idx = 0;
+    let other = cabin.threads[1].id.clone();
+    cabin.chat_job_thread = Some(other);
+    assert!(!cabin.stream_here());
+    assert!(!cabin.running);
+    assert_eq!(cabin.status, "Harbor");
+}
+
+// Folded from PR #340.
+#[test]
+fn leave_should_halt_false_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    // drop_leaving_thread_chrome gates on `running && leave_should_halt()`.
+    assert!(
+        !(cabin.running && cabin.leave_should_halt()),
+        "leaving while idle must not halt"
+    );
+
+    // Cabin-wide unbound work (no chat_job_thread) still stops on leave.
+    cabin.running = true;
+    assert!(
+        cabin.leave_should_halt(),
+        "cabin-wide work with no thread still stops"
+    );
+}
+
+// Folded from PR #341.
+#[test]
+fn chrome_here_true_on_unbound_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    // quiet_for_test: chat_job_thread None → chrome_here true (unbound cabin-wide work).
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.chrome_here());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+
+    // Bound to a different thread than visible → false; match visible → true.
+    cabin.threads.push(crate::threads::ChatThread::new("Chat", false));
+    cabin.thread_idx = 0;
+    let vis = cabin.visible_thread_id();
+    cabin.chat_job_thread = Some("elsewhere".into());
+    assert!(!cabin.chrome_here());
+    cabin.chat_job_thread = Some(vis);
+    assert!(cabin.chrome_here());
+    assert!(!cabin.running);
+    assert_eq!(cabin.status, "Harbor");
+}
+
+// Folded from PR #343.
+#[test]
+fn run_phase_here_idle_when_not_thinking() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert_eq!(
+        cabin.run_phase_here(),
+        ChatRunPhase::Idle,
+        "quiet idle cabin must report Idle"
+    );
+}
+
+// Folded from PR #344.
+#[test]
+fn has_real_history_false_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+
+    // Empty / blank title, Scratch, and default Chat are not real history — even with messages.
+    let mut blank = crate::threads::ChatThread::new("", false);
+    blank.messages = Arc::new(vec![("user".into(), "hi".into())]);
+    let mut scratch = crate::threads::ChatThread::new("Scratch", true);
+    scratch.messages = Arc::new(vec![("user".into(), "hi".into())]);
+    let mut chat = crate::threads::ChatThread::new("Chat", false);
+    chat.messages = Arc::new(vec![("user".into(), "hi".into())]);
+    cabin.threads = vec![blank, scratch, chat];
+    cabin.thread_idx = 2;
+
+    assert!(!cabin.has_real_history());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #345.
+#[test]
+fn run_action_here_empty_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.perm_ask.is_none());
+    assert!(cabin.elicit_ask.is_none());
+    assert!(cabin.tool_cards.is_empty());
+    assert!(cabin.live_blocks.is_empty());
+    // Quiet idle: no wait title, no tool title → chat_run_action → "".
+    assert_eq!(cabin.run_action_here(), "");
+}
+
+// Folded from PR #346.
+#[test]
+fn thinking_here_false_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.thinking_here());
+}
+
+// Folded from PR #349.
+#[test]
+fn last_night_hint_empty_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.continue_hint.is_empty());
+    assert!(cabin.messages.is_empty());
+    assert!(cabin.rewind_rows.is_empty());
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    assert!(cabin.acp.is_none());
+    assert!(cabin.live_cap_rx.is_none());
+
+    let hint = cabin.last_night_hint();
+    assert!(
+        hint.is_empty(),
+        "idle cabin with empty continue_hint and no receipts stays on the continue_hint-only path: {hint:?}"
+    );
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rx.is_none());
+    assert!(cabin.acp.is_none());
+    assert!(cabin.live_cap_rx.is_none());
+}
+
+// Folded from PR #351.
+#[test]
+fn visible_host_receipts_empty_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.messages.is_empty());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.visible_host_receipts().is_empty());
+}
+
+// Folded from PR #353.
+#[test]
+fn visible_thread_id_matches_current_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin
+        .threads
+        .push(crate::threads::ChatThread::new("Chat", false));
+    cabin.thread_idx = 0;
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    let id = cabin.visible_thread_id();
+    assert!(!id.is_empty());
+    assert_eq!(id, cabin.threads[cabin.thread_idx].id);
+}
+
+// Folded from PR #355.
+#[test]
+fn scratch_false_on_quiet_chat() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads.push(crate::threads::ChatThread::new("Chat", false));
+    cabin.thread_idx = 0;
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(!cabin.scratch());
+}
+
+// Folded from PR #356.
+#[test]
+fn touch_clears_reflected_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.reflect_rx.is_none());
+    assert!(cabin.rx.is_none());
+    cabin.reflected_idle = true;
+    cabin.touch();
+    assert!(!cabin.reflected_idle);
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.reflect_rx.is_none());
+    assert!(cabin.rx.is_none());
+}
+
+// Folded from PR #359.
+#[test]
+fn last_user_on_job_empty_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.messages.is_empty());
+    // Quiet empty transcript → empty string. No spawn/network.
+    assert_eq!(cabin.last_user_on_job(), "");
+}
+
+// Folded from PR #365.
+#[test]
+fn turn_transcript_returns_merged_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.turn_log.is_empty());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rx.is_none());
+    let merged = "idle merged reply".to_string();
+    // Empty turn_log → turn_needs_timeline false → merged unchanged. No spawn/network.
+    assert_eq!(cabin.turn_transcript(merged.clone(), IMAGE_FILE_CAP), merged);
+}
+
+// Folded from PR #367.
+#[test]
+fn job_stored_pairs_empty_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    let vis = cabin.visible_thread_id();
+    // Quiet cabin: None job id → empty. No spawn/network.
+    assert!(cabin.job_stored_pairs(None, &vis).is_empty());
+    // Job id equal to visible → empty.
+    assert!(cabin.job_stored_pairs(Some(vis.as_str()), &vis).is_empty());
+}
+
+// Folded from PR #372.
+#[test]
+fn tick_mid_thought_sets_continue_hint() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    cabin.tick_mid_thought();
+    assert_eq!(
+        cabin.continue_hint,
+        crate::threads::continue_thread_hint(&cabin.threads)
+    );
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #374.
+#[test]
+fn last_project_title_from_prefers_continue_hint() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    assert!(cabin.acp.is_none());
+
+    assert_eq!(
+        Cabin::last_project_title_from("", "", ""),
+        "",
+        "empty inputs stay empty"
+    );
+    assert_eq!(
+        Cabin::last_project_title_from("Night Board", "Auth Gate", "Short Pin"),
+        "Auth Gate",
+        "continue_hint wins over last_night and short goal_pin"
+    );
+    assert_eq!(
+        Cabin::last_project_title_from("Night Board", "", "Short Pin"),
+        "Night Board",
+        "last_night wins when continue_hint is empty"
+    );
+    assert_eq!(
+        Cabin::last_project_title_from("", "", "Short Pin"),
+        "Short Pin",
+        "short goal_pin is the last fallback"
+    );
+
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rx.is_none());
+    assert!(cabin.acp.is_none());
+}
+
+// Folded from PR #380.
+#[test]
+fn absorb_turn_learning_noop_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.messages.is_empty());
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    let before = cabin.learning.clone();
+    cabin.absorb_turn_learning("Ready.");
+    assert_eq!(cabin.learning, before);
+    assert!(cabin.messages.is_empty());
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    assert!(cabin.persist_rx.is_none());
+}
+
+// Folded from PR #381.
+#[test]
+fn apply_assistant_snapshot_empty_and_sets() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    assert!(cabin.messages.is_empty());
+
+    // Empty content is a no-op.
+    cabin.apply_assistant_snapshot(String::new());
+    assert!(
+        cabin.messages.is_empty(),
+        "empty snapshot must not touch the visible thread: {:?}",
+        cabin.messages
+    );
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+
+    // Non-empty lands as assistant on the visible thread.
+    cabin.apply_assistant_snapshot("first reply".into());
+    assert_eq!(
+        cabin.messages.as_slice(),
+        [("assistant".into(), "first reply".into())]
+    );
+
+    // Another non-empty updates that assistant in place.
+    cabin.apply_assistant_snapshot("updated reply".into());
+    assert_eq!(
+        cabin.messages.as_slice(),
+        [("assistant".into(), "updated reply".into())]
+    );
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+}
+
+// Folded from PR #382.
+#[test]
+fn trim_job_result_dumps_noop_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.messages.is_empty());
+    assert!(cabin.rx.is_none());
+    cabin.trim_job_result_dumps();
+    assert!(
+        cabin.messages.is_empty(),
+        "empty transcript stays empty"
+    );
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rx.is_none());
+}
+
+// Folded from PR #383.
+#[test]
+fn push_bound_msg_appends_on_visible() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.messages.is_empty());
+    assert!(!cabin.running);
+    // Quiet cabin (no chat_job_thread) → lines land on the visible transcript. No spawn/network.
+    cabin.push_bound_msg("user", "harbor bound user".into());
+    cabin.push_bound_msg("assistant", "harbor bound reply".into());
+    assert_eq!(
+        cabin.messages.as_ref(),
+        &[
+            ("user".into(), "harbor bound user".into()),
+            ("assistant".into(), "harbor bound reply".into()),
+        ]
+    );
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rx.is_none());
+}
+
+// Folded from PR #384.
+#[test]
+fn apply_live_assistant_empty_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.thought_buf.is_empty());
+    assert!(cabin.stream_buf.is_empty());
+    assert!(cabin.turn_log.is_empty());
+    assert!(cabin.messages.is_empty());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rx.is_none());
+    // Empty buffers → empty snapshot → apply_assistant_snapshot early-outs. No spawn/network.
+    cabin.apply_live_assistant();
+    assert!(cabin.messages.is_empty(), "idle empty snapshot must not add an assistant line");
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+}
+
+// Folded from PR #388.
+#[test]
+fn paint_text_delta_skips_when_stream_elsewhere() {
+    let mut cabin = Cabin::quiet_for_test();
+    // quiet_for_test: chat_job_thread None → stream_here false → paint early-returns.
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.live_blocks.is_empty());
+    cabin.paint_text_delta(LiveKind::Say, "hello elsewhere");
+    assert!(
+        cabin.live_blocks.is_empty(),
+        "unbound stream must not paint say: {:?}",
+        cabin.live_blocks
+    );
+    cabin.paint_text_delta(LiveKind::Thought, "thinking elsewhere");
+    assert!(
+        cabin.live_blocks.is_empty(),
+        "unbound stream must not paint thought: {:?}",
+        cabin.live_blocks
+    );
+    assert!(!cabin.running);
+
+    // Job on another thread → same early return; live_blocks stay empty.
+    cabin.threads.push(crate::threads::ChatThread::new("Chat", false));
+    cabin.thread_idx = 0;
+    cabin.chat_job_thread = Some("elsewhere".into());
+    cabin.paint_text_delta(LiveKind::Say, "parked say");
+    cabin.paint_text_delta(LiveKind::Thought, "parked thought");
+    assert!(
+        cabin.live_blocks.is_empty(),
+        "stream on another thread must not paint: {:?}",
+        cabin.live_blocks
+    );
+    assert!(!cabin.running);
+}
+
+// Folded from PR #389.
+#[test]
+fn ingest_tool_card_skips_live_when_stream_elsewhere() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin
+        .threads
+        .push(crate::threads::ChatThread::new("Here", false));
+    cabin
+        .threads
+        .push(crate::threads::ChatThread::new("Elsewhere", false));
+    cabin.thread_idx = 0;
+    let other = cabin.threads[1].id.clone();
+    cabin.chat_job_thread = Some(other);
+    assert!(!cabin.stream_here());
+    assert!(!cabin.running);
+    assert!(cabin.live_blocks.is_empty());
+
+    let card = grokhub_acp::ToolCard {
+        id: "t1".into(),
+        title: "grep".into(),
+        kind: String::new(),
+        status: "completed".into(),
+        detail: String::new(),
+        diff: String::new(),
+        image_data_url: None,
+    };
+    cabin.ingest_tool_card(&card);
+    assert!(cabin.live_blocks.is_empty());
+    assert!(cabin.turn_log.is_empty());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+}
+
+// Folded from PR #391.
+#[test]
+fn apply_job_fail_returns_error_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    assert!(!cabin.try_again);
+    // No chat_job_thread → job_error_goes_to_chat is false; non-sigterm / non-credit
+    // err returns the string without chat paint or grok spawn.
+    let err = "host failed";
+    assert_eq!(cabin.apply_job_fail(err), err);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.messages.is_empty());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    assert!(!cabin.try_again);
+    assert!(cabin.persist_rx.is_none());
+}
+
+// Folded from PR #398.
+#[test]
+fn withdraw_perm_asks_noop_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.perm_ask.is_none());
+    assert!(cabin.perm_queue.is_empty());
+    assert!(cabin.acp.is_none());
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    cabin.withdraw_perm_asks();
+    assert!(cabin.perm_ask.is_none());
+    assert!(cabin.perm_queue.is_empty());
+    assert!(cabin.acp.is_none());
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    assert!(cabin.persist_rx.is_none());
+}
+
+// Folded from PR #399.
+#[test]
+fn job_is_idea_talk_false_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.job_is_idea_talk());
+}
+
+// Folded from PR #400.
+#[test]
+fn settle_auto_run_noop_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    assert!(cabin.auto_run.is_none());
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    // Quiet cabin with auto_run None → early return; status/Harbor unchanged.
+    cabin.settle_auto_run(super::night::AutoEnd::Failed("dummy"), None);
+    assert!(cabin.auto_run.is_none());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rx.is_none());
+}
+
+// Folded from PR #404.
+#[test]
+fn hold_chat_name_for_plan_freezes_visible_history_label() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    assert!(cabin.acp.is_none());
+    assert!(!cabin.host_diff_kick);
+
+    let sid = "sess-plan-hold";
+    let mut thread = crate::threads::ChatThread::new("Night watch", false);
+    thread.title_locked = true;
+    thread.grok_session = Some(sid.into());
+    cabin.threads = vec![thread];
+    cabin.thread_idx = 0;
+    cabin.grok_sessions.push(grokhub_acp::GrokSession {
+        id: sid.into(),
+        title: "fix the dock".into(),
+        path: None,
+        cwd: None,
+        cabin: false,
+    });
+
+    cabin.hold_chat_name_for_plan();
+    assert_eq!(cabin.threads[0].title, "Night watch");
+    assert_eq!(
+        cabin
+            .grok_sessions
+            .iter()
+            .find(|s| s.id == sid)
+            .map(|s| s.title.as_str()),
+        Some("Night watch"),
+        "Plan freezes the History label to the visible rail title"
+    );
+
+    // Already held: second call is a noop.
+    cabin.hold_chat_name_for_plan();
+    assert_eq!(
+        cabin
+            .grok_sessions
+            .iter()
+            .find(|s| s.id == sid)
+            .map(|s| s.title.as_str()),
+        Some("Night watch")
+    );
+    assert_eq!(cabin.threads[0].title, "Night watch");
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    assert!(cabin.acp.is_none());
+    assert!(!cabin.host_diff_kick);
+}
+
+// Folded from PR #405.
+#[test]
+fn apply_thread_goal_empty_topics_stays_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin
+        .threads
+        .push(crate::threads::ChatThread::new("Chat", false));
+    cabin.thread_idx = 0;
+    let tid = cabin.threads[0].id.clone();
+    assert!(!tid.is_empty());
+    assert!(!cabin.host_diff_kick);
+    assert!(!cabin.goal_busy);
+    assert!(!cabin.goal_stale);
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.goal_rx.is_none());
+    assert!(cabin.rx.is_none());
+
+    // Empty reply → empty topics → early return; no spawn/network/persist path.
+    cabin.apply_thread_goal(&tid, "");
+    assert!(
+        cabin.threads[0].goal.label.is_empty(),
+        "empty topics must leave the goal label alone"
+    );
+    assert!(
+        cabin.threads[0].goal.topics.is_empty(),
+        "empty topics must leave goal topics alone"
+    );
+    assert!(!cabin.host_diff_kick);
+    assert!(!cabin.goal_busy);
+    assert!(!cabin.goal_stale);
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.goal_rx.is_none());
+    assert!(cabin.rx.is_none());
+}
+
+// Folded from PR #425.
+#[test]
+fn chip_chat_pairs_empty_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.messages.is_empty());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    // Quiet cabin / empty messages → empty chip pairs. No spawn/network.
+    let pairs = cabin.chip_chat_pairs();
+    assert!(pairs.is_empty());
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+}
+
+// ---- Cursor fold: Secrets, skills and memory ----
+
+// Folded from PR #253.
+#[test]
+fn dismiss_fork_explainer_stays_off_a_run() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut app) = isolated_cabin("fork-explainer-dismiss");
+    std::fs::create_dir_all(crate::config::config_dir()).expect("config dir");
+    app.fork_explainer_seen = false;
+    app.dismiss_fork_explainer();
+    assert!(app.fork_explainer_seen);
+    let body = std::fs::read_to_string(crate::config::config_dir().join("fork_explainer_seen"))
+        .expect("seen file");
+    assert_eq!(body, "1");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+    release_isolated(&root, app);
+}
+
+// Folded from PR #358.
+#[test]
+fn hold_secret_skips_short_and_keeps_one() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.secret_hold.is_empty());
+    // Short value (<4 chars) is skipped; no network.
+    cabin.hold_secret("ab");
+    cabin.hold_secret("abc");
+    assert!(cabin.secret_hold.is_empty());
+    // Longer secret held once; duplicate ignored.
+    let held = "held-token-xyz";
+    cabin.hold_secret(held);
+    assert_eq!(cabin.secret_hold.len(), 1);
+    cabin.hold_secret(held);
+    assert_eq!(cabin.secret_hold.len(), 1);
+}
+
+// Folded from PR #364.
+#[test]
+fn mark_get_started_done_sets_flag() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("mark-get-started-done");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.cfg.get_started_done);
+    assert!(!cabin.official_cli_session);
+    assert!(cabin.chat_job_thread.is_none());
+    cabin.mark_get_started_done();
+    assert!(cabin.cfg.get_started_done);
+    assert!(!cabin.official_cli_session);
+    cabin.mark_get_started_done();
+    assert!(cabin.cfg.get_started_done);
+    assert!(!cabin.official_cli_session);
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+
+    std::env::remove_var("GROKHUB_CONFIG");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// Folded from PR #366.
+#[test]
+fn scrub_transcript_redacts_held_secret() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.secret_hold.is_empty());
+    // Fake placeholder only — no real credentials, no network.
+    let held = "fake-secret-token-xyz";
+    cabin.hold_secret(held);
+    assert_eq!(cabin.secret_hold.as_slice(), &[held.to_string()]);
+    let scrubbed = cabin.scrub_transcript(format!("CONNECTOR_RESULT used {held} then ok"));
+    assert!(!scrubbed.contains(held), "held secret must leave the transcript: {scrubbed}");
+    assert!(scrubbed.contains("[redacted]"), "scrub must insert [redacted]: {scrubbed}");
+    assert!(
+        scrubbed.contains("CONNECTOR_RESULT"),
+        "non-secret text must survive: {scrubbed}"
+    );
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #368.
+#[test]
+fn remember_skill_upserts_and_sorts() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.skill_list.is_empty());
+    let mk = |name: &str, desc: &str| SkillMd {
+        name: name.into(),
+        description: desc.into(),
+        slash: "/x".into(),
+        trigger: "t".into(),
+        instructions: "1. `echo ok`".into(),
+        pitfalls: String::new(),
+        verify: String::new(),
+        runs: 0,
+    };
+    // Push out of order; remember_skill sorts on insert.
+    cabin.remember_skill(mk("zeta-skill", "first zeta"));
+    cabin.remember_skill(mk("alpha-skill", "first alpha"));
+    assert_eq!(cabin.skill_list.len(), 2);
+    assert_eq!(
+        cabin
+            .skill_list
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>(),
+        ["alpha-skill", "zeta-skill"]
+    );
+    // Same name upserts in place; list size and sort order stay put.
+    cabin.remember_skill(mk("zeta-skill", "updated zeta"));
+    assert_eq!(cabin.skill_list.len(), 2);
+    assert_eq!(cabin.skill_list[0].name, "alpha-skill");
+    assert_eq!(cabin.skill_list[1].name, "zeta-skill");
+    assert_eq!(cabin.skill_list[1].description, "updated zeta");
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #373.
+#[test]
+fn mem_file_idx_maps_soul_user_memory() {
+    assert_eq!(Cabin::mem_file_idx("SOUL.md"), Some(0));
+    assert_eq!(Cabin::mem_file_idx("USER.md"), Some(1));
+    assert_eq!(Cabin::mem_file_idx("MEMORY.md"), Some(2));
+    assert_eq!(Cabin::mem_file_idx("NOTES.md"), None);
+    assert_eq!(Cabin::mem_file_idx(""), None);
+}
+
+// Folded from PR #385.
+#[test]
+fn fork_explainer_seen_on_disk_false_when_missing() {
+    let _lock = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("fork-seen-missing");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("temp config");
+    let _cfg = RestoreEnv::set("GROKHUB_CONFIG", &root);
+    let _ = std::fs::remove_file(root.join("fork_explainer_seen"));
+    assert!(
+        !super::fork_explainer_seen_on_disk(),
+        "a missing fork_explainer_seen marker must read as unseen"
+    );
+}
+
+// Folded from PR #386.
+#[test]
+fn scrub_live_blocks_noop_without_secrets() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.secret_hold.is_empty());
+
+    let plain = "plain live text, no hold yet";
+    cabin.live_blocks.push(grokhub_core::LiveBlock {
+        kind: grokhub_core::LiveKind::Say,
+        body: plain.to_string(),
+        tool_id: String::new(),
+        tool_title: String::new(),
+        tool_status: String::new(),
+        tool_detail: String::new(),
+        fold_slot: 2,
+    });
+    cabin.live_keys = vec![(2, plain.len(), 5)];
+    // Empty secret_hold → early return; body and keys stay put. No spawn/network.
+    cabin.scrub_live_blocks();
+    assert_eq!(cabin.live_blocks[0].body, plain);
+    assert_eq!(cabin.live_keys, vec![(2, plain.len(), 5)]);
+    assert!(cabin.secret_hold.is_empty());
+
+    // Hold a secret, put it in the live body, scrub must redact.
+    let secret = "held-live-token";
+    cabin.hold_secret(secret);
+    cabin.live_blocks[0].body = format!("leak {secret} now");
+    cabin.scrub_live_blocks();
+    assert!(!cabin.live_blocks[0].body.contains(secret));
+    assert!(cabin.live_blocks[0].body.contains("[redacted]"));
+    assert!(cabin.live_keys.is_empty());
+}
+
+// Folded from PR #392.
+#[test]
+fn apply_review_skill_patches_noop_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.skill_list.is_empty());
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    // Empty / irrelevant raw → parse_suggest_skill_patches empty → early return.
+    cabin.apply_review_skill_patches("");
+    cabin.apply_review_skill_patches("just prose, no SUGGEST_SKILL_PATCH line");
+    assert!(
+        cabin.skill_list.is_empty(),
+        "idle review patches must not invent skills"
+    );
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+}
+
+// Folded from PR #394.
+#[test]
+fn commit_proposed_skill_remembers_in_list() {
+    // Spawned save_skill follows GROKHUB_CONFIG (not thread-local TestConfigDir).
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("commit-skill");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.skill_list.is_empty());
+    let proposed = SkillMd {
+        name: "harbor-tidy".into(),
+        description: "Tidy the harbor desk".into(),
+        slash: "/harbor-tidy".into(),
+        trigger: "tidy harbor".into(),
+        instructions: "1. `echo ok`".into(),
+        pitfalls: String::new(),
+        verify: String::new(),
+        runs: 0,
+    };
+    // Empty skill_list → prefer_patch misses → remember_skill inserts as-is.
+    cabin.commit_proposed_skill(proposed);
+    assert_eq!(cabin.skill_list.len(), 1);
+    assert_eq!(cabin.skill_list[0].name, "harbor-tidy");
+    assert_eq!(cabin.skill_list[0].slash, "/harbor-tidy");
+    assert_eq!(cabin.skill_name, "harbor-tidy");
+    assert!(cabin.skill_body.contains("harbor-tidy"));
+    assert_eq!(cabin.status, "Wrote skill harbor-tidy");
+    assert!(
+        cabin
+            .messages
+            .iter()
+            .any(|(r, c)| r == "user" && c == SKILL_SAVED_MARK),
+        "commit pushes SKILL_SAVED_MARK onto the live transcript"
+    );
+    assert!(cabin.chat_job_thread.is_none());
+
+    // The spawned save_skill resolves config_dir() when it runs. Let it land
+    // under the test root before GROKHUB_CONFIG goes away.
+    wait_for("commit_proposed_skill writes SKILL.md under the test root", || {
+        std::fs::read_dir(root.join("skills"))
+            .map(|rd| rd.flatten().any(|e| e.path().join("SKILL.md").is_file()))
+            .unwrap_or(false)
+    });
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// ---- Cursor fold: Settings, lanes, confirm sheets and update ----
+
+// Folded from PR #268.
+#[test]
+fn cabin_lane_flip_reorders_chips() {
+    assert_eq!(persistable_cabin_lane(" life "), "life");
+    assert_eq!(persistable_cabin_lane("nope"), "coding");
+    assert_eq!(cabin_lane("life"), CabinLane::Life);
+    assert_eq!(cabin_lane("Coding"), CabinLane::Coding);
+    assert_eq!(cabin_lane_label(CabinLane::Life), "Life");
+    assert_eq!(cabin_lane_label(CabinLane::Coding), "Coding");
+    assert_eq!(flip_cabin_lane(CabinLane::Coding), CabinLane::Life);
+    assert_eq!(flip_cabin_lane(CabinLane::Life), CabinLane::Coding);
+
+    let shell = QuickChip {
+        id: "shell".into(),
+        label: "Shell".into(),
+        value: "/sh".into(),
+        kind: ChipKind::Shell,
+        score: 1.0,
+        hint: String::new(),
+        primary: false,
+    };
+    let imagine = QuickChip {
+        id: "imagine".into(),
+        label: "Imagine".into(),
+        value: "__nav:imagine".into(),
+        kind: ChipKind::Nav,
+        score: 1.0,
+        hint: String::new(),
+        primary: false,
+    };
+    let mut chips = vec![imagine, shell];
+    bias_chips_for_lane(&mut chips, CabinLane::Coding);
+    assert_eq!(chips[0].kind, ChipKind::Shell);
+    assert_eq!(chips[0].value, "/sh");
+    bias_chips_for_lane(&mut chips, CabinLane::Life);
+    assert_eq!(chips[0].kind, ChipKind::Nav);
+    assert_eq!(chips[0].value, "__nav:imagine");
+}
+
+// Folded from PR #269.
+#[test]
+fn destructive_host_confirm_matches_the_rule() {
+    assert!(should_confirm_destructive_host("rm foo.txt"));
+    assert!(should_confirm_destructive_host("git push --force"));
+    assert!(!should_confirm_destructive_host("ls"));
+    assert!(!should_confirm_destructive_host("git push origin"));
+    assert!(!should_confirm_destructive_host(
+        "cp -a '/home/me/.config/GrokHub/rewind/1/.' '/tmp/proj'"
+    ));
+}
+
+// Folded from PR #271.
+#[test]
+fn confirm_keys_follow_the_sheet_rule() {
+    assert_eq!(confirm_key(true, false, false, false, true), Some(ConfirmAct::Confirm));
+    assert_eq!(confirm_key(false, true, false, false, true), Some(ConfirmAct::Cancel));
+    assert_eq!(confirm_key(true, true, false, false, true), Some(ConfirmAct::Cancel));
+    assert_eq!(confirm_key(true, false, true, false, true), None);
+    assert_eq!(confirm_key(true, false, false, true, true), None);
+    assert_eq!(confirm_key(true, false, false, false, false), None);
+    assert_eq!(confirm_key(false, false, false, false, true), None);
+}
+
+// Folded from PR #274.
+#[test]
+fn always_confirm_stays_only_for_the_same_ask() {
+    // The Always sheet stays up only while the Ask on screen still has the armed rpc id.
+    let one = serde_json::json!(1);
+    let two = serde_json::json!(2);
+    assert!(always_confirm_matches_rpc(Some(&one), &one));
+    assert!(!always_confirm_matches_rpc(None, &one));
+    assert!(!always_confirm_matches_rpc(Some(&one), &two));
+}
+
+// Folded from PR #291.
+#[test]
+fn work_root_uses_the_home_folder() {
+    struct RestoreHome {
+        prev: Option<String>,
+        #[cfg(windows)]
+        prev_profile: Option<std::ffi::OsString>,
+    }
+    impl Drop for RestoreHome {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(h) => std::env::set_var("HOME", h),
+                None => std::env::remove_var("HOME"),
+            }
+            #[cfg(windows)]
+            match self.prev_profile.take() {
+                Some(p) => std::env::set_var("USERPROFILE", p),
+                None => std::env::remove_var("USERPROFILE"),
+            }
+        }
+    }
+
+    let app = Cabin::quiet_for_test();
+    let home_guard = RestoreHome {
+        prev: std::env::var("HOME").ok(),
+        #[cfg(windows)]
+        prev_profile: std::env::var_os("USERPROFILE"),
+    };
+    #[cfg(windows)]
+    std::env::remove_var("USERPROFILE");
+    let home = std::env::temp_dir().join("grokhub-work-root-1054");
+    std::env::set_var("HOME", &home);
+    let got = app.work_root();
+    #[cfg(not(windows))]
+    let expect = {
+        let home_s = home.display().to_string().trim_end_matches('/').to_string();
+        format!("{home_s}/GrokHub-Work")
+    };
+    #[cfg(windows)]
+    let expect = {
+        let h = home
+            .display()
+            .to_string()
+            .trim_end_matches(['/', '\\'])
+            .to_string();
+        let drive = h.len() >= 2 && h.as_bytes()[1] == b':';
+        if drive || h.starts_with('\\') || h.contains('\\') {
+            format!("{}\\GrokHub-Work", h.replace('/', "\\"))
+        } else {
+            format!("{h}/GrokHub-Work")
+        }
+    };
+    assert_eq!(got, expect);
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+    drop(home_guard);
+}
+
+// Folded from PR #293.
+#[test]
+fn always_arm_opens_the_sheet() {
+    let mut app = Cabin::quiet_for_test();
+    app.status = "Harbor".into();
+    assert!(app.confirm.is_none());
+    app.arm_session_always();
+    assert!(matches!(
+        app.confirm,
+        Some(ConfirmKind::AlwaysSession)
+    ));
+    assert_eq!(app.status, "Confirm Always…");
+    assert!(matches!(app.permission_mode, PermissionMode::Ask));
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #342.
+#[test]
+fn bias_chips_for_lane_orders_coding_first() {
+    fn chip(id: &str, label: &str, value: &str, kind: ChipKind) -> QuickChip {
+        QuickChip {
+            id: id.into(),
+            label: label.into(),
+            value: value.into(),
+            kind,
+            score: 1.0,
+            hint: String::new(),
+            primary: false,
+        }
+    }
+
+    // Life-leaning first in the input so Coding reorder is falsifiable.
+    let mut chips = vec![
+        chip(
+            "imagine",
+            "Open Imagine",
+            "__nav:imagine",
+            ChipKind::Nav,
+        ),
+        chip(
+            "plain",
+            "Cabin brief",
+            "Give me a short cabin brief.",
+            ChipKind::Chat,
+        ),
+        chip(
+            "ship",
+            "Ship it",
+            "Ship a minimal solid slice.",
+            ChipKind::Chat,
+        ),
+    ];
+
+    super::bias_chips_for_lane(&mut chips, super::CabinLane::Coding);
+    assert_eq!(
+        chips.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+        vec!["ship", "plain", "imagine"],
+        "Coding lane puts coding-leaning chips first: {chips:?}"
+    );
+
+    super::bias_chips_for_lane(&mut chips, super::CabinLane::Life);
+    assert_eq!(
+        chips.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+        vec!["imagine", "plain", "ship"],
+        "Life lane puts life-leaning chips first: {chips:?}"
+    );
+}
+
+// Folded from PR #347.
+#[test]
+fn cabin_update_available_false_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.cabin_latest.is_none());
+    assert!(!cabin.cabin_overlay_done);
+    // Quiet idle: no probe, no spawn — available stays false.
+    assert!(!cabin.cabin_update_available());
+}
+
+// Folded from PR #348.
+#[test]
+fn cabin_signed_in_false_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.secrets.oauth.is_none());
+    assert!(!cabin.cabin_signed_in());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #352.
+#[test]
+fn has_key_false_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.secrets.api_key.trim().is_empty());
+    assert!(cabin.cfg.api_key.trim().is_empty());
+    assert!(cabin.secrets.oauth.is_none());
+    // Quiet cabin with empty secrets/api key → has_auth → false. No network.
+    assert!(!cabin.has_key());
+}
+
+// Folded from PR #354.
+#[test]
+fn update_pending_now_none_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.cli_installed.is_none());
+    assert!(cabin.cli_alpha.is_none());
+    assert!(cabin.cabin_latest.is_none());
+    assert_eq!(
+        cabin.update_pending_now(),
+        UpdatePending::None,
+        "quiet idle cabin with no cli/cabin update flags must report none"
+    );
+}
+
+// Folded from PR #357.
+#[test]
+fn open_update_overlay_opens_settings_update() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(matches!(cabin.nav, Nav::Chat));
+    assert!(matches!(cabin.settings_sec, SettingsSec::Account));
+    assert!(cabin.chat_job_thread.is_none());
+    cabin.open_update_overlay();
+    assert!(matches!(cabin.nav, Nav::Settings));
+    assert!(matches!(cabin.settings_sec, SettingsSec::Update));
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.queued_overlay.is_none());
+}
+
+// Folded from PR #360.
+#[test]
+fn grok_cli_cwd_matches_grok_cwd() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    // grok_cli_cwd delegates to grok_cwd; quiet cabin, no spawn/network.
+    assert_eq!(cabin.grok_cli_cwd(), cabin.grok_cwd());
+}
+
+// Folded from PR #362.
+#[test]
+fn policy_returns_max_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    // Quiet cabin → Policy::max(). No spawn/network.
+    assert_eq!(cabin.policy(), Policy::max());
+}
+
+// Folded from PR #363.
+#[test]
+fn console_key_empty_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.secrets.api_key.trim().is_empty());
+    assert!(cabin.cfg.api_key.trim().is_empty());
+    // Quiet cabin with empty secrets/api_key → empty string. No network.
+    assert_eq!(cabin.console_key(), "");
+}
+
+// Folded from PR #369.
+#[test]
+fn apply_compact_status_sets_compacting_and_done() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+
+    cabin.apply_compact_status(true, GrokUsage::default(), None);
+    assert_eq!(cabin.status, "Compacting…");
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+
+    cabin.apply_compact_status(false, GrokUsage::default(), None);
+    assert_eq!(cabin.status, "Compacted");
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+
+    cabin.apply_compact_status(false, GrokUsage::default(), Some("disk full".into()));
+    assert_eq!(cabin.status, "Compact failed: disk full");
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+}
+
+// Folded from PR #370.
+#[test]
+fn note_token_budget_noop_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert_eq!(cabin.cfg.daily_token_budget, 0);
+    let before = cabin.status.clone();
+    // Default usage + budget off → take_budget_note is None → early return, no notify.
+    cabin.note_token_budget();
+    assert_eq!(cabin.status, before);
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #403.
+#[test]
+fn clear_oauth_photo_drops_cached_avatar_state() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.oauth_photo_key = "https://pbs.twimg.com/profile_images/harbor.jpg".into();
+    cabin.oauth_photo_busy = true;
+    cabin.oauth_profile_tried = true;
+    let (_tx, rx) = std::sync::mpsc::channel::<super::OauthPhotoOut>();
+    cabin.oauth_photo_rx = Some(rx);
+    assert!(cabin.oauth_photo.is_none());
+    assert!(!cabin.host_diff_kick);
+
+    cabin.clear_oauth_photo();
+
+    assert!(cabin.oauth_photo.is_none());
+    assert!(cabin.oauth_photo_key.is_empty());
+    assert!(cabin.oauth_photo_rx.is_none());
+    assert!(!cabin.oauth_photo_busy);
+    assert!(!cabin.oauth_profile_tried);
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.host_diff_kick);
+}
+
+// Folded from PR #411.
+#[test]
+fn avatar_chrome_returns_menu_fields() {
+    let cabin = Cabin::quiet_for_test();
+    let chrome = cabin.avatar_chrome();
+    // Quiet cabin: empty display_name, no OAuth name, empty USER.md → fallback "Grok".
+    assert_eq!(chrome.name, "Grok");
+    assert!(chrome.picture_path.is_empty());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #414.
+#[test]
+fn cabin_default_model_id_empty_and_known() {
+    // Real fn: empty/whitespace → ""; known chat id → sanitized non-empty. No spawn/network.
+    assert_eq!(cabin_default_model_id(""), "");
+    assert_eq!(cabin_default_model_id("  \t"), "");
+    let id = cabin_default_model_id("grok-4.7");
+    assert!(!id.is_empty());
+    assert_eq!(id, grokhub_core::sanitize_chat_model("grok-4.7"));
+}
+
+// Folded from PR #416.
+#[test]
+fn fallback_cabin_name_defaults_to_grok() {
+    let blank = super::fallback_cabin_name("");
+    assert!(!blank.is_empty());
+    assert_eq!(blank, "Grok");
+
+    let from_md = super::fallback_cabin_name("Name: Jeremy\n");
+    assert!(!from_md.is_empty());
+    assert_eq!(from_md, "Jeremy");
+}
+
+// Folded from PR #417.
+#[test]
+fn export_dest_joins_under_config_or_project() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("export-dest");
+    let _ = std::fs::remove_dir_all(&root);
+    let _pin = crate::config::TestConfigDir::set(root.clone());
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.project_dir.clear();
+    assert_eq!(
+        cabin.export_dest("export.md"),
+        crate::config::config_dir().join("export.md"),
+        "empty project_dir lands under config_dir"
+    );
+
+    let project = root.join("harbor-work");
+    cabin.cfg.project_dir = project.display().to_string();
+    assert_eq!(
+        cabin.export_dest("export.html"),
+        project.join("export.html"),
+        "a bound project_dir joins under that path"
+    );
+
+    std::env::remove_var("GROKHUB_CONFIG");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// Folded from PR #418.
+#[test]
+fn always_session_spec_title_primary_not_danger() {
+    let spec = always_session_spec();
+    assert_eq!(spec.title, ALWAYS_SESSION_TITLE);
+    assert_eq!(spec.primary, "Confirm");
+    assert!(!spec.danger);
+}
+
+// Folded from PR #420.
+#[test]
+fn cabin_default_model_label_empty_unknown_and_known() {
+    // Real fn: empty/unknown pin → "Auto"; known catalog id → its label. No spawn/network.
+    assert_eq!(cabin_default_model_label(""), "Auto");
+    assert_eq!(cabin_default_model_label("  \t"), "Auto");
+    assert_eq!(cabin_default_model_label("grok-4.7"), "Grok 4.7");
+}
+
+// Folded from PR #422.
+#[test]
+fn cabin_default_efforts_lists_known_ids() {
+    // Real fn: non-empty effort ladder with known ids. No spawn/network.
+    let efforts = cabin_default_efforts();
+    assert!(!efforts.is_empty());
+    let ids: Vec<&str> = efforts.iter().map(|(id, _)| *id).collect();
+    for want in ["none", "minimal", "low", "medium", "high", "xhigh"] {
+        assert!(ids.contains(&want), "missing effort id {want}: {ids:?}");
+    }
+}
+
+// Folded from PR #426.
+#[test]
+fn destructive_host_spec_title_primary_is_danger() {
+    let spec = destructive_host_spec();
+    assert_eq!(spec.title, HOST_CONFIRM_TITLE);
+    assert_eq!(spec.primary, HOST_CONFIRM_PRIMARY);
+    assert!(spec.danger);
+}
+
+// Folded from PR #427.
+#[test]
+fn cabin_default_sessions_lists_known_ids() {
+    // Real fn: non-empty session list with known ids. No spawn/network.
+    let sessions = cabin_default_sessions();
+    assert!(!sessions.is_empty());
+    let ids: Vec<&str> = sessions.iter().map(|(id, _)| *id).collect();
+    for want in ["chat", "plan", "ask"] {
+        assert!(ids.contains(&want), "missing session id {want}: {ids:?}");
+    }
+}
+
+// Folded from PR #428.
+#[test]
+fn cabin_default_permissions_lists_known_ids() {
+    // Real fn: non-empty permission ladder with known ids. No spawn/network.
+    let perms = cabin_default_permissions();
+    assert!(!perms.is_empty());
+    let ids: Vec<&str> = perms.iter().map(|(id, _)| *id).collect();
+    for want in ["ask", "auto"] {
+        assert!(ids.contains(&want), "missing permission id {want}: {ids:?}");
+    }
+}
+
+// Folded from PR #429.
+#[test]
+fn cabin_default_permission_id_empty_unknown_and_known() {
+    // Real fn: empty/unknown → ask; known ask/auto stay. No spawn/network.
+    assert_eq!(cabin_default_permission_id(""), "ask");
+    assert_eq!(cabin_default_permission_id("nope"), "ask");
+    assert_eq!(cabin_default_permission_id("ask"), "ask");
+    assert_eq!(cabin_default_permission_id("auto"), "auto");
+}
+
+// Folded from PR #430.
+#[test]
+fn cabin_default_session_id_empty_unknown_and_known() {
+    // Real fn: empty/unknown → "chat"; known ids stay. No spawn/network.
+    assert_eq!(cabin_default_session_id(""), "chat");
+    assert_eq!(cabin_default_session_id("nonsense"), "chat");
+    assert_eq!(cabin_default_session_id("chat"), "chat");
+    assert_eq!(cabin_default_session_id("plan"), "plan");
+    assert_eq!(cabin_default_session_id("ask"), "ask");
+}
+
+// Folded from PR #431.
+#[test]
+fn cabin_default_models_lists_known_ids() {
+    // Real fn: non-empty chat catalog plus Auto with known ids/labels. No spawn/network.
+    let models = cabin_default_models();
+    assert!(!models.is_empty());
+    let ids: Vec<&str> = models.iter().map(|(id, _)| *id).collect();
+    let labels: Vec<&str> = models.iter().map(|(_, label)| *label).collect();
+    assert!(ids.contains(&""), "missing Auto id: {ids:?}");
+    assert!(labels.contains(&"Auto"), "missing Auto label: {labels:?}");
+    for (want_id, want_label) in [
+        ("grok-4.7", "Grok 4.7"),
+        ("grok-4.6", "Grok 4.6"),
+        ("grok-4.3", "Grok 4.3"),
+        ("grok-3", "Grok 3"),
+    ] {
+        assert!(ids.contains(&want_id), "missing model id {want_id}: {ids:?}");
+        assert!(
+            labels.contains(&want_label),
+            "missing model label {want_label}: {labels:?}"
+        );
+    }
+}
+
+// ---- Cursor fold: Feed, pulse and home ----
+
+// Folded from PR #275.
+#[test]
+fn pulse_paints_only_on_an_empty_signed_in_chat() {
+    assert!(should_paint_pulse(true, false, true));
+    assert!(!should_paint_pulse(false, false, true));
+    assert!(!should_paint_pulse(true, true, true));
+    assert!(!should_paint_pulse(true, false, false));
+    assert_eq!(pulse_row_label("Night", ""), "Night");
+    assert_eq!(pulse_row_label(" Night ", "done"), "Night · done");
+}
+
+// Folded from PR #280.
+#[test]
+fn feed_deck_hover_lifts_the_card_behind() {
+    let front = super::open_slide(0);
+    assert_eq!(front, super::SlidePose { dy: 0.0, scale: 1.0 });
+    let second = super::open_slide(1);
+    assert!(second.dy < 0.0);
+    assert_eq!(second.scale, 1.0);
+    assert!(super::open_slide(2).dy < second.dy);
+
+    let rest = super::rest_slide(1);
+    let open = super::open_slide(1);
+    assert!(rest.dy > front.dy);
+    assert!(rest.scale < front.scale);
+    assert_ne!(rest, open);
+    assert_eq!(super::mix_slide(rest, open, 0.0), rest);
+    assert_eq!(super::mix_slide(rest, open, 1.0), open);
+    let mid = super::mix_slide(rest, open, 0.5);
+    assert!(open.dy < mid.dy && mid.dy < rest.dy);
+    assert!(rest.scale < mid.scale && mid.scale < open.scale);
+    assert_eq!(super::mix_slide(rest, open, 1.5), open);
+    assert_eq!(super::mix_slide(rest, open, -0.25), rest);
+
+    let closed = super::StackView {
+        expanded: false,
+        popped: None,
+    };
+    let pile = super::next_feed_stack(&closed, super::StackHit::Pile, Some("back".into()));
+    assert_eq!(
+        pile,
+        super::StackView {
+            expanded: true,
+            popped: Some("back".into()),
+        }
+    );
+    let away = super::next_feed_stack(&pile, super::StackHit::Away, Some("other".into()));
+    assert_eq!(
+        away,
+        super::StackView {
+            expanded: false,
+            popped: Some("back".into()),
+        }
+    );
+    let on_card = super::next_feed_stack(&pile, super::StackHit::Card, Some("other".into()));
+    assert_eq!(on_card, pile);
+    let still_down = super::next_feed_stack(&away, super::StackHit::Card, Some("other".into()));
+    assert_eq!(still_down, away);
+    let cleared = super::next_feed_stack(&away, super::StackHit::Pile, None);
+    assert_eq!(
+        cleared,
+        super::StackView {
+            expanded: true,
+            popped: None,
+        }
+    );
+
+    assert_eq!(
+        super::pile_pop_target(Some("front"), Some("front".into())),
+        None
+    );
+    assert_eq!(
+        super::pile_pop_target(Some("front"), Some("back".into())),
+        Some("back".into())
+    );
+
+    assert_eq!(
+        super::stack_hit(super::StackHover {
+            on_card: true,
+            on_pile: true,
+        }),
+        super::StackHit::Card
+    );
+    assert_eq!(
+        super::stack_hit(super::StackHover {
+            on_card: false,
+            on_pile: true,
+        }),
+        super::StackHit::Pile
+    );
+    assert_eq!(
+        super::stack_hit(super::StackHover {
+            on_card: false,
+            on_pile: false,
+        }),
+        super::StackHit::Away
+    );
+}
+
+// Folded from PR #289.
+#[test]
+fn feed_deck_shift_keeps_the_top_card_on_screen() {
+    assert_eq!(super::feed_ui::slide_up_shift(100.0, 0, 0.0), 0.0);
+    assert_eq!(super::feed_ui::slide_up_shift(100.0, 1, 0.0), 0.0);
+
+    let behind = super::feed_ui::open_slide(1).dy;
+    let top_card = super::feed_ui::open_slide(2).dy;
+    assert!(top_card < behind);
+    assert!(behind < 0.0 && top_card < 0.0);
+
+    let n = 3usize;
+    let front_y = 40.0;
+    assert!(super::feed_ui::slide_up_shift(front_y, n, 0.0) > 0.0);
+    assert_eq!(super::feed_ui::slide_up_shift(front_y, n, -1000.0), 0.0);
+}
+
+// Folded from PR #292.
+#[test]
+fn feed_stack_height_peeks_two_edges() {
+    assert_eq!(super::feed_ui::collapsed_stack_h(0), 0.0);
+    assert_eq!(super::feed_ui::collapsed_stack_h(1), 64.0);
+    assert_eq!(
+        super::feed_ui::collapsed_stack_h(2),
+        64.0 + super::feed_ui::STACK_REST_DY_1
+    );
+    assert_eq!(
+        super::feed_ui::collapsed_stack_h(3),
+        64.0 + super::feed_ui::STACK_REST_DY_2
+    );
+    assert!(super::feed_ui::collapsed_stack_h(1) < super::feed_ui::collapsed_stack_h(2));
+    assert!(super::feed_ui::collapsed_stack_h(2) < super::feed_ui::collapsed_stack_h(3));
+    assert_eq!(
+        super::feed_ui::collapsed_stack_h(9),
+        super::feed_ui::collapsed_stack_h(3)
+    );
+    assert_eq!(super::feed_ui::STACK_REST_DY_1, 8.0);
+    assert_eq!(super::feed_ui::STACK_REST_DY_2, 16.0);
+    assert_eq!(super::feed_ui::stacked_feed_h(0), 0.0);
+    assert_eq!(super::feed_ui::stacked_feed_h(2), 64.0 * 2.0 + 6.0);
+    assert!(super::feed_ui::stacked_feed_h(2) > super::feed_ui::collapsed_stack_h(2));
+}
+
+// Folded from PR #330.
+#[test]
+fn roll_today_stays_put_on_same_day() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("roll-today-same-day");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    let today = Cabin::local_day();
+    cabin.usage.day = today.clone();
+    cabin.roll_today();
+    assert_eq!(cabin.usage.day, today, "same-day roll must leave usage.day alone");
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    drop(cabin);
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Folded from PR #331.
+#[test]
+fn collect_pulse_rows_lists_goal_and_loop() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("pulse-rows");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.cfg.goal_pin = "Ship the pulse".into();
+    cabin.goal_step = 2;
+    cabin.grok_loops.push(grokhub_core::new_loop(
+        "30m".into(),
+        "check deploy".into(),
+        1_000,
+    ));
+
+    assert!(!cabin.running);
+    let status = cabin.status.clone();
+    let rows = cabin.collect_pulse_rows();
+
+    assert!(
+        rows.iter().any(|r| {
+            r.kind == super::pulse::PulseRowKind::Goal
+                && r.title == "Ship the pulse"
+                && r.detail.contains("step 2")
+        }),
+        "goal pin must surface as a Goal row: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| {
+            r.kind == super::pulse::PulseRowKind::Job && r.title == "check deploy"
+        }),
+        "enabled loop must surface as the Job row: {rows:?}"
+    );
+    assert!(!cabin.running);
+    assert_eq!(cabin.status, status);
+    assert_eq!(cabin.status, "Harbor");
+
+    std::env::remove_var("GROKHUB_CONFIG");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// Folded from PR #375.
+#[test]
+fn tick_home_surface_remembers_nav() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.chip_memory.last_surface.is_none());
+    cabin.set_nav_id("imagine");
+    cabin.tick_home_surface();
+    assert_eq!(cabin.chip_memory.last_surface.as_deref(), Some("imagine"));
+    let stamped = cabin.chip_memory.updated_at;
+    assert!(stamped > 0);
+    // Same surface again is a no-op — updated_at stays put.
+    cabin.tick_home_surface();
+    assert_eq!(cabin.chip_memory.last_surface.as_deref(), Some("imagine"));
+    assert_eq!(cabin.chip_memory.updated_at, stamped);
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #376.
+#[test]
+fn remember_last_frame_keeps_short_url() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.last_frame_url.is_none());
+    // Short URL sticks; over FRAME_CAP is rejected. No store_hub_frame / live_room / network.
+    cabin.remember_last_frame("data:image/jpeg;base64,abc");
+    assert_eq!(
+        cabin.last_frame_url.as_deref(),
+        Some("data:image/jpeg;base64,abc")
+    );
+    cabin.last_frame_url = None;
+    let huge = "x".repeat(FRAME_CAP + 1);
+    cabin.remember_last_frame(&huge);
+    assert!(cabin.last_frame_url.is_none());
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #378.
+#[test]
+fn push_presence_keeps_short_url() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.presence_ring.is_empty());
+    assert!(cabin.last_frame_url.is_none());
+    assert!(cabin.rx.is_none());
+    assert!(cabin.reflect_rx.is_none());
+
+    let short = "data:image/jpeg;base64,abc".to_string();
+    cabin.push_presence(short.clone());
+    assert_eq!(cabin.presence_ring.len(), 1);
+    assert_eq!(cabin.presence_ring[0].1, short);
+    assert!(
+        cabin.last_frame_url.is_none(),
+        "must not call store_hub_frame/remember_last_frame"
+    );
+
+    let oversized = "x".repeat(FRAME_CAP + 1);
+    cabin.push_presence(oversized);
+    assert_eq!(cabin.presence_ring.len(), 1);
+    assert_eq!(cabin.presence_ring[0].1, short);
+
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    assert!(cabin.reflect_rx.is_none());
+}
+
+// Folded from PR #379.
+#[test]
+fn tool_header_color_failed_vs_ok() {
+    assert_eq!(
+        super::tool_header_color(true),
+        crate::cards::chip_tone_color(crate::cards::ChipTone::Offline),
+        "failed tool header uses Offline chip tone"
+    );
+    assert_eq!(
+        super::tool_header_color(false),
+        crate::theme::muted(),
+        "ok tool header uses muted"
+    );
+}
+
+// Folded from PR #406.
+#[test]
+fn device_glance_none_when_hub_off() {
+    // Free fn: hub_off + no thumb → None; hub_on → Some("Sharing"). Stay off network/spawn.
+    assert!(device_glance(false, None).is_none());
+    let share = device_glance(true, None).expect("sharing");
+    assert_eq!(share.share_line, "Sharing");
+    assert!(!share.has_thumb);
+}
+
+// Folded from PR #409.
+#[test]
+fn home_feed_count_empty_and_one_event() {
+    // Real `home_feed_count` on a quiet slice — no cabin, spawn, or network.
+    assert_eq!(home_feed_count(&[]), 0);
+
+    let cards = vec![feed_card("event-1", UpdateKind::AutomationDone, false)];
+    assert_eq!(home_feed_count(&cards), 1);
+}
+
+// Folded from PR #410.
+#[test]
+fn drop_extra_note_none_for_zero_extras() {
+    // Free fn: 0 → None; 1 → singular wording; n>1 → mentions n. Stay off spawn/network.
+    assert_eq!(drop_extra_note(0), None);
+    let one = drop_extra_note(1).expect("singular");
+    assert!(
+        one.contains("The other one was left out"),
+        "one extra uses singular wording: {one}"
+    );
+    let many = drop_extra_note(4).expect("plural");
+    assert!(
+        many.contains("4 others were left out"),
+        "n>1 extras mention n: {many}"
+    );
+}
+
+// Folded from PR #423.
+#[test]
+fn composer_hint_ink_blends_subtle_and_muted() {
+    let ink = super::composer_hint_ink();
+    assert_ne!(ink.a(), 0, "hint ink is not fully transparent: {ink:?}");
+    assert_eq!(
+        ink,
+        crate::theme::blend_color(crate::theme::subtle(), crate::theme::muted(), 0.5),
+        "hint ink is the subtle+muted mid blend"
+    );
+}
+
+// Folded from PR #424.
+#[test]
+fn collect_pulse_rows_quiet_stable_rows() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.automations.is_empty());
+    assert!(cabin.grok_loops.is_empty());
+    assert!(cabin.cfg.goal_pin.is_empty());
+    assert!(cabin.board.is_empty());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+
+    let rows = cabin.collect_pulse_rows();
+
+    let seed = crate::cards::SUGGESTED_AUTOS
+        .iter()
+        .find(|s| s.title == "Morning brief")
+        .expect("Morning brief seed");
+    assert_eq!(
+        rows.len(),
+        2,
+        "quiet cabin yields seed Job + Usage only: {rows:?}"
+    );
+    assert_eq!(rows[0].kind, super::pulse::PulseRowKind::Job);
+    assert_eq!(rows[0].title, seed.title);
+    assert_eq!(rows[0].detail, seed.body);
+    assert_eq!(rows[0].nav, Some(super::pulse::PulseNav::Night));
+    assert_eq!(rows[1].kind, super::pulse::PulseRowKind::Usage);
+    assert_eq!(rows[1].title, grokhub_core::usage_line(&cabin.usage));
+    assert!(rows[1].detail.is_empty());
+    assert!(rows[1].nav.is_none());
+    assert!(!rows
+        .iter()
+        .any(|r| r.kind == super::pulse::PulseRowKind::Empty));
+    assert!(!rows
+        .iter()
+        .any(|r| r.kind == super::pulse::PulseRowKind::Goal));
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// ---- Cursor fold: Clock, day and host shells ----
+
+// Folded from PR #387.
+#[test]
+fn day_now_returns_yyyy_mm_dd() {
+    // Associated fn: shells `date +%F`, or falls back to 1970-01-01. No network/xAI.
+    let day = Cabin::day_now();
+    let ok = day.len() == 10
+        && day.as_bytes()[4] == b'-'
+        && day.as_bytes()[7] == b'-'
+        && day
+            .bytes()
+            .enumerate()
+            .all(|(i, b)| i == 4 || i == 7 || b.is_ascii_digit());
+    assert!(
+        ok,
+        "day_now must be YYYY-MM-DD (or the 1970-01-01 fallback), got {day:?}"
+    );
+}
+
+// Folded from PR #390.
+#[test]
+fn clock_now_returns_local_clock() {
+    // Associated fn: shells `date` (or noon Monday fallback). No network/xAI.
+    let clock = Cabin::clock_now();
+    assert!(
+        clock.weekday <= 6 && clock.hour <= 23 && clock.minute <= 59,
+        "LocalClock out of range (or expect weekday=1 hour=12 minute=0 fallback): weekday={} hour={} minute={}",
+        clock.weekday,
+        clock.hour,
+        clock.minute
+    );
+}
+
+// Folded from PR #393.
+#[test]
+fn local_clock_returns_cached_or_fresh() {
+    // Associated fn: cache hit or `clock_now` via `date` (or noon Monday fallback).
+    // No network/xAI. Call twice so the second path is cached-or-fresh.
+    let a = Cabin::local_clock();
+    let b = Cabin::local_clock();
+    for (label, clock) in [("first", a), ("second", b)] {
+        assert!(
+            clock.weekday <= 6 && clock.hour <= 23 && clock.minute <= 59,
+            "{label} LocalClock out of range (or expect weekday=1 hour=12 minute=0 fallback): weekday={} hour={} minute={}",
+            clock.weekday,
+            clock.hour,
+            clock.minute
+        );
+    }
+}
+
+// Folded from PR #395.
+#[test]
+fn date_out_formats_via_date() {
+    // Associated fn: shells `date` with fmt; empty on failure. No network/xAI.
+    let out = Cabin::date_out("+%F");
+    let ok = out.is_empty()
+        || (out.len() == 10
+            && out.as_bytes()[4] == b'-'
+            && out.as_bytes()[7] == b'-'
+            && out
+                .bytes()
+                .enumerate()
+                .all(|(i, b)| i == 4 || i == 7 || b.is_ascii_digit()));
+    assert!(
+        ok,
+        "date_out(+%F) must be YYYY-MM-DD shaped or empty on failure, got {out:?}"
+    );
+}
+
+// Folded from PR #396.
+#[test]
+fn kick_local_clock_stays_off_network() {
+    // Associated fn: background `date` refresh into LAST_CLOCK. No grok/xAI/network.
+    let cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+
+    if let Ok(mut g) = super::LAST_CLOCK.lock() {
+        *g = None;
+    }
+    Cabin::kick_local_clock();
+
+    let clock = (0..80).find_map(|_| {
+        if let Ok(g) = super::LAST_CLOCK.lock() {
+            if let Some((_, clock, inflight)) = g.as_ref() {
+                if !*inflight {
+                    return Some(*clock);
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        None
+    })
+    .expect("kick_local_clock should cache a LocalClock (date shell OK)");
+
+    assert!(
+        clock.weekday <= 6 && clock.hour <= 23 && clock.minute <= 59,
+        "cached LocalClock out of range: weekday={} hour={} minute={}",
+        clock.weekday,
+        clock.hour,
+        clock.minute
+    );
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #397.
+#[test]
+fn kick_local_day_stays_off_network() {
+    let cabin = Cabin::quiet_for_test();
+    // Seed LAST_DAY so kick marks inflight and refreshes via `day_now` / `date +%F`.
+    let _ = Cabin::local_day();
+    Cabin::kick_local_day();
+    // Date shell OK; wait for the worker to rewrite the cache. No grok/xAI.
+    let mut day = String::new();
+    for _ in 0..100 {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        day = Cabin::local_day();
+        let shaped = day.len() == 10
+            && day.as_bytes()[4] == b'-'
+            && day.as_bytes()[7] == b'-'
+            && day
+                .bytes()
+                .enumerate()
+                .all(|(i, b)| i == 4 || i == 7 || b.is_ascii_digit());
+        if shaped {
+            break;
+        }
+    }
+    let ok = day.len() == 10
+        && day.as_bytes()[4] == b'-'
+        && day.as_bytes()[7] == b'-'
+        && day
+            .bytes()
+            .enumerate()
+            .all(|(i, b)| i == 4 || i == 7 || b.is_ascii_digit());
+    assert!(
+        ok,
+        "kick_local_day must refresh/cache YYYY-MM-DD (date shell OK), got {day:?}"
+    );
+    assert!(!cabin.running, "kick_local_day must stay off grok/xAI");
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rx.is_none());
+}
+
+// Folded from PR #401.
+#[test]
+fn hostname_i_now_returns_string() {
+    // Free fn: shells `hostname -I` (empty String if it fails). Hostname OK; stay off network/xAI/bind.
+    let out = hostname_i_now();
+    // Empty is valid when the shell fails; otherwise UTF-8 stdout from `hostname -I`.
+    let _: &str = out.as_str();
+}
+
+// Folded from PR #402.
+#[test]
+fn chip_hour_returns_0_through_23() {
+    // Associated fn: hour from local_clock (cached date shell or noon fallback). No network/xAI.
+    let hour = Cabin::chip_hour();
+    assert!(
+        (0..=23).contains(&hour),
+        "chip_hour must be 0..=23 (or noon fallback hour=12), got {hour}"
+    );
 }
