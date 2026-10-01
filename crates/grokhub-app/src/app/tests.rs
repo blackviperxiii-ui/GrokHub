@@ -16992,3 +16992,15 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn turn_transcript_returns_merged_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.turn_log.is_empty());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rx.is_none());
+    let merged = "idle merged reply".to_string();
+    // Empty turn_log → turn_needs_timeline false → merged unchanged. No spawn/network.
+    assert_eq!(cabin.turn_transcript(merged.clone(), IMAGE_FILE_CAP), merged);
+}
