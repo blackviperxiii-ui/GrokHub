@@ -16992,3 +16992,28 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn clear_oauth_photo_drops_cached_avatar_state() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.oauth_photo_key = "https://pbs.twimg.com/profile_images/harbor.jpg".into();
+    cabin.oauth_photo_busy = true;
+    cabin.oauth_profile_tried = true;
+    let (_tx, rx) = std::sync::mpsc::channel::<super::OauthPhotoOut>();
+    cabin.oauth_photo_rx = Some(rx);
+    assert!(cabin.oauth_photo.is_none());
+    assert!(!cabin.host_diff_kick);
+
+    cabin.clear_oauth_photo();
+
+    assert!(cabin.oauth_photo.is_none());
+    assert!(cabin.oauth_photo_key.is_empty());
+    assert!(cabin.oauth_photo_rx.is_none());
+    assert!(!cabin.oauth_photo_busy);
+    assert!(!cabin.oauth_profile_tried);
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.host_diff_kick);
+}
