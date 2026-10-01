@@ -21120,3 +21120,13 @@ fn chip_hour_returns_0_through_23() {
         "chip_hour must be 0..=23 (or noon fallback hour=12), got {hour}"
     );
 }
+
+#[test]
+fn dream_rewind_id_none_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rewind_rows.is_empty());
+    // Quiet cabin with empty rewind_rows → None.
+    assert!(cabin.dream_rewind_id().is_none());
+}
