@@ -10766,6 +10766,29 @@ fn import_without_openclaw_and_consult_without_login() {
     std::env::remove_var("GROKHUB_GROK");
 }
 
+#[test]
+fn openclaw_import_poll_reports_a_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_import_openclaw();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.import_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.import_rx = Some(rx);
+    cabin.poll_import_openclaw();
+    assert!(cabin.import_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_import_openclaw();
+    assert!(cabin.import_rx.is_none());
+    assert_eq!(cabin.status, "OpenClaw import failed");
+    assert!(!matches!(cabin.nav, Nav::Memory));
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
 // Landed from PR #121.
 #[test]
 fn recall_finds_a_memory_line_and_reports_a_miss() {
