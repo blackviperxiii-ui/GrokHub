@@ -16992,3 +16992,35 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn ingest_tool_card_skips_live_when_stream_elsewhere() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin
+        .threads
+        .push(crate::threads::ChatThread::new("Here", false));
+    cabin
+        .threads
+        .push(crate::threads::ChatThread::new("Elsewhere", false));
+    cabin.thread_idx = 0;
+    let other = cabin.threads[1].id.clone();
+    cabin.chat_job_thread = Some(other);
+    assert!(!cabin.stream_here());
+    assert!(!cabin.running);
+    assert!(cabin.live_blocks.is_empty());
+
+    let card = grokhub_acp::ToolCard {
+        id: "t1".into(),
+        title: "grep".into(),
+        kind: String::new(),
+        status: "completed".into(),
+        detail: String::new(),
+        diff: String::new(),
+        image_data_url: None,
+    };
+    cabin.ingest_tool_card(&card);
+    assert!(cabin.live_blocks.is_empty());
+    assert!(cabin.turn_log.is_empty());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+}
