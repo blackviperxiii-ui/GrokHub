@@ -299,6 +299,7 @@ impl Cabin {
             self.acp = None;
             self.acp_spawn_rx = None;
             self.perm_ask = None;
+            self.perm_queue.clear();
             self.perm_always_confirm = None;
             self.confirm = None;
             self.elicit_ask = None;

@@ -1,8 +1,9 @@
 use crate::protocol::{
     elicit_accept, elicit_cancel, elicit_decline, encode_line, initialize_params, method_not_found,
     parse_elicit, parse_elicit_complete, parse_permission, parse_session_update, permission_allow,
-    permission_allow_always, permission_deny, pick_auth_method, prompt_params_with_image, request,
-    response, session_load_params, session_new_params, AcpEvent, JsonRpc,
+    permission_allow_always, permission_cancel, permission_reject, pick_auth_method,
+    prompt_params_with_image, request, response, session_load_params, session_new_params, AcpEvent,
+    JsonRpc, PermissionAsk,
 };
 use crate::protocol::SessionMode;
 use crate::{
@@ -167,10 +168,20 @@ fn cwd_probe_cache() -> &'static Mutex<Option<(PathBuf, Instant, bool)>> {
     C.get_or_init(|| Mutex::new(None))
 }
 
+/// How one `session/request_permission` is answered.
+enum PermAnswer {
+    Allow,
+    AllowAlways,
+    /// You chose Deny: the agent's own reject option.
+    Reject(String),
+    /// The turn is stopping or replaying, so the ask is withdrawn (`cancelled`).
+    Cancel,
+}
+
 enum Cmd {
     Prompt { text: String, image: Option<String> },
     Cancel,
-    Permission { id: Value, allow: bool, always: bool },
+    Permission { id: Value, answer: PermAnswer },
     Elicit {
         id: Value,
         outcome: &'static str,
@@ -804,15 +815,12 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
                         ),
                     );
                 }
-                Cmd::Permission { id, allow, always } => {
-                    let msg = if allow {
-                        if always {
-                            permission_allow_always(id)
-                        } else {
-                            permission_allow(id)
-                        }
-                    } else {
-                        permission_deny(id)
+                Cmd::Permission { id, answer } => {
+                    let msg = match answer {
+                        PermAnswer::Allow => permission_allow(id),
+                        PermAnswer::AllowAlways => permission_allow_always(id),
+                        PermAnswer::Reject(option) => permission_reject(id, &option),
+                        PermAnswer::Cancel => permission_cancel(id),
                     };
                     let _ = write_msg(&mut *stdin, &msg);
                 }
@@ -838,13 +846,15 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
         }
     });
 
-    let allow_pending = opts.always_approve || opts.auto;
     for id in pending_perm {
-        let _ = cmd_tx.send(Cmd::Permission {
-            id,
-            allow: allow_pending,
-            always: opts.always_approve,
-        });
+        let answer = if opts.always_approve {
+            PermAnswer::AllowAlways
+        } else if opts.auto {
+            PermAnswer::Allow
+        } else {
+            PermAnswer::Cancel
+        };
+        let _ = cmd_tx.send(Cmd::Permission { id, answer });
     }
     for id in pending_elicit {
         let _ = cmd_tx.send(Cmd::Elicit {
@@ -907,8 +917,7 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
                                 if let Some(id) = msg.id {
                                     let _ = cmd_tx_r.send(Cmd::Permission {
                                         id,
-                                        allow: false,
-                                        always: false,
+                                        answer: PermAnswer::Cancel,
                                     });
                                 }
                                 continue;
@@ -1029,13 +1038,17 @@ impl AcpHandle {
         self.cmd.send(Cmd::Cancel).map_err(|e| e.to_string())
     }
 
+    /// Allow (`true`), or withdraw the ask (`false`) because the turn is stopping.
+    /// The agent reports a withdrawn ask as "User cancelled", so a Deny you chose
+    /// goes through [`Self::reject_permission`] instead.
     pub fn answer_permission(&self, id: Value, allow: bool) -> Result<(), String> {
+        let answer = if allow {
+            PermAnswer::Allow
+        } else {
+            PermAnswer::Cancel
+        };
         self.cmd
-            .send(Cmd::Permission {
-                id,
-                allow,
-                always: false,
-            })
+            .send(Cmd::Permission { id, answer })
             .map_err(|e| e.to_string())
     }
 
@@ -1043,8 +1056,22 @@ impl AcpHandle {
         self.cmd
             .send(Cmd::Permission {
                 id,
-                allow: true,
-                always: true,
+                answer: PermAnswer::AllowAlways,
+            })
+            .map_err(|e| e.to_string())
+    }
+
+    /// Deny: select the reject option the agent offered. An agent that offered none
+    /// has no other way to hear no, so it gets `cancelled`.
+    pub fn reject_permission(&self, ask: &PermissionAsk) -> Result<(), String> {
+        let answer = match &ask.reject_option {
+            Some(option) => PermAnswer::Reject(option.clone()),
+            None => PermAnswer::Cancel,
+        };
+        self.cmd
+            .send(Cmd::Permission {
+                id: ask.rpc_id.clone(),
+                answer,
             })
             .map_err(|e| e.to_string())
     }
@@ -2840,7 +2867,7 @@ mod tests {
         assert!(
             load.contains("swallow_load")
                 && load.contains("Cmd::Permission")
-                && load.contains("allow: false"),
+                && load.contains("PermAnswer::Cancel"),
             "load-replay permission must be denied so the agent is not stuck: {load}"
         );
         assert!(

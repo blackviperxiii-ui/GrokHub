@@ -417,17 +417,7 @@ impl Cabin {
                             let _ = h.answer_permission(p.rpc_id, true);
                         }
                     } else {
-                        if let Some(old) = self.perm_ask.take() {
-                            if let Some(h) = &self.acp {
-                                let _ = h.answer_permission(old.rpc_id, false);
-                            }
-                        }
-                        self.perm_always_confirm = None;
-                        self.confirm = None;
-                        self.perm_ask = Some(p);
-                        if self.chrome_here() {
-                            self.status = "Grok wants permission".into();
-                        }
+                        self.show_perm_ask(p);
                     }
                 }
                 AcpEvent::Elicit(p) => {
@@ -490,11 +480,7 @@ impl Cabin {
                         }
                         StreamErrorKind::CreditLimit | StreamErrorKind::Fatal => {}
                     }
-                    if let Some(p) = self.perm_ask.take() {
-                        if let Some(h) = &self.acp {
-                            let _ = h.answer_permission(p.rpc_id, false);
-                        }
-                    }
+                    self.withdraw_perm_asks();
                     self.perm_always_confirm = None;
                     self.confirm = None;
                     if let Some(p) = self.elicit_ask.take() {
@@ -525,13 +511,47 @@ impl Cabin {
         }
     }
 
-    pub(super) fn finish_acp_turn(&mut self, text: String) {
-        let text = self.scrub_transcript(take_ui_text(text, IMAGE_FILE_CAP));
-        if let Some(p) = self.perm_ask.take() {
-            if let Some(h) = &self.acp {
+    /// Put a new Ask on the card, or queue it behind the one already there. A
+    /// parallel tool call can ask while a card is up; cancelling either would read
+    /// to Grok as "User cancelled".
+    pub(super) fn show_perm_ask(&mut self, p: grokhub_acp::PermissionAsk) {
+        if self.perm_ask.is_some() {
+            self.perm_queue.push_back(p);
+            return;
+        }
+        self.perm_always_confirm = None;
+        self.confirm = None;
+        self.perm_ask = Some(p);
+        if self.chrome_here() {
+            self.status = "Grok wants permission".into();
+        }
+    }
+
+    /// The turn is stopping: withdraw the Ask on screen and every Ask queued
+    /// behind it, so no RPC is left hanging.
+    pub(super) fn withdraw_perm_asks(&mut self) {
+        let asks: Vec<_> = self
+            .perm_ask
+            .take()
+            .into_iter()
+            .chain(self.perm_queue.drain(..))
+            .collect();
+        if let Some(h) = &self.acp {
+            for p in asks {
                 let _ = h.answer_permission(p.rpc_id, false);
             }
         }
+    }
+
+    /// The Ask on screen was answered. The next queued one takes the card.
+    pub(super) fn next_perm_ask(&mut self) {
+        self.perm_ask = self.perm_queue.pop_front();
+        self.perm_always_confirm = None;
+    }
+
+    pub(super) fn finish_acp_turn(&mut self, text: String) {
+        let text = self.scrub_transcript(take_ui_text(text, IMAGE_FILE_CAP));
+        self.withdraw_perm_asks();
         self.perm_always_confirm = None;
         self.confirm = None;
         if let Some(p) = self.elicit_ask.take() {
