@@ -16992,3 +16992,19 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn feed_deck_shift_keeps_the_top_card_on_screen() {
+    assert_eq!(super::feed_ui::slide_up_shift(100.0, 0, 0.0), 0.0);
+    assert_eq!(super::feed_ui::slide_up_shift(100.0, 1, 0.0), 0.0);
+
+    let behind = super::feed_ui::open_slide(1).dy;
+    let top_card = super::feed_ui::open_slide(2).dy;
+    assert!(top_card < behind);
+    assert!(behind < 0.0 && top_card < 0.0);
+
+    let n = 3usize;
+    let front_y = 40.0;
+    assert!(super::feed_ui::slide_up_shift(front_y, n, 0.0) > 0.0);
+    assert_eq!(super::feed_ui::slide_up_shift(front_y, n, -1000.0), 0.0);
+}
