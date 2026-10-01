@@ -16992,3 +16992,13 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn offscreen_chat_row_stays_outside_the_clip() {
+    let clip = egui::Rect::from_min_max(egui::pos2(0.0, 100.0), egui::pos2(200.0, 300.0));
+    assert!(chat_row_outside_clip(egui::pos2(0.0, 0.0), 100.0, 50.0, clip));
+    assert!(chat_row_outside_clip(egui::pos2(0.0, 300.0), 100.0, 40.0, clip));
+    assert!(chat_row_outside_clip(egui::pos2(-80.0, 120.0), 40.0, 40.0, clip));
+    assert!(chat_row_outside_clip(egui::pos2(200.0, 120.0), 40.0, 40.0, clip));
+    assert!(!chat_row_outside_clip(egui::pos2(10.0, 150.0), 100.0, 40.0, clip));
+}
