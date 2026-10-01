@@ -16992,3 +16992,28 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn feed_stack_height_peeks_two_edges() {
+    assert_eq!(super::feed_ui::collapsed_stack_h(0), 0.0);
+    assert_eq!(super::feed_ui::collapsed_stack_h(1), 64.0);
+    assert_eq!(
+        super::feed_ui::collapsed_stack_h(2),
+        64.0 + super::feed_ui::STACK_REST_DY_1
+    );
+    assert_eq!(
+        super::feed_ui::collapsed_stack_h(3),
+        64.0 + super::feed_ui::STACK_REST_DY_2
+    );
+    assert!(super::feed_ui::collapsed_stack_h(1) < super::feed_ui::collapsed_stack_h(2));
+    assert!(super::feed_ui::collapsed_stack_h(2) < super::feed_ui::collapsed_stack_h(3));
+    assert_eq!(
+        super::feed_ui::collapsed_stack_h(9),
+        super::feed_ui::collapsed_stack_h(3)
+    );
+    assert_eq!(super::feed_ui::STACK_REST_DY_1, 8.0);
+    assert_eq!(super::feed_ui::STACK_REST_DY_2, 16.0);
+    assert_eq!(super::feed_ui::stacked_feed_h(0), 0.0);
+    assert_eq!(super::feed_ui::stacked_feed_h(2), 64.0 * 2.0 + 6.0);
+    assert!(super::feed_ui::stacked_feed_h(2) > super::feed_ui::collapsed_stack_h(2));
+}
