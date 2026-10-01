@@ -16992,3 +16992,46 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn history_search_poll_keeps_matching_hits() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+
+    cabin.poll_history_search();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.history_rx.is_none());
+    assert!(cabin.history_hits.is_empty());
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.history_rx = Some(rx);
+    cabin.poll_history_search();
+    assert!(cabin.history_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    cabin.history_q = "harbor".into();
+    tx.send(("other".into(), vec![("a".into(), "b".into())]))
+        .expect("send other");
+    cabin.poll_history_search();
+    assert!(cabin.history_hits.is_empty());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.history_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.history_rx = Some(rx);
+    tx.send(("harbor".into(), vec![("Chat".into(), "sess-1".into())]))
+        .expect("send harbor");
+    cabin.poll_history_search();
+    assert_eq!(cabin.history_hits, vec![("Chat".into(), "sess-1".into())]);
+    assert_eq!(cabin.status, "1 hits");
+    assert!(cabin.history_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    drop(tx);
+    cabin.history_rx = Some(rx);
+    cabin.poll_history_search();
+    assert!(cabin.history_rx.is_none());
+    assert_eq!(cabin.history_hits, vec![("Chat".into(), "sess-1".into())]);
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
