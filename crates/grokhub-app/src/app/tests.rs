@@ -16992,3 +16992,23 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+/// A pick already in flight must not start another file dialog or clipboard read.
+#[test]
+fn plus_act_while_busy_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    let (_tx, rx) = std::sync::mpsc::channel::<(PlusTarget, PlusPick)>();
+    app.pick_rx = Some(rx);
+    app.run_plus_act(PlusTarget::Chat, PlusAct::Upload);
+    assert_eq!(app.status, "Choose a file…");
+    assert!(app.pick_rx.is_some());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+    let (_tx2, rx2) = std::sync::mpsc::channel::<(PlusTarget, PlusPick)>();
+    app.pick_rx = Some(rx2);
+    app.run_plus_act(PlusTarget::Imagine, PlusAct::Paste);
+    assert_eq!(app.status, "Reading clipboard…");
+    assert!(app.pick_rx.is_some());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
