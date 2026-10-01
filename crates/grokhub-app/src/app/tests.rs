@@ -16992,3 +16992,76 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn greeting_poll_keeps_a_fresh_line() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.greeting = "Harbor is quiet tonight.".into();
+    cabin.greeting_busy = true;
+
+    cabin.poll_greeting();
+    assert!(cabin.greeting_files_rx.is_none());
+    assert!(cabin.greeting_rx.is_none());
+    assert!(cabin.greeting_busy);
+    assert_eq!(cabin.greeting, "Harbor is quiet tonight.");
+
+    let (files_tx, files_rx) = std::sync::mpsc::channel();
+    cabin.greeting_files_rx = Some(files_rx);
+    cabin.poll_greeting();
+    assert!(cabin.greeting_files_rx.is_some());
+    assert!(cabin.greeting_rx.is_none());
+    assert!(cabin.greeting_busy);
+    assert_eq!(cabin.greeting, "Harbor is quiet tonight.");
+
+    files_tx
+        .send((3, "user page".into(), 4, "memory page".into()))
+        .expect("send greeting files");
+    cabin.poll_greeting();
+    assert!(cabin.greeting_files_rx.is_none());
+    assert_eq!(cabin.greeting_user_at, 3);
+    assert_eq!(cabin.greeting_user_md, "user page");
+    assert_eq!(cabin.greeting_memory_at, 4);
+    assert_eq!(cabin.greeting_memory_md, "memory page");
+    assert!(cabin.greeting_rx.is_none());
+    assert!(cabin.greeting_busy);
+    assert_eq!(cabin.greeting, "Harbor is quiet tonight.");
+
+    let (greet_tx, greet_rx) = std::sync::mpsc::channel();
+    cabin.greeting_rx = Some(greet_rx);
+    cabin.poll_greeting();
+    assert!(cabin.greeting_rx.is_some());
+    assert!(cabin.greeting_busy);
+    assert_eq!(cabin.greeting, "Harbor is quiet tonight.");
+
+    greet_tx
+        .send("Evening, Viper. The dock light is on.".into())
+        .expect("send greeting");
+    cabin.poll_greeting();
+    assert!(cabin.greeting_rx.is_none());
+    assert!(!cabin.greeting_busy);
+    assert_eq!(cabin.greeting, "Evening, Viper. The dock light is on.");
+
+    cabin.greeting = "Harbor is quiet tonight.".into();
+    cabin.greeting_user_md = "the wall still wants a second coat tonight".into();
+    let (echo_tx, echo_rx) = std::sync::mpsc::channel();
+    cabin.greeting_rx = Some(echo_rx);
+    echo_tx
+        .send("Evening, Viper. the wall still wants a second coat tonight.".into())
+        .expect("send echoed greeting");
+    cabin.poll_greeting();
+    assert!(cabin.greeting_rx.is_none());
+    assert!(!cabin.greeting_busy);
+    assert_eq!(cabin.greeting, "Harbor is quiet tonight.");
+
+    cabin.greeting_busy = true;
+    let (drop_tx, drop_rx) = std::sync::mpsc::channel::<String>();
+    cabin.greeting_rx = Some(drop_rx);
+    drop(drop_tx);
+    cabin.poll_greeting();
+    assert!(cabin.greeting_rx.is_none());
+    assert!(cabin.greeting_files_rx.is_none());
+    assert!(!cabin.greeting_busy);
+    assert_eq!(cabin.greeting, "Harbor is quiet tonight.");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
