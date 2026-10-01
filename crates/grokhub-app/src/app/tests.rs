@@ -16992,3 +16992,36 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn scrub_live_blocks_noop_without_secrets() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.secret_hold.is_empty());
+
+    let plain = "plain live text, no hold yet";
+    cabin.live_blocks.push(grokhub_core::LiveBlock {
+        kind: grokhub_core::LiveKind::Say,
+        body: plain.to_string(),
+        tool_id: String::new(),
+        tool_title: String::new(),
+        tool_status: String::new(),
+        tool_detail: String::new(),
+        fold_slot: 2,
+    });
+    cabin.live_keys = vec![(2, plain.len(), 5)];
+    // Empty secret_hold → early return; body and keys stay put. No spawn/network.
+    cabin.scrub_live_blocks();
+    assert_eq!(cabin.live_blocks[0].body, plain);
+    assert_eq!(cabin.live_keys, vec![(2, plain.len(), 5)]);
+    assert!(cabin.secret_hold.is_empty());
+
+    // Hold a secret, put it in the live body, scrub must redact.
+    let secret = "held-live-token";
+    cabin.hold_secret(secret);
+    cabin.live_blocks[0].body = format!("leak {secret} now");
+    cabin.scrub_live_blocks();
+    assert!(!cabin.live_blocks[0].body.contains(secret));
+    assert!(cabin.live_blocks[0].body.contains("[redacted]"));
+    assert!(cabin.live_keys.is_empty());
+}
