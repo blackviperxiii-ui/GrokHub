@@ -17010,3 +17010,5 @@ fn ptt_continue_stays_off_when_voice_is_idle() {
     assert!(!app.running);
     assert!(app.chat_job_thread.is_none());
 }
+
+// ci-retrigger-marker
