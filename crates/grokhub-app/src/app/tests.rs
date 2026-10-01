@@ -16992,3 +16992,22 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn grok_session_rows_empty_lists_nothing() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rx.is_none());
+    assert!(cabin.grok_sessions.is_empty());
+    assert!(!cabin.grok_sessions_loaded);
+
+    // Empty CLI list → empty rows. Helper only — no Ok / spawn / network.
+    let cwd = std::path::PathBuf::from("/tmp/grokhub-session-rows-empty");
+    let rows = super::grok_session_rows(Vec::new(), cwd);
+    assert!(rows.is_empty());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rx.is_none());
+    assert_eq!(cabin.grok_sessions_inflight, 0);
+}
