@@ -16992,3 +16992,12 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn grok_cli_cwd_matches_grok_cwd() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    // grok_cli_cwd delegates to grok_cwd; quiet cabin, no spawn/network.
+    assert_eq!(cabin.grok_cli_cwd(), cabin.grok_cwd());
+}
