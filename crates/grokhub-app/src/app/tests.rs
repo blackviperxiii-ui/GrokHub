@@ -16992,3 +16992,21 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn pending_kick_waits_out_a_handshake() {
+    let mut app = Cabin::quiet_for_test();
+    app.poll_pending_kick();
+    assert!(app.pending_kick.is_none());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+
+    app.pending_kick = Some(false);
+    let (_tx, rx) = std::sync::mpsc::channel();
+    app.acp_spawn_rx = Some(rx);
+    app.poll_pending_kick();
+    assert_eq!(app.pending_kick, Some(false));
+    assert!(app.acp_spawn_rx.is_some());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
