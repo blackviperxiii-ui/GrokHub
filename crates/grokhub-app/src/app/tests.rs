@@ -16992,3 +16992,11 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn destructive_host_spec_title_primary_is_danger() {
+    let spec = destructive_host_spec();
+    assert_eq!(spec.title, HOST_CONFIRM_TITLE);
+    assert_eq!(spec.primary, HOST_CONFIRM_PRIMARY);
+    assert!(spec.danger);
+}
