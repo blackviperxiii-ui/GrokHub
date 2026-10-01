@@ -588,6 +588,40 @@ pub(super) fn paint_thought_bubble(ui: &mut egui::Ui, body: &str) -> egui::Respo
 
 /// Temp-data key for per-row heights. Pane width is part of the key so a
 /// resize does not reuse wrap heights measured at another width.
+/// Height cache for the live turn's rows, keyed like stored rows by pane width.
+pub(super) fn live_row_height_id(thread_id: &str, pane_w: f32) -> egui::Id {
+    egui::Id::new(("cabin-live-row-h", thread_id, pane_width_bucket(pane_w)))
+}
+
+/// Which block a live row starts on. A text block has its own fold slot; a tool
+/// row (slot 0) is named by its first call. A cached height is reused only for
+/// the same row, so the next turn's rows never inherit this turn's heights.
+pub(super) fn live_row_ident(b: &LiveBlock) -> u64 {
+    if b.fold_slot != 0 {
+        b.fold_slot
+    } else {
+        egui::Id::new(("cabin-live-tool-row", b.tool_id.as_str())).value()
+    }
+}
+
+/// Everything besides its own text that sets a live row's height: its fold, its
+/// neighbours' folds, and whether it carries the Copy / Reply acts. A change here
+/// (a click, Minimize all, a newer reply) repaints the row instead of reusing it.
+pub(super) fn live_row_shape(
+    fold: ThoughtFold,
+    prev_expanded: bool,
+    next_expanded: bool,
+    next_drawn_thought: bool,
+    last_say: bool,
+) -> u8 {
+    u8::from(prev_expanded)
+        | u8::from(next_expanded) << 1
+        | u8::from(next_drawn_thought) << 2
+        | u8::from(last_say) << 3
+        | u8::from(fold.paints_body()) << 4
+        | u8::from(fold.paints_row()) << 5
+}
+
 pub(super) fn chat_row_height_id(thread_id: &str, pane_w: f32) -> egui::Id {
     egui::Id::new(("cabin-chat-row-h", thread_id, pane_width_bucket(pane_w)))
 }
@@ -1447,12 +1481,29 @@ impl Cabin {
     ) -> ChatBlockAct {
         let mut act = ChatBlockAct::None;
         let thread_id = self.visible_thread_id();
-        self.live_keys.resize(self.live_blocks.len(), (0, usize::MAX, 0));
+        let n = self.live_blocks.len();
+        self.live_keys.resize(n, (0, usize::MAX, 0));
+        // A long agent turn holds hundreds of blocks. Like stored rows, one scrolled
+        // out of the pane reserves its last height instead of re-laying its markdown.
+        let row_h_id = live_row_height_id(&thread_id, ui.available_width());
+        let prev_heights: Vec<(u64, u8, f32)> =
+            ui.ctx().data(|d| d.get_temp(row_h_id)).unwrap_or_default();
+        let mut next_heights = vec![(0_u64, 0_u8, 0.0_f32); n];
         let mut skip_to = 0;
         for (i, b) in self.live_blocks.iter().enumerate() {
             if i < skip_to {
                 continue;
             }
+            // Back-to-back calls share one row, so a busy turn is not a wall of tool names.
+            let run = if b.kind == LiveKind::Tool {
+                self.live_blocks[i..]
+                    .iter()
+                    .take_while(|x| x.kind == LiveKind::Tool)
+                    .count()
+            } else {
+                1
+            };
+            skip_to = i + run;
             let this_thought = b.kind == LiveKind::Thought;
             let prev_thought = i
                 .checked_sub(1)
@@ -1483,106 +1534,139 @@ impl Cabin {
                     start_collapsed,
                 )
                 .paints_row();
-            let mut drawn = true;
-            match b.kind {
-                LiveKind::Thought => {
-                    let view = ChatView {
-                        kind: ChatKind::Thought,
-                        title: "Thought".into(),
-                        body: b.body.clone(),
-                    };
-                    let slot_id = thought_fold_id(&thread_id, "slot", b.fold_slot);
-                    // Only the thought still streaming grows. Rekey a block when it does.
-                    let cached = &mut self.live_keys[i];
-                    if cached.0 != b.fold_slot || cached.1 != b.body.len() {
-                        *cached = (b.fold_slot, b.body.len(), thought_body_key(&b.body));
-                    }
-                    let body_key = cached.2;
-                    let body_id = thought_fold_id(&thread_id, "body", body_key);
-                    let stored = ui.ctx().data(|d| {
-                        d.get_temp::<ThoughtFold>(slot_id)
-                            .or_else(|| d.get_temp(body_id))
-                    });
-                    let fold = grokhub_core::effective_thought_fold(stored, start_collapsed);
-                    let painted = paint_chat_block(
-                        ui,
-                        &view,
-                        thought_shows_label(prev_expanded),
-                        thought_shows_acts(next_expanded),
-                        fold,
-                    );
-                    note_thought_fold_click(
-                        ui.ctx(),
-                        &thread_id,
-                        Some(b.fold_slot),
-                        body_key,
-                        fold,
-                        painted.thought_fold,
-                        collapse_session,
-                    );
-                    // A growing live thought keeps an explicit fold on the current body key.
-                    if let Some(explicit) = ui.ctx().data(|d| d.get_temp::<ThoughtFold>(slot_id)) {
-                        write_thought_fold(ui.ctx(), body_id, explicit);
-                    }
-                    drawn = painted.drawn;
-                    match painted.act {
-                        ChatBlockAct::None => {}
-                        other => act = other,
-                    }
+            let slot_id = thought_fold_id(&thread_id, "slot", b.fold_slot);
+            let (fold, body_key) = if this_thought {
+                // Only the thought still streaming grows. Rekey a block when it does.
+                let cached = &mut self.live_keys[i];
+                if cached.0 != b.fold_slot || cached.1 != b.body.len() {
+                    *cached = (b.fold_slot, b.body.len(), thought_body_key(&b.body));
                 }
-                LiveKind::Say => {
-                    let view = ChatView {
-                        kind: ChatKind::Assistant,
-                        title: String::new(),
-                        body: b.body.clone(),
-                    };
-                    let last_say = !self.live_blocks[i + 1..]
-                        .iter()
-                        .any(|x| x.kind == LiveKind::Say);
-                    match paint_chat_block_with(
-                        ui,
-                        &view,
-                        false,
-                        false,
-                        ThoughtFold::Expanded,
-                        last_say,
-                    )
-                    .act
-                    {
-                        ChatBlockAct::None => {}
-                        other => act = other,
-                    }
-                }
-                LiveKind::Tool => {
-                    // Back-to-back calls share one row, so a busy turn is not a wall of tool names.
-                    let run = self.live_blocks[i..]
-                        .iter()
-                        .take_while(|x| x.kind == LiveKind::Tool)
-                        .count();
-                    skip_to = i + run;
-                    // Borrow each card. A clone per frame copied its diff and screenshot.
-                    let cards: Vec<std::borrow::Cow<'_, ToolCard>> = self.live_blocks[i..skip_to]
-                        .iter()
-                        .map(|b| match self.tool_cards.iter().find(|c| c.id == b.tool_id) {
-                            Some(card) => std::borrow::Cow::Borrowed(card),
-                            None => std::borrow::Cow::Owned(ToolCard {
-                                id: b.tool_id.clone(),
-                                title: b.tool_title.clone(),
-                                kind: String::new(),
-                                status: b.tool_status.clone(),
-                                detail: b.tool_detail.clone(),
-                                diff: String::new(),
-                                image_data_url: None,
-                            }),
-                        })
-                        .collect();
-                    paint_tool_group(ui, &cards);
-                }
+                let body_id = thought_fold_id(&thread_id, "body", cached.2);
+                let stored = ui.ctx().data(|d| {
+                    d.get_temp::<ThoughtFold>(slot_id)
+                        .or_else(|| d.get_temp(body_id))
+                });
+                (
+                    grokhub_core::effective_thought_fold(stored, start_collapsed),
+                    cached.2,
+                )
+            } else {
+                (ThoughtFold::Expanded, 0)
+            };
+            let body_id = thought_fold_id(&thread_id, "body", body_key);
+            // Copy / Reply sit under the last reply only.
+            let last_say = b.kind == LiveKind::Say
+                && !self.live_blocks[i + 1..]
+                    .iter()
+                    .any(|x| x.kind == LiveKind::Say);
+            let ident = live_row_ident(b);
+            let shape = live_row_shape(
+                fold,
+                prev_expanded,
+                next_expanded,
+                next_drawn_thought,
+                last_say,
+            );
+            // The row still streaming changes height every delta; always paint it.
+            let growing = skip_to >= n;
+            let cached_h = prev_heights
+                .get(i)
+                .filter(|(id, sh, _)| *id == ident && *sh == shape && !growing)
+                .map_or(0.0, |(_, _, h)| *h);
+            if reserve_offscreen_chat_row(ui, cached_h) {
+                // Same auto-id slot `push_id` below would consume.
+                ui.skip_ahead_auto_ids(1);
+                next_heights[i] = (ident, shape, cached_h);
+                continue;
             }
-            if drawn {
-                ui.add_space(cluster_gap(this_thought, next_drawn_thought));
+            let y0 = ui.cursor().min.y;
+            let tool_cards = &self.tool_cards;
+            let blocks = &self.live_blocks;
+            let row_act = ui
+                .push_id(("cabin-live-row", ident), |ui| {
+                    let mut act = ChatBlockAct::None;
+                    let mut drawn = true;
+                    match b.kind {
+                        LiveKind::Thought => {
+                            let view = ChatView {
+                                kind: ChatKind::Thought,
+                                title: "Thought".into(),
+                                body: b.body.clone(),
+                            };
+                            let painted = paint_chat_block(
+                                ui,
+                                &view,
+                                thought_shows_label(prev_expanded),
+                                thought_shows_acts(next_expanded),
+                                fold,
+                            );
+                            note_thought_fold_click(
+                                ui.ctx(),
+                                &thread_id,
+                                Some(b.fold_slot),
+                                body_key,
+                                fold,
+                                painted.thought_fold,
+                                collapse_session,
+                            );
+                            // A growing live thought keeps an explicit fold on the current body key.
+                            if let Some(explicit) =
+                                ui.ctx().data(|d| d.get_temp::<ThoughtFold>(slot_id))
+                            {
+                                write_thought_fold(ui.ctx(), body_id, explicit);
+                            }
+                            drawn = painted.drawn;
+                            act = painted.act;
+                        }
+                        LiveKind::Say => {
+                            let view = ChatView {
+                                kind: ChatKind::Assistant,
+                                title: String::new(),
+                                body: b.body.clone(),
+                            };
+                            act = paint_chat_block_with(
+                                ui,
+                                &view,
+                                false,
+                                false,
+                                ThoughtFold::Expanded,
+                                last_say,
+                            )
+                            .act;
+                        }
+                        LiveKind::Tool => {
+                            // Borrow each card. A clone per frame copied its diff and screenshot.
+                            let cards: Vec<std::borrow::Cow<'_, ToolCard>> = blocks[i..i + run]
+                                .iter()
+                                .map(|b| match tool_cards.iter().find(|c| c.id == b.tool_id) {
+                                    Some(card) => std::borrow::Cow::Borrowed(card),
+                                    None => std::borrow::Cow::Owned(ToolCard {
+                                        id: b.tool_id.clone(),
+                                        title: b.tool_title.clone(),
+                                        kind: String::new(),
+                                        status: b.tool_status.clone(),
+                                        detail: b.tool_detail.clone(),
+                                        diff: String::new(),
+                                        image_data_url: None,
+                                    }),
+                                })
+                                .collect();
+                            paint_tool_group(ui, &cards);
+                        }
+                    }
+                    if drawn {
+                        ui.add_space(cluster_gap(this_thought, next_drawn_thought));
+                    }
+                    act
+                })
+                .inner;
+            match row_act {
+                ChatBlockAct::None => {}
+                other => act = other,
             }
+            next_heights[i] = (ident, shape, (ui.cursor().min.y - y0).max(0.0));
         }
+        ui.ctx().data_mut(|d| d.insert_temp(row_h_id, next_heights));
         act
     }
 
@@ -2466,7 +2550,14 @@ impl Cabin {
             self.messages.len(),
             self.messages.last().map_or(0, |m| m.1.len()),
             self.messages_rev,
+            self.messages_body_mark(),
         );
+        let cached = &self.session_size.0;
+        let tail_only = cached.0 == key.0 && cached.1 == key.1 && cached.4 == key.4;
+        if tail_only && self.tail_streaming_here() {
+            // Only the streaming reply grew. The hint catches up when the turn ends.
+            return self.session_size.1;
+        }
         if self.session_size.0 != key {
             let msgs = || self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str()));
             let size = (
@@ -2478,16 +2569,36 @@ impl Cabin {
         self.session_size.1
     }
 
+    /// A turn is streaming on this tab: only its last message grows, and the pane
+    /// paints it from live blocks. Transcript caches can hold until it stops.
+    fn tail_streaming_here(&self) -> bool {
+        self.thinking_here() && !self.live_blocks.is_empty()
+    }
+
     pub(super) fn cached_chat_views(&mut self) -> &[ChatView] {
         let tid = self.visible_thread_id();
         let n = self.messages.len();
         let last = self.messages.last().map(|m| m.1.len()).unwrap_or(0);
         let rev = self.messages_rev;
+        let body = self.messages_body_mark();
         if self.chat_view_tid == tid
             && self.chat_view_n == n
             && self.chat_view_last == last
             && self.chat_view_rev == rev
+            && self.chat_view_body == body
         {
+            return &self.chat_views;
+        }
+        // Only the last message changed (`live_tail_mut`): a stream delta. Any edit
+        // before it, or a swapped transcript, rebuilds every view.
+        let tail_only = self.chat_view_tid == tid
+            && self.chat_view_n == n
+            && self.chat_view_body == body
+            && !self.chat_views.is_empty();
+        if tail_only && self.tail_streaming_here() {
+            // The pane paints this turn from live blocks and shows views only up to
+            // the last ask. Decoding, scrubbing, and rekeying the whole turn on every
+            // delta was thrown away. The stretch rebuilds once when the turn ends.
             return &self.chat_views;
         }
         let refs: Vec<(&str, &str)> = self
@@ -2495,13 +2606,7 @@ impl Cabin {
             .iter()
             .map(|m| (m.0.as_str(), m.1.as_str()))
             .collect();
-        // Same count and last length used to miss an edit anywhere in the transcript.
-        // A stream delta still changes the last length, so only that stretch rekeys.
-        let kept = if self.chat_view_tid == tid
-            && self.chat_view_n == n
-            && self.chat_view_last != last
-            && !self.chat_views.is_empty()
-        {
+        let kept = if tail_only {
             refresh_last_stretch(&mut self.chat_views, &refs)
         } else {
             self.chat_views = visible_chat_refs(refs.iter().copied());
@@ -2516,6 +2621,7 @@ impl Cabin {
         self.chat_view_n = n;
         self.chat_view_last = last;
         self.chat_view_rev = rev;
+        self.chat_view_body = body;
         &self.chat_views
     }
 }
