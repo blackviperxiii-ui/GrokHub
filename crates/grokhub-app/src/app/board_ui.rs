@@ -12,7 +12,7 @@ use super::*;
 use super::pages::{BoardAct, BoardDrag};
 use grokhub_core::{
     encode_turn, visible_chat, visible_chat_refs, views_up_to_last_user, ChatView, ThoughtFold,
-    UpdateAction, UpdateKind,
+    UpdateAction, UpdateCard, UpdateKind,
 };
 
 /// Rest on a card this long before it opens, so sweeping past does not flicker.
@@ -694,6 +694,9 @@ impl Cabin {
         self.chat_job_thread = Some(thread_id);
         self.push_bound_msg("user", message);
         self.flush_board();
+        // The card's chat (maybe new) is saved with the board, so workboard.json
+        // never points at a chat that threads.json does not have yet.
+        self.persist();
         self.kick_model(false);
         true
     }
@@ -761,8 +764,17 @@ impl Cabin {
             t.messages_mut().push(entry);
             t.accessed_ms = now_ms();
         }
-        // The run's card on the home feed now leads to this card.
+        // The run's card on the home feed now leads to this card. A clock
+        // automation's chat run posts no feed card of its own, so it gets one here.
         let prefix = format!("done-{}-", automation_id.trim());
+        let fresh_feed = |c: &UpdateCard| {
+            c.kind == UpdateKind::AutomationDone
+                && c.id.starts_with(&prefix)
+                && now_ms().saturating_sub(c.created_at) < 10 * 60 * 1000
+        };
+        if !self.updates.iter().any(fresh_feed) {
+            self.note_automation_done(automation_id, &card.title, &card.detail);
+        }
         if let Some(feed) = self
             .updates
             .iter_mut()
