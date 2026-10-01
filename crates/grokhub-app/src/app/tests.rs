@@ -16992,3 +16992,17 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn dismiss_fork_explainer_stays_off_a_run() {
+    std::fs::create_dir_all(crate::config::config_dir()).expect("config dir");
+    let mut app = Cabin::quiet_for_test();
+    app.fork_explainer_seen = false;
+    app.dismiss_fork_explainer();
+    assert!(app.fork_explainer_seen);
+    let body = std::fs::read_to_string(crate::config::config_dir().join("fork_explainer_seen"))
+        .expect("seen file");
+    assert_eq!(body, "1");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
