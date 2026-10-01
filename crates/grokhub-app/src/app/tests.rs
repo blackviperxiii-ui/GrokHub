@@ -16992,3 +16992,22 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn voice_hold_while_idle_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    app.voice_hold_rx = Some(rx);
+    app.voice_state = VoiceState::Idle;
+    app.poll_voice_hold();
+    assert!(app.voice_hold_rx.is_some());
+    assert!(matches!(app.voice_state, VoiceState::Idle));
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+    drop(tx);
+    app.poll_voice_hold();
+    assert!(app.voice_hold_rx.is_none());
+    assert!(matches!(app.voice_state, VoiceState::Idle));
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
