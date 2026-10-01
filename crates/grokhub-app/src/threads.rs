@@ -121,7 +121,9 @@ pub fn threads_path() -> std::path::PathBuf {
 }
 
 pub fn load() -> Vec<ChatThread> {
-    config::load_json(&threads_path(), config::JSON_STORE_CAP)
+    let path = threads_path();
+    let threads = config::load_json(&path, config::HISTORY_STORE_CAP);
+    recover_quarantined(&path, threads)
 }
 
 /// An unloaded Grok row has no transcript yet. Persisting `messages: []` would make the next open treat that blank list as the chat.
@@ -130,6 +132,12 @@ pub fn session_transcript_unloaded(show_pending: bool, message_count: usize) -> 
 }
 
 pub fn save(threads: &[ChatThread]) -> Result<(), String> {
+    save_capped(threads, config::HISTORY_STORE_CAP)
+}
+
+/// Never writes more than `load` accepts: over `cap`, the largest message bodies are
+/// dropped from the saved copy, and when that is not enough nothing is written.
+fn save_capped(threads: &[ChatThread], cap: usize) -> Result<(), String> {
     let mut rows = Vec::with_capacity(threads.len());
     for t in threads {
         let mut row = serde_json::to_value(t).map_err(|e| e.to_string())?;
@@ -140,7 +148,11 @@ pub fn save(threads: &[ChatThread]) -> Result<(), String> {
         }
         rows.push(row);
     }
-    let s = serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?;
+    let mut rows = serde_json::Value::Array(rows);
+    let (s, dropped) = config::fit_history_json(&mut rows, cap, thread_message_bodies)?;
+    if dropped > 0 {
+        eprintln!("threads.json: dropped the {dropped} largest messages to stay under the cap");
+    }
     let path = threads_path();
     // A bad in-memory list must not be the only remaining copy of a long history.
     if let Ok(prev) = std::fs::metadata(&path) {
@@ -154,6 +166,116 @@ pub fn save(threads: &[ChatThread]) -> Result<(), String> {
         }
     }
     config::atomic_write(&path, s.as_bytes())
+}
+
+fn thread_message_bodies(rows: &mut serde_json::Value) -> Vec<&mut String> {
+    rows.as_array_mut()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| row.get_mut("messages"))
+        .flat_map(config::message_bodies)
+        .collect()
+}
+
+/// Copies of `threads.json` that `config::quarantine` set aside, oldest first.
+fn quarantined_copies(path: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|s| s.to_str())) else {
+        return Vec::new();
+    };
+    let prefix = format!("{name}.corrupt-");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut found: Vec<(u128, std::path::PathBuf)> = entries
+        .flatten()
+        .filter_map(|e| {
+            let stamp = e
+                .file_name()
+                .to_str()?
+                .strip_prefix(&prefix)?
+                .parse()
+                .ok()?;
+            Some((stamp, e.path()))
+        })
+        .collect();
+    found.sort();
+    found.into_iter().map(|(_, p)| p).collect()
+}
+
+/// Before the history cap, any `threads.json` over 32 MiB was quarantined as unreadable and
+/// the cabin started over with an empty History. A quarantined copy that parses now is that
+/// history: fold it back in, write the result, and only then rename the copy so the next
+/// launch does not fold it in again. A copy that still does not parse stays where it is.
+fn recover_quarantined(path: &std::path::Path, current: Vec<ChatThread>) -> Vec<ChatThread> {
+    let mut recovered = Vec::new();
+    let mut used = Vec::new();
+    for copy in quarantined_copies(path) {
+        let rows = config::peek_json::<Vec<ChatThread>>(&copy, config::HISTORY_STORE_CAP);
+        if let Some(rows) = rows {
+            recovered.push(rows);
+            used.push(copy);
+        }
+    }
+    if used.is_empty() {
+        return current;
+    }
+    let merged = merge_recovered(current, recovered);
+    match save(&merged) {
+        Ok(()) => {
+            for copy in &used {
+                let name = copy
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default();
+                let done = name.replacen(".corrupt-", ".recovered-", 1);
+                let _ = std::fs::rename(copy, copy.with_file_name(done));
+            }
+            eprintln!(
+                "threads.json: recovered {} quarantined copies, {} chats in History",
+                used.len(),
+                merged.len()
+            );
+        }
+        Err(e) => eprintln!("threads.json: could not save recovered chats: {e}"),
+    }
+    merged
+}
+
+/// Recovered chats first, then the live ones. The live store is newer, so it wins an id
+/// clash, and among copies the newer one wins. A Grok session row adopted after the loss
+/// that never loaded its transcript is dropped when a recovered chat already points at that
+/// session: it only stood in for the chat the quarantine hid.
+fn merge_recovered(current: Vec<ChatThread>, copies: Vec<Vec<ChatThread>>) -> Vec<ChatThread> {
+    let mut recovered: Vec<ChatThread> = Vec::new();
+    let mut at = std::collections::HashMap::new();
+    for rows in copies {
+        for row in rows {
+            match at.get(&row.id) {
+                Some(&i) => recovered[i] = row,
+                None => {
+                    at.insert(row.id.clone(), recovered.len());
+                    recovered.push(row);
+                }
+            }
+        }
+    }
+    let live_ids: std::collections::HashSet<&str> = current.iter().map(|t| t.id.as_str()).collect();
+    recovered.retain(|t| !live_ids.contains(t.id.as_str()));
+    let sessions: std::collections::HashSet<String> = recovered
+        .iter()
+        .flat_map(|t| t.grok_session.iter().chain(t.retired_sessions.iter()))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let live = current.into_iter().filter(|t| {
+        let stand_in = session_transcript_unloaded(t.grok_show_pending, t.messages.len())
+            && t.grok_session
+                .as_deref()
+                .is_some_and(|s| sessions.contains(s.trim()));
+        !stand_in
+    });
+    recovered.extend(live);
+    recovered
 }
 
 /// Grok homes whose saved sessions should reappear in History when no cabin thread
@@ -780,6 +902,268 @@ mod tests {
             "threads.json is chat history, not a memory file: a 1MiB cap truncates it \
              into unparseable JSON and the next persist saves the empty default back \
              over every thread: {load}"
+        );
+        assert!(
+            load.contains("HISTORY_STORE_CAP") && !load.contains("JSON_STORE_CAP"),
+            "threads.json must load under the history cap: at the 32 MiB store cap a few \
+             pasted screenshots quarantined the whole History on the next launch: {load}"
+        );
+    }
+
+    /// About 113 KB a chat, mostly a pasted screenshot kept inline as a data URL.
+    fn heavy_history(chats: usize) -> Vec<ChatThread> {
+        (0..chats)
+            .map(|i| {
+                let mut t = ChatThread::new(&format!("Screens {i}"), false);
+                t.accessed_ms = i as u64;
+                let shot = format!("data:image/png;base64,{}", "iVBORw0K".repeat(14_000));
+                let msgs = t.messages_mut();
+                msgs.push(("user".into(), format!("what is on screen {i}?")));
+                msgs.push(("user".into(), shot));
+                msgs.push(("assistant".into(), format!("screen {i} shows a login form")));
+                t
+            })
+            .collect()
+    }
+
+    fn names_in(dir: &std::path::Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .expect("dir")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_history_over_32_mib_survives_a_reload() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("hist-32mib");
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+
+        let want = heavy_history(300);
+        save(&want).expect("save");
+        let bytes = fs::metadata(threads_path()).expect("meta").len();
+        assert!(
+            bytes > config::JSON_STORE_CAP as u64,
+            "fixture must exceed the old 32 MiB store cap, got {bytes} bytes"
+        );
+
+        let got = load();
+        assert_eq!(
+            got.len(),
+            want.len(),
+            "a {bytes} byte history came back with {} of {} chats",
+            got.len(),
+            want.len()
+        );
+        for (a, b) in want.iter().zip(got.iter()) {
+            assert_eq!(a.id, b.id);
+            assert_eq!(
+                a.messages.as_ref(),
+                b.messages.as_ref(),
+                "{} changed",
+                a.title
+            );
+        }
+        assert_eq!(
+            names_in(&root),
+            vec!["threads.json".to_string()],
+            "a history the cabin wrote must load in place, never be quarantined"
+        );
+
+        save(&got).expect("resave");
+        assert_eq!(
+            load().len(),
+            want.len(),
+            "a persist after reload lost chats"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn save_never_writes_more_than_load_accepts() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("hist-fit");
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let cap = 256 * 1024;
+
+        let mut shots = ChatThread::new("Screens", false);
+        shots.messages_mut().extend([
+            ("user".into(), "what broke?".into()),
+            (
+                "tool".into(),
+                format!("data:image/png;base64,{}", "A".repeat(400_000)),
+            ),
+            ("assistant".into(), "the login form".into()),
+        ]);
+        let mut notes = ChatThread::new("Notes", false);
+        for m in 0..20 {
+            notes
+                .messages_mut()
+                .push(("user".into(), format!("note {m}: {}", "n".repeat(2_000))));
+        }
+        let mut small_shot = ChatThread::new("Icon", false);
+        small_shot.messages_mut().push((
+            "tool".into(),
+            format!("data:image/png;base64,{}", "B".repeat(100_000)),
+        ));
+        let want = vec![shots, notes, small_shot];
+
+        save_capped(&want, cap).expect("save fits by dropping the biggest body");
+        let path = threads_path();
+        let bytes = fs::metadata(&path).expect("meta").len();
+        assert!(
+            bytes <= cap as u64,
+            "wrote {bytes} bytes over a {cap} byte cap"
+        );
+        let got: Vec<ChatThread> = config::load_json(&path, cap);
+        assert_eq!(
+            got.len(),
+            3,
+            "a loader with the same cap must read every chat"
+        );
+        assert!(path.exists(), "what save wrote must not be quarantined");
+        let dropped = &got[0].messages[1];
+        assert_eq!(dropped.0, "tool", "the role stays");
+        assert!(
+            dropped.1.starts_with("[This ") && dropped.1.contains("dropped from saved History"),
+            "the dropped body says what happened: {}",
+            dropped.1
+        );
+        assert_eq!(got[0].messages[0], want[0].messages[0]);
+        assert_eq!(got[0].messages[2], want[0].messages[2]);
+        assert_eq!(got[1].messages.as_ref(), want[1].messages.as_ref());
+        assert_eq!(
+            got[2].messages.as_ref(),
+            want[2].messages.as_ref(),
+            "only as many bodies are dropped as it takes to fit"
+        );
+        assert_eq!(
+            want[0].messages[1].1.len(),
+            400_000 + "data:image/png;base64,".len(),
+            "the open chat keeps its body; only the saved copy drops it"
+        );
+
+        // When dropping bodies is not enough, the last good file stays as it was.
+        let before = fs::read(&path).expect("before");
+        let mut planned = ChatThread::new("Plan", false);
+        planned.plan_body = "p".repeat(cap);
+        assert!(save_capped(&[planned], cap).is_err());
+        assert_eq!(fs::read(&path).expect("after"), before, "nothing written");
+
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn a_history_quarantined_for_its_size_comes_back_on_launch() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("hist-recover");
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        fs::create_dir_all(&root).expect("root");
+
+        // What an older cabin left behind: the real history set aside for being over
+        // 32 MiB, a torn copy from some other crash, and the small store it started over.
+        let mut lost = heavy_history(300);
+        lost[0].grok_session = Some("sess-harbor".into());
+        let aside = root.join("threads.json.corrupt-1700000000000");
+        fs::write(&aside, serde_json::to_string(&lost).expect("json")).expect("aside");
+        assert!(fs::metadata(&aside).expect("meta").len() > config::JSON_STORE_CAP as u64);
+        let torn = root.join("threads.json.corrupt-1700000000001");
+        fs::write(&torn, "[{\"id\":\"thr-x\",\"ti").expect("torn");
+
+        let mut fresh = ChatThread::new("Chat", false);
+        fresh
+            .messages_mut()
+            .push(("user".into(), "where did my chats go?".into()));
+        let mut stand_in = ChatThread::new("Harbor lights", false);
+        stand_in.grok_session = Some("sess-harbor".into());
+        stand_in.grok_show_pending = true;
+        save(&[fresh.clone(), stand_in]).expect("live store");
+
+        let got = load();
+        assert_eq!(
+            got.len(),
+            lost.len() + 1,
+            "every lost chat is back next to the one started after the loss"
+        );
+        for (a, b) in lost.iter().zip(got.iter()) {
+            assert_eq!(a.id, b.id);
+            assert_eq!(a.messages.as_ref(), b.messages.as_ref());
+        }
+        assert_eq!(got.last().map(|t| t.id.as_str()), Some(fresh.id.as_str()));
+        assert_eq!(
+            got.iter()
+                .filter(|t| t.grok_session.as_deref() == Some("sess-harbor"))
+                .count(),
+            1,
+            "the unloaded row adopted for a recovered session is not a second chat"
+        );
+
+        let names = names_in(&root);
+        assert!(
+            names.contains(&"threads.json.recovered-1700000000000".to_string()),
+            "the recovered copy is kept under a new name: {names:?}"
+        );
+        assert!(
+            names.contains(&"threads.json.corrupt-1700000000001".to_string()),
+            "a copy that still does not parse stays where it is: {names:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(&torn).expect("torn"),
+            "[{\"id\":\"thr-x\",\"ti"
+        );
+
+        // The merge is on disk, and the next launch does not fold the copy in again.
+        let again = load();
+        assert_eq!(again.len(), got.len());
+        assert_eq!(names_in(&root), names);
+
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn merge_recovered_prefers_newer_rows_and_drops_stand_ins() {
+        let row = |id: &str, title: &str| {
+            let mut t = ChatThread::new(title, false);
+            t.id = id.into();
+            t.messages_mut().push(("user".into(), title.into()));
+            t
+        };
+        let older = vec![row("a", "a v1"), row("b", "b v1")];
+        let newer = vec![row("b", "b v2"), row("c", "c v1")];
+        let mut session = row("d", "session chat");
+        session.retired_sessions = vec!["sess-old".into()];
+        let copies = vec![older, newer, vec![session]];
+
+        let mut stub = ChatThread::new("adopted", false);
+        stub.grok_session = Some("sess-old".into());
+        stub.grok_show_pending = true;
+        let mut opened = ChatThread::new("opened", false);
+        opened.grok_session = Some("sess-old".into());
+        opened
+            .messages_mut()
+            .push(("user".into(), "kept going".into()));
+        let live = vec![row("c", "c live"), stub, opened.clone()];
+
+        let merged = merge_recovered(live, copies);
+        let titles: Vec<&str> = merged.iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            vec!["a v1", "b v2", "session chat", "c live", "opened"],
+            "recovered first, newer copy wins, live wins, unloaded stand-in dropped"
+        );
+        assert_eq!(
+            merged.last().map(|t| t.id.as_str()),
+            Some(opened.id.as_str())
         );
     }
 

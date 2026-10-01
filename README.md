@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.49** — A tool ask no longer reads as "User cancelled". When Grok asks for two tools at once, the second card waits its turn instead of cancelling the first, Deny sends the agent's own reject option, and only a bare key with nothing open over the chat answers the card. Stop still cancels every ask, on screen and queued.
+**v2.10.50** — History no longer disappears once it passes 32 MiB. Chat history now has its own 512 MiB cap, and a save never writes more than a launch reads: past the cap, the largest messages in the saved copy give way to a short note. History an earlier version set aside as `threads.json.corrupt-*` comes back on the next launch.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.49.tar.gz`, AUR | **v2.10.49** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.49.exe`, `grokhub-windows-v2.10.49.zip` | **v2.10.49** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.50.tar.gz`, AUR | **v2.10.50** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.50.exe`, `grokhub-windows-v2.10.50.zip` | **v2.10.50** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
