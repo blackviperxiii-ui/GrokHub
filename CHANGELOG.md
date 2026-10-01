@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 2.10.50 — 2026-09-30
+
+History no longer disappears once it passes 32 MiB. A few chats with pasted screenshots could push `threads.json` over the store cap, and the next launch set the whole file aside as `threads.json.corrupt-<time>` and opened an empty History. Chat history (`threads.json` and `chat.json`) now has its own 512 MiB cap, and a save never writes more than a launch reads: past the cap, the largest messages in the saved copy give way to a short note that says so, biggest first, until the rest fits. If even that cannot fit, nothing is written and the file already on disk stays as it was. A file that is actually torn or unreadable is still set aside, as before.
+
+If an earlier version already set your History aside, the next launch brings it back. Every `threads.json.corrupt-*` copy that still reads is merged into History next to the chats started since (the live copy wins when both have the same chat), then renamed `threads.json.recovered-*`. A copy that does not read stays where it is. Nothing is deleted.
+
+Opening a History over 32 MiB in 2.10.48 or older sets it aside again; this version brings it back on its next launch.
+
+- Linux: `grokhub-linux-v2.10.50.tar.gz` and AUR `pkgver=2.10.50`.
+- Windows: `GrokHub-Setup-2.10.50.exe` and `grokhub-windows-v2.10.50.zip`.
+
 ## 2.10.49 — 2026-09-30
 
 A tool ask no longer reads as "User cancelled". When Grok asked for two tools at once, the second permission card replaced the first and cancelled it, so the agent saw a cancel the user never made. Asks now queue: the card on screen stays until it is answered, then the next one shows.

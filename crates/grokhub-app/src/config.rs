@@ -8,11 +8,18 @@ use std::time::{Duration, Instant};
 /// SOUL/USER/MEMORY on the UI thread. Bigger files freeze kick_model and the editor.
 pub const MEMORY_FILE_CAP: usize = 1024 * 1024;
 
-/// JSON stores grow with ordinary use — `threads.json` holds the whole chat history — so
-/// they get a far larger ceiling than the markdown memory files. Anything over the cap is
-/// quarantined rather than parsed: a severed JSON token deserializes to nothing, and the
-/// next persist would write that nothing back over the user's data.
+/// JSON stores grow with ordinary use, so they get a far larger ceiling than the markdown
+/// memory files. Anything over the cap is quarantined rather than parsed: a severed JSON
+/// token deserializes to nothing, and the next persist would write that nothing back over
+/// the user's data. Chat history has its own, larger cap: [`HISTORY_STORE_CAP`].
 pub const JSON_STORE_CAP: usize = 32 * 1024 * 1024;
+
+/// `threads.json` holds every chat and `chat.json` mirrors the open one. Pasted screenshots
+/// and tool results sit inline as data URLs, so a few heavy chats pass 32 MiB, and at that
+/// cap the next launch quarantined the whole History. Boot parses about 1.2 ms per MB, so
+/// this still bounds the read, and the savers keep under it through [`fit_history_json`]:
+/// the app always reads back what it wrote.
+pub const HISTORY_STORE_CAP: usize = 512 * 1024 * 1024;
 
 /// Write, fsync, then rename so a kill mid-persist cannot leave a truncated JSON.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -203,6 +210,90 @@ where
 /// `load_json_or` with `T::default()` as the fallback.
 pub fn load_json<T: Default + serde::de::DeserializeOwned>(path: &Path, cap: usize) -> T {
     load_json_or(path, cap, T::default)
+}
+
+/// Parse a store that must stay where it is when it does not parse, such as a quarantined
+/// copy. `None` for missing, over the cap, unreadable, or not valid JSON for `T`.
+pub fn peek_json<T: serde::de::DeserializeOwned>(path: &Path, cap: usize) -> Option<T> {
+    let StoreRead::Text(raw) = read_store(path, cap) else {
+        return None;
+    };
+    let raw = raw.strip_prefix('\u{feff}').unwrap_or(raw.as_str());
+    serde_json::from_str(raw).ok()
+}
+
+/// The body of every `[role, body]` pair in a serialized message list.
+pub fn message_bodies(msgs: &mut serde_json::Value) -> Vec<&mut String> {
+    msgs.as_array_mut()
+        .into_iter()
+        .flatten()
+        .filter_map(|pair| match pair.get_mut(1) {
+            Some(serde_json::Value::String(body)) => Some(body),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Pretty JSON for a history store that fits under `cap`, so the next launch can load it.
+/// Over the cap, the largest message bodies (from `bodies`) give way to a short note,
+/// biggest first, until the rest fits. Returns the JSON and how many bodies were dropped.
+/// Errs when even that cannot fit; the caller then writes nothing, so the file already on
+/// disk stays loadable.
+pub fn fit_history_json(
+    value: &mut serde_json::Value,
+    cap: usize,
+    bodies: fn(&mut serde_json::Value) -> Vec<&mut String>,
+) -> Result<(String, usize), String> {
+    let s = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
+    if s.len() <= cap {
+        return Ok((s, 0));
+    }
+    // A body serializes to at least its own length, so counting only that undercounts what
+    // each swap saves. Once the count covers the excess, the real file is under the cap.
+    let mut excess = s.len() - cap;
+    let mut list = bodies(value);
+    list.sort_by_key(|b| std::cmp::Reverse(b.len()));
+    let mut dropped = 0;
+    for body in list {
+        if excess == 0 {
+            break;
+        }
+        let note = dropped_body_note(body.len(), cap);
+        if note.len() >= body.len() {
+            break;
+        }
+        excess = excess.saturating_sub(body.len() - note.len());
+        *body = note;
+        dropped += 1;
+    }
+    let s = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
+    if s.len() > cap {
+        return Err(format!(
+            "history is {} even without its largest messages, over the {} cap",
+            size_label(s.len()),
+            size_label(cap)
+        ));
+    }
+    Ok((s, dropped))
+}
+
+/// Stands in for a body [`fit_history_json`] dropped. Plain ASCII with nothing to escape,
+/// so it serializes to exactly its length.
+fn dropped_body_note(len: usize, cap: usize) -> String {
+    format!(
+        "[This {} message was dropped from saved History to keep it under {}.]",
+        size_label(len),
+        size_label(cap)
+    )
+}
+
+fn size_label(bytes: usize) -> String {
+    let mb = bytes as f64 / (1024.0 * 1024.0);
+    if mb >= 10.0 {
+        format!("{mb:.0} MB")
+    } else {
+        format!("{mb:.1} MB")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -652,7 +743,7 @@ pub fn chat_path() -> PathBuf {
 }
 
 pub fn load_chat() -> Vec<(String, String)> {
-    load_json(&chat_path(), JSON_STORE_CAP)
+    load_json(&chat_path(), HISTORY_STORE_CAP)
 }
 
 pub fn workboard_path() -> PathBuf {
@@ -680,7 +771,8 @@ pub fn imagine_dir() -> PathBuf {
 }
 
 pub fn save_chat(msgs: &[(String, String)]) -> Result<(), String> {
-    let s = serde_json::to_string_pretty(msgs).map_err(|e| e.to_string())?;
+    let mut rows = serde_json::to_value(msgs).map_err(|e| e.to_string())?;
+    let (s, _) = fit_history_json(&mut rows, HISTORY_STORE_CAP, message_bodies)?;
     atomic_write(&chat_path(), s.as_bytes())
 }
 
@@ -1135,6 +1227,77 @@ mod tests {
         assert_eq!(loaded.len(), 200);
         assert!(path.exists(), "a readable store must not be quarantined");
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn history_stores_load_what_they_save() {
+        let src = include_str!("config.rs");
+        for (name, next) in [
+            ("pub fn load_chat(", "pub fn workboard_path("),
+            ("pub fn save_chat(", "#[cfg(test)]"),
+        ] {
+            let slice = src
+                .split(name)
+                .nth(1)
+                .and_then(|s| s.split(next).next())
+                .unwrap_or(name);
+            assert!(
+                slice.contains("HISTORY_STORE_CAP") && !slice.contains("JSON_STORE_CAP"),
+                "chat.json mirrors the open chat, so it shares the history cap: {slice}"
+            );
+        }
+
+        // One chat with a pasted screenshot, shaped like chat.json.
+        let msgs = vec![
+            ("user".to_string(), "what is this?".to_string()),
+            (
+                "tool".to_string(),
+                format!("data:image/png;base64,{}", "A".repeat(90_000)),
+            ),
+            ("assistant".to_string(), "a harbor at night".to_string()),
+        ];
+        let mut rows = serde_json::to_value(&msgs).expect("value");
+        let (s, dropped) = fit_history_json(&mut rows, 1024 * 1024, message_bodies).expect("fit");
+        assert_eq!(dropped, 0, "under the cap nothing changes");
+        assert_eq!(s, serde_json::to_string_pretty(&msgs).expect("json"));
+
+        let cap = 16 * 1024;
+        let (s, dropped) = fit_history_json(&mut rows, cap, message_bodies).expect("fit");
+        assert!(s.len() <= cap, "{} bytes over a {cap} byte cap", s.len());
+        assert_eq!(dropped, 1);
+        let back: Vec<(String, String)> = serde_json::from_str(&s).expect("parses");
+        assert_eq!(back[0], msgs[0]);
+        assert_eq!(back[1].0, "tool");
+        assert!(
+            back[1].1.contains("dropped from saved History"),
+            "{}",
+            back[1].1
+        );
+        assert_eq!(back[2], msgs[2]);
+    }
+
+    #[test]
+    fn peek_json_never_moves_the_file() {
+        let root = test_config_root("peek");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("root");
+        let good = root.join("threads.json.corrupt-1");
+        fs::write(&good, "[\"a\",\"b\"]").expect("write");
+        assert_eq!(
+            peek_json::<Vec<String>>(&good, JSON_STORE_CAP),
+            Some(vec!["a".into(), "b".into()])
+        );
+        assert_eq!(peek_json::<Vec<String>>(&good, 4), None, "over the cap");
+        let torn = root.join("threads.json.corrupt-2");
+        fs::write(&torn, "[\"a\",").expect("write");
+        assert_eq!(peek_json::<Vec<String>>(&torn, JSON_STORE_CAP), None);
+        assert!(
+            good.exists() && torn.exists(),
+            "peek must not quarantine anything"
+        );
+        let names: Vec<_> = fs::read_dir(&root).expect("dir").flatten().collect();
+        assert_eq!(names.len(), 2);
         let _ = fs::remove_dir_all(&root);
     }
 
