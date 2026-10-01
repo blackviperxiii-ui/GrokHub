@@ -16992,3 +16992,13 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn chip_hour_returns_0_through_23() {
+    // Associated fn: hour from local_clock (cached date shell or noon fallback). No network/xAI.
+    let hour = Cabin::chip_hour();
+    assert!(
+        (0..=23).contains(&hour),
+        "chip_hour must be 0..=23 (or noon fallback hour=12), got {hour}"
+    );
+}
