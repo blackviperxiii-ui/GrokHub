@@ -16992,3 +16992,60 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn memory_file_poll_fills_the_open_page() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.mem_name = "USER.md".into();
+    cabin.mem_body = "old".into();
+    cabin.status = "Harbor".into();
+
+    cabin.poll_mem_file();
+    assert_eq!(cabin.mem_name, "USER.md");
+    assert_eq!(cabin.mem_body, "old");
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.mem_file_rx.is_none());
+    assert_eq!(cabin.mem_cache_at, [0, 0, 0]);
+    assert_eq!(
+        cabin.mem_cache_body,
+        [String::new(), String::new(), String::new()]
+    );
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.mem_file_rx = Some(("USER.md".into(), rx));
+    cabin.poll_mem_file();
+    assert!(cabin.mem_file_rx.as_ref().is_some_and(|(name, _)| name == "USER.md"));
+    assert_eq!(cabin.mem_body, "old");
+    assert_eq!(cabin.status, "Harbor");
+
+    tx.send((9, "Night brief".into())).expect("user file");
+    cabin.poll_mem_file();
+    assert_eq!(cabin.mem_body, "Night brief");
+    assert_eq!(cabin.mem_cache_at[1], 9);
+    assert_eq!(cabin.mem_cache_body[1], "Night brief");
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.mem_file_rx.is_none());
+
+    let (soul_tx, soul_rx) = std::sync::mpsc::channel();
+    cabin.mem_file_rx = Some(("SOUL.md".into(), soul_rx));
+    soul_tx.send((3, "soul text".into())).expect("soul file");
+    assert_eq!(cabin.mem_name, "USER.md");
+    cabin.poll_mem_file();
+    assert_eq!(cabin.mem_body, "Night brief");
+    assert_eq!(cabin.mem_cache_at[0], 3);
+    assert_eq!(cabin.mem_cache_body[0], "soul text");
+    assert_eq!(cabin.mem_cache_at[1], 9);
+    assert_eq!(cabin.mem_cache_body[1], "Night brief");
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.mem_file_rx.is_none());
+
+    let (gone_tx, gone_rx) = std::sync::mpsc::channel();
+    cabin.mem_file_rx = Some(("MEMORY.md".into(), gone_rx));
+    drop(gone_tx);
+    cabin.poll_mem_file();
+    assert!(cabin.mem_file_rx.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert_eq!(cabin.mem_body, "Night brief");
+    assert_eq!(cabin.status, "Harbor");
+}
