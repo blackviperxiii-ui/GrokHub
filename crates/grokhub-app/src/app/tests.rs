@@ -21120,3 +21120,21 @@ fn chip_hour_returns_0_through_23() {
         "chip_hour must be 0..=23 (or noon fallback hour=12), got {hour}"
     );
 }
+
+#[test]
+fn ptt_continue_stays_off_when_voice_is_idle() {
+    let mut app = Cabin::quiet_for_test();
+    app.status = "Harbor".into();
+    app.voice_state = VoiceState::Idle;
+    app.voice_orb = "idle".into();
+    app.voice_sock = None;
+    app.voice_hold_rx = None;
+    app.running = false;
+    app.maybe_continue_ptt();
+    assert_eq!(app.status, "Harbor");
+    assert!(matches!(app.voice_state, VoiceState::Idle));
+    assert_eq!(app.voice_orb, "idle");
+    assert!(app.voice_hold_rx.is_none());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
