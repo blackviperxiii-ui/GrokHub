@@ -16992,3 +16992,20 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn day_now_returns_yyyy_mm_dd() {
+    // Associated fn: shells `date +%F`, or falls back to 1970-01-01. No network/xAI.
+    let day = Cabin::day_now();
+    let ok = day.len() == 10
+        && day.as_bytes()[4] == b'-'
+        && day.as_bytes()[7] == b'-'
+        && day
+            .bytes()
+            .enumerate()
+            .all(|(i, b)| i == 4 || i == 7 || b.is_ascii_digit());
+    assert!(
+        ok,
+        "day_now must be YYYY-MM-DD (or the 1970-01-01 fallback), got {day:?}"
+    );
+}
