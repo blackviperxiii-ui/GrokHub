@@ -16992,3 +16992,39 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn kick_local_clock_stays_off_network() {
+    // Associated fn: background `date` refresh into LAST_CLOCK. No grok/xAI/network.
+    let cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+
+    if let Ok(mut g) = super::LAST_CLOCK.lock() {
+        *g = None;
+    }
+    Cabin::kick_local_clock();
+
+    let clock = (0..80).find_map(|_| {
+        if let Ok(g) = super::LAST_CLOCK.lock() {
+            if let Some((_, clock, inflight)) = g.as_ref() {
+                if !*inflight {
+                    return Some(*clock);
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        None
+    })
+    .expect("kick_local_clock should cache a LocalClock (date shell OK)");
+
+    assert!(
+        clock.weekday <= 6 && clock.hour <= 23 && clock.minute <= 59,
+        "cached LocalClock out of range: weekday={} hour={} minute={}",
+        clock.weekday,
+        clock.hour,
+        clock.minute
+    );
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
