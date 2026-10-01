@@ -16778,3 +16778,66 @@ fn a_finished_turn_keeps_each_reply_and_tool_run_apart() {
     assert_eq!(tools, vec!["2 steps · Grep, Read file", "Screenshot"]);
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn idea_card_threads_leave_with_the_card() {
+    let mut quiet = QuietCabin::boot("idea-card-thread-gone");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    cabin.updates.push(board_idea(
+        "idea-auto",
+        grokhub_core::IdeaKind::Automation,
+        "every weekday at 9 summarize the workboard",
+        5,
+    ));
+    cabin.updates.push(board_idea("idea-try", grokhub_core::IdeaKind::Try, "draft my standup", 6));
+    cabin.discuss_card("idea-auto");
+    cabin.discuss_card("idea-try");
+    let auto_tid = cabin.updates.iter().find(|c| c.id == "idea-auto").unwrap().discuss_thread.clone().unwrap();
+    let try_tid = cabin.updates.iter().find(|c| c.id == "idea-try").unwrap().discuss_thread.clone().unwrap();
+    let visible = cabin.visible_thread_id();
+    cabin.apply_idea("idea-auto");
+    assert!(!cabin.threads.iter().any(|t| t.id == auto_tid), "an applied card takes its chat along");
+    assert!(cabin.status.contains("Automation added") || cabin.status.contains("loop"), "{}", cabin.status);
+    cabin.delete_idea("idea-try");
+    assert!(!cabin.threads.iter().any(|t| t.id == try_tid), "a deleted card takes its chat along");
+    assert_eq!(cabin.status, "Idea deleted");
+    assert_eq!(cabin.visible_thread_id(), visible, "the open chat stays open");
+}
+
+#[test]
+fn idea_card_chat_reads_only_the_reply_of_a_stored_turn() {
+    let mut quiet = QuietCabin::boot("idea-card-turn");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    cabin.updates.push(board_idea("idea-a", grokhub_core::IdeaKind::Try, "draft my standup", 5));
+    cabin.discuss_card("idea-a");
+    let tid = cabin.updates[0].discuss_thread.clone().unwrap();
+    let thread = cabin.threads.iter_mut().find(|t| t.id == tid).unwrap();
+    thread.messages_mut().push(("user".into(), "make it shorter".into()));
+    thread.messages_mut().push((
+        "assistant".into(),
+        "TURN_THOUGHT:\nCould use CARD_ACTION: write a haiku\nTURN_SAY:\nShorter now.\nCARD_ACTION: draft a three-line standup\n".into(),
+    ));
+    cabin.sync_idea_card_actions();
+    assert_eq!(cabin.updates[0].idea_action(), "draft a three-line standup");
+    let last = cabin.threads.iter().find(|t| t.id == tid).unwrap().messages.last().cloned().unwrap();
+    let shown = grokhub_core::assistant_prose(&last.1);
+    assert!(shown.contains("Shorter now.") && shown.contains(grokhub_core::CARD_ACTION_DONE), "{shown}");
+    assert!(!shown.contains("haiku"), "the thought stays off the card chat: {shown}");
+}
+
+#[test]
+fn a_hung_ideas_ask_stops_thinking() {
+    let mut quiet = QuietCabin::boot("ideas-ask-timeout");
+    let cabin = &mut quiet.cabin;
+    let (_tx, rx) = std::sync::mpsc::channel::<String>();
+    cabin.ideas_rx = Some((rx, Vec::new(), Vec::new()));
+    cabin.cfg.feed_pulse.last_ideas_ms = super::now_ms();
+    cabin.poll_ideas();
+    assert!(cabin.ideas_rx.is_some(), "a fresh ask keeps waiting");
+    cabin.cfg.feed_pulse.last_ideas_ms =
+        super::now_ms().saturating_sub(super::feed_ui::IDEAS_WAIT_MS + 1_000);
+    cabin.poll_ideas();
+    assert!(cabin.ideas_rx.is_none(), "an ask past the wait lets the button go back to Suggest ideas");
+}
