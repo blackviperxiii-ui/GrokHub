@@ -1244,6 +1244,19 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     }
 
     #[test]
+    fn chat_row_outside_clip_is_false_inside_and_true_outside() {
+        let clip = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 100.0));
+        assert!(
+            !super::chat_row_outside_clip(egui::Pos2::new(10.0, 10.0), 80.0, 40.0, clip),
+            "a row fully inside the clip must paint"
+        );
+        assert!(
+            super::chat_row_outside_clip(egui::Pos2::new(10.0, 200.0), 80.0, 40.0, clip),
+            "a row clearly below the clip must skip"
+        );
+    }
+
+    #[test]
     fn culled_row_does_not_steal_the_next_rows_widget_id() {
         fn copy_id(skip_earlier: bool, salt: bool) -> egui::Id {
             let ctx = egui::Context::default();
