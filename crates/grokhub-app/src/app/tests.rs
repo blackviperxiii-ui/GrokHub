@@ -16992,3 +16992,20 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn local_clock_returns_cached_or_fresh() {
+    // Associated fn: cache hit or `clock_now` via `date` (or noon Monday fallback).
+    // No network/xAI. Call twice so the second path is cached-or-fresh.
+    let a = Cabin::local_clock();
+    let b = Cabin::local_clock();
+    for (label, clock) in [("first", a), ("second", b)] {
+        assert!(
+            clock.weekday <= 6 && clock.hour <= 23 && clock.minute <= 59,
+            "{label} LocalClock out of range (or expect weekday=1 hour=12 minute=0 fallback): weekday={} hour={} minute={}",
+            clock.weekday,
+            clock.hour,
+            clock.minute
+        );
+    }
+}
