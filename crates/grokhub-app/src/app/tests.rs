@@ -16992,3 +16992,25 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn chrome_here_true_on_unbound_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    // quiet_for_test: chat_job_thread None → chrome_here true (unbound cabin-wide work).
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.chrome_here());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+
+    // Bound to a different thread than visible → false; match visible → true.
+    cabin.threads.push(crate::threads::ChatThread::new("Chat", false));
+    cabin.thread_idx = 0;
+    let vis = cabin.visible_thread_id();
+    cabin.chat_job_thread = Some("elsewhere".into());
+    assert!(!cabin.chrome_here());
+    cabin.chat_job_thread = Some(vis);
+    assert!(cabin.chrome_here());
+    assert!(!cabin.running);
+    assert_eq!(cabin.status, "Harbor");
+}
