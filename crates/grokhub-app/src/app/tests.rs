@@ -16992,3 +16992,49 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn greeting_galley_h_drives_empty_home_greet_top() {
+    // Real empty-home placement path: `greeting_galley_h` + mark → `empty_home_greet_top`.
+    // Quiet cabin only — no greeting LLM / network spawn.
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.greeting = "Hello from empty home".into();
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+
+    let ctx = egui::Context::default();
+    let _ = ctx.run(Default::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let mark_h = 40.0 + 12.0;
+            let short_h = super::greeting_galley_h(ui, &cabin.greeting, 480.0);
+            assert!(
+                short_h >= crate::theme::GREET_HERO,
+                "galley height is at least GREET_HERO: {short_h}"
+            );
+            let composer_top =
+                super::empty_home_composer_top(800.0, crate::theme::QUERY_MIN_H);
+            let short_top =
+                super::empty_home_greet_top(composer_top, short_h + mark_h, 12.0);
+            assert!(short_top >= 0.0, "greeting top stays non-negative: {short_top}");
+
+            let long = "word ".repeat(80);
+            let long_h = super::greeting_galley_h(ui, &long, 200.0);
+            assert!(
+                long_h > short_h,
+                "narrow wrap grows galley height: {long_h} vs {short_h}"
+            );
+            let long_top =
+                super::empty_home_greet_top(composer_top, long_h + mark_h, 12.0);
+            assert!(
+                long_top < short_top,
+                "taller wrapped greeting rises for empty-home placement: {long_top} vs {short_top}"
+            );
+        });
+    });
+
+    assert!(!cabin.running, "galley height must not start a run");
+    assert!(
+        cabin.chat_job_thread.is_none(),
+        "galley height must not spawn a chat job"
+    );
+}
