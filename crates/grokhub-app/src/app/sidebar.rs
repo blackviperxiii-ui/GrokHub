@@ -198,7 +198,7 @@ impl Cabin {
             crate::theme::muted()
         };
         let w = ui.available_width();
-        let (_rect, resp) =
+        let (slot, resp) =
             ui.allocate_exact_size(egui::vec2(w, crate::theme::NAV_ROW_H), egui::Sense::click());
         let (resp, rect, _) = crate::theme::feel_response(ui, resp, egui::Color32::TRANSPARENT);
         crate::theme::glide_candidate(ui, "rail", rect, resp.hovered(), active);
@@ -214,14 +214,16 @@ impl Cabin {
                 egui::Stroke::new(1.0_f32, crate::theme::border_strong()),
             );
         }
-        let icon_c = egui::pos2(rect.left() + 20.0, rect.center().y);
+        // The hover scale grows the highlight only. Icon and label stay on the resting
+        // slot, or a 1.035 scale on a full-width row slides them ~4px left.
+        let icon_c = egui::pos2(slot.left() + 20.0, slot.center().y);
         let icon_rect = egui::Rect::from_center_size(icon_c, egui::vec2(20.0, 20.0));
         crate::icons::paint_rail_icon_at(ui.painter(), icon_rect, icon, color);
-        let text_left = rect.left() + 38.0;
-        let text_right = rect.right() - 12.0;
+        let text_left = slot.left() + 38.0;
+        let text_right = slot.right() - 12.0;
         let painted = fit_rail_label(ui, label, (text_right - text_left).max(8.0));
         ui.painter().text(
-            egui::pos2(text_left, rect.center().y),
+            egui::pos2(text_left, slot.center().y),
             egui::Align2::LEFT_CENTER,
             &painted,
             egui::FontId::proportional(crate::theme::FONT_CHROME),
@@ -362,7 +364,11 @@ impl Cabin {
                 let mut proj_act: Option<(String, ProjectMenuAct, egui::Pos2)> = None;
                 let mut section_act: Option<TabAct> = None;
                 let live_empty = self.messages.is_empty();
-                let proj_h = (ui.available_height() * 0.46).clamp(40.0, 320.0);
+                // Snap to whole rows so the list never ends on a sliver of the next row's gutter.
+                let row_gap = ui.spacing().item_spacing.y;
+                let pitch = crate::theme::NAV_ROW_H + row_gap;
+                let raw_h = (ui.available_height() * 0.46).clamp(40.0, 320.0);
+                let proj_h = (((raw_h + row_gap) / pitch).floor().max(1.0) * pitch - row_gap).max(40.0);
                 egui::ScrollArea::vertical()
                     .id_salt("rail-projects")
                     .auto_shrink([false, true])

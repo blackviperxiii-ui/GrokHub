@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.50** — History no longer disappears once it passes 32 MiB. Chat history now has its own 512 MiB cap, and a save never writes more than a launch reads: past the cap, the largest messages in the saved copy give way to a short note. History an earlier version set aside as `threads.json.corrupt-*` comes back on the next launch.
+**v2.10.51** — UI pass 2: a failed turn's `Error:` reply gets a faint red wash and hairline so it no longer reads as an answer, help lines paint `backtick` spans as inline code, Ideas uses the same page header as the other pages, and the titlebar update chip, pills, tabs and rail rows stay steady on hover. Live green is readable in light mode.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.50.tar.gz`, AUR | **v2.10.50** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.50.exe`, `grokhub-windows-v2.10.50.zip` | **v2.10.50** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.51.tar.gz`, AUR | **v2.10.51** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.51.exe`, `grokhub-windows-v2.10.51.zip` | **v2.10.51** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.

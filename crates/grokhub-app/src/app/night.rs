@@ -118,11 +118,7 @@ impl Cabin {
                 self.auto_compose = true;
             }
             egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.label(
-                RichText::new("Interval prompts run as Grok Build `/loop`. A clock time — `every weekday at 9` — runs as a cabin automation on the 15s pulse. Stop a job when the work is done.")
-                    .size(12.0)
-                    .color(crate::theme::muted()),
-            );
+            crate::cards::help_text(ui, "Interval prompts run as Grok Build `/loop`. A clock time — `every weekday at 9` — runs as a cabin automation on the 15s pulse. Stop a job when the work is done.");
             ui.add_space(12.0);
             if self.auto_compose {
                 ui.add_space(12.0);
@@ -267,11 +263,7 @@ impl Cabin {
     pub(super) fn ui_scheduled_automations(&mut self, ui: &mut egui::Ui) {
         crate::cards::section_label(ui, "Scheduled");
         if self.automations.is_empty() {
-            ui.label(
-                RichText::new("No clock jobs yet. Add `every weekday at 9, summarize the board`.")
-                    .size(12.0)
-                    .color(crate::theme::muted()),
-            );
+            crate::cards::help_text(ui, "No clock jobs yet. Add `every weekday at 9, summarize the board`.");
             ui.add_space(16.0);
             return;
         }
