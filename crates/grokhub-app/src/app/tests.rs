@@ -17014,3 +17014,5 @@ fn palette_search_poll_clears_on_drop() {
     assert!(!cabin.running);
     assert!(cabin.chat_job_thread.is_none());
 }
+
+// ci-retrigger-marker
