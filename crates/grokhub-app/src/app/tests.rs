@@ -16992,3 +16992,17 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn open_update_overlay_opens_settings_update() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(matches!(cabin.nav, Nav::Chat));
+    assert!(matches!(cabin.settings_sec, SettingsSec::Account));
+    assert!(cabin.chat_job_thread.is_none());
+    cabin.open_update_overlay();
+    assert!(matches!(cabin.nav, Nav::Settings));
+    assert!(matches!(cabin.settings_sec, SettingsSec::Update));
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.queued_overlay.is_none());
+}
