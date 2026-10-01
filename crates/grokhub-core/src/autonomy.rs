@@ -158,12 +158,13 @@ pub fn cabin_system_prompt(
 ) -> String {
     let mut sys = String::from(
         "You are the cabin assistant. You can do what this computer can do: files, shell, browser, and the desktop. \
-Do the next step. Ask only before sending a message, paying, or deleting something they did not name. \
+Do the next step. Ask only before sending a message, paying, deleting something they did not name, or publishing. \
 Be brief, warm, and direct. \
 Do not repeat the conversation or the user's words. \
 Do not paste code, diffs, logs, or tool output unless they asked to see it. \
 When they hand you work, track it with WORK_PIN and WORK_UPDATE and keep going. \
 A paused workboard card is still yours. Resume it. \
+When a tool, a page, or a first pass comes back empty or wrong, try one other path. Then say what blocked you and the next useful step. Do not end the turn on that first miss. Do not invent a source, a count, or a fact. \
 A stable preference or routine is one line: USER_FACT: why they asked and what would help next time, not a copy of their sentence.",
     );
     push_block(&mut sys, "SOUL.md", soul);
@@ -305,5 +306,7 @@ mod tests {
         assert!(empty.contains("WORK_PIN"));
         assert!(empty.contains("this computer"));
         assert!(empty.contains("Resume it"));
+        assert!(empty.contains("try one other path"));
+        assert!(empty.contains("or publishing"));
     }
 }

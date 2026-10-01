@@ -12,9 +12,11 @@ use grokhub_core::{
     dismiss_update, feed_ideas, feed_visible, file_idea_todo, hold_if_quiet,
     home_feed_n, idea_open_line, unpin_feed_idea,
     idea_todo_title,
-    links_from_research, mark_update_opened, post_update, quiet_hours_active, route_schedule,
+    links_from_research, mark_update_opened, parse_lookup, post_help, post_update,
+    quiet_hours_active, remember_dismissed_source, route_schedule,
     schedule_created_card, tick_feed_pulse, visible_digests, visible_updates,
-    CardReaction, CitedLink, DigestMaterial, PulseNow, TasteNote, UpdateAction, UpdateCard,
+    CardReaction, DigestEdition, DigestMaterial, PausedJob, PulseNow, RepeatedAction,
+    TasteNote, UpdateAction, UpdateCard,
     UpdateKind, UpdateStatus, DIGEST_PAINT_MAX, FEED_PAINT_MAX,
 };
 
@@ -199,8 +201,6 @@ pub(super) enum FeedAct {
     Open(String),
     Dismiss(String),
     Build(String),
-    Offer(String),
-    React(String, CardReaction),
     Discuss(String),
     Archive(String),
     /// Remove an idea from the Ideas board.
@@ -248,41 +248,61 @@ impl Cabin {
             && (pulse.digest_held
                 || pulse.last_digest_ms == 0
                 || now.saturating_sub(pulse.last_digest_ms) >= pulse.digest_ms);
-        let (user_md, memory_md, soul_md, taste, links) = if want_digest && !quiet {
+        let (user_md, memory_md, soul_md, taste) = if want_digest && !quiet {
             (
                 crate::config::read_memory("USER.md"),
                 crate::config::read_memory("MEMORY.md"),
                 crate::config::read_memory("SOUL.md"),
                 self.digest_taste(),
-                Vec::<CitedLink>::new(),
             )
         } else {
-            (
-                String::new(),
-                String::new(),
-                String::new(),
-                Vec::new(),
-                links_from_research(""),
-            )
+            (String::new(), String::new(), String::new(), Vec::new())
         };
+        let project = self.cfg.project_dir.clone();
+        let steer = if want_digest && !quiet {
+            grokhub_core::digest_steer(&self.cfg.digest_brief, &user_md, &memory_md, &project)
+        } else {
+            self.cfg.digest_brief.clone()
+        };
+        let parsed = self.digest_pending.as_deref().map(parse_lookup);
+        let edition = parsed.as_ref().map(|item| DigestEdition {
+            found: item.found,
+            refused: item.refused,
+            title: item.title.as_str(),
+            body: item.body.as_str(),
+        });
+        let links = parsed
+            .as_ref()
+            .map(|item| links_from_research(&item.body))
+            .unwrap_or_default();
         let material = DigestMaterial {
-            brief: &self.cfg.digest_brief,
+            brief: &steer,
             user_md: &user_md,
             memory_md: &memory_md,
             soul_md: &soul_md,
             links: &links,
             taste: &taste,
+            edition,
         };
+        let fed_edition = edition.is_some();
         let tick = tick_feed_pulse(
             &mut self.updates,
             &mut self.cfg.feed_pulse,
             PulseNow { now_ms: now, quiet },
             material,
         );
-        if tick.cards_changed {
+        if fed_edition && tick.digest_consumed {
+            self.digest_pending = None;
+        }
+        self.digest_wants_lookup = tick.digest_needs_lookup;
+        if tick.digest_needs_lookup {
+            self.digest_steer = steer;
+        }
+        let help_changed = self.note_help_offers(now, quiet);
+        if tick.cards_changed || help_changed {
             self.persist_updates();
         }
-        if tick.pulse_changed {
+        if tick.pulse_changed || help_changed {
             self.persist_cfg();
         }
     }
@@ -318,6 +338,155 @@ impl Cabin {
             });
         }
         notes
+    }
+
+    /// Local situation cards. No model call and no desktop ping in this function.
+    fn note_help_offers(&mut self, now: u64, quiet: bool) -> bool {
+        let paused_owned: Vec<(String, String, String)> = self
+            .board
+            .iter()
+            .filter(|card| card.detail == "Paused. This is where to resume.")
+            .map(|card| (card.id.clone(), card.title.clone(), card.detail.clone()))
+            .collect();
+        let paused: Vec<PausedJob> = paused_owned
+            .iter()
+            .map(|(id, title, detail)| PausedJob {
+                id: id.as_str(),
+                title: title.as_str(),
+                detail: detail.as_str(),
+            })
+            .collect();
+        let names: Vec<String> = self
+            .automations
+            .iter()
+            .map(|job| job.name.to_ascii_lowercase())
+            .chain(
+                self.grok_loops
+                    .iter()
+                    .map(|job| job.prompt.to_ascii_lowercase()),
+            )
+            .collect();
+        let mut repeats_owned: Vec<(String, String, u32, bool, bool)> = Vec::new();
+        for dests in self.chip_memory.transitions.values() {
+            for (key, count) in dests {
+                if *count < 3 {
+                    continue;
+                }
+                let Some(hit) = self.chip_memory.hits.iter().find(|hit| hit.key == *key) else {
+                    continue;
+                };
+                let label = hit.label.clone();
+                let key_l = key.to_ascii_lowercase();
+                let label_l = label.to_ascii_lowercase();
+                let automated = names.iter().any(|name| name == &key_l || name == &label_l);
+                if let Some(row) = repeats_owned.iter_mut().find(|row| row.0 == *key) {
+                    row.2 = row.2.max(*count);
+                } else {
+                    repeats_owned.push((key.clone(), label, *count, hit.dismisses > 0, automated));
+                }
+            }
+        }
+        let repeats: Vec<RepeatedAction> = repeats_owned
+            .iter()
+            .map(|(key, label, count, dismissed, automated)| RepeatedAction {
+                key: key.as_str(),
+                label: label.as_str(),
+                count: *count,
+                dismissed: *dismissed,
+                automated: *automated,
+            })
+            .collect();
+        let before = self.updates.len();
+        let seen_before = self.cfg.feed_pulse.paused_seen.clone();
+        let help = post_help(
+            &mut self.updates,
+            &mut self.cfg.feed_pulse,
+            now,
+            quiet,
+            self.offer_repeated,
+            &paused,
+            &repeats,
+            &grokhub_core::brief_for(&self.learning, "ideas"),
+        );
+        if help.ping {
+            if let Some(card) = self.updates.iter().rev().find(|card| {
+                card.kind == UpdateKind::Suggestion
+                    && card.status == UpdateStatus::Unread
+                    && !card.held
+            }) {
+                self.situation_ping = Some((
+                    card.title.clone(),
+                    card.body.clone().unwrap_or_default(),
+                ));
+            }
+        }
+        help.ideas > 0
+            || help.posted
+            || self.updates.len() != before
+            || self.cfg.feed_pulse.paused_seen != seen_before
+    }
+
+    /// One lookup a day, off the UI thread. A missing key waits and does not stamp a search.
+    /// Unit tests never start it: this machine's Grok login would spend a real call.
+    pub(super) fn follow_feed_lookup(&mut self) {
+        if !self.digest_wants_lookup || self.digest_busy || self.digest_pending.is_some() {
+            return;
+        }
+        if cfg!(test) {
+            return;
+        }
+        let key = self.bearer();
+        if key.trim().is_empty() {
+            return;
+        }
+        let prompt = grokhub_core::digest_lookup_prompt(&self.digest_steer);
+        let model = CABIN_FAST_MODEL.to_string();
+        let (tx, rx) = mpsc::channel();
+        self.digest_rx = Some(rx);
+        self.digest_busy = true;
+        std::thread::spawn(move || {
+            let messages = [("user".into(), prompt)];
+            let _ = tx.send(grok_chat(&key, &model, &messages, None, None));
+        });
+    }
+
+    pub(super) fn poll_digest_lookup(&mut self) {
+        let Some(rx) = self.digest_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(text)) => {
+                self.digest_busy = false;
+                self.digest_pending = Some(text);
+            }
+            Ok(Err(_)) => {
+                self.digest_busy = false;
+                self.digest_pending = Some("NONE".into());
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                self.digest_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.digest_busy = false;
+                self.digest_pending = Some("NONE".into());
+            }
+        }
+    }
+
+    /// The situation card only. News stays on the home feed. Quiet hours and a focused window stay silent.
+    pub(super) fn release_situation_ping(&mut self) {
+        let Some((title, body)) = self.situation_ping.take() else {
+            return;
+        };
+        if self.quiet_now() || self.window_focused {
+            return;
+        }
+        let line = if body.is_empty() {
+            title
+        } else {
+            format!("{title} {body}")
+        };
+        crate::notify::ping("GrokHub", &line);
     }
 
     pub(super) fn paint_update_feed(&mut self, ui: &mut egui::Ui, pane_w: f32) {
@@ -405,9 +574,7 @@ impl Cabin {
         match act {
             Some(FeedAct::Dismiss(id)) => self.dismiss_feed_card(&id),
             Some(FeedAct::Build(id)) => self.build_idea(&id),
-            Some(FeedAct::Offer(id)) => self.accept_automate_offer(&id),
             Some(FeedAct::Open(id)) => self.open_feed_card(&id),
-            Some(FeedAct::React(id, reaction)) => self.react_card(&id, reaction),
             Some(FeedAct::Discuss(id)) => self.discuss_card(&id),
             Some(FeedAct::Archive(id)) => self.archive_feed_digest(&id),
             Some(FeedAct::Drop(id)) => self.delete_idea(&id),
@@ -438,6 +605,23 @@ impl Cabin {
             card.status = UpdateStatus::Opened;
         }
         self.persist_updates();
+    }
+
+    /// The offer opens the schedule box. Add on that page is what saves it.
+    fn open_offer_on_automations(&mut self, id: &str) {
+        if !mark_update_opened(&mut self.updates, id) {
+            return;
+        }
+        let seed = self
+            .updates
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| c.title.clone())
+            .unwrap_or_default();
+        self.persist_updates();
+        self.night_nl = seed;
+        self.auto_compose = true;
+        self.nav = Nav::Night;
     }
 
     pub(super) fn accept_automate_offer(&mut self, id: &str) {
@@ -705,7 +889,7 @@ impl Cabin {
             self.open_idea_on_board(&card.id);
             return;
         }
-        if !matches!(card.kind, UpdateKind::Digest) {
+        if !matches!(card.kind, UpdateKind::Digest | UpdateKind::Suggestion) {
             return;
         }
         if let Some(thread_id) = card.discuss_thread.as_deref() {
@@ -716,7 +900,11 @@ impl Cabin {
                 return;
             }
         }
-        let context = idea_open_line(&card);
+        let context = if card.kind == UpdateKind::Suggestion {
+            card.body.clone().unwrap_or_else(|| card.title.clone())
+        } else {
+            idea_open_line(&card)
+        };
         let title = format!("Discuss · {}", card.title);
         self.new_thread(false);
         let thread_id = self
@@ -751,6 +939,10 @@ impl Cabin {
             self.discuss_card(id);
             return;
         }
+        if matches!(kind, Some(UpdateKind::AutomateOffer)) {
+            self.open_offer_on_automations(id);
+            return;
+        }
         if !mark_update_opened(&mut self.updates, id) {
             return;
         }
@@ -771,16 +963,23 @@ impl Cabin {
     }
 
     pub(super) fn dismiss_feed_card(&mut self, id: &str) {
-        let idea = self
+        let kind = self.updates.iter().find(|c| c.id == id).map(|c| c.kind);
+        let source = self
             .updates
             .iter()
-            .any(|c| c.id == id && c.kind == UpdateKind::Idea);
-        let removed = if idea {
+            .find(|c| c.id == id)
+            .map(|c| c.source_id.clone())
+            .unwrap_or_default();
+        let removed = if kind == Some(UpdateKind::Idea) {
             unpin_feed_idea(&mut self.updates, id)
         } else {
             dismiss_update(&mut self.updates, id)
         };
         if removed {
+            if kind == Some(UpdateKind::Suggestion) {
+                remember_dismissed_source(&mut self.cfg.feed_pulse, &source);
+                self.persist_cfg();
+            }
             self.persist_updates();
         }
     }
@@ -916,7 +1115,7 @@ fn paint_card_at(ui: &mut egui::Ui, card: &UpdateCard, rect: egui::Rect) -> Opti
         ui.set_min_size(rect.size());
         ui.set_width(rect.width());
         ui.spacing_mut().item_spacing = egui::vec2(8.0, 4.0);
-        act = paint_feed_card(ui, card, rect.width(), false);
+        act = paint_feed_card(ui, card, rect.width());
     });
     act
 }
@@ -1042,12 +1241,7 @@ fn paint_slide_deck(
     }
 }
 
-fn paint_feed_card(
-    ui: &mut egui::Ui,
-    card: &UpdateCard,
-    pane_w: f32,
-    full: bool,
-) -> Option<FeedAct> {
+fn paint_feed_card(ui: &mut egui::Ui, card: &UpdateCard, pane_w: f32) -> Option<FeedAct> {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(pane_w, FEED_CARD_H), egui::Sense::hover());
     ui.painter().rect(
         rect,
@@ -1055,105 +1249,85 @@ fn paint_feed_card(
         crate::theme::elevated(),
         egui::Stroke::new(1.0_f32, crate::theme::border()),
     );
-    let inner = rect.shrink(8.0);
-    let mut act = None;
-    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
-        ui.horizontal(|ui| {
-            let text_w = (inner.width() - 220.0).max(80.0);
-            let title_color = if card.status == UpdateStatus::Opened || card.built {
-                crate::theme::muted()
-            } else {
-                crate::theme::fg()
-            };
-            let (text_rect, text_resp) =
-                ui.allocate_exact_size(egui::vec2(text_w, inner.height()), egui::Sense::click());
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(text_rect), |ui| {
-                ui.set_width(text_w);
-                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-                let title = if card.kind == UpdateKind::Idea {
-                    format!("{} · {}", card.idea_type_label(), card.title)
-                } else if card.built {
-                    format!("{} · {} · On the board", card.kind.label(), card.title)
-                } else {
-                    format!("{} · {}", card.kind.label(), card.title)
-                };
-                ui.label(
-                    RichText::new(title)
-                        .size(crate::theme::FONT_BODY)
-                        .color(title_color),
-                );
-                if let Some(body) = card.body.as_deref() {
-                    ui.label(
-                        RichText::new(body)
-                            .size(crate::theme::FONT_TIP)
-                            .color(crate::theme::muted()),
-                    );
-                }
-            });
-            if text_resp.clicked() {
-                act = Some(if card.kind == UpdateKind::Idea {
-                    FeedAct::Discuss(card.id.clone())
-                } else {
-                    FeedAct::Open(card.id.clone())
-                });
-            }
-            if text_resp.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            ui.with_layout(
-                egui::Layout::right_to_left(egui::Align::Center),
-                |ui| match card.kind {
-                    UpdateKind::Idea => {
-                        if !full && crate::cards::ghost_pill(ui, "Dismiss") {
-                            act = Some(FeedAct::Dismiss(card.id.clone()));
-                        }
-                        if crate::cards::ghost_pill(ui, "Open") {
-                            act = Some(FeedAct::Discuss(card.id.clone()));
-                        }
-                    }
-                    UpdateKind::AutomateOffer => {
-                        if crate::cards::ghost_pill(ui, "Dismiss") {
-                            act = Some(FeedAct::Dismiss(card.id.clone()));
-                        }
-                        if crate::cards::ghost_pill(ui, "Accept") {
-                            act = Some(FeedAct::Offer(card.id.clone()));
-                        }
-                    }
-                    UpdateKind::Suggestion => {
-                        if crate::cards::ghost_pill(ui, "Dismiss") {
-                            act = Some(FeedAct::Dismiss(card.id.clone()));
-                        }
-                        if crate::cards::ghost_pill(ui, "Accept") {
-                            act = Some(FeedAct::Open(card.id.clone()));
-                        }
-                    }
-                    UpdateKind::Digest => {
-                        if card.status == UpdateStatus::Dismissed {
-                            ui.label(
-                                RichText::new("Archived")
-                                    .size(crate::theme::FONT_TIP)
-                                    .color(crate::theme::muted()),
-                            );
-                        } else if crate::cards::ghost_pill(ui, "Delete") {
-                            act = Some(FeedAct::Archive(card.id.clone()));
-                        }
-                        if crate::cards::ghost_pill(ui, "Discuss") {
-                            act = Some(FeedAct::Discuss(card.id.clone()));
-                        }
-                        if crate::cards::ghost_pill(ui, "Up") {
-                            act = Some(FeedAct::React(card.id.clone(), CardReaction::Up));
-                        }
-                    }
-                    UpdateKind::AutomationDone | UpdateKind::ScheduleCreated => {
-                        if crate::cards::ghost_pill(ui, "Dismiss") {
-                            act = Some(FeedAct::Dismiss(card.id.clone()));
-                        }
-                    }
-                },
+    let x_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.right() - 32.0, rect.top() + 6.0),
+        egui::vec2(24.0, 24.0),
+    );
+    let text_rect = egui::Rect::from_min_max(
+        egui::pos2(rect.left() + 8.0, rect.top() + 6.0),
+        egui::pos2(x_rect.left() - 4.0, rect.bottom() - 6.0),
+    );
+    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(text_rect), |ui| {
+        ui.set_width(text_rect.width());
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        let title_color = if card.status == UpdateStatus::Opened || card.built {
+            crate::theme::muted()
+        } else {
+            crate::theme::fg()
+        };
+        let title = if card.kind == UpdateKind::Idea {
+            format!("{} · {}", card.idea_type_label(), card.title)
+        } else if card.built {
+            format!("{} · {} · On the board", card.kind.label(), card.title)
+        } else {
+            format!("{} · {}", card.kind.label(), card.title)
+        };
+        ui.label(
+            RichText::new(title)
+                .size(crate::theme::FONT_BODY)
+                .color(title_color),
+        );
+        if let Some(body) = card.body.as_deref() {
+            ui.label(
+                RichText::new(body)
+                    .size(crate::theme::FONT_TIP)
+                    .color(crate::theme::muted()),
             );
-        });
+        }
     });
-    act
+    // Registered last so the title labels do not take the click.
+    let hit = ui.interact(
+        rect,
+        egui::Id::new(("feed-card", &card.id)),
+        egui::Sense::click(),
+    );
+    let over_x = hit.hover_pos().is_some_and(|pos| x_rect.contains(pos));
+    ui.painter().text(
+        x_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        "×",
+        egui::FontId::proportional(16.0),
+        if over_x {
+            crate::theme::fg()
+        } else {
+            crate::theme::muted()
+        },
+    );
+    if hit.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    if !hit.clicked() {
+        return None;
+    }
+    let on_x = hit
+        .interact_pointer_pos()
+        .is_some_and(|pos| x_rect.contains(pos));
+    Some(if on_x {
+        if card.kind == UpdateKind::Digest {
+            FeedAct::Archive(card.id.clone())
+        } else {
+            FeedAct::Dismiss(card.id.clone())
+        }
+    } else {
+        match card.kind {
+            UpdateKind::Digest | UpdateKind::Suggestion | UpdateKind::Idea => {
+                FeedAct::Discuss(card.id.clone())
+            }
+            UpdateKind::AutomateOffer
+            | UpdateKind::AutomationDone
+            | UpdateKind::ScheduleCreated => FeedAct::Open(card.id.clone()),
+        }
+    })
 }
 
 #[cfg(test)]

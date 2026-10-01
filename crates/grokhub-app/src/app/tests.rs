@@ -7759,8 +7759,21 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
             && !body.contains("spawn_review")
             && !body.contains("notify::")
             && !body.contains("send_chat")
-            && !body.contains("send_scheduled"),
+            && !body.contains("send_scheduled")
+            && !body.contains("grok_chat"),
         "digest authoring stays off transcripts, chat, and pings: {body}"
+    );
+    let ping = pulse
+        .split("fn release_situation_ping(")
+        .nth(1)
+        .and_then(|s| s.split("fn paint_update_feed(").next())
+        .expect("release_situation_ping");
+    assert!(
+        ping.contains("notify::ping")
+            && ping.contains("quiet_now")
+            && ping.contains("window_focused")
+            && ping.contains("GrokHub"),
+        "only the situation card pings, and only when the window is away and quiet hours are off: {ping}"
     );
     assert!(
         !pulse.contains("No updates") && !pulse.contains("Nothing queued"),
@@ -7796,6 +7809,33 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
             && build.contains("file_idea_todo(&mut self.board, &task, \"\")")
             && !build.contains("idea.body.clone()"),
         "Idea Accept files the task line, not the raw message: {build}"
+    );
+    let paint = pulse
+        .split("fn paint_feed_card(")
+        .nth(1)
+        .and_then(|s| s.split("mod stack_tests").next())
+        .expect("paint_feed_card");
+    assert!(
+        !paint.contains("ghost_pill")
+            && paint.contains("\"×\"")
+            && paint.contains("FeedAct::Archive")
+            && paint.contains("FeedAct::Discuss")
+            && paint.contains("FeedAct::Dismiss")
+            && paint.contains("FeedAct::Open"),
+        "a home card is a click plus ×, with no pill row: {paint}"
+    );
+    let offer_open = pulse
+        .split("fn open_offer_on_automations(")
+        .nth(1)
+        .and_then(|s| s.split("fn accept_automate_offer(").next())
+        .expect("open_offer_on_automations");
+    assert!(
+        offer_open.contains("self.night_nl = seed")
+            && offer_open.contains("self.auto_compose = true")
+            && offer_open.contains("Nav::Night")
+            && !offer_open.contains("commit_schedule")
+            && !offer_open.contains("route_schedule"),
+        "an offer click opens the schedule box and does not save it: {offer_open}"
     );
 }
 
@@ -9775,6 +9815,7 @@ fn discuss_card_opens_one_local_chat() {
         details: None,
         draft: None,
         modified: false,
+        source_id: String::new(),
         skill: None,
     });
     cabin.discuss_card("idea-harbor");
@@ -13920,6 +13961,7 @@ fn build_idea_files_one_todo() {
         details: None,
         draft: None,
         modified: false,
+        source_id: String::new(),
         skill: None,
     }];
 
@@ -14061,6 +14103,7 @@ fn feed_card(id: &str, kind: grokhub_core::UpdateKind, held: bool) -> grokhub_co
         details: None,
         draft: None,
         modified: false,
+        source_id: String::new(),
         skill: None,
     }
 }
@@ -14161,6 +14204,7 @@ fn offer_card(id: &str, title: &str, status: UpdateStatus) -> UpdateCard {
         details: None,
         draft: None,
         modified: false,
+        source_id: String::new(),
         skill: None,
     }
 }
@@ -14220,6 +14264,34 @@ fn automate_offer_files_a_daily_job() {
     cabin.accept_automate_offer("daily");
     assert_eq!(cabin.automations.len(), 2);
     assert!(!cabin.running);
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn feed_offer_click_opens_the_schedule_box_without_saving() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("feed-offer-open");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.automations.clear();
+    cabin.updates = vec![offer_card(
+        "daily",
+        "every day at 9, summarize the board",
+        UpdateStatus::Unread,
+    )];
+    cabin.open_feed_card("daily");
+    assert!(cabin.auto_compose);
+    assert_eq!(cabin.night_nl, "every day at 9, summarize the board");
+    assert!(matches!(cabin.nav, super::Nav::Night));
+    assert!(cabin.automations.is_empty());
+    assert_eq!(card_status(&cabin, "daily"), UpdateStatus::Opened);
+    cabin.open_feed_card("daily");
+    assert!(cabin.automations.is_empty());
 
     let _ = std::fs::remove_dir_all(&root);
     std::env::remove_var("GROKHUB_CONFIG");
@@ -14811,6 +14883,14 @@ fn quiet_cabin() -> Cabin {
         suggestions: grokhub_core::SuggestionStore::default(),
         review_rx: None,
         review_busy: false,
+        digest_rx: None,
+        digest_busy: false,
+        digest_pending: None,
+        digest_wants_lookup: false,
+        digest_steer: String::new(),
+        situation_ping: None,
+        window_focused: true,
+        offer_repeated: false,
         usage: grokhub_core::UsageDay::default(),
         palette_open: false,
         palette_q: String::new(),

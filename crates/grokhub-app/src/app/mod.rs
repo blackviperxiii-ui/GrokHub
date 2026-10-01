@@ -507,6 +507,16 @@ pub struct Cabin {
     suggestions: SuggestionStore,
     review_rx: Option<mpsc::Receiver<Result<String, String>>>,
     review_busy: bool,
+    digest_rx: Option<mpsc::Receiver<Result<String, String>>>,
+    digest_busy: bool,
+    digest_pending: Option<String>,
+    digest_wants_lookup: bool,
+    digest_steer: String,
+    situation_ping: Option<(String, String)>,
+    /// True until a frame reports the cabin window is away. Tests stay silent.
+    window_focused: bool,
+    /// With and Quiet paces may offer a repeated action. Guide does not.
+    offer_repeated: bool,
     usage: UsageDay,
     palette_open: bool,
     palette_q: String,
@@ -1082,6 +1092,14 @@ impl Cabin {
             suggestions: crate::store::load_suggestions(),
             review_rx: None,
             review_busy: false,
+            digest_rx: None,
+            digest_busy: false,
+            digest_pending: None,
+            digest_wants_lookup: false,
+            digest_steer: String::new(),
+            situation_ping: None,
+            window_focused: true,
+            offer_repeated: false,
             usage: crate::store::load_usage(),
             palette_open: false,
             palette_q: String::new(),
@@ -1485,6 +1503,14 @@ impl Cabin {
             suggestions: Default::default(),
             review_rx: None,
             review_busy: false,
+            digest_rx: None,
+            digest_busy: false,
+            digest_pending: None,
+            digest_wants_lookup: false,
+            digest_steer: String::new(),
+            situation_ping: None,
+            window_focused: true,
+            offer_repeated: false,
             usage: Default::default(),
             palette_open: false,
             palette_q: String::new(),
@@ -3237,6 +3263,8 @@ impl Cabin {
                 HeartbeatAct::Housekeep => {
                     self.roll_today();
                     self.tick_feed_pulse();
+                    self.follow_feed_lookup();
+                    self.release_situation_ping();
                     if self.last_persist.elapsed() > Duration::from_secs(2) {
                         self.persist_bg();
                     }
@@ -4676,6 +4704,8 @@ impl eframe::App for Cabin {
         self.poll_acp();
         self.poll_chips();
         self.poll_review();
+        self.poll_digest_lookup();
+        self.window_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
         self.poll_greeting();
         self.poll_ideas();
         self.poll_goals();

@@ -535,6 +535,10 @@ impl Cabin {
         let mode = input.mode;
         let user_turns = chat.iter().filter(|(role, _)| role == "user").count();
         let pace = grokhub_core::cabin_pace(&input);
+        self.offer_repeated = matches!(
+            pace,
+            grokhub_core::CabinPace::With | grokhub_core::CabinPace::Quiet
+        );
         self.visible_chips = build_quick_chips(input);
         let mut fp = context_fingerprint(&chat, &self.composer, last_failed, hour, mode);
         if !others.is_empty() {

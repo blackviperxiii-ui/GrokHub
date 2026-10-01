@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 2.10.56 — 2026-10-01
+
+The cabin keeps going when a first look comes back empty or wrong. It tries one other path, then says what blocked it and the next useful step. It still asks before sending, paying, deleting, or publishing something you did not name, and it does not invent a source, a count, or a fact.
+
+The home feed writes a daily read. Once a day, and only when the last one is not still unread, it looks up two short pieces: a news note and a longer story. Each one says why it matters to you and carries one real link from that lookup. If the lookup finds nothing worth your time, you get one honest card. A story may mention weather, mail, a calendar, or a bank. An offer to send, pay, delete, or publish on its own is not posted. News stays on the feed and does not ping the desktop.
+
+One situation card can sit with that read. A workboard job left on "Paused. This is where to resume." for half an hour asks if you want it picked back up. A chip action you repeat at least three times, on With or Quiet, asks if you want that as a reminder. The same two signals can also leave an idea on the board, and that idea does not take the home pin.
+
+Home feed cards no longer carry Up, Discuss, Delete, Accept, or Open. Click the card to finish with it: a digest or a suggestion opens its chat, an idea opens on the Ideas board, a finished run opens its chat or follow-up, and an automate offer opens the schedule box without saving until you press Add. The × in the corner clears the card. On an idea it only leaves the home feed. On a suggestion it stays gone. Quiet hours still hold a card and release it later. A situation card pings only when the cabin window is unfocused and quiet hours are off.
+
+- Linux: `grokhub-linux-v2.10.56.tar.gz` and AUR `pkgver=2.10.56`.
+- Windows: `GrokHub-Setup-2.10.56.exe` and `grokhub-windows-v2.10.56.zip`.
+
 ## 2.10.55 — 2026-10-01
 
 Ideas need a reason now. One ask used to fan out into a pile of cards: the nightly review was told to answer "a repeated ask" with a skill and an automation, and the ideas call added up to four more, so installing a driver once could leave five cards about that driver. Now an automation, reminder, or skill idea needs work you repeat (two or more asks on the topic that are not one-time jobs) or lasting context (your memory, USER.md, an open workboard card). Installs, one-off fixes, and setups get nothing, even when they took several tries. The model sees your asks grouped by topic with counts and one-time jobs marked, writes a reason for each idea (shown on the card), and keeps to one idea per need. The cabin checks it again: one card per topic, none on a topic already on the board or turned down. The same check runs on the nightly review's skills and automations, and the generic "Session habit" skill that fired whenever you typed "when I" twice is gone. Untouched ideas that only answer a one-time job are cleared once at launch; cards you opened, changed, filed, or talked about stay.

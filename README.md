@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.55** — Ideas need a reason: one-time jobs like a driver install no longer spawn automation, skill, and reminder cards, and each need gets one idea. Workboard cards are compact and open in place with a real chat with the agent. A new Follow up row collects reports and questions from your automations, each with its own chat.
+**v2.10.56** — The home feed writes a daily news note and a longer read, each with a real link, plus one situation card when a job is still paused or you keep repeating something. Click a card to open it. × clears it. The cabin tries one other path before it gives up.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.55.tar.gz`, AUR | **v2.10.55** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.55.exe`, `grokhub-windows-v2.10.55.zip` | **v2.10.55** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.56.tar.gz`, AUR | **v2.10.56** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.56.exe`, `grokhub-windows-v2.10.56.zip` | **v2.10.56** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
