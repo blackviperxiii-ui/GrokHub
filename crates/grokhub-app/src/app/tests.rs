@@ -16992,3 +16992,22 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn leave_should_halt_false_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    // drop_leaving_thread_chrome gates on `running && leave_should_halt()`.
+    assert!(
+        !(cabin.running && cabin.leave_should_halt()),
+        "leaving while idle must not halt"
+    );
+
+    // Cabin-wide unbound work (no chat_job_thread) still stops on leave.
+    cabin.running = true;
+    assert!(
+        cabin.leave_should_halt(),
+        "cabin-wide work with no thread still stops"
+    );
+}
