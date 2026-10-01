@@ -16992,3 +16992,20 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn settle_auto_run_noop_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    assert!(cabin.auto_run.is_none());
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    // Quiet cabin with auto_run None → early return; status/Harbor unchanged.
+    cabin.settle_auto_run(super::night::AutoEnd::Failed("dummy"), None);
+    assert!(cabin.auto_run.is_none());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rx.is_none());
+}
