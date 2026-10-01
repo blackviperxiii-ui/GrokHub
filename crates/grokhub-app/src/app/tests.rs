@@ -16992,3 +16992,33 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn acp_spawn_poll_reports_a_drop() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("acp-spawn-drop");
+    cabin.status = "Harbor".into();
+    cabin.permission_mode = PermissionMode::Auto;
+
+    cabin.poll_acp_spawn();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.acp_spawn_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<grokhub_acp::AcpHandle, String>>();
+    cabin.acp_spawn_rx = Some(rx);
+    cabin.poll_acp_spawn();
+    assert!(cabin.acp_spawn_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    cabin.running = true;
+    cabin.pending_kick = Some(true);
+    drop(tx);
+    cabin.poll_acp_spawn();
+    assert!(cabin.acp_spawn_rx.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.pending_kick.is_none());
+    assert_eq!(cabin.status, "Grok Build session missing");
+    assert!(cabin.chat_job_thread.is_none());
+
+    release_isolated(&root, cabin);
+}
