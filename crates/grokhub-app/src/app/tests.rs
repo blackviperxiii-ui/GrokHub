@@ -17039,7 +17039,7 @@ fn a_report_run_lands_in_follow_up_with_a_chat_and_a_chore_does_not() {
             "## Open issues\nThree opened overnight: crash on resume, tray icon, docs.".into(),
         ));
     }
-    cabin.note_automation_done("a-issues", "Morning issues", "Open issues");
+    // A clock automation's chat run posts no feed card itself; filing the Follow up adds one.
     cabin.auto_run = Some(("a-issues".into(), Some(run_id.clone())));
     cabin.settle_auto_run(AutoEnd::Ok, Some(run_id.as_str()));
     let follow: Vec<&grokhub_core::BoardCard> = cabin
@@ -17142,6 +17142,8 @@ fn board_cards_open_on_hover_fold_on_drag_and_chat_like_the_chat_page() {
     );
     let say = fn_src(&src, "say_on_card");
     assert!(say.contains("take_card_notes_block") && say.contains("kick_model"), "{say}");
+    let saved = say.find("self.persist()").expect("the card's chat is saved");
+    assert!(saved < say.find("self.kick_model").unwrap(), "saved before the turn starts: {say}");
 
     let (root, mut cabin) = isolated_cabin("board-say-needs-agent");
     let mut card = grokhub_core::BoardCard::new("Ship the AUR release", "", "");
