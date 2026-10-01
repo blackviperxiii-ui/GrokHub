@@ -16992,3 +16992,38 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn last_project_title_from_prefers_continue_hint() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    assert!(cabin.acp.is_none());
+
+    assert_eq!(
+        Cabin::last_project_title_from("", "", ""),
+        "",
+        "empty inputs stay empty"
+    );
+    assert_eq!(
+        Cabin::last_project_title_from("Night Board", "Auth Gate", "Short Pin"),
+        "Auth Gate",
+        "continue_hint wins over last_night and short goal_pin"
+    );
+    assert_eq!(
+        Cabin::last_project_title_from("Night Board", "", "Short Pin"),
+        "Night Board",
+        "last_night wins when continue_hint is empty"
+    );
+    assert_eq!(
+        Cabin::last_project_title_from("", "", "Short Pin"),
+        "Short Pin",
+        "short goal_pin is the last fallback"
+    );
+
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rx.is_none());
+    assert!(cabin.acp.is_none());
+}
