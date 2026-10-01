@@ -16992,3 +16992,32 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn push_presence_keeps_short_url() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.presence_ring.is_empty());
+    assert!(cabin.last_frame_url.is_none());
+    assert!(cabin.rx.is_none());
+    assert!(cabin.reflect_rx.is_none());
+
+    let short = "data:image/jpeg;base64,abc".to_string();
+    cabin.push_presence(short.clone());
+    assert_eq!(cabin.presence_ring.len(), 1);
+    assert_eq!(cabin.presence_ring[0].1, short);
+    assert!(
+        cabin.last_frame_url.is_none(),
+        "must not call store_hub_frame/remember_last_frame"
+    );
+
+    let oversized = "x".repeat(FRAME_CAP + 1);
+    cabin.push_presence(oversized);
+    assert_eq!(cabin.presence_ring.len(), 1);
+    assert_eq!(cabin.presence_ring[0].1, short);
+
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    assert!(cabin.reflect_rx.is_none());
+}
