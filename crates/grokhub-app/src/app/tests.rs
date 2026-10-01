@@ -16992,3 +16992,39 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn apply_assistant_snapshot_empty_and_sets() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    assert!(cabin.messages.is_empty());
+
+    // Empty content is a no-op.
+    cabin.apply_assistant_snapshot(String::new());
+    assert!(
+        cabin.messages.is_empty(),
+        "empty snapshot must not touch the visible thread: {:?}",
+        cabin.messages
+    );
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+
+    // Non-empty lands as assistant on the visible thread.
+    cabin.apply_assistant_snapshot("first reply".into());
+    assert_eq!(
+        cabin.messages.as_slice(),
+        [("assistant".into(), "first reply".into())]
+    );
+
+    // Another non-empty updates that assistant in place.
+    cabin.apply_assistant_snapshot("updated reply".into());
+    assert_eq!(
+        cabin.messages.as_slice(),
+        [("assistant".into(), "updated reply".into())]
+    );
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+}
