@@ -16992,3 +16992,22 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn scrub_transcript_redacts_held_secret() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.secret_hold.is_empty());
+    // Fake placeholder only — no real credentials, no network.
+    let held = "fake-secret-token-xyz";
+    cabin.hold_secret(held);
+    assert_eq!(cabin.secret_hold.as_slice(), &[held.to_string()]);
+    let scrubbed = cabin.scrub_transcript(format!("CONNECTOR_RESULT used {held} then ok"));
+    assert!(!scrubbed.contains(held), "held secret must leave the transcript: {scrubbed}");
+    assert!(scrubbed.contains("[redacted]"), "scrub must insert [redacted]: {scrubbed}");
+    assert!(
+        scrubbed.contains("CONNECTOR_RESULT"),
+        "non-secret text must survive: {scrubbed}"
+    );
+    assert!(cabin.chat_job_thread.is_none());
+}
