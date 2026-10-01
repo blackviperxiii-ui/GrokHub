@@ -16992,3 +16992,37 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn paint_text_delta_skips_when_stream_elsewhere() {
+    let mut cabin = Cabin::quiet_for_test();
+    // quiet_for_test: chat_job_thread None → stream_here false → paint early-returns.
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.live_blocks.is_empty());
+    cabin.paint_text_delta(LiveKind::Say, "hello elsewhere");
+    assert!(
+        cabin.live_blocks.is_empty(),
+        "unbound stream must not paint say: {:?}",
+        cabin.live_blocks
+    );
+    cabin.paint_text_delta(LiveKind::Thought, "thinking elsewhere");
+    assert!(
+        cabin.live_blocks.is_empty(),
+        "unbound stream must not paint thought: {:?}",
+        cabin.live_blocks
+    );
+    assert!(!cabin.running);
+
+    // Job on another thread → same early return; live_blocks stay empty.
+    cabin.threads.push(crate::threads::ChatThread::new("Chat", false));
+    cabin.thread_idx = 0;
+    cabin.chat_job_thread = Some("elsewhere".into());
+    cabin.paint_text_delta(LiveKind::Say, "parked say");
+    cabin.paint_text_delta(LiveKind::Thought, "parked thought");
+    assert!(
+        cabin.live_blocks.is_empty(),
+        "stream on another thread must not paint: {:?}",
+        cabin.live_blocks
+    );
+    assert!(!cabin.running);
+}
