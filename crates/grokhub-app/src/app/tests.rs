@@ -1,6 +1,7 @@
 use super::*;
 use eframe::egui;
 use super::pages::BoardAct;
+use grokhub_core::ChatRunPhase;
 use grokhub_core::UpdateAction;
 use grokhub_core::{UpdateCard, UpdateKind, UpdateStatus};
 use grokhub_core::{ProjectKind, ProjectNode};
@@ -16991,4 +16992,16 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
     }
 
     release_isolated(&root, cabin);
+}
+
+#[test]
+fn run_phase_here_idle_when_not_thinking() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert_eq!(
+        cabin.run_phase_here(),
+        ChatRunPhase::Idle,
+        "quiet idle cabin must report Idle"
+    );
 }
