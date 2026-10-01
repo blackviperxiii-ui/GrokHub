@@ -16992,3 +16992,37 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn dropped_read_clears_the_status() {
+    let mut app = Cabin::quiet_for_test();
+    app.status = "Harbor".into();
+    let (tx, rx) = std::sync::mpsc::channel::<(PlusTarget, PlusPick)>();
+    drop(tx);
+    app.pick_rx = Some(rx);
+    app.poll_pick();
+    assert!(app.pick_rx.is_none());
+    assert_eq!(app.status, "Harbor");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+
+    app.status = "Reading clipboard…".into();
+    let (tx, rx) = std::sync::mpsc::channel::<(PlusTarget, PlusPick)>();
+    drop(tx);
+    app.pick_rx = Some(rx);
+    app.poll_pick();
+    assert!(app.pick_rx.is_none());
+    assert!(app.status.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+
+    app.status = "Reading file…".into();
+    let (tx, rx) = std::sync::mpsc::channel::<(PlusTarget, PlusPick)>();
+    drop(tx);
+    app.pick_rx = Some(rx);
+    app.poll_pick();
+    assert!(app.pick_rx.is_none());
+    assert!(app.status.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
