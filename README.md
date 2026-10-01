@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.52** — A long agent turn stays smooth while it streams: the transcript caches hold while only the streaming reply grows, rows of the live turn scrolled out of view reserve their measured height instead of laying out their markdown every frame, and saving History serializes chats directly instead of copying the whole history into a JSON tree first.
+**v2.10.53** — Ideas pass: an idea card's chat shows the agent's replies only, and the action it proposes is read from its reply, never from its thinking. Apply or Delete takes the card's hidden chat and its Grok Build session with it. The chat box keeps focus after Send, and Suggest ideas stops saying Thinking… after three minutes without an answer.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.52.tar.gz`, AUR | **v2.10.52** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.52.exe`, `grokhub-windows-v2.10.52.zip` | **v2.10.52** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.53.tar.gz`, AUR | **v2.10.53** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.53.exe`, `grokhub-windows-v2.10.53.zip` | **v2.10.53** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.

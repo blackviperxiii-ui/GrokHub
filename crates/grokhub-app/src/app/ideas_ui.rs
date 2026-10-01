@@ -299,13 +299,22 @@ impl Cabin {
                         };
                         for (role, text) in &messages {
                             let mine = role == "user";
+                            // A stored turn can carry thoughts and tool rows; the card shows replies.
+                            let text = if mine {
+                                text.clone()
+                            } else {
+                                grokhub_core::assistant_prose(text)
+                            };
+                            if text.trim().is_empty() {
+                                continue;
+                            }
                             ui.label(
                                 RichText::new(if mine { "You" } else { "Agent" })
                                     .size(crate::theme::FONT_TIP)
                                     .color(crate::theme::subtle()),
                             );
                             ui.label(
-                                RichText::new(text)
+                                RichText::new(&text)
                                     .size(crate::theme::FONT_BODY)
                                     .color(if mine {
                                         crate::theme::fg()
@@ -340,6 +349,8 @@ impl Cabin {
                     let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     if (enter || crate::cards::ghost_pill(ui, "Send")) && !composer.trim().is_empty() {
                         *act = Some(IdeaAct::Send(id.clone()));
+                        // Stay in the box for the next line; the card stays open while you type.
+                        ui.memory_mut(|m| m.request_focus(chat_edit_id(&id)));
                     }
                 });
                 if let Some(note) = &note {
@@ -354,7 +365,11 @@ impl Cabin {
         if thinking {
             ui.ctx().request_repaint();
         }
-        self.idea_board.composers.insert(id, composer);
+        if composer.is_empty() {
+            self.idea_board.composers.remove(&id);
+        } else {
+            self.idea_board.composers.insert(id, composer);
+        }
         resp.rect
     }
 
@@ -621,7 +636,7 @@ impl Cabin {
                 Some(msg) if msg.starts_with("Maximum") => Err(msg),
                 Some(msg) => Ok(msg),
                 None => self.run_idea_in_chat(&format!(
-                    "Set this up as a recurring automation for me: {action}"
+                    "Set this up as a scheduled automation for me: {action}"
                 )),
             },
             _ => self.run_idea_in_chat(&action),
@@ -634,6 +649,7 @@ impl Cabin {
                 let key = format!("applied:{}", grokhub_core::engine_slug(&card.title));
                 self.engine_note("ideas", &key, &card.title);
                 self.forget_idea_view(id);
+                self.drop_idea_thread(card.discuss_thread.as_deref());
                 self.status = msg;
             }
             Err(msg) => self.idea_board.note = Some((id.to_string(), msg)),
@@ -659,20 +675,31 @@ impl Cabin {
 
     /// Delete on the Ideas board. The model hears it was turned down.
     pub(super) fn delete_idea(&mut self, id: &str) {
-        let title = self
-            .updates
-            .iter()
-            .find(|c| c.id == id)
-            .map(|c| c.title.clone())
-            .unwrap_or_default();
+        let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() else {
+            return;
+        };
         if dismiss_idea(&mut self.updates, id) {
             self.persist_updates();
-            if !title.is_empty() {
-                let key = format!("rejected:{}", grokhub_core::engine_slug(&title));
-                self.engine_note("ideas", &key, &title);
+            if !card.title.is_empty() {
+                let key = format!("rejected:{}", grokhub_core::engine_slug(&card.title));
+                self.engine_note("ideas", &key, &card.title);
             }
+            self.drop_idea_thread(card.discuss_thread.as_deref());
+            self.status = "Idea deleted".into();
         }
         self.forget_idea_view(id);
+    }
+
+    /// A card's hidden chat goes with the card, along with its Grok Build session.
+    fn drop_idea_thread(&mut self, thread_id: Option<&str>) {
+        let Some(idx) = thread_id.and_then(|tid| {
+            self.threads
+                .iter()
+                .position(|t| t.id == tid && t.background)
+        }) else {
+            return;
+        };
+        self.delete_thread_at(idx);
     }
 
     fn forget_idea_view(&mut self, id: &str) {
