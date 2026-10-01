@@ -16992,3 +16992,20 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn project_flush_stays_off_when_clean() {
+    let mut app = Cabin::quiet_for_test();
+    app.status = "Harbor".into();
+    assert!(!app.projects_dirty);
+    app.flush_projects();
+    assert!(!app.projects_dirty);
+    assert_eq!(app.status, "Harbor");
+
+    app.touch_projects();
+    assert!(app.projects_dirty);
+    assert_eq!(app.status, "Harbor");
+    // Leave dirty. Do not flush while dirty.
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
