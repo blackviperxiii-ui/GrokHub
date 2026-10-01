@@ -168,6 +168,7 @@ mod chat_ui;
 mod pulse;
 mod feed_ui;
 mod ideas_ui;
+mod board_ui;
 mod confirm;
 mod glance;
 mod sidebar;
@@ -455,8 +456,8 @@ pub struct Cabin {
     ideas_q: String,
     /// Useful setup ideas were offered once this launch. Refresh clears it.
     ideas_filled: bool,
-    /// Model call for Ideas: reply, their own lines (no echo), titles already taken.
-    ideas_rx: Option<(mpsc::Receiver<String>, Vec<String>, Vec<String>)>,
+    /// Model call for Ideas: the reply, and what it is checked against.
+    ideas_rx: Option<(mpsc::Receiver<String>, feed_ui::IdeaInputs)>,
     tray_saw_unfocused: bool,
     tray_hid_at: Instant,
     want_quit: bool,
@@ -571,6 +572,8 @@ pub struct Cabin {
     chip_memory: ChipMemory,
     chip_dismissed: Vec<String>,
     idea_board: ideas_ui::IdeaBoardView,
+    /// Workboards page: the open card and what you are typing on each.
+    board_view: board_ui::BoardView,
     llm_chips: Vec<QuickChip>,
     visible_chips: Vec<QuickChip>,
     chip_rx: Option<mpsc::Receiver<Vec<QuickChip>>>,
@@ -1136,6 +1139,7 @@ impl Cabin {
             chip_memory: crate::store::load_chips(),
             chip_dismissed: vec![],
             idea_board: Default::default(),
+            board_view: Default::default(),
             llm_chips: vec![],
             visible_chips: vec![],
             chip_rx: None,
@@ -1538,6 +1542,7 @@ impl Cabin {
             chip_memory: Default::default(),
             chip_dismissed: Vec::new(),
             idea_board: Default::default(),
+            board_view: Default::default(),
             llm_chips: Vec::new(),
             visible_chips: Vec::new(),
             chip_rx: None,

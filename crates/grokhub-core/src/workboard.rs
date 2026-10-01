@@ -13,6 +13,8 @@ pub enum BoardStatus {
     Dismissed,
     Todo,
     Blocked,
+    /// A scheduled run left something to read or act on.
+    FollowUp,
 }
 
 impl BoardStatus {
@@ -26,6 +28,7 @@ impl BoardStatus {
             "dismissed" | "dismiss" | "archived" | "archive" => Some(Self::Dismissed),
             "todo" => Some(Self::Todo),
             "blocked" | "block" => Some(Self::Blocked),
+            "follow_up" | "follow-up" | "followup" | "follow up" => Some(Self::FollowUp),
             _ => None,
         }
     }
@@ -40,6 +43,7 @@ impl BoardStatus {
             Self::Dismissed => "dismissed",
             Self::Todo => "todo",
             Self::Blocked => "blocked",
+            Self::FollowUp => "follow_up",
         }
     }
 
@@ -49,18 +53,22 @@ impl BoardStatus {
             Self::InProgress => Some(KanbanColumn::Doing),
             Self::Blocked => Some(KanbanColumn::Blocked),
             Self::Done => Some(KanbanColumn::Done),
+            Self::FollowUp => Some(KanbanColumn::FollowUp),
             Self::Dismissed => None,
         }
     }
 }
 
-/// Four columns on the Workboards page. Archived (`dismissed`) stays off the board.
+/// Four columns on the Workboards page, plus the Follow up row above them.
+/// Archived (`dismissed`) stays off the board.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KanbanColumn {
     Todo,
     Doing,
     Blocked,
     Done,
+    /// Reports and results from scheduled runs. Painted full width above `ALL`.
+    FollowUp,
 }
 
 impl KanbanColumn {
@@ -77,6 +85,7 @@ impl KanbanColumn {
             Self::Doing => "Doing",
             Self::Blocked => "Blocked",
             Self::Done => "Done",
+            Self::FollowUp => "Follow up",
         }
     }
 
@@ -86,6 +95,7 @@ impl KanbanColumn {
             Self::Doing => BoardStatus::InProgress,
             Self::Blocked => BoardStatus::Blocked,
             Self::Done => BoardStatus::Done,
+            Self::FollowUp => BoardStatus::FollowUp,
         }
     }
 }
@@ -112,6 +122,21 @@ pub struct BoardCard {
     /// Fingerprint of the notes last handed to the linked chat, so each change goes once.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub notes_sent: u64,
+    /// Follow up: the automation whose run filed this card.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automation: Option<String>,
+    /// Follow up: the latest report from that run.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub report: String,
+    /// Fingerprint of the report last handed to the linked chat.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub report_sent: u64,
+    /// A new report or reply you have not opened yet.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fresh: bool,
+    /// When the last run updated this card.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub updated_ms: u64,
     /// How this hook put the card in Doing. Cleared on settle. Not persisted.
     #[serde(skip)]
     undo: Option<InflightUndo>,
@@ -155,13 +180,23 @@ pub fn card_work_prompt(card: &BoardCard) -> String {
     out
 }
 
-/// Notes on cards linked to `thread_id` that changed since the chat last saw them.
-/// Returns the block to hand the agent with the next message, and marks them sent.
+/// Notes on cards linked to `thread_id` that changed since the chat last saw them,
+/// and a Follow up card's newest report. Returns the block to hand the agent with
+/// the next message, and marks them sent.
 pub fn take_card_notes_block(cards: &mut [BoardCard], thread_id: &str) -> Option<String> {
     let mut parts = Vec::new();
     for c in cards.iter_mut() {
         if c.thread_id.as_deref() != Some(thread_id) || c.status == BoardStatus::Dismissed {
             continue;
+        }
+        let r = card_notes_hash(&c.report);
+        if r != 0 && r != c.report_sent {
+            parts.push(format!(
+                "This chat follows up on the scheduled automation \"{}\". Its latest report:\n{}",
+                c.title.trim(),
+                c.report.trim()
+            ));
+            c.report_sent = r;
         }
         let h = card_notes_hash(&c.notes);
         if h == 0 || h == c.notes_sent {
@@ -178,6 +213,108 @@ pub fn take_card_notes_block(cards: &mut [BoardCard], thread_id: &str) -> Option
             parts.join("\n\n")
         ))
     }
+}
+
+/// Longest report kept on a Follow up card.
+pub const FOLLOW_UP_REPORT_MAX: usize = 6000;
+
+/// Words in an automation that ask for something to read or act on.
+const REPORT_WORDS: &[&str] = &[
+    "report", "summar", "digest", "brief", "review", "audit", "analy", "research", "triage",
+    "recap", "status", "compare", "draft", "monitor", "watch", "track", "news", "scan",
+    "look for", "find ", "list ", "check ", "tell me", "let me know", "notify", "update me",
+    "what changed", "anything new",
+];
+
+/// A reply that asks you something, or found a problem.
+const NEEDS_YOU: &[&str] = &[
+    "should i", "do you want", "would you like", "let me know", "your call", "needs your",
+    "action needed", "action required", "please confirm", "can you", "which one", "recommend",
+    "failed", "error", "warning", "could not", "couldn't", "blocked",
+];
+
+/// Runs that found nothing say so in a line.
+const NOTHING_NEW: &[&str] = &[
+    "nothing new", "no changes", "no new", "all clear", "all good", "nothing to report",
+    "no issues", "no updates", "nothing changed",
+];
+
+/// Does this scheduled run leave you something to follow up on? A report,
+/// summary, or check you asked for does, and so does a run that asks you
+/// something or hit a problem. A quiet chore ("clean the downloads folder") with
+/// a one-line "done" does not, and neither does a short "nothing new".
+pub fn automation_needs_follow_up(instructions: &str, reply: &str) -> bool {
+    let reply_t = reply.trim();
+    if reply_t.is_empty() {
+        return false;
+    }
+    let r = reply_t.to_ascii_lowercase();
+    if reply_t.chars().count() <= 200 && NOTHING_NEW.iter().any(|w| r.contains(w)) {
+        return false;
+    }
+    let i = format!("{} ", instructions.to_ascii_lowercase());
+    let report = REPORT_WORDS.iter().any(|w| i.contains(w));
+    let tail: String = r.chars().rev().take(600).collect::<Vec<_>>().into_iter().rev().collect();
+    let asks_you = NEEDS_YOU.iter().any(|w| r.contains(w)) || tail.trim_end().ends_with('?');
+    report || asks_you
+}
+
+/// Card title for an automation's follow-ups.
+pub fn follow_up_title(name: &str) -> String {
+    let n = name.split_whitespace().collect::<Vec<_>>().join(" ");
+    let n: String = n.chars().take(100).collect();
+    if n.is_empty() {
+        "Scheduled run".into()
+    } else {
+        n
+    }
+}
+
+/// One open Follow up card per automation. A new run updates it (new report,
+/// marked fresh, back into Follow up if you had moved it to Todo or Doing).
+/// A card you finished or archived stays put and the run files a new one.
+/// Returns the card id and whether it is new.
+pub fn file_follow_up(
+    cards: &mut Vec<BoardCard>,
+    automation_id: &str,
+    name: &str,
+    report: &str,
+    now: u64,
+) -> (String, bool) {
+    // A stored turn can carry thoughts and tool rows; the card keeps the replies.
+    let report: String = crate::chat_view::assistant_prose(report)
+        .trim()
+        .chars()
+        .take(FOLLOW_UP_REPORT_MAX)
+        .collect();
+    let detail: String = report
+        .lines()
+        .map(|l| l.trim().trim_start_matches(['#', '*', '-', '>', ' ']).trim())
+        .find(|l| !l.is_empty())
+        .unwrap_or("")
+        .chars()
+        .take(200)
+        .collect();
+    if let Some(c) = cards.iter_mut().find(|c| {
+        c.automation.as_deref() == Some(automation_id)
+            && !matches!(c.status, BoardStatus::Done | BoardStatus::Dismissed)
+    }) {
+        c.report = report;
+        c.detail = detail;
+        c.fresh = true;
+        c.updated_ms = now;
+        c.status = BoardStatus::FollowUp;
+        return (c.id.clone(), false);
+    }
+    let mut card = BoardCard::new(&follow_up_title(name), &detail, "");
+    card.status = BoardStatus::FollowUp;
+    card.automation = Some(automation_id.to_string());
+    card.report = report;
+    card.fresh = true;
+    card.updated_ms = now;
+    let id = card.id.clone();
+    cards.push(card);
+    (id, true)
 }
 
 fn is_false(v: &bool) -> bool {
@@ -202,6 +339,11 @@ impl BoardCard {
             run: false,
             notes: String::new(),
             notes_sent: 0,
+            automation: None,
+            report: String::new(),
+            report_sent: 0,
+            fresh: false,
+            updated_ms: 0,
             undo: None,
         }
     }
@@ -929,5 +1071,56 @@ mod tests {
         assert_eq!(clean_card_notes(&"x".repeat(5000)).len(), CARD_NOTES_MAX);
         let old: BoardCard = serde_json::from_str(r#"{"id":"w1","title":"t","detail":"","status":"todo"}"#).unwrap();
         assert!(old.notes.is_empty() && old.notes_sent == 0);
+    }
+
+    #[test]
+    fn reports_and_questions_need_a_follow_up_chores_do_not() {
+        assert!(automation_needs_follow_up(
+            "every weekday at 9, summarize my open GitHub issues",
+            "Three issues opened overnight: #12 crash on resume, #13 tray icon, #14 docs."
+        ));
+        assert!(automation_needs_follow_up(
+            "every day at 18, clean the downloads folder",
+            "I found two installers I was not sure about. Should I delete them?"
+        ));
+        assert!(automation_needs_follow_up("every hour, back up ~/notes", "The backup failed: disk full."));
+        assert!(!automation_needs_follow_up("every day at 18, clean the downloads folder", "Cleaned 12 files."));
+        assert!(!automation_needs_follow_up(
+            "every weekday at 9, check for new GitHub issues",
+            "Nothing new since yesterday."
+        ));
+        assert!(!automation_needs_follow_up("every weekday at 9, write the report", "  "));
+    }
+
+    #[test]
+    fn one_follow_up_card_per_automation_and_its_report_reaches_the_chat_once() {
+        let mut cards = Vec::new();
+        let (id, new) = file_follow_up(&mut cards, "a1", "Morning issues", "## Issues\nThree opened overnight.", 10);
+        assert!(new);
+        let c = cards.iter().find(|c| c.id == id).unwrap();
+        assert_eq!(c.status, BoardStatus::FollowUp);
+        assert_eq!(c.status.column(), Some(KanbanColumn::FollowUp));
+        assert_eq!(c.detail, "Issues");
+        assert!(c.fresh);
+        cards[0].thread_id = Some("t1".into());
+        cards[0].status = BoardStatus::InProgress;
+        cards[0].fresh = false;
+        let block = take_card_notes_block(&mut cards, "t1").expect("report goes with the first message");
+        assert!(block.contains("scheduled automation \"Morning issues\""), "{block}");
+        assert!(block.contains("Three opened overnight."));
+        assert!(take_card_notes_block(&mut cards, "t1").is_none(), "once per report");
+
+        let (again, new) = file_follow_up(&mut cards, "a1", "Morning issues", "Two more today.", 20);
+        assert_eq!((again.as_str(), new), (id.as_str(), false), "same card, new report");
+        assert_eq!(cards[0].status, BoardStatus::FollowUp, "back in Follow up");
+        assert!(cards[0].fresh);
+        assert!(take_card_notes_block(&mut cards, "t1").unwrap().contains("Two more today."));
+
+        cards[0].status = BoardStatus::Done;
+        let (third, new) = file_follow_up(&mut cards, "a1", "Morning issues", "One more.", 30);
+        assert!(new && third != id, "a finished card stays finished; the run files a new one");
+        assert_eq!(BoardStatus::parse("follow-up"), Some(BoardStatus::FollowUp));
+        let json = serde_json::to_string(&cards[1]).unwrap();
+        assert!(json.contains("\"status\":\"follow_up\""), "{json}");
     }
 }
