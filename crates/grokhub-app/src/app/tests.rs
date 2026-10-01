@@ -17006,17 +17006,3 @@ fn note_combined_update_landed_noop_when_idle() {
     assert!(!cabin.running);
     assert!(cabin.chat_job_thread.is_none());
 }
-
-#[test]
-fn note_combined_update_landed_noop_when_idle() {
-    let mut cabin = Cabin::quiet_for_test();
-    assert!(cabin.last_host.is_empty());
-    assert!(cabin.cli_installed.is_none());
-    assert!(!cabin.cabin_overlay_done);
-    // Quiet idle: empty last_host — no cli/overlay flags flip, no spawn.
-    cabin.note_combined_update_landed();
-    assert!(cabin.cli_installed.is_none());
-    assert!(!cabin.cabin_overlay_done);
-    assert!(!cabin.running);
-    assert!(cabin.chat_job_thread.is_none());
-}
