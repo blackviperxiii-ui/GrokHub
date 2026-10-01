@@ -16992,3 +16992,23 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn roll_today_stays_put_on_same_day() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("roll-today-same-day");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    let today = Cabin::local_day();
+    cabin.usage.day = today.clone();
+    cabin.roll_today();
+    assert_eq!(cabin.usage.day, today, "same-day roll must leave usage.day alone");
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    drop(cabin);
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
