@@ -16992,3 +16992,24 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn has_real_history_false_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+
+    // Empty / blank title, Scratch, and default Chat are not real history — even with messages.
+    let mut blank = crate::threads::ChatThread::new("", false);
+    blank.messages = Arc::new(vec![("user".into(), "hi".into())]);
+    let mut scratch = crate::threads::ChatThread::new("Scratch", true);
+    scratch.messages = Arc::new(vec![("user".into(), "hi".into())]);
+    let mut chat = crate::threads::ChatThread::new("Chat", false);
+    chat.messages = Arc::new(vec![("user".into(), "hi".into())]);
+    cabin.threads = vec![blank, scratch, chat];
+    cabin.thread_idx = 2;
+
+    assert!(!cabin.has_real_history());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
