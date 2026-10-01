@@ -16992,3 +16992,13 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn always_confirm_matches_rpc_match_and_mismatch() {
+    // Confirm sheet stays up only while Ask still shows this rpc_id.
+    let current = serde_json::json!({"rpc": 1});
+    let other = serde_json::json!({"rpc": 2});
+    assert!(always_confirm_matches_rpc(Some(&current), &current));
+    assert!(!always_confirm_matches_rpc(None, &current));
+    assert!(!always_confirm_matches_rpc(Some(&other), &current));
+}
