@@ -16992,3 +16992,14 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn job_stored_pairs_empty_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    let vis = cabin.visible_thread_id();
+    // Quiet cabin: None job id → empty. No spawn/network.
+    assert!(cabin.job_stored_pairs(None, &vis).is_empty());
+    // Job id equal to visible → empty.
+    assert!(cabin.job_stored_pairs(Some(vis.as_str()), &vis).is_empty());
+}
