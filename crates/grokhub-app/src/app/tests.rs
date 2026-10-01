@@ -16992,3 +16992,18 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn collapsed_stack_h_zero_and_grows() {
+    // Real `collapsed_stack_h`: empty deck is 0; n≥1 is non-negative and grows,
+    // then stays put once the resting peeks are capped.
+    assert_eq!(super::collapsed_stack_h(0), 0.0);
+    let h1 = super::collapsed_stack_h(1);
+    let h2 = super::collapsed_stack_h(2);
+    let h3 = super::collapsed_stack_h(3);
+    let h9 = super::collapsed_stack_h(9);
+    assert!(h1 >= 0.0, "one-card deck must be non-negative, got {h1}");
+    assert!(h2 >= h1, "two cards must not shrink vs one: {h2} < {h1}");
+    assert!(h3 >= h2, "three cards must not shrink vs two: {h3} < {h2}");
+    assert_eq!(h9, h3, "larger stacks stay at the three-peek height: {h9} != {h3}");
+}
