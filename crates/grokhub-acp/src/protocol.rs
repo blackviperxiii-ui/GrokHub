@@ -169,6 +169,9 @@ pub struct PermissionAsk {
     pub action: String,
     /// Hook `ask` reason (or any other prompt body the CLI sent).
     pub reason: String,
+    /// The agent's own "reject once" option, if it offered one. Deny selects it so
+    /// the agent hears a refusal; `cancelled` means the turn was stopped.
+    pub reject_option: Option<String>,
 }
 
 /// Grok Build 1.0.17 `x.ai/mcp/elicit` — MCP tool needs a form or URL from you.
@@ -903,7 +906,27 @@ pub fn parse_permission(id: Value, params: &Value) -> PermissionAsk {
         tool_call_id,
         action,
         reason,
+        reject_option: permission_option(params, "reject_once"),
     }
+}
+
+/// `optionId` of the first offered `session/request_permission` option of `kind`
+/// (`allow_once`, `allow_always`, `reject_once`, `reject_always`).
+pub fn permission_option(params: &Value, kind: &str) -> Option<String> {
+    params
+        .get("options")?
+        .as_array()?
+        .iter()
+        .find(|o| {
+            o.get("kind")
+                .and_then(|k| k.as_str())
+                .is_some_and(|k| k.replace('-', "_").eq_ignore_ascii_case(kind))
+        })?
+        .get("optionId")?
+        .as_str()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
 }
 
 /// The command, path, or site on one line. JSON tool dumps stay off the card.
@@ -1018,7 +1041,19 @@ pub fn permission_allow_always(id: Value) -> JsonRpc {
     )
 }
 
-pub fn permission_deny(id: Value) -> JsonRpc {
+/// You chose Deny: select the agent's reject option. The agent reports a refusal.
+pub fn permission_reject(id: Value, option_id: &str) -> JsonRpc {
+    response(
+        id,
+        json!({
+            "outcome": { "outcome": "selected", "optionId": option_id }
+        }),
+    )
+}
+
+/// The turn is stopping (Stop, a failed stream, a finished or replayed turn), so the
+/// ask is withdrawn. Agents report this as "User cancelled", so it is not a Deny.
+pub fn permission_cancel(id: Value) -> JsonRpc {
     response(
         id,
         json!({
@@ -1458,6 +1493,46 @@ mod tests {
             "rawInput": { "command": "{ echo hi; ls; }" }
         }));
         assert_eq!(group, "{ echo hi; ls; }");
+    }
+
+    #[test]
+    fn deny_rejects_and_only_a_stop_cancels() {
+        let ask = parse_permission(
+            json!(7),
+            &json!({
+                "sessionId": "s1",
+                "toolCall": { "title": "Run", "toolCallId": "c1" },
+                "options": [
+                    { "optionId": "allow-once", "name": "Allow", "kind": "allow_once" },
+                    { "optionId": "allow-always", "name": "Always", "kind": "allow_always" },
+                    { "optionId": "no-thanks", "name": "Reject", "kind": "reject_once" },
+                    { "optionId": "never", "name": "Never", "kind": "reject_always" }
+                ]
+            }),
+        );
+        assert_eq!(
+            ask.reject_option.as_deref(),
+            Some("no-thanks"),
+            "Deny picks the agent's own reject_once id, not reject_always"
+        );
+        let deny = permission_reject(json!(7), "no-thanks").result.unwrap();
+        assert_eq!(deny["outcome"]["outcome"], "selected");
+        assert_eq!(deny["outcome"]["optionId"], "no-thanks");
+        let stop = permission_cancel(json!(7)).result.unwrap();
+        assert_eq!(
+            stop["outcome"]["outcome"], "cancelled",
+            "cancelled is a stop: Grok reports it as \"User cancelled\""
+        );
+        let bare = parse_permission(
+            json!(8),
+            &json!({ "sessionId": "s1", "toolCall": { "title": "Run", "toolCallId": "c2" } }),
+        );
+        assert_eq!(bare.reject_option, None);
+        let dashed = permission_option(
+            &json!({ "options": [{ "optionId": " r1 ", "kind": "Reject-Once" }] }),
+            "reject_once",
+        );
+        assert_eq!(dashed.as_deref(), Some("r1"));
     }
 
     #[test]
