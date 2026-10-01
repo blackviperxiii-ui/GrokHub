@@ -17001,7 +17001,7 @@ fn absorb_turn_learning_noop_when_idle() {
     assert!(!cabin.running);
     assert!(cabin.rx.is_none());
     let before = cabin.learning.clone();
-    cabin.absorb_turn_learning("All set. Nothing else to change.");
+    cabin.absorb_turn_learning("Ready.");
     assert_eq!(cabin.learning, before);
     assert!(cabin.messages.is_empty());
     assert!(cabin.chat_job_thread.is_none());
