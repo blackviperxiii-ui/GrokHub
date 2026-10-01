@@ -16992,3 +16992,13 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn console_key_empty_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.secrets.api_key.trim().is_empty());
+    assert!(cabin.cfg.api_key.trim().is_empty());
+    // Quiet cabin with empty secrets/api_key → empty string. No network.
+    assert_eq!(cabin.console_key(), "");
+}
