@@ -13658,6 +13658,57 @@ fn leaving_a_chat_clears_attach_and_asks() {
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
+#[test]
+fn drop_leaving_thread_chrome_clears_edit_state() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.running = false;
+    cabin.attach_name = Some("shot.png".into());
+    cabin.attach_url = Some("file://shot.png".into());
+    cabin.attach_path = Some("/tmp/shot.png".into());
+    cabin.attach_kind = Some(grokhub_core::AttachKind::Image);
+    cabin.followup_step = 3;
+    cabin.active_skill_follow = Some("follow".into());
+    cabin.hands_attach = true;
+    cabin.eyes_attach = true;
+    cabin.last_receipt_ok = Some(true);
+    cabin.elicit_draft = "typed".into();
+    cabin.tool_cards.push(grokhub_acp::ToolCard {
+        id: "t1".into(),
+        title: "grep".into(),
+        kind: String::new(),
+        status: "completed".into(),
+        detail: String::new(),
+        diff: String::new(),
+        image_data_url: None,
+    });
+    cabin.live_blocks.push(grokhub_core::LiveBlock {
+        kind: grokhub_core::LiveKind::Say,
+        body: "hello".into(),
+        tool_id: String::new(),
+        tool_title: String::new(),
+        tool_status: String::new(),
+        tool_detail: String::new(),
+        fold_slot: 1,
+    });
+
+    cabin.drop_leaving_thread_chrome();
+
+    assert!(cabin.attach_name.is_none());
+    assert!(cabin.attach_url.is_none());
+    assert!(cabin.attach_path.is_none());
+    assert!(cabin.attach_kind.is_none());
+    assert_eq!(cabin.followup_step, 0);
+    assert!(cabin.active_skill_follow.is_none());
+    assert!(!cabin.hands_attach);
+    assert!(!cabin.eyes_attach);
+    assert!(cabin.last_receipt_ok.is_none());
+    assert!(cabin.elicit_draft.is_empty());
+    assert!(cabin.tool_cards.is_empty());
+    assert!(cabin.live_blocks.is_empty());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
 fn perm_ask_for_test(id: u64, title: &str) -> grokhub_acp::PermissionAsk {
     grokhub_acp::PermissionAsk {
         rpc_id: serde_json::json!(id),
