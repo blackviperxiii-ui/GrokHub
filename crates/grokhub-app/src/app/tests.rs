@@ -16992,3 +16992,13 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn cabin_default_model_id_empty_and_known() {
+    // Real fn: empty/whitespace → ""; known chat id → sanitized non-empty. No spawn/network.
+    assert_eq!(cabin_default_model_id(""), "");
+    assert_eq!(cabin_default_model_id("  \t"), "");
+    let id = cabin_default_model_id("grok-4.7");
+    assert!(!id.is_empty());
+    assert_eq!(id, grokhub_core::sanitize_chat_model("grok-4.7"));
+}
