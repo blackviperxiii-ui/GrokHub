@@ -16992,3 +16992,59 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn chip_poll_drops_a_secret_label() {
+    fn chip(id: &str, label: &str, value: &str) -> QuickChip {
+        QuickChip {
+            id: id.into(),
+            label: label.into(),
+            value: value.into(),
+            kind: ChipKind::Chat,
+            score: 1.0,
+            hint: String::new(),
+            primary: false,
+        }
+    }
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.chip_busy = true;
+    cabin.poll_chips();
+    assert!(cabin.chip_rx.is_none());
+    assert!(cabin.chip_busy);
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.chip_rx = Some(rx);
+    cabin.poll_chips();
+    assert!(cabin.chip_rx.is_some());
+    assert!(cabin.chip_busy);
+    assert!(cabin.llm_chips.is_empty());
+
+    let secret_label = format!("sk-{}", "a".repeat(12));
+    let secret_value = format!("sk-{}", "b".repeat(12));
+    tx.send(vec![
+        chip("harbor", "Harbor", "/sh"),
+        chip("secret-label", &secret_label, "ok"),
+        chip("secret-value", "Night", &secret_value),
+    ])
+    .expect("chip send");
+    cabin.poll_chips();
+    assert!(!cabin.chip_busy);
+    assert!(cabin.chip_rx.is_none());
+    assert_eq!(cabin.llm_chips.len(), 1);
+    assert_eq!(cabin.llm_chips[0].label, "Harbor");
+    assert_eq!(cabin.llm_chips[0].value, "/sh");
+
+    cabin.chip_busy = true;
+    let (gone, rx) = std::sync::mpsc::channel();
+    drop(gone);
+    cabin.chip_rx = Some(rx);
+    cabin.poll_chips();
+    assert!(!cabin.chip_busy);
+    assert!(cabin.chip_rx.is_none());
+    assert_eq!(cabin.llm_chips.len(), 1);
+    assert_eq!(cabin.llm_chips[0].label, "Harbor");
+    assert_eq!(cabin.llm_chips[0].value, "/sh");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
