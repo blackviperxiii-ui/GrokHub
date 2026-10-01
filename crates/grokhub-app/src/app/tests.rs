@@ -16992,3 +16992,23 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn pinned_history_row_sorts_first() {
+    let mut app = Cabin::quiet_for_test();
+    app.threads.push(crate::threads::ChatThread::new("Chat", false));
+    app.threads[0].grok_session = Some("sess-1".into());
+    app.threads[0].pinned = true;
+    app.threads[0].pinned_ms = 9;
+    let pinned = app.session_sort_key("sess-1", 1);
+    assert!(pinned.pinned);
+    assert_eq!(pinned.pinned_ms, 9);
+    let missing = app.session_sort_key("other", 4);
+    assert!(!missing.pinned);
+    assert_eq!(missing.list_rank, 4);
+    assert_eq!(missing.accessed_ms, 0);
+    let order = crate::threads::session_list_order(&[missing, pinned]);
+    assert_eq!(order, vec![1, 0]);
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
