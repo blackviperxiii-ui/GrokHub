@@ -16992,3 +16992,18 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn update_pending_now_none_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.cli_installed.is_none());
+    assert!(cabin.cli_alpha.is_none());
+    assert!(cabin.cabin_latest.is_none());
+    assert_eq!(
+        cabin.update_pending_now(),
+        UpdatePending::None,
+        "quiet idle cabin with no cli/cabin update flags must report none"
+    );
+}
