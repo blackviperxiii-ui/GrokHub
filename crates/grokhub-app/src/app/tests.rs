@@ -16992,3 +16992,31 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn goals_poll_clears_busy_on_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.goal_stale = false;
+    cabin.poll_goals();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.goal_rx.is_none());
+    assert!(!cabin.goal_busy);
+
+    cabin.goal_busy = true;
+    let (tx, rx) = std::sync::mpsc::channel::<(String, String)>();
+    cabin.goal_rx = Some(rx);
+    cabin.poll_goals();
+    assert!(cabin.goal_rx.is_some());
+    assert!(cabin.goal_busy);
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_goals();
+    assert!(cabin.goal_rx.is_none());
+    assert!(!cabin.goal_busy);
+    assert!(!cabin.goal_stale);
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
