@@ -16992,3 +16992,11 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn hostname_i_now_returns_string() {
+    // Free fn: shells `hostname -I` (empty String if it fails). Hostname OK; stay off network/xAI/bind.
+    let out = hostname_i_now();
+    // Empty is valid when the shell fails; otherwise UTF-8 stdout from `hostname -I`.
+    let _: &str = out.as_str();
+}
