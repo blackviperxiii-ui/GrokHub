@@ -16992,3 +16992,18 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+
+#[test]
+fn global_hotkeys_poll_stays_off_without_manager() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    // quiet_for_test leaves hotkeys None — early return before listen_voice / halt_work.
+    assert!(cabin.hotkeys.is_none());
+    cabin.poll_global_hotkeys();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(matches!(cabin.voice_state, VoiceState::Idle));
+    assert!(!cabin.voice_is_on());
+    assert!(cabin.chat_job_thread.is_none());
+}
