@@ -711,6 +711,14 @@ impl Cabin {
         let Some(id) = self.chat_job_thread.clone() else {
             return;
         };
+        // A reply in a Follow up card's chat is that card's work, not a new Doing card.
+        if self
+            .board
+            .iter()
+            .any(|c| c.automation.is_some() && c.thread_id.as_deref() == Some(id.as_str()))
+        {
+            return;
+        }
         let title = inflight_card_title(ask, thread_label);
         if title.trim().is_empty() {
             return;

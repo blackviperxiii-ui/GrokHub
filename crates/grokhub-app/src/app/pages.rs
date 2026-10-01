@@ -31,6 +31,12 @@ pub(super) enum BoardAct {
     CancelNotes,
     /// Start a chat from this card, with its notes, and move it to Doing.
     Work(String),
+    /// Open the card in place (a click on the compact card).
+    Expand(String),
+    /// Send a line to the agent from the card's chat box.
+    Say { id: String, text: String },
+    /// Stop the turn running in a card's chat.
+    Stop,
 }
 
 /// Drag payload for a workboard card: its id.
@@ -45,23 +51,8 @@ pub(super) fn board_drop_move(from: BoardStatus, onto: KanbanColumn) -> Option<B
     }
 }
 
-/// Six dots at the start of a card's title row: the drag handle.
-fn paint_drag_grip(ui: &mut egui::Ui) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 14.0), egui::Sense::hover());
-    let ink = crate::theme::subtle();
-    for row in 0..3 {
-        for col in 0..2 {
-            let c = egui::pos2(
-                rect.min.x + 2.5 + col as f32 * 4.5,
-                rect.min.y + 3.0 + row as f32 * 4.0,
-            );
-            ui.painter().circle_filled(c, 1.1, ink);
-        }
-    }
-}
-
 /// While a card is dragged, its title follows the pointer.
-fn paint_drag_ghost(ctx: &egui::Context, title: &str) {
+pub(super) fn paint_drag_ghost(ctx: &egui::Context, title: &str) {
     let Some(pos) = ctx.pointer_interact_pos() else {
         return;
     };
@@ -840,6 +831,8 @@ impl Cabin {
 
     pub(super) fn ui_board(&mut self, ctx: &egui::Context) {
         let mut act: Option<BoardAct> = None;
+        let mut rects: Vec<(String, egui::Rect)> = Vec::new();
+        let mut view = egui::Rect::NOTHING;
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::none()
@@ -856,7 +849,7 @@ impl Cabin {
                 }
                 crate::cards::help_text(
                     ui,
-                    "Tasks from your chats and the ones you add, by status. Drag a card to move it.",
+                    "Tasks from your chats and the ones you add, by status. Hover a card to open it and talk to the agent; drag it to move it.",
                 );
                 ui.add_space(12.0);
                 if self.board_compose {
@@ -927,9 +920,79 @@ impl Cabin {
                     }
                     ui.add_space(12.0);
                 }
-                egui::ScrollArea::vertical()
+                let dragging = egui::DragAndDrop::has_payload_of_type::<BoardDrag>(ui.ctx());
+                let from = |board: &[BoardCard], drag: &BoardDrag| {
+                    board.iter().find(|c| c.id == drag.0).map(|c| c.status)
+                };
+                let out = egui::ScrollArea::vertical()
                     .id_salt("workboards")
+                    .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        // Follow up: reports and questions from scheduled runs, full width,
+                        // newest run first. Shown while it has cards, or as a drop target.
+                        let mut follow: Vec<(String, u64)> = self
+                            .board
+                            .iter()
+                            .filter(|c| c.status == BoardStatus::FollowUp)
+                            .map(|c| (c.id.clone(), c.updated_ms))
+                            .collect();
+                        follow.sort_by_key(|(_, t)| std::cmp::Reverse(*t));
+                        if !board_empty && (!follow.is_empty() || dragging) {
+                            let top = ui.cursor().min;
+                            let w = ui.available_width();
+                            let fresh = self
+                                .board
+                                .iter()
+                                .filter(|c| c.status == BoardStatus::FollowUp && c.fresh)
+                                .count();
+                            let label = if fresh > 0 {
+                                format!("{} · {fresh} new", KanbanColumn::FollowUp.label())
+                            } else {
+                                KanbanColumn::FollowUp.label().to_string()
+                            };
+                            crate::cards::section_label(ui, &label);
+                            ui.label(
+                                RichText::new("Reports and questions from your automations. Open one to read it and keep talking to the agent here.")
+                                    .size(crate::theme::FONT_TIP)
+                                    .color(crate::theme::muted()),
+                            );
+                            ui.add_space(6.0);
+                            for (id, _) in &follow {
+                                let rect = self.paint_board_card(ui, id, true, &mut act);
+                                rects.push((id.clone(), rect));
+                                ui.add_space(8.0);
+                            }
+                            let bottom = ui.cursor().min.y.max(top.y + 64.0);
+                            let zone_rect = egui::Rect::from_min_max(top, egui::pos2(top.x + w, bottom));
+                            let zone = ui.interact(
+                                zone_rect,
+                                egui::Id::new("board-drop-follow"),
+                                egui::Sense::hover(),
+                            );
+                            if let Some(drag) = zone.dnd_hover_payload::<BoardDrag>() {
+                                if from(&self.board, &drag)
+                                    .and_then(|st| board_drop_move(st, KanbanColumn::FollowUp))
+                                    .is_some()
+                                {
+                                    ui.painter().rect_stroke(
+                                        zone_rect.shrink(1.0),
+                                        16.0,
+                                        egui::Stroke::new(1.5_f32, crate::theme::link()),
+                                    );
+                                }
+                            }
+                            if let Some(drag) = zone.dnd_release_payload::<BoardDrag>() {
+                                if let Some(status) = from(&self.board, &drag)
+                                    .and_then(|st| board_drop_move(st, KanbanColumn::FollowUp))
+                                {
+                                    act = Some(BoardAct::Move {
+                                        id: drag.0.clone(),
+                                        status,
+                                    });
+                                }
+                            }
+                            ui.add_space(12.0);
+                        }
                         if !board_empty {
                         ui.columns(KanbanColumn::ALL.len(), |cols| {
                             for (i, col) in KanbanColumn::ALL.iter().enumerate() {
@@ -952,164 +1015,8 @@ impl Cabin {
                                     );
                                 }
                                 for id in ids {
-                                    let Some(card) = self.board.iter().find(|c| c.id == id) else {
-                                        continue;
-                                    };
-                                    let title = card.title.clone();
-                                    let detail = card.detail.clone();
-                                    let linked = card.thread_id.clone();
-                                    let status = card.status;
-                                    let notes = card.notes.clone();
-                                    let editing = self
-                                        .board_notes_edit
-                                        .as_ref()
-                                        .is_some_and(|(eid, _)| eid == &id);
-                                    let dragging = egui::DragAndDrop::payload::<BoardDrag>(ui.ctx())
-                                        .is_some_and(|d| d.0 == id);
-                                    let fill = if dragging {
-                                        crate::theme::elevated().gamma_multiply(0.5)
-                                    } else {
-                                        crate::theme::elevated()
-                                    };
-                                    egui::Frame::none()
-                                        .fill(fill)
-                                        .rounding(16.0)
-                                        .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                                        .inner_margin(egui::Margin::same(12.0))
-                                        .show(ui, |ui| {
-                                            ui.set_width(ui.available_width());
-                                            // Only the title row drags. The whole card as a drag
-                                            // source swallowed clicks on its buttons.
-                                            let head = ui.horizontal(|ui| {
-                                                paint_drag_grip(ui);
-                                                ui.add(
-                                                    egui::Label::new(
-                                                        RichText::new(&title)
-                                                            .size(crate::theme::FONT_BODY)
-                                                            .color(crate::theme::fg()),
-                                                    )
-                                                    .wrap()
-                                                    .selectable(false),
-                                                );
-                                            });
-                                            let grip = ui
-                                                .interact(
-                                                    head.response.rect,
-                                                    egui::Id::new(("board-grip", id.as_str())),
-                                                    egui::Sense::drag(),
-                                                )
-                                                .on_hover_cursor(egui::CursorIcon::Grab)
-                                                .on_hover_text("Drag to another column");
-                                            if grip.drag_started() {
-                                                egui::DragAndDrop::set_payload(
-                                                    ui.ctx(),
-                                                    BoardDrag(id.clone()),
-                                                );
-                                            }
-                                            if dragging {
-                                                paint_drag_ghost(ui.ctx(), &title);
-                                            }
-                                            if !detail.trim().is_empty() {
-                                                ui.add_space(4.0);
-                                                ui.label(
-                                                    RichText::new(
-                                                        detail.chars().take(160).collect::<String>(),
-                                                    )
-                                                    .size(crate::theme::FONT_TIP)
-                                                    .color(crate::theme::muted()),
-                                                );
-                                            }
-                                            if editing {
-                                                ui.add_space(6.0);
-                                                if let Some((_, buf)) = self.board_notes_edit.as_mut() {
-                                                    ui.add(
-                                                        egui::TextEdit::multiline(buf)
-                                                            .hint_text(crate::theme::hint(
-                                                                "Notes for the agent: what to do, what to avoid, links, files",
-                                                            ))
-                                                            .desired_rows(3)
-                                                            .desired_width(f32::INFINITY),
-                                                    );
-                                                }
-                                                ui.horizontal(|ui| {
-                                                    if crate::cards::white_pill(ui, "Save notes") {
-                                                        let buf = self
-                                                            .board_notes_edit
-                                                            .as_ref()
-                                                            .map(|(_, b)| b.clone())
-                                                            .unwrap_or_default();
-                                                        act = Some(BoardAct::SaveNotes {
-                                                            id: id.clone(),
-                                                            notes: buf,
-                                                        });
-                                                    }
-                                                    if crate::cards::ghost_pill(ui, "Cancel") {
-                                                        act = Some(BoardAct::CancelNotes);
-                                                    }
-                                                });
-                                            } else if !notes.trim().is_empty() {
-                                                ui.add_space(6.0);
-                                                ui.label(
-                                                    RichText::new("Notes")
-                                                        .size(crate::theme::FONT_TIP)
-                                                        .color(crate::theme::subtle()),
-                                                );
-                                                ui.add(
-                                                    egui::Label::new(
-                                                        RichText::new(
-                                                            notes.chars().take(280).collect::<String>(),
-                                                        )
-                                                        .size(crate::theme::FONT_TIP)
-                                                        .color(crate::theme::fg()),
-                                                    )
-                                                    .wrap(),
-                                                );
-                                            }
-                                            ui.add_space(8.0);
-                                            ui.horizontal_wrapped(|ui| {
-                                                if status != BoardStatus::Done
-                                                    && crate::cards::white_pill(ui, "Work on it")
-                                                {
-                                                    act = Some(BoardAct::Work(id.clone()));
-                                                }
-                                                let notes_label =
-                                                    if notes.trim().is_empty() { "Add notes" } else { "Edit notes" };
-                                                if !editing && crate::cards::ghost_pill(ui, notes_label) {
-                                                    act = Some(BoardAct::EditNotes(id.clone()));
-                                                }
-                                            });
-                                            ui.horizontal_wrapped(|ui| {
-                                                for dest in KanbanColumn::ALL {
-                                                    if status.column() == Some(dest) {
-                                                        continue;
-                                                    }
-                                                    if crate::cards::ghost_pill(ui, dest.label()) {
-                                                        act = Some(BoardAct::Move {
-                                                            id: id.clone(),
-                                                            status: dest.status(),
-                                                        });
-                                                    }
-                                                }
-                                            });
-                                            ui.horizontal_wrapped(|ui| {
-                                                if crate::cards::ghost_pill(ui, "Edit") {
-                                                    act = Some(BoardAct::Edit(id.clone()));
-                                                }
-                                                if crate::cards::ghost_pill(ui, "Archive") {
-                                                    act = Some(BoardAct::Archive(id.clone()));
-                                                }
-                                                if linked.is_some() {
-                                                    if crate::cards::ghost_pill(ui, "Open chat") {
-                                                        act = Some(BoardAct::Open(id.clone()));
-                                                    }
-                                                    if crate::cards::ghost_pill(ui, "Unlink") {
-                                                        act = Some(BoardAct::Unlink(id.clone()));
-                                                    }
-                                                } else if crate::cards::ghost_pill(ui, "Link chat") {
-                                                    act = Some(BoardAct::Link(id.clone()));
-                                                }
-                                            });
-                                        });
+                                    let rect = self.paint_board_card(ui, &id, false, &mut act);
+                                    rects.push((id, rect));
                                     ui.add_space(8.0);
                                 }
                                 let bottom = ui.cursor().min.y.max(col_top.y + BOARD_DROP_MIN_H);
@@ -1122,11 +1029,8 @@ impl Cabin {
                                     egui::Id::new(("board-drop", i)),
                                     egui::Sense::hover(),
                                 );
-                                let from = |drag: &BoardDrag| {
-                                    self.board.iter().find(|c| c.id == drag.0).map(|c| c.status)
-                                };
                                 if let Some(drag) = zone.dnd_hover_payload::<BoardDrag>() {
-                                    if from(&drag)
+                                    if from(&self.board, &drag)
                                         .and_then(|st| board_drop_move(st, *col))
                                         .is_some()
                                     {
@@ -1139,7 +1043,7 @@ impl Cabin {
                                 }
                                 if let Some(drag) = zone.dnd_release_payload::<BoardDrag>() {
                                     if let Some(status) =
-                                        from(&drag).and_then(|st| board_drop_move(st, *col))
+                                        from(&self.board, &drag).and_then(|st| board_drop_move(st, *col))
                                     {
                                         act = Some(BoardAct::Move {
                                             id: drag.0.clone(),
@@ -1173,7 +1077,28 @@ impl Cabin {
                             }
                         }
                     });
+                view = out.inner_rect;
             });
+        // Hover opens a card, leaving folds it back, and a drag folds it at once.
+        let now = ctx.input(|i| i.time);
+        let hovered = ctx
+            .pointer_hover_pos()
+            .filter(|p| view.contains(*p))
+            .and_then(|p| rects.iter().find(|(_, r)| r.contains(p)))
+            .map(|(id, _)| id.clone());
+        let typing = self.board_view.open.as_deref().is_some_and(|o| {
+            let focused = ctx.memory(|m| m.focused());
+            focused == Some(super::board_ui::board_chat_edit_id(o))
+                || self.board_notes_edit.as_ref().is_some_and(|(n, _)| n == o)
+        });
+        let dragging = egui::DragAndDrop::has_payload_of_type::<BoardDrag>(ctx);
+        // The open menu (···) keeps its card open while the pointer is on the popup.
+        let menu_open = ctx.memory(|m| m.any_popup_open());
+        if !menu_open
+            && super::board_ui::track_board_hover(&mut self.board_view, now, hovered, typing, dragging)
+        {
+            ctx.request_repaint_after(Duration::from_millis(60));
+        }
         if self.apply_board_act(act) {
             self.flush_board();
         }
@@ -1270,8 +1195,32 @@ impl Cabin {
                 true
             }
             BoardAct::Work(id) => {
-                self.work_on_card(&id);
-                true
+                // Work happens on the card: open it and watch the chat there.
+                self.board_view.open = Some(id.clone());
+                self.board_view.pinned = true;
+                self.say_on_card(&id, "");
+                false
+            }
+            BoardAct::Expand(id) => {
+                self.board_view.open = Some(id.clone());
+                self.board_view.pinned = true;
+                self.board_view.hover = None;
+                self.board_view.left_at = None;
+                match self.board.iter_mut().find(|c| c.id == id && c.fresh) {
+                    Some(c) => {
+                        c.fresh = false;
+                        true
+                    }
+                    None => false,
+                }
+            }
+            BoardAct::Say { id, text } => {
+                self.say_on_card(&id, &text);
+                false
+            }
+            BoardAct::Stop => {
+                self.halt_work("Stopped");
+                false
             }
             BoardAct::Open(id) => {
                 let thread = self

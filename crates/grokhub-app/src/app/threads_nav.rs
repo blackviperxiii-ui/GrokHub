@@ -86,7 +86,12 @@ impl Cabin {
     /// One hidden thread for night, loops-via-chat, inbox, and anticipate.
     /// It is not a History row.
     pub(super) fn ensure_background_history_thread(&mut self) -> usize {
-        if let Some(i) = self.threads.iter().position(|t| t.background) {
+        // Only the shared Background chat: an idea card's hidden chat is background too.
+        if let Some(i) = self
+            .threads
+            .iter()
+            .position(|t| t.background && t.title == "Background")
+        {
             return i;
         }
         let mut created = ChatThread::new("Background", false);

@@ -18,6 +18,19 @@ use grokhub_core::{
     UpdateKind, UpdateStatus, DIGEST_PAINT_MAX, FEED_PAINT_MAX,
 };
 
+/// What an ideas reply is checked against.
+#[derive(Debug, Clone, Default)]
+pub(super) struct IdeaInputs {
+    /// Their own lines (asks, memory). An idea must not copy them.
+    pub sources: Vec<String>,
+    /// Titles on the board, turned down, or already running.
+    pub taken: Vec<String>,
+    /// Recent asks, newest first: an automation or skill needs a repeated one.
+    pub asks: Vec<String>,
+    /// Lasting context: memory and USER.md lines, open workboard cards.
+    pub lasting: Vec<String>,
+}
+
 const FEED_CARD_H: f32 = 64.0;
 /// Longest wait for the model's idea list before the board gives up on that ask.
 pub(super) const IDEAS_WAIT_MS: u64 = 180_000;
@@ -461,7 +474,14 @@ impl Cabin {
             return;
         }
         self.ideas_filled = true;
-        if grokhub_core::purge_template_ideas(&mut self.updates) > 0 {
+        let (_, inputs) = self.idea_request();
+        let ground = grokhub_core::IdeaGround {
+            asks: &inputs.asks,
+            lasting: &inputs.lasting,
+        };
+        let purged = grokhub_core::purge_template_ideas(&mut self.updates)
+            + grokhub_core::purge_one_off_ideas(&mut self.updates, &ground);
+        if purged > 0 {
             self.persist_updates();
         }
         // Skill suggestions saved by an older cabin move to the Ideas board once.
@@ -486,22 +506,24 @@ impl Cabin {
                 return;
             }
         }
-        let (prompt, sources, taken) = self.idea_request();
+        let (prompt, inputs) = self.idea_request();
         self.cfg.feed_pulse.last_ideas_ms = now;
         self.persist_cfg();
         let key = self.bearer();
         let (tx, rx) = mpsc::channel();
-        self.ideas_rx = Some((rx, sources, taken));
+        self.ideas_rx = Some((rx, inputs));
         std::thread::spawn(move || {
             let _ = tx.send(cabin_fast_llm(key, prompt));
         });
     }
 
-    /// The prompt plus what the reply must not copy (their own lines) or repeat.
-    pub(super) fn idea_request(&self) -> (String, Vec<String>, Vec<String>) {
+    /// The prompt plus what the reply must not copy (their own lines) or repeat,
+    /// and what an idea has to stand on.
+    pub(super) fn idea_request(&self) -> (String, IdeaInputs) {
         let user_md = crate::config::read_memory("USER.md");
         let memory_md = crate::config::read_memory("MEMORY.md");
-        let asks = self.recent_asks(15);
+        // Enough history to tell a routine from a one-time job.
+        let asks = self.recent_asks(30);
         let open_cards: Vec<String> = self
             .board
             .iter()
@@ -554,19 +576,29 @@ impl Cabin {
             hour: clock.hour as u8,
             weekday,
         });
-        let mut sources = asks;
-        sources.extend(
-            user_md
-                .lines()
-                .chain(memory_md.lines())
-                .map(str::trim)
-                .filter(|l| l.len() >= 12)
-                .map(str::to_string),
-        );
+        let memory_lines: Vec<String> = user_md
+            .lines()
+            .chain(memory_md.lines())
+            .map(|l| l.trim().trim_start_matches(['-', '*', '#', ' ']).trim())
+            .filter(|l| l.len() >= 12)
+            .map(str::to_string)
+            .collect();
+        let mut sources = asks.clone();
+        sources.extend(memory_lines.iter().cloned());
+        let mut lasting = memory_lines;
+        lasting.extend(open_cards);
         let mut taken = existing;
         taken.extend(rejected);
         taken.extend(automations);
-        (prompt, sources, taken)
+        (
+            prompt,
+            IdeaInputs {
+                sources,
+                taken,
+                asks,
+                lasting,
+            },
+        )
     }
 
     /// What they asked lately, newest first: real asks only (no slash commands,
@@ -606,13 +638,22 @@ impl Cabin {
 
     /// Post what came back. A reply that yields nothing leaves the board as it was.
     pub(super) fn poll_ideas(&mut self) {
-        let Some((rx, sources, taken)) = self.ideas_rx.take() else {
+        let Some((rx, inputs)) = self.ideas_rx.take() else {
             return;
         };
         match rx.try_recv() {
             Ok(raw) => {
-                let seeds = grokhub_core::parse_ideas(&raw, &sources, &taken);
-                let names: Vec<&str> = taken.iter().map(String::as_str).collect();
+                let parsed = grokhub_core::parse_ideas(&raw, &inputs.sources, &inputs.taken);
+                // Only ideas with a reason: repeated work or lasting context, one per topic.
+                let seeds = grokhub_core::keep_reasoned_ideas(
+                    parsed,
+                    &grokhub_core::IdeaGround {
+                        asks: &inputs.asks,
+                        lasting: &inputs.lasting,
+                    },
+                    &inputs.taken,
+                );
+                let names: Vec<&str> = inputs.taken.iter().map(String::as_str).collect();
                 let n = grokhub_core::post_generated_ideas(
                     &mut self.updates,
                     &mut self.cfg.feed_pulse,
@@ -640,7 +681,7 @@ impl Cabin {
                         self.status = "Ideas took too long. Try Suggest ideas again.".into();
                     }
                 } else {
-                    self.ideas_rx = Some((rx, sources, taken));
+                    self.ideas_rx = Some((rx, inputs));
                 }
             }
             Err(mpsc::TryRecvError::Disconnected) => {}
@@ -713,13 +754,20 @@ impl Cabin {
         if !mark_update_opened(&mut self.updates, id) {
             return;
         }
-        let action = self
+        let (action, board_card) = self
             .updates
             .iter()
             .find(|c| c.id == id)
-            .and_then(|c| c.action.clone());
+            .map(|c| (c.action.clone(), c.board_id.clone()))
+            .unwrap_or_default();
         self.persist_updates();
         self.follow_update_action(action);
+        // A run that filed a Follow up card opens that card on the board.
+        if let Some(card) = board_card.filter(|b| self.board.iter().any(|c| &c.id == b)) {
+            self.nav = Nav::Workboard;
+            self.board_view.open = Some(card);
+            self.board_view.pinned = true;
+        }
     }
 
     pub(super) fn dismiss_feed_card(&mut self, id: &str) {

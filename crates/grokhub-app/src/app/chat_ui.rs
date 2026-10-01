@@ -326,9 +326,9 @@ pub(super) enum ChatBlockAct {
 }
 
 pub(super) struct ChatBlockPaint {
-    act: ChatBlockAct,
-    drawn: bool,
-    thought_fold: ThoughtFold,
+    pub(super) act: ChatBlockAct,
+    pub(super) drawn: bool,
+    pub(super) thought_fold: ThoughtFold,
 }
 
 /// Failed turns land as an assistant block that starts with `Error:` (chat_job / mod.rs).
