@@ -16992,3 +16992,28 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn chips_poll_clears_busy_on_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_chips();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.chip_busy);
+
+    cabin.chip_busy = true;
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<QuickChip>>();
+    cabin.chip_rx = Some(rx);
+    cabin.poll_chips();
+    assert!(cabin.chip_rx.is_some());
+    assert!(cabin.chip_busy);
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_chips();
+    assert!(cabin.chip_rx.is_none());
+    assert!(!cabin.chip_busy);
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
