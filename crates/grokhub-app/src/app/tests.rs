@@ -16992,3 +16992,39 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn remember_skill_upserts_and_sorts() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.skill_list.is_empty());
+    let mk = |name: &str, desc: &str| SkillMd {
+        name: name.into(),
+        description: desc.into(),
+        slash: "/x".into(),
+        trigger: "t".into(),
+        instructions: "1. `echo ok`".into(),
+        pitfalls: String::new(),
+        verify: String::new(),
+        runs: 0,
+    };
+    // Push out of order; remember_skill sorts on insert.
+    cabin.remember_skill(mk("zeta-skill", "first zeta"));
+    cabin.remember_skill(mk("alpha-skill", "first alpha"));
+    assert_eq!(cabin.skill_list.len(), 2);
+    assert_eq!(
+        cabin
+            .skill_list
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>(),
+        ["alpha-skill", "zeta-skill"]
+    );
+    // Same name upserts in place; list size and sort order stay put.
+    cabin.remember_skill(mk("zeta-skill", "updated zeta"));
+    assert_eq!(cabin.skill_list.len(), 2);
+    assert_eq!(cabin.skill_list[0].name, "alpha-skill");
+    assert_eq!(cabin.skill_list[1].name, "zeta-skill");
+    assert_eq!(cabin.skill_list[1].description, "updated zeta");
+    assert!(cabin.chat_job_thread.is_none());
+}
