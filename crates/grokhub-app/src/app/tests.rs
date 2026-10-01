@@ -16992,3 +16992,47 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn collect_pulse_rows_lists_goal_and_loop() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("pulse-rows");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.cfg.goal_pin = "Ship the pulse".into();
+    cabin.goal_step = 2;
+    cabin.grok_loops.push(grokhub_core::new_loop(
+        "30m".into(),
+        "check deploy".into(),
+        1_000,
+    ));
+
+    assert!(!cabin.running);
+    let status = cabin.status.clone();
+    let rows = cabin.collect_pulse_rows();
+
+    assert!(
+        rows.iter().any(|r| {
+            r.kind == super::pulse::PulseRowKind::Goal
+                && r.title == "Ship the pulse"
+                && r.detail.contains("step 2")
+        }),
+        "goal pin must surface as a Goal row: {rows:?}"
+    );
+    assert!(
+        rows.iter().any(|r| {
+            r.kind == super::pulse::PulseRowKind::Job && r.title == "check deploy"
+        }),
+        "enabled loop must surface as the Job row: {rows:?}"
+    );
+    assert!(!cabin.running);
+    assert_eq!(cabin.status, status);
+    assert_eq!(cabin.status, "Harbor");
+
+    std::env::remove_var("GROKHUB_CONFIG");
+    let _ = std::fs::remove_dir_all(&root);
+}
