@@ -16992,3 +16992,14 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn destructive_host_confirm_matches_the_rule() {
+    assert!(should_confirm_destructive_host("rm foo.txt"));
+    assert!(should_confirm_destructive_host("git push --force"));
+    assert!(!should_confirm_destructive_host("ls"));
+    assert!(!should_confirm_destructive_host("git push origin"));
+    assert!(!should_confirm_destructive_host(
+        "cp -a '/home/me/.config/GrokHub/rewind/1/.' '/tmp/proj'"
+    ));
+}
