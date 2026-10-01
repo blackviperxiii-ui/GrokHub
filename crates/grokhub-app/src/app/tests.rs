@@ -16992,3 +16992,53 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn verify_poll_stays_off_a_skill_save() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    assert!(cabin.verify_chip.is_empty());
+    assert!(!cabin.verify_ok_turn);
+    assert!(cabin.verify_rx.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+
+    cabin.poll_verify();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.verify_chip.is_empty());
+    assert!(!cabin.verify_ok_turn);
+    assert!(cabin.verify_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    cabin.verify_rx = Some(rx);
+    cabin.poll_verify();
+    assert!(
+        cabin.verify_rx.is_some(),
+        "an empty poll keeps the receiver"
+    );
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.verify_chip.is_empty());
+    assert!(!cabin.verify_ok_turn);
+
+    tx.send(None).expect("send None");
+    cabin.poll_verify();
+    assert!(cabin.verify_rx.is_none());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.verify_chip.is_empty());
+    assert!(!cabin.verify_ok_turn);
+    assert!(
+        cabin.messages.is_empty(),
+        "None must not apply a verify result"
+    );
+
+    let (gone, rx) = std::sync::mpsc::channel();
+    drop(gone);
+    cabin.verify_rx = Some(rx);
+    cabin.poll_verify();
+    assert!(cabin.verify_rx.is_none());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.verify_chip.is_empty());
+    assert!(!cabin.verify_ok_turn);
+}
