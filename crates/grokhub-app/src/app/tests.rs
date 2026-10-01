@@ -16992,3 +16992,50 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn file_list_poll_keeps_the_matching_dir() {
+    let mut app = Cabin::quiet_for_test();
+    app.pick_dir = "/tmp/harbor".into();
+    app.poll_pick_list();
+    assert!(app.pick_list_rx.is_none());
+    assert!(app.pick_cache.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.pick_list_rx = Some(rx);
+    app.poll_pick_list();
+    assert!(app.pick_list_rx.is_some());
+    assert!(app.pick_cache.is_none());
+    assert_eq!(app.status, "");
+
+    tx.send((
+        "/tmp/other".into(),
+        vec![("a.txt".into(), false)],
+    ))
+    .unwrap();
+    app.poll_pick_list();
+    assert!(app.pick_list_rx.is_none());
+    assert!(app.pick_cache.is_none(), "a different dir must not fill the cache");
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.pick_list_rx = Some(rx);
+    tx.send((
+        "/tmp/harbor".into(),
+        vec![("shot.png".into(), false)],
+    ))
+    .unwrap();
+    app.poll_pick_list();
+    assert!(app.pick_list_rx.is_none());
+    let (dir, entries) = app.pick_cache.as_ref().expect("matching dir fills the cache");
+    assert_eq!(dir, "/tmp/harbor");
+    assert_eq!(entries, &vec![("shot.png".to_string(), false)]);
+
+    let (tx, rx) = std::sync::mpsc::channel::<(String, Vec<(String, bool)>)>();
+    drop(tx);
+    app.pick_list_rx = Some(rx);
+    app.poll_pick_list();
+    assert!(app.pick_list_rx.is_none());
+    assert!(app.pick_cache.is_some(), "a dropped list must not clear a filled cache");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
