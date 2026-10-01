@@ -16992,3 +16992,17 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn cabin_lane_label_coding_and_life() {
+    assert_eq!(
+        super::cabin_lane_label(super::CabinLane::Coding),
+        "Coding",
+        "Coding lane labels as Coding"
+    );
+    assert_eq!(
+        super::cabin_lane_label(super::CabinLane::Life),
+        "Life",
+        "Life lane labels as Life"
+    );
+}
