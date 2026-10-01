@@ -16992,3 +16992,24 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn ensure_background_history_thread_reuses() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    let first = cabin.ensure_background_history_thread();
+    let second = cabin.ensure_background_history_thread();
+    assert_eq!(first, second);
+    assert_eq!(
+        cabin.threads.iter().filter(|t| t.background).count(),
+        1,
+        "ensure must reuse one Background row"
+    );
+    let thread = &cabin.threads[first];
+    assert!(thread.background);
+    assert_eq!(thread.title, "Background");
+    assert!(!cabin.running);
+    assert_ne!(cabin.status, "Thinking…");
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.chat_job_thread.is_none());
+}
