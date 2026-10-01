@@ -16992,3 +16992,27 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn last_night_hint_empty_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(cabin.continue_hint.is_empty());
+    assert!(cabin.messages.is_empty());
+    assert!(cabin.rewind_rows.is_empty());
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    assert!(cabin.acp.is_none());
+    assert!(cabin.live_cap_rx.is_none());
+
+    let hint = cabin.last_night_hint();
+    assert!(
+        hint.is_empty(),
+        "idle cabin with empty continue_hint and no receipts stays on the continue_hint-only path: {hint:?}"
+    );
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rx.is_none());
+    assert!(cabin.acp.is_none());
+    assert!(cabin.live_cap_rx.is_none());
+}
