@@ -16992,3 +16992,22 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn chat_paste_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    app.composer = "chat line".into();
+    app.imagine_prompt = "sunset".into();
+    app.apply_clipboard(PlusTarget::Chat, "over the harbor\n");
+    assert_eq!(app.composer, "chat line\nover the harbor");
+    assert_eq!(app.imagine_prompt, "sunset");
+    assert_eq!(app.status, "Pasted clipboard");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+    app.apply_clipboard(PlusTarget::Chat, "   \n");
+    assert_eq!(app.composer, "chat line\nover the harbor");
+    assert_eq!(app.imagine_prompt, "sunset");
+    assert_eq!(app.status, "Pasted clipboard");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}

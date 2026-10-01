@@ -149,7 +149,9 @@ impl Cabin {
     pub(super) fn apply_clipboard(&mut self, target: PlusTarget, clip: &str) {
         match target {
             PlusTarget::Chat => {
-                self.composer = append_composer(&self.composer, clip);
+                if !clip.trim().is_empty() {
+                    self.composer = append_composer(&self.composer, clip);
+                }
                 self.status = "Pasted clipboard".into();
             }
             PlusTarget::Imagine => {
