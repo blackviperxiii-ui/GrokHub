@@ -108,7 +108,9 @@ pub fn append_tool(blocks: &mut Vec<LiveBlock>, id: &str, title: &str, status: &
     if !id.is_empty() {
         if let Some(old) = blocks.iter_mut().rev().find(|b| b.kind == LiveKind::Tool && b.tool_id == id)
         {
-            if !title.is_empty() {
+            // Grok's `tool_call_update` carries no title, which parses as the
+            // placeholder `Tool`. It must not replace the name from the call.
+            if !title.trim().is_empty() && !title.trim().eq_ignore_ascii_case("tool") {
                 old.tool_title = title.to_string();
             }
             if !status.is_empty() {
@@ -535,6 +537,15 @@ mod tests {
         assert_eq!(kinds(&b), vec![LiveKind::Tool]);
         assert_eq!(b[0].tool_status, "failed");
         assert_eq!(b[0].tool_detail, "cancelled");
+        // Grok 1.0.46 updates carry no title; the parser's placeholder keeps the name.
+        append_tool(&mut b, "t1", "Tool", "completed", "32GB");
+        assert_eq!(b[0].tool_title, "run_terminal_command");
+        assert_eq!(b[0].tool_status, "completed");
+        append_tool(&mut b, "t1", "Read `notes.md`", "", "");
+        assert_eq!(
+            b[0].tool_title, "Read `notes.md`",
+            "a real new title still lands"
+        );
     }
 
     #[test]
