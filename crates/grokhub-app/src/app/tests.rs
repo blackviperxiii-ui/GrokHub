@@ -16992,3 +16992,25 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn profile_pick_poll_clears_on_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_profile_pick();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.profile_pick_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<(u64, super::ProfilePick)>();
+    cabin.profile_pick_rx = Some(rx);
+    cabin.poll_profile_pick();
+    assert!(cabin.profile_pick_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_profile_pick();
+    assert!(cabin.profile_pick_rx.is_none());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
