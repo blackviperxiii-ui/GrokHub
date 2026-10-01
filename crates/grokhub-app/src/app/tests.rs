@@ -16992,3 +16992,17 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn flip_cabin_lane_swaps_coding_and_life() {
+    assert_eq!(
+        super::flip_cabin_lane(super::CabinLane::Coding),
+        super::CabinLane::Life,
+        "Coding flips to Life"
+    );
+    assert_eq!(
+        super::flip_cabin_lane(super::CabinLane::Life),
+        super::CabinLane::Coding,
+        "Life flips to Coding"
+    );
+}
