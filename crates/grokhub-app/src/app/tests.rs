@@ -16992,3 +16992,13 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn dream_rewind_id_none_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rewind_rows.is_empty());
+    // Quiet cabin with empty rewind_rows → None.
+    assert!(cabin.dream_rewind_id().is_none());
+}
