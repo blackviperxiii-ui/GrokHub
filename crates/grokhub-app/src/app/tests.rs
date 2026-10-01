@@ -16992,3 +16992,32 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+
+#[test]
+fn grok_sessions_poll_stays_off_when_empty() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.pending_grok_deletes.insert("keep-del".into());
+    cabin.grok_sessions.push(grokhub_acp::GrokSession {
+        id: "keep-a".into(),
+        title: "Kept A".into(),
+        path: None,
+        cwd: None,
+        cabin: false,
+    });
+    cabin.grok_sessions_loaded = true;
+
+    // quiet_for_test leaves grok_sessions_rx empty (sender still held); Empty break.
+    // Do not send Ok — that would apply a session list.
+    cabin.poll_grok_sessions();
+
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.pending_grok_deletes.contains("keep-del"));
+    assert_eq!(cabin.pending_grok_deletes.len(), 1);
+    assert_eq!(cabin.grok_sessions.len(), 1);
+    assert_eq!(cabin.grok_sessions[0].id, "keep-a");
+    assert!(cabin.grok_sessions_loaded);
+}
