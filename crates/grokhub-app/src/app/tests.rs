@@ -16992,3 +16992,60 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn work_root_uses_the_home_folder() {
+    struct RestoreHome {
+        prev: Option<String>,
+        #[cfg(windows)]
+        prev_profile: Option<std::ffi::OsString>,
+    }
+    impl Drop for RestoreHome {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(h) => std::env::set_var("HOME", h),
+                None => std::env::remove_var("HOME"),
+            }
+            #[cfg(windows)]
+            match self.prev_profile.take() {
+                Some(p) => std::env::set_var("USERPROFILE", p),
+                None => std::env::remove_var("USERPROFILE"),
+            }
+        }
+    }
+
+    let app = Cabin::quiet_for_test();
+    let home_guard = RestoreHome {
+        prev: std::env::var("HOME").ok(),
+        #[cfg(windows)]
+        prev_profile: std::env::var_os("USERPROFILE"),
+    };
+    #[cfg(windows)]
+    std::env::remove_var("USERPROFILE");
+    let home = std::env::temp_dir().join("grokhub-work-root-1054");
+    std::env::set_var("HOME", &home);
+    let got = app.work_root();
+    #[cfg(not(windows))]
+    let expect = {
+        let home_s = home.display().to_string().trim_end_matches('/').to_string();
+        format!("{home_s}/GrokHub-Work")
+    };
+    #[cfg(windows)]
+    let expect = {
+        let h = home
+            .display()
+            .to_string()
+            .trim_end_matches(['/', '\\'])
+            .to_string();
+        let drive = h.len() >= 2 && h.as_bytes()[1] == b':';
+        if drive || h.starts_with('\\') || h.contains('\\') {
+            format!("{}\\GrokHub-Work", h.replace('/', "\\"))
+        } else {
+            format!("{h}/GrokHub-Work")
+        }
+    };
+    assert_eq!(got, expect);
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+    drop(home_guard);
+}
