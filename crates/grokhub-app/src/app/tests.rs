@@ -16992,3 +16992,29 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn wall_cover_poll_stays_off_a_spawn() {
+    let mut app = Cabin::quiet_for_test();
+    app.status = "Harbor".into();
+    app.wall_busy = true;
+    app.poll_wall();
+    assert!(app.wall_rx.is_none());
+    assert!(app.wall_busy);
+    assert_eq!(app.status, "Harbor");
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<grokhub_core::WallGif, String>>();
+    app.wall_rx = Some(rx);
+    app.poll_wall();
+    assert!(app.wall_rx.is_some());
+    assert!(app.wall_busy);
+    assert_eq!(app.status, "Harbor");
+
+    drop(tx);
+    app.poll_wall();
+    assert!(app.wall_rx.is_none());
+    assert!(!app.wall_busy);
+    assert_eq!(app.status, "Harbor");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
