@@ -16992,3 +16992,56 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn hold_chat_name_for_plan_freezes_visible_history_label() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    assert!(cabin.acp.is_none());
+    assert!(!cabin.host_diff_kick);
+
+    let sid = "sess-plan-hold";
+    let mut thread = crate::threads::ChatThread::new("Night watch", false);
+    thread.title_locked = true;
+    thread.grok_session = Some(sid.into());
+    cabin.threads = vec![thread];
+    cabin.thread_idx = 0;
+    cabin.grok_sessions.push(grokhub_acp::GrokSession {
+        id: sid.into(),
+        title: "fix the dock".into(),
+        path: None,
+        cwd: None,
+        cabin: false,
+    });
+
+    cabin.hold_chat_name_for_plan();
+    assert_eq!(cabin.threads[0].title, "Night watch");
+    assert_eq!(
+        cabin
+            .grok_sessions
+            .iter()
+            .find(|s| s.id == sid)
+            .map(|s| s.title.as_str()),
+        Some("Night watch"),
+        "Plan freezes the History label to the visible rail title"
+    );
+
+    // Already held: second call is a noop.
+    cabin.hold_chat_name_for_plan();
+    assert_eq!(
+        cabin
+            .grok_sessions
+            .iter()
+            .find(|s| s.id == sid)
+            .map(|s| s.title.as_str()),
+        Some("Night watch")
+    );
+    assert_eq!(cabin.threads[0].title, "Night watch");
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.rx.is_none());
+    assert!(cabin.acp.is_none());
+    assert!(!cabin.host_diff_kick);
+}
