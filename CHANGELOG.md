@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 2.10.53 — 2026-09-30
+
+An idea card's chat shows only the agent's replies. With replies now stored beside their thoughts and tool runs, the card was about to show those too. The new action the agent proposes (`CARD_ACTION:`) is read from its reply only and the newest one wins, so a thought that mentions the tag no longer rewrites the card.
+
+Apply or Delete on an idea removes that card's hidden chat and its Grok Build session instead of leaving them behind. Only the card's own hidden (background) chat is removed; a chat you can see in History is never touched. The chat box inside a card keeps focus after Send, so the card stays open while you wait for the answer. An automation idea without a clear time is sent to chat as a scheduled automation, not a recurring one, so one-off reminders read right.
+
+Suggest ideas gives up on an ask that has not answered in three minutes, so the button no longer says Thinking… for good.
+
+- Linux: `grokhub-linux-v2.10.53.tar.gz` and AUR `pkgver=2.10.53`.
+- Windows: `GrokHub-Setup-2.10.53.exe` and `grokhub-windows-v2.10.53.zip`.
+
 ## 2.10.52 — 2026-09-30
 
 A long agent turn stays smooth while it streams. Before, every stream delta rebuilt and rescrubbed the whole transcript's views and the token estimate, and every row of the live turn re-laid its markdown each frame. Now a delta that only grows the streaming reply leaves the transcript caches alone until the turn ends (an edit anywhere before the last message still rebuilds them at once), and live rows scrolled out of view reserve the height they last painted at. The row still streaming, and any row whose fold changes (a click, Minimize all), is always measured again, and a new turn never reuses the last turn's heights.
