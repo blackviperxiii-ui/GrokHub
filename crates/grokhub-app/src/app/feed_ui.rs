@@ -19,6 +19,8 @@ use grokhub_core::{
 };
 
 const FEED_CARD_H: f32 = 64.0;
+/// Longest wait for the model's idea list before the board gives up on that ask.
+pub(super) const IDEAS_WAIT_MS: u64 = 180_000;
 const FEED_GAP: f32 = 6.0;
 /// Collapsed chat deck shows this many edges. The rest stay in the count.
 pub(super) const HOME_STACK_SHOW: usize = 3;
@@ -631,7 +633,16 @@ impl Cabin {
                     };
                 }
             }
-            Err(mpsc::TryRecvError::Empty) => self.ideas_rx = Some((rx, sources, taken)),
+            Err(mpsc::TryRecvError::Empty) => {
+                // A hung ask must not leave the Ideas button on "Thinking…" for good.
+                if now_ms().saturating_sub(self.cfg.feed_pulse.last_ideas_ms) > IDEAS_WAIT_MS {
+                    if self.nav == Nav::Ideas {
+                        self.status = "Ideas took too long. Try Suggest ideas again.".into();
+                    }
+                } else {
+                    self.ideas_rx = Some((rx, sources, taken));
+                }
+            }
             Err(mpsc::TryRecvError::Disconnected) => {}
         }
     }

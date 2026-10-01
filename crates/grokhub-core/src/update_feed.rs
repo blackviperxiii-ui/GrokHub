@@ -1068,26 +1068,30 @@ pub fn idea_card_brief(card: &UpdateCard) -> String {
     out
 }
 
+fn card_action_in(line: &str) -> Option<String> {
+    let t = line.trim().trim_start_matches(['*', '`', '-', ' ']);
+    let rest = t.strip_prefix(CARD_ACTION_TAG)?;
+    let a = rest.trim().trim_matches(['*', '`', '"']).trim();
+    (!a.is_empty()).then(|| a.chars().take(2000).collect())
+}
+
 /// Pull a `CARD_ACTION:` line out of an agent reply. Returns the reply with that
 /// line swapped for a short note, and the new action. `None` when there is none.
+/// Only the reply counts: a thought or a tool row that mentions the tag is left
+/// alone, and the newest action line wins.
 pub fn take_card_action(reply: &str) -> Option<(String, String)> {
-    let mut action = None;
-    let mut kept: Vec<String> = Vec::new();
-    for line in reply.lines() {
-        let t = line.trim().trim_start_matches(['*', '`', '-', ' ']);
-        if action.is_none() {
-            if let Some(rest) = t.strip_prefix(CARD_ACTION_TAG) {
-                let a = rest.trim().trim_matches(['*', '`', '"']).trim();
-                if !a.is_empty() {
-                    action = Some(a.chars().take(2000).collect::<String>());
-                    kept.push(CARD_ACTION_DONE.to_string());
-                    continue;
-                }
-            }
-        }
-        kept.push(line.to_string());
-    }
-    let action = action?;
+    let says = crate::chat_view::strip_thinking(reply);
+    let (line, action) = says
+        .lines()
+        .rev()
+        .find_map(|l| card_action_in(l).map(|a| (l.trim().to_string(), a)))?;
+    let lines: Vec<&str> = reply.lines().collect();
+    let pos = lines.iter().rposition(|l| l.trim() == line)?;
+    let kept: Vec<&str> = lines
+        .iter()
+        .enumerate()
+        .map(|(i, l)| if i == pos { CARD_ACTION_DONE } else { *l })
+        .collect();
     Some((kept.join("\n").trim_end().to_string(), action))
 }
 
@@ -2087,6 +2091,21 @@ mod tests {
         assert!(!clean.contains(CARD_ACTION_TAG));
         assert!(take_card_action(&clean).is_none(), "second pass finds nothing");
         assert!(take_card_action("CARD_ACTION:   ").is_none());
+    }
+
+    #[test]
+    fn card_action_comes_from_the_reply_not_a_thought() {
+        let turn = "TURN_THOUGHT:\nMaybe end with CARD_ACTION: every hour ping me\nTURN_TOOL: done\tRead\tnotes.md\nTURN_SAY:\nWeekdays it is.\nCARD_ACTION: every weekday at 8 sort my inbox\n";
+        let (clean, action) = take_card_action(turn).expect("action");
+        assert_eq!(action, "every weekday at 8 sort my inbox");
+        assert!(clean.contains("Maybe end with CARD_ACTION: every hour ping me"), "the thought stays as it was");
+        assert!(clean.contains(CARD_ACTION_DONE));
+        let says = crate::turn_timeline::turn_says(&clean).expect("still a timeline");
+        assert!(says.contains("Weekdays it is.") && says.contains(CARD_ACTION_DONE));
+        let thought_only = "TURN_THOUGHT:\nI could say CARD_ACTION: every hour ping me\nTURN_SAY:\nWhat time suits you?\n";
+        assert!(take_card_action(thought_only).is_none());
+        let two = "First: CARD_ACTION: a\nThen\nCARD_ACTION: every day at 9 plan my day";
+        assert_eq!(take_card_action(two).unwrap().1, "every day at 9 plan my day");
     }
 
     #[test]
