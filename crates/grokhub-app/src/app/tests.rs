@@ -17021,3 +17021,5 @@ fn inspect_poll_while_idle_stays_off_a_run() {
     assert!(!app.running);
     assert!(app.chat_job_thread.is_none());
 }
+
+// ci-retrigger-marker
