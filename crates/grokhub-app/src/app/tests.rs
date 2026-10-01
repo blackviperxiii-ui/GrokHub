@@ -16992,3 +16992,14 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn cabin_default_permissions_lists_known_ids() {
+    // Real fn: non-empty permission ladder with known ids. No spawn/network.
+    let perms = cabin_default_permissions();
+    assert!(!perms.is_empty());
+    let ids: Vec<&str> = perms.iter().map(|(id, _)| *id).collect();
+    for want in ["ask", "auto"] {
+        assert!(ids.contains(&want), "missing permission id {want}: {ids:?}");
+    }
+}
