@@ -17002,3 +17002,5 @@ fn dream_rewind_id_none_when_idle() {
     // Quiet cabin with empty rewind_rows → None.
     assert!(cabin.dream_rewind_id().is_none());
 }
+
+// ci-retrigger-marker
