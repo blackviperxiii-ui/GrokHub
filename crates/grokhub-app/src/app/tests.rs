@@ -16992,3 +16992,17 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn abandon_turn_card_stays_off_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    assert!(!cabin.inflight_open);
+    assert!(cabin.board.is_empty());
+    cabin.abandon_turn_card();
+    assert!(!cabin.inflight_open);
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.board.is_empty());
+}
