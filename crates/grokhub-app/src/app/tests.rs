@@ -16992,3 +16992,27 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn host_diff_poll_finishes_on_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_host_diff();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.host_diff_kick);
+
+    let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
+    cabin.host_diff_rx = Some(rx);
+    cabin.poll_host_diff();
+    assert!(cabin.host_diff_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.host_diff_kick);
+
+    drop(tx);
+    cabin.poll_host_diff();
+    assert!(cabin.host_diff_rx.is_none());
+    assert!(!cabin.host_diff_kick);
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
