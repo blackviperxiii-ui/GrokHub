@@ -16992,3 +16992,12 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn device_glance_none_when_hub_off() {
+    // Free fn: hub_off + no thumb → None; hub_on → Some("Sharing"). Stay off network/spawn.
+    assert!(device_glance(false, None).is_none());
+    let share = device_glance(true, None).expect("sharing");
+    assert_eq!(share.share_line, "Sharing");
+    assert!(!share.has_thumb);
+}
