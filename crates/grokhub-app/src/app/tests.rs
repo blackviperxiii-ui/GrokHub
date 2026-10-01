@@ -16992,3 +16992,17 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn visible_thread_id_matches_current_when_idle() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin
+        .threads
+        .push(crate::threads::ChatThread::new("Chat", false));
+    cabin.thread_idx = 0;
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    let id = cabin.visible_thread_id();
+    assert!(!id.is_empty());
+    assert_eq!(id, cabin.threads[cabin.thread_idx].id);
+}
