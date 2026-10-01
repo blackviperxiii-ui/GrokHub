@@ -16992,3 +16992,24 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn drop_hint_line_matches_shipped_wording() {
+    use super::plus::drop_hint_line;
+    assert_eq!(
+        drop_hint_line(false, 1),
+        "Drop to attach to your next message"
+    );
+    assert_eq!(
+        drop_hint_line(true, 1),
+        "Drop to use as the Imagine reference"
+    );
+    assert_eq!(
+        drop_hint_line(false, 3),
+        "Drop to attach to your next message — the first of 3 files"
+    );
+    assert_eq!(
+        drop_hint_line(true, 3),
+        "Drop to use as the Imagine reference — the first of 3 files"
+    );
+}
