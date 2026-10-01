@@ -247,9 +247,14 @@ pub fn review_system_prompt() -> &'static str {
      SUGGEST_CONNECTOR: title | body | github <tool>\n\
      Keep titles short. Name the help, not a sentence from the chat. \
      Do not copy a chat line into a title, body, trigger, seed, or instruction. \
-     For a repeated ask, say why they asked, then a skill that would help the next \
-     chat, and an automation so they do not have to ask again. \
-     Propose at most 6 of each kind. Skip anything already \
+     Suggest only for work the owner repeats: the same need asked on two or more \
+     separate occasions, or something their memory says is ongoing. A one-time \
+     task (installing a driver or package, fixing one bug, setting something up \
+     once) gets nothing, even if it took many messages or was retried. \
+     One suggestion per need: pick the single kind that fits (a skill for a \
+     procedure they redo by hand, an automation for something that should happen \
+     on a schedule), never both for the same thing. \
+     Propose at most 2 of each kind. Skip anything already \
      listed as existing. SUGGEST_SKILL_PATCH only for an existing skill name. \
      If nothing useful, output nothing."
 }
@@ -708,7 +713,6 @@ pub fn suggestions_from_sessions(
     let mut board = 0u32;
     let mut host = 0u32;
     let mut morning = 0u32;
-    let mut skill_hits = 0u32;
     for line in lines {
         if line.role != "user" {
             continue;
@@ -725,9 +729,6 @@ pub fn suggestions_from_sessions(
         }
         if t.contains("morning") || (t.contains("summarize") && t.contains("receipt")) {
             morning += 1;
-        }
-        if t.contains("/skill") || t.contains("when i ") || t.contains("every time i") {
-            skill_hits += 1;
         }
     }
     let mut items = Vec::new();
@@ -752,22 +753,7 @@ pub fn suggestions_from_sessions(
             "/loop 1d summarize the workboard and last host receipt",
         ));
     }
-    if skill_hits >= 2 {
-        items.push(LearnedSuggestion {
-            kind: SuggestionKind::Skill,
-            title: "Session habit".into(),
-            body: "A skill from a routine you already run in chat.".into(),
-            seed: None,
-            name: Some("session-habit".into()),
-            trigger: Some("when I repeat this chat routine".into()),
-            instructions: Some(
-                "Follow the steps the owner already ran in recent sessions. Stay cabin-real."
-                    .into(),
-            ),
-            provider: None,
-            tool: None,
-        });
-    }
+    // No skill here: "when I" twice is not a procedure. Skills come from the review.
     dedupe_suggestions(items, existing_skills, existing_autos, &[])
 }
 
@@ -1064,10 +1050,8 @@ SUGGEST_AUTO: Night wrap | Close the day | every day at 21, say good night
             "{items:?}"
         );
         assert!(
-            items
-                .iter()
-                .any(|i| i.kind == SuggestionKind::Skill && i.name.as_deref() == Some("session-habit")),
-            "{items:?}"
+            !items.iter().any(|i| i.kind == SuggestionKind::Skill),
+            "no generic habit skill from a phrase: {items:?}"
         );
         let hidden = suggestions_from_sessions(&lines, &["session-habit".into()], &["Midday board".into()]);
         assert!(!hidden.iter().any(|i| i.title == "Midday board"));

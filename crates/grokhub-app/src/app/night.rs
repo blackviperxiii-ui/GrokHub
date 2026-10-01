@@ -496,10 +496,38 @@ impl Cabin {
         }
         self.auto_run = None;
         match end {
-            AutoEnd::Ok => self.update_auto_health(&id, mark_automation_ok),
+            AutoEnd::Ok => {
+                self.update_auto_health(&id, mark_automation_ok);
+                self.follow_up_scheduled_chat(&id, thread.as_deref());
+            }
             AutoEnd::Stopped => self.update_auto_health(&id, mark_automation_stopped),
             AutoEnd::Failed(why) => self.note_auto_failed(&id, why),
         }
+    }
+
+    /// A scheduled chat run ended well: its last reply may need a Follow up card.
+    fn follow_up_scheduled_chat(&mut self, id: &str, thread: Option<&str>) {
+        let Some(a) = self.automations.iter().find(|x| x.id == id).cloned() else {
+            return;
+        };
+        let messages = match thread {
+            Some(tid) if tid != self.visible_thread_id() => self
+                .threads
+                .iter()
+                .find(|t| t.id == tid)
+                .map(|t| t.messages.clone()),
+            _ => Some(self.messages.clone()),
+        };
+        let Some(reply) = messages.and_then(|m| {
+            m.iter()
+                .rev()
+                .take_while(|(role, _)| role != "user")
+                .find(|(role, _)| role == "assistant")
+                .map(|(_, text)| text.clone())
+        }) else {
+            return;
+        };
+        self.file_automation_follow_up(&a.id, &a.name, &a.instructions, &reply);
     }
 
     pub(super) fn update_auto_health(&mut self, id: &str, f: fn(Automation) -> Automation) {
@@ -592,6 +620,7 @@ impl Cabin {
                     text
                 };
                 self.note_automation_done(&id, &prompt, &summary);
+                self.file_automation_follow_up(&id, &loop_card_name(&prompt), &prompt, &summary);
                 true
             }
             Err(mpsc::TryRecvError::Empty) => {
@@ -875,6 +904,38 @@ impl Cabin {
         }
     }
 
+    /// A skill or automation from the review needs the same reason an idea does:
+    /// work they repeat, or lasting context. One per topic.
+    pub(super) fn keep_reasoned_suggestions(&self, items: &mut Vec<grokhub_core::LearnedSuggestion>) {
+        let (_, inputs) = self.idea_request();
+        let ground = grokhub_core::IdeaGround {
+            asks: &inputs.asks,
+            lasting: &inputs.lasting,
+        };
+        let mut kept: Vec<String> = Vec::new();
+        items.retain(|item| {
+            let kind = match item.kind {
+                grokhub_core::SuggestionKind::Skill => grokhub_core::IdeaKind::Skill,
+                grokhub_core::SuggestionKind::Auto => grokhub_core::IdeaKind::Automation,
+                grokhub_core::SuggestionKind::Connector => return true,
+            };
+            let topic = format!(
+                "{} {} {} {}",
+                item.title,
+                item.body,
+                item.seed.as_deref().unwrap_or(""),
+                item.trigger.as_deref().unwrap_or("")
+            );
+            if !grokhub_core::idea_has_reason(kind, &topic, &ground)
+                || kept.iter().any(|k| grokhub_core::same_topic(k, &topic))
+            {
+                return false;
+            }
+            kept.push(topic);
+            true
+        });
+    }
+
     fn recent_user_lines(&self) -> Vec<String> {
         let mut out = Vec::new();
         let mut push = |text: &str| {
@@ -914,12 +975,13 @@ impl Cabin {
                     .map(|t| (*t).to_string())
                     .collect();
                 let said = self.recent_user_lines();
-                let items = dedupe_suggestions(
+                let mut items = dedupe_suggestions(
                     grokhub_core::drop_echoed_suggestions(parse_suggest_lines(&text), &said),
                     &skill_names,
                     &auto_names,
                     &live_tools,
                 );
+                self.keep_reasoned_suggestions(&mut items);
                 let day = Some(Self::local_day());
                 let ms = now_ms();
                 if items.is_empty() {
@@ -987,5 +1049,24 @@ impl Cabin {
         std::thread::spawn(move || {
             let _ = crate::night::save(&list);
         });
+    }
+}
+
+/// A `/loop` has no name; its card is named by the start of its prompt.
+pub(super) fn loop_card_name(prompt: &str) -> String {
+    let p = prompt.trim().trim_start_matches("/loop").trim();
+    // Drop the interval word ("12h", "1d") the loop starts with.
+    let p = match p.split_once(' ') {
+        Some((head, rest)) if head.chars().next().is_some_and(|c| c.is_ascii_digit()) => rest.trim(),
+        _ => p,
+    };
+    let mut out: String = p.chars().take(60).collect();
+    if p.chars().count() > 60 {
+        out.push('…');
+    }
+    let mut chars = out.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
     }
 }

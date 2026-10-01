@@ -579,6 +579,7 @@ impl Cabin {
                 .map(|r| r.prompt.clone())
                 .unwrap_or_default();
             self.note_automation_done(&id, &prompt, &text);
+            self.file_automation_follow_up(&id, &super::night::loop_card_name(&prompt), &prompt, &text);
         }
         if self.background_tasks_open() {
             let n = self.grok_tasks.iter().filter(|t| !t.2).count();

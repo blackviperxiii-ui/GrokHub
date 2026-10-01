@@ -28,6 +28,7 @@ fn cabin_src() -> String {
         include_str!("voice.rs"),
         include_str!("threads_nav.rs"),
         include_str!("ideas_ui.rs"),
+        include_str!("board_ui.rs"),
     )
     .replace("pub(super) ", "")
 }
@@ -6962,11 +6963,13 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && settled.contains("flush_board"),
             "complete moves doing to done and applies WORK_PIN lines: {settled}"
         );
+        let menu = fn_src(&src, "board_card_menu");
         assert!(
             board.contains("Workboards")
-                && board.contains("Open chat")
-                && board.contains("Archive"),
-            "Workboards page is the kanban, with a thread link: {board}"
+                && board.contains("paint_board_card")
+                && menu.contains("Open chat")
+                && menu.contains("Archive"),
+            "Workboards page is the kanban, with a thread link in each card's menu: {board}"
         );
         let open = fn_src(&src, "open_board_thread");
         assert!(
@@ -14864,6 +14867,7 @@ fn quiet_cabin() -> Cabin {
         chip_memory: grokhub_core::ChipMemory::default(),
         chip_dismissed: Vec::new(),
         idea_board: Default::default(),
+        board_view: Default::default(),
         llm_chips: Vec::new(),
         visible_chips: Vec::new(),
         chip_rx: None,
@@ -16308,9 +16312,13 @@ fn board_drop_moves_to_another_column_only() {
     }
     let src = cabin_src();
     let board = fn_src(&src, "ui_board");
-    assert!(board.contains("DragAndDrop::set_payload(") && board.contains("BoardDrag(id.clone())"), "cards must be draggable by the title row");
+    let compact = fn_src(&src, "paint_board_card_compact");
+    let open = fn_src(&src, "paint_board_card_open");
+    assert!(compact.contains("DragAndDrop::set_payload(") && compact.contains("BoardDrag(id.clone())"), "a small card drags whole");
+    assert!(open.contains("DragAndDrop::set_payload(") && open.contains("self.board_view.open = None"), "an open card drags by its title row and folds back");
     assert!(board.contains("dnd_release_payload::<BoardDrag>"), "columns must take drops");
-    assert!(board.contains("BoardAct::Move"), "a drop is the same Move the buttons use");
+    assert!(board.contains("BoardAct::Move"), "a drop is the same Move the menu uses");
+    assert!(board.contains("KanbanColumn::FollowUp"), "the Follow up row takes drops too");
 }
 
 #[test]
@@ -16459,6 +16467,8 @@ fn ideas_come_from_the_model_with_their_work_and_post_with_a_prompt() {
     let _pin = config::TestConfigDir::set(root.clone());
     let mut app = Cabin::quiet_for_test();
     app.messages = std::sync::Arc::new(vec![
+        ("user".into(), "run the grokhub tests on the chips branch".into()),
+        ("assistant".into(), "All green.".into()),
         ("user".into(), "run the grokhub tests again and tell me what broke".into()),
         ("assistant".into(), "Two failures in chips.rs.".into()),
         ("user".into(), "actually still no, the other monitor".into()),
@@ -16471,15 +16481,18 @@ fn ideas_come_from_the_model_with_their_work_and_post_with_a_prompt() {
         vec![
             "bump the AUR pkgver for the release".to_string(),
             "run the grokhub tests again and tell me what broke".to_string(),
+            "run the grokhub tests on the chips branch".to_string(),
         ],
         "newest first, no slash commands, no feedback on the last try"
     );
-    let (prompt, sources, _) = app.idea_request();
-    assert!(prompt.contains("- bump the AUR pkgver for the release"), "{prompt}");
-    assert!(prompt.contains("IDEA: kind | title | short description | details | what to send"));
+    let (prompt, inputs) = app.idea_request();
+    assert!(prompt.contains("- (1x) bump the AUR pkgver for the release"), "{prompt}");
+    assert!(prompt.contains("- (2x) run the grokhub tests again"), "{prompt}");
+    assert!(prompt.contains("IDEA: kind | title | short description | reason | details | what to send"));
+    assert_eq!(inputs.asks.len(), 3);
 
     let (tx, rx) = std::sync::mpsc::channel();
-    app.ideas_rx = Some((rx, sources, Vec::new()));
+    app.ideas_rx = Some((rx, inputs));
     tx.send(
         "IDEA: automation | Morning test run | Every weekday at 8 your GrokHub tests run and failures land on your feed before you sit down. | every weekday at 8, run cargo test in ~/GrokHub and summarize failures\n\
          IDEA: try | A chip for the next step | A chip takes the next step for you here. | take the next step\n"
@@ -16552,9 +16565,9 @@ fn board_card_notes_edit_save_and_ride_the_next_turn() {
     assert!(send.contains("take_card_notes_block"), "{send}");
     let work = fn_src(&src, "work_on_card");
     assert!(work.contains("card_work_prompt") && work.contains("c.run = true"), "{work}");
-    let board = fn_src(&src, "ui_board");
-    assert!(!board.contains("dnd_drag_source"), "the whole card must not be a drag source again");
-    assert!(board.contains("egui::DragAndDrop::set_payload"), "the title row drags");
+    let open = fn_src(&src, "paint_board_card_open");
+    assert!(!open.contains("dnd_drag_source"), "an open card's controls must not sit inside a drag source");
+    assert!(open.contains("egui::DragAndDrop::set_payload"), "the title row drags");
 }
 
 #[test]
@@ -16832,7 +16845,7 @@ fn a_hung_ideas_ask_stops_thinking() {
     let mut quiet = QuietCabin::boot("ideas-ask-timeout");
     let cabin = &mut quiet.cabin;
     let (_tx, rx) = std::sync::mpsc::channel::<String>();
-    cabin.ideas_rx = Some((rx, Vec::new(), Vec::new()));
+    cabin.ideas_rx = Some((rx, super::feed_ui::IdeaInputs::default()));
     cabin.cfg.feed_pulse.last_ideas_ms = super::now_ms();
     cabin.poll_ideas();
     assert!(cabin.ideas_rx.is_some(), "a fresh ask keeps waiting");
@@ -16990,5 +17003,191 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
         );
     }
 
+    release_isolated(&root, cabin);
+}
+
+fn test_automation(id: &str, name: &str, instructions: &str) -> grokhub_core::Automation {
+    serde_json::from_value(serde_json::json!({
+        "id": id,
+        "name": name,
+        "schedule": "daily",
+        "time": "09:00",
+        "instructions": instructions,
+    }))
+    .expect("automation")
+}
+
+#[test]
+fn a_report_run_lands_in_follow_up_with_a_chat_and_a_chore_does_not() {
+    let (root, mut cabin) = isolated_cabin("follow-up-filing");
+    cabin.board.clear();
+    cabin.automations = vec![
+        test_automation("a-issues", "Morning issues", "every weekday at 9, summarize my open GitHub issues"),
+        test_automation("a-tidy", "Tidy downloads", "every day at 18, clean the downloads folder"),
+    ];
+    // You are on another chat; a scheduled chat run on its own thread ends with a report.
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = std::sync::Arc::new(Vec::new());
+    let run = crate::threads::ChatThread::new("Morning issues", false);
+    let run_id = run.id.clone();
+    cabin.threads.push(run);
+    if let Some(t) = cabin.threads.iter_mut().find(|t| t.id == run_id) {
+        t.messages_mut().push(("user".into(), "summarize my open GitHub issues".into()));
+        t.messages_mut().push((
+            "assistant".into(),
+            "## Open issues\nThree opened overnight: crash on resume, tray icon, docs.".into(),
+        ));
+    }
+    cabin.note_automation_done("a-issues", "Morning issues", "Open issues");
+    cabin.auto_run = Some(("a-issues".into(), Some(run_id.clone())));
+    cabin.settle_auto_run(AutoEnd::Ok, Some(run_id.as_str()));
+    let follow: Vec<&grokhub_core::BoardCard> = cabin
+        .board
+        .iter()
+        .filter(|c| c.status == grokhub_core::BoardStatus::FollowUp)
+        .collect();
+    assert_eq!(follow.len(), 1, "{:?}", cabin.board);
+    let card = follow[0].clone();
+    assert_eq!(card.title, "Morning issues");
+    assert_eq!(card.automation.as_deref(), Some("a-issues"));
+    assert!(card.fresh && card.detail == "Open issues", "{card:?}");
+    let chat = card.thread_id.clone().expect("a follow up card has its own chat");
+    assert_ne!(chat, run_id, "its own chat, not the run's");
+    let feed = cabin
+        .updates
+        .iter()
+        .find(|c| c.kind == grokhub_core::UpdateKind::AutomationDone)
+        .expect("feed card")
+        .clone();
+    assert_eq!(feed.board_id.as_deref(), Some(card.id.as_str()), "the home card leads to the Follow up card");
+    cabin.open_feed_card(&feed.id);
+    assert!(cabin.nav == Nav::Workboard);
+    assert_eq!(cabin.board_view.open.as_deref(), Some(card.id.as_str()));
+    let thread = cabin.threads.iter().find(|t| t.id == chat).expect("thread");
+    assert!(!thread.background, "a real chat, listed in History");
+    assert!(thread.title.starts_with("Follow up · "));
+    assert!(thread.messages.last().unwrap().1.contains("Three opened overnight"));
+
+    // The next run of the same automation adds to the same card and chat.
+    cabin.file_automation_follow_up(
+        "a-issues",
+        "Morning issues",
+        "every weekday at 9, summarize my open GitHub issues",
+        "Two more today: #15 and #16.",
+    );
+    let same: Vec<&grokhub_core::BoardCard> = cabin
+        .board
+        .iter()
+        .filter(|c| c.automation.as_deref() == Some("a-issues"))
+        .collect();
+    assert_eq!(same.len(), 1);
+    assert_eq!(same[0].thread_id.as_deref(), Some(chat.as_str()));
+    let thread = cabin.threads.iter().find(|t| t.id == chat).unwrap();
+    assert_eq!(thread.messages.len(), 2, "one message per run");
+    assert!(thread.messages[1].1.contains("Two more today"));
+
+    // A quiet chore that just did its job files nothing.
+    assert!(!cabin.file_automation_follow_up(
+        "a-tidy",
+        "Tidy downloads",
+        "every day at 18, clean the downloads folder",
+        "Cleaned 12 files.",
+    ));
+    assert_eq!(cabin.board.len(), 1);
+
+    // A reply in that chat does not file a second, Doing card.
+    cabin.chat_job_thread = Some(chat.clone());
+    cabin.note_inflight_card("yes, start with the crash on resume", "");
+    assert_eq!(cabin.board.len(), 1, "{:?}", cabin.board);
+    cabin.chat_job_thread = None;
+
+    // Replying from the card hands the agent the latest report once.
+    let block = grokhub_core::take_card_notes_block(&mut cabin.board, &chat).expect("report");
+    assert!(block.contains("Two more today"), "{block}");
+    assert_eq!(super::night::loop_card_name("/loop 12h summarize the workboard"), "Summarize the workboard");
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn board_cards_open_on_hover_fold_on_drag_and_chat_like_the_chat_page() {
+    use super::board_ui::{track_board_hover, BoardView};
+    let mut v = BoardView::default();
+    assert!(track_board_hover(&mut v, 0.0, Some("c1".into()), false, false), "rest starts");
+    assert!(v.open.is_none(), "sweeping past does not open");
+    track_board_hover(&mut v, 0.5, Some("c1".into()), false, false);
+    assert_eq!(v.open.as_deref(), Some("c1"), "a short rest opens it");
+    track_board_hover(&mut v, 0.6, Some("c1".into()), false, true);
+    assert!(v.open.is_none(), "a drag folds the card back at once");
+    track_board_hover(&mut v, 1.0, Some("c1".into()), false, false);
+    track_board_hover(&mut v, 1.5, Some("c1".into()), false, false);
+    assert_eq!(v.open.as_deref(), Some("c1"));
+    track_board_hover(&mut v, 2.0, None, true, false);
+    track_board_hover(&mut v, 5.0, None, true, false);
+    assert_eq!(v.open.as_deref(), Some("c1"), "a card you are typing in stays open");
+    track_board_hover(&mut v, 6.0, None, false, false);
+    track_board_hover(&mut v, 7.0, None, false, false);
+    assert!(v.open.is_none(), "leaving folds it back");
+
+    let src = cabin_src();
+    let chat = fn_src(&src, "paint_card_chat");
+    assert!(
+        chat.contains("visible_chat(") && chat.contains("paint_chat_block_with") && chat.contains("turn_log"),
+        "the card chat uses the Chat page's bubbles and streams the live turn: {chat}"
+    );
+    let compact = fn_src(&src, "paint_board_card_compact");
+    assert!(
+        !compact.contains("white_pill") && !compact.contains("ghost_pill"),
+        "a small card has no buttons: {compact}"
+    );
+    let say = fn_src(&src, "say_on_card");
+    assert!(say.contains("take_card_notes_block") && say.contains("kick_model"), "{say}");
+
+    let (root, mut cabin) = isolated_cabin("board-say-needs-agent");
+    let mut card = grokhub_core::BoardCard::new("Ship the AUR release", "", "");
+    card.status = grokhub_core::BoardStatus::Todo;
+    let id = card.id.clone();
+    cabin.board = vec![card];
+    assert!(!cabin.say_on_card(&id, "start with the PKGBUILD"));
+    assert!(
+        cabin.board_view.note.as_ref().is_some_and(|(n, t)| n == &id && t.contains("Grok")),
+        "{:?}",
+        cabin.board_view.note
+    );
+    assert!(cabin.board[0].thread_id.is_none(), "nothing changes without an agent");
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn ideas_from_a_one_time_install_go_and_new_ones_need_a_reason() {
+    let (root, mut cabin) = isolated_cabin("ideas-one-off");
+    cabin.messages = std::sync::Arc::new(vec![
+        ("user".into(), "install the nvidia 550 driver for my 4070".into()),
+        ("assistant".into(), "Installed.".into()),
+    ]);
+    let mut driver = grokhub_core::idea_card("gen-driver", "Driver update check", "Checks for a newer nvidia driver every week.", 1);
+    driver.prompt = Some("every monday at 9, check for a newer nvidia driver".into());
+    driver.idea_kind = Some(grokhub_core::IdeaKind::Automation);
+    let mut kept = grokhub_core::idea_card("gen-stream", "Stream prep", "Gets the Friday stream scene ready.", 1);
+    kept.prompt = Some("every friday at 17, open obs and load the stream scene".into());
+    cabin.updates = vec![driver, kept];
+    cabin.ensure_useful_ideas();
+    let titles: Vec<&str> = cabin.updates.iter().map(|c| c.title.as_str()).collect();
+    assert_eq!(titles, vec!["Stream prep"], "the untouched one-off idea goes, the rest stays");
+
+    // The nightly review's skill for that install does not make it either.
+    let mut items = vec![grokhub_core::LearnedSuggestion {
+        kind: grokhub_core::SuggestionKind::Skill,
+        title: "NVIDIA driver install".into(),
+        body: "Installs the nvidia driver with the right kernel modules.".into(),
+        seed: None,
+        name: Some("nvidia-driver-install".into()),
+        trigger: Some("when installing the nvidia driver".into()),
+        instructions: Some("1. pacman -S nvidia".into()),
+        provider: None,
+        tool: None,
+    }];
+    cabin.keep_reasoned_suggestions(&mut items);
+    assert!(items.is_empty(), "{items:?}");
     release_isolated(&root, cabin);
 }

@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.54** — Tool rows keep their names on a finished turn. Grok Build's tool updates carry no title, and each one renamed the row to the placeholder `Tool`, so a finished turn read `Tool · 32GB` instead of `run_terminal_command`. A replay of a real Grok Build 1.0.46 Auto turn now locks in separate replies and named tool rows, before and after a reload.
+**v2.10.55** — Ideas need a reason: one-time jobs like a driver install no longer spawn automation, skill, and reminder cards, and each need gets one idea. Workboard cards are compact and open in place with a real chat with the agent. A new Follow up row collects reports and questions from your automations, each with its own chat.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.54.tar.gz`, AUR | **v2.10.54** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.54.exe`, `grokhub-windows-v2.10.54.zip` | **v2.10.54** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.55.tar.gz`, AUR | **v2.10.55** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.55.exe`, `grokhub-windows-v2.10.55.zip` | **v2.10.55** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
