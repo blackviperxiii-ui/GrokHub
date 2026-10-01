@@ -16438,6 +16438,34 @@ fn export_writes_html_and_json_next_to_export_md() {
 }
 
 #[test]
+fn export_dest_joins_under_config_or_project() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("export-dest");
+    let _ = std::fs::remove_dir_all(&root);
+    let _pin = crate::config::TestConfigDir::set(root.clone());
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.project_dir.clear();
+    assert_eq!(
+        cabin.export_dest("export.md"),
+        crate::config::config_dir().join("export.md"),
+        "empty project_dir lands under config_dir"
+    );
+
+    let project = root.join("harbor-work");
+    cabin.cfg.project_dir = project.display().to_string();
+    assert_eq!(
+        cabin.export_dest("export.html"),
+        project.join("export.html"),
+        "a bound project_dir joins under that path"
+    );
+
+    std::env::remove_var("GROKHUB_CONFIG");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn fast_reply_keeps_the_answer_and_drops_the_reasoning() {
     let stream = concat!(
         r#"{"type":"thought","data":"I'll use the user's name if known."}"#, "\n",
