@@ -16992,3 +16992,24 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn push_bound_msg_appends_on_visible() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.messages.is_empty());
+    assert!(!cabin.running);
+    // Quiet cabin (no chat_job_thread) → lines land on the visible transcript. No spawn/network.
+    cabin.push_bound_msg("user", "harbor bound user".into());
+    cabin.push_bound_msg("assistant", "harbor bound reply".into());
+    assert_eq!(
+        cabin.messages.as_ref(),
+        &[
+            ("user".into(), "harbor bound user".into()),
+            ("assistant".into(), "harbor bound reply".into()),
+        ]
+    );
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rx.is_none());
+}
