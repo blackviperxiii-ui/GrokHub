@@ -16992,3 +16992,28 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn mark_get_started_done_sets_flag() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("mark-get-started-done");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.cfg.get_started_done);
+    assert!(!cabin.official_cli_session);
+    assert!(cabin.chat_job_thread.is_none());
+    cabin.mark_get_started_done();
+    assert!(cabin.cfg.get_started_done);
+    assert!(!cabin.official_cli_session);
+    cabin.mark_get_started_done();
+    assert!(cabin.cfg.get_started_done);
+    assert!(!cabin.official_cli_session);
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+
+    std::env::remove_var("GROKHUB_CONFIG");
+    let _ = std::fs::remove_dir_all(&root);
+}
