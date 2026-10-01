@@ -16992,3 +16992,12 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn cabin_default_permission_id_empty_unknown_and_known() {
+    // Real fn: empty/unknown → ask; known ask/auto stay. No spawn/network.
+    assert_eq!(cabin_default_permission_id(""), "ask");
+    assert_eq!(cabin_default_permission_id("nope"), "ask");
+    assert_eq!(cabin_default_permission_id("ask"), "ask");
+    assert_eq!(cabin_default_permission_id("auto"), "auto");
+}
