@@ -16992,3 +16992,16 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn run_action_here_empty_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.perm_ask.is_none());
+    assert!(cabin.elicit_ask.is_none());
+    assert!(cabin.tool_cards.is_empty());
+    assert!(cabin.live_blocks.is_empty());
+    // Quiet idle: no wait title, no tool title → chat_run_action → "".
+    assert_eq!(cabin.run_action_here(), "");
+}
