@@ -16992,3 +16992,27 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn job_poll_reports_worker_gone_on_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_job();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.rx.is_none());
+
+    cabin.running = true;
+    let (tx, rx) = std::sync::mpsc::channel::<JobOut>();
+    cabin.rx = Some(rx);
+    cabin.poll_job();
+    assert!(cabin.rx.is_some());
+    assert!(cabin.running);
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_job();
+    assert!(cabin.rx.is_none());
+    assert!(!cabin.running);
+    assert_eq!(cabin.status, worker_gone_status());
+    assert!(cabin.chat_job_thread.is_none());
+}
