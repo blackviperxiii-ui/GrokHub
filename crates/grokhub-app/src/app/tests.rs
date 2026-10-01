@@ -16992,3 +16992,22 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn tick_home_surface_remembers_nav() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.chip_memory.last_surface.is_none());
+    cabin.set_nav_id("imagine");
+    cabin.tick_home_surface();
+    assert_eq!(cabin.chip_memory.last_surface.as_deref(), Some("imagine"));
+    let stamped = cabin.chip_memory.updated_at;
+    assert!(stamped > 0);
+    // Same surface again is a no-op — updated_at stays put.
+    cabin.tick_home_surface();
+    assert_eq!(cabin.chip_memory.last_surface.as_deref(), Some("imagine"));
+    assert_eq!(cabin.chip_memory.updated_at, stamped);
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
