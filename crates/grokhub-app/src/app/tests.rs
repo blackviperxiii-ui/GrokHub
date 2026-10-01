@@ -17006,3 +17006,5 @@ fn note_combined_update_landed_noop_when_idle() {
     assert!(!cabin.running);
     assert!(cabin.chat_job_thread.is_none());
 }
+
+// ci-retrigger-marker
