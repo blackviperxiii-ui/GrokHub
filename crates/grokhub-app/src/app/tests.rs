@@ -16992,3 +16992,11 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn cabin_default_model_label_empty_unknown_and_known() {
+    // Real fn: empty/unknown pin → "Auto"; known catalog id → its label. No spawn/network.
+    assert_eq!(cabin_default_model_label(""), "Auto");
+    assert_eq!(cabin_default_model_label("  \t"), "Auto");
+    assert_eq!(cabin_default_model_label("grok-4.7"), "Grok 4.7");
+}
