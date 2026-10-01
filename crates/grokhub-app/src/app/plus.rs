@@ -153,7 +153,9 @@ impl Cabin {
                 self.status = "Pasted clipboard".into();
             }
             PlusTarget::Imagine => {
-                self.imagine_prompt = append_composer(&self.imagine_prompt, clip);
+                if !clip.trim().is_empty() {
+                    self.imagine_prompt = append_composer(&self.imagine_prompt, clip);
+                }
                 self.status = "Pasted clipboard".into();
             }
         }
