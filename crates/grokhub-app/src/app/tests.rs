@@ -16992,3 +16992,21 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn remember_last_frame_keeps_short_url() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.last_frame_url.is_none());
+    // Short URL sticks; over FRAME_CAP is rejected. No store_hub_frame / live_room / network.
+    cabin.remember_last_frame("data:image/jpeg;base64,abc");
+    assert_eq!(
+        cabin.last_frame_url.as_deref(),
+        Some("data:image/jpeg;base64,abc")
+    );
+    cabin.last_frame_url = None;
+    let huge = "x".repeat(FRAME_CAP + 1);
+    cabin.remember_last_frame(&huge);
+    assert!(cabin.last_frame_url.is_none());
+    assert!(cabin.chat_job_thread.is_none());
+}
