@@ -547,7 +547,7 @@ impl Cabin {
                                                                 let fill = if self.last_receipt_ok == Some(false) && !self.running {
                                                                     crate::theme::OFFLINE
                                                                 } else {
-                                                                    crate::theme::LIVE
+                                                                    crate::theme::live()
                                                                 };
                                                                 crate::cards::settings_progress(ui, pct, fill);
                                                             }

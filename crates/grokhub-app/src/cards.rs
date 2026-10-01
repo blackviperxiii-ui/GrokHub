@@ -535,8 +535,11 @@ pub fn felt_tab(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     ui.painter().rect_filled(rect, 8.0, fill);
     ui.painter()
         .rect_stroke(rect, 8.0, Stroke::new(1.0_f32, stroke_color));
-    ui.painter()
-        .galley(rect.min + pad, galley, text_color);
+    ui.painter().galley(
+        egui::pos2(rect.min.x + pad.x, rect.center().y - galley.size().y * 0.5),
+        galley,
+        text_color,
+    );
     resp.clicked()
 }
 
@@ -617,19 +620,26 @@ pub fn paint_run_pulse(ui: &mut egui::Ui, label: &str, hint: &str) {
 }
 
 pub fn titlebar_update_chip(ui: &mut egui::Ui, label: &str) -> bool {
-    egui::Frame::none()
-        .fill(crate::theme::elevated())
-        .rounding(10.0)
-        .stroke(Stroke::new(1.0_f32, crate::theme::border()))
-        .inner_margin(egui::Margin::symmetric(8.0, 3.0))
-        .show(ui, |ui| {
-            ui.add(
-                egui::Label::new(RichText::new(label).size(12.0).color(crate::theme::LIVE))
-                    .sense(Sense::click()),
-            )
-            .clicked()
-        })
-        .inner
+    // Fixed height: a Frame in the centred titlebar row stretched to the full 40px bar.
+    let galley = ui.fonts(|f| {
+        f.layout_no_wrap(label.to_owned(), FontId::proportional(12.0), Color32::PLACEHOLDER)
+    });
+    let size = egui::vec2(galley.size().x + 16.0, 24.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let fill = if resp.hovered() {
+        crate::theme::surface_hover()
+    } else {
+        crate::theme::elevated()
+    };
+    ui.painter().rect_filled(rect, 10.0, fill);
+    ui.painter()
+        .rect_stroke(rect, 10.0, Stroke::new(1.0_f32, crate::theme::border()));
+    ui.painter().galley(
+        egui::pos2(rect.min.x + 8.0, rect.center().y - galley.size().y * 0.5),
+        galley,
+        crate::theme::live(),
+    );
+    crate::theme::pointing(resp).clicked()
 }
 
 pub fn framed_preview(ui: &mut egui::Ui, tex: &TextureHandle, size: [usize; 2], max_w: f32) {
@@ -1329,15 +1339,62 @@ pub fn tab_pill(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     felt_tab(ui, label, active)
 }
 
+/// Section heading. Brighter and heavier than the muted help line under it.
 pub fn section_label(ui: &mut egui::Ui, label: &str) -> bool {
     let hit = ui
         .add(
-            egui::Label::new(RichText::new(label).size(13.0).strong().color(crate::theme::subtle()))
-                .sense(egui::Sense::click()),
+            egui::Label::new(
+                RichText::new(label)
+                    .font(crate::theme::title_font(14.0))
+                    .color(crate::theme::fg()),
+            )
+            .sense(egui::Sense::click()),
         )
         .clicked();
-    ui.add_space(10.0);
+    ui.add_space(6.0);
     hit
+}
+
+/// Muted help text where `backtick` spans paint as monospace code, not literal backticks.
+pub fn inline_code_job(text: &str, size: f32, color: Color32, wrap_width: f32) -> LayoutJob {
+    let mut job = LayoutJob {
+        wrap: TextWrapping {
+            max_width: wrap_width,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let plain = TextFormat {
+        font_id: FontId::proportional(size),
+        color,
+        ..Default::default()
+    };
+    let code = TextFormat {
+        font_id: FontId::monospace(size),
+        color: crate::theme::fg(),
+        background: crate::theme::surface(),
+        ..Default::default()
+    };
+    for (i, part) in text.split('`').enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+        // Odd segments sat between a pair of backticks. An unpaired tail stays plain.
+        let closed = i % 2 == 1 && text.split('`').count() > i + 1;
+        job.append(part, 0.0, if closed { code.clone() } else { plain.clone() });
+    }
+    job
+}
+
+/// One muted help line under a section label. Backtick spans render as code.
+pub fn help_text(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let job = inline_code_job(
+        text,
+        crate::theme::FONT_TIP,
+        crate::theme::muted(),
+        ui.available_width(),
+    );
+    ui.label(job)
 }
 
 pub fn settings_toggle(ui: &mut egui::Ui, title: &str, hint: &str, on: &mut bool) -> bool {
@@ -2602,11 +2659,7 @@ pub fn empty_prompt_tile(ui: &mut egui::Ui, icon: TileIcon, title: &str, hint: &
                     .color(crate::theme::fg()),
             );
             ui.add_space(4.0);
-            ui.label(
-                RichText::new(hint)
-                    .size(crate::theme::FONT_TIP)
-                    .color(crate::theme::muted()),
-            );
+            help_text(ui, hint);
         });
     }
     paint_slot_card(ui, prepared, false, crate::theme::CARD_RADIUS).clicked()
@@ -2640,6 +2693,38 @@ fn take_tile_metrics() -> Vec<TileMetric> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn help_text_paints_backticks_as_code_not_literals() {
+        let job = inline_code_job("run `/loop 30m` now", 12.0, Color32::GRAY, 400.0);
+        assert!(!job.text.contains('`'), "backticks must not paint: {}", job.text);
+        assert_eq!(job.text, "run /loop 30m now");
+        let fonts: Vec<_> = job.sections.iter().map(|s| s.format.font_id.family.clone()).collect();
+        assert_eq!(
+            fonts,
+            vec![egui::FontFamily::Proportional, egui::FontFamily::Monospace, egui::FontFamily::Proportional]
+        );
+        // An unpaired backtick is prose, not the start of a code span.
+        let open = inline_code_job("it's `open", 12.0, Color32::GRAY, 400.0);
+        assert!(open
+            .sections
+            .iter()
+            .all(|s| s.format.font_id.family == egui::FontFamily::Proportional));
+    }
+
+    #[test]
+    fn titlebar_chip_does_not_stretch_to_the_bar() {
+        let src = include_str!("cards.rs");
+        let chip = src
+            .split("pub fn titlebar_update_chip(")
+            .nth(1)
+            .and_then(|s| s.split("\npub fn ").next())
+            .expect("titlebar_update_chip");
+        assert!(
+            chip.contains("allocate_exact_size") && !chip.contains("Frame::none()"),
+            "a Frame in the centred titlebar row fills the whole 40px bar: {chip}"
+        );
+    }
     use grokhub_core::parse_loop_line;
 
     fn with_fonts(mut check: impl FnMut(&egui::epaint::text::Fonts)) {
