@@ -16992,3 +16992,13 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn pulse_paints_only_on_an_empty_signed_in_chat() {
+    assert!(should_paint_pulse(true, false, true));
+    assert!(!should_paint_pulse(false, false, true));
+    assert!(!should_paint_pulse(true, true, true));
+    assert!(!should_paint_pulse(true, false, false));
+    assert_eq!(pulse_row_label("Night", ""), "Night");
+    assert_eq!(pulse_row_label(" Night ", "done"), "Night · done");
+}
