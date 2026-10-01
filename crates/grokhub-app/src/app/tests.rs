@@ -16992,3 +16992,20 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn hold_secret_skips_short_and_keeps_one() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.secret_hold.is_empty());
+    // Short value (<4 chars) is skipped; no network.
+    cabin.hold_secret("ab");
+    cabin.hold_secret("abc");
+    assert!(cabin.secret_hold.is_empty());
+    // Longer secret held once; duplicate ignored.
+    let held = "held-token-xyz";
+    cabin.hold_secret(held);
+    assert_eq!(cabin.secret_hold.len(), 1);
+    cabin.hold_secret(held);
+    assert_eq!(cabin.secret_hold.len(), 1);
+}
