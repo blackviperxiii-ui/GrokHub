@@ -16992,3 +16992,29 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn recipe_cap_poll_stays_off_a_store() {
+    let mut app = Cabin::quiet_for_test();
+    app.status = "Harbor".into();
+    app.eyes_text = "frame: capturing…\n".into();
+    app.poll_recipe_cap();
+    assert_eq!(app.status, "Harbor");
+    assert_eq!(app.eyes_text, "frame: capturing…\n");
+    assert!(app.recipe_cap_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+    app.recipe_cap_rx = Some(rx);
+    app.poll_recipe_cap();
+    assert!(app.recipe_cap_rx.is_some());
+    assert_eq!(app.status, "Harbor");
+    assert_eq!(app.eyes_text, "frame: capturing…\n");
+
+    drop(tx);
+    app.poll_recipe_cap();
+    assert!(app.recipe_cap_rx.is_none());
+    assert_eq!(app.status, "Harbor");
+    assert_eq!(app.eyes_text, "frame: capturing…\n");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
