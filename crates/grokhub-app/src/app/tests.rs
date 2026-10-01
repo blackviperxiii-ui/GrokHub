@@ -16992,3 +16992,12 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn background_tasks_open_false_when_idle() {
+    let cabin = Cabin::quiet_for_test();
+    assert!(!cabin.background_tasks_open());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.grok_tasks.is_empty());
+}
