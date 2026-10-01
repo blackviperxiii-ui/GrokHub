@@ -16992,3 +16992,35 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn imagine_save_poll_reports_the_path() {
+    let mut app = Cabin::quiet_for_test();
+    app.status = "Harbor".into();
+    app.poll_imagine_save();
+    assert_eq!(app.status, "Harbor");
+    assert!(app.imagine_save_rx.is_none());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+    app.imagine_save_rx = Some(rx);
+    app.poll_imagine_save();
+    assert!(app.imagine_save_rx.is_some());
+    assert_eq!(app.status, "Harbor");
+    tx.send(Ok("/tmp/harbor.png".into())).unwrap();
+    app.poll_imagine_save();
+    assert!(app.imagine_save_rx.is_none());
+    assert_eq!(app.status, "Saved /tmp/harbor.png");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+    app.imagine_save_rx = Some(rx);
+    tx.send(Err("disk full".into())).unwrap();
+    app.poll_imagine_save();
+    assert!(app.imagine_save_rx.is_none());
+    assert_eq!(app.status, "disk full");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
