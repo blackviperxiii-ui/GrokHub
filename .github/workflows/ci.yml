@@ -6,7 +6,6 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
-  # synchronize: empty commits alone may not requeue this PR
 
 jobs:
   linux:
