@@ -16992,3 +16992,14 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn cabin_default_efforts_lists_known_ids() {
+    // Real fn: non-empty effort ladder with known ids. No spawn/network.
+    let efforts = cabin_default_efforts();
+    assert!(!efforts.is_empty());
+    let ids: Vec<&str> = efforts.iter().map(|(id, _)| *id).collect();
+    for want in ["none", "minimal", "low", "medium", "high", "xhigh"] {
+        assert!(ids.contains(&want), "missing effort id {want}: {ids:?}");
+    }
+}
