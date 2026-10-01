@@ -16992,3 +16992,13 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn cabin_default_session_id_empty_unknown_and_known() {
+    // Real fn: empty/unknown → "chat"; known ids stay. No spawn/network.
+    assert_eq!(cabin_default_session_id(""), "chat");
+    assert_eq!(cabin_default_session_id("nonsense"), "chat");
+    assert_eq!(cabin_default_session_id("chat"), "chat");
+    assert_eq!(cabin_default_session_id("plan"), "plan");
+    assert_eq!(cabin_default_session_id("ask"), "ask");
+}
