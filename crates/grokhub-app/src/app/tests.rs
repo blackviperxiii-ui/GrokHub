@@ -16992,3 +16992,16 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn clock_now_returns_local_clock() {
+    // Associated fn: shells `date` (or noon Monday fallback). No network/xAI.
+    let clock = Cabin::clock_now();
+    assert!(
+        clock.weekday <= 6 && clock.hour <= 23 && clock.minute <= 59,
+        "LocalClock out of range (or expect weekday=1 hour=12 minute=0 fallback): weekday={} hour={} minute={}",
+        clock.weekday,
+        clock.hour,
+        clock.minute
+    );
+}
