@@ -131,6 +131,16 @@ pub fn session_transcript_unloaded(show_pending: bool, message_count: usize) -> 
     show_pending && message_count == 0
 }
 
+/// One row of `threads.json`. A thread serializes straight from the struct: going
+/// through `serde_json::Value` copied the whole history into a tree on every save.
+/// Only an unloaded Grok row takes that path, to drop its `messages` key.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum SavedRow<'a> {
+    Thread(&'a ChatThread),
+    Unloaded(serde_json::Value),
+}
+
 pub fn save(threads: &[ChatThread]) -> Result<(), String> {
     save_capped(threads, config::HISTORY_STORE_CAP)
 }
@@ -140,16 +150,24 @@ pub fn save(threads: &[ChatThread]) -> Result<(), String> {
 fn save_capped(threads: &[ChatThread], cap: usize) -> Result<(), String> {
     let mut rows = Vec::with_capacity(threads.len());
     for t in threads {
-        let mut row = serde_json::to_value(t).map_err(|e| e.to_string())?;
         if session_transcript_unloaded(t.grok_show_pending, t.messages.len()) {
+            let mut row = serde_json::to_value(t).map_err(|e| e.to_string())?;
             if let Some(obj) = row.as_object_mut() {
                 obj.remove("messages");
             }
+            rows.push(SavedRow::Unloaded(row));
+        } else {
+            rows.push(SavedRow::Thread(t));
         }
-        rows.push(row);
     }
-    let mut rows = serde_json::Value::Array(rows);
-    let (s, dropped) = config::fit_history_json(&mut rows, cap, thread_message_bodies)?;
+    // Direct pretty-print matches fit_history_json when nothing is dropped.
+    let pretty = serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?;
+    let (s, dropped) = if pretty.len() <= cap {
+        (pretty, 0)
+    } else {
+        let mut value = serde_json::to_value(&rows).map_err(|e| e.to_string())?;
+        config::fit_history_json(&mut value, cap, thread_message_bodies)?
+    };
     if dropped > 0 {
         eprintln!("threads.json: dropped the {dropped} largest messages to stay under the cap");
     }
@@ -709,6 +727,60 @@ mod tests {
     }
 
     #[test]
+    fn save_round_trips_loaded_and_unloaded_rows_together() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("save-mixed");
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let mut chat = ChatThread::new("Dock \"fix\"", false);
+        chat.messages = Arc::new(vec![
+            ("user".into(), "wrap the dock\nthen the rail — ✓".into()),
+            (
+                "assistant".into(),
+                "THINKING:\n\"quoted\" \\ path\n\nDone.".into(),
+            ),
+        ]);
+        chat.plan_body = "1. dock\n2. rail".into();
+        chat.retired_sessions = vec!["old-session".into()];
+        let mut pending = ChatThread::new("Night watch", false);
+        pending.grok_session = Some("01a01b0f-7e06-74b1-8f22-5236c9d57d45".into());
+        pending.grok_show_pending = true;
+        let empty = ChatThread::new("Blank", false);
+        save(&[chat.clone(), pending.clone(), empty.clone()]).expect("save");
+
+        let raw = fs::read_to_string(threads_path()).expect("threads.json");
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&raw).expect("an array of rows");
+        assert_eq!(rows.len(), 3);
+        assert!(
+            rows[0].get("messages").is_some(),
+            "a loaded chat keeps its transcript"
+        );
+        assert!(
+            rows[1].get("messages").is_none(),
+            "an unloaded row drops messages: {}",
+            rows[1]
+        );
+        assert!(
+            rows[2].get("messages").is_some(),
+            "an empty but loaded chat still says []"
+        );
+
+        let back = load();
+        assert_eq!(back.len(), 3);
+        assert_eq!(back[0].id, chat.id);
+        assert_eq!(back[0].title, chat.title);
+        assert_eq!(*back[0].messages, *chat.messages);
+        assert_eq!(back[0].plan_body, chat.plan_body);
+        assert_eq!(back[0].retired_sessions, chat.retired_sessions);
+        assert_eq!(back[1].id, pending.id);
+        assert!(back[1].grok_show_pending && back[1].messages.is_empty());
+        assert_eq!(back[1].grok_session, pending.grok_session);
+        assert_eq!(back[2].id, empty.id);
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
     fn unloaded_pin_does_not_store_an_empty_transcript() {
         let _g = crate::config::hold_test_config();
         let root = crate::config::test_config_root("unloaded-pin");
@@ -1056,6 +1128,110 @@ mod tests {
         planned.plan_body = "p".repeat(cap);
         assert!(save_capped(&[planned], cap).is_err());
         assert_eq!(fs::read(&path).expect("after"), before, "nothing written");
+
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn save_capped_fast_path_matches_saved_rows_and_fallback_drops_bodies() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("save-fast");
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+
+        let mut chat = ChatThread::new("Dock \"fix\"", false);
+        chat.messages_mut().extend([
+            ("user".into(), "what broke?".into()),
+            (
+                "tool".into(),
+                format!("data:image/png;base64,{}", "A".repeat(12_000)),
+            ),
+            ("assistant".into(), "the login form".into()),
+        ]);
+        let mut pending = ChatThread::new("Night watch", false);
+        pending.grok_session = Some("01a01b0f-7e06-74b1-8f22-5236c9d57d45".into());
+        pending.grok_show_pending = true;
+        let threads = vec![chat, pending];
+
+        let mut saved = Vec::with_capacity(threads.len());
+        for t in &threads {
+            if session_transcript_unloaded(t.grok_show_pending, t.messages.len()) {
+                let mut row = serde_json::to_value(t).expect("row");
+                if let Some(obj) = row.as_object_mut() {
+                    obj.remove("messages");
+                }
+                saved.push(SavedRow::Unloaded(row));
+            } else {
+                saved.push(SavedRow::Thread(t));
+            }
+        }
+        let value = serde_json::to_value(&saved).expect("value");
+        let expected = serde_json::to_string_pretty(&value).expect("pretty");
+        let wide = expected.len() + 64 * 1024;
+        save_capped(&threads, wide).expect("under the cap");
+        let disk = fs::read_to_string(threads_path()).expect("threads.json");
+        let on_disk: serde_json::Value = serde_json::from_str(&disk).expect("json");
+        assert_eq!(
+            on_disk, value,
+            "under the cap the file is the same rows as the SavedRow list"
+        );
+        let from_load = load();
+        let from_str: Vec<ChatThread> = serde_json::from_str(&disk).expect("chat threads");
+        for (label, got) in [("load", &from_load), ("from_str", &from_str)] {
+            assert_eq!(got.len(), threads.len(), "{label}");
+            for (a, b) in got.iter().zip(threads.iter()) {
+                assert_eq!(a.id, b.id, "{label}");
+                assert_eq!(
+                    a.messages.as_ref(),
+                    b.messages.as_ref(),
+                    "{label} {}",
+                    a.title
+                );
+            }
+        }
+        let shot = "A".repeat(12_000);
+        assert!(
+            disk.contains(shot.as_str()),
+            "under the cap the biggest body stays"
+        );
+        assert_eq!(
+            from_load[0].messages[1].1,
+            format!("data:image/png;base64,{shot}"),
+            "the 12k body round-trips intact"
+        );
+
+        let cap = 4 * 1024;
+        assert!(expected.len() > cap, "fixture must exceed the small cap");
+        save_capped(&threads, cap).expect("fallback drops the biggest body");
+        let raw = fs::read_to_string(threads_path()).expect("fitted");
+        assert!(
+            raw.len() <= cap,
+            "wrote {} bytes over a {cap} byte cap",
+            raw.len()
+        );
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&raw).expect("json");
+        assert_eq!(parsed.len(), 2);
+        let msgs = parsed[0]
+            .get("messages")
+            .and_then(|v| v.as_array())
+            .expect("loaded chat keeps messages");
+        assert_eq!(msgs[0][1], "what broke?");
+        assert_eq!(msgs[2][1], "the login form");
+        let dropped = msgs[1][1].as_str().unwrap_or("");
+        assert!(
+            dropped.contains("dropped from saved History"),
+            "the biggest body is the one that gives way: {dropped}"
+        );
+        assert!(
+            parsed[1].get("messages").is_none(),
+            "an unloaded row still has no messages key: {}",
+            parsed[1]
+        );
+        assert_eq!(
+            parsed[1].get("grokSession").and_then(|v| v.as_str()),
+            Some("01a01b0f-7e06-74b1-8f22-5236c9d57d45")
+        );
 
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");

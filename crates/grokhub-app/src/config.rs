@@ -771,8 +771,14 @@ pub fn imagine_dir() -> PathBuf {
 }
 
 pub fn save_chat(msgs: &[(String, String)]) -> Result<(), String> {
-    let mut rows = serde_json::to_value(msgs).map_err(|e| e.to_string())?;
-    let (s, _) = fit_history_json(&mut rows, HISTORY_STORE_CAP, message_bodies)?;
+    let pretty = serde_json::to_string_pretty(msgs).map_err(|e| e.to_string())?;
+    let s = if pretty.len() <= HISTORY_STORE_CAP {
+        pretty
+    } else {
+        let mut rows = serde_json::to_value(msgs).map_err(|e| e.to_string())?;
+        let (fitted, _) = fit_history_json(&mut rows, HISTORY_STORE_CAP, message_bodies)?;
+        fitted
+    };
     atomic_write(&chat_path(), s.as_bytes())
 }
 

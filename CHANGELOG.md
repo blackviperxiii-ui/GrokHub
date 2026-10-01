@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 2.10.52 — 2026-09-30
+
+A long agent turn stays smooth while it streams. Before, every stream delta rebuilt and rescrubbed the whole transcript's views and the token estimate, and every row of the live turn re-laid its markdown each frame. Now a delta that only grows the streaming reply leaves the transcript caches alone until the turn ends (an edit anywhere before the last message still rebuilds them at once), and live rows scrolled out of view reserve the height they last painted at. The row still streaming, and any row whose fold changes (a click, Minimize all), is always measured again, and a new turn never reuses the last turn's heights.
+
+Saving History no longer copies every chat into a `serde_json::Value` tree first: `threads.json` and `chat.json` serialize straight from the chats and only take the 2.10.50 fit-under-the-cap path when they are over 512 MiB. Keys in `threads.json` now follow the struct's field order instead of alphabetical order; any version reads either.
+
+- Linux: `grokhub-linux-v2.10.52.tar.gz` and AUR `pkgver=2.10.52`.
+- Windows: `GrokHub-Setup-2.10.52.exe` and `grokhub-windows-v2.10.52.zip`.
+
 ## 2.10.51 — 2026-09-30
 
 A failed turn no longer reads as an answer. A reply that starts with `Error:` (what a failed turn leaves in the chat) gets a faint red wash and a red hairline.
