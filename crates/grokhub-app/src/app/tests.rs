@@ -21120,3 +21120,30 @@ fn chip_hour_returns_0_through_23() {
         "chip_hour must be 0..=23 (or noon fallback hour=12), got {hour}"
     );
 }
+
+#[test]
+fn apply_review_reply_err_stays_idle() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("review-reply-err");
+    let _ = std::fs::remove_dir_all(&root);
+    let _dir = crate::config::TestConfigDir::set(root.clone());
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.suggestions.last_review_day.is_none());
+    assert!(!cabin.host_diff_kick);
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rx.is_none());
+
+    // Err only — Ok would parse suggestions and spawn more work.
+    cabin.apply_review_reply(Err("timeout".into()));
+
+    assert_eq!(cabin.status, "Nightly review held — timeout");
+    assert!(cabin.suggestions.last_review_day.is_some());
+    assert!(!cabin.host_diff_kick);
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rx.is_none());
+
+    let _ = std::fs::remove_dir_all(&root);
+}
