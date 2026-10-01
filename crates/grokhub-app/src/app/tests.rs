@@ -16992,3 +16992,28 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn update_probe_poll_clears_on_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.last_update_probe = Some(std::time::Instant::now());
+    let ctx = egui::Context::default();
+
+    cabin.poll_update_probe(&ctx);
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.update_probe_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<crate::update::UpdateProbe>();
+    cabin.update_probe_rx = Some(rx);
+    cabin.poll_update_probe(&ctx);
+    assert!(cabin.update_probe_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+
+    drop(tx);
+    cabin.poll_update_probe(&ctx);
+    assert!(cabin.update_probe_rx.is_none());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
