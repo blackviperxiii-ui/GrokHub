@@ -462,6 +462,8 @@ pub use update_feed::{
     mark_update_opened,
     post_update, release_quiet_hold, resume_needs_fresh_chat, schedule_created_card,
     suggestion_card, tick_feed_pulse, visible_digests, visible_ideas, visible_updates,
+    digest_lookup_prompt, digest_steer, parse_lookup, post_help, remember_dismissed_source,
+    DigestEdition, HelpTick, ParsedLookup, PausedJob, RepeatedAction, PAUSE_OFFER_MS,
     CardReaction, CitedLink, DigestMaterial, FeedPulse, PulseNow, PulseTick, TasteNote,
     UpdateAction, UpdateCard, UpdateKind, UpdateStatus, DIGEST_PAINT_MAX, FEED_PAINT_MAX,
     IDEA_BOARD_MAX, IDEA_DISCOVERY_MAX, IDEA_TTL_MS,

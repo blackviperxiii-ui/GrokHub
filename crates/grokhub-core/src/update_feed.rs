@@ -6,14 +6,14 @@
 //! `/loop` returns. A night recipe replay that counts as a finished run posts
 //! the same kind from `fire_night`. `Cabin::commit_schedule` posts
 //! `schedule_created` when a clock job or interval loop is saved.
-//! `suggestion` and `automate_offer` stay typed constructors with no review producer.
+//! `suggestion` is the one situation offer from a paused run or a repeated action.
 //! Idea cards and the editorial digest are separate writers into the same store.
 //! They do not consume the event paint cap. Interest learning and `interest_update`
 //! are out of scope.
 
-use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
-use crate::review::cabin_real_text;
+use serde::{Deserialize, Serialize};
 
 /// Newest event cards painted in the home slot. Older undismissed event cards stay on disk.
 pub const FEED_PAINT_MAX: usize = 4;
@@ -29,6 +29,13 @@ pub const DIGEST_PAINT_MAX: usize = 2;
 const FEED_STORE_MAX: usize = 40;
 const TITLE_CHARS: usize = 72;
 const BODY_CHARS: usize = 160;
+const DIGEST_BODY_CHARS: usize = 900;
+/// A paused run has to sit this long before the situation card offers to resume it.
+pub const PAUSE_OFFER_MS: u64 = 30 * 60 * 1000;
+/// Workboard detail written by `abandon_inflight_card` when a run is parked.
+const PAUSED_DETAIL: &str = "Paused. This is where to resume.";
+const HONEST_EMPTY: &str = "I looked and did not find a source worth your time.";
+const STEER_LINE: &str = "The brief steers the next edition.";
 const IDEA_TITLE_MEMORY: usize = 64;
 
 /// About two weeks. An explicit `expires_at` wins when it is set.
@@ -151,6 +158,9 @@ pub struct UpdateCard {
     /// Skill ideas from the nightly review: the skill Apply saves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill: Option<crate::review::LearnedSuggestion>,
+    /// Stable id for an idea or situation offer. A dismissed one does not return.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source_id: String,
 }
 
 impl UpdateCard {
@@ -215,6 +225,12 @@ pub struct FeedPulse {
     /// Last time the model was asked for ideas (`crate::ideas`).
     #[serde(default)]
     pub last_ideas_ms: u64,
+    /// Idea and situation sources the user dismissed. They do not come back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dismissed_sources: Vec<String>,
+    /// First time a paused job was seen, so the offer waits out `PAUSE_OFFER_MS`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub paused_seen: BTreeMap<String, u64>,
 }
 
 fn default_on() -> bool {
@@ -249,6 +265,8 @@ impl Default for FeedPulse {
             idea_titles: Vec::new(),
             feed_slots_spent: 0,
             last_ideas_ms: 0,
+            dismissed_sources: Vec::new(),
+            paused_seen: BTreeMap::new(),
         }
     }
 }
@@ -287,6 +305,52 @@ pub struct DigestMaterial<'a> {
     pub soul_md: &'a str,
     pub links: &'a [CitedLink],
     pub taste: &'a [TasteNote],
+    /// Written edition from the daily lookup. Absent means the lookup has not run.
+    pub edition: Option<DigestEdition<'a>>,
+}
+
+/// One lookup result. Citations still come only from `DigestMaterial::links`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DigestEdition<'a> {
+    pub found: bool,
+    pub refused: bool,
+    pub title: &'a str,
+    pub body: &'a str,
+}
+
+/// A workboard run parked with the pause sentence.
+#[derive(Debug, Clone, Copy)]
+pub struct PausedJob<'a> {
+    pub id: &'a str,
+    pub title: &'a str,
+    pub detail: &'a str,
+}
+
+/// A chip action the person keeps taking.
+#[derive(Debug, Clone, Copy)]
+pub struct RepeatedAction<'a> {
+    pub key: &'a str,
+    pub label: &'a str,
+    pub count: u32,
+    pub dismissed: bool,
+    pub automated: bool,
+}
+
+/// What `post_help` added this pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HelpTick {
+    pub ideas: usize,
+    pub posted: bool,
+    pub ping: bool,
+}
+
+/// Parsed daily lookup. `found` is false when there is no real URL.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedLookup {
+    pub title: String,
+    pub body: String,
+    pub found: bool,
+    pub refused: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -297,6 +361,10 @@ pub struct PulseTick {
     pub digest_held: bool,
     pub cards_changed: bool,
     pub pulse_changed: bool,
+    /// The digest is due and no edition is attached. The caller looks it up.
+    pub digest_needs_lookup: bool,
+    /// An edition was attached, so the caller can drop the pending lookup text.
+    pub digest_consumed: bool,
 }
 
 /// True when the home slot should paint. Held and dismissed cards do not count.
@@ -585,7 +653,7 @@ pub fn hold_if_quiet(card: &mut UpdateCard, quiet: bool) {
     if quiet
         && matches!(
             card.kind,
-            UpdateKind::AutomationDone | UpdateKind::Idea | UpdateKind::Digest
+            UpdateKind::AutomationDone | UpdateKind::Idea | UpdateKind::Digest | UpdateKind::Suggestion
         )
     {
         card.held = true;
@@ -680,16 +748,35 @@ pub fn links_from_research(payload: &str) -> Vec<CitedLink> {
     out
 }
 
-/// Weather, mail, calendar, and bank stay refused, plus the review rail.
+/// An offer to send, pay, delete, or publish on its own. A story that mentions
+/// a bank, the weather, or mail is not an offer.
 pub fn digest_topic_refused(text: &str) -> bool {
-    if !cabin_real_text(text) {
-        return true;
-    }
     let lower = text.to_ascii_lowercase();
-    const EXTRA: &[&str] = &[
-        "weather", "forecast", "calendar", "inbox", "mailbox", "gmail", "outlook", "bank",
+    const ACTIONS: &[&str] = &[
+        "pay the invoice",
+        "pay my ",
+        "pay your ",
+        "i paid",
+        "i'll pay",
+        "i will pay",
+        "want me to pay",
+        "send the email",
+        "send an email",
+        "send a message",
+        "email them",
+        "delete the ",
+        "delete my ",
+        "delete your ",
+        "i deleted",
+        "publish the post",
+        "publish this",
+        "i published",
+        "i'll publish",
+        "want me to publish",
+        "want me to send",
+        "want me to delete",
     ];
-    EXTRA.iter().any(|word| lower.contains(word))
+    ACTIONS.iter().any(|phrase| lower.contains(phrase))
 }
 
 fn due(last: u64, every: u64, now: u64) -> bool {
@@ -713,6 +800,8 @@ pub fn tick_feed_pulse(
         digest_held: pulse.digest_held,
         cards_changed: false,
         pulse_changed: false,
+        digest_needs_lookup: false,
+        digest_consumed: false,
     };
     if pulse.expiry_on && due(pulse.last_expiry_ms, pulse.expiry_ms, now.now_ms) {
         let n = expire_ideas(cards, now.now_ms);
@@ -757,21 +846,30 @@ pub fn tick_feed_pulse(
             tick.pulse_changed = true;
             return tick;
         }
-        if let Some(card) = compose_digest(cards, now.now_ms, material) {
+        if digest_topic_refused(material.brief) {
+            stamp_digest(pulse, now.now_ms, &mut tick);
+            return tick;
+        }
+        let Some(edition) = material.edition else {
+            tick.digest_needs_lookup = true;
+            return tick;
+        };
+        if let Some(card) = compose_digest(cards, now.now_ms, material, edition) {
             post_update(cards, card);
             tick.digest_posted = true;
             tick.cards_changed = true;
-            pulse.last_digest_ms = now.now_ms;
-            pulse.digest_held = false;
-            tick.digest_held = false;
-            tick.pulse_changed = true;
-        } else if pulse.digest_held {
-            pulse.digest_held = false;
-            tick.digest_held = false;
-            tick.pulse_changed = true;
         }
+        stamp_digest(pulse, now.now_ms, &mut tick);
+        tick.digest_consumed = true;
     }
     tick
+}
+
+fn stamp_digest(pulse: &mut FeedPulse, now_ms: u64, tick: &mut PulseTick) {
+    pulse.last_digest_ms = now_ms;
+    pulse.digest_held = false;
+    tick.digest_held = false;
+    tick.pulse_changed = true;
 }
 
 /// Post ideas the model wrote (see `crate::ideas`). Skips a title already on the
@@ -1194,49 +1292,41 @@ fn compose_digest(
     cards: &[UpdateCard],
     now: u64,
     material: DigestMaterial<'_>,
+    edition: DigestEdition<'_>,
 ) -> Option<UpdateCard> {
-    let brief = material.brief.trim();
-    if digest_topic_refused(brief) {
+    if edition.refused || digest_topic_refused(edition.body) || digest_topic_refused(edition.title)
+    {
         return None;
     }
-    let user = profile_line(material.user_md);
-    let memory = profile_line(material.memory_md);
-    let soul = profile_line(material.soul_md);
+    let n = cards
+        .iter()
+        .filter(|c| c.kind == UpdateKind::Digest)
+        .count()
+        + 1;
+    let allowed = real_links(material.links);
+    if !edition.found || allowed.is_empty() {
+        let body = format!("{HONEST_EMPTY} {STEER_LINE}");
+        let mut card = digest_card("edition", &format!("Digest {n}"), &body, now);
+        card.why = Some(STEER_LINE.into());
+        return Some(card);
+    }
+    let title = {
+        let given = clip_line(edition.title, TITLE_CHARS);
+        if given.is_empty() {
+            format!("Digest {n}")
+        } else {
+            given
+        }
+    };
     let taste: Vec<&TasteNote> = material
         .taste
         .iter()
         .filter(|note| note.reaction.is_some() || !note.said.trim().is_empty())
         .collect();
-    let links = real_links(material.links);
-    if brief.is_empty()
-        && user.is_empty()
-        && memory.is_empty()
-        && soul.is_empty()
-        && taste.is_empty()
-        && links.is_empty()
-    {
-        return None;
-    }
-    let edition = cards
-        .iter()
-        .filter(|c| c.kind == UpdateKind::Digest)
-        .count()
-        + 1;
-    let title = if brief.is_empty() {
-        format!("Digest {edition}")
-    } else {
-        format!("Digest {edition} · {}", clip_line(brief, 48))
-    };
     let mut parts: Vec<String> = Vec::new();
-    if !brief.is_empty() {
-        parts.push(format!("Brief: {brief}"));
-    }
-    if !user.is_empty() {
-        parts.push(user);
-    } else if !memory.is_empty() {
-        parts.push(memory);
-    } else if !soul.is_empty() {
-        parts.push(soul);
+    let written = edition.body.trim();
+    if !written.is_empty() {
+        parts.push(written.to_string());
     }
     if let Some(note) = taste.iter().find(|n| n.reaction == Some(CardReaction::Up)) {
         parts.push(format!("You marked up {}", note.title));
@@ -1246,27 +1336,18 @@ fn compose_digest(
     {
         parts.push(format!("You marked down {}", note.title));
     }
-    if taste.iter().any(|n| !n.said.trim().is_empty()) {
-        parts.push("You left a note on that post.".into());
+    if let Some(note) = taste.iter().find(|n| !n.said.trim().is_empty()) {
+        parts.push(format!("You said {}", clip_line(&note.said, 80)));
     }
-    let allowed: Vec<String> = links.iter().map(|l| l.url.clone()).collect();
-    for link in &links {
-        parts.push(format!("{} {}", link.label, link.url));
-    }
-    if let Some(prev) = newest(cards, UpdateKind::Digest) {
-        parts.push(format!("Not repeating {}", prev.title));
-    }
-    let body = strip_foreign_urls(&parts.join(". "), &allowed);
-    if body.trim().is_empty() || digest_topic_refused(&body) {
+    parts.push(STEER_LINE.to_string());
+    let urls: Vec<String> = allowed.iter().map(|l| l.url.clone()).collect();
+    let body = strip_foreign_urls(&parts.join(" "), &urls);
+    if body.trim().is_empty() {
         return None;
     }
     let mut card = digest_card("edition", &title, &body, now);
-    card.citations = allowed;
-    card.why = Some(if brief.is_empty() {
-        "From your profile.".into()
-    } else {
-        "From your brief.".into()
-    });
+    card.citations = urls;
+    card.why = Some(STEER_LINE.into());
     Some(card)
 }
 
@@ -1292,7 +1373,7 @@ fn real_links(links: &[CitedLink]) -> Vec<CitedLink> {
     out
 }
 
-fn profile_line(raw: &str) -> String {
+fn useful_profile_lines(raw: &str) -> Vec<String> {
     const SKIP: &[&str] = &[
         "Who this cabin is. Edit this.",
         "Who you are. Edit this.",
@@ -1300,9 +1381,11 @@ fn profile_line(raw: &str) -> String {
     ];
     raw.lines()
         .map(str::trim)
-        .find(|line| !line.is_empty() && !line.starts_with('#') && !SKIP.contains(line))
+        .filter(|line| !line.is_empty() && !line.starts_with('#') && !SKIP.contains(line))
         .map(|line| clip_line(line, BODY_CHARS))
-        .unwrap_or_default()
+        .filter(|line| !line.is_empty())
+        .take(4)
+        .collect()
 }
 
 fn strip_foreign_urls(text: &str, allowed: &[String]) -> String {
@@ -1385,6 +1468,7 @@ fn blank_card(
         draft: None,
         modified: false,
         skill: None,
+        source_id: String::new(),
     }
 }
 
@@ -1417,6 +1501,7 @@ pub fn automation_done_card(
         created_at,
     );
     card.action = Some(UpdateAction::OpenAutomations);
+    card.source_id = source_id.trim().to_string();
     card
 }
 
@@ -1443,6 +1528,7 @@ pub fn automation_failed_card(source_id: &str, name: &str, why: &str, created_at
         created_at,
     );
     card.action = Some(UpdateAction::OpenAutomations);
+    card.source_id = source_id.trim().to_string();
     card
 }
 
@@ -1473,10 +1559,11 @@ pub fn schedule_created_card(
         created_at,
     );
     card.action = Some(UpdateAction::OpenAutomations);
+    card.source_id = source_id.trim().to_string();
     card
 }
 
-/// Typed suggestion card. No ranking producer in this pass.
+/// Situation offer. `post_help` is the producer. Accept opens a discussion.
 pub fn suggestion_card(source_id: &str, title: &str, body: &str, created_at: u64) -> UpdateCard {
     let title = clip_line(title, TITLE_CHARS);
     let title = if title.is_empty() {
@@ -1492,13 +1579,15 @@ pub fn suggestion_card(source_id: &str, title: &str, body: &str, created_at: u64
             Some(body)
         }
     };
-    blank_card(
+    let mut card = blank_card(
         feed_card_id("sugg", source_id, created_at),
         UpdateKind::Suggestion,
         title,
         body,
         created_at,
-    )
+    );
+    card.source_id = source_id.trim().to_string();
+    card
 }
 
 /// Typed offer. Accept stays `commit_schedule`. It does not file a Todo.
@@ -1509,13 +1598,15 @@ pub fn automate_offer_card(source_id: &str, title: &str, created_at: u64) -> Upd
     } else {
         title
     };
-    blank_card(
+    let mut card = blank_card(
         feed_card_id("offer", source_id, created_at),
         UpdateKind::AutomateOffer,
         title,
         Some("Want me to automate this and notify you here when done?".into()),
         created_at,
-    )
+    );
+    card.source_id = source_id.trim().to_string();
+    card
 }
 
 /// Idea card. Accept files a workboard Todo. The generator cannot dismiss it.
@@ -1542,6 +1633,7 @@ pub fn idea_card(source_id: &str, title: &str, body: &str, created_at: u64) -> U
         created_at,
     );
     card.action = Some(UpdateAction::OpenWorkboard);
+    card.source_id = source_id.trim().to_string();
     card
 }
 
@@ -1553,20 +1645,270 @@ pub fn digest_card(source_id: &str, title: &str, body: &str, created_at: u64) ->
         title
     };
     let body = {
-        let body = clip_line(body, BODY_CHARS);
+        let body = clip_line(body, DIGEST_BODY_CHARS);
         if body.is_empty() {
             None
         } else {
             Some(body)
         }
     };
-    blank_card(
+    let mut card = blank_card(
         feed_card_id("digest", source_id, created_at),
         UpdateKind::Digest,
         title,
         body,
         created_at,
+    );
+    card.source_id = source_id.trim().to_string();
+    card
+}
+
+/// One line the daily lookup should follow. An empty brief uses a profile line or the open project.
+pub fn digest_steer(brief: &str, user_md: &str, memory_md: &str, project: &str) -> String {
+    let brief = brief.trim();
+    if !brief.is_empty() {
+        return clip_line(brief, BODY_CHARS);
+    }
+    for raw in [user_md, memory_md] {
+        if let Some(line) = useful_profile_lines(raw).into_iter().next() {
+            return line;
+        }
+    }
+    let name = project
+        .trim()
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .trim();
+    if !name.is_empty() && name != "." {
+        return format!("What is new around {name}");
+    }
+    "What they have been working on".into()
+}
+
+/// One completion. Two written items, real URLs only.
+pub fn digest_lookup_prompt(steer: &str) -> String {
+    let steer = clip_line(steer, BODY_CHARS);
+    format!(
+        "Write a short home-feed edition for this person. Steer: {steer}. \
+Two items only. First a news note, then a story or longer read. \
+Each item is two or three sentences on why it matters to them, then one real http URL on its own line. \
+Use only URLs you actually found. If you cannot find a real URL, reply with exactly: NONE. \
+Do not invent a source, a count, or a fact. Do not offer to send, pay, delete, or publish anything."
     )
+}
+
+pub fn parse_lookup(raw: &str) -> ParsedLookup {
+    let raw = raw.trim();
+    if raw.is_empty() || raw.eq_ignore_ascii_case("NONE") {
+        return ParsedLookup {
+            title: String::new(),
+            body: String::new(),
+            found: false,
+            refused: false,
+        };
+    }
+    if digest_topic_refused(raw) {
+        return ParsedLookup {
+            title: String::new(),
+            body: raw.to_string(),
+            found: false,
+            refused: true,
+        };
+    }
+    let links = links_from_research(raw);
+    if links.is_empty() {
+        return ParsedLookup {
+            title: String::new(),
+            body: String::new(),
+            found: false,
+            refused: false,
+        };
+    }
+    let title = raw
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty() && http_url_in(line).is_none())
+        .map(|line| clip_line(line, TITLE_CHARS))
+        .filter(|line| !line.is_empty())
+        .unwrap_or_else(|| "For you".into());
+    ParsedLookup {
+        title,
+        body: clip_line(raw, DIGEST_BODY_CHARS),
+        found: true,
+        refused: false,
+    }
+}
+
+pub fn remember_dismissed_source(pulse: &mut FeedPulse, source_id: &str) {
+    let id = source_id.trim();
+    if id.is_empty() || source_gone(pulse, id) {
+        return;
+    }
+    if pulse.dismissed_sources.len() >= 64 {
+        pulse.dismissed_sources.remove(0);
+    }
+    pulse.dismissed_sources.push(id.to_string());
+}
+
+/// Idea cards from a paused run and a repeated action, plus at most one situation card.
+/// Guide pace passes `offer_repeats` false so the repeated-action offer stays off.
+/// These ideas stay off the home pin. The model still owns that one slot.
+pub fn post_help(
+    cards: &mut Vec<UpdateCard>,
+    pulse: &mut FeedPulse,
+    now: u64,
+    quiet: bool,
+    offer_repeats: bool,
+    paused: &[PausedJob<'_>],
+    repeats: &[RepeatedAction<'_>],
+    lessons: &str,
+) -> HelpTick {
+    let mut ideas = 0usize;
+    let live: Vec<String> = paused
+        .iter()
+        .filter(|job| job.detail == PAUSED_DETAIL && !job.id.trim().is_empty())
+        .map(|job| job.id.to_string())
+        .collect();
+    for id in &live {
+        pulse.paused_seen.entry(id.clone()).or_insert(now);
+    }
+    pulse
+        .paused_seen
+        .retain(|id, _| live.iter().any(|live_id| live_id == id));
+    for job in paused {
+        if job.detail != PAUSED_DETAIL {
+            continue;
+        }
+        let title = clip_line(job.title, TITLE_CHARS);
+        let source = format!("pause:{}", job.id.trim());
+        if title.is_empty() || source_gone(pulse, &source) {
+            continue;
+        }
+        if post_useful_idea(
+            cards,
+            pulse,
+            now,
+            &source,
+            &title,
+            "That job is still paused. I can pick it up when you say.",
+            &[],
+            false,
+            lessons,
+            "A job you left open.",
+        ) {
+            ideas += 1;
+        }
+    }
+    for action in repeats {
+        if action.count < 3 || action.dismissed || action.automated {
+            continue;
+        }
+        let label = clip_line(action.label, TITLE_CHARS);
+        let source = format!("repeat:{}", action.key.trim());
+        if label.is_empty() || action.key.trim().is_empty() || source_gone(pulse, &source) {
+            continue;
+        }
+        if post_useful_idea(
+            cards,
+            pulse,
+            now,
+            &source,
+            &label,
+            "You keep doing this. I can make it a reminder.",
+            &[],
+            false,
+            lessons,
+            "Something you keep doing.",
+        ) {
+            ideas += 1;
+        }
+    }
+    let mut posted = false;
+    if !has_unread_suggestion(cards) {
+        for job in paused {
+            if job.detail != PAUSED_DETAIL || job.id.trim().is_empty() {
+                continue;
+            }
+            let seen = pulse.paused_seen.get(job.id).copied().unwrap_or(now);
+            if now.saturating_sub(seen) < PAUSE_OFFER_MS {
+                continue;
+            }
+            let source = format!("pause:{}", job.id.trim());
+            if post_situation(
+                cards,
+                pulse,
+                now,
+                quiet,
+                &source,
+                "That job is still paused.",
+                "Want me to pick it back up?",
+            ) {
+                posted = true;
+                break;
+            }
+        }
+    }
+    if !posted && offer_repeats && !has_unread_suggestion(cards) {
+        for action in repeats {
+            if action.count < 3 || action.dismissed || action.automated || action.key.trim().is_empty()
+            {
+                continue;
+            }
+            let label = clip_line(action.label, 40);
+            if label.is_empty() {
+                continue;
+            }
+            let source = format!("repeat:{}", action.key.trim());
+            let title = format!("You keep doing {label}.");
+            if post_situation(
+                cards,
+                pulse,
+                now,
+                quiet,
+                &source,
+                &title,
+                "Want me to make that a reminder?",
+            ) {
+                posted = true;
+                break;
+            }
+        }
+    }
+    HelpTick {
+        ideas,
+        posted,
+        ping: posted && !quiet,
+    }
+}
+
+fn has_unread_suggestion(cards: &[UpdateCard]) -> bool {
+    cards
+        .iter()
+        .any(|c| c.kind == UpdateKind::Suggestion && c.status == UpdateStatus::Unread)
+}
+
+fn post_situation(
+    cards: &mut Vec<UpdateCard>,
+    pulse: &FeedPulse,
+    now: u64,
+    quiet: bool,
+    source: &str,
+    title: &str,
+    body: &str,
+) -> bool {
+    if source_gone(pulse, source) || has_unread_suggestion(cards) {
+        return false;
+    }
+    let mut card = suggestion_card(source, title, body, now);
+    hold_if_quiet(&mut card, quiet);
+    post_update(cards, card);
+    true
+}
+
+fn source_gone(pulse: &FeedPulse, source_id: &str) -> bool {
+    let id = source_id.trim();
+    !id.is_empty() && pulse.dismissed_sources.iter().any(|saved| saved == id)
 }
 
 #[cfg(test)]
@@ -1591,6 +1933,17 @@ mod tests {
             soul_md: "",
             links,
             taste,
+            edition: None,
+        }
+    }
+
+    fn with_edition<'a>(
+        material: DigestMaterial<'a>,
+        edition: DigestEdition<'a>,
+    ) -> DigestMaterial<'a> {
+        DigestMaterial {
+            edition: Some(edition),
+            ..material
         }
     }
 
@@ -1766,9 +2119,31 @@ mod tests {
             },
             material("more F1", &[], &[]),
         );
+        assert!(tick.digest_needs_lookup);
+        assert!(!tick.digest_posted);
+        assert_eq!(pulse.last_digest_ms, 0);
+        let edition = DigestEdition {
+            found: true,
+            refused: false,
+            title: "More F1",
+            body: "A note on the race. https://news.example/f1",
+        };
+        let links = [CitedLink {
+            url: "https://news.example/f1".into(),
+            label: "Source".into(),
+        }];
+        let tick = tick_feed_pulse(
+            &mut cards,
+            &mut pulse,
+            PulseNow {
+                now_ms: 300,
+                quiet: false,
+            },
+            with_edition(material("more F1", &links, &[]), edition),
+        );
         assert!(tick.digest_posted);
-        assert_eq!(pulse.last_digest_ms, 200);
-        assert!(!pulse.digest_held);
+        assert!(tick.digest_consumed);
+        assert_eq!(pulse.last_digest_ms, 300);
         assert!(cards.iter().any(|c| c.kind == UpdateKind::Digest));
         assert!(
             !cards.iter().any(|c| c.kind == UpdateKind::Idea),
@@ -1778,7 +2153,7 @@ mod tests {
     }
 
     #[test]
-    fn digest_cites_only_returned_urls_and_refuses_mail() {
+    fn digest_cites_only_returned_urls_and_refuses_an_action() {
         let links = links_from_research("see https://news.example/f1 today");
         assert_eq!(links.len(), 1);
         let mut cards = Vec::new();
@@ -1789,6 +2164,12 @@ mod tests {
             quiet_release_ms: 10_000,
             ..FeedPulse::default()
         };
+        let edition = DigestEdition {
+            found: true,
+            refused: false,
+            title: "A bank and the weather",
+            body: "A story about a bank and the weather. https://news.example/f1 and https://evil.example/phish",
+        };
         let tick = tick_feed_pulse(
             &mut cards,
             &mut pulse,
@@ -1796,7 +2177,10 @@ mod tests {
                 now_ms: 50,
                 quiet: false,
             },
-            material("more F1 https://evil.example/phish", &links, &[]),
+            with_edition(
+                material("more F1 https://evil.example/phish", &links, &[]),
+                edition,
+            ),
         );
         assert!(tick.digest_posted);
         let digest = cards.iter().find(|c| c.kind == UpdateKind::Digest).unwrap();
@@ -1806,6 +2190,8 @@ mod tests {
             digest.citations.join(" ")
         );
         assert!(blob.contains("https://news.example/f1"));
+        assert!(blob.contains("bank"));
+        assert!(blob.contains("The brief steers the next edition."));
         assert!(!blob.contains("evil.example"));
         let mut refused = Vec::new();
         let mut pulse = FeedPulse::default();
@@ -1816,11 +2202,15 @@ mod tests {
                 now_ms: 50,
                 quiet: false,
             },
-            material("check gmail and the weather", &[], &[]),
+            material("pay the invoice for me", &[], &[]),
         );
         assert!(!tick.digest_posted);
+        assert!(!tick.digest_needs_lookup);
         assert!(refused.is_empty());
-        assert_eq!(pulse.last_digest_ms, 0);
+        assert_eq!(pulse.last_digest_ms, 50);
+        assert!(!digest_topic_refused("A story about a bank and the weather"));
+        assert!(digest_topic_refused("I paid your card"));
+        assert!(!crate::review::cabin_real_text("Connect Gmail for this skill"));
     }
 
     fn seed(kind: crate::ideas::IdeaKind, title: &str) -> crate::ideas::IdeaSeed {
@@ -2059,6 +2449,16 @@ mod tests {
             reaction: Some(CardReaction::Up),
             said: "more of that".into(),
         }];
+        let links = [CitedLink {
+            url: "https://news.example/f1".into(),
+            label: "Source".into(),
+        }];
+        let edition = DigestEdition {
+            found: true,
+            refused: false,
+            title: "More F1",
+            body: "The next race. https://news.example/f1",
+        };
         let tick = tick_feed_pulse(
             &mut cards,
             &mut pulse,
@@ -2066,7 +2466,7 @@ mod tests {
                 now_ms: 30,
                 quiet: false,
             },
-            material("more F1", &[], &taste),
+            with_edition(material("more F1", &links, &taste), edition),
         );
         assert!(tick.digest_posted);
         let digest = cards
@@ -2074,8 +2474,8 @@ mod tests {
             .find(|c| c.kind == UpdateKind::Digest && c.created_at == 30)
             .unwrap();
         assert!(digest.body.as_deref().unwrap().contains("marked up"));
-        assert!(digest.body.as_deref().unwrap().contains("left a note"));
-        assert!(!digest.body.as_deref().unwrap().contains("more of that"));
+        assert!(digest.body.as_deref().unwrap().contains("You said"));
+        assert!(digest.body.as_deref().unwrap().contains("more of that"));
     }
 
     #[test]
@@ -2177,5 +2577,66 @@ mod tests {
         assert!(brief.contains("every weekday at 8 sort my inbox"));
         assert!(brief.contains(CARD_ACTION_TAG));
         assert!(idea_chat_open_line(&c).contains("this automation"));
+    }
+
+    #[test]
+    fn one_suggestion_waits_for_an_old_pause_and_a_dismissed_source_stays_gone() {
+        let paused = [PausedJob {
+            id: "job-1",
+            title: "Ship the harbor",
+            detail: "Paused. This is where to resume.",
+        }];
+        let repeat = RepeatedAction {
+            key: "open-cabin",
+            label: "Open the cabin",
+            count: 3,
+            dismissed: false,
+            automated: false,
+        };
+        let mut cards = Vec::new();
+        let mut pulse = FeedPulse::default();
+        let first = post_help(&mut cards, &mut pulse, 1_000, false, false, &paused, &[repeat], "");
+        assert!(first.ideas >= 1);
+        assert!(!first.posted, "a fresh pause is not old enough to offer");
+        let later = 1_000 + PAUSE_OFFER_MS;
+        let second = post_help(&mut cards, &mut pulse, later, false, true, &paused, &[repeat], "");
+        assert!(second.posted, "an old pause becomes the one suggestion");
+        let suggestions: Vec<_> = cards
+            .iter()
+            .filter(|c| c.kind == UpdateKind::Suggestion)
+            .map(|c| (c.title.clone(), c.body.clone(), c.source_id.clone()))
+            .collect();
+        assert_eq!(suggestions.len(), 1);
+        assert!(suggestions[0].0.contains("still paused"));
+        assert!(suggestions[0].1.as_deref().unwrap().contains("pick it back up"));
+        let source = suggestions[0].2.clone();
+        remember_dismissed_source(&mut pulse, &source);
+        cards.retain(|c| c.kind != UpdateKind::Suggestion);
+        let after = post_help(&mut cards, &mut pulse, later + PAUSE_OFFER_MS, false, false, &paused, &[], "");
+        assert!(!after.posted);
+        assert!(cards.iter().all(|c| c.kind != UpdateKind::Suggestion));
+    }
+
+    #[test]
+    fn lookup_with_no_url_posts_an_honest_empty_card() {
+        let mut cards = Vec::new();
+        let mut pulse = FeedPulse::default();
+        let edition = DigestEdition {
+            found: false,
+            refused: false,
+            title: "",
+            body: "NONE",
+        };
+        let tick = tick_feed_pulse(
+            &mut cards,
+            &mut pulse,
+            PulseNow { now_ms: 10, quiet: false },
+            with_edition(material("the harbor", &[], &[]), edition),
+        );
+        assert!(tick.digest_posted);
+        assert!(tick.digest_consumed);
+        let body = cards[0].body.as_deref().unwrap();
+        assert!(body.contains("did not find a source"));
+        assert!(cards[0].citations.is_empty());
     }
 }
