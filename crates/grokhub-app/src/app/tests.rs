@@ -16992,3 +16992,15 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn cabin_default_sessions_lists_known_ids() {
+    // Real fn: non-empty session list with known ids. No spawn/network.
+    let sessions = cabin_default_sessions();
+    assert!(!sessions.is_empty());
+    let ids: Vec<&str> = sessions.iter().map(|(id, _)| *id).collect();
+    for want in ["chat", "plan", "ask"] {
+        assert!(ids.contains(&want), "missing session id {want}: {ids:?}");
+    }
+}
+
