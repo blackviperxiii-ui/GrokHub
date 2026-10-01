@@ -16992,3 +16992,41 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn single_poll_reports_a_drop() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("single-poll-drop");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    let _pin = crate::config::TestConfigDir::set(root.clone());
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    assert!(cabin.stream_buf.is_empty() && cabin.thought_buf.is_empty());
+
+    cabin.poll_single();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.grok_p_rx.is_none());
+
+    let (tx, rx) = std::sync::mpsc::channel::<GrokPEvent>();
+    cabin.grok_p_rx = Some(rx);
+    cabin.running = true;
+    cabin.chat_job_thread = Some(cabin.visible_thread_id());
+    cabin.poll_single();
+    assert!(cabin.grok_p_rx.is_some());
+    assert!(cabin.running);
+    assert_eq!(cabin.status, "Harbor");
+
+    // Empty buffers → Disconnected else arm (not finish_acp_turn).
+    assert!(cabin.stream_buf.is_empty() && cabin.thought_buf.is_empty());
+    drop(tx);
+    cabin.poll_single();
+    assert!(cabin.grok_p_rx.is_none());
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert_eq!(cabin.status, "Grok Build session missing");
+    assert!(cabin.stream_buf.is_empty() && cabin.thought_buf.is_empty());
+
+    let _ = std::fs::remove_dir_all(&root);
+}
