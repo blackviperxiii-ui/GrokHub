@@ -16992,3 +16992,46 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn commit_proposed_skill_remembers_in_list() {
+    // Spawned save_skill follows GROKHUB_CONFIG (not thread-local TestConfigDir).
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("commit-skill");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.skill_list.is_empty());
+    let proposed = SkillMd {
+        name: "harbor-tidy".into(),
+        description: "Tidy the harbor desk".into(),
+        slash: "/harbor-tidy".into(),
+        trigger: "tidy harbor".into(),
+        instructions: "1. `echo ok`".into(),
+        pitfalls: String::new(),
+        verify: String::new(),
+        runs: 0,
+    };
+    // Empty skill_list → prefer_patch misses → remember_skill inserts as-is.
+    cabin.commit_proposed_skill(proposed);
+    assert_eq!(cabin.skill_list.len(), 1);
+    assert_eq!(cabin.skill_list[0].name, "harbor-tidy");
+    assert_eq!(cabin.skill_list[0].slash, "/harbor-tidy");
+    assert_eq!(cabin.skill_name, "harbor-tidy");
+    assert!(cabin.skill_body.contains("harbor-tidy"));
+    assert_eq!(cabin.status, "Wrote skill harbor-tidy");
+    assert!(
+        cabin
+            .messages
+            .iter()
+            .any(|(r, c)| r == "user" && c == SKILL_SAVED_MARK),
+        "commit pushes SKILL_SAVED_MARK onto the live transcript"
+    );
+    assert!(cabin.chat_job_thread.is_none());
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
