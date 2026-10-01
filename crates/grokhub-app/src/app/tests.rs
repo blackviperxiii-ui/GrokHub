@@ -16992,3 +16992,17 @@ fn a_real_grok_auto_turn_keeps_each_reply_and_tool_name_after_it_ends() {
 
     release_isolated(&root, cabin);
 }
+
+#[test]
+fn voice_mode_is_on_when_ready() {
+    let mut app = Cabin::quiet_for_test();
+    app.voice_sock = None;
+    app.voice_state = VoiceState::Idle;
+    assert!(!app.voice_is_on());
+    app.voice_state = VoiceState::Ready;
+    assert!(app.voice_is_on());
+    app.voice_state = VoiceState::Idle;
+    assert!(!app.voice_is_on());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
