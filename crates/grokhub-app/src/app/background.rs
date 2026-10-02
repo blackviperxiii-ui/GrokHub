@@ -621,6 +621,7 @@ impl Cabin {
         // A steerable turn is never a scheduled one, so no automation settles here.
         self.halt_in_flight();
         if let Some(body) = kept {
+            let body = self.scrub_transcript(body);
             self.live_mut().push(("assistant".into(), body));
         }
         self.status = "Steering…".into();
