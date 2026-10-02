@@ -911,6 +911,46 @@ pub fn lift_fill(fill: Color32, mix: f32) -> Color32 {
     )
 }
 
+/// Tab, Shift+Tab, and the arrow keys. Shift+Tab is still [`egui::Key::Tab`].
+pub fn kb_nav_key(key: egui::Key) -> bool {
+    matches!(
+        key,
+        egui::Key::Tab
+            | egui::Key::ArrowUp
+            | egui::Key::ArrowDown
+            | egui::Key::ArrowLeft
+            | egui::Key::ArrowRight
+    )
+}
+
+/// Focus ring stays up after a nav key and drops on a pointer press.
+/// A pointer press in the same frame wins.
+pub fn kb_nav_next(prev: bool, nav_key: bool, pointer: bool) -> bool {
+    if pointer {
+        false
+    } else if nav_key {
+        true
+    } else {
+        prev
+    }
+}
+
+fn kb_nav_active(ctx: &egui::Context) -> bool {
+    let id = egui::Id::new("cabin-kb-nav");
+    let prev = ctx.data(|d| d.get_temp::<bool>(id).unwrap_or(false));
+    let (nav_key, pointer) = ctx.input(|i| {
+        let nav_key = i.events.iter().any(|ev| {
+            matches!(ev, egui::Event::Key { key, pressed: true, .. } if kb_nav_key(*key))
+        });
+        (nav_key, i.pointer.any_pressed())
+    });
+    let next = kb_nav_next(prev, nav_key, pointer);
+    if next != prev || ctx.data(|d| d.get_temp::<bool>(id).is_none()) {
+        ctx.data_mut(|d| d.insert_temp(id, next));
+    }
+    next
+}
+
 fn feel_motion(
     ui: &egui::Ui,
     resp: egui::Response,
@@ -931,6 +971,14 @@ fn feel_motion(
     let (x, y, w, h) = felt_rect(base.min.x, base.min.y, base.width(), base.height(), scale);
     let lift = if rise { feel_lift(hover_t, press_t) } else { 0.0 };
     let rect = egui::Rect::from_min_size(egui::pos2(x, y - lift), egui::vec2(w, h));
+    if focused && kb_nav_active(ui.ctx()) {
+        ui.painter().rect_stroke(
+            rect,
+            CHROME_RADIUS,
+            Stroke::new(1.5, link()),
+            egui::StrokeKind::Outside,
+        );
+    }
     (resp, rect, lift_fill(fill, mix), hover_t, press_t)
 }
 
@@ -1223,6 +1271,38 @@ mod tests {
         set_paint_dark(true);
         assert_eq!(bg(), BG);
         assert_eq!(hover(), HOVER);
+    }
+
+    #[test]
+    fn keyboard_nav_ring_follows_tab_and_clears_on_pointer() {
+        assert!(kb_nav_key(egui::Key::Tab));
+        assert!(kb_nav_key(egui::Key::ArrowUp));
+        assert!(kb_nav_key(egui::Key::ArrowDown));
+        assert!(kb_nav_key(egui::Key::ArrowLeft));
+        assert!(kb_nav_key(egui::Key::ArrowRight));
+        assert!(!kb_nav_key(egui::Key::Escape));
+        assert!(!kb_nav_key(egui::Key::Enter));
+        assert!(!kb_nav_next(false, false, false));
+        assert!(kb_nav_next(false, true, false));
+        assert!(kb_nav_next(true, false, false), "the ring stays until the pointer");
+        assert!(!kb_nav_next(true, false, true));
+        assert!(
+            !kb_nav_next(true, true, true),
+            "a pointer press in the same frame wins"
+        );
+        let src = include_str!("theme.rs");
+        let motion = src
+            .split("fn feel_motion(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn feel_response(").next())
+            .expect("feel_motion");
+        assert!(
+            motion.contains("kb_nav_active")
+                && motion.contains("CHROME_RADIUS")
+                && motion.contains("link()")
+                && motion.contains("1.5"),
+            "a keyboard focus paints a link ring: {motion}"
+        );
     }
 
     #[test]
