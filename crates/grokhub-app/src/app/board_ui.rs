@@ -177,11 +177,33 @@ impl Cabin {
         wide: bool,
         act: &mut Option<BoardAct>,
     ) -> egui::Rect {
+        if !self.board.iter().any(|c| c.id == id) {
+            return egui::Rect::NOTHING;
+        }
+        let dragging_any = egui::DragAndDrop::has_payload_of_type::<BoardDrag>(ui.ctx());
+        let open = !dragging_any && self.board_view.open.as_deref() == Some(id);
+        // The card under the pointer, and the one open card, stay interactive.
+        // Every other card keeps its last measured slot when it is fully outside
+        // the column's clip. `Frame::show` burns two parent auto-ids (the child
+        // scope, then `allocate_rect`); a skipped card burns the same two.
+        let dragged =
+            egui::DragAndDrop::payload::<BoardDrag>(ui.ctx()).is_some_and(|d| d.0 == id);
+        let width = ui.available_width().max(1.0);
+        let cache_id = egui::Id::new((
+            "cabin-board-row-h",
+            id,
+            super::chat_ui::pane_width_bucket(width),
+            open,
+        ));
+        let cached = ui.ctx().data(|d| d.get_temp::<f32>(cache_id)).unwrap_or(0.0);
+        if !open && !dragged && super::chat_ui::reserve_offscreen_chat_row(ui, cached) {
+            ui.skip_ahead_auto_ids(2);
+            return egui::Rect::NOTHING;
+        }
+        let y0 = ui.cursor().min.y;
         let Some(card) = self.board.iter().find(|c| c.id == id).cloned() else {
             return egui::Rect::NOTHING;
         };
-        let dragging_any = egui::DragAndDrop::has_payload_of_type::<BoardDrag>(ui.ctx());
-        let open = !dragging_any && self.board_view.open.as_deref() == Some(id);
         if open && card.fresh {
             // Opened is read: the NEW badge goes.
             if let Some(c) = self.board.iter_mut().find(|c| c.id == id) {
@@ -189,11 +211,18 @@ impl Cabin {
             }
             self.flush_board();
         }
-        if open {
+        let rect = if open {
             self.paint_board_card_open(ui, &card, wide, act)
         } else {
             self.paint_board_card_compact(ui, &card, act)
+        };
+        // Cursor delta includes the item spacing egui leaves under the frame,
+        // so a later skipped frame replays the same pitch.
+        let h = (ui.cursor().min.y - y0).max(0.0);
+        if h > 0.0 {
+            ui.ctx().data_mut(|d| d.insert_temp(cache_id, h));
         }
+        rect
     }
 
     /// Title, one line, and what the card has. The whole card drags; a click opens it.
@@ -211,11 +240,11 @@ impl Cabin {
             crate::theme::elevated()
         };
         let meta = card_meta_line(card, now_ms());
-        let frame = egui::Frame::none()
+        let frame = egui::Frame::NONE
             .fill(fill)
-            .rounding(crate::theme::CARD_RADIUS)
+            .corner_radius(crate::theme::CARD_RADIUS)
             .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-            .inner_margin(egui::Margin::symmetric(12.0, 10.0))
+            .inner_margin(egui::Margin::symmetric(12, 10))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.spacing_mut().item_spacing.y = 3.0;
@@ -267,6 +296,7 @@ impl Cabin {
                 rect,
                 crate::theme::CARD_RADIUS,
                 egui::Stroke::new(1.0_f32, crate::theme::border_strong()),
+                egui::StrokeKind::Middle,
             );
         }
         if resp.drag_started() {
@@ -307,11 +337,11 @@ impl Cabin {
             .as_ref()
             .filter(|(n, _)| n == &id)
             .map(|(_, t)| t.clone());
-        let resp = egui::Frame::none()
+        let resp = egui::Frame::NONE
             .fill(crate::theme::elevated())
-            .rounding(crate::theme::CARD_RADIUS)
+            .corner_radius(crate::theme::CARD_RADIUS)
             .stroke(egui::Stroke::new(1.0_f32, crate::theme::border_strong()))
-            .inner_margin(egui::Margin::same(14.0))
+            .inner_margin(egui::Margin::same(14))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 // Only the title row drags here; the rest of the card has controls.
@@ -492,7 +522,7 @@ impl Cabin {
         }
         if chosen.is_some() {
             *act = chosen;
-            ui.close_menu();
+            ui.close();
         }
     }
 

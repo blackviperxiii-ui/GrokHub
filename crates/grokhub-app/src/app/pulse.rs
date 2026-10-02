@@ -216,11 +216,11 @@ impl Cabin {
         let reserved_h = pulse_card_h(rows.len());
         let inner_w = (pane_w - PULSE_MARGIN * 2.0).max(1.0);
         let mut go: Option<PulseNav> = None;
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(crate::theme::elevated())
-            .rounding(crate::theme::CARD_RADIUS)
+            .corner_radius(crate::theme::CARD_RADIUS)
             .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-            .inner_margin(egui::Margin::same(PULSE_MARGIN))
+            .inner_margin(egui::Margin::same(PULSE_MARGIN.round() as i8))
             .show(ui, |ui| {
                 ui.set_width(inner_w);
                 ui.set_max_width(inner_w);
@@ -241,7 +241,7 @@ impl Cabin {
                     };
                     let (rect, resp) =
                         ui.allocate_exact_size(egui::vec2(inner_w, PULSE_ROW_H), sense);
-                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
                         ui.set_max_width(inner_w);
                         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
                         ui.add(
