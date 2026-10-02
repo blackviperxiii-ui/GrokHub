@@ -1005,10 +1005,13 @@ impl Cabin {
     pub(super) fn poll_wall(&mut self) {
         // A job may refresh the Imagine tokens and then fail, or (the wall) never
         // hand them back; keep the rotated pair so the next refresh is not stale.
-        if let Some(tokens) = crate::imagine_auth::take_refreshed() {
-            if self.imagine_native.tokens.is_some() {
-                self.note_imagine_tokens(tokens);
-            }
+        let current = self
+            .imagine_native
+            .tokens
+            .as_ref()
+            .and_then(|t| t.refresh_token.as_deref());
+        if let Some(tokens) = crate::imagine_auth::take_refreshed(current) {
+            self.note_imagine_tokens(tokens);
         }
         let Some(rx) = self.wall_rx.take() else {
             return;
@@ -1394,6 +1397,7 @@ impl Cabin {
             crate::imagine_auth::ImagineAuthEvent::Loaded(Ok(None)) => {}
             crate::imagine_auth::ImagineAuthEvent::Loaded(Err(e)) => self.status = e,
             crate::imagine_auth::ImagineAuthEvent::SignedIn(tokens) => {
+                crate::imagine_auth::forget_refreshed();
                 self.clear_imagine_device();
                 self.note_imagine_tokens(tokens);
                 self.status = self.imagine_signed_in_label();
@@ -1428,6 +1432,7 @@ impl Cabin {
         self.imagine_native.poll_inflight = false;
         match res {
             Ok(crate::imagine_auth::DevicePoll::Ready(tokens)) => {
+                crate::imagine_auth::forget_refreshed();
                 self.clear_imagine_device();
                 self.note_imagine_tokens(tokens);
                 self.status = self.imagine_signed_in_label();
