@@ -2467,8 +2467,7 @@ impl Cabin {
                     }
                     let focused = ui.memory(|m| m.has_focus(composer_id));
                     if let Some(t) = take_focused_composer(ui, &mut self.composer, focused) {
-                        self.bg.queue_next = ui.input(|i| i.modifiers.alt);
-                        self.send_from_composer(t);
+                        self.send_typed(ui, t);
                     }
                     ui.add_space(8.0);
                     let cluster = crate::cards::composer_go_cluster_w();
@@ -2534,8 +2533,7 @@ impl Cabin {
                             if let Some(t) =
                                 take_focused_composer(ui, &mut self.composer, edit.has_focus())
                             {
-                                self.bg.queue_next = ui.input(|i| i.modifiers.alt);
-                                self.send_from_composer(t);
+                                self.send_typed(ui, t);
                             }
                             mic_rect = self.paint_voice_mic(ui, 22.0);
                         },
