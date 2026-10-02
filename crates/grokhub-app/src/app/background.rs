@@ -1,0 +1,752 @@
+//! Background runs beside the chat, and steering a live reply.
+//!
+//! The composer owns one live turn (`grok_p_rx` / ACP). A background run is a
+//! separate headless `grok -p` with its own receiver: `/bg <task>`, a
+//! `BACKGROUND_TASK:` line in Grok's reply, or a live reply moved off the
+//! composer. It forks the chat's session instead of writing into it, and its
+//! reply is posted on the chat that started it once that chat is not mid-turn.
+//!
+//! Steering is a message typed while this chat's reply runs: the turn stops
+//! where it is, what it said stays in the transcript, and the next turn carries
+//! the new message with a note of the progress (`steer_follow_block`).
+
+use super::*;
+use grokhub_core::{
+    bg_elapsed_label, bg_result_note, bg_result_post, bg_results_follow, bg_task_prompt,
+    bg_task_title, can_detach_turn, chat_run_dot_alpha, extract_background_tasks, steer_follow_block,
+    BgEnd, BgOrigin, BG_TASK_MAX,
+};
+
+/// One background `grok -p`. Not saved: the child dies with the cabin.
+pub(super) struct BgRun {
+    pub id: u64,
+    pub thread_id: String,
+    pub title: String,
+    pub origin: BgOrigin,
+    pub pid: Option<u32>,
+    pub rx: Option<mpsc::Receiver<GrokPEvent>>,
+    /// Reply text so far (not thoughts).
+    pub say: String,
+    /// Newest tool title, for the strip.
+    pub action: String,
+    pub started: Instant,
+    pub end: Option<BgEnd>,
+    /// Session the child reported at its end.
+    pub session: String,
+    /// Session the child resumed. A moved-off turn writes into it.
+    pub resumed: Option<String>,
+    /// This run set `grok_fork` on its chat so the next composer turn forks
+    /// instead of writing the same session at the same time.
+    pub fork_hold: bool,
+}
+
+impl BgRun {
+    pub fn live(&self) -> bool {
+        self.end.is_none()
+    }
+}
+
+/// Background runs and the blocks the next turn carries. Not saved.
+#[derive(Default)]
+pub(super) struct BgWork {
+    pub runs: Vec<BgRun>,
+    pub next_id: u64,
+    /// `(thread id, note)` for runs that ended since that chat's last turn.
+    pub unread: Vec<(String, String)>,
+    /// Background results for the turn being kicked. Set on each send.
+    pub results_follow: Option<String>,
+    /// Steer context for the turn being kicked. Set on each send.
+    pub steer_follow: Option<String>,
+    /// Alt+Enter (or `/queue`): this send waits for the live reply instead of steering it.
+    pub queue_next: bool,
+}
+
+impl BgWork {
+    pub fn live_count(&self) -> usize {
+        self.runs.iter().filter(|r| r.live()).count()
+    }
+
+    pub fn busy(&self) -> bool {
+        !self.runs.is_empty()
+    }
+}
+
+/// Beside the transcript's Running pulse: move this reply off the composer.
+pub(super) fn background_pill(ui: &mut egui::Ui) -> bool {
+    crate::theme::felt_label_button(
+        ui,
+        "Background",
+        Color32::TRANSPARENT,
+        crate::theme::muted(),
+        8.0,
+        egui::vec2(0.0, 24.0),
+        Some(egui::Stroke::new(1.0_f32, crate::theme::border())),
+        false,
+    )
+    .on_hover_text("Keep this reply running in the background and free the chat. Its answer posts here when it's done.")
+    .clicked()
+}
+
+/// What a click on the live-work strip asks for. Applied after painting.
+enum LiveWorkAct {
+    Steer,
+    Queue,
+    SteerQueued(usize),
+    DropQueued(usize),
+    StopRun(u64),
+}
+
+impl Cabin {
+    /// A message onto `thread_id`, visible tab or not. A new message is activity.
+    pub(super) fn push_msg_on(&mut self, thread_id: &str, role: &str, content: String) {
+        let content = self.scrub_transcript(take_ui_text(content, IMAGE_FILE_CAP));
+        if thread_id == self.visible_thread_id() {
+            self.live_mut().push((role.to_string(), content));
+        } else if let Some(t) = self.threads.iter_mut().find(|t| t.id == thread_id) {
+            t.messages_mut().push((role.to_string(), content));
+        } else {
+            return;
+        }
+        if let Some(t) = self.threads.iter_mut().find(|t| t.id == thread_id) {
+            t.accessed_ms = now_ms();
+        }
+    }
+
+    /// Start `task` as a background run beside `thread_id`. It forks that chat's
+    /// Grok session, so it knows the conversation and never writes into it.
+    /// Unwatched like an automation: the PermissionMode pill applies, and Ask
+    /// cannot stop to ask, so tools that need approval are denied.
+    pub(super) fn start_bg_task(
+        &mut self,
+        task: &str,
+        thread_id: &str,
+        origin: BgOrigin,
+    ) -> Result<String, String> {
+        let task = task.trim();
+        if task.is_empty() {
+            return Err("Nothing to run".into());
+        }
+        if self.bg.live_count() >= BG_TASK_MAX {
+            return Err(format!(
+                "{BG_TASK_MAX} background tasks are already running — stop one first"
+            ));
+        }
+        if !self.can_agent() {
+            return Err("Install Grok Build (x.ai/cli) or Connect Grok in Settings".into());
+        }
+        let idx = self.threads.iter().position(|t| t.id == thread_id);
+        let thread = idx.and_then(|i| self.threads.get(i));
+        let cwd = thread
+            .and_then(|t| t.grok_cwd.clone())
+            .filter(|s| !s.trim().is_empty())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| self.grok_cwd());
+        let resume = thread
+            .and_then(|t| t.grok_session.clone())
+            .filter(|s| !s.trim().is_empty());
+        let resume_in_cabin = resume
+            .as_deref()
+            .is_some_and(grokhub_acp::cabin_has_session);
+        let user_home = grokhub_acp::use_user_grok_home(
+            thread.map(|t| t.grok_user_home).unwrap_or(false),
+            resume_in_cabin,
+        );
+        let worktree = thread.map(|t| t.grok_worktree).unwrap_or(false);
+        let (yolo, auto) = self.permission_mode.scheduled_flags();
+        let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
+        let effort = grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort);
+        let prompt = bg_task_prompt(task);
+        let (pid, rx) = grokhub_acp::spawn_grok_p_stream(
+            &prompt,
+            &cwd,
+            resume.as_deref(),
+            yolo,
+            auto,
+            Some(model.as_str()),
+            effort,
+            self.session_mode,
+            grokhub_acp::GrokPAttach {
+                image: None,
+                learned: &grokhub_core::brief_for(&self.learning, "chat"),
+            },
+            resume.is_some(),
+            user_home,
+            worktree,
+        )?;
+        let title = bg_task_title(task);
+        self.bg.next_id += 1;
+        self.bg.runs.push(BgRun {
+            id: self.bg.next_id,
+            thread_id: thread_id.to_string(),
+            title: title.clone(),
+            origin,
+            pid: Some(pid),
+            rx: Some(rx),
+            say: String::new(),
+            action: String::new(),
+            started: Instant::now(),
+            end: None,
+            session: String::new(),
+            resumed: resume,
+            fork_hold: false,
+        });
+        Ok(title)
+    }
+
+    /// `BACKGROUND_TASK:` lines in a finished chat reply. Ones that do not fit
+    /// are told to the next turn so Grok knows they never ran.
+    pub(super) fn start_agent_bg_tasks(&mut self, reply: &str, thread_id: &str) {
+        let tasks = extract_background_tasks(reply, BG_TASK_MAX);
+        if tasks.is_empty() {
+            return;
+        }
+        let mut started = 0usize;
+        let mut refused = Vec::new();
+        for task in tasks {
+            match self.start_bg_task(&task, thread_id, BgOrigin::Agent) {
+                Ok(_) => started += 1,
+                Err(e) => refused.push((bg_task_title(&task), e)),
+            }
+        }
+        for (title, why) in &refused {
+            self.bg.unread.push((
+                thread_id.to_string(),
+                format!("- {title} (not started: {why})"),
+            ));
+        }
+        if thread_id == self.visible_thread_id() {
+            self.status = match (started, refused.len()) {
+                (0, _) => "Background task not started — see the next reply".into(),
+                (1, 0) => "Grok started a background task".into(),
+                (n, 0) => format!("Grok started {n} background tasks"),
+                (n, m) => format!("Grok started {n} background tasks · {m} not started"),
+            };
+        }
+    }
+
+    /// The live reply is a plain headless chat turn that can keep running without
+    /// the composer, and there is room for one more background run.
+    pub(super) fn can_move_turn_to_background(&self) -> bool {
+        let headless = self.grok_p_rx.is_some() && self.grok_p_pid.is_some();
+        let side_work = self.pending_kick.is_some()
+            || self.kick_cap_rx.is_some()
+            || self.verify_rx.is_some()
+            || self.host_diff_rx.is_some()
+            || self.loop_acp_id.is_some()
+            || self.background_tasks_open()
+            || self.job_on_background_thread()
+            || self.job_is_idea_talk();
+        self.running
+            && self.chat_job_thread.is_some()
+            && self.bg.live_count() < BG_TASK_MAX
+            && can_detach_turn(headless, self.acp.is_some(), self.scheduled_perm, side_work)
+    }
+
+    /// Hand the live `grok -p` child to a background run without killing it and
+    /// free the composer. Its reply posts on the same chat when it ends.
+    pub(super) fn move_turn_to_background(&mut self) -> bool {
+        if !self.can_move_turn_to_background() {
+            return false;
+        }
+        let Some(thread_id) = self.chat_job_thread.clone() else {
+            return false;
+        };
+        let (Some(rx), Some(pid)) = (self.grok_p_rx.take(), self.grok_p_pid.take()) else {
+            return false;
+        };
+        let vis = self.visible_thread_id();
+        let ask = if thread_id == vis {
+            last_user_scan(self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())))
+        } else {
+            self.threads
+                .iter()
+                .find(|t| t.id == thread_id)
+                .and_then(|t| last_user_scan(t.messages.iter().map(|m| (m.0.as_str(), m.1.as_str()))))
+        }
+        .unwrap_or_default();
+        let mut title = bg_task_title(&ask);
+        if title.is_empty() {
+            title = "Reply".into();
+        }
+        let action = self
+            .turn_log
+            .iter()
+            .rev()
+            .find(|b| b.kind == LiveKind::Tool && !b.tool_title.is_empty())
+            .map(|b| b.tool_title.clone())
+            .unwrap_or_default();
+        let mut resumed = None;
+        let mut fork_hold = false;
+        if let Some(t) = self.threads.iter_mut().find(|t| t.id == thread_id) {
+            resumed = t.grok_session.clone().filter(|s| !s.trim().is_empty());
+            if resumed.is_some() && !t.grok_fork {
+                t.grok_fork = true;
+                fork_hold = true;
+            }
+        }
+        self.bg.next_id += 1;
+        self.bg.runs.push(BgRun {
+            id: self.bg.next_id,
+            thread_id: thread_id.clone(),
+            title: title.clone(),
+            origin: BgOrigin::Detached,
+            pid: Some(pid),
+            rx: Some(rx),
+            say: std::mem::take(&mut self.stream_buf),
+            action,
+            started: Instant::now(),
+            end: None,
+            session: String::new(),
+            resumed,
+            fork_hold,
+        });
+        // The Doing card stays up: the work goes on. The run settles it.
+        self.inflight_open = false;
+        self.running = false;
+        self.turn_retried = false;
+        self.speak_next = false;
+        self.followup_step = 0;
+        self.active_skill_follow = None;
+        self.thought_buf.clear();
+        self.turn_log.clear();
+        self.thought_seam = false;
+        self.say_seam = false;
+        if thread_id == vis {
+            self.tool_cards.clear();
+            self.live_blocks.clear();
+            if self.messages.last().is_some_and(|m| m.0 == "assistant") {
+                self.live_mut().pop();
+            }
+        } else if let Some(t) = self.threads.iter_mut().find(|t| t.id == thread_id) {
+            drop_trailing_assistant(t.messages_mut());
+        }
+        self.chat_job_thread = None;
+        self.status = format!("Moved to background · {title}");
+        self.persist();
+        true
+    }
+
+    /// Drain every run's events this frame, then post the ones that ended.
+    pub(super) fn poll_bg_runs(&mut self) {
+        if self.bg.runs.is_empty() {
+            return;
+        }
+        for run in self.bg.runs.iter_mut() {
+            let Some(rx) = run.rx.take() else {
+                continue;
+            };
+            let mut keep = true;
+            loop {
+                match rx.try_recv() {
+                    Ok(GrokPEvent::Text(d)) => {
+                        let _ = push_stream_capped(&mut run.say, &d, TEXT_FILE_CAP as u64);
+                    }
+                    Ok(GrokPEvent::Tool(card)) => {
+                        if !card.title.trim().is_empty() {
+                            run.action = redact_held_secrets(&card.title, &self.secret_hold);
+                        }
+                    }
+                    Ok(GrokPEvent::Recovering(_)) => run.action = "Retrying…".into(),
+                    Ok(GrokPEvent::End(turn)) => {
+                        if run.say.trim().is_empty() {
+                            run.say = turn.text;
+                        }
+                        run.session = turn.session_id;
+                        run.end = Some(BgEnd::Done);
+                        keep = false;
+                        break;
+                    }
+                    Ok(GrokPEvent::Err(e)) => {
+                        run.end = Some(if grokhub_acp::is_sigterm_status(&e) {
+                            BgEnd::Stopped
+                        } else {
+                            BgEnd::Failed(rewrite_truncation_error(&e))
+                        });
+                        keep = false;
+                        break;
+                    }
+                    Ok(_) => {}
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        run.end = Some(if run.say.trim().is_empty() {
+                            BgEnd::Failed("Grok Build session missing".into())
+                        } else {
+                            BgEnd::Done
+                        });
+                        keep = false;
+                        break;
+                    }
+                }
+            }
+            if keep {
+                run.rx = Some(rx);
+            } else {
+                run.pid = None;
+            }
+        }
+        self.post_finished_bg_runs();
+    }
+
+    /// Post each ended run on its chat. A chat that is mid-turn waits: its live
+    /// reply rewrites the last assistant message, so a post there would be lost.
+    pub(super) fn post_finished_bg_runs(&mut self) {
+        let busy = self.running.then(|| self.chat_job_thread.clone()).flatten();
+        let ready: Vec<usize> = self
+            .bg
+            .runs
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.end.is_some() && busy.as_deref() != Some(r.thread_id.as_str()))
+            .map(|(i, _)| i)
+            .collect();
+        if ready.is_empty() {
+            return;
+        }
+        let vis = self.visible_thread_id();
+        let mut done = Vec::new();
+        for i in ready.into_iter().rev() {
+            done.push(self.bg.runs.remove(i));
+        }
+        done.reverse();
+        for run in done {
+            let end = run.end.clone().unwrap_or(BgEnd::Done);
+            let reply = self.scrub_transcript(run.say.clone());
+            if !self.threads.iter().any(|t| t.id == run.thread_id) {
+                continue;
+            }
+            if end != BgEnd::Stopped || !reply.trim().is_empty() {
+                self.push_msg_on(&run.thread_id, "assistant", bg_result_post(&run.title, &end, &reply));
+                self.bg.unread.push((
+                    run.thread_id.clone(),
+                    bg_result_note(&run.title, &end, &reply),
+                ));
+            }
+            if run.origin == BgOrigin::Detached {
+                self.settle_detached_run(&run, &end, &reply);
+            }
+            let head = match end {
+                BgEnd::Done => "Background task done",
+                BgEnd::Failed(_) => "Background task failed",
+                BgEnd::Stopped => "Background task stopped",
+            };
+            if run.thread_id == vis {
+                self.status = format!("{head} · {}", run.title);
+            }
+            if end != BgEnd::Stopped && (!self.window_focused || run.thread_id != vis) {
+                let clock = Self::local_clock();
+                if !quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end) {
+                    crate::notify::ping("GrokHub", &format!("{head} · {}", run.title));
+                }
+            }
+        }
+        self.persist();
+    }
+
+    /// A moved-off turn wrote its chat's own session. Give that session back to
+    /// the chat when nothing newer took its place, and settle its Doing card:
+    /// done when it finished, paused when it was stopped or failed.
+    fn settle_detached_run(&mut self, run: &BgRun, end: &BgEnd, reply: &str) {
+        let bound = self.grok_cwd().display().to_string();
+        if let Some(t) = self.threads.iter_mut().find(|t| t.id == run.thread_id) {
+            let open = t.grok_session.clone().filter(|s| !s.trim().is_empty());
+            if run.fork_hold && t.grok_fork && open == run.resumed {
+                t.grok_fork = false;
+            }
+            if open.is_none() && !run.session.trim().is_empty() {
+                t.grok_session = Some(run.session.clone());
+                if t.grok_cwd.as_deref().is_none_or(|s| s.trim().is_empty()) {
+                    t.grok_cwd = Some(bound);
+                }
+            }
+        }
+        let mut changed = if *end == BgEnd::Done {
+            settle_inflight_card(&mut self.board, &run.thread_id)
+        } else {
+            abandon_inflight_card(&mut self.board, &run.thread_id)
+        };
+        if apply_assistant_work_marks(&mut self.board, reply, &run.thread_id) {
+            changed = true;
+        }
+        if changed {
+            self.flush_board();
+        }
+    }
+
+    /// Stop one run. What it said so far still posts.
+    pub(super) fn stop_bg_run(&mut self, id: u64) {
+        if let Some(run) = self.bg.runs.iter_mut().find(|r| r.id == id && r.live()) {
+            if let Some(pid) = run.pid.take() {
+                kill_pid(pid);
+            }
+            run.rx = None;
+            run.end = Some(BgEnd::Stopped);
+        }
+        self.post_finished_bg_runs();
+    }
+
+    pub(super) fn stop_all_bg_runs(&mut self) -> usize {
+        let ids: Vec<u64> = self.bg.runs.iter().filter(|r| r.live()).map(|r| r.id).collect();
+        for id in &ids {
+            self.stop_bg_run(*id);
+        }
+        ids.len()
+    }
+
+    /// Quit: no child outlives the cabin, and nothing is posted.
+    pub(super) fn kill_bg_runs(&mut self) {
+        for run in self.bg.runs.iter_mut() {
+            if let Some(pid) = run.pid.take() {
+                kill_pid(pid);
+            }
+            run.rx = None;
+        }
+        self.bg.runs.clear();
+    }
+
+    /// Results posted on `thread_id` since its last turn, as one block for the
+    /// next prompt. Taken once.
+    pub(super) fn take_bg_results_follow(&mut self, thread_id: &str) -> Option<String> {
+        let mut notes = Vec::new();
+        self.bg.unread.retain(|(id, note)| {
+            if id == thread_id {
+                notes.push(note.clone());
+                false
+            } else {
+                true
+            }
+        });
+        bg_results_follow(&notes)
+    }
+
+    /// Steering is for a chat turn on this tab: not a `/compact` or other
+    /// cabin-wide Grok command, not a `/loop` riding the ACP session.
+    pub(super) fn can_steer_live_turn(&self) -> bool {
+        self.running
+            && self.chat_job_thread.as_deref() == Some(self.visible_thread_id().as_str())
+            && (self.grok_p_rx.is_some() || self.acp.is_some())
+            && self.loop_acp_id.is_none()
+            && !self.scheduled_perm
+            && !self.job_is_idea_talk()
+    }
+
+    /// Stop this tab's live turn for a steering message. What it already said
+    /// stays in the transcript. Returns the context block for the next turn.
+    pub(super) fn stop_turn_for_steer(&mut self) -> String {
+        let prev = last_user_scan(self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())))
+            .unwrap_or_default();
+        let tools: Vec<String> = self
+            .turn_log
+            .iter()
+            .filter(|b| b.kind == LiveKind::Tool)
+            .map(|b| b.tool_title.clone())
+            .collect();
+        let block = steer_follow_block(&prev, &self.stream_buf, &tools);
+        // What the stopped turn showed, with tools that were still running marked
+        // cancelled so the transcript does not hold a spinner forever.
+        let kept = self
+            .messages
+            .last()
+            .filter(|m| m.0 == "assistant" && !m.1.trim().is_empty())
+            .map(|m| {
+                let mut log = self.turn_log.clone();
+                for b in log.iter_mut().filter(|b| {
+                    b.kind == LiveKind::Tool
+                        && grokhub_core::turn_timeline::tool_status_running(&b.tool_status)
+                }) {
+                    b.tool_status = "cancelled".into();
+                }
+                if turn_needs_timeline(&log) {
+                    take_ui_text(encode_turn(&log), TEXT_FILE_CAP as u64)
+                } else {
+                    m.1.clone()
+                }
+            })
+            .filter(|body| !body.trim().is_empty());
+        // A steerable turn is never a scheduled one, so no automation settles here.
+        self.halt_in_flight();
+        if let Some(body) = kept {
+            self.live_mut().push(("assistant".into(), body));
+        }
+        self.status = "Steering…".into();
+        block
+    }
+
+    /// `/bg`, `/bg stop`, `/bg <task>`.
+    pub(super) fn run_bg_slash(&mut self, arg: &str) {
+        let arg = arg.trim();
+        if arg.is_empty() {
+            if self.move_turn_to_background() {
+                self.drain_followup_queue();
+            } else if self.running {
+                self.status = if self.bg.live_count() >= BG_TASK_MAX {
+                    format!("{BG_TASK_MAX} background tasks are already running — stop one first")
+                } else {
+                    "This reply can't move to the background — /stop it or let it finish".into()
+                };
+            } else {
+                self.status = match self.bg.live_count() {
+                    0 => "No background tasks — /bg <task> starts one".into(),
+                    n => format!("{n} background running"),
+                };
+            }
+            return;
+        }
+        if arg.eq_ignore_ascii_case("stop") {
+            self.status = match self.stop_all_bg_runs() {
+                0 => "No background tasks running".into(),
+                1 => "Stopped 1 background task".into(),
+                n => format!("Stopped {n} background tasks"),
+            };
+            return;
+        }
+        let thread = self.visible_thread_id();
+        match self.start_bg_task(arg, &thread, BgOrigin::User) {
+            Ok(title) => {
+                self.status = if self.permission_mode.uses_acp() {
+                    format!("Background · {title} — Ask is on, so tools that need approval are denied")
+                } else {
+                    format!("Background · {title}")
+                };
+            }
+            Err(e) => self.status = e,
+        }
+    }
+
+    /// `/queue <message>`: wait for the live reply instead of steering it.
+    pub(super) fn queue_or_send(&mut self, text: String) {
+        self.bg.queue_next = true;
+        self.send_chat(text);
+    }
+
+    /// Typed text during a run (Steer / Queue), queued messages, and this chat's
+    /// background runs. Nothing paints when there is nothing to act on.
+    pub(super) fn paint_live_work(&mut self, ui: &mut egui::Ui) {
+        let vis = self.visible_thread_id();
+        let typing = self.can_steer_live_turn() && !self.composer.trim().is_empty();
+        let here: Vec<usize> = self
+            .bg
+            .runs
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.thread_id == vis)
+            .map(|(i, _)| i)
+            .collect();
+        let elsewhere = self
+            .bg
+            .runs
+            .iter()
+            .filter(|r| r.thread_id != vis && r.live())
+            .count();
+        let queued = if self.running { self.followup_queue.len() } else { 0 };
+        if !typing && here.is_empty() && elsewhere == 0 && queued == 0 {
+            return;
+        }
+        let steerable = self.can_steer_live_turn();
+        let mut act = None;
+        let t = ui.ctx().input(|i| i.time) as f32;
+        let pulse = chat_run_dot_alpha(t);
+        let live = crate::theme::live();
+        let dot = Color32::from_rgba_unmultiplied(live.r(), live.g(), live.b(), (pulse * 255.0) as u8);
+        let meta = |ui: &mut egui::Ui, s: &str, c: Color32| {
+            ui.label(RichText::new(s).size(crate::theme::FONT_META).color(c));
+        };
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 4.0;
+            if typing {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    meta(ui, "Grok is still working.", crate::theme::muted());
+                    if crate::cards::ghost_pill(ui, "Steer") {
+                        act = Some(LiveWorkAct::Steer);
+                    }
+                    if crate::cards::ghost_pill(ui, "Queue") {
+                        act = Some(LiveWorkAct::Queue);
+                    }
+                })
+                .response
+                .on_hover_text("Enter steers: the turn stops where it is and carries on with your message. Alt+Enter queues it for after this reply.");
+            }
+            for (i, q) in self.followup_queue.iter().enumerate().take(queued) {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    meta(ui, "Queued", crate::theme::subtle());
+                    let line: String = q.lines().next().unwrap_or("").chars().take(64).collect();
+                    meta(ui, &line, crate::theme::muted());
+                    if steerable && crate::cards::ghost_pill(ui, "Steer now") {
+                        act = Some(LiveWorkAct::SteerQueued(i));
+                    }
+                    if crate::cards::ghost_pill(ui, "Remove") {
+                        act = Some(LiveWorkAct::DropQueued(i));
+                    }
+                });
+            }
+            for i in &here {
+                let Some(run) = self.bg.runs.get(*i) else {
+                    continue;
+                };
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                    if run.live() {
+                        ui.painter().circle_filled(rect.center(), 4.0, dot);
+                    } else {
+                        ui.painter().circle_filled(rect.center(), 4.0, crate::theme::subtle());
+                    }
+                    meta(ui, &format!("Background · {}", run.title), crate::theme::fg());
+                    let mut line = bg_elapsed_label(run.started.elapsed().as_millis() as u64);
+                    if !run.live() {
+                        line = "waiting for this reply to finish".into();
+                    } else if !run.action.is_empty() {
+                        let action: String = run.action.chars().take(40).collect();
+                        line = format!("{line} · {action}");
+                    }
+                    meta(ui, &line, crate::theme::subtle());
+                    if run.live() && crate::cards::ghost_pill(ui, "Stop") {
+                        act = Some(LiveWorkAct::StopRun(run.id));
+                    }
+                });
+            }
+            if elsewhere > 0 {
+                let s = if elsewhere == 1 {
+                    "1 background task running in another chat".to_string()
+                } else {
+                    format!("{elsewhere} background tasks running in other chats")
+                };
+                meta(ui, &s, crate::theme::subtle());
+            }
+        });
+        ui.add_space(4.0);
+        if !here.is_empty() || elsewhere > 0 {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
+        }
+        match act {
+            Some(LiveWorkAct::Steer) => {
+                let text = std::mem::take(&mut self.composer);
+                self.bg.queue_next = false;
+                self.send_from_composer(text);
+                self.composer_want_focus = true;
+            }
+            Some(LiveWorkAct::Queue) => {
+                let text = std::mem::take(&mut self.composer);
+                self.bg.queue_next = true;
+                self.send_from_composer(text);
+                self.composer_want_focus = true;
+            }
+            Some(LiveWorkAct::SteerQueued(i)) => {
+                if i < self.followup_queue.len() {
+                    let text = self.followup_queue.remove(i);
+                    self.bg.queue_next = false;
+                    self.send_from_composer(text);
+                }
+            }
+            Some(LiveWorkAct::DropQueued(i)) => {
+                if i < self.followup_queue.len() {
+                    self.followup_queue.remove(i);
+                    self.status = "Removed from the queue".into();
+                }
+            }
+            Some(LiveWorkAct::StopRun(id)) => self.stop_bg_run(id),
+            None => {}
+        }
+    }
+}

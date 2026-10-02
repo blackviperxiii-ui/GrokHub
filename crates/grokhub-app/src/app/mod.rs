@@ -177,6 +177,7 @@ mod jobs;
 mod chips;
 mod voice;
 mod threads_nav;
+mod background;
 #[cfg(test)]
 mod tests;
 
@@ -185,6 +186,7 @@ use acp::*;
 #[allow(unused_imports)]
 use chat_ui::*;
 use night::AutoEnd;
+use background::BgWork;
 
 /// Title and body for a token budget warning.
 pub(super) fn token_budget_notice(
@@ -728,6 +730,8 @@ pub struct Cabin {
     workflow_ctl_await_acp: bool,
     /// btw questions waiting until the live turn ends. They do not cancel it.
     side_ask_queue: Vec<String>,
+    /// Background runs beside the chat, and the steer / results blocks for the next turn.
+    bg: BgWork,
     /// Next kick uses SessionMode::Ask even if the pill changes before spawn.
     side_ask_kick: bool,
     /// Plan card open. The body lives on the thread (`plan_body`).
@@ -1286,6 +1290,7 @@ impl Cabin {
             workflow_status_live: false,
             workflow_ctl_await_acp: false,
             side_ask_queue: Vec::new(),
+            bg: BgWork::default(),
             side_ask_kick: false,
             plan_open: false,
             fork_explainer_seen: fork_explainer_seen_on_disk(),
@@ -1697,6 +1702,7 @@ impl Cabin {
             workflow_status_live: false,
             workflow_ctl_await_acp: false,
             side_ask_queue: Vec::new(),
+            bg: BgWork::default(),
             side_ask_kick: false,
             plan_open: false,
             fork_explainer_seen: false,
@@ -4485,6 +4491,13 @@ impl Cabin {
         self.maybe_continue_ptt();
     }
 
+    /// Tray Halt and the halt hotkeys: the live turn and every background run.
+    /// Composer Stop and `/stop` leave background runs alone.
+    fn halt_everything(&mut self, status: impl Into<String>) {
+        self.stop_all_bg_runs();
+        self.halt_work(status);
+    }
+
     fn drain_inbox(&mut self) {
         if !self.hub_on
             || self.running
@@ -4638,7 +4651,7 @@ impl Cabin {
         };
         match tray.try_recv() {
             Some(crate::tray::TrayCmd::Show) => self.show_from_tray(ctx),
-            Some(crate::tray::TrayCmd::Halt) => self.halt_work("Stopped"),
+            Some(crate::tray::TrayCmd::Halt) => self.halt_everything("Stopped"),
             Some(crate::tray::TrayCmd::Quit) => {
                 self.want_quit = true;
                 if let Some(tray) = self.tray.take() {
@@ -4698,6 +4711,8 @@ impl Cabin {
 
 impl eframe::App for Cabin {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // No background `grok -p` outlives the cabin.
+        self.kill_bg_runs();
         // The close frame spawned a persist. Wait for it: the process exits right after this,
         // and two writers of app.json share one temp file.
         let _io = self.persist_io.lock();
@@ -4759,6 +4774,7 @@ impl eframe::App for Cabin {
         self.poll_import_openclaw();
         self.poll_acp_spawn();
         self.poll_single();
+        self.poll_bg_runs();
         self.poll_pick();
         self.take_dropped_attach(ctx);
         self.poll_pick_list();
@@ -4827,7 +4843,7 @@ impl eframe::App for Cabin {
                 && !i.modifiers.shift
                 && i.key_pressed(egui::Key::H)
         }) {
-            self.halt_work("Stopped");
+            self.halt_everything("Stopped");
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::G) && !i.modifiers.shift) {
             self.listen_voice();
@@ -4895,6 +4911,7 @@ impl eframe::App for Cabin {
                 || self.import_rx.is_some()
                 || self.acp_spawn_rx.is_some()
                 || self.grok_p_rx.is_some()
+                || self.bg.busy()
                 || self.pick_rx.is_some()
                 || self.pick_list_rx.is_some()
                 || self.profile_pick_rx.is_some()
@@ -5038,7 +5055,7 @@ impl Cabin {
             if ev.id == self.hotkey_hey {
                 self.listen_voice();
             } else if ev.id == self.hotkey_halt {
-                self.halt_work("Stopped");
+                self.halt_everything("Stopped");
             }
         }
     }

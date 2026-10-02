@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+A message typed while Grok is still replying steers the reply. Enter stops the turn where it is, keeps what it already said and did in the chat, and carries on with your message and a short note of that progress, so finished steps are not redone. Alt+Enter, or `/queue <message>`, holds the message until the reply ends, which is what Enter used to do. With text typed during a reply, a row above the composer offers Steer and Queue, and lists queued messages with Steer now and Remove.
+
+Work can run in the background beside the chat. `/bg <task>` starts one on a fork of the chat's Grok session. **Background** next to the Running pulse, or a bare `/bg`, moves the live reply off the composer so you can keep chatting; its answer posts on that chat when it ends. Sending in another chat now moves a reply still running there to the background instead of stopping it. Grok can start background work itself with a `BACKGROUND_TASK:` line. Up to three run at once, each listed above the composer with its time, last tool, and Stop. `/bg stop` stops them all, tray Halt and Ctrl+Alt+H stop them with the live turn, and the next turn on a chat is told what its background work found. They follow the permission pill like automations and end when the cabin quits.
+
 ## 2.10.60 — 2026-10-02
 
 Windows reads the day and the time from the system clock. The cabin used to ask the `date` program, which Windows does not have, so there the day stayed 1970-01-01 and every clock read noon Monday: usage never rolled over to a new day, the nightly review and session suggestions never came due (a fixed noon never reaches 9 pm, and a stuck day never changes), and scheduled automations fired at the wrong time.

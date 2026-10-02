@@ -30,6 +30,7 @@ fn cabin_src() -> String {
         include_str!("threads_nav.rs"),
         include_str!("ideas_ui.rs"),
         include_str!("board_ui.rs"),
+        include_str!("background.rs"),
     )
     .replace("pub(super) ", "")
 }
@@ -6374,6 +6375,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 super::ComposerStackSlot::AuthBanner,
                 super::ComposerStackSlot::ContextBar,
                 super::ComposerStackSlot::SessionTools,
+                super::ComposerStackSlot::LiveWork,
                 super::ComposerStackSlot::SlashPalette,
                 super::ComposerStackSlot::Attach,
                 super::ComposerStackSlot::Voice,
@@ -15254,6 +15256,7 @@ fn quiet_cabin() -> Cabin {
         workflow_status_live: false,
         workflow_ctl_await_acp: false,
         side_ask_queue: Vec::new(),
+        bg: super::background::BgWork::default(),
         side_ask_kick: false,
         plan_open: false,
         fork_explainer_seen: false,
@@ -21408,8 +21411,9 @@ fn chip_hour_returns_0_through_23() {
 #[test]
 fn halt_shortcut_is_ctrl_alt_h_not_the_task_manager_key() {
     let src = include_str!("mod.rs");
+    // The hotkey halts the live turn and every background run.
     let halt = src
-        .split("self.halt_work(\"Stopped\");")
+        .split("self.halt_everything(\"Stopped\");")
         .next()
         .and_then(|s| s.rsplit("if ctx.input(").next())
         .expect("in-app halt shortcut");
@@ -21424,4 +21428,435 @@ fn halt_shortcut_is_ctrl_alt_h_not_the_task_manager_key() {
         !src.contains("i.modifiers.shift && i.key_pressed(egui::Key::Escape)"),
         "Ctrl+Shift+Esc opens Task Manager on Windows and never reaches the app"
     );
+}
+
+// Background runs and steering.
+
+/// A fake `grok -p` that answers by what the prompt asks for. A slow turn
+/// `exec`s into `sleep` so Stop (one pid) closes its stdout.
+#[cfg(unix)]
+fn fake_bg_grok(root: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let bin_dir = root.join("bin");
+    let argv = root.join("argv.txt");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let fake = bin_dir.join("grok");
+    let script = r#"#!/bin/sh
+printf '%s\n' "$@" >> 'ARGV'
+printf '%s\n' '-----' >> 'ARGV'
+case "$*" in
+  *STEER:*)
+    printf '%s\n' '{"type":"text","data":"steered reply"}'
+    printf '%s\n' '{"type":"end","stopReason":"end_turn","sessionId":"sess-steer"}'
+    exit 0 ;;
+  *"running as a background task"*)
+    printf '%s\n' '{"type":"text","data":"checks all green"}'
+    printf '%s\n' '{"type":"end","stopReason":"end_turn","sessionId":"sess-bg"}'
+    exit 0 ;;
+  *slow-turn*)
+    printf '%s\n' '{"type":"text","data":"Working on it."}'
+    exec sleep 30 ;;
+  *finish-later*)
+    printf '%s\n' '{"type":"text","data":"Half way."}'
+    sleep 1
+    printf '%s\n' '{"type":"text","data":" All done."}'
+    printf '%s\n' '{"type":"end","stopReason":"end_turn","sessionId":"sess-later"}'
+    exit 0 ;;
+  *delegate*)
+    printf '%s\n' '{"type":"text","data":"On it.\nBACKGROUND_TASK: index the docs"}'
+    printf '%s\n' '{"type":"end","stopReason":"end_turn","sessionId":"sess-main"}'
+    exit 0 ;;
+esac
+printf '%s\n' '{"type":"text","data":"plain reply"}'
+printf '%s\n' '{"type":"end","stopReason":"end_turn","sessionId":"sess-main"}'
+"#
+    .replace("ARGV", &argv.display().to_string());
+    std::fs::write(&fake, script).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let mut perm = std::fs::metadata(&fake).unwrap().permissions();
+    perm.set_mode(0o755);
+    std::fs::set_permissions(&fake, perm).unwrap();
+    (bin_dir, argv)
+}
+
+/// Fake grok first on PATH, an Auto (headless) cabin, and one chat.
+#[cfg(unix)]
+fn bg_cabin(label: &str) -> (std::path::PathBuf, super::Cabin, GrokPathRestore, std::path::PathBuf) {
+    let (root, mut cabin) = isolated_cabin(label);
+    let (bin_dir, argv) = fake_bg_grok(&root);
+    let restore = GrokPathRestore {
+        path: std::env::var_os("PATH"),
+        grok: std::env::var_os("GROKHUB_GROK"),
+    };
+    let mut path = std::ffi::OsString::from(bin_dir.as_os_str());
+    path.push(":");
+    if let Some(old) = restore.path.as_ref() {
+        path.push(old);
+    }
+    std::env::set_var("PATH", &path);
+    std::env::remove_var("GROKHUB_GROK");
+    grokhub_acp::invalidate_grok_bin_cache();
+    assert_eq!(grokhub_acp::find_grok(), Some(bin_dir.join("grok")));
+    cabin.permission_mode = PermissionMode::Auto;
+    cabin.session_mode = SessionMode::Chat;
+    cabin.cfg.project_dir = root.display().to_string();
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    (root, cabin, restore, argv)
+}
+
+/// Poll the live turn and the background runs until `done` or `secs` pass.
+#[cfg(unix)]
+fn poll_until(cabin: &mut super::Cabin, secs: u64, done: impl Fn(&super::Cabin) -> bool) -> bool {
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(secs) {
+        cabin.poll_single();
+        cabin.poll_bg_runs();
+        if done(cabin) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    false
+}
+
+/// The argv of the newest fake grok call.
+#[cfg(unix)]
+fn last_grok_argv(argv: &std::path::Path) -> String {
+    let all = std::fs::read_to_string(argv).unwrap_or_default();
+    all.trim_end()
+        .trim_end_matches("-----")
+        .rsplit("-----\n")
+        .next()
+        .unwrap_or("")
+        .to_string()
+}
+
+#[cfg(unix)]
+fn end_bg_test(root: std::path::PathBuf, mut cabin: super::Cabin, restore: GrokPathRestore) {
+    cabin.stop_all_bg_runs();
+    cabin.halt_in_flight();
+    cabin.kill_bg_runs();
+    drop(restore);
+    release_isolated(&root, cabin);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_message_typed_during_a_reply_steers_it() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin, restore, argv) = bg_cabin("steer-live");
+    cabin.send_chat("slow-turn please".into());
+    assert!(cabin.running, "{}", cabin.status);
+    let first = cabin.grok_p_pid.expect("headless pid");
+    assert!(
+        poll_until(&mut cabin, 5, |c| c.stream_buf.contains("Working on it.")),
+        "the slow turn should stream first"
+    );
+    assert!(cabin.can_steer_live_turn());
+
+    cabin.send_chat("actually make it blue".into());
+    assert!(cabin.followup_queue.is_empty(), "Enter steers, it does not queue");
+    assert!(cabin.running, "the steered turn is running: {}", cabin.status);
+    assert_ne!(cabin.grok_p_pid, Some(first), "the stopped turn's child is gone");
+    let roles: Vec<(&str, &str)> = cabin
+        .messages
+        .iter()
+        .map(|m| (m.0.as_str(), m.1.as_str()))
+        .collect();
+    assert_eq!(roles[0], ("user", "slow-turn please"));
+    assert_eq!(roles[1], ("assistant", "Working on it."), "what it said stays: {roles:?}");
+    assert_eq!(roles[2], ("user", "actually make it blue"), "your message shows clean: {roles:?}");
+
+    assert!(poll_until(&mut cabin, 5, |c| !c.running), "steered turn ends: {}", cabin.status);
+    let sent = last_grok_argv(&argv);
+    assert!(sent.contains("STEER:"), "{sent}");
+    assert!(sent.contains("Their previous ask: slow-turn please"), "{sent}");
+    assert!(sent.contains("You had said so far: Working on it."), "{sent}");
+    assert!(sent.contains("actually make it blue"), "{sent}");
+    assert!(
+        cabin.messages.last().is_some_and(|m| m.0 == "assistant" && m.1.contains("steered reply")),
+        "{:?}",
+        cabin.messages
+    );
+    assert!(cabin.bg.steer_follow.is_none(), "the steer note goes with one turn");
+    end_bg_test(root, cabin, restore);
+}
+
+#[cfg(unix)]
+#[test]
+fn alt_enter_and_slash_queue_wait_for_the_reply() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin, restore, _argv) = bg_cabin("steer-queue");
+    cabin.send_chat("slow-turn please".into());
+    let pid = cabin.grok_p_pid;
+    assert!(poll_until(&mut cabin, 5, |c| c.stream_buf.contains("Working on it.")));
+    cabin.bg.queue_next = true;
+    cabin.send_chat("after that, deploy".into());
+    cabin.send_chat("/queue and then tidy".into());
+    assert_eq!(
+        cabin.followup_queue,
+        vec!["after that, deploy".to_string(), "and then tidy".to_string()]
+    );
+    assert!(cabin.running && cabin.grok_p_pid == pid, "queuing leaves the turn alone");
+    assert!(!cabin.bg.queue_next, "Alt+Enter is one send");
+    end_bg_test(root, cabin, restore);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_live_reply_moves_to_the_background_and_posts_when_done() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin, restore, argv) = bg_cabin("bg-detach");
+    cabin.send_chat("finish-later please".into());
+    assert!(poll_until(&mut cabin, 5, |c| c.stream_buf.contains("Half way.")));
+    assert!(cabin.can_move_turn_to_background());
+    assert!(cabin.move_turn_to_background());
+    assert!(!cabin.running && cabin.chat_job_thread.is_none() && cabin.grok_p_rx.is_none());
+    assert_eq!(cabin.bg.runs.len(), 1);
+    assert_eq!(cabin.bg.runs[0].origin, grokhub_core::BgOrigin::Detached);
+    assert!(
+        cabin.messages.last().is_some_and(|m| m.0 == "user"),
+        "the partial leaves until the whole answer posts: {:?}",
+        cabin.messages
+    );
+
+    assert!(poll_until(&mut cabin, 6, |c| c.bg.runs.is_empty()), "the run ends");
+    let post = cabin.messages.last().cloned().unwrap_or_default();
+    assert_eq!(post.0, "assistant");
+    assert!(
+        post.1.starts_with("**Background task done** · finish-later please")
+            && post.1.contains("Half way. All done."),
+        "{post:?}"
+    );
+    assert_eq!(
+        cabin.threads[0].grok_session.as_deref(),
+        Some("sess-later"),
+        "a first turn hands its session back to the chat"
+    );
+
+    cabin.send_chat("plain next".into());
+    assert!(poll_until(&mut cabin, 5, |c| !c.running));
+    let sent = last_grok_argv(&argv);
+    assert!(sent.contains("Background tasks that finished since your last turn"), "{sent}");
+    assert!(sent.contains("- finish-later please (done): Half way. All done."), "{sent}");
+    assert!(sent.contains("--resume\nsess-later"), "{sent}");
+    assert!(cabin.bg.unread.is_empty(), "results are told once");
+    end_bg_test(root, cabin, restore);
+}
+
+#[cfg(unix)]
+#[test]
+fn slash_bg_runs_beside_the_chat_on_a_forked_session() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin, restore, argv) = bg_cabin("bg-slash");
+    cabin.send_chat("hello".into());
+    assert!(poll_until(&mut cabin, 5, |c| !c.running));
+    assert_eq!(cabin.threads[0].grok_session.as_deref(), Some("sess-main"));
+
+    cabin.send_chat("/bg run the checks".into());
+    assert!(!cabin.running, "the composer stays free");
+    assert_eq!(cabin.bg.runs.len(), 1, "{}", cabin.status);
+    assert!(cabin.status.starts_with("Background · run the checks"), "{}", cabin.status);
+    assert!(poll_until(&mut cabin, 5, |c| c.bg.runs.is_empty()));
+    let sent = last_grok_argv(&argv);
+    assert!(sent.contains("Task: run the checks"), "{sent}");
+    assert!(sent.contains("--resume\nsess-main"), "{sent}");
+    assert!(sent.contains("--fork-session"), "a background run never writes the chat's session: {sent}");
+    assert_eq!(
+        cabin.messages.last().map(|m| m.1.as_str()),
+        Some("**Background task done** · run the checks\n\nchecks all green")
+    );
+    assert_eq!(cabin.threads[0].grok_session.as_deref(), Some("sess-main"));
+
+    cabin.send_chat("/bg".into());
+    assert_eq!(cabin.status, "No background tasks — /bg <task> starts one");
+    cabin.send_chat("/bg stop".into());
+    assert_eq!(cabin.status, "No background tasks running");
+    end_bg_test(root, cabin, restore);
+}
+
+#[cfg(unix)]
+#[test]
+fn grok_can_start_background_tasks_from_its_reply() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin, restore, _argv) = bg_cabin("bg-agent");
+    cabin.send_chat("delegate the docs".into());
+    let start = std::time::Instant::now();
+    while cabin.running && start.elapsed() < std::time::Duration::from_secs(5) {
+        cabin.poll_single();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(!cabin.running);
+    assert_eq!(cabin.bg.runs.len(), 1, "{}", cabin.status);
+    assert_eq!(cabin.bg.runs[0].origin, grokhub_core::BgOrigin::Agent);
+    assert_eq!(cabin.bg.runs[0].title, "index the docs");
+    assert!(poll_until(&mut cabin, 5, |c| c.bg.runs.is_empty()));
+    assert!(
+        cabin
+            .messages
+            .last()
+            .is_some_and(|m| m.1.starts_with("**Background task done** · index the docs")),
+        "{:?}",
+        cabin.messages
+    );
+    end_bg_test(root, cabin, restore);
+}
+
+#[cfg(unix)]
+#[test]
+fn sending_in_another_chat_moves_the_live_reply_to_the_background() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin, restore, _argv) = bg_cabin("bg-cross");
+    cabin.threads.push(crate::threads::ChatThread::new("Other", false));
+    let a = cabin.threads[0].id.clone();
+    let b = cabin.threads[1].id.clone();
+    cabin.send_chat("slow-turn please".into());
+    assert!(poll_until(&mut cabin, 5, |c| c.stream_buf.contains("Working on it.")));
+    cabin.switch_thread(1);
+    assert!(cabin.running, "switching tabs is not Stop");
+    cabin.send_chat("hello from b".into());
+    assert_eq!(cabin.bg.runs.len(), 1, "{}", cabin.status);
+    assert_eq!(cabin.bg.runs[0].thread_id, a, "chat A keeps going in the background");
+    assert_eq!(cabin.chat_job_thread.as_deref(), Some(b.as_str()));
+    assert!(poll_until(&mut cabin, 5, |c| !c.running));
+    assert_eq!(cabin.stop_all_bg_runs(), 1);
+    let a_msgs = cabin.threads[0].messages.clone();
+    assert!(
+        a_msgs
+            .last()
+            .is_some_and(|m| m.1.starts_with("**Background task stopped**") && m.1.contains("Working on it.")),
+        "{a_msgs:?}"
+    );
+    end_bg_test(root, cabin, restore);
+}
+
+#[test]
+fn a_background_result_waits_while_its_chat_is_mid_turn() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("bg-hold");
+    // Focused on this chat: the post needs no desktop notification.
+    cabin.window_focused = true;
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), "hi".into())]);
+    let id = cabin.threads[0].id.clone();
+    cabin.bg.runs.push(super::background::BgRun {
+        id: 1,
+        thread_id: id.clone(),
+        title: "checks".into(),
+        origin: grokhub_core::BgOrigin::User,
+        pid: None,
+        rx: None,
+        say: "all green".into(),
+        action: String::new(),
+        started: std::time::Instant::now(),
+        end: Some(grokhub_core::BgEnd::Done),
+        session: String::new(),
+        resumed: None,
+        fork_hold: false,
+    });
+    cabin.running = true;
+    cabin.chat_job_thread = Some(id.clone());
+    cabin.post_finished_bg_runs();
+    assert_eq!(cabin.bg.runs.len(), 1, "a live reply would overwrite the post");
+    assert_eq!(cabin.messages.len(), 1);
+    cabin.running = false;
+    cabin.chat_job_thread = None;
+    cabin.post_finished_bg_runs();
+    assert!(cabin.bg.runs.is_empty());
+    assert_eq!(
+        cabin.messages.last().map(|m| m.1.as_str()),
+        Some("**Background task done** · checks\n\nall green")
+    );
+    let block = cabin.take_bg_results_follow(&id).expect("next turn hears it");
+    assert!(block.contains("- checks (done): all green"), "{block}");
+    assert!(cabin.take_bg_results_follow(&id).is_none(), "told once");
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn a_cabin_wide_grok_command_still_queues_instead_of_steering() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("steer-cabin-wide");
+    let (_tx, rx) = mpsc::channel();
+    cabin.grok_p_rx = Some(rx);
+    cabin.running = true;
+    cabin.chat_job_thread = None;
+    assert!(!cabin.can_steer_live_turn(), "/compact has no chat turn to steer");
+    cabin.send_chat("then this".into());
+    assert_eq!(cabin.followup_queue, vec!["then this".to_string()]);
+    assert!(cabin.running);
+    cabin.grok_p_rx = None;
+    cabin.running = false;
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn the_live_work_strip_offers_steer_queue_and_background_stop() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("bg-strip");
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), "hi".into())]);
+    let id = cabin.threads[0].id.clone();
+    let paint = |cabin: &mut super::Cabin| {
+        let mut texts = Vec::new();
+        let ctx = egui::Context::default();
+        let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                cabin.paint_live_work(ui);
+                let layer = ui.layer_id();
+                ui.ctx().graphics(|layers| {
+                    if let Some(list) = layers.get(layer) {
+                        for clipped in list.all_entries() {
+                            collect_shape_text(&clipped.shape, &mut texts);
+                        }
+                    }
+                });
+            });
+        });
+        texts.join("|")
+    };
+    assert_eq!(paint(&mut cabin), "", "nothing to act on paints nothing");
+
+    let (_tx, rx) = mpsc::channel();
+    cabin.grok_p_rx = Some(rx);
+    cabin.running = true;
+    cabin.chat_job_thread = Some(id.clone());
+    cabin.composer = "make it blue".into();
+    cabin.followup_queue = vec!["then deploy".into()];
+    cabin.bg.runs.push(super::background::BgRun {
+        id: 7,
+        thread_id: id.clone(),
+        title: "run the checks".into(),
+        origin: grokhub_core::BgOrigin::User,
+        pid: None,
+        rx: None,
+        say: String::new(),
+        action: "cargo test".into(),
+        started: std::time::Instant::now(),
+        end: None,
+        session: String::new(),
+        resumed: None,
+        fork_hold: false,
+    });
+    let shown = paint(&mut cabin);
+    for want in [
+        "Steer",
+        "Queue",
+        "Queued",
+        "then deploy",
+        "Steer now",
+        "Remove",
+        "Background · run the checks",
+        "0s · cargo test",
+        "Stop",
+    ] {
+        assert!(shown.contains(want), "missing {want:?}: {shown}");
+    }
+    cabin.grok_p_rx = None;
+    cabin.running = false;
+    cabin.bg.runs.clear();
+    release_isolated(&root, cabin);
 }
