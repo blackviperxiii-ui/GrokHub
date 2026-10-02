@@ -109,6 +109,17 @@ impl Cabin {
         self.status = "Saved".into();
     }
 
+    #[cfg(feature = "fx")]
+    pub(super) fn set_composer_glow(&mut self, on: bool) {
+        crate::fx::dismiss_notice();
+        if self.cfg.composer_glow == on {
+            return;
+        }
+        self.cfg.composer_glow = on;
+        self.persist_cfg();
+        self.status = "Saved".into();
+    }
+
     pub(super) fn ui_settings_menu(&mut self, ctx: &egui::Context) {
         if !self.settings_menu_open {
             return;
@@ -449,6 +460,18 @@ impl Cabin {
                                                                 &mut living_wall,
                                                             ) {
                                                                 self.set_living_wall(living_wall);
+                                                            }
+                                                            #[cfg(feature = "fx")]
+                                                            {
+                                                                let mut composer_glow = self.cfg.composer_glow;
+                                                                if crate::cards::settings_toggle(
+                                                                    ui,
+                                                                    "Composer glow (GPU effects)",
+                                                                    crate::fx::settings_caption(),
+                                                                    &mut composer_glow,
+                                                                ) {
+                                                                    self.set_composer_glow(composer_glow);
+                                                                }
                                                             }
                                                             let quiet_menu = quiet_hours_menu(
                                                                 &self.cfg.quiet_start,

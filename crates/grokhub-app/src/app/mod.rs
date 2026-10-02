@@ -4698,6 +4698,15 @@ impl eframe::App for Cabin {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(feature = "fx")]
+        {
+            let glow_line = crate::fx::on_frame();
+            if self.status.is_empty() {
+                if let Some(line) = glow_line {
+                    self.status = line.to_string();
+                }
+            }
+        }
         self.poll_job();
         self.poll_imagine_save();
         self.poll_host_diff();
