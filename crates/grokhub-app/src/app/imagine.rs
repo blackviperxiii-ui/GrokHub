@@ -1003,6 +1003,13 @@ impl Cabin {
     }
 
     pub(super) fn poll_wall(&mut self) {
+        // A job may refresh the Imagine tokens and then fail, or (the wall) never
+        // hand them back; keep the rotated pair so the next refresh is not stale.
+        if let Some(tokens) = crate::imagine_auth::take_refreshed() {
+            if self.imagine_native.tokens.is_some() {
+                self.note_imagine_tokens(tokens);
+            }
+        }
         let Some(rx) = self.wall_rx.take() else {
             return;
         };
@@ -1408,6 +1415,7 @@ impl Cabin {
             }
             crate::imagine_auth::ImagineAuthEvent::Failed(e) => self.status = e,
             crate::imagine_auth::ImagineAuthEvent::SignedOut => {
+                crate::imagine_auth::forget_refreshed();
                 self.imagine_native.tokens = None;
                 self.imagine_native.email.clear();
                 self.clear_imagine_device();
@@ -1580,8 +1588,11 @@ impl Cabin {
             if !self.imagine_native.device_user_code.is_empty() {
                 ui.label(format!("Code {}", self.imagine_native.device_user_code));
                 let uri = self.imagine_native.device_verify_uri.clone();
-                if !uri.is_empty() {
-                    ui.hyperlink_to("Verify", uri);
+                // Through the trusted opener, not egui's link: the URI came from the server.
+                if !uri.is_empty() && ui.small_button("Verify").clicked() {
+                    if let Err(e) = crate::oauth::open_browser(&uri) {
+                        self.status = e;
+                    }
                 }
             }
             if self.imagine_native.offer_key && ui.small_button("Use API key").clicked() {

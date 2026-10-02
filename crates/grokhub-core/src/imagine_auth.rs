@@ -451,6 +451,14 @@ pub fn map_imagine_error(
             ImagineCredKind::ConsoleKey => plain(IMAGINE_KEY_REJECTED.into()),
         };
     }
+    if kind == ImagineCredKind::OAuth && err.trim() == IMAGINE_SIGN_IN_AGAIN {
+        // A failed refresh: offer the way out instead of looping on the same error.
+        return ImagineMappedError {
+            text: IMAGINE_SIGN_IN_AGAIN.into(),
+            offer_use_api_key: has_console_key,
+            offer_settings: !has_console_key,
+        };
+    }
     if status == Some(429) || lower.contains("rate limit") || lower.contains("usage limit") {
         return plain(IMAGINE_RATE_LIMIT.into());
     }
@@ -467,6 +475,15 @@ pub fn map_imagine_error(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn imagine_failed_refresh_offers_a_way_out() {
+        let with_key = map_imagine_error(IMAGINE_SIGN_IN_AGAIN, ImagineCredKind::OAuth, true);
+        assert_eq!(with_key.text, IMAGINE_SIGN_IN_AGAIN);
+        assert!(with_key.offer_use_api_key && !with_key.offer_settings);
+        let no_key = map_imagine_error(IMAGINE_SIGN_IN_AGAIN, ImagineCredKind::OAuth, false);
+        assert!(!no_key.offer_use_api_key && no_key.offer_settings);
+    }
 
     #[test]
     fn imagine_pkce_rfc7636_appendix_b() {
