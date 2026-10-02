@@ -21938,14 +21938,37 @@ fn bg_ask_spawn_passes_deny_args() {
     assert!(sent.contains("--deny\nBash"), "{sent}");
     assert!(sent.contains("--deny\nEdit"), "{sent}");
     assert!(sent.contains("--deny\nWrite"), "{sent}");
+    assert!(
+        sent.contains(&format!("--deny\n{}", grokhub_core::DESKTOP_MCP_RULE)),
+        "{sent}"
+    );
     assert!(!sent.contains("--always-approve"), "{sent}");
 
+    // Auto denies no tools; only the desktop server stays denied while its switch is off.
     cabin.permission_mode = PermissionMode::Auto;
+    cabin.cfg.desktop_control = false;
     let started = cabin.start_bg_task("run the checks", &id, grokhub_core::BgOrigin::User);
     assert!(started.is_ok(), "{started:?}");
     assert!(poll_until(&mut cabin, 5, |c| c.bg.runs.is_empty()), "auto run ends");
     let sent = last_grok_argv(&argv);
+    let desktop_deny = format!("--deny\n{}", grokhub_core::DESKTOP_MCP_RULE);
+    assert_eq!(sent.matches("--deny").count(), 1, "{sent}");
+    assert!(sent.contains(&desktop_deny), "{sent}");
+    assert!(!sent.contains("--deny\nBash"), "{sent}");
+    assert!(!sent.contains("--deny\nEdit"), "{sent}");
+    assert!(!sent.contains("--deny\nWrite"), "{sent}");
+    assert!(!sent.contains("dontAsk"), "{sent}");
+
+    cabin.cfg.desktop_control = true;
+    let started = cabin.start_bg_task("run the checks", &id, grokhub_core::BgOrigin::User);
+    assert!(started.is_ok(), "{started:?}");
+    assert!(poll_until(&mut cabin, 5, |c| c.bg.runs.is_empty()), "auto desktop run ends");
+    let sent = last_grok_argv(&argv);
     assert!(!sent.contains("--deny"), "{sent}");
+    assert!(
+        sent.contains(&format!("--allow\n{}", grokhub_core::DESKTOP_MCP_RULE)),
+        "{sent}"
+    );
     assert!(!sent.contains("dontAsk"), "{sent}");
     end_bg_test(root, cabin, restore);
 }
