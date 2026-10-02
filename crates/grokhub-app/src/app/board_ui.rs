@@ -161,7 +161,7 @@ pub(super) fn paint_grip(ui: &mut egui::Ui) {
 fn fresh_badge(ui: &mut egui::Ui) {
     ui.label(
         RichText::new("NEW")
-            .size(10.0)
+            .size(crate::theme::FONT_TIP)
             .strong()
             .color(crate::theme::live()),
     );
@@ -279,7 +279,7 @@ impl Cabin {
                     ui.add(
                         egui::Label::new(
                             RichText::new(&meta)
-                                .size(11.0)
+                                .size(crate::theme::FONT_TIP)
                                 .color(crate::theme::subtle()),
                         )
                         .truncate()

@@ -520,7 +520,7 @@ fn spans_job(ui: &Ui, spans: &[MdSpan], wrap: f32) -> LayoutJob {
                 (t.as_str(), f)
             }
             MdSpan::Code(t) => {
-                let mut f = TextFormat::simple(mono.clone(), crate::theme::subtle());
+                let mut f = TextFormat::simple(mono.clone(), crate::theme::fg());
                 f.background = crate::theme::code_well();
                 (t.as_str(), f)
             }
@@ -552,6 +552,20 @@ mod tests {
     #[test]
     fn splits_markers() {
         assert!("**bold** and `code`".contains("**"));
+    }
+
+    #[test]
+    fn inline_code_uses_foreground_on_the_well() {
+        let src = include_str!("markdown.rs");
+        let code = src
+            .split("MdSpan::Code(")
+            .nth(1)
+            .and_then(|s| s.split("MdSpan::Link").next())
+            .expect("inline code");
+        assert!(
+            code.contains("theme::fg()") && code.contains("code_well()") && !code.contains("theme::subtle()"),
+            "inline code must clear the well: {code}"
+        );
     }
 
     #[test]

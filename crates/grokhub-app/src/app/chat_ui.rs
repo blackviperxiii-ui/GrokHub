@@ -1011,7 +1011,7 @@ pub(super) fn paint_chat_block_with(
                         ui.label(
                             RichText::new(&block.body)
                                 .size(crate::theme::FONT_META)
-                                .color(crate::theme::subtle()),
+                                .color(crate::theme::muted()),
                         );
                     }
                 }

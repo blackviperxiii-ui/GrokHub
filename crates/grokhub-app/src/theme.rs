@@ -469,6 +469,10 @@ fn install_inter(ctx: &egui::Context) {
             "inter-full".into(),
         ],
     );
+    #[cfg(windows)]
+    let mono = std::fs::read(r"C:\Windows\Fonts\CascadiaMono.ttf")
+        .or_else(|_| std::fs::read(r"C:\Windows\Fonts\consola.ttf"));
+    #[cfg(not(windows))]
     let mono = std::fs::read("/usr/share/fonts/TTF/JetBrainsMono-Regular.ttf")
         .or_else(|_| std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"))
         .or_else(|_| std::fs::read("/usr/share/fonts/truetype/macos/JetBrainsMono-Regular.ttf"));
@@ -1108,6 +1112,18 @@ mod tests {
         assert!(
             fonts.contains("Inter-Full-Regular.ttf") && fonts.matches("\"inter-full\"").count() >= 3,
             "→, ✓ and ≥ are not in the latin subset; the full face must back both families: {fonts}"
+        );
+        assert!(
+            fonts.contains("JetBrainsMono-Regular.ttf")
+                && fonts.contains("CascadiaMono.ttf")
+                && fonts.contains("consola.ttf")
+                && fonts.contains("cfg(windows)"),
+            "Windows mono is Cascadia then Consolas; Linux keeps JetBrains Mono: {fonts}"
+        );
+        assert!(
+            fonts.find("cfg(windows)").unwrap() < fonts.find("CascadiaMono.ttf").unwrap()
+                && fonts.find("CascadiaMono.ttf").unwrap() < fonts.find("consola.ttf").unwrap(),
+            "Cascadia is tried before Consolas: {fonts}"
         );
     }
 
