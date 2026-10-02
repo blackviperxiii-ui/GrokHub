@@ -233,6 +233,19 @@ pub fn hold_paint_test() -> std::sync::MutexGuard<'static, ()> {
     PAINT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// One headless egui pass for tests. egui 0.36 debug-asserts that a dropped
+/// `TexturesDelta` was applied, and a test has no renderer, so drop them here.
+#[cfg(test)]
+pub fn test_pass(
+    ctx: &egui::Context,
+    raw: egui::RawInput,
+    add: impl FnMut(&mut egui::Ui),
+) -> egui::FullOutput {
+    let mut out = ctx.run_ui(raw, add);
+    out.textures_delta.clear();
+    out
+}
+
 #[cfg(test)]
 pub fn set_paint_dark(dark: bool) {
     USE_LIGHT.store(!dark, Ordering::Relaxed);

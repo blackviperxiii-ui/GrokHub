@@ -719,7 +719,7 @@ mod tests {
 
     fn with_fonts_ui(mut add: impl FnMut(&mut eframe::egui::Ui)) {
         let ctx = eframe::egui::Context::default();
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
             eframe::egui::CentralPanel::default().show(ui, |ui| add(ui));
         });
     }
