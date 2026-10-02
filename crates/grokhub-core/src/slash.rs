@@ -115,7 +115,10 @@ fn looks_like_bind_path(s: &str) -> bool {
 
 fn strip_bind_word(rest: &str) -> Option<&str> {
     let rest = rest.trim();
-    if rest.len() < 4 || !rest[..4].eq_ignore_ascii_case("bind") {
+    if !rest
+        .get(..4)
+        .is_some_and(|w| w.eq_ignore_ascii_case("bind"))
+    {
         return None;
     }
     let after = &rest[4..];
@@ -803,6 +806,9 @@ mod tests {
         assert_eq!(parse_slash("/project ~/GrokHub-Work"), Some(Slash::ProjectBind(Some("~/GrokHub-Work".into()))));
         assert_eq!(parse_slash("/project /tmp/cabin"), Some(Slash::ProjectBind(Some("/tmp/cabin".into()))));
         assert_eq!(parse_slash("/project typo"), None);
+        // Byte 4 falls inside a multi-byte char: no word match, and no panic.
+        assert_eq!(parse_slash("/project aé€"), None);
+        assert_eq!(parse_slash("/project 日本語"), None);
         assert_eq!(parse_slash("/project bind"), None);
         assert_eq!(
             parse_slash("/project bind ."),

@@ -256,6 +256,26 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     }
 
     #[test]
+    fn devices_lan_address_does_not_need_hostname_i() {
+        // No default route (offline CI) is None; anything else is a real IPv4.
+        if let Some(ip) = super::routed_ipv4() {
+            assert!(ip.parse::<std::net::Ipv4Addr>().is_ok(), "{ip}");
+        }
+        let src = cabin_src();
+        let now = src
+            .split("fn hostname_i_now()")
+            .nth(1)
+            .and_then(|s| s.split("\nfn kick_hostname(").next())
+            .expect("hostname_i_now");
+        let pick = now.find("pick_lan_ipv4").expect("LAN pick");
+        let routed = now.find("routed_ipv4()").expect("routed fallback");
+        assert!(
+            pick < routed,
+            "Windows and macOS have no `hostname -I`; Devices must still show a LAN address: {now}"
+        );
+    }
+
+    #[test]
     fn devices_hostname_must_not_block_the_ui() {
         let src = cabin_src();
         let host = src
