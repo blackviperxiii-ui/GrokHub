@@ -698,6 +698,21 @@ impl Cabin {
                                                                     }
                                                                 }
                                                             }
+                                                            if crate::cards::settings_toggle(
+                                                                ui,
+                                                                "Let Grok control the desktop",
+                                                                "Grok can see the screen and use the mouse and keyboard through GrokHub. Ask still asks first.",
+                                                                &mut self.cfg.desktop_control,
+                                                            ) {
+                                                                let on = self.cfg.desktop_control;
+                                                                self.persist_cfg();
+                                                                self.status = if on {
+                                                                    "Registering desktop tools...".into()
+                                                                } else {
+                                                                    "Removing desktop tools...".into()
+                                                                };
+                                                                crate::desktop_mcp::spawn_register(on);
+                                                            }
                                                             let sessions = cabin_default_sessions();
                                                             let session_labels: Vec<String> = sessions
                                                                 .iter()

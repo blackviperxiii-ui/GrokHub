@@ -367,6 +367,9 @@ pub struct AppConfig {
     /// Soft GPU glow around the composer while a reply streams. Off until Settings turns it on.
     #[serde(default)]
     pub composer_glow: bool,
+    /// Settings → Let Grok control the desktop. Off until the user turns it on.
+    #[serde(default)]
+    pub desktop_control: bool,
     #[serde(default = "default_theme")]
     pub theme: String,
     #[serde(default)]
@@ -490,6 +493,7 @@ impl Default for AppConfig {
             goal_pin: String::new(),
             imagine_wall: default_imagine_wall(),
             composer_glow: false,
+            desktop_control: false,
             theme: default_theme(),
             window: crate::window::WindowGeom::default(),
             get_started_done: false,
@@ -806,6 +810,16 @@ pub fn test_config_root(label: &str) -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_mcp_setting_defaults_off() {
+        assert!(!AppConfig::default().desktop_control);
+        let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
+        assert!(!absent.desktop_control);
+        let on: AppConfig =
+            serde_json::from_str(r#"{"deviceName":"cabin","desktopControl":true}"#).unwrap();
+        assert!(on.desktop_control);
+    }
 
     #[test]
     fn composer_glow() {
