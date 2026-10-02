@@ -21269,3 +21269,24 @@ fn chip_hour_returns_0_through_23() {
         "chip_hour must be 0..=23 (or noon fallback hour=12), got {hour}"
     );
 }
+
+#[test]
+fn halt_shortcut_is_ctrl_alt_h_not_the_task_manager_key() {
+    let src = include_str!("mod.rs");
+    let halt = src
+        .split("self.halt_work(\"Stopped\");")
+        .next()
+        .and_then(|s| s.rsplit("if ctx.input(").next())
+        .expect("in-app halt shortcut");
+    assert!(
+        halt.contains("i.modifiers.command")
+            && halt.contains("i.modifiers.alt")
+            && halt.contains("!i.modifiers.shift")
+            && halt.contains("egui::Key::H"),
+        "Ctrl+Alt+H halts: {halt}"
+    );
+    assert!(
+        !src.contains("i.modifiers.shift && i.key_pressed(egui::Key::Escape)"),
+        "Ctrl+Shift+Esc opens Task Manager on Windows and never reaches the app"
+    );
+}
