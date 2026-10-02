@@ -409,6 +409,7 @@ impl Cabin {
             grokhub_acp::GrokPAttach {
                 image: image.as_deref(),
                 learned: &grokhub_core::brief_for(&self.learning, "chat"),
+                deny: self.permission_mode.needs_approval(),
             },
             fork,
             user_home,

@@ -42,7 +42,7 @@ pub use locate::{
     hide_windows_console,
     invalidate_grok_bin_cache, invalidate_grok_key_cache, is_cli_hard_failure, mark_grok_unusable,
     parse_grok_auth_key, prepare_cabin_grok_home, silence_windows_hard_errors, single_turn_args,
-    single_turn_args_full, which, write_cli_auth_if_needed,
+    single_turn_args_full, with_ask_deny, which, write_cli_auth_if_needed, ASK_DENY_RULES,
 };
 pub use protocol::{
     ask_denied_without_acp, merge_tool_card, AcpEvent, ElicitAsk, PermissionAsk, PermissionMode,

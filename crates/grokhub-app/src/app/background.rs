@@ -17,6 +17,10 @@ use grokhub_core::{
     BgEnd, BgOrigin, BG_TASK_MAX,
 };
 
+/// `/bg` and a model `BACKGROUND_TASK:` line while Ask is on. A background run
+/// has nobody to approve a tool, so it does not start.
+pub(super) const BG_ASK_OFF: &str = "Background tasks are off while Ask is on, because they can't ask you for approval. Switch to Auto to use /bg.";
+
 /// One background `grok -p`. Not saved: the child dies with the cabin.
 pub(super) struct BgRun {
     pub id: u64,
@@ -114,8 +118,8 @@ impl Cabin {
 
     /// Start `task` as a background run beside `thread_id`. It forks that chat's
     /// Grok session, so it knows the conversation and never writes into it.
-    /// Unwatched like an automation: the PermissionMode pill applies, and Ask
-    /// cannot stop to ask, so tools that need approval are denied.
+    /// Does not refuse under Ask — `/bg` and `BACKGROUND_TASK:` do. It still
+    /// spawns, with deny args when Ask is on.
     pub(super) fn start_bg_task(
         &mut self,
         task: &str,
@@ -168,6 +172,7 @@ impl Cabin {
             grokhub_acp::GrokPAttach {
                 image: None,
                 learned: &grokhub_core::brief_for(&self.learning, "chat"),
+                deny: self.permission_mode.needs_approval(),
             },
             resume.is_some(),
             user_home,
@@ -194,10 +199,24 @@ impl Cabin {
     }
 
     /// `BACKGROUND_TASK:` lines in a finished chat reply. Ones that do not fit
-    /// are told to the next turn so Grok knows they never ran.
+    /// are told to the next turn so Grok knows they never ran. Ask starts none:
+    /// a background run cannot ask for approval.
     pub(super) fn start_agent_bg_tasks(&mut self, reply: &str, thread_id: &str) {
         let tasks = extract_background_tasks(reply, BG_TASK_MAX);
         if tasks.is_empty() {
+            return;
+        }
+        if self.permission_mode.needs_approval() {
+            for task in &tasks {
+                let title = bg_task_title(task);
+                self.bg.unread.push((
+                    thread_id.to_string(),
+                    format!("- {title} (not started: background tasks are off while Ask is on)"),
+                ));
+            }
+            if thread_id == self.visible_thread_id() {
+                self.status = BG_ASK_OFF.into();
+            }
             return;
         }
         let mut started = 0usize;
@@ -224,9 +243,9 @@ impl Cabin {
         }
     }
 
-    /// The live reply is a plain headless chat turn that can keep running without
-    /// the composer, and there is room for one more background run.
-    pub(super) fn can_move_turn_to_background(&self) -> bool {
+    /// A plain headless chat turn that could keep running without the composer.
+    /// Ask is not part of this: the pill hides the move, and the caller says why.
+    fn headless_turn_can_detach(&self) -> bool {
         let headless = self.grok_p_rx.is_some() && self.grok_p_pid.is_some();
         let side_work = self.pending_kick.is_some()
             || self.kick_cap_rx.is_some()
@@ -240,6 +259,13 @@ impl Cabin {
             && self.chat_job_thread.is_some()
             && self.bg.live_count() < BG_TASK_MAX
             && can_detach_turn(headless, self.acp.is_some(), self.scheduled_perm, side_work)
+    }
+
+    /// The live reply is a plain headless chat turn that can keep running without
+    /// the composer, and there is room for one more background run. Ask cannot
+    /// move it: a background run has nobody to approve a tool.
+    pub(super) fn can_move_turn_to_background(&self) -> bool {
+        self.headless_turn_can_detach() && !self.permission_mode.needs_approval()
     }
 
     /// Hand the live `grok -p` child to a background run without killing it and
@@ -492,6 +518,35 @@ impl Cabin {
         ids.len()
     }
 
+    /// The chat is going away. Kill its background runs, drop their receivers,
+    /// and free the slots. Nothing is posted. A moved-off turn also drops its
+    /// Doing card.
+    pub(super) fn drop_bg_runs_for(&mut self, thread_id: &str) -> usize {
+        let mut n = 0usize;
+        let mut detached = false;
+        let mut i = 0;
+        while i < self.bg.runs.len() {
+            if self.bg.runs[i].thread_id != thread_id {
+                i += 1;
+                continue;
+            }
+            let mut run = self.bg.runs.remove(i);
+            n += 1;
+            if let Some(pid) = run.pid.take() {
+                kill_pid(pid);
+            }
+            run.rx = None;
+            if run.origin == BgOrigin::Detached {
+                detached = true;
+            }
+        }
+        if detached && abandon_inflight_card(&mut self.board, thread_id) {
+            self.flush_board();
+        }
+        self.bg.unread.retain(|(id, _)| id != thread_id);
+        n
+    }
+
     /// Quit: no child outlives the cabin, and nothing is posted.
     pub(super) fn kill_bg_runs(&mut self) {
         for run in self.bg.runs.iter_mut() {
@@ -575,6 +630,10 @@ impl Cabin {
     pub(super) fn run_bg_slash(&mut self, arg: &str) {
         let arg = arg.trim();
         if arg.is_empty() {
+            if self.permission_mode.needs_approval() && self.headless_turn_can_detach() {
+                self.status = BG_ASK_OFF.into();
+                return;
+            }
             if self.move_turn_to_background() {
                 self.drain_followup_queue();
             } else if self.running {
@@ -585,6 +644,7 @@ impl Cabin {
                 };
             } else {
                 self.status = match self.bg.live_count() {
+                    0 if self.permission_mode.needs_approval() => BG_ASK_OFF.into(),
                     0 => "No background tasks — /bg <task> starts one".into(),
                     n => format!("{n} background running"),
                 };
@@ -599,15 +659,13 @@ impl Cabin {
             };
             return;
         }
+        if self.permission_mode.needs_approval() {
+            self.status = BG_ASK_OFF.into();
+            return;
+        }
         let thread = self.visible_thread_id();
         match self.start_bg_task(arg, &thread, BgOrigin::User) {
-            Ok(title) => {
-                self.status = if self.permission_mode.uses_acp() {
-                    format!("Background · {title} — Ask is on, so tools that need approval are denied")
-                } else {
-                    format!("Background · {title}")
-                };
-            }
+            Ok(title) => self.status = format!("Background · {title}"),
             Err(e) => self.status = e,
         }
     }

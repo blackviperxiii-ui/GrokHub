@@ -21448,6 +21448,9 @@ case "$*" in
     printf '%s\n' '{"type":"text","data":"steered reply"}'
     printf '%s\n' '{"type":"end","stopReason":"end_turn","sessionId":"sess-steer"}'
     exit 0 ;;
+  *slow-bg*)
+    printf '%s\n' '{"type":"text","data":"still going"}'
+    exec sleep 30 ;;
   *"running as a background task"*)
     printf '%s\n' '{"type":"text","data":"checks all green"}'
     printf '%s\n' '{"type":"end","stopReason":"end_turn","sessionId":"sess-bg"}'
@@ -21859,4 +21862,208 @@ fn the_live_work_strip_offers_steer_queue_and_background_stop() {
     cabin.running = false;
     cabin.bg.runs.clear();
     release_isolated(&root, cabin);
+}
+
+#[cfg(unix)]
+#[test]
+fn bg_ask_refuses_slash_task_and_live_move() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin, restore, argv) = bg_cabin("bg-ask-refuse");
+    cabin.permission_mode = PermissionMode::Ask;
+    cabin.send_chat("/bg run the checks".into());
+    assert!(cabin.bg.runs.is_empty(), "{}", cabin.status);
+    assert_eq!(cabin.status, super::background::BG_ASK_OFF);
+    let sent = std::fs::read_to_string(&argv).unwrap_or_default();
+    assert!(!sent.contains("Task: run the checks"), "{sent}");
+
+    cabin.permission_mode = PermissionMode::Auto;
+    cabin.send_chat("slow-turn please".into());
+    assert!(
+        poll_until(&mut cabin, 5, |c| c.stream_buf.contains("Working on it.")),
+        "the slow turn should start before the pill flips"
+    );
+    cabin.permission_mode = PermissionMode::Ask;
+    assert!(!cabin.can_move_turn_to_background());
+    cabin.send_chat("/bg".into());
+    assert!(cabin.running && cabin.grok_p_rx.is_some(), "Ask must not move the live reply");
+    assert!(cabin.bg.runs.is_empty(), "{}", cabin.status);
+    assert_eq!(cabin.status, super::background::BG_ASK_OFF);
+    cabin.send_chat("/bg stop".into());
+    assert_eq!(cabin.status, "No background tasks running");
+
+    cabin.halt_in_flight();
+    cabin.send_chat("/bg".into());
+    assert_eq!(
+        cabin.status,
+        super::background::BG_ASK_OFF,
+        "idle /bg under Ask must not offer /bg <task>"
+    );
+    end_bg_test(root, cabin, restore);
+}
+
+#[cfg(unix)]
+#[test]
+fn bg_ask_does_not_start_agent_background_tasks() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin, restore, argv) = bg_cabin("bg-ask-agent");
+    cabin.permission_mode = PermissionMode::Ask;
+    let id = cabin.threads[0].id.clone();
+    cabin.start_agent_bg_tasks("On it.\nBACKGROUND_TASK: index the docs", &id);
+    assert!(cabin.bg.runs.is_empty(), "{}", cabin.status);
+    assert_eq!(cabin.status, super::background::BG_ASK_OFF);
+    assert!(
+        cabin.bg.unread.iter().any(|(tid, note)| {
+            tid == &id && note.contains("index the docs") && note.contains("not started")
+        }),
+        "{:?}",
+        cabin.bg.unread
+    );
+    let sent = std::fs::read_to_string(&argv).unwrap_or_default();
+    assert!(!sent.contains("Task: index the docs"), "{sent}");
+    end_bg_test(root, cabin, restore);
+}
+
+#[cfg(unix)]
+#[test]
+fn bg_ask_spawn_passes_deny_args() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin, restore, argv) = bg_cabin("bg-ask-deny");
+    let id = cabin.threads[0].id.clone();
+    cabin.permission_mode = PermissionMode::Ask;
+    let started = cabin.start_bg_task("run the checks", &id, grokhub_core::BgOrigin::User);
+    assert!(started.is_ok(), "{started:?}");
+    assert!(poll_until(&mut cabin, 5, |c| c.bg.runs.is_empty()), "ask run ends");
+    let sent = last_grok_argv(&argv);
+    assert!(sent.contains("--permission-mode\ndontAsk"), "{sent}");
+    assert!(sent.contains("--deny\nBash"), "{sent}");
+    assert!(sent.contains("--deny\nEdit"), "{sent}");
+    assert!(sent.contains("--deny\nWrite"), "{sent}");
+    assert!(!sent.contains("--always-approve"), "{sent}");
+
+    cabin.permission_mode = PermissionMode::Auto;
+    let started = cabin.start_bg_task("run the checks", &id, grokhub_core::BgOrigin::User);
+    assert!(started.is_ok(), "{started:?}");
+    assert!(poll_until(&mut cabin, 5, |c| c.bg.runs.is_empty()), "auto run ends");
+    let sent = last_grok_argv(&argv);
+    assert!(!sent.contains("--deny"), "{sent}");
+    assert!(!sent.contains("dontAsk"), "{sent}");
+    end_bg_test(root, cabin, restore);
+}
+
+#[cfg(unix)]
+#[test]
+fn bg_scheduled_ask_passes_deny_args() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin, restore, argv) = bg_cabin("bg-ask-sched");
+    cabin.permission_mode = PermissionMode::Ask;
+    cabin.send_scheduled_chat("hello".into());
+    assert!(
+        poll_until(&mut cabin, 5, |c| !c.running),
+        "scheduled turn ends: {}",
+        cabin.status
+    );
+    let sent = last_grok_argv(&argv);
+    assert!(sent.contains("--permission-mode\ndontAsk"), "{sent}");
+    assert!(sent.contains("--deny\nBash"), "{sent}");
+    end_bg_test(root, cabin, restore);
+}
+
+#[cfg(unix)]
+#[test]
+fn bg_auto_status_names_the_task() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin, restore, _argv) = bg_cabin("bg-auto-status");
+    cabin.send_chat("/bg run the checks".into());
+    assert_eq!(cabin.status, "Background · run the checks");
+    assert!(!cabin.status.contains("denied"), "{}", cabin.status);
+    end_bg_test(root, cabin, restore);
+}
+
+#[test]
+fn bg_copy_no_longer_says_approval_is_denied() {
+    let src = include_str!("background.rs");
+    assert!(
+        !src.contains("tools that need approval are denied"),
+        "{src}"
+    );
+    let night = include_str!("night.rs");
+    let fire = night
+        .split("fn fire_loop(")
+        .nth(1)
+        .and_then(|s| s.split("\n    fn ").next())
+        .expect("fire_loop");
+    assert!(
+        fire.contains("with_ask_deny") && fire.contains("scheduled_args"),
+        "loops under Ask must pass deny args: {fire}"
+    );
+}
+
+#[cfg(unix)]
+fn proc_alive(pid: u32) -> bool {
+    std::path::Path::new(&format!("/proc/{pid}")).exists()
+}
+
+#[cfg(unix)]
+fn wait_pid_gone(pid: u32) -> bool {
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(3) {
+        if !proc_alive(pid) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    false
+}
+
+#[cfg(unix)]
+#[test]
+fn bg_delete_chat_stops_its_runs() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin, restore, _argv) = bg_cabin("bg-delete");
+    cabin.threads.push(crate::threads::ChatThread::new("Other", false));
+    let other = cabin.threads[1].id.clone();
+    let started = cabin.start_bg_task("slow-bg", &other, grokhub_core::BgOrigin::User);
+    assert!(started.is_ok(), "{started:?}");
+    let pid = cabin.bg.runs[0].pid.expect("background pid");
+    assert!(proc_alive(pid), "slow-bg should still be running");
+    cabin.bg.unread.push((other.clone(), "- slow-bg (done): still going".into()));
+    cabin.delete_thread_at(1);
+    assert!(
+        cabin.bg.runs.is_empty(),
+        "runs left: {} ({})",
+        cabin.bg.runs.len(),
+        cabin.status
+    );
+    assert!(
+        cabin.bg.unread.iter().all(|(id, _)| id != &other),
+        "{:?}",
+        cabin.bg.unread
+    );
+    assert!(wait_pid_gone(pid), "delete must stop pid {pid}");
+
+    let only = cabin.threads[0].id.clone();
+    let started = cabin.start_bg_task("slow-bg", &only, grokhub_core::BgOrigin::User);
+    assert!(started.is_ok(), "{started:?}");
+    let pid = cabin.bg.runs[0].pid.expect("background pid");
+    assert!(proc_alive(pid), "slow-bg should still be running");
+    cabin.bg.unread.push((only.clone(), "- slow-bg (done): still going".into()));
+    cabin.delete_thread_at(0);
+    assert!(
+        cabin.bg.runs.is_empty(),
+        "ResetLast left runs: {} ({})",
+        cabin.bg.runs.len(),
+        cabin.status
+    );
+    assert!(
+        cabin.bg.unread.iter().all(|(id, _)| id != &only),
+        "{:?}",
+        cabin.bg.unread
+    );
+    assert!(wait_pid_gone(pid), "ResetLast must stop pid {pid}");
+    if proc_alive(pid) {
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status();
+    }
+    end_bg_test(root, cabin, restore);
 }

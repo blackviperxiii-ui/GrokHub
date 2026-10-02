@@ -964,6 +964,33 @@ pub fn with_worktree(mut args: Vec<String>, on: bool) -> Vec<String> {
     args
 }
 
+/// Shell, edit, and write. An unwatched Ask run denies these: nobody can
+/// answer the prompt grok would otherwise show.
+pub const ASK_DENY_RULES: &[&str] = &["Bash", "Edit", "Write"];
+
+/// Fail closed on an unwatched `grok -p` while Ask is on.
+///
+/// Nobody can answer a prompt there, so Ask must fail closed. When `deny` is
+/// set, drop `--always-approve`, pass `--permission-mode dontAsk` only if args
+/// do not already carry `--permission-mode` (the flag may appear once; Plan and
+/// look already set one), then `--deny` each [`ASK_DENY_RULES`] entry. Deny
+/// always wins. A no-op when `deny` is false.
+pub fn with_ask_deny(mut args: Vec<String>, deny: bool) -> Vec<String> {
+    if !deny {
+        return args;
+    }
+    args.retain(|a| a != "--always-approve");
+    if !args.iter().any(|a| a == "--permission-mode") {
+        args.push("--permission-mode".into());
+        args.push("dontAsk".into());
+    }
+    for rule in ASK_DENY_RULES {
+        args.push("--deny".into());
+        args.push((*rule).to_string());
+    }
+    args
+}
+
 pub fn agent_args_resume(
     always_approve: bool,
     resume: Option<&str>,
@@ -1791,5 +1818,129 @@ mod tests {
             "Questions stays look-only, not the invalid CLI value ask: {look:?}"
         );
         assert!(!look.iter().any(|a| a == "--always-approve"), "{look:?}");
+    }
+
+    #[test]
+    fn ask_deny_fails_closed_when_nobody_can_answer() {
+        let plain = single_turn_args_full(
+            "hi",
+            "/tmp/work",
+            None,
+            false,
+            false,
+            None,
+            None,
+            SessionMode::Chat,
+        );
+        assert_eq!(
+            with_ask_deny(plain.clone(), false),
+            plain,
+            "deny false is a no-op"
+        );
+
+        let denied = with_ask_deny(plain.clone(), true);
+        assert_eq!(
+            denied.iter().filter(|a| *a == "--permission-mode").count(),
+            1,
+            "{denied:?}"
+        );
+        assert!(
+            denied
+                .windows(2)
+                .any(|w| w[0] == "--permission-mode" && w[1] == "dontAsk"),
+            "{denied:?}"
+        );
+        assert_eq!(ASK_DENY_RULES, ["Bash", "Edit", "Write"].as_slice());
+        for rule in ASK_DENY_RULES {
+            assert!(
+                denied.windows(2).any(|w| w[0] == "--deny" && w[1] == *rule),
+                "missing --deny {rule}: {denied:?}"
+            );
+        }
+
+        let plan = with_ask_deny(
+            single_turn_args_full(
+                "hi",
+                "/tmp/work",
+                None,
+                true,
+                true,
+                None,
+                None,
+                SessionMode::Plan,
+            ),
+            true,
+        );
+        assert_eq!(
+            plan.iter().filter(|a| *a == "--permission-mode").count(),
+            1,
+            "{plan:?}"
+        );
+        assert!(
+            plan.windows(2)
+                .any(|w| w[0] == "--permission-mode" && w[1] == "plan"),
+            "Plan keeps its mode: {plan:?}"
+        );
+        assert!(!plan.iter().any(|a| a == "dontAsk"), "{plan:?}");
+        assert!(
+            plan.windows(2).any(|w| w[0] == "--deny" && w[1] == "Bash"),
+            "{plan:?}"
+        );
+        assert!(
+            plan.windows(2).any(|w| w[0] == "--deny" && w[1] == "Edit"),
+            "{plan:?}"
+        );
+        assert!(
+            plan.windows(2).any(|w| w[0] == "--deny" && w[1] == "Write"),
+            "{plan:?}"
+        );
+
+        let look = with_ask_deny(
+            single_turn_args_full(
+                "hi",
+                "/tmp/work",
+                None,
+                true,
+                true,
+                None,
+                None,
+                SessionMode::Ask,
+            ),
+            true,
+        );
+        assert_eq!(
+            look.iter().filter(|a| *a == "--permission-mode").count(),
+            1,
+            "{look:?}"
+        );
+        assert!(
+            look.windows(2)
+                .any(|w| w[0] == "--permission-mode" && w[1] == "default"),
+            "look keeps default: {look:?}"
+        );
+        assert!(
+            look.windows(2).any(|w| w[0] == "--deny" && w[1] == "Write"),
+            "{look:?}"
+        );
+        assert!(!look.iter().any(|a| a == "dontAsk"), "{look:?}");
+
+        let mut yolo = plain;
+        yolo.push("--always-approve".into());
+        let kept = with_ask_deny(yolo.clone(), false);
+        assert!(
+            kept.iter().any(|a| a == "--always-approve"),
+            "deny false leaves --always-approve: {kept:?}"
+        );
+        let stripped = with_ask_deny(yolo, true);
+        assert!(
+            !stripped.iter().any(|a| a == "--always-approve"),
+            "{stripped:?}"
+        );
+        assert!(
+            stripped
+                .windows(2)
+                .any(|w| w[0] == "--permission-mode" && w[1] == "dontAsk"),
+            "{stripped:?}"
+        );
     }
 }
