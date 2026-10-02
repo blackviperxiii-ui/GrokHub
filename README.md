@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.62** — Grok can control the desktop through GrokHub's own precise screenshot, click, and type tools (Settings → Let Grok control the desktop, off by default).
+**v2.10.63** — Imagine signs in with your own Grok account (keychain only) and gets the full image and video API: up to 10 images, 2k, edits, video edit and extend.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.62.tar.gz`, AUR | **v2.10.62** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.62.exe`, `grokhub-windows-v2.10.62.zip` | **v2.10.62** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.63.tar.gz`, AUR | **v2.10.63** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.63.exe`, `grokhub-windows-v2.10.63.zip` | **v2.10.63** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.

@@ -18,7 +18,7 @@ use crate::titlebar::{
     ChromeBtn,
 };
 use crate::update::{remember_source, resolve_source};
-use crate::xai::{grok_chat, grok_imagine_opts, grok_imagine_video, grok_stt, grok_tts};
+use crate::xai::{grok_chat, grok_imagine_opts, grok_stt, grok_tts};
 use eframe::egui::{self, Color32, ColorImage, RichText, TextureHandle, TextureOptions};
 use global_hotkey::{
     hotkey::{Code, HotKey, Modifiers},
@@ -327,6 +327,7 @@ enum TabAct {
 
 enum JobOut {
     Imagine(String),
+    ImagineBatch(Vec<String>, Option<String>, Option<grokhub_core::ImagineTokens>),
     Voice(String),
     HostLine(String),
     HostDone(String),
@@ -642,6 +643,7 @@ pub struct Cabin {
     imagine_job_prompt: String,
     imagine_error: String,
     imagine_pending: bool,
+    imagine_native: imagine::ImagineNative,
     imagine_save_rx: Option<mpsc::Receiver<Result<String, String>>>,
     goal_rx: Option<mpsc::Receiver<(String, String)>>,
     goal_busy: bool,
@@ -1218,6 +1220,7 @@ impl Cabin {
             imagine_job_prompt: String::new(),
             imagine_error: String::new(),
             imagine_pending: false,
+            imagine_native: imagine::ImagineNative::default(),
             imagine_save_rx: None,
             goal_rx: None,
             goal_busy: false,
@@ -1346,6 +1349,7 @@ impl Cabin {
             composer_geom: None,
         };
         if !quiet {
+            c.imagine_native.auth_rx = Some(crate::imagine_auth::begin_load());
             if let Ok(mgr) = GlobalHotKeyManager::new() {
                 let hey = HotKey::new(Some(Modifiers::SUPER), Code::KeyG);
                 let halt = HotKey::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Escape);
@@ -1632,6 +1636,7 @@ impl Cabin {
             imagine_job_prompt: String::new(),
             imagine_error: String::new(),
             imagine_pending: false,
+            imagine_native: imagine::ImagineNative::default(),
             imagine_save_rx: None,
             goal_rx: None,
             goal_busy: false,
@@ -4827,6 +4832,7 @@ impl eframe::App for Cabin {
                 .unwrap_or(1);
             ctx.request_repaint_after(Duration::from_secs(wait));
         }
+        self.poll_imagine_auth(ctx);
         self.poll_oauth_photo(ctx);
         self.poll_profile_pick();
         self.poll_profile_photo(ctx);

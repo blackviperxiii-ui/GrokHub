@@ -22,6 +22,7 @@ tungstenite = { version = "0.24", default-features = false, features = ["handsha
 base64 = "0.22"
 global-hotkey = "0.6"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "ico"] }
+keyring = "4"
 
 [target.'cfg(unix)'.dependencies]
 eframe = { version = "0.36.2", default-features = false, features = ["x11", "wayland"] }

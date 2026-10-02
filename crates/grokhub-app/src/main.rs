@@ -32,6 +32,7 @@ mod notify;
 mod store;
 mod voice_ws;
 mod oauth;
+mod imagine_auth;
 mod secrets;
 mod skills;
 mod threads;
