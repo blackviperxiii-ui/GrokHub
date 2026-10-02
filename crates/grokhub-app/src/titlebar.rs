@@ -60,6 +60,9 @@ pub fn titlebar_chrome_btn(ui: &mut egui::Ui, kind: ChromeBtn) -> egui::Response
         crate::theme::muted()
     };
     paint_chrome_glyph(ui, rect, kind, color);
+    let name = titlebar_chrome_tip(kind, false);
+    let enabled = resp.enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, name));
     resp
 }
 
@@ -105,6 +108,18 @@ fn paint_chrome_glyph(ui: &egui::Ui, rect: egui::Rect, kind: ChromeBtn, color: e
     }
 }
 
+/// Hover name for a titlebar chrome button. Close hides when the tray owns ×.
+pub fn titlebar_chrome_tip(kind: ChromeBtn, hide_on_close: bool) -> &'static str {
+    match kind {
+        ChromeBtn::Minimize => "Minimize",
+        ChromeBtn::Maximize => "Maximize",
+        ChromeBtn::Restore => "Restore",
+        ChromeBtn::Close if hide_on_close => "Hide to tray",
+        ChromeBtn::Close => "Close",
+        ChromeBtn::Menu => "Session menu",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,6 +145,21 @@ mod tests {
     fn titlebar_body_starts_a_window_drag() {
         assert!(titlebar_should_start_drag(true));
         assert!(!titlebar_should_start_drag(false));
+    }
+
+    #[test]
+    fn titlebar_chrome_tips_name_each_button() {
+        assert_eq!(titlebar_chrome_tip(ChromeBtn::Minimize, false), "Minimize");
+        assert_eq!(titlebar_chrome_tip(ChromeBtn::Maximize, false), "Maximize");
+        assert_eq!(titlebar_chrome_tip(ChromeBtn::Restore, false), "Restore");
+        assert_eq!(titlebar_chrome_tip(ChromeBtn::Close, false), "Close");
+        assert_eq!(titlebar_chrome_tip(ChromeBtn::Close, true), "Hide to tray");
+        assert_eq!(titlebar_chrome_tip(ChromeBtn::Menu, false), "Session menu");
+        assert_eq!(
+            titlebar_chrome_tip(ChromeBtn::Menu, true),
+            "Session menu",
+            "only Close changes when the tray owns the window"
+        );
     }
 
     #[test]

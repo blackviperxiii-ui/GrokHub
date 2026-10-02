@@ -128,7 +128,7 @@ impl Cabin {
             .frame(
                 egui::Frame::NONE
                     .fill(crate::theme::panel())
-                    .corner_radius(12.0)
+                    .corner_radius(crate::theme::MENU_RADIUS)
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                     .inner_margin(egui::Margin::same(8)),
             )
@@ -182,6 +182,9 @@ impl Cabin {
                     .map(|r| !r.expand(8.0).contains(pos))
                     .unwrap_or(true)
             });
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            self.settings_menu_open = false;
+        }
         if cabin_menu_should_dismiss(self.settings_menu_ignore, outside) {
             self.settings_menu_open = false;
         }
@@ -261,7 +264,7 @@ impl Cabin {
                 ui.scope_builder(egui::UiBuilder::new().max_rect(modal), |ui| {
                     egui::Frame::NONE
                         .fill(crate::theme::bg())
-                        .corner_radius(16.0)
+                        .corner_radius(crate::theme::SHEET_RADIUS)
                         .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                         .inner_margin(egui::Margin::ZERO)
                         .show(ui, |ui| {
