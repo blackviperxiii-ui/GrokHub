@@ -74,7 +74,7 @@ fn paint_chrome_glyph(ui: &egui::Ui, rect: egui::Rect, kind: ChromeBtn, color: e
             painter.line_segment([r.right_top(), r.left_bottom()], stroke);
         }
         ChromeBtn::Maximize => {
-            painter.rect_stroke(r, 0.0, stroke);
+            painter.rect_stroke(r, 0.0, stroke, egui::StrokeKind::Middle);
         }
         ChromeBtn::Restore => {
             let inset = 2.5_f32;
@@ -86,9 +86,9 @@ fn paint_chrome_glyph(ui: &egui::Ui, rect: egui::Rect, kind: ChromeBtn, color: e
                 egui::pos2(r.left(), r.top() + inset),
                 egui::pos2(r.right() - inset, r.bottom()),
             );
-            painter.rect_stroke(back, 0.0, stroke);
+            painter.rect_stroke(back, 0.0, stroke, egui::StrokeKind::Middle);
             painter.rect_filled(front, 0.0, crate::theme::bg());
-            painter.rect_stroke(front, 0.0, stroke);
+            painter.rect_stroke(front, 0.0, stroke, egui::StrokeKind::Middle);
         }
         ChromeBtn::Minimize => {
             let y = r.center().y;

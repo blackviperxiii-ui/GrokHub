@@ -25,7 +25,7 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
     let fill = crate::theme::elevated();
     let stroke = Stroke::new(crate::theme::ICON_STROKE, crate::theme::fg());
     painter.rect_filled(rect, 6.0, fill);
-    painter.rect_stroke(rect, 6.0, Stroke::new(1.0_f32, crate::theme::border()));
+    painter.rect_stroke(rect, 6.0, Stroke::new(1.0_f32, crate::theme::border()), egui::StrokeKind::Middle);
     let r = rect.shrink(size * 0.22);
     let c = r.center();
     let w = r.width();
@@ -46,7 +46,7 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
             }
         }
         TileIcon::Host => {
-            painter.rect_stroke(r, 3.0, stroke);
+            painter.rect_stroke(r, 3.0, stroke, egui::StrokeKind::Middle);
             let p = Pos2::new(r.left() + 5.0, r.center().y);
             painter.line_segment([p, Pos2::new(p.x + 5.0, p.y + 4.0)], stroke);
             painter.line_segment([p, Pos2::new(p.x + 5.0, p.y - 4.0)], stroke);
@@ -66,7 +66,7 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
             }
         }
         TileIcon::Image => {
-            painter.rect_stroke(r, 3.0, stroke);
+            painter.rect_stroke(r, 3.0, stroke, egui::StrokeKind::Middle);
             painter.circle_filled(
                 Pos2::new(r.left() + w * 0.28, r.top() + w * 0.28),
                 2.4,
@@ -119,7 +119,7 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
             );
         }
         TileIcon::Board => {
-            painter.rect_stroke(r, 3.0, stroke);
+            painter.rect_stroke(r, 3.0, stroke, egui::StrokeKind::Middle);
             painter.line_segment(
                 [Pos2::new(r.center().x, r.top()), Pos2::new(r.center().x, r.bottom())],
                 stroke,
@@ -191,7 +191,7 @@ pub fn paint_icon(ui: &mut egui::Ui, icon: TileIcon, size: f32) {
             );
         }
         TileIcon::Chat => {
-            painter.rect_stroke(r.shrink(1.0), 6.0, stroke);
+            painter.rect_stroke(r.shrink(1.0), 6.0, stroke, egui::StrokeKind::Middle);
             painter.line_segment(
                 [
                     Pos2::new(r.left() + 6.0, r.bottom() - 2.0),
@@ -265,7 +265,7 @@ pub fn paint_rail_icon_at(painter: &egui::Painter, rect: egui::Rect, icon: RailI
         }
         RailIcon::Compose => {
             let r = rect.shrink(w * 0.22);
-            painter.rect_stroke(r, 3.0, stroke);
+            painter.rect_stroke(r, 3.0, stroke, egui::StrokeKind::Middle);
             painter.line_segment(
                 [Pos2::new(c.x, r.top() + 3.0), Pos2::new(c.x, r.bottom() - 3.0)],
                 stroke,
@@ -277,7 +277,7 @@ pub fn paint_rail_icon_at(painter: &egui::Painter, rect: egui::Rect, icon: RailI
         }
         RailIcon::Imagine => {
             let r = rect.shrink(w * 0.20);
-            painter.rect_stroke(r, 3.0, stroke);
+            painter.rect_stroke(r, 3.0, stroke, egui::StrokeKind::Middle);
             painter.circle_filled(
                 Pos2::new(r.left() + w * 0.22, r.top() + w * 0.20),
                 1.6,
@@ -316,6 +316,7 @@ pub fn paint_rail_icon_at(painter: &egui::Painter, rect: egui::Rect, icon: RailI
                         egui::Rect::from_center_size(p, Vec2::splat(s * 2.0)),
                         2.0,
                         stroke,
+                        egui::StrokeKind::Middle,
                     );
                 }
             }
@@ -329,6 +330,7 @@ pub fn paint_rail_icon_at(painter: &egui::Painter, rect: egui::Rect, icon: RailI
                 ),
                 3.0,
                 stroke,
+                egui::StrokeKind::Middle,
             );
             painter.line_segment(
                 [
@@ -354,7 +356,7 @@ pub fn paint_rail_icon_at(painter: &egui::Painter, rect: egui::Rect, icon: RailI
         }
         RailIcon::Chat => {
             let r = rect.shrink(w * 0.20);
-            painter.rect_stroke(r, 5.0, stroke);
+            painter.rect_stroke(r, 5.0, stroke, egui::StrokeKind::Middle);
             painter.line_segment(
                 [
                     Pos2::new(r.left() + 4.0, r.bottom()),
@@ -365,7 +367,7 @@ pub fn paint_rail_icon_at(painter: &egui::Painter, rect: egui::Rect, icon: RailI
         }
         RailIcon::File => {
             let r = rect.shrink(w * 0.22);
-            painter.rect_stroke(r, 2.0, stroke);
+            painter.rect_stroke(r, 2.0, stroke, egui::StrokeKind::Middle);
             painter.line_segment(
                 [
                     Pos2::new(r.right() - 5.0, r.top()),
@@ -577,7 +579,7 @@ fn paint_mic_glyph(
             egui::Color32::from_rgba_unmultiplied(ink.r(), ink.g(), ink.b(), a),
         );
     }
-    painter.rect_stroke(head, rounding, stroke);
+    painter.rect_stroke(head, rounding, stroke, egui::StrokeKind::Middle);
     let cradle_y = c.y + s * 0.16;
     painter.add(egui::epaint::QuadraticBezierShape::from_points_stroke(
         [
@@ -962,7 +964,7 @@ pub fn paint_image_mode(ui: &mut egui::Ui, size: f32, color: egui::Color32) {
     let painter = ui.painter();
     let r = rect.shrink(size * 0.08);
     let stroke = Stroke::new(1.4_f32, color);
-    painter.rect_stroke(r, 2.0, stroke);
+    painter.rect_stroke(r, 2.0, stroke, egui::StrokeKind::Middle);
     painter.circle_filled(
         Pos2::new(r.left() + r.width() * 0.28, r.top() + r.height() * 0.32),
         size * 0.08,
@@ -992,7 +994,7 @@ pub fn paint_video_mode(ui: &mut egui::Ui, size: f32, color: egui::Color32) {
         Pos2::new(rect.center().x - size * 0.08, rect.center().y),
         Vec2::new(size * 0.52, size * 0.40),
     );
-    painter.rect_stroke(body, 2.0, stroke);
+    painter.rect_stroke(body, 2.0, stroke, egui::StrokeKind::Middle);
     painter.line_segment(
         [
             Pos2::new(body.right(), body.top() + 2.0),
@@ -1038,9 +1040,9 @@ pub fn paint_style_auto(ui: &mut egui::Ui, size: f32, color: egui::Color32) {
     let painter = ui.painter();
     let stroke = Stroke::new(1.3_f32, color);
     let r = rect.shrink(size * 0.12);
-    painter.rect_stroke(r, 2.0, stroke);
+    painter.rect_stroke(r, 2.0, stroke, egui::StrokeKind::Middle);
     let inset = r.shrink(size * 0.10);
-    painter.rect_stroke(inset, 1.0, Stroke::new(1.0_f32, color));
+    painter.rect_stroke(inset, 1.0, Stroke::new(1.0_f32, color), egui::StrokeKind::Middle);
 }
 
 pub fn paint_aspect_rect(ui: &mut egui::Ui, aspect: u8, size: f32, color: egui::Color32) {
@@ -1058,7 +1060,7 @@ pub fn paint_aspect_rect(ui: &mut egui::Ui, aspect: u8, size: f32, color: egui::
             (size * 0.42, size * 0.42)
         }
     };
-    painter.rect_stroke(egui::Rect::from_center_size(rect.center(), Vec2::new(w, h)), 1.5, stroke);
+    painter.rect_stroke(egui::Rect::from_center_size(rect.center(), Vec2::new(w, h)), 1.5, stroke, egui::StrokeKind::Middle);
 }
 
 pub fn paint_menu_caret(ui: &mut egui::Ui, color: egui::Color32) {
@@ -1198,7 +1200,8 @@ mod tests {
                 time: Some(step as f64 / 60.0),
                 ..Default::default()
             };
-            let _ = ctx.run(input, |ctx| {
+            let _ = crate::theme::test_pass(&ctx, input, |ui| {
+                let ctx = ui.ctx().clone();
                 let hover_t = ctx.animate_bool_with_time(
                     egui::Id::new("composer-hover-ease"),
                     step > 0,
@@ -1225,8 +1228,8 @@ mod tests {
                 time: Some(step as f64 * 0.05),
                 ..Default::default()
             };
-            let _ = ctx.run(input, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let _ = crate::theme::test_pass(&ctx, input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     let (_, stop) = paint_composer_stop(ui, 28.0, true);
                     let (_, mic) = paint_composer_mic(ui, 22.0, MicMood::Speaking);
                     stop_scales.push(stop.scale);
@@ -1280,8 +1283,8 @@ mod tests {
                 time: Some(step as f64 * 0.05),
                 ..Default::default()
             };
-            let out = ctx.run(input, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let out = crate::theme::test_pass(&ctx, input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     let (_, stop) = paint_composer_stop(ui, 28.0, false);
                     let (_, mic) = paint_composer_mic(ui, 22.0, MicMood::Idle);
                     stop_scales.push(stop.scale);
