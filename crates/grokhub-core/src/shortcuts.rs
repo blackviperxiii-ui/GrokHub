@@ -89,17 +89,17 @@ pub struct Shortcut {
 pub const SHORTCUTS: &[Shortcut] = &[
     Shortcut { keys: "Ctrl+K", action: "Command palette", scope: "Global" },
     Shortcut { keys: "Ctrl+N", action: "New chat", scope: "Global" },
-    Shortcut { keys: "Ctrl+F", action: "Find in this chat (Enter next, Shift+Enter previous, Esc close)", scope: "Chat" },
     Shortcut { keys: "Ctrl+G", action: "Hey Grok (listen or halt)", scope: "Global" },
-    Shortcut { keys: "Super+G", action: "Hey Grok when unfocused", scope: "System" },
     Shortcut { keys: "Ctrl+Alt+H", action: "Halt", scope: "Global" },
-    Shortcut { keys: "Super+Shift+Esc", action: "Halt when unfocused", scope: "System" },
+    Shortcut { keys: "Ctrl+/", action: "Shortcut sheet", scope: "Global" },
+    Shortcut { keys: "Ctrl+F", action: "Find in this chat (Enter next, Shift+Enter previous, Esc close)", scope: "Chat" },
+    Shortcut { keys: "Enter / Esc", action: "Allow / deny tool permission (empty composer)", scope: "Chat" },
+    Shortcut { keys: "Enter / Esc", action: "Confirm / cancel overlay sheet (empty composer; Ask Always stays Allow / Deny)", scope: "Chat" },
     Shortcut { keys: "Enter", action: "Send message", scope: "Composer" },
     Shortcut { keys: "Ctrl+Enter", action: "New line", scope: "Composer" },
     Shortcut { keys: "Tab", action: "Accept slash", scope: "Composer" },
-    Shortcut { keys: "Enter / Esc", action: "Allow / deny tool permission (empty composer)", scope: "Chat" },
-    Shortcut { keys: "Enter / Esc", action: "Confirm / cancel overlay sheet (empty composer; Ask Always stays Allow / Deny)", scope: "Chat" },
-    Shortcut { keys: "Ctrl+/", action: "Shortcut sheet", scope: "Global" },
+    Shortcut { keys: "Super+G", action: "Hey Grok when unfocused", scope: "System" },
+    Shortcut { keys: "Super+Shift+Esc", action: "Halt when unfocused", scope: "System" },
 ];
 
 pub fn shortcut_help() -> String {
