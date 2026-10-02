@@ -2731,7 +2731,7 @@ mod tests {
 
     fn with_fonts(mut check: impl FnMut(&mut egui::epaint::text::FontsView<'_>)) {
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 ui.fonts_mut(|fonts| check(fonts));
             });
@@ -2792,7 +2792,7 @@ mod tests {
             )),
             ..Default::default()
         };
-        let _ = ctx.run_ui(raw, |ui| {
+        let _ = crate::theme::test_pass(ctx, raw, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 ui.set_width(920.0);
                 ui.set_min_width(920.0);
@@ -3179,7 +3179,7 @@ mod tests {
             "voice mode must show a live indicator and Stop: {voice}"
         );
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 assert!(!voice_mode_row(ui, "Listening"));
             });
@@ -3301,7 +3301,7 @@ mod tests {
             "empty state is one muted single-line chip, not a ranked action: {empty}"
         );
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 assert!(quick_chip_row(ui, &[]).is_none());
             });
@@ -3354,7 +3354,7 @@ mod tests {
         assert!(chip_pill_width(narrow) <= 120.5);
 
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 let font = FontId::proportional(13.0);
                 let color = Color32::WHITE;
@@ -3539,7 +3539,7 @@ mod tests {
             ..Default::default()
         };
         let mut act = None;
-        let out = ctx.run_ui(raw, |ui| {
+        let out = crate::theme::test_pass(ctx, raw, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 act = quick_chip_row(ui, chips);
             });
@@ -3891,7 +3891,7 @@ mod tests {
     #[test]
     fn run_pulse_paints_a_labeled_row() {
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 let _paint = crate::theme::hold_paint_test();
                 crate::theme::set_paint_dark(true);

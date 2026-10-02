@@ -335,7 +335,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
 
     fn with_cabin_theme_ui(mut add: impl FnMut(&mut egui::Ui)) {
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
             let ctx = ui.ctx().clone();
             crate::theme::apply(&ctx, true);
             egui::CentralPanel::default().show(ui, |ui| add(ui));
@@ -1200,7 +1200,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
 
     fn with_fonts_ui(mut add: impl FnMut(&mut egui::Ui)) {
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
             egui::CentralPanel::default().show(ui, |ui| add(ui));
         });
     }
@@ -1251,7 +1251,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         fn copy_id(skip_earlier: bool, salt: bool) -> egui::Id {
             let ctx = egui::Context::default();
             let mut id = egui::Id::NULL;
-            let _ = ctx.run_ui(Default::default(), |ui| {
+            let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
                 egui::CentralPanel::default().show(ui, |ui| {
                     for i in 0..2 {
                         if skip_earlier && i == 0 {
@@ -6656,7 +6656,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                         ..Default::default()
                     };
                     for _ in 0..2 {
-                        let _ = ctx.run_ui(raw.clone(), |ui| {
+                        let _ = crate::theme::test_pass(&ctx, raw.clone(), |ui| {
                             egui::CentralPanel::default().show(ui, |ui| {
                                 cabin.ui_composer_stack(ui);
                             });
@@ -8152,7 +8152,7 @@ fn paint_live_clipped(ctx: &egui::Context, cabin: &mut super::Cabin, clip_h: f32
         ..Default::default()
     };
     let (mut height, mut width) = (0.0, 0.0);
-    let _ = ctx.run_ui(raw, |ui| {
+    let _ = crate::theme::test_pass(ctx, raw, |ui| {
         egui::CentralPanel::default().show(ui, |ui| {
             let top = ui.cursor().min;
             width = ui.available_width();
@@ -8798,7 +8798,7 @@ fn session_menu_sits_left_of_minimize() {
     };
     let mut menu = egui::Rect::NOTHING;
     let mut mini = egui::Rect::NOTHING;
-    let _ = ctx.run_ui(raw, |ui| {
+    let _ = crate::theme::test_pass(&ctx, raw, |ui| {
         egui::CentralPanel::default().show(ui, |ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
@@ -13184,7 +13184,7 @@ fn empty_queue_keeps_nothing_queued_label() {
 
     let mut texts = Vec::new();
     let ctx = egui::Context::default();
-    let _ = ctx.run_ui(Default::default(), |ui| {
+    let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
         egui::CentralPanel::default().show(ui, |ui| {
             assert!(crate::cards::quick_chip_row(ui, &chips).is_none());
             let layer = ui.layer_id();
@@ -13793,7 +13793,7 @@ fn only_a_bare_key_with_nothing_over_the_chat_answers_the_card() {
             events: vec![ev],
             ..Default::default()
         };
-        let _ = ctx.run_ui(input, |ui| {
+        let _ = crate::theme::test_pass(ctx, input, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 hit = (
                     super::bare_press(ui, egui::Key::Escape),
@@ -13832,7 +13832,7 @@ fn only_a_bare_key_with_nothing_over_the_chat_answers_the_card() {
         events: vec![key(egui::Key::Escape, egui::Modifiers::NONE)],
         ..Default::default()
     };
-    let _ = renamed.run_ui(input, |ui| {
+    let _ = crate::theme::test_pass(&renamed, input, |ui| {
         egui::CentralPanel::default().show(ui, |ui| {
             super::drop_key(ui, egui::Key::Escape);
             left = super::bare_press(ui, egui::Key::Escape);
@@ -13849,7 +13849,7 @@ fn only_a_bare_key_with_nothing_over_the_chat_answers_the_card() {
     let ctx = egui::Context::default();
     let frame = |area: Option<&str>| {
         let mut over = false;
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let _ = crate::theme::test_pass(&ctx, egui::RawInput::default(), |ui| {
             let ctx = ui.ctx().clone();
             if let Some(id) = area {
                 egui::Area::new(egui::Id::new(id))
@@ -16202,7 +16202,7 @@ fn edit_puts_your_message_back_without_dropping_a_draft() {
 fn user_act_row_with_edit_stays_inside_a_narrow_pane() {
     for width in [300.0_f32, 360.0, 800.0] {
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(Default::default(), |ui| {
+        let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
             let ctx = ui.ctx().clone();
             crate::theme::apply(&ctx, true);
             egui::CentralPanel::default().show(ui, |ui| {
@@ -16297,7 +16297,7 @@ fn chat_find_bar_paints_and_steps_with_the_arrows() {
     let views = find_views(&[("user", "x one"), ("assistant", "x two")]);
     app.find.refresh("t", &views);
     let ctx = egui::Context::default();
-    let _ = ctx.run_ui(Default::default(), |ui| {
+    let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
         let ctx = ui.ctx().clone();
         crate::theme::apply(&ctx, true);
         app.paint_find_bar(&ctx, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)));
@@ -16484,13 +16484,13 @@ fn dropping_files_says_what_happens() {
     let ctx = egui::Context::default();
     let mut input = egui::RawInput::default();
     input.hovered_files.push(egui::HoveredFile::default());
-    let out = ctx.run_ui(input, |ui| {
+    let out = crate::theme::test_pass(&ctx, input, |ui| {
         let ctx = ui.ctx().clone();
         crate::theme::apply(&ctx, true);
         app.paint_drop_hint(&ctx);
     });
     assert!(!out.shapes.is_empty(), "hovering a file paints the drop hint");
-    let quiet = ctx.run_ui(egui::RawInput::default(), |ui| {
+    let quiet = crate::theme::test_pass(&ctx, egui::RawInput::default(), |ui| {
         let ctx = ui.ctx().clone();
         app.paint_drop_hint(&ctx);
     });

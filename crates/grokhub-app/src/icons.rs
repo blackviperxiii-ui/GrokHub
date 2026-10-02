@@ -1200,7 +1200,7 @@ mod tests {
                 time: Some(step as f64 / 60.0),
                 ..Default::default()
             };
-            let _ = ctx.run_ui(input, |ui| {
+            let _ = crate::theme::test_pass(&ctx, input, |ui| {
                 let ctx = ui.ctx().clone();
                 let hover_t = ctx.animate_bool_with_time(
                     egui::Id::new("composer-hover-ease"),
@@ -1228,7 +1228,7 @@ mod tests {
                 time: Some(step as f64 * 0.05),
                 ..Default::default()
             };
-            let _ = ctx.run_ui(input, |ui| {
+            let _ = crate::theme::test_pass(&ctx, input, |ui| {
                 egui::CentralPanel::default().show(ui, |ui| {
                     let (_, stop) = paint_composer_stop(ui, 28.0, true);
                     let (_, mic) = paint_composer_mic(ui, 22.0, MicMood::Speaking);
@@ -1283,7 +1283,7 @@ mod tests {
                 time: Some(step as f64 * 0.05),
                 ..Default::default()
             };
-            let out = ctx.run_ui(input, |ui| {
+            let out = crate::theme::test_pass(&ctx, input, |ui| {
                 egui::CentralPanel::default().show(ui, |ui| {
                     let (_, stop) = paint_composer_stop(ui, 28.0, false);
                     let (_, mic) = paint_composer_mic(ui, 22.0, MicMood::Idle);

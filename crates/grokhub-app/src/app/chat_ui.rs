@@ -651,6 +651,11 @@ pub(super) fn chat_row_outside_clip(
         || row.min.x >= clip.max.x
 }
 
+/// The composer field paints no frame of its own, only a 2px side inset.
+fn composer_field_frame() -> egui::Frame {
+    egui::Frame::NONE.inner_margin(egui::Margin::symmetric(2, 0))
+}
+
 /// Keep a cached row's height when it sits fully outside the clip.
 /// Returns true when the caller should skip painting that row.
 pub(super) fn reserve_offscreen_chat_row(ui: &mut egui::Ui, cached_h: f32) -> bool {
@@ -2451,11 +2456,7 @@ impl Cabin {
                                                 text_w,
                                                 if rows == 1 { pill_h } else { 0.0 },
                                             ))
-                                            .frame(
-                                                egui::Frame::NONE.inner_margin(
-                                                    egui::Margin::symmetric(2, 0),
-                                                ),
-                                            )
+                                            .frame(composer_field_frame())
                                             .vertical_align(hint_align)
                                             .font(egui::FontId::new(
                                                 15.0,
