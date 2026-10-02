@@ -118,7 +118,8 @@ pub use chat::{
     parse_model_reasoning, parse_model_text, parse_reasoning_effort, parse_responses_reasoning,
     parse_responses_text, reasoning_effort_for_mode, resolve_chat_model, responses_request_body,
     responses_url, route_auto_mode, settings_pin_blocks_auto, should_failover_status,
-    CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, DEFAULT_MODEL, REASONING_EFFORTS, XAI_BASE,
+    BACKGROUND_EFFORT, CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, DEFAULT_MODEL, REASONING_EFFORTS,
+    XAI_BASE,
 };
 pub use export::{
     chat_export_html, chat_export_json, html_escape, md_to_html, ChatExport, EXPORT_FORMATS_HINT,
@@ -292,12 +293,12 @@ pub use openclaw::{
     default_openclaw_paths, import_memory_file, is_openclaw_workspace, merge_imported_memory,
 };
 pub use organs::{
-    cap_from_text, cap_label, clipboard_context_block, daily_units_blocked, greet_from_last_job,
-    last_user_scan, last_user_text, normalize_hm, on_wheel_grab, parse_local_clock,
-    passenger_label, plan_room, presence_orb_state, presence_should_stream, quiet_hours_active,
-    quiet_hours_choice_label, quiet_hours_menu, redirect_prompt, replay_frame_delay,
-    should_keep_frame, thread_host_receipts, thread_host_receipts_from, LocalClock,
-    MidThoughtGreet, RoomPlan, PRESENCE_RING_MS, PRESENCE_WIPE_MS,
+    cap_from_text, cap_label, clipboard_context_block, daily_units_blocked, date_out_from,
+    greet_from_last_job, last_user_scan, last_user_text, normalize_hm, on_wheel_grab,
+    parse_local_clock, passenger_label, plan_room, presence_orb_state, presence_should_stream,
+    quiet_hours_active, quiet_hours_choice_label, quiet_hours_menu, redirect_prompt,
+    replay_frame_delay, should_keep_frame, thread_host_receipts, thread_host_receipts_from,
+    LocalClock, MidThoughtGreet, RoomPlan, WallClock, PRESENCE_RING_MS, PRESENCE_WIPE_MS,
 };
 pub use pair::{
     devices_shows_pair_code, hub_pair_url, lan_bind_in_use, make_pair_code, normalize_code,
@@ -463,6 +464,7 @@ pub use update_feed::{
     post_update, release_quiet_hold, resume_needs_fresh_chat, schedule_created_card,
     suggestion_card, tick_feed_pulse, visible_digests, visible_ideas, visible_updates,
     digest_lookup_prompt, digest_steer, parse_lookup, post_help, remember_dismissed_source,
+    remember_turned_down, turned_down_titles, turned_down_topic,
     DigestEdition, HelpTick, ParsedLookup, PausedJob, RepeatedAction, PAUSE_OFFER_MS,
     CardReaction, CitedLink, DigestMaterial, FeedPulse, PulseNow, PulseTick, TasteNote,
     UpdateAction, UpdateCard, UpdateKind, UpdateStatus, DIGEST_PAINT_MAX, FEED_PAINT_MAX,
