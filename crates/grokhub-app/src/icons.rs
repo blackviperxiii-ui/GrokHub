@@ -640,6 +640,7 @@ pub fn paint_composer_stop(
     let glyph = risen_glyph(alloc, hover_t, press_t);
     paint_stop_glyph(ui.painter(), glyph, motion);
     follow_composer_frame(ui, &resp, running, &[hover_t, press_t, live_t]);
+    name_control(&resp, bar_icon_name(BarIcon::Stop));
     (resp, motion)
 }
 
@@ -678,6 +679,7 @@ pub fn paint_composer_mic(
         live,
         &[hover_t, press_t, live_t, speak_t],
     );
+    name_control(&resp, bar_icon_name(BarIcon::Mic));
     (resp, motion)
 }
 
@@ -817,7 +819,25 @@ pub fn paint_composer_paperclip(
         resp.hovered(),
         &[hover_t, press_t, breath],
     );
+    name_control(&resp, bar_icon_name(BarIcon::Plus));
     resp
+}
+
+pub fn bar_icon_name(icon: BarIcon) -> &'static str {
+    match icon {
+        BarIcon::Plus => "Plus",
+        BarIcon::Mic => "Mic",
+        BarIcon::Send => "Send",
+        BarIcon::Stop => "Stop",
+        BarIcon::ArrowUp => "Up",
+        BarIcon::ArrowDown => "Down",
+        BarIcon::Search => "Search",
+    }
+}
+
+fn name_control(resp: &egui::Response, name: &str) {
+    let enabled = resp.enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, name));
 }
 
 pub fn paint_bar_icon(
@@ -926,6 +946,7 @@ pub fn paint_bar_icon(
             );
         }
     }
+    name_control(&resp, bar_icon_name(icon));
     resp
 }
 
@@ -1265,6 +1286,25 @@ mod tests {
         assert!(
             src.contains("BarIcon::Plus => return paint_composer_paperclip"),
             "the attach control is the paperclip"
+        );
+    }
+
+    #[test]
+    fn bar_icons_have_accessible_names() {
+        assert_eq!(bar_icon_name(BarIcon::Stop), "Stop");
+        assert_eq!(bar_icon_name(BarIcon::Mic), "Mic");
+        assert_eq!(bar_icon_name(BarIcon::Plus), "Plus");
+        assert_eq!(bar_icon_name(BarIcon::Send), "Send");
+        assert_eq!(bar_icon_name(BarIcon::ArrowUp), "Up");
+        assert_eq!(bar_icon_name(BarIcon::ArrowDown), "Down");
+        assert_eq!(bar_icon_name(BarIcon::Search), "Search");
+        let src = include_str!("icons.rs");
+        assert!(
+            src.contains("name_control(&resp, bar_icon_name(BarIcon::Stop))")
+                && src.contains("name_control(&resp, bar_icon_name(BarIcon::Mic))")
+                && src.contains("name_control(&resp, bar_icon_name(BarIcon::Plus))")
+                && src.contains("WidgetInfo::labeled"),
+            "stop, mic, plus, and the other bar icons carry a name"
         );
     }
 

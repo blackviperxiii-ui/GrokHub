@@ -397,7 +397,7 @@ pub fn felt_pill(ui: &mut egui::Ui, label: &str, style: PillStyle) -> bool {
             true,
         ),
     };
-    crate::theme::felt_label_button(
+    let resp = crate::theme::felt_label_button(
         ui,
         label,
         base_fill,
@@ -406,8 +406,10 @@ pub fn felt_pill(ui: &mut egui::Ui, label: &str, style: PillStyle) -> bool {
         min_size,
         stroke,
         strong,
-    )
-    .clicked()
+    );
+    let enabled = resp.enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp.clicked()
 }
 
 /// Horizontal inset so a long session label is not jammed on the pill edge.
@@ -515,6 +517,10 @@ fn felt_segment_styled(
         galley,
         text_color,
     );
+    let enabled = resp.enabled();
+    resp.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, selected, label)
+    });
     resp
 }
 
@@ -541,6 +547,10 @@ pub fn felt_tab(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
         galley,
         text_color,
     );
+    let enabled = resp.enabled();
+    resp.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, active, label)
+    });
     resp.clicked()
 }
 
@@ -1446,7 +1456,14 @@ pub fn settings_switch(ui: &mut egui::Ui, on: bool) -> bool {
     let knob = crate::theme::blend_color(crate::theme::muted(), crate::theme::bg(), on_t);
     ui.painter()
         .circle_filled(egui::pos2(knob_x, rect.center().y), 8.0, knob);
+    let enabled = resp.enabled();
+    let name = switch_access_name(on);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, name));
     resp.clicked()
+}
+
+pub fn switch_access_name(on: bool) -> &'static str {
+    if on { "On" } else { "Off" }
 }
 
 pub fn settings_dropdown(
@@ -3963,6 +3980,31 @@ mod tests {
         assert!(
             menu.contains("RectAlign::BOTTOM_START") && menu.contains("align_alternatives(&[])"),
             "the titlebar session menu stays below its button"
+        );
+    }
+
+    #[test]
+    fn switch_and_segments_expose_checked_state() {
+        assert_eq!(switch_access_name(true), "On");
+        assert_eq!(switch_access_name(false), "Off");
+        let src = include_str!("cards.rs");
+        let switch = src
+            .split("pub fn settings_switch(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn switch_access_name(").next())
+            .expect("settings_switch");
+        assert!(
+            switch.contains("WidgetType::Checkbox") && switch.contains("switch_access_name"),
+            "the settings switch is a named checkbox: {switch}"
+        );
+        let seg = src
+            .split("fn felt_segment_styled(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn felt_tab(").next())
+            .expect("segment");
+        assert!(
+            seg.contains("WidgetInfo::selected") && seg.contains("selected"),
+            "a segment reports whether it is selected: {seg}"
         );
     }
 }
