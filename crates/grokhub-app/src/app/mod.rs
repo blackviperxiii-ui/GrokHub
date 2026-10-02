@@ -1374,6 +1374,8 @@ impl Cabin {
             c.last_update_probe = Some(Instant::now());
             c.update_probe_rx = Some(crate::update::begin_update_probe());
             c.open_fresh_home();
+            #[cfg(not(test))]
+            crate::desktop_mcp::maybe_register_on_start(c.cfg.desktop_control);
         }
         c
     }
@@ -1996,6 +1998,7 @@ impl Cabin {
     }
 
     fn halt_in_flight(&mut self) {
+        crate::desktop_mcp::write_halt_stamp();
         self.host_halt.store(true, Ordering::SeqCst);
         self.withdraw_perm_asks();
         if let Some(h) = &self.acp {
@@ -4805,6 +4808,9 @@ impl eframe::App for Cabin {
             }
         }
         self.poll_grok_install();
+        if let Some(msg) = crate::desktop_mcp::take_reg_status() {
+            self.status = msg;
+        }
         self.poll_update_probe(ctx);
         if self.grok_install_rx.is_some() {
             ctx.request_repaint_after(Duration::from_millis(250));
@@ -4920,7 +4926,8 @@ impl eframe::App for Cabin {
                 || self.oauth_poll_rx.is_some()
                 || self.night_check_rx.is_some()
                 || self.eyes_cap_rx.is_some()
-                || grokhub_acp::doctor_line_busy(),
+                || grokhub_acp::doctor_line_busy()
+                || crate::desktop_mcp::reg_busy(),
             self.hub_on,
             self.window_visible,
             self.page_nav() == Nav::Imagine,

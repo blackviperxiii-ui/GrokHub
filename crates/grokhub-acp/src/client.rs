@@ -5,7 +5,7 @@ use crate::protocol::{
     prompt_params_with_image, request, response, session_load_params, session_new_params, AcpEvent,
     JsonRpc, PermissionAsk,
 };
-use crate::protocol::SessionMode;
+use crate::protocol::{PermissionMode, SessionMode};
 use crate::{
     agent_args, cabin_grok_home, cabin_leader_socket, find_grok, grok_home, grok_stdout_timeout,
     hide_windows_console, prepare_cabin_grok_home,
@@ -1256,6 +1256,8 @@ pub struct GrokPAttach<'a> {
     pub learned: &'a str,
     /// Ask pill on an unwatched run: pass dontAsk and deny rules.
     pub deny: bool,
+    /// Settings → Let Grok control the desktop.
+    pub desktop: bool,
 }
 
 /// Live `grok -p --output-format streaming-json`. Halt kills `pid`.
@@ -1413,6 +1415,7 @@ fn grok_p_child(
         image,
         learned,
         deny,
+        desktop,
     } = attach;
     let program = find_grok().ok_or_else(|| {
         "Grok Build CLI missing — install from x.ai/cli or set GROKHUB_GROK".to_string()
@@ -1433,7 +1436,7 @@ fn grok_p_child(
     );
     if let Some(i) = args.iter().position(|a| a == "--rules") {
         if i + 1 < args.len() {
-            args[i + 1] = crate::locate::cabin_rules(learned);
+            args[i + 1] = crate::locate::cabin_rules_for(learned, desktop);
         }
     }
     if image.is_some() {
@@ -1442,6 +1445,14 @@ fn grok_p_child(
     args = crate::locate::with_fork_session(args, fork);
     args = crate::locate::with_worktree(args, worktree);
     args = crate::locate::with_ask_deny(args, deny);
+    let perm = if always_approve {
+        PermissionMode::AlwaysApprove
+    } else if auto {
+        PermissionMode::Auto
+    } else {
+        PermissionMode::Ask
+    };
+    args = crate::locate::apply_desktop_spawn_args(args, perm, mode, desktop);
     let mut cmd = Command::new(&program);
     cmd.args(&args)
         .current_dir(&cwd_path)
@@ -1500,6 +1511,7 @@ fn grok_p_once(
             image,
             learned: "",
             deny: false,
+            desktop: false,
         },
         fork,
         false,

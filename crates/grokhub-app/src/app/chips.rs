@@ -41,22 +41,24 @@ pub(super) fn cabin_fast_llm(key: String, prompt: String) -> String {
     let path = std::path::PathBuf::from(picked);
     let cwd = grokhub_acp::ensure_session_cwd(&path).unwrap_or(path);
     for model in [CABIN_FAST_MODEL, CABIN_FAST_FALLBACK] {
-        let out = grokhub_acp::grok_stdout(
-            &bin,
-            &cwd,
-            &[
-                "--no-auto-update",
-                "--model",
-                model,
-                "--reasoning-effort",
-                grokhub_core::BACKGROUND_EFFORT,
-                "--output-format",
-                "streaming-json",
-                "-p",
-                &prompt,
+        let argv = grokhub_acp::apply_desktop_spawn_args(
+            vec![
+                "--no-auto-update".into(),
+                "--model".into(),
+                model.into(),
+                "--reasoning-effort".into(),
+                grokhub_core::BACKGROUND_EFFORT.into(),
+                "--output-format".into(),
+                "streaming-json".into(),
+                "-p".into(),
+                prompt.clone(),
             ],
-        )
-        .unwrap_or_default();
+            grokhub_acp::PermissionMode::Ask,
+            grokhub_acp::SessionMode::Chat,
+            false,
+        );
+        let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let out = grokhub_acp::grok_stdout(&bin, &cwd, &refs).unwrap_or_default();
         let text = fast_reply_text(&out);
         if !text.trim().is_empty() {
             return text;

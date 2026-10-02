@@ -1,6 +1,6 @@
 #define MyAppName "GrokHub"
 #ifndef MyAppVersion
-  #define MyAppVersion "2.10.61"
+  #define MyAppVersion "2.10.62"
 #endif
 #define MyAppPublisher "GrokHub"
 #define MyAppExeName "grokhub.exe"
