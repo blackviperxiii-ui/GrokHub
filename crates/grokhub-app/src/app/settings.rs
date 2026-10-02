@@ -126,11 +126,11 @@ impl Cabin {
             .resizable(false)
             .anchor(egui::Align2::LEFT_BOTTOM, [12.0, -56.0])
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(crate::theme::panel())
-                    .rounding(12.0)
+                    .corner_radius(12.0)
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                    .inner_margin(egui::Margin::same(8.0)),
+                    .inner_margin(egui::Margin::same(8)),
             )
             .show(ctx, |ui| {
                 ui.set_min_width(220.0);
@@ -245,7 +245,7 @@ impl Cabin {
         }
         let mut next_sec: Option<SettingsSec> = None;
         let sec = self.settings_sec;
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         egui::Area::new(egui::Id::new("settings-overlay"))
             .fixed_pos(screen.min)
             .order(egui::Order::Foreground)
@@ -258,10 +258,10 @@ impl Cabin {
                     screen.center(),
                     egui::vec2(920.0, 620.0).min(screen.size() - egui::vec2(48.0, 48.0)),
                 );
-                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(modal), |ui| {
-                    egui::Frame::none()
+                ui.scope_builder(egui::UiBuilder::new().max_rect(modal), |ui| {
+                    egui::Frame::NONE
                         .fill(crate::theme::bg())
-                        .rounding(16.0)
+                        .corner_radius(16.0)
                         .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                         .inner_margin(egui::Margin::ZERO)
                         .show(ui, |ui| {
@@ -271,9 +271,9 @@ impl Cabin {
                                     egui::vec2(220.0, modal.height()),
                                     egui::Layout::top_down(egui::Align::Min),
                                     |ui| {
-                                        egui::Frame::none()
+                                        egui::Frame::NONE
                                             .fill(crate::theme::surface())
-                                            .inner_margin(egui::Margin::same(12.0))
+                                            .inner_margin(egui::Margin::same(12))
                                             .show(ui, |ui| {
                                                 ui.set_width(196.0);
                                                 ui.set_min_height(modal.height() - 24.0);
@@ -762,7 +762,7 @@ impl Cabin {
                 self.board.len(),
                 &self.status,
             );
-            ctx.output_mut(|o| o.copied_text = bundle);
+            ctx.copy_text(bundle);
             self.status = "Diagnostics copied".into();
         }
         if save {

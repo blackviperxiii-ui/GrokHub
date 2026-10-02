@@ -96,8 +96,9 @@ fn paint_idea_compact(ui: &mut egui::Ui, card: &UpdateCard, act: &mut Option<Ide
         crate::theme::CARD_RADIUS,
         crate::theme::elevated(),
         egui::Stroke::new(1.0_f32, stroke),
+        egui::StrokeKind::Middle,
     );
-    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(14.0, 10.0))), |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(14.0, 10.0))), |ui| {
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
         ui.spacing_mut().item_spacing.y = 3.0;
         type_line(ui, card);
@@ -125,14 +126,15 @@ fn paint_idea_compact(ui: &mut egui::Ui, card: &UpdateCard, act: &mut Option<Ide
 }
 
 impl Cabin {
-    pub(super) fn ui_ideas(&mut self, ctx: &egui::Context) {
+    pub(super) fn ui_ideas(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
         egui::CentralPanel::default()
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(crate::theme::bg())
-                    .inner_margin(egui::Margin::same(24.0)),
+                    .inner_margin(egui::Margin::same(24)),
             )
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 // Same header as Automations, Skills, and Workboards.
                 let busy = self.ideas_rx.is_some();
                 let label = if busy { "Thinking up ideas…" } else { "Suggest ideas" };
@@ -179,7 +181,7 @@ impl Cabin {
                         }
                     });
                 let view = out.inner_rect;
-                self.track_idea_hover(ctx, view, &rects);
+                self.track_idea_hover(&ctx, view, &rects);
                 self.apply_idea_act(act);
             });
     }
@@ -207,11 +209,11 @@ impl Cabin {
             .filter(|(n, _)| n == &id)
             .map(|(_, t)| t.clone());
         let mut composer = self.idea_board.composers.get(&id).cloned().unwrap_or_default();
-        let resp = egui::Frame::none()
+        let resp = egui::Frame::NONE
             .fill(crate::theme::elevated())
             .stroke(egui::Stroke::new(1.0_f32, crate::theme::border_strong()))
-            .rounding(crate::theme::CARD_RADIUS)
-            .inner_margin(egui::Margin::same(14.0))
+            .corner_radius(crate::theme::CARD_RADIUS)
+            .inner_margin(egui::Margin::same(14))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {

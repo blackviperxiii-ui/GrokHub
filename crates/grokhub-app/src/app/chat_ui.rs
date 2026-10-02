@@ -115,6 +115,7 @@ fn paint_find_mark(ui: &egui::Ui, row: egui::Rect, current: bool) {
             row.expand2(egui::vec2(2.0, 2.0)),
             8.0,
             egui::Stroke::new(1.2_f32, crate::theme::link().gamma_multiply(0.7)),
+            egui::StrokeKind::Middle,
         );
     }
 }
@@ -178,7 +179,7 @@ pub(super) fn empty_home_greet_top(gap_h: f32, greet_h: f32, gap_below: f32) -> 
 
 pub(super) fn greeting_galley_h(ui: &egui::Ui, text: &str, wrap_w: f32) -> f32 {
     let font = crate::theme::title_font(crate::theme::GREET_HERO);
-    let galley = ui.fonts(|f| {
+    let galley = ui.fonts_mut(|f| {
         f.layout(
             text.to_string(),
             font,
@@ -236,13 +237,13 @@ pub(super) fn drop_key(ui: &egui::Ui, key: egui::Key) {
 /// Enter are its keys. The passive jump-to-latest pill does not count.
 pub(super) fn overlay_over_chat(ctx: &egui::Context) -> bool {
     let jump = egui::Id::new("chat-jump");
-    ctx.memory(|m| {
-        m.any_popup_open()
-            || m.areas()
+    egui::Popup::is_any_open(ctx)
+        || ctx.memory(|m| {
+            m.areas()
                 .visible_layer_ids()
                 .iter()
                 .any(|l| l.order == egui::Order::Foreground && l.id != jump)
-    })
+        })
 }
 
 /// Enter sends. Control+Enter is left for TextEdit (`return_key`) to insert a newline.
@@ -367,7 +368,7 @@ pub(super) fn paint_speech_bubble(
     // Pad with spaces, not Frame inner_margin: egui clips the rounded fill
     // against the content origin, which ate the first glyphs on Windows 2.10.6.
     let error = !user && is_error_reply(body);
-    let frame = egui::Frame::none()
+    let frame = egui::Frame::NONE
         .fill(if user {
             crate::theme::bubble_user()
         } else if error {
@@ -381,7 +382,7 @@ pub(super) fn paint_speech_bubble(
         } else {
             egui::Stroke::NONE
         })
-        .rounding(crate::theme::USER_BUBBLE_RADIUS)
+        .corner_radius(crate::theme::USER_BUBBLE_RADIUS)
         .inner_margin(egui::Margin::ZERO);
     let paint_inner = |ui: &mut egui::Ui| {
         ui.set_width(outer_w);
@@ -460,7 +461,7 @@ pub(super) struct MsgActsPaint {
 /// with a zero minimum size and the chrome font.
 fn label_hit_width(ui: &egui::Ui, label: &str) -> f32 {
     let font = egui::FontId::proportional(crate::theme::FONT_CHROME);
-    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font, egui::Color32::PLACEHOLDER));
+    let galley = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, egui::Color32::PLACEHOLDER));
     let pad = ui.style().spacing.button_padding.x;
     galley.size().x + pad * 2.0
 }
@@ -555,9 +556,9 @@ pub(super) fn paint_thought_bubble(ui: &mut egui::Ui, body: &str) -> egui::Respo
     let body = crate::markdown::display_text(body);
     let avail = clamp_row_width(ui.available_width().min(ui.max_rect().width()));
     let wrap = (avail - 8.0).max(1.0);
-    let frame = egui::Frame::none()
+    let frame = egui::Frame::NONE
         .fill(egui::Color32::TRANSPARENT)
-        .inner_margin(egui::Margin::symmetric(0.0, 2.0));
+        .inner_margin(egui::Margin::symmetric(0, 2));
     let mut resp = None;
     ui.scope(|ui| {
         ui.set_max_width(avail);
@@ -801,7 +802,7 @@ pub(super) fn paint_thought_fold_buttons(ui: &mut egui::Ui, fold: ThoughtFold) -
 fn paint_thought_collapse_hit(ui: &mut egui::Ui, label: &str, expanded: bool) -> egui::Response {
     let color = crate::theme::subtle();
     let font = egui::FontId::proportional(11.0);
-    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font, color));
+    let galley = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, color));
     let chev = 8.0_f32;
     let gap = 3.0;
     let pad = egui::vec2(2.0, 1.0);
@@ -997,36 +998,37 @@ pub(super) fn paint_chat_block_with(
 }
 
 impl Cabin {
-    pub(super) fn ui_chat(&mut self, ctx: &egui::Context) {
+    pub(super) fn ui_chat(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
         let empty = self.messages.is_empty();
         if !empty {
-            egui::TopBottomPanel::bottom("composer")
+            egui::Panel::bottom("composer")
                 .frame(
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(crate::theme::bg())
                         .inner_margin(egui::Margin {
-                            left: 32.0,
-                            right: 32.0,
-                            top: 10.0,
-                            bottom: 22.0,
+                            left: 32,
+                            right: 32,
+                            top: 10,
+                            bottom: 22,
                         }),
                 )
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     self.ui_composer_stack(ui);
                 });
         }
         egui::CentralPanel::default()
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(crate::theme::bg())
                     .inner_margin(egui::Margin {
-                        left: 8.0,
-                        right: 16.0,
-                        top: 12.0,
-                        bottom: 8.0,
+                        left: 8,
+                        right: 16,
+                        top: 12,
+                        bottom: 8,
                     }),
             )
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 if empty {
                     self.ui_empty_home(ui);
                     return;
@@ -1271,7 +1273,7 @@ impl Cabin {
                     });
                 self.chat_tail_frames = self.chat_tail_frames.saturating_sub(1);
                 if self.find.open {
-                    self.paint_find_bar(ctx, out.inner_rect);
+                    self.paint_find_bar(&ctx, out.inner_rect);
                 }
                 if scrolled_off_tail(
                     out.state.offset.y,
@@ -1279,7 +1281,7 @@ impl Cabin {
                     out.inner_rect.height(),
                     CHAT_TAIL_SLACK,
                 ) {
-                    match self.jump_to_latest(ctx, out.inner_rect) {
+                    match self.jump_to_latest(&ctx, out.inner_rect) {
                         ChatJump::Latest => self.pin_chat_tail(),
                         ChatJump::LastYou => self.jump_last_you = true,
                         ChatJump::None => {}
@@ -1300,12 +1302,12 @@ impl Cabin {
             .order(egui::Order::Foreground)
             .fixed_pos(pos)
             .show(ctx, |ui| {
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(crate::theme::panel())
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                    .rounding(10.0)
+                    .corner_radius(10.0)
                     .shadow(crate::theme::sheet_shadow())
-                    .inner_margin(egui::Margin::symmetric(8.0, 6.0))
+                    .inner_margin(egui::Margin::symmetric(8, 6))
                     .show(ui, |ui| {
                         ui.set_width(w - 16.0);
                         ui.horizontal(|ui| {
@@ -1316,7 +1318,7 @@ impl Cabin {
                                     RichText::new("Find in this chat").color(crate::theme::muted()),
                                 )
                                 .desired_width((w - 16.0 - 170.0).max(80.0))
-                                .frame(false);
+                                .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2)));
                             let resp = ui.add(edit);
                             if self.find.want_focus {
                                 resp.request_focus();
@@ -1698,11 +1700,11 @@ impl Cabin {
             self.perm_always_confirm = None;
         }
         ui.add_space(8.0);
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(egui::Color32::TRANSPARENT)
-            .rounding(crate::theme::CHROME_RADIUS)
+            .corner_radius(crate::theme::CHROME_RADIUS)
             .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-            .inner_margin(egui::Margin::same(12.0))
+            .inner_margin(egui::Margin::same(12))
             .show(ui, |ui| {
                 ui.label(
                     RichText::new("Grok wants permission")
@@ -1818,11 +1820,11 @@ impl Cabin {
             return;
         };
         ui.add_space(8.0);
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(egui::Color32::TRANSPARENT)
-            .rounding(crate::theme::CHROME_RADIUS)
+            .corner_radius(crate::theme::CHROME_RADIUS)
             .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-            .inner_margin(egui::Margin::same(12.0))
+            .inner_margin(egui::Margin::same(12))
             .show(ui, |ui| {
                 ui.label(
                     RichText::new(format!("{} wants input", p.server_name))
@@ -1927,7 +1929,7 @@ impl Cabin {
         let pulse_on = self.pulse_should_paint();
         let avail = ui.available_rect_before_wrap();
         let pane_w =
-            crate::cards::composer_pill_w(ui.ctx().screen_rect().width()).min(avail.width());
+            crate::cards::composer_pill_w(ui.ctx().content_rect().width()).min(avail.width());
         let side = empty_home_side_gap(avail.width(), pane_w);
         let composer_top = empty_home_composer_top(avail.height(), crate::theme::QUERY_MIN_H);
         let mark_h = if greet_on { 40.0 + 12.0 } else { 0.0 };
@@ -1951,7 +1953,7 @@ impl Cabin {
                 egui::pos2(avail.left() + side, avail.top() + greet_top),
                 egui::vec2(pane_w, block_h.max(1.0)),
             );
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(greet_rect), |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(greet_rect), |ui| {
                 ui.set_min_size(greet_rect.size());
                 ui.with_layout(
                     egui::Layout::top_down_justified(egui::Align::Center),
@@ -1979,7 +1981,7 @@ impl Cabin {
             egui::pos2(avail.left() + side, avail.top() + composer_top),
             egui::vec2(pane_w, composer_h),
         );
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.set_min_size(egui::vec2(pane_w, crate::theme::QUERY_MIN_H + 96.0));
             ui.with_layout(
                 egui::Layout::top_down_justified(egui::Align::Center),
@@ -2049,11 +2051,11 @@ impl Cabin {
         });
         if why.is_some() && !self.fork_explainer_seen {
             ui.add_space(4.0);
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(crate::theme::elevated())
-                .rounding(12.0)
+                .corner_radius(12.0)
                 .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                .inner_margin(egui::Margin::same(10.0))
+                .inner_margin(egui::Margin::same(10))
                 .show(ui, |ui| {
                     ui.label(
                         RichText::new("How fork works")
@@ -2073,11 +2075,11 @@ impl Cabin {
         }
         if self.plan_open && !plan.trim().is_empty() {
             ui.add_space(4.0);
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(crate::theme::elevated())
-                .rounding(12.0)
+                .corner_radius(12.0)
                 .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                .inner_margin(egui::Margin::same(10.0))
+                .inner_margin(egui::Margin::same(10))
                 .show(ui, |ui| {
                     ui.label(
                         RichText::new("Plan")
@@ -2100,16 +2102,17 @@ impl Cabin {
         let placed = resp.rect;
         let id = ui.make_persistent_id("session-actions-menu");
         if titlebar_chrome_hit(&resp) {
-            ui.memory_mut(|m| m.toggle_popup(id));
+            egui::Popup::toggle_id(ui.ctx(), id);
         }
         let (compact_on, copy_on, export_on) =
             session_menu_enabled(!self.messages.is_empty(), self.grok_usage.is_empty());
-        egui::popup::popup_below_widget(
-            ui,
-            id,
-            &resp,
-            egui::popup::PopupCloseBehavior::CloseOnClick,
-            |ui| {
+        egui::Popup::new(id, ui.ctx().clone(), &resp, ui.layer_id())
+            .open_memory(None)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClick)
+            .align(egui::RectAlign::BOTTOM_START)
+            .align_alternatives(&[])
+            .layout(egui::Layout::top_down_justified(egui::Align::LEFT))
+            .show(|ui| {
                 ui.set_min_width(176.0);
                 ui.spacing_mut().item_spacing.y = 2.0;
                 if session_menu_row(ui, "Compact", compact_on) {
@@ -2124,15 +2127,14 @@ impl Cabin {
                 if session_menu_row(ui, "Export", export_on) {
                     self.run_slash(Slash::Export);
                 }
-            },
-        );
+            });
         placed
     }
 
     pub(super) fn ui_composer_stack(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.vertical_centered_justified(|ui| {
-            let col_w = crate::cards::composer_pill_w(ui.ctx().screen_rect().width());
+            let col_w = crate::cards::composer_pill_w(ui.ctx().content_rect().width());
             ui.set_max_width(col_w);
             for slot in composer_stack_order() {
                 match slot {
@@ -2216,11 +2218,11 @@ impl Cabin {
                                     .color(crate::theme::subtle()),
                             );
                             ui.add_space(4.0);
-                            egui::Frame::none()
+                            egui::Frame::NONE
                                 .fill(crate::theme::surface())
-                                .rounding(crate::theme::CHROME_RADIUS)
+                                .corner_radius(crate::theme::CHROME_RADIUS)
                                 .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                                .inner_margin(egui::Margin::same(8.0))
+                                .inner_margin(egui::Margin::same(8))
                                 .show(ui, |ui| {
                                     egui::ScrollArea::vertical()
                                         .max_height(148.0)
@@ -2297,7 +2299,7 @@ impl Cabin {
             self.paint_voice_mode_row(ui);
                     }
                     ComposerStackSlot::Pill => {
-            let pill_w = crate::cards::composer_pill_w(ui.ctx().screen_rect().width());
+            let pill_w = crate::cards::composer_pill_w(ui.ctx().content_rect().width());
             let cap = pill_w.min(ui.available_width()).max(360.0);
             ui.set_width(cap);
             ui.set_max_width(cap);
@@ -2393,6 +2395,7 @@ impl Cabin {
                         crate::theme::QUERY_RADIUS,
                         crate::theme::elevated(),
                         crate::theme::composer_chrome_stroke(focused),
+                        egui::StrokeKind::Middle,
                     );
                     let inner = (cap - pad_l - pad_r).max(200.0);
                     ui.spacing_mut().item_spacing.x = 0.0;
@@ -2448,8 +2451,11 @@ impl Cabin {
                                                 text_w,
                                                 if rows == 1 { pill_h } else { 0.0 },
                                             ))
-                                            .frame(false)
-                                            .margin(egui::Margin::symmetric(2.0, 0.0))
+                                            .frame(
+                                                egui::Frame::NONE.inner_margin(
+                                                    egui::Margin::symmetric(2, 0),
+                                                ),
+                                            )
                                             .vertical_align(hint_align)
                                             .font(egui::FontId::new(
                                                 15.0,
@@ -2468,7 +2474,7 @@ impl Cabin {
                                 let ghost = composer_hint_ink();
                                 let hint_font =
                                     egui::FontId::new(15.0, egui::FontFamily::Proportional);
-                                let hint = ui.fonts(|f| {
+                                let hint = ui.fonts_mut(|f| {
                                     f.layout_no_wrap("Ask anything".to_string(), hint_font, ghost)
                                 });
                                 let hint_pos = egui::pos2(

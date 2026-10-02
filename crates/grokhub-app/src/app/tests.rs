@@ -294,9 +294,9 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             select_all_edit(ui, edit.id, &buf);
             let state = egui::TextEdit::load_state(ui.ctx(), edit.id).expect("edit state");
             let range = state.cursor.char_range().expect("selection");
-            let [a, b] = range.sorted();
-            assert_eq!(a.index, 0);
-            assert_eq!(b.index, 7);
+            let [a, b] = range.sorted_cursors();
+            assert_eq!(a.index, egui::text::CharIndex(0));
+            assert_eq!(b.index, egui::text::CharIndex(7));
         });
     }
 
@@ -335,9 +335,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
 
     fn with_cabin_theme_ui(mut add: impl FnMut(&mut egui::Ui)) {
         let ctx = egui::Context::default();
-        let _ = ctx.run(Default::default(), |ctx| {
-            crate::theme::apply(ctx, true);
-            egui::CentralPanel::default().show(ctx, |ui| add(ui));
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            let ctx = ui.ctx().clone();
+            crate::theme::apply(&ctx, true);
+            egui::CentralPanel::default().show(ui, |ui| add(ui));
         });
     }
 
@@ -475,7 +476,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         with_fonts_ui(|ui| {
             let wrap = grokhub_core::bubble_wrap_width(280.0, grokhub_core::BUBBLE_PAD_X);
             let job = crate::markdown::wrapped_job(ui, body, wrap, egui::Color32::WHITE);
-            let galley = ui.fonts(|fonts| fonts.layout_job(job));
+            let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
             let rows: Vec<String> = galley.rows.iter().map(|row| row.text()).collect();
             for row in &rows {
                 assert!(
@@ -1199,8 +1200,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
 
     fn with_fonts_ui(mut add: impl FnMut(&mut egui::Ui)) {
         let ctx = egui::Context::default();
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| add(ui));
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| add(ui));
         });
     }
 
@@ -1250,8 +1251,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         fn copy_id(skip_earlier: bool, salt: bool) -> egui::Id {
             let ctx = egui::Context::default();
             let mut id = egui::Id::NULL;
-            let _ = ctx.run(Default::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let _ = ctx.run_ui(Default::default(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     for i in 0..2 {
                         if skip_earlier && i == 0 {
                             ui.add_space(20.0);
@@ -3252,7 +3253,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     fn imagine_visit_ranks_home_chips() {
         let src = cabin_src();
         let update = src
-            .split("fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame)")
+            .split("fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame)")
             .nth(1)
             .and_then(|s| s.split("fn ui_sidebar(").next())
             .expect("update");
@@ -3385,7 +3386,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let exit = src
             .split("fn on_exit(")
             .nth(1)
-            .and_then(|s| s.split("fn update(").next())
+            .and_then(|s| s.split("fn logic(").next())
             .expect("on_exit");
         assert!(
             exit.contains("config::save") && exit.contains("cfg.window")
@@ -4892,11 +4893,11 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("fn ui_settings(").next())
             .expect("ui_get_started");
         assert!(
-            src.contains("if !self.ui_get_started(ctx)"),
+            src.contains("if !self.ui_get_started(ui)"),
             "first-run sheet must replace empty-cabin chat so it paints on Windows"
         );
         let paint = src
-            .split("self.ui_titlebar(ctx);")
+            .split("self.ui_titlebar(ui);")
             .nth(1)
             .and_then(|s| s.split("if self.palette_open").next())
             .expect("titlebar then panes");
@@ -4904,7 +4905,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .find("if self.nav == Nav::Settings")
             .expect("Settings after Get Started skip");
         let skip = paint
-            .find("if !self.ui_get_started(ctx)")
+            .find("if !self.ui_get_started(ui)")
             .expect("get started skip");
         assert!(
             settings_nav > skip
@@ -6587,7 +6588,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "greeting paints inside the capped column"
         );
         assert!(
-            home.contains("allocate_new_ui")
+            home.contains("scope_builder")
                 && home.contains("empty_home_side_gap")
                 && home.contains("top_down_justified"),
             "empty-home cluster is a tight centered column, not a full-height justified fill: {home}"
@@ -6655,8 +6656,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                         ..Default::default()
                     };
                     for _ in 0..2 {
-                        let _ = ctx.run(raw.clone(), |ctx| {
-                            egui::CentralPanel::default().show(ctx, |ui| {
+                        let _ = ctx.run_ui(raw.clone(), |ui| {
+                            egui::CentralPanel::default().show(ui, |ui| {
                                 cabin.ui_composer_stack(ui);
                             });
                         });
@@ -8151,8 +8152,8 @@ fn paint_live_clipped(ctx: &egui::Context, cabin: &mut super::Cabin, clip_h: f32
         ..Default::default()
     };
     let (mut height, mut width) = (0.0, 0.0);
-    let _ = ctx.run(raw, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    let _ = ctx.run_ui(raw, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             let top = ui.cursor().min;
             width = ui.available_width();
             ui.set_clip_rect(egui::Rect::from_min_size(top, egui::vec2(900.0, clip_h)));
@@ -8797,8 +8798,8 @@ fn session_menu_sits_left_of_minimize() {
     };
     let mut menu = egui::Rect::NOTHING;
     let mut mini = egui::Rect::NOTHING;
-    let _ = ctx.run(raw, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    let _ = ctx.run_ui(raw, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 mini = titlebar_chrome_btn(ui, ChromeBtn::Minimize).rect;
@@ -13183,8 +13184,8 @@ fn empty_queue_keeps_nothing_queued_label() {
 
     let mut texts = Vec::new();
     let ctx = egui::Context::default();
-    let _ = ctx.run(Default::default(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    let _ = ctx.run_ui(Default::default(), |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             assert!(crate::cards::quick_chip_row(ui, &chips).is_none());
             let layer = ui.layer_id();
             ui.ctx().graphics(|layers| {
@@ -13792,8 +13793,8 @@ fn only_a_bare_key_with_nothing_over_the_chat_answers_the_card() {
             events: vec![ev],
             ..Default::default()
         };
-        let _ = ctx.run(input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 hit = (
                     super::bare_press(ui, egui::Key::Escape),
                     super::bare_press(ui, egui::Key::Enter),
@@ -13831,8 +13832,8 @@ fn only_a_bare_key_with_nothing_over_the_chat_answers_the_card() {
         events: vec![key(egui::Key::Escape, egui::Modifiers::NONE)],
         ..Default::default()
     };
-    let _ = renamed.run(input, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    let _ = renamed.run_ui(input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             super::drop_key(ui, egui::Key::Escape);
             left = super::bare_press(ui, egui::Key::Escape);
         });
@@ -13848,13 +13849,14 @@ fn only_a_bare_key_with_nothing_over_the_chat_answers_the_card() {
     let ctx = egui::Context::default();
     let frame = |area: Option<&str>| {
         let mut over = false;
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let ctx = ui.ctx().clone();
             if let Some(id) = area {
                 egui::Area::new(egui::Id::new(id))
                     .order(egui::Order::Foreground)
-                    .show(ctx, |ui| ui.label("menu"));
+                    .show(&ctx, |ui| ui.label("menu"));
             }
-            over = super::overlay_over_chat(ctx);
+            over = super::overlay_over_chat(&ctx);
         });
         over
     };
@@ -16200,9 +16202,10 @@ fn edit_puts_your_message_back_without_dropping_a_draft() {
 fn user_act_row_with_edit_stays_inside_a_narrow_pane() {
     for width in [300.0_f32, 360.0, 800.0] {
         let ctx = egui::Context::default();
-        let _ = ctx.run(Default::default(), |ctx| {
-            crate::theme::apply(ctx, true);
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            let ctx = ui.ctx().clone();
+            crate::theme::apply(&ctx, true);
+            egui::CentralPanel::default().show(ui, |ui| {
                 ui.allocate_ui(egui::vec2(width, 200.0), |ui| {
                     ui.set_max_width(width);
                     let row = ui.max_rect();
@@ -16294,9 +16297,10 @@ fn chat_find_bar_paints_and_steps_with_the_arrows() {
     let views = find_views(&[("user", "x one"), ("assistant", "x two")]);
     app.find.refresh("t", &views);
     let ctx = egui::Context::default();
-    let _ = ctx.run(Default::default(), |ctx| {
-        crate::theme::apply(ctx, true);
-        app.paint_find_bar(ctx, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)));
+    let _ = ctx.run_ui(Default::default(), |ui| {
+        let ctx = ui.ctx().clone();
+        crate::theme::apply(&ctx, true);
+        app.paint_find_bar(&ctx, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0)));
     });
     assert!(app.find.open);
     assert_eq!(app.find.label(), "2 of 2");
@@ -16480,12 +16484,16 @@ fn dropping_files_says_what_happens() {
     let ctx = egui::Context::default();
     let mut input = egui::RawInput::default();
     input.hovered_files.push(egui::HoveredFile::default());
-    let out = ctx.run(input, |ctx| {
-        crate::theme::apply(ctx, true);
-        app.paint_drop_hint(ctx);
+    let out = ctx.run_ui(input, |ui| {
+        let ctx = ui.ctx().clone();
+        crate::theme::apply(&ctx, true);
+        app.paint_drop_hint(&ctx);
     });
     assert!(!out.shapes.is_empty(), "hovering a file paints the drop hint");
-    let quiet = ctx.run(egui::RawInput::default(), |ctx| app.paint_drop_hint(ctx));
+    let quiet = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let ctx = ui.ctx().clone();
+        app.paint_drop_hint(&ctx);
+    });
     assert!(quiet.shapes.is_empty(), "no hover, no overlay");
     let src = cabin_src();
     assert!(fn_src(&src, "take_dropped_attach").contains("self.drop_extra"));

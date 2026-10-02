@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.56** — The home feed writes a daily news note and a longer read, each with a real link, plus one situation card when a job is still paused or you keep repeating something. Click a card to open it. × clears it. The cabin tries one other path before it gives up.
+**v2.10.57** — The cabin window uses egui 0.36 on OpenGL. A long History, project tree, or workboard column only draws the rows on screen; scrolling back brings the same click, drag, and right-click.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.56.tar.gz`, AUR | **v2.10.56** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.56.exe`, `grokhub-windows-v2.10.56.zip` | **v2.10.56** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.57.tar.gz`, AUR | **v2.10.57** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.57.exe`, `grokhub-windows-v2.10.57.zip` | **v2.10.57** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
