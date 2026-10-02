@@ -17,6 +17,8 @@ mod icons;
 mod theme;
 mod cli;
 mod config;
+#[cfg(feature = "fx")]
+mod fx;
 mod desktop;
 mod github;
 mod host;
@@ -352,20 +354,67 @@ fn run_cabin(hidden: bool) -> eframe::Result<()> {
     if let Some(icon) = cabin_window_icon() {
         viewport = viewport.with_icon(icon);
     }
-    let opts = eframe::NativeOptions {
-        viewport,
-        // eframe window persistence also restores visibility; close-to-tray would come back withdrawn.
-        persist_window: false,
-        ..Default::default()
-    };
-    eframe::run_native(
-        "GrokHub",
-        opts,
-        Box::new(move |cc| {
-            crate::theme::install_fonts(&cc.egui_ctx);
-            Ok(Box::new(Cabin::new(hidden)))
-        }),
-    )
+    #[cfg(feature = "fx")]
+    {
+        run_cabin_with_fx(hidden, viewport)
+    }
+    #[cfg(not(feature = "fx"))]
+    {
+        let opts = eframe::NativeOptions {
+            viewport,
+            // eframe window persistence also restores visibility; close-to-tray would come back withdrawn.
+            persist_window: false,
+            ..Default::default()
+        };
+        eframe::run_native(
+            "GrokHub",
+            opts,
+            Box::new(move |cc| {
+                crate::theme::install_fonts(&cc.egui_ctx);
+                Ok(Box::new(Cabin::new(hidden)))
+            }),
+        )
+    }
+}
+
+/// wgpu when the switch is on and the last launch finished a frame. Otherwise glow.
+/// A failed wgpu start retries once in this process on the OpenGL renderer.
+#[cfg(feature = "fx")]
+fn run_cabin_with_fx(hidden: bool, viewport: egui::ViewportBuilder) -> eframe::Result<()> {
+    let mut renderer = crate::fx::prepare_launch();
+    let mut tried_fallback = false;
+    loop {
+        let want_wgpu = renderer == eframe::Renderer::Wgpu;
+        let opts = eframe::NativeOptions {
+            viewport: viewport.clone(),
+            persist_window: false,
+            renderer,
+            ..Default::default()
+        };
+        let result = eframe::run_native(
+            "GrokHub",
+            opts,
+            Box::new(move |cc| {
+                if want_wgpu {
+                    let Some(state) = cc.wgpu_render_state.as_ref() else {
+                        return Err("wgpu render state missing".into());
+                    };
+                    crate::fx::install(state);
+                }
+                crate::theme::install_fonts(&cc.egui_ctx);
+                Ok(Box::new(Cabin::new(hidden)))
+            }),
+        );
+        match result {
+            Err(err) if want_wgpu && !tried_fallback => {
+                eprintln!("composer glow: GPU renderer failed ({err}), falling back to OpenGL");
+                crate::fx::note_wgpu_failed();
+                renderer = eframe::Renderer::Glow;
+                tried_fallback = true;
+            }
+            other => return other,
+        }
+    }
 }
 
 #[cfg(test)]

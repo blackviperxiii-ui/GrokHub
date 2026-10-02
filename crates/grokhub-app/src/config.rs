@@ -364,6 +364,9 @@ pub struct AppConfig {
     /// Cabin paints a new Imagine cover every few hours.
     #[serde(default = "default_imagine_wall")]
     pub imagine_wall: bool,
+    /// Soft GPU glow around the composer while a reply streams. Off until Settings turns it on.
+    #[serde(default)]
+    pub composer_glow: bool,
     #[serde(default = "default_theme")]
     pub theme: String,
     #[serde(default)]
@@ -486,6 +489,7 @@ impl Default for AppConfig {
             budget_pauses_scheduled: default_budget_pause(),
             goal_pin: String::new(),
             imagine_wall: default_imagine_wall(),
+            composer_glow: false,
             theme: default_theme(),
             window: crate::window::WindowGeom::default(),
             get_started_done: false,
@@ -802,6 +806,36 @@ pub fn test_config_root(label: &str) -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn composer_glow() {
+        assert!(!AppConfig::default().composer_glow);
+        let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
+        assert!(!absent.composer_glow);
+        let _g = hold_test_config();
+        let root = test_config_root("composer-glow");
+        let _ = fs::remove_dir_all(&root);
+        let _pin = TestConfigDir::set(root.clone());
+        let mut cfg = AppConfig {
+            device_name: "cabin".into(),
+            composer_glow: true,
+            ..Default::default()
+        };
+        save_in(&root, &cfg).expect("save");
+        let loaded = load();
+        assert!(loaded.composer_glow);
+        let text = fs::read_to_string(root.join("app.json")).unwrap();
+        assert!(
+            text.contains("\"composerGlow\""),
+            "camelCase key must round-trip: {text}"
+        );
+        cfg.composer_glow = false;
+        save_in(&root, &cfg).expect("save off");
+        assert!(!load().composer_glow);
+        fs::write(root.join("app.json"), r#"{"deviceName":"cabin"}"#).unwrap();
+        assert!(!load().composer_glow);
+        let _ = fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn roundtrip_under_grokhub_config() {
