@@ -15,6 +15,22 @@ pub(super) fn queue_task_label(title: &str, done: bool) -> &'static str {
     }
 }
 
+/// Empty catalog copy. Loading wins, then a search that filtered a non-empty list.
+pub(super) fn catalog_empty_line<'a>(
+    loading: bool,
+    query: &str,
+    total: usize,
+    empty_text: &'a str,
+) -> &'a str {
+    if loading {
+        "Loading…"
+    } else if !query.is_empty() && total > 0 {
+        "None matched."
+    } else {
+        empty_text
+    }
+}
+
 pub(super) enum BoardAct {
     Add,
     Save(String),
@@ -1439,8 +1455,13 @@ impl Cabin {
                     .collect();
                 if mcp.is_empty() {
                     ui.label(
-                        RichText::new("No MCP servers in ~/.grok — add one with grok mcp add.")
-                            .color(crate::theme::muted()),
+                        RichText::new(catalog_empty_line(
+                            self.grok_catalog_rx.is_some(),
+                            &q,
+                            self.grok_catalog.mcp.len(),
+                            "No MCP servers in ~/.grok — add one with grok mcp add.",
+                        ))
+                        .color(crate::theme::muted()),
                     );
                 } else {
                     crate::cards::tile_row(ui, mcp.len(), |ui, i| {
@@ -1497,9 +1518,20 @@ impl Cabin {
                     .cloned()
                     .collect();
                 if installed.is_empty() {
+                    let installed_total = self
+                        .grok_catalog
+                        .plugins
+                        .iter()
+                        .filter(|p| p.status != "available")
+                        .count();
                     ui.label(
-                        RichText::new("No plugins installed yet — browse Marketplace below.")
-                            .color(crate::theme::muted()),
+                        RichText::new(catalog_empty_line(
+                            self.grok_catalog_rx.is_some(),
+                            &q,
+                            installed_total,
+                            "No plugins installed yet — browse Marketplace below.",
+                        ))
+                        .color(crate::theme::muted()),
                     );
                 } else {
                     crate::cards::tile_row(ui, installed.len(), |ui, i| {
@@ -1544,9 +1576,20 @@ impl Cabin {
                     .cloned()
                     .collect();
                 if market.is_empty() {
+                    let market_total = self
+                        .grok_catalog
+                        .plugins
+                        .iter()
+                        .filter(|p| p.status == "available")
+                        .count();
                     ui.label(
-                        RichText::new("No marketplace plugins to install.")
-                            .color(crate::theme::muted()),
+                        RichText::new(catalog_empty_line(
+                            self.grok_catalog_rx.is_some(),
+                            &q,
+                            market_total,
+                            "No marketplace plugins to install.",
+                        ))
+                        .color(crate::theme::muted()),
                     );
                 } else {
                     crate::cards::tile_row(ui, market.len(), |ui, i| {
@@ -1731,17 +1774,15 @@ impl Cabin {
                 .cloned()
                 .collect();
             if skills.is_empty() {
-                let empty = if self.grok_catalog_rx.is_some() {
-                    "Loading Grok Build skills…"
-                } else if !q.is_empty() && !self.grok_catalog.skills.is_empty() {
-                    "None matched."
-                } else {
-                    "None found. Refresh after installing a plugin."
-                };
                 ui.label(
-                    RichText::new(empty)
-                        .size(crate::theme::FONT_BODY)
-                        .color(crate::theme::muted()),
+                    RichText::new(catalog_empty_line(
+                        self.grok_catalog_rx.is_some(),
+                        &q,
+                        self.grok_catalog.skills.len(),
+                        "None found. Refresh after installing a plugin.",
+                    ))
+                    .size(crate::theme::FONT_BODY)
+                    .color(crate::theme::muted()),
                 );
             } else {
                 crate::cards::tile_row(ui, skills.len(), |ui, i| {
@@ -1972,5 +2013,25 @@ impl Cabin {
                 let _ = tx.send((at, body));
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catalog_empty_line_distinguishes_loading_search_and_empty() {
+        let mcp = "No MCP servers in ~/.grok — add one with grok mcp add.";
+        let plugins = "No plugins installed yet — browse Marketplace below.";
+        let market = "No marketplace plugins to install.";
+        let skills = "None found. Refresh after installing a plugin.";
+        assert_eq!(catalog_empty_line(true, "", 0, mcp), "Loading…");
+        assert_eq!(catalog_empty_line(true, "grok", 4, plugins), "Loading…");
+        assert_eq!(catalog_empty_line(false, "zzz", 3, market), "None matched.");
+        assert_eq!(catalog_empty_line(false, "zzz", 0, skills), skills);
+        assert_eq!(catalog_empty_line(false, "", 0, mcp), mcp);
+        assert_eq!(catalog_empty_line(false, "", 2, plugins), plugins);
+        assert_eq!(catalog_empty_line(false, "  ", 2, skills), "None matched.");
     }
 }
