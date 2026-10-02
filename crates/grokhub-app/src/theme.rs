@@ -856,7 +856,10 @@ pub fn felt_label_button(
     // Centre vertically: a layout can hand the pill more height than label + pad.
     let text_pos = egui::pos2(rect.min.x + pad.x, rect.center().y - galley.size().y * 0.5);
     ui.painter().galley(text_pos, galley, text_color);
-    pointing(resp)
+    let resp = pointing(resp);
+    let enabled = resp.enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp
 }
 
 /// Compact square hit for sidebar `+` and similar chrome.
@@ -879,7 +882,10 @@ pub fn felt_icon_hit(
         FontId::proportional(font_size),
         if resp.hovered() { fg() } else { text_color },
     );
-    pointing(resp)
+    let resp = pointing(resp);
+    let enabled = resp.enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp
 }
 
 pub fn lift_fill(fill: Color32, mix: f32) -> Color32 {

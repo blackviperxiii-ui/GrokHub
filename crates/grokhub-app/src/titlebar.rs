@@ -60,6 +60,9 @@ pub fn titlebar_chrome_btn(ui: &mut egui::Ui, kind: ChromeBtn) -> egui::Response
         crate::theme::muted()
     };
     paint_chrome_glyph(ui, rect, kind, color);
+    let name = titlebar_chrome_tip(kind, false);
+    let enabled = resp.enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, name));
     resp
 }
 
