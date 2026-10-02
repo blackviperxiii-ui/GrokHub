@@ -37,6 +37,8 @@ pub(super) enum BoardAct {
     Move { id: String, status: BoardStatus },
     Archive(String),
     Restore(String),
+    /// Remove the card for good. Its chat stays in History.
+    Delete(String),
     Link(String),
     Unlink(String),
     Open(String),
@@ -1105,7 +1107,10 @@ impl Cabin {
                                             .color(crate::theme::muted()),
                                     );
                                     if crate::cards::ghost_pill(ui, "Restore") {
-                                        act = Some(BoardAct::Restore(id));
+                                        act = Some(BoardAct::Restore(id.clone()));
+                                    }
+                                    if crate::cards::ghost_pill(ui, "Delete") {
+                                        act = Some(BoardAct::Delete(id));
                                     }
                                 });
                                 let h = (ui.cursor().min.y - y0).max(0.0);
@@ -1195,6 +1200,28 @@ impl Cabin {
                 if let Some(c) = self.board.iter_mut().find(|c| c.id == id) {
                     c.status = BoardStatus::Todo;
                 }
+                true
+            }
+            BoardAct::Delete(id) => {
+                let Some(thread) = self
+                    .board
+                    .iter()
+                    .find(|c| c.id == id)
+                    .map(|c| c.thread_id.clone())
+                else {
+                    return false;
+                };
+                if self.running && thread.is_some() && self.chat_job_thread == thread {
+                    self.board_view.note = Some((id, "Stop the card's chat first".into()));
+                    return false;
+                }
+                self.board.retain(|c| c.id != id);
+                self.forget_board_card_view(&id);
+                self.status = if thread.is_some() {
+                    "Card deleted. Its chat stays in History.".into()
+                } else {
+                    "Card deleted".into()
+                };
                 true
             }
             BoardAct::Link(id) => {

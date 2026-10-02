@@ -22,6 +22,8 @@ pub const DIGEST_CHAR_CAP: usize = 6_000;
 
 /// Per chat line so the UI thread never clones an 8MB HOST_RESULT into the digest.
 pub const DIGEST_LINE_CAP: usize = 280;
+/// Newest turned-down ideas named in the digest.
+const TURNED_DOWN_IN_DIGEST: usize = 20;
 
 /// GitHub tools we already ship. A suggestion is a tile that runs one of these
 /// or sends the user to Settings for a PAT — not a fake app.
@@ -140,6 +142,8 @@ pub struct ReviewDigest {
     pub memory_md: String,
     pub skill_names: Vec<String>,
     pub automation_names: Vec<String>,
+    /// Ideas the user deleted or dismissed, newest first. The review must not offer them again.
+    pub turned_down: Vec<String>,
     pub github_pat: bool,
     pub host_receipts: Vec<String>,
     pub chip_habits: Vec<String>,
@@ -161,6 +165,18 @@ pub fn build_review_digest(input: &ReviewDigest) -> String {
     if !input.automation_names.is_empty() {
         out.push_str("Existing automations: ");
         out.push_str(&input.automation_names.join(", "));
+        out.push('\n');
+    }
+    let turned_down: Vec<&str> = input
+        .turned_down
+        .iter()
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty() && is_plain_text(t))
+        .take(TURNED_DOWN_IN_DIGEST)
+        .collect();
+    if !turned_down.is_empty() {
+        out.push_str("Turned down (do not suggest these or anything like them): ");
+        out.push_str(&turned_down.join(", "));
         out.push('\n');
     }
     out.push_str(if input.github_pat {
@@ -917,6 +933,15 @@ SUGGEST_AUTO: Night wrap | Close the day | every day at 21, say good night
             ..ReviewDigest::default()
         };
         let digest = build_review_digest(&input);
+        assert!(!digest.contains("Turned down"), "nothing turned down, no line");
+        let with_no = build_review_digest(&ReviewDigest {
+            turned_down: vec!["Session scanner".into(), " ".into()],
+            ..ReviewDigest::default()
+        });
+        assert!(
+            with_no.contains("Turned down (do not suggest these or anything like them): Session scanner\n"),
+            "{with_no}"
+        );
         assert!(!digest.contains("ghp_abcdefghijklmnopqrstuvwx"));
         assert!(digest.contains("[redacted]"));
         assert!(digest.contains("user: please run HOST_CMD"));

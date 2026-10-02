@@ -8,6 +8,10 @@ pub const DEFAULT_MODEL: &str = "grok-3-mini-fast";
 pub const CABIN_FAST_MODEL: &str = "grok-4.7";
 /// Used only if the default model returns empty.
 pub const CABIN_FAST_FALLBACK: &str = "grok-4.5";
+/// Reasoning effort for work the cabin starts on its own: scheduled runs (automations,
+/// loops, phone tasks), the nightly review, ideas, the daily read, chips, the greeting,
+/// and the thread goal. The composer's effort is for what you type.
+pub const BACKGROUND_EFFORT: &str = "low";
 
 /// Model passed to `grok -p --model`. An empty pin uses [`CABIN_FAST_MODEL`].
 pub fn cabin_spawn_model(pinned: &str) -> &str {

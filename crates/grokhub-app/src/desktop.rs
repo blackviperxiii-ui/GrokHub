@@ -1579,6 +1579,9 @@ impl Drop for PcmSink {
         if let Some(mut c) = self.child.take() {
             let _ = c.stdin.take();
             let _ = c.kill();
+            std::thread::spawn(move || {
+                let _ = c.wait();
+            });
         }
     }
 }
@@ -1780,6 +1783,18 @@ pub fn capture_webcam() -> Result<String, String> {
     Ok(jpeg_data_url(&bytes))
 }
 
+/// Start a helper nobody waits on (an opener, a player, a notification) and reap it on a
+/// thread when it exits. A dropped `Child` is never waited for, so on Linux each one stayed
+/// a zombie until the cabin quit.
+pub(crate) fn spawn_reaped(cmd: &mut Command) -> std::io::Result<u32> {
+    let mut child = cmd.spawn()?;
+    let pid = child.id();
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(pid)
+}
+
 pub fn open_path(path: &str) -> Result<(), String> {
     let path = path.trim();
     if path.is_empty() {
@@ -1791,9 +1806,7 @@ pub fn open_path(path: &str) -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
-        std::process::Command::new("xdg-open")
-            .arg(path)
-            .spawn()
+        spawn_reaped(std::process::Command::new("xdg-open").arg(path))
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
@@ -1827,9 +1840,7 @@ pub fn open_url(url: &str) -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
-        std::process::Command::new("xdg-open")
-            .arg(url)
-            .spawn()
+        spawn_reaped(std::process::Command::new("xdg-open").arg(url))
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
@@ -1855,7 +1866,7 @@ pub fn play_media(path: &str) -> Result<(), String> {
                 }
                 _ => return open_path(path),
             }
-            if cmd.spawn().is_ok() {
+            if spawn_reaped(&mut cmd).is_ok() {
                 return Ok(());
             }
         }
@@ -2796,6 +2807,40 @@ mod tests {
         ] {
             assert!(url_safe_to_open(good), "should accept {good:?}");
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn spawn_reaped_leaves_no_zombie() {
+        let pid = spawn_reaped(&mut Command::new("true")).expect("spawn true");
+        let proc_dir = std::path::PathBuf::from(format!("/proc/{pid}"));
+        let start = Instant::now();
+        // A zombie keeps its /proc entry until someone waits on it.
+        while proc_dir.exists() {
+            assert!(
+                start.elapsed() < Duration::from_secs(5),
+                "{pid} was never reaped: {:?}",
+                std::fs::read_to_string(proc_dir.join("stat")).ok()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let desktop = include_str!("desktop.rs");
+        for name in [
+            "pub fn open_path(",
+            "pub fn open_url(",
+            "pub fn play_media(",
+        ] {
+            let body = desktop
+                .split(name)
+                .nth(1)
+                .and_then(|s| s.split("\npub ").next())
+                .expect(name);
+            assert!(
+                body.contains("spawn_reaped(") && !body.contains(".spawn()"),
+                "{name} must reap its helper: {body}"
+            );
+        }
+        assert!(include_str!("notify.rs").contains("spawn_reaped("));
     }
 
     #[test]
