@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.59** — Optional composer glow: a soft breathing light around the chat pill while Grok replies. It uses the GPU renderer, stays off until Settings → Behavior → Composer glow, and falls back to OpenGL if the GPU renderer fails.
+**v2.10.60** — Windows reads the real date and time, Stop ends a headless run on Windows, dismissed ideas and situation cards stay gone, workboard cards can be deleted, and background work runs at low reasoning effort.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.59.tar.gz`, AUR | **v2.10.59** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.59.exe`, `grokhub-windows-v2.10.59.zip` | **v2.10.59** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.60.tar.gz`, AUR | **v2.10.60** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.60.exe`, `grokhub-windows-v2.10.60.zip` | **v2.10.60** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
