@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.10.59 — 2026-10-02
+
+A soft glow can breathe around the chat composer while Grok replies. It stays off until Settings → Behavior → Composer glow (GPU effects). Turning it on uses the GPU renderer after a restart. If that renderer fails, or the last launch died while it was starting, the cabin comes back on OpenGL, turns the switch off, and says so once.
+
+- Linux: `grokhub-linux-v2.10.59.tar.gz` and AUR `pkgver=2.10.59`.
+- Windows: `GrokHub-Setup-2.10.59.exe` and `grokhub-windows-v2.10.59.zip`.
+
 ## 2.10.58 — 2026-10-02
 
 Links in chat open in your browser. Every link, the MCP sign-in Open button, and the xAI sign-in go through one opener that takes only http and https and hands the address to the system without a shell (ShellExecuteW on Windows, `xdg-open` on Linux). The old Windows path ran `cmd /C start` with the address, so a server could slip a command in after an `&`.

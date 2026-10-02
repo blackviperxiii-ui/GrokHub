@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.58** — Chat links open in your browser through one safe opener (http and https only, never through a shell). Copy says Copied on the button, composer menus open above their pill, Esc closes menus and sheets, the titlebar maximizes on double-click, and Tab shows a focus ring. Halt is now Ctrl+Alt+H.
+**v2.10.59** — Optional composer glow: a soft breathing light around the chat pill while Grok replies. It uses the GPU renderer, stays off until Settings → Behavior → Composer glow, and falls back to OpenGL if the GPU renderer fails.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.58.tar.gz`, AUR | **v2.10.58** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.58.exe`, `grokhub-windows-v2.10.58.zip` | **v2.10.58** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.59.tar.gz`, AUR | **v2.10.59** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.59.exe`, `grokhub-windows-v2.10.59.zip` | **v2.10.59** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
