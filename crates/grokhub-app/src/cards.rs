@@ -774,6 +774,15 @@ fn paint_dropdown_chevron(ui: &egui::Ui, rect: egui::Rect, color: Color32) {
     ));
 }
 
+/// Composer menus open upward. If that does not fit, they fall back below the pill.
+pub fn composer_menu_align() -> egui::RectAlign {
+    egui::RectAlign::TOP_START
+}
+
+pub fn composer_menu_align_fallback() -> egui::RectAlign {
+    egui::RectAlign::BOTTOM_START
+}
+
 fn catalog_pill(
     ui: &mut egui::Ui,
     popup_id: &'static str,
@@ -805,8 +814,8 @@ fn catalog_pill(
     egui::Popup::new(id, ui.ctx().clone(), &resp, ui.layer_id())
         .open_memory(None)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClick)
-        .align(egui::RectAlign::BOTTOM_START)
-        .align_alternatives(&[])
+        .align(composer_menu_align())
+        .align_alternatives(&[composer_menu_align_fallback()])
         .layout(egui::Layout::top_down_justified(egui::Align::LEFT))
         .show(|ui| {
             ui.set_min_width(MODE_PILL_W);
@@ -3926,6 +3935,34 @@ mod tests {
         assert!(
             app.contains("Also signs in the Grok Build CLI if it is not already connected"),
             "settings Connect must say it also signs the CLI in: {app}"
+        );
+    }
+
+    #[test]
+    fn composer_menus_prefer_opening_above_the_pill() {
+        assert_eq!(composer_menu_align(), egui::RectAlign::TOP_START);
+        assert_eq!(composer_menu_align_fallback(), egui::RectAlign::BOTTOM_START);
+        assert_ne!(composer_menu_align(), composer_menu_align_fallback());
+        let src = include_str!("cards.rs");
+        let pill = src
+            .split("fn catalog_pill(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn effort_pill(").next())
+            .expect("catalog_pill");
+        assert!(
+            pill.contains("composer_menu_align()")
+                && pill.contains("composer_menu_align_fallback()"),
+            "mode, permission, and effort menus open above the pill: {pill}"
+        );
+        let session = include_str!("app/chat_ui.rs");
+        let menu = session
+            .split("fn paint_session_actions_menu(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_composer_stack(").next())
+            .unwrap_or("");
+        assert!(
+            menu.contains("RectAlign::BOTTOM_START") && menu.contains("align_alternatives(&[])"),
+            "the titlebar session menu stays below its button"
         );
     }
 }
