@@ -1,10 +1,13 @@
 //! Composer send and the grok -p / ACP kick.
 
 use super::*;
+use grokhub_core::{live_send, LiveSend};
 
 impl Cabin {
 
     pub(super) fn send_chat(&mut self, text: String) {
+        // Alt+Enter or `/queue`: wait for the live reply instead of steering it.
+        let queue_asked = std::mem::take(&mut self.bg.queue_next);
         self.workflow_status_live = false;
         self.turn_retried = false;
         let mut text = text.trim().to_string();
@@ -31,33 +34,50 @@ impl Cabin {
             );
             return;
         }
+        let mut steer = None;
         match chat_send_kind(
             self.chat_job_thread.as_deref(),
             &self.visible_thread_id(),
             self.running,
         ) {
             ChatSendKind::Redirect => {
-                if self.acp.is_some() || self.grok_p_rx.is_some() {
-                    self.followup_queue.push(text);
-                    self.status = format!("Queued ({})", self.followup_queue.len());
-                    return;
+                if queue_asked || self.acp.is_some() || self.grok_p_rx.is_some() {
+                    // Steer this chat's own reply. A cabin-wide Grok command
+                    // (`/compact`), a `/loop` on the ACP session, or Grok's own
+                    // background tasks on the turn still queue.
+                    match live_send(
+                        queue_asked || !self.can_steer_live_turn(),
+                        self.background_tasks_open(),
+                    ) {
+                        LiveSend::Queue => {
+                            self.followup_queue.push(text);
+                            self.status = format!("Queued ({})", self.followup_queue.len());
+                            return;
+                        }
+                        LiveSend::Steer => steer = Some(self.stop_turn_for_steer()),
+                    }
+                } else {
+                    let prev =
+                        last_user_scan(self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())))
+                            .unwrap_or_default();
+                    self.halt_work("Redirected");
+                    text = redirect_prompt(&prev, &text);
                 }
-                let prev =
-                    last_user_scan(self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())))
-                        .unwrap_or_default();
-                self.halt_work("Redirected");
-                text = redirect_prompt(&prev, &text);
             }
             ChatSendKind::Fresh => {
                 if self.running && self.chat_job_thread.is_some() {
-                    if self.acp.is_some() || self.background_tasks_open() {
+                    if queue_asked || self.acp.is_some() || self.background_tasks_open() {
                         self.followup_queue.push(text);
                         self.status = format!("Queued ({})", self.followup_queue.len());
                         return;
                     }
-                    self.settle_auto_run(AutoEnd::Stopped, None);
-                    self.halt_in_flight();
-                    self.finish_hub_dispatch("Interrupted", false);
+                    // The other chat's reply keeps going in the background
+                    // instead of being cut off by this send.
+                    if !self.move_turn_to_background() {
+                        self.settle_auto_run(AutoEnd::Stopped, None);
+                        self.halt_in_flight();
+                        self.finish_hub_dispatch("Interrupted", false);
+                    }
                 }
             }
         }
@@ -98,6 +118,14 @@ impl Cabin {
         if self.card_notes_follow.is_some() {
             self.flush_board();
         }
+        // Background results that landed since this chat's last turn, and the
+        // progress of a turn this message just steered.
+        self.bg.results_follow = if self.scheduled_perm {
+            None
+        } else {
+            self.take_bg_results_follow(&notes_thread)
+        };
+        self.bg.steer_follow = steer;
         let matched = match_skill(&text, &self.skill_list).map(|sk| {
             (
                 sk.name.clone(),
@@ -251,7 +279,9 @@ impl Cabin {
             }
         };
         let with_notes = apply_skill_follow(&raw_ask, self.card_notes_follow.as_deref());
-        let with_skill = apply_skill_follow(&with_notes, self.active_skill_follow.as_deref());
+        let with_bg = apply_skill_follow(&with_notes, self.bg.results_follow.as_deref());
+        let with_steer = apply_skill_follow(&with_bg, self.bg.steer_follow.as_deref());
+        let with_skill = apply_skill_follow(&with_steer, self.active_skill_follow.as_deref());
         let last_user = apply_skill_follow(&with_skill, self.idea_talk_brief().as_deref());
         if self.grok_p_rx.is_some() {
             return;
@@ -379,6 +409,7 @@ impl Cabin {
             grokhub_acp::GrokPAttach {
                 image: image.as_deref(),
                 learned: &grokhub_core::brief_for(&self.learning, "chat"),
+                deny: self.permission_mode.needs_approval(),
             },
             fork,
             user_home,

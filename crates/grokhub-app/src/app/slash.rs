@@ -348,6 +348,8 @@ impl Cabin {
                 }
             }
             Slash::Stop => self.halt_work("Stopped"),
+            Slash::Background(arg) => self.run_bg_slash(&arg),
+            Slash::Queue(text) => self.queue_or_send(text),
             Slash::Sh(cmd) => self.queue_sh(cmd),
             Slash::HostStatus => {
                 self.status = build_agent::grok_banner();

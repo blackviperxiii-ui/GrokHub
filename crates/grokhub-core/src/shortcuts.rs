@@ -97,6 +97,8 @@ pub const SHORTCUTS: &[Shortcut] = &[
     Shortcut { keys: "Enter / Esc", action: "Confirm / cancel overlay sheet (empty composer; Ask Always stays Allow / Deny)", scope: "Chat" },
     Shortcut { keys: "Enter", action: "Send message", scope: "Composer" },
     Shortcut { keys: "Ctrl+Enter", action: "New line", scope: "Composer" },
+    Shortcut { keys: "Enter while a reply runs", action: "Steer the live reply", scope: "Composer" },
+    Shortcut { keys: "Alt+Enter while a reply runs", action: "Queue for after the reply", scope: "Composer" },
     Shortcut { keys: "Tab", action: "Accept slash", scope: "Composer" },
     Shortcut { keys: "Super+G", action: "Hey Grok when unfocused", scope: "System" },
     Shortcut { keys: "Super+Shift+Esc", action: "Halt when unfocused", scope: "System" },

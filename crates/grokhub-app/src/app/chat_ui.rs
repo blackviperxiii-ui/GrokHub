@@ -15,6 +15,8 @@ pub(super) enum ComposerStackSlot {
     AuthBanner,
     ContextBar,
     SessionTools,
+    /// Steer / Queue for typed text during a run, queued messages, background runs.
+    LiveWork,
     SlashPalette,
     Chips,
     Attach,
@@ -150,6 +152,7 @@ pub(super) fn composer_stack_order() -> &'static [ComposerStackSlot] {
         ComposerStackSlot::AuthBanner,
         ComposerStackSlot::ContextBar,
         ComposerStackSlot::SessionTools,
+        ComposerStackSlot::LiveWork,
         ComposerStackSlot::SlashPalette,
         ComposerStackSlot::Attach,
         ComposerStackSlot::Voice,
@@ -1270,11 +1273,21 @@ impl Cabin {
                         }
                         if thinking {
                             let phase = self.run_phase_here();
-                            paint_running(
-                                ui,
-                                chat_run_label(phase),
-                                &chat_run_hint(phase, &self.run_action_here()),
-                            );
+                            let hint = chat_run_hint(phase, &self.run_action_here());
+                            if self.can_move_turn_to_background() {
+                                let moved = ui
+                                    .horizontal(|ui| {
+                                        paint_running(ui, chat_run_label(phase), &hint);
+                                        ui.add_space(8.0);
+                                        super::background::background_pill(ui)
+                                    })
+                                    .inner;
+                                if moved && self.move_turn_to_background() {
+                                    self.drain_followup_queue();
+                                }
+                            } else {
+                                paint_running(ui, chat_run_label(phase), &hint);
+                            }
                         }
                         if let Some(code) = crate::markdown::take_code_copy(ui.ctx()) {
                             act = ChatBlockAct::Copy(code);
@@ -2236,6 +2249,9 @@ impl Cabin {
                     ComposerStackSlot::SessionTools => {
                         self.paint_session_tools(ui);
                     }
+                    ComposerStackSlot::LiveWork => {
+                        self.paint_live_work(ui);
+                    }
                     ComposerStackSlot::SlashPalette => {
                         let hits = filter_slash_hits(&self.composer, &self.grok_commands);
                         if !hits.is_empty() {
@@ -2451,7 +2467,7 @@ impl Cabin {
                     }
                     let focused = ui.memory(|m| m.has_focus(composer_id));
                     if let Some(t) = take_focused_composer(ui, &mut self.composer, focused) {
-                        self.send_from_composer(t);
+                        self.send_typed(ui, t);
                     }
                     ui.add_space(8.0);
                     let cluster = crate::cards::composer_go_cluster_w();
@@ -2517,7 +2533,7 @@ impl Cabin {
                             if let Some(t) =
                                 take_focused_composer(ui, &mut self.composer, edit.has_focus())
                             {
-                                self.send_from_composer(t);
+                                self.send_typed(ui, t);
                             }
                             mic_rect = self.paint_voice_mic(ui, 22.0);
                         },
