@@ -999,6 +999,9 @@ impl Cabin {
                 if !href.is_empty() {
                     self.status = href.to_string();
                 }
+                if crate::desktop::url_safe_to_open(href) {
+                    let _ = crate::desktop::open_url(href);
+                }
             }
             None => {}
         }

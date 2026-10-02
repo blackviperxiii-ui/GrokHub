@@ -356,17 +356,7 @@ pub fn ensure_access(tokens: &XaiOAuthTokens) -> Result<(String, XaiOAuthTokens,
 
 pub fn open_browser(url: &str) -> Result<(), String> {
     trusted_xai_url(url)?;
-    #[cfg(windows)]
-    {
-        let _ = std::process::Command::new("cmd")
-            .args(["/C", "start", "", url])
-            .spawn();
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = std::process::Command::new("xdg-open").arg(url).spawn();
-    }
-    Ok(())
+    crate::desktop::open_url(url)
 }
 
 pub fn poll_until_ready(device_code: &str, interval_s: u64) -> Result<XaiOAuthTokens, String> {

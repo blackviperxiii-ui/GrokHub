@@ -1799,6 +1799,42 @@ pub fn open_path(path: &str) -> Result<(), String> {
     }
 }
 
+/// Caret, pipe, backtick, backslash, braces, and quotes, plus whitespace or control.
+/// Ampersand, question mark, equals, percent, and hash stay: one argument, never cmd.
+fn url_shell_meta(url: &str) -> bool {
+    url.chars().any(|c| {
+        c.is_whitespace()
+            || c.is_control()
+            || matches!(c, '^' | '|' | '`' | '\\' | '{' | '}' | '\'' | '"')
+    })
+}
+
+/// http(s) with a non-empty host, and no shell or cmd metacharacters.
+pub fn url_safe_to_open(url: &str) -> bool {
+    grokhub_core::md_link_ok(url) && !url_shell_meta(url)
+}
+
+/// Open an http(s) URL in the browser. Windows uses ShellExecuteW via
+/// `win_native::open_path`. Other platforms pass the URL as one `xdg-open`
+/// argument. Never `cmd` and never a shell string.
+pub fn open_url(url: &str) -> Result<(), String> {
+    if !url_safe_to_open(url) {
+        return Err("refusing to open this URL".into());
+    }
+    #[cfg(windows)]
+    {
+        crate::win_native::open_path(url)
+    }
+    #[cfg(not(windows))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}
+
 pub const VIDEO_PLAYERS: &[&str] = &["mpv", "ffplay"];
 
 /// Play a saved Imagine clip (or open a still) without blocking the UI.
@@ -2726,6 +2762,93 @@ mod tests {
         assert!(
             status.contains("thread::spawn") && status.contains("inflight"),
             "stale CDP windshield probe must refresh off the UI thread: {status}"
+        );
+    }
+
+    #[test]
+    fn url_safe_to_open_rejects_schemes_and_shell_meta() {
+        for bad in [
+            "",
+            "javascript:alert(1)",
+            "file:///C:/Windows/System32/calc.exe",
+            "ftp://x.com",
+            "data:text/html,x",
+            "https://",
+            "https:///x",
+            "https://a.com/ & calc",
+            "https://a.com/x&calc ",
+            "https://a.com/|calc",
+            "https://a.com/^&calc",
+            "https://a.com/\"&calc",
+            "https://a.com/`calc`",
+            "https://a.com/\ncalc",
+            "http://a.com\\..\\x",
+            "https://a.com/{x}",
+            "https://a.com/'x",
+        ] {
+            assert!(!url_safe_to_open(bad), "should reject {bad:?}");
+        }
+        for good in [
+            "https://a.com/%0a",
+            "https://example.com",
+            "http://example.com/a?b=1&c=2#frag",
+            "HTTPS://Example.com/path",
+        ] {
+            assert!(url_safe_to_open(good), "should accept {good:?}");
+        }
+    }
+
+    #[test]
+    fn open_url_never_shells_out_through_cmd() {
+        let desktop = include_str!("desktop.rs");
+        let chat = include_str!("app/chat_ui.rs");
+        let oauth = include_str!("oauth.rs");
+        let markdown = include_str!("markdown.rs");
+        let feed = include_str!("app/feed_ui.rs");
+        for (name, src) in [
+            ("desktop", desktop),
+            ("chat", chat),
+            ("oauth", oauth),
+            ("markdown", markdown),
+            ("feed", feed),
+        ] {
+            assert!(
+                !src.contains("\"/C\", \"start\""),
+                "{name} must not hand a URL to cmd /C start"
+            );
+        }
+        let opener = desktop
+            .split("pub fn open_url(")
+            .nth(1)
+            .and_then(|s| s.split("pub const VIDEO_PLAYERS").next())
+            .expect("open_url");
+        assert!(
+            opener.contains("url_safe_to_open")
+                && opener.contains("win_native::open_path")
+                && opener.contains("xdg-open")
+                && !opener.contains("Command::new(\"cmd\"")
+                && !opener.contains("sh -c"),
+            "{opener}"
+        );
+        assert!(
+            markdown.contains("ui.link(") && markdown.contains("desktop::open_url"),
+            "chat markdown links open through desktop::open_url"
+        );
+        assert!(
+            chat.contains("desktop::open_url") && oauth.contains("desktop::open_url"),
+            "elicit Open and OAuth share desktop::open_url"
+        );
+        assert!(
+            oauth.contains("trusted_xai_url(url)?")
+                && oauth
+                    .split("pub fn open_browser(")
+                    .nth(1)
+                    .and_then(|s| s.split("pub fn poll_until_ready(").next())
+                    .is_some_and(|s| {
+                        s.find("trusted_xai_url").unwrap_or(usize::MAX)
+                            < s.find("open_url").unwrap_or(0)
+                    }),
+            "OAuth still checks the xAI host before opening"
         );
     }
 }

@@ -1872,12 +1872,7 @@ impl Cabin {
                     let accept_label = if p.mode == "url" { "Open" } else { "Accept" };
                     if crate::cards::white_pill(ui, accept_label) {
                         if p.mode == "url" && !p.url.is_empty() {
-                            #[cfg(windows)]
-                            let _ = std::process::Command::new("cmd")
-                                .args(["/C", "start", "", &p.url])
-                                .spawn();
-                            #[cfg(not(windows))]
-                            let _ = std::process::Command::new("xdg-open").arg(&p.url).spawn();
+                            let _ = crate::desktop::open_url(&p.url);
                         }
                         if p.secret {
                             let held = self.elicit_draft.clone();

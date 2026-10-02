@@ -478,8 +478,12 @@ fn inline(ui: &mut Ui, line: &str, wrap: f32) {
             match span {
                 MdSpan::Link { text, url } => {
                     // `md_spans` only builds http(s) links (`md_link_ok`).
-                    ui.hyperlink_to(RichText::new(text).color(crate::theme::link()), url)
+                    let resp = ui
+                        .link(RichText::new(text).color(crate::theme::link()))
                         .on_hover_text(url);
+                    if resp.clicked() {
+                        let _ = crate::desktop::open_url(url);
+                    }
                 }
                 other => {
                     let job = spans_job(ui, std::slice::from_ref(other), wrap);
