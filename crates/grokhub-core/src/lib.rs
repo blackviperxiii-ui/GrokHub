@@ -4,6 +4,7 @@ pub mod appearance;
 pub mod attach;
 pub mod automation;
 pub mod autonomy;
+pub mod bg_task;
 pub mod browser;
 pub mod capture;
 pub mod chat;
@@ -95,6 +96,11 @@ pub use automation::{
 pub use autonomy::{
     anticipate_consumes_slot, anticipated_need, cabin_system_prompt, host_plan_autorun,
     host_step_autorun, should_anticipate, HostAuto, LearnMode, Policy, SkillFollow, SkillWrite,
+};
+pub use bg_task::{
+    bg_elapsed_label, bg_result_note, bg_result_post, bg_results_follow, bg_task_prompt,
+    bg_task_title, can_detach_turn, extract_background_tasks, live_send, steer_follow_block, BgEnd,
+    BgOrigin, LiveSend, BG_TASK_MARK, BG_TASK_MAX,
 };
 pub use browser::{
     browser_windshield_line, cdp_activate_payload, cdp_new_tab_path, cdp_page_close_payload,

@@ -542,6 +542,7 @@ fn is_protocol_line(line: &str) -> bool {
         || t.starts_with("CONSULT:")
         || t.starts_with("IMAGINE_PROMPT:")
         || t.starts_with("USER_FACT:")
+        || t.starts_with("BACKGROUND_TASK:")
 }
 
 /// User-visible assistant prose. Thinking, protocol, replayed transcripts, and tool dumps do not count.
