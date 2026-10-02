@@ -1249,11 +1249,13 @@ pub fn run_single_turn_full(
     }
 }
 
-/// Image and learned brief for one `grok -p` turn.
+/// Image, learned brief, and Ask deny for one `grok -p` turn.
 /// One argument, so the spawner stays at a dozen.
 pub struct GrokPAttach<'a> {
     pub image: Option<&'a str>,
     pub learned: &'a str,
+    /// Ask pill on an unwatched run: pass dontAsk and deny rules.
+    pub deny: bool,
 }
 
 /// Live `grok -p --output-format streaming-json`. Halt kills `pid`.
@@ -1407,7 +1409,11 @@ fn grok_p_child(
     skip_cabin_home: bool,
     worktree: bool,
 ) -> Result<Child, String> {
-    let GrokPAttach { image, learned } = attach;
+    let GrokPAttach {
+        image,
+        learned,
+        deny,
+    } = attach;
     let program = find_grok().ok_or_else(|| {
         "Grok Build CLI missing — install from x.ai/cli or set GROKHUB_GROK".to_string()
     })?;
@@ -1435,6 +1441,7 @@ fn grok_p_child(
     }
     args = crate::locate::with_fork_session(args, fork);
     args = crate::locate::with_worktree(args, worktree);
+    args = crate::locate::with_ask_deny(args, deny);
     let mut cmd = Command::new(&program);
     cmd.args(&args)
         .current_dir(&cwd_path)
@@ -1492,6 +1499,7 @@ fn grok_p_once(
         GrokPAttach {
             image,
             learned: "",
+            deny: false,
         },
         fork,
         false,
