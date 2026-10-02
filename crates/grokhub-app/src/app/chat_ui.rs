@@ -1332,7 +1332,7 @@ impl Cabin {
                 egui::Frame::NONE
                     .fill(crate::theme::panel())
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                    .corner_radius(10.0)
+                    .corner_radius(crate::theme::MENU_RADIUS)
                     .shadow(crate::theme::sheet_shadow())
                     .inner_margin(egui::Margin::symmetric(8, 6))
                     .show(ui, |ui| {

@@ -128,7 +128,7 @@ impl Cabin {
             .frame(
                 egui::Frame::NONE
                     .fill(crate::theme::panel())
-                    .corner_radius(12.0)
+                    .corner_radius(crate::theme::MENU_RADIUS)
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                     .inner_margin(egui::Margin::same(8)),
             )
@@ -264,7 +264,7 @@ impl Cabin {
                 ui.scope_builder(egui::UiBuilder::new().max_rect(modal), |ui| {
                     egui::Frame::NONE
                         .fill(crate::theme::bg())
-                        .corner_radius(16.0)
+                        .corner_radius(crate::theme::SHEET_RADIUS)
                         .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                         .inner_margin(egui::Margin::ZERO)
                         .show(ui, |ui| {

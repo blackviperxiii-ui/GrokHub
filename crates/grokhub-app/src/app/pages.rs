@@ -645,7 +645,7 @@ impl Cabin {
                     ui.centered_and_justified(|ui| {
                         egui::Frame::NONE
                             .fill(crate::theme::panel())
-                            .corner_radius(16.0)
+                            .corner_radius(crate::theme::SHEET_RADIUS)
                             .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                             .inner_margin(egui::Margin::same(24))
                             .show(ui, |ui| {
@@ -693,7 +693,7 @@ impl Cabin {
                 ui.centered_and_justified(|ui| {
                     egui::Frame::NONE
                         .fill(crate::theme::panel())
-                        .corner_radius(16.0)
+                        .corner_radius(crate::theme::SHEET_RADIUS)
                         .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                         .inner_margin(egui::Margin::same(24))
                         .show(ui, |ui| {
@@ -872,7 +872,7 @@ impl Cabin {
                 if self.board_compose {
                     egui::Frame::NONE
                         .fill(crate::theme::elevated())
-                        .corner_radius(16.0)
+                        .corner_radius(crate::theme::CARD_RADIUS)
                         .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                         .inner_margin(egui::Margin::same(14))
                         .show(ui, |ui| {
