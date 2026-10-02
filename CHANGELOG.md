@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+Windows reads the day and the time from the system clock. The cabin used to ask the `date` program, which Windows does not have, so there the day stayed 1970-01-01 and every clock read noon Monday: usage never rolled over to a new day, the nightly review and session suggestions never came due (a fixed noon never reaches 9 pm, and a stuck day never changes), and scheduled automations fired at the wrong time.
+
+Stop ends a headless Grok Build run on Windows. It used the Unix `kill` command there, so grok kept running after Stop. It now uses `taskkill` on the process tree, like the other Windows stops.
+
+Devices shows a LAN pairing address on Windows and macOS. Neither has `hostname -I`, so the phone was offered `http://127.0.0.1`. The cabin now asks the OS which local address it would route from.
+
+Also fixed: `/project` followed by a word with accented or non-Latin letters (for example `/project aé€`) crashed the cabin. Quitting now waits for a save that is still writing, and `app.json` is no longer written by two savers at once.
+
 ## 2.10.59 — 2026-10-02
 
 A soft glow can breathe around the chat composer while Grok replies. It stays off until Settings → Behavior → Composer glow (GPU effects). Turning it on uses the GPU renderer after a restart. If that renderer fails, or the last launch died while it was starting, the cabin comes back on OpenGL, turns the switch off, and says so once.
