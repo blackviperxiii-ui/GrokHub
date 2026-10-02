@@ -2,9 +2,14 @@
 
 ## Unreleased
 
+## 2.10.61 — 2026-10-02
+
 A message typed while Grok is still replying steers the reply. Enter stops the turn where it is, keeps what it already said and did in the chat, and carries on with your message and a short note of that progress, so finished steps are not redone. Alt+Enter, or `/queue <message>`, holds the message until the reply ends, which is what Enter used to do. With text typed during a reply, a row above the composer offers Steer and Queue, and lists queued messages with Steer now and Remove.
 
 Work can run in the background beside the chat. `/bg <task>` starts one on a fork of the chat's Grok session. **Background** next to the Running pulse, or a bare `/bg`, moves the live reply off the composer so you can keep chatting; its answer posts on that chat when it ends. Sending in another chat now moves a reply still running there to the background instead of stopping it. Grok can start background work itself with a `BACKGROUND_TASK:` line. Up to three run at once, each listed above the composer with its time, last tool, and Stop. `/bg stop` stops them all, tray Halt and Ctrl+Alt+H stop them with the live turn, and the next turn on a chat is told what its background work found. With Ask on, `/bg` and Grok's `BACKGROUND_TASK:` lines are refused, because a background run can't ask for approval (switch to Auto). Unwatched runs under Ask (background, automations, night, phone) pass Grok Build `--permission-mode dontAsk` and `--deny` rules for shell, edit, and write. Deleting a chat stops its background tasks. They end when the cabin quits.
+
+- Linux: `grokhub-linux-v2.10.61.tar.gz` and AUR `pkgver=2.10.61`.
+- Windows: `GrokHub-Setup-2.10.61.exe` and `grokhub-windows-v2.10.61.zip`.
 
 ## 2.10.60 — 2026-10-02
 
