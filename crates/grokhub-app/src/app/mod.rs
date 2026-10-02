@@ -105,7 +105,7 @@ use grokhub_core::{
     route_schedule, save_hub_state, screen_from_extents, scrolled_off_tail, search_corpus,
     search_corpus_tagged, search_place, search_thread_body, seed_from_bound, settings_pin_blocks_auto,
     settings_update_hint, settings_update_label,
-    settle_project_path, shortcut_help, should_anticipate, should_auto_compact_now,
+    settle_project_path, should_anticipate, should_auto_compact_now,
     should_auto_continue_goal, should_capture_before_chat, should_idle_reflect, should_keep_frame,
     should_name_thread, should_notify_cabin_update, should_paint_greeting, should_refresh_greeting,
     should_refresh_llm, should_seed_sidebar, should_send_screenshot, should_trim_result_bodies,
@@ -4992,12 +4992,11 @@ impl Cabin {
         }
         egui::Window::new("Shortcuts")
             .collapsible(false)
-            .default_width(420.0)
+            .default_width(560.0)
             .show(ctx, |ui| {
-                ui.set_max_width(400.0);
-                for line in shortcut_help().lines() {
-                    ui.label(line);
-                }
+                ui.set_min_width(520.0);
+                palette::paint_shortcut_sheet(ui);
+                ui.add_space(8.0);
                 if crate::cards::ghost_pill(ui, "Close") {
                     self.shortcuts_open = false;
                 }

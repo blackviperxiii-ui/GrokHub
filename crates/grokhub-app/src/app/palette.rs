@@ -207,3 +207,110 @@ impl Cabin {
         self.work_root()
     }
 }
+
+/// Contiguous scope runs, in sheet order. A scope that comes back later is a new group.
+pub fn group_shortcut_scopes<'a>(scopes: impl IntoIterator<Item = &'a str>) -> Vec<(&'a str, usize)> {
+    let mut out: Vec<(&str, usize)> = Vec::new();
+    for scope in scopes {
+        match out.last_mut() {
+            Some((prev, n)) if *prev == scope => *n += 1,
+            _ => out.push((scope, 1)),
+        }
+    }
+    out
+}
+
+/// Two-column shortcut sheet. Keys are monospace chips; the action is muted.
+pub(super) fn paint_shortcut_sheet(ui: &mut egui::Ui) {
+    let mut last = "";
+    egui::Grid::new("shortcut-sheet")
+        .num_columns(2)
+        .spacing(egui::vec2(12.0, 6.0))
+        .show(ui, |ui| {
+            for row in grokhub_core::SHORTCUTS {
+                if row.scope != last {
+                    ui.label(
+                        egui::RichText::new(row.scope)
+                            .size(crate::theme::FONT_CHROME)
+                            .strong()
+                            .color(crate::theme::fg()),
+                    );
+                    ui.end_row();
+                    last = row.scope;
+                }
+                shortcut_key_chip(ui, row.keys);
+                ui.label(
+                    egui::RichText::new(row.action)
+                        .size(crate::theme::FONT_BODY)
+                        .color(crate::theme::muted()),
+                );
+                ui.end_row();
+            }
+        });
+}
+
+fn shortcut_key_chip(ui: &mut egui::Ui, keys: &str) {
+    let font = egui::FontId::monospace(crate::theme::FONT_TIP);
+    let galley = ui.fonts_mut(|f| f.layout_no_wrap(keys.to_owned(), font, crate::theme::fg()));
+    let pad = egui::vec2(8.0, 3.0);
+    let (rect, _) = ui.allocate_exact_size(galley.size() + pad * 2.0, egui::Sense::hover());
+    ui.painter().rect_filled(
+        rect,
+        crate::theme::CHROME_RADIUS,
+        crate::theme::surface(),
+    );
+    ui.painter().galley(
+        egui::pos2(rect.min.x + pad.x, rect.center().y - galley.size().y * 0.5),
+        galley,
+        crate::theme::fg(),
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::group_shortcut_scopes;
+
+    #[test]
+    fn shortcut_sheet_keeps_each_scope_together() {
+        let scopes: Vec<&str> = grokhub_core::SHORTCUTS.iter().map(|s| s.scope).collect();
+        let groups = group_shortcut_scopes(scopes.iter().copied());
+        assert!(groups.len() >= 2, "{groups:?}");
+        assert_eq!(
+            groups.iter().map(|(_, n)| *n).sum::<usize>(),
+            grokhub_core::SHORTCUTS.len()
+        );
+        let mut seen = Vec::new();
+        for scope in &scopes {
+            if seen.last() != Some(scope) {
+                assert!(!seen.contains(scope), "{scope} is split across the sheet");
+                seen.push(*scope);
+            }
+        }
+        assert_eq!(groups[0].0, "Global");
+        let src = include_str!("palette.rs");
+        let sheet = src
+            .split("fn paint_shortcut_sheet(")
+            .nth(1)
+            .and_then(|s| s.split("fn shortcut_key_chip(").next())
+            .expect("sheet");
+        assert!(
+            sheet.contains("egui::Grid")
+                && sheet.contains("SHORTCUTS")
+                && sheet.contains("shortcut_key_chip")
+                && sheet.contains("theme::muted()"),
+            "{sheet}"
+        );
+        let chip = src
+            .split("fn shortcut_key_chip(")
+            .nth(1)
+            .and_then(|s| s.split("#[cfg(test)]").next())
+            .expect("chip");
+        assert!(
+            chip.contains("FontId::monospace")
+                && chip.contains("CHROME_RADIUS")
+                && chip.contains("theme::surface()")
+                && chip.contains("theme::fg()"),
+            "{chip}"
+        );
+    }
+}
