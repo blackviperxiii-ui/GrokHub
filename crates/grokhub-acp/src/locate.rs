@@ -1004,7 +1004,11 @@ pub fn with_ask_deny(mut args: Vec<String>, deny: bool) -> Vec<String> {
         after_p = a == "-p";
         keep
     });
-    if !args.iter().any(|a| a == "--permission-mode") {
+    let has_mode = args
+        .iter()
+        .enumerate()
+        .any(|(i, a)| a == "--permission-mode" && (i == 0 || args[i - 1] != "-p"));
+    if !has_mode {
         args.push("--permission-mode".into());
         args.push("dontAsk".into());
     }
@@ -1912,6 +1916,15 @@ mod tests {
             .collect();
         let out = with_ask_deny(args, true);
         assert_eq!(&out[..4], ["-p", "--always-approve", "--cwd", "/w"]);
+        let mode_prompt: Vec<String> = ["-p", "--permission-mode", "--cwd", "/w"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let out = with_ask_deny(mode_prompt, true);
+        assert!(
+            out.windows(2).any(|w| w[0] == "--permission-mode" && w[1] == "dontAsk"),
+            "{out:?}"
+        );
     }
 
     #[test]

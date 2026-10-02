@@ -437,15 +437,19 @@ fn refreshed_from(old: &ImagineTokens) -> Option<ImagineTokens> {
     .then(|| r.tokens.clone())
 }
 
-/// Tokens a background job refreshed that the UI has not taken yet. Never blocks.
-pub fn take_refreshed() -> Option<ImagineTokens> {
+/// Tokens a background job refreshed that the UI has not taken yet, only when
+/// they came from the refresh token the UI holds now (not an earlier account).
+/// Never blocks.
+pub fn take_refreshed(current_refresh: Option<&str>) -> Option<ImagineTokens> {
     let mut slot = REFRESHED.try_lock().ok()?;
-    let r = slot.as_mut().filter(|r| r.unseen)?;
+    let r = slot
+        .as_mut()
+        .filter(|r| r.unseen && r.from_refresh.is_some() && r.from_refresh.as_deref() == current_refresh)?;
     r.unseen = false;
     Some(r.tokens.clone())
 }
 
-/// Forget any refreshed tokens, so a sign-out is not undone by a job's leftovers.
+/// Forget any refreshed tokens, so a sign-out or a new sign-in is not undone by a job's leftovers.
 pub fn forget_refreshed() {
     *REFRESHED.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
