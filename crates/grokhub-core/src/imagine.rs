@@ -981,6 +981,389 @@ pub fn imagine_dest(project: Option<&str>) -> String {
     }
 }
 
+/// Image models the Imagine page offers. Default is 2.0.
+pub const IMAGINE_IMAGE_MODELS: &[&str] = &[
+    "grok-imagine-image-2.0",
+    "grok-imagine-image-quality",
+    "grok-imagine-image",
+];
+
+/// Video models the Imagine page offers. Default is 1.5.
+pub const IMAGINE_VIDEO_MODELS: &[&str] = &["grok-imagine-video-1.5", "grok-imagine-video"];
+
+/// Aspect ratios the image and text-to-video APIs accept. `auto` is omitted, not sent.
+pub const IMAGINE_API_ASPECTS: &[&str] = &[
+    "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "2:1", "1:2", "19.5:9", "9:19.5", "20:9",
+    "9:20", "21:9", "5:2",
+];
+
+/// Quality values on `grok-imagine-image-2.0` only.
+pub const IMAGINE_QUALITIES: &[&str] = &["auto", "low", "medium"];
+
+/// Appended when a mask field is rejected and the mask goes in as another reference.
+pub const MASK_PROMPT_NOTE: &str = "Use the last image as an edit mask.";
+
+pub fn imagine_image_model_id(model: &str) -> String {
+    let u = model.trim();
+    if IMAGINE_IMAGE_MODELS.contains(&u) {
+        u.to_string()
+    } else {
+        dedicated_imagine_model(u)
+    }
+}
+
+pub fn imagine_video_model_id(model: &str) -> String {
+    let u = model.trim();
+    if IMAGINE_VIDEO_MODELS.contains(&u) {
+        u.to_string()
+    } else {
+        dedicated_video_model(u)
+    }
+}
+
+/// `None` for empty, `auto`, or a ratio outside the API list.
+pub fn imagine_api_aspect(aspect: &str) -> Option<&'static str> {
+    let a = aspect.trim();
+    if a.is_empty() || a.eq_ignore_ascii_case("auto") {
+        return None;
+    }
+    IMAGINE_API_ASPECTS.iter().copied().find(|s| *s == a)
+}
+
+/// Quality is sent only for grok-imagine-image-2.0, and only for auto/low/medium.
+/// Resolution does not invent a quality value.
+pub fn imagine_quality_field(model: &str, quality: &str) -> Option<&'static str> {
+    if !model.contains("grok-imagine-image-2.0") {
+        return None;
+    }
+    match quality.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some("auto"),
+        "low" => Some("low"),
+        "medium" => Some("medium"),
+        _ => None,
+    }
+}
+
+fn clamp_image_n(n: u32) -> u32 {
+    n.clamp(1, 10)
+}
+
+fn clamp_image_resolution(resolution: &str) -> &'static str {
+    if resolution.trim().eq_ignore_ascii_case("2k") {
+        "2k"
+    } else {
+        "1k"
+    }
+}
+
+fn response_format_field(fmt: &str) -> &'static str {
+    if fmt.trim() == "b64_json" {
+        "b64_json"
+    } else {
+        "url"
+    }
+}
+
+/// `POST /v1/images/generations`. `n` is 1–10. Unknown aspects are omitted.
+pub fn imagine_generation_body(
+    prompt: &str,
+    model: &str,
+    n: u32,
+    resolution: &str,
+    aspect: &str,
+    quality: &str,
+    response_format: &str,
+) -> Value {
+    let model = imagine_image_model_id(model);
+    let mut body = json!({
+        "model": model,
+        "prompt": prompt,
+        "n": clamp_image_n(n),
+        "resolution": clamp_image_resolution(resolution),
+        "response_format": response_format_field(response_format),
+    });
+    if let Some(a) = imagine_api_aspect(aspect) {
+        body["aspect_ratio"] = json!(a);
+    }
+    if let Some(q) = imagine_quality_field(&model, quality) {
+        body["quality"] = json!(q);
+    }
+    body
+}
+
+fn edit_sources<'a>(sources: &'a [&'a str]) -> Vec<&'a str> {
+    sources
+        .iter()
+        .copied()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .take(3)
+        .collect()
+}
+
+fn put_image_refs(body: &mut Value, sources: &[&str]) {
+    if sources.len() <= 1 {
+        let url = sources.first().copied().unwrap_or("");
+        body["image"] = json!({ "url": url });
+    } else {
+        let images: Vec<Value> = sources.iter().map(|u| json!({ "url": u })).collect();
+        body["images"] = json!(images);
+    }
+}
+
+/// `POST /v1/images/edits`. One source is `image`; two or three are `images`.
+pub fn imagine_edit_body(
+    prompt: &str,
+    model: &str,
+    sources: &[&str],
+    mask: Option<&str>,
+    n: u32,
+    resolution: &str,
+    aspect: &str,
+    response_format: &str,
+) -> Value {
+    let model = imagine_image_model_id(model);
+    let sources = edit_sources(sources);
+    let mut body = json!({
+        "model": model,
+        "prompt": prompt,
+        "n": clamp_image_n(n),
+        "resolution": clamp_image_resolution(resolution),
+        "response_format": response_format_field(response_format),
+    });
+    put_image_refs(&mut body, &sources);
+    if let Some(a) = imagine_api_aspect(aspect) {
+        body["aspect_ratio"] = json!(a);
+    }
+    if let Some(mask) = mask.map(str::trim).filter(|s| !s.is_empty()) {
+        body["mask"] = json!({ "url": mask });
+    }
+    body
+}
+
+/// Same edit, without `mask`. The mask URL is one more reference (a fourth is allowed here).
+pub fn imagine_edit_mask_fallback(
+    prompt: &str,
+    model: &str,
+    sources: &[&str],
+    mask: Option<&str>,
+    n: u32,
+    resolution: &str,
+    aspect: &str,
+    response_format: &str,
+) -> Value {
+    let mut refs = edit_sources(sources);
+    if let Some(mask) = mask.map(str::trim).filter(|s| !s.is_empty()) {
+        refs.push(mask);
+    }
+    let mut prompt = prompt.to_string();
+    if !prompt.contains(MASK_PROMPT_NOTE) {
+        if !prompt.is_empty() && !prompt.ends_with(' ') {
+            prompt.push(' ');
+        }
+        prompt.push_str(MASK_PROMPT_NOTE);
+    }
+    let model = imagine_image_model_id(model);
+    let images: Vec<Value> = refs.iter().map(|u| json!({ "url": u })).collect();
+    let mut body = json!({
+        "model": model,
+        "prompt": prompt,
+        "n": clamp_image_n(n),
+        "resolution": clamp_image_resolution(resolution),
+        "response_format": response_format_field(response_format),
+        "images": images,
+    });
+    if let Some(a) = imagine_api_aspect(aspect) {
+        body["aspect_ratio"] = json!(a);
+    }
+    body
+}
+
+/// A mask-field rejection, not a generic 401.
+pub fn imagine_mask_rejected(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    if !e.contains("mask") {
+        return false;
+    }
+    const WORDS: &[&str] = &[
+        "reject",
+        "invalid",
+        "unsupported",
+        "unknown",
+        "unrecognized",
+        "unexpected",
+        "http 400",
+        "extra",
+        "denied",
+    ];
+    WORDS.iter().any(|w| e.contains(w))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImagineVideoOp {
+    TextToVideo,
+    ImageToVideo,
+    Edit,
+    Extend,
+}
+
+/// 1080p only on grok-imagine-video-1.5 text-to-video and image-to-video. Else 720p.
+pub fn video_resolution_for(model: &str, op: ImagineVideoOp, resolution: &str) -> &'static str {
+    let want = match resolution.trim() {
+        "720p" => "720p",
+        "1080p" => "1080p",
+        _ => "480p",
+    };
+    if want == "1080p" {
+        let allow = model.contains("1.5")
+            && matches!(
+                op,
+                ImagineVideoOp::TextToVideo | ImagineVideoOp::ImageToVideo
+            );
+        if !allow {
+            return "720p";
+        }
+    }
+    want
+}
+
+pub struct VideoBodyReq<'a> {
+    pub prompt: &'a str,
+    pub model: &'a str,
+    pub op: ImagineVideoOp,
+    pub duration: u32,
+    pub resolution: &'a str,
+    pub aspect: &'a str,
+    pub generate_audio: bool,
+    pub image_url: &'a str,
+    pub video_url: &'a str,
+}
+
+fn extend_duration(duration: u32) -> u32 {
+    if duration == 0 {
+        6
+    } else {
+        duration.clamp(2, 10)
+    }
+}
+
+/// Video generations, edits, and extensions. Edit omits duration, aspect, and resolution.
+pub fn imagine_video_body(req: &VideoBodyReq<'_>) -> Value {
+    let model = imagine_video_model_id(req.model);
+    match req.op {
+        ImagineVideoOp::Edit => json!({
+            "model": model,
+            "prompt": req.prompt,
+            "video": { "url": req.video_url },
+        }),
+        ImagineVideoOp::Extend => json!({
+            "model": model,
+            "prompt": req.prompt,
+            "video": { "url": req.video_url },
+            "duration": extend_duration(req.duration),
+        }),
+        ImagineVideoOp::TextToVideo | ImagineVideoOp::ImageToVideo => {
+            let mut body = json!({
+                "model": model,
+                "prompt": req.prompt,
+                "duration": req.duration.clamp(1, 15),
+                "resolution": video_resolution_for(&model, req.op, req.resolution),
+                "generate_audio": req.generate_audio,
+            });
+            if req.op == ImagineVideoOp::TextToVideo {
+                if let Some(a) = imagine_api_aspect(req.aspect) {
+                    body["aspect_ratio"] = json!(a);
+                }
+            }
+            if req.op == ImagineVideoOp::ImageToVideo {
+                let url = req.image_url.trim();
+                if !url.is_empty() {
+                    body["image"] = json!({ "url": url });
+                }
+            }
+            body
+        }
+    }
+}
+
+/// Every URL in `data` / `images`, then a single image or top-level URL.
+pub fn parse_imagine_urls(body: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    for key in ["data", "images"] {
+        if let Some(arr) = body.get(key).and_then(|d| d.as_array()) {
+            for item in arr {
+                if let Some(u) = imagine_item_url(item) {
+                    out.push(u);
+                }
+            }
+        }
+    }
+    if out.is_empty() {
+        if let Some(img) = body.get("image") {
+            if let Some(u) = imagine_item_url(img) {
+                out.push(u);
+            }
+        }
+    }
+    if out.is_empty() {
+        if let Some(u) =
+            nonempty_json_str(body.get("url")).or_else(|| nonempty_json_str(body.get("image_url")))
+        {
+            out.push(u);
+        }
+    }
+    out
+}
+
+/// Failed video job. Includes `(error.code)` when the server sent one.
+pub fn video_failure_detail(body: &Value) -> String {
+    let err = body.get("error");
+    let code = err
+        .and_then(|e| e.get("code"))
+        .and_then(|c| c.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let msg = err
+        .and_then(|e| e.get("message").and_then(|m| m.as_str()).or_else(|| e.as_str()))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("video failed");
+    match code {
+        Some(c) => format!("{msg} ({c})"),
+        None => msg.to_string(),
+    }
+}
+
+/// Data URI for an edit source. Larger than 8 MB is refused.
+pub fn image_bytes_data_uri(buf: &[u8]) -> Result<String, String> {
+    if buf.is_empty() {
+        return Err("empty image".into());
+    }
+    if buf.len() as u64 > crate::IMAGE_FILE_CAP {
+        return Err("image is larger than 8 MB".into());
+    }
+    let ext = media_ext_from_bytes(buf, "png");
+    let mime = match ext {
+        "jpg" => "image/jpeg",
+        "webp" => "image/webp",
+        _ => "image/png",
+    };
+    Ok(format!("data:{mime};base64,{}", crate::encode_b64(buf)))
+}
+
+/// Data URI for a short clip. Over 8 MB, ask for a URL instead of uploading.
+pub fn video_bytes_data_uri(buf: &[u8]) -> Result<String, String> {
+    if buf.is_empty() {
+        return Err("empty video".into());
+    }
+    if buf.len() as u64 > crate::IMAGE_FILE_CAP {
+        return Err("Video file is too large to attach. Paste a video URL instead.".into());
+    }
+    let ext = media_ext_from_bytes(buf, "mp4");
+    let mime = if ext == "webm" { "video/webm" } else { "video/mp4" };
+    Ok(format!("data:{mime};base64,{}", crate::encode_b64(buf)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1462,5 +1845,221 @@ mod tests {
         let vid = wall_gif_from_generation("/tmp/clip.mp4", "waves", 10, "16:9");
         assert!(!vid.tall);
         assert!(imagine_is_video_path(&vid.path_a));
+    }
+
+    fn video_req<'a>(
+        op: ImagineVideoOp,
+        model: &'a str,
+        duration: u32,
+        resolution: &'a str,
+        aspect: &'a str,
+    ) -> VideoBodyReq<'a> {
+        VideoBodyReq {
+            prompt: "waves",
+            model,
+            op,
+            duration,
+            resolution,
+            aspect,
+            generate_audio: true,
+            image_url: "data:image/png;base64,aa",
+            video_url: "https://vid.example/in.mp4",
+        }
+    }
+
+    #[test]
+    fn imagine_requests_every_mode() {
+        let zero = imagine_generation_body("cabin", "nope", 0, "4k", "nope", "high", "nope");
+        assert_eq!(zero["model"], DEFAULT_IMAGINE_MODEL);
+        assert_eq!(zero["n"], 1);
+        assert_eq!(zero["resolution"], "1k");
+        assert_eq!(zero["response_format"], "url");
+        assert!(zero.get("aspect_ratio").is_none());
+        assert!(zero.get("quality").is_none(), "4k must not invent quality");
+        let many = imagine_generation_body(
+            "cabin",
+            "grok-imagine-image-2.0",
+            99,
+            "2k",
+            "16:9",
+            "medium",
+            "b64_json",
+        );
+        assert_eq!(many["n"], 10);
+        assert_eq!(many["resolution"], "2k");
+        assert_eq!(many["aspect_ratio"], "16:9");
+        assert_eq!(many["quality"], "medium");
+        assert_eq!(many["response_format"], "b64_json");
+        let auto = imagine_generation_body(
+            "cabin",
+            "grok-imagine-image-2.0",
+            2,
+            "1k",
+            "auto",
+            "auto",
+            "url",
+        );
+        assert!(auto.get("aspect_ratio").is_none());
+        assert_eq!(auto["quality"], "auto");
+        let other = imagine_generation_body(
+            "cabin",
+            "grok-imagine-image-quality",
+            1,
+            "2k",
+            "1:1",
+            "low",
+            "url",
+        );
+        assert_eq!(other["model"], "grok-imagine-image-quality");
+        assert!(other.get("quality").is_none(), "quality only on 2.0");
+        assert_eq!(other["aspect_ratio"], "1:1");
+        assert!(IMAGINE_API_ASPECTS.contains(&"19.5:9"));
+        assert!(IMAGINE_QUALITIES.contains(&"medium"));
+        assert_eq!(IMAGINE_IMAGE_MODELS[0], DEFAULT_IMAGINE_MODEL);
+
+        let one = imagine_edit_body(
+            "fix the sky",
+            "grok-imagine-image",
+            &["data:image/png;base64,aa"],
+            None,
+            1,
+            "1k",
+            "auto",
+            "url",
+        );
+        assert!(one.get("image").is_some());
+        assert!(one.get("images").is_none());
+        assert!(one.get("mask").is_none());
+        let two = imagine_edit_body(
+            "fix",
+            "grok-imagine-image-2.0",
+            &["data:a", "data:b", "data:c", "data:d"],
+            Some("data:mask"),
+            1,
+            "2k",
+            "2:3",
+            "url",
+        );
+        assert!(two.get("image").is_none());
+        assert_eq!(two["images"].as_array().map(|a| a.len()), Some(3));
+        assert_eq!(two["mask"]["url"], "data:mask");
+        let fall = imagine_edit_mask_fallback(
+            "fix",
+            "grok-imagine-image-2.0",
+            &["data:a"],
+            Some("data:mask"),
+            1,
+            "1k",
+            "",
+            "url",
+        );
+        assert!(fall.get("mask").is_none());
+        assert_eq!(fall["images"].as_array().map(|a| a.len()), Some(2));
+        assert_eq!(fall["images"][1]["url"], "data:mask");
+        assert!(fall["prompt"].as_str().unwrap_or("").contains(MASK_PROMPT_NOTE));
+        assert!(imagine_mask_rejected("HTTP 400: unknown field mask"));
+        assert!(!imagine_mask_rejected("HTTP 401: bad credentials"));
+        assert!(!imagine_mask_rejected("please include a mask"));
+
+        let t2v = imagine_video_body(&video_req(
+            ImagineVideoOp::TextToVideo,
+            "grok-imagine-video-1.5",
+            0,
+            "1080p",
+            "16:9",
+        ));
+        assert_eq!(t2v["model"], DEFAULT_VIDEO_MODEL);
+        assert_eq!(t2v["duration"], 1, "0 clamps up to 1 on generations");
+        assert_eq!(t2v["resolution"], "1080p");
+        assert_eq!(t2v["aspect_ratio"], "16:9");
+        assert_eq!(t2v["generate_audio"], true);
+        assert!(t2v.get("image").is_none());
+        let legacy = imagine_video_body(&video_req(
+            ImagineVideoOp::TextToVideo,
+            "grok-imagine-video",
+            20,
+            "1080p",
+            "auto",
+        ));
+        assert_eq!(legacy["duration"], 15);
+        assert_eq!(legacy["resolution"], "720p", "1080p only on 1.5");
+        assert!(legacy.get("aspect_ratio").is_none());
+        let i2v = imagine_video_body(&video_req(
+            ImagineVideoOp::ImageToVideo,
+            "grok-imagine-video-1.5",
+            6,
+            "1080p",
+            "16:9",
+        ));
+        assert_eq!(i2v["resolution"], "1080p");
+        assert!(i2v.get("aspect_ratio").is_none(), "aspect only on text-to-video");
+        assert_eq!(i2v["image"]["url"], "data:image/png;base64,aa");
+        let edit = imagine_video_body(&video_req(
+            ImagineVideoOp::Edit,
+            "grok-imagine-video-1.5",
+            15,
+            "1080p",
+            "16:9",
+        ));
+        assert!(edit.get("duration").is_none());
+        assert!(edit.get("aspect_ratio").is_none());
+        assert!(edit.get("resolution").is_none());
+        assert!(edit.get("generate_audio").is_none());
+        assert_eq!(edit["video"]["url"], "https://vid.example/in.mp4");
+        for (raw, expect) in [(0, 6u32), (1, 2), (15, 10), (6, 6)] {
+            let ext = imagine_video_body(&video_req(
+                ImagineVideoOp::Extend,
+                "grok-imagine-video-1.5",
+                raw,
+                "1080p",
+                "16:9",
+            ));
+            assert_eq!(ext["duration"], expect, "extend {raw}");
+            assert!(ext.get("resolution").is_none());
+            assert!(ext.get("aspect_ratio").is_none());
+            assert_eq!(ext["video"]["url"], "https://vid.example/in.mp4");
+        }
+        assert_eq!(IMAGINE_VIDEO_MODELS[0], DEFAULT_VIDEO_MODEL);
+        assert_eq!(
+            video_resolution_for("grok-imagine-video", ImagineVideoOp::ImageToVideo, "1080p"),
+            "720p"
+        );
+
+        let many_urls = json!({
+            "data": [{ "url": "https://a" }, { "b64_json": "qq" }]
+        });
+        let urls = parse_imagine_urls(&many_urls);
+        assert_eq!(urls.len(), 2);
+        assert_eq!(urls[0], "https://a");
+        assert!(urls[1].starts_with("data:image/png;base64,"));
+        assert_eq!(parse_imagine_url(&many_urls).as_deref(), Some("https://a"));
+        let detail = video_failure_detail(&json!({
+            "error": { "message": "blocked", "code": "content_policy" }
+        }));
+        assert!(detail.contains("content_policy"), "{detail}");
+        assert!(detail.contains("blocked"), "{detail}");
+        assert_eq!(parse_video_job_status("expired"), VideoJobStatus::Expired);
+        assert_eq!(parse_video_job_status("failed"), VideoJobStatus::Failed);
+
+        let png = b"\x89PNG\r\n\x1a\nhello";
+        let uri = image_bytes_data_uri(png).unwrap();
+        assert!(uri.starts_with("data:image/png;base64,"), "{uri}");
+        let big = vec![0u8; crate::IMAGE_FILE_CAP as usize + 1];
+        assert!(image_bytes_data_uri(&big).unwrap_err().contains("8 MB"));
+        let vid_err = video_bytes_data_uri(&big).unwrap_err();
+        assert!(vid_err.to_ascii_lowercase().contains("url"), "{vid_err}");
+    }
+
+    #[test]
+    fn imagine_request_source_never_names_cli_login() {
+        let src = include_str!("imagine.rs");
+        for banned in [
+            concat!("grok_cli_", "key"),
+            concat!("auth", ".json"),
+            concat!("refresh_grok_", "login"),
+            concat!("cli-chat-", "proxy"),
+        ] {
+            assert!(!src.contains(banned), "{banned}");
+        }
     }
 }
