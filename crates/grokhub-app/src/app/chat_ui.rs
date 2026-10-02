@@ -675,6 +675,16 @@ pub(super) fn chat_row_outside_clip(
 }
 
 /// The composer field paints no frame of its own, only a 2px side inset.
+#[cfg(feature = "fx")]
+impl Cabin {
+    /// GPU glow behind the pill while a reply streams, on wgpu with the Settings switch on.
+    fn paint_composer_glow(&self, ui: &egui::Ui, pill: egui::Rect) {
+        if self.running && self.cfg.composer_glow && crate::fx::renderer_is_wgpu() {
+            crate::fx::paint_composer_glow(ui, pill);
+        }
+    }
+}
+
 fn composer_field_frame() -> egui::Frame {
     egui::Frame::NONE.inner_margin(egui::Margin::symmetric(2, 0))
 }
@@ -2413,6 +2423,8 @@ impl Cabin {
                     ui.set_min_size(egui::vec2(cap, pill_h));
                     let pill_rect =
                         egui::Rect::from_min_size(ui.max_rect().min, egui::vec2(cap, pill_h));
+                    #[cfg(feature = "fx")]
+                    self.paint_composer_glow(ui, pill_rect);
                     ui.painter().rect(
                         pill_rect,
                         crate::theme::QUERY_RADIUS,
