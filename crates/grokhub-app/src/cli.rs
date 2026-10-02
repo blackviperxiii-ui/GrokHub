@@ -8,6 +8,7 @@ pub enum Launch {
     Update,
     Oauth,
     Help,
+    McpDesktop,
 }
 
 pub fn parse_args(args: &[String]) -> Launch {
@@ -20,6 +21,7 @@ pub fn parse_args(args: &[String]) -> Launch {
             "--doctor" => return Launch::Doctor,
             "--update" => return Launch::Update,
             "--oauth" => return Launch::Oauth,
+            "--mcp-desktop" => return Launch::McpDesktop,
             "-h" | "--help" => return Launch::Help,
             _ => {}
         }
@@ -44,6 +46,14 @@ mod tests {
         assert_eq!(parse_args(&args(&["grokhub", "--doctor"])), Launch::Doctor);
         assert_eq!(parse_args(&args(&["grokhub", "--update"])), Launch::Update);
         assert_eq!(parse_args(&args(&["grokhub", "--oauth"])), Launch::Oauth);
+        assert_eq!(
+            parse_args(&args(&["grokhub", "--mcp-desktop"])),
+            Launch::McpDesktop
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub", "--hub", "--mcp-desktop"])),
+            Launch::McpDesktop
+        );
         let oauth = include_str!("main.rs")
             .split("fn run_oauth_cli(")
             .nth(1)
@@ -58,8 +68,30 @@ mod tests {
     }
 
     #[test]
+    fn desktop_mcp_launch_flag() {
+        assert_eq!(
+            parse_args(&args(&["grokhub", "--mcp-desktop"])),
+            Launch::McpDesktop
+        );
+        assert_eq!(
+            parse_args(&args(&["grokhub", "--version", "--mcp-desktop"])),
+            Launch::Version,
+            "--version still returns before later flags"
+        );
+        let main = include_str!("main.rs");
+        assert!(
+            main.contains("Launch::McpDesktop") && main.contains("desktop_mcp::run_stdio"),
+            "grokhub --mcp-desktop must run the stdio server and skip the cabin window"
+        );
+        assert!(
+            !main.contains("attach_cli_console") || main.contains("Launch::Cabin | Launch::Agent | Launch::McpDesktop"),
+            "the desktop server must not attach a console"
+        );
+    }
+
+    #[test]
     fn cabin_reports_version() {
-        assert_eq!(env!("CARGO_PKG_VERSION"), "2.10.61");
+        assert_eq!(env!("CARGO_PKG_VERSION"), "2.10.62");
     }
 
     #[test]

@@ -20,6 +20,7 @@ mod config;
 #[cfg(feature = "fx")]
 mod fx;
 mod desktop;
+mod desktop_mcp;
 mod github;
 mod host;
 mod markdown;
@@ -60,7 +61,7 @@ fn main() {
     ensure_windows_home();
     let launch = parse_args(&env::args().collect::<Vec<_>>());
     match launch {
-        Launch::Cabin | Launch::Agent => {}
+        Launch::Cabin | Launch::Agent | Launch::McpDesktop => {}
         Launch::Hub => attach_cli_console(true),
         Launch::Version | Launch::Help | Launch::Doctor | Launch::Update | Launch::Oauth => {
             attach_cli_console(false)
@@ -73,12 +74,12 @@ fn main() {
         Launch::Help => {
             #[cfg(windows)]
             eprint!(
-                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  only what is newer: grok update --alpha, then GitHub zip or source overlay\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
+                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --mcp-desktop  desktop tools on stdin (no window)\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  only what is newer: grok update --alpha, then GitHub zip or source overlay\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
                 env!("CARGO_PKG_VERSION")
             );
             #[cfg(not(windows))]
             eprint!(
-                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  only what is newer: grok update --alpha, then git pull + install.sh --user\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
+                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --mcp-desktop  desktop tools on stdin (no window)\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  only what is newer: grok update --alpha, then git pull + install.sh --user\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
                 env!("CARGO_PKG_VERSION")
             );
         }
@@ -86,6 +87,10 @@ fn main() {
         Launch::Oauth => run_oauth_cli(),
         Launch::Update => run_update_cli(),
         Launch::Hub => run_hub(),
+        Launch::McpDesktop => {
+            let code = desktop_mcp::run_stdio();
+            std::process::exit(code);
+        }
         Launch::Agent => {
             if let Err(e) = run_cabin(true) {
                 eprintln!("{e}");

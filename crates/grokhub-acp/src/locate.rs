@@ -5,7 +5,7 @@ use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::protocol::SessionMode;
+use crate::protocol::{PermissionMode, SessionMode};
 
 /// `(env key, scanned at, grok path, refresh in flight)`.
 type GrokBinCache = Option<(String, Instant, Option<PathBuf>, bool)>;
@@ -933,6 +933,19 @@ pub fn cabin_rules(learned: &str) -> String {
     )
 }
 
+/// One line on the cabin rules while Settings → desktop control is on.
+/// Off stays byte-identical to [`cabin_rules`].
+pub const DESKTOP_CABIN_LINE: &str =
+    "Prefer the grokhub-desktop tools over shell xdotool or PowerShell for the screen.";
+
+pub fn cabin_rules_for(learned: &str, desktop: bool) -> String {
+    let base = cabin_rules(learned);
+    if !desktop {
+        return base;
+    }
+    format!("{base}\n{DESKTOP_CABIN_LINE}")
+}
+
 /// Headless GrokHub chat is the cabin assistant on this Linux box, not grok.com.
 /// One argv for `grok -p --rules`. Look mode (btw) does not receive this.
 pub const CABIN_DESKTOP_RULES: &str = "You are the cabin assistant on this Linux desktop through GrokHub. You can do what this computer can do: files, shell, browser, and the desktop. Never say you lack access to this computer, files, or desktop. Do the next step with tools. Ask only before sending a message, paying, deleting something they did not name, or publishing. Be brief and warm. Do not repeat the chat. Do not paste code, diffs, or logs unless they asked to see it. When they hand you work, track it with WORK_PIN and WORK_UPDATE and keep going. A paused workboard card is still yours. Resume it. When a tool, a page, or a first pass comes back empty or wrong, try one other path. Then say what blocked you and the next useful step. Do not end the turn on that first miss. Do not invent a source, a count, or a fact. A stable preference or routine is one line: USER_FACT: why they asked and what would help next time, not a copy of their sentence. Separate long work that should not hold up this chat (a full test run, a big search, a batch elsewhere) is one line per task: BACKGROUND_TASK: complete, self-contained instructions. The cabin runs it beside this chat and posts the result here; do not wait for it.";
@@ -964,9 +977,14 @@ pub fn with_worktree(mut args: Vec<String>, on: bool) -> Vec<String> {
     args
 }
 
-/// Shell, edit, and write. An unwatched Ask run denies these: nobody can
-/// answer the prompt grok would otherwise show.
-pub const ASK_DENY_RULES: &[&str] = &["Bash", "Edit", "Write"];
+/// Shell, edit, write, and the desktop MCP server. An unwatched Ask run
+/// denies these: nobody can answer the prompt grok would otherwise show.
+pub const ASK_DENY_RULES: &[&str] = &[
+    "Bash",
+    "Edit",
+    "Write",
+    grokhub_core::DESKTOP_MCP_RULE,
+];
 
 /// Fail closed on an unwatched `grok -p` while Ask is on.
 ///
@@ -991,6 +1009,25 @@ pub fn with_ask_deny(mut args: Vec<String>, deny: bool) -> Vec<String> {
     args
 }
 
+/// Desktop allow/deny for every headless `grok -p`. Plan and btw (Ask) deny
+/// the desktop tools even on Auto or Always. Attended Ask never reaches here.
+pub fn apply_desktop_spawn_args(
+    args: Vec<String>,
+    permission: PermissionMode,
+    session: SessionMode,
+    enabled: bool,
+) -> Vec<String> {
+    let mode = match session {
+        SessionMode::Plan | SessionMode::Ask => grokhub_core::DesktopPermMode::Ask,
+        SessionMode::Chat => match permission {
+            PermissionMode::AlwaysApprove => grokhub_core::DesktopPermMode::Always,
+            PermissionMode::Auto => grokhub_core::DesktopPermMode::Auto,
+            PermissionMode::Ask => grokhub_core::DesktopPermMode::Ask,
+        },
+    };
+    grokhub_core::apply_desktop_mcp_args(args, mode, false, enabled)
+}
+
 pub fn agent_args_resume(
     always_approve: bool,
     resume: Option<&str>,
@@ -998,6 +1035,41 @@ pub fn agent_args_resume(
 ) -> Vec<String> {
     let _ = resume;
     agent_args(always_approve, reasoning_effort)
+}
+
+/// `grok mcp add grokhub-desktop -- <exe> --mcp-desktop`
+pub fn desktop_mcp_add_argv(exe: &str) -> Vec<String> {
+    vec![
+        "mcp".into(),
+        "add".into(),
+        grokhub_core::DESKTOP_MCP_SERVER.into(),
+        "--".into(),
+        exe.into(),
+        "--mcp-desktop".into(),
+    ]
+}
+
+/// `grok mcp remove grokhub-desktop`
+pub fn desktop_mcp_remove_argv() -> Vec<String> {
+    vec![
+        "mcp".into(),
+        "remove".into(),
+        grokhub_core::DESKTOP_MCP_SERVER.into(),
+    ]
+}
+
+/// Register the stdio server in the cabin `GROK_HOME`, never `~/.grok`.
+pub fn register_desktop_mcp(bin: &Path, cwd: &Path, exe: &Path) -> Result<String, String> {
+    let argv = desktop_mcp_add_argv(&exe.display().to_string());
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    grok_stdout_timeout(bin, cwd, &refs, 20)
+}
+
+/// Remove the cabin registration. Same isolated runner as [`register_desktop_mcp`].
+pub fn unregister_desktop_mcp(bin: &Path, cwd: &Path) -> Result<String, String> {
+    let argv = desktop_mcp_remove_argv();
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    grok_stdout_timeout(bin, cwd, &refs, 20)
 }
 
 #[cfg(test)]
@@ -1337,7 +1409,13 @@ mod tests {
             "cabin grok -p must tell Grok it has this computer: {ask:?}"
         );
         assert_eq!(cabin_rules(""), CABIN_DESKTOP_RULES);
+        assert_eq!(cabin_rules_for("", false), CABIN_DESKTOP_RULES);
+        let armed = cabin_rules_for("", true);
+        assert!(armed.starts_with(CABIN_DESKTOP_RULES));
+        assert!(armed.contains(DESKTOP_CABIN_LINE));
+        assert_ne!(armed, CABIN_DESKTOP_RULES);
         let with = cabin_rules("Around 21:00 they skip night.");
+        assert_eq!(cabin_rules_for("Around 21:00 they skip night.", false), with);
         assert!(with.starts_with(CABIN_DESKTOP_RULES));
         assert!(with.contains("skip night"));
         assert!(with.contains("Do not recite"));
@@ -1850,7 +1928,16 @@ mod tests {
                 .any(|w| w[0] == "--permission-mode" && w[1] == "dontAsk"),
             "{denied:?}"
         );
-        assert_eq!(ASK_DENY_RULES, ["Bash", "Edit", "Write"].as_slice());
+        assert_eq!(
+            ASK_DENY_RULES,
+            [
+                "Bash",
+                "Edit",
+                "Write",
+                grokhub_core::DESKTOP_MCP_RULE,
+            ]
+            .as_slice()
+        );
         for rule in ASK_DENY_RULES {
             assert!(
                 denied.windows(2).any(|w| w[0] == "--deny" && w[1] == *rule),
@@ -1894,6 +1981,11 @@ mod tests {
             plan.windows(2).any(|w| w[0] == "--deny" && w[1] == "Write"),
             "{plan:?}"
         );
+        assert!(
+            plan.windows(2)
+                .any(|w| w[0] == "--deny" && w[1] == grokhub_core::DESKTOP_MCP_RULE),
+            "{plan:?}"
+        );
 
         let look = with_ask_deny(
             single_turn_args_full(
@@ -1922,6 +2014,11 @@ mod tests {
             look.windows(2).any(|w| w[0] == "--deny" && w[1] == "Write"),
             "{look:?}"
         );
+        assert!(
+            look.windows(2)
+                .any(|w| w[0] == "--deny" && w[1] == grokhub_core::DESKTOP_MCP_RULE),
+            "{look:?}"
+        );
         assert!(!look.iter().any(|a| a == "dontAsk"), "{look:?}");
 
         let mut yolo = plain;
@@ -1941,6 +2038,108 @@ mod tests {
                 .windows(2)
                 .any(|w| w[0] == "--permission-mode" && w[1] == "dontAsk"),
             "{stripped:?}"
+        );
+    }
+
+    #[test]
+    fn desktop_mcp_register_uses_isolated_runner() {
+        let add = desktop_mcp_add_argv("/usr/bin/grokhub");
+        assert_eq!(
+            add,
+            [
+                "mcp",
+                "add",
+                "grokhub-desktop",
+                "--",
+                "/usr/bin/grokhub",
+                "--mcp-desktop",
+            ]
+        );
+        assert_eq!(
+            desktop_mcp_remove_argv(),
+            ["mcp", "remove", "grokhub-desktop"]
+        );
+        let src = include_str!("locate.rs");
+        let reg = src
+            .split("pub fn register_desktop_mcp(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn unregister_desktop_mcp(").next())
+            .expect("register_desktop_mcp");
+        assert!(
+            reg.contains("grok_stdout_timeout") && !reg.contains("grok_user_stdout"),
+            "desktop MCP add must use the cabin GROK_HOME runner: {reg}"
+        );
+        let unreg = src
+            .split("pub fn unregister_desktop_mcp(")
+            .nth(1)
+            .and_then(|s| s.split("#[cfg(test)]").next())
+            .expect("unregister_desktop_mcp");
+        assert!(
+            unreg.contains("grok_stdout_timeout") && !unreg.contains("grok_user_stdout"),
+            "desktop MCP remove must use the cabin GROK_HOME runner: {unreg}"
+        );
+    }
+
+    #[test]
+    fn desktop_mcp_plan_and_btw_deny_even_when_allowed() {
+        let plan = apply_desktop_spawn_args(
+            vec!["--always-approve".into()],
+            PermissionMode::AlwaysApprove,
+            SessionMode::Plan,
+            true,
+        );
+        assert!(
+            plan.windows(2)
+                .any(|w| w[0] == "--deny" && w[1] == grokhub_core::DESKTOP_MCP_RULE),
+            "{plan:?}"
+        );
+        assert!(
+            !plan
+                .windows(2)
+                .any(|w| w[0] == "--allow" && w[1] == grokhub_core::DESKTOP_MCP_RULE),
+            "{plan:?}"
+        );
+        let look = apply_desktop_spawn_args(
+            Vec::new(),
+            PermissionMode::Auto,
+            SessionMode::Ask,
+            true,
+        );
+        assert!(
+            look.windows(2)
+                .any(|w| w[0] == "--deny" && w[1] == grokhub_core::DESKTOP_MCP_RULE),
+            "{look:?}"
+        );
+        let allow = apply_desktop_spawn_args(
+            Vec::new(),
+            PermissionMode::Auto,
+            SessionMode::Chat,
+            true,
+        );
+        assert!(
+            allow
+                .windows(2)
+                .any(|w| w[0] == "--allow" && w[1] == grokhub_core::DESKTOP_MCP_RULE),
+            "{allow:?}"
+        );
+        let off = apply_desktop_spawn_args(
+            vec![
+                "--allow".into(),
+                grokhub_core::DESKTOP_MCP_RULE.into(),
+            ],
+            PermissionMode::AlwaysApprove,
+            SessionMode::Chat,
+            false,
+        );
+        assert!(
+            !off.windows(2)
+                .any(|w| w[0] == "--allow" && w[1] == grokhub_core::DESKTOP_MCP_RULE),
+            "{off:?}"
+        );
+        assert!(
+            off.windows(2)
+                .any(|w| w[0] == "--deny" && w[1] == grokhub_core::DESKTOP_MCP_RULE),
+            "{off:?}"
         );
     }
 }
