@@ -4800,9 +4800,12 @@ impl eframe::App for Cabin {
         {
             self.touch();
         }
-        if ctx
-            .input(|i| i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::Escape))
-        {
+        if ctx.input(|i| {
+            i.modifiers.command
+                && i.modifiers.alt
+                && !i.modifiers.shift
+                && i.key_pressed(egui::Key::H)
+        }) {
             self.halt_work("Stopped");
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::G) && !i.modifiers.shift) {
