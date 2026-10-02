@@ -2003,6 +2003,9 @@ impl Cabin {
     }
 
     fn halt_in_flight(&mut self) {
+        // A stopped turn's steer and background notes must not ride into another chat.
+        self.bg.steer_follow = None;
+        self.bg.results_follow = None;
         crate::desktop_mcp::write_halt_stamp();
         self.host_halt.store(true, Ordering::SeqCst);
         self.withdraw_perm_asks();
