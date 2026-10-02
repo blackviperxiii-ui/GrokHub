@@ -1,14 +1,16 @@
 use grokhub_core::{
     chat_request_body_vision, chat_timeout_secs, client_secrets_body, client_secrets_url,
-    dedicated_imagine_model, dedicated_video_model, frame_bytes, imagine_empty_reply_hint,
+    dedicated_imagine_model, dedicated_video_model, frame_bytes, imagine_edit_body,
+    imagine_edit_mask_fallback, imagine_empty_reply_hint, imagine_generation_body,
     imagine_image_fallback_model, imagine_image_shaped, imagine_is_network_stall,
-    imagine_moderation_blocked, imagine_network_hint, imagine_should_retry_model, imagine_slug,
-    imagine_video_fallback_model, media_ext_from_bytes,
-    merge_thinking, parse_client_secret, parse_imagine_url, parse_model_reasoning,
-    parse_model_text, parse_stt_text, parse_video_job_status, parse_video_request_id,
-    parse_video_url, realtime_can_connect, responses_request_body, responses_url, stt_multipart,
-    stt_url, tts_request_body, tts_url, video_moderation_blocked, video_request_body,
-    voice_client_secret_denied, PresenceFrame, VideoJobStatus, MEDIA_FILE_CAP, TEXT_FILE_CAP,
+    imagine_mask_rejected, imagine_moderation_blocked, imagine_network_hint,
+    imagine_should_retry_model, imagine_slug, imagine_video_body, imagine_video_fallback_model,
+    media_ext_from_bytes, merge_thinking, parse_client_secret, parse_imagine_url,
+    parse_imagine_urls, parse_model_reasoning, parse_model_text, parse_stt_text,
+    parse_video_job_status, parse_video_request_id, parse_video_url, realtime_can_connect,
+    responses_request_body, responses_url, stt_multipart, stt_url, tts_request_body, tts_url,
+    video_failure_detail, video_moderation_blocked, video_request_body, voice_client_secret_denied,
+    ImagineVideoOp, PresenceFrame, VideoBodyReq, VideoJobStatus, MEDIA_FILE_CAP, TEXT_FILE_CAP,
     XAI_BASE,
 };
 use std::io::Read;
@@ -252,6 +254,153 @@ pub fn grok_imagine_video(
             VideoJobStatus::Expired => return Err("video expired".into()),
         }
     }
+}
+
+fn image_urls_from(v: &serde_json::Value) -> Result<Vec<String>, String> {
+    if imagine_moderation_blocked(v) {
+        return Err("image blocked by moderation".into());
+    }
+    let urls = parse_imagine_urls(v);
+    if urls.is_empty() {
+        return Err(imagine_empty_reply_hint(v));
+    }
+    Ok(urls)
+}
+
+fn store_image_urls(urls: Vec<String>, prompt: &str, key: &str) -> Result<Vec<String>, String> {
+    // The local-send test returns a URL and asserts the cabin keeps that string.
+    #[cfg(test)]
+    if imagine_base_override().is_some() {
+        return Ok(urls);
+    }
+    let mut out = Vec::new();
+    for url in urls {
+        out.push(save_media(&url, prompt, "png", key)?);
+    }
+    Ok(out)
+}
+
+pub fn grok_imagine_generations(
+    api_key: &str,
+    prompt: &str,
+    model: &str,
+    n: u32,
+    resolution: &str,
+    aspect: &str,
+    quality: &str,
+) -> Result<Vec<String>, String> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err("Connect Grok in Settings".into());
+    }
+    let body = imagine_generation_body(prompt, model, n, resolution, aspect, quality, "url");
+    let v = grok_json(
+        &format!("{}/images/generations", imagine_api_base()),
+        key,
+        body,
+        120,
+    )?;
+    store_image_urls(image_urls_from(&v)?, prompt, key)
+}
+
+pub fn grok_imagine_edits(
+    api_key: &str,
+    prompt: &str,
+    model: &str,
+    sources: &[String],
+    mask: Option<&str>,
+    n: u32,
+    resolution: &str,
+    aspect: &str,
+) -> Result<(Vec<String>, Option<String>), String> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err("Connect Grok in Settings".into());
+    }
+    let refs: Vec<&str> = sources.iter().map(String::as_str).collect();
+    let post = |body: serde_json::Value| -> Result<Vec<String>, String> {
+        let v = grok_json(
+            &format!("{}/images/edits", imagine_api_base()),
+            key,
+            body,
+            120,
+        )?;
+        store_image_urls(image_urls_from(&v)?, prompt, key)
+    };
+    let body = imagine_edit_body(prompt, model, &refs, mask, n, resolution, aspect, "url");
+    match post(body) {
+        Ok(urls) => Ok((urls, None)),
+        Err(e) if mask.is_some_and(|m| !m.trim().is_empty()) && imagine_mask_rejected(&e) => {
+            let body =
+                imagine_edit_mask_fallback(prompt, model, &refs, mask, n, resolution, aspect, "url");
+            let urls = post(body)?;
+            Ok((
+                urls,
+                Some("Mask was rejected; sent it as a reference image.".into()),
+            ))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn poll_imagine_video(key: &str, request_id: &str, prompt: &str) -> Result<String, String> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(480);
+    loop {
+        if std::time::Instant::now() >= deadline {
+            return Err(imagine_network_hint("video timed out"));
+        }
+        let poll = xai_agent(45)
+            .get(&format!("{}/videos/{request_id}", imagine_api_base()))
+            .set("authorization", &format!("Bearer {key}"))
+            .call()
+            .map_err(|e| imagine_network_hint(&http_err(e)))?;
+        let v = read_json_capped(poll)?;
+        let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("");
+        match parse_video_job_status(status) {
+            VideoJobStatus::Pending => {
+                if status.is_empty() {
+                    if let Some(err) = json_error(&v) {
+                        return Err(err);
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+            VideoJobStatus::Done => {
+                if video_moderation_blocked(&v) {
+                    return Err("video blocked by moderation".into());
+                }
+                let url = parse_video_url(&v).ok_or_else(|| "empty video url".to_string())?;
+                #[cfg(test)]
+                if imagine_base_override().is_some() {
+                    return Ok(url);
+                }
+                return save_media(&url, prompt, "mp4", key);
+            }
+            VideoJobStatus::Failed => return Err(video_failure_detail(&v)),
+            VideoJobStatus::Expired => return Err("video expired".into()),
+        }
+    }
+}
+
+pub fn grok_imagine_video_op(api_key: &str, req: &VideoBodyReq<'_>) -> Result<String, String> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err("Connect Grok in Settings".into());
+    }
+    let path = match req.op {
+        ImagineVideoOp::Edit => "videos/edits",
+        ImagineVideoOp::Extend => "videos/extensions",
+        ImagineVideoOp::TextToVideo | ImagineVideoOp::ImageToVideo => "videos/generations",
+    };
+    let started = grok_json(
+        &format!("{}/{path}", imagine_api_base()),
+        key,
+        imagine_video_body(req),
+        120,
+    )?;
+    let request_id =
+        parse_video_request_id(&started).ok_or_else(|| "empty video request_id".to_string())?;
+    poll_imagine_video(key, &request_id, req.prompt)
 }
 
 fn save_media(url: &str, prompt: &str, ext: &str, key: &str) -> Result<String, String> {

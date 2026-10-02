@@ -36,6 +36,7 @@ pub mod hub_sync;
 pub mod hygiene;
 pub mod ideas;
 pub mod imagine;
+pub mod imagine_auth;
 pub mod inhabit;
 pub mod learning;
 pub mod md;
@@ -268,13 +269,28 @@ pub use imagine::{
     imagine_video_duration_secs, imagine_video_fallback_model, imagine_video_poster_args,
     imagine_video_poster_path, imagine_video_res_label, imagine_video_resolution,
     imagine_wall_bounds, imagine_wall_overlaps_toolbox, last_imagine_receipt, media_ext_from_bytes,
-    parse_imagine_url, parse_video_job_status, parse_video_request_id, parse_video_url,
-    pick_fresh_seed, retired_imagine_model, video_moderation_blocked, video_request_body,
+    image_bytes_data_uri, imagine_api_aspect, imagine_edit_body, imagine_edit_mask_fallback,
+    imagine_generation_body, imagine_image_model_id, imagine_mask_rejected, imagine_quality_field,
+    imagine_video_body, imagine_video_model_id, parse_imagine_url, parse_imagine_urls,
+    parse_video_job_status, parse_video_request_id, parse_video_url, pick_fresh_seed,
+    retired_imagine_model, video_bytes_data_uri, video_failure_detail, video_moderation_blocked,
+    video_request_body, video_resolution_for, ImagineVideoOp, VideoBodyReq, IMAGINE_API_ASPECTS,
+    IMAGINE_IMAGE_MODELS, IMAGINE_QUALITIES, IMAGINE_VIDEO_MODELS, MASK_PROMPT_NOTE,
     wall_can_paint, wall_curate_seed, wall_due, wall_evict, wall_gif_from_generation, ImagineKind,
     ImagineMediaClick, ImagineSpec, ImagineToolboxDock, ImagineWall, VideoJobStatus, WallGif,
     WallSeed, WallSlot, DEFAULT_IMAGINE_MODEL, DEFAULT_VIDEO_MODEL, FALLBACK_IMAGINE_MODEL,
     FALLBACK_VIDEO_MODEL, IMAGINE_ASPECTS, IMAGINE_STYLES, IMAGINE_TOOLBOX_PAD, IMAGINE_VIDEO_DURS,
     IMAGINE_VIDEO_RES, IMAGINE_WALL_GAP, WALL_GIF_EVERY_MS, WALL_GIF_MAX, WALL_SEEDS,
+};
+pub use imagine_auth::{
+    choose_imagine_bearer, ct_eq, imagine_authorize_url, imagine_code_form, imagine_device_form,
+    imagine_device_poll_form, imagine_needs_refresh, imagine_oauth_preferred, imagine_refresh_form,
+    imagine_tokens_from_xai, keychain_unavailable_message, map_imagine_error, merge_imagine_refresh,
+    oauth_nonce, parse_imagine_discovery, parse_loopback_callback, pkce_challenge, pkce_verifier,
+    ImagineAuthorize, ImagineCred, ImagineCredKind, ImagineEndpoints, ImagineMappedError,
+    ImagineTokens, IMAGINE_KEY_REJECTED, IMAGINE_NEED_SIGNIN, IMAGINE_NO_KEYCHAIN,
+    IMAGINE_OAUTH_DENIED, IMAGINE_OAUTH_REFERRER, IMAGINE_OAUTH_SCOPE, IMAGINE_RATE_LIMIT,
+    IMAGINE_SIGN_IN_AGAIN,
 };
 pub use inhabit::{
     can_inhabit, inhabit_bundle_usable, inhabit_claim_allowed, inhabit_ready, InhabitBundle,

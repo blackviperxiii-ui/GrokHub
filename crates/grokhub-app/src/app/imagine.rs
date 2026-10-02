@@ -10,6 +10,126 @@ pub(super) struct ImagineBarOut {
     go_settings: bool,
 }
 
+enum ImaginePickKind {
+    Sources,
+    Mask,
+    VideoStill,
+}
+
+pub(super) struct ImaginePickOut {
+    kind: ImaginePickKind,
+    uris: Result<Vec<String>, String>,
+}
+
+enum ImagineCall {
+    Generate {
+        model: String,
+        n: u32,
+        resolution: String,
+        aspect: String,
+        quality: String,
+    },
+    Edit {
+        model: String,
+        n: u32,
+        resolution: String,
+        aspect: String,
+        sources: Vec<String>,
+        mask: Option<String>,
+    },
+    Video {
+        op: grokhub_core::ImagineVideoOp,
+        model: String,
+        duration: u32,
+        resolution: String,
+        aspect: String,
+        audio: bool,
+        image_url: String,
+        video_url: String,
+    },
+}
+
+/// Extra Imagine controls and the Grok sign-in used only by this page.
+pub(super) struct ImagineNative {
+    pub tokens: Option<grokhub_core::ImagineTokens>,
+    pub email: String,
+    pub results: Vec<String>,
+    pub note: String,
+    pub image_op: u8,
+    pub image_model: u8,
+    pub count: u8,
+    pub resolution: u8,
+    pub res_custom: bool,
+    pub api_aspect: u8,
+    pub quality_tier: u8,
+    pub quality_custom: bool,
+    pub edit_sources: Vec<String>,
+    pub edit_mask: Option<String>,
+    pub video_op: u8,
+    pub video_model: u8,
+    pub video_res_1080: bool,
+    pub video_dur_custom: Option<u32>,
+    pub video_image: Option<String>,
+    pub video_url: String,
+    pub offer_key: bool,
+    pub offer_settings: bool,
+    pub force_key: bool,
+    pub cred_oauth: bool,
+    pub auth_busy: bool,
+    pub device_user_code: String,
+    pub device_verify_uri: String,
+    pub device_code: String,
+    pub device_interval: u64,
+    pub device_next: Option<Instant>,
+    pub poll_inflight: bool,
+    pub auth_rx: Option<mpsc::Receiver<crate::imagine_auth::ImagineAuthEvent>>,
+    pub poll_rx: Option<mpsc::Receiver<Result<crate::imagine_auth::DevicePoll, String>>>,
+    pub pick_rx: Option<mpsc::Receiver<ImaginePickOut>>,
+    pub item_save_rx: Option<mpsc::Receiver<Result<String, String>>>,
+}
+
+impl Default for ImagineNative {
+    fn default() -> Self {
+        Self {
+            tokens: None,
+            email: String::new(),
+            results: Vec::new(),
+            note: String::new(),
+            image_op: 0,
+            image_model: 0,
+            count: 1,
+            resolution: 0,
+            res_custom: false,
+            api_aspect: 0,
+            quality_tier: 0,
+            quality_custom: false,
+            edit_sources: Vec::new(),
+            edit_mask: None,
+            video_op: 0,
+            video_model: 0,
+            video_res_1080: false,
+            video_dur_custom: None,
+            video_image: None,
+            video_url: String::new(),
+            offer_key: false,
+            offer_settings: false,
+            force_key: false,
+            cred_oauth: false,
+            auth_busy: false,
+            device_user_code: String::new(),
+            device_verify_uri: String::new(),
+            device_code: String::new(),
+            device_interval: 5,
+            device_next: None,
+            poll_inflight: false,
+            auth_rx: None,
+            poll_rx: None,
+            pick_rx: None,
+            item_save_rx: None,
+        }
+    }
+}
+
 
 pub(super) fn imagine_popup(
     ctx: &egui::Context,
@@ -89,25 +209,50 @@ impl Cabin {
             return;
         }
         let kind = self.imagine_kind;
-        let console = self.console_key().trim().to_string();
-        let key = if !console.is_empty() {
-            console
+        let cred = if self.imagine_native.force_key {
+            self.imagine_native.force_key = false;
+            let key = self.console_key();
+            let key = key.trim();
+            if key.is_empty() {
+                self.imagine_error = grokhub_core::IMAGINE_NEED_SIGNIN.into();
+                self.status = self.imagine_error.clone();
+                return;
+            }
+            grokhub_core::ImagineCred {
+                secret: key.to_string(),
+                kind: grokhub_core::ImagineCredKind::ConsoleKey,
+            }
         } else {
-            self.bearer()
+            match self.imagine_cred() {
+                Ok(cred) => cred,
+                Err(msg) => {
+                    self.imagine_error = msg.into();
+                    self.status = self.imagine_error.clone();
+                    self.imagine_native.offer_key = false;
+                    self.imagine_native.offer_settings = false;
+                    return;
+                }
+            }
         };
-        if key.trim().is_empty() {
-            self.imagine_error =
-                "Add an xAI console API key in Settings, or run grok login.".into();
+        if let Some(msg) = self.imagine_call_block() {
+            self.imagine_error = msg.into();
             self.status = self.imagine_error.clone();
             return;
         }
+        self.imagine_native.cred_oauth = cred.kind == grokhub_core::ImagineCredKind::OAuth;
+        self.imagine_native.offer_key = false;
+        self.imagine_native.offer_settings = false;
+        let cred_oauth = self.imagine_native.cred_oauth;
+        let job_tokens = if cred_oauth {
+            self.imagine_native.tokens.clone()
+        } else {
+            None
+        };
+        let call = self.imagine_call();
         self.engine_note("imagine", "generated", "They generate images.");
         let aspect = imagine_aspect_label(self.imagine_aspect).to_string();
-        let resolution = imagine_image_resolution(self.imagine_quality).to_string();
         let video_res =
             imagine_video_resolution(imagine_video_res_label(self.imagine_video_res)).to_string();
-        let video_dur =
-            imagine_video_duration_secs(imagine_video_dur_label(self.imagine_video_dur));
         let prompt = compose_imagine_prompt(&ImagineSpec {
             prompt: &prompt,
             kind,
@@ -134,27 +279,31 @@ impl Cabin {
             ImagineKind::Video => "Imagining video…".into(),
             ImagineKind::Agent => "Imagining agent still…".into(),
         };
-        let image_model = dedicated_imagine_model(&self.cfg.imagine_model);
-        let video_model = dedicated_video_model("");
+        let key = cred.secret;
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
-            let r = match kind {
-                ImagineKind::Video => {
-                    grok_imagine_video(&key, &video_model, &prompt, video_dur, &aspect, &video_res)
+            let (key, rotated) = if cred_oauth {
+                if let Some(tokens) = job_tokens {
+                    match crate::imagine_auth::access_for_job(&tokens) {
+                        Ok(pair) => pair,
+                        Err(e) => {
+                            let _ = tx.send(JobOut::Err(e));
+                            return;
+                        }
+                    }
+                } else {
+                    (key, None)
                 }
-                ImagineKind::Image | ImagineKind::Agent => grok_imagine_opts(
-                    &key,
-                    &image_model,
-                    &prompt,
-                    Some(&aspect),
-                    Some(&resolution),
-                ),
+            } else {
+                (key, None)
             };
-            let _ = tx.send(match r {
-                Ok(u) => JobOut::Imagine(u),
+            let sent = match run_imagine_call(&key, &prompt, call) {
+                Ok((urls, note)) if !urls.is_empty() => JobOut::ImagineBatch(urls, note, rotated),
+                Ok(_) => JobOut::Err("empty Imagine reply".into()),
                 Err(e) => JobOut::Err(e),
-            });
+            };
+            let _ = tx.send(sent);
         });
     }
 
@@ -354,6 +503,7 @@ impl Cabin {
                                         seed = Some(p);
                                     },
                                 );
+                                self.ui_imagine_results(ui);
                             });
                     });
                 } else {
@@ -385,6 +535,7 @@ impl Cabin {
                                             seed = Some(p);
                                         },
                                     );
+                                    self.ui_imagine_results(ui);
                                 });
                         });
                     }
@@ -423,9 +574,14 @@ impl Cabin {
                     }
                     self.ui_attach_chip(ui, PlusTarget::Imagine);
                     self.paint_voice_mode_row(ui);
+                    if self.ui_imagine_account(ui) {
+                        go_settings = true;
+                    }
                     let bar = self.ui_imagine_bar(ui);
                     generate = bar.generate;
-                    go_settings = bar.go_settings;
+                    if bar.go_settings {
+                        go_settings = true;
+                    }
                     if bar.stop {
                         generate = false;
                     }
@@ -492,6 +648,8 @@ impl Cabin {
             self.imagine_prompt.clear();
             self.imagine_last.clear();
             self.imagine_error.clear();
+            self.imagine_native.results.clear();
+            self.imagine_native.note.clear();
             self.imagine_expand = false;
             self.imagine_want_focus = true;
         }
@@ -894,8 +1052,13 @@ impl Cabin {
     pub(super) fn tick_wall(&mut self) {
         let clock = Self::local_clock();
         let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
+        let imagine_signed_in = self
+            .imagine_native
+            .tokens
+            .as_ref()
+            .is_some_and(|t| grokhub_core::imagine_oauth_preferred(t, now_ms()));
         if !wall_can_paint(
-            self.has_key(),
+            self.has_key() || imagine_signed_in,
             self.cfg.imagine_wall,
             self.wall_busy,
             self.running,
@@ -917,7 +1080,17 @@ impl Cabin {
         let seed = pick_fresh_seed(now_ms(), &taken_ref);
         let id = format!("{:x}", now_ms());
         let dir = config::wall_dir();
-        let key = self.bearer();
+        let cred = match self.imagine_cred() {
+            Ok(cred) => cred,
+            Err(_) => return,
+        };
+        let cred_oauth = cred.kind == grokhub_core::ImagineCredKind::OAuth;
+        let job_tokens = if cred_oauth {
+            self.imagine_native.tokens.clone()
+        } else {
+            None
+        };
+        let key = cred.secret;
         let model = dedicated_imagine_model(&self.cfg.imagine_model);
         let title = seed.title.to_string();
         let prompt = seed.prompt.to_string();
@@ -929,9 +1102,796 @@ impl Cabin {
         self.wall_busy = true;
         self.status = format!("Painting a wall cover — {title}");
         std::thread::spawn(move || {
+            let key = if cred_oauth {
+                if let Some(tokens) = job_tokens {
+                    match crate::imagine_auth::access_for_job(&tokens) {
+                        Ok((key, _)) => key,
+                        Err(e) => {
+                            let _ = tx.send(Err(e));
+                            return;
+                        }
+                    }
+                } else {
+                    key
+                }
+            } else {
+                key
+            };
             let _ = tx.send(paint_wall_cover(
                 &key, &model, &id, &dir, &title, &prompt, &prompt_b, tall, created_ms,
             ));
         });
+    }
+
+    fn imagine_cred(&self) -> Result<grokhub_core::ImagineCred, &'static str> {
+        let now = now_ms();
+        let preferred = self
+            .imagine_native
+            .tokens
+            .as_ref()
+            .is_some_and(|t| grokhub_core::imagine_oauth_preferred(t, now));
+        let access = self
+            .imagine_native
+            .tokens
+            .as_ref()
+            .map(|t| t.access_token.as_str());
+        grokhub_core::choose_imagine_bearer(
+            if preferred { access } else { None },
+            preferred,
+            self.console_key(),
+        )
+    }
+
+    fn imagine_call_block(&self) -> Option<&'static str> {
+        if self.imagine_kind == ImagineKind::Image
+            && self.imagine_native.image_op == 1
+            && self.imagine_native.edit_sources.is_empty()
+        {
+            return Some("Add at least one source image to edit.");
+        }
+        if self.imagine_kind == ImagineKind::Video
+            && self.imagine_native.video_op == 1
+            && self
+                .imagine_native
+                .video_image
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .is_empty()
+        {
+            return Some("Add a source image for image-to-video.");
+        }
+        if self.imagine_kind == ImagineKind::Video
+            && matches!(self.imagine_native.video_op, 2 | 3)
+            && self.imagine_native.video_url.trim().is_empty()
+        {
+            return Some("Add a video URL to edit or extend.");
+        }
+        None
+    }
+
+    fn imagine_image_model_now(&self) -> String {
+        match self.imagine_native.image_model {
+            1 => "grok-imagine-image-quality".into(),
+            2 => grokhub_core::FALLBACK_IMAGINE_MODEL.into(),
+            _ => grokhub_core::DEFAULT_IMAGINE_MODEL.into(),
+        }
+    }
+
+    fn imagine_resolution_now(&self) -> String {
+        if self.imagine_native.res_custom {
+            if self.imagine_native.resolution == 1 {
+                "2k".into()
+            } else {
+                "1k".into()
+            }
+        } else {
+            imagine_image_resolution(self.imagine_quality).into()
+        }
+    }
+
+    fn imagine_quality_now(&self) -> String {
+        if self.imagine_native.image_model != 0 {
+            return String::new();
+        }
+        if self.imagine_native.quality_custom {
+            match self.imagine_native.quality_tier {
+                1 => "low".into(),
+                2 => "medium".into(),
+                _ => "auto".into(),
+            }
+        } else {
+            grokhub_core::imagine_image_quality(self.imagine_quality).into()
+        }
+    }
+
+    fn imagine_api_aspect_now(&self) -> String {
+        if self.imagine_native.api_aspect == 0 {
+            String::new()
+        } else {
+            imagine_api_aspect_label(self.imagine_native.api_aspect).into()
+        }
+    }
+
+    fn video_aspect_now(&self) -> String {
+        if self.imagine_native.api_aspect == 0 {
+            imagine_aspect_label(self.imagine_aspect).into()
+        } else {
+            imagine_api_aspect_label(self.imagine_native.api_aspect).into()
+        }
+    }
+
+    fn video_duration_now(&self) -> u32 {
+        self.imagine_native.video_dur_custom.unwrap_or_else(|| {
+            imagine_video_duration_secs(imagine_video_dur_label(self.imagine_video_dur))
+        })
+    }
+
+    fn video_resolution_now(&self) -> String {
+        let allow_1080 = self.imagine_native.video_model == 0 && self.imagine_native.video_op <= 1;
+        if self.imagine_native.video_res_1080 && allow_1080 {
+            "1080p".into()
+        } else {
+            imagine_video_resolution(imagine_video_res_label(self.imagine_video_res)).into()
+        }
+    }
+
+    fn imagine_call(&self) -> ImagineCall {
+        if self.imagine_kind == ImagineKind::Video {
+            let op = match self.imagine_native.video_op {
+                1 => grokhub_core::ImagineVideoOp::ImageToVideo,
+                2 => grokhub_core::ImagineVideoOp::Edit,
+                3 => grokhub_core::ImagineVideoOp::Extend,
+                _ => grokhub_core::ImagineVideoOp::TextToVideo,
+            };
+            let model = if self.imagine_native.video_model == 1 {
+                grokhub_core::FALLBACK_VIDEO_MODEL
+            } else {
+                grokhub_core::DEFAULT_VIDEO_MODEL
+            };
+            return ImagineCall::Video {
+                op,
+                model: model.into(),
+                duration: self.video_duration_now(),
+                resolution: self.video_resolution_now(),
+                aspect: self.video_aspect_now(),
+                audio: self.imagine_video_audio,
+                image_url: self.imagine_native.video_image.clone().unwrap_or_default(),
+                video_url: self.imagine_native.video_url.clone(),
+            };
+        }
+        if self.imagine_kind == ImagineKind::Image && self.imagine_native.image_op == 1 {
+            return ImagineCall::Edit {
+                model: self.imagine_image_model_now(),
+                n: u32::from(self.imagine_native.count.clamp(1, 10)),
+                resolution: self.imagine_resolution_now(),
+                aspect: self.imagine_api_aspect_now(),
+                sources: self.imagine_native.edit_sources.clone(),
+                mask: self.imagine_native.edit_mask.clone(),
+            };
+        }
+        ImagineCall::Generate {
+            model: self.imagine_image_model_now(),
+            n: u32::from(self.imagine_native.count.clamp(1, 10)),
+            resolution: self.imagine_resolution_now(),
+            aspect: self.imagine_api_aspect_now(),
+            quality: self.imagine_quality_now(),
+        }
+    }
+
+    pub(super) fn finish_imagine_job(
+        &mut self,
+        urls: Vec<String>,
+        note: Option<String>,
+        tokens: Option<grokhub_core::ImagineTokens>,
+    ) {
+        self.running = false;
+        self.imagine_pending = false;
+        self.imagine_error.clear();
+        self.imagine_native.offer_key = false;
+        self.imagine_native.offer_settings = false;
+        if let Some(tokens) = tokens {
+            self.note_imagine_tokens(tokens);
+        }
+        let first = urls.first().cloned().unwrap_or_default();
+        self.imagine_last = first.clone();
+        self.imagine_native.results = urls.clone();
+        let job_prompt = self.imagine_job_prompt.clone();
+        if let Some(note) = note.filter(|s| !s.trim().is_empty()) {
+            self.imagine_native.note = note.clone();
+            self.status = format!("Imagine ready. {note}");
+        } else {
+            self.imagine_native.note.clear();
+            self.status = "Imagine ready".into();
+        }
+        if !first.is_empty() {
+            self.pin_generation_to_wall(&first, &job_prompt);
+        }
+        for url in &urls {
+            self.push_bound_msg("assistant", format!("IMAGINE: {url}"));
+        }
+        let summary = if first.is_empty() {
+            "IMAGINE:".into()
+        } else {
+            format!("IMAGINE: {first}")
+        };
+        self.settle_auto_run(AutoEnd::Ok, self.chat_job_thread.clone().as_deref());
+        self.finish_hub_dispatch(&summary, true);
+        self.abandon_turn_card();
+        self.chat_job_thread = None;
+        self.persist();
+        self.maybe_continue_ptt();
+    }
+
+    pub(super) fn poll_imagine_auth(&mut self, ctx: &egui::Context) {
+        if let Some(rx) = self.imagine_native.auth_rx.take() {
+            match rx.try_recv() {
+                Ok(ev) => self.apply_imagine_auth(ev),
+                Err(mpsc::TryRecvError::Empty) => self.imagine_native.auth_rx = Some(rx),
+                Err(mpsc::TryRecvError::Disconnected) => self.imagine_native.auth_busy = false,
+            }
+        }
+        let due = self
+            .imagine_native
+            .device_next
+            .is_some_and(|t| Instant::now() >= t);
+        if !self.imagine_native.device_code.is_empty() && !self.imagine_native.poll_inflight && due
+        {
+            self.imagine_native.poll_inflight = true;
+            let code = self.imagine_native.device_code.clone();
+            let interval = self.imagine_native.device_interval.max(1);
+            let (tx, rx) = mpsc::channel();
+            self.imagine_native.poll_rx = Some(rx);
+            std::thread::spawn(move || {
+                let _ = tx.send(crate::imagine_auth::poll_device_once(&code, interval));
+            });
+        }
+        if let Some(rx) = self.imagine_native.poll_rx.take() {
+            match rx.try_recv() {
+                Ok(res) => self.apply_imagine_poll(res),
+                Err(mpsc::TryRecvError::Empty) => self.imagine_native.poll_rx = Some(rx),
+                Err(mpsc::TryRecvError::Disconnected) => self.imagine_native.poll_inflight = false,
+            }
+        }
+        if let Some(rx) = self.imagine_native.pick_rx.take() {
+            match rx.try_recv() {
+                Ok(out) => self.apply_imagine_pick(out),
+                Err(mpsc::TryRecvError::Empty) => self.imagine_native.pick_rx = Some(rx),
+                Err(mpsc::TryRecvError::Disconnected) => {}
+            }
+        }
+        if let Some(rx) = self.imagine_native.item_save_rx.take() {
+            match rx.try_recv() {
+                Ok(Ok(path)) => self.status = format!("Saved {path}"),
+                Ok(Err(e)) => self.status = e,
+                Err(mpsc::TryRecvError::Empty) => self.imagine_native.item_save_rx = Some(rx),
+                Err(mpsc::TryRecvError::Disconnected) => {}
+            }
+        }
+        if self.imagine_native.auth_rx.is_some()
+            || self.imagine_native.poll_rx.is_some()
+            || self.imagine_native.pick_rx.is_some()
+            || self.imagine_native.item_save_rx.is_some()
+            || !self.imagine_native.device_code.is_empty()
+        {
+            ctx.request_repaint_after(Duration::from_millis(250));
+        }
+    }
+
+    fn apply_imagine_auth(&mut self, ev: crate::imagine_auth::ImagineAuthEvent) {
+        self.imagine_native.auth_busy = false;
+        match ev {
+            crate::imagine_auth::ImagineAuthEvent::Loaded(Ok(Some(tokens))) => {
+                self.note_imagine_tokens(tokens);
+            }
+            crate::imagine_auth::ImagineAuthEvent::Loaded(Ok(None)) => {}
+            crate::imagine_auth::ImagineAuthEvent::Loaded(Err(e)) => self.status = e,
+            crate::imagine_auth::ImagineAuthEvent::SignedIn(tokens) => {
+                self.clear_imagine_device();
+                self.note_imagine_tokens(tokens);
+                self.status = self.imagine_signed_in_label();
+            }
+            crate::imagine_auth::ImagineAuthEvent::DeviceReady {
+                user_code,
+                verify_uri,
+                device_code,
+                interval,
+            } => {
+                self.imagine_native.device_user_code = user_code.clone();
+                self.imagine_native.device_verify_uri = verify_uri;
+                self.imagine_native.device_code = device_code;
+                self.imagine_native.device_interval = interval.max(1);
+                self.imagine_native.device_next =
+                    Some(Instant::now() + Duration::from_secs(interval.max(1)));
+                self.imagine_native.poll_inflight = false;
+                self.status = format!("Enter code {user_code} in the browser.");
+            }
+            crate::imagine_auth::ImagineAuthEvent::Failed(e) => self.status = e,
+            crate::imagine_auth::ImagineAuthEvent::SignedOut => {
+                self.imagine_native.tokens = None;
+                self.imagine_native.email.clear();
+                self.clear_imagine_device();
+                self.status = "Signed out of Imagine".into();
+            }
+        }
+    }
+
+    fn apply_imagine_poll(&mut self, res: Result<crate::imagine_auth::DevicePoll, String>) {
+        self.imagine_native.poll_inflight = false;
+        match res {
+            Ok(crate::imagine_auth::DevicePoll::Ready(tokens)) => {
+                self.clear_imagine_device();
+                self.note_imagine_tokens(tokens);
+                self.status = self.imagine_signed_in_label();
+            }
+            Ok(crate::imagine_auth::DevicePoll::Wait { secs }) => {
+                let secs = secs.max(1);
+                self.imagine_native.device_interval = secs;
+                self.imagine_native.device_next = Some(Instant::now() + Duration::from_secs(secs));
+            }
+            Ok(crate::imagine_auth::DevicePoll::Stop(msg)) => {
+                self.clear_imagine_device();
+                self.status = msg;
+            }
+            Err(e) => {
+                self.status = e;
+                let secs = self.imagine_native.device_interval.max(5);
+                self.imagine_native.device_next = Some(Instant::now() + Duration::from_secs(secs));
+            }
+        }
+    }
+
+    fn apply_imagine_pick(&mut self, out: ImaginePickOut) {
+        let uris = match out.uris {
+            Ok(uris) => uris,
+            Err(e) => {
+                self.status = e;
+                return;
+            }
+        };
+        if uris.is_empty() {
+            return;
+        }
+        match out.kind {
+            ImaginePickKind::Sources => {
+                for uri in uris {
+                    if self.imagine_native.edit_sources.len() >= 3 {
+                        break;
+                    }
+                    self.imagine_native.edit_sources.push(uri);
+                }
+                self.status = format!("{} source image(s)", self.imagine_native.edit_sources.len());
+            }
+            ImaginePickKind::Mask => {
+                self.imagine_native.edit_mask = uris.into_iter().next();
+                self.status = "Mask added".into();
+            }
+            ImaginePickKind::VideoStill => {
+                self.imagine_native.video_image = uris.into_iter().next();
+                self.status = "Video source image added".into();
+            }
+        }
+    }
+
+    fn clear_imagine_device(&mut self) {
+        self.imagine_native.device_code.clear();
+        self.imagine_native.device_user_code.clear();
+        self.imagine_native.device_verify_uri.clear();
+        self.imagine_native.device_next = None;
+        self.imagine_native.poll_inflight = false;
+    }
+
+    fn note_imagine_tokens(&mut self, tokens: grokhub_core::ImagineTokens) {
+        if let Some(email) = tokens.email.clone().filter(|s| !s.trim().is_empty()) {
+            self.imagine_native.email = email;
+        }
+        self.imagine_native.tokens = Some(tokens);
+    }
+
+    fn imagine_signed_in_label(&self) -> String {
+        if self.imagine_native.email.trim().is_empty() {
+            "Signed in with Grok".into()
+        } else {
+            format!("Signed in as {}", self.imagine_native.email)
+        }
+    }
+
+    fn start_imagine_auth(&mut self, pkce: bool) {
+        if self.imagine_native.auth_busy || self.imagine_native.auth_rx.is_some() {
+            return;
+        }
+        self.imagine_native.auth_busy = true;
+        self.imagine_native.auth_rx = Some(if pkce {
+            crate::imagine_auth::begin_pkce()
+        } else {
+            crate::imagine_auth::begin_device()
+        });
+        self.status = if pkce {
+            "Opening the browser to sign in…".into()
+        } else {
+            "Starting a device code…".into()
+        };
+    }
+
+    fn start_imagine_sign_out(&mut self) {
+        if self.imagine_native.auth_busy || self.imagine_native.auth_rx.is_some() {
+            return;
+        }
+        self.imagine_native.auth_busy = true;
+        self.imagine_native.auth_rx = Some(crate::imagine_auth::begin_sign_out());
+    }
+
+    fn start_imagine_pick(&mut self, kind: ImaginePickKind) {
+        if self.imagine_native.pick_rx.is_some() {
+            return;
+        }
+        let max = match kind {
+            ImaginePickKind::Sources => 3usize.saturating_sub(self.imagine_native.edit_sources.len()),
+            ImaginePickKind::Mask | ImaginePickKind::VideoStill => 1,
+        };
+        if max == 0 {
+            self.status = "Three source images is the maximum.".into();
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        self.imagine_native.pick_rx = Some(rx);
+        std::thread::spawn(move || {
+            let uris = crate::imagine_auth::pick_image_data_uris(max);
+            let _ = tx.send(ImaginePickOut { kind, uris });
+        });
+    }
+
+    fn start_imagine_result_save(&mut self, src: &str) {
+        if self.imagine_native.item_save_rx.is_some() {
+            return;
+        }
+        let src = src.to_string();
+        let (tx, rx) = mpsc::channel();
+        self.imagine_native.item_save_rx = Some(rx);
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::imagine_auth::save_copy_dialog(&src));
+        });
+    }
+
+    fn open_imagine_folder(&mut self) {
+        let dir = crate::config::imagine_dir();
+        let _ = std::fs::create_dir_all(&dir);
+        if let Err(e) = crate::desktop::open_path(&dir.display().to_string()) {
+            self.status = e;
+        }
+    }
+
+    fn ui_imagine_account(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut settings = false;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+            if self.imagine_native.tokens.is_some() {
+                ui.label(RichText::new(self.imagine_signed_in_label()).color(crate::theme::fg()));
+                if ui.small_button("Sign out").clicked() {
+                    self.start_imagine_sign_out();
+                }
+            } else if ui.small_button("Sign in with Grok for Imagine").clicked() {
+                self.start_imagine_auth(true);
+            }
+            if self.imagine_native.tokens.is_none() && ui.small_button("Use a code instead").clicked()
+            {
+                self.start_imagine_auth(false);
+            }
+            if !self.imagine_native.device_user_code.is_empty() {
+                ui.label(format!("Code {}", self.imagine_native.device_user_code));
+                let uri = self.imagine_native.device_verify_uri.clone();
+                if !uri.is_empty() {
+                    ui.hyperlink_to("Verify", uri);
+                }
+            }
+            if self.imagine_native.offer_key && ui.small_button("Use API key").clicked() {
+                self.imagine_native.force_key = true;
+                self.imagine_native.offer_key = false;
+                self.kick_imagine();
+            }
+            if self.imagine_native.offer_settings && ui.small_button("Settings").clicked() {
+                self.imagine_native.offer_settings = false;
+                settings = true;
+            }
+        });
+        if !self.imagine_native.note.is_empty() {
+            ui.label(RichText::new(&self.imagine_native.note).color(crate::theme::muted()));
+        }
+        self.ui_imagine_controls(ui);
+        settings
+    }
+
+    fn ui_imagine_controls(&mut self, ui: &mut egui::Ui) {
+        if self.imagine_kind == ImagineKind::Image {
+            self.ui_imagine_image_controls(ui);
+        } else if self.imagine_kind == ImagineKind::Video {
+            self.ui_imagine_video_controls(ui);
+        }
+    }
+
+    fn ui_imagine_image_controls(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+            if ui
+                .selectable_label(self.imagine_native.image_op == 0, "Generate")
+                .clicked()
+            {
+                self.imagine_native.image_op = 0;
+            }
+            if ui
+                .selectable_label(self.imagine_native.image_op == 1, "Edit")
+                .clicked()
+            {
+                self.imagine_native.image_op = 1;
+            }
+            for (i, label) in ["2.0", "Quality", "Image"].iter().enumerate() {
+                if ui
+                    .selectable_label(self.imagine_native.image_model == i as u8, *label)
+                    .clicked()
+                {
+                    self.imagine_native.image_model = i as u8;
+                }
+            }
+            if ui.small_button("-").clicked() {
+                self.imagine_native.count = self.imagine_native.count.saturating_sub(1).max(1);
+            }
+            ui.label(format!("n {}", self.imagine_native.count));
+            if ui.small_button("+").clicked() {
+                self.imagine_native.count = (self.imagine_native.count + 1).min(10);
+            }
+            let res = if self.imagine_native.res_custom {
+                if self.imagine_native.resolution == 1 {
+                    "2k"
+                } else {
+                    "1k"
+                }
+            } else if self.imagine_quality {
+                "2k"
+            } else {
+                "1k"
+            };
+            if ui.small_button(format!("Res {res}")).clicked() {
+                self.imagine_native.resolution = if res == "1k" { 1 } else { 0 };
+                self.imagine_native.res_custom = true;
+            }
+            let aspect = imagine_api_aspect_label(self.imagine_native.api_aspect);
+            if ui.small_button(format!("Aspect {aspect}")).clicked() {
+                let n = grokhub_core::IMAGINE_API_ASPECTS.len() as u8 + 1;
+                self.imagine_native.api_aspect = (self.imagine_native.api_aspect + 1) % n.max(1);
+            }
+            if self.imagine_native.image_model == 0 {
+                let q = if self.imagine_native.quality_custom {
+                    match self.imagine_native.quality_tier {
+                        1 => "low",
+                        2 => "medium",
+                        _ => "auto",
+                    }
+                } else if self.imagine_quality {
+                    "medium"
+                } else {
+                    "low"
+                };
+                if ui.small_button(format!("Quality {q}")).clicked() {
+                    self.imagine_native.quality_tier = match q {
+                        "auto" => 1,
+                        "low" => 2,
+                        _ => 0,
+                    };
+                    self.imagine_native.quality_custom = true;
+                }
+            }
+            if self.imagine_native.image_op == 1 {
+                let n = self.imagine_native.edit_sources.len();
+                if ui.small_button(format!("Add image {n}/3")).clicked() {
+                    self.start_imagine_pick(ImaginePickKind::Sources);
+                }
+                if n > 0 && ui.small_button("Clear images").clicked() {
+                    self.imagine_native.edit_sources.clear();
+                }
+                let mask = if self.imagine_native.edit_mask.is_some() {
+                    "Mask on"
+                } else {
+                    "Add mask"
+                };
+                if ui.small_button(mask).clicked() {
+                    self.start_imagine_pick(ImaginePickKind::Mask);
+                }
+                if self.imagine_native.edit_mask.is_some() && ui.small_button("Clear mask").clicked()
+                {
+                    self.imagine_native.edit_mask = None;
+                }
+            }
+        });
+    }
+
+    fn ui_imagine_video_controls(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+            for (i, label) in ["Text", "Image", "Edit", "Extend"].iter().enumerate() {
+                if ui
+                    .selectable_label(self.imagine_native.video_op == i as u8, *label)
+                    .clicked()
+                {
+                    self.imagine_native.video_op = i as u8;
+                }
+            }
+            for (i, label) in ["1.5", "Video"].iter().enumerate() {
+                if ui
+                    .selectable_label(self.imagine_native.video_model == i as u8, *label)
+                    .clicked()
+                {
+                    self.imagine_native.video_model = i as u8;
+                }
+            }
+            let allow_1080 = self.imagine_native.video_model == 0 && self.imagine_native.video_op <= 1;
+            if allow_1080 {
+                let on = self.imagine_native.video_res_1080;
+                if ui.selectable_label(on, "1080p").clicked() {
+                    self.imagine_native.video_res_1080 = !on;
+                }
+            }
+            let dur = self.video_duration_now();
+            if ui.small_button("-").clicked() {
+                self.imagine_native.video_dur_custom = Some(dur.saturating_sub(1).max(1));
+            }
+            ui.label(format!("{dur}s"));
+            if ui.small_button("+").clicked() {
+                self.imagine_native.video_dur_custom = Some((dur + 1).min(15));
+            }
+            if self.imagine_native.video_op == 0 {
+                let aspect = if self.imagine_native.api_aspect == 0 {
+                    imagine_aspect_label(self.imagine_aspect)
+                } else {
+                    imagine_api_aspect_label(self.imagine_native.api_aspect)
+                };
+                if ui.small_button(format!("Aspect {aspect}")).clicked() {
+                    let n = grokhub_core::IMAGINE_API_ASPECTS.len() as u8 + 1;
+                    self.imagine_native.api_aspect = (self.imagine_native.api_aspect + 1) % n.max(1);
+                }
+            }
+            let audio = self.imagine_video_audio;
+            if ui.selectable_label(audio, "Audio").clicked() {
+                self.imagine_video_audio = !audio;
+            }
+            if self.imagine_native.video_op == 1 && ui.small_button("Source image").clicked() {
+                self.start_imagine_pick(ImaginePickKind::VideoStill);
+            }
+        });
+        if matches!(self.imagine_native.video_op, 2 | 3) {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.imagine_native.video_url)
+                    .hint_text("Video URL")
+                    .desired_width(ui.available_width().min(420.0)),
+            );
+        }
+    }
+
+    fn ui_imagine_results(&mut self, ui: &mut egui::Ui) {
+        if self.imagine_native.results.is_empty() {
+            return;
+        }
+        let paths = self.imagine_native.results.clone();
+        ui.add_space(8.0);
+        ui.label(RichText::new("Results").color(crate::theme::fg()));
+        let mut save_at = None;
+        let mut open_folder = false;
+        let mut play: Option<String> = None;
+        egui::Grid::new("imagine-results")
+            .num_columns(2)
+            .spacing(egui::vec2(8.0, 8.0))
+            .show(ui, |ui| {
+                for (i, path) in paths.iter().enumerate() {
+                    ui.vertical(|ui| {
+                        let (rect, resp) = ui.allocate_exact_size(
+                            egui::vec2(168.0, 112.0),
+                            egui::Sense::click(),
+                        );
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                            crate::cards::imagine_result_hero(ui, path);
+                        });
+                        if resp.clicked() && grokhub_core::imagine_is_video_path(path) {
+                            play = Some(path.clone());
+                        }
+                        ui.horizontal(|ui| {
+                            if ui.small_button("Save").clicked() {
+                                save_at = Some(i);
+                            }
+                            if ui.small_button("Open folder").clicked() {
+                                open_folder = true;
+                            }
+                        });
+                    });
+                    if i % 2 == 1 {
+                        ui.end_row();
+                    }
+                }
+                if paths.len() % 2 == 1 {
+                    ui.end_row();
+                }
+            });
+        if let Some(i) = save_at {
+            if let Some(path) = paths.get(i) {
+                self.start_imagine_result_save(path);
+            }
+        }
+        if open_folder {
+            self.open_imagine_folder();
+        }
+        if let Some(path) = play {
+            self.play_imagine_media(&path);
+        }
+    }
+}
+
+fn imagine_api_aspect_label(i: u8) -> &'static str {
+    if i == 0 {
+        "auto"
+    } else {
+        grokhub_core::IMAGINE_API_ASPECTS
+            .get(i as usize - 1)
+            .copied()
+            .unwrap_or("auto")
+    }
+}
+
+fn run_imagine_call(
+    key: &str,
+    prompt: &str,
+    call: ImagineCall,
+) -> Result<(Vec<String>, Option<String>), String> {
+    match call {
+        ImagineCall::Generate {
+            model,
+            n,
+            resolution,
+            aspect,
+            quality,
+        } => {
+            let urls = crate::xai::grok_imagine_generations(
+                key, prompt, &model, n, &resolution, &aspect, &quality,
+            )?;
+            Ok((urls, None))
+        }
+        ImagineCall::Edit {
+            model,
+            n,
+            resolution,
+            aspect,
+            sources,
+            mask,
+        } => crate::xai::grok_imagine_edits(
+            key,
+            prompt,
+            &model,
+            &sources,
+            mask.as_deref(),
+            n,
+            &resolution,
+            &aspect,
+        ),
+        ImagineCall::Video {
+            op,
+            model,
+            duration,
+            resolution,
+            aspect,
+            audio,
+            image_url,
+            video_url,
+        } => {
+            let req = grokhub_core::VideoBodyReq {
+                prompt,
+                model: &model,
+                op,
+                duration,
+                resolution: &resolution,
+                aspect: &aspect,
+                generate_audio: audio,
+                image_url: &image_url,
+                video_url: &video_url,
+            };
+            let path = crate::xai::grok_imagine_video_op(key, &req)?;
+            Ok((vec![path], None))
+        }
     }
 }

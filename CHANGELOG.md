@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.10.63 — 2026-10-02
+
+Imagine has its own Grok sign-in and the full Imagine API. **Sign in with Grok for Imagine** on the Imagine page opens xAI in the browser (PKCE on a one-time `127.0.0.1` callback, or **Use a code instead** for a device code), and the tokens live only in the OS keychain (Windows Credential Manager, or the Secret Service on Linux), never in a file or a log. Imagine uses that sign-in first, then a console API key; it no longer borrows the Grok CLI login. If xAI doesn't allow the sign-in to use the Imagine API, Imagine says so and offers **Use API key**. Images: Generate or Edit, models `grok-imagine-image-2.0` (default), `grok-imagine-image-quality` and `grok-imagine-image`, 1–10 at a time, 1k or 2k, every aspect ratio, quality on 2.0, and edits from up to three source images with an optional mask. Video: text-to-video, image-to-video, edit and extend, with `grok-imagine-video-1.5` (1080p on text and image to video) or `grok-imagine-video`, 1–15 s and audio on or off. Results show in a grid with Save and Open folder.
+
+- Linux: `grokhub-linux-v2.10.63.tar.gz` and AUR `pkgver=2.10.63`.
+- Windows: `GrokHub-Setup-2.10.63.exe` and `grokhub-windows-v2.10.63.zip`.
+
 ## 2.10.62 — 2026-10-02
 
 Grok can control the desktop precisely through GrokHub. Turn on **Settings → Let Grok control the desktop** (off by default) and GrokHub registers its own desktop tools with Grok Build as a local MCP server (`grokhub --mcp-desktop`, server `grokhub-desktop`): `list_monitors`, `screenshot` (per monitor or the whole desktop, with exact geometry and scale), `click` (button, double), `move`, `drag`, `scroll`, `type`, and `key` (combos like `ctrl+shift+t`). Coordinates are in the screenshot's pixels and map back exactly to real screen pixels per monitor, DPI-aware, instead of Grok guessing with xdotool or PowerShell. Windows uses xcap capture and SendInput (no extra programs). Linux X11 uses the X server directly (RandR, XTEST); Wayland uses grim and ydotool when they are installed and says what is missing when they are not. The registration goes into the cabin's own Grok home (`grok mcp add`), never `~/.grok`. Ask still asks before every desktop tool in a watched chat; unwatched Ask runs (background, automations, night, phone), Plan and btw deny them; Auto and Always allow them. Turning the switch off refuses the tools at once. Halt (Ctrl+Alt+H) stops desktop actions, the lock screen blocks them, and nothing reads the keyboard or clipboard.

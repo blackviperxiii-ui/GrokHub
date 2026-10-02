@@ -2930,10 +2930,11 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         );
         let kick = fn_src(&src, "kick_imagine");
         assert!(
-            kick.contains("bearer()")
+            kick.contains("imagine_cred()")
                 && kick.contains("console_key()")
+                && !kick.contains("self.bearer()")
                 && !kick.contains("has_key()"),
-            "Imagine prefers a console API key, then grok login: {kick}"
+            "Imagine prefers its own sign-in, then a console API key: {kick}"
         );
         assert!(
             kick.contains("bump_usage(&mut self.usage, \"imagine\")"),
@@ -2955,9 +2956,9 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "every usage merge goes through merge_grok_usage or the day loses tokens"
         );
         assert_eq!(
-            kick.matches("bearer()").count(),
-            1,
-            "Imagine must not refresh grok login twice on the UI thread: {kick}"
+            kick.matches("self.bearer()").count(),
+            0,
+            "Imagine must not fall back to cabin or CLI login: {kick}"
         );
         let imag = src
             .split("fn ui_imagine(")
@@ -8868,8 +8869,25 @@ fn kick_without_grok_does_not_start_a_run() {
 }
 
 #[test]
+fn imagine_auth_source_never_names_cli_login() {
+    let auth = include_str!("../imagine_auth.rs");
+    let cabin = cabin_src();
+    let kick = fn_src(&cabin, "kick_imagine");
+    for src in [auth, kick] {
+        for banned in [
+            concat!("grok_cli_", "key"),
+            concat!("auth", ".json"),
+            concat!("refresh_grok_", "login"),
+            concat!("cli-chat-", "proxy"),
+        ] {
+            assert!(!src.contains(banned), "{banned} in imagine auth path");
+        }
+    }
+}
+
+#[test]
 fn kick_imagine_empty_stays_idle_and_no_key_refuses() {
-    const NO_KEY: &str = "Add an xAI console API key in Settings, or run grok login.";
+    const NO_KEY: &str = "Sign in with Grok for Imagine, or add a console API key.";
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("imagine-nokey");
     assert!(
@@ -15184,6 +15202,7 @@ fn quiet_cabin() -> Cabin {
         imagine_job_prompt: String::new(),
         imagine_error: String::new(),
         imagine_pending: false,
+        imagine_native: super::imagine::ImagineNative::default(),
         imagine_save_rx: None,
         goal_rx: None,
         goal_busy: false,
@@ -15912,7 +15931,7 @@ fn imagine_without_key_stays_off_a_run() {
 
     cabin.kick_imagine();
 
-    let expected = "Add an xAI console API key in Settings, or run grok login.";
+    let expected = "Sign in with Grok for Imagine, or add a console API key.";
     assert_eq!(cabin.status, expected);
     assert_eq!(cabin.imagine_error, expected);
     assert!(!cabin.running);

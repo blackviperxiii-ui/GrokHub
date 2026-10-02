@@ -175,20 +175,10 @@ impl Cabin {
                 }
             }
             Ok(JobOut::Imagine(url)) => {
-                self.running = false;
-                self.imagine_pending = false;
-                self.imagine_error.clear();
-                self.imagine_last = url.clone();
-                self.status = "Imagine ready".into();
-                let job_prompt = self.imagine_job_prompt.clone();
-                self.pin_generation_to_wall(&url, &job_prompt);
-                self.push_bound_msg("assistant", format!("IMAGINE: {url}"));
-                self.settle_auto_run(AutoEnd::Ok, self.chat_job_thread.clone().as_deref());
-                self.finish_hub_dispatch(&format!("IMAGINE: {url}"), true);
-                self.abandon_turn_card();
-                self.chat_job_thread = None;
-                self.persist();
-                self.maybe_continue_ptt();
+                self.finish_imagine_job(vec![url], None, None);
+            }
+            Ok(JobOut::ImagineBatch(urls, note, tokens)) => {
+                self.finish_imagine_job(urls, note, tokens);
             }
             Ok(JobOut::Voice(t)) => {
                 self.running = false;
@@ -245,12 +235,24 @@ impl Cabin {
                 if !self.voice_is_on() {
                     self.voice_orb = "idle".into();
                 }
-                if self.imagine_pending {
+                let fail = if self.imagine_pending {
                     self.imagine_pending = false;
-                    self.imagine_error = e.clone();
-                }
+                    let kind = if self.imagine_native.cred_oauth {
+                        grokhub_core::ImagineCredKind::OAuth
+                    } else {
+                        grokhub_core::ImagineCredKind::ConsoleKey
+                    };
+                    let has_console = !self.console_key().trim().is_empty();
+                    let mapped = grokhub_core::map_imagine_error(&e, kind, has_console);
+                    self.imagine_native.offer_key = mapped.offer_use_api_key;
+                    self.imagine_native.offer_settings = mapped.offer_settings;
+                    self.imagine_error = mapped.text.clone();
+                    mapped.text
+                } else {
+                    e.clone()
+                };
                 remember_chip_outcome(&mut self.chip_memory, false, now_ms());
-                self.status = self.apply_job_fail(&e);
+                self.status = self.apply_job_fail(&fail);
                 self.finish_hub_dispatch(&e, false);
                 self.abandon_turn_card();
                 self.chat_job_thread = None;
