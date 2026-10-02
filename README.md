@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.57** — The cabin window uses egui 0.36 on OpenGL. A long History, project tree, or workboard column only draws the rows on screen; scrolling back brings the same click, drag, and right-click.
+**v2.10.58** — Chat links open in your browser through one safe opener (http and https only, never through a shell). Copy says Copied on the button, composer menus open above their pill, Esc closes menus and sheets, the titlebar maximizes on double-click, and Tab shows a focus ring. Halt is now Ctrl+Alt+H.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.57.tar.gz`, AUR | **v2.10.57** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.57.exe`, `grokhub-windows-v2.10.57.zip` | **v2.10.57** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.58.tar.gz`, AUR | **v2.10.58** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.58.exe`, `grokhub-windows-v2.10.58.zip` | **v2.10.58** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
@@ -51,7 +51,7 @@ Projects sit in the left rail. `+` makes a one-level folder. It does not create 
 
 History search runs as you type across SOUL/USER/MEMORY and every chat; a new query drops the previous needle's hits so a late walk cannot open the wrong thread. A hit is a door — click a memory line to open that file in the editor, a chat line to open that thread. Re-opening the memory file already in the editor keeps unsaved typing. Below the search, History is the cabin's own chats (newest used, pins on top). Headless `grok -p` keeps the session on that chat. Background runs such as “summarize the workboard” are not rows. Right-click **Delete** or the History-page Delete button removes the cabin chat and its Grok Build session. Transcripts stay on the chat until you delete it. The cabin stays on Grok Build CLI **alpha** (`grok update --alpha`). It does not switch off alpha.
 
-Imagine stills use dedicated **`grok-imagine-image-2.0`** (falls back to `grok-imagine-image` on timeout). Video kind calls **`grok-imagine-video-1.5`**. Auth is `grok login` first, then a console key / cabin OAuth. Hey Grok: push-to-talk STT into chat, then TTS of the reply body (not thinking). Same on Linux and Windows. Desktop control is **Grok Build computer-use** — the cabin keeps tool cards, diffs, and computer-use frames in a collapsed Work tree in chat. No Desk / Take over menu. Halt / Stop / tray Halt / Ctrl+Shift+Esc SIGTERM the `grok -p` child. Stream buffers clip at `IMAGE_FILE_CAP` / `TEXT_FILE_CAP`. Desk frames drop above `FRAME_CAP`. Titlebar × unmaps to tray. Plus-button stills ride `--prompt-json` image blocks.
+Imagine stills use dedicated **`grok-imagine-image-2.0`** (falls back to `grok-imagine-image` on timeout). Video kind calls **`grok-imagine-video-1.5`**. Auth is `grok login` first, then a console key / cabin OAuth. Hey Grok: push-to-talk STT into chat, then TTS of the reply body (not thinking). Same on Linux and Windows. Desktop control is **Grok Build computer-use** — the cabin keeps tool cards, diffs, and computer-use frames in a collapsed Work tree in chat. No Desk / Take over menu. Halt / Stop / tray Halt / Ctrl+Alt+H SIGTERM the `grok -p` child. Stream buffers clip at `IMAGE_FILE_CAP` / `TEXT_FILE_CAP`. Desk frames drop above `FRAME_CAP`. Titlebar × unmaps to tray. Plus-button stills ride `--prompt-json` image blocks.
 
 Settings → **Account** is Super Grok device-code OAuth only — **Connect** / **Sign out** (or `grokhub --oauth`). That also writes `~/.grok/auth.json` when the Grok Build CLI is not already connected. Tokens live in `~/.config/GrokHub/secrets.json` (mode 0600; Windows user-only DACL), never in markdown. Settings → Appearance is **Dark**, **Light**, or **System**. Settings → Behavior holds close-to-tray, the living wall, and one **quiet hours** dropdown (Off / common windows). Picking a window saves it. Settings → **Cabin defaults** pins the chat model, reasoning effort, Ask or Auto, and Chat / Plan / btw in `app.json`, plus **Always collapse**. Auto model saves an empty pin. Always is not written from that page. Close-to-tray still hides the cabin; the desktop tip is once, and only when quiet hours allow it. GitHub PAT is not a Settings page — the connector owns that.
 

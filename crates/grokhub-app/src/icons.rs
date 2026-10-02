@@ -513,11 +513,14 @@ fn channel_moving(t: f32) -> bool {
     t > 0.0 && t < 1.0
 }
 
-/// Another frame only while the pointer is on the control, it is pressed,
-/// the control is live, or a channel is still easing back to rest.
-fn follow_composer_frame(ui: &egui::Ui, resp: &egui::Response, live: bool, channels: &[f32]) {
-    let moving = channels.iter().copied().any(channel_moving);
-    if resp.hovered() || resp.is_pointer_button_down_on() || live || moving {
+/// A frame is due while a channel is easing (`0 < t < 1`) or the control is live.
+fn composer_wants_frame(live: bool, channels: &[f32]) -> bool {
+    live || channels.iter().copied().any(channel_moving)
+}
+
+/// Another frame only while a channel is easing or the control is live.
+fn follow_composer_frame(ui: &egui::Ui, _resp: &egui::Response, live: bool, channels: &[f32]) {
+    if composer_wants_frame(live, channels) {
         ui.ctx().request_repaint();
     }
 }
@@ -640,6 +643,7 @@ pub fn paint_composer_stop(
     let glyph = risen_glyph(alloc, hover_t, press_t);
     paint_stop_glyph(ui.painter(), glyph, motion);
     follow_composer_frame(ui, &resp, running, &[hover_t, press_t, live_t]);
+    name_control(&resp, bar_icon_name(BarIcon::Stop));
     (resp, motion)
 }
 
@@ -678,6 +682,7 @@ pub fn paint_composer_mic(
         live,
         &[hover_t, press_t, live_t, speak_t],
     );
+    name_control(&resp, bar_icon_name(BarIcon::Mic));
     (resp, motion)
 }
 
@@ -811,13 +816,26 @@ pub fn paint_composer_paperclip(
         (hover_t * 0.72 * (1.0 - 0.35 * press_t)).clamp(0.0, 1.0),
     );
     paint_paperclip_glyph(ui.painter(), glyph, ink, hover_t, press_t, breath);
-    follow_composer_frame(
-        ui,
-        &resp,
-        resp.hovered(),
-        &[hover_t, press_t, breath],
-    );
+    follow_composer_frame(ui, &resp, false, &[hover_t, press_t]);
+    name_control(&resp, bar_icon_name(BarIcon::Plus));
     resp
+}
+
+pub fn bar_icon_name(icon: BarIcon) -> &'static str {
+    match icon {
+        BarIcon::Plus => "Plus",
+        BarIcon::Mic => "Mic",
+        BarIcon::Send => "Send",
+        BarIcon::Stop => "Stop",
+        BarIcon::ArrowUp => "Up",
+        BarIcon::ArrowDown => "Down",
+        BarIcon::Search => "Search",
+    }
+}
+
+fn name_control(resp: &egui::Response, name: &str) {
+    let enabled = resp.enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, name));
 }
 
 pub fn paint_bar_icon(
@@ -926,6 +944,7 @@ pub fn paint_bar_icon(
             );
         }
     }
+    name_control(&resp, bar_icon_name(icon));
     resp
 }
 
@@ -1265,6 +1284,48 @@ mod tests {
         assert!(
             src.contains("BarIcon::Plus => return paint_composer_paperclip"),
             "the attach control is the paperclip"
+        );
+    }
+
+    #[test]
+    fn composer_repaints_only_while_easing_or_live() {
+        assert!(!composer_wants_frame(false, &[0.0, 1.0]));
+        assert!(composer_wants_frame(false, &[0.4]));
+        assert!(composer_wants_frame(true, &[0.0]));
+        assert!(!composer_wants_frame(false, &[]));
+        let src = include_str!("icons.rs");
+        let clip = src
+            .split("pub fn paint_composer_paperclip(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn bar_icon_name(").next())
+            .expect("paperclip");
+        let follow = clip
+            .split("follow_composer_frame(")
+            .nth(1)
+            .expect("follow");
+        let args = follow.split(';').next().unwrap_or(follow);
+        assert!(
+            args.contains("false") && !args.contains("hovered"),
+            "a settled paperclip hover must not request frames: {args}"
+        );
+    }
+
+    #[test]
+    fn bar_icons_have_accessible_names() {
+        assert_eq!(bar_icon_name(BarIcon::Stop), "Stop");
+        assert_eq!(bar_icon_name(BarIcon::Mic), "Mic");
+        assert_eq!(bar_icon_name(BarIcon::Plus), "Plus");
+        assert_eq!(bar_icon_name(BarIcon::Send), "Send");
+        assert_eq!(bar_icon_name(BarIcon::ArrowUp), "Up");
+        assert_eq!(bar_icon_name(BarIcon::ArrowDown), "Down");
+        assert_eq!(bar_icon_name(BarIcon::Search), "Search");
+        let src = include_str!("icons.rs");
+        assert!(
+            src.contains("name_control(&resp, bar_icon_name(BarIcon::Stop))")
+                && src.contains("name_control(&resp, bar_icon_name(BarIcon::Mic))")
+                && src.contains("name_control(&resp, bar_icon_name(BarIcon::Plus))")
+                && src.contains("WidgetInfo::labeled"),
+            "stop, mic, plus, and the other bar icons carry a name"
         );
     }
 

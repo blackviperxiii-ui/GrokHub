@@ -62,20 +62,20 @@ fn type_line(ui: &mut egui::Ui, card: &UpdateCard) {
         let label = card.idea_type_label();
         ui.label(
             RichText::new(label.to_ascii_uppercase())
-                .size(11.0)
+                .size(crate::theme::FONT_TIP)
                 .strong()
                 .color(type_color(label)),
         );
         if card.modified {
             ui.label(
                 RichText::new("· In progress")
-                    .size(11.0)
+                    .size(crate::theme::FONT_TIP)
                     .color(crate::theme::subtle()),
             );
         } else if card.built {
             ui.label(
                 RichText::new("· On the board")
-                    .size(11.0)
+                    .size(crate::theme::FONT_TIP)
                     .color(crate::theme::subtle()),
             );
         }

@@ -480,7 +480,16 @@ pub(super) fn msg_act_labels(user: bool) -> &'static [&'static str] {
 pub(super) fn msg_acts_row_width(ui: &egui::Ui, user: bool) -> f32 {
     let gap = ui.spacing().item_spacing.x.max(0.0);
     let labels = msg_act_labels(user);
-    labels.iter().map(|l| label_hit_width(ui, l)).sum::<f32>()
+    labels
+        .iter()
+        .map(|l| {
+            if *l == "Copy" {
+                crate::theme::copy_hit_width(ui)
+            } else {
+                label_hit_width(ui, l)
+            }
+        })
+        .sum::<f32>()
         + gap * labels.len().saturating_sub(1) as f32
 }
 
@@ -495,13 +504,24 @@ pub(super) fn paint_msg_acts(
     let mut bounds: Option<egui::Rect> = None;
     let mut paint = |ui: &mut egui::Ui| {
         for &label in msg_act_labels(user) {
+            let flash_id = ui.next_auto_id();
+            let shown = if label == "Copy" {
+                crate::theme::copy_flash_label(ui.ctx(), flash_id)
+            } else {
+                label
+            };
+            let min_w = if label == "Copy" {
+                crate::theme::copy_hit_width(ui)
+            } else {
+                0.0
+            };
             let resp = crate::theme::felt_label_button(
                 ui,
-                label,
+                shown,
                 egui::Color32::TRANSPARENT,
                 crate::theme::muted(),
                 6.0,
-                egui::vec2(0.0, 0.0),
+                egui::vec2(min_w, 0.0),
                 None,
                 false,
             );
@@ -511,6 +531,9 @@ pub(super) fn paint_msg_acts(
                 resp
             };
             if resp.clicked() {
+                if label == "Copy" {
+                    crate::theme::mark_copy_clicked(ui.ctx(), resp.id);
+                }
                 act = match label {
                     "Copy" => ChatBlockAct::Copy(body.to_string()),
                     "Edit" => ChatBlockAct::Edit(body.to_string()),
@@ -988,7 +1011,7 @@ pub(super) fn paint_chat_block_with(
                         ui.label(
                             RichText::new(&block.body)
                                 .size(crate::theme::FONT_META)
-                                .color(crate::theme::subtle()),
+                                .color(crate::theme::muted()),
                         );
                     }
                 }
@@ -1249,7 +1272,6 @@ impl Cabin {
                         match act {
                             ChatBlockAct::Copy(body) => {
                                 ui.ctx().copy_text(body);
-                                self.status = "Copied".into();
                             }
                             ChatBlockAct::Reply(body) => {
                                 self.composer =
@@ -1310,7 +1332,7 @@ impl Cabin {
                 egui::Frame::NONE
                     .fill(crate::theme::panel())
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                    .corner_radius(10.0)
+                    .corner_radius(crate::theme::MENU_RADIUS)
                     .shadow(crate::theme::sheet_shadow())
                     .inner_margin(egui::Margin::symmetric(8, 6))
                     .show(ui, |ui| {
@@ -1872,12 +1894,7 @@ impl Cabin {
                     let accept_label = if p.mode == "url" { "Open" } else { "Accept" };
                     if crate::cards::white_pill(ui, accept_label) {
                         if p.mode == "url" && !p.url.is_empty() {
-                            #[cfg(windows)]
-                            let _ = std::process::Command::new("cmd")
-                                .args(["/C", "start", "", &p.url])
-                                .spawn();
-                            #[cfg(not(windows))]
-                            let _ = std::process::Command::new("xdg-open").arg(&p.url).spawn();
+                            let _ = crate::desktop::open_url(&p.url);
                         }
                         if p.secret {
                             let held = self.elicit_draft.clone();
@@ -2103,7 +2120,8 @@ impl Cabin {
 
     /// Compact, Copy session, and Export. Titlebar, immediately left of minimize.
     pub(super) fn paint_session_actions_menu(&mut self, ui: &mut egui::Ui) -> egui::Rect {
-        let resp = titlebar_chrome_btn(ui, ChromeBtn::Menu);
+        let resp = titlebar_chrome_btn(ui, ChromeBtn::Menu)
+            .on_hover_text(crate::titlebar::titlebar_chrome_tip(ChromeBtn::Menu, false));
         let placed = resp.rect;
         let id = ui.make_persistent_id("session-actions-menu");
         if titlebar_chrome_hit(&resp) {
