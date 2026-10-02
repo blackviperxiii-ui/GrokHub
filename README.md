@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.63** — Imagine signs in with your own Grok account (keychain only) and gets the full image and video API: up to 10 images, 2k, edits, video edit and extend.
+**v2.10.64** — Repo rules for Cursor and Claude chats (`CLAUDE.md`, `.cursor/rules/`) and a hardened `.gitignore`. The app is unchanged from 2.10.63.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.63.tar.gz`, AUR | **v2.10.63** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.63.exe`, `grokhub-windows-v2.10.63.zip` | **v2.10.63** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.64.tar.gz`, AUR | **v2.10.64** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.64.exe`, `grokhub-windows-v2.10.64.zip` | **v2.10.64** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.

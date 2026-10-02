@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.10.64 — 2026-10-02
+
+Repo rules for new Cursor and Claude chats. `CLAUDE.md` and `.cursor/rules/repo-gates.mdc` write down the real gates: branch off `main` and never push to it, no secrets or credential files, the exact CI test and clippy commands, the version-bump file list, the 12,000-byte composer source-scan window, no merges without Jeremy's OK, and no tag or release without his "full ship". `.cursor/rules/merge-prs.mdc` now agrees with them: no merges, tags or releases unless Jeremy says so. `.gitignore` also covers `target/` anywhere, key and certificate files (`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.crt`, `id_rsa*`), and `auth.json`, `secrets.json` and `credentials.json`, while still allowing `.env.example`. No tracked file is ignored. The working tree and full git history were scanned for committed secrets (gitleaks 8.30.1 plus targeted greps). Nothing is in the current tree. One historical finding was reported separately for a rotation decision, and history was not rewritten. The app itself is unchanged.
+
+- Linux: `grokhub-linux-v2.10.64.tar.gz` and AUR `pkgver=2.10.64`.
+- Windows: `GrokHub-Setup-2.10.64.exe` and `grokhub-windows-v2.10.64.zip`.
+
 ## 2.10.63 — 2026-10-02
 
 Imagine has its own Grok sign-in and the full Imagine API. **Sign in with Grok for Imagine** on the Imagine page opens xAI in the browser (PKCE on a one-time `127.0.0.1` callback, or **Use a code instead** for a device code), and the tokens live only in the OS keychain (Windows Credential Manager, or the Secret Service on Linux), never in a file or a log. Imagine uses that sign-in first, then a console API key; it no longer borrows the Grok CLI login. If xAI doesn't allow the sign-in to use the Imagine API, Imagine says so and offers **Use API key**. Images: Generate or Edit, models `grok-imagine-image-2.0` (default), `grok-imagine-image-quality` and `grok-imagine-image`, 1–10 at a time, 1k or 2k, every aspect ratio, quality on 2.0, and edits from up to three source images with an optional mask. Video: text-to-video, image-to-video, edit and extend, with `grok-imagine-video-1.5` (1080p on text and image to video) or `grok-imagine-video`, 1–15 s and audio on or off. Results show in a grid with Save and Open folder.
