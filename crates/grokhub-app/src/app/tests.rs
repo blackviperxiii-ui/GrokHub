@@ -15209,6 +15209,7 @@ fn quiet_cabin() -> Cabin {
         goal_stale: false,
         wall: grokhub_core::ImagineWall::default(),
         wall_rx: None,
+        logic_input_pass: None,
         wall_busy: false,
         attach_url: None,
         attach_name: None,
@@ -22108,4 +22109,20 @@ fn bg_delete_chat_stops_its_runs() {
             .status();
     }
     end_bg_test(root, cabin, restore);
+}
+
+#[test]
+fn hidden_logic_acts_on_input_once_per_pass() {
+    // eframe 0.36 hands a hidden window's `logic` the last shown frame's input
+    // every tick; drops, shortcuts, and activity must not replay from it.
+    let src = cabin_src();
+    let logic = fn_src(&src, "logic");
+    let gate = logic.find("fresh_input = ").expect("logic tracks the input pass");
+    let drop = logic.find("take_dropped_attach").expect("logic attaches drops");
+    let keys = logic.find("logic_input_actions").expect("logic runs shortcuts");
+    assert!(gate < drop && gate < keys, "{logic}");
+    assert!(logic.contains("cumulative_pass_nr"), "{logic}");
+    assert!(!logic.contains("Key::N"), "shortcuts live behind the gate: {logic}");
+    let actions = fn_src(&src, "logic_input_actions");
+    assert!(actions.contains("self.touch()") && actions.contains("Key::K"), "{actions}");
 }
