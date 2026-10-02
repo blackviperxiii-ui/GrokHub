@@ -124,7 +124,7 @@ impl Cabin {
                 ui.add_space(12.0);
                 egui::Frame::NONE
                     .fill(crate::theme::elevated())
-                    .corner_radius(12.0)
+                    .corner_radius(crate::theme::CARD_RADIUS)
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                     .inner_margin(egui::Margin::same(14))
                     .show(ui, |ui| {
@@ -179,7 +179,7 @@ impl Cabin {
                     );
                     egui::Frame::NONE
                         .fill(crate::theme::elevated())
-                        .corner_radius(14.0)
+                        .corner_radius(crate::theme::CARD_RADIUS)
                         .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                         .inner_margin(egui::Margin::same(12))
                         .show(ui, |ui| {
@@ -286,7 +286,7 @@ impl Cabin {
             };
             egui::Frame::NONE
                 .fill(crate::theme::elevated())
-                .corner_radius(14.0)
+                .corner_radius(crate::theme::CARD_RADIUS)
                 .stroke(egui::Stroke::new(1.0_f32, ring))
                 .inner_margin(egui::Margin::same(12))
                 .show(ui, |ui| {

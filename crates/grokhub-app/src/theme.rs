@@ -339,6 +339,10 @@ pub const USER_BUBBLE_RADIUS: f32 = 20.0;
 pub const CHROME_RADIUS: f32 = 6.0;
 /// Catalog / agent card — Fluent card radius, not a chat pill.
 pub const CARD_RADIUS: f32 = 12.0;
+/// Floating menus, the avatar menu, and the find bar.
+pub const MENU_RADIUS: f32 = 12.0;
+/// Modal sheets (settings, get started).
+pub const SHEET_RADIUS: f32 = 16.0;
 /// Catalog icon well that holds a 20px Fluent glyph.
 pub const TILE_ICON: f32 = 28.0;
 /// Rail / composer chrome glyph.
@@ -548,8 +552,8 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     visuals.widgets.open.bg_fill = panel();
     visuals.widgets.open.fg_stroke = Stroke::new(1.0_f32, fg());
     visuals.window_stroke = Stroke::new(1.0_f32, border());
-    visuals.window_corner_radius = CHROME_RADIUS.into();
-    visuals.menu_corner_radius = CHROME_RADIUS.into();
+    visuals.window_corner_radius = MENU_RADIUS.into();
+    visuals.menu_corner_radius = MENU_RADIUS.into();
     visuals.window_shadow = sheet_shadow();
     visuals.popup_shadow = sheet_shadow();
     visuals.widgets.noninteractive.corner_radius = CHROME_RADIUS.into();
@@ -1128,6 +1132,31 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn menu_sheet_and_card_radii_are_shared() {
+        assert_eq!(MENU_RADIUS, 12.0);
+        assert_eq!(SHEET_RADIUS, 16.0);
+        assert_eq!(CARD_RADIUS, MENU_RADIUS);
+        assert!(CHROME_RADIUS < MENU_RADIUS && MENU_RADIUS < SHEET_RADIUS);
+        let theme = include_str!("theme.rs");
+        assert!(
+            theme.contains("visuals.menu_corner_radius = MENU_RADIUS.into()")
+                && theme.contains("visuals.window_corner_radius = MENU_RADIUS.into()")
+                && theme.contains("visuals.widgets.inactive.corner_radius = CHROME_RADIUS.into()"),
+            "menus grow to MENU_RADIUS; widget chrome stays 6"
+        );
+        let settings = include_str!("app/settings.rs");
+        assert!(settings.contains("MENU_RADIUS") && settings.contains("SHEET_RADIUS"));
+        let chat = include_str!("app/chat_ui.rs");
+        assert!(chat.contains("corner_radius(crate::theme::MENU_RADIUS)"));
+        let night = include_str!("app/night.rs");
+        assert_eq!(night.matches("corner_radius(crate::theme::CARD_RADIUS)").count(), 3);
+        let pages = include_str!("app/pages.rs");
+        assert_eq!(pages.matches("corner_radius(crate::theme::SHEET_RADIUS)").count(), 2);
+        assert!(pages.contains("corner_radius(crate::theme::CARD_RADIUS)"));
+    }
+
+    #[test]
     fn glide_gap_stays_on_the_near_row() {
         let selected = egui::Rect::from_min_size(egui::pos2(8.0, 4.0), egui::vec2(200.0, 28.0));
         let above = egui::Rect::from_min_size(egui::pos2(8.0, 40.0), egui::vec2(200.0, 28.0));
@@ -1187,6 +1216,10 @@ mod tests {
         assert!(USER_BUBBLE_RADIUS < QUERY_RADIUS);
         assert_eq!(CHROME_RADIUS, 6.0);
         assert_eq!(CARD_RADIUS, 12.0);
+        assert_eq!(MENU_RADIUS, 12.0);
+        assert_eq!(SHEET_RADIUS, 16.0);
+        assert!(CHROME_RADIUS < MENU_RADIUS);
+        assert!(MENU_RADIUS < SHEET_RADIUS);
         assert_eq!(TILE_ICON, 28.0);
         assert_eq!(ICON_CHROME, 16.0);
         assert_eq!(ICON_ACTION, 20.0);
