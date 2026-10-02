@@ -59,11 +59,15 @@ impl Cabin {
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
-                        if titlebar_chrome_hit(&titlebar_chrome_btn(ui, ChromeBtn::Close)) {
-                            let hide = crate::tray::should_hide_on_close(
-                                self.cfg.close_to_tray,
-                                self.tray.is_some(),
-                            ) && !self.want_quit;
+                        let hide = crate::tray::should_hide_on_close(
+                            self.cfg.close_to_tray,
+                            self.tray.is_some(),
+                        ) && !self.want_quit;
+                        if titlebar_chrome_hit(
+                            &titlebar_chrome_btn(ui, ChromeBtn::Close).on_hover_text(
+                                crate::titlebar::titlebar_chrome_tip(ChromeBtn::Close, hide),
+                            ),
+                        ) {
                             if hide {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                                 self.hide_to_tray(&ctx);
@@ -71,63 +75,23 @@ impl Cabin {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                             }
                         }
-                        if titlebar_chrome_hit(&titlebar_chrome_btn(
-                            ui,
-                            if self.win_max {
-                                ChromeBtn::Restore
-                            } else {
-                                ChromeBtn::Maximize
-                            },
-                        )) {
-                            let currently = ctx
-                                .input(|i| i.viewport().maximized)
-                                .unwrap_or(self.win_max);
-                            self.win_max = next_maximized(currently);
-                            self.cfg.window.maximized = self.win_max;
-                            self.geom_dirty = true;
-                            #[cfg(windows)]
-                            {
-                                let ppp = ctx.pixels_per_point().max(0.5);
-                                if self.win_max {
-                                    if let Some((x, y, w, h)) = crate::win_native::work_area() {
-                                        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
-                                            egui::vec2(w as f32 / ppp, h as f32 / ppp),
-                                        ));
-                                        ctx.send_viewport_cmd(
-                                            egui::ViewportCommand::OuterPosition(egui::pos2(
-                                                x as f32 / ppp,
-                                                y as f32 / ppp,
-                                            )),
-                                        );
-                                        let _ = crate::win_native::show_cabin(x, y, w, h, true);
-                                    }
-                                } else {
-                                    let g = crate::window::clamp_geom(self.cfg.window);
-                                    let x = (g.x.unwrap_or(100.0) * ppp).round() as i32;
-                                    let y = (g.y.unwrap_or(100.0) * ppp).round() as i32;
-                                    let w = (g.w * ppp).round() as i32;
-                                    let h = (g.h * ppp).round() as i32;
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
-                                        egui::vec2(g.w, g.h),
-                                    ));
-                                    if let Some([lx, ly]) = crate::window::launch_pos(&g) {
-                                        ctx.send_viewport_cmd(
-                                            egui::ViewportCommand::OuterPosition(egui::pos2(
-                                                lx, ly,
-                                            )),
-                                        );
-                                    }
-                                    let _ = crate::win_native::show_cabin(x, y, w, h, false);
-                                }
-                            }
-                            #[cfg(not(windows))]
-                            {
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(
-                                    self.win_max,
-                                ));
-                            }
+                        let max_kind = if self.win_max {
+                            ChromeBtn::Restore
+                        } else {
+                            ChromeBtn::Maximize
+                        };
+                        if titlebar_chrome_hit(
+                            &titlebar_chrome_btn(ui, max_kind).on_hover_text(
+                                crate::titlebar::titlebar_chrome_tip(max_kind, false),
+                            ),
+                        ) {
+                            self.toggle_maximize(&ctx);
                         }
-                        if titlebar_chrome_hit(&titlebar_chrome_btn(ui, ChromeBtn::Minimize)) {
+                        if titlebar_chrome_hit(
+                            &titlebar_chrome_btn(ui, ChromeBtn::Minimize).on_hover_text(
+                                crate::titlebar::titlebar_chrome_tip(ChromeBtn::Minimize, false),
+                            ),
+                        ) {
                             self.resume_fresh = true;
                             self.saw_minimized = true;
                             ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
@@ -141,6 +105,9 @@ impl Cabin {
                         if titlebar_should_start_drag(drag.drag_started()) {
                             ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                         }
+                        if drag.double_clicked() {
+                            self.toggle_maximize(&ctx);
+                        }
                     });
                 });
                 let hair = ui.max_rect();
@@ -153,6 +120,45 @@ impl Cabin {
         if run_pending_update {
             self.open_update_overlay();
             self.queue_combined_update();
+        }
+    }
+
+    fn toggle_maximize(&mut self, ctx: &egui::Context) {
+        let currently = ctx.input(|i| i.viewport().maximized).unwrap_or(self.win_max);
+        self.win_max = next_maximized(currently);
+        self.cfg.window.maximized = self.win_max;
+        self.geom_dirty = true;
+        #[cfg(windows)]
+        {
+            let ppp = ctx.pixels_per_point().max(0.5);
+            if self.win_max {
+                if let Some((x, y, w, h)) = crate::win_native::work_area() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                        w as f32 / ppp,
+                        h as f32 / ppp,
+                    )));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                        x as f32 / ppp,
+                        y as f32 / ppp,
+                    )));
+                    let _ = crate::win_native::show_cabin(x, y, w, h, true);
+                }
+            } else {
+                let g = crate::window::clamp_geom(self.cfg.window);
+                let x = (g.x.unwrap_or(100.0) * ppp).round() as i32;
+                let y = (g.y.unwrap_or(100.0) * ppp).round() as i32;
+                let w = (g.w * ppp).round() as i32;
+                let h = (g.h * ppp).round() as i32;
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(g.w, g.h)));
+                if let Some([lx, ly]) = crate::window::launch_pos(&g) {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(lx, ly)));
+                }
+                let _ = crate::win_native::show_cabin(x, y, w, h, false);
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(self.win_max));
         }
     }
 

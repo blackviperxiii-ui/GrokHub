@@ -2120,7 +2120,8 @@ impl Cabin {
 
     /// Compact, Copy session, and Export. Titlebar, immediately left of minimize.
     pub(super) fn paint_session_actions_menu(&mut self, ui: &mut egui::Ui) -> egui::Rect {
-        let resp = titlebar_chrome_btn(ui, ChromeBtn::Menu);
+        let resp = titlebar_chrome_btn(ui, ChromeBtn::Menu)
+            .on_hover_text(crate::titlebar::titlebar_chrome_tip(ChromeBtn::Menu, false));
         let placed = resp.rect;
         let id = ui.make_persistent_id("session-actions-menu");
         if titlebar_chrome_hit(&resp) {
