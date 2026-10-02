@@ -182,6 +182,9 @@ impl Cabin {
                     .map(|r| !r.expand(8.0).contains(pos))
                     .unwrap_or(true)
             });
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            self.settings_menu_open = false;
+        }
         if cabin_menu_should_dismiss(self.settings_menu_ignore, outside) {
             self.settings_menu_open = false;
         }

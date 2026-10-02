@@ -411,9 +411,13 @@ impl Cabin {
                         menu_rect = ui.min_rect();
                     });
                 });
+            let esc = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
             if let Some(act) = picked {
                 self.plus_menu = None;
                 self.run_plus_act(target, act);
+            } else if esc {
+                self.plus_menu = None;
+                self.plus_ignore_close = false;
             } else if self.plus_ignore_close {
                 self.plus_ignore_close = false;
             } else if ctx.input(|i| i.pointer.any_click()) {
@@ -501,7 +505,9 @@ impl Cabin {
             } else if paste {
                 self.file_pick = None;
                 self.run_plus_act(target, PlusAct::Paste);
-            } else if cancel {
+            } else if cancel
+                || ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+            {
                 self.file_pick = None;
             }
         }
