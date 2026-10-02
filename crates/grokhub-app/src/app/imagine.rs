@@ -258,7 +258,8 @@ impl Cabin {
         }
     }
 
-    pub(super) fn ui_imagine(&mut self, ctx: &egui::Context) {
+    pub(super) fn ui_imagine(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
         let mut generate = false;
         let mut stop = false;
         let mut new_project = false;
@@ -294,11 +295,11 @@ impl Cabin {
         let mut stage_hit = crate::cards::ImagineStageHit::default();
         let panel = egui::CentralPanel::default()
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(crate::theme::bg())
                     .inner_margin(egui::Margin::ZERO),
             )
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 let content = ui.max_rect();
                 let toolbox_top = imagine_toolbox_top(content.top(), content.height(), box_h, dock);
                 let stage_w = (content.width() - 48.0).max(280.0);
@@ -312,7 +313,7 @@ impl Cabin {
                     } else {
                         0.0
                     };
-                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(viewport), |ui| {
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(viewport), |ui| {
                         ui.set_clip_rect(viewport);
                         egui::ScrollArea::vertical()
                             .id_salt("imagine-scroll")
@@ -329,7 +330,7 @@ impl Cabin {
                                         egui::pos2(x + stage_w * 0.5, st.center().y),
                                         egui::vec2(stage_w, stage_h),
                                     );
-                                    ui.allocate_new_ui(
+                                    ui.scope_builder(
                                         egui::UiBuilder::new().max_rect(stage),
                                         |ui| {
                                             ui.set_clip_rect(stage);
@@ -369,7 +370,7 @@ impl Cabin {
                             egui::pos2(content.left(), wall_top),
                             egui::vec2(content.width(), wall_h),
                         );
-                        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(wall), |ui| {
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(wall), |ui| {
                             ui.set_clip_rect(wall);
                             egui::ScrollArea::vertical()
                                 .auto_shrink([false, false])
@@ -396,7 +397,7 @@ impl Cabin {
         egui::Area::new(egui::Id::new("imagine-new"))
             .fixed_pos(egui::pos2(content.right() - 148.0, content.top() + 12.0))
             .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
+            .show(&ctx, |ui| {
                 if crate::cards::white_pill(ui, "+ New project") {
                     new_project = true;
                 }
@@ -406,7 +407,7 @@ impl Cabin {
             .fixed_pos(egui::pos2(x, y))
             .constrain_to(content)
             .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
+            .show(&ctx, |ui| {
                 ui.set_width(bar_w);
                 ui.vertical(|ui| {
                     ui.set_width(bar_w);
@@ -450,19 +451,19 @@ impl Cabin {
             egui::Area::new(egui::Id::new("imagine-lightbox"))
                 .fixed_pos(content.min)
                 .order(egui::Order::Tooltip)
-                .show(ctx, |ui| {
+                .show(&ctx, |ui| {
                     let (full, back) = ui.allocate_exact_size(content.size(), egui::Sense::click());
                     ui.painter()
                         .rect_filled(full, 0.0, egui::Color32::from_black_alpha(220));
                     let inner = full.shrink(28.0);
-                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(inner), |ui| {
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
                         crate::cards::imagine_result_hero(ui, &last);
                     });
                     let save_rect = egui::Rect::from_min_size(
                         egui::pos2(full.right() - 220.0, full.top() + 16.0),
                         egui::vec2(200.0, 40.0),
                     );
-                    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(save_rect), |ui| {
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(save_rect), |ui| {
                         ui.horizontal(|ui| {
                             if crate::cards::white_pill(ui, "Save") {
                                 save_now = true;
@@ -524,11 +525,11 @@ impl Cabin {
         let model = dedicated_imagine_model(&self.cfg.imagine_model);
         let ready = !self.imagine_prompt.trim().is_empty();
         let authed = self.llm_ready();
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(crate::theme::surface())
-            .rounding(crate::theme::IMAGINE_BAR_RADIUS)
+            .corner_radius(crate::theme::IMAGINE_BAR_RADIUS)
             .stroke(egui::Stroke::new(1.0_f32, stroke))
-            .inner_margin(egui::Margin::same(12.0))
+            .inner_margin(egui::Margin::same(12))
             .show(ui, |ui| {
                 ui.set_width(bar_w);
                 let prompt_w = (ui.available_width() - 8.0).max(80.0);
@@ -543,7 +544,7 @@ impl Cabin {
                         .id(egui::Id::new("imagine-prompt"))
                         .desired_width(prompt_w)
                         .clip_text(true)
-                        .frame(false)
+                        .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2)))
                         .hint_text(crate::theme::hint("Type to imagine")),
                 );
                 if self.imagine_want_focus {
@@ -714,10 +715,10 @@ impl Cabin {
                                 }
                             }
                             let style_label = imagine_style_label(self.imagine_style);
-                            let style_inner = egui::Frame::none()
+                            let style_inner = egui::Frame::NONE
                                 .fill(crate::theme::panel())
-                                .rounding(crate::theme::IMAGINE_HIT)
-                                .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+                                .corner_radius(crate::theme::IMAGINE_HIT)
+                                .inner_margin(egui::Margin::symmetric(10, 6))
                                 .show(ui, |ui| {
                                     ui.set_height(crate::theme::IMAGINE_HIT - 12.0);
                                     ui.set_min_width(56.0);
@@ -748,10 +749,10 @@ impl Cabin {
                             }
                             let aspect = imagine_aspect_label(self.imagine_aspect);
                             let aspect_name = imagine_aspect_name(self.imagine_aspect);
-                            let aspect_inner = egui::Frame::none()
+                            let aspect_inner = egui::Frame::NONE
                                 .fill(crate::theme::panel())
-                                .rounding(crate::theme::IMAGINE_HIT)
-                                .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+                                .corner_radius(crate::theme::IMAGINE_HIT)
+                                .inner_margin(egui::Margin::symmetric(10, 6))
                                 .show(ui, |ui| {
                                     ui.set_height(crate::theme::IMAGINE_HIT - 12.0);
                                     ui.set_min_width(56.0);

@@ -181,7 +181,7 @@ impl Cabin {
         };
         let inner_w = pane_w.max(1.0);
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(inner_w, 24.0), egui::Sense::click());
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.set_max_width(inner_w);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;

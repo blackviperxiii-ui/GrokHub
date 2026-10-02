@@ -1,6 +1,7 @@
 [package]
 name = "grokhub-app"
 version.workspace = true
+rust-version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "GrokHub native cabin — no Electron, no Tauri"
@@ -15,7 +16,7 @@ grokhub-hub = { path = "../grokhub-hub" }
 grokhub-acp = { path = "../grokhub-acp" }
 serde.workspace = true
 serde_json.workspace = true
-eframe = { version = "0.29", default-features = false, features = ["default_fonts", "glow"] }
+eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow"] }
 ureq = { version = "2.12", default-features = false, features = ["tls", "json"] }
 tungstenite = { version = "0.24", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 base64 = "0.22"
@@ -23,7 +24,7 @@ global-hotkey = "0.6"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "ico"] }
 
 [target.'cfg(unix)'.dependencies]
-eframe = { version = "0.29", default-features = false, features = ["x11", "wayland"] }
+eframe = { version = "0.36.2", default-features = false, features = ["x11", "wayland"] }
 ksni = { version = "0.3.6", features = ["blocking"] }
 
 [build-dependencies]

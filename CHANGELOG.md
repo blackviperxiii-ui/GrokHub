@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 2.10.57 — 2026-10-01
+
+The cabin window moves from egui 0.29 to 0.36 and stays on the OpenGL renderer. The frameless title bar, the tray, and the menus stay where they were.
+
+A long History, a deep project tree, and a tall workboard column only draw the rows on screen. A row you have scrolled past keeps its place, so the scrollbar and the order do not change. Scroll it back and it has the same click, hover, drag, and right-click menu. The workboard card that is open, and the card you are dragging, still paint when they sit past the edge. The project asks for Rust 1.95.
+
+- Linux: `grokhub-linux-v2.10.57.tar.gz` and AUR `pkgver=2.10.57`.
+- Windows: `GrokHub-Setup-2.10.57.exe` and `grokhub-windows-v2.10.57.zip`.
+
 ## 2.10.56 — 2026-10-01
 
 The cabin keeps going when a first look comes back empty or wrong. It tries one other path, then says what blocked it and the next useful step. It still asks before sending, paying, deleting, or publishing something you did not name, and it does not invent a source, a count, or a fact.

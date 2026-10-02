@@ -117,7 +117,7 @@ impl Cabin {
                             if ui
                                 .add_sized(
                                     [ui.available_width(), 28.0],
-                                    egui::SelectableLabel::new(i == self.palette_pick, label),
+                                    egui::Button::selectable(i == self.palette_pick, label),
                                 )
                                 .clicked()
                             {

@@ -110,11 +110,11 @@ pub(super) fn paint_confirm_sheet(ui: &mut egui::Ui, spec: ConfirmSpec, detail: 
         crate::theme::always_amber()
     };
     let mut act = None;
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(crate::theme::elevated())
-        .rounding(crate::theme::CHROME_RADIUS)
+        .corner_radius(crate::theme::CHROME_RADIUS)
         .stroke(egui::Stroke::new(2.0_f32, stroke))
-        .inner_margin(egui::Margin::same(10.0))
+        .inner_margin(egui::Margin::same(10))
         .show(ui, |ui| {
             ui.label(
                 RichText::new(spec.title)

@@ -13,7 +13,7 @@ use grokhub_core::{
     SELECT_SECS,
 };
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 pub fn title_font(size: f32) -> FontId {
@@ -198,16 +198,16 @@ pub fn code_well() -> Color32 {
 pub fn sheet_shadow() -> egui::Shadow {
     if USE_LIGHT.load(Ordering::Relaxed) {
         egui::Shadow {
-            offset: egui::vec2(0.0, 2.0),
-            blur: 8.0,
-            spread: 0.0,
+            offset: [0, 2],
+            blur: 8,
+            spread: 0,
             color: Color32::from_black_alpha(28),
         }
     } else {
         egui::Shadow {
-            offset: egui::vec2(0.0, 2.0),
-            blur: 10.0,
-            spread: 0.0,
+            offset: [0, 2],
+            blur: 10,
+            spread: 0,
             color: Color32::from_white_alpha(14),
         }
     }
@@ -419,20 +419,28 @@ fn install_inter(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert(
         "inter".into(),
-        FontData::from_static(include_bytes!("../assets/fonts/Inter-Regular.ttf")),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../assets/fonts/Inter-Regular.ttf"
+        ))),
     );
     fonts.font_data.insert(
         "inter-medium".into(),
-        FontData::from_static(include_bytes!("../assets/fonts/Inter-Medium.ttf")),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../assets/fonts/Inter-Medium.ttf"
+        ))),
     );
     fonts.font_data.insert(
         "inter-bold".into(),
-        FontData::from_static(include_bytes!("../assets/fonts/Inter-SemiBold.ttf")),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../assets/fonts/Inter-SemiBold.ttf"
+        ))),
     );
     // The latin statics are subset (no →, ✓, ≥, Cyrillic). The full face backs them.
     fonts.font_data.insert(
         "inter-full".into(),
-        FontData::from_static(include_bytes!("../assets/fonts/Inter-Full-Regular.ttf")),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../assets/fonts/Inter-Full-Regular.ttf"
+        ))),
     );
     if let Some(fam) = fonts.families.get_mut(&FontFamily::Proportional) {
         fam.insert(0, "inter-full".into());
@@ -454,7 +462,7 @@ fn install_inter(ctx: &egui::Context) {
     if let Ok(mono) = mono {
         fonts
             .font_data
-            .insert("mono".into(), FontData::from_owned(mono));
+            .insert("mono".into(), Arc::new(FontData::from_owned(mono)));
         if let Some(fam) = fonts.families.get_mut(&FontFamily::Monospace) {
             fam.insert(0, "mono".into());
         }
@@ -523,17 +531,17 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     visuals.widgets.open.bg_fill = panel();
     visuals.widgets.open.fg_stroke = Stroke::new(1.0_f32, fg());
     visuals.window_stroke = Stroke::new(1.0_f32, border());
-    visuals.window_rounding = CHROME_RADIUS.into();
-    visuals.menu_rounding = CHROME_RADIUS.into();
+    visuals.window_corner_radius = CHROME_RADIUS.into();
+    visuals.menu_corner_radius = CHROME_RADIUS.into();
     visuals.window_shadow = sheet_shadow();
     visuals.popup_shadow = sheet_shadow();
-    visuals.widgets.noninteractive.rounding = CHROME_RADIUS.into();
-    visuals.widgets.inactive.rounding = CHROME_RADIUS.into();
-    visuals.widgets.hovered.rounding = CHROME_RADIUS.into();
-    visuals.widgets.active.rounding = CHROME_RADIUS.into();
+    visuals.widgets.noninteractive.corner_radius = CHROME_RADIUS.into();
+    visuals.widgets.inactive.corner_radius = CHROME_RADIUS.into();
+    visuals.widgets.hovered.corner_radius = CHROME_RADIUS.into();
+    visuals.widgets.active.corner_radius = CHROME_RADIUS.into();
     ctx.set_visuals(visuals);
 
-    let mut style = (*ctx.style()).clone();
+    let mut style = (*ctx.global_style()).clone();
     style.text_styles.insert(
         TextStyle::Small,
         FontId::new(FONT_META, FontFamily::Proportional),
@@ -558,8 +566,8 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     style.spacing.button_padding = egui::vec2(12.0, 7.0);
     style.spacing.scroll.bar_width = 8.0;
     style.spacing.scroll.handle_min_length = 24.0;
-    style.visuals = ctx.style().visuals.clone();
-    ctx.set_style(style);
+    style.visuals = ctx.global_style().visuals.clone();
+    ctx.set_global_style(style);
 }
 
 /// TextEdit placeholder. egui bakes `override_text_color` into a plain hint galley,
@@ -779,7 +787,7 @@ pub fn felt_label_button(
     } else {
         FontId::proportional(FONT_CHROME)
     };
-    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font, text_color));
+    let galley = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, text_color));
     let pad = ui.style().spacing.button_padding;
     let size = egui::vec2(
         (galley.size().x + pad.x * 2.0).max(min_size.x),
@@ -789,7 +797,7 @@ pub fn felt_label_button(
     let (resp, rect, fill) = feel_button(ui, resp, base_fill);
     ui.painter().rect_filled(rect, rounding, fill);
     if let Some(s) = stroke {
-        ui.painter().rect_stroke(rect, rounding, s);
+        ui.painter().rect_stroke(rect, rounding, s, egui::StrokeKind::Middle);
     }
     // Centre vertically: a layout can hand the pill more height than label + pad.
     let text_pos = egui::pos2(rect.min.x + pad.x, rect.center().y - galley.size().y * 0.5);
@@ -1079,11 +1087,11 @@ mod tests {
         assert_ne!(composer_chrome_stroke(true).color, always_amber());
         set_paint_dark(true);
         let dark_sheet = sheet_shadow();
-        assert!(dark_sheet.blur > 0.0);
+        assert!(dark_sheet.blur > 0);
         assert_ne!(dark_sheet.color, always_amber());
         set_paint_dark(false);
         let light_sheet = sheet_shadow();
-        assert!(light_sheet.blur > 0.0);
+        assert!(light_sheet.blur > 0);
         assert_ne!(light_sheet.color, ALWAYS_AMBER_LIGHT);
         set_paint_dark(true);
         assert!(CHROME_RADIUS < CARD_RADIUS);

@@ -217,10 +217,10 @@ pub fn imagine_chip_stack_h() -> f32 {
 
 /// Dark track + selected chip — grok.com Image|Video|Agent and Speed|Quality.
 pub fn imagine_seg_track(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(crate::theme::bg())
-        .rounding(crate::theme::IMAGINE_HIT)
-        .inner_margin(egui::Margin::same(2.0))
+        .corner_radius(crate::theme::IMAGINE_HIT)
+        .inner_margin(egui::Margin::same(2))
         .show(ui, |ui| {
             ui.set_height(crate::theme::IMAGINE_HIT);
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -234,10 +234,10 @@ pub fn imagine_seg_chip(ui: &mut egui::Ui, selected: bool, add: impl FnOnce(&mut
     } else {
         Color32::TRANSPARENT
     };
-    let resp = egui::Frame::none()
+    let resp = egui::Frame::NONE
         .fill(fill)
-        .rounding(crate::theme::IMAGINE_HIT)
-        .inner_margin(egui::Margin::symmetric(10.0, 4.0))
+        .corner_radius(crate::theme::IMAGINE_HIT)
+        .inner_margin(egui::Margin::symmetric(10, 4))
         .show(ui, |ui| {
             ui.set_min_size(egui::vec2(
                 crate::theme::IMAGINE_HIT - 8.0,
@@ -484,7 +484,7 @@ fn felt_segment_styled(
     } else {
         FontId::proportional(font_size)
     };
-    let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER));
+    let galley = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER));
     // Size to the label + 8px inset so a longer session word is not jammed.
     let size = egui::vec2(
         (galley.size().x + SEG_INSET_X * 2.0).max(52.0),
@@ -497,12 +497,13 @@ fn felt_segment_styled(
     let text_color = crate::theme::blend_color(crate::theme::muted(), crate::theme::fg(), on_t);
     let (resp, rect, _) = crate::theme::feel_response(ui, resp, Color32::TRANSPARENT);
     if let Some(stroke) = stroke {
-        ui.painter().rect_stroke(rect, 8.0, stroke);
+        ui.painter().rect_stroke(rect, 8.0, stroke, egui::StrokeKind::Middle);
     } else {
         ui.painter().rect_stroke(
             rect,
             8.0,
             Stroke::new(1.0_f32, crate::theme::border()),
+            egui::StrokeKind::Middle,
         );
     }
     let _ = base_fill;
@@ -523,7 +524,7 @@ pub fn felt_tab(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     // PLACEHOLDER lets the painter pick the colour below. Baking one in here painted the
     // selected tab's label in fg() on top of an fg() pill — a white label on white.
     let galley =
-        ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER));
+        ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER));
     let pad = ui.style().spacing.button_padding;
     let size = egui::vec2((galley.size().x + pad.x * 2.0).max(32.0), 32.0);
     let (_rect, resp) = ui.allocate_exact_size(size, Sense::click());
@@ -534,7 +535,7 @@ pub fn felt_tab(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     let (resp, rect, fill) = crate::theme::feel_button(ui, resp, base_fill);
     ui.painter().rect_filled(rect, 8.0, fill);
     ui.painter()
-        .rect_stroke(rect, 8.0, Stroke::new(1.0_f32, stroke_color));
+        .rect_stroke(rect, 8.0, Stroke::new(1.0_f32, stroke_color), egui::StrokeKind::Middle);
     ui.painter().galley(
         egui::pos2(rect.min.x + pad.x, rect.center().y - galley.size().y * 0.5),
         galley,
@@ -576,11 +577,11 @@ pub fn chip_tone_color(tone: ChipTone) -> Color32 {
 
 pub fn status_chip(ui: &mut egui::Ui, label: &str, tone: ChipTone) {
     let color = chip_tone_color(tone);
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(crate::theme::elevated())
-        .rounding(12.0)
+        .corner_radius(12.0)
         .stroke(Stroke::new(1.0_f32, crate::theme::border()))
-        .inner_margin(egui::Margin::symmetric(10.0, 4.0))
+        .inner_margin(egui::Margin::symmetric(10, 4))
         .show(ui, |ui| {
             ui.label(RichText::new(label).size(12.0).color(color));
         });
@@ -621,7 +622,7 @@ pub fn paint_run_pulse(ui: &mut egui::Ui, label: &str, hint: &str) {
 
 pub fn titlebar_update_chip(ui: &mut egui::Ui, label: &str) -> bool {
     // Fixed height: a Frame in the centred titlebar row stretched to the full 40px bar.
-    let galley = ui.fonts(|f| {
+    let galley = ui.fonts_mut(|f| {
         f.layout_no_wrap(label.to_owned(), FontId::proportional(12.0), Color32::PLACEHOLDER)
     });
     let size = egui::vec2(galley.size().x + 16.0, 24.0);
@@ -633,7 +634,7 @@ pub fn titlebar_update_chip(ui: &mut egui::Ui, label: &str) -> bool {
     };
     ui.painter().rect_filled(rect, 10.0, fill);
     ui.painter()
-        .rect_stroke(rect, 10.0, Stroke::new(1.0_f32, crate::theme::border()));
+        .rect_stroke(rect, 10.0, Stroke::new(1.0_f32, crate::theme::border()), egui::StrokeKind::Middle);
     ui.painter().galley(
         egui::pos2(rect.min.x + 8.0, rect.center().y - galley.size().y * 0.5),
         galley,
@@ -645,13 +646,13 @@ pub fn titlebar_update_chip(ui: &mut egui::Ui, label: &str) -> bool {
 pub fn framed_preview(ui: &mut egui::Ui, tex: &TextureHandle, size: [usize; 2], max_w: f32) {
     let scale = max_w / size[0].max(1) as f32;
     let h = size[1] as f32 * scale;
-    egui::Frame::none()
-        .rounding(12.0)
+    egui::Frame::NONE
+        .corner_radius(12.0)
         .stroke(Stroke::new(1.0_f32, crate::theme::border()))
-        .inner_margin(egui::Margin::same(2.0))
+        .inner_margin(egui::Margin::same(2))
         .show(ui, |ui| {
             ui.add(
-                egui::Image::new((tex.id(), egui::vec2(max_w, h))).rounding(10.0),
+                egui::Image::new((tex.id(), egui::vec2(max_w, h))).corner_radius(10.0),
             );
         });
 }
@@ -747,7 +748,7 @@ fn with_composer_tip(resp: egui::Response, title: &str, body: &str) -> egui::Res
 
 /// Room for the label, both pads, and the chevron so "Extra High" never runs under it.
 fn dropdown_pill_w(ui: &egui::Ui, label: &str) -> f32 {
-    let label_w = ui.fonts(|f| {
+    let label_w = ui.fonts_mut(|f| {
         f.layout_no_wrap(
             label.to_owned(),
             FontId::proportional(crate::theme::FONT_CHROME),
@@ -799,15 +800,15 @@ fn catalog_pill(
         resp = with_composer_tip(resp, title, body);
     }
     if resp.clicked() {
-        ui.memory_mut(|m| m.toggle_popup(id));
+        egui::Popup::toggle_id(ui.ctx(), id);
     }
-    egui::popup::popup_above_or_below_widget(
-        ui,
-        id,
-        &resp,
-        egui::AboveOrBelow::Below,
-        egui::popup::PopupCloseBehavior::CloseOnClick,
-        |ui| {
+    egui::Popup::new(id, ui.ctx().clone(), &resp, ui.layer_id())
+        .open_memory(None)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClick)
+        .align(egui::RectAlign::BOTTOM_START)
+        .align_alternatives(&[])
+        .layout(egui::Layout::top_down_justified(egui::Align::LEFT))
+        .show(|ui| {
             ui.set_min_width(MODE_PILL_W);
             for (item_id, item_label) in items {
                 let on = *item_id == current;
@@ -815,11 +816,10 @@ fn catalog_pill(
                     if !on {
                         next = Some((*item_id).to_string());
                     }
-                    ui.memory_mut(|m| m.close_popup());
+                    ui.close();
                 }
             }
-        },
-    );
+        });
     next
 }
 
@@ -1014,7 +1014,7 @@ pub fn chip_row_visible_w(ui: &egui::Ui) -> f32 {
     let left = ui.cursor().left();
     let clip_w = (ui.clip_rect().right() - left).max(0.0);
     let avail = ui.available_width().min(clip_w);
-    let col = composer_pill_w(ui.ctx().screen_rect().width());
+    let col = composer_pill_w(ui.ctx().content_rect().width());
     chip_row_width_lock(avail.min(col))
 }
 
@@ -1106,7 +1106,7 @@ pub fn layout_chip_label(
     );
     job.wrap = TextWrapping::truncate_at_width(max_w.max(1.0));
     job.break_on_newline = false;
-    ui.fonts(|f| f.layout_job(job))
+    ui.fonts_mut(|f| f.layout_job(job))
 }
 
 /// Empty-home placeholder when ranking yields none. Not a ranked action chip.
@@ -1168,7 +1168,7 @@ fn paint_chip_pill(ui: &mut egui::Ui, rect: egui::Rect, fill: Color32, primary: 
     let stroke = Stroke::new(stroke_w, quick_chip_stroke(primary));
     let body = rect.shrink(stroke_w * 0.5);
     ui.painter()
-        .rect(body, CHIP_ROW_H * 0.5, fill, stroke);
+        .rect(body, CHIP_ROW_H * 0.5, fill, stroke, egui::StrokeKind::Middle);
 }
 
 pub fn paint_empty_chip_state(ui: &mut egui::Ui) {
@@ -1430,6 +1430,7 @@ pub fn settings_switch(ui: &mut egui::Ui, on: bool) -> bool {
                 rect,
                 rect.height() * 0.5,
                 Stroke::new(1.0_f32, crate::theme::border_strong()),
+                egui::StrokeKind::Middle,
             );
     }
     let knob_x = grokhub_core::lerp_f32(rect.left() + 12.0, rect.right() - 12.0, on_t);
@@ -1453,11 +1454,11 @@ pub fn settings_dropdown(
         ui.label(RichText::new(hint).size(12.0).color(crate::theme::muted()));
     }
     ui.add_space(6.0);
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(crate::theme::elevated())
-        .rounding(10.0)
+        .corner_radius(10.0)
         .stroke(Stroke::new(1.0_f32, crate::theme::border()))
-        .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+        .inner_margin(egui::Margin::symmetric(10, 8))
         .show(ui, |ui| {
             egui::ComboBox::from_id_salt(title)
                 .selected_text(
@@ -1494,15 +1495,15 @@ pub fn settings_field(
         ui.label(RichText::new(hint).size(12.0).color(crate::theme::muted()));
     }
     ui.add_space(6.0);
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(crate::theme::elevated())
-        .rounding(10.0)
+        .corner_radius(10.0)
         .stroke(Stroke::new(1.0_f32, crate::theme::border()))
-        .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+        .inner_margin(egui::Margin::symmetric(10, 8))
         .show(ui, |ui| {
             let mut edit = egui::TextEdit::singleline(value)
                 .desired_width(f32::INFINITY)
-                .frame(false);
+                .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2)));
             if password {
                 edit = edit.password(true);
             }
@@ -1619,7 +1620,7 @@ pub fn appearance_card(ui: &mut egui::Ui, label: &str, selected: bool, preview: 
     let (resp, rect, fill) = crate::theme::feel_button(ui, resp, fill);
     ui.painter().rect_filled(rect, 12.0, fill);
     ui.painter()
-        .rect_stroke(rect, 12.0, Stroke::new(1.0_f32, stroke));
+        .rect_stroke(rect, 12.0, Stroke::new(1.0_f32, stroke), egui::StrokeKind::Middle);
     let preview_rect = egui::Rect::from_min_size(
         rect.min + egui::vec2(10.0, 10.0),
         egui::vec2(88.0, 56.0),
@@ -1641,11 +1642,11 @@ pub fn search_field(ui: &mut egui::Ui, q: &mut String) {
 }
 
 pub fn search_bar(ui: &mut egui::Ui, q: &mut String, hint: &str, width: f32) {
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(crate::theme::elevated())
-        .rounding(18.0)
+        .corner_radius(18.0)
         .stroke(Stroke::new(1.0_f32, crate::theme::border()))
-        .inner_margin(egui::Margin::symmetric(10.0, 5.0))
+        .inner_margin(egui::Margin::symmetric(10, 5))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 icons::paint_bar_icon(ui, icons::BarIcon::Search, 16.0, crate::theme::subtle());
@@ -1653,7 +1654,7 @@ pub fn search_bar(ui: &mut egui::Ui, q: &mut String, hint: &str, width: f32) {
                     egui::TextEdit::singleline(q)
                         .hint_text(crate::theme::hint(hint.to_owned()))
                         .desired_width(width)
-                        .frame(false),
+                        .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2))),
                 );
             });
         });
@@ -1679,7 +1680,7 @@ fn paint_slot_card(
         (crate::theme::border(), 1.0_f32)
     };
     ui.painter()
-        .rect_stroke(slot.shrink(0.5), rounding, Stroke::new(stroke_w, stroke));
+        .rect_stroke(slot.shrink(0.5), rounding, Stroke::new(stroke_w, stroke), egui::StrokeKind::Middle);
     resp
 }
 
@@ -1714,7 +1715,7 @@ fn tile_body_width(wrap_width: f32) -> f32 {
 }
 
 fn tile_body_galley(
-    fonts: &egui::epaint::text::Fonts,
+    fonts: &mut egui::epaint::text::FontsView<'_>,
     text: &str,
     width: f32,
 ) -> std::sync::Arc<egui::epaint::text::Galley> {
@@ -1726,7 +1727,7 @@ fn tile_body_galley(
     )
 }
 
-fn tile_body_fits(fonts: &egui::epaint::text::Fonts, text: &str, width: f32) -> bool {
+fn tile_body_fits(fonts: &mut egui::epaint::text::FontsView<'_>, text: &str, width: f32) -> bool {
     let galley = tile_body_galley(fonts, text, width);
     galley.rows.len() <= TILE_BODY_MAX_LINES && galley.rect.width() <= width + 1.0
 }
@@ -1734,7 +1735,7 @@ fn tile_body_fits(fonts: &egui::epaint::text::Fonts, text: &str, width: f32) -> 
 /// Body copy for a skill/connector tile. At most three wrapped lines.
 /// Overflow ends on a word boundary with an ellipsis. A single token wider
 /// than the card is the only case that ellipsizes inside the token.
-pub fn tile_body_text(fonts: &egui::epaint::text::Fonts, body: &str, wrap_width: f32) -> String {
+pub fn tile_body_text(fonts: &mut egui::epaint::text::FontsView<'_>, body: &str, wrap_width: f32) -> String {
     let t = body.trim();
     if t.is_empty() {
         return String::new();
@@ -1769,7 +1770,7 @@ pub fn tile_body_text(fonts: &egui::epaint::text::Fonts, body: &str, wrap_width:
     ellipsize_tile_token(fonts, words[0], width)
 }
 
-fn ellipsize_tile_token(fonts: &egui::epaint::text::Fonts, token: &str, width: f32) -> String {
+fn ellipsize_tile_token(fonts: &mut egui::epaint::text::FontsView<'_>, token: &str, width: f32) -> String {
     let chars: Vec<char> = token.chars().collect();
     let mut lo = 0usize;
     let mut hi = chars.len();
@@ -1857,10 +1858,10 @@ pub fn grok_tile(
     let extra = slot
         .map(|(prev, fill)| tile_row_slack(prev, fill))
         .unwrap_or(0.0);
-    let mut prepared = egui::Frame::none()
+    let mut prepared = egui::Frame::NONE
         .fill(crate::theme::elevated())
-        .rounding(crate::theme::CARD_RADIUS)
-        .inner_margin(egui::Margin::same(14.0))
+        .corner_radius(crate::theme::CARD_RADIUS)
+        .inner_margin(egui::Margin::same(14))
         .begin(ui);
     {
         let ui = &mut prepared.content_ui;
@@ -1882,12 +1883,12 @@ pub fn grok_tile(
                 );
                 ui.add_space(3.0);
                 let body_w = ui.available_width().max(8.0);
-                let galley = ui.fonts(|fonts| {
+                let galley = ui.fonts_mut(|fonts| {
                     let painted = tile_body_text(fonts, body, body_w);
                     tile_body_galley(fonts, &painted, body_w)
                 });
                 let line_h = ui
-                    .fonts(|fonts| fonts.row_height(&tile_body_font()))
+                    .fonts_mut(|fonts| fonts.row_height(&tile_body_font()))
                     .max(1.0);
                 body_h = line_h * TILE_BODY_MAX_LINES as f32;
                 let (body_rect, _) =
@@ -2151,7 +2152,7 @@ pub fn imagine_stage(
     ui.painter()
         .rect_filled(r, 14.0, crate::theme::elevated());
     ui.painter()
-        .rect_stroke(r, 14.0, Stroke::new(1.0_f32, crate::theme::border()));
+        .rect_stroke(r, 14.0, Stroke::new(1.0_f32, crate::theme::border()), egui::StrokeKind::Middle);
     if working {
         let label = if video {
             "Imagining video…"
@@ -2186,7 +2187,7 @@ pub fn imagine_stage(
         r.min,
         egui::pos2(r.right(), (r.bottom() - bar_h).max(r.top() + 8.0)),
     );
-    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(media), |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(media), |ui| {
         ui.set_clip_rect(media);
         imagine_result_hero(ui, path);
         let resp = ui.interact(media, egui::Id::new("imagine-stage-media"), Sense::click());
@@ -2203,7 +2204,7 @@ pub fn imagine_stage(
         });
     });
     let bar = egui::Rect::from_min_max(egui::pos2(r.left() + 10.0, media.bottom()), r.max);
-    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(bar), |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(bar), |ui| {
         ui.horizontal(|ui| {
             match imagine_media_click(path) {
                 ImagineMediaClick::Play => {
@@ -2636,16 +2637,17 @@ fn wall_slot_feel(ui: &egui::Ui, resp: egui::Response, selected: bool) -> egui::
             slot.shrink(0.5),
             0.0,
             Stroke::new(1.0_f32, crate::theme::fg()),
+            egui::StrokeKind::Middle,
         );
     }
     resp
 }
 
 pub fn empty_prompt_tile(ui: &mut egui::Ui, icon: TileIcon, title: &str, hint: &str) -> bool {
-    let mut prepared = egui::Frame::none()
+    let mut prepared = egui::Frame::NONE
         .fill(crate::theme::elevated())
-        .rounding(crate::theme::CARD_RADIUS)
-        .inner_margin(egui::Margin::same(14.0))
+        .corner_radius(crate::theme::CARD_RADIUS)
+        .inner_margin(egui::Margin::same(14))
         .begin(ui);
     {
         let ui = &mut prepared.content_ui;
@@ -2721,17 +2723,17 @@ mod tests {
             .and_then(|s| s.split("\npub fn ").next())
             .expect("titlebar_update_chip");
         assert!(
-            chip.contains("allocate_exact_size") && !chip.contains("Frame::none()"),
+            chip.contains("allocate_exact_size") && !chip.contains("Frame::NONE"),
             "a Frame in the centred titlebar row fills the whole 40px bar: {chip}"
         );
     }
     use grokhub_core::parse_loop_line;
 
-    fn with_fonts(mut check: impl FnMut(&egui::epaint::text::Fonts)) {
+    fn with_fonts(mut check: impl FnMut(&mut egui::epaint::text::FontsView<'_>)) {
         let ctx = egui::Context::default();
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                ui.fonts(|fonts| check(fonts));
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.fonts_mut(|fonts| check(fonts));
             });
         });
     }
@@ -2774,7 +2776,9 @@ mod tests {
         let mut fonts = egui::FontDefinitions::default();
         fonts.font_data.insert(
             "inter-bold".into(),
-            egui::FontData::from_static(include_bytes!("../assets/fonts/Inter-SemiBold.ttf")),
+            Arc::new(egui::FontData::from_static(include_bytes!(
+                "../assets/fonts/Inter-SemiBold.ttf"
+            ))),
         );
         fonts.families.insert(
             egui::FontFamily::Name("inter-bold".into()),
@@ -2788,8 +2792,8 @@ mod tests {
             )),
             ..Default::default()
         };
-        let _ = ctx.run(raw, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(raw, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 ui.set_width(920.0);
                 ui.set_min_width(920.0);
                 tile_row(ui, tiles.len(), |ui, i| {
@@ -2906,7 +2910,7 @@ mod tests {
             .nth(1)
             .expect("ui_connectors");
         assert!(
-            connectors.contains("self.ui_skills(ctx)"),
+            connectors.contains("self.ui_skills(ui)"),
             "connectors must reuse the skills grid: {connectors}"
         );
         assert!(
@@ -3175,8 +3179,8 @@ mod tests {
             "voice mode must show a live indicator and Stop: {voice}"
         );
         let ctx = egui::Context::default();
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 assert!(!voice_mode_row(ui, "Listening"));
             });
         });
@@ -3297,8 +3301,8 @@ mod tests {
             "empty state is one muted single-line chip, not a ranked action: {empty}"
         );
         let ctx = egui::Context::default();
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 assert!(quick_chip_row(ui, &[]).is_none());
             });
         });
@@ -3350,8 +3354,8 @@ mod tests {
         assert!(chip_pill_width(narrow) <= 120.5);
 
         let ctx = egui::Context::default();
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 let font = FontId::proportional(13.0);
                 let color = Color32::WHITE;
                 let long = layout_chip_label(
@@ -3379,7 +3383,7 @@ mod tests {
                         CHIP_ROW_H
                     );
                 }
-                let natural = ui.fonts(|f| {
+                let natural = ui.fonts_mut(|f| {
                     f.layout_no_wrap(
                         "you should already have mcp configured".into(),
                         FontId::proportional(13.0),
@@ -3421,7 +3425,7 @@ mod tests {
                         CHIP_LABEL_MAX_W,
                     );
                     assert_eq!(galley.rows.len(), 1, "owner wrap: {label}");
-                    let natural = ui.fonts(|f| {
+                    let natural = ui.fonts_mut(|f| {
                         f.layout_no_wrap(label.to_owned(), FontId::proportional(13.0), color)
                             .size()
                             .x
@@ -3494,7 +3498,9 @@ mod tests {
         let mut fonts = egui::FontDefinitions::default();
         fonts.font_data.insert(
             "inter-bold".into(),
-            egui::FontData::from_static(include_bytes!("../assets/fonts/Inter-SemiBold.ttf")),
+            Arc::new(egui::FontData::from_static(include_bytes!(
+                "../assets/fonts/Inter-SemiBold.ttf"
+            ))),
         );
         fonts.families.insert(
             egui::FontFamily::Name("inter-bold".into()),
@@ -3533,8 +3539,8 @@ mod tests {
             ..Default::default()
         };
         let mut act = None;
-        let out = ctx.run(raw, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let out = ctx.run_ui(raw, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 act = quick_chip_row(ui, chips);
             });
         });
@@ -3885,8 +3891,8 @@ mod tests {
     #[test]
     fn run_pulse_paints_a_labeled_row() {
         let ctx = egui::Context::default();
-        let _ = ctx.run(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 let _paint = crate::theme::hold_paint_test();
                 crate::theme::set_paint_dark(true);
                 paint_run_pulse(ui, "Running", "run_terminal_cmd");
