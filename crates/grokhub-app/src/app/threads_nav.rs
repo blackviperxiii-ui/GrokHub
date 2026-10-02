@@ -451,7 +451,11 @@ impl Cabin {
         let was_current = idx == self.thread_idx;
         match delete_thread(self.threads.len(), idx, self.thread_idx) {
             DeleteOutcome::ResetLast => {
+                let old_ids: Vec<String> = self.threads.iter().map(|t| t.id.clone()).collect();
                 self.halt_in_flight();
+                for id in &old_ids {
+                    self.drop_bg_runs_for(id);
+                }
                 self.finish_hub_dispatch("Chat deleted", false);
                 self.threads.clear();
                 self.threads.push(ChatThread::new("Chat", false));
@@ -466,6 +470,7 @@ impl Cabin {
             }
             DeleteOutcome::Removed { next } => {
                 let gone = self.threads.remove(idx);
+                self.drop_bg_runs_for(&gone.id);
                 if self.chat_job_thread.as_deref() == Some(gone.id.as_str()) {
                     self.halt_in_flight();
                     self.finish_hub_dispatch("Chat deleted", false);
@@ -500,7 +505,11 @@ impl Cabin {
     }
 
     pub(super) fn delete_all_history(&mut self) {
+        let thread_ids: Vec<String> = self.threads.iter().map(|t| t.id.clone()).collect();
         self.halt_in_flight();
+        for id in &thread_ids {
+            self.drop_bg_runs_for(id);
+        }
         self.finish_hub_dispatch("Chats deleted", false);
         let mut ids: Vec<String> = Vec::new();
         for t in &self.threads {

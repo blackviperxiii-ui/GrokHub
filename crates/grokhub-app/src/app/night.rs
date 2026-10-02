@@ -648,7 +648,10 @@ impl Cabin {
         let cwd = self.grok_cwd();
         let prompt = row.prompt.clone();
         let resume = row.session_id.clone().filter(|s| !s.is_empty());
-        let perm_args = self.permission_mode.scheduled_args();
+        let perm_args = grokhub_acp::with_ask_deny(
+            self.permission_mode.scheduled_args(),
+            self.permission_mode.needs_approval(),
+        );
         let title: String = row.prompt.chars().take(48).collect();
         self.status = format!("Loop: {title}");
         if self.acp.is_some() && !self.running {

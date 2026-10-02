@@ -85,6 +85,12 @@ impl PermissionMode {
         matches!(self, Self::Ask)
     }
 
+    /// Ask requires approval before shell, edit, or write. Same modes as
+    /// [`Self::uses_acp`]. An unwatched run cannot show Allow / Deny.
+    pub fn needs_approval(self) -> bool {
+        self.uses_acp()
+    }
+
     /// Composer `grok -p` for Auto and Always. Interactive Ask uses ACP
     /// (`uses_acp`) and does not reach this. Ask matches [`Self::scheduled_flags`]
     /// so a skipped ACP arm cannot pass `--always-approve`.

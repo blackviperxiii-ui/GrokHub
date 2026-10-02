@@ -107,6 +107,11 @@ pub enum Slash {
     Btw,
     /// Open the stored plan (`/view-plan`, `/show-plan`, `/plan-view`).
     ViewPlan,
+    /// `/bg <task>` runs a task beside this chat. Bare `/bg` moves the live reply
+    /// to the background; `/bg stop` stops every background run.
+    Background(String),
+    /// `/queue <message>` holds the message until the live reply ends instead of steering it.
+    Queue(String),
 }
 
 fn looks_like_bind_path(s: &str) -> bool {
@@ -170,6 +175,8 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/loop" => Some(Slash::Loop(rest.to_string())),
         "/fork" => Some(Slash::Fork),
         "/btw" => Some(Slash::Btw),
+        "/bg" | "/background" => Some(Slash::Background(rest.to_string())),
+        "/queue" if !rest.is_empty() => Some(Slash::Queue(rest.to_string())),
         "/view-plan" | "/show-plan" | "/plan-view" => Some(Slash::ViewPlan),
         "/workflow" if rest.is_empty() => Some(Slash::GrokWorkflows),
         "/workflow" => Some(parse_workflow_arg(rest)),
@@ -424,6 +431,8 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Worktree => "worktree",
         Slash::Btw => "btw",
         Slash::ViewPlan => "view_plan",
+        Slash::Background(_) => "background",
+        Slash::Queue(_) => "queue",
     }
 }
 
@@ -478,6 +487,8 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/rewind --files", hint: "Restore last project snapshot", insert: "/rewind --files", run_on_pick: true },
     SlashDef { cmd: "/fork", hint: "Fork this Grok session", insert: "/fork", run_on_pick: true },
     SlashDef { cmd: "/btw", hint: "Side ask — does not stop a live run", insert: "/btw", run_on_pick: true },
+    SlashDef { cmd: "/bg", hint: "Run a task in the background…", insert: "/bg ", run_on_pick: false },
+    SlashDef { cmd: "/queue", hint: "Send after the live reply…", insert: "/queue ", run_on_pick: false },
     SlashDef { cmd: "/view-plan", hint: "Show the plan from Plan mode", insert: "/view-plan", run_on_pick: true },
     SlashDef { cmd: "/worktree", hint: "Next chat in a git worktree", insert: "/worktree", run_on_pick: true },
     SlashDef { cmd: "/workflow", hint: "Launch a Grok workflow…", insert: "/workflow ", run_on_pick: false },
@@ -675,6 +686,9 @@ pub fn slash_help() -> String {
         "/rewind — rewind Grok conversation; /rewind --files restores the last project snapshot",
         "/fork — fork the Grok session into a new chat tab",
         "/btw — side ask. A live run keeps going; the question waits, then sends look-safe. Saved as ask.",
+        "/bg <task> — run a task in the background beside this chat (up to 3 at once); its reply posts here when it ends. Bare /bg moves the live reply to the background and frees the composer. /bg stop stops every background run.",
+        "/queue <message> — hold a message until the live reply ends instead of steering it (Alt+Enter does the same).",
+        "Typing while a reply runs steers it: Enter stops the turn where it is, keeps what it said and did, and carries on with your message folded in. Alt+Enter queues instead. Sending in another chat moves a running reply to the background instead of stopping it.",
         "/view-plan — show the plan from Plan mode (/show-plan and /plan-view too)",
         "/worktree — next chat starts in a git worktree",
         "/workflow <name> — launch a Grok Build workflow",
@@ -748,6 +762,14 @@ mod tests {
         assert_eq!(parse_slash("/compact"), Some(Slash::Compact));
         assert_eq!(parse_slash("/fork"), Some(Slash::Fork));
         assert_eq!(parse_slash("/btw"), Some(Slash::Btw));
+        assert_eq!(parse_slash("/bg"), Some(Slash::Background(String::new())));
+        assert_eq!(
+            parse_slash("/bg run the tests"),
+            Some(Slash::Background("run the tests".into()))
+        );
+        assert_eq!(parse_slash("/background stop"), Some(Slash::Background("stop".into())));
+        assert_eq!(parse_slash("/queue then deploy"), Some(Slash::Queue("then deploy".into())));
+        assert_eq!(parse_slash("/queue"), None);
         assert_eq!(parse_slash("/view-plan"), Some(Slash::ViewPlan));
         assert_eq!(parse_slash("/show-plan"), Some(Slash::ViewPlan));
         assert_eq!(parse_slash("/plan-view"), Some(Slash::ViewPlan));
