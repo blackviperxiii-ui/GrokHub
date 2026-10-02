@@ -45,7 +45,7 @@ pub fn measure_text(ui: &Ui, text: &str, wrap: f32) -> Vec2 {
         return Vec2::new(0.0, ui.text_style_height(&TextStyle::Body));
     }
     let job = wrapped_job(ui, text, wrap, Color32::WHITE);
-    ui.fonts(|f| f.layout_job(job)).size()
+    ui.fonts_mut(|f| f.layout_job(job)).size()
 }
 
 /// Bubble content width for a markdown reply. Code blocks, tables, and headings take
@@ -166,7 +166,7 @@ fn list_item(ui: &mut Ui, depth: u8, marker: Marker, text: &str, wrap: f32) {
             }
             Marker::Num(n) => {
                 let font = TextStyle::Body.resolve(ui.style());
-                let galley = ui.fonts(|f| f.layout_no_wrap(format!("{n}."), font, ink));
+                let galley = ui.fonts_mut(|f| f.layout_no_wrap(format!("{n}."), font, ink));
                 // Two-digit numbers push the text a little instead of overlapping it.
                 let w = galley.size().x;
                 ui.painter().galley(
@@ -184,7 +184,7 @@ fn list_item(ui: &mut Ui, depth: u8, marker: Marker, text: &str, wrap: f32) {
                     egui::pos2(rect.min.x + side * 0.5 + 1.0, rect.center().y),
                     Vec2::splat(side),
                 );
-                ui.painter().rect_stroke(b, 2.5, Stroke::new(1.2_f32, ink));
+                ui.painter().rect_stroke(b, 2.5, Stroke::new(1.2_f32, ink), egui::StrokeKind::Middle);
                 if done {
                     let s = Stroke::new(1.6_f32, crate::theme::live());
                     ui.painter().line_segment(
@@ -211,14 +211,14 @@ fn list_item(ui: &mut Ui, depth: u8, marker: Marker, text: &str, wrap: f32) {
 }
 
 fn quote(ui: &mut Ui, body: &str, wrap: f32) {
-    let bar = 3.0;
-    let pad = 10.0;
-    let resp = Frame::none()
+    let bar: f32 = 3.0;
+    let pad: f32 = 10.0;
+    let resp = Frame::NONE
         .inner_margin(Margin {
-            left: bar + pad,
-            right: 0.0,
-            top: 2.0,
-            bottom: 2.0,
+            left: (bar + pad).round() as i8,
+            right: 0,
+            top: 2,
+            bottom: 2,
         })
         .show(ui, |ui| {
             let inner = (wrap - bar - pad).max(1.0);
@@ -287,7 +287,7 @@ pub(crate) fn table_col_widths(
     let cols = header.len().max(1);
     let font = TextStyle::Body.resolve(ui.style());
     let measure = |t: &str| {
-        ui.fonts(|f| {
+        ui.fonts_mut(|f| {
             f.layout_no_wrap(md_plain(t), font.clone(), Color32::WHITE)
                 .size()
                 .x
@@ -395,11 +395,11 @@ pub(crate) fn code_job(ui: &Ui, lang: &str, body: &str, wrap: f32) -> LayoutJob 
 fn code_block(ui: &mut Ui, key: usize, lang: &str, body: &str, wrap: f32) {
     let pad = Vec2::new(10.0, 8.0);
     ui.add_space(2.0);
-    Frame::none()
+    Frame::NONE
         .fill(crate::theme::code_well())
         .stroke(Stroke::new(1.0_f32, crate::theme::border()))
-        .rounding(8.0)
-        .inner_margin(Margin::symmetric(pad.x, pad.y))
+        .corner_radius(8.0)
+        .inner_margin(Margin::symmetric(pad.x.round() as i8, pad.y.round() as i8))
         .show(ui, |ui| {
             let inner = (wrap - pad.x * 2.0 - 2.0).max(1.0);
             ui.set_width(inner);
@@ -719,8 +719,8 @@ mod tests {
 
     fn with_fonts_ui(mut add: impl FnMut(&mut eframe::egui::Ui)) {
         let ctx = eframe::egui::Context::default();
-        let _ = ctx.run(Default::default(), |ctx| {
-            eframe::egui::CentralPanel::default().show(ctx, |ui| add(ui));
+        let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
+            eframe::egui::CentralPanel::default().show(ui, |ui| add(ui));
         });
     }
 }

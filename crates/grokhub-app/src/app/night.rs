@@ -110,10 +110,10 @@ impl Cabin {
         }
     }
 
-    pub(super) fn ui_night(&mut self, ctx: &egui::Context) {
+    pub(super) fn ui_night(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(crate::theme::bg()).inner_margin(egui::Margin::same(24.0)))
-            .show(ctx, |ui| {
+            .frame(egui::Frame::NONE.fill(crate::theme::bg()).inner_margin(egui::Margin::same(24)))
+            .show(ui, |ui| {
             if crate::cards::page_header(ui, "Automations", "New job") {
                 self.auto_compose = true;
             }
@@ -122,11 +122,11 @@ impl Cabin {
             ui.add_space(12.0);
             if self.auto_compose {
                 ui.add_space(12.0);
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(crate::theme::elevated())
-                    .rounding(12.0)
+                    .corner_radius(12.0)
                     .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                    .inner_margin(egui::Margin::same(14.0))
+                    .inner_margin(egui::Margin::same(14))
                     .show(ui, |ui| {
                         ui.label(RichText::new("New job").strong());
                         let edit = ui.add(
@@ -177,11 +177,11 @@ impl Cabin {
                         self.grok_loops[i].interval,
                         self.grok_loops[i].run_count
                     );
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(crate::theme::elevated())
-                        .rounding(14.0)
+                        .corner_radius(14.0)
                         .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                        .inner_margin(egui::Margin::same(12.0))
+                        .inner_margin(egui::Margin::same(12))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 if ui.checkbox(&mut self.grok_loops[i].enabled, "").changed() {
@@ -284,11 +284,11 @@ impl Cabin {
             } else {
                 crate::theme::border()
             };
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(crate::theme::elevated())
-                .rounding(14.0)
+                .corner_radius(14.0)
                 .stroke(egui::Stroke::new(1.0_f32, ring))
-                .inner_margin(egui::Margin::same(12.0))
+                .inner_margin(egui::Margin::same(12))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         if ui.checkbox(&mut self.automations[i].enabled, "").changed() {

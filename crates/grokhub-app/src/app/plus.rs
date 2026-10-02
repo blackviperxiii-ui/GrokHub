@@ -230,7 +230,7 @@ impl Cabin {
             return;
         }
         let line = drop_hint_line(self.page_nav() == Nav::Imagine, n);
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let painter = ctx.layer_painter(egui::LayerId::new(
             egui::Order::Foreground,
             egui::Id::new("cabin-drop-hint"),
@@ -247,6 +247,7 @@ impl Cabin {
             16.0,
             crate::theme::elevated(),
             egui::Stroke::new(1.5_f32, crate::theme::link()),
+            egui::StrokeKind::Middle,
         );
         painter.galley(card.center() - galley.size() * 0.5, galley, crate::theme::fg());
     }
@@ -258,7 +259,7 @@ impl Cabin {
             i.raw
                 .dropped_files
                 .iter()
-                .filter_map(|f| f.path.clone())
+                .map(|f| f.path().to_path_buf())
                 .collect()
         });
         let Some(path) = paths.first().cloned() else {

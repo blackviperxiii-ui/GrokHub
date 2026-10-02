@@ -1111,7 +1111,7 @@ fn paint_stack_shadow(painter: &egui::Painter, rect: egui::Rect) {
 
 fn paint_card_at(ui: &mut egui::Ui, card: &UpdateCard, rect: egui::Rect) -> Option<FeedAct> {
     let mut act = None;
-    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
         ui.set_min_size(rect.size());
         ui.set_width(rect.width());
         ui.spacing_mut().item_spacing = egui::vec2(8.0, 4.0);
@@ -1171,6 +1171,7 @@ fn paint_tucked_edge(ui: &mut egui::Ui, rect: egui::Rect, cover: egui::Rect) {
         crate::theme::CARD_RADIUS,
         crate::theme::elevated(),
         egui::Stroke::new(1.0_f32, crate::theme::border()),
+        egui::StrokeKind::Middle,
     );
 }
 
@@ -1182,7 +1183,7 @@ fn paint_slide_deck(
     view: &StackView,
 ) -> SlidePaint {
     let front = stack.left_top();
-    let placements = slide_placements(ui.ctx(), cards, view, front.y, ui.ctx().screen_rect().top());
+    let placements = slide_placements(ui.ctx(), cards, view, front.y, ui.ctx().content_rect().top());
     let rects: Vec<egui::Rect> = placements
         .iter()
         .map(|place| slide_rect(front, width, place.pose))
@@ -1248,6 +1249,7 @@ fn paint_feed_card(ui: &mut egui::Ui, card: &UpdateCard, pane_w: f32) -> Option<
         crate::theme::CARD_RADIUS,
         crate::theme::elevated(),
         egui::Stroke::new(1.0_f32, crate::theme::border()),
+        egui::StrokeKind::Middle,
     );
     let x_rect = egui::Rect::from_min_size(
         egui::pos2(rect.right() - 32.0, rect.top() + 6.0),
@@ -1257,7 +1259,7 @@ fn paint_feed_card(ui: &mut egui::Ui, card: &UpdateCard, pane_w: f32) -> Option<
         egui::pos2(rect.left() + 8.0, rect.top() + 6.0),
         egui::pos2(x_rect.left() - 4.0, rect.bottom() - 6.0),
     );
-    ui.allocate_new_ui(egui::UiBuilder::new().max_rect(text_rect), |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(text_rect), |ui| {
         ui.set_width(text_rect.width());
         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
         let title_color = if card.status == UpdateStatus::Opened || card.built {

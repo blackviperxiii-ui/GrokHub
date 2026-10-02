@@ -4697,7 +4697,7 @@ impl eframe::App for Cabin {
         }
     }
 
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_job();
         self.poll_imagine_save();
         self.poll_host_diff();
@@ -4740,7 +4740,6 @@ impl eframe::App for Cabin {
         self.poll_single();
         self.poll_pick();
         self.take_dropped_attach(ctx);
-        self.paint_drop_hint(ctx);
         self.poll_pick_list();
         self.poll_eyes_cap();
         self.poll_recipe_cap();
@@ -4929,45 +4928,55 @@ impl eframe::App for Cabin {
             ),
         );
         self.drain_queued_update();
-        self.ui_titlebar(ctx);
+        // eframe 0.34+ runs only `logic` while the window is hidden, minimized or
+        // occluded, so these keep ticking from the tray. `ui` runs them again
+        // after a painted frame's clicks.
+        self.sync_idea_card_actions();
+        self.release_workflow_ctl_if_idle();
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        self.paint_drop_hint(&ctx);
+        self.ui_titlebar(ui);
         // First-run wait / Get Started takes CentralPanel — a Foreground Area over chat does not paint on Windows.
-        if !self.ui_get_started(ctx) {
-            self.ui_sidebar(ctx);
-            self.ui_settings_menu(ctx);
+        if !self.ui_get_started(ui) {
+            self.ui_sidebar(ui);
+            self.ui_settings_menu(&ctx);
 
             match self.page_nav() {
-                Nav::Chat => self.ui_chat(ctx),
-                Nav::Devices => self.ui_devices(ctx),
-                Nav::Memory => self.ui_memory(ctx),
-                Nav::Workboard => self.ui_board(ctx),
-                Nav::Ideas => self.ui_ideas(ctx),
-                Nav::Imagine => self.ui_imagine(ctx),
-                Nav::Skills => self.ui_skills(ctx),
-                Nav::Night => self.ui_night(ctx),
-                Nav::History => self.ui_history(ctx),
-                Nav::Command => self.ui_command(ctx),
-                Nav::Connectors => self.ui_connectors(ctx),
-                Nav::Agents => self.ui_agents(ctx),
-                Nav::Settings => self.ui_chat(ctx),
+                Nav::Chat => self.ui_chat(ui),
+                Nav::Devices => self.ui_devices(ui),
+                Nav::Memory => self.ui_memory(ui),
+                Nav::Workboard => self.ui_board(ui),
+                Nav::Ideas => self.ui_ideas(ui),
+                Nav::Imagine => self.ui_imagine(ui),
+                Nav::Skills => self.ui_skills(ui),
+                Nav::Night => self.ui_night(ui),
+                Nav::History => self.ui_history(ui),
+                Nav::Command => self.ui_command(ui),
+                Nav::Connectors => self.ui_connectors(ui),
+                Nav::Agents => self.ui_agents(ui),
+                Nav::Settings => self.ui_chat(ui),
             }
         }
         // Latest chip → Settings → Update must paint on top of Get Started.
         // A first-frame Area over empty chat does not draw; this overlay opens
         // after GitHub Latest returns, when the window is already sized.
         if self.nav == Nav::Settings {
-            self.ui_settings(ctx);
+            self.ui_settings(&ctx);
         }
         if self.palette_open {
-            self.ui_palette(ctx);
+            self.ui_palette(&ctx);
         }
         if self.confirm.as_ref().is_some_and(|c| c.paints_overlay()) {
-            self.paint_confirm_overlay(ctx);
+            self.paint_confirm_overlay(&ctx);
         }
         if self.shortcuts_open {
             egui::Window::new("Shortcuts")
                 .collapsible(false)
                 .default_width(420.0)
-                .show(ctx, |ui| {
+                .show(&ctx, |ui| {
                     ui.set_max_width(400.0);
                     for line in shortcut_help().lines() {
                         ui.label(line);
@@ -4977,9 +4986,9 @@ impl eframe::App for Cabin {
                     }
                 });
         }
-        self.ui_plus_overlays(ctx);
-        self.ui_imagine_overlays(ctx);
-        self.ui_project_overlays(ctx);
+        self.ui_plus_overlays(&ctx);
+        self.ui_imagine_overlays(&ctx);
+        self.ui_project_overlays(&ctx);
         self.sync_idea_card_actions();
         self.release_workflow_ctl_if_idle();
     }
@@ -5112,11 +5121,11 @@ fn paint_tool_rows(ui: &mut egui::Ui, rows: &[grokhub_core::ToolRow]) {
 }
 
 fn paint_tool_card_body(ui: &mut egui::Ui, card: &ToolCard) {
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(egui::Color32::TRANSPARENT)
-        .rounding(crate::theme::CHROME_RADIUS)
+        .corner_radius(crate::theme::CHROME_RADIUS)
         .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-        .inner_margin(egui::Margin::same(8.0))
+        .inner_margin(egui::Margin::same(8))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
