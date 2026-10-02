@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.10.62 — 2026-10-02
+
+Grok can control the desktop precisely through GrokHub. Turn on **Settings → Let Grok control the desktop** (off by default) and GrokHub registers its own desktop tools with Grok Build as a local MCP server (`grokhub --mcp-desktop`, server `grokhub-desktop`): `list_monitors`, `screenshot` (per monitor or the whole desktop, with exact geometry and scale), `click` (button, double), `move`, `drag`, `scroll`, `type`, and `key` (combos like `ctrl+shift+t`). Coordinates are in the screenshot's pixels and map back exactly to real screen pixels per monitor, DPI-aware, instead of Grok guessing with xdotool or PowerShell. Windows uses xcap capture and SendInput (no extra programs). Linux X11 uses the X server directly (RandR, XTEST); Wayland uses grim and ydotool when they are installed and says what is missing when they are not. The registration goes into the cabin's own Grok home (`grok mcp add`), never `~/.grok`. Ask still asks before every desktop tool in a watched chat; unwatched Ask runs (background, automations, night, phone), Plan and btw deny them; Auto and Always allow them. Turning the switch off refuses the tools at once. Halt (Ctrl+Alt+H) stops desktop actions, the lock screen blocks them, and nothing reads the keyboard or clipboard.
+
+- Linux: `grokhub-linux-v2.10.62.tar.gz` and AUR `pkgver=2.10.62`.
+- Windows: `GrokHub-Setup-2.10.62.exe` and `grokhub-windows-v2.10.62.zip`.
+
 ## 2.10.61 — 2026-10-02
 
 A message typed while Grok is still replying steers the reply. Enter stops the turn where it is, keeps what it already said and did in the chat, and carries on with your message and a short note of that progress, so finished steps are not redone. Alt+Enter, or `/queue <message>`, holds the message until the reply ends, which is what Enter used to do. With text typed during a reply, a row above the composer offers Steer and Queue, and lists queued messages with Steer now and Remove.

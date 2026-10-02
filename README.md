@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.61** — A message typed while Grok replies steers the reply (Alt+Enter or `/queue` waits instead), and `/bg` runs work in the background beside the chat. With Ask on, background tasks stay off because they can't ask you for approval.
+**v2.10.62** — Grok can control the desktop through GrokHub's own precise screenshot, click, and type tools (Settings → Let Grok control the desktop, off by default).
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.61.tar.gz`, AUR | **v2.10.61** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.61.exe`, `grokhub-windows-v2.10.61.zip` | **v2.10.61** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.62.tar.gz`, AUR | **v2.10.62** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.62.exe`, `grokhub-windows-v2.10.62.zip` | **v2.10.62** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.

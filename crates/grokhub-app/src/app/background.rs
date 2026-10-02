@@ -173,6 +173,7 @@ impl Cabin {
                 image: None,
                 learned: &grokhub_core::brief_for(&self.learning, "chat"),
                 deny: self.permission_mode.needs_approval(),
+                desktop: self.cfg.desktop_control,
             },
             resume.is_some(),
             user_home,

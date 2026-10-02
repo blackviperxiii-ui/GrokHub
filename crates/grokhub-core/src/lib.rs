@@ -17,6 +17,7 @@ pub mod connector;
 pub mod consult;
 pub mod context;
 pub mod desktop_entry;
+pub mod desktop_mcp;
 pub mod diagnostics;
 pub mod doctor;
 pub mod export;
@@ -192,6 +193,10 @@ pub use context::{
     RESULT_TRIM_THRESHOLD,
 };
 pub use desktop_entry::{desktop_bin_path, desktop_entry_uses_prefix_bin, rewrite_desktop_entry};
+pub use desktop_mcp::{
+    apply_desktop_mcp_args, desktop_mcp_args, stamp_halts, DesktopPermMode, DESKTOP_MCP_RULE,
+    DESKTOP_MCP_SERVER,
+};
 pub use diagnostics::diagnostics_bundle;
 pub use doctor::{
     doctor_cabin_line, doctor_extras, doctor_grok_cli_line, doctor_hands_line, doctor_lines,
