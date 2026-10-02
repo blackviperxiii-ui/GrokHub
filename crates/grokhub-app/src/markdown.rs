@@ -418,18 +418,20 @@ fn code_block(ui: &mut Ui, key: usize, lang: &str, body: &str, wrap: f32) {
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.push_id(("md-code-copy", key), |ui| {
+                        let flash_id = ui.next_auto_id();
                         let copy = crate::theme::felt_label_button(
                             ui,
-                            "Copy",
+                            crate::theme::copy_flash_label(ui.ctx(), flash_id),
                             Color32::TRANSPARENT,
                             crate::theme::muted(),
                             6.0,
-                            Vec2::ZERO,
+                            Vec2::new(crate::theme::copy_hit_width(ui), 0.0),
                             None,
                             false,
                         )
                         .on_hover_text("Copy this code");
                         if copy.clicked() {
+                            crate::theme::mark_copy_clicked(ui.ctx(), copy.id);
                             let code = body.to_string();
                             ui.ctx()
                                 .data_mut(|d| d.insert_temp(code_copy_id(), code));

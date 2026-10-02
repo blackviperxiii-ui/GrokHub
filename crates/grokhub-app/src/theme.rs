@@ -784,6 +784,47 @@ pub fn paint_button_shadow(painter: &egui::Painter, rect: egui::Rect, hover_t: f
     );
 }
 
+/// How long a Copy button reads "Copied".
+pub const COPY_FLASH: Duration = Duration::from_millis(1500);
+
+/// True while a click at `clicked` should still read "Copied".
+pub fn copy_flash_showing(clicked: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(clicked) < COPY_FLASH
+}
+
+/// "Copied" for [`COPY_FLASH`] after a click, otherwise "Copy".
+pub fn copy_button_label(clicked: Option<Instant>, now: Instant) -> &'static str {
+    match clicked {
+        Some(t) if copy_flash_showing(t, now) => "Copied",
+        _ => "Copy",
+    }
+}
+
+/// Width of the wider Copy label, so the row does not jump when it flips.
+pub fn copy_hit_width(ui: &egui::Ui) -> f32 {
+    let font = FontId::proportional(FONT_CHROME);
+    let galley = ui.fonts_mut(|f| f.layout_no_wrap("Copied".to_owned(), font, Color32::PLACEHOLDER));
+    let pad = ui.style().spacing.button_padding.x;
+    galley.size().x + pad * 2.0
+}
+
+/// Label for a Copy button. The click time lives in temp data under the button id.
+pub fn copy_flash_label(ctx: &egui::Context, id: egui::Id) -> &'static str {
+    let now = Instant::now();
+    let clicked = ctx.data(|d| d.get_temp::<Instant>(id));
+    if let Some(t) = clicked.filter(|t| copy_flash_showing(*t, now)) {
+        let left = COPY_FLASH.saturating_sub(now.saturating_duration_since(t));
+        ctx.request_repaint_after(left.max(Duration::from_millis(16)));
+        return "Copied";
+    }
+    "Copy"
+}
+
+pub fn mark_copy_clicked(ctx: &egui::Context, id: egui::Id) {
+    ctx.data_mut(|d| d.insert_temp(id, Instant::now()));
+    ctx.request_repaint_after(COPY_FLASH);
+}
+
 /// Painted label button with hover grow / press shrink (Plasma-style pointer feedback).
 pub fn felt_label_button(
     ui: &mut egui::Ui,
@@ -1276,6 +1317,23 @@ mod tests {
         assert!(
             !paint.contains("load_from_memory"),
             "paint must not decode the PNG: {paint}"
+        );
+    }
+
+    #[test]
+    fn copy_label_lasts_one_and_a_half_seconds() {
+        let t0 = Instant::now();
+        assert_eq!(copy_button_label(None, t0), "Copy");
+        assert_eq!(copy_button_label(Some(t0), t0), "Copied");
+        assert_eq!(
+            copy_button_label(Some(t0), t0 + Duration::from_millis(1499)),
+            "Copied"
+        );
+        assert!(!copy_flash_showing(t0, t0 + COPY_FLASH));
+        assert_eq!(copy_button_label(Some(t0), t0 + COPY_FLASH), "Copy");
+        assert_eq!(
+            copy_button_label(Some(t0), t0 + Duration::from_secs(2)),
+            "Copy"
         );
     }
 }
