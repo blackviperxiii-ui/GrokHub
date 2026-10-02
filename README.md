@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.60** — Windows reads the real date and time, Stop ends a headless run on Windows, dismissed ideas and situation cards stay gone, workboard cards can be deleted, and background work runs at low reasoning effort.
+**v2.10.61** — A message typed while Grok replies steers the reply (Alt+Enter or `/queue` waits instead), and `/bg` runs work in the background beside the chat. With Ask on, background tasks stay off because they can't ask you for approval.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.60.tar.gz`, AUR | **v2.10.60** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.60.exe`, `grokhub-windows-v2.10.60.zip` | **v2.10.60** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.61.tar.gz`, AUR | **v2.10.61** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.61.exe`, `grokhub-windows-v2.10.61.zip` | **v2.10.61** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
