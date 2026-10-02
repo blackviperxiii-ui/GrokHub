@@ -513,11 +513,14 @@ fn channel_moving(t: f32) -> bool {
     t > 0.0 && t < 1.0
 }
 
-/// Another frame only while the pointer is on the control, it is pressed,
-/// the control is live, or a channel is still easing back to rest.
-fn follow_composer_frame(ui: &egui::Ui, resp: &egui::Response, live: bool, channels: &[f32]) {
-    let moving = channels.iter().copied().any(channel_moving);
-    if resp.hovered() || resp.is_pointer_button_down_on() || live || moving {
+/// A frame is due while a channel is easing (`0 < t < 1`) or the control is live.
+fn composer_wants_frame(live: bool, channels: &[f32]) -> bool {
+    live || channels.iter().copied().any(channel_moving)
+}
+
+/// Another frame only while a channel is easing or the control is live.
+fn follow_composer_frame(ui: &egui::Ui, _resp: &egui::Response, live: bool, channels: &[f32]) {
+    if composer_wants_frame(live, channels) {
         ui.ctx().request_repaint();
     }
 }
@@ -813,12 +816,7 @@ pub fn paint_composer_paperclip(
         (hover_t * 0.72 * (1.0 - 0.35 * press_t)).clamp(0.0, 1.0),
     );
     paint_paperclip_glyph(ui.painter(), glyph, ink, hover_t, press_t, breath);
-    follow_composer_frame(
-        ui,
-        &resp,
-        resp.hovered(),
-        &[hover_t, press_t, breath],
-    );
+    follow_composer_frame(ui, &resp, false, &[hover_t, press_t]);
     name_control(&resp, bar_icon_name(BarIcon::Plus));
     resp
 }
@@ -1286,6 +1284,29 @@ mod tests {
         assert!(
             src.contains("BarIcon::Plus => return paint_composer_paperclip"),
             "the attach control is the paperclip"
+        );
+    }
+
+    #[test]
+    fn composer_repaints_only_while_easing_or_live() {
+        assert!(!composer_wants_frame(false, &[0.0, 1.0]));
+        assert!(composer_wants_frame(false, &[0.4]));
+        assert!(composer_wants_frame(true, &[0.0]));
+        assert!(!composer_wants_frame(false, &[]));
+        let src = include_str!("icons.rs");
+        let clip = src
+            .split("pub fn paint_composer_paperclip(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn bar_icon_name(").next())
+            .expect("paperclip");
+        let follow = clip
+            .split("follow_composer_frame(")
+            .nth(1)
+            .expect("follow");
+        let args = follow.split(';').next().unwrap_or(follow);
+        assert!(
+            args.contains("false") && !args.contains("hovered"),
+            "a settled paperclip hover must not request frames: {args}"
         );
     }
 
