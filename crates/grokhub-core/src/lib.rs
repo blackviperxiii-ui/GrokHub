@@ -63,6 +63,7 @@ pub mod thread_tab;
 pub mod tui_gaps;
 pub mod trajectory;
 pub mod turn_timeline;
+pub mod card_signals;
 pub mod update;
 pub mod update_feed;
 pub mod usage;
@@ -476,26 +477,30 @@ pub use windshield::{
     refused_lock, tab_list_from_rows, window_name_from_atspi, window_name_from_wmctrl,
     windshield_browser_line, windshield_prompt, AtspiRow, PendingStep, WindshieldFrame,
 };
+pub use card_signals::{
+    append_signal, append_signals, ignored_signals, load_signals, ms_since_shown, signal_from_card,
+    signals_path, CardEvent, CardSignal, SIGNAL_CAP,
+};
 pub use update_feed::{
     ideas_board, idea_card_brief, idea_chat_open_line, mark_idea_modified, take_card_action,
     CARD_ACTION_DONE, CARD_ACTION_TAG, modified_ideas, post_skill_idea, set_idea_draft,
     IDEA_MODIFIED_MAX,
     board_covers_topic, live_generated_ideas, post_generated_ideas, purge_one_off_ideas, purge_template_ideas,
     automation_failed_card,
-    archive_digest, archived_digests, automate_offer_card, automation_done_card, card_matches,
-    digest_card, digest_topic_refused, discuss_context, dismiss_idea, dismiss_update, expire_ideas,
-    feed_ideas, feed_visible, hold_if_quiet, home_feed_n, idea_card, idea_dialogue,
-    idea_open_line, idea_rank, lesson_rank_delta, setup_blocked_by_lessons,
-    idea_touched, links_from_research, unpin_feed_idea,
-    mark_update_opened,
-    post_update, release_quiet_hold, resume_needs_fresh_chat, schedule_created_card,
-    suggestion_card, tick_feed_pulse, visible_digests, visible_ideas, visible_updates,
-    digest_lookup_prompt, digest_steer, parse_lookup, post_help, remember_dismissed_source,
-    remember_turned_down, turned_down_titles, turned_down_topic,
-    DigestEdition, HelpTick, ParsedLookup, PausedJob, RepeatedAction, PAUSE_OFFER_MS,
-    CardReaction, CitedLink, DigestMaterial, FeedPulse, PulseNow, PulseTick, TasteNote,
-    UpdateAction, UpdateCard, UpdateKind, UpdateStatus, DIGEST_PAINT_MAX, FEED_PAINT_MAX,
-    IDEA_BOARD_MAX, IDEA_DISCOVERY_MAX, IDEA_TTL_MS,
+    archive_digest, archived_digests, automate_offer_card, automation_done_card, card_is_failure,
+    card_matches, collapse_feed, digest_card, digest_topic_refused, discuss_context, dismiss_feed_group,
+    dismiss_idea, dismiss_update, event_why_line, expire_ideas, feed_ideas, feed_visible, group_key,
+    hold_if_quiet, home_feed_n, home_post_gate, idea_card, idea_dialogue, idea_open_line, idea_rank,
+    lesson_rank_delta, less_blocks, mute_home_source, mute_less_like, note_muted_failure,
+    runs_latest_line, schedule_created_card, setup_blocked_by_lessons, source_muted, suggestion_card,
+    tick_feed_pulse, topic_tokens, unmute_home_source, unpin_feed_idea, visible_digests, visible_ideas,
+    visible_updates, idea_touched, links_from_research, mark_update_opened, post_update,
+    release_quiet_hold, resume_needs_fresh_chat, digest_lookup_prompt, digest_steer, parse_lookup,
+    post_help, remember_dismissed_source, remember_turned_down, turned_down_titles, turned_down_topic,
+    DigestEdition, FeedMute, HelpTick, HomeGate, ParsedLookup, PausedJob, RepeatedAction, DAY_MS,
+    LESS_MUTE_MS, PAUSE_OFFER_MS, CardReaction, CitedLink, DigestMaterial, FeedPulse, PulseNow,
+    PulseTick, TasteNote, UpdateAction, UpdateCard, UpdateKind, UpdateStatus, DIGEST_PAINT_MAX,
+    FEED_PAINT_MAX, IDEA_BOARD_MAX, IDEA_DISCOVERY_MAX, IDEA_TTL_MS,
 };
 pub use workboard::{
     card_notes_hash, card_work_prompt, clean_card_notes, take_card_notes_block, CARD_NOTES_MAX,

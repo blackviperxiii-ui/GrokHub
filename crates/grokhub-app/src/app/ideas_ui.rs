@@ -647,6 +647,7 @@ impl Cabin {
         };
         match done {
             Ok(msg) => {
+                self.record_signal_id(id, grokhub_core::CardEvent::Acted);
                 if dismiss_idea(&mut self.updates, id) {
                     self.persist_updates();
                 }

@@ -9886,6 +9886,9 @@ fn discuss_card_opens_one_local_chat() {
         modified: false,
         source_id: String::new(),
         skill: None,
+        runs: 1,
+        first_at: 0,
+        collapsed: false,
     });
     cabin.discuss_card("idea-harbor");
     let open_id = cabin
@@ -13174,7 +13177,7 @@ fn housekeep_keeps_ideas_until_newer_ones_push_them_out() {
     assert!(!cabin.running);
     assert!(
         grokhub_core::visible_updates(&cabin.updates).is_empty(),
-        "ideas must not invent event rows or take the paint cap of 4"
+        "ideas must not invent event rows or take the paint cap of 3"
     );
     assert_eq!(
         grokhub_core::visible_ideas(&cabin.updates)
@@ -14160,6 +14163,9 @@ fn build_idea_files_one_todo() {
         modified: false,
         source_id: String::new(),
         skill: None,
+        runs: 1,
+        first_at: 0,
+        collapsed: false,
     }];
 
     cabin.build_idea("nope");
@@ -14302,6 +14308,9 @@ fn feed_card(id: &str, kind: grokhub_core::UpdateKind, held: bool) -> grokhub_co
         modified: false,
         source_id: String::new(),
         skill: None,
+        runs: 1,
+        first_at: 0,
+        collapsed: false,
     }
 }
 
@@ -14403,6 +14412,9 @@ fn offer_card(id: &str, title: &str, status: UpdateStatus) -> UpdateCard {
         modified: false,
         source_id: String::new(),
         skill: None,
+        runs: 1,
+        first_at: 0,
+        collapsed: false,
     }
 }
 
@@ -22108,4 +22120,56 @@ fn bg_delete_chat_stops_its_runs() {
             .status();
     }
     end_bg_test(root, cabin, restore);
+}
+
+#[test]
+fn muted_source_skips_the_home_feed_and_follow_up_still_updates_the_board() {
+    let (root, mut cabin) = isolated_cabin("muted-home-follow-up");
+    cabin.board.clear();
+    cabin.updates.clear();
+    grokhub_core::mute_home_source(&mut cabin.cfg.feed_pulse, "a-issues");
+    let instructions = "every weekday at 9, summarize my open GitHub issues";
+    assert!(cabin.file_automation_follow_up(
+        "a-issues",
+        "Morning issues",
+        instructions,
+        "Three opened overnight: crash on resume.",
+    ));
+    let follow: Vec<&grokhub_core::BoardCard> = cabin
+        .board
+        .iter()
+        .filter(|c| c.status == grokhub_core::BoardStatus::FollowUp)
+        .collect();
+    assert_eq!(follow.len(), 1, "{:?}", cabin.board);
+    assert_eq!(follow[0].title, "Morning issues");
+    assert_eq!(follow[0].automation.as_deref(), Some("a-issues"));
+    assert!(follow[0].report.contains("Three opened overnight"), "{:?}", follow[0]);
+    assert!(
+        cabin
+            .updates
+            .iter()
+            .all(|c| c.kind != grokhub_core::UpdateKind::AutomationDone),
+        "a muted source posts no Home card: {:?}",
+        cabin.updates
+    );
+    assert!(cabin.file_automation_follow_up(
+        "a-issues",
+        "Morning issues",
+        instructions,
+        "Two more today: #15 and #16.",
+    ));
+    let same: Vec<&grokhub_core::BoardCard> = cabin
+        .board
+        .iter()
+        .filter(|c| c.automation.as_deref() == Some("a-issues"))
+        .collect();
+    assert_eq!(same.len(), 1, "the board keeps one Follow up card");
+    assert!(same[0].report.contains("Two more today"), "{:?}", same[0].report);
+    assert_eq!(same[0].status, grokhub_core::BoardStatus::FollowUp);
+    assert!(
+        cabin.updates.iter().all(|c| c.source_id != "a-issues"),
+        "the second run still skips Home: {:?}",
+        cabin.updates
+    );
+    release_isolated(&root, cabin);
 }

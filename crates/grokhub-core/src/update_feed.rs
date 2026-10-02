@@ -16,7 +16,11 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 /// Newest event cards painted in the home slot. Older undismissed event cards stay on disk.
-pub const FEED_PAINT_MAX: usize = 4;
+pub const FEED_PAINT_MAX: usize = 3;
+/// One day. Content dedupe and the muted-failure floor use this window.
+pub const DAY_MS: u64 = 24 * 60 * 60 * 1000;
+/// "Less like this" hides a topic or source for two weeks. Phase 1b scores it.
+pub const LESS_MUTE_MS: u64 = 14 * DAY_MS;
 /// Idea cards pinned on the home feed. The Ideas board keeps the rest, up to `IDEA_BOARD_MAX`.
 pub const IDEA_DISCOVERY_MAX: usize = 3;
 /// Ideas on the board you have not worked on. A newer card pushes out the oldest.
@@ -162,6 +166,15 @@ pub struct UpdateCard {
     /// Stable id for an idea or situation offer. A dismissed one does not return.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source_id: String,
+    /// Runs this one card stands in for. Old feeds load as a single run.
+    #[serde(default = "default_runs", skip_serializing_if = "runs_is_default")]
+    pub runs: u32,
+    /// First post in the group. `0` on cards saved before grouping.
+    #[serde(default, skip_serializing_if = "u64_is_zero")]
+    pub first_at: u64,
+    /// Folded away by `collapse_feed`. Out of Home, learning, and archives.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub collapsed: bool,
 }
 
 impl UpdateCard {
@@ -190,6 +203,26 @@ impl UpdateCard {
 
 fn is_false(v: &bool) -> bool {
     !*v
+}
+
+fn default_runs() -> u32 {
+    1
+}
+
+fn runs_is_default(v: &u32) -> bool {
+    *v == 1
+}
+
+fn u64_is_zero(v: &u64) -> bool {
+    *v == 0
+}
+
+/// A topic or source hidden by "Less like this" until `until_ms`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedMute {
+    pub key: String,
+    pub until_ms: u64,
 }
 
 /// One persisted config for the three feed passes. Default cadence stays background.
@@ -236,6 +269,15 @@ pub struct FeedPulse {
     /// First time a paused job was seen, so the offer waits out `PAUSE_OFFER_MS`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub paused_seen: BTreeMap<String, u64>,
+    /// Automation and loop ids hidden from Home until Undo. The workboard still updates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub muted_sources: Vec<String>,
+    /// 14-day "Less like this" keys: group, `src:<id>`, `topic:<token>`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub less_mutes: Vec<FeedMute>,
+    /// Last time a muted source was allowed to show a failure.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub muted_fail_at: BTreeMap<String, u64>,
 }
 
 fn default_on() -> bool {
@@ -273,6 +315,9 @@ impl Default for FeedPulse {
             dismissed_sources: Vec::new(),
             turned_down: Vec::new(),
             paused_seen: BTreeMap::new(),
+            muted_sources: Vec::new(),
+            less_mutes: Vec::new(),
+            muted_fail_at: BTreeMap::new(),
         }
     }
 }
@@ -380,7 +425,7 @@ pub fn feed_visible(cards: &[UpdateCard]) -> bool {
 }
 
 /// Event cards only, newest first. Ideas and digest cards are not in this list,
-/// so they cannot consume the paint cap of 4.
+/// so they cannot consume the paint cap of 3.
 pub fn visible_updates(cards: &[UpdateCard]) -> Vec<UpdateCard> {
     visible_kind(cards, UpdateKind::event)
 }
@@ -396,7 +441,9 @@ pub fn visible_digests(cards: &[UpdateCard]) -> Vec<UpdateCard> {
 pub fn archived_digests(cards: &[UpdateCard]) -> Vec<UpdateCard> {
     let mut out: Vec<UpdateCard> = cards
         .iter()
-        .filter(|c| c.kind == UpdateKind::Digest && c.status == UpdateStatus::Dismissed)
+        .filter(|c| {
+            c.kind == UpdateKind::Digest && c.status == UpdateStatus::Dismissed && !c.collapsed
+        })
         .cloned()
         .collect();
     sort_feed(&mut out);
@@ -543,30 +590,479 @@ fn sort_feed(cards: &mut [UpdateCard]) {
     cards.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(b.id.cmp(&a.id)));
 }
 
-pub fn post_update(cards: &mut Vec<UpdateCard>, card: UpdateCard) {
-    let id = card.id.clone();
-    cards.retain(|c| {
-        if c.id == id {
-            return false;
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+/// Lowercase, collapse whitespace, drop digits and clock times (`9:05`, `09:00 pm`).
+fn normalize_feed_text(raw: &str) -> String {
+    let lower = raw.to_ascii_lowercase();
+    let mut kept = String::with_capacity(lower.len());
+    let mut rest = lower.as_str();
+    while !rest.is_empty() {
+        if let Some(n) = clock_prefix_len(rest) {
+            rest = &rest[n..];
+            kept.push(' ');
+            continue;
         }
-        if c.kind == UpdateKind::Idea || c.kind == UpdateKind::Digest {
+        let ch = rest.chars().next().unwrap_or(' ');
+        let n = ch.len_utf8();
+        if !ch.is_ascii_digit() {
+            kept.push(ch);
+        }
+        rest = &rest[n..];
+    }
+    kept.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn clock_prefix_len(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    if i >= bytes.len() || !bytes[i].is_ascii_digit() {
+        return None;
+    }
+    i += 1;
+    if i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i >= bytes.len() || bytes[i] != b':' {
+        return None;
+    }
+    i += 1;
+    if i + 1 >= bytes.len() || !bytes[i].is_ascii_digit() || !bytes[i + 1].is_ascii_digit() {
+        return None;
+    }
+    i += 2;
+    let mut j = i;
+    if j < bytes.len() && bytes[j] == b' ' {
+        j += 1;
+    }
+    if let Some(end) = meridiem_end(bytes, j) {
+        return Some(end);
+    }
+    if i == bytes.len() || !bytes[i].is_ascii_alphanumeric() {
+        return Some(i);
+    }
+    None
+}
+
+fn meridiem_end(bytes: &[u8], j: usize) -> Option<usize> {
+    if j + 1 >= bytes.len() || (bytes[j] != b'a' && bytes[j] != b'p') {
+        return None;
+    }
+    let end = if j + 3 < bytes.len() && bytes[j + 1] == b'.' && bytes[j + 2] == b'm' && bytes[j + 3] == b'.'
+    {
+        j + 4
+    } else if bytes[j + 1] == b'm' {
+        j + 2
+    } else {
+        return None;
+    };
+    if end == bytes.len() || !bytes[end].is_ascii_alphanumeric() {
+        Some(end)
+    } else {
+        None
+    }
+}
+
+/// Group key for an event card. Ideas and digests are not grouped.
+pub fn group_key(card: &UpdateCard) -> Option<String> {
+    let prefix = match card.kind {
+        UpdateKind::AutomationDone => "run",
+        UpdateKind::ScheduleCreated => "sched",
+        UpdateKind::AutomateOffer => "offer",
+        UpdateKind::Suggestion => "sugg",
+        UpdateKind::Idea | UpdateKind::Digest => return None,
+    };
+    let source = card.source_id.trim();
+    if source.is_empty() {
+        let title = normalize_feed_text(&card.title);
+        Some(format!("{prefix}:{:016x}", fnv1a64(title.as_bytes())))
+    } else {
+        Some(format!("{prefix}:{source}"))
+    }
+}
+
+fn content_key(card: &UpdateCard) -> String {
+    let body = card.body.as_deref().unwrap_or("");
+    normalize_feed_text(&format!("{} {body}", card.title))
+}
+
+fn content_duplicate(cards: &[UpdateCard], card: &UpdateCard) -> bool {
+    let key = content_key(card);
+    if key.is_empty() {
+        return false;
+    }
+    cards.iter().any(|prev| {
+        prev.created_at.abs_diff(card.created_at) < DAY_MS && content_key(prev) == key
+    })
+}
+
+/// True when the title is a failed automation, including after a group merge kept the old id.
+pub fn card_is_failure(card: &UpdateCard) -> bool {
+    card.kind == UpdateKind::AutomationDone
+        && (card.title == "Automation failed" || card.title.ends_with(" failed"))
+}
+
+fn failure_name(title: &str) -> String {
+    if title == "Automation failed" {
+        return "Automation".into();
+    }
+    let name = title.strip_suffix(" failed").unwrap_or(title).trim();
+    if name.is_empty() {
+        "Automation".into()
+    } else {
+        name.to_string()
+    }
+}
+
+/// Fixed why line for run, failure, and schedule cards. Other kinds keep their own `why`.
+pub fn event_why_line(card: &UpdateCard) -> Option<String> {
+    match card.kind {
+        UpdateKind::AutomationDone if card_is_failure(card) => {
+            Some(format!("“{}” failed and needs a look.", failure_name(&card.title)))
+        }
+        UpdateKind::AutomationDone => {
+            let mut line = format!(
+                "Your automation “{}” finished and left a report in Follow up.",
+                card.title.trim()
+            );
+            if card.runs > 1 {
+                line.push_str(&format!(" · {} runs since you last looked", card.runs));
+            }
+            Some(line)
+        }
+        UpdateKind::ScheduleCreated => Some("You saved this schedule.".into()),
+        _ => None,
+    }
+}
+
+fn apply_stored_why(card: &mut UpdateCard) {
+    if let Some(line) = event_why_line(card) {
+        card.why = Some(line);
+    }
+}
+
+/// `×N runs · latest h:mm` for a card that has repeated. `hour` and `minute` are the local clock now.
+pub fn runs_latest_line(
+    runs: u32,
+    created_at: u64,
+    now_ms: u64,
+    hour: u32,
+    minute: u32,
+) -> Option<String> {
+    if runs <= 1 {
+        return None;
+    }
+    let now_mins = i64::from(hour.min(23)) * 60 + i64::from(minute.min(59));
+    let delta_min = now_ms.saturating_sub(created_at) / 60_000;
+    let delta_min = i64::try_from(delta_min).unwrap_or(i64::MAX / 4);
+    let mins = (now_mins - delta_min).rem_euclid(24 * 60);
+    Some(format!(
+        "×{runs} runs · latest {:02}:{:02}",
+        mins / 60,
+        mins % 60
+    ))
+}
+
+/// Up to five topic tokens from a title. Same stemmer as idea topics.
+pub fn topic_tokens(title: &str) -> Vec<String> {
+    crate::ideas::topic_words(title).into_iter().take(5).collect()
+}
+
+/// On load, fold each event group down to its newest undismissed card.
+/// Returns true when a card changed, so the caller can write `updates.json` once.
+pub fn collapse_feed(cards: &mut [UpdateCard]) -> bool {
+    let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, card) in cards.iter().enumerate() {
+        if card.collapsed {
+            continue;
+        }
+        if let Some(key) = group_key(card) {
+            groups.entry(key).or_default().push(i);
+        }
+    }
+    let mut changed = false;
+    for idxs in groups.into_values() {
+        if idxs.len() < 2 {
+            continue;
+        }
+        let undismissed: Vec<usize> = idxs
+            .iter()
+            .copied()
+            .filter(|&i| cards[i].status != UpdateStatus::Dismissed)
+            .collect();
+        let pool: Vec<usize> = if undismissed.is_empty() {
+            idxs.clone()
+        } else {
+            undismissed
+        };
+        let keeper = pool
+            .iter()
+            .copied()
+            .max_by(|&a, &b| {
+                cards[a]
+                    .created_at
+                    .cmp(&cards[b].created_at)
+                    .then(cards[a].id.cmp(&cards[b].id))
+            })
+            .unwrap_or(idxs[0]);
+        let runs = idxs.iter().fold(0u32, |acc, &i| {
+            acc.saturating_add(cards[i].runs.max(1))
+        });
+        let first_at = idxs
+            .iter()
+            .map(|&i| {
+                if cards[i].first_at == 0 {
+                    cards[i].created_at
+                } else {
+                    cards[i].first_at
+                }
+            })
+            .min()
+            .unwrap_or(cards[keeper].created_at);
+        let board_id = cards[keeper].board_id.clone().or_else(|| {
+            idxs.iter()
+                .copied()
+                .filter(|&i| cards[i].board_id.is_some())
+                .max_by(|&a, &b| {
+                    cards[a]
+                        .created_at
+                        .cmp(&cards[b].created_at)
+                        .then(cards[a].id.cmp(&cards[b].id))
+                })
+                .and_then(|i| cards[i].board_id.clone())
+        });
+        let discuss = cards[keeper].discuss_thread.clone().or_else(|| {
+            idxs.iter()
+                .copied()
+                .find_map(|i| cards[i].discuss_thread.clone())
+        });
+        for &i in &idxs {
+            if i == keeper {
+                continue;
+            }
+            cards[i].status = UpdateStatus::Dismissed;
+            cards[i].collapsed = true;
+            cards[i].held = false;
+        }
+        cards[keeper].runs = runs;
+        if cards[keeper].first_at == 0 || first_at < cards[keeper].first_at {
+            cards[keeper].first_at = first_at;
+        }
+        if cards[keeper].board_id.is_none() {
+            cards[keeper].board_id = board_id;
+        }
+        if cards[keeper].discuss_thread.is_none() {
+            cards[keeper].discuss_thread = discuss;
+        }
+        apply_stored_why(&mut cards[keeper]);
+        changed = true;
+    }
+    changed
+}
+
+/// Dismiss every undismissed card in the same group. They stay on disk so a repeat
+/// within a day does not come back as a new row. `collapsed` stays false: this is
+/// the user, not the migration fold.
+pub fn dismiss_feed_group(cards: &mut [UpdateCard], id: &str) -> bool {
+    let Some(key) = cards.iter().find(|c| c.id == id).and_then(group_key) else {
+        return false;
+    };
+    let mut hit = false;
+    for card in cards.iter_mut() {
+        if card.collapsed || card.status == UpdateStatus::Dismissed {
+            continue;
+        }
+        if group_key(card).as_deref() == Some(key.as_str()) {
+            card.status = UpdateStatus::Dismissed;
+            card.held = false;
+            hit = true;
+        }
+    }
+    hit
+}
+
+pub fn source_muted(pulse: &FeedPulse, source: &str) -> bool {
+    let source = source.trim();
+    !source.is_empty() && pulse.muted_sources.iter().any(|saved| saved == source)
+}
+
+pub fn mute_home_source(pulse: &mut FeedPulse, source: &str) {
+    let source = source.trim();
+    if source.is_empty() || source_muted(pulse, source) {
+        return;
+    }
+    pulse.muted_sources.push(source.to_string());
+}
+
+pub fn unmute_home_source(pulse: &mut FeedPulse, source: &str) {
+    let source = source.trim();
+    pulse.muted_sources.retain(|saved| saved != source);
+    pulse.muted_fail_at.remove(source);
+}
+
+fn mute_row_active(pulse: &FeedPulse, key: &str, now: u64) -> bool {
+    pulse
+        .less_mutes
+        .iter()
+        .any(|row| row.key == key && row.until_ms > now)
+}
+
+pub fn less_blocks(pulse: &FeedPulse, card: &UpdateCard, now: u64) -> bool {
+    if let Some(key) = group_key(card) {
+        if mute_row_active(pulse, &key, now) {
             return true;
         }
-        c.status != UpdateStatus::Dismissed
-    });
+    }
+    let source = card.source_id.trim();
+    if !source.is_empty() && mute_row_active(pulse, &format!("src:{source}"), now) {
+        return true;
+    }
+    topic_tokens(&card.title)
+        .iter()
+        .any(|token| mute_row_active(pulse, &format!("topic:{token}"), now))
+}
+
+pub fn mute_less_like(pulse: &mut FeedPulse, card: &UpdateCard, now: u64) {
+    pulse.less_mutes.retain(|row| row.until_ms > now);
+    let until = now.saturating_add(LESS_MUTE_MS);
+    let mut keys = Vec::new();
+    if let Some(key) = group_key(card) {
+        keys.push(key);
+    }
+    let source = card.source_id.trim();
+    if !source.is_empty() {
+        keys.push(format!("src:{source}"));
+    }
+    for token in topic_tokens(&card.title) {
+        keys.push(format!("topic:{token}"));
+    }
+    for key in keys {
+        if let Some(row) = pulse.less_mutes.iter_mut().find(|row| row.key == key) {
+            row.until_ms = row.until_ms.max(until);
+        } else {
+            pulse.less_mutes.push(FeedMute { key, until_ms: until });
+        }
+    }
+}
+
+pub fn muted_failure_allowed(pulse: &FeedPulse, source: &str, now: u64) -> bool {
+    match pulse.muted_fail_at.get(source.trim()) {
+        None => true,
+        Some(&at) => now.saturating_sub(at) >= DAY_MS,
+    }
+}
+
+pub fn note_muted_failure(pulse: &mut FeedPulse, source: &str, now: u64) {
+    let source = source.trim();
+    if source.is_empty() {
+        return;
+    }
+    pulse.muted_fail_at.insert(source.to_string(), now);
+}
+
+/// What `post_feed_card` should do with a card before it hits the store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HomeGate {
+    pub skip: bool,
+    /// The caller records `now` so the next muted failure waits a day.
+    pub stamp_failure: bool,
+}
+
+pub fn home_post_gate(pulse: &FeedPulse, card: &UpdateCard, now: u64) -> HomeGate {
+    let source = card.source_id.trim();
+    let hard = !source.is_empty() && source_muted(pulse, source);
+    let less = less_blocks(pulse, card, now);
+    if !hard && !less {
+        return HomeGate {
+            skip: false,
+            stamp_failure: false,
+        };
+    }
+    if card_is_failure(card) && !source.is_empty() && muted_failure_allowed(pulse, source, now) {
+        return HomeGate {
+            skip: false,
+            stamp_failure: true,
+        };
+    }
+    HomeGate {
+        skip: true,
+        stamp_failure: false,
+    }
+}
+
+pub fn post_update(cards: &mut Vec<UpdateCard>, mut card: UpdateCard) {
+    if card.runs == 0 {
+        card.runs = 1;
+    }
+    if card.first_at == 0 {
+        card.first_at = card.created_at;
+    }
+    if card.kind.event() {
+        if let Some(key) = group_key(&card) {
+            if let Some(idx) = cards.iter().position(|prev| {
+                !prev.collapsed
+                    && prev.status != UpdateStatus::Dismissed
+                    && group_key(prev).as_deref() == Some(key.as_str())
+            }) {
+                merge_group_card(cards, idx, card);
+                trim_feed_store(cards);
+                return;
+            }
+        }
+        if content_duplicate(cards, &card) {
+            return;
+        }
+    }
+    apply_stored_why(&mut card);
+    let id = card.id.clone();
+    cards.retain(|c| c.id != id);
     cards.push(card);
     trim_feed_store(cards);
+}
+
+fn merge_group_card(cards: &mut [UpdateCard], idx: usize, mut card: UpdateCard) {
+    let prev = &cards[idx];
+    let runs = prev.runs.max(1).saturating_add(1);
+    let first_at = if prev.first_at == 0 {
+        prev.created_at.min(card.created_at)
+    } else {
+        prev.first_at
+    };
+    card.id = prev.id.clone();
+    card.runs = runs;
+    card.first_at = first_at;
+    card.board_id = card.board_id.clone().or_else(|| prev.board_id.clone());
+    card.discuss_thread = prev.discuss_thread.clone().or(card.discuss_thread.clone());
+    card.reaction = card.reaction.or(prev.reaction);
+    if card.citations.is_empty() {
+        card.citations = prev.citations.clone();
+    }
+    card.status = UpdateStatus::Unread;
+    card.collapsed = false;
+    apply_stored_why(&mut card);
+    cards[idx] = card;
 }
 
 fn trim_feed_store(cards: &mut Vec<UpdateCard>) {
     let mut ideas = Vec::new();
     let mut archive = Vec::new();
     let mut live = Vec::new();
+    let mut folded = Vec::new();
     for card in cards.drain(..) {
         if card.kind == UpdateKind::Idea {
             ideas.push(card);
-        } else if card.kind == UpdateKind::Digest && card.status == UpdateStatus::Dismissed {
+        } else if card.kind == UpdateKind::Digest && card.status == UpdateStatus::Dismissed && !card.collapsed
+        {
             archive.push(card);
+        } else if card.status == UpdateStatus::Dismissed || card.collapsed {
+            folded.push(card);
         } else {
             live.push(card);
         }
@@ -574,13 +1070,18 @@ fn trim_feed_store(cards: &mut Vec<UpdateCard>) {
     sort_feed(&mut live);
     sort_feed(&mut archive);
     sort_feed(&mut ideas);
+    sort_feed(&mut folded);
     if live.len() > FEED_STORE_MAX {
         live.truncate(FEED_STORE_MAX);
     }
     if archive.len() > FEED_STORE_MAX {
         archive.truncate(FEED_STORE_MAX);
     }
+    if folded.len() > FEED_STORE_MAX {
+        folded.truncate(FEED_STORE_MAX);
+    }
     cards.extend(live);
+    cards.extend(folded);
     cards.extend(archive);
     cards.extend(ideas);
     sort_feed(cards);
@@ -1112,6 +1613,9 @@ fn post_useful_idea(
     } else {
         why.trim().to_string()
     });
+    if less_blocks(pulse, &card, now) {
+        return false;
+    }
     let kept = card.title.clone();
     post_update(cards, card);
     remember_idea_title(pulse, &kept);
@@ -1521,6 +2025,9 @@ fn blank_card(
         modified: false,
         skill: None,
         source_id: String::new(),
+        runs: 1,
+        first_at: created_at,
+        collapsed: false,
     }
 }
 
@@ -1554,6 +2061,7 @@ pub fn automation_done_card(
     );
     card.action = Some(UpdateAction::OpenAutomations);
     card.source_id = source_id.trim().to_string();
+    apply_stored_why(&mut card);
     card
 }
 
@@ -1581,6 +2089,7 @@ pub fn automation_failed_card(source_id: &str, name: &str, why: &str, created_at
     );
     card.action = Some(UpdateAction::OpenAutomations);
     card.source_id = source_id.trim().to_string();
+    apply_stored_why(&mut card);
     card
 }
 
@@ -1612,6 +2121,7 @@ pub fn schedule_created_card(
     );
     card.action = Some(UpdateAction::OpenAutomations);
     card.source_id = source_id.trim().to_string();
+    apply_stored_why(&mut card);
     card
 }
 
@@ -1960,6 +2470,9 @@ fn post_situation(
     }
     let mut card = suggestion_card(source, title, body, now);
     hold_if_quiet(&mut card, quiet);
+    if home_post_gate(pulse, &card, now).skip {
+        return false;
+    }
     post_update(cards, card);
     true
 }
@@ -2783,5 +3296,237 @@ mod tests {
         let body = cards[0].body.as_deref().unwrap();
         assert!(body.contains("did not find a source"));
         assert!(cards[0].citations.is_empty());
+    }
+
+    #[test]
+    fn five_runs_of_one_loop_stay_one_card_with_the_newest_body() {
+        let mut cards = Vec::new();
+        for n in 1..=5 {
+            post_update(
+                &mut cards,
+                automation_done_card("loop-a", "Host snapshot", &format!("report word {n}"), 1_000 * n),
+            );
+        }
+        let visible = visible_updates(&cards);
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].runs, 5);
+        assert_eq!(visible[0].body.as_deref(), Some("report word 5"));
+        assert!(visible[0].id.starts_with("done-loop-a-"));
+        assert!(visible[0]
+            .why
+            .as_deref()
+            .unwrap()
+            .contains("5 runs since you last looked"));
+    }
+
+    #[test]
+    fn two_loops_stay_two_cards() {
+        let mut cards = Vec::new();
+        post_update(
+            &mut cards,
+            automation_done_card("loop-a", "Alpha snapshot", "alpha words", 1_000),
+        );
+        post_update(
+            &mut cards,
+            automation_done_card("loop-b", "Beta snapshot", "beta words", 2_000),
+        );
+        assert_eq!(visible_updates(&cards).len(), 2);
+    }
+
+    #[test]
+    fn a_failure_replaces_the_done_card_in_the_same_group() {
+        let mut cards = Vec::new();
+        post_update(
+            &mut cards,
+            automation_done_card("loop-a", "Board summary", "all quiet", 10),
+        );
+        let kept = visible_updates(&cards)[0].id.clone();
+        post_update(
+            &mut cards,
+            automation_failed_card("loop-a", "Board summary", "credit limit", 20),
+        );
+        let visible = visible_updates(&cards);
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].id, kept);
+        assert_eq!(visible[0].runs, 2);
+        assert_eq!(visible[0].title, "Board summary failed");
+        assert_eq!(visible[0].body.as_deref(), Some("credit limit"));
+        assert!(visible[0]
+            .why
+            .as_deref()
+            .unwrap()
+            .contains("failed and needs a look"));
+        assert_eq!(group_key(&visible[0]).as_deref(), Some("run:loop-a"));
+    }
+
+    #[test]
+    fn collapse_feed_folds_four_done_cards_and_stays_put() {
+        let mut cards = Vec::new();
+        for ms in [10_u64, 20, 30, 40] {
+            let mut card = automation_done_card("loop-a", "Host snapshot", "same report", ms);
+            card.board_id = Some("board-1".into());
+            cards.push(card);
+        }
+        assert_eq!(cards.len(), 4);
+        assert!(collapse_feed(&mut cards));
+        let visible = visible_updates(&cards);
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].runs, 4);
+        assert_eq!(visible[0].created_at, 40);
+        assert_eq!(visible[0].board_id.as_deref(), Some("board-1"));
+        assert_eq!(cards.iter().filter(|c| c.collapsed).count(), 3);
+        assert!(archived_digests(&cards).is_empty());
+        assert!(!collapse_feed(&mut cards));
+        assert_eq!(visible_updates(&cards)[0].runs, 4);
+    }
+
+    #[test]
+    fn dismiss_clears_the_group_and_the_same_text_stays_down_for_a_day() {
+        let mut cards = Vec::new();
+        for ms in [10_u64, 20] {
+            cards.push(automation_done_card("loop-a", "Host snapshot", "alpha report", ms));
+        }
+        let id = cards.iter().max_by_key(|c| c.created_at).unwrap().id.clone();
+        assert!(dismiss_feed_group(&mut cards, &id));
+        assert!(visible_updates(&cards).is_empty());
+        assert!(cards.iter().all(|c| !c.collapsed));
+        post_update(
+            &mut cards,
+            automation_done_card("loop-a", "Host snapshot", "alpha report", 30),
+        );
+        assert!(visible_updates(&cards).is_empty(), "same text within a day is dropped");
+        post_update(
+            &mut cards,
+            automation_done_card("loop-a", "Host snapshot", "beta findings", 40),
+        );
+        let visible = visible_updates(&cards);
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].runs, 1);
+        assert_eq!(visible[0].body.as_deref(), Some("beta findings"));
+    }
+
+    #[test]
+    fn muted_failure_shows_once_per_day_and_a_success_stays_hidden() {
+        let mut pulse = FeedPulse::default();
+        mute_home_source(&mut pulse, "loop-a");
+        let fail = automation_failed_card("loop-a", "Host snapshot", "disk full", 1_000);
+        let first = home_post_gate(&pulse, &fail, 1_000);
+        assert!(!first.skip && first.stamp_failure);
+        note_muted_failure(&mut pulse, "loop-a", 1_000);
+        let second = home_post_gate(&pulse, &fail, 1_000 + 60_000);
+        assert!(second.skip && !second.stamp_failure);
+        let later = home_post_gate(&pulse, &fail, 1_000 + DAY_MS);
+        assert!(!later.skip && later.stamp_failure);
+        let done = automation_done_card("loop-a", "Host snapshot", "all quiet", 2_000);
+        assert!(home_post_gate(&pulse, &done, 2_000).skip);
+        let mut board = Vec::new();
+        let (id, is_new) = crate::file_follow_up(
+            &mut board,
+            "loop-a",
+            "Host snapshot",
+            "summarize the disk and report what changed",
+            5,
+        );
+        let (again, is_new_again) = crate::file_follow_up(
+            &mut board,
+            "loop-a",
+            "Host snapshot",
+            "summarize the disk again with a fresh report",
+            6,
+        );
+        assert!(is_new && !is_new_again);
+        assert_eq!(id, again);
+        assert_eq!(board.len(), 1);
+        assert!(board[0].report.contains("fresh report"));
+    }
+
+    #[test]
+    fn same_text_from_another_source_is_dropped_for_a_day() {
+        let mut cards = Vec::new();
+        post_update(
+            &mut cards,
+            automation_done_card("loop-a", "Same headline", "same story words", 1_000),
+        );
+        post_update(
+            &mut cards,
+            automation_done_card("loop-b", "Same headline", "same story words", 2_000),
+        );
+        assert_eq!(visible_updates(&cards).len(), 1);
+        post_update(
+            &mut cards,
+            automation_done_card("loop-b", "Same headline", "same story words", 1_000 + DAY_MS),
+        );
+        assert_eq!(visible_updates(&cards).len(), 2);
+    }
+
+    #[test]
+    fn quiet_hours_release_does_not_burst_grouped_runs() {
+        let mut cards = Vec::new();
+        for n in 1..=5 {
+            let mut card = automation_done_card("loop-a", "Host snapshot", &format!("edition word {n}"), 1_000 * n);
+            hold_if_quiet(&mut card, true);
+            post_update(&mut cards, card);
+        }
+        assert!(!feed_visible(&cards));
+        assert_eq!(cards.iter().filter(|c| c.held).count(), 1);
+        assert_eq!(release_quiet_hold(&mut cards), 1);
+        let visible = visible_updates(&cards);
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].runs, 5);
+        assert_eq!(visible[0].body.as_deref(), Some("edition word 5"));
+    }
+
+    #[test]
+    fn older_event_json_round_trips_without_the_new_fields() {
+        let raw = r#"[{"id":"d1","kind":"automation_done","title":"Old run","createdAt":5,"status":"unread","sourceId":"loop-a"}]"#;
+        let cards: Vec<UpdateCard> = serde_json::from_str(raw).expect("old feed loads");
+        assert_eq!(cards[0].runs, 1);
+        assert_eq!(cards[0].first_at, 0);
+        assert!(!cards[0].collapsed);
+        assert!(cards[0].prompt.is_none());
+        let back = serde_json::to_string(&cards[0]).unwrap();
+        assert!(!back.contains("prompt"), "{back}");
+        assert!(!back.contains("runs"), "{back}");
+        assert!(!back.contains("collapsed"), "{back}");
+        assert!(!back.contains("firstAt"), "{back}");
+        let mut kept = cards[0].clone();
+        kept.runs = 3;
+        kept.first_at = 5;
+        let again: UpdateCard = serde_json::from_str(&serde_json::to_string(&kept).unwrap()).unwrap();
+        assert_eq!(again.runs, 3);
+        assert_eq!(again.first_at, 5);
+        assert!(!again.collapsed);
+    }
+
+    #[test]
+    fn paint_cap_is_three() {
+        assert_eq!(FEED_PAINT_MAX, 3);
+    }
+
+    #[test]
+    fn empty_source_groups_by_normalized_title_and_clocks_do_not_split_it() {
+        let morning = automation_done_card("", "Meet at 9:00", "notes", 1);
+        let evening = automation_done_card("", "Meet at 10:30 pm", "notes", 2);
+        assert_eq!(group_key(&morning), group_key(&evening));
+        assert!(group_key(&idea_card("i", "Meet at 9:00", "notes", 1)).is_none());
+        let mut pulse = FeedPulse::default();
+        let card = automation_done_card("loop-a", "Host snapshot report", "done", 1);
+        mute_less_like(&mut pulse, &card, 1_000);
+        assert!(less_blocks(&pulse, &card, 1_000 + DAY_MS));
+        assert!(!less_blocks(&pulse, &card, 1_000 + LESS_MUTE_MS));
+        let schedule = schedule_created_card("auto-1", "Board", "weekdays at 09:00", 8);
+        assert_eq!(schedule.why.as_deref(), Some("You saved this schedule."));
+        assert_eq!(
+            runs_latest_line(3, 0, 90 * 60_000, 15, 0).as_deref(),
+            Some("×3 runs · latest 13:30")
+        );
+    }
+
+    #[test]
+    fn a_collapsed_digest_stays_out_of_the_archive() {
+        let mut card = digest_card("d", "Sunday", "brief", 4);
+        card.status = UpdateStatus::Dismissed;
+        card.collapsed = true;
+        assert!(archived_digests(&[card]).is_empty());
     }
 }

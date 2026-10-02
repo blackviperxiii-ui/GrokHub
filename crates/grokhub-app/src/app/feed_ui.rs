@@ -9,13 +9,14 @@
 use super::*;
 use grokhub_core::{
     archive_digest, automation_done_card,
-    dismiss_update, feed_ideas, feed_visible, file_idea_todo, hold_if_quiet,
-    home_feed_n, idea_open_line, unpin_feed_idea,
+    dismiss_feed_group, dismiss_update, event_why_line, feed_ideas, feed_visible, file_idea_todo,
+    hold_if_quiet, home_feed_n, home_post_gate, idea_open_line, mute_home_source, mute_less_like,
+    note_muted_failure, runs_latest_line, unpin_feed_idea,
     idea_todo_title,
     links_from_research, mark_update_opened, parse_lookup, post_help, post_update,
     quiet_hours_active, remember_dismissed_source, route_schedule,
     schedule_created_card, tick_feed_pulse, visible_digests, visible_updates,
-    CardReaction, DigestEdition, DigestMaterial, PausedJob, PulseNow, RepeatedAction,
+    CardEvent, CardReaction, DigestEdition, DigestMaterial, PausedJob, PulseNow, RepeatedAction,
     TasteNote, UpdateAction, UpdateCard,
     UpdateKind, UpdateStatus, DIGEST_PAINT_MAX, FEED_PAINT_MAX,
 };
@@ -113,6 +114,23 @@ pub(super) fn mix_slide(rest: SlidePose, open: SlidePose, t: f32) -> SlidePose {
     }
 }
 
+/// Open dy, scaled so the top card stays inside `room` pixels above the front card.
+/// A room of zero keeps the resting tuck, so the deck does not climb over the composer.
+pub(super) fn clamped_open_dy(index: usize, n: usize, room: f32) -> f32 {
+    if n <= 1 {
+        return 0.0;
+    }
+    if room <= 0.0 {
+        return rest_slide(index).dy;
+    }
+    let raw = open_slide(index).dy;
+    let need = -open_slide(n - 1).dy;
+    if need <= room {
+        return raw;
+    }
+    raw * (room / need)
+}
+
 /// How far to push the open deck down so the top card stays on screen.
 pub(super) fn slide_up_shift(front_y: f32, n: usize, screen_top: f32) -> f32 {
     if n <= 1 {
@@ -205,6 +223,9 @@ pub(super) enum FeedAct {
     Archive(String),
     /// Remove an idea from the Ideas board.
     Drop(String),
+    Less(String),
+    More(String),
+    Mute(String),
 }
 
 impl Cabin {
@@ -229,6 +250,15 @@ impl Cabin {
     }
 
     pub(super) fn post_feed_card(&mut self, card: UpdateCard) {
+        let now = card.created_at;
+        let gate = home_post_gate(&self.cfg.feed_pulse, &card, now);
+        if gate.skip {
+            return;
+        }
+        if gate.stamp_failure {
+            note_muted_failure(&mut self.cfg.feed_pulse, &card.source_id, now);
+            self.persist_cfg();
+        }
         post_update(&mut self.updates, card);
         self.persist_updates();
     }
@@ -305,11 +335,15 @@ impl Cabin {
         if tick.pulse_changed || help_changed {
             self.persist_cfg();
         }
+        self.note_ignored_signals(now);
     }
 
     fn digest_taste(&self) -> Vec<TasteNote> {
         let mut notes = Vec::new();
         for card in &self.updates {
+            if card.collapsed {
+                continue;
+            }
             if !matches!(card.kind, UpdateKind::Idea | UpdateKind::Digest) {
                 continue;
             }
@@ -556,7 +590,26 @@ impl Cabin {
         if cards.is_empty() {
             return;
         }
-        let painted = paint_slide_deck(ui, &cards, deferred.stack, deferred.width, &deferred.view);
+        for card in &cards {
+            let seen_id = egui::Id::new(("card-signal-shown", card.id.clone()));
+            let seen = ui.ctx().data(|d| d.get_temp::<bool>(seen_id).unwrap_or(false));
+            if !seen {
+                ui.ctx().data_mut(|d| d.insert_temp(seen_id, true));
+                self.record_card_signal(card, CardEvent::Shown, None);
+            }
+        }
+        let ceiling = self
+            .composer_geom
+            .map(|(pill, _, _)| pill.bottom())
+            .unwrap_or(f32::NEG_INFINITY);
+        let painted = paint_slide_deck(
+            ui,
+            &cards,
+            deferred.stack,
+            deferred.width,
+            &deferred.view,
+            ceiling,
+        );
         ui.ctx().data_mut(|d| {
             d.insert_temp(
                 egui::Id::new("home-feed-stack"),
@@ -579,6 +632,9 @@ impl Cabin {
             Some(FeedAct::Discuss(id)) => self.discuss_card(&id),
             Some(FeedAct::Archive(id)) => self.archive_feed_digest(&id),
             Some(FeedAct::Drop(id)) => self.delete_idea(&id),
+            Some(FeedAct::Less(id)) => self.less_like_card(&id),
+            Some(FeedAct::More(id)) => self.more_like_card(&id),
+            Some(FeedAct::Mute(id)) => self.mute_feed_source(&id),
             None => {}
         }
     }
@@ -605,6 +661,7 @@ impl Cabin {
             card.board_id = Some(board_id);
             card.status = UpdateStatus::Opened;
         }
+        self.record_signal_id(id, CardEvent::Acted);
         self.persist_updates();
     }
 
@@ -620,6 +677,7 @@ impl Cabin {
             .map(|c| c.title.clone())
             .unwrap_or_default();
         self.persist_updates();
+        self.record_signal_id(id, CardEvent::Opened);
         self.night_nl = seed;
         self.auto_compose = true;
         self.nav = Nav::Night;
@@ -636,6 +694,7 @@ impl Cabin {
             .map(|c| c.title.clone())
             .unwrap_or_default();
         self.persist_updates();
+        self.record_signal_id(id, CardEvent::Acted);
         if let Some(route) = route_schedule(&seed) {
             let _ = self.commit_schedule(route);
         }
@@ -881,12 +940,14 @@ impl Cabin {
             return;
         };
         if card.kind == UpdateKind::Idea {
+            self.record_signal_id(id, CardEvent::Opened);
             self.open_idea_on_board(&card.id);
             return;
         }
         if !matches!(card.kind, UpdateKind::Digest | UpdateKind::Suggestion) {
             return;
         }
+        self.record_signal_id(id, CardEvent::Opened);
         if let Some(thread_id) = card.discuss_thread.as_deref() {
             if let Some(idx) = self.threads.iter().position(|t| t.id == thread_id) {
                 self.switch_thread(idx);
@@ -923,6 +984,10 @@ impl Cabin {
     }
 
     pub(super) fn archive_feed_digest(&mut self, id: &str) {
+        if let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() {
+            let after_open = card.status == UpdateStatus::Opened;
+            self.record_card_signal(&card, CardEvent::Dismissed, Some(after_open));
+        }
         if archive_digest(&mut self.updates, id) {
             self.persist_updates();
         }
@@ -941,6 +1006,7 @@ impl Cabin {
         if !mark_update_opened(&mut self.updates, id) {
             return;
         }
+        self.record_signal_id(id, CardEvent::Opened);
         let (action, board_card) = self
             .updates
             .iter()
@@ -958,15 +1024,18 @@ impl Cabin {
     }
 
     pub(super) fn dismiss_feed_card(&mut self, id: &str) {
-        let kind = self.updates.iter().find(|c| c.id == id).map(|c| c.kind);
-        let (source, title) = self
-            .updates
-            .iter()
-            .find(|c| c.id == id)
-            .map(|c| (c.source_id.clone(), c.title.clone()))
-            .unwrap_or_default();
+        let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() else {
+            return;
+        };
+        let kind = Some(card.kind);
+        let source = card.source_id.clone();
+        let title = card.title.clone();
+        let after_open = card.status == UpdateStatus::Opened;
+        self.record_card_signal(&card, CardEvent::Dismissed, Some(after_open));
         let removed = if kind == Some(UpdateKind::Idea) {
             unpin_feed_idea(&mut self.updates, id)
+        } else if card.kind.event() {
+            dismiss_feed_group(&mut self.updates, id)
         } else {
             dismiss_update(&mut self.updates, id)
         };
@@ -1006,6 +1075,130 @@ impl Cabin {
             None => {}
         }
     }
+
+    pub(super) fn record_signal_id(&mut self, id: &str, event: CardEvent) {
+        let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() else {
+            return;
+        };
+        let after_open = (event == CardEvent::Dismissed).then_some(card.status == UpdateStatus::Opened);
+        self.record_card_signal(&card, event, after_open);
+    }
+
+    pub(super) fn record_signal_for_source(&mut self, source: &str, event: CardEvent) {
+        let source = source.trim();
+        if source.is_empty() {
+            return;
+        }
+        let Some(card) = self
+            .updates
+            .iter()
+            .find(|c| {
+                !c.collapsed && c.status != UpdateStatus::Dismissed && c.source_id == source
+            })
+            .cloned()
+        else {
+            return;
+        };
+        self.record_card_signal(&card, event, None);
+    }
+
+    fn record_card_signal(&mut self, card: &UpdateCard, event: CardEvent, after_open: Option<bool>) {
+        if card.collapsed {
+            return;
+        }
+        let dir = crate::config::config_dir();
+        let log = grokhub_core::load_signals(&dir);
+        if event == CardEvent::Replied
+            && log
+                .iter()
+                .any(|row| row.card_id == card.id && row.event == CardEvent::Replied)
+        {
+            return;
+        }
+        let now = now_ms();
+        let since = grokhub_core::ms_since_shown(&log, &card.id, now);
+        let row = grokhub_core::signal_from_card(card, event, now, since, after_open);
+        let _ = grokhub_core::append_signal(&dir, &row);
+    }
+
+    /// A user line in a card thread or its discuss chat, within a day of the card.
+    pub(super) fn note_card_reply(&mut self, thread_id: &str) {
+        let thread_id = thread_id.trim();
+        if thread_id.is_empty() {
+            return;
+        }
+        let now = now_ms();
+        let ids: Vec<String> = self
+            .updates
+            .iter()
+            .filter(|card| !card.collapsed && card_reply_matches(card, &self.board, thread_id))
+            .filter(|card| now.saturating_sub(card.created_at.max(card.first_at)) <= grokhub_core::DAY_MS)
+            .map(|card| card.id.clone())
+            .collect();
+        for id in ids {
+            self.record_signal_id(&id, CardEvent::Replied);
+        }
+    }
+
+    fn less_like_card(&mut self, id: &str) {
+        let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() else {
+            return;
+        };
+        mute_less_like(&mut self.cfg.feed_pulse, &card, now_ms());
+        self.persist_cfg();
+        self.record_card_signal(&card, CardEvent::Less, None);
+    }
+
+    fn more_like_card(&mut self, id: &str) {
+        self.record_signal_id(id, CardEvent::More);
+    }
+
+    fn mute_feed_source(&mut self, id: &str) {
+        let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() else {
+            return;
+        };
+        if card.source_id.trim().is_empty() {
+            return;
+        }
+        mute_home_source(&mut self.cfg.feed_pulse, &card.source_id);
+        self.persist_cfg();
+        self.record_card_signal(&card, CardEvent::Muted, None);
+        if card.kind.event() {
+            dismiss_feed_group(&mut self.updates, id);
+        } else if let Some(saved) = self.updates.iter_mut().find(|c| c.id == id) {
+            saved.status = UpdateStatus::Dismissed;
+            saved.held = false;
+        }
+        self.persist_updates();
+    }
+
+    fn note_ignored_signals(&mut self, now: u64) {
+        let dir = crate::config::config_dir();
+        let log = grokhub_core::load_signals(&dir);
+        let live: Vec<String> = self
+            .updates
+            .iter()
+            .filter(|card| card.status != UpdateStatus::Dismissed && !card.held && !card.collapsed)
+            .map(|card| card.id.clone())
+            .collect();
+        let extra = grokhub_core::ignored_signals(&log, now, &live);
+        if extra.is_empty() {
+            return;
+        }
+        let _ = grokhub_core::append_signals(&dir, &extra);
+    }
+}
+
+fn card_reply_matches(card: &UpdateCard, board: &[grokhub_core::BoardCard], thread_id: &str) -> bool {
+    if card.discuss_thread.as_deref() == Some(thread_id) {
+        return true;
+    }
+    let Some(board_id) = card.board_id.as_deref() else {
+        return false;
+    };
+    board
+        .iter()
+        .any(|row| row.id == board_id && row.thread_id.as_deref() == Some(thread_id))
 }
 
 #[derive(Clone, Debug)]
@@ -1139,8 +1332,17 @@ fn slide_placements(
     view: &StackView,
     front_y: f32,
     screen_top: f32,
+    ceiling_y: f32,
 ) -> Vec<SlidePlacement> {
-    let shift = slide_up_shift(front_y, cards.len(), screen_top);
+    let n = cards.len();
+    let room = (front_y - ceiling_y).max(0.0);
+    let top_dy = clamped_open_dy(n.saturating_sub(1), n, room);
+    let shift = {
+        let top = front_y + top_dy;
+        let min_top = screen_top + 8.0;
+        (min_top - top).max(0.0)
+    };
+    let min_dy = ceiling_y - front_y;
     cards
         .iter()
         .enumerate()
@@ -1148,9 +1350,16 @@ fn slide_placements(
             let popped = view.popped.as_deref() == Some(card.id.as_str());
             let spread = slide_spread(ctx, index, view.expanded || popped);
             let lift = slide_lift(ctx, index, popped);
-            let mut pose = mix_slide(rest_slide(index), open_slide(index), spread);
+            let open = SlidePose {
+                dy: clamped_open_dy(index, n, room),
+                scale: 1.0,
+            };
+            let mut pose = mix_slide(rest_slide(index), open, spread);
             pose.dy += shift * spread;
             pose.dy -= STACK_POP * lift;
+            if pose.dy < min_dy {
+                pose.dy = min_dy;
+            }
             SlidePlacement {
                 pose,
                 spread,
@@ -1184,9 +1393,17 @@ fn paint_slide_deck(
     stack: egui::Rect,
     width: f32,
     view: &StackView,
+    ceiling_y: f32,
 ) -> SlidePaint {
     let front = stack.left_top();
-    let placements = slide_placements(ui.ctx(), cards, view, front.y, ui.ctx().content_rect().top());
+    let placements = slide_placements(
+        ui.ctx(),
+        cards,
+        view,
+        front.y,
+        ui.ctx().content_rect().top(),
+        ceiling_y,
+    );
     let rects: Vec<egui::Rect> = placements
         .iter()
         .map(|place| slide_rect(front, width, place.pose))
@@ -1258,9 +1475,13 @@ fn paint_feed_card(ui: &mut egui::Ui, card: &UpdateCard, pane_w: f32) -> Option<
         egui::pos2(rect.right() - 32.0, rect.top() + 6.0),
         egui::vec2(24.0, 24.0),
     );
+    let menu_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.right() - 56.0, rect.top() + 6.0),
+        egui::vec2(24.0, 24.0),
+    );
     let text_rect = egui::Rect::from_min_max(
         egui::pos2(rect.left() + 8.0, rect.top() + 6.0),
-        egui::pos2(x_rect.left() - 4.0, rect.bottom() - 6.0),
+        egui::pos2(menu_rect.left() - 4.0, rect.bottom() - 6.0),
     );
     ui.scope_builder(egui::UiBuilder::new().max_rect(text_rect), |ui| {
         ui.set_width(text_rect.width());
@@ -1282,9 +1503,30 @@ fn paint_feed_card(ui: &mut egui::Ui, card: &UpdateCard, pane_w: f32) -> Option<
                 .size(crate::theme::FONT_BODY)
                 .color(title_color),
         );
+        let clock = Cabin::local_clock();
+        if let Some(line) = runs_latest_line(card.runs, card.created_at, now_ms(), clock.hour, clock.minute)
+        {
+            ui.label(
+                RichText::new(line)
+                    .size(crate::theme::FONT_TIP)
+                    .color(crate::theme::muted()),
+            );
+        }
         if let Some(body) = card.body.as_deref() {
             ui.label(
                 RichText::new(body)
+                    .size(crate::theme::FONT_TIP)
+                    .color(crate::theme::muted()),
+            );
+        }
+        let why = card
+            .why
+            .clone()
+            .or_else(|| event_why_line(card))
+            .filter(|line| !line.is_empty());
+        if let Some(why) = why {
+            ui.label(
+                RichText::new(why)
                     .size(crate::theme::FONT_TIP)
                     .color(crate::theme::muted()),
             );
@@ -1297,6 +1539,18 @@ fn paint_feed_card(ui: &mut egui::Ui, card: &UpdateCard, pane_w: f32) -> Option<
         egui::Sense::click(),
     );
     let over_x = hit.hover_pos().is_some_and(|pos| x_rect.contains(pos));
+    let over_menu = hit.hover_pos().is_some_and(|pos| menu_rect.contains(pos));
+    ui.painter().text(
+        menu_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        "⋯",
+        egui::FontId::proportional(16.0),
+        if over_menu {
+            crate::theme::fg()
+        } else {
+            crate::theme::muted()
+        },
+    );
     ui.painter().text(
         x_rect.center(),
         egui::Align2::CENTER_CENTER,
@@ -1311,7 +1565,37 @@ fn paint_feed_card(ui: &mut egui::Ui, card: &UpdateCard, pane_w: f32) -> Option<
     if hit.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
-    if !hit.clicked() {
+    let popup_id = ui.make_persistent_id(("feed-more", &card.id));
+    let on_menu = hit
+        .interact_pointer_pos()
+        .is_some_and(|pos| menu_rect.contains(pos));
+    if hit.secondary_clicked() || (hit.clicked() && on_menu) {
+        egui::Popup::toggle_id(ui.ctx(), popup_id);
+    }
+    let mut menu_act = None;
+    let hide = matches!(
+        card.kind,
+        UpdateKind::AutomationDone | UpdateKind::ScheduleCreated | UpdateKind::AutomateOffer
+    ) && !card.source_id.trim().is_empty();
+    egui::Popup::new(popup_id, ui.ctx().clone(), menu_rect, ui.layer_id())
+        .open_memory(None)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClick)
+        .layout(egui::Layout::top_down_justified(egui::Align::Min))
+        .show(|ui| {
+            if ui.button("Less like this").clicked() {
+                menu_act = Some(FeedAct::Less(card.id.clone()));
+            }
+            if hide && ui.button("Hide this automation's runs from Home").clicked() {
+                menu_act = Some(FeedAct::Mute(card.id.clone()));
+            }
+            if ui.button("More like this").clicked() {
+                menu_act = Some(FeedAct::More(card.id.clone()));
+            }
+        });
+    if menu_act.is_some() {
+        return menu_act;
+    }
+    if !hit.clicked() || on_menu {
         return None;
     }
     let on_x = hit
@@ -1338,8 +1622,9 @@ fn paint_feed_card(ui: &mut egui::Ui, card: &UpdateCard, pane_w: f32) -> Option<
 #[cfg(test)]
 mod stack_tests {
     use super::{
-        collapsed_stack_h, mix_slide, next_feed_stack, open_slide, rest_slide, slide_up_shift,
-        stack_hit, stacked_feed_h, StackHit, StackHover, StackView, FEED_CARD_H, HOME_STACK_SHOW,
+        clamped_open_dy, collapsed_stack_h, mix_slide, next_feed_stack, open_slide, rest_slide,
+        slide_up_shift, stack_hit, stacked_feed_h, StackHit, StackHover, StackView, FEED_CARD_H,
+        HOME_STACK_SHOW,
         STACK_REST_DY_1, STACK_REST_DY_2, STACK_REST_SCALE_1, STACK_REST_SCALE_2,
     };
 
@@ -1447,5 +1732,16 @@ mod stack_tests {
             pile_pop_target(Some("front"), Some("peek".into())).as_deref(),
             Some("peek")
         );
+    }
+
+    #[test]
+    fn expanded_stack_stops_above_the_composer() {
+        assert_eq!(clamped_open_dy(0, 3, 10_000.0), open_slide(0).dy);
+        assert_eq!(clamped_open_dy(2, 3, 10_000.0), open_slide(2).dy);
+        let tight = clamped_open_dy(2, 3, 20.0);
+        assert!(tight >= -20.0 - 0.01);
+        assert!(tight > open_slide(2).dy);
+        assert_eq!(clamped_open_dy(1, 3, 0.0), rest_slide(1).dy);
+        assert_eq!(clamped_open_dy(0, 1, 0.0), 0.0);
     }
 }

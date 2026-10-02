@@ -159,6 +159,8 @@ impl Cabin {
                 ui.add_space(8.0);
             }
             let mut drop: Option<usize> = None;
+            let mut unmute_loop: Option<String> = None;
+            let mut acted_loop: Option<String> = None;
             if self.grok_loops.is_empty() {
                 if crate::cards::empty_prompt_tile(
                     ui,
@@ -172,6 +174,8 @@ impl Cabin {
             } else {
                 for i in 0..self.grok_loops.len() {
                     let title = self.grok_loops[i].prompt.clone();
+                    let loop_id = self.grok_loops[i].id.clone();
+                    let hidden = grokhub_core::source_muted(&self.cfg.feed_pulse, &loop_id);
                     let body = format!(
                         "every {} · {} runs",
                         self.grok_loops[i].interval,
@@ -203,11 +207,15 @@ impl Cabin {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
+                                        if hidden && crate::cards::ghost_pill(ui, "Hidden from Home · Undo") {
+                                            unmute_loop = Some(loop_id.clone());
+                                        }
                                         if crate::cards::ghost_pill(ui, "Remove") {
                                             drop = Some(i);
                                         }
                                         if crate::cards::white_pill(ui, "Run") {
                                             drop = Some(usize::MAX - i);
+                                            acted_loop = Some(loop_id.clone());
                                         }
                                     },
                                 );
@@ -255,6 +263,13 @@ impl Cabin {
                     }
                 }
             }
+            if let Some(id) = unmute_loop {
+                grokhub_core::unmute_home_source(&mut self.cfg.feed_pulse, &id);
+                self.persist_cfg();
+            }
+            if let Some(id) = acted_loop {
+                self.record_signal_for_source(&id, grokhub_core::CardEvent::Acted);
+            }
             });
         });
     }
@@ -272,11 +287,15 @@ impl Cabin {
         let mut remove: Option<usize> = None;
         let mut run: Option<usize> = None;
         let mut toggled = false;
+        let mut unmute_job: Option<String> = None;
+        let mut acted_job: Option<String> = None;
         for i in 0..self.automations.len() {
             let title = match self.automations[i].name.trim() {
                 "" => self.automations[i].instructions.clone(),
                 name => name.to_string(),
             };
+            let job_id = self.automations[i].id.clone();
+            let hidden = grokhub_core::source_muted(&self.cfg.feed_pulse, &job_id);
             let body = automation_summary_line(&self.automations[i], now);
             let health = automation_health_line(&self.automations[i]);
             let ring = if health.is_some() {
@@ -314,11 +333,15 @@ impl Cabin {
                             }
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if hidden && crate::cards::ghost_pill(ui, "Hidden from Home · Undo") {
+                                unmute_job = Some(job_id.clone());
+                            }
                             if crate::cards::ghost_pill(ui, "Remove") {
                                 remove = Some(i);
                             }
                             if crate::cards::white_pill(ui, "Run") {
                                 run = Some(i);
+                                acted_job = Some(job_id.clone());
                             }
                         });
                     });
@@ -343,6 +366,13 @@ impl Cabin {
             if let Some(a) = self.automations.get(i).cloned() {
                 self.fire_night(a, now);
             }
+        }
+        if let Some(id) = unmute_job {
+            grokhub_core::unmute_home_source(&mut self.cfg.feed_pulse, &id);
+            self.persist_cfg();
+        }
+        if let Some(id) = acted_job {
+            self.record_signal_for_source(&id, grokhub_core::CardEvent::Acted);
         }
         ui.add_space(12.0);
     }

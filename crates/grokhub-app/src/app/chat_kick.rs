@@ -158,6 +158,8 @@ impl Cabin {
             self.push_bound_msg("user", text.clone());
         } else {
             self.live_mut().push(("user".into(), text.clone()));
+            let tid = self.visible_thread_id();
+            self.note_card_reply(&tid);
         }
         self.stamp_current_access();
         self.persist();

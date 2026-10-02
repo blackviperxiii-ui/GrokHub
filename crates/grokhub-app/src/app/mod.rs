@@ -2233,19 +2233,27 @@ impl Cabin {
     fn push_bound_msg(&mut self, role: &str, content: String) {
         let content = self.scrub_transcript(take_ui_text(content, IMAGE_FILE_CAP));
         let vis = self.visible_thread_id();
-        let job = self.chat_job_thread.as_deref();
-        if job.is_none() || job == Some(vis.as_str()) {
+        let job = self.chat_job_thread.clone();
+        let on_visible = match job.as_deref() {
+            None => true,
+            Some(id) => id == vis.as_str(),
+        };
+        let wrote = if on_visible {
             self.live_mut().push((role.to_string(), content));
             if let Some(t) = self.threads.iter_mut().find(|t| t.id == vis) {
                 t.accessed_ms = now_ms();
             }
-            return;
-        }
-        if let Some(job_id) = job {
+            vis
+        } else {
+            let job_id = job.unwrap_or_default();
             if let Some(t) = self.threads.iter_mut().find(|t| t.id == job_id) {
                 t.messages_mut().push((role.to_string(), content));
                 t.accessed_ms = now_ms();
             }
+            job_id
+        };
+        if role == "user" {
+            self.note_card_reply(&wrote);
         }
     }
 

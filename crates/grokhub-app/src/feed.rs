@@ -9,7 +9,11 @@ pub fn path() -> std::path::PathBuf {
 }
 
 pub fn load() -> Vec<UpdateCard> {
-    config::load_json(&path(), config::JSON_STORE_CAP)
+    let mut cards: Vec<UpdateCard> = config::load_json(&path(), config::JSON_STORE_CAP);
+    if grokhub_core::collapse_feed(&mut cards) {
+        let _ = save(&cards);
+    }
+    cards
 }
 
 pub fn save(list: &[UpdateCard]) -> Result<(), String> {
@@ -41,6 +45,28 @@ mod tests {
             code.contains("load_json") && !code.contains("read_to_string"),
             "boot must not slurp unbounded updates JSON: {code}"
         );
+        let _ = fs::remove_dir_all(&root);
+        std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn load_collapses_repeated_runs() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("updates-collapse");
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let cards: Vec<_> = [1_u64, 2, 3, 4]
+            .into_iter()
+            .map(|ms| automation_done_card("loop-a", "Host snapshot", "report", ms))
+            .collect();
+        save(&cards).expect("save");
+        let loaded = load();
+        let visible = grokhub_core::visible_updates(&loaded);
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].runs, 4);
+        assert_eq!(loaded.iter().filter(|card| card.collapsed).count(), 3);
+        let again = load();
+        assert_eq!(grokhub_core::visible_updates(&again)[0].runs, 4);
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }
