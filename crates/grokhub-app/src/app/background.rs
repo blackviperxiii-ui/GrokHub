@@ -612,6 +612,12 @@ impl Cabin {
         }
     }
 
+    /// Enter in the composer. Alt+Enter queues instead of steering a live reply.
+    pub(super) fn send_typed(&mut self, ui: &egui::Ui, text: String) {
+        self.bg.queue_next = ui.input(|i| i.modifiers.alt);
+        self.send_from_composer(text);
+    }
+
     /// `/queue <message>`: wait for the live reply instead of steering it.
     pub(super) fn queue_or_send(&mut self, text: String) {
         self.bg.queue_next = true;
