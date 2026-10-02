@@ -397,7 +397,7 @@ pub fn felt_pill(ui: &mut egui::Ui, label: &str, style: PillStyle) -> bool {
             true,
         ),
     };
-    crate::theme::felt_label_button(
+    let resp = crate::theme::felt_label_button(
         ui,
         label,
         base_fill,
@@ -406,8 +406,10 @@ pub fn felt_pill(ui: &mut egui::Ui, label: &str, style: PillStyle) -> bool {
         min_size,
         stroke,
         strong,
-    )
-    .clicked()
+    );
+    let enabled = resp.enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp.clicked()
 }
 
 /// Horizontal inset so a long session label is not jammed on the pill edge.
@@ -515,6 +517,10 @@ fn felt_segment_styled(
         galley,
         text_color,
     );
+    let enabled = resp.enabled();
+    resp.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, selected, label)
+    });
     resp
 }
 
@@ -541,6 +547,10 @@ pub fn felt_tab(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
         galley,
         text_color,
     );
+    let enabled = resp.enabled();
+    resp.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, active, label)
+    });
     resp.clicked()
 }
 
@@ -617,7 +627,8 @@ pub fn paint_run_pulse(ui: &mut egui::Ui, label: &str, hint: &str) {
     if !hint.is_empty() {
         row.response.on_hover_text(hint);
     }
-    ui.ctx().request_repaint();
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(33));
 }
 
 pub fn titlebar_update_chip(ui: &mut egui::Ui, label: &str) -> bool {
@@ -774,6 +785,15 @@ fn paint_dropdown_chevron(ui: &egui::Ui, rect: egui::Rect, color: Color32) {
     ));
 }
 
+/// Composer menus open upward. If that does not fit, they fall back below the pill.
+pub fn composer_menu_align() -> egui::RectAlign {
+    egui::RectAlign::TOP_START
+}
+
+pub fn composer_menu_align_fallback() -> egui::RectAlign {
+    egui::RectAlign::BOTTOM_START
+}
+
 fn catalog_pill(
     ui: &mut egui::Ui,
     popup_id: &'static str,
@@ -805,8 +825,8 @@ fn catalog_pill(
     egui::Popup::new(id, ui.ctx().clone(), &resp, ui.layer_id())
         .open_memory(None)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClick)
-        .align(egui::RectAlign::BOTTOM_START)
-        .align_alternatives(&[])
+        .align(composer_menu_align())
+        .align_alternatives(&[composer_menu_align_fallback()])
         .layout(egui::Layout::top_down_justified(egui::Align::LEFT))
         .show(|ui| {
             ui.set_min_width(MODE_PILL_W);
@@ -1437,7 +1457,14 @@ pub fn settings_switch(ui: &mut egui::Ui, on: bool) -> bool {
     let knob = crate::theme::blend_color(crate::theme::muted(), crate::theme::bg(), on_t);
     ui.painter()
         .circle_filled(egui::pos2(knob_x, rect.center().y), 8.0, knob);
+    let enabled = resp.enabled();
+    let name = switch_access_name(on);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, name));
     resp.clicked()
+}
+
+pub fn switch_access_name(on: bool) -> &'static str {
+    if on { "On" } else { "Off" }
 }
 
 pub fn settings_dropdown(
@@ -3889,6 +3916,24 @@ mod tests {
     }
 
     #[test]
+    fn run_pulse_ticks_about_thirty_times_a_second() {
+        let src = include_str!("cards.rs");
+        let pulse = src
+            .split("pub fn paint_run_pulse(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn titlebar_update_chip(").next())
+            .expect("paint_run_pulse");
+        assert!(
+            pulse.contains("request_repaint_after") && pulse.contains("33"),
+            "the live dot must not repaint every frame: {pulse}"
+        );
+        assert!(
+            !pulse.contains("request_repaint()"),
+            "request_repaint() would run at the monitor rate: {pulse}"
+        );
+    }
+
+    #[test]
     fn run_pulse_paints_a_labeled_row() {
         let ctx = egui::Context::default();
         let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
@@ -3926,6 +3971,59 @@ mod tests {
         assert!(
             app.contains("Also signs in the Grok Build CLI if it is not already connected"),
             "settings Connect must say it also signs the CLI in: {app}"
+        );
+    }
+
+    #[test]
+    fn composer_menus_prefer_opening_above_the_pill() {
+        assert_eq!(composer_menu_align(), egui::RectAlign::TOP_START);
+        assert_eq!(composer_menu_align_fallback(), egui::RectAlign::BOTTOM_START);
+        assert_ne!(composer_menu_align(), composer_menu_align_fallback());
+        let src = include_str!("cards.rs");
+        let pill = src
+            .split("fn catalog_pill(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn effort_pill(").next())
+            .expect("catalog_pill");
+        assert!(
+            pill.contains("composer_menu_align()")
+                && pill.contains("composer_menu_align_fallback()"),
+            "mode, permission, and effort menus open above the pill: {pill}"
+        );
+        let session = include_str!("app/chat_ui.rs");
+        let menu = session
+            .split("fn paint_session_actions_menu(")
+            .nth(1)
+            .and_then(|s| s.split("fn ui_composer_stack(").next())
+            .unwrap_or("");
+        assert!(
+            menu.contains("RectAlign::BOTTOM_START") && menu.contains("align_alternatives(&[])"),
+            "the titlebar session menu stays below its button"
+        );
+    }
+
+    #[test]
+    fn switch_and_segments_expose_checked_state() {
+        assert_eq!(switch_access_name(true), "On");
+        assert_eq!(switch_access_name(false), "Off");
+        let src = include_str!("cards.rs");
+        let switch = src
+            .split("pub fn settings_switch(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn switch_access_name(").next())
+            .expect("settings_switch");
+        assert!(
+            switch.contains("WidgetType::Checkbox") && switch.contains("switch_access_name"),
+            "the settings switch is a named checkbox: {switch}"
+        );
+        let seg = src
+            .split("fn felt_segment_styled(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn felt_tab(").next())
+            .expect("segment");
+        assert!(
+            seg.contains("WidgetInfo::selected") && seg.contains("selected"),
+            "a segment reports whether it is selected: {seg}"
         );
     }
 }

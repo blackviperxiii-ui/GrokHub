@@ -89,17 +89,17 @@ pub struct Shortcut {
 pub const SHORTCUTS: &[Shortcut] = &[
     Shortcut { keys: "Ctrl+K", action: "Command palette", scope: "Global" },
     Shortcut { keys: "Ctrl+N", action: "New chat", scope: "Global" },
-    Shortcut { keys: "Ctrl+F", action: "Find in this chat (Enter next, Shift+Enter previous, Esc close)", scope: "Chat" },
     Shortcut { keys: "Ctrl+G", action: "Hey Grok (listen or halt)", scope: "Global" },
-    Shortcut { keys: "Super+G", action: "Hey Grok when unfocused", scope: "System" },
-    Shortcut { keys: "Ctrl+Shift+Esc", action: "Halt", scope: "Global" },
-    Shortcut { keys: "Super+Shift+Esc", action: "Halt when unfocused", scope: "System" },
+    Shortcut { keys: "Ctrl+Alt+H", action: "Halt", scope: "Global" },
+    Shortcut { keys: "Ctrl+/", action: "Shortcut sheet", scope: "Global" },
+    Shortcut { keys: "Ctrl+F", action: "Find in this chat (Enter next, Shift+Enter previous, Esc close)", scope: "Chat" },
+    Shortcut { keys: "Enter / Esc", action: "Allow / deny tool permission (empty composer)", scope: "Chat" },
+    Shortcut { keys: "Enter / Esc", action: "Confirm / cancel overlay sheet (empty composer; Ask Always stays Allow / Deny)", scope: "Chat" },
     Shortcut { keys: "Enter", action: "Send message", scope: "Composer" },
     Shortcut { keys: "Ctrl+Enter", action: "New line", scope: "Composer" },
     Shortcut { keys: "Tab", action: "Accept slash", scope: "Composer" },
-    Shortcut { keys: "Enter / Esc", action: "Allow / deny tool permission (empty composer)", scope: "Chat" },
-    Shortcut { keys: "Enter / Esc", action: "Confirm / cancel overlay sheet (empty composer; Ask Always stays Allow / Deny)", scope: "Chat" },
-    Shortcut { keys: "Ctrl+/", action: "Shortcut sheet", scope: "Global" },
+    Shortcut { keys: "Super+G", action: "Hey Grok when unfocused", scope: "System" },
+    Shortcut { keys: "Super+Shift+Esc", action: "Halt when unfocused", scope: "System" },
 ];
 
 pub fn shortcut_help() -> String {
@@ -187,6 +187,25 @@ mod tests {
         );
         assert_eq!(perm_key(false, false, false, false), None);
         assert!(shortcut_help().contains("Allow / deny tool permission"));
+    }
+
+    #[test]
+    fn halt_is_ctrl_alt_h_and_no_other_shortcut_shares_it() {
+        let halt: Vec<_> = SHORTCUTS.iter().filter(|s| s.action == "Halt").collect();
+        assert_eq!(halt.len(), 1);
+        assert_eq!(halt[0].keys, "Ctrl+Alt+H");
+        assert!(
+            !SHORTCUTS.iter().any(|s| s.keys == "Ctrl+Shift+Esc"),
+            "Ctrl+Shift+Esc is the Windows Task Manager key and never reaches the app"
+        );
+        assert_eq!(
+            SHORTCUTS
+                .iter()
+                .filter(|s| s.keys.eq_ignore_ascii_case("Ctrl+Alt+H"))
+                .count(),
+            1
+        );
+        assert!(shortcut_help().contains("Ctrl+Alt+H — Halt (Global)"));
     }
 
     #[test]

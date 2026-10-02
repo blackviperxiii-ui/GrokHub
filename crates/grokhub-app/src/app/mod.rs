@@ -105,7 +105,7 @@ use grokhub_core::{
     route_schedule, save_hub_state, screen_from_extents, scrolled_off_tail, search_corpus,
     search_corpus_tagged, search_place, search_thread_body, seed_from_bound, settings_pin_blocks_auto,
     settings_update_hint, settings_update_label,
-    settle_project_path, shortcut_help, should_anticipate, should_auto_compact_now,
+    settle_project_path, should_anticipate, should_auto_compact_now,
     should_auto_continue_goal, should_capture_before_chat, should_idle_reflect, should_keep_frame,
     should_name_thread, should_notify_cabin_update, should_paint_greeting, should_refresh_greeting,
     should_refresh_llm, should_seed_sidebar, should_send_screenshot, should_trim_result_bodies,
@@ -4800,9 +4800,12 @@ impl eframe::App for Cabin {
         {
             self.touch();
         }
-        if ctx
-            .input(|i| i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::Escape))
-        {
+        if ctx.input(|i| {
+            i.modifiers.command
+                && i.modifiers.alt
+                && !i.modifiers.shift
+                && i.key_pressed(egui::Key::H)
+        }) {
             self.halt_work("Stopped");
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::G) && !i.modifiers.shift) {
@@ -4972,20 +4975,7 @@ impl eframe::App for Cabin {
         if self.confirm.as_ref().is_some_and(|c| c.paints_overlay()) {
             self.paint_confirm_overlay(&ctx);
         }
-        if self.shortcuts_open {
-            egui::Window::new("Shortcuts")
-                .collapsible(false)
-                .default_width(420.0)
-                .show(&ctx, |ui| {
-                    ui.set_max_width(400.0);
-                    for line in shortcut_help().lines() {
-                        ui.label(line);
-                    }
-                    if crate::cards::ghost_pill(ui, "Close") {
-                        self.shortcuts_open = false;
-                    }
-                });
-        }
+        self.paint_shortcuts(&ctx);
         self.ui_plus_overlays(&ctx);
         self.ui_imagine_overlays(&ctx);
         self.ui_project_overlays(&ctx);
@@ -4995,6 +4985,27 @@ impl eframe::App for Cabin {
 }
 
 impl Cabin {
+    pub(super) fn paint_shortcuts(&mut self, ctx: &egui::Context) {
+        if !self.shortcuts_open {
+            return;
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            self.shortcuts_open = false;
+            return;
+        }
+        egui::Window::new("Shortcuts")
+            .collapsible(false)
+            .default_width(560.0)
+            .show(ctx, |ui| {
+                ui.set_min_width(520.0);
+                palette::paint_shortcut_sheet(ui);
+                ui.add_space(8.0);
+                if crate::cards::ghost_pill(ui, "Close") {
+                    self.shortcuts_open = false;
+                }
+            });
+    }
+
     fn poll_global_hotkeys(&mut self) {
         if self.hotkeys.is_none() {
             return;

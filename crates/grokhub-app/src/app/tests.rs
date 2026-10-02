@@ -13868,6 +13868,67 @@ fn only_a_bare_key_with_nothing_over_the_chat_answers_the_card() {
     assert!(!frame(None));
 }
 
+#[test]
+fn escape_closes_plus_folder_avatar_shortcuts_and_upload() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("esc-overlays");
+    let esc = || egui::RawInput {
+        events: vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+
+    cabin.plus_menu = Some(grokhub_core::PlusTarget::Chat);
+    cabin.plus_anchor = egui::Pos2::ZERO;
+    cabin.plus_ignore_close = true;
+    let _ = crate::theme::test_pass(&ctx, esc(), |ui| {
+        cabin.ui_plus_overlays(ui.ctx());
+    });
+    assert!(cabin.plus_menu.is_none(), "Esc closes the plus menu");
+    assert!(
+        !cabin.plus_ignore_close,
+        "the open-click guard stays, and Esc clears it"
+    );
+
+    cabin.file_pick = Some(grokhub_core::PlusTarget::Chat);
+    cabin.pick_dir = root.display().to_string();
+    let _ = crate::theme::test_pass(&ctx, esc(), |ui| {
+        cabin.ui_plus_overlays(ui.ctx());
+    });
+    assert!(cabin.file_pick.is_none(), "Esc closes Upload");
+
+    cabin.proj_add_for = Some("pid".into());
+    cabin.proj_menu_pos = egui::Pos2::ZERO;
+    cabin.proj_ignore_close = true;
+    let _ = crate::theme::test_pass(&ctx, esc(), |ui| {
+        cabin.ui_project_overlays(ui.ctx());
+    });
+    assert!(cabin.proj_add_for.is_none(), "Esc closes Add to folder");
+    assert!(!cabin.proj_ignore_close);
+
+    cabin.settings_menu_open = true;
+    cabin.settings_menu_ignore = true;
+    let _ = crate::theme::test_pass(&ctx, esc(), |ui| {
+        cabin.ui_settings_menu(ui.ctx());
+    });
+    assert!(!cabin.settings_menu_open, "Esc closes the avatar menu");
+    assert!(!cabin.settings_menu_ignore);
+
+    cabin.shortcuts_open = true;
+    let _ = crate::theme::test_pass(&ctx, esc(), |ui| {
+        cabin.paint_shortcuts(ui.ctx());
+    });
+    assert!(!cabin.shortcuts_open, "Esc closes Shortcuts");
+
+    release_isolated(&root, cabin);
+}
+
 // Landed from PR #175.
 #[test]
 fn clear_slash_empties_the_chat() {
@@ -21206,5 +21267,26 @@ fn chip_hour_returns_0_through_23() {
     assert!(
         (0..=23).contains(&hour),
         "chip_hour must be 0..=23 (or noon fallback hour=12), got {hour}"
+    );
+}
+
+#[test]
+fn halt_shortcut_is_ctrl_alt_h_not_the_task_manager_key() {
+    let src = include_str!("mod.rs");
+    let halt = src
+        .split("self.halt_work(\"Stopped\");")
+        .next()
+        .and_then(|s| s.rsplit("if ctx.input(").next())
+        .expect("in-app halt shortcut");
+    assert!(
+        halt.contains("i.modifiers.command")
+            && halt.contains("i.modifiers.alt")
+            && halt.contains("!i.modifiers.shift")
+            && halt.contains("egui::Key::H"),
+        "Ctrl+Alt+H halts: {halt}"
+    );
+    assert!(
+        !src.contains("i.modifiers.shift && i.key_pressed(egui::Key::Escape)"),
+        "Ctrl+Shift+Esc opens Task Manager on Windows and never reaches the app"
     );
 }

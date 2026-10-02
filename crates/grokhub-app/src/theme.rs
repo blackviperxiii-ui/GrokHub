@@ -339,6 +339,10 @@ pub const USER_BUBBLE_RADIUS: f32 = 20.0;
 pub const CHROME_RADIUS: f32 = 6.0;
 /// Catalog / agent card — Fluent card radius, not a chat pill.
 pub const CARD_RADIUS: f32 = 12.0;
+/// Floating menus, the avatar menu, and the find bar.
+pub const MENU_RADIUS: f32 = 12.0;
+/// Modal sheets (settings, get started).
+pub const SHEET_RADIUS: f32 = 16.0;
 /// Catalog icon well that holds a 20px Fluent glyph.
 pub const TILE_ICON: f32 = 28.0;
 /// Rail / composer chrome glyph.
@@ -469,6 +473,10 @@ fn install_inter(ctx: &egui::Context) {
             "inter-full".into(),
         ],
     );
+    #[cfg(windows)]
+    let mono = std::fs::read(r"C:\Windows\Fonts\CascadiaMono.ttf")
+        .or_else(|_| std::fs::read(r"C:\Windows\Fonts\consola.ttf"));
+    #[cfg(not(windows))]
     let mono = std::fs::read("/usr/share/fonts/TTF/JetBrainsMono-Regular.ttf")
         .or_else(|_| std::fs::read("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"))
         .or_else(|_| std::fs::read("/usr/share/fonts/truetype/macos/JetBrainsMono-Regular.ttf"));
@@ -544,8 +552,8 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
     visuals.widgets.open.bg_fill = panel();
     visuals.widgets.open.fg_stroke = Stroke::new(1.0_f32, fg());
     visuals.window_stroke = Stroke::new(1.0_f32, border());
-    visuals.window_corner_radius = CHROME_RADIUS.into();
-    visuals.menu_corner_radius = CHROME_RADIUS.into();
+    visuals.window_corner_radius = MENU_RADIUS.into();
+    visuals.menu_corner_radius = MENU_RADIUS.into();
     visuals.window_shadow = sheet_shadow();
     visuals.popup_shadow = sheet_shadow();
     visuals.widgets.noninteractive.corner_radius = CHROME_RADIUS.into();
@@ -784,6 +792,47 @@ pub fn paint_button_shadow(painter: &egui::Painter, rect: egui::Rect, hover_t: f
     );
 }
 
+/// How long a Copy button reads "Copied".
+pub const COPY_FLASH: Duration = Duration::from_millis(1500);
+
+/// True while a click at `clicked` should still read "Copied".
+pub fn copy_flash_showing(clicked: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(clicked) < COPY_FLASH
+}
+
+/// "Copied" for [`COPY_FLASH`] after a click, otherwise "Copy".
+pub fn copy_button_label(clicked: Option<Instant>, now: Instant) -> &'static str {
+    match clicked {
+        Some(t) if copy_flash_showing(t, now) => "Copied",
+        _ => "Copy",
+    }
+}
+
+/// Width of the wider Copy label, so the row does not jump when it flips.
+pub fn copy_hit_width(ui: &egui::Ui) -> f32 {
+    let font = FontId::proportional(FONT_CHROME);
+    let galley = ui.fonts_mut(|f| f.layout_no_wrap("Copied".to_owned(), font, Color32::PLACEHOLDER));
+    let pad = ui.style().spacing.button_padding.x;
+    galley.size().x + pad * 2.0
+}
+
+/// Label for a Copy button. The click time lives in temp data under the button id.
+pub fn copy_flash_label(ctx: &egui::Context, id: egui::Id) -> &'static str {
+    let now = Instant::now();
+    let clicked = ctx.data(|d| d.get_temp::<Instant>(id));
+    if let Some(t) = clicked.filter(|t| copy_flash_showing(*t, now)) {
+        let left = COPY_FLASH.saturating_sub(now.saturating_duration_since(t));
+        ctx.request_repaint_after(left.max(Duration::from_millis(16)));
+        return "Copied";
+    }
+    "Copy"
+}
+
+pub fn mark_copy_clicked(ctx: &egui::Context, id: egui::Id) {
+    ctx.data_mut(|d| d.insert_temp(id, Instant::now()));
+    ctx.request_repaint_after(COPY_FLASH);
+}
+
 /// Painted label button with hover grow / press shrink (Plasma-style pointer feedback).
 pub fn felt_label_button(
     ui: &mut egui::Ui,
@@ -815,7 +864,10 @@ pub fn felt_label_button(
     // Centre vertically: a layout can hand the pill more height than label + pad.
     let text_pos = egui::pos2(rect.min.x + pad.x, rect.center().y - galley.size().y * 0.5);
     ui.painter().galley(text_pos, galley, text_color);
-    pointing(resp)
+    let resp = pointing(resp);
+    let enabled = resp.enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp
 }
 
 /// Compact square hit for sidebar `+` and similar chrome.
@@ -838,7 +890,10 @@ pub fn felt_icon_hit(
         FontId::proportional(font_size),
         if resp.hovered() { fg() } else { text_color },
     );
-    pointing(resp)
+    let resp = pointing(resp);
+    let enabled = resp.enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp
 }
 
 pub fn lift_fill(fill: Color32, mix: f32) -> Color32 {
@@ -870,6 +925,46 @@ pub fn lift_fill(fill: Color32, mix: f32) -> Color32 {
     )
 }
 
+/// Tab, Shift+Tab, and the arrow keys. Shift+Tab is still [`egui::Key::Tab`].
+pub fn kb_nav_key(key: egui::Key) -> bool {
+    matches!(
+        key,
+        egui::Key::Tab
+            | egui::Key::ArrowUp
+            | egui::Key::ArrowDown
+            | egui::Key::ArrowLeft
+            | egui::Key::ArrowRight
+    )
+}
+
+/// Focus ring stays up after a nav key and drops on a pointer press.
+/// A pointer press in the same frame wins.
+pub fn kb_nav_next(prev: bool, nav_key: bool, pointer: bool) -> bool {
+    if pointer {
+        false
+    } else if nav_key {
+        true
+    } else {
+        prev
+    }
+}
+
+fn kb_nav_active(ctx: &egui::Context) -> bool {
+    let id = egui::Id::new("cabin-kb-nav");
+    let prev = ctx.data(|d| d.get_temp::<bool>(id).unwrap_or(false));
+    let (nav_key, pointer) = ctx.input(|i| {
+        let nav_key = i.events.iter().any(|ev| {
+            matches!(ev, egui::Event::Key { key, pressed: true, .. } if kb_nav_key(*key))
+        });
+        (nav_key, i.pointer.any_pressed())
+    });
+    let next = kb_nav_next(prev, nav_key, pointer);
+    if next != prev || ctx.data(|d| d.get_temp::<bool>(id).is_none()) {
+        ctx.data_mut(|d| d.insert_temp(id, next));
+    }
+    next
+}
+
 fn feel_motion(
     ui: &egui::Ui,
     resp: egui::Response,
@@ -890,6 +985,14 @@ fn feel_motion(
     let (x, y, w, h) = felt_rect(base.min.x, base.min.y, base.width(), base.height(), scale);
     let lift = if rise { feel_lift(hover_t, press_t) } else { 0.0 };
     let rect = egui::Rect::from_min_size(egui::pos2(x, y - lift), egui::vec2(w, h));
+    if focused && kb_nav_active(ui.ctx()) {
+        ui.painter().rect_stroke(
+            rect,
+            CHROME_RADIUS,
+            Stroke::new(1.5, link()),
+            egui::StrokeKind::Outside,
+        );
+    }
     (resp, rect, lift_fill(fill, mix), hover_t, press_t)
 }
 
@@ -1014,6 +1117,43 @@ mod tests {
             fonts.contains("Inter-Full-Regular.ttf") && fonts.matches("\"inter-full\"").count() >= 3,
             "→, ✓ and ≥ are not in the latin subset; the full face must back both families: {fonts}"
         );
+        assert!(
+            fonts.contains("JetBrainsMono-Regular.ttf")
+                && fonts.contains("CascadiaMono.ttf")
+                && fonts.contains("consola.ttf")
+                && fonts.contains("cfg(windows)"),
+            "Windows mono is Cascadia then Consolas; Linux keeps JetBrains Mono: {fonts}"
+        );
+        assert!(
+            fonts.find("cfg(windows)").unwrap() < fonts.find("CascadiaMono.ttf").unwrap()
+                && fonts.find("CascadiaMono.ttf").unwrap() < fonts.find("consola.ttf").unwrap(),
+            "Cascadia is tried before Consolas: {fonts}"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn menu_sheet_and_card_radii_are_shared() {
+        assert_eq!(MENU_RADIUS, 12.0);
+        assert_eq!(SHEET_RADIUS, 16.0);
+        assert_eq!(CARD_RADIUS, MENU_RADIUS);
+        assert!(CHROME_RADIUS < MENU_RADIUS && MENU_RADIUS < SHEET_RADIUS);
+        let theme = include_str!("theme.rs");
+        assert!(
+            theme.contains("visuals.menu_corner_radius = MENU_RADIUS.into()")
+                && theme.contains("visuals.window_corner_radius = MENU_RADIUS.into()")
+                && theme.contains("visuals.widgets.inactive.corner_radius = CHROME_RADIUS.into()"),
+            "menus grow to MENU_RADIUS; widget chrome stays 6"
+        );
+        let settings = include_str!("app/settings.rs");
+        assert!(settings.contains("MENU_RADIUS") && settings.contains("SHEET_RADIUS"));
+        let chat = include_str!("app/chat_ui.rs");
+        assert!(chat.contains("corner_radius(crate::theme::MENU_RADIUS)"));
+        let night = include_str!("app/night.rs");
+        assert_eq!(night.matches("corner_radius(crate::theme::CARD_RADIUS)").count(), 3);
+        let pages = include_str!("app/pages.rs");
+        assert_eq!(pages.matches("corner_radius(crate::theme::SHEET_RADIUS)").count(), 2);
+        assert!(pages.contains("corner_radius(crate::theme::CARD_RADIUS)"));
     }
 
     #[test]
@@ -1076,6 +1216,10 @@ mod tests {
         assert!(USER_BUBBLE_RADIUS < QUERY_RADIUS);
         assert_eq!(CHROME_RADIUS, 6.0);
         assert_eq!(CARD_RADIUS, 12.0);
+        assert_eq!(MENU_RADIUS, 12.0);
+        assert_eq!(SHEET_RADIUS, 16.0);
+        assert!(CHROME_RADIUS < MENU_RADIUS);
+        assert!(MENU_RADIUS < SHEET_RADIUS);
         assert_eq!(TILE_ICON, 28.0);
         assert_eq!(ICON_CHROME, 16.0);
         assert_eq!(ICON_ACTION, 20.0);
@@ -1185,6 +1329,38 @@ mod tests {
     }
 
     #[test]
+    fn keyboard_nav_ring_follows_tab_and_clears_on_pointer() {
+        assert!(kb_nav_key(egui::Key::Tab));
+        assert!(kb_nav_key(egui::Key::ArrowUp));
+        assert!(kb_nav_key(egui::Key::ArrowDown));
+        assert!(kb_nav_key(egui::Key::ArrowLeft));
+        assert!(kb_nav_key(egui::Key::ArrowRight));
+        assert!(!kb_nav_key(egui::Key::Escape));
+        assert!(!kb_nav_key(egui::Key::Enter));
+        assert!(!kb_nav_next(false, false, false));
+        assert!(kb_nav_next(false, true, false));
+        assert!(kb_nav_next(true, false, false), "the ring stays until the pointer");
+        assert!(!kb_nav_next(true, false, true));
+        assert!(
+            !kb_nav_next(true, true, true),
+            "a pointer press in the same frame wins"
+        );
+        let src = include_str!("theme.rs");
+        let motion = src
+            .split("fn feel_motion(")
+            .nth(1)
+            .and_then(|s| s.split("pub fn feel_response(").next())
+            .expect("feel_motion");
+        assert!(
+            motion.contains("kb_nav_active")
+                && motion.contains("CHROME_RADIUS")
+                && motion.contains("link()")
+                && motion.contains("1.5"),
+            "a keyboard focus paints a link ring: {motion}"
+        );
+    }
+
+    #[test]
     fn lift_fill_washes_transparent() {
         let _paint = hold_paint_test();
         set_paint_dark(true);
@@ -1276,6 +1452,23 @@ mod tests {
         assert!(
             !paint.contains("load_from_memory"),
             "paint must not decode the PNG: {paint}"
+        );
+    }
+
+    #[test]
+    fn copy_label_lasts_one_and_a_half_seconds() {
+        let t0 = Instant::now();
+        assert_eq!(copy_button_label(None, t0), "Copy");
+        assert_eq!(copy_button_label(Some(t0), t0), "Copied");
+        assert_eq!(
+            copy_button_label(Some(t0), t0 + Duration::from_millis(1499)),
+            "Copied"
+        );
+        assert!(!copy_flash_showing(t0, t0 + COPY_FLASH));
+        assert_eq!(copy_button_label(Some(t0), t0 + COPY_FLASH), "Copy");
+        assert_eq!(
+            copy_button_label(Some(t0), t0 + Duration::from_secs(2)),
+            "Copy"
         );
     }
 }

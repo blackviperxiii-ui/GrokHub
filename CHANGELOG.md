@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 2.10.58 — 2026-10-02
+
+Links in chat open in your browser. Every link, the MCP sign-in Open button, and the xAI sign-in go through one opener that takes only http and https and hands the address to the system without a shell (ShellExecuteW on Windows, `xdg-open` on Linux). The old Windows path ran `cmd /C start` with the address, so a server could slip a command in after an `&`.
+
+Copy reads Copied on the button you clicked for a moment. The Mode, Permission and Effort menus open above their pill. Esc closes the plus menu, Add to folder, the avatar menu, Shortcuts and Upload. The Shortcuts sheet is a table grouped by scope. Double-click the empty title bar to maximize, and the window buttons say what they do. Tab and the arrow keys show a focus ring. Custom buttons, pills, tabs and switches carry names for screen readers. Connectors says Loading… while a list is still coming and None matched. when search hides everything. Inline code and tool output are easier to read, small labels are at least 12 px, and Windows code uses Cascadia Mono or Consolas. The run dot and the composer stop repainting every frame while nothing moves. Menus, sheets and cards share one set of corner radii.
+
+Halt is now Ctrl+Alt+H. Ctrl+Shift+Esc opens Task Manager on Windows and never reached the cabin.
+
+- Linux: `grokhub-linux-v2.10.58.tar.gz` and AUR `pkgver=2.10.58`.
+- Windows: `GrokHub-Setup-2.10.58.exe` and `grokhub-windows-v2.10.58.zip`.
+
 ## 2.10.57 — 2026-10-01
 
 The cabin window moves from egui 0.29 to 0.36 and stays on the OpenGL renderer. The frameless title bar, the tray, and the menus stay where they were.
