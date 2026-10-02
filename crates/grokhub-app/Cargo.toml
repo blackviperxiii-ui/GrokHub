@@ -50,3 +50,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_Media_Multimedia",
     "Win32_UI_Controls_Dialogs",
 ] }
+
+[features]
+default = ["fx"]
+fx = ["eframe/wgpu"]

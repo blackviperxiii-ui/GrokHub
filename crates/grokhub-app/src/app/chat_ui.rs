@@ -2413,6 +2413,10 @@ impl Cabin {
                     ui.set_min_size(egui::vec2(cap, pill_h));
                     let pill_rect =
                         egui::Rect::from_min_size(ui.max_rect().min, egui::vec2(cap, pill_h));
+                    #[cfg(feature = "fx")]
+                    if self.running && self.cfg.composer_glow && crate::fx::renderer_is_wgpu() {
+                        crate::fx::paint_composer_glow(ui, pill_rect);
+                    }
                     ui.painter().rect(
                         pill_rect,
                         crate::theme::QUERY_RADIUS,
