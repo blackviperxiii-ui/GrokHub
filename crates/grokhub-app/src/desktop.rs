@@ -2831,7 +2831,7 @@ mod tests {
             "{opener}"
         );
         assert!(
-            markdown.contains("ui.link(") && markdown.contains("desktop::open_url"),
+            markdown.contains(".link(RichText::new(text)") && markdown.contains("desktop::open_url"),
             "chat markdown links open through desktop::open_url"
         );
         assert!(
