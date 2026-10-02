@@ -592,7 +592,6 @@ impl Cabin {
         match act {
             ChatBlockAct::Copy(body) => {
                 ui.ctx().copy_text(body);
-                self.status = "Copied".into();
             }
             ChatBlockAct::Reply(body) | ChatBlockAct::Edit(body) => {
                 let draft = self.board_view.composers.entry(card_id.to_string()).or_default();
