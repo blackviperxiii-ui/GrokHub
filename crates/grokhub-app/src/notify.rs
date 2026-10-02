@@ -34,7 +34,8 @@ pub fn ping(title: &str, body: &str) {
     }
     #[cfg(not(windows))]
     {
-        let _ = Command::new("notify-send").args(ping_args(title, body)).spawn();
+        let _ =
+            crate::desktop::spawn_reaped(Command::new("notify-send").args(ping_args(title, body)));
     }
 }
 

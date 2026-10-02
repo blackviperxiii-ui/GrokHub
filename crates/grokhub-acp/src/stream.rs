@@ -2,8 +2,6 @@
 
 use serde_json::Value;
 use std::process::Command;
-use std::thread;
-use std::time::Duration;
 
 use crate::client::SingleTurn;
 use crate::protocol::{parse_tool_card, ToolCard};
@@ -589,14 +587,28 @@ pub fn prompt_json(text: &str, image_data_url: Option<&str>) -> String {
     serde_json::to_string(&blocks).unwrap_or_else(|_| format!(r#"[{{"type":"text","text":{}}}]"#, serde_json::to_string(text).unwrap_or_default()))
 }
 
+/// Stop a headless `grok -p` run. Windows has no `kill`, so Stop used to leave grok running there.
 pub fn kill_pid(pid: u32) {
-    let _ = Command::new("kill")
-        .args(["-TERM", &pid.to_string()])
-        .status();
-    thread::sleep(Duration::from_millis(80));
-    let _ = Command::new("kill")
-        .args(["-KILL", &pid.to_string()])
-        .status();
+    #[cfg(windows)]
+    {
+        let mut kill = Command::new("taskkill");
+        kill.args(["/PID", &pid.to_string(), "/T", "/F"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        crate::locate::hide_windows_console(&mut kill);
+        let _ = kill.status();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status();
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        let _ = Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status();
+    }
 }
 
 #[cfg(test)]
@@ -749,5 +761,42 @@ mod tests {
         assert!(j.contains(r#""media_type":"image/png""#), "{j}");
         assert!(j.contains("AAA"), "{j}");
         assert!(!prompt_json("hi", None).contains("image"));
+    }
+
+    #[test]
+    fn kill_pid_stops_a_running_child() {
+        #[cfg(windows)]
+        let mut child = Command::new("ping")
+            .args(["-n", "60", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn ping");
+        #[cfg(not(windows))]
+        let mut child = Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .expect("spawn sleep");
+        kill_pid(child.id());
+        // `taskkill` can take a few seconds to start on a loaded Windows runner.
+        let start = std::time::Instant::now();
+        while child.try_wait().expect("try_wait").is_none() {
+            if start.elapsed() > std::time::Duration::from_secs(15) {
+                let _ = child.kill();
+                panic!("kill_pid left the child running");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let src = include_str!("stream.rs");
+        let body = src
+            .split("pub fn kill_pid(")
+            .nth(1)
+            .and_then(|s| s.split("#[cfg(test)]").next())
+            .expect("kill_pid");
+        assert!(
+            body.contains("taskkill")
+                && body.contains("/T")
+                && body.contains("hide_windows_console"),
+            "Windows has no `kill`; Stop must taskkill the grok tree: {body}"
+        );
     }
 }

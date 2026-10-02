@@ -212,6 +212,28 @@ pub fn clipboard_context_block(text: &str) -> String {
     format!("Clipboard:\n```\n{}\n```", text.trim())
 }
 
+/// Local wall-clock fields as the OS reports them. `weekday` is 0 = Sunday, like `date +%w`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WallClock {
+    pub year: u16,
+    pub month: u16,
+    pub day: u16,
+    pub weekday: u16,
+    pub hour: u16,
+    pub minute: u16,
+}
+
+/// What `date <fmt>` prints for the two formats the cabin asks for (`+%w %H %M`, `+%F`).
+/// Windows has no `date` binary, so the cabin fills these from the OS clock instead.
+/// Any other format is empty, the same as a failed `date`.
+pub fn date_out_from(fmt: &str, wall: WallClock) -> String {
+    match fmt {
+        "+%w %H %M" => format!("{} {:02} {:02}", wall.weekday, wall.hour, wall.minute),
+        "+%F" => format!("{:04}-{:02}-{:02}", wall.year, wall.month, wall.day),
+        _ => String::new(),
+    }
+}
+
 pub fn parse_local_clock(date_out: &str, now_ms: u64) -> Option<LocalClock> {
     let mut bits = date_out.split_whitespace();
     let weekday = bits.next()?.parse::<u8>().ok()?;
@@ -402,6 +424,20 @@ mod tests {
         let c = parse_local_clock("5 16 42", 1).unwrap();
         assert_eq!(c.weekday, 5);
         assert_eq!(c.hm(), "16:42");
+        let wall = WallClock {
+            year: 2026,
+            month: 3,
+            day: 8,
+            weekday: 0,
+            hour: 7,
+            minute: 5,
+        };
+        assert_eq!(date_out_from("+%F", wall), "2026-03-08");
+        let line = date_out_from("+%w %H %M", wall);
+        assert_eq!(line, "0 07 05");
+        let c = parse_local_clock(&line, 1).unwrap();
+        assert_eq!((c.weekday, c.hm()), (0, "07:05".to_string()));
+        assert_eq!(date_out_from("+%s", wall), "");
         assert_eq!(
             last_user_text(&[
                 ("user".into(), "check the box".into()),

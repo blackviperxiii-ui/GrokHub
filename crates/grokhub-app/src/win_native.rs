@@ -7,11 +7,12 @@ use std::os::windows::ffi::OsStrExt;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT, TRUE};
+use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT, SYSTEMTIME, TRUE};
 use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
 use windows_sys::Win32::System::Power::{
     SetThreadExecutionState, ES_CONTINUOUS, ES_SYSTEM_REQUIRED,
 };
+use windows_sys::Win32::System::SystemInformation::GetLocalTime;
 use windows_sys::Win32::UI::Shell::{
     SetCurrentProcessExplicitAppUserModelID, ShellExecuteW,
 };
@@ -465,6 +466,29 @@ pub fn open_path(path: &str) -> Result<(), String> {
         return Err(format!("ShellExecute failed ({})", rc as usize));
     }
     Ok(())
+}
+
+/// Local wall clock. `date` is a cmd builtin on Windows, not a binary the cabin can run.
+pub fn local_wall_clock() -> grokhub_core::WallClock {
+    let mut st = SYSTEMTIME {
+        wYear: 0,
+        wMonth: 0,
+        wDayOfWeek: 0,
+        wDay: 0,
+        wHour: 0,
+        wMinute: 0,
+        wSecond: 0,
+        wMilliseconds: 0,
+    };
+    unsafe { GetLocalTime(&mut st) };
+    grokhub_core::WallClock {
+        year: st.wYear,
+        month: st.wMonth,
+        day: st.wDay,
+        weekday: st.wDayOfWeek,
+        hour: st.wHour,
+        minute: st.wMinute,
+    }
 }
 
 fn file_dialog(save: bool, suggested: &str) -> Option<std::path::PathBuf> {

@@ -520,6 +520,17 @@ impl Cabin {
         if ui.button("Archive").clicked() {
             chosen = Some(BoardAct::Archive(id.clone()));
         }
+        // A second step, so a stray click cannot remove a card.
+        ui.menu_button("Delete", |ui| {
+            ui.label(
+                RichText::new("Delete this card for good? Its chat stays in History.")
+                    .size(crate::theme::FONT_TIP)
+                    .color(crate::theme::muted()),
+            );
+            if ui.button("Delete card").clicked() {
+                chosen = Some(BoardAct::Delete(id.clone()));
+            }
+        });
         if chosen.is_some() {
             *act = chosen;
             ui.close();
@@ -731,6 +742,29 @@ impl Cabin {
     }
 
     /// A chat for a card, listed in History like any other chat.
+    /// A deleted card leaves nothing open, typed, or noted behind.
+    pub(super) fn forget_board_card_view(&mut self, id: &str) {
+        let v = &mut self.board_view;
+        v.composers.remove(id);
+        if v.open.as_deref() == Some(id) {
+            v.open = None;
+            v.pinned = false;
+        }
+        if v.hover.as_ref().is_some_and(|(h, _)| h == id) {
+            v.hover = None;
+        }
+        if v.note.as_ref().is_some_and(|(n, _)| n == id) {
+            v.note = None;
+        }
+        if self.board_edit.as_deref() == Some(id) {
+            self.board_edit = None;
+            self.board_compose = false;
+        }
+        if self.board_notes_edit.as_ref().is_some_and(|(n, _)| n == id) {
+            self.board_notes_edit = None;
+        }
+    }
+
     pub(super) fn make_card_thread(&mut self, title: &str) -> String {
         let mut thread = crate::threads::ChatThread::new(title.trim(), false);
         thread.title_locked = true;

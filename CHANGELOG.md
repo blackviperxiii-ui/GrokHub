@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+Windows reads the day and the time from the system clock. The cabin used to ask the `date` program, which Windows does not have, so there the day stayed 1970-01-01 and every clock read noon Monday: usage never rolled over to a new day, the nightly review and session suggestions never came due (a fixed noon never reaches 9 pm, and a stuck day never changes), and scheduled automations fired at the wrong time.
+
+Stop ends a headless Grok Build run on Windows. It used the Unix `kill` command there, so grok kept running after Stop. It now uses `taskkill` on the process tree, like the other Windows stops.
+
+Devices shows a LAN pairing address on Windows and macOS. Neither has `hostname -I`, so the phone was offered `http://127.0.0.1`. The cabin now asks the OS which local address it would route from.
+
+Dismissing sticks. Delete on the Ideas board remembers the idea, and later ideas on the same topic stay off the board, even when the nightly review or the ideas call words them differently. The review and the ideas call are told what you turned down. Taking an idea off the home feed with × keeps it on the Ideas board and counts as a no for new ideas on that topic. The cabin stopped remembering new idea titles after its first 64, so older installs could see a deleted idea come back; it now keeps the newest 64. A situation card you opened (for example "That job is still paused") is no longer posted again on the next tick, which is how the same card could show up twice in a row.
+
+Workboard cards can be deleted. The card's ··· menu has Delete, with a second step so a stray click does not remove anything, and archived cards have Delete next to Restore. The card's chat stays in History. A card whose chat is still running asks you to stop it first.
+
+Background work always runs at low reasoning effort: automations, `/loop` runs, phone tasks, the nightly review, ideas, the daily read, chips, the greeting, and the thread goal. What you type in a chat or on a card keeps the effort you picked.
+
+Also fixed: `/project` followed by a word with accented or non-Latin letters (for example `/project aé€`) crashed the cabin. Quitting now waits for a save that is still writing, and `app.json` is no longer written by two savers at once. On Linux, the browser opener, video players, notifications, and the voice player are reaped when they exit instead of lingering as zombie processes. A heartbeat automation longer than a day runs daily, matching its next-run time and its label, instead of sitting overdue. The LAN hub compares access tokens in constant time and answers 503 past 64 requests at once instead of starting a thread for each.
+
 ## 2.10.59 — 2026-10-02
 
 A soft glow can breathe around the chat composer while Grok replies. It stays off until Settings → Behavior → Composer glow (GPU effects). Turning it on uses the GPU renderer after a restart. If that renderer fails, or the last launch died while it was starting, the cabin comes back on OpenGL, turns the switch off, and says so once.

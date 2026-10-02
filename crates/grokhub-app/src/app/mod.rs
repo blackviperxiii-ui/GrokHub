@@ -3150,12 +3150,21 @@ impl Cabin {
         }
     }
 
+    /// Windows has no `date` binary. Spawning one failed there, so the day stayed 1970-01-01
+    /// (usage never rolled, the nightly review never came due) and every clock read noon Monday.
     fn date_out(fmt: &str) -> String {
-        let mut cmd = std::process::Command::new("date");
-        cmd.arg(fmt);
-        run_limited(cmd, Duration::from_millis(400))
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_default()
+        #[cfg(windows)]
+        {
+            grokhub_core::date_out_from(fmt, crate::win_native::local_wall_clock())
+        }
+        #[cfg(not(windows))]
+        {
+            let mut cmd = std::process::Command::new("date");
+            cmd.arg(fmt);
+            run_limited(cmd, Duration::from_millis(400))
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_default()
+        }
     }
 
     fn local_clock() -> LocalClock {
@@ -4689,6 +4698,9 @@ impl Cabin {
 
 impl eframe::App for Cabin {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // The close frame spawned a persist. Wait for it: the process exits right after this,
+        // and two writers of app.json share one temp file.
+        let _io = self.persist_io.lock();
         let mut cfg = self.cfg.clone();
         cfg.api_key.clear();
         let _ = crate::config::save(&cfg);
@@ -5333,10 +5345,25 @@ fn hostname_i() -> String {
 fn hostname_i_now() -> String {
     let mut cmd = std::process::Command::new("hostname");
     cmd.arg("-I");
-    run_limited(cmd, Duration::from_millis(400))
+    let out = run_limited(cmd, Duration::from_millis(400))
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let addrs = parse_hostname_i(&out);
+    let refs: Vec<&str> = addrs.iter().map(|s| s.as_str()).collect();
+    if pick_lan_ipv4(&refs).is_some() {
+        return out;
+    }
+    // Windows and macOS have no `hostname -I`, so Devices showed a phone 127.0.0.1.
+    routed_ipv4().unwrap_or(out)
+}
+
+/// The local address the OS would route outbound traffic from. A UDP connect sends nothing;
+/// 192.0.2.1 is TEST-NET-1 (RFC 5737).
+fn routed_ipv4() -> Option<String> {
+    let sock = std::net::UdpSocket::bind(("0.0.0.0", 0)).ok()?;
+    sock.connect(("192.0.2.1", 9)).ok()?;
+    Some(sock.local_addr().ok()?.ip().to_string())
 }
 
 fn kick_hostname() {

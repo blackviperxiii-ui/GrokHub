@@ -15,7 +15,7 @@ pub(super) fn cabin_fast_llm(key: String, prompt: String) -> String {
             CABIN_FAST_MODEL,
             &[("user".into(), prompt.clone())],
             None,
-            None,
+            Some(grokhub_core::BACKGROUND_EFFORT),
         )
         .unwrap_or_default();
         if !primary.trim().is_empty() {
@@ -26,7 +26,7 @@ pub(super) fn cabin_fast_llm(key: String, prompt: String) -> String {
             CABIN_FAST_FALLBACK,
             &[("user".into(), prompt)],
             None,
-            None,
+            Some(grokhub_core::BACKGROUND_EFFORT),
         )
         .unwrap_or_default();
     }
@@ -48,6 +48,8 @@ pub(super) fn cabin_fast_llm(key: String, prompt: String) -> String {
                 "--no-auto-update",
                 "--model",
                 model,
+                "--reasoning-effort",
+                grokhub_core::BACKGROUND_EFFORT,
                 "--output-format",
                 "streaming-json",
                 "-p",
@@ -444,7 +446,14 @@ impl Cabin {
         self.goal_stale = false;
         std::thread::spawn(move || {
             let reply =
-                grok_chat(&key, &model, &[("user".into(), prompt)], None, None).unwrap_or_default();
+                grok_chat(
+                    &key,
+                    &model,
+                    &[("user".into(), prompt)],
+                    None,
+                    Some(grokhub_core::BACKGROUND_EFFORT),
+                )
+                .unwrap_or_default();
             let _ = tx.send((tid, reply));
         });
     }
