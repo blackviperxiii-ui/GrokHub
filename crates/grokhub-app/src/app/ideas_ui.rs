@@ -684,6 +684,10 @@ impl Cabin {
         };
         if dismiss_idea(&mut self.updates, id) {
             self.persist_updates();
+            // Without these a reworded copy, or the same skill from the nightly review, came back.
+            grokhub_core::remember_dismissed_source(&mut self.cfg.feed_pulse, &card.source_id);
+            grokhub_core::remember_turned_down(&mut self.cfg.feed_pulse, &card.title);
+            self.persist_cfg();
             if !card.title.is_empty() {
                 let key = format!("rejected:{}", grokhub_core::engine_slug(&card.title));
                 self.engine_note("ideas", &key, &card.title);

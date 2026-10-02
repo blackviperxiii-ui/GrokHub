@@ -118,7 +118,8 @@ pub use chat::{
     parse_model_reasoning, parse_model_text, parse_reasoning_effort, parse_responses_reasoning,
     parse_responses_text, reasoning_effort_for_mode, resolve_chat_model, responses_request_body,
     responses_url, route_auto_mode, settings_pin_blocks_auto, should_failover_status,
-    CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, DEFAULT_MODEL, REASONING_EFFORTS, XAI_BASE,
+    BACKGROUND_EFFORT, CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, DEFAULT_MODEL, REASONING_EFFORTS,
+    XAI_BASE,
 };
 pub use export::{
     chat_export_html, chat_export_json, html_escape, md_to_html, ChatExport, EXPORT_FORMATS_HINT,
@@ -463,6 +464,7 @@ pub use update_feed::{
     post_update, release_quiet_hold, resume_needs_fresh_chat, schedule_created_card,
     suggestion_card, tick_feed_pulse, visible_digests, visible_ideas, visible_updates,
     digest_lookup_prompt, digest_steer, parse_lookup, post_help, remember_dismissed_source,
+    remember_turned_down, turned_down_titles, turned_down_topic,
     DigestEdition, HelpTick, ParsedLookup, PausedJob, RepeatedAction, PAUSE_OFFER_MS,
     CardReaction, CitedLink, DigestMaterial, FeedPulse, PulseNow, PulseTick, TasteNote,
     UpdateAction, UpdateCard, UpdateKind, UpdateStatus, DIGEST_PAINT_MAX, FEED_PAINT_MAX,

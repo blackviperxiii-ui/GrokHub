@@ -339,7 +339,12 @@ impl Cabin {
             self.permission_mode.composer_headless_flags()
         };
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
-        let effort = grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort);
+        // Automations, loops, and phone tasks run unwatched: always low effort.
+        let effort = if self.scheduled_perm {
+            Some(grokhub_core::BACKGROUND_EFFORT)
+        } else {
+            grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort)
+        };
         let resume_in_cabin = resume
             .as_deref()
             .is_some_and(grokhub_acp::cabin_has_session);

@@ -8978,6 +8978,7 @@ fn kick_with_fake_grok_runs_the_prompt() {
     cabin.thread_idx = 0;
     cabin.messages = std::sync::Arc::new(vec![("user".into(), prompt.into())]);
     cabin.threads[0].messages = cabin.messages.clone();
+    cabin.cfg.reasoning_effort = "high".into();
 
     cabin.kick_model(false);
     assert!(
@@ -9019,6 +9020,33 @@ fn kick_with_fake_grok_runs_the_prompt() {
         cabin.status
     );
     eprintln!("FAKE_GROK_ARGV_BEGIN\n{argv}FAKE_GROK_ARGV_END");
+    assert!(
+        argv.contains("--reasoning-effort\nhigh\n"),
+        "a chat you type keeps the composer effort: {argv:?}"
+    );
+
+    // A scheduled run (automation, loop, phone task) is background work: low effort.
+    let _ = std::fs::remove_file(&argv_path);
+    cabin.scheduled_perm = true;
+    cabin.kick_model(false);
+    assert!(cabin.running, "scheduled kick should start: {}", cabin.status);
+    let child = cabin.grok_p_pid;
+    let start = std::time::Instant::now();
+    while cabin.running && start.elapsed() < std::time::Duration::from_secs(5) {
+        cabin.poll_single();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    if cabin.running {
+        if let Some(pid) = child {
+            grokhub_acp::kill_pid(pid);
+        }
+        panic!("scheduled fake grok still running after 5s; status {}", cabin.status);
+    }
+    let argv = std::fs::read_to_string(&argv_path).unwrap_or_default();
+    assert!(
+        argv.contains("--reasoning-effort\nlow\n") && !argv.contains("\nhigh\n"),
+        "background work runs at low effort: {argv:?}"
+    );
     drop(restore);
     release_isolated(&root, cabin);
 }
@@ -11310,6 +11338,72 @@ fn board_add_move_archive_restore_and_link() {
     assert!(cabin.apply_board_act(Some(BoardAct::Unlink(id))));
     assert!(cabin.board[0].thread_id.is_none());
     assert!(!cabin.running);
+}
+
+#[test]
+fn background_model_calls_run_at_low_effort() {
+    assert_eq!(grokhub_core::BACKGROUND_EFFORT, "low");
+    let src = cabin_src() + include_str!("feed_ui.rs");
+    for name in [
+        "cabin_fast_llm",
+        "spawn_review",
+        "follow_feed_lookup",
+        "spawn_thread_goal_on",
+        "fire_loop",
+    ] {
+        let body = fn_src(&src, name);
+        assert!(
+            body.contains("BACKGROUND_EFFORT"),
+            "{name} runs on its own and must use low effort: {body}"
+        );
+    }
+    let fast = fn_src(&src, "cabin_fast_llm");
+    assert!(
+        !fast.contains("None,\n            None,"),
+        "neither API call in the fast helper may leave effort unset: {fast}"
+    );
+}
+
+#[test]
+fn workboard_delete_removes_the_card_and_keeps_its_chat() {
+    use super::pages::BoardAct;
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.new_thread(false);
+    let thread_id = cabin.threads[cabin.thread_idx].id.clone();
+    cabin.board_title = "Harbor lamp".into();
+    assert!(cabin.apply_board_act(Some(BoardAct::Add)));
+    cabin.board_title = "Tide chart".into();
+    assert!(cabin.apply_board_act(Some(BoardAct::Add)));
+    let id = cabin.board[0].id.clone();
+    assert!(cabin.apply_board_act(Some(BoardAct::Link(id.clone()))));
+    cabin.board_view.open = Some(id.clone());
+    cabin.board_view.pinned = true;
+    cabin.board_view.composers.insert(id.clone(), "half a thought".into());
+    // A turn running in the card's chat has to stop first.
+    cabin.running = true;
+    cabin.chat_job_thread = Some(thread_id.clone());
+    assert!(!cabin.apply_board_act(Some(BoardAct::Delete(id.clone()))));
+    assert_eq!(cabin.board.len(), 2);
+    assert!(cabin.board_view.note.as_ref().is_some_and(|(n, _)| n == &id));
+    cabin.running = false;
+    cabin.chat_job_thread = None;
+    assert!(cabin.apply_board_act(Some(BoardAct::Delete(id.clone()))));
+    assert_eq!(cabin.board.len(), 1);
+    assert!(cabin.board.iter().all(|c| c.id != id));
+    assert!(cabin.board_view.open.is_none() && !cabin.board_view.pinned);
+    assert!(cabin.board_view.composers.is_empty() && cabin.board_view.note.is_none());
+    assert!(cabin.threads.iter().any(|t| t.id == thread_id), "the chat stays in History");
+    assert!(!cabin.apply_board_act(Some(BoardAct::Delete(id))), "already gone");
+    let archived = cabin.board[0].id.clone();
+    assert!(cabin.apply_board_act(Some(BoardAct::Archive(archived.clone()))));
+    assert!(cabin.apply_board_act(Some(BoardAct::Delete(archived))));
+    assert!(cabin.board.is_empty(), "an archived card can be deleted too");
+    let src = cabin_src();
+    let menu = fn_src(&src, "board_card_menu");
+    assert!(
+        menu.contains("BoardAct::Delete") && menu.contains("menu_button(\"Delete\""),
+        "Delete sits behind a second step in the card menu: {menu}"
+    );
 }
 
 // Landed from PR #136.
@@ -16844,6 +16938,27 @@ fn idea_card_apply_and_delete_follow_the_type() {
     cabin.delete_idea("idea-try");
     assert!(!cabin.updates.iter().any(|c| c.id == "idea-try"));
     assert!(cabin.idea_board.note.is_none());
+    let pulse = &cabin.cfg.feed_pulse;
+    assert!(
+        pulse.turned_down.iter().any(|t| t == "Idea idea-try")
+            && pulse.dismissed_sources.iter().any(|s| s == "idea-try"),
+        "Delete must be remembered, or the same idea comes back: {pulse:?}"
+    );
+    assert!(grokhub_core::turned_down_topic(pulse, "Idea idea-try"));
+}
+
+#[test]
+fn feed_x_on_an_idea_keeps_it_on_the_board_and_turns_its_topic_down() {
+    let mut quiet = QuietCabin::boot("idea-feed-x");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    let mut card = board_idea("idea-pin", grokhub_core::IdeaKind::Try, "draft my standup", 5);
+    card.feed_pin = true;
+    cabin.updates.push(card);
+    cabin.dismiss_feed_card("idea-pin");
+    let card = cabin.updates.iter().find(|c| c.id == "idea-pin").expect("still on the board");
+    assert!(!card.feed_pin);
+    assert!(cabin.cfg.feed_pulse.turned_down.iter().any(|t| t == "Idea idea-pin"));
 }
 
 #[test]

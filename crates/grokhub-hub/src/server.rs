@@ -5,10 +5,13 @@ use grokhub_core::{CompleteError, HubState, HUB_KIND};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::io::Read;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 const MAX_BODY: usize = 8 * 1024 * 1024;
+/// Requests handled at once. Past this a LAN flood gets a 503, not one more thread each.
+const MAX_IN_FLIGHT: usize = 64;
 
 pub fn serve(state: Arc<Mutex<HubState>>, port: u16) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let server = Server::http(("0.0.0.0", port))?;
@@ -36,11 +39,45 @@ fn serve_bind(state: Arc<Mutex<HubState>>, host: &str, port: u16) -> Result<u16,
 }
 
 fn accept_loop(state: Arc<Mutex<HubState>>, server: Server) {
+    let in_flight = Arc::new(AtomicUsize::new(0));
     for req in server.incoming_requests() {
+        let Some(slot) = InFlight::enter(&in_flight, MAX_IN_FLIGHT) else {
+            let _ = send_json(
+                req,
+                503,
+                json!({ "ok": false, "error": "Hub is busy. Try again." }),
+            );
+            continue;
+        };
         let state = state.clone();
         std::thread::spawn(move || {
+            let _slot = slot;
             let _ = handle(&state, req);
         });
+    }
+}
+
+/// One request being handled. The slot frees when the handler ends, even on a panic.
+struct InFlight(Arc<AtomicUsize>);
+
+impl InFlight {
+    fn enter(count: &Arc<AtomicUsize>, max: usize) -> Option<Self> {
+        let mut now = count.load(Ordering::SeqCst);
+        loop {
+            if now >= max {
+                return None;
+            }
+            match count.compare_exchange(now, now + 1, Ordering::SeqCst, Ordering::SeqCst) {
+                Ok(_) => return Some(Self(count.clone())),
+                Err(seen) => now = seen,
+            }
+        }
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -1007,5 +1044,24 @@ mod tests {
             serve.contains("accept_loop") && !serve.contains("handle("),
             "LAN serve must not handle on the accept thread: {serve}"
         );
+    }
+
+    #[test]
+    fn in_flight_slots_cap_and_free() {
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let a = InFlight::enter(&count, 2).expect("first");
+        let b = InFlight::enter(&count, 2).expect("second");
+        assert!(InFlight::enter(&count, 2).is_none(), "a third waits for a free slot");
+        drop(a);
+        let c = InFlight::enter(&count, 2).expect("a freed slot is reused");
+        let panicked = std::thread::spawn(move || {
+            let _slot = c;
+            panic!("handler blew up");
+        })
+        .join();
+        assert!(panicked.is_err());
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1, "a panic still frees its slot");
+        drop(b);
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }

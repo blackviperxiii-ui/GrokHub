@@ -678,6 +678,8 @@ impl Cabin {
                 cwd.display().to_string(),
                 "--output-format".into(),
                 "json".into(),
+                "--reasoning-effort".into(),
+                grokhub_core::BACKGROUND_EFFORT.into(),
             ];
             args.extend(perm_args);
             if let Some(id) = resume {
@@ -778,6 +780,14 @@ impl Cabin {
             memory_md: config::read_memory("MEMORY.md"),
             skill_names: self.skill_list.iter().map(|s| s.name.clone()).collect(),
             automation_names: self.automations.iter().map(|a| a.name.clone()).collect(),
+            turned_down: self
+                .cfg
+                .feed_pulse
+                .turned_down
+                .iter()
+                .rev()
+                .cloned()
+                .collect(),
             github_pat: !self.secrets.github_token.trim().is_empty(),
             host_receipts,
             chip_habits: top_habit_labels(&self.chip_memory, 6),
@@ -853,6 +863,14 @@ impl Cabin {
         let automation_names: Vec<String> =
             self.automations.iter().map(|a| a.name.clone()).collect();
         let github_pat = !self.secrets.github_token.trim().is_empty();
+        let turned_down: Vec<String> = self
+            .cfg
+            .feed_pulse
+            .turned_down
+            .iter()
+            .rev()
+            .cloned()
+            .collect();
         let chip_habits = top_habit_labels(&self.chip_memory, 6);
         let now = now_ms();
         let model = model_for_mode("balanced").to_string();
@@ -870,6 +888,7 @@ impl Cabin {
                 memory_md: config::read_memory("MEMORY.md"),
                 skill_names,
                 automation_names,
+                turned_down,
                 github_pat,
                 host_receipts,
                 chip_habits,
@@ -881,7 +900,13 @@ impl Cabin {
                 ),
             });
             let messages = [("system".into(), prompt), ("user".into(), digest)];
-            let out = grok_chat(&key, &model, &messages, None, None);
+            let out = grok_chat(
+                &key,
+                &model,
+                &messages,
+                None,
+                Some(grokhub_core::BACKGROUND_EFFORT),
+            );
             let _ = tx.send(out);
         });
     }
@@ -928,6 +953,11 @@ impl Cabin {
             );
             if !grokhub_core::idea_has_reason(kind, &topic, &ground)
                 || kept.iter().any(|k| grokhub_core::same_topic(k, &topic))
+                || grokhub_core::turned_down_topic(&self.cfg.feed_pulse, &item.title)
+                || item
+                    .name
+                    .as_deref()
+                    .is_some_and(|n| grokhub_core::turned_down_topic(&self.cfg.feed_pulse, n))
             {
                 return false;
             }
