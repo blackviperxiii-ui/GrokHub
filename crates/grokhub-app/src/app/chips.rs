@@ -59,6 +59,9 @@ pub(super) fn cabin_fast_llm(key: String, prompt: String) -> String {
         );
         let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
         let out = grokhub_acp::grok_stdout(&bin, &cwd, &refs).unwrap_or_default();
+        if let Ok(turn) = grokhub_acp::fold_stream(&out) {
+            super::background::hide_background_session(&turn.session_id);
+        }
         let text = fast_reply_text(&out);
         if !text.trim().is_empty() {
             return text;

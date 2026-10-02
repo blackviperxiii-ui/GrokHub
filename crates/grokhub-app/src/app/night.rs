@@ -603,6 +603,7 @@ impl Cabin {
                     .map(|r| r.prompt.clone())
                     .unwrap_or_default();
                 let summary = if let Ok(turn) = grokhub_acp::parse_single_turn(&text) {
+                    super::background::hide_background_session(&turn.session_id);
                     if let Some(row) = self.grok_loops.iter_mut().find(|x| x.id == id) {
                         row.session_id = Some(turn.session_id);
                     }
