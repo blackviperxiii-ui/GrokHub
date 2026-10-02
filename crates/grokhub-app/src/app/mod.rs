@@ -4972,20 +4972,7 @@ impl eframe::App for Cabin {
         if self.confirm.as_ref().is_some_and(|c| c.paints_overlay()) {
             self.paint_confirm_overlay(&ctx);
         }
-        if self.shortcuts_open {
-            egui::Window::new("Shortcuts")
-                .collapsible(false)
-                .default_width(420.0)
-                .show(&ctx, |ui| {
-                    ui.set_max_width(400.0);
-                    for line in shortcut_help().lines() {
-                        ui.label(line);
-                    }
-                    if crate::cards::ghost_pill(ui, "Close") {
-                        self.shortcuts_open = false;
-                    }
-                });
-        }
+        self.paint_shortcuts(&ctx);
         self.ui_plus_overlays(&ctx);
         self.ui_imagine_overlays(&ctx);
         self.ui_project_overlays(&ctx);
@@ -4995,6 +4982,28 @@ impl eframe::App for Cabin {
 }
 
 impl Cabin {
+    pub(super) fn paint_shortcuts(&mut self, ctx: &egui::Context) {
+        if !self.shortcuts_open {
+            return;
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            self.shortcuts_open = false;
+            return;
+        }
+        egui::Window::new("Shortcuts")
+            .collapsible(false)
+            .default_width(420.0)
+            .show(ctx, |ui| {
+                ui.set_max_width(400.0);
+                for line in shortcut_help().lines() {
+                    ui.label(line);
+                }
+                if crate::cards::ghost_pill(ui, "Close") {
+                    self.shortcuts_open = false;
+                }
+            });
+    }
+
     fn poll_global_hotkeys(&mut self) {
         if self.hotkeys.is_none() {
             return;

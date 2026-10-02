@@ -13868,6 +13868,67 @@ fn only_a_bare_key_with_nothing_over_the_chat_answers_the_card() {
     assert!(!frame(None));
 }
 
+#[test]
+fn escape_closes_plus_folder_avatar_shortcuts_and_upload() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("esc-overlays");
+    let esc = || egui::RawInput {
+        events: vec![egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+        ..Default::default()
+    };
+    let ctx = egui::Context::default();
+
+    cabin.plus_menu = Some(grokhub_core::PlusTarget::Chat);
+    cabin.plus_anchor = egui::Pos2::ZERO;
+    cabin.plus_ignore_close = true;
+    let _ = crate::theme::test_pass(&ctx, esc(), |ui| {
+        cabin.ui_plus_overlays(ui.ctx());
+    });
+    assert!(cabin.plus_menu.is_none(), "Esc closes the plus menu");
+    assert!(
+        !cabin.plus_ignore_close,
+        "the open-click guard stays, and Esc clears it"
+    );
+
+    cabin.file_pick = Some(grokhub_core::PlusTarget::Chat);
+    cabin.pick_dir = root.display().to_string();
+    let _ = crate::theme::test_pass(&ctx, esc(), |ui| {
+        cabin.ui_plus_overlays(ui.ctx());
+    });
+    assert!(cabin.file_pick.is_none(), "Esc closes Upload");
+
+    cabin.proj_add_for = Some("pid".into());
+    cabin.proj_menu_pos = egui::Pos2::ZERO;
+    cabin.proj_ignore_close = true;
+    let _ = crate::theme::test_pass(&ctx, esc(), |ui| {
+        cabin.ui_project_overlays(ui.ctx());
+    });
+    assert!(cabin.proj_add_for.is_none(), "Esc closes Add to folder");
+    assert!(!cabin.proj_ignore_close);
+
+    cabin.settings_menu_open = true;
+    cabin.settings_menu_ignore = true;
+    let _ = crate::theme::test_pass(&ctx, esc(), |ui| {
+        cabin.ui_settings_menu(ui.ctx());
+    });
+    assert!(!cabin.settings_menu_open, "Esc closes the avatar menu");
+    assert!(!cabin.settings_menu_ignore);
+
+    cabin.shortcuts_open = true;
+    let _ = crate::theme::test_pass(&ctx, esc(), |ui| {
+        cabin.paint_shortcuts(ui.ctx());
+    });
+    assert!(!cabin.shortcuts_open, "Esc closes Shortcuts");
+
+    release_isolated(&root, cabin);
+}
+
 // Landed from PR #175.
 #[test]
 fn clear_slash_empties_the_chat() {

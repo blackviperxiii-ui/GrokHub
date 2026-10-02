@@ -355,6 +355,7 @@ impl Cabin {
                         menu_rect = ui.min_rect();
                     });
                 });
+            let esc = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
             if let Some(folder) = picked {
                 self.proj_add_for = None;
                 match add_to_folder(&mut self.projects, &pid, folder.as_deref()) {
@@ -372,6 +373,9 @@ impl Cabin {
                     }
                     Err(e) => self.status = e.into(),
                 }
+            } else if esc {
+                self.proj_add_for = None;
+                self.proj_ignore_close = false;
             } else if self.proj_ignore_close {
                 self.proj_ignore_close = false;
             } else if ctx.input(|i| i.pointer.any_click()) {
