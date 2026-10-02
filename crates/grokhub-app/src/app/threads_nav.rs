@@ -90,11 +90,11 @@ impl Cabin {
         if let Some(i) = self
             .threads
             .iter()
-            .position(|t| t.background && t.title == "Background")
+            .position(|t| t.background && t.title == threads::BACKGROUND_THREAD_TITLE)
         {
             return i;
         }
-        let mut created = ChatThread::new("Background", false);
+        let mut created = ChatThread::new(threads::BACKGROUND_THREAD_TITLE, false);
         created.background = true;
         self.threads.push(created);
         self.threads.len() - 1
