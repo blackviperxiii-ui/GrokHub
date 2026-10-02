@@ -446,7 +446,8 @@ impl Cabin {
         self.digest_busy = true;
         std::thread::spawn(move || {
             let messages = [("user".into(), prompt)];
-            let _ = tx.send(grok_chat(&key, &model, &messages, None, None));
+            let effort = Some(grokhub_core::BACKGROUND_EFFORT);
+            let _ = tx.send(grok_chat(&key, &model, &messages, None, effort));
         });
     }
 
@@ -730,14 +731,8 @@ impl Cabin {
             .filter(|c| c.kind == UpdateKind::Idea)
             .map(|c| c.title.clone())
             .collect();
-        let rejected: Vec<String> = self
-            .cfg
-            .feed_pulse
-            .idea_titles
-            .iter()
-            .filter(|t| !existing.iter().any(|e| e.eq_ignore_ascii_case(t)))
-            .cloned()
-            .collect();
+        // Newest first, what they said no to ahead of the rest: the prompt shows only 12.
+        let rejected = grokhub_core::turned_down_titles(&self.cfg.feed_pulse, &existing);
         let clock = Self::local_clock();
         let weekday = match clock.weekday {
             0 => "Sunday",
@@ -964,11 +959,11 @@ impl Cabin {
 
     pub(super) fn dismiss_feed_card(&mut self, id: &str) {
         let kind = self.updates.iter().find(|c| c.id == id).map(|c| c.kind);
-        let source = self
+        let (source, title) = self
             .updates
             .iter()
             .find(|c| c.id == id)
-            .map(|c| c.source_id.clone())
+            .map(|c| (c.source_id.clone(), c.title.clone()))
             .unwrap_or_default();
         let removed = if kind == Some(UpdateKind::Idea) {
             unpin_feed_idea(&mut self.updates, id)
@@ -978,6 +973,11 @@ impl Cabin {
         if removed {
             if kind == Some(UpdateKind::Suggestion) {
                 remember_dismissed_source(&mut self.cfg.feed_pulse, &source);
+                self.persist_cfg();
+            }
+            // The idea stays on the Ideas board. New ideas on its topic stay off.
+            if kind == Some(UpdateKind::Idea) {
+                grokhub_core::remember_turned_down(&mut self.cfg.feed_pulse, &title);
                 self.persist_cfg();
             }
             self.persist_updates();

@@ -161,14 +161,19 @@ impl HubState {
         if token.is_empty() {
             return None;
         }
-        self.peers.iter().find(|p| p.token == token)
+        // Same constant-time compare as the pairing code: no early exit on a matching prefix.
+        self.peers
+            .iter()
+            .find(|p| ct_eq(p.token.as_bytes(), token.as_bytes()))
     }
 
     pub fn peer_for_token_mut(&mut self, token: &str) -> Option<&mut Peer> {
         if token.is_empty() {
             return None;
         }
-        self.peers.iter_mut().find(|p| p.token == token)
+        self.peers
+            .iter_mut()
+            .find(|p| ct_eq(p.token.as_bytes(), token.as_bytes()))
     }
 
     pub fn enqueue_task(&mut self, from: &Peer, target: &str, title: &str, prompt: &str) -> Result<HubTask, String> {

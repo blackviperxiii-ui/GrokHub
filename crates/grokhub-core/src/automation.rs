@@ -162,9 +162,12 @@ pub fn normalize_times(time: &str, times: &[String]) -> Vec<String> {
     out
 }
 
+/// Longest heartbeat gap. The next run, the due check, and the label all use it.
+const HEARTBEAT_MAX_MIN: u32 = 24 * 60;
+
 pub fn compute_next_run(a: &Automation, clock: LocalClock) -> u64 {
     if a.schedule == "heartbeat" {
-        let mins = a.heartbeat_every_min.clamp(1, 24 * 60);
+        let mins = a.heartbeat_every_min.clamp(1, HEARTBEAT_MAX_MIN);
         let gap = mins as u64 * 60_000;
         return match a.last_run {
             Some(last) if clock.now_ms.saturating_sub(last) < gap => last + gap,
@@ -260,7 +263,9 @@ pub fn due_automations(list: &[Automation], now_ms: u64) -> Vec<Automation> {
                 return a.run_count == 0;
             }
             if a.schedule == "heartbeat" {
-                let mins = a.heartbeat_every_min.max(1);
+                // Same cap as `compute_next_run`, or a "heartbeat every 5000 min" job sat
+                // overdue for days after its next run came up.
+                let mins = a.heartbeat_every_min.clamp(1, HEARTBEAT_MAX_MIN);
                 if let Some(last) = a.last_run {
                     if now_ms.saturating_sub(last) < mins as u64 * 60_000 - 5_000 {
                         return false;
@@ -517,7 +522,10 @@ pub fn route_schedule(text: &str) -> Option<ScheduleRoute> {
 /// "weekdays at 09:00" / "every 15m" — how a job repeats, without the next-run clock.
 pub fn automation_schedule_label(a: &Automation) -> String {
     if a.schedule == "heartbeat" {
-        return format!("every {}", minutes_label(a.heartbeat_every_min.max(1)));
+        return format!(
+            "every {}",
+            minutes_label(a.heartbeat_every_min.clamp(1, HEARTBEAT_MAX_MIN))
+        );
     }
     let slots = normalize_times(&a.time, &a.times).join(", ");
     let word = match a.schedule.as_str() {
@@ -858,6 +866,22 @@ mod tests {
             1_000,
         );
         assert_eq!(due.len(), 1);
+        let day = 24 * 3_600_000;
+        let mut slow = parse_nl_automation("heartbeat every 5000 min check the board").unwrap();
+        slow.enabled = true;
+        slow.last_run = Some(1_000);
+        let at = LocalClock {
+            now_ms: 1_000 + day,
+            ..clock
+        };
+        slow.next_run = Some(compute_next_run(&slow, at));
+        assert_eq!(slow.next_run, Some(1_000 + day), "heartbeat gaps cap at a day");
+        assert_eq!(
+            due_automations(std::slice::from_ref(&slow), 1_000 + day).len(),
+            1,
+            "a heartbeat is due when its capped next run comes up"
+        );
+        assert_eq!(automation_schedule_label(&slow), "every 24h", "the label shows the cap");
         assert!(automation_blocked_by_policy(true, true, 3));
         assert!(!automation_blocked_by_policy(false, true, 3));
         assert_eq!(replay_automation_target("replay last"), Some("last"));

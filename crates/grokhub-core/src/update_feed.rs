@@ -37,6 +37,7 @@ const PAUSED_DETAIL: &str = "Paused. This is where to resume.";
 const HONEST_EMPTY: &str = "I looked and did not find a source worth your time.";
 const STEER_LINE: &str = "The brief steers the next edition.";
 const IDEA_TITLE_MEMORY: usize = 64;
+const TURNED_DOWN_MEMORY: usize = 64;
 
 /// About two weeks. An explicit `expires_at` wins when it is set.
 pub const IDEA_TTL_MS: u64 = 14 * 24 * 60 * 60 * 1000;
@@ -228,6 +229,10 @@ pub struct FeedPulse {
     /// Idea and situation sources the user dismissed. They do not come back.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dismissed_sources: Vec<String>,
+    /// Idea titles the user deleted or took off the home feed, oldest first. A later
+    /// idea on the same topic is not posted, and the prompts list these as turned down.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub turned_down: Vec<String>,
     /// First time a paused job was seen, so the offer waits out `PAUSE_OFFER_MS`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub paused_seen: BTreeMap<String, u64>,
@@ -266,6 +271,7 @@ impl Default for FeedPulse {
             feed_slots_spent: 0,
             last_ideas_ms: 0,
             dismissed_sources: Vec::new(),
+            turned_down: Vec::new(),
             paused_seen: BTreeMap::new(),
         }
     }
@@ -1082,10 +1088,12 @@ fn post_useful_idea(
         return false;
     }
     if !recover
-        && pulse
+        && (pulse
             .idea_titles
             .iter()
             .any(|t| t.eq_ignore_ascii_case(title))
+            || source_gone(pulse, source)
+            || turned_down_topic(pulse, title))
     {
         return false;
     }
@@ -1265,10 +1273,54 @@ fn remember_idea_title(pulse: &mut FeedPulse, title: &str) {
     {
         return;
     }
+    // Once full this used to stop remembering, so every later idea could come back.
     if pulse.idea_titles.len() >= IDEA_TITLE_MEMORY {
-        return;
+        pulse.idea_titles.remove(0);
     }
     pulse.idea_titles.push(title.to_string());
+}
+
+/// The user deleted this idea or took it off the home feed. The oldest falls off.
+pub fn remember_turned_down(pulse: &mut FeedPulse, title: &str) {
+    let title = title.trim();
+    if title.is_empty() {
+        return;
+    }
+    pulse.turned_down.retain(|t| !t.eq_ignore_ascii_case(title));
+    if pulse.turned_down.len() >= TURNED_DOWN_MEMORY {
+        pulse.turned_down.remove(0);
+    }
+    pulse.turned_down.push(title.to_string());
+}
+
+/// A title the user turned down, or one on the same topic.
+pub fn turned_down_topic(pulse: &FeedPulse, title: &str) -> bool {
+    let title = title.trim();
+    !title.is_empty()
+        && pulse
+            .turned_down
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case(title) || crate::ideas::same_topic(t, title))
+}
+
+/// Turned-down titles for a prompt, newest first: what the user said no to, then ideas
+/// that left the board some other way.
+pub fn turned_down_titles(pulse: &FeedPulse, on_board: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for t in pulse
+        .turned_down
+        .iter()
+        .rev()
+        .chain(pulse.idea_titles.iter().rev())
+    {
+        if on_board.iter().any(|b| b.eq_ignore_ascii_case(t))
+            || out.iter().any(|o| o.eq_ignore_ascii_case(t))
+        {
+            continue;
+        }
+        out.push(t.clone());
+    }
+    out
 }
 
 fn digest_blocks_next(cards: &[UpdateCard]) -> bool {
@@ -1897,7 +1949,13 @@ fn post_situation(
     title: &str,
     body: &str,
 ) -> bool {
-    if source_gone(pulse, source) || has_unread_suggestion(cards) {
+    // Opening the card marks it read. Checking only unread offers posted the same one again.
+    if source_gone(pulse, source)
+        || has_unread_suggestion(cards)
+        || cards
+            .iter()
+            .any(|c| c.kind == UpdateKind::Suggestion && c.source_id == source.trim())
+    {
         return false;
     }
     let mut card = suggestion_card(source, title, body, now);
@@ -2615,6 +2673,93 @@ mod tests {
         let after = post_help(&mut cards, &mut pulse, later + PAUSE_OFFER_MS, false, false, &paused, &[], "");
         assert!(!after.posted);
         assert!(cards.iter().all(|c| c.kind != UpdateKind::Suggestion));
+    }
+
+    #[test]
+    fn an_opened_situation_offer_is_not_posted_again() {
+        let paused = [PausedJob {
+            id: "job-1",
+            title: "Ship the harbor",
+            detail: "Paused. This is where to resume.",
+        }];
+        let mut cards = Vec::new();
+        let mut pulse = FeedPulse::default();
+        post_help(&mut cards, &mut pulse, 1_000, false, false, &paused, &[], "");
+        let later = 1_000 + PAUSE_OFFER_MS;
+        assert!(post_help(&mut cards, &mut pulse, later, false, false, &paused, &[], "").posted);
+        // Clicking the card opens its chat and marks it read.
+        for c in cards.iter_mut().filter(|c| c.kind == UpdateKind::Suggestion) {
+            c.status = UpdateStatus::Opened;
+        }
+        for step in 1..=3 {
+            let tick = post_help(&mut cards, &mut pulse, later + step * 60_000, false, false, &paused, &[], "");
+            assert!(!tick.posted, "the same offer came back on tick {step}");
+        }
+        assert_eq!(cards.iter().filter(|c| c.kind == UpdateKind::Suggestion).count(), 1);
+    }
+
+    #[test]
+    fn a_turned_down_idea_stays_gone_even_reworded_or_from_the_review() {
+        use crate::review::{LearnedSuggestion, SuggestionKind};
+        let skill = |title: &str| LearnedSuggestion {
+            kind: SuggestionKind::Skill,
+            title: title.into(),
+            body: "Reads recent sessions and lists what is left open.".into(),
+            seed: None,
+            name: Some("session-scanner".into()),
+            trigger: Some("start of day".into()),
+            instructions: Some("1. read\n2. list".into()),
+            provider: None,
+            tool: None,
+        };
+        let mut cards = Vec::new();
+        let mut pulse = FeedPulse::default();
+        assert!(post_skill_idea(&mut cards, &mut pulse, 10, &skill("Session scanner"), &[]));
+        let card = cards.iter().find(|c| c.kind == UpdateKind::Idea).cloned().unwrap();
+        // Delete on the Ideas board.
+        assert!(dismiss_idea(&mut cards, &card.id));
+        remember_dismissed_source(&mut pulse, &card.source_id);
+        remember_turned_down(&mut pulse, &card.title);
+        assert!(!post_skill_idea(&mut cards, &mut pulse, 20, &skill("Session scanner"), &[]));
+        assert!(
+            !post_skill_idea(&mut cards, &mut pulse, 30, &skill("Scan my sessions"), &[]),
+            "a reworded title on the same topic"
+        );
+        let mut other = skill("Release checklist");
+        other.name = Some("release-checklist".into());
+        assert!(post_skill_idea(&mut cards, &mut pulse, 40, &other, &[]), "other topics still post");
+        use crate::ideas::IdeaKind::*;
+        assert_eq!(
+            post_generated_ideas(&mut cards, &mut pulse, 50, &[seed(Try, "Session scanner")], &[], ""),
+            0
+        );
+        assert_eq!(
+            turned_down_titles(&pulse, &["Release checklist".to_string()]),
+            vec!["Session scanner".to_string()],
+            "newest no first; titles still on the board are not turned down"
+        );
+    }
+
+    #[test]
+    fn title_memory_keeps_the_newest_once_full() {
+        let mut pulse = FeedPulse::default();
+        for i in 0..IDEA_TITLE_MEMORY + 5 {
+            remember_idea_title(&mut pulse, &format!("Idea {i}"));
+        }
+        assert_eq!(pulse.idea_titles.len(), IDEA_TITLE_MEMORY);
+        assert_eq!(
+            pulse.idea_titles.last().map(String::as_str),
+            Some(format!("Idea {}", IDEA_TITLE_MEMORY + 4).as_str()),
+            "a full memory still records the newest title"
+        );
+        assert!(!pulse.idea_titles.iter().any(|t| t == "Idea 0"));
+        for i in 0..TURNED_DOWN_MEMORY + 3 {
+            remember_turned_down(&mut pulse, &format!("No {i}"));
+        }
+        remember_turned_down(&mut pulse, "no 10");
+        assert_eq!(pulse.turned_down.len(), TURNED_DOWN_MEMORY);
+        assert_eq!(pulse.turned_down.last().map(String::as_str), Some("no 10"));
+        assert_eq!(pulse.turned_down.iter().filter(|t| t.eq_ignore_ascii_case("no 10")).count(), 1);
     }
 
     #[test]
