@@ -16,7 +16,11 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 /// Newest event cards painted in the home slot. Older undismissed event cards stay on disk.
-pub const FEED_PAINT_MAX: usize = 4;
+pub const FEED_PAINT_MAX: usize = 3;
+/// "Less like this" keeps that group off Home for two weeks.
+pub const LESS_MUTE_MS: u64 = 14 * DISMISS_HIDE_MS;
+/// Shown on Automations when this source's runs are hidden from Home.
+pub const HOME_HIDDEN_NOTE: &str = "Hidden from Home · Undo";
 /// Idea cards pinned on the home feed. The Ideas board keeps the rest, up to `IDEA_BOARD_MAX`.
 pub const IDEA_DISCOVERY_MAX: usize = 3;
 /// Ideas on the board you have not worked on. A newer card pushes out the oldest.
@@ -28,7 +32,9 @@ pub const IDEA_MODIFIED_MAX: usize = 10;
 pub const DIGEST_PAINT_MAX: usize = 2;
 const FEED_STORE_MAX: usize = 40;
 /// A dismissed event stays down this long. A failure still posts inside the window.
+/// A muted automation's failure uses the same window as its once-a-day floor.
 const DISMISS_HIDE_MS: u64 = 24 * 60 * 60 * 1000;
+const FLOOR_WINDOW_MS: u64 = DISMISS_HIDE_MS;
 const TITLE_CHARS: usize = 72;
 const BODY_CHARS: usize = 160;
 const DIGEST_BODY_CHARS: usize = 900;
@@ -256,6 +262,15 @@ pub struct FeedPulse {
     /// First time a paused job was seen, so the offer waits out `PAUSE_OFFER_MS`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub paused_seen: BTreeMap<String, u64>,
+    /// Automation sources whose runs stay off Home until Undo. Failures can still use the floor.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub muted_sources: Vec<String>,
+    /// Group key → unix ms when a "Less like this" mute ends.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub less_until: BTreeMap<String, u64>,
+    /// Source → `created_at` of the failure Home last admitted through the safety floor.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub floor_shown: BTreeMap<String, u64>,
 }
 
 fn default_on() -> bool {
@@ -293,6 +308,9 @@ impl Default for FeedPulse {
             dismissed_sources: Vec::new(),
             turned_down: Vec::new(),
             paused_seen: BTreeMap::new(),
+            muted_sources: Vec::new(),
+            less_until: BTreeMap::new(),
+            floor_shown: BTreeMap::new(),
         }
     }
 }
@@ -400,7 +418,7 @@ pub fn feed_visible(cards: &[UpdateCard]) -> bool {
 }
 
 /// Event cards only, newest first. Ideas and digest cards are not in this list,
-/// so they cannot consume the paint cap of 4.
+/// so they cannot consume the paint cap of 3.
 pub fn visible_updates(cards: &[UpdateCard]) -> Vec<UpdateCard> {
     visible_kind(cards, UpdateKind::event)
 }
@@ -623,8 +641,15 @@ fn take_live_group(cards: &mut Vec<UpdateCard>, key: &str) -> Option<UpdateCard>
     Some(base)
 }
 
+/// The new run replaces the text. `runs` keeps counting until the card was opened.
+/// An Opened card starts again at the incoming run: runs since you last looked.
 fn merge_event(mut existing: UpdateCard, new: UpdateCard) -> UpdateCard {
-    existing.runs = existing.runs.saturating_add(card_runs(&new));
+    let opened = existing.status == UpdateStatus::Opened;
+    existing.runs = if opened {
+        card_runs(&new)
+    } else {
+        existing.runs.saturating_add(card_runs(&new))
+    };
     existing.held = existing.held && new.held;
     existing.id = new.id;
     existing.kind = new.kind;
@@ -633,10 +658,14 @@ fn merge_event(mut existing: UpdateCard, new: UpdateCard) -> UpdateCard {
     existing.created_at = new.created_at;
     existing.status = UpdateStatus::Unread;
     existing.action = new.action;
-    existing.board_id = new.board_id;
+    // A fresh run card does not carry the Follow up link. Keep the one already filed.
+    if new.board_id.is_some() {
+        existing.board_id = new.board_id;
+    }
     existing.why = new.why;
     existing.dismissed_at = 0;
     existing.source_id = new.source_id;
+    refresh_event_why(&mut existing);
     existing
 }
 
@@ -672,6 +701,204 @@ fn card_is_failure(card: &UpdateCard) -> bool {
 
 fn title_or_body_says_failed(text: &str) -> bool {
     text == "automation failed" || text.starts_with("failed") || text.contains(" failed")
+}
+
+/// A failed automation run, from the card id or title. Not inferred from the body.
+fn failed_run(card: &UpdateCard) -> bool {
+    card.kind == UpdateKind::AutomationDone
+        && (card.id.starts_with("fail-")
+            || card.title == "Automation failed"
+            || card.title.ends_with(" failed"))
+}
+
+fn automation_display_name(card: &UpdateCard) -> String {
+    let title = card.title.trim();
+    if failed_run(card) {
+        if let Some(name) = title.strip_suffix(" failed") {
+            let name = name.trim();
+            if !name.is_empty() {
+                return name.to_string();
+            }
+        }
+        return "Automation".to_string();
+    }
+    if title.is_empty() {
+        "Automation".to_string()
+    } else {
+        title.to_string()
+    }
+}
+
+/// Fixed why line for a run, a failure, or a saved schedule. Other kinds keep `why`.
+pub fn refresh_event_why(card: &mut UpdateCard) {
+    let name = automation_display_name(card);
+    match card.kind {
+        UpdateKind::AutomationDone if failed_run(card) => {
+            card.why = Some(format!("“{name}” failed and needs a look."));
+        }
+        UpdateKind::AutomationDone => {
+            let mut line = if card.board_id.as_ref().is_some_and(|id| !id.trim().is_empty()) {
+                format!("Your automation “{name}” finished and left a report in Follow up.")
+            } else {
+                format!("Your automation “{name}” finished.")
+            };
+            let runs = card.runs.max(1);
+            if runs > 1 {
+                line.push_str(&format!(" · {runs} runs since you last looked"));
+            }
+            card.why = Some(line);
+        }
+        UpdateKind::ScheduleCreated => {
+            card.why = Some("You saved this schedule.".to_string());
+        }
+        _ => {}
+    }
+}
+
+/// `×N runs · latest h:mm` when the card stands for more than one run.
+/// `hour` and `minute` are the local clock now. `created_at` and `now_ms` are unix ms.
+pub fn runs_latest_line(
+    runs: u32,
+    created_at: u64,
+    now_ms: u64,
+    hour: u32,
+    minute: u32,
+) -> Option<String> {
+    if runs <= 1 {
+        return None;
+    }
+    let now_mins = i64::from(hour.min(23)) * 60 + i64::from(minute.min(59));
+    let delta_min = now_ms.saturating_sub(created_at) / 60_000;
+    let delta_min = i64::try_from(delta_min).unwrap_or(i64::MAX / 4);
+    let mins = (now_mins - delta_min).rem_euclid(24 * 60);
+    Some(format!(
+        "×{runs} runs · latest {:02}:{:02}",
+        mins / 60,
+        mins % 60
+    ))
+}
+
+pub fn source_hidden(pulse: &FeedPulse, source: &str) -> bool {
+    let source = source.trim();
+    !source.is_empty() && pulse.muted_sources.iter().any(|saved| saved == source)
+}
+
+pub fn automation_home_note(pulse: &FeedPulse, source_id: &str) -> Option<&'static str> {
+    if source_hidden(pulse, source_id) {
+        Some(HOME_HIDDEN_NOTE)
+    } else {
+        None
+    }
+}
+
+pub fn hide_home_source(pulse: &mut FeedPulse, source: &str) {
+    let source = source.trim();
+    if source.is_empty() || source_hidden(pulse, source) {
+        return;
+    }
+    pulse.muted_sources.push(source.to_string());
+}
+
+pub fn unhide_home_source(pulse: &mut FeedPulse, source: &str) {
+    let source = source.trim();
+    pulse.muted_sources.retain(|saved| saved != source);
+}
+
+fn less_active(pulse: &FeedPulse, key: &str, now: u64) -> bool {
+    pulse.less_until.get(key).is_some_and(|&until| until > now)
+}
+
+/// Mute this card's group until two weeks from `now`.
+pub fn mute_less_like(pulse: &mut FeedPulse, card: &UpdateCard, now: u64) {
+    let Some(key) = feed_group_key(card) else {
+        return;
+    };
+    pulse
+        .less_until
+        .insert(key, now.saturating_add(LESS_MUTE_MS));
+}
+
+/// Drop an active Less mute for this card's group and source.
+pub fn clear_less_mute(pulse: &mut FeedPulse, card: &UpdateCard) {
+    if let Some(key) = feed_group_key(card) {
+        pulse.less_until.remove(&key);
+    }
+    let source = card.source_id.trim();
+    if source.is_empty() {
+        return;
+    }
+    let suffix = format!(":{source}");
+    pulse
+        .less_until
+        .retain(|key, _| key != source && !key.ends_with(&suffix));
+}
+
+fn home_suppressed(card: &UpdateCard, pulse: &FeedPulse, now: u64) -> bool {
+    if source_hidden(pulse, &card.source_id) {
+        return true;
+    }
+    if let Some(key) = feed_group_key(card) {
+        if less_active(pulse, &key, now) {
+            return true;
+        }
+    }
+    false
+}
+
+fn floor_open(card: &UpdateCard, pulse: &FeedPulse, now: u64) -> bool {
+    if !failed_run(card) {
+        return false;
+    }
+    let source = card.source_id.trim();
+    if source.is_empty() {
+        return false;
+    }
+    match pulse.floor_shown.get(source) {
+        None => true,
+        Some(&at) if at == card.created_at => true,
+        Some(&at) if now.saturating_sub(at) >= FLOOR_WINDOW_MS => true,
+        Some(_) => false,
+    }
+}
+
+/// Home deck filter. Hidden and Less-muted cards stay in the store and off Home.
+/// A muted automation's failure still shows, at most once per 24 h per source.
+pub fn surfaces_on_home(card: &UpdateCard, pulse: &FeedPulse, now: u64) -> bool {
+    if !home_suppressed(card, pulse, now) {
+        return true;
+    }
+    floor_open(card, pulse, now)
+}
+
+/// Event cards for the home deck, newest first, at most `FEED_PAINT_MAX`.
+pub fn home_event_cards(cards: &[UpdateCard], pulse: &FeedPulse, now: u64) -> Vec<UpdateCard> {
+    visible_updates(cards)
+        .into_iter()
+        .filter(|card| surfaces_on_home(card, pulse, now))
+        .take(FEED_PAINT_MAX)
+        .collect()
+}
+
+/// Remember a failure that Home is showing only because of the safety floor.
+/// Returns true when `pulse` changed.
+pub fn record_home_floors(pulse: &mut FeedPulse, shown: &[UpdateCard], now: u64) -> bool {
+    let mut changed = false;
+    for card in shown {
+        if !failed_run(card) || !home_suppressed(card, pulse, now) {
+            continue;
+        }
+        let source = card.source_id.trim();
+        if source.is_empty() {
+            continue;
+        }
+        if pulse.floor_shown.get(source) != Some(&card.created_at) {
+            pulse
+                .floor_shown
+                .insert(source.to_string(), card.created_at);
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn trim_feed_store(cards: &mut Vec<UpdateCard>, now: u64) {
@@ -1898,6 +2125,7 @@ pub fn automation_done_card(
     );
     card.action = Some(UpdateAction::OpenAutomations);
     card.source_id = source_id.trim().to_string();
+    refresh_event_why(&mut card);
     card
 }
 
@@ -1925,6 +2153,7 @@ pub fn automation_failed_card(source_id: &str, name: &str, why: &str, created_at
     );
     card.action = Some(UpdateAction::OpenAutomations);
     card.source_id = source_id.trim().to_string();
+    refresh_event_why(&mut card);
     card
 }
 
@@ -1956,6 +2185,7 @@ pub fn schedule_created_card(
     );
     card.action = Some(UpdateAction::OpenAutomations);
     card.source_id = source_id.trim().to_string();
+    refresh_event_why(&mut card);
     card
 }
 
@@ -3273,5 +3503,180 @@ mod tests {
         let body = cards[0].body.as_deref().unwrap();
         assert!(body.contains("did not find a source"));
         assert!(cards[0].citations.is_empty());
+    }
+
+    #[test]
+    fn opened_card_restarts_its_run_count() {
+        // Unread repeats still add. `repeat_runs_of_one_automation_keep_one_card`
+        // covers that path (five posts, never opened, runs = 5) and is unchanged.
+        let mut cards = Vec::new();
+        for at in [10u64, 20, 30] {
+            post_update(&mut cards, automation_done_card("loop-1", "Board", "ok", at));
+        }
+        assert_eq!(visible_updates(&cards)[0].runs, 3);
+        assert!(mark_update_opened(&mut cards, "done-loop-1"));
+        post_update(&mut cards, automation_done_card("loop-1", "Board", "again", 40));
+        let card = &visible_updates(&cards)[0];
+        assert_eq!(card.runs, 1, "an opened card starts again at the new run");
+        assert_eq!(card.status, UpdateStatus::Unread);
+        assert_eq!(card.body.as_deref(), Some("again"));
+        let why = card.why.as_deref().unwrap();
+        assert!(!why.contains("runs since you last looked"));
+        post_update(&mut cards, automation_done_card("loop-1", "Board", "third", 50));
+        let card = &visible_updates(&cards)[0];
+        assert_eq!(card.runs, 2);
+        assert!(card.why.as_deref().unwrap().contains("· 2 runs since you last looked"));
+        assert_eq!(
+            runs_latest_line(3, 0, 90 * 60_000, 15, 0).as_deref(),
+            Some("×3 runs · latest 13:30")
+        );
+        assert!(runs_latest_line(1, 0, 0, 15, 0).is_none());
+    }
+
+    #[test]
+    fn hidden_automation_stays_off_home_but_still_updates() {
+        let mut cards = Vec::new();
+        let mut pulse = FeedPulse::default();
+        post_update(&mut cards, automation_done_card("hid", "Nightly", "one", 10));
+        hide_home_source(&mut pulse, "hid");
+        hide_home_source(&mut pulse, "hid");
+        assert_eq!(pulse.muted_sources, vec!["hid".to_string()]);
+        assert!(home_event_cards(&cards, &pulse, 10).is_empty());
+        post_update(&mut cards, automation_done_card("hid", "Nightly", "two", 20));
+        let live: Vec<&UpdateCard> = cards
+            .iter()
+            .filter(|c| c.source_id == "hid" && c.status != UpdateStatus::Dismissed)
+            .collect();
+        assert_eq!(live.len(), 1, "the hidden run still merges in place");
+        assert_eq!(live[0].runs, 2);
+        assert_eq!(live[0].body.as_deref(), Some("two"));
+        assert!(home_event_cards(&cards, &pulse, 20).is_empty());
+        post_update(&mut cards, automation_done_card("other", "Other", "stay", 30));
+        let home = home_event_cards(&cards, &pulse, 30);
+        assert_eq!(home.len(), 1);
+        assert_eq!(home[0].source_id, "other");
+        unhide_home_source(&mut pulse, "hid");
+        assert!(!source_hidden(&pulse, "hid"));
+        assert_eq!(home_event_cards(&cards, &pulse, 30).len(), 2);
+    }
+
+    #[test]
+    fn hidden_automation_failure_shows_once_a_day() {
+        let mut cards = Vec::new();
+        let mut pulse = FeedPulse::default();
+        hide_home_source(&mut pulse, "hid");
+        post_update(
+            &mut cards,
+            automation_failed_card("hid", "Nightly", "disk full", 1_000),
+        );
+        let shown = home_event_cards(&cards, &pulse, 1_000);
+        assert_eq!(shown.len(), 1, "the first failure still surfaces");
+        assert!(record_home_floors(&mut pulse, &shown, 1_000));
+        assert!(!record_home_floors(&mut pulse, &shown, 1_000), "the same failure stays put");
+        assert_eq!(pulse.floor_shown.get("hid"), Some(&1_000));
+        assert_eq!(home_event_cards(&cards, &pulse, 1_500).len(), 1);
+        post_update(
+            &mut cards,
+            automation_failed_card("hid", "Nightly", "disk again", 2_000),
+        );
+        assert_eq!(
+            cards.iter().filter(|c| c.status != UpdateStatus::Dismissed).count(),
+            1
+        );
+        assert_eq!(cards.iter().find(|c| c.source_id == "hid").unwrap().runs, 2);
+        assert!(
+            home_event_cards(&cards, &pulse, 2_000).is_empty(),
+            "a newer failure inside the day stays off Home"
+        );
+        let day = 24 * 60 * 60 * 1000;
+        assert!(home_event_cards(&cards, &pulse, 1_000 + day - 1).is_empty());
+        assert_eq!(home_event_cards(&cards, &pulse, 1_000 + day).len(), 1);
+    }
+
+    #[test]
+    fn less_like_this_mutes_the_group_for_two_weeks() {
+        let bare: FeedPulse = serde_json::from_str("{}").unwrap();
+        assert!(bare.muted_sources.is_empty());
+        assert!(bare.less_until.is_empty());
+        assert!(bare.floor_shown.is_empty());
+        let flagged: FeedPulse = serde_json::from_str(r#"{"expiryOn":true}"#).unwrap();
+        assert!(flagged.less_until.is_empty());
+
+        let card = automation_done_card("loop-9", "Board", "ok", 10);
+        let other = automation_done_card("loop-8", "Other", "ok", 11);
+        let mut pulse = FeedPulse::default();
+        let now = 5_000u64;
+        mute_less_like(&mut pulse, &card, now);
+        assert_eq!(
+            pulse.less_until.get("run:loop-9").copied(),
+            Some(now + LESS_MUTE_MS)
+        );
+        assert!(!surfaces_on_home(&card, &pulse, now));
+        assert!(surfaces_on_home(&other, &pulse, now));
+        assert!(!surfaces_on_home(&card, &pulse, now + LESS_MUTE_MS - 1));
+        assert!(surfaces_on_home(&card, &pulse, now + LESS_MUTE_MS));
+
+        let fail = automation_failed_card("loop-9", "Board", "disk", now + 10);
+        assert!(surfaces_on_home(&fail, &pulse, now + 10));
+        assert!(record_home_floors(&mut pulse, std::slice::from_ref(&fail), now + 10));
+        let again = automation_failed_card("loop-9", "Board", "disk again", now + 20);
+        assert!(!surfaces_on_home(&again, &pulse, now + 20));
+
+        clear_less_mute(&mut pulse, &card);
+        assert!(surfaces_on_home(&card, &pulse, now));
+        assert!(pulse.less_until.is_empty());
+    }
+
+    #[test]
+    fn why_line_per_kind() {
+        let done = automation_done_card("a", "Board", "ok", 1);
+        assert_eq!(
+            done.why.as_deref(),
+            Some("Your automation “Board” finished.")
+        );
+        let fail = automation_failed_card("a", "Board", "disk full", 2);
+        assert_eq!(fail.why.as_deref(), Some("“Board” failed and needs a look."));
+        assert!(!fail.why.as_deref().unwrap().contains("runs since"));
+        let sched = schedule_created_card("a", "Board", "weekdays at 9", 3);
+        assert_eq!(sched.why.as_deref(), Some("You saved this schedule."));
+        let mut sugg = suggestion_card("s", "File the notes", "from last night", 4);
+        sugg.why = Some("kept".into());
+        refresh_event_why(&mut sugg);
+        assert_eq!(sugg.why.as_deref(), Some("kept"));
+
+        let mut cards = vec![done];
+        cards[0].board_id = Some("follow-1".into());
+        post_update(&mut cards, automation_done_card("a", "Board", "next", 5));
+        let card = &visible_updates(&cards)[0];
+        assert_eq!(card.board_id.as_deref(), Some("follow-1"));
+        assert_eq!(card.runs, 2);
+        assert_eq!(
+            card.why.as_deref(),
+            Some(
+                "Your automation “Board” finished and left a report in Follow up. · 2 runs since you last looked"
+            )
+        );
+    }
+
+    #[test]
+    fn home_paints_at_most_three_event_cards() {
+        assert_eq!(FEED_PAINT_MAX, 3);
+        let mut cards = Vec::new();
+        for n in 0..5u64 {
+            post_update(
+                &mut cards,
+                automation_done_card(&format!("e{n}"), "Loop", "done", n),
+            );
+        }
+        cards.push(idea_card("idea", "A thought", "not an event", 9));
+        let pulse = FeedPulse::default();
+        let home = home_event_cards(&cards, &pulse, 10);
+        assert_eq!(home.len(), 3);
+        assert!(home.iter().all(|c| c.kind.event()));
+        assert_eq!(
+            home.iter().map(|c| c.source_id.as_str()).collect::<Vec<_>>(),
+            vec!["e4", "e3", "e2"]
+        );
+        assert_eq!(visible_updates(&cards).len(), 5);
     }
 }
