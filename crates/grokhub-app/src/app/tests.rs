@@ -10130,6 +10130,11 @@ fn delete_all_history_clears_seeded_chats() {
     );
     wait_tree_contains(&cfg.root, "Chat");
     join_persist(&cabin.persist_io);
+    let saved = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
+    assert!(
+        !saved.contains("Pier light") && !saved.contains("Salt lane"),
+        "the pre-delete snapshot from halt_in_flight must not land last: {saved}"
+    );
     assert!(
         cabin.threads.iter().all(|t| t.title != "Pier light"),
         "Pier light must be gone"
@@ -10146,6 +10151,44 @@ fn delete_all_history_clears_seeded_chats() {
         "the fresh chat has no transcript"
     );
     drop(hide);
+    drop(cfg);
+}
+
+#[test]
+fn an_older_persist_snapshot_never_overwrites_a_newer_one() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("persist-order");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads = vec![crate::threads::ChatThread::new("Pier light", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = std::sync::Arc::new(Vec::new());
+    cabin.projects_dirty = true;
+    let mut old = cabin.persist_snap();
+    old.secrets = Some(cabin.secrets.clone());
+    let old_gen = cabin.next_persist_gen();
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.projects_dirty = false;
+    let new = cabin.persist_snap();
+    let new_gen = cabin.next_persist_gen();
+    assert_eq!((old_gen, new_gen), (1, 2));
+    assert!(old.projects.is_some() && new.projects.is_none());
+    assert!(new.secrets.is_none());
+    let mark = cabin.persist_mark.clone();
+    // The newer worker takes persist_io first, the older one second.
+    write_persist_disk_in_order(&cfg.root, &new, new_gen, &mark);
+    write_persist_disk_in_order(&cfg.root, &old, old_gen, &mark);
+    let threads = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
+    assert!(threads.contains("\"title\": \"Chat\""), "{threads}");
+    assert!(!threads.contains("Pier light"), "{threads}");
+    // Only the older snapshot carried projects and secrets, so those still land.
+    assert!(crate::store::projects_path().is_file());
+    assert!(cfg.root.join("secrets.json").is_file());
+    // A second older write of the same generation changes nothing.
+    std::fs::remove_file(crate::store::projects_path()).expect("projects");
+    write_persist_disk_in_order(&cfg.root, &old, old_gen, &mark);
+    assert!(!crate::store::projects_path().exists());
+    let again = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
+    assert_eq!(again, threads);
     drop(cfg);
 }
 
@@ -15024,6 +15067,8 @@ fn quiet_cabin() -> Cabin {
         persist_idle_key: String::new(),
         persist_rx: None,
         persist_io: std::sync::Arc::new(std::sync::Mutex::new(())),
+        persist_gen: 0,
+        persist_mark: std::sync::Arc::new(std::sync::Mutex::new(PersistMark::default())),
         cfg_slot: std::sync::Arc::new(std::sync::Mutex::new(super::CfgSlot { gen: 0, cfg })),
         board: Vec::new(),
         board_title: String::new(),

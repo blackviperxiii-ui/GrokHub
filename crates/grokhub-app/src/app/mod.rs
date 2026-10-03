@@ -420,6 +420,11 @@ pub struct Cabin {
     persist_idle_key: String,
     persist_rx: Option<mpsc::Receiver<()>>,
     persist_io: Arc<Mutex<()>>,
+    /// Generation of the newest full snapshot handed to a persist worker.
+    persist_gen: u64,
+    /// What the persist workers have written, so an older snapshot that takes
+    /// `persist_io` late never overwrites a newer one.
+    persist_mark: Arc<Mutex<PersistMark>>,
     cfg_slot: Arc<Mutex<CfgSlot>>,
     board: Vec<BoardCard>,
     board_title: String,
@@ -1017,6 +1022,8 @@ impl Cabin {
             persist_idle_key: String::new(),
             persist_rx: None,
             persist_io: Arc::new(Mutex::new(())),
+            persist_gen: 0,
+            persist_mark: Arc::new(Mutex::new(PersistMark::default())),
             cfg_slot,
             board: config::load_board(),
             board_title: String::new(),
@@ -1450,6 +1457,8 @@ impl Cabin {
             persist_idle_key: String::new(),
             persist_rx: None,
             persist_io: Arc::new(Mutex::new(())),
+            persist_gen: 0,
+            persist_mark: Arc::new(Mutex::new(PersistMark::default())),
             cfg_slot: Arc::new(Mutex::new(CfgSlot { gen: 0, cfg })),
             board: Vec::new(),
             board_title: String::new(),
@@ -3031,9 +3040,11 @@ impl Cabin {
         let (tx, rx) = mpsc::channel();
         self.sync_rx = Some(rx);
         self.status = "Syncing…".into();
+        let gen = self.next_persist_gen();
+        let mark = self.persist_mark.clone();
         std::thread::spawn(move || {
             if let Ok(_g) = io.lock() {
-                write_persist_disk(&dir, &snap);
+                write_persist_disk_in_order(&dir, &snap, gen, &mark);
             }
             let mem = mem
                 .into_iter()
