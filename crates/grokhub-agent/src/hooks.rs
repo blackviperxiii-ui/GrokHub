@@ -135,7 +135,11 @@ pub fn discover_hooks(
 }
 
 pub fn attach(session: &str, workspace: &Path, _attended: bool) -> HookGuard {
-    let hooks = load_all(workspace, grokhub_core::user_home().as_deref(), &[]);
+    let hooks = load_all(
+        workspace,
+        grokhub_core::user_home().as_deref(),
+        &crate::plugins::hook_paths(workspace),
+    );
     install(session, runnable(hooks, folder_trusted(workspace)))
 }
 
@@ -894,8 +898,19 @@ fn load_all(workspace: &Path, home: Option<&Path>, plugin_dirs: &[PathBuf]) -> V
             HookOrigin::Project,
         );
     }
-    for dir in plugin_dirs {
-        push_dir(&mut raw, dir, HookOrigin::Plugin);
+    for path in plugin_dirs {
+        if regular_file(path) {
+            push_settings(&mut raw, path, HookOrigin::Plugin);
+        } else {
+            push_dir(&mut raw, path, HookOrigin::Plugin);
+        }
+    }
+    // Inline manifest hooks are only merged when the caller already asked for
+    // plugin paths. An empty list stays a pure project/user scan.
+    if !plugin_dirs.is_empty() {
+        for (path, text) in crate::plugins::inline_hook_documents(workspace) {
+            raw.extend(parse_hooks(&text, &path, HookOrigin::Plugin));
+        }
     }
     dedupe(raw)
 }

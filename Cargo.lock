@@ -1940,7 +1940,7 @@ dependencies = [
 
 [[package]]
 name = "grokhub-acp"
-version = "2.10.82"
+version = "2.10.83"
 dependencies = [
  "grokhub-core",
  "serde",
@@ -1949,7 +1949,7 @@ dependencies = [
 
 [[package]]
 name = "grokhub-agent"
-version = "2.10.82"
+version = "2.10.83"
 dependencies = [
  "base64",
  "globset",
@@ -1962,13 +1962,14 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "ureq",
  "windows-sys 0.59.0",
 ]
 
 [[package]]
 name = "grokhub-app"
-version = "2.10.82"
+version = "2.10.83"
 dependencies = [
  "ashpd",
  "base64",
@@ -1999,7 +2000,7 @@ dependencies = [
 
 [[package]]
 name = "grokhub-core"
-version = "2.10.82"
+version = "2.10.83"
 dependencies = [
  "getrandom 0.2.17",
  "hex",
@@ -2010,14 +2011,14 @@ dependencies = [
 
 [[package]]
 name = "grokhub-ffi"
-version = "2.10.82"
+version = "2.10.83"
 dependencies = [
  "grokhub-core",
 ]
 
 [[package]]
 name = "grokhub-hub"
-version = "2.10.82"
+version = "2.10.83"
 dependencies = [
  "grokhub-core",
  "serde",
