@@ -1261,12 +1261,16 @@ fn read_text_inside(root: &Path, path: &Path) -> Option<String> {
 }
 
 fn cached_hash(root: &Path) -> Result<String, String> {
-    let fingerprint = fingerprint(root)?;
+    let (fingerprint, racy) = fingerprint(root)?;
     if let Some(hit) = memo_get(root, &fingerprint) {
         return Ok(hit);
     }
     let hash = full_hash(root)?;
-    memo_put(root, &fingerprint, &hash);
+    // A file changed in the last two seconds could change again inside the
+    // same timestamp tick without moving its stamp, so don't remember it yet.
+    if !racy {
+        memo_put(root, &fingerprint, &hash);
+    }
     Ok(hash)
 }
 
@@ -1367,9 +1371,10 @@ fn walk_items(root: &Path, dir: &Path, out: &mut Vec<Item>) -> Result<(), String
     Ok(())
 }
 
-fn fingerprint(root: &Path) -> Result<String, String> {
+fn fingerprint(root: &Path) -> Result<(String, bool), String> {
     let items = collect_items(root)?;
     let mut out = String::new();
+    let mut racy = false;
     for item in items {
         match item {
             Item::File { rel, path } => {
@@ -1385,11 +1390,38 @@ fn fingerprint(root: &Path) -> Result<String, String> {
                     meta.len(),
                     change_stamp(&meta)
                 ));
+                racy |= changed_recently(&meta);
             }
             Item::Link { rel, target } => out.push_str(&format!("l\n{rel}\n{target}\n")),
         }
     }
-    Ok(out)
+    Ok((out, racy))
+}
+
+fn changed_recently(meta: &fs::Metadata) -> bool {
+    let Some(changed) = change_secs(meta) else {
+        return true;
+    };
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|time| time.as_secs_f64())
+        .unwrap_or(0.0);
+    now - changed < 2.0
+}
+
+#[cfg(unix)]
+fn change_secs(meta: &fs::Metadata) -> Option<f64> {
+    use std::os::unix::fs::MetadataExt;
+    Some(meta.ctime() as f64 + meta.ctime_nsec() as f64 / 1e9)
+}
+
+#[cfg(not(unix))]
+fn change_secs(meta: &fs::Metadata) -> Option<f64> {
+    meta.modified()
+        .ok()?
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .ok()
+        .map(|time| time.as_secs_f64())
 }
 
 /// The inode change time moves on every content write and can't be set back
@@ -2291,6 +2323,20 @@ mod tests {
             "trust demo 1.0.0 before enabling"
         );
         let _ = fs::remove_dir_all(&iso.root);
+    }
+
+    #[test]
+    fn a_just_written_bundle_is_never_memoized() {
+        let dir = scratch("racy");
+        fs::write(dir.join("a.txt"), "one").unwrap();
+        let (print, racy) = fingerprint(&dir).unwrap();
+        assert!(racy);
+        assert!(print.starts_with("f\na.txt\n3\n"), "{print}");
+        let first = cached_hash(&dir).unwrap();
+        assert_eq!(memo_get(&dir, &print), None);
+        fs::write(dir.join("a.txt"), "two").unwrap();
+        assert_ne!(cached_hash(&dir).unwrap(), first);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

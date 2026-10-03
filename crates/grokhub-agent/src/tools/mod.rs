@@ -272,6 +272,14 @@ pub fn confine(root: &Path, raw: &str) -> Result<PathBuf, String> {
     Ok(acc)
 }
 
+/// `image_generate` request body from the existing media builder.
+/// The `ImagineApi` is not called.
+pub(crate) fn dry_imagine_body(args: &Value) -> Result<Value, String> {
+    Ok(media::build_media_call("image_generate", args)?.body)
+}
+
+pub(crate) use media::ImagineApi;
+
 /// Install fetch and Imagine clients for this thread. An empty bearer installs
 /// adapters that refuse without dialing. The guard restores the previous ports.
 /// `session` picks the media folder (`sessions/<id>/media`).
