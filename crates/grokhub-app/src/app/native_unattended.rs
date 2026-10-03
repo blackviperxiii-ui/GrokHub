@@ -781,7 +781,8 @@ mod tests {
         assert!(greet.contains("self.cfg.native_engine"));
 
         let here = include_str!("native_unattended.rs")
-            .split("\n#[cfg(test)]\nmod tests {")
+            // Not "\n#[cfg(test)]\n...": a Windows checkout has CRLF line endings.
+            .split(concat!("mod tests", " {"))
             .next()
             .unwrap_or_default();
         assert!(here.contains("fn execute("), "runtime half of the file");
