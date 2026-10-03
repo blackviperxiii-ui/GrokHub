@@ -1023,12 +1023,22 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
     })
 }
 
+/// One answer to a native permission card. The CLI path still writes JSON-RPC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativePerm {
+    Allow,
+    Always,
+    Deny,
+    Cancel,
+}
+
 /// Commands a native engine receives instead of a `grok` child.
 #[derive(Debug)]
 pub enum ExternalCmd {
     Prompt { text: String, image: Option<String> },
     Cancel,
     Steer(String),
+    Permission { id: String, answer: NativePerm },
     Shutdown,
 }
 
@@ -1076,9 +1086,20 @@ impl AcpHandle {
                         let _ = ext_tx.send(ExternalCmd::Shutdown);
                         return;
                     }
-                    Cmd::Permission { .. } | Cmd::Elicit { .. } | Cmd::Reject { .. } | Cmd::Ack { .. } => {
-                        continue
+                    Cmd::Permission { id, answer } => {
+                        let id = match id {
+                            Value::String(text) => text,
+                            other => other.to_string(),
+                        };
+                        let answer = match answer {
+                            PermAnswer::Allow => NativePerm::Allow,
+                            PermAnswer::AllowAlways => NativePerm::Always,
+                            PermAnswer::Reject(_) => NativePerm::Deny,
+                            PermAnswer::Cancel => NativePerm::Cancel,
+                        };
+                        ExternalCmd::Permission { id, answer }
                     }
+                    Cmd::Elicit { .. } | Cmd::Reject { .. } | Cmd::Ack { .. } => continue,
                 };
                 if ext_tx.send(mapped).is_err() {
                     return;

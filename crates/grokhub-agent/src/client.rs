@@ -9,7 +9,6 @@ use serde_json::{json, Value};
 
 use crate::retry::{decide_retry, DEFAULT_MAX_RETRIES};
 use crate::sse::{SseEvent, SseParser};
-use crate::tools::tool_schemas;
 
 pub const DEFAULT_MODEL: &str = "grok-4.7";
 pub const RESPONSES_URL: &str = "https://api.x.ai/v1/responses";
@@ -73,6 +72,8 @@ pub struct ResponsesRequest {
     pub effort: Option<String>,
     pub input: Vec<InputItem>,
     pub conversation_id: String,
+    /// Function tools for this turn. Hosted web_search and x_search are added in [`responses_body`].
+    pub tools: Vec<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,7 +249,7 @@ pub fn responses_body(req: &ResponsesRequest) -> Value {
             }
         }
     }
-    let mut tools = tool_schemas();
+    let mut tools = req.tools.clone();
     tools.push(json!({"type": "web_search"}));
     tools.push(json!({"type": "x_search"}));
     let model = if req.model.trim().is_empty() {
@@ -516,6 +517,7 @@ mod tests {
                 content: vec![ContentPart::InputText("hi".into())],
             }],
             conversation_id: "c".into(),
+            tools: crate::tool_schemas(),
         };
         let body = responses_body(&plain);
         assert_eq!(body["model"], DEFAULT_MODEL);
@@ -536,6 +538,7 @@ mod tests {
                 content: vec![ContentPart::InputImage("data:image/png;base64,YQ==".into())],
             }],
             conversation_id: "c".into(),
+            tools: crate::tool_schemas(),
         };
         let body = responses_body(&with_image);
         assert_eq!(body["store"], false);

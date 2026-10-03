@@ -295,7 +295,11 @@ impl Cabin {
             }
             v
         };
-        let auto_allow = self.permission_mode.auto_allows();
+        let native_session = self
+            .acp
+            .as_ref()
+            .is_some_and(|handle| handle.session_id.starts_with("native-"));
+        let auto_allow = self.permission_mode.auto_allows() && !native_session;
         for ev in evs {
             match ev {
                 AcpEvent::Ready { session_id } => {
