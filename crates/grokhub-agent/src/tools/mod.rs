@@ -85,6 +85,7 @@ pub fn schemas_for(gate: &Gate) -> Vec<Value> {
     if gate.desktop {
         tools.extend(desktop::schemas());
     }
+    tools.extend(crate::mcp::schema_tools());
     tools
 }
 
@@ -113,6 +114,9 @@ pub fn dispatch(ctx: &ToolCtx<'_>, name: &str, arguments: &str) -> ToolOutput {
     };
     if is_readonly(name) {
         return dispatch_readonly(ctx, name, &args);
+    }
+    if let Some(output) = crate::mcp::try_dispatch(name, &args) {
+        return output;
     }
     match name {
         "write" => write::run(ctx.workspace, &args),
@@ -177,6 +181,7 @@ fn dispatch_readonly(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolOutput 
         "glob" => glob::run(ctx.workspace, args),
         "get_command_or_subagent_output" => control::output(ctx.tasks.as_ref(), args),
         "scheduler_list" => control::scheduler_list(),
+        "search_tool" => crate::mcp::search_output(args),
         other => ToolOutput::err(format!("{READ_ONLY_PHASE}: `{other}` is not available.")),
     }
 }
