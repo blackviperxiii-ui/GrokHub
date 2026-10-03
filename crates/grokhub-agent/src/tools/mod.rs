@@ -67,6 +67,7 @@ pub fn tool_schemas() -> Vec<Value> {
         glob::schema(),
         control::output_schema(),
         control::scheduler_list_schema(),
+        crate::skills::schema(),
     ]
 }
 
@@ -182,6 +183,7 @@ fn dispatch_readonly(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolOutput 
         "get_command_or_subagent_output" => control::output(ctx.tasks.as_ref(), args),
         "scheduler_list" => control::scheduler_list(),
         "search_tool" => crate::mcp::search_output(args),
+        "skill" => crate::skills::tool_run(ctx.workspace, args),
         other => ToolOutput::err(format!("{READ_ONLY_PHASE}: `{other}` is not available.")),
     }
 }
@@ -282,6 +284,7 @@ mod tests {
                 "glob",
                 "get_command_or_subagent_output",
                 "scheduler_list",
+                "skill",
             ]
         );
         for tool in &tools {

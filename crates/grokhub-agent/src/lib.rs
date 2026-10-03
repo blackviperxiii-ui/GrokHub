@@ -5,6 +5,7 @@ mod client;
 mod compact;
 mod events;
 mod gate;
+mod hooks;
 mod image_budget;
 pub mod mcp;
 mod models;
@@ -14,6 +15,7 @@ mod retry;
 mod run;
 mod scan;
 mod session;
+mod skills;
 mod sse;
 pub mod tasks;
 pub mod tokens;
@@ -27,6 +29,9 @@ pub use client::{
 pub use compact::{estimate_input_tokens, manual_compact_targets_native, message_text};
 pub use events::{meter_for, Engine, EngineParts, NativeEngine, StampHalt};
 pub use gate::{ClosedPermits, Gate, PermAnswer, PermMode, PermitInbox, PermitNote, PermitWait};
+pub use hooks::{
+    discover_hooks, folder_trusted, on_session_end, set_folder_trust, on_subagent_start, on_subagent_stop, HookInfo, HookOrigin,
+};
 pub use mcp::{
     attach_elicit, configured, detach_elicit, doctor, import_documents, import_paths, restart,
     set_workspace, shutdown_all, DoctorRow, ElicitInbox, ElicitNote, ElicitView,
@@ -50,6 +55,7 @@ pub use session::{
     record_turn, rename_session, resume_input, session_file, transcript_pairs, usage_label,
     HistoryRow, RunGuard, SessionInfo,
 };
+pub use skills::{discover as discover_skills, Skill, SkillSource};
 pub use sse::SseParser;
 pub use tasks::{forget_session, halt_all_sessions, halt_session, halt_tree, hub_for, link_child, watch_cancel};
 pub use tools::control::{take_automation_changes, AutomationChange};

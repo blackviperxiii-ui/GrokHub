@@ -126,6 +126,28 @@ pub struct LoopOut {
     pub compacted: bool,
 }
 
+fn finish(
+    input: &LoopIn<'_>,
+    stop: StopReason,
+    usage: Usage,
+    compacted: bool,
+    fire: bool,
+) -> LoopOut {
+    if fire {
+        let event = match &stop {
+            StopReason::EndTurn | StopReason::RepeatedCall => "Stop",
+            StopReason::Error(_) => "StopFailure",
+            StopReason::Cancelled | StopReason::Halted | StopReason::MaxTurns => "StopCancelled",
+        };
+        let _ = crate::hooks::on_stop(input.conversation_id, input.workspace, event, true);
+    }
+    LoopOut {
+        stop,
+        usage,
+        compacted,
+    }
+}
+
 pub fn run_loop(
     input: &LoopIn<'_>,
     history: &mut Vec<InputItem>,
@@ -144,6 +166,28 @@ pub fn run_loop(
     let mut usage = input.usage_base.clone();
     let mut did_compact = false;
     let mut repeats: HashMap<String, u32> = HashMap::new();
+    let mut stop_hook_active = false;
+    match crate::hooks::on_user_prompt(input.conversation_id, input.workspace, user_text) {
+        crate::hooks::PromptHook::Block { reason } => {
+            history.pop();
+            return finish(
+                input,
+                StopReason::Error(format!("Prompt blocked by hook: {reason}")),
+                usage,
+                did_compact,
+                true,
+            );
+        }
+        crate::hooks::PromptHook::Continue { context } if !context.is_empty() => {
+            if let Some(InputItem::Message { content, .. }) = history.last_mut() {
+                if let Some(ContentPart::InputText(text)) = content.first_mut() {
+                    text.push('\n');
+                    text.push_str(&context);
+                }
+            }
+        }
+        crate::hooks::PromptHook::Continue { .. } => {}
+    }
     let max_turns = if input.max_turns == 0 {
         DEFAULT_MAX_TURNS
     } else {
@@ -151,18 +195,10 @@ pub fn run_loop(
     };
     for _turn in 0..max_turns {
         if input.cancel.is_cancelled() {
-            return LoopOut {
-                stop: StopReason::Cancelled,
-                usage,
-                compacted: did_compact,
-            };
+            return finish(input, StopReason::Cancelled, usage, did_compact, true);
         }
         if stop_for_halt(input) {
-            return LoopOut {
-                stop: StopReason::Halted,
-                usage,
-                compacted: did_compact,
-            };
+            return finish(input, StopReason::Halted, usage, did_compact, true);
         }
         inject_notices(input, history);
         if !did_compact && crate::compact::needs_auto_compact(history, input.context_length) {
@@ -171,14 +207,17 @@ pub fn run_loop(
                 usage: usage.clone(),
                 error: None,
             });
-            match crate::compact::compact_transcript(
+            crate::hooks::on_compact(input.conversation_id, input.workspace, true);
+            let compact_result = crate::compact::compact_transcript(
                 input.client,
                 input.cancel,
                 input.model,
                 input.effort,
                 input.conversation_id,
                 history,
-            ) {
+            );
+            crate::hooks::on_compact(input.conversation_id, input.workspace, false);
+            match compact_result {
                 Ok(extra) => {
                     usage.add(&extra);
                     did_compact = true;
@@ -195,11 +234,7 @@ pub fn run_loop(
                         usage: usage.clone(),
                         error: Some("cancelled".into()),
                     });
-                    return LoopOut {
-                        stop: StopReason::Cancelled,
-                        usage,
-                        compacted: false,
-                    };
+                    return finish(input, StopReason::Cancelled, usage, false, true);
                 }
                 Err(crate::compact::CompactError::Failed(message)) => {
                     on_event(LoopEvent::Compact {
@@ -227,18 +262,16 @@ pub fn run_loop(
         }) {
             Ok(turn) => turn,
             Err(ClientError::Cancelled) => {
-                return LoopOut {
-                    stop: StopReason::Cancelled,
-                    usage,
-                    compacted: did_compact,
-                }
+                return finish(input, StopReason::Cancelled, usage, did_compact, true);
             }
             Err(err) => {
-                return LoopOut {
-                    stop: StopReason::Error(err.to_string()),
+                return finish(
+                    input,
+                    StopReason::Error(err.to_string()),
                     usage,
-                    compacted: did_compact,
-                }
+                    did_compact,
+                    true,
+                );
             }
         };
         usage.add(&turn.usage);
@@ -252,11 +285,20 @@ pub fn run_loop(
         if turn.calls.is_empty() {
             let notes = input.steer.drain();
             if notes.is_empty() {
-                return LoopOut {
-                    stop: StopReason::EndTurn,
-                    usage,
-                    compacted: did_compact,
-                };
+                if !stop_hook_active {
+                    if let Some(reason) =
+                        crate::hooks::on_stop(input.conversation_id, input.workspace, "Stop", false)
+                    {
+                        stop_hook_active = true;
+                        history.push(user_message(
+                            &format!("Stop hook blocked the turn: {reason}"),
+                            None,
+                        ));
+                        continue;
+                    }
+                    return finish(input, StopReason::EndTurn, usage, did_compact, false);
+                }
+                return finish(input, StopReason::EndTurn, usage, did_compact, true);
             }
             for note in notes {
                 history.push(user_message(&note, None));
@@ -274,18 +316,10 @@ pub fn run_loop(
         }
         for call in &turn.calls {
             if input.cancel.is_cancelled() {
-                return LoopOut {
-                    stop: StopReason::Cancelled,
-                    usage,
-                    compacted: did_compact,
-                };
+                return finish(input, StopReason::Cancelled, usage, did_compact, true);
             }
             if stop_for_halt(input) {
-                return LoopOut {
-                    stop: StopReason::Halted,
-                    usage,
-                    compacted: did_compact,
-                };
+                return finish(input, StopReason::Halted, usage, did_compact, true);
             }
             let key = format!("{}\\n{}", call.name, call.arguments);
             let seen = repeats.entry(key).or_insert(0);
@@ -334,29 +368,44 @@ pub fn run_loop(
                 let output = ToolOutput::err(gate::user_cancelled(&call.name));
                 emit_tool(on_event, &id, call, "failed", &output.text, None);
                 push_output(history, call, output);
-                return LoopOut {
-                    stop: StopReason::Cancelled,
-                    usage,
-                    compacted: did_compact,
-                };
+                return finish(input, StopReason::Cancelled, usage, did_compact, true);
             }
             if reviewed.halted {
                 let _ = stop_for_halt(input);
-                return LoopOut {
-                    stop: StopReason::Halted,
-                    usage,
-                    compacted: did_compact,
-                };
+                return finish(input, StopReason::Halted, usage, did_compact, true);
             }
-            let ask_reason = reviewed.ask_reason;
-            let output = match reviewed.decision {
+            let constrained = crate::hooks::constrain_tool(crate::hooks::ToolHook {
+                session: input.conversation_id,
+                workspace: input.workspace,
+                attended: input.gate.attended,
+                decision: reviewed.decision,
+                ask_reason: reviewed.ask_reason,
+                name: &call.name,
+                arguments: &call.arguments,
+                tool_use_id: &id,
+            });
+            let ask_reason = constrained.ask_reason;
+            let pre_context = constrained.context;
+            let output = match constrained.decision {
                 Decision::Refuse(text) => {
+                    crate::hooks::on_permission_denied(
+                        input.conversation_id,
+                        input.workspace,
+                        &call.name,
+                        &call.arguments,
+                        &id,
+                    );
                     let output = ToolOutput::err(text);
                     emit_tool(on_event, &id, call, "in_progress", &call.arguments, None);
                     emit_tool(on_event, &id, call, if output.failed { "failed" } else { "completed" }, &output.text, output.image_data_url.clone());
                     output
                 }
                 Decision::Ask => {
+                    crate::hooks::on_notification(
+                        input.conversation_id,
+                        input.workspace,
+                        "permission_prompt",
+                    );
                     on_event(LoopEvent::Permission {
                         id: id.clone(),
                         name: call.name.clone(),
@@ -367,9 +416,13 @@ pub fn run_loop(
                         .permits
                         .wait(&id, input.cancel, &|| stop_for_halt(input))
                     {
-                        Waited::Answer(PermAnswer::Allow) => {
-                            run_allowed(input, call, &id, on_event)
-                        }
+                        Waited::Answer(PermAnswer::Allow) => note_tool(
+                            input,
+                            call,
+                            &id,
+                            run_allowed(input, call, &id, on_event),
+                            &pre_context,
+                        ),
                         Waited::Answer(PermAnswer::Always) => {
                             if input.perms.is_some() {
                                 let _ = crate::perm::remember_allow_always(
@@ -379,9 +432,22 @@ pub fn run_loop(
                                 );
                             }
                             always = true;
-                            run_allowed(input, call, &id, on_event)
+                            note_tool(
+                                input,
+                                call,
+                                &id,
+                                run_allowed(input, call, &id, on_event),
+                                &pre_context,
+                            )
                         }
                         Waited::Answer(PermAnswer::Deny) => {
+                            crate::hooks::on_permission_denied(
+                                input.conversation_id,
+                                input.workspace,
+                                &call.name,
+                                &call.arguments,
+                                &id,
+                            );
                             let output = ToolOutput::err(gate::user_rejected(&call.name));
                             emit_tool(on_event, &id, call, "failed", &output.text, None);
                             output
@@ -390,58 +456,40 @@ pub fn run_loop(
                             let output = ToolOutput::err(gate::user_cancelled(&call.name));
                             emit_tool(on_event, &id, call, "failed", &output.text, None);
                             push_output(history, call, output);
-                            return LoopOut {
-                                stop: StopReason::Cancelled,
-                                usage,
-                                compacted: did_compact,
-                            };
+                            return finish(input, StopReason::Cancelled, usage, did_compact, true);
                         }
                         Waited::Halted => {
                             let _ = stop_for_halt(input);
-                            return LoopOut {
-                                stop: StopReason::Halted,
-                                usage,
-                                compacted: did_compact,
-                            };
+                            return finish(input, StopReason::Halted, usage, did_compact, true);
                         }
                     }
                 }
-                Decision::Run => run_allowed(input, call, &id, on_event),
+                Decision::Run => note_tool(
+                    input,
+                    call,
+                    &id,
+                    run_allowed(input, call, &id, on_event),
+                    &pre_context,
+                ),
             };
             let cancelled = input.cancel.is_cancelled();
             let halted = stop_for_halt(input);
             push_output(history, call, output);
             if cancelled {
-                return LoopOut {
-                    stop: StopReason::Cancelled,
-                    usage,
-                    compacted: did_compact,
-                };
+                return finish(input, StopReason::Cancelled, usage, did_compact, true);
             }
             if halted {
-                return LoopOut {
-                    stop: StopReason::Halted,
-                    usage,
-                    compacted: did_compact,
-                };
+                return finish(input, StopReason::Halted, usage, did_compact, true);
             }
         }
         if repeated {
-            return LoopOut {
-                stop: StopReason::RepeatedCall,
-                usage,
-                compacted: did_compact,
-            };
+            return finish(input, StopReason::RepeatedCall, usage, did_compact, true);
         }
         for note in input.steer.drain() {
             history.push(user_message(&note, None));
         }
     }
-    LoopOut {
-        stop: StopReason::MaxTurns,
-        usage,
-        compacted: did_compact,
-    }
+    finish(input, StopReason::MaxTurns, usage, did_compact, true)
 }
 
 fn emit_usage(
@@ -516,6 +564,37 @@ fn inject_notices(input: &LoopIn<'_>, history: &mut Vec<InputItem>) {
         let text = format!("<background-notice>\n{note}\n</background-notice>");
         history.push(user_message(&text, None));
     }
+}
+
+fn note_tool(
+    input: &LoopIn<'_>,
+    call: &FunctionCall,
+    id: &str,
+    mut output: ToolOutput,
+    pre_context: &str,
+) -> ToolOutput {
+    if !pre_context.is_empty() {
+        if !output.text.is_empty() && !output.text.ends_with('\n') {
+            output.text.push('\n');
+        }
+        output.text.push_str(pre_context);
+    }
+    let extra = crate::hooks::after_tool(
+        input.conversation_id,
+        input.workspace,
+        &call.name,
+        &call.arguments,
+        id,
+        output.failed,
+        &output.text,
+    );
+    if !extra.is_empty() {
+        if !output.text.is_empty() && !output.text.ends_with('\n') {
+            output.text.push('\n');
+        }
+        output.text.push_str(&extra);
+    }
+    output
 }
 
 fn run_allowed(
@@ -1635,6 +1714,135 @@ mod tests {
         assert!(!cfg.join("automations.json").exists());
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn pre_tool_hook_deny_blocks_and_allow_does_not_skip_ask() {
+        let dir = workspace("hook-gate");
+        let session = format!("hook-gate-{}", std::process::id());
+        let deny = crate::hooks::install_test_hooks(
+            &session,
+            vec![crate::hooks::TestHook {
+                event: "PreToolUse".into(),
+                matcher: "Write".into(),
+                command: crate::hooks::test_echo(r#"{"decision":"deny","reason":"nope"}"#, None),
+                timeout: std::time::Duration::from_secs(5),
+                source_dir: dir.clone(),
+            }],
+        );
+        let script = Script {
+            turns: Mutex::new(vec![
+                ScriptTurn {
+                    text: String::new(),
+                    calls: vec![call("w", "write", r#"{"path":"out.txt","content":"yes"}"#)],
+                    usage: Usage::default(),
+                },
+                ScriptTurn {
+                    text: "done".into(),
+                    calls: Vec::new(),
+                    usage: Usage::default(),
+                },
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let input = LoopIn {
+            client: &script,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: None,
+            system: "",
+            conversation_id: &session,
+            max_turns: 4,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate: chat(gate::PermMode::Always, true, false),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+        };
+        let mut history = Vec::new();
+        let mut events = Vec::new();
+        let out = run_loop(&input, &mut history, "go", None, &mut |ev| events.push(ev));
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert!(!dir.join("out.txt").exists());
+        assert!(
+            history.iter().any(|item| matches!(
+                item,
+                InputItem::FunctionCallOutput { output, .. } if output.contains("nope")
+            )),
+            "{history:?}"
+        );
+        drop(deny);
+
+        let allow_session = format!("{session}-allow");
+        let allow = crate::hooks::install_test_hooks(
+            &allow_session,
+            vec![crate::hooks::TestHook {
+                event: "PreToolUse".into(),
+                matcher: String::new(),
+                command: crate::hooks::test_echo(r#"{"decision":"allow"}"#, None),
+                timeout: std::time::Duration::from_secs(5),
+                source_dir: dir.clone(),
+            }],
+        );
+        let script = Script {
+            turns: Mutex::new(vec![
+                ScriptTurn {
+                    text: String::new(),
+                    calls: vec![call("w", "write", r#"{"path":"out.txt","content":"yes"}"#)],
+                    usage: Usage::default(),
+                },
+                ScriptTurn {
+                    text: "done".into(),
+                    calls: Vec::new(),
+                    usage: Usage::default(),
+                },
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let input = LoopIn {
+            client: &script,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: None,
+            system: "",
+            conversation_id: &allow_session,
+            max_turns: 4,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate: chat(gate::PermMode::Ask, true, false),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: None,
+        };
+        let mut history = Vec::new();
+        let out = run_loop(&input, &mut history, "go", None, &mut |_ev| {});
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert!(
+            !dir.join("out.txt").exists(),
+            "hook allow must not skip the ask gate"
+        );
+        assert!(
+            history.iter().any(|item| matches!(
+                item,
+                InputItem::FunctionCallOutput { output, .. } if output.contains("rejected")
+            )),
+            "{history:?}"
+        );
+        drop(allow);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
