@@ -954,7 +954,7 @@ impl Cabin {
 /// The model client for a native `/bg` run, with the credential kind so usage is
 /// labelled "SuperGrok pool" or "API credits" like the foreground engine.
 type BgModel = (
-    Box<dyn grokhub_agent::ModelClient + Send>,
+    std::sync::Arc<dyn grokhub_agent::ModelClient + Send + Sync>,
     grokhub_agent::AuthKind,
 );
 
@@ -963,7 +963,7 @@ fn native_bg_model(cabin: &mut Cabin) -> Result<BgModel, String> {
     {
         let _ = cabin;
         Ok((
-            Box::new(BgFake {
+            std::sync::Arc::new(BgFake {
                 n: std::sync::atomic::AtomicUsize::new(0),
             }),
             grokhub_agent::AuthKind::ApiKey,
@@ -973,7 +973,7 @@ fn native_bg_model(cabin: &mut Cabin) -> Result<BgModel, String> {
     {
         let (bearer, kind) = cabin.native_cred()?;
         Ok((
-            Box::new(grokhub_agent::XaiClient::new(
+            std::sync::Arc::new(grokhub_agent::XaiClient::new(
                 bearer,
                 kind,
                 std::time::Duration::from_secs(120),
@@ -986,7 +986,7 @@ fn native_bg_model(cabin: &mut Cabin) -> Result<BgModel, String> {
 fn run_native_bg(
     session: String,
     workspace: std::path::PathBuf,
-    client: Box<dyn grokhub_agent::ModelClient + Send>,
+    client: std::sync::Arc<dyn grokhub_agent::ModelClient + Send + Sync>,
     auth_kind: grokhub_agent::AuthKind,
     gate: grokhub_agent::Gate,
     model: String,
@@ -1019,7 +1019,7 @@ fn run_native_bg(
         }),
         gate,
         desktop: None,
-        permits: Box::new(grokhub_agent::ClosedPermits),
+        permits: std::sync::Arc::new(grokhub_agent::ClosedPermits),
     });
     engine.set_reopen_tasks(false);
     if let Ok(info) = grokhub_agent::load_session(&session) {
