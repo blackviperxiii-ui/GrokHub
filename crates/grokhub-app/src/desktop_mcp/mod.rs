@@ -12,6 +12,10 @@ mod windows;
 mod x11;
 #[cfg(unix)]
 mod wayland;
+#[cfg(target_os = "linux")]
+mod kwin_shot;
+#[cfg(target_os = "linux")]
+mod portal;
 
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -321,6 +325,22 @@ impl DesktopBackend for LiveBackend {
             b.pace();
         }
     }
+    fn release_input(&mut self) {
+        if let Ok(backend) = self.ensure() {
+            backend.release_input();
+        }
+    }
+    fn move_abs_on(
+        &mut self,
+        geom: &grokhub_core::desktop_mcp::ShotGeom,
+        x: i32,
+        y: i32,
+    ) -> Result<(), String> {
+        self.ensure()?.move_abs_on(geom, x, y)
+    }
+    fn status_note(&mut self) -> Option<String> {
+        self.ensure().ok().and_then(|backend| backend.status_note())
+    }
 }
 
 fn connect_backend() -> Result<Box<dyn DesktopBackend>, String> {
@@ -380,5 +400,29 @@ mod tests {
         assert!(stamp_halts(ms, ms.saturating_sub(1)));
         assert!(!stamp_halts(ms, ms));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn no_xdotool_on_wayland() {
+        let wayland = include_str!("wayland.rs");
+        let portal = include_str!("portal.rs");
+        assert!(
+            !wayland.contains("xdotool"),
+            "wayland input must not name the xwayland tool"
+        );
+        assert!(
+            !portal.contains("xdotool"),
+            "portal input must not name the xwayland tool"
+        );
+    }
+
+    #[test]
+    fn desktop_entry_allows_kwin_screenshot2() {
+        let text = include_str!("../../../../packaging/grokhub.desktop");
+        assert!(text.lines().any(|line| line == "Version=1.5"));
+        assert!(text.lines().any(|line| line == "Exec=grokhub"));
+        assert!(text
+            .lines()
+            .any(|line| line == "X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2"));
     }
 }
