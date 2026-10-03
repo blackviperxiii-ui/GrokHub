@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 2.10.69 — 2026-10-03
+
+Desktop control on KDE Wayland gets fallbacks. If the portal won't hand over libei, input stays in the same RemoteDesktop session through the portal's Notify* calls. If there's no portal session at all, it moves to an absolute uinput pointer (evdev 0.13, Linux only) that spans the union of the outputs from `kscreen-doctor`, so clicks land on absolute coordinates with no acceleration. ydotool is the last resort and is labeled imprecise. Capture tries KWin ScreenShot2, then `spectacle -b -n -o`, then the portal Screenshot, and crops to the requested monitor. xdotool is never used on Wayland.
+
+A small broker owns the desktop session. It listens on `$XDG_RUNTIME_DIR/grokhub/desk.sock` (socket 0600, folder 0700), accepts only same-uid peers, and holds a file lock so two GrokHub processes can't drive the desk at once. The broker checks the **Let Grok control the desktop** switch (off by default), Halt (Ctrl+Alt+H) and the lock screen again on every request, and Ask still runs before any tool call reaches it. A request can't carry its own gate. **Settings → Desktop control** shows the active input and capture backends, and **Test** moves to each monitor's center and captures it. `packaging/udev/60-grokhub-uinput.rules` adds `TAG+="uaccess"`, so the seated user gets `/dev/uinput` without joining the `input` group. The mode stays 0660, never world-writable. The uinput mapping is only covered by unit tests so far. The ±2 px click accuracy still needs a live check on a KDE desktop.
+
+- Linux: `grokhub-linux-v2.10.69.tar.gz` and AUR `pkgver=2.10.69`.
+- Windows: `GrokHub-Setup-2.10.69.exe` and `grokhub-windows-v2.10.69.zip`.
+
 ## 2.10.68 — 2026-10-02
 
 Desktop control on KDE Plasma 6 Wayland stops fighting the compositor. On a KDE session, GrokHub's desktop tools now use the xdg-desktop-portal RemoteDesktop session with libei for input (ashpd and reis, Linux only). Clicks are absolute moves inside KWin's per-output regions, with no pointer acceleration or calibration. KDE asks "Allow remote control" once. The restore token is kept in the OS keychain (service `GrokHub`, account `desktop-portal-restore`), never in a file, and each session's new token replaces the old one. If KDE asks again, the status says why.

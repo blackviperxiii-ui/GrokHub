@@ -766,6 +766,21 @@ impl Cabin {
                                                                     "Removing desktop tools...".into()
                                                                 };
                                                                 crate::desktop_mcp::spawn_register(on);
+                                                                crate::desktop_mcp::set_desktop_enabled(on);
+                                                            }
+                                                            crate::cards::settings_note(
+                                                                ui,
+                                                                &crate::desktop_mcp::desktop_panel_lines(),
+                                                            );
+                                                            if crate::cards::settings_action(
+                                                                ui,
+                                                                "Desktop control",
+                                                                "Move to each monitor center and capture. Offset is reported when the pointer can be read back.",
+                                                                "Test",
+                                                            ) {
+                                                                self.status = crate::desktop_mcp::request_desktop_test(
+                                                                    self.cfg.desktop_control,
+                                                                );
                                                             }
                                                             let sessions = cabin_default_sessions();
                                                             let session_labels: Vec<String> = sessions
