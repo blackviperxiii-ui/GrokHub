@@ -11,3 +11,5 @@ The Apache-2.0 license text is in LICENSE-APACHE-2.0 in this directory.
 `src/subagent.rs` ports the spawn_subagent and send_subagent_message tool shapes (explore/general types, depth limit, worktree isolation) from Grok Build's agent and tool crates.
 `src/session_tools.rs` ports the todo_write, ask_user_question, enter_plan_mode and exit_plan_mode tool shapes from Grok Build's tool crates.
 `src/tools/web_fetch.rs` ports the web_fetch tool shape, size caps and redirect handling from Grok Build's tool crates.
+`src/memory.rs` ports the FTS-plus-temporal-decay recall score, the pre-compaction flush, and the fenced first-turn memory reminder from `xai-grok-memory` and `xai-grok-shell`.
+`src/slash_parity.rs` lists the pager builtin slash commands from `xai-grok-pager` `slash/commands/mod.rs`.

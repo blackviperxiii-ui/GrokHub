@@ -2,6 +2,8 @@
 //! Auto-compact at 85% and manual compaction. The summary prompt is the detailed
 //! prompt from `xai-grok-shell` `helpers/session_compact.rs`.
 
+use std::path::Path;
+
 use crate::client::{ClientError, ContentPart, InputItem, ModelClient, ResponsesRequest, Usage};
 use crate::tokens::{self, estimate_token_bytes};
 use crate::CancelToken;
@@ -75,6 +77,22 @@ pub fn needs_auto_compact(items: &[InputItem], context_length: u64) -> bool {
 
 pub fn is_manual_compact_command(text: &str) -> bool {
     text.trim() == "/compact"
+}
+
+/// Flush pending memory, then summarize. A flush error still compacts.
+/// The summary call sees the memory file already written.
+#[allow(clippy::too_many_arguments)]
+pub fn compact_after_flush(
+    workspace: &Path,
+    client: &dyn ModelClient,
+    cancel: &CancelToken,
+    model: &str,
+    effort: Option<&str>,
+    conversation_id: &str,
+    history: &mut Vec<InputItem>,
+) -> Result<Usage, CompactError> {
+    let _ = crate::memory::flush_pending(workspace, history);
+    compact_transcript(client, cancel, model, effort, conversation_id, history)
 }
 
 /// Summarize `history` and replace it. On failure or cancel, `history` is unchanged.
@@ -806,5 +824,53 @@ mod tests {
         );
         assert!(err.is_err());
         assert_eq!(kept, vec![last]);
+    }
+
+    #[test]
+    fn flush_runs_before_the_summary_model_call() {
+        let dir = workspace();
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        struct Watch {
+            dir: PathBuf,
+        }
+        impl ModelClient for Watch {
+            fn stream(
+                &self,
+                req: &ResponsesRequest,
+                _cancel: &CancelToken,
+                _sink: &mut dyn FnMut(StreamEvent),
+            ) -> Result<TurnOutput, ClientError> {
+                let mem = std::fs::read_to_string(crate::memory::flush_memory_path(&self.dir))
+                    .unwrap_or_default();
+                assert!(
+                    mem.contains("keep the quay lantern"),
+                    "flush must land before the summary call: {mem}"
+                );
+                assert!(req
+                    .input
+                    .iter()
+                    .any(|item| message_text(item).contains("faithful, concise summary")));
+                Ok(TurnOutput {
+                    text: "kept the quay".into(),
+                    reasoning: String::new(),
+                    calls: Vec::new(),
+                    usage: Usage::default(),
+                })
+            }
+        }
+        let mut history = vec![text_message("user", "keep the quay lantern")];
+        compact_after_flush(
+            &dir,
+            &Watch { dir: dir.clone() },
+            &CancelToken::new(),
+            "grok-4.7",
+            Some("low"),
+            "conv",
+            &mut history,
+        )
+        .expect("compact after flush");
+        assert!(message_text(&history[0]).contains("kept the quay"));
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

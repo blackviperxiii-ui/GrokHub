@@ -8,6 +8,7 @@ mod gate;
 mod hooks;
 mod image_budget;
 pub mod mcp;
+mod memory;
 mod models;
 pub mod perm;
 mod prompt;
@@ -18,6 +19,7 @@ mod scan;
 mod session;
 mod session_tools;
 mod skills;
+mod slash_parity;
 mod sse;
 mod subagent;
 pub mod tasks;
@@ -39,6 +41,10 @@ pub use mcp::{
     alias_elicit, attach_elicit, configured, detach_elicit, doctor, import_documents, import_paths,
     restart, set_workspace, shutdown_all, unalias_elicit, DoctorRow, ElicitInbox, ElicitNote,
     ElicitView,
+};
+pub use memory::{
+    dream, first_turn_injection, flush_pending, is_dream_command, is_flush_command,
+    queue_memory_status, remember, take_memory_status, INJECT_BYTE_CAP, INJECT_TOKEN_CAP,
 };
 pub use models::{
     context_length_for, parse_listed_models, parse_xai_models, pick_model, ListedModel,
@@ -62,6 +68,7 @@ pub use session::{
 };
 pub use session_tools::{plan_on, set_plan_session, todos_for, TodoItem};
 pub use skills::{discover as discover_skills, Skill, SkillSource};
+pub use slash_parity::{slash_parity, unparsed_native_slash, SlashParity, UnparsedSlash};
 pub use sse::SseParser;
 pub use subagent::{drain_side_events, requeue_side_events, SideEvent};
 pub use tasks::{

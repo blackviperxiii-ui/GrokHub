@@ -542,4 +542,22 @@ mod tests {
         assert!(!grokhub_agent::manual_compact_targets_native(false, true));
         assert!(!grokhub_agent::manual_compact_targets_native(true, false));
     }
+
+    #[test]
+    fn native_help_lists_slash_parity() {
+        let src = include_str!("mod.rs");
+        let body = src
+            .split("fn paint_shortcuts")
+            .nth(1)
+            .expect("paint_shortcuts");
+        let sheet = body.find("palette::paint_shortcut_sheet").expect("sheet");
+        let table = body.find("slash_parity").expect("parity table");
+        assert!(sheet < table, "the slash table follows the shortcut sheet");
+        assert!(body.contains("Slash commands"));
+        let rows = grokhub_agent::slash_parity();
+        assert_eq!(rows.len(), 74);
+        assert!(rows.iter().any(|row| row.command == "remember"));
+        assert!(rows.iter().any(|row| row.command == "flush"));
+        assert!(rows.iter().any(|row| row.command == "dream"));
+    }
 }
