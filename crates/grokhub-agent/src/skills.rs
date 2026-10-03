@@ -149,7 +149,11 @@ pub fn tool_run(workspace: &Path, args: &Value) -> ToolOutput {
         return ToolOutput::err("name is required");
     }
     let home = grokhub_core::user_home();
-    let skills = discover(workspace, home.as_deref(), &[]);
+    let skills = discover(
+        workspace,
+        home.as_deref(),
+        &crate::plugins::skill_dirs(workspace),
+    );
     let Some(skill) = skills.into_iter().find(|skill| skill.name == name) else {
         return ToolOutput::err(format!("unknown skill `{name}`"));
     };

@@ -194,7 +194,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
             Usage::default(),
         );
     };
-    let spec = match parse_spec(call.arguments) {
+    let spec = match parse_spec(call.workspace, call.arguments) {
         Ok(spec) => spec,
         Err(err) => return (ToolOutput::err(err), Usage::default()),
     };
@@ -557,7 +557,7 @@ fn pump(
     }
 }
 
-fn parse_spec(arguments: &str) -> Result<Spec, String> {
+fn parse_spec(workspace: &Path, arguments: &str) -> Result<Spec, String> {
     let value = serde_json::from_str::<Value>(arguments)
         .map_err(|err| format!("arguments are not JSON: {err}"))?;
     if value.as_object().is_none() {
@@ -585,14 +585,34 @@ fn parse_spec(arguments: &str) -> Result<Spec, String> {
                 .into(),
         );
     }
+    let mut persona = text_field(&value, &["persona"]);
+    if let Some(body) = crate::plugins::persona_body(workspace, &persona) {
+        persona = body;
+    } else if !explore {
+        let kind = named_kind(&value);
+        if !kind.is_empty() && !kind.eq_ignore_ascii_case("general") {
+            if let Some(body) = crate::plugins::persona_body(workspace, &kind) {
+                persona = body;
+            }
+        }
+    }
     Ok(Spec {
         prompt,
         description: text_field(&value, &["description"]),
-        persona: text_field(&value, &["persona"]),
+        persona,
         explore,
         background: bool_field(&value, &["background", "run_in_background"]),
         worktree,
     })
+}
+
+fn named_kind(value: &Value) -> String {
+    ["type", "subagent_type", "agent_type"]
+        .iter()
+        .find_map(|key| value.get(*key).and_then(|item| item.as_str()))
+        .unwrap_or("")
+        .trim()
+        .to_string()
 }
 
 fn kind_is_explore(value: &Value) -> bool {
@@ -1828,7 +1848,7 @@ mod tests {
             "spawn_subagent",
             &spawn_args("look", "explore", false, "none")
         ));
-        let err = parse_spec(&args).err().unwrap_or_default();
+        let err = parse_spec(Path::new("."), &args).err().unwrap_or_default();
         assert!(err.contains("do not use worktree isolation"), "{err}");
         // Unattended Ask: the explore+worktree spawn goes through the normal gate and is denied.
         let gate = Gate {
@@ -2020,5 +2040,54 @@ mod tests {
         assert!(tools::schemas_for(&chat(PermMode::Always, false, true))
             .iter()
             .any(|tool| tool["name"] == "send_subagent_message"));
+    }
+
+    #[test]
+    fn plugin_persona_name_expands_only_when_the_bundle_is_trusted() {
+        let root = scratch("persona");
+        let cfg = root.join("cfg");
+        let home = root.join("home");
+        let workspace = root.join("ws");
+        std::fs::create_dir_all(&cfg).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        let _cfg = crate::perm::ConfigGuard::set(&cfg);
+        let _home = crate::plugins::HomeGuard::set(&home);
+        let src = root.join("src");
+        let agents = src.join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::create_dir_all(src.join(".grok-plugin")).unwrap();
+        std::fs::write(
+            src.join(".grok-plugin").join("plugin.json"),
+            r#"{"name":"demo","version":"1.0.0","description":"persona","agents":"agents"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            agents.join("reviewer.md"),
+            "---\nname: reviewer\ndescription: Reviews patches\n---\nReview the diff carefully.\n",
+        )
+        .unwrap();
+        crate::plugins::install_path(&src).unwrap();
+        let literal = r#"{"prompt":"look","persona":"reviewer"}"#;
+        let spec = parse_spec(&workspace, literal).unwrap();
+        assert_eq!(spec.persona, "reviewer");
+        crate::plugins::trust_plugin(&workspace, "demo").unwrap();
+        assert!(crate::plugins::enable_plugin(&workspace, "demo").is_ok());
+        let spec = parse_spec(&workspace, literal).unwrap();
+        assert!(
+            spec.persona.contains("Review the diff carefully."),
+            "{}",
+            spec.persona
+        );
+        crate::plugins::disable_plugin("demo").unwrap();
+        let spec = parse_spec(&workspace, literal).unwrap();
+        assert_eq!(spec.persona, "reviewer");
+        crate::plugins::enable_plugin(&workspace, "demo").unwrap();
+        let spec = parse_spec(&workspace, r#"{"prompt":"look","type":"reviewer"}"#).unwrap();
+        assert!(spec.persona.contains("Review the diff carefully."));
+        assert!(!spec.explore);
+        let spec = parse_spec(&workspace, r#"{"prompt":"look","persona":"not-a-plugin"}"#).unwrap();
+        assert_eq!(spec.persona, "not-a-plugin");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -843,6 +843,8 @@ impl Cabin {
                                                             }
                                                             if self.cfg.native_engine {
                                                                 crate::native_mcp::paint(ui);
+                                                                let cwd = self.grok_cwd();
+                                                                crate::native_plugins::paint(ui, &cwd);
                                                             }
                                                         }
                                                         SettingsSec::Permissions => self.ui_permission_editor(ui),
