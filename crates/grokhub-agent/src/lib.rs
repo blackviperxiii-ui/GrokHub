@@ -1,7 +1,8 @@
-//! Read-only native engine. Sync HTTP, no CLI, no credential files.
+//! Native engine. Sync HTTP, no CLI, no credential files.
 
 mod client;
 mod events;
+mod gate;
 mod models;
 mod prompt;
 mod retry;
@@ -23,8 +24,11 @@ pub use retry::{
     retry_backoff_with_jitter, DEFAULT_MAX_RETRIES, MAX_RETRY_BACKOFF, RATE_LIMIT_RETRY_THRESHOLD,
     TRANSPORT_REBUILD_BACKOFF,
 };
+pub use gate::{ClosedPermits, Gate, PermAnswer, PermMode, PermitInbox, PermitNote, PermitWait};
 pub use run::{
     run_loop, HaltCheck, LoopEvent, LoopIn, LoopOut, SteerQueue, StopReason, DEFAULT_MAX_TURNS,
 };
 pub use sse::SseParser;
-pub use tools::{execute, is_readonly, tool_schemas, ToolOutput, READ_ONLY_PHASE};
+pub use tools::{
+    execute, is_readonly, schemas_for, tool_schemas, DesktopOps, ToolOutput, READ_ONLY_PHASE,
+};
