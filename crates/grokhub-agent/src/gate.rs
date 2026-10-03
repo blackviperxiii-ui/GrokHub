@@ -46,6 +46,14 @@ const DESKTOP: &[&str] = &[
     "type",
     "key",
 ];
+const WEB_FETCH: &str = "web_fetch";
+const MEDIA: &[&str] = &[
+    "image_generate",
+    "image_edit",
+    "video_generate",
+    "video_edit",
+    "video_extend",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermMode {
@@ -171,12 +179,18 @@ pub fn is_desktop(name: &str) -> bool {
     DESKTOP.contains(&name)
 }
 
+pub fn is_media(name: &str) -> bool {
+    MEDIA.contains(&name)
+}
+
 pub fn is_known(name: &str) -> bool {
     is_readonly(name)
         || EDIT.contains(&name)
         || SHELL.contains(&name)
         || CONTROL.contains(&name)
         || is_desktop(name)
+        || name == WEB_FETCH
+        || is_media(name)
 }
 
 pub fn readonly_refusal(name: &str) -> String {
@@ -192,6 +206,8 @@ pub fn unattended_deny(name: &str) -> String {
         "mcp matching \"grokhub-desktop__*\""
     } else if SHELL.contains(&name) || name == "kill_command_or_subagent" || name == "monitor" {
         "bash"
+    } else if name == WEB_FETCH {
+        "web_fetch"
     } else {
         "edit"
     };

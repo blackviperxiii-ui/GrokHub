@@ -78,6 +78,12 @@ pub fn govern(
         }
         return base;
     }
+    if name == "web_fetch" {
+        return govern_fetch(base, gate, arguments, policy);
+    }
+    if gate::is_media(name) {
+        return govern_media(base, gate, name, policy);
+    }
     let Some(kind) = tool_kind(name) else {
         return base;
     };
@@ -178,6 +184,19 @@ pub(crate) fn explicit_ask(policy: &Policy, name: &str, arguments: &str, workspa
     if crate::mcp::is_mcp_call(name, arguments) {
         return crate::mcp::has_ask_rule(policy, name, arguments);
     }
+    if name == "web_fetch" {
+        let url = url_arg(arguments);
+        return policy
+            .rules
+            .iter()
+            .any(|rule| rule.action == Action::Ask && webfetch_matches(rule, &url));
+    }
+    if gate::is_media(name) {
+        return policy
+            .rules
+            .iter()
+            .any(|rule| rule.action == Action::Ask && media_rule_matches(rule, name));
+    }
     let Some(kind) = tool_kind(name) else {
         return false;
     };
@@ -189,6 +208,82 @@ pub(crate) fn explicit_ask(policy: &Policy, name: &str, arguments: &str, workspa
     }
     let paths = collect_paths(name, arguments);
     rule_hit_paths(policy, Action::Ask, kind, workspace, &paths)
+}
+
+fn govern_fetch(base: Decision, gate: &Gate, arguments: &str, policy: &Policy) -> Decision {
+    let url = url_arg(arguments);
+    if policy
+        .rules
+        .iter()
+        .any(|rule| rule.action == Action::Deny && webfetch_matches(rule, &url))
+    {
+        return Decision::Refuse(gate::unattended_deny("web_fetch"));
+    }
+    if policy
+        .rules
+        .iter()
+        .any(|rule| rule.action == Action::Ask && webfetch_matches(rule, &url))
+    {
+        return prompt(gate, "web_fetch");
+    }
+    if policy
+        .rules
+        .iter()
+        .any(|rule| rule.action == Action::Allow && webfetch_matches(rule, &url))
+    {
+        return Decision::Run;
+    }
+    base
+}
+
+/// Media tools have no tool prefix in the rule parser. A rule matches only
+/// when it is `Tool::Any` and the pattern is blank, `*`, or the tool name.
+/// Bash and edit rules do not reach these tools.
+fn govern_media(base: Decision, gate: &Gate, name: &str, policy: &Policy) -> Decision {
+    if policy
+        .rules
+        .iter()
+        .any(|rule| rule.action == Action::Deny && media_rule_matches(rule, name))
+    {
+        return Decision::Refuse(gate::unattended_deny(name));
+    }
+    if policy
+        .rules
+        .iter()
+        .any(|rule| rule.action == Action::Ask && media_rule_matches(rule, name))
+    {
+        return prompt(gate, name);
+    }
+    if policy
+        .rules
+        .iter()
+        .any(|rule| rule.action == Action::Allow && media_rule_matches(rule, name))
+    {
+        return Decision::Run;
+    }
+    base
+}
+
+fn media_rule_matches(rule: &Rule, name: &str) -> bool {
+    if rule.tool != Tool::Any || rule.mode == PatMode::Domain {
+        return false;
+    }
+    match rule.pattern.as_deref() {
+        None | Some("*") | Some("") => true,
+        Some(pattern) => pattern.eq_ignore_ascii_case(name),
+    }
+}
+
+fn url_arg(arguments: &str) -> String {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments) else {
+        return String::new();
+    };
+    value
+        .get("url")
+        .and_then(|item| item.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string()
 }
 
 fn prompt(gate: &Gate, name: &str) -> Decision {

@@ -282,6 +282,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         title: title.clone(),
         background: spec.background,
         shared_client: client,
+        ports: crate::tools::ports::current(),
     };
     if spec.background {
         thread::spawn(move || run_job(job, None));
@@ -361,6 +362,7 @@ struct ChildJob {
     title: String,
     background: bool,
     shared_client: Arc<dyn ModelClient + Send + Sync>,
+    ports: crate::tools::ports::Ports,
 }
 
 struct ChildDone {
@@ -411,6 +413,7 @@ fn run_job(job: ChildJob, tx: Option<Sender<ChildNote>>) {
 }
 
 fn run_child(job: &ChildJob, tx: &Option<Sender<ChildNote>>) -> ChildDone {
+    let _ports = crate::tools::ports::enter(job.ports.clone());
     crate::mcp::alias_elicit(&job.conversation_id, &job.parent_session);
     struct DropAlias(String);
     impl Drop for DropAlias {

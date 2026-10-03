@@ -11,6 +11,7 @@ pub mod mcp;
 mod models;
 pub mod perm;
 mod prompt;
+mod research;
 mod retry;
 mod run;
 mod scan;
@@ -44,6 +45,7 @@ pub use models::{
     GROK_47_CONTEXT_LENGTH, XAI_MODELS_URL,
 };
 pub use prompt::system_prompt;
+pub use research::native_deep_research_prompt;
 pub use retry::{
     decide_retry, jitter_backoff, resolve_max_retries_with_env, retry_after_or_backoff,
     retry_backoff_with_jitter, DEFAULT_MAX_RETRIES, MAX_RETRY_BACKOFF, RATE_LIMIT_RETRY_THRESHOLD,
