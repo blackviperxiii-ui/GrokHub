@@ -1,17 +1,22 @@
-//! Read-only tools. Anything else returns a refusal and is not executed.
+//! Workspace tools. `execute` stays read-only. `dispatch` runs the gated set.
 
+mod desktop;
 mod glob;
 mod grep;
 mod list_dir;
+mod lock;
 mod read_file;
+mod search_replace;
+mod shell;
+mod write;
 
 use std::path::{Component, Path, PathBuf};
 
 use serde_json::{json, Value};
 
-pub const READ_ONLY_PHASE: &str = "read-only in this phase";
+pub use crate::gate::{is_readonly, READ_ONLY_PHASE};
 
-const NAMES: &[&str] = &["read_file", "list_dir", "grep", "glob"];
+use crate::gate::{self, DeskFlags, Gate};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolOutput {
@@ -38,8 +43,16 @@ impl ToolOutput {
     }
 }
 
-pub fn is_readonly(name: &str) -> bool {
-    NAMES.contains(&name)
+pub trait DesktopOps {
+    fn halted(&self) -> bool;
+    fn locked(&self) -> bool;
+    fn call(&self, name: &str, args: &Value) -> ToolOutput;
+}
+
+pub struct ToolCtx<'a> {
+    pub workspace: &'a Path,
+    pub desktop: Option<&'a dyn DesktopOps>,
+    pub stop: &'a dyn Fn() -> bool,
 }
 
 pub fn tool_schemas() -> Vec<Value> {
@@ -51,29 +64,83 @@ pub fn tool_schemas() -> Vec<Value> {
     ]
 }
 
+pub fn schemas_for(gate: &Gate) -> Vec<Value> {
+    let mut tools = tool_schemas();
+    if gate.readonly_session {
+        return tools;
+    }
+    tools.push(write::schema());
+    tools.push(search_replace::schema());
+    tools.push(shell::schema());
+    if gate.desktop {
+        tools.extend(desktop::schemas());
+    }
+    tools
+}
+
 pub fn execute(workspace: &Path, name: &str, arguments: &str) -> ToolOutput {
     if !is_readonly(name) {
-        return ToolOutput::err(format!(
-            "{READ_ONLY_PHASE}: `{name}` is not available. Use read_file, list_dir, grep, or glob."
-        ));
+        return ToolOutput::err(gate::readonly_refusal(name));
     }
-    let args: Value = if arguments.trim().is_empty() {
-        json!({})
-    } else {
-        match serde_json::from_str(arguments) {
-            Ok(v) => v,
-            Err(e) => return ToolOutput::err(format!("arguments are not JSON: {e}")),
-        }
+    let args = match parse_args(arguments) {
+        Ok(args) => args,
+        Err(output) => return output,
     };
-    if args.as_object().is_none() && !arguments.trim().is_empty() {
-        return ToolOutput::err("arguments must be a JSON object");
+    dispatch_readonly(workspace, name, &args)
+}
+
+pub fn dispatch(ctx: &ToolCtx<'_>, name: &str, arguments: &str) -> ToolOutput {
+    let args = match parse_args(arguments) {
+        Ok(args) => args,
+        Err(output) => return output,
+    };
+    if is_readonly(name) {
+        return dispatch_readonly(ctx.workspace, name, &args);
     }
     match name {
-        "read_file" => read_file::run(workspace, &args),
-        "list_dir" => list_dir::run(workspace, &args),
-        "grep" => grep::run(workspace, &args),
-        "glob" => glob::run(workspace, &args),
-        _ => ToolOutput::err(format!("{READ_ONLY_PHASE}: `{name}` is not available.")),
+        "write" => write::run(ctx.workspace, &args),
+        "search_replace" => search_replace::run(ctx.workspace, &args),
+        "run_terminal_command" => shell::run(ctx.workspace, &args, ctx.stop),
+        "screenshot" | "click" | "move" | "drag" | "scroll" | "type" | "key" => match ctx.desktop {
+            Some(desktop) => desktop.call(name, &args),
+            None => ToolOutput::err(grokhub_core::desktop_mcp::OFF_MSG),
+        },
+        other => ToolOutput::err(gate::readonly_refusal(other)),
+    }
+}
+
+pub fn desk_flags(name: &str, gate: &Gate, desktop: Option<&dyn DesktopOps>) -> Option<DeskFlags> {
+    if !gate::is_desktop(name) || !gate.desktop {
+        return None;
+    }
+    let desktop = desktop?;
+    if desktop.halted() {
+        return Some(DeskFlags { halted: true, locked: false });
+    }
+    Some(DeskFlags {
+        halted: false,
+        locked: desktop.locked(),
+    })
+}
+
+fn dispatch_readonly(workspace: &Path, name: &str, args: &Value) -> ToolOutput {
+    match name {
+        "read_file" => read_file::run(workspace, args),
+        "list_dir" => list_dir::run(workspace, args),
+        "grep" => grep::run(workspace, args),
+        "glob" => glob::run(workspace, args),
+        other => ToolOutput::err(format!("{READ_ONLY_PHASE}: `{other}` is not available.")),
+    }
+}
+
+fn parse_args(arguments: &str) -> Result<Value, ToolOutput> {
+    if arguments.trim().is_empty() {
+        return Ok(json!({}));
+    }
+    match serde_json::from_str::<Value>(arguments) {
+        Ok(value) if value.as_object().is_some() => Ok(value),
+        Ok(_) => Err(ToolOutput::err("arguments must be a JSON object")),
+        Err(err) => Err(ToolOutput::err(format!("arguments are not JSON: {err}"))),
     }
 }
 
