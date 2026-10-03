@@ -64,6 +64,7 @@ pub mod tui_gaps;
 pub mod trajectory;
 pub mod turn_timeline;
 pub mod update;
+pub mod card_prefs;
 pub mod card_signals;
 pub mod update_feed;
 pub mod usage;
@@ -476,6 +477,12 @@ pub use windshield::{
     parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse, pick_named_row, rank_atspi_rows,
     refused_lock, tab_list_from_rows, window_name_from_atspi, window_name_from_wmctrl,
     windshield_browser_line, windshield_prompt, AtspiRow, PendingStep, WindshieldFrame,
+};
+pub use card_prefs::{
+    apply_card_event, card_prefs_json, card_score, explain_hint, forget_learned, hint_open_topic,
+    load_card_prefs, rank_home_events, top_learned, topic_keywords, CardPrefs, HomeRank,
+    LearnedBucket, LearnedEntry, Weight, FOLD_BELOW, FOLD_NOTE, HINT_MIN, HINT_NEEDS, HINT_NEW,
+    HINT_OPEN_GROUP, NOVELTY_BONUS,
 };
 pub use card_signals::{append_signal, signal_for, signal_group, CardEvent, CardSignal, SIGNAL_CAP};
 pub use update_feed::{
