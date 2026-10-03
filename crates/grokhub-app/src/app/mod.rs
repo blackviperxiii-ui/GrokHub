@@ -157,6 +157,7 @@ mod persist;
 mod acp;
 mod native_engine;
 mod native_sessions;
+mod native_unattended;
 mod chat_kick;
 mod palette;
 mod settings;
@@ -2036,6 +2037,7 @@ impl Cabin {
         self.withdraw_perm_asks();
         if self.cfg.native_engine {
             grokhub_agent::halt_all_sessions();
+            self.stop_native_unattended();
         }
         if let Some(h) = &self.acp {
             self.perm_always_confirm = None;
@@ -4561,7 +4563,7 @@ impl Cabin {
         if !self.hub_on
             || self.running
             || self.pending_hub_task.is_some()
-            || !inbox_claim_ready(self.can_agent())
+            || !inbox_claim_ready(self.can_agent()) && !self.cfg.native_engine
         {
             return;
         }
@@ -4583,6 +4585,18 @@ impl Cabin {
             self.pending_hub_task = Some(t.id.clone());
             self.land_on_real_chat();
             self.send_scheduled_chat(format!("[from {}] {}", t.from_name, t.prompt));
+            if self.cfg.native_engine
+                && !self.running
+                && self.pending_kick.is_none()
+                && self.grok_p_rx.is_none()
+            {
+                let status = if self.status.trim().is_empty() {
+                    grokhub_core::XAI_NEED_SIGNIN.to_string()
+                } else {
+                    self.status.clone()
+                };
+                self.finish_hub_dispatch(&status, false);
+            }
         }
     }
 
@@ -4772,6 +4786,8 @@ impl eframe::App for Cabin {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // No background `grok -p` outlives the cabin.
         self.kill_bg_runs();
+        grokhub_agent::halt_all_sessions();
+        self.stop_native_unattended();
         grokhub_agent::mcp::shutdown_all();
         // The close frame spawned a persist. Wait for it: the process exits right after this,
         // and two writers of app.json share one temp file.
@@ -4828,6 +4844,7 @@ impl eframe::App for Cabin {
         self.poll_mem_file();
         self.poll_recall();
         self.poll_native_memory();
+        self.drain_native_unattended_usage();
         self.poll_sync();
         self.poll_inhabit();
         self.poll_reflect();
