@@ -834,6 +834,7 @@ thread_local! {
 
 impl Cabin {
     pub fn new(hidden: bool) -> Self {
+        crate::desktop_mcp::process_started_ms();
         let mut cfg = config::load();
         if cfg.device_name.trim().is_empty() {
             cfg.device_name = config::default_device_name();
@@ -1386,6 +1387,8 @@ impl Cabin {
             c.open_fresh_home();
             #[cfg(not(test))]
             crate::desktop_mcp::maybe_register_on_start(c.cfg.desktop_control);
+            #[cfg(not(test))]
+            crate::desktop_mcp::set_desktop_enabled(c.cfg.desktop_control);
         }
         c
     }
@@ -2012,6 +2015,7 @@ impl Cabin {
 
     fn halt_in_flight(&mut self) {
         crate::desktop_mcp::write_halt_stamp();
+        crate::desktop_mcp::note_halt();
         self.host_halt.store(true, Ordering::SeqCst);
         self.withdraw_perm_asks();
         if let Some(h) = &self.acp {
@@ -4822,6 +4826,9 @@ impl eframe::App for Cabin {
         }
         self.poll_grok_install();
         if let Some(msg) = crate::desktop_mcp::take_reg_status() {
+            self.status = msg;
+        }
+        if let Some(msg) = crate::desktop_mcp::take_desktop_test_status() {
             self.status = msg;
         }
         self.poll_update_probe(ctx);

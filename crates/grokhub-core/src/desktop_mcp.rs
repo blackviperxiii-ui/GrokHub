@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 /// MCP server name. grok exposes tools as `grokhub-desktop__<tool>`.
@@ -15,17 +16,17 @@ pub const DESKTOP_MCP_RULE: &str = "MCPTool(grokhub-desktop__*)";
 const PREFERRED_PROTOCOL: &str = "2025-06-18";
 const PROTOCOLS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
-const OFF_MSG: &str = "Desktop control is off. Turn on Settings → Let Grok control the desktop.";
-const HALT_MSG: &str =
+pub const OFF_MSG: &str = "Desktop control is off. Turn on Settings → Let Grok control the desktop.";
+pub const HALT_MSG: &str =
     "Desktop control was halted (Ctrl+Alt+H). Open GrokHub again to use the screen.";
-const LOCK_MSG: &str = "The lock screen is up. Unlock this computer, then try again.";
+pub const LOCK_MSG: &str = "The lock screen is up. Unlock this computer, then try again.";
 
 const DRAG_STEPS: i32 = 8;
 
 const COORD_NOTE: &str = "Coordinates are pixels in the last screenshot of that monitor (or \"all\"), not physical screen pixels. With no screenshot yet, they are the monitor's native pixels.";
 
 /// One monitor in physical pixels. Origins may be negative on a virtual desktop.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MonitorGeom {
     pub id: String,
     pub name: String,
@@ -39,7 +40,7 @@ pub struct MonitorGeom {
 
 /// Last screenshot of one monitor, or of the whole desktop (`id` `"all"`).
 /// `scale_factor` is DPI. Mapping uses physical size over image size, not DPI.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ShotGeom {
     pub id: String,
     pub x: i32,
@@ -335,7 +336,8 @@ fn parse_key_token(token: &str) -> Result<(KeyName, bool), String> {
     Ok((KeyName::Char(ch), false))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum MouseButton {
     Left,
     Right,
@@ -362,9 +364,12 @@ pub trait DesktopBackend {
     fn is_locked(&mut self) -> bool;
     /// Pause between a double-click's halves and between drag steps.
     fn pace(&mut self) {}
-    /// Close a portal session. Halt and the lock screen both call this.
+    /// Close a portal session and latch it shut. Halt and the lock screen call this.
     /// The default does nothing so X11, Windows, and fakes stay quiet.
     fn release_input(&mut self) {}
+    /// Close a session without latching it. The desktop switch uses this so
+    /// turning the switch back on can open a new session.
+    fn suspend_input(&mut self) {}
     /// Move using the screenshot geometry. The default ignores `geom` and
     /// calls [`move_abs`](DesktopBackend::move_abs) with the mapped point.
     fn move_abs_on(&mut self, geom: &ShotGeom, x: i32, y: i32) -> Result<(), String> {
@@ -373,6 +378,11 @@ pub trait DesktopBackend {
     }
     /// Sticky note for the next input reply (imprecise fallback, portal retry).
     fn status_note(&mut self) -> Option<String> {
+        None
+    }
+    /// Where the pointer landed, when the backend can see it. `None` means
+    /// the Test button must say the offset was not measured.
+    fn landed_at(&mut self) -> Option<(i32, i32)> {
         None
     }
 }
@@ -524,6 +534,7 @@ impl<B: DesktopBackend> DesktopServer<B> {
             }
         };
         if !gate.enabled {
+            self.backend.suspend_input();
             return tool_fail(id, OFF_MSG, false);
         }
         if gate.halted {
@@ -1422,6 +1433,8 @@ pub fn plan_eis_text(
     Ok(EisTextPlan::Keycodes(codes))
 }
 
+include!("desktop_routes.rs");
+
 fn json_u32(value: Option<&Value>) -> Option<u32> {
     let value = value?;
     if let Some(n) = value.as_u64() {
@@ -2248,5 +2261,296 @@ mod tests {
             EisTextPlan::Keycodes(vec![30, 48])
         );
         assert!(plan_eis_text(false, "é", |_| None).unwrap_err().contains("missing"));
+    }
+
+    #[test]
+    fn spectacle_argv() {
+        assert_eq!(
+            super::spectacle_argv("/tmp/grokhub-shot.png", None),
+            vec![
+                "spectacle".to_string(),
+                "-b".into(),
+                "-n".into(),
+                "-f".into(),
+                "-o".into(),
+                "/tmp/grokhub-shot.png".into(),
+            ]
+        );
+        assert_eq!(
+            super::spectacle_argv("/tmp/out.png", Some(2)),
+            vec![
+                "spectacle", "-b", "-n", "-f", "-o", "/tmp/out.png", "-s", "2"
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+        );
+        assert!(spectacle_help_supports_screen(
+            "Usage: spectacle -b -n -f -o file -s, --screen <index>"
+        ));
+        assert!(!spectacle_help_supports_screen("Usage: spectacle -b -n -f -o file"));
+        assert_eq!(
+            monitor_index(
+                &[mon("HDMI-A-2", 0, 0, 100, 100, 1.0, true), mon("DP-1", 100, 0, 100, 100, 1.0, false)],
+                "DP-1"
+            ),
+            Some(1)
+        );
+        assert_eq!(monitor_index(&[mon("a", 0, 0, 1, 1, 1.0, true)], "all"), None);
+    }
+
+    #[test]
+    fn uinput_abs_device_spans_the_output_union() {
+        let mons = [
+            mon("HDMI-A-2", 0, 0, 2560, 1440, 1.0, true),
+            mon("DP-1", 2560, 0, 2800, 1440, 1.0, false),
+            mon("DP-2", 5360, 0, 1920, 1440, 1.0, false),
+        ];
+        let desc = uinput_abs_descriptor(&mons).unwrap();
+        assert_eq!(desc.name, "GrokHub absolute pointer");
+        assert_eq!(desc.width, 7280);
+        assert_eq!(desc.height, 1440);
+        assert_eq!(desc.origin_x, 0);
+        assert_eq!(desc.origin_y, 0);
+        assert_eq!(desc.abs_x.minimum, 0);
+        assert_eq!(desc.abs_x.maximum, 7279);
+        assert_eq!(desc.abs_y.maximum, 1439);
+        assert_eq!(
+            (desc.abs_x.maximum - desc.abs_x.minimum + 1) as u32,
+            desc.width
+        );
+        assert_eq!(map_point_to_uinput(&desc, 10, 20), (10, 20));
+        assert_eq!(map_point_to_uinput(&desc, 2560, 0), (2560, 0));
+        assert_eq!(map_point_to_uinput(&desc, 5360 + 100, 10), (5460, 10));
+        assert_eq!(map_point_to_uinput(&desc, 8000, 2000), (7279, 1439));
+
+        let shifted = [
+            mon("left", -1920, -100, 1920, 1080, 1.0, false),
+            mon("main", 0, 0, 2560, 1440, 1.0, true),
+        ];
+        let desc = uinput_abs_descriptor(&shifted).unwrap();
+        assert_eq!(desc.origin_x, -1920);
+        assert_eq!(desc.origin_y, -100);
+        assert_eq!(map_point_to_uinput(&desc, -1920, -100), (0, 0));
+        assert_eq!(map_point_to_uinput(&desc, 0, 0), (1920, 100));
+        assert!(uinput_access_denied_message().contains("TAG+=\"uaccess\""));
+        assert!(uinput_access_denied_message().contains("/dev/uinput"));
+    }
+
+    #[test]
+    fn broker_protocol_round_trip() {
+        let geom = ShotGeom {
+            id: "m".into(),
+            x: -1920,
+            y: 0,
+            physical_w: 1920,
+            physical_h: 1080,
+            scale_factor: 1.0,
+            image_w: 1920,
+            image_h: 1080,
+        };
+        let requests = vec![
+            DeskRequest::ListMonitors { id: 1 },
+            DeskRequest::Screenshot {
+                id: 2,
+                monitor: "HDMI-A-2".into(),
+            },
+            DeskRequest::MoveAbs { id: 3, x: 4, y: 5 },
+            DeskRequest::MoveOn {
+                id: 4,
+                geom: geom.clone(),
+                x: 8,
+                y: 9,
+            },
+            DeskRequest::Button {
+                id: 5,
+                button: MouseButton::Right,
+                down: true,
+            },
+            DeskRequest::Scroll { id: 6, dx: -1, dy: 2 },
+            DeskRequest::TypeText {
+                id: 7,
+                text: "hi".into(),
+            },
+            DeskRequest::Key {
+                id: 8,
+                keys: "ctrl+a".into(),
+            },
+            DeskRequest::Release { id: 9 },
+            DeskRequest::Locked { id: 10 },
+            DeskRequest::Status { id: 11 },
+            DeskRequest::Probe { id: 12 },
+        ];
+        for req in &requests {
+            let line = encode_desk_request(req).unwrap();
+            assert!(!line.contains("enabled"), "{line}");
+            assert!(!line.contains('\n'));
+            assert_eq!(&decode_desk_request(&line).unwrap(), req);
+        }
+        let full = DeskResponse {
+            id: 3,
+            ok: true,
+            error: Some("nope".into()),
+            exit: true,
+            monitors: Some(vec![mon("HDMI-A-2", 0, 0, 10, 10, 1.0, true)]),
+            image_b64: Some(b64(&[1, 2, 3])),
+            mime: Some("image/png".into()),
+            geom: Some(geom),
+            locked: Some(false),
+            input: Some(input_route_label(InputRouteId::Libei).into()),
+            capture: Some(capture_route_label(CaptureRouteId::ScreenShot2).into()),
+            note: Some("imprecise".into()),
+            report: Some("offset not measured".into()),
+        };
+        let encoded = encode_desk_response(&full).unwrap();
+        assert_eq!(decode_desk_response(&encoded).unwrap(), full);
+        let bare = DeskResponse::bare(9);
+        let bare_line = encode_desk_response(&bare).unwrap();
+        assert!(!bare_line.contains("image_b64"));
+        assert_eq!(decode_desk_response(&bare_line).unwrap(), bare);
+        assert_eq!(desk_b64_decode(&b64(b"Man")).unwrap(), b"Man");
+        assert!(desk_b64_decode("****").is_err());
+        assert!(peer_uid_allowed(1000, 1000));
+        assert!(!peer_uid_allowed(1000, 0));
+        assert_eq!(
+            input_route_order(),
+            &[
+                InputRouteId::Libei,
+                InputRouteId::Notify,
+                InputRouteId::Uinput,
+                InputRouteId::Ydotool
+            ]
+        );
+        assert_eq!(
+            capture_route_order(),
+            &[
+                CaptureRouteId::ScreenShot2,
+                CaptureRouteId::Spectacle,
+                CaptureRouteId::PortalScreenshot
+            ]
+        );
+        assert_eq!(
+            desktop_control_status(
+                input_route_label(InputRouteId::Libei),
+                capture_route_label(CaptureRouteId::ScreenShot2)
+            ),
+            "Input: RemoteDesktop portal (libei)\nCapture: KWin ScreenShot2"
+        );
+    }
+
+    struct GateFake {
+        locked: bool,
+        released: u32,
+        suspended: u32,
+        moves: u32,
+        shots: u32,
+        lists: u32,
+    }
+
+    impl DesktopBackend for GateFake {
+        fn list_monitors(&mut self) -> Result<Vec<MonitorGeom>, String> {
+            self.lists += 1;
+            Ok(vec![mon("main", 0, 0, 200, 100, 1.0, true)])
+        }
+        fn screenshot(&mut self, _monitor: &str) -> Result<CapturedShot, String> {
+            self.shots += 1;
+            Ok(CapturedShot {
+                bytes: vec![9],
+                mime: "image/png".into(),
+                geom: shot(0, 0, 200, 100, 200, 100, 1.0),
+            })
+        }
+        fn move_abs(&mut self, _x: i32, _y: i32) -> Result<(), String> {
+            self.moves += 1;
+            Ok(())
+        }
+        fn button(&mut self, _button: MouseButton, _down: bool) -> Result<(), String> {
+            Ok(())
+        }
+        fn scroll(&mut self, _dx: i32, _dy: i32) -> Result<(), String> {
+            Ok(())
+        }
+        fn type_text(&mut self, _text: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn key_combo(&mut self, _combo: &KeyCombo) -> Result<(), String> {
+            Ok(())
+        }
+        fn is_locked(&mut self) -> bool {
+            self.locked
+        }
+        fn release_input(&mut self) {
+            self.released += 1;
+        }
+        fn suspend_input(&mut self) {
+            self.suspended += 1;
+        }
+    }
+
+    #[test]
+    fn broker_refuses_when_halted_or_switch_off() {
+        let mut fake = GateFake {
+            locked: false,
+            released: 0,
+            suspended: 0,
+            moves: 0,
+            shots: 0,
+            lists: 0,
+        };
+        let off = apply_desk_request(
+            &mut fake,
+            CallGate {
+                enabled: false,
+                halted: false,
+            },
+            &DeskRequest::Screenshot {
+                id: 1,
+                monitor: "all".into(),
+            },
+        );
+        assert!(!off.ok);
+        assert!(!off.exit);
+        assert_eq!(off.error.as_deref(), Some(OFF_MSG));
+        assert_eq!(fake.suspended, 1);
+        assert_eq!(fake.shots, 0);
+
+        let halted = apply_desk_request(
+            &mut fake,
+            CallGate {
+                enabled: true,
+                halted: true,
+            },
+            &DeskRequest::MoveAbs { id: 2, x: 1, y: 1 },
+        );
+        assert!(!halted.ok);
+        assert!(halted.exit);
+        assert_eq!(halted.error.as_deref(), Some(HALT_MSG));
+        assert_eq!(fake.released, 1);
+        assert_eq!(fake.moves, 0);
+
+        fake.locked = true;
+        let locked = apply_desk_request(
+            &mut fake,
+            CallGate {
+                enabled: true,
+                halted: false,
+            },
+            &DeskRequest::Probe { id: 3 },
+        );
+        assert_eq!(locked.error.as_deref(), Some(LOCK_MSG));
+        assert_eq!(fake.released, 2);
+        assert_eq!(fake.moves, 0);
+
+        let shot = apply_desk_request(
+            &mut fake,
+            CallGate {
+                enabled: true,
+                halted: false,
+            },
+            &DeskRequest::ListMonitors { id: 4 },
+        );
+        assert!(shot.ok);
+        assert_eq!(fake.lists, 1);
+        assert_eq!(fake.released, 2);
     }
 }
