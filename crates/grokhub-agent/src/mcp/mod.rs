@@ -9,8 +9,8 @@ mod rpc;
 mod stdio;
 
 pub use config::{
-    config_file, import_documents, import_paths, load_servers, read_mcp_text, target_label,
-    ImportReport, ServerDef,
+    config_file, import_documents, import_paths, load_servers, load_servers_for, read_mcp_text,
+    target_label, ImportReport, ServerDef,
 };
 pub use elicit::{
     alias_elicit, attach_elicit, detach_elicit, unalias_elicit, ElicitInbox, ElicitNote, ElicitView,
@@ -116,6 +116,8 @@ struct State {
     path: PathBuf,
     gen: u64,
     mtime: Option<SystemTime>,
+    /// Hash of enabled plugins. A disable or content change drops plugin servers.
+    server_stamp: String,
     loaded: bool,
     workspace: PathBuf,
     slots: BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>,
@@ -127,6 +129,7 @@ impl State {
             path: PathBuf::new(),
             gen: 0,
             mtime: None,
+            server_stamp: String::new(),
             loaded: false,
             workspace: PathBuf::new(),
             slots: BTreeMap::new(),
@@ -161,7 +164,11 @@ pub fn shutdown_all() {
 }
 
 pub fn configured() -> Vec<DoctorRow> {
-    config::load_servers()
+    let workspace = {
+        let held = lock_state();
+        workspace_of(&held)
+    };
+    config::load_servers_for(&workspace)
         .into_iter()
         .map(|(name, def)| DoctorRow {
             name,
@@ -535,16 +542,32 @@ fn slots_now() -> BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>> {
     slots
 }
 
+fn workspace_of(held: &State) -> PathBuf {
+    if held.workspace.as_os_str().is_empty() {
+        std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir())
+    } else {
+        held.workspace.clone()
+    }
+}
+
 fn load_slots() -> (BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>, PathBuf) {
     let mut held = lock_state();
+    let workspace = workspace_of(&held);
+    // Plugin state is read while this lock is held. Plugin code must not take it.
+    let stamp = crate::plugins::listing_stamp(&workspace);
     let path = config::config_file();
     let (gen, mtime) = fingerprint(&path);
-    if !held.loaded || held.path != path || held.gen != gen || held.mtime != mtime {
+    if !held.loaded
+        || held.path != path
+        || held.gen != gen
+        || held.mtime != mtime
+        || held.server_stamp != stamp
+    {
         for slot in held.slots.values() {
             lock_slot(slot).conn.take();
         }
         held.slots.clear();
-        for (name, def) in config::load_servers() {
+        for (name, def) in config::load_servers_for(&workspace) {
             held.slots.insert(
                 name.clone(),
                 std::sync::Arc::new(Mutex::new(SlotInner::new(name, def))),
@@ -554,12 +577,8 @@ fn load_slots() -> (BTreeMap<String, std::sync::Arc<Mutex<SlotInner>>>, PathBuf)
         held.path = path;
         held.gen = gen;
         held.mtime = mtime;
+        held.server_stamp = stamp;
     }
-    let workspace = if held.workspace.as_os_str().is_empty() {
-        std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir())
-    } else {
-        held.workspace.clone()
-    };
     (held.slots.clone(), workspace)
 }
 
