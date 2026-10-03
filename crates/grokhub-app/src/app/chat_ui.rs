@@ -1984,7 +1984,7 @@ impl Cabin {
             0.0
         };
         let feed_n = if pulse_on {
-            home_feed_count(&self.updates)
+            home_feed_count(&self.updates, &self.cfg.feed_pulse, now_ms())
         } else {
             0
         };
@@ -2032,7 +2032,12 @@ impl Cabin {
                 egui::Layout::top_down_justified(egui::Align::Center),
                 |ui| {
                     ui.set_width(pane_w);
+                    let composer_origin = ui.cursor().min;
                     self.ui_composer_stack(ui);
+                    let composer_rect = egui::Rect::from_min_max(
+                        composer_origin,
+                        egui::pos2(composer_origin.x + pane_w, ui.cursor().min.y),
+                    );
                     if self.chrome_here() {
                         self.paint_perm_ask(ui);
                         self.paint_elicit_ask(ui);
@@ -2043,7 +2048,7 @@ impl Cabin {
                         let gap = ui.available_height();
                         ui.add_space(((gap - below) * 0.5).max(0.0));
                         if feed_n > 0 {
-                            self.paint_update_feed(ui, pane_w);
+                            self.paint_update_feed(ui, pane_w, composer_rect);
                         }
                         if device_on {
                             if feed_n > 0 {

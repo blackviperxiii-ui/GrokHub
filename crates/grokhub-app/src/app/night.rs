@@ -159,6 +159,7 @@ impl Cabin {
                 ui.add_space(8.0);
             }
             let mut drop: Option<usize> = None;
+            let mut unhide_loop: Option<String> = None;
             if self.grok_loops.is_empty() {
                 if crate::cards::empty_prompt_tile(
                     ui,
@@ -199,6 +200,13 @@ impl Cabin {
                                     ui.label(
                                         RichText::new(&body).size(12.0).color(crate::theme::muted()),
                                     );
+                                    if grokhub_core::source_hidden(
+                                        &self.cfg.feed_pulse,
+                                        &self.grok_loops[i].id,
+                                    ) && crate::cards::ghost_pill(ui, grokhub_core::HOME_HIDDEN_NOTE)
+                                    {
+                                        unhide_loop = Some(self.grok_loops[i].id.clone());
+                                    }
                                 });
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
@@ -255,6 +263,9 @@ impl Cabin {
                     }
                 }
             }
+            if let Some(id) = unhide_loop {
+                self.undo_hide_automation_from_home(&id);
+            }
             });
         });
     }
@@ -271,6 +282,7 @@ impl Cabin {
         let clock = Self::local_clock();
         let mut remove: Option<usize> = None;
         let mut run: Option<usize> = None;
+        let mut unhide: Option<String> = None;
         let mut toggled = false;
         for i in 0..self.automations.len() {
             let title = match self.automations[i].name.trim() {
@@ -312,6 +324,11 @@ impl Cabin {
                                     .wrap(),
                                 );
                             }
+                            if grokhub_core::source_hidden(&self.cfg.feed_pulse, &self.automations[i].id)
+                                && crate::cards::ghost_pill(ui, grokhub_core::HOME_HIDDEN_NOTE)
+                            {
+                                unhide = Some(self.automations[i].id.clone());
+                            }
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if crate::cards::ghost_pill(ui, "Remove") {
@@ -343,6 +360,9 @@ impl Cabin {
             if let Some(a) = self.automations.get(i).cloned() {
                 self.fire_night(a, now);
             }
+        }
+        if let Some(id) = unhide {
+            self.undo_hide_automation_from_home(&id);
         }
         ui.add_space(12.0);
     }
