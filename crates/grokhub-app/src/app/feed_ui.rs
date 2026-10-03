@@ -593,6 +593,10 @@ impl Cabin {
         if !self.digest_wants_lookup || self.digest_busy || self.digest_pending.is_some() {
             return;
         }
+        if self.cfg.native_engine {
+            self.spawn_native_digest();
+            return;
+        }
         if cfg!(test) {
             return;
         }
@@ -621,9 +625,12 @@ impl Cabin {
                 self.digest_busy = false;
                 self.digest_pending = Some(text);
             }
-            Ok(Err(_)) => {
+            Ok(Err(err)) => {
                 self.digest_busy = false;
                 self.digest_pending = Some("NONE".into());
+                if self.cfg.native_engine && !err.is_empty() {
+                    self.status = err;
+                }
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.digest_rx = Some(rx);
@@ -919,7 +926,7 @@ impl Cabin {
     /// than a handful of generated ideas and the last ask is hours old, never in
     /// quiet hours or over the token budget. `force` is the Suggest ideas button.
     pub(super) fn maybe_suggest_ideas(&mut self, force: bool) {
-        if self.ideas_rx.is_some() || !self.llm_ready() {
+        if self.ideas_rx.is_some() || (!self.llm_ready() && !self.cfg.native_engine) {
             return;
         }
         let now = now_ms();
@@ -935,9 +942,13 @@ impl Cabin {
         let (prompt, inputs) = self.idea_request();
         self.cfg.feed_pulse.last_ideas_ms = now;
         self.persist_cfg();
-        let key = self.bearer();
         let (tx, rx) = mpsc::channel();
         self.ideas_rx = Some((rx, inputs));
+        if self.cfg.native_engine {
+            self.spawn_native_ideas(prompt, tx);
+            return;
+        }
+        let key = self.bearer();
         std::thread::spawn(move || {
             let _ = tx.send(cabin_fast_llm(key, prompt));
         });

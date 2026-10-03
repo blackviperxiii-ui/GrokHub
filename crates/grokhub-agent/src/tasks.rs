@@ -773,6 +773,13 @@ pub fn halt_tree(session_id: &str) {
     }
 }
 
+/// True while a session still has a task hub or a registered cancel token.
+/// A finished or halted run is forgotten, so this goes false.
+pub fn session_is_live(session_id: &str) -> bool {
+    let world = lock_world();
+    world.hubs.contains_key(session_id) || world.cancels.contains_key(session_id)
+}
+
 pub fn forget_session(session_id: &str) {
     halt_tree(session_id);
     let mut world = lock_world();
