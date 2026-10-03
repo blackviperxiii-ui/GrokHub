@@ -252,18 +252,15 @@ fn should_review(input: &ReviewIn<'_>) -> bool {
 fn attended_decision(input: &ReviewIn<'_>) -> Decision {
     let mut gate = *input.gate;
     gate.attended = true;
-    match input.policy {
-        Some(policy) => gate::decide_with(
-            &gate,
-            input.name,
-            input.arguments,
-            input.latched_always,
-            input.desk,
-            input.workspace,
-            Some(policy),
-        ),
-        None => gate::decide(&gate, input.name, input.latched_always, input.desk),
-    }
+    gate::decide_with(
+        &gate,
+        input.name,
+        input.arguments,
+        input.latched_always,
+        input.desk,
+        input.workspace,
+        input.policy,
+    )
 }
 
 fn hard_shell(name: &str, arguments: &str) -> bool {
@@ -1257,6 +1254,7 @@ mod tests {
             permits,
             perms: policy,
             context_length: 0,
+            tasks: None,
         };
         let mut history = Vec::new();
         let mut events = Vec::new();

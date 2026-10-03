@@ -170,6 +170,14 @@ fn attach_run_with_hook(
 }
 
 fn stop_run(id: &str) {
+    // Tasks and linked `/bg` engines first, then this run's cancel hook.
+    // The hook still runs before `delete_session` removes the file.
+    crate::tasks::halt_tree(id);
+    cancel_token(id);
+}
+
+/// Cancel the run registered for `id`. Does not walk `/bg` children.
+pub(crate) fn cancel_token(id: &str) {
     let live = runs()
         .lock()
         .unwrap_or_else(|err| err.into_inner())
@@ -185,6 +193,15 @@ fn stop_run(id: &str) {
     if let Some(hook) = hook {
         hook();
     }
+}
+
+/// Stop one native session's stream and its background tasks. Not its `/bg` children.
+pub fn cancel_session(id: &str) {
+    let Ok(id) = safe_id(id) else {
+        return;
+    };
+    crate::tasks::halt_session(id);
+    cancel_token(id);
 }
 
 pub fn sessions_dir() -> PathBuf {
@@ -470,6 +487,7 @@ pub fn delete_session(id: &str) -> Result<(), String> {
     if path.is_file() {
         fs::remove_file(&path).map_err(|err| err.to_string())?;
     }
+    crate::tasks::forget_session(&id);
     bump_history();
     Ok(())
 }
