@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 2.10.70 — 2026-10-03
+
+A native engine arrives behind a switch. **Settings → Labs → Native engine (no Grok CLI)** is off by default, and while it's off chats launch the Grok CLI exactly as before. With it on, new chats run GrokHub's own read-only agent (new `grokhub-agent` crate, sync, `ureq`). It streams `POST api.x.ai/v1/responses` with model `grok-4.7` and the composer's reasoning effort, plus hosted `web_search` and `x_search`. Retries follow the Grok Build schedule (15 tries, 2 s doubling to 30 s, ±20% jitter, Retry-After). The loop runs until no tool call remains or 50 turns pass, and honors Stop, Halt, steer at the next turn boundary, and a guard against the same call three times in a row. The tools are read-only: `read_file` (PNG/JPEG go back as images), `list_dir`, `grep` (`.gitignore` aware) and `glob`, all confined to the workspace. Any write, edit or shell call is refused. Those chats carry a **Native** badge, and usage shows tokens and cost labeled "SuperGrok pool" (sign-in) or "API credits" (key).
+
+Sign-in is shared. The Imagine sign-in becomes **Sign in with Grok**, and its keychain account moves once from `imagine-oauth` to `xai-oauth`. The bearer is your GrokHub sign-in, then your console API key, otherwise "Sign in with Grok or add an API key." The native engine never reads the Grok CLI's `~/.grok/auth.json`, `config.toml` or `GROK_HOME`, and never calls the CLI proxy. A source-scan test guards that. Parts of the prompt and retry logic are ported from xai-org/grok-build under Apache-2.0 (see `crates/grokhub-agent/NOTICE`). No live call has been made yet.
+
+- Linux: `grokhub-linux-v2.10.70.tar.gz` and AUR `pkgver=2.10.70`.
+- Windows: `GrokHub-Setup-2.10.70.exe` and `grokhub-windows-v2.10.70.zip`.
+
 ## 2.10.69 — 2026-10-03
 
 Desktop control on KDE Wayland gets fallbacks. If the portal won't hand over libei, input stays in the same RemoteDesktop session through the portal's Notify* calls. If there's no portal session at all, it moves to an absolute uinput pointer (evdev 0.13, Linux only) that spans the union of the outputs from `kscreen-doctor`, so clicks land on absolute coordinates with no acceleration. ydotool is the last resort and is labeled imprecise. Capture tries KWin ScreenShot2, then `spectacle -b -n -o`, then the portal Screenshot, and crops to the requested monitor. xdotool is never used on Wayland.

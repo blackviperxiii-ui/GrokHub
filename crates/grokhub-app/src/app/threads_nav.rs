@@ -165,6 +165,7 @@ impl Cabin {
                 t.grok_session = None;
                 t.grok_cwd = None;
                 t.project_id = want_project.clone();
+                t.native = self.cfg.native_engine;
             }
             self.stamp_current_access();
             self.persist();
@@ -183,6 +184,7 @@ impl Cabin {
         let title = if scratch { "Scratch" } else { "Chat" };
         let mut created = ChatThread::new(title, scratch);
         created.project_id = want_project;
+        created.native = self.cfg.native_engine;
         self.threads.push(created);
         self.thread_idx = self.threads.len() - 1;
         self.messages = Arc::new(Vec::new());
