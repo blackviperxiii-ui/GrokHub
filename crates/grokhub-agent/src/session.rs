@@ -208,6 +208,13 @@ pub fn sessions_dir() -> PathBuf {
     crate::perm::config_dir().join("sessions")
 }
 
+/// `sessions/<id>/media`: files the native media tools download for this session.
+/// Removed with the session.
+pub fn media_dir(id: &str) -> Result<PathBuf, String> {
+    let id = safe_id(id)?;
+    Ok(sessions_dir().join(id).join("media"))
+}
+
 pub fn session_file(id: &str) -> Result<PathBuf, String> {
     let id = safe_id(id)?;
     Ok(sessions_dir().join(format!("{id}.jsonl")))
@@ -486,6 +493,10 @@ pub fn delete_session(id: &str) -> Result<(), String> {
     let path = session_file(&id)?;
     if path.is_file() {
         fs::remove_file(&path).map_err(|err| err.to_string())?;
+    }
+    let media = sessions_dir().join(&id);
+    if media.is_dir() {
+        let _ = fs::remove_dir_all(&media);
     }
     crate::tasks::forget_session(&id);
     bump_history();

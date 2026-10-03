@@ -415,9 +415,10 @@ fn serve_native(session_id: String, ext_rx: std::sync::mpsc::Receiver<ExternalCm
             let _ = evt_tx.send(AcpEvent::Done { stop_reason: "error".into() });
             continue;
         };
-        let client = XaiClient::new(cfg.bearer, cfg.auth_kind, Duration::from_secs(120));
         engine.set_workspace(cfg.workspace);
         engine.set_gate(cfg.gate);
+        engine.set_imagine_bearer(&cfg.bearer);
+        let client = XaiClient::new(cfg.bearer, cfg.auth_kind, Duration::from_secs(120));
         engine.set_route(
             std::sync::Arc::new(client),
             cfg.model,
