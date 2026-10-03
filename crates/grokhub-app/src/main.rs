@@ -25,6 +25,7 @@ mod github;
 mod host;
 mod markdown;
 mod native_mcp;
+mod native_plugins;
 mod night;
 mod loops;
 mod card_prefs;

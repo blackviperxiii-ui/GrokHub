@@ -68,6 +68,21 @@ pub fn load_servers() -> BTreeMap<String, ServerDef> {
     servers_from_document(&text).unwrap_or_default()
 }
 
+/// User `mcp.json` entries plus enabled, trusted plugin servers. User names win.
+/// Plugin documents are already prefixed and are not written back to the file.
+pub fn load_servers_for(workspace: &Path) -> BTreeMap<String, ServerDef> {
+    let mut out = load_servers();
+    for doc in crate::plugins::mcp_documents(workspace) {
+        let Ok(extra) = servers_from_document(&doc) else {
+            continue;
+        };
+        for (name, def) in extra {
+            out.entry(name).or_insert(def);
+        }
+    }
+    out
+}
+
 pub fn import_documents(docs: &[String]) -> Result<ImportReport, String> {
     let mut incoming = BTreeMap::new();
     for doc in docs {
