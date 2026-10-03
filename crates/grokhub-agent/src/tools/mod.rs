@@ -1,5 +1,6 @@
 //! Workspace tools. `execute` stays read-only. `dispatch` runs the gated set.
 
+pub(crate) mod control;
 mod desktop;
 mod glob;
 mod grep;
@@ -7,16 +8,18 @@ mod list_dir;
 mod lock;
 mod read_file;
 mod search_replace;
-mod shell;
+pub(crate) mod shell;
 mod write;
 
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use serde_json::{json, Value};
 
 pub use crate::gate::{is_readonly, READ_ONLY_PHASE};
 
 use crate::gate::{self, DeskFlags, Gate};
+use crate::tasks::TaskHub;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolOutput {
@@ -53,6 +56,7 @@ pub struct ToolCtx<'a> {
     pub workspace: &'a Path,
     pub desktop: Option<&'a dyn DesktopOps>,
     pub stop: &'a dyn Fn() -> bool,
+    pub tasks: Option<Arc<TaskHub>>,
 }
 
 pub fn tool_schemas() -> Vec<Value> {
@@ -61,6 +65,8 @@ pub fn tool_schemas() -> Vec<Value> {
         list_dir::schema(),
         grep::schema(),
         glob::schema(),
+        control::output_schema(),
+        control::scheduler_list_schema(),
     ]
 }
 
@@ -72,6 +78,10 @@ pub fn schemas_for(gate: &Gate) -> Vec<Value> {
     tools.push(write::schema());
     tools.push(search_replace::schema());
     tools.push(shell::schema());
+    tools.push(control::kill_schema());
+    tools.push(control::monitor_schema());
+    tools.push(control::scheduler_create_schema());
+    tools.push(control::scheduler_delete_schema());
     if gate.desktop {
         tools.extend(desktop::schemas());
     }
@@ -86,7 +96,14 @@ pub fn execute(workspace: &Path, name: &str, arguments: &str) -> ToolOutput {
         Ok(args) => args,
         Err(output) => return output,
     };
-    dispatch_readonly(workspace, name, &args)
+    let stop = || false;
+    let ctx = ToolCtx {
+        workspace,
+        desktop: None,
+        stop: &stop,
+        tasks: None,
+    };
+    dispatch_readonly(&ctx, name, &args)
 }
 
 pub fn dispatch(ctx: &ToolCtx<'_>, name: &str, arguments: &str) -> ToolOutput {
@@ -95,17 +112,46 @@ pub fn dispatch(ctx: &ToolCtx<'_>, name: &str, arguments: &str) -> ToolOutput {
         Err(output) => return output,
     };
     if is_readonly(name) {
-        return dispatch_readonly(ctx.workspace, name, &args);
+        return dispatch_readonly(ctx, name, &args);
     }
     match name {
         "write" => write::run(ctx.workspace, &args),
         "search_replace" => search_replace::run(ctx.workspace, &args),
-        "run_terminal_command" => shell::run(ctx.workspace, &args, ctx.stop),
+        "run_terminal_command" => run_shell(ctx, &args),
+        "kill_command_or_subagent" => control::kill(ctx.tasks.as_ref(), &args),
+        "monitor" => control::monitor(ctx, &args),
+        "scheduler_create" => control::scheduler_create(&args),
+        "scheduler_delete" => control::scheduler_delete(&args),
         "screenshot" | "click" | "move" | "drag" | "scroll" | "type" | "key" => match ctx.desktop {
             Some(desktop) => desktop.call(name, &args),
             None => ToolOutput::err(grokhub_core::desktop_mcp::OFF_MSG),
         },
         other => ToolOutput::err(gate::readonly_refusal(other)),
+    }
+}
+
+fn run_shell(ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput {
+    let background = args
+        .get("is_background")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !background {
+        return shell::run(ctx.workspace, args, ctx.stop);
+    }
+    let Some(tasks) = ctx.tasks.as_ref() else {
+        return ToolOutput::err("background tasks are not available on this run");
+    };
+    let command = args
+        .get("command")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if command.is_empty() {
+        return ToolOutput::err("command is required");
+    }
+    match tasks.spawn(ctx.workspace, command) {
+        Ok(id) => ToolOutput::ok(format!("task id: {id}\nstatus: running")),
+        Err(err) => ToolOutput::err(err),
     }
 }
 
@@ -123,12 +169,14 @@ pub fn desk_flags(name: &str, gate: &Gate, desktop: Option<&dyn DesktopOps>) -> 
     })
 }
 
-fn dispatch_readonly(workspace: &Path, name: &str, args: &Value) -> ToolOutput {
+fn dispatch_readonly(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolOutput {
     match name {
-        "read_file" => read_file::run(workspace, args),
-        "list_dir" => list_dir::run(workspace, args),
-        "grep" => grep::run(workspace, args),
-        "glob" => glob::run(workspace, args),
+        "read_file" => read_file::run(ctx.workspace, args),
+        "list_dir" => list_dir::run(ctx.workspace, args),
+        "grep" => grep::run(ctx.workspace, args),
+        "glob" => glob::run(ctx.workspace, args),
+        "get_command_or_subagent_output" => control::output(ctx.tasks.as_ref(), args),
+        "scheduler_list" => control::scheduler_list(),
         other => ToolOutput::err(format!("{READ_ONLY_PHASE}: `{other}` is not available.")),
     }
 }
@@ -216,8 +264,22 @@ mod tests {
     #[test]
     fn tool_schemas_have_object_roots() {
         let tools = tool_schemas();
-        assert_eq!(tools.len(), 4);
-        for tool in tools {
+        let names: Vec<&str> = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "read_file",
+                "list_dir",
+                "grep",
+                "glob",
+                "get_command_or_subagent_output",
+                "scheduler_list",
+            ]
+        );
+        for tool in &tools {
             assert_eq!(tool["type"], "function");
             assert_eq!(tool["parameters"]["type"], "object");
             assert!(tool["name"].as_str().is_some());
