@@ -13,3 +13,4 @@ The Apache-2.0 license text is in LICENSE-APACHE-2.0 in this directory.
 `src/tools/web_fetch.rs` ports the web_fetch tool shape, size caps and redirect handling from Grok Build's tool crates.
 `src/memory.rs` ports the FTS-plus-temporal-decay recall score, the pre-compaction flush, and the fenced first-turn memory reminder from `xai-grok-memory` and `xai-grok-shell`.
 `src/slash_parity.rs` lists the pager builtin slash commands from `xai-grok-pager` `slash/commands/mod.rs`.
+`src/plugins.rs` ports plugin manifests, git/local install, marketplace index parsing, and trust-before-enable from `xai-grok-agent` `plugins/` and `xai-grok-plugin-marketplace`.
