@@ -1725,7 +1725,7 @@ mod tests {
             vec![crate::hooks::TestHook {
                 event: "PreToolUse".into(),
                 matcher: "Write".into(),
-                command: r#"printf '%s\n' '{"decision":"deny","reason":"nope"}'"#.into(),
+                command: crate::hooks::test_echo(r#"{"decision":"deny","reason":"nope"}"#, None),
                 timeout: std::time::Duration::from_secs(5),
                 source_dir: dir.clone(),
             }],
@@ -1786,7 +1786,7 @@ mod tests {
             vec![crate::hooks::TestHook {
                 event: "PreToolUse".into(),
                 matcher: String::new(),
-                command: r#"printf '%s\n' '{"decision":"allow"}'"#.into(),
+                command: crate::hooks::test_echo(r#"{"decision":"allow"}"#, None),
                 timeout: std::time::Duration::from_secs(5),
                 source_dir: dir.clone(),
             }],

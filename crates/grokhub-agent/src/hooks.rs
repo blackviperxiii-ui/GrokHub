@@ -202,6 +202,20 @@ pub fn set_folder_trust(workspace: &Path, trusted: bool) -> Result<(), String> {
     save_trusted(&list)
 }
 
+/// A test hook command that prints `json` (and exits with `exit`), in the shell the
+/// hook runner uses on this platform: `sh -c` on Unix, PowerShell on Windows.
+#[cfg(test)]
+pub(crate) fn test_echo(json: &str, exit: Option<i32>) -> String {
+    let tail = exit
+        .map(|code| format!("; exit {code}"))
+        .unwrap_or_default();
+    if cfg!(windows) {
+        format!("Write-Output '{json}'{tail}")
+    } else {
+        format!("printf '%s\\n' '{json}'{tail}")
+    }
+}
+
 #[cfg(test)]
 pub struct TestHook {
     pub event: String,
@@ -1204,7 +1218,7 @@ mod tests {
             vec![TestHook {
                 event: "PreToolUse".into(),
                 matcher: String::new(),
-                command: r#"printf '%s\n' '{"decision":"allow"}'"#.into(),
+                command: test_echo(r#"{"decision":"allow"}"#, None),
                 timeout: Duration::from_secs(5),
                 source_dir: dir.clone(),
             }],
@@ -1244,7 +1258,7 @@ mod tests {
             vec![TestHook {
                 event: "PreToolUse".into(),
                 matcher: "Write".into(),
-                command: r#"printf '%s\n' '{"decision":"deny","reason":"nope"}'"#.into(),
+                command: test_echo(r#"{"decision":"deny","reason":"nope"}"#, None),
                 timeout: Duration::from_secs(5),
                 source_dir: dir.clone(),
             }],
@@ -1268,7 +1282,7 @@ mod tests {
             vec![TestHook {
                 event: "PreToolUse".into(),
                 matcher: String::new(),
-                command: r#"printf '%s\n' '{"decision":"allow"}'; exit 2"#.into(),
+                command: test_echo(r#"{"decision":"allow"}"#, Some(2)),
                 timeout: Duration::from_secs(5),
                 source_dir: dir.clone(),
             }],
@@ -1301,13 +1315,23 @@ mod tests {
         let sid_path = dir.join("sid");
         let tool_path = dir.join("tool");
         let stdin_path = dir.join("stdin");
-        let command = format!(
-            "printf '%s' \"$GROK_HOOK_EVENT\" > '{}'; printf '%s' \"$GROK_SESSION_ID\" > '{}'; printf '%s' \"$GROK_TOOL_NAME\" > '{}'; cat > '{}'",
-            event_path.display(),
-            sid_path.display(),
-            tool_path.display(),
-            stdin_path.display()
-        );
+        let command = if cfg!(windows) {
+            format!(
+                "[IO.File]::WriteAllText('{}', $env:GROK_HOOK_EVENT); [IO.File]::WriteAllText('{}', $env:GROK_SESSION_ID); [IO.File]::WriteAllText('{}', $env:GROK_TOOL_NAME); [IO.File]::WriteAllText('{}', [Console]::In.ReadToEnd())",
+                event_path.display(),
+                sid_path.display(),
+                tool_path.display(),
+                stdin_path.display()
+            )
+        } else {
+            format!(
+                "printf '%s' \"$GROK_HOOK_EVENT\" > '{}'; printf '%s' \"$GROK_SESSION_ID\" > '{}'; printf '%s' \"$GROK_TOOL_NAME\" > '{}'; cat > '{}'",
+                event_path.display(),
+                sid_path.display(),
+                tool_path.display(),
+                stdin_path.display()
+            )
+        };
         let guard = install_test_hooks(
             &session,
             vec![TestHook {
