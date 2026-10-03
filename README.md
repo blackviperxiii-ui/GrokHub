@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.67** — Home learns which cards help: the ones you open rise, the ones you keep dismissing fold away, failures always show, and Settings → What Home learned can forget it all. Everything stays on this machine.
+**v2.10.68** — Wayland desktop control on KDE Plasma 6 goes through the RemoteDesktop portal and libei, with exact absolute clicks, one-time consent remembered in the keychain, and silent KWin screenshots. Needs a live check on KDE.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.67.tar.gz`, AUR | **v2.10.67** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.67.exe`, `grokhub-windows-v2.10.67.zip` | **v2.10.67** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.68.tar.gz`, AUR | **v2.10.68** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.68.exe`, `grokhub-windows-v2.10.68.zip` | **v2.10.68** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
