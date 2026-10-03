@@ -444,6 +444,33 @@ pub fn record_compaction(
     Ok(())
 }
 
+/// Append a usage record with no items, for side calls such as `/dream`.
+/// A deleted session is not written back.
+pub fn record_usage(
+    id: &str,
+    cwd: &str,
+    model: &str,
+    usage: &Usage,
+    meter: &str,
+) -> Result<(), String> {
+    let id = safe_id(id)?.to_string();
+    if tombstoned(&id) {
+        return Ok(());
+    }
+    touch(&id, cwd, model)?;
+    if tombstoned(&id) {
+        let _ = fs::remove_file(session_file(&id)?);
+        return Ok(());
+    }
+    append_json(&id, &usage_json(usage, meter))?;
+    if tombstoned(&id) {
+        let _ = fs::remove_file(session_file(&id)?);
+        return Ok(());
+    }
+    bump_history();
+    Ok(())
+}
+
 pub fn fork_session(id: &str) -> Result<SessionInfo, String> {
     let mut info = load_session(id)?;
     let new_id = format!("native-{}", grokhub_core::uid("n"));
