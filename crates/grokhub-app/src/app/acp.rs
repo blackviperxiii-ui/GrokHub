@@ -149,6 +149,9 @@ impl Cabin {
     }
 
     pub(super) fn ensure_acp(&mut self) -> Result<(), String> {
+        if self.native_engine_for_current() {
+            return self.ensure_native_engine();
+        }
         if grokhub_acp::find_grok().is_none() {
             return Err("Grok Build CLI is not on PATH".into());
         }

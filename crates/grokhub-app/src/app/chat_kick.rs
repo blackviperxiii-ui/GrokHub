@@ -290,6 +290,7 @@ impl Cabin {
             self.pending_kick = Some(consume_attach);
             return;
         }
+        self.drop_stale_native_handle();
         if !self.scheduled_perm && self.permission_mode.uses_acp() && self.acp.is_none() {
             if let Err(e) = self.ensure_acp() {
                 self.fail_ask_without_acp(&e);
@@ -330,6 +331,9 @@ impl Cabin {
         } else {
             None
         };
+        if self.kick_native_turn(&last_user, image.as_deref(), &raw_ask, &thread_label) {
+            return;
+        }
         if !self.scheduled_perm && self.permission_mode.uses_acp() {
             self.side_ask_kick = false;
             let prompt_err = self

@@ -1,6 +1,7 @@
 //! Imagine's own xAI sign-in. Tokens stay in the OS keychain, never a file.
 //! The cabin OAuth flow in `oauth` is a different scope and is not used here.
 
+use grokhub_core::OAuthAccountStore;
 use grokhub_core::{
     imagine_authorize_url, imagine_code_form, imagine_device_form, imagine_device_poll_form,
     imagine_needs_refresh, imagine_refresh_form, imagine_tokens_from_xai, keychain_unavailable_message,
@@ -17,7 +18,6 @@ use std::time::{Duration, Instant};
 
 const UA: &str = concat!("GrokHub/", env!("CARGO_PKG_VERSION"), " (xAI OAuth; Linux)");
 const SERVICE: &str = "GrokHub";
-const ACCOUNT: &str = "imagine-oauth";
 const LOOPBACK_SECS: u64 = 300;
 const READ_CAP: usize = 16 * 1024;
 
@@ -29,37 +29,50 @@ pub trait TokenStore {
 
 pub struct KeyringStore;
 
-fn keyring_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(SERVICE, ACCOUNT).map_err(|e| keychain_unavailable_message(&e.to_string()))
+struct KeyringAccounts;
+
+fn keyring_entry(account: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(SERVICE, account).map_err(|e| keychain_unavailable_message(&e.to_string()))
 }
 
-impl TokenStore for KeyringStore {
-    fn load(&self) -> Result<Option<ImagineTokens>, String> {
-        let entry = keyring_entry()?;
+impl grokhub_core::OAuthAccountStore for KeyringAccounts {
+    fn load_account(&self, account: &str) -> Result<Option<ImagineTokens>, String> {
+        let entry = keyring_entry(account)?;
         match entry.get_password() {
-            Ok(raw) => {
-                let tokens = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-                Ok(Some(tokens))
-            }
+            Ok(raw) => Ok(Some(serde_json::from_str(&raw).map_err(|e| e.to_string())?)),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(e) => Err(keychain_unavailable_message(&e.to_string())),
         }
     }
 
-    fn save(&self, tokens: &ImagineTokens) -> Result<(), String> {
-        let entry = keyring_entry()?;
+    fn save_account(&self, account: &str, tokens: &ImagineTokens) -> Result<(), String> {
+        let entry = keyring_entry(account)?;
         let raw = serde_json::to_string(tokens).map_err(|e| e.to_string())?;
         entry
             .set_password(&raw)
             .map_err(|e| keychain_unavailable_message(&e.to_string()))
     }
 
-    fn delete(&self) -> Result<(), String> {
-        let entry = keyring_entry()?;
+    fn delete_account(&self, account: &str) -> Result<(), String> {
+        let entry = keyring_entry(account)?;
         match entry.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(keychain_unavailable_message(&e.to_string())),
         }
+    }
+}
+
+impl TokenStore for KeyringStore {
+    fn load(&self) -> Result<Option<ImagineTokens>, String> {
+        grokhub_core::load_xai_oauth(&KeyringAccounts)
+    }
+
+    fn save(&self, tokens: &ImagineTokens) -> Result<(), String> {
+        KeyringAccounts.save_account(grokhub_core::XAI_OAUTH_ACCOUNT, tokens)
+    }
+
+    fn delete(&self) -> Result<(), String> {
+        grokhub_core::delete_xai_oauth(&KeyringAccounts)
     }
 }
 

@@ -36,6 +36,7 @@ pub mod hub_sync;
 pub mod hygiene;
 pub mod ideas;
 pub mod imagine;
+pub mod xai_signin;
 pub mod imagine_auth;
 pub mod inhabit;
 pub mod learning;
@@ -286,14 +287,17 @@ pub use imagine::{
 };
 pub use imagine_auth::{
     choose_imagine_bearer, ct_eq, imagine_authorize_url, imagine_code_form, imagine_device_form,
-    imagine_device_poll_form, imagine_needs_refresh, imagine_oauth_preferred, imagine_refresh_form,
+    imagine_access_usable, imagine_device_poll_form, imagine_needs_refresh, imagine_oauth_preferred,
+    imagine_refresh_form,
     imagine_tokens_from_xai, keychain_unavailable_message, map_imagine_error, merge_imagine_refresh,
     oauth_nonce, parse_imagine_discovery, parse_loopback_callback, pkce_challenge, pkce_verifier,
     ImagineAuthorize, ImagineCred, ImagineCredKind, ImagineEndpoints, ImagineMappedError,
     ImagineTokens, IMAGINE_KEY_REJECTED, IMAGINE_NEED_SIGNIN, IMAGINE_NO_KEYCHAIN,
     IMAGINE_OAUTH_DENIED, IMAGINE_OAUTH_REFERRER, IMAGINE_OAUTH_SCOPE, IMAGINE_RATE_LIMIT,
-    IMAGINE_SIGN_IN_AGAIN,
+    IMAGINE_SIGN_IN_AGAIN, METER_API_KEY, METER_OAUTH, XAI_NEED_SIGNIN, XAI_OAUTH_ACCOUNT,
+    XAI_OAUTH_LEGACY_ACCOUNT,
 };
+pub use xai_signin::{choose_xai_bearer, delete_xai_oauth, load_xai_oauth, OAuthAccountStore};
 pub use inhabit::{
     can_inhabit, inhabit_bundle_usable, inhabit_claim_allowed, inhabit_ready, InhabitBundle,
 };
