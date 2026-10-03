@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 2.10.68 — 2026-10-02
+
+Desktop control on KDE Plasma 6 Wayland stops fighting the compositor. On a KDE session, GrokHub's desktop tools now use the xdg-desktop-portal RemoteDesktop session with libei for input (ashpd and reis, Linux only). Clicks are absolute moves inside KWin's per-output regions, with no pointer acceleration or calibration. KDE asks "Allow remote control" once. The restore token is kept in the OS keychain (service `GrokHub`, account `desktop-portal-restore`), never in a file, and each session's new token replaces the old one. If KDE asks again, the status says why.
+
+Screenshots on KDE use KWin's `org.kde.KWin.ScreenShot2`, silently and at full resolution. The packaged `grokhub.desktop` now carries `X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2` so KWin allows it. Monitors come from `kscreen-doctor -j`. If the portal is denied or unavailable, input falls back to ydotool and says it's imprecise. xdotool is never used on Wayland. wlroots desktops keep grim and ydotool, and X11 and Windows are unchanged.
+
+The **Let Grok control the desktop** switch (off by default) and Ask gating are unchanged. Halt (Ctrl+Alt+H) and the lock screen close the portal session, which revokes input at the compositor. This hasn't been run on a live KDE desktop yet.
+
+- Linux: `grokhub-linux-v2.10.68.tar.gz` and AUR `pkgver=2.10.68`.
+- Windows: `GrokHub-Setup-2.10.68.exe` and `grokhub-windows-v2.10.68.zip`.
+
 ## 2.10.67 — 2026-10-02
 
 Home learns which cards help. Opening, dismissing, More, Less, Hide and Follow up now also update a small local preference file, `card_prefs.json`, in the GrokHub config folder. It keeps decaying weights (14-day half-life) per card type, per source group, and per topic keyword. Keywords are at most three single words taken from the card title at the time of the event, with stopwords, digits and times dropped. It's capped at 200 groups and 200 keywords, and holds no sentences or body text. If the file is missing, the type and group weights are rebuilt from the signal log, which stays text-free.
