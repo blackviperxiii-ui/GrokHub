@@ -81,7 +81,8 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
             .strip_prefix(&workspace_c)
             .unwrap_or(path)
             .display()
-            .to_string();
+            .to_string()
+            .replace('\\', "/");
         for (i, line) in lines.iter().enumerate() {
             if !re.is_match(line) {
                 continue;

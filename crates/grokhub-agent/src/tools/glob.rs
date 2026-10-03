@@ -59,7 +59,7 @@ pub fn run(workspace: &Path, args: &Value) -> ToolOutput {
         let path = ent.path();
         let rel = path.strip_prefix(&workspace_c).unwrap_or(path);
         if matcher.is_match(rel) {
-            paths.push(rel.display().to_string());
+            paths.push(rel.display().to_string().replace('\\', "/"));
         }
         if paths.len() >= MAX_PATHS {
             break;
