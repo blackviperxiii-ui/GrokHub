@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.73** — Native engine (Labs, off by default): Auto mode reviews risky calls with local fast paths and a fail-closed grok-4.7 judge instead of always asking. Deny rules and dangerous commands still win. The Grok CLI stays the default.
+**v2.10.74** — Native engine (Labs, off by default): native chats become JSONL sessions with resume, fork, rename, export and delete, merged into History next to read-only Grok CLI sessions, with per-turn usage and cost. The Grok CLI stays the default.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.73.tar.gz`, AUR | **v2.10.73** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.73.exe`, `grokhub-windows-v2.10.73.zip` | **v2.10.73** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.74.tar.gz`, AUR | **v2.10.74** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.74.exe`, `grokhub-windows-v2.10.74.zip` | **v2.10.74** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.

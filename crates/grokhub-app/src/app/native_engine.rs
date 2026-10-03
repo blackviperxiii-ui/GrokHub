@@ -83,20 +83,52 @@ impl Cabin {
 
     pub(super) fn ensure_native_engine(&mut self) -> Result<(), String> {
         let cwd = self.native_workspace();
+        let (session_id, changed) = self.bind_native_session_id(&cwd);
+        if changed {
+            self.persist();
+        }
         if self
             .acp
             .as_ref()
-            .is_some_and(|handle| handle.session_id.starts_with("native-") && handle.cwd == cwd)
+            .is_some_and(|handle| handle.session_id == session_id && handle.cwd == cwd)
         {
             return self.publish_native_cfg();
         }
         self.acp = None;
-        let session_id = format!("native-{}", grokhub_core::uid("n"));
-        let (handle, ext_rx, evt_tx) = grokhub_acp::AcpHandle::external(cwd.clone(), session_id.clone());
+        let (handle, ext_rx, evt_tx) =
+            grokhub_acp::AcpHandle::external(cwd.clone(), session_id.clone());
         self.publish_native_cfg_for(&session_id)?;
         std::thread::spawn(move || serve_native(session_id, ext_rx, evt_tx));
         self.acp = Some(handle);
         Ok(())
+    }
+
+    /// Keep the thread's session id across handle restarts. A new id is minted once.
+    fn bind_native_session_id(&mut self, cwd: &std::path::Path) -> (String, bool) {
+        let idx = self
+            .chat_job_thread
+            .as_deref()
+            .and_then(|id| self.threads.iter().position(|t| t.id == id))
+            .unwrap_or(self.thread_idx);
+        let cwd_text = cwd.display().to_string();
+        let Some(thread) = self.threads.get_mut(idx).filter(|thread| thread.native) else {
+            return (format!("native-{}", grokhub_core::uid("n")), false);
+        };
+        let mut changed = false;
+        if thread.grok_cwd.as_deref().unwrap_or("").trim().is_empty() {
+            thread.grok_cwd = Some(cwd_text);
+            changed = true;
+        }
+        if let Some(id) = thread
+            .grok_session
+            .clone()
+            .filter(|id| !id.trim().is_empty())
+        {
+            return (id, changed);
+        }
+        let id = format!("native-{}", grokhub_core::uid("n"));
+        thread.grok_session = Some(id.clone());
+        (id, true)
     }
 
     fn fail_native(&mut self, err: &str) {
@@ -192,16 +224,52 @@ impl Cabin {
         Err(grokhub_core::XAI_NEED_SIGNIN.into())
     }
 
-    pub(super) fn paint_native_badge(&self, ui: &mut egui::Ui) {
+    pub(super) fn paint_native_badge(&mut self, ui: &mut egui::Ui) {
         if !self.cfg.native_engine {
             return;
         }
-        let show = self.threads.get(self.thread_idx).is_some_and(|thread| thread.native);
-        if !show {
+        let checked_id = ui.id().with("native-usage-sid");
+        let native = self
+            .threads
+            .get(self.thread_idx)
+            .is_some_and(|thread| thread.native);
+        if !native {
+            let checked = ui
+                .data(|data| data.get_temp::<String>(checked_id))
+                .unwrap_or_default();
+            if !checked.is_empty() {
+                ui.data_mut(|data| data.insert_temp(checked_id, String::new()));
+            }
             return;
         }
+        let sid = self
+            .threads
+            .get(self.thread_idx)
+            .and_then(|thread| thread.grok_session.clone())
+            .unwrap_or_default();
+        let checked = ui
+            .data(|data| data.get_temp::<String>(checked_id))
+            .unwrap_or_default();
+        if !sid.is_empty() && checked != sid {
+            if let Ok(info) = grokhub_agent::load_session(&sid) {
+                self.show_native_usage(&info);
+            }
+            ui.data_mut(|data| data.insert_temp(checked_id, sid));
+        }
+        let label = grokhub_agent::usage_label(
+            self.grok_usage.input_tokens,
+            self.grok_usage.output_tokens,
+            self.grok_usage.reasoning_tokens,
+            self.grok_usage.cost_in_usd_ticks,
+            &self.grok_usage.meter,
+        );
+        let text = if label.is_empty() {
+            "Native".to_string()
+        } else {
+            format!("Native · {label}")
+        };
         ui.label(
-            egui::RichText::new("Native")
+            egui::RichText::new(text)
                 .size(crate::theme::FONT_TIP)
                 .color(crate::theme::muted()),
         );
@@ -257,13 +325,17 @@ fn serve_native(session_id: String, ext_rx: std::sync::mpsc::Receiver<ExternalCm
         conversation_id: session_id.clone(),
         auth_kind: AuthKind::ApiKey,
         max_turns: 0,
-        cancel,
+        cancel: cancel.clone(),
         steer,
         halt: Box::new(StampHalt { started_ms: 0, read: || None }),
         gate: Gate::phase_readonly(),
         desktop: Some(Box::new(crate::desktop_mcp::NativeDesktop::new())),
         permits: Box::new(permit_inbox),
     });
+    let _run = grokhub_agent::attach_run(&session_id, cancel.clone());
+    if let Ok(info) = grokhub_agent::load_session(&session_id) {
+        engine.resume(info.input(), info.usage);
+    }
     while let Ok(job) = job_rx.recv() {
         let NativeJob::Prompt { text, image } = job else {
             break;

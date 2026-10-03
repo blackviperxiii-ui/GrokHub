@@ -844,6 +844,7 @@ impl Cabin {
                     self.nav = Nav::History;
                 }
             }
+            self.paint_native_history_merge(ui);
         });
     }
 
