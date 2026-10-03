@@ -404,6 +404,16 @@ impl Cabin {
                     ui.add_space(8.0);
                 }
                 let mut run_at: Option<usize> = None;
+                let todo_session = self
+                    .threads
+                    .get(self.thread_idx)
+                    .and_then(|thread| thread.grok_session.clone())
+                    .unwrap_or_default();
+                let todos = if self.cfg.native_engine {
+                    grokhub_agent::todos_for(&todo_session)
+                } else {
+                    Vec::new()
+                };
                 if !self.grok_tasks.is_empty() {
                     crate::cards::section_label(ui, "Grok tasks");
                     ui.add_space(8.0);
@@ -421,7 +431,24 @@ impl Cabin {
                     }
                     ui.add_space(12.0);
                 }
-                if self.agents.is_empty() && self.grok_tasks.is_empty() {
+                if !todos.is_empty() {
+                    crate::cards::section_label(ui, "Todos");
+                    ui.add_space(8.0);
+                    for todo in &todos {
+                        let done = todo.status == "completed" || todo.status == "cancelled";
+                        crate::cards::grok_tile(
+                            ui,
+                            crate::icons::TileIcon::List,
+                            &todo.content,
+                            &format!("{} · {}", todo.status, todo.id),
+                            None,
+                            done,
+                        );
+                        ui.add_space(6.0);
+                    }
+                    ui.add_space(12.0);
+                }
+                if self.agents.is_empty() && self.grok_tasks.is_empty() && todos.is_empty() {
                     let _ = crate::cards::empty_prompt_tile(
                         ui,
                         crate::icons::TileIcon::List,

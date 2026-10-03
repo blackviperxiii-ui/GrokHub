@@ -54,6 +54,14 @@ pub enum LoopEvent {
         reason: String,
     },
     Elicit(crate::mcp::ElicitView),
+    /// A background command, monitor, or subagent row for the existing Tasks list.
+    Task {
+        id: String,
+        title: String,
+        done: bool,
+    },
+    /// Plan text for the existing plan card. `replace` is always true on the wire.
+    Plan(String),
 }
 
 #[derive(Clone)]
@@ -117,6 +125,14 @@ pub struct LoopIn<'a> {
     pub context_length: u64,
     /// Background commands and monitors for this session. `None` in tests that do not spawn.
     pub tasks: Option<Arc<TaskHub>>,
+    /// 0 is the root run. A child of a child is 2 and cannot spawn.
+    pub depth: u32,
+    /// Set on a subagent so commands it starts die with it.
+    pub agent_id: Option<&'a str>,
+    /// Shared with worker threads. `None` refuses `spawn_subagent`.
+    pub shared_client: Option<Arc<dyn ModelClient + Send + Sync>>,
+    pub shared_permits: Option<Arc<dyn PermitWait + Send + Sync>>,
+    pub shared_desktop: Option<Arc<dyn DesktopOps + Send + Sync>>,
 }
 
 pub struct LoopOut {
@@ -164,6 +180,12 @@ pub fn run_loop(
     history.push(user_message(user_text, image));
     input.permits.drain();
     let mut usage = input.usage_base.clone();
+    let base_readonly = input.gate.readonly_session;
+    let plan_at_start = crate::session_tools::plan_on(input.conversation_id);
+    let mut gate = input.gate;
+    if plan_at_start {
+        gate.readonly_session = true;
+    }
     let mut did_compact = false;
     let mut repeats: HashMap<String, u32> = HashMap::new();
     let mut stop_hook_active = false;
@@ -201,6 +223,13 @@ pub fn run_loop(
             return finish(input, StopReason::Halted, usage, did_compact, true);
         }
         inject_notices(input, history);
+        if let Some(tasks) = &input.tasks {
+            let extra = tasks.take_usage();
+            if usage_pending(&extra) {
+                usage.add(&extra);
+                emit_usage(on_event, &usage, history, input.context_length);
+            }
+        }
         if !did_compact && crate::compact::needs_auto_compact(history, input.context_length) {
             on_event(LoopEvent::Compact {
                 started: true,
@@ -252,7 +281,7 @@ pub fn run_loop(
             effort: input.effort.map(str::to_string),
             input: wire,
             conversation_id: input.conversation_id.to_string(),
-            tools: tools::schemas_for(&input.gate),
+            tools: tools::schemas_for(&gate),
             hosted_search: true,
             call_timeout: None,
         };
@@ -306,7 +335,7 @@ pub fn run_loop(
             continue;
         }
         let mut repeated = false;
-        let mut always = input.gate.mode == gate::PermMode::Always;
+        let mut always = gate.mode == gate::PermMode::Always;
         for call in &turn.calls {
             history.push(InputItem::FunctionCall {
                 call_id: call.call_id.clone(),
@@ -334,9 +363,9 @@ pub fn run_loop(
                 continue;
             }
             let id = tool_id(call);
-            let desk = tools::desk_flags(&call.name, &input.gate, input.desktop);
+            let desk = tools::desk_flags(&call.name, &gate, input.desktop);
             let base = gate::decide_with(
-                &input.gate,
+                &gate,
                 &call.name,
                 &call.arguments,
                 always,
@@ -348,7 +377,7 @@ pub fn run_loop(
                 client: input.client,
                 cancel: input.cancel,
                 halt: &|| stop_for_halt(input),
-                gate: &input.gate,
+                gate: &gate,
                 name: &call.name,
                 arguments: &call.arguments,
                 workspace: input.workspace,
@@ -377,7 +406,7 @@ pub fn run_loop(
             let constrained = crate::hooks::constrain_tool(crate::hooks::ToolHook {
                 session: input.conversation_id,
                 workspace: input.workspace,
-                attended: input.gate.attended,
+                attended: gate.attended,
                 decision: reviewed.decision,
                 ask_reason: reviewed.ask_reason,
                 name: &call.name,
@@ -386,7 +415,7 @@ pub fn run_loop(
             });
             let ask_reason = constrained.ask_reason;
             let pre_context = constrained.context;
-            let output = match constrained.decision {
+            let (output, extra_usage) = match constrained.decision {
                 Decision::Refuse(text) => {
                     crate::hooks::on_permission_denied(
                         input.conversation_id,
@@ -397,8 +426,15 @@ pub fn run_loop(
                     );
                     let output = ToolOutput::err(text);
                     emit_tool(on_event, &id, call, "in_progress", &call.arguments, None);
-                    emit_tool(on_event, &id, call, if output.failed { "failed" } else { "completed" }, &output.text, output.image_data_url.clone());
-                    output
+                    emit_tool(
+                        on_event,
+                        &id,
+                        call,
+                        if output.failed { "failed" } else { "completed" },
+                        &output.text,
+                        output.image_data_url.clone(),
+                    );
+                    (output, Usage::default())
                 }
                 Decision::Ask => {
                     crate::hooks::on_notification(
@@ -418,9 +454,12 @@ pub fn run_loop(
                     {
                         Waited::Answer(PermAnswer::Allow) => note_tool(
                             input,
+                            &mut gate,
+                            base_readonly,
+                            plan_at_start,
                             call,
                             &id,
-                            run_allowed(input, call, &id, on_event),
+                            on_event,
                             &pre_context,
                         ),
                         Waited::Answer(PermAnswer::Always) => {
@@ -434,9 +473,12 @@ pub fn run_loop(
                             always = true;
                             note_tool(
                                 input,
+                                &mut gate,
+                                base_readonly,
+                                plan_at_start,
                                 call,
                                 &id,
-                                run_allowed(input, call, &id, on_event),
+                                on_event,
                                 &pre_context,
                             )
                         }
@@ -450,7 +492,7 @@ pub fn run_loop(
                             );
                             let output = ToolOutput::err(gate::user_rejected(&call.name));
                             emit_tool(on_event, &id, call, "failed", &output.text, None);
-                            output
+                            (output, Usage::default())
                         }
                         Waited::Answer(PermAnswer::Cancel) | Waited::Cancelled => {
                             let output = ToolOutput::err(gate::user_cancelled(&call.name));
@@ -466,12 +508,19 @@ pub fn run_loop(
                 }
                 Decision::Run => note_tool(
                     input,
+                    &mut gate,
+                    base_readonly,
+                    plan_at_start,
                     call,
                     &id,
-                    run_allowed(input, call, &id, on_event),
+                    on_event,
                     &pre_context,
                 ),
             };
+            if usage_pending(&extra_usage) {
+                usage.add(&extra_usage);
+                emit_usage(on_event, &usage, history, input.context_length);
+            }
             let cancelled = input.cancel.is_cancelled();
             let halted = stop_for_halt(input);
             push_output(history, call, output);
@@ -566,13 +615,32 @@ fn inject_notices(input: &LoopIn<'_>, history: &mut Vec<InputItem>) {
     }
 }
 
+fn usage_pending(usage: &Usage) -> bool {
+    usage.input_tokens != 0
+        || usage.output_tokens != 0
+        || usage.reasoning_tokens != 0
+        || usage.cost_in_usd_ticks != 0
+}
+
 fn note_tool(
     input: &LoopIn<'_>,
+    gate: &mut Gate,
+    base_readonly: bool,
+    plan_at_start: bool,
     call: &FunctionCall,
     id: &str,
-    mut output: ToolOutput,
+    on_event: &mut dyn FnMut(LoopEvent),
     pre_context: &str,
-) -> ToolOutput {
+) -> (ToolOutput, Usage) {
+    let (mut output, usage) = run_allowed(
+        input,
+        gate,
+        base_readonly,
+        plan_at_start,
+        call,
+        id,
+        on_event,
+    );
     if !pre_context.is_empty() {
         if !output.text.is_empty() && !output.text.ends_with('\n') {
             output.text.push('\n');
@@ -594,17 +662,20 @@ fn note_tool(
         }
         output.text.push_str(&extra);
     }
-    output
+    (output, usage)
 }
 
 fn run_allowed(
     input: &LoopIn<'_>,
+    gate: &mut Gate,
+    base_readonly: bool,
+    plan_at_start: bool,
     call: &FunctionCall,
     id: &str,
     on_event: &mut dyn FnMut(LoopEvent),
-) -> ToolOutput {
+) -> (ToolOutput, Usage) {
     emit_tool(on_event, id, call, "in_progress", &call.arguments, None);
-    let attended = input.gate.attended;
+    let attended = gate.attended;
     let session = input.conversation_id.to_string();
     let cancel = input.cancel.clone();
     let tasks = input.tasks.clone();
@@ -614,21 +685,65 @@ fn run_allowed(
         desktop: input.desktop,
         stop: &|| input.cancel.is_cancelled() || stop_for_halt(input),
         tasks: input.tasks.clone(),
+        owner: input.agent_id,
     };
-    let mut emit_card = |view: crate::mcp::ElicitView| {
-        on_event(LoopEvent::Elicit(view));
+    let halted = || halt.halted() || tasks.as_ref().is_some_and(|hub| hub.is_halted());
+    let (output, extra) = if let Some(done) =
+        crate::session_tools::try_run(crate::session_tools::SessionCall {
+            name: &call.name,
+            arguments: &call.arguments,
+            gate,
+            session: &session,
+            attended,
+            cancel: &cancel,
+            halted: &halted,
+            base_readonly,
+            plan_at_start,
+            on_event,
+        }) {
+        done
+    } else if let Some(done) = crate::subagent::try_run(crate::subagent::SpawnCall {
+        name: &call.name,
+        arguments: &call.arguments,
+        gate,
+        session: &session,
+        workspace: input.workspace,
+        cancel: &cancel,
+        halt,
+        tasks: input.tasks.clone(),
+        depth: input.depth,
+        agent_id: input.agent_id,
+        client: input.shared_client.clone(),
+        permits: input.shared_permits.clone(),
+        desktop: input.shared_desktop.clone(),
+        model: input.model,
+        effort: input.effort,
+        system: input.system,
+        max_turns: input.max_turns,
+        policy: input.perms,
+        on_event,
+    }) {
+        done
+    } else {
+        let mut emit_card = |view: crate::mcp::ElicitView| {
+            on_event(LoopEvent::Elicit(view));
+        };
+        let mut wait_card = |eid: &str| crate::mcp::wait_elicit(&session, eid, &cancel, &halted);
+        let output = crate::mcp::with_elicit(attended, &mut emit_card, &mut wait_card, || {
+            tools::dispatch(&ctx, &call.name, &call.arguments)
+        });
+        (output, Usage::default())
     };
-    let mut wait_card = |eid: &str| {
-        crate::mcp::wait_elicit(&session, eid, &cancel, &|| {
-            halt.halted() || tasks.as_ref().is_some_and(|hub| hub.is_halted())
-        })
-    };
-    let output = crate::mcp::with_elicit(attended, &mut emit_card, &mut wait_card, || {
-        tools::dispatch(&ctx, &call.name, &call.arguments)
-    });
     let status = if output.failed { "failed" } else { "completed" };
-    emit_tool(on_event, id, call, status, &output.text, output.image_data_url.clone());
-    output
+    emit_tool(
+        on_event,
+        id,
+        call,
+        status,
+        &output.text,
+        output.image_data_url.clone(),
+    );
+    (output, extra)
 }
 
 fn action_line(name: &str, arguments: &str) -> String {
@@ -809,6 +924,11 @@ mod tests {
             perms: None,
             context_length: 0,
             tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
         };
         let mut history = Vec::new();
         let mut events = Vec::new();
@@ -1015,6 +1135,11 @@ mod tests {
             perms: None,
             context_length: 0,
             tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
         };
         let mut history = Vec::new();
         let out = run_loop(&input, &mut history, "go", None, &mut |_| {});
@@ -1096,6 +1221,11 @@ mod tests {
             perms: None,
             context_length: 0,
             tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
         };
         let mut history = Vec::new();
         let mut events = Vec::new();
@@ -1470,6 +1600,11 @@ mod tests {
             perms: None,
             context_length: 0,
             tasks: Some(hub),
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
         };
         let mut history = Vec::new();
         let out = run_loop(&input, &mut history, "go", None, &mut |_| {});
@@ -1584,6 +1719,11 @@ mod tests {
             perms: None,
             context_length: 0,
             tasks: Some(hub.clone()),
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
         };
         let mut history = Vec::new();
         let out = run_loop(&input, &mut history, "go", None, &mut |_| {});
@@ -1684,6 +1824,11 @@ mod tests {
             perms: None,
             context_length: 0,
             tasks: Some(hub),
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
         };
         let mut history = Vec::new();
         let mut events = Vec::new();
@@ -1765,6 +1910,11 @@ mod tests {
             perms: None,
             context_length: 0,
             tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
         };
         let mut history = Vec::new();
         let mut events = Vec::new();
@@ -1826,6 +1976,11 @@ mod tests {
             perms: None,
             context_length: 0,
             tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
         };
         let mut history = Vec::new();
         let out = run_loop(&input, &mut history, "go", None, &mut |_ev| {});
