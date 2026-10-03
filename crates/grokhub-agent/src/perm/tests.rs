@@ -742,6 +742,7 @@ fn allow_always_remembers_a_grant_for_the_next_turn() {
         desktop: None,
         permits: &permits,
         perms: Some(&policy),
+        context_length: 0,
     };
     let mut history = Vec::new();
     let out = run_loop(&input, &mut history, "go", None, &mut |_| {});
@@ -780,6 +781,7 @@ fn allow_always_remembers_a_grant_for_the_next_turn() {
         desktop: None,
         permits: &permits2,
         perms: Some(&policy2),
+        context_length: 0,
     };
     let mut history2 = Vec::new();
     let out2: LoopOut = run_loop(&input2, &mut history2, "go", None, &mut |_| {});

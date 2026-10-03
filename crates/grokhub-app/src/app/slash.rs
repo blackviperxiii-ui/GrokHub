@@ -249,6 +249,11 @@ impl Cabin {
             }
             Slash::RewindFiles => self.rewind_project(),
             Slash::Compact => {
+                if self.native_compact_if_current() {
+                    self.stamp_current_access();
+                    self.persist();
+                    return;
+                }
                 self.send_grok_slash("/compact");
                 if !self.running {
                     return;

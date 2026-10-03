@@ -36,6 +36,16 @@ pub enum LoopEvent {
         image: Option<String>,
     },
     Usage(Usage),
+    /// Context meter for the usage event that follows.
+    Meter {
+        used: u64,
+        limit: u64,
+    },
+    Compact {
+        started: bool,
+        usage: Usage,
+        error: Option<String>,
+    },
     Permission {
         id: String,
         name: String,
@@ -101,11 +111,15 @@ pub struct LoopIn<'a> {
     pub permits: &'a dyn PermitWait,
     /// `None` keeps gate v0. The native engine passes the loaded policy.
     pub perms: Option<&'a crate::perm::Policy>,
+    /// Model context window. `0` disables auto-compact.
+    pub context_length: u64,
 }
 
 pub struct LoopOut {
     pub stop: StopReason,
     pub usage: Usage,
+    /// A summary replaced older history. The caller records a compaction marker.
+    pub compacted: bool,
 }
 
 pub fn run_loop(
@@ -124,6 +138,7 @@ pub fn run_loop(
     history.push(user_message(user_text, image));
     input.permits.drain();
     let mut usage = input.usage_base.clone();
+    let mut did_compact = false;
     let mut repeats: HashMap<String, u32> = HashMap::new();
     let max_turns = if input.max_turns == 0 {
         DEFAULT_MAX_TURNS
@@ -132,15 +147,70 @@ pub fn run_loop(
     };
     for _turn in 0..max_turns {
         if input.cancel.is_cancelled() {
-            return LoopOut { stop: StopReason::Cancelled, usage };
+            return LoopOut {
+                stop: StopReason::Cancelled,
+                usage,
+                compacted: did_compact,
+            };
         }
         if input.halt.halted() {
-            return LoopOut { stop: StopReason::Halted, usage };
+            return LoopOut {
+                stop: StopReason::Halted,
+                usage,
+                compacted: did_compact,
+            };
         }
+        if !did_compact && crate::compact::needs_auto_compact(history, input.context_length) {
+            on_event(LoopEvent::Compact {
+                started: true,
+                usage: usage.clone(),
+                error: None,
+            });
+            match crate::compact::compact_transcript(
+                input.client,
+                input.cancel,
+                input.model,
+                input.effort,
+                input.conversation_id,
+                history,
+            ) {
+                Ok(extra) => {
+                    usage.add(&extra);
+                    did_compact = true;
+                    on_event(LoopEvent::Compact {
+                        started: false,
+                        usage: usage.clone(),
+                        error: None,
+                    });
+                    emit_usage(on_event, &usage, history, input.context_length);
+                }
+                Err(crate::compact::CompactError::Cancelled) => {
+                    on_event(LoopEvent::Compact {
+                        started: false,
+                        usage: usage.clone(),
+                        error: Some("cancelled".into()),
+                    });
+                    return LoopOut {
+                        stop: StopReason::Cancelled,
+                        usage,
+                        compacted: false,
+                    };
+                }
+                Err(crate::compact::CompactError::Failed(message)) => {
+                    on_event(LoopEvent::Compact {
+                        started: false,
+                        usage: usage.clone(),
+                        error: Some(message),
+                    });
+                }
+            }
+        }
+        let mut wire = history.clone();
+        crate::image_budget::apply_image_budget(&mut wire);
         let req = ResponsesRequest {
             model: input.model.to_string(),
             effort: input.effort.map(str::to_string),
-            input: history.clone(),
+            input: wire,
             conversation_id: input.conversation_id.to_string(),
             tools: tools::schemas_for(&input.gate),
             hosted_search: true,
@@ -151,16 +221,23 @@ pub fn run_loop(
             StreamEvent::ReasoningDelta(text) => on_event(LoopEvent::Thought(text)),
         }) {
             Ok(turn) => turn,
-            Err(ClientError::Cancelled) => return LoopOut { stop: StopReason::Cancelled, usage },
+            Err(ClientError::Cancelled) => {
+                return LoopOut {
+                    stop: StopReason::Cancelled,
+                    usage,
+                    compacted: did_compact,
+                }
+            }
             Err(err) => {
                 return LoopOut {
                     stop: StopReason::Error(err.to_string()),
                     usage,
+                    compacted: did_compact,
                 }
             }
         };
         usage.add(&turn.usage);
-        on_event(LoopEvent::Usage(usage.clone()));
+        emit_usage(on_event, &usage, history, input.context_length);
         if !turn.text.is_empty() {
             history.push(InputItem::Message {
                 role: "assistant".into(),
@@ -170,7 +247,11 @@ pub fn run_loop(
         if turn.calls.is_empty() {
             let notes = input.steer.drain();
             if notes.is_empty() {
-                return LoopOut { stop: StopReason::EndTurn, usage };
+                return LoopOut {
+                    stop: StopReason::EndTurn,
+                    usage,
+                    compacted: did_compact,
+                };
             }
             for note in notes {
                 history.push(user_message(&note, None));
@@ -188,10 +269,18 @@ pub fn run_loop(
         }
         for call in &turn.calls {
             if input.cancel.is_cancelled() {
-                return LoopOut { stop: StopReason::Cancelled, usage };
+                return LoopOut {
+                    stop: StopReason::Cancelled,
+                    usage,
+                    compacted: did_compact,
+                };
             }
             if input.halt.halted() {
-                return LoopOut { stop: StopReason::Halted, usage };
+                return LoopOut {
+                    stop: StopReason::Halted,
+                    usage,
+                    compacted: did_compact,
+                };
             }
             let key = format!("{}\\n{}", call.name, call.arguments);
             let seen = repeats.entry(key).or_insert(0);
@@ -237,7 +326,7 @@ pub fn run_loop(
             });
             if let Some(extra) = &reviewed.judge_usage {
                 usage.add(extra);
-                on_event(LoopEvent::Usage(usage.clone()));
+                emit_usage(on_event, &usage, history, input.context_length);
             }
             if reviewed.cancelled {
                 let output = ToolOutput::err(gate::user_cancelled(&call.name));
@@ -246,12 +335,14 @@ pub fn run_loop(
                 return LoopOut {
                     stop: StopReason::Cancelled,
                     usage,
+                    compacted: did_compact,
                 };
             }
             if reviewed.halted {
                 return LoopOut {
                     stop: StopReason::Halted,
                     usage,
+                    compacted: did_compact,
                 };
             }
             let ask_reason = reviewed.ask_reason;
@@ -291,9 +382,19 @@ pub fn run_loop(
                             let output = ToolOutput::err(gate::user_cancelled(&call.name));
                             emit_tool(on_event, &id, call, "failed", &output.text, None);
                             push_output(history, call, output);
-                            return LoopOut { stop: StopReason::Cancelled, usage };
+                            return LoopOut {
+                                stop: StopReason::Cancelled,
+                                usage,
+                                compacted: did_compact,
+                            };
                         }
-                        Waited::Halted => return LoopOut { stop: StopReason::Halted, usage },
+                        Waited::Halted => {
+                            return LoopOut {
+                                stop: StopReason::Halted,
+                                usage,
+                                compacted: did_compact,
+                            }
+                        }
                     }
                 }
                 Decision::Run => run_allowed(input, call, &id, on_event),
@@ -302,20 +403,49 @@ pub fn run_loop(
             let halted = input.halt.halted();
             push_output(history, call, output);
             if cancelled {
-                return LoopOut { stop: StopReason::Cancelled, usage };
+                return LoopOut {
+                    stop: StopReason::Cancelled,
+                    usage,
+                    compacted: did_compact,
+                };
             }
             if halted {
-                return LoopOut { stop: StopReason::Halted, usage };
+                return LoopOut {
+                    stop: StopReason::Halted,
+                    usage,
+                    compacted: did_compact,
+                };
             }
         }
         if repeated {
-            return LoopOut { stop: StopReason::RepeatedCall, usage };
+            return LoopOut {
+                stop: StopReason::RepeatedCall,
+                usage,
+                compacted: did_compact,
+            };
         }
         for note in input.steer.drain() {
             history.push(user_message(&note, None));
         }
     }
-    LoopOut { stop: StopReason::MaxTurns, usage }
+    LoopOut {
+        stop: StopReason::MaxTurns,
+        usage,
+        compacted: did_compact,
+    }
+}
+
+fn emit_usage(
+    on_event: &mut dyn FnMut(LoopEvent),
+    usage: &Usage,
+    history: &[InputItem],
+    limit: u64,
+) {
+    on_event(LoopEvent::Meter {
+        used: crate::compact::estimate_input_tokens(history),
+        limit,
+    });
+    on_event(LoopEvent::Usage(usage.clone()));
 }
 
 fn user_message(text: &str, image: Option<&str>) -> InputItem {
@@ -551,6 +681,7 @@ mod tests {
             desktop: None,
             permits: &gate::ClosedPermits,
             perms: None,
+            context_length: 0,
         };
         let mut history = Vec::new();
         let mut events = Vec::new();
@@ -755,6 +886,7 @@ mod tests {
             desktop: None,
             permits: &gate::ClosedPermits,
             perms: None,
+            context_length: 0,
         };
         let mut history = Vec::new();
         let out = run_loop(&input, &mut history, "go", None, &mut |_| {});
@@ -834,6 +966,7 @@ mod tests {
             desktop,
             permits,
             perms: None,
+            context_length: 0,
         };
         let mut history = Vec::new();
         let mut events = Vec::new();

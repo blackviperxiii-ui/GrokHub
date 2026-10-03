@@ -231,10 +231,20 @@ pub fn request_headers(bearer: &str, conv_id: &str) -> Vec<(String, String)> {
     ]
 }
 
-pub fn responses_body(req: &ResponsesRequest) -> Value {
+pub fn input_wire_value(items: &[InputItem]) -> Value {
+    Value::Array(input_wire(items).0)
+}
+
+pub fn input_wire_len(items: &[InputItem]) -> usize {
+    serde_json::to_vec(&input_wire_value(items))
+        .map(|bytes| bytes.len())
+        .unwrap_or(0)
+}
+
+fn input_wire(items: &[InputItem]) -> (Vec<Value>, bool) {
     let mut input = Vec::new();
     let mut has_image = false;
-    for item in &req.input {
+    for item in items {
         match item {
             InputItem::Message { role, content } => {
                 let mut parts = Vec::new();
@@ -268,6 +278,11 @@ pub fn responses_body(req: &ResponsesRequest) -> Value {
             }
         }
     }
+    (input, has_image)
+}
+
+pub fn responses_body(req: &ResponsesRequest) -> Value {
+    let (input, has_image) = input_wire(&req.input);
     let mut tools = req.tools.clone();
     if req.hosted_search {
         tools.push(json!({"type": "web_search"}));
