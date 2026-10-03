@@ -23,11 +23,16 @@ fn compose(cabin_rules: &str, workspace: &Path, home: Option<&Path>) -> String {
         out.push_str(&agents);
         out.push_str("\n</agents>");
     }
-    let skills = crate::skills::discover(workspace, home, &[]);
+    let skills = crate::skills::discover(workspace, home, &crate::plugins::skill_dirs(workspace));
     let reminder = crate::skills::reminder(&skills);
     if !reminder.is_empty() {
         out.push_str("\n\n");
         out.push_str(&reminder);
+    }
+    let extras = crate::plugins::prompt_extras(workspace);
+    if !extras.is_empty() {
+        out.push_str("\n\n");
+        out.push_str(&extras);
     }
     out
 }
