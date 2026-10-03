@@ -171,11 +171,19 @@ pub fn run_loop(
     image: Option<&str>,
     on_event: &mut dyn FnMut(LoopEvent),
 ) -> LoopOut {
-    if history.is_empty() && !input.system.trim().is_empty() {
-        history.push(InputItem::Message {
-            role: "system".into(),
-            content: vec![ContentPart::InputText(input.system.to_string())],
-        });
+    let first_turn = history.is_empty();
+    if first_turn {
+        let system = match crate::memory::first_turn_injection(input.workspace, user_text) {
+            Some(block) if input.system.trim().is_empty() => block,
+            Some(block) => format!("{}\n\n{block}", input.system),
+            None => input.system.to_string(),
+        };
+        if !system.trim().is_empty() {
+            history.push(InputItem::Message {
+                role: "system".into(),
+                content: vec![ContentPart::InputText(system)],
+            });
+        }
     }
     history.push(user_message(user_text, image));
     input.permits.drain();
@@ -237,7 +245,8 @@ pub fn run_loop(
                 error: None,
             });
             crate::hooks::on_compact(input.conversation_id, input.workspace, true);
-            let compact_result = crate::compact::compact_transcript(
+            let compact_result = crate::compact::compact_after_flush(
+                input.workspace,
                 input.client,
                 input.cancel,
                 input.model,

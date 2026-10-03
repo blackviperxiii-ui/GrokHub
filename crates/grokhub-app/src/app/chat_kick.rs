@@ -30,6 +30,9 @@ impl Cabin {
             .threads
             .get(self.thread_idx)
             .is_some_and(|thread| thread.native);
+        if self.apply_unparsed_native_slash(&text) {
+            return;
+        }
         if let Some(recipe) =
             grokhub_agent::native_deep_research_prompt(self.cfg.native_engine, thread_native, &text)
         {
