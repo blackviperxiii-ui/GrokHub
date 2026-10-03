@@ -704,6 +704,11 @@ fn title_or_body_says_failed(text: &str) -> bool {
 }
 
 /// A failed automation run, from the card id or title. Not inferred from the body.
+pub fn card_needs_you(card: &UpdateCard) -> bool {
+    failed_run(card)
+}
+
+/// A failed automation run, from the card id or title. Not inferred from the body.
 fn failed_run(card: &UpdateCard) -> bool {
     card.kind == UpdateKind::AutomationDone
         && (card.id.starts_with("fail-")
@@ -3678,5 +3683,159 @@ mod tests {
             vec!["e4", "e3", "e2"]
         );
         assert_eq!(visible_updates(&cards).len(), 5);
+    }
+
+    fn prefs_weight(pos: f64, neg: f64, n: u32, at: u64) -> crate::card_prefs::Weight {
+        crate::card_prefs::Weight { pos, neg, n, at }
+    }
+
+    #[test]
+    fn liked_group_rises_and_dismissed_group_folds() {
+        use crate::card_prefs::{apply_card_event, rank_home_events, CardPrefs};
+        use crate::card_signals::CardEvent;
+        let loved = automation_done_card("loved", "Alpha snapshot report", "one", 100);
+        let neutral = automation_done_card("neutral", "Beta widget module", "two", 300);
+        let hated = automation_done_card("hated", "Gamma ledger nightly", "three", 200);
+        let mut prefs = CardPrefs::default();
+        for _ in 0..3 {
+            apply_card_event(&mut prefs, &loved, CardEvent::More, None, 1_000);
+        }
+        for _ in 0..4 {
+            apply_card_event(&mut prefs, &hated, CardEvent::Less, None, 1_000);
+        }
+        let cards = vec![loved, neutral, hated];
+        let rank = rank_home_events(&cards, &FeedPulse::default(), &prefs, 1_000);
+        assert_eq!(rank.deck.first().map(|card| card.source_id.as_str()), Some("loved"));
+        assert!(rank.deck.iter().any(|card| card.source_id == "neutral"));
+        assert!(rank.deck.iter().all(|card| card.source_id != "hated"));
+        assert!(rank.folded.iter().any(|card| card.source_id == "hated"));
+        let again = rank_home_events(&cards, &FeedPulse::default(), &prefs, 1_000);
+        assert_eq!(
+            rank.deck.iter().map(|card| &card.id).collect::<Vec<_>>(),
+            again.deck.iter().map(|card| &card.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn failures_and_pinned_cards_are_never_folded() {
+        use crate::card_prefs::{apply_card_event, rank_home_events, CardPrefs};
+        use crate::card_signals::CardEvent;
+        let fail = automation_failed_card("bad", "Nightly", "disk full", 500);
+        let mut pinned = automation_done_card("pin", "Pinned ledger report", "x", 400);
+        pinned.feed_pin = true;
+        let mut worked = automation_done_card("work", "Worked ledger report", "y", 350);
+        worked.modified = true;
+        let plain = automation_done_card("plain", "Plain ledger report", "z", 300);
+        let mut prefs = CardPrefs::default();
+        for card in [&fail, &pinned, &worked, &plain] {
+            for _ in 0..10 {
+                apply_card_event(&mut prefs, card, CardEvent::Less, None, 500);
+            }
+        }
+        let cards = vec![fail.clone(), pinned.clone(), worked.clone(), plain.clone()];
+        let rank = rank_home_events(&cards, &FeedPulse::default(), &prefs, 500);
+        assert!(rank.deck.iter().any(|card| card.id == fail.id));
+        assert!(rank.deck.iter().any(|card| card.id == pinned.id));
+        assert!(rank.deck.iter().any(|card| card.id == worked.id));
+        assert!(rank.deck.iter().all(|card| card.id != plain.id));
+        assert!(rank.folded.iter().any(|card| card.id == plain.id));
+        assert!(rank.folded.iter().all(|card| card.id != fail.id && card.id != pinned.id && card.id != worked.id));
+        assert!(rank.deck.len() <= FEED_PAINT_MAX);
+    }
+
+    #[test]
+    fn ranking_respects_hide_mute_and_the_three_card_limit() {
+        use crate::card_prefs::{apply_card_event, rank_home_events, CardPrefs};
+        use crate::card_signals::CardEvent;
+        let mut prefs = CardPrefs::default();
+        let mut cards = Vec::new();
+        for i in 0..4 {
+            let card = automation_done_card(&format!("s{i}"), "Alpha snapshot report", "ok", 1_000 + i * 100);
+            apply_card_event(&mut prefs, &card, CardEvent::More, None, 1_000);
+            cards.push(card);
+        }
+        let hidden = automation_done_card("hid", "Alpha snapshot report", "ok", 2_000);
+        let muted = automation_done_card("mute", "Alpha snapshot report", "ok", 1_800);
+        apply_card_event(&mut prefs, &muted, CardEvent::More, None, 1_000);
+        let fail = automation_failed_card("hid", "Nightly", "disk full", 1_500);
+        cards.push(hidden);
+        cards.push(muted.clone());
+        cards.push(fail);
+        let mut pulse = FeedPulse::default();
+        hide_home_source(&mut pulse, "hid");
+        mute_less_like(&mut pulse, &muted, 1_000);
+        let rank = rank_home_events(&cards, &pulse, &prefs, 1_500);
+        assert_eq!(rank.deck.len(), FEED_PAINT_MAX);
+        assert!(rank.deck.iter().any(|card| card.id.starts_with("fail-")));
+        assert!(rank.deck.iter().all(|card| card.source_id != "mute"));
+        assert!(rank.deck.iter().all(|card| card.source_id != "hid" || card.id.starts_with("fail-")));
+        assert!(rank.folded.iter().all(|card| card.source_id != "hid" && card.source_id != "mute"));
+        let parked = cards.iter().filter(|card| {
+            card.source_id.starts_with('s') && rank.deck.iter().all(|shown| shown.id != card.id)
+        });
+        assert!(parked.clone().count() >= 1);
+        assert!(parked.into_iter().all(|card| rank.folded.iter().all(|folded| folded.id != card.id)));
+    }
+
+    #[test]
+    fn novelty_bonus_goes_to_one_card() {
+        use crate::card_prefs::{card_score, rank_home_events, CardPrefs, NOVELTY_BONUS};
+        let a = automation_done_card("a", "Alpha snapshot report", "x", 1_000);
+        let b = automation_done_card("b", "Beta widget report", "y", 1_000);
+        let c = automation_done_card("c", "Gamma ledger report", "z", 1_000);
+        let prefs = CardPrefs::default();
+        let cards = vec![c.clone(), a.clone(), b.clone()];
+        let pulse = FeedPulse::default();
+        let rank = rank_home_events(&cards, &pulse, &prefs, 1_000);
+        let again = rank_home_events(&cards, &pulse, &prefs, 1_000);
+        assert_eq!(rank.novelty_id.as_deref(), Some(a.id.as_str()));
+        assert_eq!(rank.novelty_id, again.novelty_id);
+        assert_ne!(rank.novelty_id.as_deref(), Some(b.id.as_str()));
+        let plain = card_score(&a, &prefs, 1_000, false);
+        let boosted = card_score(&a, &prefs, 1_000, true);
+        assert!((boosted - plain - NOVELTY_BONUS).abs() < 1e-9);
+        assert!((card_score(&b, &prefs, 1_000, false) - plain).abs() < 1e-9);
+    }
+
+    #[test]
+    fn explain_hint_picks_the_top_term() {
+        use crate::card_prefs::{
+            explain_hint, hint_open_topic, CardPrefs, FOLD_NOTE, HINT_NEEDS, HINT_NEW, HINT_OPEN_GROUP,
+        };
+        use crate::card_signals::signal_group;
+        assert_eq!(FOLD_NOTE, "Showing fewer of these; you've been dismissing them");
+        let now = 1_000u64;
+        let card = automation_done_card("src", "Snapshot ledger report", "body text", now);
+        let group = signal_group(&card);
+        let mut prefs = CardPrefs::default();
+        prefs.groups.insert(group.clone(), prefs_weight(8.0, 0.0, 5, now));
+        prefs.topics.insert("snapshot".into(), prefs_weight(1.0, 0.0, 2, now));
+        assert_eq!(
+            explain_hint(&card, &prefs, now, true).as_deref(),
+            Some(HINT_OPEN_GROUP)
+        );
+
+        prefs.groups.insert(group.clone(), prefs_weight(0.0, 0.0, 5, now));
+        prefs.topics.insert("ledger".into(), prefs_weight(8.0, 0.0, 5, now));
+        assert_eq!(
+            explain_hint(&card, &prefs, now, true).as_deref(),
+            Some(hint_open_topic("ledger").as_str())
+        );
+
+        let fail = automation_failed_card("src", "Nightly", "disk full", now);
+        prefs.groups.insert(signal_group(&fail), prefs_weight(8.0, 0.0, 5, now));
+        assert_eq!(explain_hint(&fail, &prefs, now, true).as_deref(), Some(HINT_NEEDS));
+
+        let fresh = automation_done_card("new", "Widget digest report", "x", now);
+        let empty = CardPrefs::default();
+        assert_eq!(explain_hint(&fresh, &empty, now, true).as_deref(), Some(HINT_NEW));
+        assert!(explain_hint(&fresh, &empty, now, false).is_none());
+
+        let mut disliked = CardPrefs::default();
+        disliked.groups.insert(signal_group(&fresh), prefs_weight(0.0, 8.0, 5, now));
+        assert!(
+            explain_hint(&fresh, &disliked, now, true).is_none(),
+            "a stronger negative group blocks New for you"
+        );
     }
 }

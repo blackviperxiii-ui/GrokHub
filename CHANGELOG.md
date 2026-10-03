@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 2.10.67 — 2026-10-02
+
+Home learns which cards help. Opening, dismissing, More, Less, Hide and Follow up now also update a small local preference file, `card_prefs.json`, in the GrokHub config folder. It keeps decaying weights (14-day half-life) per card type, per source group, and per topic keyword. Keywords are at most three single words taken from the card title at the time of the event, with stopwords, digits and times dropped. It's capped at 200 groups and 200 keywords, and holds no sentences or body text. If the file is missing, the type and group weights are rebuilt from the signal log, which stays text-free.
+
+Home ranks event cards by a simple, deterministic score: a base for the card type, plus how often you open that type, source and topic, plus a little recency. Cards you keep dismissing sink, and a card scoring under 0.15 folds into a **More (n)** row under the deck ("Showing fewer of these; you've been dismissing them"). Failures, pinned cards and cards you worked on are never folded. Hide, Less like this and the once-a-day failure floor still apply first, and Home still shows at most three cards. A new type or source gets a small one-card novelty bump. When one reason clearly dominates, a short hint follows the why line: "You usually open these", "You often open {topic} cards", "New for you" or "Needs a look". **Settings → Behavior → What Home learned** lists the top liked and disliked groups and topics, with Forget on each row and **Reset all**. Reset keeps the signal log. No network or model calls are involved.
+
+- Linux: `grokhub-linux-v2.10.67.tar.gz` and AUR `pkgver=2.10.67`.
+- Windows: `GrokHub-Setup-2.10.67.exe` and `grokhub-windows-v2.10.67.zip`.
+
 ## 2.10.66 — 2026-10-02
 
 Home cards explain themselves and take feedback. A card that stands for several runs shows **×N runs · latest h:mm**. The count restarts once you open the card, so it means runs since you last looked. Under the body, one muted line says why the card is there:

@@ -82,6 +82,58 @@ fn choice_label(choices: &[(&str, &str)], id: &str, fallback: &str) -> String {
 }
 
 impl Cabin {
+    pub(super) fn reset_home_learned(&mut self) {
+        self.card_prefs = grokhub_core::CardPrefs::default();
+        let _ = crate::card_prefs::save(&self.card_prefs);
+        self.status = "Home learning reset".into();
+    }
+
+    pub(super) fn forget_home_learned(&mut self, bucket: grokhub_core::LearnedBucket, key: &str) {
+        grokhub_core::forget_learned(&mut self.card_prefs, bucket, key);
+        let _ = crate::card_prefs::save(&self.card_prefs);
+    }
+
+    fn ui_home_learned(&mut self, ui: &mut egui::Ui) {
+        ui.label(
+            RichText::new("What Home learned")
+                .size(15.0)
+                .color(crate::theme::fg()),
+        );
+        ui.label(
+            RichText::new("Groups and topics from cards you open or dismiss. Stays on this computer.")
+                .size(12.0)
+                .color(crate::theme::muted()),
+        );
+        ui.add_space(6.0);
+        let (liked, disliked) = grokhub_core::top_learned(&self.card_prefs, now_ms());
+        let mut forget = None;
+        if liked.is_empty() && disliked.is_empty() {
+            crate::cards::settings_note(ui, "Nothing yet.");
+        } else {
+            for row in liked.iter().chain(disliked.iter()) {
+                let sign = if row.sign > 0 { "+" } else { "-" };
+                let hint = match row.bucket {
+                    grokhub_core::LearnedBucket::Group => "Group",
+                    grokhub_core::LearnedBucket::Topic => "Topic",
+                };
+                if crate::cards::settings_action(ui, &format!("{sign} {}", row.key), hint, "Forget") {
+                    forget = Some((row.bucket, row.key.clone()));
+                }
+            }
+        }
+        if crate::cards::settings_action(
+            ui,
+            "Reset all",
+            "Clears what Home learned. The signal log stays.",
+            "Reset all",
+        ) {
+            self.reset_home_learned();
+        }
+        if let Some((bucket, key)) = forget {
+            self.forget_home_learned(bucket, &key);
+        }
+    }
+
     pub(super) fn choose_theme(&mut self, choice: grokhub_core::ThemeChoice) {
         let current = grokhub_core::parse_theme(&self.cfg.theme);
         if let Some(next) = grokhub_core::pick_theme(current, choice) {
@@ -539,6 +591,8 @@ impl Cabin {
                                                                     self.status = "Saved".into();
                                                                 }
                                                             }
+                                                            ui.add_space(8.0);
+                                                            self.ui_home_learned(ui);
                                                         }
                                                         SettingsSec::Update => {
                                                             if let Some(notice) = cli_notice.as_deref() {
