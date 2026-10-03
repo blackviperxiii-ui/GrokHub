@@ -64,6 +64,7 @@ pub mod tui_gaps;
 pub mod trajectory;
 pub mod turn_timeline;
 pub mod update;
+pub mod card_signals;
 pub mod update_feed;
 pub mod usage;
 pub mod verify;
@@ -476,6 +477,7 @@ pub use windshield::{
     refused_lock, tab_list_from_rows, window_name_from_atspi, window_name_from_wmctrl,
     windshield_browser_line, windshield_prompt, AtspiRow, PendingStep, WindshieldFrame,
 };
+pub use card_signals::{append_signal, signal_for, signal_group, CardEvent, CardSignal, SIGNAL_CAP};
 pub use update_feed::{
     ideas_board, idea_card_brief, idea_chat_open_line, mark_idea_modified, take_card_action,
     CARD_ACTION_DONE, CARD_ACTION_TAG, modified_ideas, post_skill_idea, set_idea_draft,
@@ -489,6 +491,9 @@ pub use update_feed::{
     idea_open_line, idea_rank, lesson_rank_delta, setup_blocked_by_lessons,
     idea_touched, links_from_research, unpin_feed_idea,
     mark_update_opened,
+    automation_home_note, clear_less_mute, hide_home_source, home_event_cards, mute_less_like,
+    record_home_floors, refresh_event_why, runs_latest_line, source_hidden, surfaces_on_home,
+    unhide_home_source, HOME_HIDDEN_NOTE, LESS_MUTE_MS,
     post_update, release_quiet_hold, resume_needs_fresh_chat, schedule_created_card,
     suggestion_card, tick_feed_pulse, visible_digests, visible_ideas, visible_updates,
     digest_lookup_prompt, digest_steer, parse_lookup, post_help, remember_dismissed_source,

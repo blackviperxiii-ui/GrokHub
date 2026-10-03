@@ -10,11 +10,11 @@ use super::*;
 use grokhub_core::{
     archive_digest, automation_done_card,
     dismiss_update_at, feed_ideas, feed_visible, file_idea_todo, hold_if_quiet,
-    home_feed_n, idea_open_line, unpin_feed_idea,
+    idea_open_line, unpin_feed_idea,
     idea_todo_title,
     links_from_research, mark_update_opened, parse_lookup, post_help, post_update,
     quiet_hours_active, remember_dismissed_source, route_schedule,
-    schedule_created_card, tick_feed_pulse, visible_digests, visible_updates,
+    schedule_created_card, tick_feed_pulse, visible_digests,
     CardReaction, DigestEdition, DigestMaterial, PausedJob, PulseNow, RepeatedAction,
     TasteNote, UpdateAction, UpdateCard,
     UpdateKind, UpdateStatus, DIGEST_PAINT_MAX, FEED_PAINT_MAX,
@@ -33,7 +33,10 @@ pub(super) struct IdeaInputs {
     pub lasting: Vec<String>,
 }
 
-const FEED_CARD_H: f32 = 64.0;
+/// Title, runs meta, body, and the why line each need a row.
+const FEED_CARD_H: f32 = 96.0;
+/// `Rect::intersects` treats a shared edge as a hit, so the deck keeps a 1px gap.
+const DECK_CLEAR: f32 = 1.0;
 /// Longest wait for the model's idea list before the board gives up on that ask.
 pub(super) const IDEAS_WAIT_MS: u64 = 180_000;
 const FEED_GAP: f32 = 6.0;
@@ -131,6 +134,89 @@ pub(super) fn slide_rect(front: egui::Pos2, width: f32, pose: SlidePose) -> egui
     egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h))
 }
 
+/// Fully open deck. Cards fan upward from `front` and stay in the band above
+/// `composer`. A composer with no area leaves only the on-screen clamp.
+pub(super) fn expanded_deck_rects(
+    front: egui::Pos2,
+    width: f32,
+    n: usize,
+    card_h: f32,
+    stride: f32,
+    composer: egui::Rect,
+    screen_top: f32,
+) -> Vec<egui::Rect> {
+    if n == 0 {
+        return Vec::new();
+    }
+    let card_h = card_h.max(0.0);
+    let stride = stride.max(0.0);
+    let constrained = composer.height() > 1.0 && composer.width() > 1.0;
+    if !constrained {
+        let shift = if n <= 1 {
+            0.0
+        } else {
+            let top = front.y - (n - 1) as f32 * stride;
+            (screen_top + 8.0 - top).max(0.0)
+        };
+        return (0..n)
+            .map(|index| {
+                let top = front.y - index as f32 * stride + shift;
+                egui::Rect::from_min_size(egui::pos2(front.x, top), egui::vec2(width, card_h))
+            })
+            .collect();
+    }
+    let limit = composer.top() - DECK_CLEAR;
+    let mut height = card_h;
+    let mut tops: Vec<f32> = (0..n)
+        .map(|index| front.y - index as f32 * stride)
+        .collect();
+    let lowest_bottom = tops[0] + height;
+    if lowest_bottom > limit {
+        let up = lowest_bottom - limit;
+        for top in &mut tops {
+            *top -= up;
+        }
+    }
+    let highest = tops.iter().copied().fold(f32::INFINITY, f32::min);
+    if highest < screen_top {
+        let room = (limit - screen_top).max(0.0);
+        if room <= 0.0 {
+            return (0..n)
+                .map(|_| {
+                    egui::Rect::from_min_size(egui::pos2(front.x, limit), egui::vec2(width, 0.0))
+                })
+                .collect();
+        }
+        height = card_h.min(room);
+        let extra = (room - height).max(0.0);
+        let step = if n <= 1 {
+            0.0
+        } else {
+            stride.min(extra / (n as f32 - 1.0))
+        };
+        tops = (0..n)
+            .map(|index| limit - height - index as f32 * step)
+            .collect();
+    }
+    tops.into_iter()
+        .map(|top| egui::Rect::from_min_size(egui::pos2(front.x, top), egui::vec2(width, height)))
+        .collect()
+}
+
+fn lerp_rect(from: egui::Rect, to: egui::Rect, t: f32) -> egui::Rect {
+    let t = t.clamp(0.0, 1.0);
+    egui::Rect::from_min_max(from.min + (to.min - from.min) * t, from.max + (to.max - from.max) * t)
+}
+
+/// Move a card that crosses the composer into the band above it.
+fn separate_from_composer(rect: egui::Rect, composer: egui::Rect) -> egui::Rect {
+    if composer.height() <= 1.0 || composer.width() <= 1.0 || !rect.intersects(composer) {
+        return rect;
+    }
+    let top = composer.top() - DECK_CLEAR - rect.height();
+    egui::Rect::from_min_size(egui::pos2(rect.left(), top), rect.size())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum StackHit {
     /// Pointer is on the lifted card.
@@ -193,8 +279,8 @@ pub(super) fn update_feed_h(n: usize) -> f32 {
     stacked_feed_h(n.min(FEED_PAINT_MAX))
 }
 
-pub(super) fn home_feed_count(cards: &[UpdateCard]) -> usize {
-    home_feed_n(cards)
+pub(super) fn home_feed_count(cards: &[UpdateCard], pulse: &grokhub_core::FeedPulse, now: u64) -> usize {
+    home_stack_cards(cards, pulse, now).len()
 }
 
 pub(super) enum FeedAct {
@@ -205,6 +291,9 @@ pub(super) enum FeedAct {
     Archive(String),
     /// Remove an idea from the Ideas board.
     Drop(String),
+    More(String),
+    Less(String),
+    Hide(String),
 }
 
 impl Cabin {
@@ -230,7 +319,71 @@ impl Cabin {
 
     pub(super) fn post_feed_card(&mut self, card: UpdateCard) {
         post_update(&mut self.updates, card);
+        let now = now_ms();
+        let shown = grokhub_core::home_event_cards(&self.updates, &self.cfg.feed_pulse, now);
+        if grokhub_core::record_home_floors(&mut self.cfg.feed_pulse, &shown, now) {
+            self.persist_cfg();
+        }
         self.persist_updates();
+    }
+
+    pub(super) fn log_card_signal(
+        &self,
+        card: &UpdateCard,
+        event: grokhub_core::CardEvent,
+        after_open: Option<bool>,
+    ) {
+        let row = grokhub_core::signal_for(card, event, now_ms(), after_open);
+        grokhub_core::append_signal(&crate::config::config_dir(), &row);
+    }
+
+    pub(super) fn more_like_this(&mut self, id: &str) {
+        let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() else {
+            return;
+        };
+        grokhub_core::clear_less_mute(&mut self.cfg.feed_pulse, &card);
+        self.log_card_signal(&card, grokhub_core::CardEvent::More, None);
+        self.persist_cfg();
+    }
+
+    pub(super) fn less_like_this(&mut self, id: &str) {
+        let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() else {
+            return;
+        };
+        grokhub_core::mute_less_like(&mut self.cfg.feed_pulse, &card, now_ms());
+        self.log_card_signal(&card, grokhub_core::CardEvent::Less, None);
+        self.persist_cfg();
+    }
+
+    pub(super) fn hide_automation_from_home(&mut self, id: &str) {
+        let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() else {
+            return;
+        };
+        if card.kind != UpdateKind::AutomationDone || card.source_id.trim().is_empty() {
+            return;
+        }
+        let before = self.cfg.feed_pulse.muted_sources.len();
+        grokhub_core::hide_home_source(&mut self.cfg.feed_pulse, &card.source_id);
+        if self.cfg.feed_pulse.muted_sources.len() == before {
+            return;
+        }
+        self.log_card_signal(&card, grokhub_core::CardEvent::Hidden, None);
+        self.persist_cfg();
+    }
+
+    pub(super) fn undo_hide_automation_from_home(&mut self, source_id: &str) {
+        if !grokhub_core::source_hidden(&self.cfg.feed_pulse, source_id) {
+            return;
+        }
+        grokhub_core::unhide_home_source(&mut self.cfg.feed_pulse, source_id);
+        let card = self
+            .updates
+            .iter()
+            .find(|c| c.kind == UpdateKind::AutomationDone && c.source_id == source_id)
+            .cloned()
+            .unwrap_or_else(|| grokhub_core::automation_done_card(source_id, "", "", now_ms()));
+        self.log_card_signal(&card, grokhub_core::CardEvent::Unhidden, None);
+        self.persist_cfg();
     }
 
     pub(super) fn quiet_now(&self) -> bool {
@@ -490,7 +643,7 @@ impl Cabin {
         crate::notify::ping("GrokHub", &line);
     }
 
-    pub(super) fn paint_update_feed(&mut self, ui: &mut egui::Ui, pane_w: f32) {
+    pub(super) fn paint_update_feed(&mut self, ui: &mut egui::Ui, pane_w: f32, composer: egui::Rect) {
         self.ensure_useful_ideas();
         let mem_id = egui::Id::new("home-feed-stack");
         if !feed_visible(&self.updates) {
@@ -500,7 +653,8 @@ impl Cabin {
             });
             return;
         }
-        let cards = home_stack_cards(&self.updates, now_ms());
+        let now = now_ms();
+        let cards = home_stack_cards(&self.updates, &self.cfg.feed_pulse, now);
         if cards.is_empty() {
             ui.ctx().data_mut(|d| {
                 d.insert_temp(mem_id, FeedStackMem::default());
@@ -529,8 +683,8 @@ impl Cabin {
             hovered
         };
         let view = drop_missing_pop(&cards, next_feed_stack(&prev.view(), hit, hovered_for));
-        // Paint later, after the home composer, so the open deck covers that
-        // box and stays inside the chat pane.
+        // Paint later, after the home composer, inside the chat pane. The open
+        // fan stays in the space above the composer and does not cover that box.
         ui.ctx().data_mut(|d| {
             d.insert_temp(
                 egui::Id::new("home-deck-defer"),
@@ -538,6 +692,7 @@ impl Cabin {
                     stack,
                     width: pane_w,
                     view,
+                    composer,
                 }),
             );
         });
@@ -552,11 +707,22 @@ impl Cabin {
         let Some(deferred) = deferred else {
             return;
         };
-        let cards = home_stack_cards(&self.updates, now_ms());
+        let now = now_ms();
+        let cards = home_stack_cards(&self.updates, &self.cfg.feed_pulse, now);
         if cards.is_empty() {
             return;
         }
-        let painted = paint_slide_deck(ui, &cards, deferred.stack, deferred.width, &deferred.view);
+        if grokhub_core::record_home_floors(&mut self.cfg.feed_pulse, &cards, now) {
+            self.persist_cfg();
+        }
+        let painted = paint_slide_deck(
+            ui,
+            &cards,
+            deferred.stack,
+            deferred.width,
+            &deferred.view,
+            deferred.composer,
+        );
         ui.ctx().data_mut(|d| {
             d.insert_temp(
                 egui::Id::new("home-feed-stack"),
@@ -579,6 +745,9 @@ impl Cabin {
             Some(FeedAct::Discuss(id)) => self.discuss_card(&id),
             Some(FeedAct::Archive(id)) => self.archive_feed_digest(&id),
             Some(FeedAct::Drop(id)) => self.delete_idea(&id),
+            Some(FeedAct::More(id)) => self.more_like_this(&id),
+            Some(FeedAct::Less(id)) => self.less_like_this(&id),
+            Some(FeedAct::Hide(id)) => self.hide_automation_from_home(&id),
             None => {}
         }
     }
@@ -605,6 +774,9 @@ impl Cabin {
             card.board_id = Some(board_id);
             card.status = UpdateStatus::Opened;
         }
+        if let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() {
+            self.log_card_signal(&card, grokhub_core::CardEvent::Opened, None);
+        }
         self.persist_updates();
     }
 
@@ -620,6 +792,9 @@ impl Cabin {
             .map(|c| c.title.clone())
             .unwrap_or_default();
         self.persist_updates();
+        if let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() {
+            self.log_card_signal(&card, grokhub_core::CardEvent::Opened, None);
+        }
         self.night_nl = seed;
         self.auto_compose = true;
         self.nav = Nav::Night;
@@ -636,6 +811,9 @@ impl Cabin {
             .map(|c| c.title.clone())
             .unwrap_or_default();
         self.persist_updates();
+        if let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() {
+            self.log_card_signal(&card, grokhub_core::CardEvent::Opened, None);
+        }
         if let Some(route) = route_schedule(&seed) {
             let _ = self.commit_schedule(route);
         }
@@ -887,6 +1065,7 @@ impl Cabin {
         if !matches!(card.kind, UpdateKind::Digest | UpdateKind::Suggestion) {
             return;
         }
+        self.log_card_signal(&card, grokhub_core::CardEvent::Opened, None);
         if let Some(thread_id) = card.discuss_thread.as_deref() {
             if let Some(idx) = self.threads.iter().position(|t| t.id == thread_id) {
                 self.switch_thread(idx);
@@ -948,6 +1127,9 @@ impl Cabin {
             .map(|c| (c.action.clone(), c.board_id.clone()))
             .unwrap_or_default();
         self.persist_updates();
+        if let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() {
+            self.log_card_signal(&card, grokhub_core::CardEvent::Opened, None);
+        }
         self.follow_update_action(action);
         // A run that filed a Follow up card opens that card on the board.
         if let Some(card) = board_card.filter(|b| self.board.iter().any(|c| &c.id == b)) {
@@ -958,11 +1140,13 @@ impl Cabin {
     }
 
     pub(super) fn dismiss_feed_card(&mut self, id: &str) {
-        let kind = self.updates.iter().find(|c| c.id == id).map(|c| c.kind);
-        let (source, title) = self
-            .updates
-            .iter()
-            .find(|c| c.id == id)
+        let prior = self.updates.iter().find(|c| c.id == id).cloned();
+        let kind = prior.as_ref().map(|c| c.kind);
+        let was_open = prior
+            .as_ref()
+            .is_some_and(|c| c.status == UpdateStatus::Opened);
+        let (source, title) = prior
+            .as_ref()
             .map(|c| (c.source_id.clone(), c.title.clone()))
             .unwrap_or_default();
         let removed = if kind == Some(UpdateKind::Idea) {
@@ -981,6 +1165,9 @@ impl Cabin {
                 self.persist_cfg();
             }
             self.persist_updates();
+            if let Some(card) = prior {
+                self.log_card_signal(&card, grokhub_core::CardEvent::Dismissed, Some(was_open));
+            }
         }
     }
 
@@ -1013,6 +1200,7 @@ struct DeckDefer {
     stack: egui::Rect,
     width: f32,
     view: StackView,
+    composer: egui::Rect,
 }
 
 #[derive(Clone, Debug)]
@@ -1045,11 +1233,8 @@ struct SlidePaint {
     popped_rect: Option<egui::Rect>,
 }
 
-fn home_stack_cards(cards: &[UpdateCard], now: u64) -> Vec<UpdateCard> {
-    let mut out: Vec<UpdateCard> = visible_updates(cards)
-        .into_iter()
-        .take(FEED_PAINT_MAX)
-        .collect();
+fn home_stack_cards(cards: &[UpdateCard], pulse: &grokhub_core::FeedPulse, now: u64) -> Vec<UpdateCard> {
+    let mut out = grokhub_core::home_event_cards(cards, pulse, now);
     out.extend(feed_ideas(cards, now));
     out.extend(visible_digests(cards).into_iter().take(DIGEST_PAINT_MAX));
     out
@@ -1128,33 +1313,21 @@ fn tucked_slide(index: usize, spread: f32) -> bool {
 }
 
 struct SlidePlacement {
-    pose: SlidePose,
     spread: f32,
     popped: bool,
+    lift: f32,
 }
 
-fn slide_placements(
-    ctx: &egui::Context,
-    cards: &[UpdateCard],
-    view: &StackView,
-    front_y: f32,
-    screen_top: f32,
-) -> Vec<SlidePlacement> {
-    let shift = slide_up_shift(front_y, cards.len(), screen_top);
+fn slide_placements(ctx: &egui::Context, cards: &[UpdateCard], view: &StackView) -> Vec<SlidePlacement> {
     cards
         .iter()
         .enumerate()
         .map(|(index, card)| {
             let popped = view.popped.as_deref() == Some(card.id.as_str());
-            let spread = slide_spread(ctx, index, view.expanded || popped);
-            let lift = slide_lift(ctx, index, popped);
-            let mut pose = mix_slide(rest_slide(index), open_slide(index), spread);
-            pose.dy += shift * spread;
-            pose.dy -= STACK_POP * lift;
             SlidePlacement {
-                pose,
-                spread,
+                spread: slide_spread(ctx, index, view.expanded || popped),
                 popped,
+                lift: slide_lift(ctx, index, popped),
             }
         })
         .collect()
@@ -1184,12 +1357,32 @@ fn paint_slide_deck(
     stack: egui::Rect,
     width: f32,
     view: &StackView,
+    composer: egui::Rect,
 ) -> SlidePaint {
     let front = stack.left_top();
-    let placements = slide_placements(ui.ctx(), cards, view, front.y, ui.ctx().content_rect().top());
+    let screen_top = ui.ctx().content_rect().top();
+    let placements = slide_placements(ui.ctx(), cards, view);
+    let open = expanded_deck_rects(
+        front,
+        width,
+        cards.len(),
+        FEED_CARD_H,
+        slide_stride(),
+        composer,
+        screen_top,
+    );
     let rects: Vec<egui::Rect> = placements
         .iter()
-        .map(|place| slide_rect(front, width, place.pose))
+        .enumerate()
+        .map(|(index, place)| {
+            let rest = slide_rect(front, width, rest_slide(index));
+            let target = open.get(index).copied().unwrap_or(rest);
+            let mut rect = lerp_rect(rest, target, place.spread);
+            if place.lift > 0.0 {
+                rect = rect.translate(egui::vec2(0.0, -STACK_POP * place.lift));
+            }
+            separate_from_composer(rect, composer)
+        })
         .collect();
     let mut act = None;
     let mut hits = Vec::new();
@@ -1258,9 +1451,18 @@ fn paint_feed_card(ui: &mut egui::Ui, card: &UpdateCard, pane_w: f32) -> Option<
         egui::pos2(rect.right() - 32.0, rect.top() + 6.0),
         egui::vec2(24.0, 24.0),
     );
+    let menu_rect = egui::Rect::from_min_size(
+        egui::pos2(x_rect.left() - 28.0, rect.top() + 6.0),
+        egui::vec2(24.0, 24.0),
+    );
+    let text_right = if card.kind.event() {
+        menu_rect.left() - 4.0
+    } else {
+        x_rect.left() - 4.0
+    };
     let text_rect = egui::Rect::from_min_max(
         egui::pos2(rect.left() + 8.0, rect.top() + 6.0),
-        egui::pos2(x_rect.left() - 4.0, rect.bottom() - 6.0),
+        egui::pos2(text_right, rect.bottom() - 6.0),
     );
     ui.scope_builder(egui::UiBuilder::new().max_rect(text_rect), |ui| {
         ui.set_width(text_rect.width());
@@ -1282,9 +1484,32 @@ fn paint_feed_card(ui: &mut egui::Ui, card: &UpdateCard, pane_w: f32) -> Option<
                 .size(crate::theme::FONT_BODY)
                 .color(title_color),
         );
+        if card.runs > 1 {
+            let clock = Cabin::local_clock();
+            if let Some(line) = grokhub_core::runs_latest_line(
+                card.runs,
+                card.created_at,
+                now_ms(),
+                clock.hour,
+                clock.minute,
+            ) {
+                ui.label(
+                    RichText::new(line)
+                        .size(crate::theme::FONT_TIP)
+                        .color(crate::theme::muted()),
+                );
+            }
+        }
         if let Some(body) = card.body.as_deref() {
             ui.label(
                 RichText::new(body)
+                    .size(crate::theme::FONT_TIP)
+                    .color(crate::theme::muted()),
+            );
+        }
+        if let Some(why) = card.why.as_deref().map(str::trim).filter(|line| !line.is_empty()) {
+            ui.label(
+                RichText::new(why)
                     .size(crate::theme::FONT_TIP)
                     .color(crate::theme::muted()),
             );
@@ -1297,6 +1522,20 @@ fn paint_feed_card(ui: &mut egui::Ui, card: &UpdateCard, pane_w: f32) -> Option<
         egui::Sense::click(),
     );
     let over_x = hit.hover_pos().is_some_and(|pos| x_rect.contains(pos));
+    let over_menu = card.kind.event() && hit.hover_pos().is_some_and(|pos| menu_rect.contains(pos));
+    if card.kind.event() {
+        ui.painter().text(
+            menu_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "⋯",
+            egui::FontId::proportional(16.0),
+            if over_menu {
+                crate::theme::fg()
+            } else {
+                crate::theme::muted()
+            },
+        );
+    }
     ui.painter().text(
         x_rect.center(),
         egui::Align2::CENTER_CENTER,
@@ -1311,7 +1550,50 @@ fn paint_feed_card(ui: &mut egui::Ui, card: &UpdateCard, pane_w: f32) -> Option<
     if hit.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
+    let mut menu_act = None;
+    if card.kind.event() {
+        let popup_id = egui::Id::new(("feed-card-menu", &card.id));
+        if hit.secondary_clicked() {
+            egui::Popup::open_id(ui.ctx(), popup_id);
+        }
+        let on_menu_click = hit.clicked()
+            && hit
+                .interact_pointer_pos()
+                .is_some_and(|pos| menu_rect.contains(pos));
+        if on_menu_click {
+            egui::Popup::toggle_id(ui.ctx(), popup_id);
+        }
+        let hide = card.kind == UpdateKind::AutomationDone && !card.source_id.trim().is_empty();
+        egui::Popup::new(popup_id, ui.ctx().clone(), menu_rect, ui.layer_id())
+            .kind(egui::PopupKind::Menu)
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClick)
+            .layout(egui::Layout::top_down_justified(egui::Align::Min))
+            .show(|ui| {
+                if ui.button("More like this").clicked() {
+                    menu_act = Some(FeedAct::More(card.id.clone()));
+                    ui.close();
+                }
+                if ui.button("Less like this").clicked() {
+                    menu_act = Some(FeedAct::Less(card.id.clone()));
+                    ui.close();
+                }
+                if hide && ui.button("Hide this automation's runs from Home").clicked() {
+                    menu_act = Some(FeedAct::Hide(card.id.clone()));
+                    ui.close();
+                }
+            });
+    }
+    if menu_act.is_some() {
+        return menu_act;
+    }
     if !hit.clicked() {
+        return None;
+    }
+    let on_menu = card.kind.event()
+        && hit
+            .interact_pointer_pos()
+            .is_some_and(|pos| menu_rect.contains(pos));
+    if on_menu {
         return None;
     }
     let on_x = hit
@@ -1447,5 +1729,52 @@ mod stack_tests {
             pile_pop_target(Some("front"), Some("peek".into())).as_deref(),
             Some("peek")
         );
+    }
+
+    #[test]
+    fn expanded_deck_never_covers_the_composer() {
+        use super::{expanded_deck_rects, open_slide, slide_stride};
+        use eframe::egui;
+        let width = 280.0;
+        let stride = slide_stride();
+        let composer = egui::Rect::from_min_max(egui::pos2(0.0, 420.0), egui::pos2(320.0, 520.0));
+        let front = egui::pos2(20.0, 540.0);
+        let rects = expanded_deck_rects(front, width, 3, FEED_CARD_H, stride, composer, 0.0);
+        assert_eq!(rects.len(), 3);
+        for rect in &rects {
+            assert!(
+                !rect.intersects(composer),
+                "open card {rect:?} covers the composer {composer:?}"
+            );
+            assert!(rect.bottom() <= composer.top() - 1.0 + 0.05);
+        }
+        assert!(
+            rects[0].top() < front.y,
+            "the fan shifts up off the resting slot"
+        );
+
+        let above = egui::Rect::from_min_max(egui::pos2(0.0, 500.0), egui::pos2(320.0, 640.0));
+        let high = egui::pos2(20.0, 200.0);
+        let parked = expanded_deck_rects(high, width, 2, FEED_CARD_H, stride, above, 0.0);
+        assert!((parked[0].top() - high.y).abs() < 0.05);
+        assert!((parked[1].top() - (high.y + open_slide(1).dy)).abs() < 0.05);
+        for rect in &parked {
+            assert!(!rect.intersects(above));
+            assert!(rect.bottom() <= above.top() - 1.0 + 0.05);
+        }
+
+        let tight = egui::Rect::from_min_max(egui::pos2(0.0, 50.0), egui::pos2(320.0, 200.0));
+        let squeezed = expanded_deck_rects(front, width, 3, FEED_CARD_H, stride, tight, 0.0);
+        for rect in &squeezed {
+            assert!(!rect.intersects(tight), "{rect:?}");
+            assert!(rect.top() >= -0.05);
+            assert!(rect.bottom() <= tight.top() - 1.0 + 0.05);
+        }
+        assert!(squeezed[2].top() + 0.05 >= 0.0);
+
+        let none = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(0.0, 0.0));
+        let free = expanded_deck_rects(egui::pos2(10.0, 40.0), width, 8, FEED_CARD_H, stride, none, 0.0);
+        assert!(free[7].top() >= 8.0 - 0.05);
+        assert!(!free.iter().any(|rect| rect.intersects(none) && none.height() > 1.0));
     }
 }
