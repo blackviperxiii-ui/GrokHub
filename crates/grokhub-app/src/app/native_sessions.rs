@@ -199,6 +199,16 @@ impl Cabin {
             .saturating_add(info.usage.reasoning_tokens);
         self.grok_usage.cost_in_usd_ticks = info.usage.cost_in_usd_ticks;
         self.grok_usage.meter = info.meter.clone();
+        let input = info.input();
+        let has_usage = info.usage.input_tokens > 0
+            || info.usage.output_tokens > 0
+            || info.usage.reasoning_tokens > 0
+            || info.usage.cost_in_usd_ticks != 0;
+        if !input.is_empty() || has_usage {
+            self.grok_usage.context_tokens_used = grokhub_agent::estimate_input_tokens(&input);
+            self.grok_usage.context_window_tokens =
+                grokhub_agent::context_length_for(&info.model, &[]);
+        }
     }
 
     pub(super) fn sync_native_title_from_store(&mut self) {
@@ -489,5 +499,47 @@ mod tests {
         drop(_guard);
         let _ = std::fs::remove_dir_all(&home);
         let _ = std::fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn manual_compact_slash_targets_native_threads_only() {
+        let slash = include_str!("slash.rs");
+        let compact = slash
+            .split("Slash::Compact =>")
+            .nth(1)
+            .and_then(|src| src.split("Slash::Skill").next())
+            .expect("Compact");
+        let native_at = compact
+            .find("native_compact_if_current")
+            .expect("native hook");
+        let cli_at = compact
+            .find("send_grok_slash(\"/compact\")")
+            .expect("cli compact");
+        assert!(native_at < cli_at, "{compact}");
+        assert!(
+            compact.contains("compact_keep_start_from") && !compact.contains("content.clone()"),
+            "{compact}"
+        );
+        assert!(
+            compact.contains("stamp_current_access") || compact.contains("accessed_ms"),
+            "{compact}"
+        );
+        let engine = include_str!("native_engine.rs");
+        let body = engine
+            .split("fn native_compact_if_current")
+            .nth(1)
+            .and_then(|src| src.split("fn kick_native_turn").next())
+            .expect("native_compact_if_current");
+        assert!(body.contains("manual_compact_targets_native"));
+        assert!(body.contains("self.cfg.native_engine"));
+        assert!(body.contains("ensure_native_engine"));
+        assert!(body.contains("\"Compacting…\""));
+        assert!(!body.contains("self.running = true"));
+        let ensure_at = body.find("ensure_native_engine").unwrap();
+        let job_at = body.find("chat_job_thread").unwrap();
+        assert!(ensure_at < job_at, "{body}");
+        assert!(grokhub_agent::manual_compact_targets_native(true, true));
+        assert!(!grokhub_agent::manual_compact_targets_native(false, true));
+        assert!(!grokhub_agent::manual_compact_targets_native(true, false));
     }
 }

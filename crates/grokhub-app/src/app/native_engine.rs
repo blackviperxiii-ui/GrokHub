@@ -50,6 +50,34 @@ impl Cabin {
         self.threads.get(idx).is_some_and(|t| t.native)
     }
 
+    /// `/compact` on a native thread while Settings → Labs is on.
+    /// Lab off, or a CLI thread, returns false so the CLI command stays as it is.
+    /// The job thread is bound after the engine, so the session id stays on this tab.
+    /// `running` stays false: the compact `Done` must not append an assistant bubble.
+    pub(super) fn native_compact_if_current(&mut self) -> bool {
+        let thread_native = self
+            .threads
+            .get(self.thread_idx)
+            .is_some_and(|thread| thread.native);
+        if !grokhub_agent::manual_compact_targets_native(self.cfg.native_engine, thread_native) {
+            return false;
+        }
+        if let Err(err) = self.ensure_native_engine() {
+            self.status = err;
+            return true;
+        }
+        let prompted = self.acp.as_ref().map(|handle| handle.prompt("/compact"));
+        match prompted {
+            Some(Ok(())) => {
+                self.chat_job_thread = Some(self.visible_thread_id());
+                self.status = "Compacting…".into();
+            }
+            Some(Err(err)) => self.status = err,
+            None => self.status = "native engine is not running".into(),
+        }
+        true
+    }
+
     pub(super) fn kick_native_turn(
         &mut self,
         last_user: &str,

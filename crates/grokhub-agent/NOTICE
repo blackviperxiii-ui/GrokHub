@@ -1,3 +1,7 @@
 Portions derived from xai-org/grok-build (Apache-2.0, © SpaceXAI), commit 2bdd1d6a; modified.
 
 The Apache-2.0 license text is in LICENSE-APACHE-2.0 in this directory.
+
+`src/tokens.rs` vendors `xai-token-estimation` (bytes/4 estimator, no tokenizer data).
+`src/compact.rs` ports the session summary prompt from `xai-grok-shell` `helpers/session_compact.rs`.
+`src/image_budget.rs` ports the image-eviction placeholder and byte budget from `xai-chat-state` `image_budget.rs`.

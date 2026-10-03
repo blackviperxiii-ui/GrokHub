@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.10.75 — 2026-10-03
+
+Native chats (Settings → Labs, still off by default) now track and manage their context window. The window size comes from the `context_length` in `/v1/models` (256k for `grok-4.7` when the field is missing). Token use is estimated locally with the bytes/4 estimator vendored from Grok Build's `xai-token-estimation`, with no tokenizer data. The result shows in the existing context line under the chat. At 85% the engine compacts on its own before the next model call. It asks for a summary using the prompt ported from the Grok CLI's `session_compact.rs`, then replaces older history with that summary. Any leading system message, the open todos and the last user turn are kept verbatim. A compaction marker is written to the session JSONL, so reopening the chat rebuilds the compacted conversation. If the summary call fails, comes back empty or is cancelled, the transcript is left exactly as it was. `/compact` on a native chat does the same on demand. On a Grok CLI chat it still sends the CLI's own `/compact`. When a request body gets close to the proxy's size limit, the oldest inline images are evicted first and replaced with the CLI's placeholder text. The summary call's tokens and cost count in the session usage. The Grok CLI path is unchanged.
+
+- Linux: `grokhub-linux-v2.10.75.tar.gz` and AUR `pkgver=2.10.75`.
+- Windows: `GrokHub-Setup-2.10.75.exe` and `grokhub-windows-v2.10.75.zip`.
+
 ## 2.10.74 — 2026-10-03
 
 Native chats (Settings → Labs, still off by default) are now real sessions. Each is an append-only JSONL file under the GrokHub config folder's `sessions/`: a header line (id, title, created, folder, model), then one line per message, tool call, tool result and usage record, flushed as it happens. Reopening a chat rebuilds the conversation from the file. If the last line was cut off by a crash, it's dropped and the file repaired instead of failing. History lists native sessions next to Grok CLI sessions. CLI rows still come from the same discovery code and stay read-only. Native rows can be resumed, forked into an independent copy, renamed, exported to Markdown and deleted. Delete stops a running native turn for that session before removing the file. Titles come from the first message locally, with no model call. Each turn's tokens and cost are stored and shown, labeled "SuperGrok pool" or "API credits". The Grok CLI path is unchanged.

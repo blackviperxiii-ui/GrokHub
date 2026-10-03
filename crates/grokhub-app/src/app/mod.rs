@@ -3895,6 +3895,7 @@ impl Cabin {
         self.merge_grok_usage(&usage);
         if let Some(e) = error.filter(|s| !s.trim().is_empty()) {
             self.status = format!("Compact failed: {e}");
+            self.release_native_compact_slot();
             return;
         }
         let ctx = grok_context_line(&self.grok_usage);
@@ -3909,6 +3910,17 @@ impl Cabin {
         } else {
             format!("Compacted · {ctx}")
         };
+        if !started {
+            self.release_native_compact_slot();
+        }
+    }
+
+    /// A native `/compact` does not set `running`. Drop the job slot when it finishes
+    /// so the meter status stays and the composer does not keep a stream.
+    fn release_native_compact_slot(&mut self) {
+        if !self.running && self.native_engine_for_current() {
+            self.chat_job_thread = None;
+        }
     }
 
     fn apply_job_fail(&mut self, err: &str) -> String {
