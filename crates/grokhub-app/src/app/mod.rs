@@ -2484,6 +2484,14 @@ impl Cabin {
         }
     }
 
+    fn poll_native_memory(&mut self) {
+        if let Some(msg) = grokhub_agent::take_memory_status() {
+            if !msg.is_empty() {
+                self.status = msg;
+            }
+        }
+    }
+
     fn bearer(&mut self) -> String {
         if let Some(k) = grokhub_acp::grok_cli_key() {
             if !k.trim().is_empty() {
@@ -4819,6 +4827,7 @@ impl eframe::App for Cabin {
         self.poll_mem_restore();
         self.poll_mem_file();
         self.poll_recall();
+        self.poll_native_memory();
         self.poll_sync();
         self.poll_inhabit();
         self.poll_reflect();
@@ -5102,6 +5111,45 @@ impl Cabin {
             .show(ctx, |ui| {
                 ui.set_min_width(520.0);
                 palette::paint_shortcut_sheet(ui);
+                ui.add_space(12.0);
+                ui.label(
+                    egui::RichText::new("Slash commands")
+                        .size(crate::theme::FONT_CHROME)
+                        .strong()
+                        .color(crate::theme::fg()),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "Native handler, or N/A on a native thread. CLI threads stay on the Grok CLI.",
+                    )
+                    .size(crate::theme::FONT_TIP)
+                    .color(crate::theme::muted()),
+                );
+                ui.add_space(6.0);
+                egui::ScrollArea::vertical()
+                    .id_salt("slash-parity")
+                    .max_height(280.0)
+                    .show(ui, |ui| {
+                        egui::Grid::new("slash-parity")
+                            .num_columns(2)
+                            .spacing(egui::vec2(12.0, 4.0))
+                            .show(ui, |ui| {
+                                for row in grokhub_agent::slash_parity() {
+                                    ui.label(
+                                        egui::RichText::new(format!("/{}", row.command))
+                                            .monospace()
+                                            .size(crate::theme::FONT_TIP)
+                                            .color(crate::theme::fg()),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(row.disposition)
+                                            .size(crate::theme::FONT_TIP)
+                                            .color(crate::theme::muted()),
+                                    );
+                                    ui.end_row();
+                                }
+                            });
+                    });
                 ui.add_space(8.0);
                 if crate::cards::ghost_pill(ui, "Close") {
                     self.shortcuts_open = false;

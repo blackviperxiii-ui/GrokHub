@@ -109,6 +109,30 @@ impl Cabin {
         true
     }
 
+    /// `/flush` and `/dream` on a native thread. `running` stays false so the
+    /// following `Done` does not append an assistant bubble, and the job thread
+    /// stays clear so the composer does not look busy.
+    pub(super) fn prompt_native_memory(&mut self, command: &str, status: &str) -> bool {
+        let thread_native = self
+            .threads
+            .get(self.thread_idx)
+            .is_some_and(|thread| thread.native);
+        if !grokhub_agent::manual_compact_targets_native(self.cfg.native_engine, thread_native) {
+            return false;
+        }
+        if let Err(err) = self.ensure_native_engine() {
+            self.status = err;
+            return true;
+        }
+        let prompted = self.acp.as_ref().map(|handle| handle.prompt(command));
+        match prompted {
+            Some(Ok(())) => self.status = status.into(),
+            Some(Err(err)) => self.status = err,
+            None => self.status = "native engine is not running".into(),
+        }
+        true
+    }
+
     pub(super) fn ensure_native_engine(&mut self) -> Result<(), String> {
         let cwd = self.native_workspace();
         let (session_id, changed) = self.bind_native_session_id(&cwd);
