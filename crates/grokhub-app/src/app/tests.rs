@@ -13176,7 +13176,7 @@ fn housekeep_keeps_ideas_until_newer_ones_push_them_out() {
     assert!(!cabin.running);
     assert!(
         grokhub_core::visible_updates(&cabin.updates).is_empty(),
-        "ideas must not invent event rows or take the paint cap of 4"
+        "ideas must not invent event rows or take the paint cap of 3"
     );
     assert_eq!(
         grokhub_core::visible_ideas(&cabin.updates)
@@ -21047,14 +21047,14 @@ fn feed_deck_shift_keeps_the_top_card_on_screen() {
 #[test]
 fn feed_stack_height_peeks_two_edges() {
     assert_eq!(super::feed_ui::collapsed_stack_h(0), 0.0);
-    assert_eq!(super::feed_ui::collapsed_stack_h(1), 64.0);
+    assert_eq!(super::feed_ui::collapsed_stack_h(1), 96.0);
     assert_eq!(
         super::feed_ui::collapsed_stack_h(2),
-        64.0 + super::feed_ui::STACK_REST_DY_1
+        96.0 + super::feed_ui::STACK_REST_DY_1
     );
     assert_eq!(
         super::feed_ui::collapsed_stack_h(3),
-        64.0 + super::feed_ui::STACK_REST_DY_2
+        96.0 + super::feed_ui::STACK_REST_DY_2
     );
     assert!(super::feed_ui::collapsed_stack_h(1) < super::feed_ui::collapsed_stack_h(2));
     assert!(super::feed_ui::collapsed_stack_h(2) < super::feed_ui::collapsed_stack_h(3));
@@ -21065,7 +21065,7 @@ fn feed_stack_height_peeks_two_edges() {
     assert_eq!(super::feed_ui::STACK_REST_DY_1, 8.0);
     assert_eq!(super::feed_ui::STACK_REST_DY_2, 16.0);
     assert_eq!(super::feed_ui::stacked_feed_h(0), 0.0);
-    assert_eq!(super::feed_ui::stacked_feed_h(2), 64.0 * 2.0 + 6.0);
+    assert_eq!(super::feed_ui::stacked_feed_h(2), 96.0 * 2.0 + 6.0);
     assert!(super::feed_ui::stacked_feed_h(2) > super::feed_ui::collapsed_stack_h(2));
 }
 
@@ -21233,10 +21233,105 @@ fn device_glance_none_when_hub_off() {
 #[test]
 fn home_feed_count_empty_and_one_event() {
     // Real `home_feed_count` on a quiet slice — no cabin, spawn, or network.
-    assert_eq!(home_feed_count(&[]), 0);
+    let pulse = grokhub_core::FeedPulse::default();
+    assert_eq!(home_feed_count(&[], &pulse, 0), 0);
 
     let cards = vec![feed_card("event-1", UpdateKind::AutomationDone, false)];
-    assert_eq!(home_feed_count(&cards), 1);
+    assert_eq!(home_feed_count(&cards, &pulse, 0), 1);
+}
+
+#[test]
+fn card_menu_hide_and_undo_round_trip() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("card-menu-hide");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let _pin = crate::config::TestConfigDir::set(root.clone());
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.quiet_start = "00:00".into();
+    cabin.cfg.quiet_end = "00:00".into();
+    cabin.note_automation_done("zephyr-src-9f3a", "ZephyrHideTitle9f3a", "ZephyrHideBody9f3a");
+    let id = cabin
+        .updates
+        .iter()
+        .find(|card| card.source_id == "zephyr-src-9f3a")
+        .map(|card| card.id.clone())
+        .expect("run card");
+    assert_eq!(home_feed_count(&cabin.updates, &cabin.cfg.feed_pulse, now_ms()), 1);
+
+    cabin.hide_automation_from_home(&id);
+    assert!(
+        grokhub_core::home_event_cards(&cabin.updates, &cabin.cfg.feed_pulse, now_ms()).is_empty(),
+        "a hidden run stays off Home"
+    );
+    assert!(
+        cabin.updates.iter().any(|card| card.source_id == "zephyr-src-9f3a"),
+        "the card still updates in the store"
+    );
+    cabin.note_automation_done("zephyr-src-9f3a", "ZephyrHideTitle9f3a", "ZephyrHideBody9f3a again");
+    let stored = cabin
+        .updates
+        .iter()
+        .find(|card| card.source_id == "zephyr-src-9f3a")
+        .expect("merged");
+    assert!(stored.runs >= 2, "hidden runs still merge, runs={}", stored.runs);
+    assert!(grokhub_core::home_event_cards(&cabin.updates, &cabin.cfg.feed_pulse, now_ms()).is_empty());
+    assert_eq!(
+        grokhub_core::automation_home_note(&cabin.cfg.feed_pulse, "zephyr-src-9f3a"),
+        Some(grokhub_core::HOME_HIDDEN_NOTE)
+    );
+    let night = include_str!("night.rs");
+    assert!(
+        night.contains("HOME_HIDDEN_NOTE") && night.contains("undo_hide_automation_from_home"),
+        "Automations shows Hidden from Home · Undo"
+    );
+    assert!(grokhub_core::HOME_HIDDEN_NOTE.contains("Undo"));
+    let feed = include_str!("feed_ui.rs");
+    assert!(
+        feed.contains("More like this")
+            && feed.contains("Less like this")
+            && feed.contains("Hide this automation's runs from Home")
+            && feed.contains("secondary_clicked"),
+        "every event card has the ⋯ menu and a right-click"
+    );
+
+    let app_json = root.join("app.json");
+    let mut saw_hide = false;
+    for _ in 0..100 {
+        if std::fs::read_to_string(&app_json)
+            .unwrap_or_default()
+            .contains("zephyr-src-9f3a")
+        {
+            saw_hide = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(saw_hide, "muted source persisted in app.json");
+
+    cabin.undo_hide_automation_from_home("zephyr-src-9f3a");
+    assert_eq!(home_feed_count(&cabin.updates, &cabin.cfg.feed_pulse, now_ms()), 1);
+    let mut saw_undo = false;
+    for _ in 0..100 {
+        let body = std::fs::read_to_string(&app_json).unwrap_or_default();
+        if !body.contains("zephyr-src-9f3a") {
+            saw_undo = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(saw_undo, "Undo drops the source from app.json");
+
+    let signals = std::fs::read_to_string(root.join("card_signals.jsonl")).unwrap_or_default();
+    assert!(signals.contains("\"event\":\"hidden\""), "{signals}");
+    assert!(signals.contains("\"event\":\"unhidden\""), "{signals}");
+    assert!(!signals.contains("ZephyrHideTitle9f3a"), "{signals}");
+    assert!(!signals.contains("ZephyrHideBody9f3a"), "{signals}");
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
 }
 
 // Folded from PR #410.
