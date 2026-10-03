@@ -360,12 +360,156 @@ impl Drop for Group {
 }
 
 #[cfg(unix)]
-fn kill_group(pgid: i32) {
+pub(crate) fn kill_group(pgid: i32) {
     if pgid > 1 {
         unsafe {
             libc::kill(-pgid, libc::SIGKILL);
         }
     }
+}
+
+/// Result of one hook command. `timed_out` means the process tree was killed.
+pub(crate) struct HookProc {
+    pub exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub timed_out: bool,
+}
+
+#[cfg(unix)]
+pub(crate) fn run_hook_command(
+    cwd: &Path,
+    command: &str,
+    stdin_bytes: &[u8],
+    env: &[(String, String)],
+    timeout: Duration,
+    source_dir: &Path,
+) -> Result<HookProc, String> {
+    use std::io::Write;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    let (program, args) = hook_argv(command, source_dir);
+    let mut cmd = Command::new(&program);
+    cmd.args(&args)
+        .current_dir(cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0);
+    for (key, value) in env {
+        cmd.env(key, value);
+    }
+    let mut child = cmd
+        .spawn()
+        .map_err(|err| format!("could not start hook: {err}"))?;
+    // Feed stdin on its own thread so a hook that never reads it (or fills stdout
+    // first) cannot block us before the timeout loop starts.
+    if let Some(mut stdin) = child.stdin.take() {
+        let input = stdin_bytes.to_vec();
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&input);
+        });
+    }
+    let pgid = child.id() as i32;
+    let mut group = Group {
+        pgid,
+        armed: pgid > 1,
+    };
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
+    let out_thread = std::thread::spawn(move || read_pipe(stdout_pipe));
+    let err_thread = std::thread::spawn(move || read_pipe(stderr_pipe));
+    let started = Instant::now();
+    let status = loop {
+        if started.elapsed() >= timeout {
+            kill_group(group.pgid);
+            group.disarm();
+            let _ = child.wait();
+            break None;
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                group.disarm();
+                break Some(status.code().unwrap_or(1));
+            }
+            Ok(None) => std::thread::sleep(POLL),
+            Err(err) => {
+                kill_group(group.pgid);
+                group.disarm();
+                let _ = child.wait();
+                return Err(format!("could not wait for hook: {err}"));
+            }
+        }
+    };
+    let stdout = String::from_utf8_lossy(&out_thread.join().unwrap_or_default()).into_owned();
+    let stderr = String::from_utf8_lossy(&err_thread.join().unwrap_or_default()).into_owned();
+    Ok(match status {
+        Some(code) => HookProc {
+            exit_code: Some(code),
+            stdout,
+            stderr,
+            timed_out: false,
+        },
+        None => HookProc {
+            exit_code: None,
+            stdout,
+            stderr,
+            timed_out: true,
+        },
+    })
+}
+
+#[cfg(unix)]
+fn hook_argv(command: &str, source_dir: &Path) -> (std::path::PathBuf, Vec<String>) {
+    let meta = command.chars().any(|ch| {
+        matches!(
+            ch,
+            ' ' | '|' | '&' | ';' | '>' | '<' | '$' | '~' | '\n' | '\t'
+        )
+    });
+    if !meta {
+        let path = Path::new(command);
+        let candidate = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            source_dir.join(path)
+        };
+        let regular = std::fs::symlink_metadata(&candidate)
+            .map(|meta| meta.file_type().is_file())
+            .unwrap_or(false);
+        if regular {
+            return (candidate, Vec::new());
+        }
+    }
+    (
+        std::path::PathBuf::from("sh"),
+        vec!["-c".into(), command.to_string()],
+    )
+}
+
+#[cfg(windows)]
+pub(crate) fn run_hook_command(
+    cwd: &Path,
+    command: &str,
+    stdin_bytes: &[u8],
+    env: &[(String, String)],
+    timeout: Duration,
+    _source_dir: &Path,
+) -> Result<HookProc, String> {
+    win::run_hook(cwd, command, stdin_bytes, env, timeout)
+}
+
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn run_hook_command(
+    _cwd: &Path,
+    _command: &str,
+    _stdin_bytes: &[u8],
+    _env: &[(String, String)],
+    _timeout: Duration,
+    _source_dir: &Path,
+) -> Result<HookProc, String> {
+    Err("hooks are not available on this system".into())
 }
 
 #[cfg(unix)]
@@ -533,10 +677,75 @@ mod win {
     use windows_sys::Win32::System::Pipes::CreatePipe;
     use windows_sys::Win32::System::Threading::{
         CreateProcessW, GetExitCodeProcess, ResumeThread, TerminateProcess, WaitForSingleObject,
-        CREATE_NO_WINDOW, CREATE_SUSPENDED, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
+        CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION,
+        STARTF_USESTDHANDLES, STARTUPINFOW,
     };
 
     use super::{finish, CapBuf, POLL};
+
+    pub(super) fn run_hook(
+        cwd: &Path,
+        command: &str,
+        stdin: &[u8],
+        env: &[(String, String)],
+        timeout: Duration,
+    ) -> Result<super::HookProc, String> {
+        let mut child = JobChild::spawn_io(cwd, command, stdin, env)?;
+        let started = Instant::now();
+        let timed_out = loop {
+            if started.elapsed() >= timeout {
+                child.kill();
+                break true;
+            }
+            match child.poll() {
+                Poll::Running => thread::sleep(POLL),
+                Poll::Exited(code) => {
+                    let (stdout, stderr) = child.output_split();
+                    return Ok(super::HookProc {
+                        exit_code: Some(i32::try_from(code).unwrap_or(1)),
+                        stdout: String::from_utf8_lossy(&stdout).into_owned(),
+                        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+                        timed_out: false,
+                    });
+                }
+                Poll::Failed(err) => return Err(err),
+            }
+        };
+        let (stdout, stderr) = child.output_split();
+        let _ = timed_out;
+        Ok(super::HookProc {
+            exit_code: None,
+            stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&stderr).into_owned(),
+            timed_out: true,
+        })
+    }
+
+    fn env_wide(extra: &[(String, String)]) -> Vec<u16> {
+        let mut map = std::collections::BTreeMap::new();
+        if !extra.is_empty() {
+            for (key, value) in std::env::vars() {
+                map.insert(key, value);
+            }
+            for (key, value) in extra {
+                if key.contains('=') || key.contains('\0') || value.contains('\0') {
+                    continue;
+                }
+                map.insert(key.clone(), value.clone());
+            }
+        }
+        if map.is_empty() {
+            return vec![0, 0];
+        }
+        let mut wide = Vec::new();
+        for (key, value) in map {
+            let pair = format!("{key}={value}");
+            wide.extend(OsStr::new(&pair).encode_wide());
+            wide.push(0);
+        }
+        wide.push(0);
+        wide
+    }
 
     pub fn run(
         cwd: &Path,
@@ -601,6 +810,15 @@ mod win {
 
     impl JobChild {
         fn spawn(cwd: &Path, command: &str) -> Result<Self, String> {
+            Self::spawn_io(cwd, command, &[], &[])
+        }
+
+        fn spawn_io(
+            cwd: &Path,
+            command: &str,
+            stdin: &[u8],
+            env: &[(String, String)],
+        ) -> Result<Self, String> {
             let mut child = Self {
                 job: ptr::null_mut(),
                 process: ptr::null_mut(),
@@ -654,14 +872,22 @@ mod win {
                 si.hStdOutput = child.stdout_write;
                 si.hStdError = child.stderr_write;
                 let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
+                let env_block = env_wide(env);
+                let mut flags = CREATE_SUSPENDED | CREATE_NO_WINDOW;
+                let env_ptr: *const core::ffi::c_void = if env.is_empty() {
+                    ptr::null()
+                } else {
+                    flags |= CREATE_UNICODE_ENVIRONMENT;
+                    env_block.as_ptr().cast()
+                };
                 let created = CreateProcessW(
                     app.as_ptr(),
                     cmdline.as_mut_ptr(),
                     ptr::null(),
                     ptr::null(),
                     TRUE,
-                    CREATE_SUSPENDED | CREATE_NO_WINDOW,
-                    ptr::null(),
+                    flags,
+                    env_ptr,
                     dir.as_ptr(),
                     &si,
                     &mut pi,
@@ -674,6 +900,13 @@ mod win {
                 if AssignProcessToJobObject(child.job, child.process) == 0 {
                     return Err(os_err("could not assign job"));
                 }
+                // Written on its own thread after resume: a write into the pipe before
+                // the child runs (or while nobody reads stdout) could block forever.
+                let stdin_file = if stdin.is_empty() {
+                    None
+                } else {
+                    Some(take_file(&mut child.stdin_write))
+                };
                 if ResumeThread(child.thread) == u32::MAX {
                     return Err(os_err("could not resume process"));
                 }
@@ -681,6 +914,12 @@ mod win {
                 close(&mut child.stderr_write);
                 close(&mut child.stdin_read);
                 close(&mut child.stdin_write);
+                if let Some(mut file) = stdin_file {
+                    let input = stdin.to_vec();
+                    thread::spawn(move || {
+                        let _ = std::io::Write::write_all(&mut file, &input);
+                    });
+                }
                 let stdout = take_file(&mut child.stdout_read);
                 let stderr = take_file(&mut child.stderr_read);
                 child.reader = Some(thread::spawn(move || read_file(stdout)));
@@ -721,14 +960,27 @@ mod win {
             }
         }
 
-        fn output(mut self) -> Vec<u8> {
+        fn output(self) -> Vec<u8> {
+            let (stdout, stderr) = self.output_split();
+            super::merge_output(stdout, stderr)
+        }
+
+        fn output_split(mut self) -> (Vec<u8>, Vec<u8>) {
             close(&mut self.stdout_write);
             close(&mut self.stderr_write);
             close(&mut self.stdin_write);
             close(&mut self.stdin_read);
-            let stdout = self.reader.take().and_then(|handle| handle.join().ok()).unwrap_or_default();
-            let stderr = self.err_reader.take().and_then(|handle| handle.join().ok()).unwrap_or_default();
-            super::merge_output(stdout, stderr)
+            let stdout = self
+                .reader
+                .take()
+                .and_then(|handle| handle.join().ok())
+                .unwrap_or_default();
+            let stderr = self
+                .err_reader
+                .take()
+                .and_then(|handle| handle.join().ok())
+                .unwrap_or_default();
+            (stdout, stderr)
         }
     }
 
