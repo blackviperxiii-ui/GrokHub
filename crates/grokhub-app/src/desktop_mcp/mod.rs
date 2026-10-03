@@ -521,6 +521,73 @@ impl DesktopBackend for LiveBackend {
     }
 }
 
+pub(crate) struct NativeDesktop {
+    inner: Mutex<DesktopServer<LiveBackend>>,
+}
+
+impl NativeDesktop {
+    pub(crate) fn new() -> Self {
+        Self {
+            inner: Mutex::new(DesktopServer::new(env!("CARGO_PKG_VERSION"), LiveBackend::new())),
+        }
+    }
+}
+
+impl grokhub_agent::DesktopOps for NativeDesktop {
+    fn halted(&self) -> bool {
+        read_halt_stamp().is_some_and(|ms| stamp_halts(ms, process_started_ms()))
+    }
+
+    fn locked(&self) -> bool {
+        self.inner
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .backend_mut()
+            .is_locked()
+    }
+
+    fn call(&self, name: &str, args: &serde_json::Value) -> grokhub_agent::ToolOutput {
+        let mut server = self.inner.lock().unwrap_or_else(|err| err.into_inner());
+        match server.invoke(name, args) {
+            Ok(body) => mcp_tool_output(body),
+            Err(err) => grokhub_agent::ToolOutput::err(err),
+        }
+    }
+}
+
+fn mcp_tool_output(body: serde_json::Value) -> grokhub_agent::ToolOutput {
+    let failed = body.get("isError").and_then(|value| value.as_bool()).unwrap_or(false);
+    let mut text = String::new();
+    let mut image = None;
+    if let Some(parts) = body.get("content").and_then(|value| value.as_array()) {
+        for part in parts {
+            match part.get("type").and_then(|value| value.as_str()) {
+                Some("text") => {
+                    if let Some(line) = part.get("text").and_then(|value| value.as_str()) {
+                        if !text.is_empty() {
+                            text.push('\n');
+                        }
+                        text.push_str(line);
+                    }
+                }
+                Some("image") => {
+                    let data = part.get("data").and_then(|value| value.as_str()).unwrap_or("");
+                    let mime = part.get("mimeType").and_then(|value| value.as_str()).unwrap_or("image/png");
+                    if !data.is_empty() {
+                        image = Some(format!("data:{mime};base64,{data}"));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    grokhub_agent::ToolOutput {
+        text,
+        image_data_url: image,
+        failed,
+    }
+}
+
 fn connect_backend() -> Result<Box<dyn DesktopBackend>, String> {
     #[cfg(windows)]
     {

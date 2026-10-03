@@ -4,7 +4,7 @@ version.workspace = true
 rust-version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Read-only native xAI responses engine"
+description = "Native xAI responses engine"
 publish = false
 
 [dependencies]
@@ -18,3 +18,16 @@ base64 = "0.22"
 ignore = "0.4"
 globset = "0.4"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.189"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }

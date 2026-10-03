@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.70** — Native engine (Labs, off by default): GrokHub's own read-only agent on api.x.ai with grok-4.7, shared "Sign in with Grok", read_file/list_dir/grep/glob plus hosted web and X search. The Grok CLI stays the default.
+**v2.10.71** — Native engine (Labs, off by default) gains write, search_replace, a tree-killing shell and in-process desktop tools, behind an Ask/Always/Plan permission gate. The Grok CLI stays the default.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.70.tar.gz`, AUR | **v2.10.70** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.70.exe`, `grokhub-windows-v2.10.70.zip` | **v2.10.70** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.71.tar.gz`, AUR | **v2.10.71** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.71.exe`, `grokhub-windows-v2.10.71.zip` | **v2.10.71** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.

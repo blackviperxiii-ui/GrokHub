@@ -545,23 +545,27 @@ impl<B: DesktopBackend> DesktopServer<B> {
             self.backend.release_input();
             return tool_fail(id, LOCK_MSG, false);
         }
-        let result = match name {
-            "list_monitors" => self.tool_list_monitors(),
-            "screenshot" => self.tool_screenshot(&args),
-            "click" => self.tool_click(&args),
-            "move" => self.tool_move(&args),
-            "drag" => self.tool_drag(&args),
-            "scroll" => self.tool_scroll(&args),
-            "type" => self.tool_type(&args),
-            "key" => self.tool_key(&args),
-            other => Err(format!("Unknown tool \"{other}\".")),
-        };
-        match result {
+        match self.invoke(name, &args) {
             Ok(body) => RpcOutcome {
                 reply: Some(rpc_result(id, body)),
                 exit: false,
             },
             Err(msg) => tool_fail(id, &msg, false),
+        }
+    }
+
+    /// Run one desktop tool. Callers apply the switch, halt, and lock gates first.
+    pub fn invoke(&mut self, name: &str, args: &Value) -> Result<Value, String> {
+        match name {
+            "list_monitors" => self.tool_list_monitors(),
+            "screenshot" => self.tool_screenshot(args),
+            "click" => self.tool_click(args),
+            "move" => self.tool_move(args),
+            "drag" => self.tool_drag(args),
+            "scroll" => self.tool_scroll(args),
+            "type" => self.tool_type(args),
+            "key" => self.tool_key(args),
+            other => Err(format!("Unknown tool \"{other}\".")),
         }
     }
 
