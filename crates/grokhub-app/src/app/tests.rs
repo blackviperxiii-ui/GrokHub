@@ -15354,6 +15354,10 @@ fn quiet_cabin() -> Cabin {
         grok_catalog: grokhub_acp::GrokCatalog::default(),
         grok_catalog_loaded: false,
         grok_catalog_rx: None,
+        native_skills: Vec::new(),
+        native_hooks: Vec::new(),
+        native_listing_cwd: String::new(),
+        native_hooks_trusted: false,
         grok_ext_rx: None,
         grok_ext_q: Vec::new(),
         connector_note: String::new(),
@@ -20857,6 +20861,23 @@ fn cabin_default_model_label_empty_unknown_and_known() {
     assert_eq!(cabin_default_model_label(""), "Auto");
     assert_eq!(cabin_default_model_label("  \t"), "Auto");
     assert_eq!(cabin_default_model_label("grok-4.7"), "Grok 4.7");
+}
+
+#[test]
+fn native_skills_hooks_settings_listing_comes_from_discovery() {
+    let pages = include_str!("pages.rs");
+    let engine = include_str!("native_engine.rs");
+    let skills = fn_src(pages, "ui_skills");
+    let hooks = fn_src(pages, "ui_hooks_section");
+    assert!(skills.contains("ensure_native_listing"), "{skills}");
+    assert!(skills.contains("native_skills"), "{skills}");
+    assert!(skills.contains("reload_grok_catalog"), "{skills}");
+    assert!(hooks.contains("native_hooks"), "{hooks}");
+    assert!(hooks.contains("ensure_native_listing"), "{hooks}");
+    assert!(engine.contains("discover_skills"), "{engine}");
+    assert!(engine.contains("discover_hooks"), "{engine}");
+    assert!(!engine.contains("inspect"), "{engine}");
+    assert!(skills.contains("reload_grok_catalog"));
 }
 
 #[test]
