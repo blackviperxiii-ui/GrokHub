@@ -10,6 +10,7 @@ mod prompt;
 mod retry;
 mod run;
 mod scan;
+mod session;
 mod sse;
 mod tools;
 
@@ -29,6 +30,12 @@ pub use retry::{
 pub use gate::{ClosedPermits, Gate, PermAnswer, PermMode, PermitInbox, PermitNote, PermitWait};
 pub use run::{
     run_loop, HaltCheck, LoopEvent, LoopIn, LoopOut, SteerQueue, StopReason, DEFAULT_MAX_TURNS,
+};
+pub use session::{
+    attach_run, delete_session, export_markdown, fork_session, format_cost_ticks,
+    history_generation, list_sessions, load_session, local_title, merge_history, record_turn,
+    rename_session, resume_input, session_file, transcript_pairs, usage_label, HistoryRow,
+    RunGuard, SessionInfo,
 };
 pub use sse::SseParser;
 pub use tools::{
