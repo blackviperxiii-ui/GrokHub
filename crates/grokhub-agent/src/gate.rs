@@ -1,5 +1,6 @@
 //! Permission gate v0. Auto asks until a later phase. Plan and btw stay read-only.
 
+use std::path::Path;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -195,6 +196,24 @@ pub fn decide(gate: &Gate, name: &str, latched_always: bool, desk: Option<DeskFl
     }
     // Unattended: Auto means Ask until the Phase 5 judge exists, and Ask denies.
     Decision::Refuse(unattended_deny(name))
+}
+
+/// Gate v0, then the permission engine when a policy is loaded.
+/// `decide` itself is unchanged. The native loop calls this.
+pub fn decide_with(
+    gate: &Gate,
+    name: &str,
+    arguments: &str,
+    latched_always: bool,
+    desk: Option<DeskFlags>,
+    workspace: &Path,
+    policy: Option<&crate::perm::Policy>,
+) -> Decision {
+    let base = decide(gate, name, latched_always, desk);
+    match policy {
+        Some(policy) => crate::perm::govern(base, gate, name, arguments, workspace, policy),
+        None => base,
+    }
 }
 
 #[cfg(test)]

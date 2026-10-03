@@ -4,6 +4,7 @@ mod client;
 mod events;
 mod gate;
 mod models;
+pub mod perm;
 mod prompt;
 mod retry;
 mod run;

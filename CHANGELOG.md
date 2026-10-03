@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 2.10.72 — 2026-10-03
+
+The native engine (Settings → Labs, still off by default) gets a real permission engine on top of the 2.10.71 gate. Rules are allow, ask or deny, and deny wins over ask, which wins over allow. `Bash(...)` rules match each command segment by prefix or glob, so `git status && rm -rf /` is never auto-allowed and `Bash(git *)` doesn't match `gitleaks`. Wrappers like `timeout`, `nice`, `env` and leading `VAR=value` are peeled first. Commands the splitter can't classify ask: `$(...)`, backticks, heredocs and the like. `Read`/`Edit`/`Grep` path rules take `**` globs and can't escape the workspace. `MCPTool(server__*)` and `WebFetch(domain:...)` rules are parsed for later phases.
+
+Dangerous commands (`rm -rf`, `sudo`, `dd`, `mkfs`, force-push, `curl … | sh` …) always ask, even in Always mode or with a remembered grant, and are refused in unattended runs. **Allow always** now remembers a grant per project. A short list of read-only commands (`ls`, `cat`, `pwd`, `head`, `tail`, `wc`, `grep`, plain `git status`/`log`/`diff` and similar) runs without a prompt, also in unattended runs. That's the one deliberate loosening against 2.10.71, and it matches the Grok CLI. **Settings → Permissions** lists and edits rules and grants, and can import the `permissions` block of a project's `.claude/settings.json` (read-only). The Grok CLI path is unchanged.
+
+- Linux: `grokhub-linux-v2.10.72.tar.gz` and AUR `pkgver=2.10.72`.
+- Windows: `GrokHub-Setup-2.10.72.exe` and `grokhub-windows-v2.10.72.zip`.
+
 ## 2.10.71 — 2026-10-03
 
 The native engine (Settings → Labs, still off by default) can now change things, behind a permission gate. New tools: `write`, `search_replace` (exact match, `replace_all`, keeps CRLF files CRLF, one writer per file), `run_terminal_command` (bash on Linux, PowerShell on Windows; 120 s default, 300 s max; output capped), and the desktop tools screenshot, click, move, drag, scroll, type and key, called in-process with no MCP hop. Shell commands run in their own process group on Linux and in a kill-on-close job object on Windows, so Stop, Halt and timeouts end the whole process tree, not just the shell.
