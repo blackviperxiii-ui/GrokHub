@@ -5222,13 +5222,15 @@ fn paint_tool_rows(ui: &mut egui::Ui, rows: &[grokhub_core::ToolRow]) {
                 );
             }
         });
-        let detail = row.detail.trim();
-        if !detail.is_empty() && !detail.starts_with('{') && !detail.starts_with('[') {
-            ui.label(
-                RichText::new(detail.chars().take(160).collect::<String>())
-                    .size(12.0)
-                    .color(crate::theme::muted()),
-            );
+        if !crate::cards::paint_native_media_card(ui, &row.title, &row.detail) {
+            let detail = row.detail.trim();
+            if !detail.is_empty() && !detail.starts_with('{') && !detail.starts_with('[') {
+                ui.label(
+                    RichText::new(detail.chars().take(160).collect::<String>())
+                        .size(12.0)
+                        .color(crate::theme::muted()),
+                );
+            }
         }
         ui.add_space(4.0);
     }
@@ -5259,7 +5261,9 @@ fn paint_tool_card_body(ui: &mut egui::Ui, card: &ToolCard) {
                     },
                 );
             });
-            if !card.diff.is_empty()
+            let painted = crate::cards::paint_native_media_card(ui, &card.title, &card.detail);
+            if !painted
+                && !card.diff.is_empty()
                 && !card.diff.trim().starts_with('{')
                 && !card.diff.trim().starts_with('[')
             {
@@ -5270,7 +5274,8 @@ fn paint_tool_card_body(ui: &mut egui::Ui, card: &ToolCard) {
                         .monospace()
                         .color(crate::theme::muted()),
                 );
-            } else if !card.detail.is_empty()
+            } else if !painted
+                && !card.detail.is_empty()
                 && !card.detail.trim().starts_with('{')
                 && !card.detail.trim().starts_with('[')
             {

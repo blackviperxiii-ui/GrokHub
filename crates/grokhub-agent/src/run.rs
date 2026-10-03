@@ -590,7 +590,7 @@ fn emit_tool(
         id: id.to_string(),
         name: call.name.clone(),
         status: status.into(),
-        detail: clip(detail, 180),
+        detail: clip(detail, detail_limit(detail)),
         image,
     });
 }
@@ -748,9 +748,25 @@ fn run_allowed(
 
 fn action_line(name: &str, arguments: &str) -> String {
     let _ = name;
-    let value: serde_json::Value = serde_json::from_str(arguments).unwrap_or(serde_json::Value::Null);
-    let picked = ["path", "file_path", "target_file", "command", "text", "keys"].iter().find_map(|key| {
-        value.get(*key).and_then(|item| item.as_str()).map(str::trim).filter(|text| !text.is_empty())
+    let value: serde_json::Value =
+        serde_json::from_str(arguments).unwrap_or(serde_json::Value::Null);
+    let picked = [
+        "path",
+        "file_path",
+        "target_file",
+        "command",
+        "text",
+        "keys",
+        "url",
+        "prompt",
+    ]
+    .iter()
+    .find_map(|key| {
+        value
+            .get(*key)
+            .and_then(|item| item.as_str())
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
     });
     clip(picked.unwrap_or(arguments), 180)
 }
@@ -760,6 +776,14 @@ fn tool_id(call: &FunctionCall) -> String {
         format!("tool-{}", call.name)
     } else {
         call.call_id.clone()
+    }
+}
+
+fn detail_limit(detail: &str) -> usize {
+    if detail.contains("IMAGINE:") {
+        4000
+    } else {
+        180
     }
 }
 

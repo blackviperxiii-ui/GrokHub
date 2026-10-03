@@ -26,6 +26,15 @@ impl Cabin {
             self.status = "Unknown command — /help".into();
             return;
         }
+        let thread_native = self
+            .threads
+            .get(self.thread_idx)
+            .is_some_and(|thread| thread.native);
+        if let Some(recipe) =
+            grokhub_agent::native_deep_research_prompt(self.cfg.native_engine, thread_native, &text)
+        {
+            text = recipe;
+        }
         if btw_queues_without_interrupt(self.session_mode == SessionMode::Ask, self.running) {
             self.side_ask_queue.push(text);
             self.status = format!(
