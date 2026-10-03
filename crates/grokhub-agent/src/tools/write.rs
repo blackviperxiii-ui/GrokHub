@@ -91,6 +91,7 @@ mod tests {
             desktop: None,
             stop: &|| false,
             tasks: None,
+            owner: None,
         };
         let out = dispatch(&ctx, "write", r#"{"path":"sub/a.txt","content":"hi"}"#);
         assert!(!out.failed, "{}", out.text);

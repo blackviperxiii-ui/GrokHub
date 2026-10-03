@@ -134,6 +134,11 @@ fn run_call(dir: &Path, attended: bool, on_event: &mut dyn FnMut(LoopEvent)) -> 
         perms: None,
         context_length: 0,
         tasks: None,
+        depth: 0,
+        agent_id: None,
+        shared_client: None,
+        shared_permits: None,
+        shared_desktop: None,
     };
     let mut history = Vec::new();
     let _ = run_loop(&input, &mut history, "go", None, on_event);

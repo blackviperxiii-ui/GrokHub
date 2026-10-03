@@ -57,6 +57,8 @@ pub struct ToolCtx<'a> {
     pub desktop: Option<&'a dyn DesktopOps>,
     pub stop: &'a dyn Fn() -> bool,
     pub tasks: Option<Arc<TaskHub>>,
+    /// Subagent that started this call. Its commands are killed with it.
+    pub owner: Option<&'a str>,
 }
 
 pub fn tool_schemas() -> Vec<Value> {
@@ -73,9 +75,12 @@ pub fn tool_schemas() -> Vec<Value> {
 
 pub fn schemas_for(gate: &Gate) -> Vec<Value> {
     let mut tools = tool_schemas();
+    tools.extend(crate::session_tools::schemas());
+    tools.push(crate::subagent::spawn_schema());
     if gate.readonly_session {
         return tools;
     }
+    tools.push(crate::subagent::send_schema());
     tools.push(write::schema());
     tools.push(search_replace::schema());
     tools.push(shell::schema());
@@ -104,6 +109,7 @@ pub fn execute(workspace: &Path, name: &str, arguments: &str) -> ToolOutput {
         desktop: None,
         stop: &stop,
         tasks: None,
+        owner: None,
     };
     dispatch_readonly(&ctx, name, &args)
 }
@@ -154,7 +160,7 @@ fn run_shell(ctx: &ToolCtx<'_>, args: &Value) -> ToolOutput {
     if command.is_empty() {
         return ToolOutput::err("command is required");
     }
-    match tasks.spawn(ctx.workspace, command) {
+    match tasks.spawn_for(ctx.workspace, command, ctx.owner) {
         Ok(id) => ToolOutput::ok(format!("task id: {id}\nstatus: running")),
         Err(err) => ToolOutput::err(err),
     }
