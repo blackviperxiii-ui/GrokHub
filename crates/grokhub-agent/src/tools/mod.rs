@@ -4,11 +4,15 @@ pub(crate) mod control;
 mod desktop;
 mod glob;
 mod grep;
+mod html_md;
 mod list_dir;
 mod lock;
+mod media;
+pub(crate) mod ports;
 mod read_file;
 mod search_replace;
 pub(crate) mod shell;
+mod web_fetch;
 mod write;
 
 use std::path::{Component, Path, PathBuf};
@@ -84,6 +88,8 @@ pub fn schemas_for(gate: &Gate) -> Vec<Value> {
     tools.push(write::schema());
     tools.push(search_replace::schema());
     tools.push(shell::schema());
+    tools.push(web_fetch::schema());
+    tools.extend(media::schemas());
     tools.push(control::kill_schema());
     tools.push(control::monitor_schema());
     tools.push(control::scheduler_create_schema());
@@ -133,6 +139,10 @@ pub fn dispatch(ctx: &ToolCtx<'_>, name: &str, arguments: &str) -> ToolOutput {
         "monitor" => control::monitor(ctx, &args),
         "scheduler_create" => control::scheduler_create(&args),
         "scheduler_delete" => control::scheduler_delete(&args),
+        "web_fetch" => web_fetch::run_with_ports(&args),
+        "image_generate" | "image_edit" | "video_generate" | "video_edit" | "video_extend" => {
+            media::run_with_ports(name, &args, ctx.stop)
+        }
         "screenshot" | "click" | "move" | "drag" | "scroll" | "type" | "key" => match ctx.desktop {
             Some(desktop) => desktop.call(name, &args),
             None => ToolOutput::err(grokhub_core::desktop_mcp::OFF_MSG),
@@ -260,6 +270,27 @@ pub fn confine(root: &Path, raw: &str) -> Result<PathBuf, String> {
         return Err("path escapes the workspace".into());
     }
     Ok(acc)
+}
+
+/// Install fetch and Imagine clients for this thread. An empty bearer installs
+/// adapters that refuse without dialing. The guard restores the previous ports.
+/// `session` picks the media folder (`sessions/<id>/media`).
+pub(crate) fn install_network(bearer: &str, session: &str) -> ports::Guard {
+    let bearer = bearer.trim();
+    let media_dir = crate::session::media_dir(session).ok();
+    if bearer.is_empty() {
+        ports::enter(ports::Ports {
+            fetch: Some(Arc::new(web_fetch::BlockedFetch)),
+            imagine: Some(Arc::new(media::BlockedImagine)),
+            media_dir,
+        })
+    } else {
+        ports::enter(ports::Ports {
+            fetch: Some(Arc::new(web_fetch::UreqFetch::new())),
+            imagine: Some(Arc::new(media::UreqImagine::new(bearer.to_string()))),
+            media_dir,
+        })
+    }
 }
 
 pub fn str_field(v: &Value, key: &str) -> String {
