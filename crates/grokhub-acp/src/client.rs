@@ -1039,6 +1039,11 @@ pub enum ExternalCmd {
     Cancel,
     Steer(String),
     Permission { id: String, answer: NativePerm },
+    Elicit {
+        id: String,
+        action: String,
+        content: Option<Value>,
+    },
     Shutdown,
 }
 
@@ -1099,7 +1104,22 @@ impl AcpHandle {
                         };
                         ExternalCmd::Permission { id, answer }
                     }
-                    Cmd::Elicit { .. } | Cmd::Reject { .. } | Cmd::Ack { .. } => continue,
+                    Cmd::Elicit {
+                        id,
+                        outcome,
+                        content,
+                    } => {
+                        let id = match id {
+                            Value::String(text) => text,
+                            other => other.to_string(),
+                        };
+                        ExternalCmd::Elicit {
+                            id,
+                            action: outcome.to_string(),
+                            content,
+                        }
+                    }
+                    Cmd::Reject { .. } | Cmd::Ack { .. } => continue,
                 };
                 if ext_tx.send(mapped).is_err() {
                     return;

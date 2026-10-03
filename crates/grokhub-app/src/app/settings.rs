@@ -841,6 +841,9 @@ impl Cabin {
                                                                 self.persist_cfg();
                                                                 self.status = "Saved".into();
                                                             }
+                                                            if self.cfg.native_engine {
+                                                                crate::native_mcp::paint(ui);
+                                                            }
                                                         }
                                                         SettingsSec::Permissions => self.ui_permission_editor(ui),
                                                     }

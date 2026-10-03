@@ -53,6 +53,7 @@ pub enum LoopEvent {
         action: String,
         reason: String,
     },
+    Elicit(crate::mcp::ElicitView),
 }
 
 #[derive(Clone)]
@@ -524,16 +525,28 @@ fn run_allowed(
     on_event: &mut dyn FnMut(LoopEvent),
 ) -> ToolOutput {
     emit_tool(on_event, id, call, "in_progress", &call.arguments, None);
-    let output = tools::dispatch(
-        &ToolCtx {
-            workspace: input.workspace,
-            desktop: input.desktop,
-            stop: &|| input.cancel.is_cancelled() || stop_for_halt(input),
-            tasks: input.tasks.clone(),
-        },
-        &call.name,
-        &call.arguments,
-    );
+    let attended = input.gate.attended;
+    let session = input.conversation_id.to_string();
+    let cancel = input.cancel.clone();
+    let tasks = input.tasks.clone();
+    let halt = input.halt;
+    let ctx = ToolCtx {
+        workspace: input.workspace,
+        desktop: input.desktop,
+        stop: &|| input.cancel.is_cancelled() || stop_for_halt(input),
+        tasks: input.tasks.clone(),
+    };
+    let mut emit_card = |view: crate::mcp::ElicitView| {
+        on_event(LoopEvent::Elicit(view));
+    };
+    let mut wait_card = |eid: &str| {
+        crate::mcp::wait_elicit(&session, eid, &cancel, &|| {
+            halt.halted() || tasks.as_ref().is_some_and(|hub| hub.is_halted())
+        })
+    };
+    let output = crate::mcp::with_elicit(attended, &mut emit_card, &mut wait_card, || {
+        tools::dispatch(&ctx, &call.name, &call.arguments)
+    });
     let status = if output.failed { "failed" } else { "completed" };
     emit_tool(on_event, id, call, status, &output.text, output.image_data_url.clone());
     output
