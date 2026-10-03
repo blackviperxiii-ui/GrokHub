@@ -38,6 +38,8 @@ pub struct NativeEngine {
     context_length: u64,
     /// The main engine clears a previous Halt. A `/bg` engine does not.
     reopen_tasks: bool,
+    /// Imagine and web_fetch bearer. Empty means those tools do not dial.
+    imagine_bearer: String,
 }
 
 pub struct EngineParts {
@@ -79,6 +81,7 @@ impl NativeEngine {
             usage: Usage::default(),
             context_length,
             reopen_tasks: true,
+            imagine_bearer: String::new(),
         }
     }
 
@@ -97,6 +100,11 @@ impl NativeEngine {
 
     pub fn steer(&self) -> SteerQueue {
         self.steer.clone()
+    }
+
+    /// Credential for `web_fetch` and Imagine. Empty refuses those tools without a dial.
+    pub fn set_imagine_bearer(&mut self, bearer: &str) {
+        self.imagine_bearer = bearer.trim().to_string();
     }
 
     pub fn set_route(
@@ -189,6 +197,7 @@ impl Engine for NativeEngine {
         let meter = kind.meter();
         let before_len = self.history.len();
         let before_usage = self.usage.clone();
+        let _network = crate::tools::install_network(&self.imagine_bearer, &self.conversation_id);
         let mut meter_used = crate::compact::estimate_input_tokens(&self.history);
         let mut meter_limit = self.context_length;
         let out = run_loop(&input, &mut self.history, text, image, &mut |ev| match ev {
