@@ -230,6 +230,19 @@ impl Cabin {
         }
     }
 
+    pub(super) fn ensure_native_listing(&mut self) {
+        let cwd = self.grok_cwd().display().to_string();
+        if self.native_listing_cwd == cwd {
+            return;
+        }
+        let workspace = self.grok_cwd();
+        let home = grokhub_core::user_home();
+        self.native_skills = grokhub_agent::discover_skills(&workspace, home.as_deref(), &[]);
+        self.native_hooks = grokhub_agent::discover_hooks(&workspace, home.as_deref(), &[]);
+        self.native_hooks_trusted = grokhub_agent::folder_trusted(&workspace);
+        self.native_listing_cwd = cwd;
+    }
+
     pub(super) fn native_cred(&mut self) -> Result<(String, AuthKind), String> {
         let now = grokhub_core::now_ms();
         if let Some(tokens) = self.imagine_native.tokens.clone() {

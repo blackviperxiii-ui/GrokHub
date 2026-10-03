@@ -21,6 +21,7 @@ const READONLY: &[&str] = &[
     "get_command_or_subagent_output",
     "scheduler_list",
     "search_tool",
+    "skill",
 ];
 const EDIT: &[&str] = &["write", "search_replace"];
 const SHELL: &[&str] = &["run_terminal_command"];
