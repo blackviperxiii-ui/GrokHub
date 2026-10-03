@@ -9,7 +9,7 @@
 use super::*;
 use grokhub_core::{
     archive_digest, automation_done_card,
-    dismiss_update, feed_ideas, feed_visible, file_idea_todo, hold_if_quiet,
+    dismiss_update_at, feed_ideas, feed_visible, file_idea_todo, hold_if_quiet,
     home_feed_n, idea_open_line, unpin_feed_idea,
     idea_todo_title,
     links_from_research, mark_update_opened, parse_lookup, post_help, post_update,
@@ -968,7 +968,7 @@ impl Cabin {
         let removed = if kind == Some(UpdateKind::Idea) {
             unpin_feed_idea(&mut self.updates, id)
         } else {
-            dismiss_update(&mut self.updates, id)
+            dismiss_update_at(&mut self.updates, id, now_ms())
         };
         if removed {
             if kind == Some(UpdateKind::Suggestion) {

@@ -27,6 +27,8 @@ pub const IDEA_MODIFIED_MAX: usize = 10;
 /// Digest cards painted beside the event slot. They do not consume `FEED_PAINT_MAX`.
 pub const DIGEST_PAINT_MAX: usize = 2;
 const FEED_STORE_MAX: usize = 40;
+/// A dismissed event stays down this long. A failure still posts inside the window.
+const DISMISS_HIDE_MS: u64 = 24 * 60 * 60 * 1000;
 const TITLE_CHARS: usize = 72;
 const BODY_CHARS: usize = 160;
 const DIGEST_BODY_CHARS: usize = 900;
@@ -162,6 +164,12 @@ pub struct UpdateCard {
     /// Stable id for an idea or situation offer. A dismissed one does not return.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source_id: String,
+    /// Runs this card stands for. Repeats of one automation share a card and add one.
+    #[serde(default = "default_runs", skip_serializing_if = "runs_is_one")]
+    pub runs: u32,
+    /// When the user dismissed this event. A repeat stays hidden for a day.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub dismissed_at: u64,
 }
 
 impl UpdateCard {
@@ -190,6 +198,18 @@ impl UpdateCard {
 
 fn is_false(v: &bool) -> bool {
     !*v
+}
+
+fn default_runs() -> u32 {
+    1
+}
+
+fn runs_is_one(runs: &u32) -> bool {
+    *runs == 1
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 /// One persisted config for the three feed passes. Default cadence stays background.
@@ -544,29 +564,130 @@ fn sort_feed(cards: &mut [UpdateCard]) {
 }
 
 pub fn post_update(cards: &mut Vec<UpdateCard>, card: UpdateCard) {
+    let now = card.created_at;
+    if let Some(key) = feed_group_key(&card) {
+        if let Some(existing) = take_live_group(cards, &key) {
+            cards.retain(|c| !is_group_tombstone(c, &key));
+            cards.push(merge_event(existing, card));
+            trim_feed_store(cards, now);
+            return;
+        }
+        let fresh_tombstone = cards.iter().any(|c| is_group_tombstone(c, &key) && tombstone_fresh(c, now));
+        if fresh_tombstone && !card_is_failure(&card) {
+            trim_feed_store(cards, now);
+            return;
+        }
+        cards.retain(|c| !is_group_tombstone(c, &key));
+    }
     let id = card.id.clone();
-    cards.retain(|c| {
-        if c.id == id {
-            return false;
-        }
-        if c.kind == UpdateKind::Idea || c.kind == UpdateKind::Digest {
-            return true;
-        }
-        c.status != UpdateStatus::Dismissed
-    });
+    cards.retain(|c| c.id != id);
     cards.push(card);
-    trim_feed_store(cards);
+    trim_feed_store(cards, now);
 }
 
-fn trim_feed_store(cards: &mut Vec<UpdateCard>) {
+fn is_group_tombstone(card: &UpdateCard, key: &str) -> bool {
+    card.status == UpdateStatus::Dismissed && feed_group_key(card).as_deref() == Some(key)
+}
+
+/// Pull every live card in `key` out of the store. The one returned is the newest,
+/// with `runs` already the sum of the group, and its discuss thread or reaction
+/// kept when an older copy was the one the user touched.
+fn take_live_group(cards: &mut Vec<UpdateCard>, key: &str) -> Option<UpdateCard> {
+    let live: Vec<usize> = cards
+        .iter()
+        .enumerate()
+        .filter_map(|(i, card)| {
+            (feed_group_key(card).as_deref() == Some(key) && card.status != UpdateStatus::Dismissed)
+                .then_some(i)
+        })
+        .collect();
+    let keep = newest_index(cards, &live)?;
+    let mut base = cards[keep].clone();
+    if base.discuss_thread.is_none() {
+        base.discuss_thread = live
+            .iter()
+            .filter(|&&i| i != keep)
+            .find_map(|&i| cards[i].discuss_thread.clone());
+    }
+    if base.reaction.is_none() {
+        base.reaction = live.iter().filter(|&&i| i != keep).find_map(|&i| cards[i].reaction);
+    }
+    base.runs = live
+        .iter()
+        .fold(0u32, |acc, &i| acc.saturating_add(card_runs(&cards[i])));
+    let mut drop_idx = live;
+    drop_idx.sort_unstable();
+    for i in drop_idx.into_iter().rev() {
+        cards.remove(i);
+    }
+    Some(base)
+}
+
+fn merge_event(mut existing: UpdateCard, new: UpdateCard) -> UpdateCard {
+    existing.runs = existing.runs.saturating_add(card_runs(&new));
+    existing.held = existing.held && new.held;
+    existing.id = new.id;
+    existing.kind = new.kind;
+    existing.title = new.title;
+    existing.body = new.body;
+    existing.created_at = new.created_at;
+    existing.status = UpdateStatus::Unread;
+    existing.action = new.action;
+    existing.board_id = new.board_id;
+    existing.why = new.why;
+    existing.dismissed_at = 0;
+    existing.source_id = new.source_id;
+    existing
+}
+
+fn card_runs(card: &UpdateCard) -> u32 {
+    card.runs.max(1)
+}
+
+fn newest_index(cards: &[UpdateCard], idxs: &[usize]) -> Option<usize> {
+    idxs.iter().copied().max_by(|&a, &b| {
+        cards[a]
+            .created_at
+            .cmp(&cards[b].created_at)
+            .then_with(|| cards[a].id.cmp(&cards[b].id))
+    })
+}
+
+fn tombstone_fresh(card: &UpdateCard, now: u64) -> bool {
+    card.dismissed_at > 0 && now.saturating_sub(card.dismissed_at) < DISMISS_HIDE_MS
+}
+
+/// A failed run. Dismissing the last success must not hide a failure.
+fn card_is_failure(card: &UpdateCard) -> bool {
+    if card.kind != UpdateKind::AutomationDone {
+        return false;
+    }
+    if card.id.starts_with("fail-") {
+        return true;
+    }
+    let title = card.title.to_ascii_lowercase();
+    let body = card.body.as_deref().unwrap_or("").to_ascii_lowercase();
+    title_or_body_says_failed(&title) || title_or_body_says_failed(&body)
+}
+
+fn title_or_body_says_failed(text: &str) -> bool {
+    text == "automation failed" || text.starts_with("failed") || text.contains(" failed")
+}
+
+fn trim_feed_store(cards: &mut Vec<UpdateCard>, now: u64) {
     let mut ideas = Vec::new();
     let mut archive = Vec::new();
+    let mut tombs = Vec::new();
     let mut live = Vec::new();
     for card in cards.drain(..) {
         if card.kind == UpdateKind::Idea {
             ideas.push(card);
         } else if card.kind == UpdateKind::Digest && card.status == UpdateStatus::Dismissed {
             archive.push(card);
+        } else if card.kind.event() && card.status == UpdateStatus::Dismissed {
+            if tombstone_fresh(&card, now) {
+                tombs.push(card);
+            }
         } else {
             live.push(card);
         }
@@ -574,13 +695,23 @@ fn trim_feed_store(cards: &mut Vec<UpdateCard>) {
     sort_feed(&mut live);
     sort_feed(&mut archive);
     sort_feed(&mut ideas);
+    tombs.sort_by(|a, b| {
+        b.dismissed_at
+            .cmp(&a.dismissed_at)
+            .then(b.created_at.cmp(&a.created_at))
+            .then(b.id.cmp(&a.id))
+    });
     if live.len() > FEED_STORE_MAX {
         live.truncate(FEED_STORE_MAX);
     }
     if archive.len() > FEED_STORE_MAX {
         archive.truncate(FEED_STORE_MAX);
     }
+    if tombs.len() > FEED_STORE_MAX {
+        tombs.truncate(FEED_STORE_MAX);
+    }
     cards.extend(live);
+    cards.extend(tombs);
     cards.extend(archive);
     cards.extend(ideas);
     sort_feed(cards);
@@ -599,6 +730,30 @@ pub fn mark_update_opened(cards: &mut [UpdateCard], id: &str) -> bool {
 }
 
 pub fn dismiss_update(cards: &mut Vec<UpdateCard>, id: &str) -> bool {
+    let now = cards
+        .iter()
+        .find(|c| c.id == id)
+        .map(|c| c.created_at)
+        .unwrap_or(0);
+    dismiss_update_at(cards, id, now)
+}
+
+/// Dismiss one card. An event with a group key leaves a single tombstone stamped
+/// `now`, so a repeat of that run stays hidden for a day. Ideas and digests
+/// still leave the store (a digest archive uses `archive_digest`, not this).
+pub fn dismiss_update_at(cards: &mut Vec<UpdateCard>, id: &str, now: u64) -> bool {
+    let Some(pos) = cards.iter().position(|c| c.id == id) else {
+        return false;
+    };
+    if let Some(key) = feed_group_key(&cards[pos]) {
+        let mut tomb = cards[pos].clone();
+        tomb.status = UpdateStatus::Dismissed;
+        tomb.dismissed_at = now;
+        tomb.held = false;
+        cards.retain(|c| feed_group_key(c).as_deref() != Some(key.as_str()));
+        cards.push(tomb);
+        return true;
+    }
     let before = cards.len();
     cards.retain(|c| c.id != id);
     cards.len() != before
@@ -1480,13 +1635,200 @@ fn clip_line(raw: &str, max_chars: usize) -> String {
     out
 }
 
-fn feed_card_id(prefix: &str, source_id: &str, created_at: u64) -> String {
+fn feed_card_id(prefix: &str, source_id: &str, title: &str, created_at: u64, stable: bool) -> String {
     let source = source_id.trim();
-    if source.is_empty() {
+    if stable {
+        if source.is_empty() {
+            format!("{prefix}-{}", title_hash(title))
+        } else {
+            format!("{prefix}-{source}")
+        }
+    } else if source.is_empty() {
         format!("{prefix}-{created_at}")
     } else {
         format!("{prefix}-{source}-{created_at}")
     }
+}
+
+/// Group key for one event source. Done and failed runs of the same automation
+/// share `run:<source>`. Ideas and digests are not grouped here.
+pub fn feed_group_key(card: &UpdateCard) -> Option<String> {
+    let source = card.source_id.trim();
+    if !source.is_empty() {
+        let prefix = match card.kind {
+            UpdateKind::AutomationDone => "run",
+            UpdateKind::ScheduleCreated => "sched",
+            UpdateKind::AutomateOffer => "offer",
+            UpdateKind::Suggestion => "sugg",
+            UpdateKind::Idea | UpdateKind::Digest => return None,
+        };
+        return Some(format!("{prefix}:{source}"));
+    }
+    let kind = match card.kind {
+        UpdateKind::AutomationDone => "automation_done",
+        UpdateKind::ScheduleCreated => "schedule_created",
+        UpdateKind::AutomateOffer => "automate_offer",
+        UpdateKind::Suggestion => "suggestion",
+        UpdateKind::Idea | UpdateKind::Digest => return None,
+    };
+    Some(format!("{kind}:{}", title_hash(&card.title)))
+}
+
+fn stable_event_id(card: &UpdateCard) -> String {
+    let prefix = match card.kind {
+        UpdateKind::AutomationDone => {
+            if card.id.starts_with("fail-") {
+                "fail"
+            } else {
+                "done"
+            }
+        }
+        UpdateKind::ScheduleCreated => "sched",
+        UpdateKind::Suggestion => "sugg",
+        UpdateKind::AutomateOffer => "offer",
+        UpdateKind::Idea | UpdateKind::Digest => return card.id.clone(),
+    };
+    feed_card_id(prefix, &card.source_id, &card.title, card.created_at, true)
+}
+
+/// Fold saved duplicate runs into one card per group. The newest live card stays,
+/// `runs` is the sum of the group's runs, and its id is the stable one. A second
+/// call changes nothing.
+pub fn collapse_feed(cards: &mut Vec<UpdateCard>) -> bool {
+    let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, card) in cards.iter().enumerate() {
+        if let Some(key) = feed_group_key(card) {
+            groups.entry(key).or_default().push(i);
+        }
+    }
+    let mut changed = false;
+    let mut remove = Vec::new();
+    let mut edits: Vec<(usize, UpdateCard)> = Vec::new();
+    for idxs in groups.values() {
+        if idxs.len() < 2 {
+            continue;
+        }
+        let live: Vec<usize> = idxs
+            .iter()
+            .copied()
+            .filter(|&i| cards[i].status != UpdateStatus::Dismissed)
+            .collect();
+        let pool: &[usize] = if live.is_empty() { idxs.as_slice() } else { &live };
+        let Some(keep) = newest_index(cards, pool) else {
+            continue;
+        };
+        let drop_set: Vec<usize> = idxs.iter().copied().filter(|&i| i != keep).collect();
+        if drop_set.is_empty() {
+            continue;
+        }
+        if !live.is_empty() {
+            let runs = live
+                .iter()
+                .fold(0u32, |acc, &i| acc.saturating_add(card_runs(&cards[i])));
+            let mut kept = cards[keep].clone();
+            if kept.discuss_thread.is_none() {
+                kept.discuss_thread = live
+                    .iter()
+                    .filter(|&&i| i != keep)
+                    .find_map(|&i| cards[i].discuss_thread.clone());
+            }
+            if kept.reaction.is_none() {
+                kept.reaction = live
+                    .iter()
+                    .filter(|&&i| i != keep)
+                    .find_map(|&i| cards[i].reaction);
+            }
+            kept.runs = runs;
+            kept.id = stable_event_id(&kept);
+            edits.push((keep, kept));
+        }
+        remove.extend(drop_set);
+        changed = true;
+    }
+    if !changed {
+        return false;
+    }
+    for (i, card) in edits {
+        cards[i] = card;
+    }
+    remove.sort_unstable();
+    remove.dedup();
+    for i in remove.into_iter().rev() {
+        cards.remove(i);
+    }
+    true
+}
+
+/// Lowercase, collapse whitespace, and drop clock times and ASCII digits so
+/// "Board at 9:05" and "Board at 10:30" share a key when the source id is empty.
+fn normalize_title(title: &str) -> String {
+    let chars: Vec<char> = title.to_ascii_lowercase().chars().collect();
+    let mut stripped = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if let Some(n) = clock_len(&chars[i..]) {
+            i += n;
+            continue;
+        }
+        stripped.push(chars[i]);
+        i += 1;
+    }
+    let mut collapsed = String::new();
+    let mut pending_space = false;
+    for c in stripped.chars() {
+        if c.is_ascii_digit() {
+            continue;
+        }
+        if c.is_whitespace() {
+            pending_space = !collapsed.is_empty();
+            continue;
+        }
+        if pending_space {
+            collapsed.push(' ');
+            pending_space = false;
+        }
+        collapsed.push(c);
+    }
+    collapsed
+}
+
+fn clock_len(chars: &[char]) -> Option<usize> {
+    let digits = |slice: &[char], max: usize| {
+        slice.iter().take(max).take_while(|c| c.is_ascii_digit()).count()
+    };
+    let mut hours = digits(chars, 2);
+    if hours == 0 {
+        return None;
+    }
+    if hours == 2 && chars.get(2) != Some(&':') {
+        hours = 1;
+    }
+    if chars.get(hours) != Some(&':') {
+        return None;
+    }
+    let mut i = hours + 1;
+    if digits(&chars[i..], 2) != 2 {
+        return None;
+    }
+    i += 2;
+    if chars.get(i) == Some(&':') && digits(&chars[i + 1..], 2) == 2 {
+        i += 3;
+    }
+    Some(i)
+}
+
+/// FNV-1a 64-bit. `std::hash::DefaultHasher` is not stable across releases.
+fn fnv1a64(data: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in data {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
+    }
+    hash
+}
+
+fn title_hash(title: &str) -> String {
+    format!("{:016x}", fnv1a64(normalize_title(title).as_bytes()))
 }
 
 fn blank_card(
@@ -1521,6 +1863,8 @@ fn blank_card(
         modified: false,
         skill: None,
         source_id: String::new(),
+        runs: 1,
+        dismissed_at: 0,
     }
 }
 
@@ -1546,7 +1890,7 @@ pub fn automation_done_card(
         }
     };
     let mut card = blank_card(
-        feed_card_id("done", source_id, created_at),
+        feed_card_id("done", source_id, &title, created_at, true),
         UpdateKind::AutomationDone,
         title,
         body,
@@ -1573,7 +1917,7 @@ pub fn automation_failed_card(source_id: &str, name: &str, why: &str, created_at
         why
     });
     let mut card = blank_card(
-        feed_card_id("fail", source_id, created_at),
+        feed_card_id("fail", source_id, &title, created_at, true),
         UpdateKind::AutomationDone,
         title,
         body,
@@ -1604,7 +1948,7 @@ pub fn schedule_created_card(
         Some(format!("Scheduled · {when_label}"))
     };
     let mut card = blank_card(
-        feed_card_id("sched", source_id, created_at),
+        feed_card_id("sched", source_id, &title, created_at, true),
         UpdateKind::ScheduleCreated,
         title,
         body,
@@ -1632,7 +1976,7 @@ pub fn suggestion_card(source_id: &str, title: &str, body: &str, created_at: u64
         }
     };
     let mut card = blank_card(
-        feed_card_id("sugg", source_id, created_at),
+        feed_card_id("sugg", source_id, &title, created_at, true),
         UpdateKind::Suggestion,
         title,
         body,
@@ -1651,7 +1995,7 @@ pub fn automate_offer_card(source_id: &str, title: &str, created_at: u64) -> Upd
         title
     };
     let mut card = blank_card(
-        feed_card_id("offer", source_id, created_at),
+        feed_card_id("offer", source_id, &title, created_at, true),
         UpdateKind::AutomateOffer,
         title,
         Some("Want me to automate this and notify you here when done?".into()),
@@ -1678,7 +2022,7 @@ pub fn idea_card(source_id: &str, title: &str, body: &str, created_at: u64) -> U
         }
     };
     let mut card = blank_card(
-        feed_card_id("idea", source_id, created_at),
+        feed_card_id("idea", source_id, &title, created_at, false),
         UpdateKind::Idea,
         title,
         body,
@@ -1705,7 +2049,7 @@ pub fn digest_card(source_id: &str, title: &str, body: &str, created_at: u64) ->
         }
     };
     let mut card = blank_card(
-        feed_card_id("digest", source_id, created_at),
+        feed_card_id("digest", source_id, &title, created_at, false),
         UpdateKind::Digest,
         title,
         body,
@@ -1950,18 +2294,25 @@ fn post_situation(
     body: &str,
 ) -> bool {
     // Opening the card marks it read. Checking only unread offers posted the same one again.
+    let source_key = source.trim();
     if source_gone(pulse, source)
         || has_unread_suggestion(cards)
-        || cards
-            .iter()
-            .any(|c| c.kind == UpdateKind::Suggestion && c.source_id == source.trim())
+        || cards.iter().any(|c| {
+            c.kind == UpdateKind::Suggestion
+                && c.status != UpdateStatus::Dismissed
+                && c.source_id == source_key
+        })
     {
         return false;
     }
     let mut card = suggestion_card(source, title, body, now);
     hold_if_quiet(&mut card, quiet);
     post_update(cards, card);
-    true
+    cards.iter().any(|c| {
+        c.kind == UpdateKind::Suggestion
+            && c.status != UpdateStatus::Dismissed
+            && c.source_id == source_key
+    })
 }
 
 fn source_gone(pulse: &FeedPulse, source_id: &str) -> bool {
@@ -2029,8 +2380,147 @@ mod tests {
         assert_eq!(cards[0].status, UpdateStatus::Opened);
         assert!(feed_visible(&cards));
         assert!(dismiss_update(&mut cards, "a"));
-        assert!(cards.is_empty());
+        assert_eq!(cards.len(), 1, "an event dismiss leaves one tombstone");
+        assert_eq!(cards[0].status, UpdateStatus::Dismissed);
+        assert!(cards[0].dismissed_at > 0);
+        assert!(visible_updates(&cards).is_empty());
         assert!(!feed_visible(&cards));
+        assert_eq!(home_feed_n(&cards), 0);
+    }
+
+    #[test]
+    fn repeat_runs_of_one_automation_keep_one_card() {
+        let mut cards = Vec::new();
+        post_update(&mut cards, automation_done_card("loop-1", "Board", "summary 0", 100));
+        cards[0].reaction = Some(CardReaction::Up);
+        cards[0].discuss_thread = Some("thr-board".into());
+        for (i, at) in [200u64, 300, 400, 500].into_iter().enumerate() {
+            post_update(
+                &mut cards,
+                automation_done_card("loop-1", "Board", &format!("summary {}", i + 1), at),
+            );
+        }
+        let visible = visible_updates(&cards);
+        assert_eq!(visible.len(), 1);
+        assert_eq!(cards.iter().filter(|c| c.kind.event()).count(), 1);
+        assert_eq!(visible[0].runs, 5);
+        assert_eq!(visible[0].body.as_deref(), Some("summary 4"));
+        assert_eq!(visible[0].created_at, 500);
+        assert_eq!(visible[0].id, "done-loop-1");
+        assert_eq!(visible[0].reaction, Some(CardReaction::Up));
+        assert_eq!(visible[0].discuss_thread.as_deref(), Some("thr-board"));
+        assert_eq!(feed_group_key(&visible[0]).as_deref(), Some("run:loop-1"));
+    }
+
+    #[test]
+    fn two_automations_keep_two_cards() {
+        let mut cards = Vec::new();
+        for at in [1u64, 2, 3] {
+            post_update(&mut cards, automation_done_card("alpha", "Alpha", &format!("a{at}"), at));
+            post_update(
+                &mut cards,
+                automation_done_card("beta", "Beta", &format!("b{at}"), at + 10),
+            );
+        }
+        let visible = visible_updates(&cards);
+        assert_eq!(visible.len(), 2);
+        let alpha = visible.iter().find(|c| c.source_id == "alpha").unwrap();
+        let beta = visible.iter().find(|c| c.source_id == "beta").unwrap();
+        assert_eq!(alpha.runs, 3);
+        assert_eq!(alpha.body.as_deref(), Some("a3"));
+        assert_eq!(beta.runs, 3);
+        assert_eq!(beta.body.as_deref(), Some("b3"));
+        assert_ne!(feed_group_key(alpha), feed_group_key(beta));
+    }
+
+    #[test]
+    fn failed_run_replaces_done_card_in_same_group() {
+        let mut cards = Vec::new();
+        post_update(&mut cards, automation_done_card("loop-1", "Board", "ok", 10));
+        post_update(
+            &mut cards,
+            automation_failed_card("loop-1", "Board", "credit limit", 20),
+        );
+        let visible = visible_updates(&cards);
+        assert_eq!(visible.len(), 1);
+        assert_eq!(cards.iter().filter(|c| c.kind.event()).count(), 1);
+        assert_eq!(visible[0].runs, 2);
+        assert_eq!(visible[0].created_at, 20);
+        assert_eq!(visible[0].title, "Board failed");
+        assert_eq!(visible[0].body.as_deref(), Some("credit limit"));
+        assert!(visible[0].id.starts_with("fail-"));
+        assert_eq!(feed_group_key(&visible[0]).as_deref(), Some("run:loop-1"));
+    }
+
+    #[test]
+    fn collapse_feed_folds_saved_duplicate_runs() {
+        let mut cards = Vec::new();
+        for (i, at) in [10u64, 20, 30, 40].into_iter().enumerate() {
+            let mut card = automation_done_card("loop-9", "Board", &format!("sum {i}"), at);
+            card.id = format!("done-loop-9-{at}");
+            cards.push(card);
+        }
+        assert!(collapse_feed(&mut cards));
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].runs, 4);
+        assert_eq!(cards[0].created_at, 40);
+        assert_eq!(cards[0].body.as_deref(), Some("sum 3"));
+        assert_eq!(cards[0].id, "done-loop-9");
+        assert!(!collapse_feed(&mut cards), "a second pass is a no-op");
+        let raw = r#"{"id":"done-x-1","kind":"automation_done","title":"Board","createdAt":1,"status":"unread"}"#;
+        let old: UpdateCard = serde_json::from_str(raw).unwrap();
+        assert_eq!(old.runs, 1);
+        assert_eq!(old.dismissed_at, 0);
+        let fresh = automation_done_card("z", "T", "b", 1);
+        let encoded = serde_json::to_string(&fresh).unwrap();
+        assert!(!encoded.contains("runs"));
+        assert!(!encoded.contains("dismissedAt"));
+        let folded = serde_json::to_string(&cards[0]).unwrap();
+        assert!(folded.contains("\"runs\":4"));
+    }
+
+    #[test]
+    fn dismissed_run_stays_gone_for_a_day() {
+        let day = 24 * 60 * 60 * 1000;
+        let t0 = 5_000_000u64;
+        let mut cards = Vec::new();
+        post_update(&mut cards, automation_done_card("loop-1", "Board", "first", t0));
+        let mut older = automation_done_card("loop-1", "Board", "older", t0 - 10);
+        older.id = format!("done-loop-1-{}", t0 - 10);
+        cards.push(older);
+        let id = cards.iter().find(|c| c.created_at == t0).unwrap().id.clone();
+        assert!(dismiss_update_at(&mut cards, &id, t0));
+        assert!(visible_updates(&cards).is_empty());
+        assert_eq!(home_feed_n(&cards), 0);
+        assert_eq!(
+            cards.iter().filter(|c| feed_group_key(c).as_deref() == Some("run:loop-1")).count(),
+            1,
+            "the group keeps one tombstone"
+        );
+        assert!(cards.iter().all(|c| c.status == UpdateStatus::Dismissed));
+
+        post_update(&mut cards, automation_done_card("loop-1", "Board", "again", t0 + 60_000));
+        assert!(visible_updates(&cards).is_empty(), "a repeat within a day stays hidden");
+
+        post_update(
+            &mut cards,
+            automation_failed_card("loop-1", "Board", "disk full", t0 + 120_000),
+        );
+        let visible = visible_updates(&cards);
+        assert_eq!(visible.len(), 1, "a failure still posts");
+        assert_eq!(visible[0].body.as_deref(), Some("disk full"));
+        assert!(visible[0].id.starts_with("fail-") || visible[0].title.ends_with("failed"));
+        assert_eq!(cards.iter().filter(|c| c.source_id == "loop-1").count(), 1);
+
+        let mut later = Vec::new();
+        post_update(&mut later, automation_done_card("loop-2", "Nightly", "once", t0));
+        let id2 = later[0].id.clone();
+        assert!(dismiss_update_at(&mut later, &id2, t0));
+        post_update(&mut later, automation_done_card("loop-2", "Nightly", "next day", t0 + day));
+        let back = visible_updates(&later);
+        assert_eq!(back.len(), 1, "a run after a day comes back");
+        assert_eq!(back[0].body.as_deref(), Some("next day"));
+        assert!(later.iter().all(|c| c.status != UpdateStatus::Dismissed));
     }
 
     #[test]

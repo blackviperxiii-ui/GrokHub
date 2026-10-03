@@ -9886,6 +9886,8 @@ fn discuss_card_opens_one_local_chat() {
         modified: false,
         source_id: String::new(),
         skill: None,
+        runs: 1,
+        dismissed_at: 0,
     });
     cabin.discuss_card("idea-harbor");
     let open_id = cabin
@@ -14160,6 +14162,8 @@ fn build_idea_files_one_todo() {
         modified: false,
         source_id: String::new(),
         skill: None,
+        runs: 1,
+        dismissed_at: 0,
     }];
 
     cabin.build_idea("nope");
@@ -14302,6 +14306,8 @@ fn feed_card(id: &str, kind: grokhub_core::UpdateKind, held: bool) -> grokhub_co
         modified: false,
         source_id: String::new(),
         skill: None,
+        runs: 1,
+        dismissed_at: 0,
     }
 }
 
@@ -14403,6 +14409,8 @@ fn offer_card(id: &str, title: &str, status: UpdateStatus) -> UpdateCard {
         modified: false,
         source_id: String::new(),
         skill: None,
+        runs: 1,
+        dismissed_at: 0,
     }
 }
 
@@ -17413,6 +17421,46 @@ fn a_report_run_lands_in_follow_up_with_a_chat_and_a_chore_does_not() {
     let block = grokhub_core::take_card_notes_block(&mut cabin.board, &chat).expect("report");
     assert!(block.contains("Two more today"), "{block}");
     assert_eq!(super::night::loop_card_name("/loop 12h summarize the workboard"), "Summarize the workboard");
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn follow_up_runs_update_one_feed_card() {
+    let (root, mut cabin) = isolated_cabin("follow-up-one-card");
+    cabin.board.clear();
+    cabin.updates.clear();
+    let instructions = "every weekday at 9, summarize my open GitHub issues";
+    for n in 1..=3 {
+        assert!(
+            cabin.file_automation_follow_up(
+                "a-issues",
+                "Morning issues",
+                instructions,
+                &format!("## Open issues\nReport {n}: crash on resume."),
+            ),
+            "run {n} should file follow up"
+        );
+    }
+    let feeds: Vec<&grokhub_core::UpdateCard> = cabin
+        .updates
+        .iter()
+        .filter(|c| {
+            c.kind == grokhub_core::UpdateKind::AutomationDone
+                && grokhub_core::feed_group_key(c).as_deref() == Some("run:a-issues")
+        })
+        .collect();
+    assert_eq!(feeds.len(), 1, "one automation keeps one feed card: {:?}", cabin.updates);
+    let board = cabin
+        .board
+        .iter()
+        .find(|c| c.automation.as_deref() == Some("a-issues"))
+        .expect("follow up card");
+    assert_eq!(feeds[0].board_id.as_deref(), Some(board.id.as_str()));
+    assert_eq!(feeds[0].action, Some(grokhub_core::UpdateAction::OpenWorkboard));
+    assert_eq!(
+        feeds[0].body.as_deref(),
+        Some("In Follow up on your workboard. Open it to read and reply.")
+    );
     release_isolated(&root, cabin);
 }
 

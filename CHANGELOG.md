@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.10.65 — 2026-10-02
+
+Home stops repeating cards. Each automation, schedule, offer or suggestion now keeps one card, with a stable id built from its source (or a hash of the normalized title when it has none) instead of the run time. A repeat run updates that card in place: newest title, body and time, back to unread, and a count of the runs it stands for. A failed run replaces the finished card for the same automation. Filing a run in Follow up points the automation's one card at the workboard instead of rewriting every older copy, which is how four identical "In Follow up on your workboard" cards showed up. Dismissing a card clears its whole group and keeps a hidden marker for 24 hours, so a repeat of that run doesn't come back that day. A failure still shows. Saved feeds are deduped once on load: duplicate runs fold into the newest card with their run count, and the file is only rewritten when something changed.
+
+- Linux: `grokhub-linux-v2.10.65.tar.gz` and AUR `pkgver=2.10.65`.
+- Windows: `GrokHub-Setup-2.10.65.exe` and `grokhub-windows-v2.10.65.zip`.
+
 ## 2.10.64 — 2026-10-02
 
 Repo rules for new Cursor and Claude chats. `CLAUDE.md` and `.cursor/rules/repo-gates.mdc` write down the real gates: branch off `main` and never push to it, no secrets or credential files, the exact CI test and clippy commands, the version-bump file list, the 12,000-byte composer source-scan window, no merges without Jeremy's OK, and no tag or release without his "full ship". `.cursor/rules/merge-prs.mdc` now agrees with them: no merges, tags or releases unless Jeremy says so. `.gitignore` also covers `target/` anywhere, key and certificate files (`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.crt`, `id_rsa*`), and `auth.json`, `secrets.json` and `credentials.json`, while still allowing `.env.example`. No tracked file is ignored. The working tree and full git history were scanned for committed secrets (gitleaks 8.30.1 plus targeted greps). Nothing is in the current tree. One historical finding was reported separately for a rotation decision, and history was not rewritten. The app itself is unchanged.
