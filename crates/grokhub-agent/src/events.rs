@@ -33,6 +33,8 @@ pub struct NativeEngine {
     permits: Box<dyn PermitWait + Send>,
     history: Vec<InputItem>,
     usage: Usage,
+    /// Context window for the meter and the 85% auto-compact gate.
+    context_length: u64,
 }
 
 pub struct EngineParts {
@@ -54,6 +56,7 @@ pub struct EngineParts {
 
 impl NativeEngine {
     pub fn new(parts: EngineParts) -> Self {
+        let context_length = crate::models::context_length_for(&parts.model, &[]);
         Self {
             client: parts.client,
             workspace: parts.workspace,
@@ -71,6 +74,7 @@ impl NativeEngine {
             permits: parts.permits,
             history: Vec::new(),
             usage: Usage::default(),
+            context_length,
         }
     }
 
@@ -94,6 +98,7 @@ impl NativeEngine {
         system: String,
         auth_kind: AuthKind,
     ) {
+        self.context_length = crate::models::context_length_for(&model, &[]);
         self.client = client;
         self.model = model;
         self.effort = effort;
@@ -119,6 +124,9 @@ impl Engine for NativeEngine {
 
     fn prompt(&mut self, text: &str, image: Option<&str>, emit: &mut dyn FnMut(AcpEvent)) -> Result<(), String> {
         self.cancel.reset();
+        if image.is_none() && crate::compact::is_manual_compact_command(text) {
+            return self.compact_now(emit);
+        }
         let policy = crate::perm::Policy::load(&self.workspace);
         let input = LoopIn {
             client: self.client.as_ref(),
@@ -136,22 +144,55 @@ impl Engine for NativeEngine {
             desktop: self.desktop.as_deref(),
             permits: self.permits.as_ref(),
             perms: Some(&policy),
+            context_length: self.context_length,
         };
         let session = self.conversation_id.clone();
         let cwd = self.workspace.display().to_string();
         let model = self.model.clone();
-        let meter = self.auth_kind.meter();
+        let kind = self.auth_kind;
+        let meter = kind.meter();
         let before_len = self.history.len();
         let before_usage = self.usage.clone();
-        let out = run_loop(&input, &mut self.history, text, image, &mut |ev| {
-            if let Some(acp) = to_acp(ev, self.auth_kind, &session) {
-                emit(acp);
+        let mut meter_used = crate::compact::estimate_input_tokens(&self.history);
+        let mut meter_limit = self.context_length;
+        let out = run_loop(&input, &mut self.history, text, image, &mut |ev| match ev {
+            LoopEvent::Meter { used, limit } => {
+                meter_used = used;
+                meter_limit = limit;
+            }
+            LoopEvent::Compact {
+                started,
+                usage,
+                error,
+            } => {
+                emit(AcpEvent::Compact {
+                    started,
+                    usage: grok_usage(&usage, kind, meter_used, meter_limit),
+                    error,
+                });
+            }
+            other => {
+                if let Some(acp) = to_acp(other, kind, &session, meter_used, meter_limit) {
+                    emit(acp);
+                }
             }
         });
         self.usage = out.usage.clone();
-        let fresh = self.history.get(before_len..).unwrap_or(&[]).to_vec();
         let delta = self.usage.saturating_delta(&before_usage);
-        let _ = crate::session::record_turn(&session, &cwd, &model, &fresh, &delta, meter, text);
+        if out.compacted {
+            let _ = crate::session::record_compaction(
+                &session,
+                &cwd,
+                &model,
+                &self.history,
+                &delta,
+                meter,
+            );
+        } else {
+            let fresh = self.history.get(before_len..).unwrap_or(&[]).to_vec();
+            let _ =
+                crate::session::record_turn(&session, &cwd, &model, &fresh, &delta, meter, text);
+        }
         let stop = match out.stop {
             StopReason::EndTurn => "end_turn".to_string(),
             StopReason::Cancelled => "cancelled".to_string(),
@@ -163,13 +204,92 @@ impl Engine for NativeEngine {
                 "error".into()
             }
         };
-        emit(grok_usage_event(&self.usage, self.auth_kind));
+        let used = crate::compact::estimate_input_tokens(&self.history);
+        emit(grok_usage_event(
+            &self.usage,
+            self.auth_kind,
+            used,
+            self.context_length,
+        ));
         emit(AcpEvent::Done { stop_reason: stop });
         Ok(())
     }
 }
 
-fn to_acp(ev: LoopEvent, kind: AuthKind, session: &str) -> Option<AcpEvent> {
+impl NativeEngine {
+    /// Manual `/compact`. The command is not stored as a user turn.
+    /// A failure or cancel leaves `history` as it was.
+    fn compact_now(&mut self, emit: &mut dyn FnMut(AcpEvent)) -> Result<(), String> {
+        let session = self.conversation_id.clone();
+        let cwd = self.workspace.display().to_string();
+        let model = self.model.clone();
+        let kind = self.auth_kind;
+        let meter = kind.meter();
+        let limit = self.context_length;
+        let before = self.usage.clone();
+        let used = crate::compact::estimate_input_tokens(&self.history);
+        emit(AcpEvent::Compact {
+            started: true,
+            usage: grok_usage(&self.usage, kind, used, limit),
+            error: None,
+        });
+        match crate::compact::compact_transcript(
+            self.client.as_ref(),
+            &self.cancel,
+            &self.model,
+            self.effort.as_deref(),
+            &self.conversation_id,
+            &mut self.history,
+        ) {
+            Ok(extra) => {
+                self.usage.add(&extra);
+                let delta = self.usage.saturating_delta(&before);
+                let _ = crate::session::record_compaction(
+                    &session,
+                    &cwd,
+                    &model,
+                    &self.history,
+                    &delta,
+                    meter,
+                );
+                let used = crate::compact::estimate_input_tokens(&self.history);
+                let usage = grok_usage(&self.usage, kind, used, limit);
+                emit(AcpEvent::Compact {
+                    started: false,
+                    usage: usage.clone(),
+                    error: None,
+                });
+                emit(AcpEvent::Usage(usage));
+                emit(AcpEvent::Done {
+                    stop_reason: "end_turn".into(),
+                });
+            }
+            Err(crate::compact::CompactError::Cancelled) => {
+                emit(AcpEvent::Compact {
+                    started: false,
+                    usage: grok_usage(&self.usage, kind, used, limit),
+                    error: Some("cancelled".into()),
+                });
+                emit(AcpEvent::Done {
+                    stop_reason: "cancelled".into(),
+                });
+            }
+            Err(crate::compact::CompactError::Failed(message)) => {
+                emit(AcpEvent::Compact {
+                    started: false,
+                    usage: grok_usage(&self.usage, kind, used, limit),
+                    error: Some(message),
+                });
+                emit(AcpEvent::Done {
+                    stop_reason: "end_turn".into(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+fn to_acp(ev: LoopEvent, kind: AuthKind, session: &str, used: u64, limit: u64) -> Option<AcpEvent> {
     Some(match ev {
         LoopEvent::Text(text) => AcpEvent::Text(text),
         LoopEvent::Thought(text) => AcpEvent::Thought(text),
@@ -182,7 +302,8 @@ fn to_acp(ev: LoopEvent, kind: AuthKind, session: &str) -> Option<AcpEvent> {
             diff: String::new(),
             image_data_url: image,
         }),
-        LoopEvent::Usage(usage) => grok_usage_event(&usage, kind),
+        LoopEvent::Usage(usage) => grok_usage_event(&usage, kind, used, limit),
+        LoopEvent::Meter { .. } | LoopEvent::Compact { .. } => return None,
         LoopEvent::Permission {
             id,
             name,
@@ -200,8 +321,8 @@ fn to_acp(ev: LoopEvent, kind: AuthKind, session: &str) -> Option<AcpEvent> {
     })
 }
 
-fn grok_usage_event(usage: &Usage, kind: AuthKind) -> AcpEvent {
-    AcpEvent::Usage(GrokUsage {
+fn grok_usage(usage: &Usage, kind: AuthKind, used: u64, limit: u64) -> GrokUsage {
+    GrokUsage {
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
         reasoning_tokens: usage.reasoning_tokens,
@@ -210,9 +331,15 @@ fn grok_usage_event(usage: &Usage, kind: AuthKind) -> AcpEvent {
             .saturating_add(usage.output_tokens)
             .saturating_add(usage.reasoning_tokens),
         cost_in_usd_ticks: usage.cost_in_usd_ticks,
+        context_tokens_used: used,
+        context_window_tokens: limit,
         meter: kind.meter().to_string(),
         ..GrokUsage::default()
-    })
+    }
+}
+
+fn grok_usage_event(usage: &Usage, kind: AuthKind, used: u64, limit: u64) -> AcpEvent {
+    AcpEvent::Usage(grok_usage(usage, kind, used, limit))
 }
 
 pub fn meter_for(kind: AuthKind) -> &'static str {
@@ -237,6 +364,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
     use std::sync::Mutex;
 
     struct Speak;
@@ -302,6 +430,8 @@ mod tests {
         assert!(events.iter().any(|ev| matches!(
             ev,
             AcpEvent::Usage(u) if u.meter == "SuperGrok pool" && u.input_tokens == 3 && u.cost_in_usd_ticks == 9
+                && u.context_window_tokens == crate::models::GROK_47_CONTEXT_LENGTH
+                && u.context_tokens_used > 0
         )));
         assert!(events
             .iter()
@@ -324,6 +454,209 @@ mod tests {
         );
         assert_eq!(loaded.usage.cost_in_usd_ticks, 9);
         assert_eq!(crate::session::resume_input("c").unwrap(), resumed);
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    struct Summarize {
+        calls: AtomicUsize,
+        fail: bool,
+    }
+
+    impl ModelClient for Summarize {
+        fn stream(
+            &self,
+            req: &crate::ResponsesRequest,
+            _cancel: &CancelToken,
+            sink: &mut dyn FnMut(crate::StreamEvent),
+        ) -> Result<crate::TurnOutput, crate::ClientError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let compact = req.input.iter().any(|item| {
+                crate::compact::message_text(item).contains("faithful, concise summary")
+            });
+            if compact {
+                if self.fail {
+                    return Err(crate::ClientError::Protocol("disk full".into()));
+                }
+                sink(crate::StreamEvent::TextDelta("hidden summary delta".into()));
+                return Ok(crate::TurnOutput {
+                    text: "<summary>kept the plan</summary>".into(),
+                    reasoning: String::new(),
+                    calls: Vec::new(),
+                    usage: Usage {
+                        input_tokens: 4,
+                        output_tokens: 2,
+                        reasoning_tokens: 0,
+                        cost_in_usd_ticks: 3,
+                    },
+                });
+            }
+            Ok(crate::TurnOutput {
+                text: "hello".into(),
+                reasoning: String::new(),
+                calls: Vec::new(),
+                usage: Usage {
+                    input_tokens: 3,
+                    output_tokens: 1,
+                    reasoning_tokens: 0,
+                    cost_in_usd_ticks: 1,
+                },
+            })
+        }
+    }
+
+    fn engine(
+        dir: &std::path::Path,
+        id: &str,
+        client: Box<dyn ModelClient + Send>,
+    ) -> NativeEngine {
+        NativeEngine::new(EngineParts {
+            client,
+            workspace: dir.to_path_buf(),
+            model: "grok-4.7".into(),
+            effort: None,
+            system: String::new(),
+            conversation_id: id.into(),
+            auth_kind: AuthKind::ApiKey,
+            max_turns: 2,
+            cancel: CancelToken::new(),
+            steer: SteerQueue::new(),
+            halt: Box::new(NoHalt),
+            gate: crate::Gate::phase_readonly(),
+            desktop: None,
+            permits: Box::new(crate::gate::ClosedPermits),
+        })
+    }
+
+    #[test]
+    fn manual_compact_records_the_marker_and_hides_summary_deltas() {
+        let dir = std::env::temp_dir().join(format!("gh-eng-compact-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        let mut engine = engine(
+            &dir,
+            "native-manual",
+            Box::new(Summarize {
+                calls: AtomicUsize::new(0),
+                fail: false,
+            }),
+        );
+        engine
+            .prompt("remember the harbor", None, &mut |_| {})
+            .unwrap();
+        let events = Mutex::new(Vec::new());
+        engine
+            .prompt("/compact", None, &mut |ev| events.lock().unwrap().push(ev))
+            .unwrap();
+        let events = events.into_inner().unwrap();
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            AcpEvent::Compact {
+                started: true,
+                error: None,
+                ..
+            }
+        )));
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            AcpEvent::Compact { started: false, error: None, usage }
+                if usage.cost_in_usd_ticks == 4
+                    && usage.context_window_tokens == crate::models::GROK_47_CONTEXT_LENGTH
+                    && usage.context_tokens_used > 0
+        )));
+        assert!(!events
+            .iter()
+            .any(|ev| matches!(ev, AcpEvent::Text(text) if text.contains("hidden summary"))));
+        assert!(events
+            .iter()
+            .any(|ev| matches!(ev, AcpEvent::Done { stop_reason } if stop_reason == "end_turn")));
+        let loaded = crate::session::load_session("native-manual").unwrap();
+        let input = loaded.input();
+        assert!(input
+            .iter()
+            .any(|item| crate::compact::message_text(item)
+                .contains("This session is being continued")));
+        assert!(input
+            .iter()
+            .any(|item| crate::compact::message_text(item) == "remember the harbor"));
+        assert!(!input
+            .iter()
+            .any(|item| crate::compact::message_text(item).contains("/compact")));
+        assert_eq!(loaded.usage.cost_in_usd_ticks, 4);
+        assert_eq!(loaded.usage.input_tokens, 7);
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn failed_manual_compact_keeps_the_transcript() {
+        let dir = std::env::temp_dir().join(format!("gh-eng-compact-fail-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        let mut engine = engine(
+            &dir,
+            "native-fail",
+            Box::new(Summarize {
+                calls: AtomicUsize::new(0),
+                fail: true,
+            }),
+        );
+        engine.prompt("keep this", None, &mut |_| {}).unwrap();
+        let events = Mutex::new(Vec::new());
+        engine
+            .prompt("/compact", None, &mut |ev| events.lock().unwrap().push(ev))
+            .unwrap();
+        let events = events.into_inner().unwrap();
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            AcpEvent::Compact { error: Some(message), .. } if message.contains("disk full")
+        )));
+        let loaded = crate::session::load_session("native-fail").unwrap();
+        let input = loaded.input();
+        assert!(input
+            .iter()
+            .any(|item| crate::compact::message_text(item) == "keep this"));
+        assert!(!input
+            .iter()
+            .any(|item| crate::compact::message_text(item)
+                .contains("This session is being continued")));
+        assert_eq!(loaded.usage.cost_in_usd_ticks, 1);
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    struct RefuseCall;
+
+    impl ModelClient for RefuseCall {
+        fn stream(
+            &self,
+            _req: &crate::ResponsesRequest,
+            _cancel: &CancelToken,
+            _sink: &mut dyn FnMut(crate::StreamEvent),
+        ) -> Result<crate::TurnOutput, crate::ClientError> {
+            panic!("empty /compact must not call the model");
+        }
+    }
+
+    #[test]
+    fn empty_manual_compact_does_not_call_the_model() {
+        let dir = std::env::temp_dir().join(format!("gh-eng-compact-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        let mut engine = engine(&dir, "native-empty", Box::new(RefuseCall));
+        let events = Mutex::new(Vec::new());
+        engine
+            .prompt("/compact", None, &mut |ev| events.lock().unwrap().push(ev))
+            .unwrap();
+        let events = events.into_inner().unwrap();
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            AcpEvent::Compact { error: Some(message), .. } if message.contains("nothing to compact")
+        )));
+        assert!(crate::session::load_session("native-empty").is_err());
         drop(_guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
