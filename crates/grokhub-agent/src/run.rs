@@ -94,6 +94,8 @@ pub struct LoopIn<'a> {
     pub gate: Gate,
     pub desktop: Option<&'a dyn DesktopOps>,
     pub permits: &'a dyn PermitWait,
+    /// `None` keeps gate v0. The native engine passes the loaded policy.
+    pub perms: Option<&'a crate::perm::Policy>,
 }
 
 pub struct LoopOut {
@@ -197,12 +199,19 @@ pub fn run_loop(
                 continue;
             }
             let id = tool_id(call);
-            let decision = gate::decide(
-                &input.gate,
-                &call.name,
-                always,
-                tools::desk_flags(&call.name, &input.gate, input.desktop),
-            );
+            let desk = tools::desk_flags(&call.name, &input.gate, input.desktop);
+            let decision = match input.perms {
+                Some(policy) => gate::decide_with(
+                    &input.gate,
+                    &call.name,
+                    &call.arguments,
+                    always,
+                    desk,
+                    input.workspace,
+                    Some(policy),
+                ),
+                None => gate::decide(&input.gate, &call.name, always, desk),
+            };
             let output = match decision {
                 Decision::Refuse(text) => {
                     let output = ToolOutput::err(text);
@@ -219,6 +228,13 @@ pub fn run_loop(
                     match input.permits.wait(&id, input.cancel, &|| input.halt.halted()) {
                         Waited::Answer(PermAnswer::Allow) => run_allowed(input, call, &id, on_event),
                         Waited::Answer(PermAnswer::Always) => {
+                            if input.perms.is_some() {
+                                let _ = crate::perm::remember_allow_always(
+                                    input.workspace,
+                                    &call.name,
+                                    &call.arguments,
+                                );
+                            }
                             always = true;
                             run_allowed(input, call, &id, on_event)
                         }
@@ -490,6 +506,7 @@ mod tests {
             gate: Gate::phase_readonly(),
             desktop: None,
             permits: &gate::ClosedPermits,
+            perms: None,
         };
         let mut history = Vec::new();
         let mut events = Vec::new();
@@ -693,6 +710,7 @@ mod tests {
             gate: Gate::phase_readonly(),
             desktop: None,
             permits: &gate::ClosedPermits,
+            perms: None,
         };
         let mut history = Vec::new();
         let out = run_loop(&input, &mut history, "go", None, &mut |_| {});
@@ -771,6 +789,7 @@ mod tests {
             gate,
             desktop,
             permits,
+            perms: None,
         };
         let mut history = Vec::new();
         let mut events = Vec::new();

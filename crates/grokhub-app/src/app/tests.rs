@@ -7641,6 +7641,28 @@ fn settings_cabin_defaults_section() {
 }
 
 #[test]
+fn settings_permissions_editor_lists_rules_and_grants() {
+    let settings = include_str!("settings.rs");
+    assert!(settings.contains("(SettingsSec::Permissions, \"Permissions\")"));
+    assert!(settings.contains("SettingsSec::Permissions => \"Permissions\""));
+    assert!(settings.contains("SettingsSec::Permissions => self.ui_permission_editor(ui)"));
+    assert!(settings.contains("fn ui_permission_editor"));
+    assert!(settings.contains("load_rules"));
+    assert!(settings.contains("load_grants"));
+    assert!(settings.contains("load_claude_project"));
+    assert!(settings.contains("remember_allow_always"));
+    let chat = include_str!("chat_ui.rs");
+    assert!(!chat.contains("ui_permission_editor"));
+    assert!(!chat.contains("SettingsSec::Permissions"));
+    let defaults = settings
+        .split("SettingsSec::Defaults => {")
+        .nth(1)
+        .and_then(|slice| slice.split("if let Some(s) = next_sec").next())
+        .expect("defaults arm");
+    assert_eq!(defaults.matches("settings_dropdown").count(), 4);
+}
+
+#[test]
 fn session_thought_collapse_stays_on_one_thread() {
     let ctx = egui::Context::default();
     let a = "thread-a";
