@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use grokhub_core::desktop_mcp::EisRegion;
+use grokhub_core::desktop_mcp::{CastStream, EisRegion};
 
 const SERVICE: &str = "GrokHub";
 const ACCOUNT: &str = "desktop-portal-restore";
@@ -22,6 +22,10 @@ pub(crate) struct PortalStart {
     pub regions: Vec<EisRegion>,
     pub text: bool,
     pub keyboard: bool,
+    /// ScreenCast streams from the same `Start`. Notify* uses these.
+    pub streams: Vec<CastStream>,
+    /// ConnectToEIS failed and this session stays open for Notify*.
+    pub notify: bool,
 }
 
 /// What [`open_with_restore`] hands the Wayland backend.
@@ -30,6 +34,8 @@ pub(crate) struct OpenedPortal {
     pub regions: Vec<EisRegion>,
     pub text: bool,
     pub keyboard: bool,
+    pub streams: Vec<CastStream>,
+    pub notify: bool,
     /// Set when a stored token was rejected and a fresh dialog succeeded.
     pub notice: Option<String>,
 }
@@ -71,8 +77,15 @@ pub(crate) trait EisInput {
     fn text(&mut self, text: &str) -> Result<(), String>;
 }
 
-pub(crate) trait PortalDevice: RemoteDesktopPortal + EisInput {}
-impl<T> PortalDevice for T where T: RemoteDesktopPortal + EisInput {}
+pub(crate) trait NotifyInput: Send {
+    fn notify_pointer(&mut self, stream: u32, x: f64, y: f64) -> Result<(), String>;
+    fn notify_button(&mut self, button: i32, down: bool) -> Result<(), String>;
+    fn notify_axis(&mut self, horizontal: bool, steps: i32) -> Result<(), String>;
+    fn notify_keysym(&mut self, keysym: i32, down: bool) -> Result<(), String>;
+}
+
+pub(crate) trait PortalDevice: RemoteDesktopPortal + EisInput + NotifyInput + Send {}
+impl<T> PortalDevice for T where T: RemoteDesktopPortal + EisInput + NotifyInput + Send {}
 
 /// Load the single-use token, `Start`, and replace it with the token from this Start.
 /// A rejected token starts one fresh session and says why.
@@ -115,6 +128,8 @@ fn opened(start: PortalStart, notice: Option<String>) -> OpenedPortal {
         regions: start.regions,
         text: start.text,
         keyboard: start.keyboard,
+        streams: start.streams,
+        notify: start.notify,
         notice,
     }
 }
@@ -206,6 +221,27 @@ enum Cmd {
     },
     Text {
         text: String,
+        reply: Sender<Result<(), String>>,
+    },
+    NotifyPointer {
+        stream: u32,
+        x: f64,
+        y: f64,
+        reply: Sender<Result<(), String>>,
+    },
+    NotifyButton {
+        button: i32,
+        down: bool,
+        reply: Sender<Result<(), String>>,
+    },
+    NotifyAxis {
+        horizontal: bool,
+        steps: i32,
+        reply: Sender<Result<(), String>>,
+    },
+    NotifyKeysym {
+        keysym: i32,
+        down: bool,
         reply: Sender<Result<(), String>>,
     },
 }
@@ -326,6 +362,28 @@ impl EisInput for AshpdPortal {
     }
 }
 
+impl NotifyInput for AshpdPortal {
+    fn notify_pointer(&mut self, stream: u32, x: f64, y: f64) -> Result<(), String> {
+        self.roundtrip(|reply| Cmd::NotifyPointer { stream, x, y, reply })
+    }
+
+    fn notify_button(&mut self, button: i32, down: bool) -> Result<(), String> {
+        self.roundtrip(|reply| Cmd::NotifyButton { button, down, reply })
+    }
+
+    fn notify_axis(&mut self, horizontal: bool, steps: i32) -> Result<(), String> {
+        self.roundtrip(|reply| Cmd::NotifyAxis {
+            horizontal,
+            steps,
+            reply,
+        })
+    }
+
+    fn notify_keysym(&mut self, keysym: i32, down: bool) -> Result<(), String> {
+        self.roundtrip(|reply| Cmd::NotifyKeysym { keysym, down, reply })
+    }
+}
+
 fn worker(rx: Receiver<Cmd>, cancel: Arc<AtomicBool>) {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_time()
@@ -355,74 +413,21 @@ fn fail_cmd(cmd: Cmd, msg: &str) {
         | Cmd::Button { reply, .. }
         | Cmd::Scroll { reply, .. }
         | Cmd::Key { reply, .. }
-        | Cmd::Text { reply, .. } => {
+        | Cmd::Text { reply, .. }
+        | Cmd::NotifyPointer { reply, .. }
+        | Cmd::NotifyButton { reply, .. }
+        | Cmd::NotifyAxis { reply, .. }
+        | Cmd::NotifyKeysym { reply, .. } => {
             let _ = reply.send(Err(msg.to_string()));
         }
     }
 }
 
 async fn run_worker(rx: Receiver<Cmd>, cancel: Arc<AtomicBool>) {
-    let mut live: Option<LiveEis> = None;
+    let mut live: Option<Live> = None;
     loop {
         match rx.try_recv() {
-            Ok(Cmd::Start { token, reply }) => {
-                if let Some(old) = live.take() {
-                    old.shutdown().await;
-                }
-                cancel.store(false, Ordering::SeqCst);
-                match open_eis(&cancel, token).await {
-                    Ok(session) => {
-                        let summary = session.summary();
-                        live = Some(session);
-                        let _ = reply.send(Ok(summary));
-                    }
-                    Err(err) => {
-                        let _ = reply.send(Err(err));
-                    }
-                }
-            }
-            Ok(Cmd::Close { reply }) => {
-                cancel.store(false, Ordering::SeqCst);
-                if let Some(old) = live.take() {
-                    old.shutdown().await;
-                }
-                let _ = reply.send(());
-            }
-            Ok(Cmd::Pointer { x, y, reply }) => {
-                let result = match live.as_mut() {
-                    Some(session) => session.pointer(x, y).await,
-                    None => Err("The portal session is closed.".into()),
-                };
-                let _ = reply.send(result);
-            }
-            Ok(Cmd::Button { code, down, reply }) => {
-                let result = match live.as_mut() {
-                    Some(session) => session.button(code, down).await,
-                    None => Err("The portal session is closed.".into()),
-                };
-                let _ = reply.send(result);
-            }
-            Ok(Cmd::Scroll { dx, dy, reply }) => {
-                let result = match live.as_mut() {
-                    Some(session) => session.scroll(dx, dy).await,
-                    None => Err("The portal session is closed.".into()),
-                };
-                let _ = reply.send(result);
-            }
-            Ok(Cmd::Key { code, down, reply }) => {
-                let result = match live.as_mut() {
-                    Some(session) => session.key(code, down).await,
-                    None => Err("The portal session is closed.".into()),
-                };
-                let _ = reply.send(result);
-            }
-            Ok(Cmd::Text { text, reply }) => {
-                let result = match live.as_mut() {
-                    Some(session) => session.text(&text).await,
-                    None => Err("The portal session is closed.".into()),
-                };
-                let _ = reply.send(result);
-            }
+            Ok(cmd) => dispatch(&mut live, cmd, &cancel).await,
             Err(TryRecvError::Empty) => {
                 if let Some(session) = live.as_mut() {
                     if let Err(err) = session.drain().await {
@@ -437,6 +442,102 @@ async fn run_worker(rx: Receiver<Cmd>, cancel: Arc<AtomicBool>) {
     }
     if let Some(old) = live.take() {
         old.shutdown().await;
+    }
+}
+
+async fn dispatch(live: &mut Option<Live>, cmd: Cmd, cancel: &AtomicBool) {
+    match cmd {
+        Cmd::Start { token, reply } => {
+            if let Some(old) = live.take() {
+                old.shutdown().await;
+            }
+            cancel.store(false, Ordering::SeqCst);
+            match open_eis(cancel, token).await {
+                Ok(session) => {
+                    let summary = session.summary();
+                    *live = Some(session);
+                    let _ = reply.send(Ok(summary));
+                }
+                Err(err) => {
+                    let _ = reply.send(Err(err));
+                }
+            }
+        }
+        Cmd::Close { reply } => {
+            cancel.store(false, Ordering::SeqCst);
+            if let Some(old) = live.take() {
+                old.shutdown().await;
+            }
+            let _ = reply.send(());
+        }
+        Cmd::Pointer { x, y, reply } => {
+            let result = match live.as_mut() {
+                Some(Live::Eis(session)) => session.pointer(x, y).await,
+                Some(Live::Notify(_)) => Err("The portal session is using Notify, not libei.".into()),
+                None => Err("The portal session is closed.".into()),
+            };
+            let _ = reply.send(result);
+        }
+        Cmd::Button { code, down, reply } => {
+            let result = match live.as_mut() {
+                Some(Live::Eis(session)) => session.button(code, down).await,
+                Some(Live::Notify(_)) => Err("The portal session is using Notify, not libei.".into()),
+                None => Err("The portal session is closed.".into()),
+            };
+            let _ = reply.send(result);
+        }
+        Cmd::Scroll { dx, dy, reply } => {
+            let result = match live.as_mut() {
+                Some(Live::Eis(session)) => session.scroll(dx, dy).await,
+                Some(Live::Notify(_)) => Err("The portal session is using Notify, not libei.".into()),
+                None => Err("The portal session is closed.".into()),
+            };
+            let _ = reply.send(result);
+        }
+        Cmd::Key { code, down, reply } => {
+            let result = match live.as_mut() {
+                Some(Live::Eis(session)) => session.key(code, down).await,
+                Some(Live::Notify(_)) => Err("The portal session is using Notify, not libei.".into()),
+                None => Err("The portal session is closed.".into()),
+            };
+            let _ = reply.send(result);
+        }
+        Cmd::Text { text, reply } => {
+            let result = match live.as_mut() {
+                Some(Live::Eis(session)) => session.text(&text).await,
+                Some(Live::Notify(_)) => Err("The portal session is using Notify, not libei.".into()),
+                None => Err("The portal session is closed.".into()),
+            };
+            let _ = reply.send(result);
+        }
+        Cmd::NotifyPointer { stream, x, y, reply } => {
+            let result = match live.as_mut() {
+                Some(Live::Notify(session)) => session.pointer(stream, x, y).await,
+                _ => Err("The portal session is not using Notify.".into()),
+            };
+            let _ = reply.send(result);
+        }
+        Cmd::NotifyButton { button, down, reply } => {
+            let result = match live.as_mut() {
+                Some(Live::Notify(session)) => session.button(button, down).await,
+                _ => Err("The portal session is not using Notify.".into()),
+            };
+            let _ = reply.send(result);
+        }
+        Cmd::NotifyAxis { horizontal, steps, reply } => {
+            let result = match live.as_mut() {
+                Some(Live::Notify(session)) => session.axis(horizontal, steps).await,
+                _ => Err("The portal session is not using Notify.".into()),
+            };
+            let _ = reply.send(result);
+        }
+        Cmd::NotifyKeysym { keysym, down, reply } => {
+            let result = match live.as_mut() {
+                Some(Live::Notify(session)) => session.keysym(keysym, down).await,
+                _ => Err("The portal session is not using Notify.".into()),
+            };
+            let _ = reply.send(result);
+        }
     }
 }
 
@@ -486,7 +587,7 @@ async fn drive<T>(
     }
 }
 
-async fn open_eis(cancel: &AtomicBool, token: Option<String>) -> Result<LiveEis, PortalFail> {
+async fn open_eis(cancel: &AtomicBool, token: Option<String>) -> Result<Live, PortalFail> {
     let had_token = token.as_ref().is_some_and(|value| !value.trim().is_empty());
     let portal = drive(cancel, RdPortal::new(), Duration::from_secs(20))
         .await?
@@ -498,52 +599,22 @@ async fn open_eis(cancel: &AtomicBool, token: Option<String>) -> Result<LiveEis,
     )
     .await?
     .map_err(|err| classify(err, had_token))?;
-    bind_eis(&portal, session, cancel, token.as_deref(), had_token).await
-}
-
-async fn bind_eis(
-    portal: &RdPortal,
-    session: RdSession,
-    cancel: &AtomicBool,
-    token: Option<&str>,
-    had_token: bool,
-) -> Result<LiveEis, PortalFail> {
-    match assemble(portal, &session, cancel, token, had_token).await {
-        Ok((context, converter, bound, restore_token)) => Ok(LiveEis {
-            session,
-            context,
-            converter,
-            device: bound.device,
-            serial: bound.serial,
-            sequence: 2,
-            emulating: true,
-            regions: bound.regions,
-            text: bound.text,
-            keyboard: bound.keyboard,
-            restore_token,
-        }),
-        Err(err) => {
+    match start_session(portal, session, cancel, token.as_deref(), had_token).await {
+        Ok(live) => Ok(live),
+        Err((session, err)) => {
             let _ = session.close().await;
             Err(err)
         }
     }
 }
 
-async fn assemble(
-    portal: &RdPortal,
-    session: &RdSession,
+async fn start_session(
+    portal: RdPortal,
+    session: RdSession,
     cancel: &AtomicBool,
     token: Option<&str>,
     had_token: bool,
-) -> Result<
-    (
-        reis::ei::Context,
-        reis::event::EiEventConverter,
-        BoundDevice,
-        Option<String>,
-    ),
-    PortalFail,
-> {
+) -> Result<Live, (RdSession, PortalFail)> {
     use ashpd::desktop::remote_desktop::{
         ConnectToEISOptions, DeviceType, SelectDevicesOptions, StartOptions,
     };
@@ -553,44 +624,293 @@ async fn assemble(
         .set_devices(DeviceType::Keyboard | DeviceType::Pointer)
         .set_persist_mode(PersistMode::ExplicitlyRevoked)
         .set_restore_token(token.filter(|value| !value.trim().is_empty()));
-    let selected = drive(
+    let selected = match drive(
         cancel,
-        portal.select_devices(session, options),
+        portal.select_devices(&session, options),
         Duration::from_secs(30),
     )
-    .await?
-    .map_err(|err| classify(err, had_token))?;
-    selected
-        .response()
-        .map_err(|err| classify(err, had_token))?;
+    .await
+    {
+        Ok(Ok(value)) => value,
+        Ok(Err(err)) => return Err((session, classify(err, had_token))),
+        Err(err) => return Err((session, err)),
+    };
+    if let Err(err) = selected.response().map_err(|err| classify(err, had_token)) {
+        return Err((session, err));
+    }
+    // Same session, still one Start consent. A failed SelectSources leaves EIS-only.
+    let _ = select_monitor_sources(&session, cancel).await;
 
-    let started = drive(
+    let started = match drive(
         cancel,
-        portal.start(session, None, StartOptions::default()),
+        portal.start(&session, None, StartOptions::default()),
         Duration::from_secs(180),
     )
-    .await?
-    .map_err(|err| classify(err, had_token))?;
-    let selected = started
-        .response()
-        .map_err(|err| classify(err, had_token))?;
+    .await
+    {
+        Ok(result) => result,
+        Err(err) => return Err((session, err)),
+    };
+    let started = match started {
+        Ok(value) => value,
+        Err(err) => return Err((session, classify(err, had_token))),
+    };
+    let selected = match started.response() {
+        Ok(value) => value,
+        Err(err) => return Err((session, classify(err, had_token))),
+    };
     let restore_token = selected.restore_token().map(str::to_string);
+    let streams = cast_streams(&selected);
 
-    let fd = drive(
+    let connected = match drive(
         cancel,
-        portal.connect_to_eis(session, ConnectToEISOptions::default()),
+        portal.connect_to_eis(&session, ConnectToEISOptions::default()),
         Duration::from_secs(10),
     )
-    .await?
-    .map_err(|err| classify(err, had_token))?;
-    let context = reis::ei::Context::new(std::os::unix::net::UnixStream::from(fd))
-        .map_err(|err| PortalFail::Fallback(format!("EIS socket: {err}")))?;
+    .await
+    {
+        Ok(result) => result,
+        Err(err) if keep_for_notify(&err, &streams) => {
+            return Ok(Live::Notify(LiveNotify {
+                portal,
+                session,
+                streams,
+                restore_token,
+            }));
+        }
+        Err(err) => return Err((session, err)),
+    };
+    let fd = match connected {
+        Ok(fd) => fd,
+        Err(err) => {
+            let fail = classify(err, had_token);
+            if keep_for_notify(&fail, &streams) {
+                return Ok(Live::Notify(LiveNotify {
+                    portal,
+                    session,
+                    streams,
+                    restore_token,
+                }));
+            }
+            return Err((session, fail));
+        }
+    };
+    let context = match reis::ei::Context::new(std::os::unix::net::UnixStream::from(fd)) {
+        Ok(context) => context,
+        Err(err) => {
+            let fail = PortalFail::Fallback(format!("EIS socket: {err}"));
+            if keep_for_notify(&fail, &streams) {
+                return Ok(Live::Notify(LiveNotify {
+                    portal,
+                    session,
+                    streams,
+                    restore_token,
+                }));
+            }
+            return Err((session, fail));
+        }
+    };
     let mut handshaker =
         reis::handshake::EiHandshaker::new("grokhub", reis::ei::handshake::ContextType::Sender);
-    let resp = handshake(&context, &mut handshaker, cancel).await?;
+    let resp = match handshake(&context, &mut handshaker, cancel).await {
+        Ok(resp) => resp,
+        Err(err) if keep_for_notify(&err, &streams) => {
+            return Ok(Live::Notify(LiveNotify {
+                portal,
+                session,
+                streams,
+                restore_token,
+            }));
+        }
+        Err(err) => return Err((session, err)),
+    };
     let mut converter = reis::event::EiEventConverter::new(&context, resp);
-    let bound = wait_absolute(&context, &mut converter, cancel).await?;
-    Ok((context, converter, bound, restore_token))
+    let bound = match wait_absolute(&context, &mut converter, cancel).await {
+        Ok(bound) => bound,
+        Err(err) if keep_for_notify(&err, &streams) => {
+            return Ok(Live::Notify(LiveNotify {
+                portal,
+                session,
+                streams,
+                restore_token,
+            }));
+        }
+        Err(err) => return Err((session, err)),
+    };
+    Ok(Live::Eis(Box::new(LiveEis {
+        session,
+        context,
+        converter,
+        device: bound.device,
+        serial: bound.serial,
+        sequence: 2,
+        emulating: true,
+        regions: bound.regions,
+        text: bound.text,
+        keyboard: bound.keyboard,
+        restore_token,
+    })))
+}
+
+async fn select_monitor_sources(session: &RdSession, cancel: &AtomicBool) -> bool {
+    use ashpd::desktop::screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType};
+    use ashpd::desktop::PersistMode;
+
+    let cast = match Screencast::new().await {
+        Ok(cast) => cast,
+        Err(err) => {
+            eprintln!("desktop-mcp: screencast portal: {err}");
+            return false;
+        }
+    };
+    let options = SelectSourcesOptions::default()
+        .set_sources(ashpd::enumflags2::BitFlags::from_flag(SourceType::Monitor))
+        .set_multiple(true)
+        .set_cursor_mode(CursorMode::Hidden)
+        .set_persist_mode(PersistMode::DoNot);
+    match drive(cancel, cast.select_sources(session, options), Duration::from_secs(30)).await {
+        Ok(Ok(request)) => match request.response() {
+            Ok(()) => true,
+            Err(err) => {
+                eprintln!("desktop-mcp: screencast sources: {err}");
+                false
+            }
+        },
+        Ok(Err(err)) => {
+            eprintln!("desktop-mcp: screencast sources: {err}");
+            false
+        }
+        Err(err) => {
+            eprintln!("desktop-mcp: screencast sources: {}", err.text());
+            false
+        }
+    }
+}
+
+fn cast_streams(selected: &ashpd::desktop::remote_desktop::SelectedDevices) -> Vec<CastStream> {
+    selected
+        .streams()
+        .iter()
+        .filter_map(|stream| {
+            let (width, height) = stream.size()?;
+            if width <= 0 || height <= 0 {
+                return None;
+            }
+            let (x, y) = stream.position().unwrap_or((0, 0));
+            Some(CastStream {
+                node: stream.pipe_wire_node_id(),
+                x,
+                y,
+                width: u32::try_from(width).unwrap_or(0),
+                height: u32::try_from(height).unwrap_or(0),
+            })
+        })
+        .filter(|stream| stream.width > 0 && stream.height > 0)
+        .collect()
+}
+
+fn keep_for_notify(err: &PortalFail, streams: &[CastStream]) -> bool {
+    if streams.is_empty() {
+        return false;
+    }
+    !err.text().contains("halted")
+}
+
+enum Live {
+    Eis(Box<LiveEis>),
+    Notify(LiveNotify),
+}
+
+struct LiveNotify {
+    portal: RdPortal,
+    session: RdSession,
+    streams: Vec<CastStream>,
+    restore_token: Option<String>,
+}
+
+impl Live {
+    fn summary(&self) -> PortalStart {
+        match self {
+            Self::Eis(session) => session.summary(),
+            Self::Notify(session) => PortalStart {
+                restore_token: session.restore_token.clone(),
+                regions: Vec::new(),
+                text: false,
+                keyboard: true,
+                streams: session.streams.clone(),
+                notify: true,
+            },
+        }
+    }
+
+    async fn shutdown(self) {
+        match self {
+            Self::Eis(session) => session.shutdown().await,
+            Self::Notify(session) => {
+                let _ = session.session.close().await;
+            }
+        }
+    }
+
+    async fn drain(&mut self) -> Result<(), String> {
+        match self {
+            Self::Eis(session) => session.drain().await,
+            Self::Notify(_) => Ok(()),
+        }
+    }
+}
+
+impl LiveNotify {
+    async fn pointer(&self, stream: u32, x: f64, y: f64) -> Result<(), String> {
+        use ashpd::desktop::remote_desktop::NotifyPointerMotionAbsoluteOptions;
+        self.portal
+            .notify_pointer_motion_absolute(
+                &self.session,
+                stream,
+                x,
+                y,
+                NotifyPointerMotionAbsoluteOptions::default(),
+            )
+            .await
+            .map_err(|err| format!("NotifyPointerMotionAbsolute: {err}"))
+    }
+
+    async fn button(&self, button: i32, down: bool) -> Result<(), String> {
+        use ashpd::desktop::remote_desktop::{KeyState, NotifyPointerButtonOptions};
+        let state = if down { KeyState::Pressed } else { KeyState::Released };
+        self.portal
+            .notify_pointer_button(&self.session, button, state, NotifyPointerButtonOptions::default())
+            .await
+            .map_err(|err| format!("NotifyPointerButton: {err}"))
+    }
+
+    async fn axis(&self, horizontal: bool, steps: i32) -> Result<(), String> {
+        use ashpd::desktop::remote_desktop::{Axis, NotifyPointerAxisDiscreteOptions};
+        let axis = if horizontal { Axis::Horizontal } else { Axis::Vertical };
+        self.portal
+            .notify_pointer_axis_discrete(
+                &self.session,
+                axis,
+                steps,
+                NotifyPointerAxisDiscreteOptions::default(),
+            )
+            .await
+            .map_err(|err| format!("NotifyPointerAxisDiscrete: {err}"))
+    }
+
+    async fn keysym(&self, keysym: i32, down: bool) -> Result<(), String> {
+        use ashpd::desktop::remote_desktop::{KeyState, NotifyKeyboardKeysymOptions};
+        let state = if down { KeyState::Pressed } else { KeyState::Released };
+        self.portal
+            .notify_keyboard_keysym(
+                &self.session,
+                keysym,
+                state,
+                NotifyKeyboardKeysymOptions::default(),
+            )
+            .await
+            .map_err(|err| format!("NotifyKeyboardKeysym: {err}"))
+    }
 }
 
 struct BoundDevice {
@@ -622,6 +942,8 @@ impl LiveEis {
             regions: self.regions.clone(),
             text: self.text,
             keyboard: self.keyboard,
+            streams: Vec::new(),
+            notify: false,
         }
     }
 
@@ -1054,6 +1376,8 @@ pub(crate) mod doubles {
                     regions: inner.regions.clone(),
                     text: true,
                     keyboard: true,
+                    streams: Vec::new(),
+                    notify: false,
                 }),
                 Some(FakeReply::Reject) => {
                     Err(PortalFail::TokenRejected("restore token rejected".into()))
@@ -1088,6 +1412,21 @@ pub(crate) mod doubles {
         }
 
         fn text(&mut self, _text: &str) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    impl NotifyInput for FakePortal {
+        fn notify_pointer(&mut self, _stream: u32, _x: f64, _y: f64) -> Result<(), String> {
+            Ok(())
+        }
+        fn notify_button(&mut self, _button: i32, _down: bool) -> Result<(), String> {
+            Ok(())
+        }
+        fn notify_axis(&mut self, _horizontal: bool, _steps: i32) -> Result<(), String> {
+            Ok(())
+        }
+        fn notify_keysym(&mut self, _keysym: i32, _down: bool) -> Result<(), String> {
             Ok(())
         }
     }

@@ -37,7 +37,9 @@ ashpd = { version = "0.13", default-features = false, features = ["tokio", "remo
 reis = { version = "0.7", default-features = false }
 tokio = { version = "1", default-features = false, features = ["rt", "time"] }
 zbus = { version = "5.19", default-features = false, features = ["blocking-api"] }
-rustix = { version = "1", default-features = false, features = ["event", "time"] }
+rustix = { version = "1", default-features = false, features = ["event", "time", "fs", "net"] }
+# Absolute uinput (Phase 2b). No tokio feature: the device is blocking evdev.
+evdev = { version = "0.13.2", default-features = false }
 
 [build-dependencies]
 winresource = "0.1"
