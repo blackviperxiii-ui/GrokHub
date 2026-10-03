@@ -25,6 +25,7 @@ mod subagent;
 pub mod tasks;
 pub mod tokens;
 mod tools;
+mod unattended;
 
 pub use client::{
     map_http_status, request_headers, responses_body, AuthKind, CancelToken, ClientError,
@@ -72,9 +73,11 @@ pub use slash_parity::{slash_parity, unparsed_native_slash, SlashParity, Unparse
 pub use sse::SseParser;
 pub use subagent::{drain_side_events, requeue_side_events, SideEvent};
 pub use tasks::{
-    forget_session, halt_all_sessions, halt_session, halt_tree, hub_for, link_child, watch_cancel,
+    forget_session, halt_all_sessions, halt_session, halt_tree, hub_for, link_child,
+    session_is_live, watch_cancel,
 };
 pub use tools::control::{take_automation_changes, AutomationChange};
 pub use tools::{
     execute, is_readonly, schemas_for, tool_schemas, DesktopOps, ToolOutput, READ_ONLY_PHASE,
 };
+pub use unattended::{run_unattended, UnattendedDone, UnattendedRun};

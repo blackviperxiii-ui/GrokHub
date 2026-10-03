@@ -813,6 +813,9 @@ impl Cabin {
                 } else {
                     self.scheduled_perm = false;
                     let status = self.apply_job_fail(&rewrite_truncation_error(&e));
+                    if self.cfg.native_engine {
+                        self.finish_hub_dispatch(&status, false);
+                    }
                     if paints || self.chat_job_thread.is_none() {
                         self.status = status;
                     }
@@ -846,6 +849,9 @@ impl Cabin {
                     self.scheduled_perm = false;
                     let paints = self.stream_here();
                     let status = self.apply_job_fail("Grok Build session missing");
+                    if self.cfg.native_engine {
+                        self.finish_hub_dispatch(&status, false);
+                    }
                     if paints || self.chat_job_thread.is_none() {
                         self.status = status;
                     }

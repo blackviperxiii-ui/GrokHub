@@ -298,6 +298,10 @@ impl Cabin {
         if self.greeting_busy {
             return;
         }
+        if self.cfg.native_engine {
+            self.spawn_native_greeting(prompt);
+            return;
+        }
         let key = self.bearer();
         if key.trim().is_empty() && grokhub_acp::find_grok().is_none() {
             return;
@@ -580,6 +584,10 @@ impl Cabin {
 
     pub(super) fn spawn_chip_llm(&mut self) {
         if self.chip_busy {
+            return;
+        }
+        if self.cfg.native_engine {
+            self.spawn_native_chips();
             return;
         }
         let key = self.bearer();

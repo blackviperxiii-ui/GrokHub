@@ -107,7 +107,7 @@ impl Cabin {
             Self::local_clock().hour as u8,
         );
         remember_home_surface(&mut self.chip_memory, "chat", now_ms());
-        if !persist_user_turn(self.can_agent()) {
+        if !persist_user_turn(self.can_agent() || (self.cfg.native_engine && self.scheduled_perm)) {
             self.hands_attach = false;
             self.eyes_attach = false;
             self.speak_next = false;
@@ -208,7 +208,7 @@ impl Cabin {
     }
 
     pub(super) fn kick_model(&mut self, consume_attach: bool) {
-        if !self.can_agent() {
+        if !self.can_agent() && !(self.cfg.native_engine && self.scheduled_perm) {
             self.running = false;
             self.chat_job_thread = None;
             self.status = "Install Grok Build (x.ai/cli) or Connect Grok in Settings".into();
@@ -419,6 +419,20 @@ impl Cabin {
             .get(idx)
             .map(|t| t.grok_worktree)
             .unwrap_or(false);
+        if self.cfg.native_engine && self.scheduled_perm {
+            self.start_native_scheduled(
+                &last_user,
+                cwd,
+                &model,
+                effort.map(str::to_string),
+                mode,
+                image,
+            );
+            if self.grok_p_rx.is_some() {
+                self.note_inflight_card(&raw_ask, &thread_label);
+            }
+            return;
+        }
         match grokhub_acp::spawn_grok_p_stream(
             &last_user,
             &cwd,
