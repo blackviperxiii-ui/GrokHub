@@ -1256,6 +1256,7 @@ mod tests {
             desktop: None,
             permits,
             perms: policy,
+            context_length: 0,
         };
         let mut history = Vec::new();
         let mut events = Vec::new();
