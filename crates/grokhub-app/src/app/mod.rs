@@ -256,6 +256,7 @@ enum SettingsSec {
     About,
     Defaults,
     Labs,
+    Permissions,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
