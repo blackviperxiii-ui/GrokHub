@@ -32,7 +32,14 @@ struct Header {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Record {
     Item(InputItem),
-    Usage { usage: Usage, meter: String },
+    Usage {
+        usage: Usage,
+        meter: String,
+    },
+    /// Replaces every earlier item. Later items append after this prefix.
+    Compaction {
+        items: Vec<InputItem>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,14 +57,9 @@ pub struct SessionInfo {
 
 impl SessionInfo {
     /// Responses `input` rebuilt from the file. Usage lines are not model input.
+    /// A compaction marker drops every item before it.
     pub fn input(&self) -> Vec<InputItem> {
-        self.records
-            .iter()
-            .filter_map(|record| match record {
-                Record::Item(item) => Some(item.clone()),
-                Record::Usage { .. } => None,
-            })
-            .collect()
+        replay_items(&self.records)
     }
 }
 
@@ -385,6 +387,39 @@ pub fn record_turn(
     Ok(())
 }
 
+/// Append a compaction marker and its usage. Resume rebuilds `input` from the marker,
+/// then appends any items recorded after it. A deleted session is not written back.
+pub fn record_compaction(
+    id: &str,
+    cwd: &str,
+    model: &str,
+    items: &[InputItem],
+    usage: &Usage,
+    meter: &str,
+) -> Result<(), String> {
+    let id = safe_id(id)?.to_string();
+    if tombstoned(&id) {
+        return Ok(());
+    }
+    touch(&id, cwd, model)?;
+    if tombstoned(&id) {
+        let _ = fs::remove_file(session_file(&id)?);
+        return Ok(());
+    }
+    append_json(&id, &compaction_json(items))?;
+    if tombstoned(&id) {
+        let _ = fs::remove_file(session_file(&id)?);
+        return Ok(());
+    }
+    append_json(&id, &usage_json(usage, meter))?;
+    if tombstoned(&id) {
+        let _ = fs::remove_file(session_file(&id)?);
+        return Ok(());
+    }
+    bump_history();
+    Ok(())
+}
+
 pub fn fork_session(id: &str) -> Result<SessionInfo, String> {
     let mut info = load_session(id)?;
     let new_id = format!("native-{}", grokhub_core::uid("n"));
@@ -442,7 +477,7 @@ pub fn delete_session(id: &str) -> Result<(), String> {
 pub fn export_markdown(id: &str) -> Result<String, String> {
     let info = load_session(id)?;
     let mut out = format!("# {}\n", info.title);
-    for record in &info.records {
+    for record in &visible_records(&info.records) {
         match record {
             Record::Item(InputItem::Message { role, .. }) if role == "system" => {}
             Record::Item(InputItem::Message { role, content }) => {
@@ -473,6 +508,7 @@ pub fn export_markdown(id: &str) -> Result<String, String> {
                     out.push_str(&format!("\n## Usage\n\n{line}\n"));
                 }
             }
+            Record::Compaction { .. } => {}
         }
     }
     Ok(out)
@@ -480,7 +516,7 @@ pub fn export_markdown(id: &str) -> Result<String, String> {
 
 pub fn transcript_pairs(info: &SessionInfo) -> Vec<(String, String)> {
     let mut pairs = Vec::new();
-    for record in &info.records {
+    for record in &visible_records(&info.records) {
         match record {
             Record::Item(InputItem::Message { role, content }) if role != "system" => {
                 let text = message_text(content);
@@ -619,6 +655,7 @@ fn write_session(info: &SessionInfo) -> Result<(), String> {
         let value = match record {
             Record::Item(item) => item_json(item),
             Record::Usage { usage, meter } => usage_json(usage, meter),
+            Record::Compaction { items } => compaction_json(items),
         };
         push_line(&mut bytes, &value)?;
     }
@@ -808,8 +845,48 @@ fn parse_record(value: &Value) -> Option<Record> {
             },
             meter: string_field(value, "meter"),
         }),
+        "compaction" => {
+            let mut items = Vec::new();
+            if let Some(rows) = value.get("items").and_then(|rows| rows.as_array()) {
+                for row in rows {
+                    if let Some(Record::Item(item)) = parse_record(row) {
+                        items.push(item);
+                    }
+                }
+            }
+            Some(Record::Compaction { items })
+        }
         _ => None,
     }
+}
+
+fn replay_items(records: &[Record]) -> Vec<InputItem> {
+    let mut items = Vec::new();
+    for record in records {
+        match record {
+            Record::Item(item) => items.push(item.clone()),
+            Record::Usage { .. } => {}
+            Record::Compaction { items: rebuilt } => items = rebuilt.clone(),
+        }
+    }
+    items
+}
+
+/// Items before a compaction marker drop out of the transcript. Usage lines stay.
+fn visible_records(records: &[Record]) -> Vec<Record> {
+    let mut out = Vec::new();
+    for record in records {
+        match record {
+            Record::Compaction { items } => {
+                out.retain(|entry| matches!(entry, Record::Usage { .. }));
+                for item in items {
+                    out.push(Record::Item(item.clone()));
+                }
+            }
+            other => out.push(other.clone()),
+        }
+    }
+    out
 }
 
 fn header_json(header: &Header) -> Value {
@@ -854,6 +931,13 @@ fn item_json(item: &InputItem) -> Value {
             "output": output,
         }),
     }
+}
+
+fn compaction_json(items: &[InputItem]) -> Value {
+    json!({
+        "type": "compaction",
+        "items": items.iter().map(item_json).collect::<Vec<_>>(),
+    })
 }
 
 fn usage_json(usage: &Usage, meter: &str) -> Value {
@@ -1206,5 +1290,78 @@ mod tests {
         assert!(!rows[1].read_only);
         assert_eq!(rows[1].cost_in_usd_ticks, 9);
         assert_eq!(rows[1].title, "fix the dock");
+    }
+
+    #[test]
+    fn resume_after_compaction_rebuilds_the_compacted_input() {
+        let (_dir, _guard) = isolated("compact");
+        let id = "native-compact";
+        record_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &[user("OLD_TOPIC"), assistant("old reply")],
+            &Usage {
+                input_tokens: 10,
+                output_tokens: 4,
+                reasoning_tokens: 0,
+                cost_in_usd_ticks: 3,
+            },
+            "SuperGrok pool",
+            "OLD_TOPIC",
+        )
+        .unwrap();
+        let summary = InputItem::Message {
+            role: "user".into(),
+            content: vec![ContentPart::InputText(
+                "This session is being continued from a previous conversation.".into(),
+            )],
+        };
+        let last = user("keep me");
+        let compact_usage = Usage {
+            input_tokens: 6,
+            output_tokens: 2,
+            reasoning_tokens: 1,
+            cost_in_usd_ticks: 8,
+        };
+        record_compaction(
+            id,
+            "/work",
+            "grok-4.7",
+            &[summary.clone(), last.clone()],
+            &compact_usage,
+            "SuperGrok pool",
+        )
+        .unwrap();
+        record_turn(
+            id,
+            "/work",
+            "grok-4.7",
+            &[assistant("after")],
+            &Usage {
+                input_tokens: 1,
+                output_tokens: 1,
+                reasoning_tokens: 0,
+                cost_in_usd_ticks: 1,
+            },
+            "SuperGrok pool",
+            "",
+        )
+        .unwrap();
+        let loaded = load_session(id).unwrap();
+        assert_eq!(loaded.input(), vec![summary, last, assistant("after")]);
+        assert!(!loaded
+            .input()
+            .iter()
+            .any(|item| format!("{item:?}").contains("OLD_TOPIC")));
+        assert_eq!(loaded.usage.input_tokens, 17);
+        assert_eq!(loaded.usage.output_tokens, 7);
+        assert_eq!(loaded.usage.reasoning_tokens, 1);
+        assert_eq!(loaded.usage.cost_in_usd_ticks, 12);
+        let pairs = transcript_pairs(&loaded);
+        assert!(pairs.iter().any(|(_, text)| text.contains("keep me")));
+        assert!(!pairs.iter().any(|(_, text)| text.contains("OLD_TOPIC")));
+        let raw = fs::read_to_string(session_file(id).unwrap()).unwrap();
+        assert!(raw.contains("\"type\":\"compaction\""), "{raw}");
     }
 }
