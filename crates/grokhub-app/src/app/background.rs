@@ -263,7 +263,7 @@ impl Cabin {
         if let Some(parent) = parent.as_deref() {
             grokhub_agent::link_child(parent, &child_id);
         }
-        let (client, auth_kind) = native_bg_model(self)?;
+        let (client, auth_kind, bearer) = native_bg_model(self)?;
         let gate = self.native_bg_gate();
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
         let effort =
@@ -281,8 +281,8 @@ impl Cabin {
         let session = child_id.clone();
         std::thread::spawn(move || {
             run_native_bg(
-                session, workspace, client, auth_kind, gate, model, effort, system, prompt, cancel,
-                tx,
+                session, workspace, client, auth_kind, bearer, gate, model, effort, system, prompt,
+                cancel, tx,
             );
         });
         let title = bg_task_title(task);
@@ -956,6 +956,7 @@ impl Cabin {
 type BgModel = (
     std::sync::Arc<dyn grokhub_agent::ModelClient + Send + Sync>,
     grokhub_agent::AuthKind,
+    String,
 );
 
 fn native_bg_model(cabin: &mut Cabin) -> Result<BgModel, String> {
@@ -967,6 +968,7 @@ fn native_bg_model(cabin: &mut Cabin) -> Result<BgModel, String> {
                 n: std::sync::atomic::AtomicUsize::new(0),
             }),
             grokhub_agent::AuthKind::ApiKey,
+            String::new(),
         ))
     }
     #[cfg(not(test))]
@@ -974,11 +976,12 @@ fn native_bg_model(cabin: &mut Cabin) -> Result<BgModel, String> {
         let (bearer, kind) = cabin.native_cred()?;
         Ok((
             std::sync::Arc::new(grokhub_agent::XaiClient::new(
-                bearer,
+                bearer.clone(),
                 kind,
                 std::time::Duration::from_secs(120),
             )),
             kind,
+            bearer,
         ))
     }
 }
@@ -988,6 +991,7 @@ fn run_native_bg(
     workspace: std::path::PathBuf,
     client: std::sync::Arc<dyn grokhub_agent::ModelClient + Send + Sync>,
     auth_kind: grokhub_agent::AuthKind,
+    bearer: String,
     gate: grokhub_agent::Gate,
     model: String,
     effort: Option<String>,
@@ -1021,6 +1025,7 @@ fn run_native_bg(
         desktop: None,
         permits: std::sync::Arc::new(grokhub_agent::ClosedPermits),
     });
+    engine.set_imagine_bearer(&bearer);
     engine.set_reopen_tasks(false);
     if let Ok(info) = grokhub_agent::load_session(&session) {
         engine.resume(info.input(), info.usage);
