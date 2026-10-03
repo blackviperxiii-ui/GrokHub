@@ -1,0 +1,266 @@
+//! Native read-only engine. The CLI launch path stays in `acp` and `chat_kick`.
+
+use super::*;
+use grokhub_acp::ExternalCmd;
+use grokhub_agent::{AuthKind, Engine, EngineParts, NativeEngine, StampHalt, XaiClient};
+use std::collections::HashMap;
+use std::time::Duration;
+
+struct LiveCfg {
+    workspace: std::path::PathBuf,
+    model: String,
+    effort: Option<String>,
+    system: String,
+    bearer: String,
+    auth_kind: AuthKind,
+}
+
+fn live_map() -> &'static Mutex<HashMap<String, LiveCfg>> {
+    static MAP: OnceLock<Mutex<HashMap<String, LiveCfg>>> = OnceLock::new();
+    MAP.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+impl Cabin {
+    pub(super) fn drop_stale_native_handle(&mut self) {
+        if self.native_engine_for_current() {
+            return;
+        }
+        if self
+            .acp
+            .as_ref()
+            .is_some_and(|handle| handle.session_id.starts_with("native-"))
+        {
+            self.acp = None;
+        }
+    }
+
+    pub(super) fn native_engine_for_current(&self) -> bool {
+        if !self.cfg.native_engine {
+            return false;
+        }
+        let idx = self
+            .chat_job_thread
+            .as_deref()
+            .and_then(|id| self.threads.iter().position(|t| t.id == id))
+            .unwrap_or(self.thread_idx);
+        self.threads.get(idx).is_some_and(|t| t.native)
+    }
+
+    pub(super) fn kick_native_turn(
+        &mut self,
+        last_user: &str,
+        image: Option<&str>,
+        raw_ask: &str,
+        thread_label: &str,
+    ) -> bool {
+        if !self.native_engine_for_current() {
+            return false;
+        }
+        if let Err(err) = self.ensure_native_engine() {
+            self.fail_native(&err);
+            return true;
+        }
+        if let Err(err) = self.publish_native_cfg() {
+            self.fail_native(&err);
+            return true;
+        }
+        let prompted = self
+            .acp
+            .as_ref()
+            .map(|handle| handle.prompt_with_image(last_user, image));
+        match prompted {
+            Some(Ok(())) => self.note_inflight_card(raw_ask, thread_label),
+            Some(Err(err)) => self.fail_native(&err),
+            None => self.fail_native("native engine is not running"),
+        }
+        true
+    }
+
+    pub(super) fn ensure_native_engine(&mut self) -> Result<(), String> {
+        let cwd = self.native_workspace();
+        if self
+            .acp
+            .as_ref()
+            .is_some_and(|handle| handle.session_id.starts_with("native-") && handle.cwd == cwd)
+        {
+            return self.publish_native_cfg();
+        }
+        self.acp = None;
+        let session_id = format!("native-{}", grokhub_core::uid("n"));
+        let (handle, ext_rx, evt_tx) = grokhub_acp::AcpHandle::external(cwd.clone(), session_id.clone());
+        self.publish_native_cfg_for(&session_id)?;
+        std::thread::spawn(move || serve_native(session_id, ext_rx, evt_tx));
+        self.acp = Some(handle);
+        Ok(())
+    }
+
+    fn fail_native(&mut self, err: &str) {
+        self.abandon_turn_card();
+        self.running = false;
+        self.scheduled_perm = false;
+        self.status = self.apply_job_fail(err);
+        self.chat_job_thread = None;
+    }
+
+    fn native_workspace(&self) -> std::path::PathBuf {
+        let idx = self
+            .chat_job_thread
+            .as_deref()
+            .and_then(|id| self.threads.iter().position(|t| t.id == id))
+            .unwrap_or(self.thread_idx);
+        self.threads
+            .get(idx)
+            .and_then(|t| t.grok_cwd.clone())
+            .filter(|s| !s.trim().is_empty())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| self.grok_cwd())
+    }
+
+    fn publish_native_cfg(&mut self) -> Result<(), String> {
+        let Some(session_id) = self.acp.as_ref().map(|handle| handle.session_id.clone()) else {
+            return Err("native engine is not running".into());
+        };
+        self.publish_native_cfg_for(&session_id)
+    }
+
+    fn publish_native_cfg_for(&mut self, session_id: &str) -> Result<(), String> {
+        let (bearer, auth_kind) = self.native_cred()?;
+        let workspace = self.native_workspace();
+        let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
+        let effort = grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort).map(str::to_string);
+        let rules = grokhub_acp::cabin_rules_for(
+            &grokhub_core::brief_for(&self.learning, "chat"),
+            self.cfg.desktop_control,
+        );
+        let system = grokhub_agent::system_prompt(&rules, &workspace);
+        let cfg = LiveCfg {
+            workspace,
+            model,
+            effort,
+            system,
+            bearer,
+            auth_kind,
+        };
+        live_map()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .insert(session_id.to_string(), cfg);
+        Ok(())
+    }
+
+    fn native_cred(&mut self) -> Result<(String, AuthKind), String> {
+        let now = grokhub_core::now_ms();
+        if let Some(tokens) = self.imagine_native.tokens.clone() {
+            if grokhub_core::imagine_oauth_preferred(&tokens, now) {
+                if grokhub_core::imagine_access_usable(&tokens, now) {
+                    return Ok((tokens.access_token, AuthKind::OAuth));
+                }
+                if let Ok((access, updated)) = crate::imagine_auth::access_for_job(&tokens) {
+                    if let Some(next) = updated {
+                        self.imagine_native.tokens = Some(next);
+                    }
+                    return Ok((access, AuthKind::OAuth));
+                }
+            }
+        }
+        let key = self.console_key().trim();
+        if !key.is_empty() {
+            return Ok((key.to_string(), AuthKind::ApiKey));
+        }
+        Err(grokhub_core::XAI_NEED_SIGNIN.into())
+    }
+
+    pub(super) fn paint_native_badge(&self, ui: &mut egui::Ui) {
+        if !self.cfg.native_engine {
+            return;
+        }
+        let show = self.threads.get(self.thread_idx).is_some_and(|thread| thread.native);
+        if !show {
+            return;
+        }
+        ui.label(
+            egui::RichText::new("Native")
+                .size(crate::theme::FONT_TIP)
+                .color(crate::theme::muted()),
+        );
+    }
+}
+
+enum NativeJob {
+    Prompt { text: String, image: Option<String> },
+    Shutdown,
+}
+
+fn serve_native(session_id: String, ext_rx: std::sync::mpsc::Receiver<ExternalCmd>, evt_tx: std::sync::mpsc::Sender<AcpEvent>) {
+    let cancel = grokhub_agent::CancelToken::new();
+    let steer = grokhub_agent::SteerQueue::new();
+    let (job_tx, job_rx) = std::sync::mpsc::channel();
+    let cancel_ctl = cancel.clone();
+    let steer_ctl = steer.clone();
+    std::thread::spawn(move || {
+        while let Ok(cmd) = ext_rx.recv() {
+            match cmd {
+                ExternalCmd::Cancel => cancel_ctl.cancel(),
+                ExternalCmd::Steer(text) => steer_ctl.push(text),
+                ExternalCmd::Shutdown => {
+                    cancel_ctl.cancel();
+                    let _ = job_tx.send(NativeJob::Shutdown);
+                    return;
+                }
+                ExternalCmd::Prompt { text, image } => {
+                    if job_tx.send(NativeJob::Prompt { text, image }).is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+    let dir = std::env::temp_dir();
+    let mut engine = NativeEngine::new(EngineParts {
+        client: Box::new(XaiClient::new(String::new(), AuthKind::ApiKey, Duration::from_secs(120))),
+        workspace: dir,
+        model: grokhub_core::CABIN_FAST_MODEL.to_string(),
+        effort: None,
+        system: String::new(),
+        conversation_id: session_id.clone(),
+        auth_kind: AuthKind::ApiKey,
+        max_turns: 0,
+        cancel,
+        steer,
+        halt: Box::new(StampHalt { started_ms: 0, read: || None }),
+    });
+    while let Ok(job) = job_rx.recv() {
+        let NativeJob::Prompt { text, image } = job else {
+            break;
+        };
+        let Some(cfg) = live_map()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .get(&session_id)
+            .map(|cfg| LiveCfg {
+                workspace: cfg.workspace.clone(),
+                model: cfg.model.clone(),
+                effort: cfg.effort.clone(),
+                system: cfg.system.clone(),
+                bearer: cfg.bearer.clone(),
+                auth_kind: cfg.auth_kind,
+            })
+        else {
+            let _ = evt_tx.send(AcpEvent::Err(grokhub_core::XAI_NEED_SIGNIN.into()));
+            let _ = evt_tx.send(AcpEvent::Done { stop_reason: "error".into() });
+            continue;
+        };
+        let client = XaiClient::new(cfg.bearer, cfg.auth_kind, Duration::from_secs(120));
+        engine.set_route(Box::new(client), cfg.model, cfg.effort, cfg.system, cfg.auth_kind);
+        let started = grokhub_core::now_ms();
+        engine.set_halt(Box::new(StampHalt {
+            started_ms: started,
+            read: || crate::desktop_mcp::read_halt_stamp(),
+        }));
+        let tx = evt_tx.clone();
+        let _ = engine.prompt(&text, image.as_deref(), &mut |ev| {
+            let _ = tx.send(ev);
+        });
+    }
+    live_map().lock().unwrap_or_else(|err| err.into_inner()).remove(&session_id);
+}

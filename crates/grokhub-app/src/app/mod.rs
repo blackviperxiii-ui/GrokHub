@@ -155,6 +155,7 @@ use std::time::{Duration, Instant};
 
 mod persist;
 mod acp;
+mod native_engine;
 mod chat_kick;
 mod palette;
 mod settings;
@@ -254,6 +255,7 @@ enum SettingsSec {
     Update,
     About,
     Defaults,
+    Labs,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5014,7 +5016,10 @@ impl eframe::App for Cabin {
             self.ui_settings_menu(&ctx);
 
             match self.page_nav() {
-                Nav::Chat => self.ui_chat(ui),
+                Nav::Chat => {
+                    self.paint_native_badge(ui);
+                    self.ui_chat(ui);
+                }
                 Nav::Devices => self.ui_devices(ui),
                 Nav::Memory => self.ui_memory(ui),
                 Nav::Workboard => self.ui_board(ui),
