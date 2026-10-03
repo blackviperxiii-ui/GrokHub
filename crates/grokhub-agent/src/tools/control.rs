@@ -46,7 +46,7 @@ pub fn output_schema() -> Value {
     json!({
         "type": "function",
         "name": "get_command_or_subagent_output",
-        "description": "Read new output from a background task. timeout_ms waits up to 120000 milliseconds. Omit it or pass 0 for a snapshot of what is new since the last read.",
+        "description": "Read new output from a background command or subagent. Pass the task id. timeout_ms waits up to 120000 milliseconds. Omit it or pass 0 for a snapshot of what is new since the last read.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -63,7 +63,7 @@ pub fn kill_schema() -> Value {
     json!({
         "type": "function",
         "name": "kill_command_or_subagent",
-        "description": "Kill a background command or stop a monitor. The whole process tree dies.",
+        "description": "Kill a background command, stop a monitor, or cancel a subagent. The whole process tree dies.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -479,6 +479,7 @@ mod tests {
             desktop: None,
             stop: &|| false,
             tasks: None,
+            owner: None,
         };
         let made = dispatch(
             &ctx,

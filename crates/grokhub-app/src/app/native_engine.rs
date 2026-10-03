@@ -198,6 +198,11 @@ impl Cabin {
             self.cfg.desktop_control,
         );
         let system = grokhub_agent::system_prompt(&rules, &workspace);
+        // A side question stays read-only even in plan mode, so it never gets plan approval.
+        grokhub_agent::set_plan_session(
+            session_id,
+            matches!(self.session_mode, grokhub_acp::SessionMode::Plan) && !self.side_ask_kick,
+        );
         let cfg = LiveCfg {
             workspace,
             model,
@@ -371,7 +376,11 @@ fn serve_native(session_id: String, ext_rx: std::sync::mpsc::Receiver<ExternalCm
     });
     let dir = std::env::temp_dir();
     let mut engine = NativeEngine::new(EngineParts {
-        client: Box::new(XaiClient::new(String::new(), AuthKind::ApiKey, Duration::from_secs(120))),
+        client: std::sync::Arc::new(XaiClient::new(
+            String::new(),
+            AuthKind::ApiKey,
+            Duration::from_secs(120),
+        )),
         workspace: dir,
         model: grokhub_core::CABIN_FAST_MODEL.to_string(),
         effort: None,
@@ -384,7 +393,7 @@ fn serve_native(session_id: String, ext_rx: std::sync::mpsc::Receiver<ExternalCm
         halt: Box::new(StampHalt { started_ms: 0, read: || None }),
         gate: Gate::phase_readonly(),
         desktop: Some(Box::new(crate::desktop_mcp::NativeDesktop::new())),
-        permits: Box::new(permit_inbox),
+        permits: std::sync::Arc::new(permit_inbox),
     });
     grokhub_agent::watch_cancel(&session_id, cancel.clone());
     let _ = grokhub_agent::hub_for(&session_id);
@@ -409,7 +418,13 @@ fn serve_native(session_id: String, ext_rx: std::sync::mpsc::Receiver<ExternalCm
         let client = XaiClient::new(cfg.bearer, cfg.auth_kind, Duration::from_secs(120));
         engine.set_workspace(cfg.workspace);
         engine.set_gate(cfg.gate);
-        engine.set_route(Box::new(client), cfg.model, cfg.effort, cfg.system, cfg.auth_kind);
+        engine.set_route(
+            std::sync::Arc::new(client),
+            cfg.model,
+            cfg.effort,
+            cfg.system,
+            cfg.auth_kind,
+        );
         let started = grokhub_core::now_ms();
         engine.set_halt(Box::new(StampHalt {
             started_ms: started,

@@ -15,8 +15,10 @@ mod retry;
 mod run;
 mod scan;
 mod session;
+mod session_tools;
 mod skills;
 mod sse;
+mod subagent;
 pub mod tasks;
 pub mod tokens;
 mod tools;
@@ -33,8 +35,9 @@ pub use hooks::{
     discover_hooks, folder_trusted, on_session_end, set_folder_trust, on_subagent_start, on_subagent_stop, HookInfo, HookOrigin,
 };
 pub use mcp::{
-    attach_elicit, configured, detach_elicit, doctor, import_documents, import_paths, restart,
-    set_workspace, shutdown_all, DoctorRow, ElicitInbox, ElicitNote, ElicitView,
+    alias_elicit, attach_elicit, configured, detach_elicit, doctor, import_documents, import_paths,
+    restart, set_workspace, shutdown_all, unalias_elicit, DoctorRow, ElicitInbox, ElicitNote,
+    ElicitView,
 };
 pub use models::{
     context_length_for, parse_listed_models, parse_xai_models, pick_model, ListedModel,
@@ -55,9 +58,13 @@ pub use session::{
     record_turn, rename_session, resume_input, session_file, transcript_pairs, usage_label,
     HistoryRow, RunGuard, SessionInfo,
 };
+pub use session_tools::{plan_on, set_plan_session, todos_for, TodoItem};
 pub use skills::{discover as discover_skills, Skill, SkillSource};
 pub use sse::SseParser;
-pub use tasks::{forget_session, halt_all_sessions, halt_session, halt_tree, hub_for, link_child, watch_cancel};
+pub use subagent::{drain_side_events, requeue_side_events, SideEvent};
+pub use tasks::{
+    forget_session, halt_all_sessions, halt_session, halt_tree, hub_for, link_child, watch_cancel,
+};
 pub use tools::control::{take_automation_changes, AutomationChange};
 pub use tools::{
     execute, is_readonly, schemas_for, tool_schemas, DesktopOps, ToolOutput, READ_ONLY_PHASE,

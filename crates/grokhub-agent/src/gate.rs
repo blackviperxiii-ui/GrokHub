@@ -22,6 +22,10 @@ const READONLY: &[&str] = &[
     "scheduler_list",
     "search_tool",
     "skill",
+    "todo_write",
+    "ask_user_question",
+    "enter_plan_mode",
+    "exit_plan_mode",
 ];
 const EDIT: &[&str] = &["write", "search_replace"];
 const SHELL: &[&str] = &["run_terminal_command"];
@@ -30,6 +34,8 @@ const CONTROL: &[&str] = &[
     "monitor",
     "scheduler_create",
     "scheduler_delete",
+    "spawn_subagent",
+    "send_subagent_message",
 ];
 const DESKTOP: &[&str] = &[
     "screenshot",
@@ -247,6 +253,11 @@ pub fn decide_with(
         return decision;
     }
     if name == "monitor" && crate::tasks::monitor_watch_only(arguments) {
+        return Decision::Run;
+    }
+    // Explore is read-only work. It runs in plan mode and while unattended.
+    // A general spawn stays on the normal gate, so it is never looser than the parent.
+    if crate::subagent::spawn_is_explore(name, arguments) {
         return Decision::Run;
     }
     let base = decide(gate, name, latched_always, desk);

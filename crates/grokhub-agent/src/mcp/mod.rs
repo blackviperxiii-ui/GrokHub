@@ -12,8 +12,10 @@ pub use config::{
     config_file, import_documents, import_paths, load_servers, read_mcp_text, target_label,
     ImportReport, ServerDef,
 };
-pub(crate) use elicit::wait_elicit;
-pub use elicit::{attach_elicit, detach_elicit, ElicitInbox, ElicitNote, ElicitView};
+pub use elicit::{
+    alias_elicit, attach_elicit, detach_elicit, unalias_elicit, ElicitInbox, ElicitNote, ElicitView,
+};
+pub(crate) use elicit::{wait_elicit, ElicitAnswer};
 
 pub(crate) use elicit::with_elicit;
 

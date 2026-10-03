@@ -1,6 +1,7 @@
 //! Adapt loop events into the cabin's existing ACP events.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use grokhub_acp::{AcpEvent, ElicitAsk, GrokUsage, PermissionAsk, ToolCard};
 
@@ -17,7 +18,7 @@ pub trait Engine {
 }
 
 pub struct NativeEngine {
-    client: Box<dyn ModelClient + Send>,
+    client: Arc<dyn ModelClient + Send + Sync>,
     workspace: PathBuf,
     model: String,
     effort: Option<String>,
@@ -30,7 +31,7 @@ pub struct NativeEngine {
     halt: Box<dyn HaltCheck + Send>,
     gate: Gate,
     desktop: Option<Box<dyn DesktopOps>>,
-    permits: Box<dyn PermitWait + Send>,
+    permits: Arc<dyn PermitWait + Send + Sync>,
     history: Vec<InputItem>,
     usage: Usage,
     /// Context window for the meter and the 85% auto-compact gate.
@@ -40,7 +41,7 @@ pub struct NativeEngine {
 }
 
 pub struct EngineParts {
-    pub client: Box<dyn ModelClient + Send>,
+    pub client: Arc<dyn ModelClient + Send + Sync>,
     pub workspace: PathBuf,
     pub model: String,
     pub effort: Option<String>,
@@ -53,7 +54,7 @@ pub struct EngineParts {
     pub halt: Box<dyn HaltCheck + Send>,
     pub gate: Gate,
     pub desktop: Option<Box<dyn DesktopOps>>,
-    pub permits: Box<dyn PermitWait + Send>,
+    pub permits: Arc<dyn PermitWait + Send + Sync>,
 }
 
 impl NativeEngine {
@@ -100,7 +101,7 @@ impl NativeEngine {
 
     pub fn set_route(
         &mut self,
-        client: Box<dyn ModelClient + Send>,
+        client: Arc<dyn ModelClient + Send + Sync>,
         model: String,
         effort: Option<String>,
         system: String,
@@ -175,6 +176,11 @@ impl Engine for NativeEngine {
             perms: Some(&policy),
             context_length: self.context_length,
             tasks: Some(hub),
+            depth: 0,
+            agent_id: None,
+            shared_client: Some(Arc::clone(&self.client)),
+            shared_permits: Some(Arc::clone(&self.permits)),
+            shared_desktop: None,
         };
         let session = self.conversation_id.clone();
         let cwd = self.workspace.display().to_string();
@@ -337,6 +343,8 @@ fn to_acp(ev: LoopEvent, kind: AuthKind, session: &str, used: u64, limit: u64) -
         }),
         LoopEvent::Usage(usage) => grok_usage_event(&usage, kind, used, limit),
         LoopEvent::Meter { .. } | LoopEvent::Compact { .. } => return None,
+        LoopEvent::Task { id, title, done } => AcpEvent::Task { id, title, done },
+        LoopEvent::Plan(text) => AcpEvent::Plan(text),
         LoopEvent::Permission {
             id,
             name,
@@ -451,7 +459,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let _guard = crate::perm::ConfigGuard::set(&dir);
         let mut engine = NativeEngine::new(EngineParts {
-            client: Box::new(Speak),
+            client: Arc::new(Speak),
             workspace: dir.clone(),
             model: "grok-4.7".into(),
             effort: None,
@@ -464,7 +472,7 @@ mod tests {
             halt: Box::new(NoHalt),
             gate: crate::Gate::phase_readonly(),
             desktop: None,
-            permits: Box::new(crate::gate::ClosedPermits),
+            permits: Arc::new(crate::gate::ClosedPermits),
         });
         let events = Mutex::new(Vec::new());
         engine
@@ -554,7 +562,7 @@ mod tests {
     fn engine(
         dir: &std::path::Path,
         id: &str,
-        client: Box<dyn ModelClient + Send>,
+        client: Arc<dyn ModelClient + Send + Sync>,
     ) -> NativeEngine {
         NativeEngine::new(EngineParts {
             client,
@@ -570,7 +578,7 @@ mod tests {
             halt: Box::new(NoHalt),
             gate: crate::Gate::phase_readonly(),
             desktop: None,
-            permits: Box::new(crate::gate::ClosedPermits),
+            permits: Arc::new(crate::gate::ClosedPermits),
         })
     }
 
@@ -583,7 +591,7 @@ mod tests {
         let mut engine = engine(
             &dir,
             "native-manual",
-            Box::new(Summarize {
+            Arc::new(Summarize {
                 calls: AtomicUsize::new(0),
                 fail: false,
             }),
@@ -644,7 +652,7 @@ mod tests {
         let mut engine = engine(
             &dir,
             "native-fail",
-            Box::new(Summarize {
+            Arc::new(Summarize {
                 calls: AtomicUsize::new(0),
                 fail: true,
             }),
@@ -692,7 +700,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let _guard = crate::perm::ConfigGuard::set(&dir);
-        let mut engine = engine(&dir, "native-empty", Box::new(RefuseCall));
+        let mut engine = engine(&dir, "native-empty", Arc::new(RefuseCall));
         let events = Mutex::new(Vec::new());
         engine
             .prompt("/compact", None, &mut |ev| events.lock().unwrap().push(ev))

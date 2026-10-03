@@ -627,6 +627,11 @@ mod tests {
             perms: None,
             context_length: limit,
             tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
         };
         run_loop(&input, history, "go", None, &mut |_| {})
     }
