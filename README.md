@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.68** — Wayland desktop control on KDE Plasma 6 goes through the RemoteDesktop portal and libei, with exact absolute clicks, one-time consent remembered in the keychain, and silent KWin screenshots. Needs a live check on KDE.
+**v2.10.69** — Wayland desktop control gets fallbacks (portal Notify, absolute uinput, spectacle, portal screenshot), one shared portal session for the app and the CLI, and a Settings → Desktop control panel with a Test button. Needs a live check on KDE.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.68.tar.gz`, AUR | **v2.10.68** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.68.exe`, `grokhub-windows-v2.10.68.zip` | **v2.10.68** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.69.tar.gz`, AUR | **v2.10.69** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.69.exe`, `grokhub-windows-v2.10.69.zip` | **v2.10.69** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
