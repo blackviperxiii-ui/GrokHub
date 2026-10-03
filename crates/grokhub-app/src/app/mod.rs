@@ -4752,6 +4752,7 @@ impl eframe::App for Cabin {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // No background `grok -p` outlives the cabin.
         self.kill_bg_runs();
+        grokhub_agent::mcp::shutdown_all();
         // The close frame spawned a persist. Wait for it: the process exits right after this,
         // and two writers of app.json share one temp file.
         let _io = self.persist_io.lock();
