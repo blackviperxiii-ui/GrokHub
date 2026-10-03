@@ -35,6 +35,8 @@ pub struct NativeEngine {
     usage: Usage,
     /// Context window for the meter and the 85% auto-compact gate.
     context_length: u64,
+    /// The main engine clears a previous Halt. A `/bg` engine does not.
+    reopen_tasks: bool,
 }
 
 pub struct EngineParts {
@@ -75,7 +77,13 @@ impl NativeEngine {
             history: Vec::new(),
             usage: Usage::default(),
             context_length,
+            reopen_tasks: true,
         }
+    }
+
+    /// `/bg` leaves this false so a Halt that landed first is not cleared.
+    pub fn set_reopen_tasks(&mut self, reopen: bool) {
+        self.reopen_tasks = reopen;
     }
 
     pub fn set_workspace(&mut self, workspace: PathBuf) {
@@ -122,8 +130,23 @@ impl Engine for NativeEngine {
         self.cancel.cancel();
     }
 
-    fn prompt(&mut self, text: &str, image: Option<&str>, emit: &mut dyn FnMut(AcpEvent)) -> Result<(), String> {
+    fn prompt(
+        &mut self,
+        text: &str,
+        image: Option<&str>,
+        emit: &mut dyn FnMut(AcpEvent),
+    ) -> Result<(), String> {
+        let hub = crate::tasks::hub_for(&self.conversation_id);
+        if !self.reopen_tasks && (hub.is_halted() || self.cancel.is_cancelled()) {
+            emit(AcpEvent::Done {
+                stop_reason: "halted".into(),
+            });
+            return Ok(());
+        }
         self.cancel.reset();
+        if self.reopen_tasks {
+            hub.reopen();
+        }
         if image.is_none() && crate::compact::is_manual_compact_command(text) {
             return self.compact_now(emit);
         }
@@ -145,6 +168,7 @@ impl Engine for NativeEngine {
             permits: self.permits.as_ref(),
             perms: Some(&policy),
             context_length: self.context_length,
+            tasks: Some(hub),
         };
         let session = self.conversation_id.clone();
         let cwd = self.workspace.display().to_string();
