@@ -1,0 +1,37 @@
+---
+description: "GrokHub repo gates for every chat: branches, secrets, CI commands, versions, merges, and full ship."
+alwaysApply: true
+---
+
+# GrokHub repo gates
+
+Native Rust cabin (`crates/`). These rules apply to every Cursor, Claude, and Grok chat working here. `CLAUDE.md` holds the same rules.
+
+## Branches and merges
+- Branch off `main`. Never push to `main`, never force-push, never delete branches unless Jeremy asks.
+- Open a normal PR against `main`. **Don't merge PRs: Jeremy merges.** Ask before any merge.
+- No tag and no GitHub Release without Jeremy's explicit **"full ship"**.
+- No changes to `.github/`, `clippy.toml`, or release scripts (`scripts/make-*release*`, `packaging/windows/`, `packaging/aur/`) without his OK. Version-bump lines (below) are the exception.
+
+## Secrets
+- Never commit `.env*` (only `.env.example`), tokens, keys, certs, `auth.json`, `secrets.json`, or credential files. Tests use obvious fakes (`sk-abcdefghijklmnopqrstuv`).
+- Never read, copy, link, or reuse `~/.grok/auth.json` or `~/.grok/config.toml`, or the Grok CLI's credentials. Imagine uses its own sign-in in the OS keychain.
+- If you find a committed secret, don't rewrite history. Report the file, commit, type, and first 4 characters, never the value.
+
+## Tests (CI is the gate)
+CI runs these on Linux and Windows with the toolchain from `rust-toolchain.toml` (stable):
+
+```sh
+cargo test --workspace --locked -- --test-threads=1
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+- A full local `cargo test` can touch the real `~/.grok` and `~/.config/GrokHub`. Set `GROKHUB_CONFIG` to a temp dir, run only the crate or test you changed, or rely on CI.
+- Never skip, `#[ignore]`, delete, or loosen a test to get green. Fix the code. Don't add `#[allow(dead_code)]`; delete dead code.
+- Don't mass `cargo fmt`. Format only the lines you touch.
+- `chat_composer_pins_stop_on_the_right` (`crates/grokhub-app/src/app/tests.rs`) reads a 12,000-byte window after `ComposerStackSlot::Pill =>` in `chat_ui.rs`. The last string it checks for sits about 310 bytes from the window's edge, and less with Windows CRLF line endings. Don't grow the Pill arm before the Stop handler. Move code into helpers instead of widening the window.
+
+## Commits, PRs, versions
+- Titles: `Cabin X.Y.Z: <what changed>`, or a plain sentence ending in `(X.Y.Z)`. Add a short bullet body and the PR number when merged.
+- Every landed change bumps the patch in `VERSION` once, in the same files as #453: `VERSION`, `Cargo.toml` `[workspace.package] version`, the `grokhub-*` entries in `Cargo.lock`, `README.md` (headline and both Latest rows), `packaging/PKGBUILD`, `packaging/aur/PKGBUILD`, `packaging/windows/grokhub.iss`, and the `cabin_reports_version` assert in `crates/grokhub-app/src/cli.rs`. Add a `CHANGELOG.md` section with the Linux and Windows artifact lines.
+- Don't bump the Imagine `Quality (v2.0)`, specs marked `(do not bump)`, the diagnostics fixture, or `packaging/grokhub.desktop` `Version=`.
