@@ -1,5 +1,6 @@
 //! Native engine. Sync HTTP, no CLI, no credential files.
 
+mod auto_review;
 mod client;
 mod events;
 mod gate;

@@ -72,8 +72,13 @@ pub struct ResponsesRequest {
     pub effort: Option<String>,
     pub input: Vec<InputItem>,
     pub conversation_id: String,
-    /// Function tools for this turn. Hosted web_search and x_search are added in [`responses_body`].
+    /// Function tools for this turn. Hosted web_search and x_search are added in [`responses_body`]
+    /// when [`ResponsesRequest::hosted_search`] is set.
     pub tools: Vec<Value>,
+    /// Hosted `web_search` and `x_search`. The auto-review judge turns this off.
+    pub hosted_search: bool,
+    /// Overrides the agent timeout for this call. `None` keeps the client's idle timeout.
+    pub call_timeout: Option<Duration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,8 +255,10 @@ pub fn responses_body(req: &ResponsesRequest) -> Value {
         }
     }
     let mut tools = req.tools.clone();
-    tools.push(json!({"type": "web_search"}));
-    tools.push(json!({"type": "x_search"}));
+    if req.hosted_search {
+        tools.push(json!({"type": "web_search"}));
+        tools.push(json!({"type": "x_search"}));
+    }
     let model = if req.model.trim().is_empty() {
         DEFAULT_MODEL
     } else {
@@ -301,7 +308,7 @@ impl XaiClient {
             return Err(ClientError::Cancelled);
         }
         let body = responses_body(req);
-        let response = self
+        let mut call = self
             .agent
             .post(RESPONSES_URL)
             .set("Authorization", &{
@@ -310,8 +317,11 @@ impl XaiClient {
             })
             .set("User-Agent", USER_AGENT)
             .set("x-grok-conv-id", &req.conversation_id)
-            .set("Accept", "text/event-stream")
-            .send_json(body);
+            .set("Accept", "text/event-stream");
+        if let Some(limit) = req.call_timeout {
+            call = call.timeout(limit);
+        }
+        let response = call.send_json(body);
         let response = match response {
             Ok(resp) => resp,
             Err(ureq::Error::Status(status, resp)) => {
@@ -518,6 +528,8 @@ mod tests {
             }],
             conversation_id: "c".into(),
             tools: crate::tool_schemas(),
+            hosted_search: true,
+            call_timeout: None,
         };
         let body = responses_body(&plain);
         assert_eq!(body["model"], DEFAULT_MODEL);
@@ -539,6 +551,8 @@ mod tests {
             }],
             conversation_id: "c".into(),
             tools: crate::tool_schemas(),
+            hosted_search: true,
+            call_timeout: None,
         };
         let body = responses_body(&with_image);
         assert_eq!(body["store"], false);

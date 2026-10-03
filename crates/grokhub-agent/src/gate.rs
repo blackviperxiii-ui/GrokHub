@@ -1,4 +1,6 @@
-//! Permission gate v0. Auto asks until a later phase. Plan and btw stay read-only.
+//! Permission gate v0. `decide` still treats Auto like Ask.
+//! Phase 5 auto-review runs in the loop, and only on calls this gate would ask about.
+//! Plan and btw stay read-only.
 
 use std::path::Path;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
@@ -194,7 +196,8 @@ pub fn decide(gate: &Gate, name: &str, latched_always: bool, desk: Option<DeskFl
     if gate.attended {
         return Decision::Ask;
     }
-    // Unattended: Auto means Ask until the Phase 5 judge exists, and Ask denies.
+    // Unattended Ask refuses. Unattended Auto refuses here too; the loop may
+    // replace that soft refusal with the Phase 5 judge. This function does not.
     Decision::Refuse(unattended_deny(name))
 }
 
