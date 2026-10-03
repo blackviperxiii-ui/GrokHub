@@ -6,6 +6,7 @@ mod compact;
 mod events;
 mod gate;
 mod image_budget;
+pub mod mcp;
 mod models;
 pub mod perm;
 mod prompt;
@@ -26,6 +27,10 @@ pub use client::{
 pub use compact::{estimate_input_tokens, manual_compact_targets_native, message_text};
 pub use events::{meter_for, Engine, EngineParts, NativeEngine, StampHalt};
 pub use gate::{ClosedPermits, Gate, PermAnswer, PermMode, PermitInbox, PermitNote, PermitWait};
+pub use mcp::{
+    attach_elicit, configured, detach_elicit, doctor, import_documents, import_paths, restart,
+    set_workspace, shutdown_all, DoctorRow, ElicitInbox, ElicitNote, ElicitView,
+};
 pub use models::{
     context_length_for, parse_listed_models, parse_xai_models, pick_model, ListedModel,
     GROK_47_CONTEXT_LENGTH, XAI_MODELS_URL,

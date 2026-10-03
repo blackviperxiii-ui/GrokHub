@@ -314,6 +314,8 @@ fn serve_native(session_id: String, ext_rx: std::sync::mpsc::Receiver<ExternalCm
     let steer = grokhub_agent::SteerQueue::new();
     let (job_tx, job_rx) = std::sync::mpsc::channel();
     let (permit_tx, permit_inbox) = grokhub_agent::PermitInbox::pair();
+    let (elicit_tx, elicit_inbox) = grokhub_agent::mcp::ElicitInbox::pair();
+    grokhub_agent::mcp::attach_elicit(&session_id, elicit_inbox);
     let cancel_ctl = cancel.clone();
     let steer_ctl = steer.clone();
     std::thread::spawn(move || {
@@ -339,6 +341,17 @@ fn serve_native(session_id: String, ext_rx: std::sync::mpsc::Receiver<ExternalCm
                         NativePerm::Cancel => PermAnswer::Cancel,
                     };
                     let _ = permit_tx.send(PermitNote { id, answer });
+                }
+                ExternalCmd::Elicit {
+                    id,
+                    action,
+                    content,
+                } => {
+                    let _ = elicit_tx.send(grokhub_agent::mcp::ElicitNote {
+                        id,
+                        action,
+                        content,
+                    });
                 }
             }
         }
@@ -394,5 +407,9 @@ fn serve_native(session_id: String, ext_rx: std::sync::mpsc::Receiver<ExternalCm
             let _ = tx.send(ev);
         });
     }
-    live_map().lock().unwrap_or_else(|err| err.into_inner()).remove(&session_id);
+    live_map()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .remove(&session_id);
+    grokhub_agent::mcp::detach_elicit(&session_id);
 }
