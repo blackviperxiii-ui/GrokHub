@@ -113,6 +113,7 @@ impl Engine for NativeEngine {
 
     fn prompt(&mut self, text: &str, image: Option<&str>, emit: &mut dyn FnMut(AcpEvent)) -> Result<(), String> {
         self.cancel.reset();
+        let policy = crate::perm::Policy::load(&self.workspace);
         let input = LoopIn {
             client: self.client.as_ref(),
             workspace: &self.workspace,
@@ -128,6 +129,7 @@ impl Engine for NativeEngine {
             gate: self.gate,
             desktop: self.desktop.as_deref(),
             permits: self.permits.as_ref(),
+            perms: Some(&policy),
         };
         let session = self.conversation_id.clone();
         let out = run_loop(&input, &mut self.history, text, image, &mut |ev| {
