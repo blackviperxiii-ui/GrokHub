@@ -104,6 +104,12 @@ impl NativeEngine {
     pub fn set_halt(&mut self, halt: Box<dyn HaltCheck + Send>) {
         self.halt = halt;
     }
+
+    /// Replace the in-memory transcript with a session file. The next prompt continues it.
+    pub fn resume(&mut self, items: Vec<InputItem>, usage: Usage) {
+        self.history = items;
+        self.usage = usage;
+    }
 }
 
 impl Engine for NativeEngine {
@@ -132,12 +138,20 @@ impl Engine for NativeEngine {
             perms: Some(&policy),
         };
         let session = self.conversation_id.clone();
+        let cwd = self.workspace.display().to_string();
+        let model = self.model.clone();
+        let meter = self.auth_kind.meter();
+        let before_len = self.history.len();
+        let before_usage = self.usage.clone();
         let out = run_loop(&input, &mut self.history, text, image, &mut |ev| {
             if let Some(acp) = to_acp(ev, self.auth_kind, &session) {
                 emit(acp);
             }
         });
         self.usage = out.usage.clone();
+        let fresh = self.history.get(before_len..).unwrap_or(&[]).to_vec();
+        let delta = self.usage.saturating_delta(&before_usage);
+        let _ = crate::session::record_turn(&session, &cwd, &model, &fresh, &delta, meter, text);
         let stop = match out.stop {
             StopReason::EndTurn => "end_turn".to_string(),
             StopReason::Cancelled => "cancelled".to_string(),
@@ -261,6 +275,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gh-eng-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&dir);
         let mut engine = NativeEngine::new(EngineParts {
             client: Box::new(Speak),
             workspace: dir.clone(),
@@ -288,8 +303,28 @@ mod tests {
             ev,
             AcpEvent::Usage(u) if u.meter == "SuperGrok pool" && u.input_tokens == 3 && u.cost_in_usd_ticks == 9
         )));
-        assert!(events.iter().any(|ev| matches!(ev, AcpEvent::Done { stop_reason } if stop_reason == "end_turn")));
-        assert!(!events.iter().any(|ev| matches!(ev, AcpEvent::Permission(_))));
+        assert!(events
+            .iter()
+            .any(|ev| matches!(ev, AcpEvent::Done { stop_reason } if stop_reason == "end_turn")));
+        assert!(!events
+            .iter()
+            .any(|ev| matches!(ev, AcpEvent::Permission(_))));
+        let loaded = crate::session::load_session("c").expect("turn is on disk");
+        let resumed = loaded.input();
+        assert!(
+            resumed.iter().any(|item| matches!(
+                item,
+                InputItem::Message { role, content }
+                    if role == "user"
+                        && content.iter().any(|part| {
+                            matches!(part, crate::ContentPart::InputText(text) if text == "hi")
+                        })
+            )),
+            "{resumed:?}"
+        );
+        assert_eq!(loaded.usage.cost_in_usd_ticks, 9);
+        assert_eq!(crate::session::resume_input("c").unwrap(), resumed);
+        drop(_guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
