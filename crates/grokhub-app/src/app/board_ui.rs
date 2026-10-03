@@ -839,6 +839,7 @@ impl Cabin {
         if !fresh {
             self.note_automation_done(automation_id, &card.title, &card.detail);
         }
+        let mut followed = None;
         if let Some(feed) = self
             .updates
             .iter_mut()
@@ -851,10 +852,18 @@ impl Cabin {
             feed.action = Some(UpdateAction::OpenWorkboard);
             feed.board_id = Some(card_id.clone());
             feed.body = Some("In Follow up on your workboard. Open it to read and reply.".into());
+            grokhub_core::refresh_event_why(feed);
+            followed = Some(feed.clone());
             self.persist_updates();
         }
         self.flush_board();
         self.persist();
+        if let Some(card) = followed {
+            self.log_card_signal(&card, grokhub_core::CardEvent::FollowUp, None);
+        } else {
+            let stub = grokhub_core::automation_done_card(automation_id, "", "", now_ms());
+            self.log_card_signal(&stub, grokhub_core::CardEvent::FollowUp, None);
+        }
         true
     }
 }

@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## 2.10.66 — 2026-10-02
+
+Home cards explain themselves and take feedback. A card that stands for several runs shows **×N runs · latest h:mm**. The count restarts once you open the card, so it means runs since you last looked. Under the body, one muted line says why the card is there:
+- "Your automation “name” finished and left a report in Follow up." (or just "…finished." when nothing was filed)
+- "“name” failed and needs a look."
+- "You saved this schedule."
+
+Home paints at most three event cards, and the open deck stays above the composer instead of covering it. Cards are taller (96 px) to fit the extra lines.
+
+Every event card has a **⋯** menu, which right-click also opens:
+- **More like this.**
+- **Less like this** keeps that card's group off Home for 14 days.
+- **Hide this automation's runs from Home.** Hidden runs still update in place and in Follow up. Automations shows **Hidden from Home · Undo**.
+
+A hidden or muted automation's failure still shows on Home at most once a day.
+
+Card feedback goes to a local signal log, `card_signals.jsonl` in the GrokHub config folder, for the learning step that comes next. It records open, dismiss (and whether the card was opened first), more, less, hide, unhide and Follow up events. Each line holds only the time, card id, kind, group and source, never card text. At 2,000 lines the log rotates to `card_signals.jsonl.1`. Nothing leaves the machine.
+
+- Linux: `grokhub-linux-v2.10.66.tar.gz` and AUR `pkgver=2.10.66`.
+- Windows: `GrokHub-Setup-2.10.66.exe` and `grokhub-windows-v2.10.66.zip`.
+
 ## 2.10.65 — 2026-10-02
 
 Home stops repeating cards. Each automation, schedule, offer or suggestion now keeps one card, with a stable id built from its source (or a hash of the normalized title when it has none) instead of the run time. A repeat run updates that card in place: newest title, body and time, back to unread, and a count of the runs it stands for. A failed run replaces the finished card for the same automation. Filing a run in Follow up points the automation's one card at the workboard instead of rewriting every older copy, which is how four identical "In Follow up on your workboard" cards showed up. Dismissing a card clears its whole group and keeps a hidden marker for 24 hours, so a repeat of that run doesn't come back that day. A failure still shows. Saved feeds are deduped once on load: duplicate runs fold into the newest card with their run count, and the file is only rewritten when something changed.
