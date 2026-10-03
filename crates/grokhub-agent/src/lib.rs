@@ -3,6 +3,7 @@
 mod auto_review;
 mod client;
 mod compact;
+mod eval;
 mod events;
 mod gate;
 mod hooks;
@@ -34,6 +35,7 @@ pub use client::{
     Usage, XaiClient, DEFAULT_MODEL, RESPONSES_URL, USER_AGENT,
 };
 pub use compact::{estimate_input_tokens, manual_compact_targets_native, message_text};
+pub use eval::{parse_args, reject_live, render_report, run_suite, ItemResult, Opts, SUITE_ITEMS};
 pub use events::{meter_for, Engine, EngineParts, NativeEngine, StampHalt};
 pub use gate::{ClosedPermits, Gate, PermAnswer, PermMode, PermitInbox, PermitNote, PermitWait};
 pub use hooks::{
