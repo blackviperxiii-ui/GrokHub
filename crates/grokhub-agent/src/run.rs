@@ -36,7 +36,12 @@ pub enum LoopEvent {
         image: Option<String>,
     },
     Usage(Usage),
-    Permission { id: String, name: String, action: String },
+    Permission {
+        id: String,
+        name: String,
+        action: String,
+        reason: String,
+    },
 }
 
 #[derive(Clone)]
@@ -138,6 +143,8 @@ pub fn run_loop(
             input: history.clone(),
             conversation_id: input.conversation_id.to_string(),
             tools: tools::schemas_for(&input.gate),
+            hosted_search: true,
+            call_timeout: None,
         };
         let turn = match input.client.stream(&req, input.cancel, &mut |ev| match ev {
             StreamEvent::TextDelta(text) => on_event(LoopEvent::Text(text)),
@@ -200,7 +207,7 @@ pub fn run_loop(
             }
             let id = tool_id(call);
             let desk = tools::desk_flags(&call.name, &input.gate, input.desktop);
-            let decision = match input.perms {
+            let base = match input.perms {
                 Some(policy) => gate::decide_with(
                     &input.gate,
                     &call.name,
@@ -212,7 +219,43 @@ pub fn run_loop(
                 ),
                 None => gate::decide(&input.gate, &call.name, always, desk),
             };
-            let output = match decision {
+            let reviewed = crate::auto_review::review(&crate::auto_review::ReviewIn {
+                client: input.client,
+                cancel: input.cancel,
+                halt: &|| input.halt.halted(),
+                gate: &input.gate,
+                name: &call.name,
+                arguments: &call.arguments,
+                workspace: input.workspace,
+                policy: input.perms,
+                latched_always: always,
+                desk,
+                history,
+                conversation_id: input.conversation_id,
+                base,
+                timeout: crate::auto_review::JUDGE_TIMEOUT,
+            });
+            if let Some(extra) = &reviewed.judge_usage {
+                usage.add(extra);
+                on_event(LoopEvent::Usage(usage.clone()));
+            }
+            if reviewed.cancelled {
+                let output = ToolOutput::err(gate::user_cancelled(&call.name));
+                emit_tool(on_event, &id, call, "failed", &output.text, None);
+                push_output(history, call, output);
+                return LoopOut {
+                    stop: StopReason::Cancelled,
+                    usage,
+                };
+            }
+            if reviewed.halted {
+                return LoopOut {
+                    stop: StopReason::Halted,
+                    usage,
+                };
+            }
+            let ask_reason = reviewed.ask_reason;
+            let output = match reviewed.decision {
                 Decision::Refuse(text) => {
                     let output = ToolOutput::err(text);
                     emit_tool(on_event, &id, call, "in_progress", &call.arguments, None);
@@ -224,6 +267,7 @@ pub fn run_loop(
                         id: id.clone(),
                         name: call.name.clone(),
                         action: action_line(&call.name, &call.arguments),
+                        reason: ask_reason,
                     });
                     match input.permits.wait(&id, input.cancel, &|| input.halt.halted()) {
                         Waited::Answer(PermAnswer::Allow) => run_allowed(input, call, &id, on_event),
@@ -981,6 +1025,8 @@ mod tests {
             input: Vec::new(),
             conversation_id: "c".into(),
             tools: tools::schemas_for(&chat(gate::PermMode::Always, true, false)),
+            hosted_search: true,
+            call_timeout: None,
         });
         assert!(body["tools"].as_array().unwrap().iter().all(|tool| tool["name"] != "screenshot"));
 

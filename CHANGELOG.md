@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.10.73 — 2026-10-03
+
+Auto mode on the native engine (Settings → Labs, still off by default) now reviews instead of always asking. A call the permission engine would have asked about goes to auto-review first. Routine git, the read-only `gh` list and security-finding checks are decided locally on fast paths ported from Grok Build. Anything else gets a short low-effort `grok-4.7` judge call on a capped transcript tail, which answers allow, block or ask. When attended, a block or ask shows the usual permission card with the reason. Unattended, a block goes back to the model as "Auto mode blocked…". A judge error, a timeout (20 s) or an unreadable verdict fails closed: ask when attended, refuse when unattended. Deny rules, explicit ask rules, dangerous or unsplittable commands, desktop tools, Plan and btw never reach the judge. The judge's tokens and cost count in the session usage. Ask and Always are unchanged, and so is the Grok CLI path. The judge hasn't been run against the live API yet.
+
+- Linux: `grokhub-linux-v2.10.73.tar.gz` and AUR `pkgver=2.10.73`.
+- Windows: `GrokHub-Setup-2.10.73.exe` and `grokhub-windows-v2.10.73.zip`.
+
 ## 2.10.72 — 2026-10-03
 
 The native engine (Settings → Labs, still off by default) gets a real permission engine on top of the 2.10.71 gate. Rules are allow, ask or deny, and deny wins over ask, which wins over allow. `Bash(...)` rules match each command segment by prefix or glob, so `git status && rm -rf /` is never auto-allowed and `Bash(git *)` doesn't match `gitleaks`. Wrappers like `timeout`, `nice`, `env` and leading `VAR=value` are peeled first. Commands the splitter can't classify ask: `$(...)`, backticks, heredocs and the like. `Read`/`Edit`/`Grep` path rules take `**` globs and can't escape the workspace. `MCPTool(server__*)` and `WebFetch(domain:...)` rules are parsed for later phases.
