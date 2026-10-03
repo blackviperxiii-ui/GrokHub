@@ -156,6 +156,7 @@ use std::time::{Duration, Instant};
 mod persist;
 mod acp;
 mod native_engine;
+mod native_sessions;
 mod chat_kick;
 mod palette;
 mod settings;

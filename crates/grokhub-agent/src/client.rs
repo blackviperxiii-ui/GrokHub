@@ -44,6 +44,20 @@ impl Usage {
         self.reasoning_tokens = self.reasoning_tokens.saturating_add(other.reasoning_tokens);
         self.cost_in_usd_ticks = self.cost_in_usd_ticks.saturating_add(other.cost_in_usd_ticks);
     }
+
+    /// Tokens and cost added since `earlier`. Underflow stays at zero.
+    pub fn saturating_delta(&self, earlier: &Usage) -> Usage {
+        Usage {
+            input_tokens: self.input_tokens.saturating_sub(earlier.input_tokens),
+            output_tokens: self.output_tokens.saturating_sub(earlier.output_tokens),
+            reasoning_tokens: self
+                .reasoning_tokens
+                .saturating_sub(earlier.reasoning_tokens),
+            cost_in_usd_ticks: self
+                .cost_in_usd_ticks
+                .saturating_sub(earlier.cost_in_usd_ticks),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
