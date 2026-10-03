@@ -204,6 +204,14 @@ fn git_has_push(words: &[String]) -> bool {
     words.iter().skip(1).any(|word| word == "push")
 }
 
+pub(crate) fn git_words_are_read_only_query(words: &[String]) -> bool {
+    git_readonly(words)
+}
+
+pub(crate) fn git_words_have_unsafe_query_option(words: &[String]) -> bool {
+    words.first().map(String::as_str) == Some("git") && git_unsafe_query_option(words)
+}
+
 fn git_readonly(words: &[String]) -> bool {
     if words.first().map(String::as_str) != Some("git") {
         return false;

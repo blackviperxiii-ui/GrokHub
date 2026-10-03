@@ -20,6 +20,8 @@ use crate::gate::{self, Decision, Gate};
 pub use claude::{import_claude_json, load_project as load_claude_project};
 pub use rules::{parse_rule, Action, PatMode, Rule, RuleParseError, Tool};
 pub use split::{analyze, peeled_primary, Facts, Seg};
+
+pub(crate) use risk::{git_words_are_read_only_query, git_words_have_unsafe_query_option};
 pub use store::{
     add_grant_at, config_dir, load_all_grants, load_grants, load_rules, project_key,
     remember_grant, remove_grant, save_rules, ConfigGuard,
@@ -159,6 +161,21 @@ pub fn webfetch_matches(rule: &Rule, url: &str) -> bool {
             matchers::domain_matches(pattern, url) || matchers::glob_match(pattern, url, false)
         }
     }
+}
+
+/// An explicit ask rule matched. Auto-review must not override it.
+pub(crate) fn explicit_ask(policy: &Policy, name: &str, arguments: &str, workspace: &Path) -> bool {
+    let Some(kind) = tool_kind(name) else {
+        return false;
+    };
+    if kind == Tool::Bash {
+        let command = command_arg(arguments).unwrap_or_default();
+        let facts = split::analyze(&command);
+        let texts = bash_texts(&command, &facts);
+        return rule_hit(policy, Action::Ask, kind, &texts);
+    }
+    let paths = collect_paths(name, arguments);
+    rule_hit_paths(policy, Action::Ask, kind, workspace, &paths)
 }
 
 fn prompt(gate: &Gate, name: &str) -> Decision {

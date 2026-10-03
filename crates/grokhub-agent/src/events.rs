@@ -169,13 +169,18 @@ fn to_acp(ev: LoopEvent, kind: AuthKind, session: &str) -> Option<AcpEvent> {
             image_data_url: image,
         }),
         LoopEvent::Usage(usage) => grok_usage_event(&usage, kind),
-        LoopEvent::Permission { id, name, action } => AcpEvent::Permission(PermissionAsk {
+        LoopEvent::Permission {
+            id,
+            name,
+            action,
+            reason,
+        } => AcpEvent::Permission(PermissionAsk {
             rpc_id: serde_json::Value::String(id.clone()),
             session_id: session.to_string(),
             title: name.clone(),
             tool_call_id: id,
             action,
-            reason: String::new(),
+            reason,
             reject_option: Some("denied".into()),
         }),
     })
