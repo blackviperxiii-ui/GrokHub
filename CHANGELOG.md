@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.10.74 — 2026-10-03
+
+Native chats (Settings → Labs, still off by default) are now real sessions. Each is an append-only JSONL file under the GrokHub config folder's `sessions/`: a header line (id, title, created, folder, model), then one line per message, tool call, tool result and usage record, flushed as it happens. Reopening a chat rebuilds the conversation from the file. If the last line was cut off by a crash, it's dropped and the file repaired instead of failing. History lists native sessions next to Grok CLI sessions. CLI rows still come from the same discovery code and stay read-only. Native rows can be resumed, forked into an independent copy, renamed, exported to Markdown and deleted. Delete stops a running native turn for that session before removing the file. Titles come from the first message locally, with no model call. Each turn's tokens and cost are stored and shown, labeled "SuperGrok pool" or "API credits". The Grok CLI path is unchanged.
+
+- Linux: `grokhub-linux-v2.10.74.tar.gz` and AUR `pkgver=2.10.74`.
+- Windows: `GrokHub-Setup-2.10.74.exe` and `grokhub-windows-v2.10.74.zip`.
+
 ## 2.10.73 — 2026-10-03
 
 Auto mode on the native engine (Settings → Labs, still off by default) now reviews instead of always asking. A call the permission engine would have asked about goes to auto-review first. Routine git, the read-only `gh` list and security-finding checks are decided locally on fast paths ported from Grok Build. Anything else gets a short low-effort `grok-4.7` judge call on a capped transcript tail, which answers allow, block or ask. When attended, a block or ask shows the usual permission card with the reason. Unattended, a block goes back to the model as "Auto mode blocked…". A judge error, a timeout (20 s) or an unreadable verdict fails closed: ask when attended, refuse when unattended. Deny rules, explicit ask rules, dangerous or unsplittable commands, desktop tools, Plan and btw never reach the judge. The judge's tokens and cost count in the session usage. Ask and Always are unchanged, and so is the Grok CLI path. The judge hasn't been run against the live API yet.
