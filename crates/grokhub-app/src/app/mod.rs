@@ -2022,6 +2022,9 @@ impl Cabin {
         crate::desktop_mcp::note_halt();
         self.host_halt.store(true, Ordering::SeqCst);
         self.withdraw_perm_asks();
+        if self.cfg.native_engine {
+            grokhub_agent::halt_all_sessions();
+        }
         if let Some(h) = &self.acp {
             self.perm_always_confirm = None;
             self.confirm = None;
@@ -4811,6 +4814,7 @@ impl eframe::App for Cabin {
         self.poll_acp_spawn();
         self.poll_single();
         self.poll_bg_runs();
+        self.poll_native_automations();
         self.poll_pick();
         self.take_dropped_attach(ctx);
         self.poll_pick_list();

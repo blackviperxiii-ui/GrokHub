@@ -626,6 +626,7 @@ mod tests {
             permits: &gate::ClosedPermits,
             perms: None,
             context_length: limit,
+            tasks: None,
         };
         run_loop(&input, history, "go", None, &mut |_| {})
     }

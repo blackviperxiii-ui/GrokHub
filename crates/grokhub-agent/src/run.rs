@@ -5,6 +5,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use crate::gate::{self, Decision, Gate, PermAnswer, PermitWait, Waited};
+use crate::tasks::TaskHub;
 use crate::tools::{self, DesktopOps, ToolCtx, ToolOutput};
 use crate::{
     CancelToken, ClientError, ContentPart, FunctionCall, InputItem, ModelClient, ResponsesRequest,
@@ -113,6 +114,8 @@ pub struct LoopIn<'a> {
     pub perms: Option<&'a crate::perm::Policy>,
     /// Model context window. `0` disables auto-compact.
     pub context_length: u64,
+    /// Background commands and monitors for this session. `None` in tests that do not spawn.
+    pub tasks: Option<Arc<TaskHub>>,
 }
 
 pub struct LoopOut {
@@ -153,13 +156,14 @@ pub fn run_loop(
                 compacted: did_compact,
             };
         }
-        if input.halt.halted() {
+        if stop_for_halt(input) {
             return LoopOut {
                 stop: StopReason::Halted,
                 usage,
                 compacted: did_compact,
             };
         }
+        inject_notices(input, history);
         if !did_compact && crate::compact::needs_auto_compact(history, input.context_length) {
             on_event(LoopEvent::Compact {
                 started: true,
@@ -275,7 +279,7 @@ pub fn run_loop(
                     compacted: did_compact,
                 };
             }
-            if input.halt.halted() {
+            if stop_for_halt(input) {
                 return LoopOut {
                     stop: StopReason::Halted,
                     usage,
@@ -296,22 +300,19 @@ pub fn run_loop(
             }
             let id = tool_id(call);
             let desk = tools::desk_flags(&call.name, &input.gate, input.desktop);
-            let base = match input.perms {
-                Some(policy) => gate::decide_with(
-                    &input.gate,
-                    &call.name,
-                    &call.arguments,
-                    always,
-                    desk,
-                    input.workspace,
-                    Some(policy),
-                ),
-                None => gate::decide(&input.gate, &call.name, always, desk),
-            };
+            let base = gate::decide_with(
+                &input.gate,
+                &call.name,
+                &call.arguments,
+                always,
+                desk,
+                input.workspace,
+                input.perms,
+            );
             let reviewed = crate::auto_review::review(&crate::auto_review::ReviewIn {
                 client: input.client,
                 cancel: input.cancel,
-                halt: &|| input.halt.halted(),
+                halt: &|| stop_for_halt(input),
                 gate: &input.gate,
                 name: &call.name,
                 arguments: &call.arguments,
@@ -339,6 +340,7 @@ pub fn run_loop(
                 };
             }
             if reviewed.halted {
+                let _ = stop_for_halt(input);
                 return LoopOut {
                     stop: StopReason::Halted,
                     usage,
@@ -360,8 +362,13 @@ pub fn run_loop(
                         action: action_line(&call.name, &call.arguments),
                         reason: ask_reason,
                     });
-                    match input.permits.wait(&id, input.cancel, &|| input.halt.halted()) {
-                        Waited::Answer(PermAnswer::Allow) => run_allowed(input, call, &id, on_event),
+                    match input
+                        .permits
+                        .wait(&id, input.cancel, &|| stop_for_halt(input))
+                    {
+                        Waited::Answer(PermAnswer::Allow) => {
+                            run_allowed(input, call, &id, on_event)
+                        }
                         Waited::Answer(PermAnswer::Always) => {
                             if input.perms.is_some() {
                                 let _ = crate::perm::remember_allow_always(
@@ -389,18 +396,19 @@ pub fn run_loop(
                             };
                         }
                         Waited::Halted => {
+                            let _ = stop_for_halt(input);
                             return LoopOut {
                                 stop: StopReason::Halted,
                                 usage,
                                 compacted: did_compact,
-                            }
+                            };
                         }
                     }
                 }
                 Decision::Run => run_allowed(input, call, &id, on_event),
             };
             let cancelled = input.cancel.is_cancelled();
-            let halted = input.halt.halted();
+            let halted = stop_for_halt(input);
             push_output(history, call, output);
             if cancelled {
                 return LoopOut {
@@ -489,13 +497,39 @@ fn emit_tool(
     });
 }
 
-fn run_allowed(input: &LoopIn<'_>, call: &FunctionCall, id: &str, on_event: &mut dyn FnMut(LoopEvent)) -> ToolOutput {
+fn stop_for_halt(input: &LoopIn<'_>) -> bool {
+    let stop = input.halt.halted() || input.tasks.as_ref().is_some_and(|hub| hub.is_halted());
+    if stop {
+        if let Some(tasks) = &input.tasks {
+            tasks.halt_all();
+        }
+    }
+    stop
+}
+
+fn inject_notices(input: &LoopIn<'_>, history: &mut Vec<InputItem>) {
+    let Some(tasks) = &input.tasks else {
+        return;
+    };
+    for note in tasks.drain_notices() {
+        let text = format!("<background-notice>\n{note}\n</background-notice>");
+        history.push(user_message(&text, None));
+    }
+}
+
+fn run_allowed(
+    input: &LoopIn<'_>,
+    call: &FunctionCall,
+    id: &str,
+    on_event: &mut dyn FnMut(LoopEvent),
+) -> ToolOutput {
     emit_tool(on_event, id, call, "in_progress", &call.arguments, None);
     let output = tools::dispatch(
         &ToolCtx {
             workspace: input.workspace,
             desktop: input.desktop,
-            stop: &|| input.cancel.is_cancelled() || input.halt.halted(),
+            stop: &|| input.cancel.is_cancelled() || stop_for_halt(input),
+            tasks: input.tasks.clone(),
         },
         &call.name,
         &call.arguments,
@@ -682,6 +716,7 @@ mod tests {
             permits: &gate::ClosedPermits,
             perms: None,
             context_length: 0,
+            tasks: None,
         };
         let mut history = Vec::new();
         let mut events = Vec::new();
@@ -887,6 +922,7 @@ mod tests {
             permits: &gate::ClosedPermits,
             perms: None,
             context_length: 0,
+            tasks: None,
         };
         let mut history = Vec::new();
         let out = run_loop(&input, &mut history, "go", None, &mut |_| {});
@@ -967,6 +1003,7 @@ mod tests {
             permits,
             perms: None,
             context_length: 0,
+            tasks: None,
         };
         let mut history = Vec::new();
         let mut events = Vec::new();
@@ -1233,5 +1270,358 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(unix)]
+    fn notice_count(items: &[InputItem]) -> usize {
+        items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    InputItem::Message { content, .. }
+                        if content.iter().any(|part| matches!(part, ContentPart::InputText(text) if text.contains("<background-notice>")))
+                )
+            })
+            .count()
+    }
+
+    #[cfg(unix)]
+    fn task_id_in(items: &[InputItem]) -> Option<String> {
+        for item in items.iter().rev() {
+            let InputItem::FunctionCallOutput { output, .. } = item else {
+                continue;
+            };
+            for line in output.lines() {
+                if let Some(rest) = line.trim().strip_prefix("task id:") {
+                    let id = rest.trim();
+                    if !id.is_empty() {
+                        return Some(id.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    #[cfg(unix)]
+    struct NoticeClient {
+        n: AtomicUsize,
+        seen: Mutex<Vec<Vec<InputItem>>>,
+    }
+
+    #[cfg(unix)]
+    impl ModelClient for NoticeClient {
+        fn stream(
+            &self,
+            req: &crate::ResponsesRequest,
+            _cancel: &CancelToken,
+            _sink: &mut dyn FnMut(crate::StreamEvent),
+        ) -> Result<crate::TurnOutput, crate::ClientError> {
+            self.seen.lock().unwrap().push(req.input.clone());
+            let n = self.n.fetch_add(1, Ordering::SeqCst);
+            let calls = if n == 0 {
+                vec![call(
+                    "bg",
+                    "run_terminal_command",
+                    r#"{"command":"echo hello-notice","is_background":true}"#,
+                )]
+            } else if n == 1 {
+                let id = task_id_in(&req.input).unwrap_or_else(|| "missing".into());
+                vec![call(
+                    "out",
+                    "get_command_or_subagent_output",
+                    &format!(r#"{{"task_id":"{id}","timeout_ms":8000}}"#),
+                )]
+            } else if n == 2 {
+                vec![call("r", "read_file", r#"{"target_file":"note.txt"}"#)]
+            } else {
+                Vec::new()
+            };
+            Ok(crate::TurnOutput {
+                text: if calls.is_empty() {
+                    "done".into()
+                } else {
+                    String::new()
+                },
+                reasoning: String::new(),
+                calls,
+                usage: Usage::default(),
+            })
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn notice_is_injected_once_on_the_next_turn() {
+        let dir = workspace("notice");
+        let sid = format!("notice-{}", std::process::id());
+        let hub = crate::tasks::hub_for(&sid);
+        hub.reopen();
+        let client = NoticeClient {
+            n: AtomicUsize::new(0),
+            seen: Mutex::new(Vec::new()),
+        };
+        let input = LoopIn {
+            client: &client,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: None,
+            system: "",
+            conversation_id: &sid,
+            max_turns: 6,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate: chat(gate::PermMode::Always, true, false),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: Some(hub),
+        };
+        let mut history = Vec::new();
+        let out = run_loop(&input, &mut history, "go", None, &mut |_| {});
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let seen = client.seen.lock().unwrap();
+        assert!(seen.len() >= 4, "turns {}", seen.len());
+        assert_eq!(notice_count(&seen[0]), 0, "the first request has no notice");
+        assert!(seen.iter().all(|items| notice_count(items) <= 1));
+        assert_eq!(notice_count(&seen[2]), 1, "{:?}", seen[2]);
+        assert_eq!(
+            notice_count(&seen[3]),
+            1,
+            "a later turn must not copy the notice again"
+        );
+        let blob = format!("{:?}", seen[3]);
+        assert!(blob.contains("hello-notice"), "{blob}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn steer_lands_at_the_next_tool_boundary() {
+        let dir = workspace("steer-boundary");
+        let steer = SteerQueue::new();
+        let script = Script {
+            turns: Mutex::new(vec![
+                ScriptTurn {
+                    text: String::new(),
+                    calls: vec![call("r", "read_file", r#"{"target_file":"note.txt"}"#)],
+                    usage: Usage::default(),
+                },
+                ScriptTurn {
+                    text: "after steer".into(),
+                    calls: Vec::new(),
+                    usage: Usage::default(),
+                },
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: Some(steer.clone()),
+        };
+        let _ = run(&script, &dir, 4, &CancelToken::new(), &steer, &NeverHalt);
+        let seen = script.seen.lock().unwrap();
+        let first = format!("{:?}", seen.first());
+        assert!(!first.contains("please look again"), "{first}");
+        let second = format!("{:?}", seen.get(1));
+        let output_at = second.find("FunctionCallOutput").expect(&second);
+        let steer_at = second.find("please look again").expect(&second);
+        assert!(output_at < steer_at, "{second}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn halt_stops_the_run_and_its_tasks_and_monitors() {
+        let dir = workspace("halt-tasks");
+        let sid = format!(
+            "halt-run-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        let hub = crate::tasks::hub_for(&sid);
+        hub.reopen();
+        let task = hub
+            .spawn(&dir, "sleep 30 & echo $! > child.pid; wait")
+            .expect("spawn");
+        let _mon = hub
+            .start_monitor(&dir, None, Some(task), None, 60_000, "watch".into())
+            .expect("monitor");
+        let pidfile = dir.join("child.pid");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        let mut pid = 0i32;
+        while std::time::Instant::now() < deadline {
+            if let Ok(text) = std::fs::read_to_string(&pidfile) {
+                if let Ok(n) = text.trim().parse::<i32>() {
+                    if n > 1 {
+                        pid = n;
+                        break;
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(pid > 1, "child pid was not written");
+        let script = Script {
+            turns: Mutex::new(vec![ScriptTurn {
+                text: String::new(),
+                calls: vec![call("r", "read_file", r#"{"target_file":"note.txt"}"#)],
+                usage: Usage::default(),
+            }]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let input = LoopIn {
+            client: &script,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: None,
+            system: "",
+            conversation_id: &sid,
+            max_turns: 4,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &HaltAfter(AtomicUsize::new(0)),
+            gate: Gate::phase_readonly(),
+            desktop: None,
+            permits: &gate::ClosedPermits,
+            perms: None,
+            context_length: 0,
+            tasks: Some(hub.clone()),
+        };
+        let mut history = Vec::new();
+        let out = run_loop(&input, &mut history, "go", None, &mut |_| {});
+        assert_eq!(out.stop, StopReason::Halted);
+        assert!(hub.is_halted());
+        assert!(hub.spawn(&dir, "echo still").is_err());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while std::time::Instant::now() < deadline {
+            let alive = unsafe { libc::kill(pid, 0) } == 0;
+            if !alive {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        assert!(!alive, "child {pid} still alive");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut notes = Vec::new();
+        while std::time::Instant::now() < deadline {
+            notes.extend(hub.drain_notices());
+            if notes
+                .iter()
+                .any(|note| note.contains("cancelled") || note.contains("killed"))
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            notes
+                .iter()
+                .any(|note| note.contains("cancelled") || note.contains("killed")),
+            "{notes:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bg_ask_refuses_non_readonly_tools() {
+        let dir = workspace("bg-ask");
+        let cfg = std::env::temp_dir().join(format!("gh-bg-ask-cfg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&cfg);
+        std::fs::create_dir_all(&cfg).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&cfg);
+        let asks = Answer {
+            answer: PermAnswer::Deny,
+            asks: AtomicUsize::new(0),
+        };
+        let script = Script {
+            turns: Mutex::new(vec![
+                ScriptTurn {
+                    text: String::new(),
+                    calls: vec![
+                        call("w", "write", r#"{"path":"no.txt","content":"x"}"#),
+                        call(
+                            "s",
+                            "run_terminal_command",
+                            r#"{"command":"echo ran > ran.txt"}"#,
+                        ),
+                        call("k", "kill_command_or_subagent", r#"{"task_id":"t1"}"#),
+                        call(
+                            "c",
+                            "scheduler_create",
+                            r#"{"interval":"10m","prompt":"nope"}"#,
+                        ),
+                        call("m", "monitor", r#"{"command":"echo hi"}"#),
+                    ],
+                    usage: Usage::default(),
+                },
+                ScriptTurn {
+                    text: "done".into(),
+                    calls: Vec::new(),
+                    usage: Usage::default(),
+                },
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let sid = format!("bg-ask-{}", std::process::id());
+        let hub = crate::tasks::hub_for(&sid);
+        hub.reopen();
+        let input = LoopIn {
+            client: &script,
+            workspace: &dir,
+            model: "grok-4.7",
+            effort: None,
+            system: "",
+            conversation_id: &sid,
+            max_turns: 4,
+            usage_base: Usage::default(),
+            cancel: &CancelToken::new(),
+            steer: &SteerQueue::new(),
+            halt: &NeverHalt,
+            gate: chat(gate::PermMode::Ask, false, false),
+            desktop: None,
+            permits: &asks,
+            perms: None,
+            context_length: 0,
+            tasks: Some(hub),
+        };
+        let mut history = Vec::new();
+        let mut events = Vec::new();
+        let out = run_loop(&input, &mut history, "go", None, &mut |ev| events.push(ev));
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(asks.asks.load(Ordering::SeqCst), 0);
+        assert!(events
+            .iter()
+            .all(|ev| !matches!(ev, LoopEvent::Permission { .. })));
+        for name in [
+            "write",
+            "run_terminal_command",
+            "kill_command_or_subagent",
+            "scheduler_create",
+            "monitor",
+        ] {
+            assert!(
+                history.iter().any(|item| matches!(
+                    item,
+                    InputItem::FunctionCallOutput { output, .. }
+                        if output.contains(name) && output.contains("was not executed")
+                )),
+                "{name} missing from {history:?}"
+            );
+        }
+        assert!(!dir.join("no.txt").exists());
+        assert!(!dir.join("ran.txt").exists());
+        assert!(!cfg.join("automations.json").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&cfg);
+    }
 }
 

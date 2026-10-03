@@ -13,10 +13,31 @@ use crate::CancelToken;
 
 pub const READ_ONLY_PHASE: &str = "read-only in this phase";
 
-const READONLY: &[&str] = &["read_file", "list_dir", "grep", "glob"];
+const READONLY: &[&str] = &[
+    "read_file",
+    "list_dir",
+    "grep",
+    "glob",
+    "get_command_or_subagent_output",
+    "scheduler_list",
+];
 const EDIT: &[&str] = &["write", "search_replace"];
 const SHELL: &[&str] = &["run_terminal_command"];
-const DESKTOP: &[&str] = &["screenshot", "click", "move", "drag", "scroll", "type", "key"];
+const CONTROL: &[&str] = &[
+    "kill_command_or_subagent",
+    "monitor",
+    "scheduler_create",
+    "scheduler_delete",
+];
+const DESKTOP: &[&str] = &[
+    "screenshot",
+    "click",
+    "move",
+    "drag",
+    "scroll",
+    "type",
+    "key",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermMode {
@@ -143,7 +164,11 @@ pub fn is_desktop(name: &str) -> bool {
 }
 
 pub fn is_known(name: &str) -> bool {
-    is_readonly(name) || EDIT.contains(&name) || SHELL.contains(&name) || is_desktop(name)
+    is_readonly(name)
+        || EDIT.contains(&name)
+        || SHELL.contains(&name)
+        || CONTROL.contains(&name)
+        || is_desktop(name)
 }
 
 pub fn readonly_refusal(name: &str) -> String {
@@ -153,7 +178,7 @@ pub fn readonly_refusal(name: &str) -> String {
 pub fn unattended_deny(name: &str) -> String {
     let label = if is_desktop(name) {
         "mcp matching \"grokhub-desktop__*\""
-    } else if SHELL.contains(&name) {
+    } else if SHELL.contains(&name) || name == "kill_command_or_subagent" || name == "monitor" {
         "bash"
     } else {
         "edit"
@@ -212,6 +237,9 @@ pub fn decide_with(
     workspace: &Path,
     policy: Option<&crate::perm::Policy>,
 ) -> Decision {
+    if name == "monitor" && crate::tasks::monitor_watch_only(arguments) {
+        return Decision::Run;
+    }
     let base = decide(gate, name, latched_always, desk);
     match policy {
         Some(policy) => crate::perm::govern(base, gate, name, arguments, workspace, policy),
@@ -251,8 +279,30 @@ mod tests {
             unattended_deny("click"),
             "Tool `click` was not executed: Denied by permission policy: deny rule on mcp matching \"grokhub-desktop__*\""
         );
-        assert_eq!(user_rejected("write"), "User rejected the execution for tool `write`");
-        assert_eq!(user_cancelled("write"), "User cancelled the execution for tool `write`");
+        assert_eq!(
+            unattended_deny("kill_command_or_subagent"),
+            "Tool `kill_command_or_subagent` was not executed: Denied by permission policy: deny rule on bash"
+        );
+        assert_eq!(
+            unattended_deny("monitor"),
+            "Tool `monitor` was not executed: Denied by permission policy: deny rule on bash"
+        );
+        assert_eq!(
+            unattended_deny("scheduler_create"),
+            "Tool `scheduler_create` was not executed: Denied by permission policy: deny rule on edit"
+        );
+        assert_eq!(
+            unattended_deny("scheduler_delete"),
+            "Tool `scheduler_delete` was not executed: Denied by permission policy: deny rule on edit"
+        );
+        assert_eq!(
+            user_rejected("write"),
+            "User rejected the execution for tool `write`"
+        );
+        assert_eq!(
+            user_cancelled("write"),
+            "User cancelled the execution for tool `write`"
+        );
     }
 
     #[test]

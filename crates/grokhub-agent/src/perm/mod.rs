@@ -68,6 +68,16 @@ pub fn govern(
     {
         return base;
     }
+    if name == "monitor" {
+        if let Some(command) = command_arg(arguments) {
+            let facts = split::analyze(&command);
+            let texts = bash_texts(&command, &facts);
+            if rule_hit(policy, Action::Deny, Tool::Bash, &texts) {
+                return Decision::Refuse(gate::unattended_deny(name));
+            }
+        }
+        return base;
+    }
     let Some(kind) = tool_kind(name) else {
         return base;
     };
