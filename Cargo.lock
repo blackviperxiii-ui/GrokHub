@@ -165,6 +165,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ashpd"
+version = "0.13.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb8421aaa9644a5faf26735f258b669b15f063313ef8f8e2bdb28912a1a6f111"
+dependencies = [
+ "enumflags2",
+ "futures-util",
+ "getrandom 0.4.3",
+ "serde",
+ "serde_repr",
+ "tokio",
+ "zbus",
+]
+
+[[package]]
 name = "async-broadcast"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1841,7 +1856,7 @@ dependencies = [
 
 [[package]]
 name = "grokhub-acp"
-version = "2.10.67"
+version = "2.10.68"
 dependencies = [
  "grokhub-core",
  "serde",
@@ -1850,8 +1865,9 @@ dependencies = [
 
 [[package]]
 name = "grokhub-app"
-version = "2.10.67"
+version = "2.10.68"
 dependencies = [
+ "ashpd",
  "base64",
  "eframe",
  "global-hotkey",
@@ -1861,8 +1877,11 @@ dependencies = [
  "image",
  "keyring",
  "ksni",
+ "reis",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
+ "tokio",
  "tray-icon",
  "tungstenite",
  "ureq",
@@ -1870,11 +1889,12 @@ dependencies = [
  "winresource",
  "x11rb",
  "xcap",
+ "zbus",
 ]
 
 [[package]]
 name = "grokhub-core"
-version = "2.10.67"
+version = "2.10.68"
 dependencies = [
  "getrandom 0.2.17",
  "hex",
@@ -1885,14 +1905,14 @@ dependencies = [
 
 [[package]]
 name = "grokhub-ffi"
-version = "2.10.67"
+version = "2.10.68"
 dependencies = [
  "grokhub-core",
 ]
 
 [[package]]
 name = "grokhub-hub"
-version = "2.10.67"
+version = "2.10.68"
 dependencies = [
  "grokhub-core",
  "serde",
@@ -3883,6 +3903,17 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "reis"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b967ec6489a42067a20724f11987bb96178ea796873cbe1afd25fb93ee6f85f"
+dependencies = [
+ "enumflags2",
+ "log",
+ "rustix 1.1.4",
+]
 
 [[package]]
 name = "renderdoc-sys"
