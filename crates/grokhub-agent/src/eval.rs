@@ -488,12 +488,17 @@ fn repo_bugfix_native() -> (&'static str, u32) {
         "fix the failing test",
     );
     let turns = client.turns();
-    let fixed = fixture_passes(&dir);
+    let edited = bugfix_edited(&dir);
+    let fixed = edited && fixture_passes(&dir);
     let _ = std::fs::remove_dir_all(&dir);
-    if done.stop == "end_turn" && fixed {
-        ("fixed", turns)
+    if done.stop != "end_turn" {
+        ("failed: turn did not end", turns)
+    } else if !edited {
+        ("failed: edit not applied", turns)
+    } else if !fixed {
+        ("failed: fixture test", turns)
     } else {
-        ("failed: test", turns)
+        ("fixed", turns)
     }
 }
 
@@ -1033,9 +1038,9 @@ impl ModelClient for Scripted {
                     "edit",
                     "search_replace",
                     &json!({
-                        "file_path": "lib.sh",
-                        "old_string": "echo $(( $1 - $2 ))",
-                        "new_string": "echo $(( $1 + $2 ))",
+                        "file_path": BUGFIX_LIB.0,
+                        "old_string": BUGFIX_EDIT.0,
+                        "new_string": BUGFIX_EDIT.1,
                     })
                     .to_string(),
                 ),
@@ -1133,22 +1138,58 @@ fn long_history() -> Vec<InputItem> {
     }]
 }
 
+// The fixture is a two-file shell project on unix and a PowerShell one on
+// Windows, so the "run the tests" step works on both CI runners.
+#[cfg(unix)]
+const BUGFIX_LIB: (&str, &str) = ("lib.sh", "add() {\n  echo $(( $1 - $2 ))\n}\n");
+#[cfg(unix)]
+const BUGFIX_TEST: (&str, &str) = (
+    "test.sh",
+    "#!/bin/sh\nset -eu\n. ./lib.sh\nresult=$(add 2 3)\ntest \"$result\" = 5\nprintf '%s\\n' ok\n",
+);
+#[cfg(unix)]
+const BUGFIX_EDIT: (&str, &str) = ("echo $(( $1 - $2 ))", "echo $(( $1 + $2 ))");
+
+#[cfg(not(unix))]
+const BUGFIX_LIB: (&str, &str) = ("lib.ps1", "function add($a, $b) { $a - $b }\n");
+#[cfg(not(unix))]
+const BUGFIX_TEST: (&str, &str) = (
+    "test.ps1",
+    ". ./lib.ps1\nif ((add 2 3) -ne 5) { exit 1 }\nWrite-Output ok\n",
+);
+#[cfg(not(unix))]
+const BUGFIX_EDIT: (&str, &str) = ("$a - $b", "$a + $b");
+
 fn write_bugfix_fixture(dir: &Path) -> Result<(), String> {
-    std::fs::write(dir.join("lib.sh"), "add() {\n  echo $(( $1 - $2 ))\n}\n")
-        .map_err(|err| err.to_string())?;
-    std::fs::write(
-        dir.join("test.sh"),
-        "#!/bin/bash\nset -eu\n. ./lib.sh\nresult=$(add 2 3)\ntest \"$result\" = 5\nprintf '%s\\n' ok\n",
-    )
-    .map_err(|err| err.to_string())
+    std::fs::write(dir.join(BUGFIX_LIB.0), BUGFIX_LIB.1).map_err(|err| err.to_string())?;
+    std::fs::write(dir.join(BUGFIX_TEST.0), BUGFIX_TEST.1).map_err(|err| err.to_string())
+}
+
+fn bugfix_edited(dir: &Path) -> bool {
+    std::fs::read_to_string(dir.join(BUGFIX_LIB.0)).is_ok_and(|text| text.contains(BUGFIX_EDIT.1))
 }
 
 fn fixture_passes(dir: &Path) -> bool {
-    let Ok(output) = Command::new("bash")
-        .arg("test.sh")
-        .current_dir(dir)
-        .output()
-    else {
+    #[cfg(unix)]
+    let mut cmd = {
+        let mut cmd = Command::new("sh");
+        cmd.arg(BUGFIX_TEST.0);
+        cmd
+    };
+    #[cfg(not(unix))]
+    let mut cmd = {
+        let mut cmd = Command::new("powershell");
+        cmd.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+        ]);
+        cmd.arg(BUGFIX_TEST.0);
+        cmd
+    };
+    let Ok(output) = cmd.current_dir(dir).output() else {
         return false;
     };
     output.status.success() && String::from_utf8_lossy(&output.stdout).contains("ok")
@@ -1635,11 +1676,20 @@ mod tests {
         assert!(!report.contains("/tmp"));
         assert!(report.contains("| imagine | native | yes | 1 | dry-run | 0 | 0 | request built |"));
         assert_eq!(imagine_send_count(), 0);
-        assert!(report.contains("| repo-bugfix | native | yes |"));
-        assert!(report.contains("| ask-refusal | native | yes |"));
-        assert!(report.contains("| background-halt | native | yes |"));
-        assert!(report.contains("| compaction | native | yes |"));
-        assert!(report.contains("| mcp-tool | native | yes |"));
+        assert!(
+            report.contains("| repo-bugfix | native | yes |"),
+            "{report}"
+        );
+        assert!(
+            report.contains("| ask-refusal | native | yes |"),
+            "{report}"
+        );
+        assert!(
+            report.contains("| background-halt | native | yes |"),
+            "{report}"
+        );
+        assert!(report.contains("| compaction | native | yes |"), "{report}");
+        assert!(report.contains("| mcp-tool | native | yes |"), "{report}");
         if report.contains(SKIP_XVFB) {
             assert!(report.contains("- xvfb-desktop: skipped: no Xvfb\n"));
         }
@@ -1651,12 +1701,15 @@ mod tests {
             );
         }
         if !report.contains(NO_FAKE_ACP) {
-            assert!(report.contains("| repo-bugfix | cli | yes |"));
-            assert!(report.contains("| ask-refusal | cli | yes |"));
-            assert!(report.contains("| background-halt | cli | yes |"));
-            assert!(report.contains("| mcp-tool | cli | yes |"));
-            assert!(report.contains("| compaction | cli | yes |"));
-            assert!(report.contains("| imagine | cli | yes |"));
+            assert!(report.contains("| repo-bugfix | cli | yes |"), "{report}");
+            assert!(report.contains("| ask-refusal | cli | yes |"), "{report}");
+            assert!(
+                report.contains("| background-halt | cli | yes |"),
+                "{report}"
+            );
+            assert!(report.contains("| mcp-tool | cli | yes |"), "{report}");
+            assert!(report.contains("| compaction | cli | yes |"), "{report}");
+            assert!(report.contains("| imagine | cli | yes |"), "{report}");
         }
     }
 }
