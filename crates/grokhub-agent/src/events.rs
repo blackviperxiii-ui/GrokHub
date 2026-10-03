@@ -147,6 +147,11 @@ impl Engine for NativeEngine {
         if self.reopen_tasks {
             hub.reopen();
         }
+        let _hooks =
+            crate::hooks::attach(&self.conversation_id, &self.workspace, self.gate.attended);
+        if self.history.is_empty() {
+            crate::hooks::on_session_start(&self.conversation_id, &self.workspace, "startup");
+        }
         if image.is_none() && crate::compact::is_manual_compact_command(text) {
             return self.compact_now(emit);
         }
@@ -258,14 +263,17 @@ impl NativeEngine {
             usage: grok_usage(&self.usage, kind, used, limit),
             error: None,
         });
-        match crate::compact::compact_transcript(
+        crate::hooks::on_compact(&self.conversation_id, &self.workspace, true);
+        let compact_result = crate::compact::compact_transcript(
             self.client.as_ref(),
             &self.cancel,
             &self.model,
             self.effort.as_deref(),
             &self.conversation_id,
             &mut self.history,
-        ) {
+        );
+        crate::hooks::on_compact(&self.conversation_id, &self.workspace, false);
+        match compact_result {
             Ok(extra) => {
                 self.usage.add(&extra);
                 let delta = self.usage.saturating_delta(&before);

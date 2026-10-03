@@ -5,3 +5,6 @@ The Apache-2.0 license text is in LICENSE-APACHE-2.0 in this directory.
 `src/tokens.rs` vendors `xai-token-estimation` (bytes/4 estimator, no tokenizer data).
 `src/compact.rs` ports the session summary prompt from `xai-grok-shell` `helpers/session_compact.rs`.
 `src/image_budget.rs` ports the image-eviction placeholder and byte budget from `xai-chat-state` `image_budget.rs`.
+`src/skills.rs` ports SKILL.md discovery and the skill tool from `xai-grok-tools` and `xai-grok-agent`.
+`src/hooks.rs` ports hook discovery, the stdin JSON contract, and exit-code handling from `xai-grok-hooks`.
+`src/prompt.rs` layers AGENTS.md and CLAUDE.md the way `xai-grok-agent` does.

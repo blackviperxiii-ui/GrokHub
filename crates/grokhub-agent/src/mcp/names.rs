@@ -147,6 +147,7 @@ pub fn reserved(name: &str) -> bool {
             | "type"
             | "key"
             | "search_tool"
+            | "skill"
             | "use_tool"
     )
 }
