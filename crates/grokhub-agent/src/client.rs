@@ -1,7 +1,7 @@
 // Portions derived from xai-org/grok-build (Apache-2.0, © SpaceXAI), commit 2bdd1d6a; modified.
 
 use std::io::Read;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -183,19 +183,48 @@ pub fn map_http_status(
 }
 
 #[derive(Clone, Debug)]
+struct CancelLink {
+    parent: CancelToken,
+    snapshot: u64,
+}
+
+/// Cooperative cancel. `reset` clears only this token.
+/// A child created with [`CancelToken::child_of`] stays cancelled after the parent
+/// is cancelled, even if the parent is later reset for a new user turn.
+#[derive(Clone, Debug)]
 pub struct CancelToken {
     flag: Arc<AtomicBool>,
+    generation: Arc<AtomicU64>,
+    parent: Option<Arc<CancelLink>>,
 }
 
 impl CancelToken {
     pub fn new() -> Self {
         Self {
             flag: Arc::new(AtomicBool::new(false)),
+            generation: Arc::new(AtomicU64::new(0)),
+            parent: None,
+        }
+    }
+
+    /// A token that follows `parent`, including parents of parents.
+    /// The snapshot is the parent's generation now. A later parent `cancel`
+    /// moves that generation, so a parent `reset` does not revive the child.
+    pub fn child_of(parent: &CancelToken) -> Self {
+        let snapshot = parent.generation.load(Ordering::SeqCst);
+        Self {
+            flag: Arc::new(AtomicBool::new(false)),
+            generation: Arc::new(AtomicU64::new(0)),
+            parent: Some(Arc::new(CancelLink {
+                parent: parent.clone(),
+                snapshot,
+            })),
         }
     }
 
     pub fn cancel(&self) {
         self.flag.store(true, Ordering::SeqCst);
+        let _ = self.generation.fetch_add(1, Ordering::SeqCst);
     }
 
     pub fn reset(&self) {
@@ -203,7 +232,13 @@ impl CancelToken {
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.flag.load(Ordering::SeqCst)
+        if self.flag.load(Ordering::SeqCst) {
+            return true;
+        }
+        let Some(link) = &self.parent else {
+            return false;
+        };
+        link.snapshot != link.parent.generation.load(Ordering::SeqCst) || link.parent.is_cancelled()
     }
 }
 
@@ -521,6 +556,26 @@ fn fold_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancel_token_child_does_not_revive_when_the_parent_resets() {
+        let parent = CancelToken::new();
+        let child = CancelToken::child_of(&parent);
+        let grand = CancelToken::child_of(&child);
+        assert!(!parent.is_cancelled());
+        assert!(!child.is_cancelled());
+        assert!(!grand.is_cancelled());
+        parent.cancel();
+        assert!(parent.is_cancelled());
+        assert!(child.is_cancelled());
+        assert!(grand.is_cancelled());
+        parent.reset();
+        assert!(!parent.is_cancelled());
+        assert!(child.is_cancelled());
+        assert!(grand.is_cancelled());
+        let later = CancelToken::child_of(&parent);
+        assert!(!later.is_cancelled());
+    }
 
     #[test]
     fn http_status_maps_oauth_key_rate_and_server() {

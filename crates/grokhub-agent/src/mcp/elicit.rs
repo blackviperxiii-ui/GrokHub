@@ -3,7 +3,7 @@
 
 use std::cell::Cell;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -100,19 +100,41 @@ where
     })
 }
 
-fn inboxes() -> &'static Mutex<std::collections::HashMap<String, ElicitInbox>> {
-    static MAP: OnceLock<Mutex<std::collections::HashMap<String, ElicitInbox>>> = OnceLock::new();
+fn inboxes() -> &'static Mutex<std::collections::HashMap<String, Arc<ElicitInbox>>> {
+    static MAP: OnceLock<Mutex<std::collections::HashMap<String, Arc<ElicitInbox>>>> =
+        OnceLock::new();
     MAP.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
 }
 
 pub fn attach_elicit(session: &str, inbox: ElicitInbox) {
     let mut map = inboxes().lock().unwrap_or_else(|err| err.into_inner());
-    map.insert(session.to_string(), inbox);
+    map.insert(session.to_string(), Arc::new(inbox));
 }
 
 pub fn detach_elicit(session: &str) {
     let mut map = inboxes().lock().unwrap_or_else(|err| err.into_inner());
     map.remove(session);
+}
+
+/// A child session reads the parent's inbox. The map stores `Arc` so both ids
+/// share one receiver without holding the map lock across the wait.
+pub fn alias_elicit(child: &str, parent: &str) {
+    if child.is_empty() || parent.is_empty() || child == parent {
+        return;
+    }
+    let mut map = inboxes().lock().unwrap_or_else(|err| err.into_inner());
+    let Some(inbox) = map.get(parent).cloned() else {
+        return;
+    };
+    map.insert(child.to_string(), inbox);
+}
+
+pub fn unalias_elicit(child: &str) {
+    if child.is_empty() {
+        return;
+    }
+    let mut map = inboxes().lock().unwrap_or_else(|err| err.into_inner());
+    map.remove(child);
 }
 
 pub(crate) fn wait_elicit(
@@ -128,9 +150,12 @@ pub(crate) fn wait_elicit(
         if halted() {
             return ElicitAnswer::Cancel;
         }
-        let map = inboxes().lock().unwrap_or_else(|err| err.into_inner());
-        let Some(inbox) = map.get(session) else {
-            return ElicitAnswer::Decline;
+        let inbox = {
+            let map = inboxes().lock().unwrap_or_else(|err| err.into_inner());
+            let Some(inbox) = map.get(session).cloned() else {
+                return ElicitAnswer::Decline;
+            };
+            inbox
         };
         let rx = inbox.rx.lock().unwrap_or_else(|err| err.into_inner());
         match rx.recv_timeout(Duration::from_millis(30)) {

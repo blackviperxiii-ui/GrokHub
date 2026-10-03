@@ -4828,6 +4828,7 @@ impl eframe::App for Cabin {
         self.poll_single();
         self.poll_bg_runs();
         self.poll_native_automations();
+        self.poll_native_side_events();
         self.poll_pick();
         self.take_dropped_attach(ctx);
         self.poll_pick_list();

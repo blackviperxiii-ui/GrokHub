@@ -366,6 +366,27 @@ impl Cabin {
                     }
                 }
                 AcpEvent::Tool(mut card) => {
+                    if self.cfg.native_engine && card.status == "completed" {
+                        let sid = self
+                            .acp
+                            .as_ref()
+                            .map(|handle| handle.session_id.clone())
+                            .unwrap_or_default();
+                        if card.kind == "enter_plan_mode" && self.session_mode == SessionMode::Chat
+                        {
+                            self.set_session_mode(SessionMode::Plan);
+                            if !sid.is_empty() {
+                                grokhub_agent::set_plan_session(&sid, true);
+                            }
+                        } else if card.kind == "exit_plan_mode"
+                            && self.session_mode == SessionMode::Plan
+                        {
+                            self.set_session_mode(SessionMode::Chat);
+                            if !sid.is_empty() {
+                                grokhub_agent::set_plan_session(&sid, false);
+                            }
+                        }
+                    }
                     card.detail = redact_held_secrets(&card.detail, &self.secret_hold);
                     card.diff = redact_held_secrets(&card.diff, &self.secret_hold);
                     card.title = redact_held_secrets(&card.title, &self.secret_hold);
@@ -1018,6 +1039,64 @@ impl Cabin {
 
     pub(super) fn apply_grok_commands(&mut self, cmds: Vec<String>) {
         self.grok_commands = grok_command_hits(&cmds);
+    }
+
+    /// Background subagents emit cards after the parent turn has returned.
+    /// The CLI path never queues these, and this poll runs only while the native engine is on.
+    pub(super) fn poll_native_side_events(&mut self) {
+        if !self.cfg.native_engine {
+            return;
+        }
+        let here = self
+            .acp
+            .as_ref()
+            .map(|handle| handle.session_id.clone())
+            .unwrap_or_default();
+        let mut later = Vec::new();
+        for event in grokhub_agent::drain_side_events() {
+            // Cards, rows and answers go through the open thread's handle. An event from
+            // another session waits until that thread is open, so a card is never answered
+            // through, or under the permission mode of, the wrong thread.
+            if here.is_empty() || event.session() != here {
+                later.push(event);
+                continue;
+            }
+            match event {
+                grokhub_agent::SideEvent::Task {
+                    id, title, done, ..
+                } => {
+                    self.apply_grok_task(id, title, done);
+                }
+                grokhub_agent::SideEvent::Plan { text, .. } => {
+                    self.store_session_plan(&text, true);
+                    if self.stream_here() {
+                        self.status = format!("Plan · {text}");
+                    }
+                }
+                grokhub_agent::SideEvent::Permission(ask) => {
+                    if self.permission_mode == PermissionMode::AlwaysApprove {
+                        if let Some(handle) = &self.acp {
+                            let _ = handle.answer_permission_always(ask.rpc_id);
+                        }
+                    } else {
+                        self.show_perm_ask(ask);
+                    }
+                }
+                grokhub_agent::SideEvent::Elicit(ask) => {
+                    if let Some(old) = self.elicit_ask.take() {
+                        if let Some(handle) = &self.acp {
+                            let _ = handle.answer_elicit(old.rpc_id, "cancel", None);
+                        }
+                    }
+                    self.elicit_draft.clear();
+                    if self.chrome_here() {
+                        self.status = format!("{} wants input", ask.server_name);
+                    }
+                    self.elicit_ask = Some(ask);
+                }
+            }
+        }
+        grokhub_agent::requeue_side_events(later);
     }
 
     pub(super) fn apply_grok_task(&mut self, id: String, title: String, done: bool) {
