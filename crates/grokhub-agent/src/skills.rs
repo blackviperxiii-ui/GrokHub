@@ -203,7 +203,13 @@ fn render(skill: &Skill, rel: Option<&str>) -> ToolOutput {
             Ok(path) => path,
             Err(err) => return ToolOutput::err(err.replace("workspace", "skill directory")),
         };
-        if !path.starts_with(&skill.dir) {
+        // `confine` returns a canonical path (`\\?\C:\...` on Windows), so compare
+        // against the canonical skill folder, not the path as discovered.
+        let root = skill
+            .dir
+            .canonicalize()
+            .unwrap_or_else(|_| skill.dir.clone());
+        if !path.starts_with(&root) {
             return ToolOutput::err("path escapes the skill directory");
         }
         match fs::read_to_string(&path) {
