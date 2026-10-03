@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use grokhub_acp::{AcpEvent, GrokUsage, PermissionAsk, ToolCard};
+use grokhub_acp::{AcpEvent, ElicitAsk, GrokUsage, PermissionAsk, ToolCard};
 
 use crate::gate::{Gate, PermitWait};
 use crate::tools::DesktopOps;
@@ -151,6 +151,7 @@ impl Engine for NativeEngine {
             return self.compact_now(emit);
         }
         let policy = crate::perm::Policy::load(&self.workspace);
+        crate::mcp::set_workspace(&self.workspace);
         let input = LoopIn {
             client: self.client.as_ref(),
             workspace: &self.workspace,
@@ -341,6 +342,19 @@ fn to_acp(ev: LoopEvent, kind: AuthKind, session: &str, used: u64, limit: u64) -
             action,
             reason,
             reject_option: Some("denied".into()),
+        }),
+        LoopEvent::Elicit(view) => AcpEvent::Elicit(ElicitAsk {
+            rpc_id: serde_json::Value::String(view.id.clone()),
+            session_id: session.to_string(),
+            tool_call_id: view.id,
+            server_name: view.server_name,
+            message: view.message,
+            mode: view.mode,
+            url: view.url,
+            elicitation_id: view.elicitation_id,
+            field_name: view.field_name,
+            field_title: view.field_title,
+            secret: view.secret,
         }),
     })
 }
