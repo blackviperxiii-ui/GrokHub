@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.80** — Native engine (Labs, off by default): `web_fetch` (public addresses only, `WebFetch` rules), full-parameter Imagine tools for images and video (n up to 10, 2k, quality, mask, 1080p, edit, extend) saved into the session folder, and `/deep-research` on native chats. The Grok CLI stays the default.
+**v2.10.81** — Native engine (Labs, off by default): project and global `MEMORY.md` with `/remember`, fenced first-turn recall from a local SQLite index, `/flush` and `/dream`, and an answer for every Grok CLI slash command on native chats. The Grok CLI stays the default.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.80.tar.gz`, AUR | **v2.10.80** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.80.exe`, `grokhub-windows-v2.10.80.zip` | **v2.10.80** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.81.tar.gz`, AUR | **v2.10.81** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.81.exe`, `grokhub-windows-v2.10.81.zip` | **v2.10.81** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
