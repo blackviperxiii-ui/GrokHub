@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.66** — Home cards show how many runs they stand for and why they are there, and each card has a menu: More like this, Less like this, or hide an automation's runs from Home (its failures still show).
+**v2.10.67** — Home learns which cards help: the ones you open rise, the ones you keep dismissing fold away, failures always show, and Settings → What Home learned can forget it all. Everything stays on this machine.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.66.tar.gz`, AUR | **v2.10.66** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.66.exe`, `grokhub-windows-v2.10.66.zip` | **v2.10.66** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.67.tar.gz`, AUR | **v2.10.67** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.67.exe`, `grokhub-windows-v2.10.67.zip` | **v2.10.67** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.

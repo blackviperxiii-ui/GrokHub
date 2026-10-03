@@ -320,21 +320,29 @@ impl Cabin {
     pub(super) fn post_feed_card(&mut self, card: UpdateCard) {
         post_update(&mut self.updates, card);
         let now = now_ms();
-        let shown = grokhub_core::home_event_cards(&self.updates, &self.cfg.feed_pulse, now);
-        if grokhub_core::record_home_floors(&mut self.cfg.feed_pulse, &shown, now) {
+        let rank = grokhub_core::rank_home_events(
+            &self.updates,
+            &self.cfg.feed_pulse,
+            &self.card_prefs,
+            now,
+        );
+        if grokhub_core::record_home_floors(&mut self.cfg.feed_pulse, &rank.deck, now) {
             self.persist_cfg();
         }
         self.persist_updates();
     }
 
     pub(super) fn log_card_signal(
-        &self,
+        &mut self,
         card: &UpdateCard,
         event: grokhub_core::CardEvent,
         after_open: Option<bool>,
     ) {
-        let row = grokhub_core::signal_for(card, event, now_ms(), after_open);
+        let now = now_ms();
+        let row = grokhub_core::signal_for(card, event, now, after_open);
         grokhub_core::append_signal(&crate::config::config_dir(), &row);
+        grokhub_core::apply_card_event(&mut self.card_prefs, card, event, after_open, now);
+        let _ = crate::card_prefs::save(&self.card_prefs);
     }
 
     pub(super) fn more_like_this(&mut self, id: &str) {
@@ -654,48 +662,101 @@ impl Cabin {
             return;
         }
         let now = now_ms();
-        let cards = home_stack_cards(&self.updates, &self.cfg.feed_pulse, now);
-        if cards.is_empty() {
+        let (cards, rank) = home_deck(&self.updates, &self.cfg.feed_pulse, &self.card_prefs, now);
+        if cards.is_empty() && rank.folded.is_empty() {
             ui.ctx().data_mut(|d| {
                 d.insert_temp(mem_id, FeedStackMem::default());
                 d.insert_temp(egui::Id::new("home-deck-defer"), None::<DeckDefer>);
             });
             return;
         }
-        let (stack, _) = ui.allocate_exact_size(
-            egui::vec2(pane_w, collapsed_stack_h(cards.len())),
-            egui::Sense::hover(),
-        );
-        let prev: FeedStackMem = ui.ctx().data(|d| d.get_temp(mem_id)).unwrap_or_default();
-        let pointer = ui.ctx().input(|i| i.pointer.hover_pos());
-        let on_card = prev
-            .popped_rect
-            .is_some_and(|rect| pointer.is_some_and(|p| rect.contains(p)));
-        let on_pile = pointer.is_some_and(|p| {
-            stack.contains(p) || prev.hits.iter().any(|hit| hit.rect.contains(p))
-        });
-        let hit = stack_hit(StackHover { on_card, on_pile });
-        let hovered = hovered_slide_card(pointer, &prev.hits);
-        let front_id = cards.first().map(|card| card.id.as_str());
-        let hovered_for = if hit == StackHit::Pile {
-            pile_pop_target(front_id, hovered)
+        if cards.is_empty() {
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(mem_id, FeedStackMem::default());
+                d.insert_temp(egui::Id::new("home-deck-defer"), None::<DeckDefer>);
+            });
         } else {
-            hovered
-        };
-        let view = drop_missing_pop(&cards, next_feed_stack(&prev.view(), hit, hovered_for));
-        // Paint later, after the home composer, inside the chat pane. The open
-        // fan stays in the space above the composer and does not cover that box.
-        ui.ctx().data_mut(|d| {
-            d.insert_temp(
-                egui::Id::new("home-deck-defer"),
-                Some(DeckDefer {
-                    stack,
-                    width: pane_w,
-                    view,
-                    composer,
-                }),
+            let (stack, _) = ui.allocate_exact_size(
+                egui::vec2(pane_w, collapsed_stack_h(cards.len())),
+                egui::Sense::hover(),
             );
-        });
+            let prev: FeedStackMem = ui.ctx().data(|d| d.get_temp(mem_id)).unwrap_or_default();
+            let pointer = ui.ctx().input(|i| i.pointer.hover_pos());
+            let on_card = prev
+                .popped_rect
+                .is_some_and(|rect| pointer.is_some_and(|p| rect.contains(p)));
+            let on_pile = pointer.is_some_and(|p| {
+                stack.contains(p) || prev.hits.iter().any(|hit| hit.rect.contains(p))
+            });
+            let hit = stack_hit(StackHover { on_card, on_pile });
+            let hovered = hovered_slide_card(pointer, &prev.hits);
+            let front_id = cards.first().map(|card| card.id.as_str());
+            let hovered_for = if hit == StackHit::Pile {
+                pile_pop_target(front_id, hovered)
+            } else {
+                hovered
+            };
+            let view = drop_missing_pop(&cards, next_feed_stack(&prev.view(), hit, hovered_for));
+            // Paint later, after the home composer, inside the chat pane. The open
+            // fan stays in the space above the composer and does not cover that box.
+            ui.ctx().data_mut(|d| {
+                d.insert_temp(
+                    egui::Id::new("home-deck-defer"),
+                    Some(DeckDefer {
+                        stack,
+                        width: pane_w,
+                        view,
+                        composer,
+                    }),
+                );
+            });
+        }
+        self.paint_home_fold(ui, pane_w, &rank, now);
+    }
+
+    fn paint_home_fold(
+        &mut self,
+        ui: &mut egui::Ui,
+        pane_w: f32,
+        rank: &grokhub_core::HomeRank,
+        now: u64,
+    ) {
+        let n = rank.folded.len();
+        if n == 0 {
+            return;
+        }
+        ui.add_space(4.0);
+        let label = format!("More ({n})");
+        let clicked = ui
+            .add(
+                egui::Label::new(
+                    RichText::new(label)
+                        .size(crate::theme::FONT_TIP)
+                        .color(crate::theme::muted()),
+                )
+                .sense(egui::Sense::click()),
+            )
+            .clicked();
+        if clicked {
+            self.home_fold_open = true;
+        }
+        ui.label(
+            RichText::new(grokhub_core::FOLD_NOTE)
+                .size(crate::theme::FONT_TIP)
+                .color(crate::theme::muted()),
+        );
+        if !self.home_fold_open {
+            return;
+        }
+        let folded = rank.folded.clone();
+        let novelty = rank.novelty_id.clone();
+        for card in folded {
+            let hint = event_hint(&card, &self.card_prefs, now, novelty.as_deref());
+            if let Some(act) = paint_feed_card(ui, &card, pane_w, hint.as_deref()) {
+                self.apply_feed_act(Some(act));
+            }
+            ui.add_space(6.0);
+        }
     }
 
     /// Open deck for the empty home chat. Call after the composer in that pane.
@@ -708,16 +769,18 @@ impl Cabin {
             return;
         };
         let now = now_ms();
-        let cards = home_stack_cards(&self.updates, &self.cfg.feed_pulse, now);
+        let (cards, rank) = home_deck(&self.updates, &self.cfg.feed_pulse, &self.card_prefs, now);
         if cards.is_empty() {
             return;
         }
-        if grokhub_core::record_home_floors(&mut self.cfg.feed_pulse, &cards, now) {
+        if grokhub_core::record_home_floors(&mut self.cfg.feed_pulse, &rank.deck, now) {
             self.persist_cfg();
         }
+        let hints = deck_hints(&cards, &self.card_prefs, now, rank.novelty_id.as_deref());
         let painted = paint_slide_deck(
             ui,
             &cards,
+            &hints,
             deferred.stack,
             deferred.width,
             &deferred.view,
@@ -1240,6 +1303,43 @@ fn home_stack_cards(cards: &[UpdateCard], pulse: &grokhub_core::FeedPulse, now: 
     out
 }
 
+fn home_deck(
+    cards: &[UpdateCard],
+    pulse: &grokhub_core::FeedPulse,
+    prefs: &grokhub_core::CardPrefs,
+    now: u64,
+) -> (Vec<UpdateCard>, grokhub_core::HomeRank) {
+    let rank = grokhub_core::rank_home_events(cards, pulse, prefs, now);
+    let mut shown = rank.deck.clone();
+    shown.extend(feed_ideas(cards, now));
+    shown.extend(visible_digests(cards).into_iter().take(DIGEST_PAINT_MAX));
+    (shown, rank)
+}
+
+fn event_hint(
+    card: &UpdateCard,
+    prefs: &grokhub_core::CardPrefs,
+    now: u64,
+    novelty_id: Option<&str>,
+) -> Option<String> {
+    if !card.kind.event() {
+        return None;
+    }
+    grokhub_core::explain_hint(card, prefs, now, novelty_id == Some(card.id.as_str()))
+}
+
+fn deck_hints(
+    cards: &[UpdateCard],
+    prefs: &grokhub_core::CardPrefs,
+    now: u64,
+    novelty_id: Option<&str>,
+) -> Vec<Option<String>> {
+    cards
+        .iter()
+        .map(|card| event_hint(card, prefs, now, novelty_id))
+        .collect()
+}
+
 fn drop_missing_pop(cards: &[UpdateCard], mut view: StackView) -> StackView {
     if view
         .popped
@@ -1297,13 +1397,18 @@ fn paint_stack_shadow(painter: &egui::Painter, rect: egui::Rect) {
     );
 }
 
-fn paint_card_at(ui: &mut egui::Ui, card: &UpdateCard, rect: egui::Rect) -> Option<FeedAct> {
+fn paint_card_at(
+    ui: &mut egui::Ui,
+    card: &UpdateCard,
+    rect: egui::Rect,
+    hint: Option<&str>,
+) -> Option<FeedAct> {
     let mut act = None;
     ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
         ui.set_min_size(rect.size());
         ui.set_width(rect.width());
         ui.spacing_mut().item_spacing = egui::vec2(8.0, 4.0);
-        act = paint_feed_card(ui, card, rect.width());
+        act = paint_feed_card(ui, card, rect.width(), hint);
     });
     act
 }
@@ -1354,6 +1459,7 @@ fn paint_tucked_edge(ui: &mut egui::Ui, rect: egui::Rect, cover: egui::Rect) {
 fn paint_slide_deck(
     ui: &mut egui::Ui,
     cards: &[UpdateCard],
+    hints: &[Option<String>],
     stack: egui::Rect,
     width: f32,
     view: &StackView,
@@ -1406,7 +1512,7 @@ fn paint_slide_deck(
                 paint_tucked_edge(ui, rect, rects[0]);
                 None
             } else {
-                paint_card_at(ui, &cards[index], rect)
+                paint_card_at(ui, &cards[index], rect, hints.get(index).and_then(|hint| hint.as_deref()))
             };
             if card_act.is_some() {
                 act = card_act;
@@ -1438,7 +1544,12 @@ fn paint_slide_deck(
     }
 }
 
-fn paint_feed_card(ui: &mut egui::Ui, card: &UpdateCard, pane_w: f32) -> Option<FeedAct> {
+fn paint_feed_card(
+    ui: &mut egui::Ui,
+    card: &UpdateCard,
+    pane_w: f32,
+    hint: Option<&str>,
+) -> Option<FeedAct> {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(pane_w, FEED_CARD_H), egui::Sense::hover());
     ui.painter().rect(
         rect,
@@ -1508,8 +1619,12 @@ fn paint_feed_card(ui: &mut egui::Ui, card: &UpdateCard, pane_w: f32) -> Option<
             );
         }
         if let Some(why) = card.why.as_deref().map(str::trim).filter(|line| !line.is_empty()) {
+            let line = match hint.map(str::trim).filter(|text| !text.is_empty()) {
+                Some(hint) => format!("{why} · {hint}"),
+                None => why.to_string(),
+            };
             ui.label(
-                RichText::new(why)
+                RichText::new(line)
                     .size(crate::theme::FONT_TIP)
                     .color(crate::theme::muted()),
             );

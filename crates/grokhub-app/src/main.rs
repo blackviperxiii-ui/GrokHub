@@ -26,6 +26,7 @@ mod host;
 mod markdown;
 mod night;
 mod loops;
+mod card_prefs;
 mod feed;
 mod recipes;
 mod notify;

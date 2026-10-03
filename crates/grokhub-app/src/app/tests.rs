@@ -15053,6 +15053,8 @@ fn quiet_cabin() -> Cabin {
         automations: Vec::new(),
         grok_loops: Vec::new(),
         updates: Vec::new(),
+        card_prefs: grokhub_core::CardPrefs::default(),
+        home_fold_open: false,
         grok_loop_rx: None,
         night_nl: String::new(),
         watch_once: false,
@@ -21329,6 +21331,55 @@ fn card_menu_hide_and_undo_round_trip() {
     assert!(signals.contains("\"event\":\"unhidden\""), "{signals}");
     assert!(!signals.contains("ZephyrHideTitle9f3a"), "{signals}");
     assert!(!signals.contains("ZephyrHideBody9f3a"), "{signals}");
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn reset_all_clears_what_home_learned() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("home-learned-reset");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let _pin = crate::config::TestConfigDir::set(root.clone());
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.quiet_start = "00:00".into();
+    cabin.cfg.quiet_end = "00:00".into();
+    cabin.note_automation_done("learn-src", "ZephyrLedger snapshot", "ZephyrBodyShouldStayOut");
+    let id = cabin
+        .updates
+        .iter()
+        .find(|card| card.source_id == "learn-src")
+        .map(|card| card.id.clone())
+        .expect("run card");
+    cabin.more_like_this(&id);
+    cabin.less_like_this(&id);
+
+    let prefs_path = root.join("card_prefs.json");
+    let body = std::fs::read_to_string(&prefs_path).unwrap_or_default();
+    assert!(
+        body.contains("zephyrledger") && body.contains("snapshot"),
+        "title keywords landed in card_prefs.json: {body}"
+    );
+    assert!(!body.contains("ZephyrBodyShouldStayOut"), "{body}");
+    let signals_before = std::fs::read_to_string(root.join("card_signals.jsonl")).unwrap_or_default();
+    assert!(signals_before.contains("\"event\":\"more\""), "{signals_before}");
+    assert!(signals_before.contains("\"event\":\"less\""), "{signals_before}");
+    assert!(!signals_before.contains("ZephyrLedger"), "{signals_before}");
+
+    cabin.reset_home_learned();
+    let cleared = std::fs::read_to_string(&prefs_path).unwrap_or_default();
+    let parsed: grokhub_core::CardPrefs = serde_json::from_str(&cleared).expect("empty prefs still parse");
+    assert!(parsed.kinds.is_empty(), "{cleared}");
+    assert!(parsed.groups.is_empty(), "{cleared}");
+    assert!(parsed.topics.is_empty(), "{cleared}");
+    let loaded = grokhub_core::load_card_prefs(&root);
+    assert!(loaded.kinds.is_empty() && loaded.groups.is_empty() && loaded.topics.is_empty());
+    let signals_after = std::fs::read_to_string(root.join("card_signals.jsonl")).unwrap_or_default();
+    assert_eq!(signals_before, signals_after);
 
     let _ = std::fs::remove_dir_all(&root);
     std::env::remove_var("GROKHUB_CONFIG");
