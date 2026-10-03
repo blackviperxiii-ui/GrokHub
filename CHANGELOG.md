@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.10.85 — 2026-10-03
+
+Delete all (Settings → History) no longer brings deleted chats back. It first halts whatever is running, which saves the chats as they were, and then saves the fresh empty chat. Each save is written by its own background thread, so the older save could finish last and overwrite `threads.json` with the deleted chats. They would then come back on the next start. Saves now carry a sequence number. A save that's older than the last one written never replaces the chats or settings. It only writes its project list or secrets when no newer save has written them. This also made the `delete_all_history_clears_seeded_chats` test fail now and then in CI.
+
+- Linux: `grokhub-linux-v2.10.85.tar.gz` and AUR `pkgver=2.10.85`.
+- Windows: `GrokHub-Setup-2.10.85.exe` and `grokhub-windows-v2.10.85.zip`.
+
 ## 2.10.84 — 2026-10-03
 
 A parity harness for the native engine, with nothing switched. `cargo run -p grokhub-agent --example eval` runs a fixed suite on the native engine and on the CLI path: a desktop probe, a small repo bugfix with a test, an Ask-mode refusal, background work plus Halt, an MCP tool call, compaction of a long transcript, and an Imagine call that only builds the request. Dry-run is the default. It uses scripted model replies for the native engine and the test-only fake Grok CLI agent (`grokhub-fake-acp`, not shipped) for the CLI path, with no network, no key and no stored credential. It writes `research/native-parity-v1.md`, a table of every item on both engines plus a GAPS section. **Live evals don't work yet.** `--live` refuses to start without `GROKHUB_EVAL_API_KEY` and a budget of $0.20 or less, and even with both it only says live mode isn't implemented in this build. So the report compares scripted runs, not real models, and its GAPS section says so. The Grok CLI stays the default engine. Plugin trust also no longer reuses a cached hash for files changed in the last two seconds.
