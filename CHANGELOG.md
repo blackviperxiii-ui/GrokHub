@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 2.10.71 — 2026-10-03
+
+The native engine (Settings → Labs, still off by default) can now change things, behind a permission gate. New tools: `write`, `search_replace` (exact match, `replace_all`, keeps CRLF files CRLF, one writer per file), `run_terminal_command` (bash on Linux, PowerShell on Windows; 120 s default, 300 s max; output capped), and the desktop tools screenshot, click, move, drag, scroll, type and key, called in-process with no MCP hop. Shell commands run in their own process group on Linux and in a kill-on-close job object on Windows, so Stop, Halt and timeouts end the whole process tree, not just the shell.
+
+The gate: read-only tools always run. In Ask and Auto, anything else shows the usual permission card (Auto stays Ask until the Phase 5 reviewer). Always runs it. Plan and btw keep the read-only set. Unattended runs deny non-read-only tools with the same message as the CLI path. Desktop tools are absent while **Let Grok control the desktop** is off, and refuse while halted or on the lock screen. The Grok CLI path is unchanged. No live call has been made yet.
+
+- Linux: `grokhub-linux-v2.10.71.tar.gz` and AUR `pkgver=2.10.71`.
+- Windows: `GrokHub-Setup-2.10.71.exe` and `grokhub-windows-v2.10.71.zip`.
+
 ## 2.10.70 — 2026-10-03
 
 A native engine arrives behind a switch. **Settings → Labs → Native engine (no Grok CLI)** is off by default, and while it's off chats launch the Grok CLI exactly as before. With it on, new chats run GrokHub's own read-only agent (new `grokhub-agent` crate, sync, `ureq`). It streams `POST api.x.ai/v1/responses` with model `grok-4.7` and the composer's reasoning effort, plus hosted `web_search` and `x_search`. Retries follow the Grok Build schedule (15 tries, 2 s doubling to 30 s, ±20% jitter, Retry-After). The loop runs until no tool call remains or 50 turns pass, and honors Stop, Halt, steer at the next turn boundary, and a guard against the same call three times in a row. The tools are read-only: `read_file` (PNG/JPEG go back as images), `list_dir`, `grep` (`.gitignore` aware) and `glob`, all confined to the workspace. Any write, edit or shell call is refused. Those chats carry a **Native** badge, and usage shows tokens and cost labeled "SuperGrok pool" (sign-in) or "API credits" (key).

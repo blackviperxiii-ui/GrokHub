@@ -1,11 +1,14 @@
-//! Native read-only engine. The CLI launch path stays in `acp` and `chat_kick`.
+//! Native engine thread. The CLI launch path stays in `acp` and `chat_kick`.
 
 use super::*;
-use grokhub_acp::ExternalCmd;
-use grokhub_agent::{AuthKind, Engine, EngineParts, NativeEngine, StampHalt, XaiClient};
+use grokhub_acp::{ExternalCmd, NativePerm};
+use grokhub_agent::{
+    AuthKind, Engine, EngineParts, Gate, NativeEngine, PermAnswer, PermMode, PermitNote, StampHalt, XaiClient,
+};
 use std::collections::HashMap;
 use std::time::Duration;
 
+#[derive(Clone)]
 struct LiveCfg {
     workspace: std::path::PathBuf,
     model: String,
@@ -13,6 +16,7 @@ struct LiveCfg {
     system: String,
     bearer: String,
     auth_kind: AuthKind,
+    gate: Gate,
 }
 
 fn live_map() -> &'static Mutex<HashMap<String, LiveCfg>> {
@@ -56,11 +60,12 @@ impl Cabin {
         if !self.native_engine_for_current() {
             return false;
         }
-        if let Err(err) = self.ensure_native_engine() {
-            self.fail_native(&err);
-            return true;
-        }
-        if let Err(err) = self.publish_native_cfg() {
+        let ready = match self.ensure_native_engine() {
+            Ok(()) => self.publish_native_cfg(),
+            Err(err) => Err(err),
+        };
+        self.side_ask_kick = false;
+        if let Err(err) = ready {
             self.fail_native(&err);
             return true;
         }
@@ -140,12 +145,29 @@ impl Cabin {
             system,
             bearer,
             auth_kind,
+            gate: self.native_gate(),
         };
         live_map()
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .insert(session_id.to_string(), cfg);
         Ok(())
+    }
+
+    fn native_gate(&self) -> Gate {
+        let readonly = self.side_ask_kick
+            || matches!(self.session_mode, grokhub_acp::SessionMode::Plan | grokhub_acp::SessionMode::Ask);
+        let mode = match self.permission_mode {
+            grokhub_acp::PermissionMode::Ask => PermMode::Ask,
+            grokhub_acp::PermissionMode::Auto => PermMode::Auto,
+            grokhub_acp::PermissionMode::AlwaysApprove => PermMode::Always,
+        };
+        Gate {
+            mode,
+            readonly_session: readonly,
+            attended: !self.scheduled_perm,
+            desktop: self.cfg.desktop_control,
+        }
     }
 
     fn native_cred(&mut self) -> Result<(String, AuthKind), String> {
@@ -195,6 +217,7 @@ fn serve_native(session_id: String, ext_rx: std::sync::mpsc::Receiver<ExternalCm
     let cancel = grokhub_agent::CancelToken::new();
     let steer = grokhub_agent::SteerQueue::new();
     let (job_tx, job_rx) = std::sync::mpsc::channel();
+    let (permit_tx, permit_inbox) = grokhub_agent::PermitInbox::pair();
     let cancel_ctl = cancel.clone();
     let steer_ctl = steer.clone();
     std::thread::spawn(move || {
@@ -212,6 +235,15 @@ fn serve_native(session_id: String, ext_rx: std::sync::mpsc::Receiver<ExternalCm
                         return;
                     }
                 }
+                ExternalCmd::Permission { id, answer } => {
+                    let answer = match answer {
+                        NativePerm::Allow => PermAnswer::Allow,
+                        NativePerm::Always => PermAnswer::Always,
+                        NativePerm::Deny => PermAnswer::Deny,
+                        NativePerm::Cancel => PermAnswer::Cancel,
+                    };
+                    let _ = permit_tx.send(PermitNote { id, answer });
+                }
             }
         }
     });
@@ -228,6 +260,9 @@ fn serve_native(session_id: String, ext_rx: std::sync::mpsc::Receiver<ExternalCm
         cancel,
         steer,
         halt: Box::new(StampHalt { started_ms: 0, read: || None }),
+        gate: Gate::phase_readonly(),
+        desktop: Some(Box::new(crate::desktop_mcp::NativeDesktop::new())),
+        permits: Box::new(permit_inbox),
     });
     while let Ok(job) = job_rx.recv() {
         let NativeJob::Prompt { text, image } = job else {
@@ -237,20 +272,15 @@ fn serve_native(session_id: String, ext_rx: std::sync::mpsc::Receiver<ExternalCm
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .get(&session_id)
-            .map(|cfg| LiveCfg {
-                workspace: cfg.workspace.clone(),
-                model: cfg.model.clone(),
-                effort: cfg.effort.clone(),
-                system: cfg.system.clone(),
-                bearer: cfg.bearer.clone(),
-                auth_kind: cfg.auth_kind,
-            })
+            .cloned()
         else {
             let _ = evt_tx.send(AcpEvent::Err(grokhub_core::XAI_NEED_SIGNIN.into()));
             let _ = evt_tx.send(AcpEvent::Done { stop_reason: "error".into() });
             continue;
         };
         let client = XaiClient::new(cfg.bearer, cfg.auth_kind, Duration::from_secs(120));
+        engine.set_workspace(cfg.workspace);
+        engine.set_gate(cfg.gate);
         engine.set_route(Box::new(client), cfg.model, cfg.effort, cfg.system, cfg.auth_kind);
         let started = grokhub_core::now_ms();
         engine.set_halt(Box::new(StampHalt {

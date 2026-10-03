@@ -2,8 +2,10 @@
 
 use std::path::PathBuf;
 
-use grokhub_acp::{AcpEvent, GrokUsage, ToolCard};
+use grokhub_acp::{AcpEvent, GrokUsage, PermissionAsk, ToolCard};
 
+use crate::gate::{Gate, PermitWait};
+use crate::tools::DesktopOps;
 use crate::{
     run_loop, AuthKind, CancelToken, HaltCheck, InputItem, LoopEvent, LoopIn, ModelClient, SteerQueue,
     StopReason, Usage, DEFAULT_MAX_TURNS,
@@ -26,6 +28,9 @@ pub struct NativeEngine {
     cancel: CancelToken,
     steer: SteerQueue,
     halt: Box<dyn HaltCheck + Send>,
+    gate: Gate,
+    desktop: Option<Box<dyn DesktopOps>>,
+    permits: Box<dyn PermitWait + Send>,
     history: Vec<InputItem>,
     usage: Usage,
 }
@@ -42,6 +47,9 @@ pub struct EngineParts {
     pub cancel: CancelToken,
     pub steer: SteerQueue,
     pub halt: Box<dyn HaltCheck + Send>,
+    pub gate: Gate,
+    pub desktop: Option<Box<dyn DesktopOps>>,
+    pub permits: Box<dyn PermitWait + Send>,
 }
 
 impl NativeEngine {
@@ -58,9 +66,20 @@ impl NativeEngine {
             cancel: parts.cancel,
             steer: parts.steer,
             halt: parts.halt,
+            gate: parts.gate,
+            desktop: parts.desktop,
+            permits: parts.permits,
             history: Vec::new(),
             usage: Usage::default(),
         }
+    }
+
+    pub fn set_workspace(&mut self, workspace: PathBuf) {
+        self.workspace = workspace;
+    }
+
+    pub fn set_gate(&mut self, gate: Gate) {
+        self.gate = gate;
     }
 
     pub fn steer(&self) -> SteerQueue {
@@ -106,9 +125,13 @@ impl Engine for NativeEngine {
             cancel: &self.cancel,
             steer: &self.steer,
             halt: self.halt.as_ref(),
+            gate: self.gate,
+            desktop: self.desktop.as_deref(),
+            permits: self.permits.as_ref(),
         };
+        let session = self.conversation_id.clone();
         let out = run_loop(&input, &mut self.history, text, image, &mut |ev| {
-            if let Some(acp) = to_acp(ev, self.auth_kind) {
+            if let Some(acp) = to_acp(ev, self.auth_kind, &session) {
                 emit(acp);
             }
         });
@@ -130,7 +153,7 @@ impl Engine for NativeEngine {
     }
 }
 
-fn to_acp(ev: LoopEvent, kind: AuthKind) -> Option<AcpEvent> {
+fn to_acp(ev: LoopEvent, kind: AuthKind, session: &str) -> Option<AcpEvent> {
     Some(match ev {
         LoopEvent::Text(text) => AcpEvent::Text(text),
         LoopEvent::Thought(text) => AcpEvent::Thought(text),
@@ -144,6 +167,15 @@ fn to_acp(ev: LoopEvent, kind: AuthKind) -> Option<AcpEvent> {
             image_data_url: image,
         }),
         LoopEvent::Usage(usage) => grok_usage_event(&usage, kind),
+        LoopEvent::Permission { id, name, action } => AcpEvent::Permission(PermissionAsk {
+            rpc_id: serde_json::Value::String(id.clone()),
+            session_id: session.to_string(),
+            title: name.clone(),
+            tool_call_id: id,
+            action,
+            reason: String::new(),
+            reject_option: Some("denied".into()),
+        }),
     })
 }
 
@@ -234,6 +266,9 @@ mod tests {
             cancel: CancelToken::new(),
             steer: SteerQueue::new(),
             halt: Box::new(NoHalt),
+            gate: crate::Gate::phase_readonly(),
+            desktop: None,
+            permits: Box::new(crate::gate::ClosedPermits),
         });
         let events = Mutex::new(Vec::new());
         engine

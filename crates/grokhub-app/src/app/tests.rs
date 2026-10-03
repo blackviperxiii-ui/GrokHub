@@ -20867,6 +20867,23 @@ fn native_flag_off_cli_path_is_unchanged() {
 }
 
 #[test]
+fn native_auto_keeps_the_permission_card() {
+    let acp = include_str!("acp.rs");
+    let poll = acp
+        .split("fn poll_acp(")
+        .nth(1)
+        .and_then(|src| src.split("fn finish_acp_turn").next())
+        .expect("poll_acp");
+    assert!(poll.contains("auto_allows()"), "{poll}");
+    assert!(poll.contains("starts_with(\"native-\")"), "{poll}");
+    assert!(poll.contains("&& !native_session"), "{poll}");
+    let engine = include_str!("native_engine.rs");
+    assert!(engine.contains("ExternalCmd::Permission"), "{engine}");
+    let kick = fn_src(engine, "kick_native_turn");
+    assert!(kick.contains("side_ask_kick = false"), "{kick}");
+}
+
+#[test]
 fn signin_button_and_keychain_move() {
     let settings = include_str!("settings.rs");
     assert!(settings.contains("Sign in with Grok"));
