@@ -175,6 +175,9 @@ pub fn webfetch_matches(rule: &Rule, url: &str) -> bool {
 
 /// An explicit ask rule matched. Auto-review must not override it.
 pub(crate) fn explicit_ask(policy: &Policy, name: &str, arguments: &str, workspace: &Path) -> bool {
+    if crate::mcp::is_mcp_call(name, arguments) {
+        return crate::mcp::has_ask_rule(policy, name, arguments);
+    }
     let Some(kind) = tool_kind(name) else {
         return false;
     };

@@ -20,6 +20,7 @@ const READONLY: &[&str] = &[
     "glob",
     "get_command_or_subagent_output",
     "scheduler_list",
+    "search_tool",
 ];
 const EDIT: &[&str] = &["write", "search_replace"];
 const SHELL: &[&str] = &["run_terminal_command"];
@@ -175,6 +176,10 @@ pub fn readonly_refusal(name: &str) -> String {
     format!("{READ_ONLY_PHASE}: `{name}` is not available. Use read_file, list_dir, grep, or glob.")
 }
 
+pub fn mcp_policy_deny(name: &str) -> String {
+    format!("Tool `{name}` was not executed: Denied by permission policy: deny rule on mcp")
+}
+
 pub fn unattended_deny(name: &str) -> String {
     let label = if is_desktop(name) {
         "mcp matching \"grokhub-desktop__*\""
@@ -237,6 +242,9 @@ pub fn decide_with(
     workspace: &Path,
     policy: Option<&crate::perm::Policy>,
 ) -> Decision {
+    if let Some(decision) = crate::mcp::permission(gate, name, arguments, latched_always, policy) {
+        return decision;
+    }
     if name == "monitor" && crate::tasks::monitor_watch_only(arguments) {
         return Decision::Run;
     }
