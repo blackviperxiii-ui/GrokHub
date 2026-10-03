@@ -1255,6 +1255,11 @@ mod tests {
             perms: policy,
             context_length: 0,
             tasks: None,
+            depth: 0,
+            agent_id: None,
+            shared_client: None,
+            shared_permits: None,
+            shared_desktop: None,
         };
         let mut history = Vec::new();
         let mut events = Vec::new();

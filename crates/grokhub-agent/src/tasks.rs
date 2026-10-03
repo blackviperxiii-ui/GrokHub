@@ -72,6 +72,8 @@ struct TaskSlot {
     kill: Arc<dyn Fn() + Send + Sync>,
     /// Set when this task was started by a monitor. Halt stops it with the rest.
     owned_by_monitor: bool,
+    /// Subagent id that started this command or child agent. Cancel of that agent kills it.
+    owner: Option<String>,
 }
 
 struct MonitorSlot {
@@ -86,6 +88,7 @@ struct HubInner {
     monitors: HashMap<String, MonitorSlot>,
     notices: VecDeque<String>,
     halted: bool,
+    pending_usage: crate::Usage,
 }
 
 /// One session's background commands, monitors, and pending notices.
@@ -103,6 +106,7 @@ impl TaskHub {
                 monitors: HashMap::new(),
                 notices: VecDeque::new(),
                 halted: false,
+                pending_usage: crate::Usage::default(),
             }),
         })
     }
@@ -121,7 +125,16 @@ impl TaskHub {
     }
 
     pub fn spawn(self: &Arc<Self>, cwd: &Path, command: &str) -> Result<String, String> {
-        self.spawn_owned(cwd, command, false)
+        self.spawn_for(cwd, command, None)
+    }
+
+    pub fn spawn_for(
+        self: &Arc<Self>,
+        cwd: &Path,
+        command: &str,
+        owner: Option<&str>,
+    ) -> Result<String, String> {
+        self.spawn_owned(cwd, command, false, owner.map(str::to_string))
     }
 
     fn spawn_owned(
@@ -129,6 +142,7 @@ impl TaskHub {
         cwd: &Path,
         command: &str,
         owned_by_monitor: bool,
+        owner: Option<String>,
     ) -> Result<String, String> {
         let command = command.trim().to_string();
         if command.is_empty() {
@@ -159,6 +173,7 @@ impl TaskHub {
             phase: Mutex::new(Phase::Running),
             kill: proc.killer(),
             owned_by_monitor,
+            owner,
         });
         self.lock().tasks.insert(id.clone(), Arc::clone(&slot));
         let notice_hub = Arc::clone(self);
@@ -180,9 +195,109 @@ impl TaskHub {
         }
     }
 
-    /// Kill a background command or stop a monitor. Unknown ids error.
+    /// Register a running subagent. `sN` ids share the counter with commands and monitors.
+    /// `kill` cancels it. Output is appended by the agent when it finishes.
+    pub fn register_agent(
+        self: &Arc<Self>,
+        owner: Option<String>,
+        kill: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<String, String> {
+        if self.is_halted() {
+            return Err("halted".into());
+        }
+        let id = {
+            let mut hub = self.lock();
+            if hub.halted {
+                return Err("halted".into());
+            }
+            hub.seq = hub.seq.saturating_add(1);
+            format!("s{}", hub.seq)
+        };
+        let slot = Arc::new(TaskSlot {
+            ring: Arc::new(Mutex::new(Ring::new())),
+            read_at: AtomicU64::new(0),
+            phase: Mutex::new(Phase::Running),
+            kill,
+            owned_by_monitor: false,
+            owner,
+        });
+        self.lock().tasks.insert(id.clone(), slot);
+        Ok(id)
+    }
+
+    pub fn append_output(&self, id: &str, text: &str) -> Result<(), String> {
+        if text.is_empty() {
+            return Ok(());
+        }
+        let slot = self.task(id)?;
+        let mut ring = slot.ring.lock().unwrap_or_else(|err| err.into_inner());
+        ring.push(text.as_bytes());
+        if !text.ends_with('\n') {
+            ring.push(b"\n");
+        }
+        Ok(())
+    }
+
+    /// Mark a subagent finished. A kill that already landed stays killed.
+    pub fn finish_agent(&self, id: &str, text: &str) {
+        let Ok(slot) = self.task(id) else {
+            return;
+        };
+        if !text.is_empty() {
+            let mut ring = slot.ring.lock().unwrap_or_else(|err| err.into_inner());
+            ring.push(text.as_bytes());
+            if !text.ends_with('\n') {
+                ring.push(b"\n");
+            }
+        }
+        let mut phase = slot.phase.lock().unwrap_or_else(|err| err.into_inner());
+        if !matches!(*phase, Phase::Running) {
+            return;
+        }
+        *phase = Phase::Exited(0);
+        drop(phase);
+        let tail = notice_tail(&slot);
+        let note = if tail.is_empty() {
+            format!("Subagent {id} finished.")
+        } else {
+            format!("Subagent {id} finished.\n{tail}")
+        };
+        self.push_notice(note);
+    }
+
+    /// Kill commands and child agents started by `owner`.
+    pub fn kill_owner(&self, owner: &str) {
+        if owner.is_empty() {
+            return;
+        }
+        let slots: Vec<_> = {
+            let hub = self.lock();
+            hub.tasks
+                .values()
+                .filter(|slot| slot.owner.as_deref() == Some(owner))
+                .cloned()
+                .collect()
+        };
+        for slot in slots {
+            kill_slot(&slot);
+        }
+    }
+
+    /// Child usage that arrived after the spawning tool returned.
+    pub fn roll_usage(&self, extra: &crate::Usage) {
+        self.lock().pending_usage.add(extra);
+    }
+
+    pub fn take_usage(&self) -> crate::Usage {
+        std::mem::take(&mut self.lock().pending_usage)
+    }
+
+    /// Kill a background command, a subagent, or stop a monitor. Unknown ids error.
+    /// The hub lock is dropped before `kill` runs. A subagent kill cancels its
+    /// children, and that path locks the hub again.
     pub fn kill(&self, id: &str) -> Result<String, String> {
-        if let Some(slot) = self.lock().tasks.get(id).cloned() {
+        let slot = self.lock().tasks.get(id).cloned();
+        if let Some(slot) = slot {
             kill_slot(&slot);
             return Ok(format!("killed {id}"));
         }
@@ -217,7 +332,7 @@ impl TaskHub {
             Some(text) => Some(regex::Regex::new(text).map_err(|err| format!("pattern: {err}"))?),
         };
         let launched = if let Some(command) = command.filter(|c| !c.trim().is_empty()) {
-            Some(self.spawn_owned(cwd, &command, true)?)
+            Some(self.spawn_owned(cwd, &command, true, None)?)
         } else {
             None
         };
@@ -312,7 +427,8 @@ impl TaskHub {
         };
         stop.store(true, Ordering::SeqCst);
         if let Some(task_id) = task_id {
-            if let Some(slot) = self.lock().tasks.get(&task_id).cloned() {
+            let slot = self.lock().tasks.get(&task_id).cloned();
+            if let Some(slot) = slot {
                 if slot.owned_by_monitor {
                     kill_slot(&slot);
                 }
