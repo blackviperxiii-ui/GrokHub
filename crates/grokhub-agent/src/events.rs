@@ -164,6 +164,12 @@ impl Engine for NativeEngine {
         if image.is_none() && crate::compact::is_manual_compact_command(text) {
             return self.compact_now(emit);
         }
+        if image.is_none() && crate::memory::is_flush_command(text) {
+            return self.flush_now(emit);
+        }
+        if image.is_none() && crate::memory::is_dream_command(text) {
+            return self.dream_now(emit);
+        }
         let policy = crate::perm::Policy::load(&self.workspace);
         crate::mcp::set_workspace(&self.workspace);
         let input = LoopIn {
@@ -279,7 +285,8 @@ impl NativeEngine {
             error: None,
         });
         crate::hooks::on_compact(&self.conversation_id, &self.workspace, true);
-        let compact_result = crate::compact::compact_transcript(
+        let compact_result = crate::compact::compact_after_flush(
+            &self.workspace,
             self.client.as_ref(),
             &self.cancel,
             &self.model,
@@ -333,6 +340,59 @@ impl NativeEngine {
                 });
             }
         }
+        Ok(())
+    }
+
+    /// `/flush` is not a model call and is not stored as a user turn.
+    fn flush_now(&mut self, emit: &mut dyn FnMut(AcpEvent)) -> Result<(), String> {
+        let status = match crate::memory::flush_pending(&self.workspace, &self.history) {
+            Ok(true) => "Flushed memory".to_string(),
+            Ok(false) => "Nothing to flush".to_string(),
+            Err(err) => format!("Flush failed: {err}"),
+        };
+        crate::memory::queue_memory_status(status);
+        emit(AcpEvent::Done {
+            stop_reason: "end_turn".into(),
+        });
+        Ok(())
+    }
+
+    /// `/dream` is one low-effort call on the session client. A failure leaves
+    /// MEMORY.md as it was. The command is not stored as a user turn.
+    fn dream_now(&mut self, emit: &mut dyn FnMut(AcpEvent)) -> Result<(), String> {
+        let mut spent = Usage::default();
+        let status = match crate::memory::dream(
+            self.client.as_ref(),
+            &self.cancel,
+            &self.model,
+            &self.workspace,
+            &self.conversation_id,
+            &mut spent,
+        ) {
+            Ok(msg) => msg,
+            Err(err) => err,
+        };
+        if spent != Usage::default() {
+            self.usage.add(&spent);
+            let _ = crate::session::record_usage(
+                &self.conversation_id,
+                &self.workspace.display().to_string(),
+                &self.model,
+                &spent,
+                self.auth_kind.meter(),
+            );
+            let used = crate::compact::estimate_input_tokens(&self.history);
+            emit(AcpEvent::Usage(grok_usage(
+                &self.usage,
+                self.auth_kind,
+                used,
+                self.context_length,
+            )));
+        }
+        crate::memory::queue_memory_status(status);
+        emit(AcpEvent::Done {
+            stop_reason: "end_turn".into(),
+        });
         Ok(())
     }
 }
@@ -720,6 +780,83 @@ mod tests {
             AcpEvent::Compact { error: Some(message), .. } if message.contains("nothing to compact")
         )));
         assert!(crate::session::load_session("native-empty").is_err());
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn flush_command_writes_memory_without_a_model_call() {
+        struct NoCall;
+        impl ModelClient for NoCall {
+            fn stream(
+                &self,
+                _req: &crate::ResponsesRequest,
+                _cancel: &CancelToken,
+                _sink: &mut dyn FnMut(crate::StreamEvent),
+            ) -> Result<crate::TurnOutput, crate::ClientError> {
+                panic!("/flush must not call the model");
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("gh-eng-flush-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        let mut engine = engine(&dir, "native-flush", Arc::new(NoCall));
+        engine.history.push(InputItem::Message {
+            role: "user".into(),
+            content: vec![crate::ContentPart::InputText(
+                "keep the quay lantern".into(),
+            )],
+        });
+        engine.prompt("/flush", None, &mut |_| {}).unwrap();
+        let mem = std::fs::read_to_string(crate::memory::flush_memory_path(&dir)).unwrap();
+        assert!(mem.contains("keep the quay lantern"), "{mem}");
+        assert!(!dir.join("MEMORY.md").exists());
+        assert!(engine
+            .history
+            .iter()
+            .all(|item| !crate::compact::message_text(item).contains("/flush")));
+        drop(_guard);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dream_command_failure_keeps_memory_intact() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        struct DreamBoom {
+            saw: AtomicBool,
+        }
+        impl ModelClient for DreamBoom {
+            fn stream(
+                &self,
+                req: &crate::ResponsesRequest,
+                _cancel: &CancelToken,
+                _sink: &mut dyn FnMut(crate::StreamEvent),
+            ) -> Result<crate::TurnOutput, crate::ClientError> {
+                assert_eq!(req.effort.as_deref(), Some("low"));
+                assert!(req.input.iter().any(|item| {
+                    crate::compact::message_text(item).contains("<<<GH_WORKSPACE>>>")
+                }));
+                self.saw.store(true, Ordering::SeqCst);
+                Err(crate::ClientError::Protocol("dream down".into()))
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("gh-eng-dream-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        let path = dir.join("MEMORY.md");
+        std::fs::write(&path, "keep the harbor fact\n").unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let client = Arc::new(DreamBoom {
+            saw: AtomicBool::new(false),
+        });
+        let mut engine = engine(&dir, "native-dream", client.clone());
+        engine.prompt("/dream", None, &mut |_| {}).unwrap();
+        assert!(client.saw.load(Ordering::SeqCst));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert!(!path.with_file_name("MEMORY.md.dream.bak").exists());
+        assert!(engine.history.is_empty());
         drop(_guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
