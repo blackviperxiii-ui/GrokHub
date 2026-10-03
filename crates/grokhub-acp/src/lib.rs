@@ -23,7 +23,8 @@ pub use client::{
     run_single_turn, title_after_selecting_plan,
     run_single_turn_full, spawn_grok_p_stream, session_usage, GrokPAttach,
     session_title_from_chat_history,
-    show_session, split_session_row, wait_event, AcpHandle, GrokSession, SingleTurn, SpawnOpts,
+    show_session, split_session_row, wait_event, AcpHandle, ExternalCmd, GrokSession, SingleTurn,
+    SpawnOpts,
 };
 pub use install::{
     begin_ensure_grok_alpha, begin_grok_install, begin_grok_install_force, begin_keep_cli_alpha,

@@ -20837,6 +20837,92 @@ fn cabin_default_model_label_empty_unknown_and_known() {
     assert_eq!(cabin_default_model_label("grok-4.7"), "Grok 4.7");
 }
 
+#[test]
+fn native_flag_off_cli_path_is_unchanged() {
+    assert!(!AppConfig::default().native_engine);
+    let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
+    assert!(!absent.native_engine);
+    let acp = include_str!("acp.rs");
+    let spawn = acp
+        .split("build_agent::spawn_session(")
+        .nth(1)
+        .expect("spawn_session");
+    let args = spawn.lines().take(12).collect::<Vec<_>>().join("\n");
+    assert!(args.contains("cwd.clone(),"), "{args}");
+    assert!(args.contains("auth_key.clone(),"), "{args}");
+    assert!(args.contains("xai_env.clone(),"), "{args}");
+    assert!(args.contains("perm,"), "{args}");
+    assert!(args.contains("mode,"), "{args}");
+    assert!(args.contains("reasoning_effort.clone()"), "{args}");
+    assert!(args.contains("resume,"), "{args}");
+    assert!(args.contains("user_home,"), "{args}");
+    assert!(args.contains("worktree,"), "{args}");
+    let src = cabin_src();
+    let kick = fn_src(&src, "kick_model");
+    assert!(kick.contains("spawn_grok_p_stream"), "{kick}");
+    assert_eq!(
+        crate::build_agent::cli_launch_args(false, Some("high")),
+        grokhub_acp::agent_args(false, Some("high"))
+    );
+}
+
+#[test]
+fn signin_button_and_keychain_move() {
+    let settings = include_str!("settings.rs");
+    assert!(settings.contains("Sign in with Grok"));
+    assert!(settings.contains("Connect Grok"));
+
+    struct Mem {
+        current: std::sync::Mutex<Option<grokhub_core::ImagineTokens>>,
+        legacy: std::sync::Mutex<Option<grokhub_core::ImagineTokens>>,
+    }
+    impl grokhub_core::OAuthAccountStore for Mem {
+        fn load_account(&self, account: &str) -> Result<Option<grokhub_core::ImagineTokens>, String> {
+            let slot = if account == grokhub_core::XAI_OAUTH_ACCOUNT {
+                &self.current
+            } else if account == grokhub_core::XAI_OAUTH_LEGACY_ACCOUNT {
+                &self.legacy
+            } else {
+                return Ok(None);
+            };
+            Ok(slot.lock().unwrap_or_else(|err| err.into_inner()).clone())
+        }
+        fn save_account(
+            &self,
+            account: &str,
+            tokens: &grokhub_core::ImagineTokens,
+        ) -> Result<(), String> {
+            if account == grokhub_core::XAI_OAUTH_ACCOUNT {
+                *self.current.lock().unwrap_or_else(|err| err.into_inner()) = Some(tokens.clone());
+                return Ok(());
+            }
+            Err("unexpected account".into())
+        }
+        fn delete_account(&self, account: &str) -> Result<(), String> {
+            let slot = if account == grokhub_core::XAI_OAUTH_ACCOUNT {
+                &self.current
+            } else {
+                &self.legacy
+            };
+            *slot.lock().unwrap_or_else(|err| err.into_inner()) = None;
+            Ok(())
+        }
+    }
+    let legacy = grokhub_core::ImagineTokens {
+        access_token: "moved".into(),
+        refresh_token: Some("r".into()),
+        ..grokhub_core::ImagineTokens::default()
+    };
+    let store = Mem {
+        current: std::sync::Mutex::new(None),
+        legacy: std::sync::Mutex::new(Some(legacy)),
+    };
+    let loaded = grokhub_core::load_xai_oauth(&store).unwrap().unwrap();
+    assert_eq!(loaded.access_token, "moved");
+    assert!(store.legacy.lock().unwrap().is_none());
+    assert!(store.current.lock().unwrap().is_some());
+}
+
 // Folded from PR #422.
 #[test]
 fn cabin_default_efforts_lists_known_ids() {

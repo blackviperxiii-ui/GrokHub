@@ -389,6 +389,9 @@ pub struct AppConfig {
     /// Expiry sweep, quiet release, and the digest clock. No settings panel.
     #[serde(default, skip_serializing_if = "FeedPulse::is_background_default")]
     pub feed_pulse: FeedPulse,
+    /// Settings → Labs. Off keeps the Grok CLI launch path.
+    #[serde(default)]
+    pub native_engine: bool,
 }
 
 fn default_yolo() -> bool {
@@ -501,6 +504,7 @@ impl Default for AppConfig {
             profile_picture: String::new(),
             digest_brief: String::new(),
             feed_pulse: FeedPulse::default(),
+            native_engine: false,
         }
     }
 }

@@ -17,6 +17,7 @@ pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
         SettingsSec::Update => "Update",
         SettingsSec::About => "About",
         SettingsSec::Defaults => "Cabin defaults",
+        SettingsSec::Labs => "Labs",
     }
 }
 
@@ -351,6 +352,7 @@ impl Cabin {
                                                     (SettingsSec::Appearance, "Appearance"),
                                                     (SettingsSec::Behavior, "Behavior"),
                                                     (SettingsSec::Defaults, "Cabin defaults"),
+                                                    (SettingsSec::Labs, "Labs"),
                                                 ] {
                                                     if crate::cards::settings_nav(ui, label, sec == s) {
                                                         next_sec = Some(s);
@@ -459,7 +461,7 @@ impl Cabin {
                                                                 ui,
                                                                 auth_title,
                                                                 auth_hint,
-                                                                if oauth_on { "Sign out" } else { "Connect" },
+                                                                if oauth_on { "Sign out" } else { "Sign in with Grok" },
                                                             ) {
                                                                 if oauth_on {
                                                                     disconnect = true;
@@ -815,6 +817,17 @@ impl Cabin {
                                                                 "Always collapse",
                                                                 "Thoughts start collapsed in every session. Expand opens one at a time.",
                                                                 &mut self.cfg.always_collapse_thoughts,
+                                                            ) {
+                                                                self.persist_cfg();
+                                                                self.status = "Saved".into();
+                                                            }
+                                                        }
+                                                        SettingsSec::Labs => {
+                                                            if crate::cards::settings_toggle(
+                                                                ui,
+                                                                "Native engine (no Grok CLI)",
+                                                                "New chats talk to xAI directly. Tools stay read-only.",
+                                                                &mut self.cfg.native_engine,
                                                             ) {
                                                                 self.persist_cfg();
                                                                 self.status = "Saved".into();
