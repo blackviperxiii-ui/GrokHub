@@ -230,7 +230,7 @@ impl Cabin {
         }
     }
 
-    fn native_cred(&mut self) -> Result<(String, AuthKind), String> {
+    pub(super) fn native_cred(&mut self) -> Result<(String, AuthKind), String> {
         let now = grokhub_core::now_ms();
         if let Some(tokens) = self.imagine_native.tokens.clone() {
             if grokhub_core::imagine_oauth_preferred(&tokens, now) {
@@ -360,6 +360,8 @@ fn serve_native(session_id: String, ext_rx: std::sync::mpsc::Receiver<ExternalCm
         desktop: Some(Box::new(crate::desktop_mcp::NativeDesktop::new())),
         permits: Box::new(permit_inbox),
     });
+    grokhub_agent::watch_cancel(&session_id, cancel.clone());
+    let _ = grokhub_agent::hub_for(&session_id);
     let _run = grokhub_agent::attach_run(&session_id, cancel.clone());
     if let Ok(info) = grokhub_agent::load_session(&session_id) {
         engine.resume(info.input(), info.usage);

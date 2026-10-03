@@ -54,7 +54,13 @@ impl Cabin {
                             self.status = format!("Queued ({})", self.followup_queue.len());
                             return;
                         }
-                        LiveSend::Steer => steer = Some(self.stop_turn_for_steer()),
+                        LiveSend::Steer => {
+                            if self.native_engine_for_current() {
+                                self.steer_native_live(text);
+                                return;
+                            }
+                            steer = Some(self.stop_turn_for_steer());
+                        }
                     }
                 } else {
                     let prev =
