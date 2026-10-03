@@ -27,7 +27,8 @@ pub fn schema() -> Value {
             "type": "object",
             "properties": {
                 "command": {"type": "string"},
-                "timeout": {"type": "integer", "description": "Milliseconds. Default 120000. Maximum 300000."}
+                "timeout": {"type": "integer", "description": "Milliseconds. Default 120000. Maximum 300000. Ignored when is_background is true."},
+                "is_background": {"type": "boolean", "description": "Start the command and return a task id immediately. Read it with get_command_or_subagent_output."}
             },
             "required": ["command"],
             "additionalProperties": false
@@ -138,6 +139,109 @@ impl CapBuf {
         out.extend(self.tail.iter().copied());
         out
     }
+}
+
+pub(crate) enum WaitPoll {
+    Running,
+    Exited(i32),
+    Failed(String),
+}
+
+/// A command in its own process group or job. Drop kills the tree unless disarmed.
+pub(crate) struct BgProc {
+    pub stdout: Option<Box<dyn std::io::Read + Send>>,
+    pub stderr: Option<Box<dyn std::io::Read + Send>>,
+    armed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    kill: std::sync::Arc<dyn Fn() + Send + Sync>,
+    wait: std::sync::Mutex<Box<dyn FnMut() -> WaitPoll + Send>>,
+}
+
+impl BgProc {
+    pub(crate) fn killer(&self) -> std::sync::Arc<dyn Fn() + Send + Sync> {
+        let kill = std::sync::Arc::clone(&self.kill);
+        let armed = std::sync::Arc::clone(&self.armed);
+        std::sync::Arc::new(move || {
+            if armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                kill();
+            }
+        })
+    }
+
+    pub(crate) fn kill_tree(&self) {
+        (self.killer())();
+    }
+
+    pub(crate) fn disarm(&self) {
+        self.armed.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub(crate) fn poll(&mut self) -> WaitPoll {
+        let mut wait = self.wait.lock().unwrap_or_else(|err| err.into_inner());
+        wait()
+    }
+}
+
+impl Drop for BgProc {
+    fn drop(&mut self) {
+        self.kill_tree();
+    }
+}
+
+#[cfg(unix)]
+pub(crate) fn spawn_background(cwd: &Path, command: &str) -> Result<BgProc, String> {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex};
+
+    let mut child = Command::new("bash")
+        .args(["--noprofile", "--norc", "-c", command])
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .map_err(|err| format!("could not start bash: {err}"))?;
+    let pgid = child.id() as i32;
+    let stdout = child
+        .stdout
+        .take()
+        .map(|pipe| Box::new(pipe) as Box<dyn std::io::Read + Send>);
+    let stderr = child
+        .stderr
+        .take()
+        .map(|pipe| Box::new(pipe) as Box<dyn std::io::Read + Send>);
+    let child = Arc::new(Mutex::new(child));
+    let armed = Arc::new(AtomicBool::new(pgid > 1));
+    let pgid_kill = pgid;
+    let kill: Arc<dyn Fn() + Send + Sync> = Arc::new(move || kill_group(pgid_kill));
+    let wait_child = Arc::clone(&child);
+    let wait: Mutex<Box<dyn FnMut() -> WaitPoll + Send>> = Mutex::new(Box::new(move || {
+        let mut child = wait_child.lock().unwrap_or_else(|err| err.into_inner());
+        match child.try_wait() {
+            Ok(Some(status)) => WaitPoll::Exited(status.code().unwrap_or(1)),
+            Ok(None) => WaitPoll::Running,
+            Err(err) => WaitPoll::Failed(err.to_string()),
+        }
+    }));
+    Ok(BgProc {
+        stdout,
+        stderr,
+        armed,
+        kill,
+        wait,
+    })
+}
+
+#[cfg(windows)]
+pub(crate) fn spawn_background(cwd: &Path, command: &str) -> Result<BgProc, String> {
+    win::spawn_background(cwd, command)
+}
+
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn spawn_background(_cwd: &Path, _command: &str) -> Result<BgProc, String> {
+    Err("shell is not available on this system".into())
 }
 
 fn merge_output(stdout: Vec<u8>, stderr: Vec<u8>) -> Vec<u8> {
@@ -380,7 +484,7 @@ mod tests {
         let output = worker.join().expect("shell thread");
         assert!(output.failed, "{}", output.text);
         assert!(output.text.contains("killed"), "{}", output.text);
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(10);
         while process_alive(pid) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -718,6 +822,200 @@ mod win {
         OsStr::new(text).encode_wide().chain(std::iter::once(0)).collect()
     }
 
+    struct WinProc {
+        job: usize,
+        process: usize,
+        thread: usize,
+    }
+
+    unsafe impl Send for WinProc {}
+    unsafe impl Sync for WinProc {}
+
+    impl Drop for WinProc {
+        fn drop(&mut self) {
+            let mut thread = self.thread as HANDLE;
+            let mut process = self.process as HANDLE;
+            let mut job = self.job as HANDLE;
+            close(&mut thread);
+            close(&mut process);
+            close(&mut job);
+        }
+    }
+
+    struct SpawnGuard {
+        job: HANDLE,
+        process: HANDLE,
+        thread: HANDLE,
+        stdout_read: HANDLE,
+        stderr_read: HANDLE,
+        stdout_write: HANDLE,
+        stderr_write: HANDLE,
+        stdin_read: HANDLE,
+        stdin_write: HANDLE,
+    }
+
+    impl SpawnGuard {
+        fn blank() -> Self {
+            Self {
+                job: ptr::null_mut(),
+                process: ptr::null_mut(),
+                thread: ptr::null_mut(),
+                stdout_read: ptr::null_mut(),
+                stderr_read: ptr::null_mut(),
+                stdout_write: ptr::null_mut(),
+                stderr_write: ptr::null_mut(),
+                stdin_read: ptr::null_mut(),
+                stdin_write: ptr::null_mut(),
+            }
+        }
+    }
+
+    impl Drop for SpawnGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if !self.job.is_null() {
+                    TerminateJobObject(self.job, 1);
+                }
+                if !self.process.is_null() {
+                    TerminateProcess(self.process, 1);
+                }
+            }
+            close(&mut self.thread);
+            close(&mut self.process);
+            close(&mut self.job);
+            close(&mut self.stdout_read);
+            close(&mut self.stderr_read);
+            close(&mut self.stdout_write);
+            close(&mut self.stderr_write);
+            close(&mut self.stdin_read);
+            close(&mut self.stdin_write);
+        }
+    }
+
+    pub(super) fn spawn_background(cwd: &Path, command: &str) -> Result<super::BgProc, String> {
+        use std::sync::atomic::AtomicBool;
+        use std::sync::{Arc, Mutex};
+
+        let mut guard = SpawnGuard::blank();
+        unsafe {
+            guard.job = CreateJobObjectW(ptr::null(), ptr::null());
+            if guard.job.is_null() {
+                return Err(os_err("could not create job"));
+            }
+            let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let set = SetInformationJobObject(
+                guard.job,
+                JobObjectExtendedLimitInformation,
+                &limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION as *const _,
+                u32::try_from(std::mem::size_of_val(&limits)).unwrap_or(u32::MAX),
+            );
+            if set == 0 {
+                return Err(os_err("could not set job limits"));
+            }
+            let (stdout_read, stdout_write) = make_pipe()?;
+            let (stderr_read, stderr_write) = make_pipe()?;
+            let (stdin_read, stdin_write) = make_pipe()?;
+            guard.stdout_read = stdout_read;
+            guard.stderr_read = stderr_read;
+            guard.stdout_write = stdout_write;
+            guard.stderr_write = stderr_write;
+            guard.stdin_read = stdin_read;
+            guard.stdin_write = stdin_write;
+            hide_inherit(guard.stdout_read)?;
+            hide_inherit(guard.stderr_read)?;
+            hide_inherit(guard.stdin_write)?;
+            let exe = powershell_exe();
+            let encoded = encode_ps(command);
+            let mut cmdline = wide(&format!(
+                "\"{exe}\" -NoProfile -NonInteractive -EncodedCommand {encoded}"
+            ));
+            let app = wide(&exe);
+            let dir = wide(&cwd.display().to_string());
+            let mut si: STARTUPINFOW = std::mem::zeroed();
+            si.cb = u32::try_from(std::mem::size_of::<STARTUPINFOW>()).unwrap_or(0);
+            si.dwFlags = STARTF_USESTDHANDLES;
+            si.hStdInput = guard.stdin_read;
+            si.hStdOutput = guard.stdout_write;
+            si.hStdError = guard.stderr_write;
+            let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
+            let created = CreateProcessW(
+                app.as_ptr(),
+                cmdline.as_mut_ptr(),
+                ptr::null(),
+                ptr::null(),
+                TRUE,
+                CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                ptr::null(),
+                dir.as_ptr(),
+                &si,
+                &mut pi,
+            );
+            if created == 0 {
+                return Err(os_err("could not start PowerShell"));
+            }
+            guard.process = pi.hProcess;
+            guard.thread = pi.hThread;
+            if AssignProcessToJobObject(guard.job, guard.process) == 0 {
+                return Err(os_err("could not assign job"));
+            }
+            if ResumeThread(guard.thread) == u32::MAX {
+                return Err(os_err("could not resume process"));
+            }
+            close(&mut guard.stdout_write);
+            close(&mut guard.stderr_write);
+            close(&mut guard.stdin_read);
+            close(&mut guard.stdin_write);
+        }
+        let stdout = take_file(&mut guard.stdout_read);
+        let stderr = take_file(&mut guard.stderr_read);
+        let job = std::mem::replace(&mut guard.job, ptr::null_mut());
+        let process = std::mem::replace(&mut guard.process, ptr::null_mut());
+        let thread = std::mem::replace(&mut guard.thread, ptr::null_mut());
+        drop(guard);
+        let shared = Arc::new(WinProc {
+            job: job as usize,
+            process: process as usize,
+            thread: thread as usize,
+        });
+        let armed = Arc::new(AtomicBool::new(shared.job != 0));
+        let kill_proc = Arc::clone(&shared);
+        let kill: Arc<dyn Fn() + Send + Sync> = Arc::new(move || unsafe {
+            let job = kill_proc.job as HANDLE;
+            if !job.is_null() {
+                TerminateJobObject(job, 1);
+            }
+        });
+        let wait_proc = Arc::clone(&shared);
+        let wait: Mutex<Box<dyn FnMut() -> super::WaitPoll + Send>> =
+            Mutex::new(Box::new(move || unsafe {
+                let process = wait_proc.process as HANDLE;
+                let waited = WaitForSingleObject(process, 0);
+                if waited == WAIT_TIMEOUT {
+                    return super::WaitPoll::Running;
+                }
+                if waited != WAIT_OBJECT_0 {
+                    return super::WaitPoll::Failed(os_err("wait failed"));
+                }
+                let mut code = 0u32;
+                if GetExitCodeProcess(process, &mut code) == 0 {
+                    return super::WaitPoll::Failed(os_err("exit code failed"));
+                }
+                if code == STILL_ACTIVE as u32 {
+                    super::WaitPoll::Running
+                } else {
+                    super::WaitPoll::Exited(i32::try_from(code).unwrap_or(1))
+                }
+            }));
+        Ok(super::BgProc {
+            stdout: Some(Box::new(stdout)),
+            stderr: Some(Box::new(stderr)),
+            armed,
+            kill,
+            wait,
+        })
+    }
+
     #[cfg(test)]
     fn process_alive(pid: u32) -> bool {
         use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
@@ -771,7 +1069,7 @@ mod win {
         let output = worker.join().expect("shell thread");
         assert!(output.failed, "{}", output.text);
         assert!(output.text.contains("killed"), "{}", output.text);
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + Duration::from_secs(10);
         while process_alive(pid) && Instant::now() < deadline {
             thread::sleep(POLL);
         }

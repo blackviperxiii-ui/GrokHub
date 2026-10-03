@@ -22096,6 +22096,7 @@ fn a_background_result_waits_while_its_chat_is_mid_turn() {
         session: String::new(),
         resumed: None,
         fork_hold: false,
+        native_session: None,
     });
     cabin.running = true;
     cabin.chat_job_thread = Some(id.clone());
@@ -22181,6 +22182,7 @@ fn the_live_work_strip_offers_steer_queue_and_background_stop() {
         session: String::new(),
         resumed: None,
         fork_hold: false,
+        native_session: None,
     });
     let shown = paint(&mut cabin);
     for want in [
@@ -22237,6 +22239,51 @@ fn bg_ask_refuses_slash_task_and_live_move() {
         "idle /bg under Ask must not offer /bg <task>"
     );
     end_bg_test(root, cabin, restore);
+}
+
+/// Native `/bg` under Ask runs the engine and denies a write. It never opens a card.
+#[cfg(unix)]
+#[test]
+fn native_bg_ask_refuses_a_write_without_prompting() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("native-bg-ask");
+    let _ = std::fs::create_dir_all(&root);
+    cabin.cfg.native_engine = true;
+    cabin.permission_mode = PermissionMode::Ask;
+    cabin.session_mode = SessionMode::Chat;
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.threads[0].native = true;
+    cabin.threads[0].grok_cwd = Some(root.display().to_string());
+    cabin.send_chat("/bg write a file".into());
+    assert_ne!(
+        cabin.status,
+        super::background::BG_ASK_OFF,
+        "{}",
+        cabin.status
+    );
+    let child = cabin
+        .bg
+        .runs
+        .first()
+        .and_then(|run| run.native_session.clone())
+        .unwrap_or_else(|| panic!("{}", cabin.status));
+    assert!(cabin.perm_ask.is_none());
+    let child_for_poll = child.clone();
+    assert!(
+        poll_until(&mut cabin, 8, move |_| {
+            grokhub_agent::session_file(&child_for_poll)
+                .ok()
+                .and_then(|path| std::fs::read_to_string(path).ok())
+                .is_some_and(|body| body.contains("deny rule on edit"))
+        }),
+        "native /bg should record the Ask denial"
+    );
+    assert!(cabin.perm_ask.is_none());
+    assert!(!root.join("written-by-bg.txt").exists());
+    cabin.stop_all_bg_runs();
+    release_isolated(&root, cabin);
 }
 
 #[cfg(unix)]
