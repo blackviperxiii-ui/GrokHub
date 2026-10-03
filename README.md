@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.83** — Native engine (Labs, off by default): Claude Code and Grok plugin bundles bring skills, hooks, MCP servers and agents. They stay off until you trust their exact contents and enable them, and any change needs trust again. The Grok CLI stays the default.
+**v2.10.84** — Native engine (Labs, off by default): a dry-run parity harness runs a fixed suite on the native engine and the CLI path and writes `research/native-parity-v1.md` with its gaps. Live evals aren't implemented yet. The Grok CLI stays the default.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.83.tar.gz`, AUR | **v2.10.83** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.83.exe`, `grokhub-windows-v2.10.83.zip` | **v2.10.83** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.84.tar.gz`, AUR | **v2.10.84** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.84.exe`, `grokhub-windows-v2.10.84.zip` | **v2.10.84** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
