@@ -2,10 +2,9 @@
 
 Native Rust cabin (`crates/`). These rules apply to every Cursor, Claude, and Grok chat working here. `.cursor/rules/repo-gates.mdc` holds the same rules.
 
-## Branches and merges
+## Branches, merges, ship
 - Branch off `main`. Never push to `main`, never force-push, never delete branches unless Jeremy asks.
-- Open a normal PR against `main`. **Don't merge PRs: Jeremy merges.** Ask before any merge.
-- No tag and no GitHub Release without Jeremy's explicit **"full ship"**.
+- **Done and green is Jeremy's full ship.** Bots merge (merge commit, stack order), tag `vX.Y.Z`, check the Release is Latest with its assets, then report the live link. Steps: `.cursor/rules/merge-prs.mdc`.
 - No changes to `.github/`, `clippy.toml`, or release scripts (`scripts/make-*release*`, `packaging/windows/`, `packaging/aur/`) without his OK. Version-bump lines (below) are the exception.
 
 ## Secrets
@@ -22,9 +21,16 @@ cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 - A full local `cargo test` can touch the real `~/.grok` and `~/.config/GrokHub`. Set `GROKHUB_CONFIG` to a temp dir, run only the crate or test you changed, or rely on CI.
-- Never skip, `#[ignore]`, delete, or loosen a test to get green. Fix the code. Don't add `#[allow(dead_code)]`; delete dead code.
+- **Test shape:** assert literal expected values, no tautologies (would it still pass if the code returned a default or stub?). Never skip, `#[ignore]`, delete, or loosen a test to get green; fix the code and report suspect tests. Don't add `#[allow(dead_code)]`; delete dead code.
 - Don't mass `cargo fmt`. Format only the lines you touch.
 - `chat_composer_pins_stop_on_the_right` (`crates/grokhub-app/src/app/tests.rs`) reads a 12,000-byte window after `ComposerStackSlot::Pill =>` in `chat_ui.rs`. The last string it checks for sits about 310 bytes from the window's edge, and less with Windows CRLF line endings. Don't grow the Pill arm before the Stop handler. Move code into helpers instead of widening the window.
+
+## How bots work
+- **Proof of work:** every PR body names the real run path exercised and what was seen (CI green is the floor, not the proof), plus a **Skipped / not verified** line.
+- **Findings:** log non-blocking findings to the box findings log and fix them in batches; no per-finding or one-test PRs.
+- **Stacks:** order them so every PR ends green; one agent owns rebase and topology, others push only their own branch.
+- **Agent briefs** follow the template: intent, data shape, scope and non-goals, file boundaries, required evidence, file pointers, exact error plus at most 20 log lines.
+- **CI failures:** find and classify the cause before at most one rerun; a repeat failure is real.
 
 ## Commits, PRs, versions
 - Titles: `Cabin X.Y.Z: <what changed>`, or a plain sentence ending in `(X.Y.Z)`. Add a short bullet body and the PR number when merged.
