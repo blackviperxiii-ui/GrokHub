@@ -84,22 +84,6 @@ impl BgWork {
     }
 }
 
-/// Beside the transcript's Running pulse: move this reply off the composer.
-pub(super) fn background_pill(ui: &mut egui::Ui) -> bool {
-    crate::theme::felt_label_button(
-        ui,
-        "Background",
-        Color32::TRANSPARENT,
-        crate::theme::muted(),
-        8.0,
-        egui::vec2(0.0, 24.0),
-        Some(egui::Stroke::new(1.0_f32, crate::theme::border())),
-        false,
-    )
-    .on_hover_text("Keep this reply running in the background and free the chat. Its answer posts here when it's done.")
-    .clicked()
-}
-
 /// What a click on the live-work strip asks for. Applied after painting.
 enum LiveWorkAct {
     Steer,

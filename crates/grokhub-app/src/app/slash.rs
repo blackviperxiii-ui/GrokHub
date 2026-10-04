@@ -537,7 +537,7 @@ impl Cabin {
                     self.persist_idle_key = self.persist_idle_now();
                     self.status = format!("Effort {}", grokhub_core::effort_label(effort));
                 } else {
-                    self.status = "Effort: none | minimal | low | medium | high | xhigh".into();
+                    self.status = "Effort: none | low | medium | high | xhigh".into();
                 }
             }
             Slash::Sessions => {
@@ -1064,7 +1064,7 @@ impl Cabin {
                 self.persist();
             }
             grokhub_agent::UnparsedSlash::EffortHint => {
-                self.status = "Effort: none | minimal | low | medium | high | xhigh".into();
+                self.status = "Effort: none | low | medium | high | xhigh".into();
             }
             grokhub_agent::UnparsedSlash::Note(text) => {
                 self.status = text.into();

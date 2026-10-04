@@ -1,15 +1,18 @@
 ---
-description: Merges, tags, and releases happen only when Jeremy explicitly says so. "full ship" is the release word.
+description: Done and green is Jeremy's full ship. Bots merge, tag, release, and report the live link.
 alwaysApply: true
 ---
 
 # Merges, tags, releases
 
-Jeremy merges and ships. By default, leave every PR **open, not draft, and green**.
+When the work is done and CI is green, that counts as Jeremy's **full ship**. Bots ship it end to end:
 
-- **Merge** only when Jeremy explicitly says to merge (for example "update" or "merge PRs") for those PRs. Ask first if it's unclear. Merge in the order he gives. Record a PR that `main` already supersedes with `git merge -s ours`, so the merge doesn't revert `main`.
-- **Tag and release** only on Jeremy's explicit **"full ship"**. Then tag `vX.Y.Z` at the bumped commit and `git push origin vX.Y.Z`. `.github/workflows/release.yml` publishes the Release, which must end up marked Latest.
+- **Merge** with a merge commit, in stack order. Record a PR that `main` already supersedes with `git merge -s ours`, so the merge doesn't revert `main`. Leave PRs he has parked open and untouched.
+- **Main CI** must pass after the merge before tagging (find the cause before at most one rerun).
+- **Tag** `vX.Y.Z` at the bumped merge commit and `git push origin vX.Y.Z`. `.github/workflows/release.yml` publishes the Release.
+- **Release:** check the Linux tarball, Windows setup `.exe`, and Windows zip are attached and non-empty, write the notes, and mark it Latest.
+- **Report** the live Release link, asset sizes, PR and merge commit, main CI run, and Skipped / not verified.
 - **Branches:** delete a merged PR branch only when he asks (`delete_branch_on_merge` is off). Never force-push or push to `main`.
-- **Versions:** each landed change already carries its patch bump. See `repo-gates.mdc` for the file list. Docs (`README.md`, `/help` text, specs under `docs/`) must match what shipped.
+- **Versions:** each landed change carries its patch bump (file list in `repo-gates.mdc`). Docs (`README.md`, `/help` text, specs under `docs/`) must match what shipped.
 
-"Don't do it now", or no explicit word, means leave PRs, branches, and tags alone.
+"Don't ship it", "hold", or a PR he names as parked means leave it, its branch, and tags alone.
