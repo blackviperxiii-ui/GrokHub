@@ -1089,8 +1089,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "tools must sit in the live turn, not always under the last bubble: {chat}"
         );
         assert!(
-            chat.contains("paint_running") && chat.contains("chat_run_label"),
-            "a running pulse must show while the agent is working: {chat}"
+            !chat.contains("paint_running")
+                && !chat.contains("chat_run_label")
+                && !chat.contains("background_pill"),
+            "2.10.87: no Thinking dot or Background button in the transcript; the composer glow shows a live turn: {chat}"
         );
         assert!(
             !chat.contains("run_slash(Slash::Stop)"),
@@ -10563,8 +10565,24 @@ fn effort_slash_sets_extra_high_and_rejects_a_bad_level() {
     assert_eq!(cabin.cfg.reasoning_effort, "xhigh");
     assert_eq!(cabin.status, "Effort Extra High");
     cabin.run_slash_line("/effort banana");
-    assert_eq!(cabin.status, "Effort: none | minimal | low | medium | high | xhigh");
+    assert_eq!(cabin.status, "Effort: none | low | medium | high | xhigh");
     assert_eq!(cabin.cfg.reasoning_effort, "xhigh");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+/// 2.10.87: Minimal is gone. `/effort minimal` still works and picks Low.
+#[test]
+fn effort_slash_minimal_falls_back_to_low() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("effort-minimal");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/effort minimal");
+    assert_eq!(cabin.cfg.reasoning_effort, "low");
+    assert_eq!(cabin.status, "Effort Low");
+    cabin.run_slash_line("/effort none");
+    assert_eq!(cabin.cfg.reasoning_effort, "none");
+    assert_eq!(cabin.status, "Effort None");
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
@@ -21035,9 +21053,12 @@ fn cabin_default_efforts_lists_known_ids() {
     let efforts = cabin_default_efforts();
     assert!(!efforts.is_empty());
     let ids: Vec<&str> = efforts.iter().map(|(id, _)| *id).collect();
-    for want in ["none", "minimal", "low", "medium", "high", "xhigh"] {
+    for want in ["none", "low", "medium", "high", "xhigh"] {
         assert!(ids.contains(&want), "missing effort id {want}: {ids:?}");
     }
+    // 2.10.87: Minimal is not a real level; Settings must not offer it.
+    assert!(!ids.contains(&"minimal"), "{ids:?}");
+    assert_eq!(ids, vec!["none", "low", "medium", "high", "xhigh"]);
 }
 
 // Folded from PR #426.
@@ -22654,4 +22675,68 @@ fn a_filed_idea_that_reaches_done_counts_as_completed_once() {
     assert!(!signals.contains("release checklist"), "{signals}");
     let _ = std::fs::remove_dir_all(&root);
     std::env::remove_var("GROKHUB_CONFIG");
+}
+
+/// 2.10.87: the chat window has no Thinking dot and no Background button.
+/// The composer glow shows a live turn; `/bg` stays as the way to move it.
+#[test]
+fn chat_window_has_no_thinking_dot_or_background_button() {
+    let chat = include_str!("chat_ui.rs");
+    let bg = include_str!("background.rs");
+    assert!(!chat.contains("background_pill"), "Background button call is gone");
+    assert!(!bg.contains("fn background_pill"), "dead Background button fn is gone");
+    assert!(!chat.contains("\"Background\""), "no Background label in the chat window");
+    assert!(!chat.contains("paint_running("), "no running dot in the chat transcript");
+    assert!(!chat.contains("chat_run_label("), "no Thinking/Running/Waiting label in chat");
+    assert_eq!(chat.matches("move_turn_to_background").count(), 0);
+    assert_eq!(bg.matches("fn run_bg_slash(").count(), 1, "/bg is kept");
+    assert_eq!(bg.matches("fn move_turn_to_background(").count(), 1, "/bg needs it");
+}
+
+/// The Thinking dot's hover moved onto Stop: idle says Send, a live turn says
+/// what Stop stops.
+#[test]
+fn stop_hover_names_the_live_turn_now_the_dot_is_gone() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert_eq!(cabin.go_tip_here(), "Send");
+    cabin.running = true;
+    cabin.chat_job_thread = Some(cabin.visible_thread_id());
+    assert!(cabin.thinking_here());
+    assert_eq!(cabin.go_tip_here(), "Stop · Working on your reply");
+    cabin.stream_buf = "Half way.".into();
+    assert_eq!(cabin.go_tip_here(), "Stop · Streaming a reply");
+    cabin.running = false;
+    cabin.chat_job_thread = None;
+    assert_eq!(cabin.go_tip_here(), "Send");
+}
+
+/// 2.10.87: with the Background button gone, bare `/bg` still moves a live
+/// reply off the composer and posts the whole answer when it lands.
+#[cfg(unix)]
+#[test]
+fn bare_slash_bg_still_moves_a_live_reply() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin, restore, _argv) = bg_cabin("bg-bare");
+    cabin.send_chat("finish-later please".into());
+    assert!(poll_until(&mut cabin, 5, |c| c.stream_buf.contains("Half way.")));
+    assert!(cabin.can_move_turn_to_background());
+    cabin.send_chat("/bg".into());
+    assert!(
+        !cabin.running && cabin.chat_job_thread.is_none() && cabin.grok_p_rx.is_none(),
+        "{}",
+        cabin.status
+    );
+    assert_eq!(cabin.bg.runs.len(), 1);
+    assert_eq!(cabin.bg.runs[0].origin, grokhub_core::BgOrigin::Detached);
+    assert!(poll_until(&mut cabin, 6, |c| c.bg.runs.is_empty()), "the run ends");
+    let post = cabin.messages.last().cloned().unwrap_or_default();
+    assert_eq!(post.0, "assistant");
+    assert!(
+        post.1.starts_with("**Background task done** · finish-later please")
+            && post.1.contains("Half way. All done."),
+        "{post:?}"
+    );
+    cabin.send_chat("/bg stop".into());
+    assert_eq!(cabin.status, "No background tasks running");
+    end_bg_test(root, cabin, restore);
 }

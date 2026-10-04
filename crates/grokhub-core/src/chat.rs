@@ -115,7 +115,6 @@ pub fn agent_reasoning_effort_for_mode(mode: &str) -> Option<&'static str> {
 /// Composer effort dropdown levels (Grok Build 1.0.11 canonical ladder).
 pub const REASONING_EFFORTS: &[(&str, &str)] = &[
     ("none", "None"),
-    ("minimal", "Minimal"),
     ("low", "Low"),
     ("medium", "Medium"),
     ("high", "High"),
@@ -126,8 +125,9 @@ pub const REASONING_EFFORTS: &[(&str, &str)] = &[
 pub fn parse_reasoning_effort(s: &str) -> Option<&'static str> {
     match s.trim().to_ascii_lowercase().as_str() {
         "none" | "off" => Some("none"),
-        "minimal" | "mini" => Some("minimal"),
-        "low" | "fast" => Some("low"),
+        // Minimal was never a real level (2.10.87). A saved one loads as Low, the
+        // smallest level that still reasons; None would switch reasoning off.
+        "low" | "fast" | "minimal" | "mini" => Some("low"),
         "medium" | "med" | "balanced" | "balance" => Some("medium"),
         "high" | "think" | "build" | "expert" => Some("high"),
         // Saved Max is the next lower offered level (Extra High). Do not send `max`.
@@ -531,15 +531,28 @@ mod tests {
         assert_eq!(parse_reasoning_effort("think"), Some("high"));
         assert_eq!(parse_reasoning_effort("xhigh"), Some("xhigh"));
         assert_eq!(parse_reasoning_effort("max"), Some("xhigh"));
-        assert_eq!(parse_reasoning_effort("mini"), Some("minimal"));
+        assert_eq!(parse_reasoning_effort("mini"), Some("low"));
         assert_eq!(parse_reasoning_effort("none"), Some("none"));
         assert_eq!(effort_label("xhigh"), "Extra High");
         assert_eq!(effort_label("max"), "Extra High");
-        assert_eq!(REASONING_EFFORTS.len(), 6);
+        assert_eq!(REASONING_EFFORTS.len(), 5);
         assert!(REASONING_EFFORTS.iter().all(|(id, label)| *id != "max" && *label != "Max"));
         assert_eq!(cabin_spawn_model(""), "grok-4.7");
         assert_eq!(cabin_spawn_model("  "), "grok-4.7");
         assert_eq!(cabin_spawn_model("grok-4.6"), "grok-4.6");
+    }
+
+    /// 2.10.87: Minimal is off the ladder. Saved `minimal` / `mini` load as Low.
+    #[test]
+    fn minimal_effort_is_gone_and_loads_as_low() {
+        let ids: Vec<&str> = REASONING_EFFORTS.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, vec!["none", "low", "medium", "high", "xhigh"]);
+        assert!(REASONING_EFFORTS.iter().all(|(_, label)| *label != "Minimal"));
+        assert_eq!(parse_reasoning_effort("minimal"), Some("low"));
+        assert_eq!(parse_reasoning_effort(" Minimal "), Some("low"));
+        assert_eq!(parse_reasoning_effort("MINI"), Some("low"));
+        assert_eq!(effort_label("minimal"), "Low");
+        assert_eq!(parse_reasoning_effort("none"), Some("none"));
     }
 
     #[test]

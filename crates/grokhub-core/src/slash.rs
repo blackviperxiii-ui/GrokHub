@@ -648,7 +648,7 @@ pub fn slash_help() -> String {
         "/plan — plan mode (Grok Build)",
         "/always-approve — skip tool permission prompts",
         "/auto — auto-approve safe tools",
-        "/effort <none|minimal|low|medium|high|xhigh> — reasoning effort (composer dropdown too)",
+        "/effort <none|low|medium|high|xhigh> — reasoning effort (composer dropdown too)",
         "/sessions — Grok Build sessions",
         "/resume — same as /sessions (Grok /resume)",
         "/inspect — grok inspect --json against ~/.grok",
@@ -711,9 +711,9 @@ pub fn slash_help() -> String {
         "/usage — today's cabin buckets, tokens spent today, and the last Grok Build turn",
         "/models — Grok catalog",
         "/palette — command palette. Search walks nested files in the bound project (or ~/GrokHub-Work), not only the top of that folder.",
-        "Enter sends; Ctrl+Enter newline. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The transcript Running row has no Stop. The changing status text above the composer is gone. The context usage bar stays. A green live dot plus Thinking / Running / Waiting sits on the turn; hover shows the current action. That line does not sit above the composer.",
+        "Enter sends; Ctrl+Enter newline. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The transcript Running row has no Stop. The changing status text above the composer is gone. The context usage bar stays. No live dot or Thinking label sits on the turn; the composer glow shows a running reply, and Stop's hover names the current action.",
         "The Ask card names the command, path, or site. Always on that card confirms skip every tool prompt this launch; night / loop / phone inherit --always-approve until quit. Composer Always and a destructive host command reuse that confirm sheet (title, consequence, Confirm or Run, Cancel). Enter / Esc stay Allow / Deny on the Ask card; overlay confirm uses them only when the composer is empty. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out. History is the cabin's own chats (headless grok -p on the thread). Background jobs such as workboard summarize stay off that list. Same on Linux and Windows. History offers Last you and fork branch points when those markers exist.",
-        "Mode pill: Chat / Plan / btw. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort: None / Minimal / Low / Medium / High / Extra High. A saved Max loads as Extra High. Default model is grok-4.7. Hover a composer pill for what it does. Grok Build runs the agent.",
+        "Mode pill: Chat / Plan / btw. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort: None / Low / Medium / High / Extra High. A saved Max loads as Extra High, a saved Minimal as Low. Default model is grok-4.7. Hover a composer pill for what it does. Grok Build runs the agent.",
         "Settings → Behavior: close to tray, living wall, and a quiet hours dropdown. Picking a window saves it. A Quiet until chip shows on the titlebar only while that window is active. Signed-in empty home shows an update feed in the gap under the composer when a card is undismissed, and hides that slot when the feed is empty. A finished /loop posts automation_done from poll_grok_loop. Saving a schedule posts schedule_created. Cards stay until opened or dismissed. A device glance appears only when hub share or a last frame is bound; click opens Devices.",
         "History search drops stale hits when the box changes. Re-opening the memory file already in the editor keeps unsaved typing.",
         "Appearance: Dark, Light, System. Ask permission is grok agent stdio (ACP) so Allow / Deny can show; if ACP is down the turn is denied. Auto and Always stay on grok -p and inherit the PermissionMode pill. `/workflow` `/compact` `/rewind` honor that same pill — Ask fail-closed if ACP is down, Auto/Always keep session mode. btw (saved as ask) is a side ask: a live run keeps going and the question waits, then sends look-safe on grok -p (`--permission-mode default`, no desktop-do-the-work). Idle btw sends that same look-safe ask. Night/inbox/anticipate inherit scheduled_args like loops — Ask is fail-closed, no ACP. Halt is session/cancel.",
@@ -903,7 +903,7 @@ mod tests {
             slash_help()
         );
         assert!(slash_help().contains(
-            "Effort: None / Minimal / Low / Medium / High / Extra High. A saved Max loads as Extra High."
+            "Effort: None / Low / Medium / High / Extra High. A saved Max loads as Extra High, a saved Minimal as Low."
         ));
         assert!(slash_help().contains("Default model is grok-4.7"));
         assert!(slash_help().contains("Hover a composer pill for what it does"));
@@ -928,9 +928,10 @@ mod tests {
         assert!(slash_help().contains("User bubbles sit on the right"));
         assert!(slash_help().contains("1.035"));
         assert!(slash_help().contains("each row keeps its id"));
-        assert!(slash_help().contains("green live dot plus Thinking / Running / Waiting"));
-        assert!(slash_help().contains("sits on the turn"));
-        assert!(slash_help().contains("That line does not sit above the composer"));
+        // 2.10.87: the Thinking dot is gone; the composer glow shows a live turn.
+        assert!(!slash_help().contains("green live dot plus Thinking / Running / Waiting"));
+        assert!(slash_help().contains("No live dot or Thinking label sits on the turn"));
+        assert!(slash_help().contains("Stop's hover names the current action"));
         assert!(!slash_help().contains("above the composer when the pane is scrolled"));
         assert!(slash_help().contains("Composer Stop is a disc with a small rounded mark"));
         assert!(slash_help().contains("The transcript Running row has no Stop"));
