@@ -36,6 +36,7 @@ pub mod hub_sync;
 pub mod hygiene;
 pub mod ideas;
 pub mod imagine;
+pub mod xai_signin;
 pub mod imagine_auth;
 pub mod inhabit;
 pub mod learning;
@@ -64,6 +65,8 @@ pub mod tui_gaps;
 pub mod trajectory;
 pub mod turn_timeline;
 pub mod update;
+pub mod card_prefs;
+pub mod card_signals;
 pub mod update_feed;
 pub mod usage;
 pub mod verify;
@@ -284,14 +287,17 @@ pub use imagine::{
 };
 pub use imagine_auth::{
     choose_imagine_bearer, ct_eq, imagine_authorize_url, imagine_code_form, imagine_device_form,
-    imagine_device_poll_form, imagine_needs_refresh, imagine_oauth_preferred, imagine_refresh_form,
+    imagine_access_usable, imagine_device_poll_form, imagine_needs_refresh, imagine_oauth_preferred,
+    imagine_refresh_form,
     imagine_tokens_from_xai, keychain_unavailable_message, map_imagine_error, merge_imagine_refresh,
     oauth_nonce, parse_imagine_discovery, parse_loopback_callback, pkce_challenge, pkce_verifier,
     ImagineAuthorize, ImagineCred, ImagineCredKind, ImagineEndpoints, ImagineMappedError,
     ImagineTokens, IMAGINE_KEY_REJECTED, IMAGINE_NEED_SIGNIN, IMAGINE_NO_KEYCHAIN,
     IMAGINE_OAUTH_DENIED, IMAGINE_OAUTH_REFERRER, IMAGINE_OAUTH_SCOPE, IMAGINE_RATE_LIMIT,
-    IMAGINE_SIGN_IN_AGAIN,
+    IMAGINE_SIGN_IN_AGAIN, METER_API_KEY, METER_OAUTH, XAI_NEED_SIGNIN, XAI_OAUTH_ACCOUNT,
+    XAI_OAUTH_LEGACY_ACCOUNT,
 };
+pub use xai_signin::{choose_xai_bearer, delete_xai_oauth, load_xai_oauth, OAuthAccountStore};
 pub use inhabit::{
     can_inhabit, inhabit_bundle_usable, inhabit_claim_allowed, inhabit_ready, InhabitBundle,
 };
@@ -476,6 +482,13 @@ pub use windshield::{
     refused_lock, tab_list_from_rows, window_name_from_atspi, window_name_from_wmctrl,
     windshield_browser_line, windshield_prompt, AtspiRow, PendingStep, WindshieldFrame,
 };
+pub use card_prefs::{
+    apply_card_event, card_prefs_json, card_score, explain_hint, forget_learned, hint_open_topic,
+    load_card_prefs, rank_home_events, top_learned, topic_keywords, CardPrefs, HomeRank,
+    LearnedBucket, LearnedEntry, Weight, FOLD_BELOW, FOLD_NOTE, HINT_MIN, HINT_NEEDS, HINT_NEW,
+    HINT_OPEN_GROUP, NOVELTY_BONUS,
+};
+pub use card_signals::{append_signal, signal_for, signal_group, CardEvent, CardSignal, SIGNAL_CAP};
 pub use update_feed::{
     ideas_board, idea_card_brief, idea_chat_open_line, mark_idea_modified, take_card_action,
     CARD_ACTION_DONE, CARD_ACTION_TAG, modified_ideas, post_skill_idea, set_idea_draft,
@@ -483,11 +496,15 @@ pub use update_feed::{
     board_covers_topic, live_generated_ideas, post_generated_ideas, purge_one_off_ideas, purge_template_ideas,
     automation_failed_card,
     archive_digest, archived_digests, automate_offer_card, automation_done_card, card_matches,
-    digest_card, digest_topic_refused, discuss_context, dismiss_idea, dismiss_update, expire_ideas,
-    feed_ideas, feed_visible, hold_if_quiet, home_feed_n, idea_card, idea_dialogue,
+    digest_card, digest_topic_refused, discuss_context, dismiss_idea, dismiss_update, dismiss_update_at,
+    collapse_feed, expire_ideas,
+    feed_group_key, feed_ideas, feed_visible, hold_if_quiet, home_feed_n, idea_card, idea_dialogue,
     idea_open_line, idea_rank, lesson_rank_delta, setup_blocked_by_lessons,
     idea_touched, links_from_research, unpin_feed_idea,
     mark_update_opened,
+    automation_home_note, clear_less_mute, hide_home_source, home_event_cards, mute_less_like,
+    record_home_floors, refresh_event_why, runs_latest_line, source_hidden, surfaces_on_home,
+    unhide_home_source, HOME_HIDDEN_NOTE, LESS_MUTE_MS,
     post_update, release_quiet_hold, resume_needs_fresh_chat, schedule_created_card,
     suggestion_card, tick_feed_pulse, visible_digests, visible_ideas, visible_updates,
     digest_lookup_prompt, digest_steer, parse_lookup, post_help, remember_dismissed_source,

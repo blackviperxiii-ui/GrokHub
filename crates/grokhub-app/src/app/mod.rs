@@ -155,6 +155,9 @@ use std::time::{Duration, Instant};
 
 mod persist;
 mod acp;
+mod native_engine;
+mod native_sessions;
+mod native_unattended;
 mod chat_kick;
 mod palette;
 mod settings;
@@ -254,6 +257,8 @@ enum SettingsSec {
     Update,
     About,
     Defaults,
+    Labs,
+    Permissions,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -415,6 +420,11 @@ pub struct Cabin {
     persist_idle_key: String,
     persist_rx: Option<mpsc::Receiver<()>>,
     persist_io: Arc<Mutex<()>>,
+    /// Generation of the newest full snapshot handed to a persist worker.
+    persist_gen: u64,
+    /// What the persist workers have written, so an older snapshot that takes
+    /// `persist_io` late never overwrites a newer one.
+    persist_mark: Arc<Mutex<PersistMark>>,
     cfg_slot: Arc<Mutex<CfgSlot>>,
     board: Vec<BoardCard>,
     board_title: String,
@@ -470,6 +480,10 @@ pub struct Cabin {
     grok_loops: Vec<GrokLoop>,
     /// Home update feed. `updates.json`. Not an AppConfig field.
     updates: Vec<grokhub_core::UpdateCard>,
+    /// Learned Home weights. `card_prefs.json`. Not part of AppConfig.
+    card_prefs: grokhub_core::CardPrefs,
+    /// The folded "More (n)" list stays open until the cabin exits.
+    home_fold_open: bool,
     grok_loop_rx: Option<(String, mpsc::Receiver<String>)>,
     night_nl: String,
     /// One-shot watch on the Automations page. Not a second clock.
@@ -797,6 +811,10 @@ pub struct Cabin {
     grok_catalog: grokhub_acp::GrokCatalog,
     grok_catalog_loaded: bool,
     grok_catalog_rx: Option<mpsc::Receiver<Result<grokhub_acp::GrokCatalog, String>>>,
+    native_skills: Vec<grokhub_agent::Skill>,
+    native_hooks: Vec<grokhub_agent::HookInfo>,
+    native_listing_cwd: String,
+    native_hooks_trusted: bool,
     grok_ext_rx: Option<mpsc::Receiver<String>>,
     /// Connector commands waiting while one `grok mcp` / `grok plugin` is running.
     grok_ext_q: Vec<Vec<String>>,
@@ -830,6 +848,7 @@ thread_local! {
 
 impl Cabin {
     pub fn new(hidden: bool) -> Self {
+        crate::desktop_mcp::process_started_ms();
         let mut cfg = config::load();
         if cfg.device_name.trim().is_empty() {
             cfg.device_name = config::default_device_name();
@@ -1012,6 +1031,8 @@ impl Cabin {
             persist_idle_key: String::new(),
             persist_rx: None,
             persist_io: Arc::new(Mutex::new(())),
+            persist_gen: 0,
+            persist_mark: Arc::new(Mutex::new(PersistMark::default())),
             cfg_slot,
             board: config::load_board(),
             board_title: String::new(),
@@ -1072,6 +1093,8 @@ impl Cabin {
             automations: crate::night::load(),
             grok_loops: crate::loops::load(),
             updates: crate::feed::load(),
+            card_prefs: crate::card_prefs::load(),
+            home_fold_open: false,
             grok_loop_rx: None,
             night_nl: String::new(),
             watch_once: false,
@@ -1349,6 +1372,10 @@ impl Cabin {
             grok_catalog: grokhub_acp::GrokCatalog::default(),
             grok_catalog_loaded: false,
             grok_catalog_rx: None,
+            native_skills: Vec::new(),
+            native_hooks: Vec::new(),
+            native_listing_cwd: String::new(),
+            native_hooks_trusted: false,
             grok_ext_rx: None,
             grok_ext_q: Vec::new(),
             connector_note: String::new(),
@@ -1389,6 +1416,8 @@ impl Cabin {
             c.open_fresh_home();
             #[cfg(not(test))]
             crate::desktop_mcp::maybe_register_on_start(c.cfg.desktop_control);
+            #[cfg(not(test))]
+            crate::desktop_mcp::set_desktop_enabled(c.cfg.desktop_control);
         }
         c
     }
@@ -1437,6 +1466,8 @@ impl Cabin {
             persist_idle_key: String::new(),
             persist_rx: None,
             persist_io: Arc::new(Mutex::new(())),
+            persist_gen: 0,
+            persist_mark: Arc::new(Mutex::new(PersistMark::default())),
             cfg_slot: Arc::new(Mutex::new(CfgSlot { gen: 0, cfg })),
             board: Vec::new(),
             board_title: String::new(),
@@ -1488,6 +1519,8 @@ impl Cabin {
             automations: Vec::new(),
             grok_loops: Vec::new(),
             updates: Vec::new(),
+            card_prefs: grokhub_core::CardPrefs::default(),
+            home_fold_open: false,
             grok_loop_rx: None,
             night_nl: String::new(),
             watch_once: false,
@@ -1765,6 +1798,10 @@ impl Cabin {
             grok_catalog: Default::default(),
             grok_catalog_loaded: false,
             grok_catalog_rx: None,
+            native_skills: Vec::new(),
+            native_hooks: Vec::new(),
+            native_listing_cwd: String::new(),
+            native_hooks_trusted: false,
             grok_ext_rx: None,
             grok_ext_q: Vec::new(),
             connector_note: String::new(),
@@ -2013,8 +2050,13 @@ impl Cabin {
 
     fn halt_in_flight(&mut self) {
         crate::desktop_mcp::write_halt_stamp();
+        crate::desktop_mcp::note_halt();
         self.host_halt.store(true, Ordering::SeqCst);
         self.withdraw_perm_asks();
+        if self.cfg.native_engine {
+            grokhub_agent::halt_all_sessions();
+            self.stop_native_unattended();
+        }
         if let Some(h) = &self.acp {
             self.perm_always_confirm = None;
             self.confirm = None;
@@ -2459,6 +2501,14 @@ impl Cabin {
                 self.recall_rx = Some(rx);
             }
             Err(mpsc::TryRecvError::Disconnected) => {}
+        }
+    }
+
+    fn poll_native_memory(&mut self) {
+        if let Some(msg) = grokhub_agent::take_memory_status() {
+            if !msg.is_empty() {
+                self.status = msg;
+            }
         }
     }
 
@@ -2999,9 +3049,11 @@ impl Cabin {
         let (tx, rx) = mpsc::channel();
         self.sync_rx = Some(rx);
         self.status = "Syncing…".into();
+        let gen = self.next_persist_gen();
+        let mark = self.persist_mark.clone();
         std::thread::spawn(move || {
             if let Ok(_g) = io.lock() {
-                write_persist_disk(&dir, &snap);
+                write_persist_disk_in_order(&dir, &snap, gen, &mark);
             }
             let mem = mem
                 .into_iter()
@@ -3888,6 +3940,7 @@ impl Cabin {
         self.merge_grok_usage(&usage);
         if let Some(e) = error.filter(|s| !s.trim().is_empty()) {
             self.status = format!("Compact failed: {e}");
+            self.release_native_compact_slot();
             return;
         }
         let ctx = grok_context_line(&self.grok_usage);
@@ -3902,6 +3955,17 @@ impl Cabin {
         } else {
             format!("Compacted · {ctx}")
         };
+        if !started {
+            self.release_native_compact_slot();
+        }
+    }
+
+    /// A native `/compact` does not set `running`. Drop the job slot when it finishes
+    /// so the meter status stays and the composer does not keep a stream.
+    fn release_native_compact_slot(&mut self) {
+        if !self.running && self.native_engine_for_current() {
+            self.chat_job_thread = None;
+        }
     }
 
     fn apply_job_fail(&mut self, err: &str) -> String {
@@ -4519,7 +4583,7 @@ impl Cabin {
         if !self.hub_on
             || self.running
             || self.pending_hub_task.is_some()
-            || !inbox_claim_ready(self.can_agent())
+            || !inbox_claim_ready(self.can_agent()) && !self.cfg.native_engine
         {
             return;
         }
@@ -4541,6 +4605,18 @@ impl Cabin {
             self.pending_hub_task = Some(t.id.clone());
             self.land_on_real_chat();
             self.send_scheduled_chat(format!("[from {}] {}", t.from_name, t.prompt));
+            if self.cfg.native_engine
+                && !self.running
+                && self.pending_kick.is_none()
+                && self.grok_p_rx.is_none()
+            {
+                let status = if self.status.trim().is_empty() {
+                    grokhub_core::XAI_NEED_SIGNIN.to_string()
+                } else {
+                    self.status.clone()
+                };
+                self.finish_hub_dispatch(&status, false);
+            }
         }
     }
 
@@ -4730,6 +4806,9 @@ impl eframe::App for Cabin {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // No background `grok -p` outlives the cabin.
         self.kill_bg_runs();
+        grokhub_agent::halt_all_sessions();
+        self.stop_native_unattended();
+        grokhub_agent::mcp::shutdown_all();
         // The close frame spawned a persist. Wait for it: the process exits right after this,
         // and two writers of app.json share one temp file.
         let _io = self.persist_io.lock();
@@ -4784,6 +4863,8 @@ impl eframe::App for Cabin {
         self.poll_mem_restore();
         self.poll_mem_file();
         self.poll_recall();
+        self.poll_native_memory();
+        self.drain_native_unattended_usage();
         self.poll_sync();
         self.poll_inhabit();
         self.poll_reflect();
@@ -4792,6 +4873,8 @@ impl eframe::App for Cabin {
         self.poll_acp_spawn();
         self.poll_single();
         self.poll_bg_runs();
+        self.poll_native_automations();
+        self.poll_native_side_events();
         self.poll_pick();
         self.take_dropped_attach(ctx);
         self.poll_pick_list();
@@ -4823,6 +4906,9 @@ impl eframe::App for Cabin {
         }
         self.poll_grok_install();
         if let Some(msg) = crate::desktop_mcp::take_reg_status() {
+            self.status = msg;
+        }
+        if let Some(msg) = crate::desktop_mcp::take_desktop_test_status() {
             self.status = msg;
         }
         self.poll_update_probe(ctx);
@@ -5008,7 +5094,10 @@ impl eframe::App for Cabin {
             self.ui_settings_menu(&ctx);
 
             match self.page_nav() {
-                Nav::Chat => self.ui_chat(ui),
+                Nav::Chat => {
+                    self.paint_native_badge(ui);
+                    self.ui_chat(ui);
+                }
                 Nav::Devices => self.ui_devices(ui),
                 Nav::Memory => self.ui_memory(ui),
                 Nav::Workboard => self.ui_board(ui),
@@ -5059,6 +5148,45 @@ impl Cabin {
             .show(ctx, |ui| {
                 ui.set_min_width(520.0);
                 palette::paint_shortcut_sheet(ui);
+                ui.add_space(12.0);
+                ui.label(
+                    egui::RichText::new("Slash commands")
+                        .size(crate::theme::FONT_CHROME)
+                        .strong()
+                        .color(crate::theme::fg()),
+                );
+                ui.label(
+                    egui::RichText::new(
+                        "Native handler, or N/A on a native thread. CLI threads stay on the Grok CLI.",
+                    )
+                    .size(crate::theme::FONT_TIP)
+                    .color(crate::theme::muted()),
+                );
+                ui.add_space(6.0);
+                egui::ScrollArea::vertical()
+                    .id_salt("slash-parity")
+                    .max_height(280.0)
+                    .show(ui, |ui| {
+                        egui::Grid::new("slash-parity")
+                            .num_columns(2)
+                            .spacing(egui::vec2(12.0, 4.0))
+                            .show(ui, |ui| {
+                                for row in grokhub_agent::slash_parity() {
+                                    ui.label(
+                                        egui::RichText::new(format!("/{}", row.command))
+                                            .monospace()
+                                            .size(crate::theme::FONT_TIP)
+                                            .color(crate::theme::fg()),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(row.disposition)
+                                            .size(crate::theme::FONT_TIP)
+                                            .color(crate::theme::muted()),
+                                    );
+                                    ui.end_row();
+                                }
+                            });
+                    });
                 ui.add_space(8.0);
                 if crate::cards::ghost_pill(ui, "Close") {
                     self.shortcuts_open = false;
@@ -5179,13 +5307,15 @@ fn paint_tool_rows(ui: &mut egui::Ui, rows: &[grokhub_core::ToolRow]) {
                 );
             }
         });
-        let detail = row.detail.trim();
-        if !detail.is_empty() && !detail.starts_with('{') && !detail.starts_with('[') {
-            ui.label(
-                RichText::new(detail.chars().take(160).collect::<String>())
-                    .size(12.0)
-                    .color(crate::theme::muted()),
-            );
+        if !crate::cards::paint_native_media_card(ui, &row.title, &row.detail) {
+            let detail = row.detail.trim();
+            if !detail.is_empty() && !detail.starts_with('{') && !detail.starts_with('[') {
+                ui.label(
+                    RichText::new(detail.chars().take(160).collect::<String>())
+                        .size(12.0)
+                        .color(crate::theme::muted()),
+                );
+            }
         }
         ui.add_space(4.0);
     }
@@ -5216,7 +5346,9 @@ fn paint_tool_card_body(ui: &mut egui::Ui, card: &ToolCard) {
                     },
                 );
             });
-            if !card.diff.is_empty()
+            let painted = crate::cards::paint_native_media_card(ui, &card.title, &card.detail);
+            if !painted
+                && !card.diff.is_empty()
                 && !card.diff.trim().starts_with('{')
                 && !card.diff.trim().starts_with('[')
             {
@@ -5227,7 +5359,8 @@ fn paint_tool_card_body(ui: &mut egui::Ui, card: &ToolCard) {
                         .monospace()
                         .color(crate::theme::muted()),
                 );
-            } else if !card.detail.is_empty()
+            } else if !painted
+                && !card.detail.is_empty()
                 && !card.detail.trim().starts_with('{')
                 && !card.detail.trim().starts_with('[')
             {

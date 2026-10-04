@@ -2256,6 +2256,61 @@ pub fn imagine_stage(
     hit
 }
 
+/// One `IMAGINE:` receipt inside a native image or video tool card.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeMediaCard {
+    pub path: String,
+    pub video: bool,
+}
+
+fn native_media_tool(title: &str) -> bool {
+    matches!(
+        title,
+        "image_generate" | "image_edit" | "video_generate" | "video_edit" | "video_extend"
+    )
+}
+
+/// Receipts from a native media tool. Other titles stay text, even if they mention `IMAGINE:`.
+pub fn media_tool_cards(title: &str, detail: &str) -> Option<Vec<NativeMediaCard>> {
+    if !native_media_tool(title) {
+        return None;
+    }
+    let mut out = Vec::new();
+    for line in detail.lines() {
+        let Some(rest) = line.trim().strip_prefix("IMAGINE:") else {
+            continue;
+        };
+        let path = rest.trim();
+        if path.is_empty() {
+            continue;
+        }
+        out.push(NativeMediaCard {
+            video: grokhub_core::imagine_is_video_path(path),
+            path: path.to_string(),
+        });
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// Letterboxed Imagine still or video inside a tool card. Returns false when the card is not media.
+pub fn paint_native_media_card(ui: &mut egui::Ui, title: &str, detail: &str) -> bool {
+    let Some(cards) = media_tool_cards(title, detail) else {
+        return false;
+    };
+    for card in cards {
+        let width = ui.available_width().clamp(8.0, 360.0);
+        ui.allocate_ui(egui::vec2(width, 200.0), |ui| {
+            imagine_result_hero(ui, &card.path);
+        });
+        ui.add_space(4.0);
+    }
+    true
+}
+
 /// Generated still, letterboxed in the Imagine stage under the chat box.
 pub fn imagine_result_hero(ui: &mut egui::Ui, path: &str) {
     let wall = ui.max_rect();
@@ -4025,5 +4080,43 @@ mod tests {
             seg.contains("WidgetInfo::selected") && seg.contains("selected"),
             "a segment reports whether it is selected: {seg}"
         );
+    }
+}
+
+#[cfg(test)]
+mod native_media_cards {
+    use super::media_tool_cards;
+
+    #[test]
+    fn media_tool_cards_use_imagine_hero() {
+        let image = media_tool_cards(
+            "image_generate",
+            "IMAGINE: /tmp/cabin.png\nIMAGINE: /tmp/b.png",
+        )
+        .unwrap();
+        assert_eq!(image.len(), 2);
+        assert!(!image[0].video);
+        assert_eq!(image[0].path, "/tmp/cabin.png");
+        let video = media_tool_cards("video_extend", "note\nIMAGINE: /tmp/clip.mp4").unwrap();
+        assert!(video[0].video);
+        assert_eq!(video[0].path, "/tmp/clip.mp4");
+        assert!(media_tool_cards("web_fetch", "IMAGINE: /tmp/cabin.png").is_none());
+        assert!(media_tool_cards("image_edit", "still working").is_none());
+        let cards = include_str!("cards.rs");
+        assert!(cards.contains("fn paint_native_media_card"));
+        assert!(cards.contains("imagine_result_hero"));
+        let app = include_str!("app/mod.rs");
+        let body = app
+            .split("fn paint_tool_card_body(")
+            .nth(1)
+            .and_then(|s| s.split("fn eyes_frame_tex(").next())
+            .expect("paint_tool_card_body");
+        assert!(body.contains("paint_native_media_card"), "{body}");
+        let rows = app
+            .split("fn paint_tool_rows(")
+            .nth(1)
+            .and_then(|s| s.split("fn paint_tool_card_body(").next())
+            .expect("paint_tool_rows");
+        assert!(rows.contains("paint_native_media_card"), "{rows}");
     }
 }

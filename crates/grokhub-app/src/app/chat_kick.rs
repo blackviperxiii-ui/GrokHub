@@ -26,6 +26,18 @@ impl Cabin {
             self.status = "Unknown command — /help".into();
             return;
         }
+        let thread_native = self
+            .threads
+            .get(self.thread_idx)
+            .is_some_and(|thread| thread.native);
+        if self.apply_unparsed_native_slash(&text) {
+            return;
+        }
+        if let Some(recipe) =
+            grokhub_agent::native_deep_research_prompt(self.cfg.native_engine, thread_native, &text)
+        {
+            text = recipe;
+        }
         if btw_queues_without_interrupt(self.session_mode == SessionMode::Ask, self.running) {
             self.side_ask_queue.push(text);
             self.status = format!(
@@ -54,7 +66,13 @@ impl Cabin {
                             self.status = format!("Queued ({})", self.followup_queue.len());
                             return;
                         }
-                        LiveSend::Steer => steer = Some(self.stop_turn_for_steer()),
+                        LiveSend::Steer => {
+                            if self.native_engine_for_current() {
+                                self.steer_native_live(text);
+                                return;
+                            }
+                            steer = Some(self.stop_turn_for_steer());
+                        }
                     }
                 } else {
                     let prev =
@@ -89,7 +107,7 @@ impl Cabin {
             Self::local_clock().hour as u8,
         );
         remember_home_surface(&mut self.chip_memory, "chat", now_ms());
-        if !persist_user_turn(self.can_agent()) {
+        if !persist_user_turn(self.can_agent() || (self.cfg.native_engine && self.scheduled_perm)) {
             self.hands_attach = false;
             self.eyes_attach = false;
             self.speak_next = false;
@@ -190,7 +208,7 @@ impl Cabin {
     }
 
     pub(super) fn kick_model(&mut self, consume_attach: bool) {
-        if !self.can_agent() {
+        if !self.can_agent() && !(self.cfg.native_engine && self.scheduled_perm) {
             self.running = false;
             self.chat_job_thread = None;
             self.status = "Install Grok Build (x.ai/cli) or Connect Grok in Settings".into();
@@ -290,6 +308,7 @@ impl Cabin {
             self.pending_kick = Some(consume_attach);
             return;
         }
+        self.drop_stale_native_handle();
         if !self.scheduled_perm && self.permission_mode.uses_acp() && self.acp.is_none() {
             if let Err(e) = self.ensure_acp() {
                 self.fail_ask_without_acp(&e);
@@ -330,6 +349,9 @@ impl Cabin {
         } else {
             None
         };
+        if self.kick_native_turn(&last_user, image.as_deref(), &raw_ask, &thread_label) {
+            return;
+        }
         if !self.scheduled_perm && self.permission_mode.uses_acp() {
             self.side_ask_kick = false;
             let prompt_err = self
@@ -397,6 +419,20 @@ impl Cabin {
             .get(idx)
             .map(|t| t.grok_worktree)
             .unwrap_or(false);
+        if self.cfg.native_engine && self.scheduled_perm {
+            self.start_native_scheduled(
+                &last_user,
+                cwd,
+                &model,
+                effort.map(str::to_string),
+                mode,
+                image,
+            );
+            if self.grok_p_rx.is_some() {
+                self.note_inflight_card(&raw_ask, &thread_label);
+            }
+            return;
+        }
         match grokhub_acp::spawn_grok_p_stream(
             &last_user,
             &cwd,

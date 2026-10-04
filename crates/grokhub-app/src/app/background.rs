@@ -11,6 +11,7 @@
 //! the new message with a note of the progress (`steer_follow_block`).
 
 use super::*;
+use grokhub_agent::Engine;
 use grokhub_core::{
     bg_elapsed_label, bg_result_note, bg_result_post, bg_results_follow, bg_task_prompt,
     bg_task_title, can_detach_turn, chat_run_dot_alpha, extract_background_tasks, steer_follow_block,
@@ -59,11 +60,19 @@ pub(super) struct BgRun {
     /// This run set `grok_fork` on its chat so the next composer turn forks
     /// instead of writing the same session at the same time.
     pub fork_hold: bool,
+    /// Native `/bg` session. Halt and delete cancel this engine. CLI runs leave it empty.
+    pub native_session: Option<String>,
 }
 
 impl BgRun {
     pub fn live(&self) -> bool {
         self.end.is_none()
+    }
+
+    fn stop_native(&self) {
+        if let Some(id) = &self.native_session {
+            grokhub_agent::cancel_session(id);
+        }
     }
 }
 
@@ -152,6 +161,9 @@ impl Cabin {
                 "{BG_TASK_MAX} background tasks are already running — stop one first"
             ));
         }
+        if self.native_bg_target(thread_id) {
+            return self.start_native_bg(task, thread_id, origin);
+        }
         if !self.can_agent() {
             return Err("Install Grok Build (x.ai/cli) or Connect Grok in Settings".into());
         }
@@ -212,6 +224,101 @@ impl Cabin {
             session: String::new(),
             resumed: resume,
             fork_hold: false,
+            native_session: None,
+        });
+        Ok(title)
+    }
+
+    fn native_bg_target(&self, thread_id: &str) -> bool {
+        self.cfg.native_engine && self.threads.iter().any(|t| t.id == thread_id && t.native)
+    }
+
+    fn native_bg_gate(&self) -> grokhub_agent::Gate {
+        let readonly = matches!(
+            self.session_mode,
+            grokhub_acp::SessionMode::Plan | grokhub_acp::SessionMode::Ask
+        );
+        let mode = match self.permission_mode {
+            grokhub_acp::PermissionMode::Ask => grokhub_agent::PermMode::Ask,
+            grokhub_acp::PermissionMode::Auto => grokhub_agent::PermMode::Auto,
+            grokhub_acp::PermissionMode::AlwaysApprove => grokhub_agent::PermMode::Always,
+        };
+        grokhub_agent::Gate {
+            mode,
+            readonly_session: readonly,
+            attended: false,
+            desktop: self.cfg.desktop_control,
+        }
+    }
+
+    fn start_native_bg(
+        &mut self,
+        task: &str,
+        thread_id: &str,
+        origin: BgOrigin,
+    ) -> Result<String, String> {
+        let (cwd, parent) = {
+            let thread = self.threads.iter().find(|t| t.id == thread_id);
+            let cwd = thread
+                .and_then(|t| t.grok_cwd.clone())
+                .filter(|s| !s.trim().is_empty());
+            let parent = thread
+                .and_then(|t| t.grok_session.clone())
+                .filter(|s| !s.trim().is_empty());
+            (cwd, parent)
+        };
+        let workspace = cwd
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| self.grok_cwd());
+        let child_id = if let Some(parent) = parent.as_deref() {
+            grokhub_agent::fork_session(parent)
+                .map(|info| info.id)
+                .unwrap_or_else(|_| format!("native-{}", grokhub_core::uid("n")))
+        } else {
+            format!("native-{}", grokhub_core::uid("n"))
+        };
+        if let Some(parent) = parent.as_deref() {
+            grokhub_agent::link_child(parent, &child_id);
+        }
+        let (client, auth_kind, bearer) = native_bg_model(self)?;
+        let gate = self.native_bg_gate();
+        let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
+        let effort =
+            grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort).map(str::to_string);
+        let rules = grokhub_acp::cabin_rules_for(
+            &grokhub_core::brief_for(&self.learning, "chat"),
+            self.cfg.desktop_control,
+        );
+        let system = grokhub_agent::system_prompt(&rules, &workspace);
+        let prompt = bg_task_prompt(task);
+        let cancel = grokhub_agent::CancelToken::new();
+        let _ = grokhub_agent::hub_for(&child_id);
+        grokhub_agent::watch_cancel(&child_id, cancel.clone());
+        let (tx, rx) = mpsc::channel();
+        let session = child_id.clone();
+        std::thread::spawn(move || {
+            run_native_bg(
+                session, workspace, client, auth_kind, bearer, gate, model, effort, system, prompt,
+                cancel, tx,
+            );
+        });
+        let title = bg_task_title(task);
+        self.bg.next_id += 1;
+        self.bg.runs.push(BgRun {
+            id: self.bg.next_id,
+            thread_id: thread_id.to_string(),
+            title: title.clone(),
+            origin,
+            pid: None,
+            rx: Some(rx),
+            say: String::new(),
+            action: String::new(),
+            started: Instant::now(),
+            end: None,
+            session: String::new(),
+            resumed: parent,
+            fork_hold: false,
+            native_session: Some(child_id),
         });
         Ok(title)
     }
@@ -343,6 +450,7 @@ impl Cabin {
             session: String::new(),
             resumed,
             fork_hold,
+            native_session: None,
         });
         // The Doing card stays up: the work goes on. The run settles it.
         self.inflight_open = false;
@@ -540,9 +648,21 @@ impl Cabin {
         }
     }
 
+    /// Apply what native `scheduler_*` tools wrote to `automations.json` to the
+    /// in-memory list, so the next persist keeps it instead of overwriting it.
+    pub(super) fn poll_native_automations(&mut self) {
+        let changes = grokhub_agent::take_automation_changes();
+        if changes.is_empty() {
+            return;
+        }
+        apply_automation_changes(&mut self.automations, changes);
+        self.persist_automations();
+    }
+
     /// Stop one run. What it said so far still posts.
     pub(super) fn stop_bg_run(&mut self, id: u64) {
         if let Some(run) = self.bg.runs.iter_mut().find(|r| r.id == id && r.live()) {
+            run.stop_native();
             if let Some(pid) = run.pid.take() {
                 kill_pid(pid);
             }
@@ -574,6 +694,7 @@ impl Cabin {
             }
             let mut run = self.bg.runs.remove(i);
             n += 1;
+            run.stop_native();
             if let Some(pid) = run.pid.take() {
                 kill_pid(pid);
             }
@@ -592,6 +713,7 @@ impl Cabin {
     /// Quit: no child outlives the cabin, and nothing is posted.
     pub(super) fn kill_bg_runs(&mut self) {
         for run in self.bg.runs.iter_mut() {
+            run.stop_native();
             if let Some(pid) = run.pid.take() {
                 kill_pid(pid);
             }
@@ -628,6 +750,19 @@ impl Cabin {
 
     /// Stop this tab's live turn for a steering message. What it already said
     /// stays in the transcript. Returns the context block for the next turn.
+    /// Native steer lands at the next tool boundary. The live turn keeps running.
+    pub(super) fn steer_native_live(&mut self, text: String) {
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        self.live_mut().push(("user".into(), text.clone()));
+        if let Some(handle) = &self.acp {
+            let _ = handle.steer(&text);
+        }
+        self.status = "Steering…".into();
+    }
+
     pub(super) fn stop_turn_for_steer(&mut self) -> String {
         let prev = last_user_scan(self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())))
             .unwrap_or_default();
@@ -701,12 +836,12 @@ impl Cabin {
             };
             return;
         }
-        if self.permission_mode.needs_approval() {
+        let visible = self.visible_thread_id();
+        if self.permission_mode.needs_approval() && !self.native_bg_target(&visible) {
             self.status = BG_ASK_OFF.into();
             return;
         }
-        let thread = self.visible_thread_id();
-        match self.start_bg_task(arg, &thread, BgOrigin::User) {
+        match self.start_bg_task(arg, &visible, BgOrigin::User) {
             Ok(title) => self.status = format!("Background · {title}"),
             Err(e) => self.status = e,
         }
@@ -854,5 +989,227 @@ impl Cabin {
             Some(LiveWorkAct::StopRun(id)) => self.stop_bg_run(id),
             None => {}
         }
+    }
+}
+
+/// The model client for a native `/bg` run, with the credential kind so usage is
+/// labelled "SuperGrok pool" or "API credits" like the foreground engine.
+type BgModel = (
+    std::sync::Arc<dyn grokhub_agent::ModelClient + Send + Sync>,
+    grokhub_agent::AuthKind,
+    String,
+);
+
+fn native_bg_model(cabin: &mut Cabin) -> Result<BgModel, String> {
+    #[cfg(test)]
+    {
+        let _ = cabin;
+        Ok((
+            std::sync::Arc::new(BgFake {
+                n: std::sync::atomic::AtomicUsize::new(0),
+            }),
+            grokhub_agent::AuthKind::ApiKey,
+            String::new(),
+        ))
+    }
+    #[cfg(not(test))]
+    {
+        let (bearer, kind) = cabin.native_cred()?;
+        Ok((
+            std::sync::Arc::new(grokhub_agent::XaiClient::new(
+                bearer.clone(),
+                kind,
+                std::time::Duration::from_secs(120),
+            )),
+            kind,
+            bearer,
+        ))
+    }
+}
+
+fn run_native_bg(
+    session: String,
+    workspace: std::path::PathBuf,
+    client: std::sync::Arc<dyn grokhub_agent::ModelClient + Send + Sync>,
+    auth_kind: grokhub_agent::AuthKind,
+    bearer: String,
+    gate: grokhub_agent::Gate,
+    model: String,
+    effort: Option<String>,
+    system: String,
+    prompt: String,
+    cancel: grokhub_agent::CancelToken,
+    tx: mpsc::Sender<GrokPEvent>,
+) {
+    let hub = grokhub_agent::hub_for(&session);
+    if hub.is_halted() || cancel.is_cancelled() {
+        let _ = tx.send(GrokPEvent::Err("halted".into()));
+        return;
+    }
+    let _guard = grokhub_agent::attach_run(&session, cancel.clone());
+    let mut engine = grokhub_agent::NativeEngine::new(grokhub_agent::EngineParts {
+        client,
+        workspace,
+        model,
+        effort,
+        system,
+        conversation_id: session.clone(),
+        auth_kind,
+        max_turns: 0,
+        cancel: cancel.clone(),
+        steer: grokhub_agent::SteerQueue::new(),
+        halt: Box::new(grokhub_agent::StampHalt {
+            started_ms: grokhub_core::now_ms(),
+            read: || crate::desktop_mcp::read_halt_stamp(),
+        }),
+        gate,
+        desktop: None,
+        permits: std::sync::Arc::new(grokhub_agent::ClosedPermits),
+    });
+    engine.set_imagine_bearer(&bearer);
+    engine.set_reopen_tasks(false);
+    if let Ok(info) = grokhub_agent::load_session(&session) {
+        engine.resume(info.input(), info.usage);
+    }
+    let mut say = String::new();
+    let _ = engine.prompt(&prompt, None, &mut |ev| match ev {
+        AcpEvent::Text(text) => {
+            say.push_str(&text);
+            let _ = tx.send(GrokPEvent::Text(text));
+        }
+        AcpEvent::Thought(text) => {
+            let _ = tx.send(GrokPEvent::Thought(text));
+        }
+        AcpEvent::Tool(card) => {
+            let _ = tx.send(GrokPEvent::Tool(card));
+        }
+        AcpEvent::Err(err) => {
+            let _ = tx.send(GrokPEvent::Err(err));
+        }
+        AcpEvent::Done { stop_reason } => {
+            let _ = tx.send(GrokPEvent::End(grokhub_acp::SingleTurn {
+                session_id: session.clone(),
+                text: say.clone(),
+                thought: String::new(),
+                usage: empty_grok_usage(),
+                stop_reason,
+            }));
+        }
+        _ => {}
+    });
+}
+
+fn apply_automation_changes(
+    list: &mut Vec<grokhub_core::Automation>,
+    changes: Vec<grokhub_agent::AutomationChange>,
+) {
+    for change in changes {
+        match change {
+            grokhub_agent::AutomationChange::Upsert(row) => {
+                if let Some(slot) = list.iter_mut().find(|item| item.id == row.id) {
+                    *slot = *row;
+                } else {
+                    list.push(*row);
+                }
+            }
+            grokhub_agent::AutomationChange::Delete(id) => list.retain(|item| item.id != id),
+        }
+    }
+}
+
+fn empty_grok_usage() -> GrokUsage {
+    GrokUsage {
+        input_tokens: 0,
+        output_tokens: 0,
+        reasoning_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        total_tokens: 0,
+        num_turns: 0,
+        context_tokens_used: 0,
+        context_window_tokens: 0,
+        stop_reason: String::new(),
+        cost_in_usd_ticks: 0,
+        meter: String::new(),
+    }
+}
+
+#[cfg(test)]
+struct BgFake {
+    n: std::sync::atomic::AtomicUsize,
+}
+
+#[cfg(test)]
+impl grokhub_agent::ModelClient for BgFake {
+    fn stream(
+        &self,
+        _req: &grokhub_agent::ResponsesRequest,
+        _cancel: &grokhub_agent::CancelToken,
+        sink: &mut dyn FnMut(grokhub_agent::StreamEvent),
+    ) -> Result<grokhub_agent::TurnOutput, grokhub_agent::ClientError> {
+        use std::sync::atomic::Ordering;
+        let n = self.n.fetch_add(1, Ordering::SeqCst);
+        if n == 0 {
+            Ok(grokhub_agent::TurnOutput {
+                text: String::new(),
+                reasoning: String::new(),
+                calls: vec![grokhub_agent::FunctionCall {
+                    call_id: "bg-write".into(),
+                    name: "write".into(),
+                    arguments: r#"{"path":"written-by-bg.txt","content":"nope"}"#.into(),
+                }],
+                usage: grokhub_agent::Usage::default(),
+            })
+        } else {
+            sink(grokhub_agent::StreamEvent::TextDelta("bg finished".into()));
+            Ok(grokhub_agent::TurnOutput {
+                text: "bg finished".into(),
+                reasoning: String::new(),
+                calls: Vec::new(),
+                usage: grokhub_agent::Usage::default(),
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod automation_sync_tests {
+    use super::apply_automation_changes;
+    use grokhub_agent::AutomationChange;
+    use grokhub_core::Automation;
+
+    fn row(id: &str, every: u32) -> Automation {
+        Automation {
+            id: id.into(),
+            name: id.into(),
+            schedule: "heartbeat".into(),
+            time: "09:00".into(),
+            times: Vec::new(),
+            instructions: String::new(),
+            heartbeat_every_min: every,
+            check_command: String::new(),
+            enabled: true,
+            last_run: None,
+            next_run: None,
+            run_count: 0,
+            health: grokhub_core::AutoHealth::default(),
+        }
+    }
+
+    #[test]
+    fn scheduler_changes_reach_the_in_memory_list() {
+        let mut list = vec![row("keep", 5), row("edit", 5), row("drop", 5)];
+        apply_automation_changes(
+            &mut list,
+            vec![
+                AutomationChange::Upsert(Box::new(row("edit", 30))),
+                AutomationChange::Upsert(Box::new(row("new", 10))),
+                AutomationChange::Delete("drop".into()),
+            ],
+        );
+        let ids: Vec<&str> = list.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["keep", "edit", "new"]);
+        assert_eq!(list[1].heartbeat_every_min, 30);
+        assert_eq!(list[2].heartbeat_every_min, 10);
     }
 }

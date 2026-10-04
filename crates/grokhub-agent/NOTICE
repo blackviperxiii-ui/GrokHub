@@ -1,0 +1,16 @@
+Portions derived from xai-org/grok-build (Apache-2.0, © SpaceXAI), commit 2bdd1d6a; modified.
+
+The Apache-2.0 license text is in LICENSE-APACHE-2.0 in this directory.
+
+`src/tokens.rs` vendors `xai-token-estimation` (bytes/4 estimator, no tokenizer data).
+`src/compact.rs` ports the session summary prompt from `xai-grok-shell` `helpers/session_compact.rs`.
+`src/image_budget.rs` ports the image-eviction placeholder and byte budget from `xai-chat-state` `image_budget.rs`.
+`src/skills.rs` ports SKILL.md discovery and the skill tool from `xai-grok-tools` and `xai-grok-agent`.
+`src/hooks.rs` ports hook discovery, the stdin JSON contract, and exit-code handling from `xai-grok-hooks`.
+`src/prompt.rs` layers AGENTS.md and CLAUDE.md the way `xai-grok-agent` does.
+`src/subagent.rs` ports the spawn_subagent and send_subagent_message tool shapes (explore/general types, depth limit, worktree isolation) from Grok Build's agent and tool crates.
+`src/session_tools.rs` ports the todo_write, ask_user_question, enter_plan_mode and exit_plan_mode tool shapes from Grok Build's tool crates.
+`src/tools/web_fetch.rs` ports the web_fetch tool shape, size caps and redirect handling from Grok Build's tool crates.
+`src/memory.rs` ports the FTS-plus-temporal-decay recall score, the pre-compaction flush, and the fenced first-turn memory reminder from `xai-grok-memory` and `xai-grok-shell`.
+`src/slash_parity.rs` lists the pager builtin slash commands from `xai-grok-pager` `slash/commands/mod.rs`.
+`src/plugins.rs` ports plugin manifests, git/local install, marketplace index parsing, and trust-before-enable from `xai-grok-agent` `plugins/` and `xai-grok-plugin-marketplace`.

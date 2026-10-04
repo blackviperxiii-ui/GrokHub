@@ -35,6 +35,11 @@ pub fn spawn_session(
     connect(opts)
 }
 
+/// CLI argv for `grok agent stdio`. The native engine does not call this.
+pub fn cli_launch_args(always_approve: bool, reasoning_effort: Option<&str>) -> Vec<String> {
+    grokhub_acp::agent_args(always_approve, reasoning_effort)
+}
+
 pub fn grok_banner() -> String {
     match find_grok() {
         Some(p) => grokhub_acp::doctor_grok_line(Some(&p)).1,
@@ -50,6 +55,23 @@ mod tests {
     fn agent_needs_cli() {
         assert_eq!(can_agent(true), find_grok().is_some());
         assert_eq!(can_agent(false), find_grok().is_some());
+    }
+
+    #[test]
+    fn native_flag_off_argv_matches_agent_args() {
+        assert_eq!(
+            cli_launch_args(false, Some("high")),
+            grokhub_acp::agent_args(false, Some("high"))
+        );
+        assert_eq!(
+            cli_launch_args(true, None),
+            vec![
+                "--no-auto-update".to_string(),
+                "agent".into(),
+                "--always-approve".into(),
+                "stdio".into(),
+            ]
+        );
     }
 
     #[test]

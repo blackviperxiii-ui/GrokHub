@@ -54,6 +54,9 @@ pub struct ChatThread {
     /// and must not become extra History rows.
     #[serde(default)]
     pub retired_sessions: Vec<String>,
+    /// Opened while Settings → Labs native engine was on. Old rows stay on the CLI.
+    #[serde(default)]
+    pub native: bool,
 }
 
 impl ChatThread {
@@ -78,6 +81,7 @@ impl ChatThread {
             background: false,
             plan_body: String::new(),
             retired_sessions: Vec::new(),
+            native: false,
         }
     }
 

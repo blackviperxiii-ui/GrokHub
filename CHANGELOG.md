@@ -4,6 +4,188 @@
 
 Background work stays out of the sidebar History. A `/bg` run forks the chat's Grok session, and a `/loop` or a quick-chip reply through the CLI writes a session of its own; on the next launch those sessions came back as extra chats in History. Their ids are now filed on the hidden Background chat, so startup adoption and the Grok session list skip them, and chats a loop already leaked are hidden on load. Nothing is deleted: the sessions stay on disk, and deleting all chats still removes them.
 
+## 2.10.85 — 2026-10-03
+
+Delete all (Settings → History) no longer brings deleted chats back. It first halts whatever is running, which saves the chats as they were, and then saves the fresh empty chat. Each save is written by its own background thread, so the older save could finish last and overwrite `threads.json` with the deleted chats. They would then come back on the next start. Saves now carry a sequence number. A save that's older than the last one written never replaces the chats or settings. It only writes its project list or secrets when no newer save has written them. This also made the `delete_all_history_clears_seeded_chats` test fail now and then in CI.
+
+- Linux: `grokhub-linux-v2.10.85.tar.gz` and AUR `pkgver=2.10.85`.
+- Windows: `GrokHub-Setup-2.10.85.exe` and `grokhub-windows-v2.10.85.zip`.
+
+## 2.10.84 — 2026-10-03
+
+A parity harness for the native engine, with nothing switched. `cargo run -p grokhub-agent --example eval` runs a fixed suite on the native engine and on the CLI path: a desktop probe, a small repo bugfix with a test, an Ask-mode refusal, background work plus Halt, an MCP tool call, compaction of a long transcript, and an Imagine call that only builds the request. Dry-run is the default. It uses scripted model replies for the native engine and the test-only fake Grok CLI agent (`grokhub-fake-acp`, not shipped) for the CLI path, with no network, no key and no stored credential. It writes `research/native-parity-v1.md`, a table of every item on both engines plus a GAPS section. **Live evals don't work yet.** `--live` refuses to start without `GROKHUB_EVAL_API_KEY` and a budget of $0.20 or less, and even with both it only says live mode isn't implemented in this build. So the report compares scripted runs, not real models, and its GAPS section says so. The Grok CLI stays the default engine. Plugin trust also no longer reuses a cached hash for files changed in the last two seconds.
+
+- Linux: `grokhub-linux-v2.10.84.tar.gz` and AUR `pkgver=2.10.84`.
+- Windows: `GrokHub-Setup-2.10.84.exe` and `grokhub-windows-v2.10.84.zip`.
+
+## 2.10.83 — 2026-10-03
+
+Native chats (Settings → Labs, still off by default) can now use plugin bundles in the Claude Code and Grok formats (`.claude-plugin/plugin.json`, `.grok-plugin/plugin.json` or `plugin.json`). A bundle can bring skills, hooks, MCP servers, agents and commands. Install one from Settings → Labs → Plugins with an https, ssh or `file://` git URL, or with an absolute folder path. The cabin copies it into its config folder. Nothing from the bundle runs during install: the git clone uses no templates, hooks or submodules, and the `.git` folder is removed. Bundles already in `~/.claude/plugins`, `~/.grok/plugins` or the project's `.claude`/`.grok` plugin folders are listed but never changed. Every bundle stays off until you trust its current contents and then enable it. Trust shows the exact hook and MCP commands it would run. Trust is tied to a SHA-256 of the bundle's files, so any change to the files or the version turns the bundle off until you trust it again. A bundle that holds a credential-like file can't be trusted, and paths that leave the bundle, including through symlinks, are refused. Plugin MCP servers are named `plugin__<bundle>__<server>`, go through the same permission rules as your own servers, and never replace a server you configured. A plugin can't add permission rules. Plugin agents work as subagent personas, and plugin commands are listed in the system text. A marketplace index is fetched only when you press Fetch (https only, no redirects, 1 MB cap), and fetching never installs anything. The Grok CLI path is unchanged.
+
+- Linux: `grokhub-linux-v2.10.83.tar.gz` and AUR `pkgver=2.10.83`.
+- Windows: `GrokHub-Setup-2.10.83.exe` and `grokhub-windows-v2.10.83.zip`.
+
+## 2.10.82 — 2026-10-03
+
+With the native engine on (Settings → Labs, still off by default), the cabin's unattended work runs on it instead of the Grok CLI: automations, loops, the night review, phone and hub tasks, ideas, the digest lookup, chips and the greeting. Each runner keeps its prompt and how it reads the reply, so results still land in Follow up and on Home, grouped per source as before. An unattended run never shows a permission or question card and never waits for you. In Ask mode anything that isn't read-only is refused, the same rule unattended runs already follow. Auto asks the auto-review judge and refuses if the answer isn't a clear yes. Always works as it does for scheduled CLI runs. Halt and quitting stop every unattended run and what it started. Their tokens count toward today's usage, and the one-shot runs (chips, greeting, ideas, digest, review) don't leave sessions in History. Without a native sign-in a run fails with a clear message; it never falls back to the Grok CLI's sign-in. With the native engine off, every runner uses the Grok CLI exactly as before.
+
+- Linux: `grokhub-linux-v2.10.82.tar.gz` and AUR `pkgver=2.10.82`.
+- Windows: `GrokHub-Setup-2.10.82.exe` and `grokhub-windows-v2.10.82.zip`.
+
+## 2.10.81 — 2026-10-03
+
+Native chats (Settings → Labs, still off by default) now have memory and answer every Grok CLI slash command. `/remember` adds a note to the project's `MEMORY.md`, or to the global one in the GrokHub config folder when it starts with `global:` or `--global`. Secrets are redacted before anything is written. On the first turn of a session, the closest matching notes are recalled from a local SQLite full-text index and added to the system text, fenced as untrusted and capped at 4 KB. Recalled text can't change a permission, gate or mode. Newer notes win over older equal matches (30-day half-life). Recall only reads the global notes, this project's `MEMORY.md` and this project's flush notes, so one project's notes never show up in another. The index can be deleted at any time and is rebuilt from the files. Before a compaction, and on `/flush`, the pending conversation is saved to a per-project notes file in the config folder, never into your repository, without a model call. `/dream` makes one low-effort model call to tidy both `MEMORY.md` files, keeps a `MEMORY.md.dream.bak` copy, and leaves the files untouched if anything fails. Its tokens count in the chat's usage. All 74 Grok CLI slash commands now have a native answer: the cabin handles it, or says plainly that it's a CLI-pager or account feature. `/rewind` says it isn't available on native chats, because their sessions are append-only, and points to `/fork`. The full table is in the Shortcuts window. SQLite is compiled into the app (`rusqlite` with `bundled`), so there's nothing extra to install on Linux or Windows. The Grok CLI path and its slash commands are unchanged.
+
+- Linux: `grokhub-linux-v2.10.81.tar.gz` and AUR `pkgver=2.10.81`.
+- Windows: `GrokHub-Setup-2.10.81.exe` and `grokhub-windows-v2.10.81.zip`.
+
+## 2.10.80 — 2026-10-03
+
+Native chats (Settings → Labs, still off by default) can now read the web and make images and videos. `web_fetch` loads one public `http` or `https` page and returns it as markdown: headings, links, lists, code and paragraphs, with scripts and styles stripped. The raw body is capped at 5 MiB and the markdown is truncated after that. It only reaches public addresses. Localhost, loopback, link-local (169.254.*), private ranges, carrier-grade NAT (100.64.0.0/10) and their IPv6 forms are refused before the request, and again when the connection is made, so a DNS answer that changes in between can't reach your network. Redirects are followed by hand, up to a cap, and each hop is checked again. `web_fetch` sends a network request, so it isn't read-only. `WebFetch(domain:…)` rules decide it (deny, then ask, then allow). With no rule it asks when you're there, unattended runs refuse it, and Auto mode asks the auto-review judge. `image_generate`, `image_edit`, `video_generate`, `video_edit` and `video_extend` use the same request bodies as the Imagine page, with every parameter: up to 10 images, 1k or 2k, quality, a mask (retried as a reference image if the model rejects masks), text-to-video and image-to-video up to 1080p, edit and extend. That's more than the Grok CLI offers. These spend credits, so they're gated like other non-read-only tools. Results are downloaded into the session's own folder (`sessions/<id>/media`), shown as image and video cards in the chat, and removed when the session is deleted. Halt and Stop end a video wait. `/deep-research` on a native chat sends a research recipe as a normal turn: plan, search with `web_search`, `x_search` and `web_fetch`, cross-check, then a cited report. The Grok CLI path is unchanged.
+
+- Linux: `grokhub-linux-v2.10.80.tar.gz` and AUR `pkgver=2.10.80`.
+- Windows: `GrokHub-Setup-2.10.80.exe` and `grokhub-windows-v2.10.80.zip`.
+
+## 2.10.79 — 2026-10-03
+
+Native chats (Settings → Labs, still off by default) can now hand work to subagents and keep a plan. `spawn_subagent` runs a child native loop on its own thread with its own history. An `explore` child is read-only: it only gets read-only tools, the gate refuses everything else, and it can't use a git worktree. A `general` child copies the parent's mode, gates and attended or unattended state, so it is never looser than the chat that started it. Starting a general child is gated like any other non-read-only tool, and every call a child makes goes through the same permission rules, auto-review judge and hooks as the parent. A child of a child can't spawn. A general child can run in its own `git worktree` under the GrokHub config folder. If the folder isn't a git repository that's an error, never a silent fallback to the main tree, and the worktree is removed if the child is cancelled. A `persona` adds to the parent's system text without replacing it. Background children show in the existing Tasks list, `get_command_or_subagent_output` and `kill_command_or_subagent` accept their ids, and `send_subagent_message` steers a running child. Cancel and Halt reach every child and grandchild and the commands they started. A child's tokens and cost count in the parent chat's usage. A background child's cost is added at the parent's next turn. `todo_write` keeps a todo list on the session. It shows under Tasks and survives compaction. `ask_user_question` shows a question card and waits while you're there. Unattended runs get an error instead of waiting. `enter_plan_mode` makes the chat read-only, and `exit_plan_mode` shows the plan in an approval card. Only your approval ends plan mode, and an unattended run can't end it. The Grok CLI path is unchanged.
+
+- Linux: `grokhub-linux-v2.10.79.tar.gz` and AUR `pkgver=2.10.79`.
+- Windows: `GrokHub-Setup-2.10.79.exe` and `grokhub-windows-v2.10.79.zip`.
+
+## 2.10.78 — 2026-10-03
+
+Native chats (Settings → Labs, still off by default) now pick up skills, layered rules and hooks the way the Grok CLI and Claude do. `SKILL.md` skills are found in the project's `.grok/skills` and `.claude/skills` (from the repo root down to the folder) and in the user folders. A project skill wins over a user skill with the same name. The model sees a short capped list of names and descriptions, and the new `skill` tool loads a skill's body and lists its files without leaving the skill folder. A skill's `allowed-tools` is only shown, never used to grant anything. `AGENTS.md` and `CLAUDE.md` are layered global first, then the repo root, then nested folders down to the workspace, capped at 64 KB, after GrokHub's own rules. Hooks load from the same user and project hook settings the CLI reads, get the CLI's JSON on stdin and its environment variables, and answer the same way. A `PreToolUse` hook can refuse a call or turn it into a question. It can never let through something the permission check would ask about or refuse. A hook that times out has its whole process tree killed and decides nothing. In unattended runs a hook that asks counts as a refusal. Project hooks come from the repository, so on native chats they only run after you trust the folder in Settings → Skills and Hooks. Your own hooks always run. With the native engine on, that page lists the discovered skills and hooks. With it off, it shows the Grok CLI's listing as before. The Grok CLI path is unchanged.
+
+- Linux: `grokhub-linux-v2.10.78.tar.gz` and AUR `pkgver=2.10.78`.
+- Windows: `GrokHub-Setup-2.10.78.exe` and `grokhub-windows-v2.10.78.zip`.
+
+## 2.10.77 — 2026-10-03
+
+Native chats (Settings → Labs, still off by default) can now use MCP servers. The client is a small synchronous JSON-RPC implementation in `grokhub-agent`, with no tokio and no new dependencies. It speaks stdio, streamable HTTP and legacy SSE. The official `rmcp` SDK was left out because it would have brought an async runtime into the app. Servers are read from `mcp.json` in the GrokHub config folder. Settings → Labs can import them once from the cabin's Grok home, copying only the server definitions, never auth files. The cabin's own `grokhub-desktop` server is never imported or started, because native chats drive the desktop in-process behind the existing desktop gates. Tools appear to the model as `server__tool` and go through `MCPTool` rules (deny, then ask, then allow). A tool with no rule asks when you're there and is refused in unattended runs. A server's read-only hint never skips the gate. Above 40 tools the model gets `search_tool` and `use_tool` instead of every schema. A server asking for input (`elicitation/create`) shows the existing elicitation card, and is declined in unattended runs. Stdio servers run in their own process tree, are killed on exit and restart, and a crash is reported instead of taking the chat down. Remote servers use the `Authorization` header stored on the entry. The browser OAuth flow isn't there yet. Settings → Labs lists each server's status and tool count, with restart. The Grok CLI path is unchanged.
+
+- Linux: `grokhub-linux-v2.10.77.tar.gz` and AUR `pkgver=2.10.77`.
+- Windows: `GrokHub-Setup-2.10.77.exe` and `grokhub-windows-v2.10.77.zip`.
+
+## 2.10.76 — 2026-10-03
+
+Native chats (Settings → Labs, still off by default) can now run work in the background. A shell call with `is_background` returns a task id straight away. Its output goes into a 1 MiB ring buffer that keeps the tail. `get_command_or_subagent_output` reads new output and the exit status, and can wait up to 2 minutes. `kill_command_or_subagent` ends the whole process tree, using the same process group on Linux and kill-on-close job object on Windows as the foreground shell. When a task finishes, a short notice is added once at the start of the next model turn. `monitor` streams matching lines from a running task or its own command, for up to 10 hours. Monitors stop on Halt and when the session is deleted. `/bg` on a native chat starts a separate native engine on a fork of the session. It never shows a permission card. In Ask mode its non-read-only tools are refused, as for every unattended run, and Auto uses the auto-review judge. Steer on a native chat now lands at the next tool boundary without stopping the turn. Halt cancels every native run, including `/bg` engines, and kills all their background tasks and monitors. `scheduler_create`, `scheduler_list` and `scheduler_delete` create, list and delete GrokHub automations. There is no second scheduler. Creating or deleting one is never treated as read-only. The Grok CLI path is unchanged.
+
+- Linux: `grokhub-linux-v2.10.76.tar.gz` and AUR `pkgver=2.10.76`.
+- Windows: `GrokHub-Setup-2.10.76.exe` and `grokhub-windows-v2.10.76.zip`.
+
+## 2.10.75 — 2026-10-03
+
+Native chats (Settings → Labs, still off by default) now track and manage their context window. The window size comes from the `context_length` in `/v1/models` (256k for `grok-4.7` when the field is missing). Token use is estimated locally with the bytes/4 estimator vendored from Grok Build's `xai-token-estimation`, with no tokenizer data. The result shows in the existing context line under the chat. At 85% the engine compacts on its own before the next model call. It asks for a summary using the prompt ported from the Grok CLI's `session_compact.rs`, then replaces older history with that summary. Any leading system message, the open todos and the last user turn are kept verbatim. A compaction marker is written to the session JSONL, so reopening the chat rebuilds the compacted conversation. If the summary call fails, comes back empty or is cancelled, the transcript is left exactly as it was. `/compact` on a native chat does the same on demand. On a Grok CLI chat it still sends the CLI's own `/compact`. When a request body gets close to the proxy's size limit, the oldest inline images are evicted first and replaced with the CLI's placeholder text. The summary call's tokens and cost count in the session usage. The Grok CLI path is unchanged.
+
+- Linux: `grokhub-linux-v2.10.75.tar.gz` and AUR `pkgver=2.10.75`.
+- Windows: `GrokHub-Setup-2.10.75.exe` and `grokhub-windows-v2.10.75.zip`.
+
+## 2.10.74 — 2026-10-03
+
+Native chats (Settings → Labs, still off by default) are now real sessions. Each is an append-only JSONL file under the GrokHub config folder's `sessions/`: a header line (id, title, created, folder, model), then one line per message, tool call, tool result and usage record, flushed as it happens. Reopening a chat rebuilds the conversation from the file. If the last line was cut off by a crash, it's dropped and the file repaired instead of failing. History lists native sessions next to Grok CLI sessions. CLI rows still come from the same discovery code and stay read-only. Native rows can be resumed, forked into an independent copy, renamed, exported to Markdown and deleted. Delete stops a running native turn for that session before removing the file. Titles come from the first message locally, with no model call. Each turn's tokens and cost are stored and shown, labeled "SuperGrok pool" or "API credits". The Grok CLI path is unchanged.
+
+- Linux: `grokhub-linux-v2.10.74.tar.gz` and AUR `pkgver=2.10.74`.
+- Windows: `GrokHub-Setup-2.10.74.exe` and `grokhub-windows-v2.10.74.zip`.
+
+## 2.10.73 — 2026-10-03
+
+Auto mode on the native engine (Settings → Labs, still off by default) now reviews instead of always asking. A call the permission engine would have asked about goes to auto-review first. Routine git, the read-only `gh` list and security-finding checks are decided locally on fast paths ported from Grok Build. Anything else gets a short low-effort `grok-4.7` judge call on a capped transcript tail, which answers allow, block or ask. When attended, a block or ask shows the usual permission card with the reason. Unattended, a block goes back to the model as "Auto mode blocked…". A judge error, a timeout (20 s) or an unreadable verdict fails closed: ask when attended, refuse when unattended. Deny rules, explicit ask rules, dangerous or unsplittable commands, desktop tools, Plan and btw never reach the judge. The judge's tokens and cost count in the session usage. Ask and Always are unchanged, and so is the Grok CLI path. The judge hasn't been run against the live API yet.
+
+- Linux: `grokhub-linux-v2.10.73.tar.gz` and AUR `pkgver=2.10.73`.
+- Windows: `GrokHub-Setup-2.10.73.exe` and `grokhub-windows-v2.10.73.zip`.
+
+## 2.10.72 — 2026-10-03
+
+The native engine (Settings → Labs, still off by default) gets a real permission engine on top of the 2.10.71 gate. Rules are allow, ask or deny, and deny wins over ask, which wins over allow. `Bash(...)` rules match each command segment by prefix or glob, so `git status && rm -rf /` is never auto-allowed and `Bash(git *)` doesn't match `gitleaks`. Wrappers like `timeout`, `nice`, `env` and leading `VAR=value` are peeled first. Commands the splitter can't classify ask: `$(...)`, backticks, heredocs and the like. `Read`/`Edit`/`Grep` path rules take `**` globs and can't escape the workspace. `MCPTool(server__*)` and `WebFetch(domain:...)` rules are parsed for later phases.
+
+Dangerous commands (`rm -rf`, `sudo`, `dd`, `mkfs`, force-push, `curl … | sh` …) always ask, even in Always mode or with a remembered grant, and are refused in unattended runs. **Allow always** now remembers a grant per project. A short list of read-only commands (`ls`, `cat`, `pwd`, `head`, `tail`, `wc`, `grep`, plain `git status`/`log`/`diff` and similar) runs without a prompt, also in unattended runs. That's the one deliberate loosening against 2.10.71, and it matches the Grok CLI. **Settings → Permissions** lists and edits rules and grants, and can import the `permissions` block of a project's `.claude/settings.json` (read-only). The Grok CLI path is unchanged.
+
+- Linux: `grokhub-linux-v2.10.72.tar.gz` and AUR `pkgver=2.10.72`.
+- Windows: `GrokHub-Setup-2.10.72.exe` and `grokhub-windows-v2.10.72.zip`.
+
+## 2.10.71 — 2026-10-03
+
+The native engine (Settings → Labs, still off by default) can now change things, behind a permission gate. New tools: `write`, `search_replace` (exact match, `replace_all`, keeps CRLF files CRLF, one writer per file), `run_terminal_command` (bash on Linux, PowerShell on Windows; 120 s default, 300 s max; output capped), and the desktop tools screenshot, click, move, drag, scroll, type and key, called in-process with no MCP hop. Shell commands run in their own process group on Linux and in a kill-on-close job object on Windows, so Stop, Halt and timeouts end the whole process tree, not just the shell.
+
+The gate: read-only tools always run. In Ask and Auto, anything else shows the usual permission card (Auto stays Ask until the Phase 5 reviewer). Always runs it. Plan and btw keep the read-only set. Unattended runs deny non-read-only tools with the same message as the CLI path. Desktop tools are absent while **Let Grok control the desktop** is off, and refuse while halted or on the lock screen. The Grok CLI path is unchanged. No live call has been made yet.
+
+- Linux: `grokhub-linux-v2.10.71.tar.gz` and AUR `pkgver=2.10.71`.
+- Windows: `GrokHub-Setup-2.10.71.exe` and `grokhub-windows-v2.10.71.zip`.
+
+## 2.10.70 — 2026-10-03
+
+A native engine arrives behind a switch. **Settings → Labs → Native engine (no Grok CLI)** is off by default, and while it's off chats launch the Grok CLI exactly as before. With it on, new chats run GrokHub's own read-only agent (new `grokhub-agent` crate, sync, `ureq`). It streams `POST api.x.ai/v1/responses` with model `grok-4.7` and the composer's reasoning effort, plus hosted `web_search` and `x_search`. Retries follow the Grok Build schedule (15 tries, 2 s doubling to 30 s, ±20% jitter, Retry-After). The loop runs until no tool call remains or 50 turns pass, and honors Stop, Halt, steer at the next turn boundary, and a guard against the same call three times in a row. The tools are read-only: `read_file` (PNG/JPEG go back as images), `list_dir`, `grep` (`.gitignore` aware) and `glob`, all confined to the workspace. Any write, edit or shell call is refused. Those chats carry a **Native** badge, and usage shows tokens and cost labeled "SuperGrok pool" (sign-in) or "API credits" (key).
+
+Sign-in is shared. The Imagine sign-in becomes **Sign in with Grok**, and its keychain account moves once from `imagine-oauth` to `xai-oauth`. The bearer is your GrokHub sign-in, then your console API key, otherwise "Sign in with Grok or add an API key." The native engine never reads the Grok CLI's `~/.grok/auth.json`, `config.toml` or `GROK_HOME`, and never calls the CLI proxy. A source-scan test guards that. Parts of the prompt and retry logic are ported from xai-org/grok-build under Apache-2.0 (see `crates/grokhub-agent/NOTICE`). No live call has been made yet.
+
+- Linux: `grokhub-linux-v2.10.70.tar.gz` and AUR `pkgver=2.10.70`.
+- Windows: `GrokHub-Setup-2.10.70.exe` and `grokhub-windows-v2.10.70.zip`.
+
+## 2.10.69 — 2026-10-03
+
+Desktop control on KDE Wayland gets fallbacks. If the portal won't hand over libei, input stays in the same RemoteDesktop session through the portal's Notify* calls. If there's no portal session at all, it moves to an absolute uinput pointer (evdev 0.13, Linux only) that spans the union of the outputs from `kscreen-doctor`, so clicks land on absolute coordinates with no acceleration. ydotool is the last resort and is labeled imprecise. Capture tries KWin ScreenShot2, then `spectacle -b -n -o`, then the portal Screenshot, and crops to the requested monitor. xdotool is never used on Wayland.
+
+A small broker owns the desktop session. It listens on `$XDG_RUNTIME_DIR/grokhub/desk.sock` (socket 0600, folder 0700), accepts only same-uid peers, and holds a file lock so two GrokHub processes can't drive the desk at once. The broker checks the **Let Grok control the desktop** switch (off by default), Halt (Ctrl+Alt+H) and the lock screen again on every request, and Ask still runs before any tool call reaches it. A request can't carry its own gate. **Settings → Desktop control** shows the active input and capture backends, and **Test** moves to each monitor's center and captures it. `packaging/udev/60-grokhub-uinput.rules` adds `TAG+="uaccess"`, so the seated user gets `/dev/uinput` without joining the `input` group. The mode stays 0660, never world-writable. The uinput mapping is only covered by unit tests so far. The ±2 px click accuracy still needs a live check on a KDE desktop.
+
+- Linux: `grokhub-linux-v2.10.69.tar.gz` and AUR `pkgver=2.10.69`.
+- Windows: `GrokHub-Setup-2.10.69.exe` and `grokhub-windows-v2.10.69.zip`.
+
+## 2.10.68 — 2026-10-02
+
+Desktop control on KDE Plasma 6 Wayland stops fighting the compositor. On a KDE session, GrokHub's desktop tools now use the xdg-desktop-portal RemoteDesktop session with libei for input (ashpd and reis, Linux only). Clicks are absolute moves inside KWin's per-output regions, with no pointer acceleration or calibration. KDE asks "Allow remote control" once. The restore token is kept in the OS keychain (service `GrokHub`, account `desktop-portal-restore`), never in a file, and each session's new token replaces the old one. If KDE asks again, the status says why.
+
+Screenshots on KDE use KWin's `org.kde.KWin.ScreenShot2`, silently and at full resolution. The packaged `grokhub.desktop` now carries `X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2` so KWin allows it. Monitors come from `kscreen-doctor -j`. If the portal is denied or unavailable, input falls back to ydotool and says it's imprecise. xdotool is never used on Wayland. wlroots desktops keep grim and ydotool, and X11 and Windows are unchanged.
+
+The **Let Grok control the desktop** switch (off by default) and Ask gating are unchanged. Halt (Ctrl+Alt+H) and the lock screen close the portal session, which revokes input at the compositor. This hasn't been run on a live KDE desktop yet.
+
+- Linux: `grokhub-linux-v2.10.68.tar.gz` and AUR `pkgver=2.10.68`.
+- Windows: `GrokHub-Setup-2.10.68.exe` and `grokhub-windows-v2.10.68.zip`.
+
+## 2.10.67 — 2026-10-02
+
+Home learns which cards help. Opening, dismissing, More, Less, Hide and Follow up now also update a small local preference file, `card_prefs.json`, in the GrokHub config folder. It keeps decaying weights (14-day half-life) per card type, per source group, and per topic keyword. Keywords are at most three single words taken from the card title at the time of the event, with stopwords, digits and times dropped. It's capped at 200 groups and 200 keywords, and holds no sentences or body text. If the file is missing, the type and group weights are rebuilt from the signal log, which stays text-free.
+
+Home ranks event cards by a simple, deterministic score: a base for the card type, plus how often you open that type, source and topic, plus a little recency. Cards you keep dismissing sink, and a card scoring under 0.15 folds into a **More (n)** row under the deck ("Showing fewer of these; you've been dismissing them"). Failures, pinned cards and cards you worked on are never folded. Hide, Less like this and the once-a-day failure floor still apply first, and Home still shows at most three cards. A new type or source gets a small one-card novelty bump. When one reason clearly dominates, a short hint follows the why line: "You usually open these", "You often open {topic} cards", "New for you" or "Needs a look". **Settings → Behavior → What Home learned** lists the top liked and disliked groups and topics, with Forget on each row and **Reset all**. Reset keeps the signal log. No network or model calls are involved.
+
+- Linux: `grokhub-linux-v2.10.67.tar.gz` and AUR `pkgver=2.10.67`.
+- Windows: `GrokHub-Setup-2.10.67.exe` and `grokhub-windows-v2.10.67.zip`.
+
+## 2.10.66 — 2026-10-02
+
+Home cards explain themselves and take feedback. A card that stands for several runs shows **×N runs · latest h:mm**. The count restarts once you open the card, so it means runs since you last looked. Under the body, one muted line says why the card is there:
+- "Your automation “name” finished and left a report in Follow up." (or just "…finished." when nothing was filed)
+- "“name” failed and needs a look."
+- "You saved this schedule."
+
+Home paints at most three event cards, and the open deck stays above the composer instead of covering it. Cards are taller (96 px) to fit the extra lines.
+
+Every event card has a **⋯** menu, which right-click also opens:
+- **More like this.**
+- **Less like this** keeps that card's group off Home for 14 days.
+- **Hide this automation's runs from Home.** Hidden runs still update in place and in Follow up. Automations shows **Hidden from Home · Undo**.
+
+A hidden or muted automation's failure still shows on Home at most once a day.
+
+Card feedback goes to a local signal log, `card_signals.jsonl` in the GrokHub config folder, for the learning step that comes next. It records open, dismiss (and whether the card was opened first), more, less, hide, unhide and Follow up events. Each line holds only the time, card id, kind, group and source, never card text. At 2,000 lines the log rotates to `card_signals.jsonl.1`. Nothing leaves the machine.
+
+- Linux: `grokhub-linux-v2.10.66.tar.gz` and AUR `pkgver=2.10.66`.
+- Windows: `GrokHub-Setup-2.10.66.exe` and `grokhub-windows-v2.10.66.zip`.
+
+## 2.10.65 — 2026-10-02
+
+Home stops repeating cards. Each automation, schedule, offer or suggestion now keeps one card, with a stable id built from its source (or a hash of the normalized title when it has none) instead of the run time. A repeat run updates that card in place: newest title, body and time, back to unread, and a count of the runs it stands for. A failed run replaces the finished card for the same automation. Filing a run in Follow up points the automation's one card at the workboard instead of rewriting every older copy, which is how four identical "In Follow up on your workboard" cards showed up. Dismissing a card clears its whole group and keeps a hidden marker for 24 hours, so a repeat of that run doesn't come back that day. A failure still shows. Saved feeds are deduped once on load: duplicate runs fold into the newest card with their run count, and the file is only rewritten when something changed.
+
+- Linux: `grokhub-linux-v2.10.65.tar.gz` and AUR `pkgver=2.10.65`.
+- Windows: `GrokHub-Setup-2.10.65.exe` and `grokhub-windows-v2.10.65.zip`.
+
+## 2.10.64 — 2026-10-02
+
+Repo rules for new Cursor and Claude chats. `CLAUDE.md` and `.cursor/rules/repo-gates.mdc` write down the real gates: branch off `main` and never push to it, no secrets or credential files, the exact CI test and clippy commands, the version-bump file list, the 12,000-byte composer source-scan window, no merges without Jeremy's OK, and no tag or release without his "full ship". `.cursor/rules/merge-prs.mdc` now agrees with them: no merges, tags or releases unless Jeremy says so. `.gitignore` also covers `target/` anywhere, key and certificate files (`*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.crt`, `id_rsa*`), and `auth.json`, `secrets.json` and `credentials.json`, while still allowing `.env.example`. No tracked file is ignored. The working tree and full git history were scanned for committed secrets (gitleaks 8.30.1 plus targeted greps). Nothing is in the current tree. One historical finding was reported separately for a rotation decision, and history was not rewritten. The app itself is unchanged.
+
+- Linux: `grokhub-linux-v2.10.64.tar.gz` and AUR `pkgver=2.10.64`.
+- Windows: `GrokHub-Setup-2.10.64.exe` and `grokhub-windows-v2.10.64.zip`.
+
 ## 2.10.63 — 2026-10-02
 
 Imagine has its own Grok sign-in and the full Imagine API. **Sign in with Grok for Imagine** on the Imagine page opens xAI in the browser (PKCE on a one-time `127.0.0.1` callback, or **Use a code instead** for a device code), and the tokens live only in the OS keychain (Windows Credential Manager, or the Secret Service on Linux), never in a file or a log. Imagine uses that sign-in first, then a console API key; it no longer borrows the Grok CLI login. If xAI doesn't allow the sign-in to use the Imagine API, Imagine says so and offers **Use API key**. Images: Generate or Edit, models `grok-imagine-image-2.0` (default), `grok-imagine-image-quality` and `grok-imagine-image`, 1–10 at a time, 1k or 2k, every aspect ratio, quality on 2.0, and edits from up to three source images with an optional mask. Video: text-to-video, image-to-video, edit and extend, with `grok-imagine-video-1.5` (1080p on text and image to video) or `grok-imagine-video`, 1–15 s and audio on or off. Results show in a grid with Save and Open folder.

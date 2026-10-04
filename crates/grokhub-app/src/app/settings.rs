@@ -2,6 +2,13 @@
 
 use super::*;
 
+#[derive(Clone, Default)]
+struct PermDraft {
+    rule: String,
+    action: String,
+    grant: String,
+}
+
 pub(super) fn settings_group_home(group: SettingsGroup) -> SettingsSec {
     match group {
         SettingsGroup::General => SettingsSec::Account,
@@ -17,6 +24,8 @@ pub(super) fn settings_sec_title(sec: SettingsSec) -> &'static str {
         SettingsSec::Update => "Update",
         SettingsSec::About => "About",
         SettingsSec::Defaults => "Cabin defaults",
+        SettingsSec::Labs => "Labs",
+        SettingsSec::Permissions => "Permissions",
     }
 }
 
@@ -82,6 +91,58 @@ fn choice_label(choices: &[(&str, &str)], id: &str, fallback: &str) -> String {
 }
 
 impl Cabin {
+    pub(super) fn reset_home_learned(&mut self) {
+        self.card_prefs = grokhub_core::CardPrefs::default();
+        let _ = crate::card_prefs::save(&self.card_prefs);
+        self.status = "Home learning reset".into();
+    }
+
+    pub(super) fn forget_home_learned(&mut self, bucket: grokhub_core::LearnedBucket, key: &str) {
+        grokhub_core::forget_learned(&mut self.card_prefs, bucket, key);
+        let _ = crate::card_prefs::save(&self.card_prefs);
+    }
+
+    fn ui_home_learned(&mut self, ui: &mut egui::Ui) {
+        ui.label(
+            RichText::new("What Home learned")
+                .size(15.0)
+                .color(crate::theme::fg()),
+        );
+        ui.label(
+            RichText::new("Groups and topics from cards you open or dismiss. Stays on this computer.")
+                .size(12.0)
+                .color(crate::theme::muted()),
+        );
+        ui.add_space(6.0);
+        let (liked, disliked) = grokhub_core::top_learned(&self.card_prefs, now_ms());
+        let mut forget = None;
+        if liked.is_empty() && disliked.is_empty() {
+            crate::cards::settings_note(ui, "Nothing yet.");
+        } else {
+            for row in liked.iter().chain(disliked.iter()) {
+                let sign = if row.sign > 0 { "+" } else { "-" };
+                let hint = match row.bucket {
+                    grokhub_core::LearnedBucket::Group => "Group",
+                    grokhub_core::LearnedBucket::Topic => "Topic",
+                };
+                if crate::cards::settings_action(ui, &format!("{sign} {}", row.key), hint, "Forget") {
+                    forget = Some((row.bucket, row.key.clone()));
+                }
+            }
+        }
+        if crate::cards::settings_action(
+            ui,
+            "Reset all",
+            "Clears what Home learned. The signal log stays.",
+            "Reset all",
+        ) {
+            self.reset_home_learned();
+        }
+        if let Some((bucket, key)) = forget {
+            self.forget_home_learned(bucket, &key);
+        }
+    }
+
     pub(super) fn choose_theme(&mut self, choice: grokhub_core::ThemeChoice) {
         let current = grokhub_core::parse_theme(&self.cfg.theme);
         if let Some(next) = grokhub_core::pick_theme(current, choice) {
@@ -298,7 +359,9 @@ impl Cabin {
                                                     (SettingsSec::Account, "Account"),
                                                     (SettingsSec::Appearance, "Appearance"),
                                                     (SettingsSec::Behavior, "Behavior"),
+                                                    (SettingsSec::Permissions, "Permissions"),
                                                     (SettingsSec::Defaults, "Cabin defaults"),
+                                                    (SettingsSec::Labs, "Labs"),
                                                 ] {
                                                     if crate::cards::settings_nav(ui, label, sec == s) {
                                                         next_sec = Some(s);
@@ -407,7 +470,7 @@ impl Cabin {
                                                                 ui,
                                                                 auth_title,
                                                                 auth_hint,
-                                                                if oauth_on { "Sign out" } else { "Connect" },
+                                                                if oauth_on { "Sign out" } else { "Sign in with Grok" },
                                                             ) {
                                                                 if oauth_on {
                                                                     disconnect = true;
@@ -539,6 +602,8 @@ impl Cabin {
                                                                     self.status = "Saved".into();
                                                                 }
                                                             }
+                                                            ui.add_space(8.0);
+                                                            self.ui_home_learned(ui);
                                                         }
                                                         SettingsSec::Update => {
                                                             if let Some(notice) = cli_notice.as_deref() {
@@ -712,6 +777,21 @@ impl Cabin {
                                                                     "Removing desktop tools...".into()
                                                                 };
                                                                 crate::desktop_mcp::spawn_register(on);
+                                                                crate::desktop_mcp::set_desktop_enabled(on);
+                                                            }
+                                                            crate::cards::settings_note(
+                                                                ui,
+                                                                &crate::desktop_mcp::desktop_panel_lines(),
+                                                            );
+                                                            if crate::cards::settings_action(
+                                                                ui,
+                                                                "Desktop control",
+                                                                "Move to each monitor center and capture. Offset is reported when the pointer can be read back.",
+                                                                "Test",
+                                                            ) {
+                                                                self.status = crate::desktop_mcp::request_desktop_test(
+                                                                    self.cfg.desktop_control,
+                                                                );
                                                             }
                                                             let sessions = cabin_default_sessions();
                                                             let session_labels: Vec<String> = sessions
@@ -751,6 +831,23 @@ impl Cabin {
                                                                 self.status = "Saved".into();
                                                             }
                                                         }
+                                                        SettingsSec::Labs => {
+                                                            if crate::cards::settings_toggle(
+                                                                ui,
+                                                                "Native engine (no Grok CLI)",
+                                                                "New chats talk to xAI directly. Tools stay read-only.",
+                                                                &mut self.cfg.native_engine,
+                                                            ) {
+                                                                self.persist_cfg();
+                                                                self.status = "Saved".into();
+                                                            }
+                                                            if self.cfg.native_engine {
+                                                                crate::native_mcp::paint(ui);
+                                                                let cwd = self.grok_cwd();
+                                                                crate::native_plugins::paint(ui, &cwd);
+                                                            }
+                                                        }
+                                                        SettingsSec::Permissions => self.ui_permission_editor(ui),
                                                     }
                                                 });
                                             });
@@ -809,6 +906,138 @@ impl Cabin {
         if save {
             self.save_settings();
         }
+    }
+
+    fn ui_permission_editor(&mut self, ui: &mut egui::Ui) {
+        let draft_id = egui::Id::new("grokhub-perm-draft");
+        let mut draft = ui
+            .ctx()
+            .data(|data| data.get_temp::<PermDraft>(draft_id))
+            .unwrap_or_default();
+        if draft.action.is_empty() {
+            draft.action = "allow".into();
+        }
+        let workspace = self.grok_cwd();
+        let dir = grokhub_agent::perm::config_dir();
+        crate::cards::settings_note(
+            ui,
+            "Deny wins over ask, and ask wins over allow. Dangerous commands still ask, including after Allow always.",
+        );
+        crate::cards::settings_field(
+            ui,
+            "Rule",
+            "Bash(git *), Read(src/**), Edit(src/**), WebFetch(domain:example.com), MCPTool(server__*)",
+            &mut draft.rule,
+            false,
+        );
+        ui.horizontal(|ui| {
+            for (id, label) in [("allow", "Allow"), ("ask", "Ask"), ("deny", "Deny")] {
+                if draft.action == id {
+                    ui.label(RichText::new(label).color(crate::theme::fg()));
+                } else if crate::cards::ghost_pill(ui, label) {
+                    draft.action = id.into();
+                }
+            }
+        });
+        ui.add_space(8.0);
+        if crate::cards::settings_action(ui, "Add rule", "Saved for every project.", "Add") {
+            let action = match draft.action.as_str() {
+                "deny" => grokhub_agent::perm::Action::Deny,
+                "ask" => grokhub_agent::perm::Action::Ask,
+                _ => grokhub_agent::perm::Action::Allow,
+            };
+            match grokhub_agent::perm::parse_rule(draft.rule.trim(), action) {
+                Ok(rule) => {
+                    let mut rules = grokhub_agent::perm::load_rules(&dir);
+                    rules.push(rule);
+                    if grokhub_agent::perm::save_rules(&dir, &rules).is_ok() {
+                        draft.rule.clear();
+                        self.status = "Saved".into();
+                    } else {
+                        self.status = "Could not save rules".into();
+                    }
+                }
+                Err(_) => self.status = "That rule could not be parsed".into(),
+            }
+        }
+        let rules = grokhub_agent::perm::load_rules(&dir);
+        if rules.is_empty() {
+            crate::cards::settings_note(ui, "No saved rules.");
+        }
+        let mut drop_at = None;
+        for (idx, rule) in rules.iter().enumerate() {
+            let title = format!("{}  {}", rule.action, rule.source);
+            if crate::cards::settings_action(ui, &title, "Saved rule", "Remove") {
+                drop_at = Some(idx);
+            }
+        }
+        if let Some(idx) = drop_at {
+            let mut rules = grokhub_agent::perm::load_rules(&dir);
+            if idx < rules.len() {
+                rules.remove(idx);
+                if grokhub_agent::perm::save_rules(&dir, &rules).is_ok() {
+                    self.status = "Saved".into();
+                } else {
+                    self.status = "Could not save rules".into();
+                }
+            }
+        }
+        if let Some(imported) = grokhub_agent::perm::load_claude_project(&workspace) {
+            if !imported.is_empty() {
+                crate::cards::settings_note(ui, "From .claude/settings.json. Read only.");
+                for rule in imported {
+                    crate::cards::settings_note(ui, &format!("{}  {}", rule.action, rule.source));
+                }
+            }
+        }
+        crate::cards::settings_field(
+            ui,
+            "Remembered grant",
+            "Allow always for this project. Dangerous commands are not stored.",
+            &mut draft.grant,
+            false,
+        );
+        if crate::cards::settings_action(
+            ui,
+            "Remember command",
+            "Stored for this project.",
+            "Remember",
+        ) {
+            let raw = draft.grant.trim().to_string();
+            let args = serde_json::json!({ "command": raw }).to_string();
+            match grokhub_agent::perm::remember_allow_always(
+                &workspace,
+                "run_terminal_command",
+                &args,
+            ) {
+                Ok(true) => {
+                    draft.grant.clear();
+                    self.status = "Saved".into();
+                }
+                Ok(false) => {
+                    self.status = "That command was not remembered".into();
+                }
+                Err(_) => self.status = "Could not save the grant".into(),
+            }
+        }
+        let grants = grokhub_agent::perm::load_grants(&dir, &workspace);
+        if grants.is_empty() {
+            crate::cards::settings_note(ui, "No remembered grants for this project.");
+        }
+        let mut drop_grant = None;
+        for grant in &grants {
+            if crate::cards::settings_action(ui, grant, "Remembered for this project", "Remove") {
+                drop_grant = Some(grant.clone());
+            }
+        }
+        if let Some(grant) = drop_grant {
+            if grokhub_agent::perm::remove_grant(&workspace, &grant).is_ok() {
+                self.status = "Saved".into();
+            } else {
+                self.status = "Could not save the grant".into();
+            }
+        }
+        ui.ctx().data_mut(|data| data.insert_temp(draft_id, draft));
     }
 
     /// Next cabin turn picks up a Settings pin the same way a composer pill does.

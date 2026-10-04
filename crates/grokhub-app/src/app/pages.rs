@@ -206,10 +206,37 @@ impl Cabin {
     }
 
     fn ui_hooks_section(&mut self, ui: &mut egui::Ui, q: &str) {
+        if self.cfg.native_engine {
+            self.ensure_native_listing();
+        }
+        let native = self.cfg.native_engine;
+        let native_rows: Vec<grokhub_acp::GrokHookRow> = if native {
+            self.native_hooks
+                .iter()
+                .map(|hook| grokhub_acp::GrokHookRow {
+                    event: hook.event.clone(),
+                    hook_type: hook.kind.clone(),
+                    target: hook.command.clone(),
+                    origin: match hook.origin {
+                        grokhub_agent::HookOrigin::User => grokhub_acp::HookOrigin::User,
+                        grokhub_agent::HookOrigin::Project => grokhub_acp::HookOrigin::Project,
+                        grokhub_agent::HookOrigin::Plugin => grokhub_acp::HookOrigin::Other,
+                    },
+                    path: hook.path.display().to_string(),
+                    matcher: if hook.matcher.is_empty() {
+                        None
+                    } else {
+                        Some(hook.matcher.clone())
+                    },
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let hooks_section = ui
             .vertical(|ui| {
                 crate::cards::section_label(ui, "Hooks");
-                if self.grok_catalog.project_trusted == Some(false) {
+                if !native && self.grok_catalog.project_trusted == Some(false) {
                     ui.label(
                         RichText::new(
                             "Project hooks stay hidden until this folder is trusted in Grok Build (/hooks-trust).",
@@ -219,21 +246,67 @@ impl Cabin {
                     );
                     ui.add_space(6.0);
                 }
-                let hooks: Vec<_> = self
-                    .grok_catalog
-                    .hooks
-                    .iter()
-                    .filter(|h| {
-                        q.is_empty()
-                            || h.event.to_ascii_lowercase().contains(q)
-                            || h.target.to_ascii_lowercase().contains(q)
-                            || h.matcher
-                                .as_ref()
-                                .is_some_and(|m| m.to_ascii_lowercase().contains(q))
-                    })
-                    .cloned()
-                    .collect();
-                if self.grok_catalog.hooks.is_empty() {
+                let native_project_hooks = native
+                    && self
+                        .native_hooks
+                        .iter()
+                        .any(|hook| hook.origin == grokhub_agent::HookOrigin::Project);
+                if native_project_hooks {
+                    let trusted = self.native_hooks_trusted;
+                    let note = if trusted {
+                        "This folder is trusted: its project hooks run on native chats."
+                    } else {
+                        "Project hooks come from this repository and don't run on native chats until you trust this folder."
+                    };
+                    ui.label(RichText::new(note).size(12.0).color(crate::theme::muted()));
+                    let label = if trusted {
+                        "Stop trusting this folder"
+                    } else {
+                        "Trust this folder's hooks"
+                    };
+                    if ui.button(label).clicked() {
+                        let workspace = self.grok_cwd();
+                        match grokhub_agent::set_folder_trust(&workspace, !trusted) {
+                            Ok(()) => self.native_listing_cwd.clear(),
+                            Err(err) => self.status = err,
+                        }
+                    }
+                    ui.add_space(6.0);
+                }
+                let hooks: Vec<grokhub_acp::GrokHookRow> = if native {
+                    native_rows
+                        .iter()
+                        .filter(|h| {
+                            q.is_empty()
+                                || h.event.to_ascii_lowercase().contains(q)
+                                || h.target.to_ascii_lowercase().contains(q)
+                                || h.matcher
+                                    .as_ref()
+                                    .is_some_and(|m| m.to_ascii_lowercase().contains(q))
+                        })
+                        .cloned()
+                        .collect()
+                } else {
+                    self.grok_catalog
+                        .hooks
+                        .iter()
+                        .filter(|h| {
+                            q.is_empty()
+                                || h.event.to_ascii_lowercase().contains(q)
+                                || h.target.to_ascii_lowercase().contains(q)
+                                || h.matcher
+                                    .as_ref()
+                                    .is_some_and(|m| m.to_ascii_lowercase().contains(q))
+                        })
+                        .cloned()
+                        .collect()
+                };
+                let none = if native {
+                    self.native_hooks.is_empty()
+                } else {
+                    self.grok_catalog.hooks.is_empty()
+                };
+                if none {
                     ui.label(
                         RichText::new(
                             "No hooks in ~/.grok/hooks or this project's .grok/hooks.",
@@ -331,6 +404,16 @@ impl Cabin {
                     ui.add_space(8.0);
                 }
                 let mut run_at: Option<usize> = None;
+                let todo_session = self
+                    .threads
+                    .get(self.thread_idx)
+                    .and_then(|thread| thread.grok_session.clone())
+                    .unwrap_or_default();
+                let todos = if self.cfg.native_engine {
+                    grokhub_agent::todos_for(&todo_session)
+                } else {
+                    Vec::new()
+                };
                 if !self.grok_tasks.is_empty() {
                     crate::cards::section_label(ui, "Grok tasks");
                     ui.add_space(8.0);
@@ -348,7 +431,24 @@ impl Cabin {
                     }
                     ui.add_space(12.0);
                 }
-                if self.agents.is_empty() && self.grok_tasks.is_empty() {
+                if !todos.is_empty() {
+                    crate::cards::section_label(ui, "Todos");
+                    ui.add_space(8.0);
+                    for todo in &todos {
+                        let done = todo.status == "completed" || todo.status == "cancelled";
+                        crate::cards::grok_tile(
+                            ui,
+                            crate::icons::TileIcon::List,
+                            &todo.content,
+                            &format!("{} · {}", todo.status, todo.id),
+                            None,
+                            done,
+                        );
+                        ui.add_space(6.0);
+                    }
+                    ui.add_space(12.0);
+                }
+                if self.agents.is_empty() && self.grok_tasks.is_empty() && todos.is_empty() {
                     let _ = crate::cards::empty_prompt_tile(
                         ui,
                         crate::icons::TileIcon::List,
@@ -844,6 +944,7 @@ impl Cabin {
                     self.nav = Nav::History;
                 }
             }
+            self.paint_native_history_merge(ui);
         });
     }
 
@@ -1351,6 +1452,9 @@ impl Cabin {
     }
 
     pub(super) fn ui_skills(&mut self, ui: &mut egui::Ui) {
+        if self.cfg.native_engine {
+            self.ensure_native_listing();
+        }
         if !self.grok_catalog_loaded && self.grok_catalog_rx.is_none() {
             self.reload_grok_catalog();
         }
@@ -1358,6 +1462,10 @@ impl Cabin {
             .frame(egui::Frame::NONE.fill(crate::theme::bg()).inner_margin(egui::Margin::same(24)))
             .show(ui, |ui| {
             if crate::cards::page_header(ui, "Skills and Connectors", "Refresh") {
+                if self.cfg.native_engine {
+                    self.native_listing_cwd.clear();
+                    self.ensure_native_listing();
+                }
                 self.reload_grok_catalog();
                 self.skill_list = skills::list_skills();
             }
@@ -1786,6 +1894,56 @@ impl Cabin {
             }
             ui.add_space(16.0);
             crate::cards::section_label(ui, "Grok Build skills");
+            if self.cfg.native_engine {
+                crate::cards::help_text(
+                    ui,
+                    "Skills discovered for the native engine. Use in chat sends /name.",
+                );
+                ui.add_space(8.0);
+                let skills: Vec<_> = self
+                    .native_skills
+                    .iter()
+                    .filter(|s| {
+                        q.is_empty()
+                            || s.name.to_ascii_lowercase().contains(&q)
+                            || s.description.to_ascii_lowercase().contains(&q)
+                            || s.path.display().to_string().to_ascii_lowercase().contains(&q)
+                    })
+                    .cloned()
+                    .collect();
+                if skills.is_empty() {
+                    ui.label(
+                        RichText::new(if q.is_empty() {
+                            "None found in this project or the user skills directory."
+                        } else {
+                            "None matched."
+                        })
+                        .size(crate::theme::FONT_BODY)
+                        .color(crate::theme::muted()),
+                    );
+                } else {
+                    crate::cards::tile_row(ui, skills.len(), |ui, i| {
+                        let s = &skills[i];
+                        let src = format!("{} · {}", s.source.as_str(), s.path.display());
+                        let body = if s.description.is_empty() {
+                            src
+                        } else {
+                            format!("{src} · {}", s.description)
+                        };
+                        if crate::cards::grok_tile(
+                            ui,
+                            crate::icons::icon_for_label(&s.name),
+                            &s.name,
+                            &body,
+                            Some("Use in chat"),
+                            false,
+                        ) == crate::cards::TileHit::Add
+                        {
+                            use_skill = Some(s.name.clone());
+                        }
+                    });
+                }
+            } else {
             crate::cards::help_text(ui, "Bundled skills and plugin skills from `grok inspect`. Use in chat sends /name.");
             ui.add_space(8.0);
             let skills: Vec<_> = self
@@ -1837,6 +1995,7 @@ impl Cabin {
                         use_skill = Some(s.name.clone());
                     }
                 });
+            }
             }
             }
             });
