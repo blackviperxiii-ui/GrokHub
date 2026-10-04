@@ -1320,6 +1320,11 @@ impl Cabin {
                 }
                 self.board.retain(|c| c.id != id);
                 self.forget_board_card_view(&id);
+                // A Follow up chat was hidden because its card was the way in.
+                // With the card gone it goes back to History, as the status says.
+                if self.unpark_follow_up_chat(thread.as_deref()) {
+                    self.persist();
+                }
                 self.status = if thread.is_some() {
                     "Card deleted. Its chat stays in History.".into()
                 } else {

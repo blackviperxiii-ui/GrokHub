@@ -4,13 +4,20 @@
 
 Fixes from a debug run of the whole app. GrokHub no longer refuses to open, silently, after a crash or reboot: a leftover `cabin.pid` could name a pid the system had since given to another program (or a zombie), and the new launch took it for a running cabin and quit. Now only a live process with GrokHub's own name counts. When the Grok Build CLI download fails on first run (offline, or blocked by a proxy), Get Started shows the real error, such as `curl: (22) … 403`, instead of "install finished but grok was not found". Digest cards no longer say "The brief steers the next edition." twice. `cabin_leader_socket_is_not_the_cli_leader` passes with `GROKHUB_CONFIG` set to a temp dir, as `CLAUDE.md` tells local runs to do.
 
+## 2.10.89 — 2026-10-04
+
+Scheduled automations run in the background on their own process and stay out of your chats. A clock automation used to borrow your chat's reply slot: it switched you to the chat page when it fired, and a message you sent while it ran stopped it. Its Follow up chat ("Follow up · …") was also a History row. Now each run is its own background `grok -p` (or native engine run) on the hidden Background chat, one at a time, and it doesn't use any of your three `/bg` slots or show in the chat's background strip. You stay on the page you're on, and your messages don't stop it. Its report still lands on the Follow up card on the workboard and the Home card, where you read and answer it, but that chat is no longer listed in History. Follow up chats filed by older builds are hidden on load. Nothing is deleted.
+
+Review fixes for the change above. A scheduled run is unwatched, so it runs at low effort again, as it did in the chat slot and as every other unattended run does; moving to the background had switched it to the effort you picked for your own chats. An automation whose instructions name a skill (`/snapshot …`, or words matching a skill's trigger) gets that skill's steps again. Deleting a Follow up card puts its chat back in History, as the "Its chat stays in History" status says, so the report and anything you replied there can still be found; startup now hides only the Follow up chats a card still links. Halt (the hotkey, the tray, or Ctrl+Alt+H) stops a scheduled run and marks the job stopped; Stop on your own chat leaves it running.
+
+- Linux: `grokhub-linux-v2.10.89.tar.gz` and AUR `pkgver=2.10.89`.
+- Windows: `GrokHub-Setup-2.10.89.exe` and `grokhub-windows-v2.10.89.zip`.
+
 ## 2.10.88 — 2026-10-04
 
 A review of every open pull request, shipped as one release.
 
 Background work stays out of the sidebar History. A `/bg` run forks the chat's Grok session, and a `/loop` or a quick-chip reply through the CLI writes a session of its own; on the next launch those sessions came back as extra chats in History. Their ids are now filed on the hidden Background chat, so startup adoption and the Grok session list skip them, and chats a loop already leaked are hidden on load. Nothing is deleted: the sessions stay on disk, and deleting all chats still removes them.
-
-Scheduled automations run in the background on their own process and stay out of your chats. A clock automation used to borrow your chat's reply slot: it switched you to the chat page when it fired, and a message you sent while it ran stopped it. Its Follow up chat ("Follow up · …") was also a History row. Now each run is its own background `grok -p` (or native engine run) on the hidden Background chat, one at a time, and it doesn't use any of your three `/bg` slots or show in the chat's background strip. You stay on the page you're on, and your messages don't stop it. Its report still lands on the Follow up card on the workboard and the Home card, where you read and answer it, but that chat is no longer listed in History. Follow up chats filed by older builds are hidden on load. Nothing is deleted.
 
 Hovering Send while no reply is running says just "Send" again. Since 2.10.87 the hover could read "Send · Read file" after a turn that used a tool, because the finished turn's tool cards are only cleared when the next turn starts, and it could also show another chat's pending permission title. The tool or wait name now only appears on Stop's hover while a reply is running here.
 

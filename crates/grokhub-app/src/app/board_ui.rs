@@ -766,6 +766,21 @@ impl Cabin {
         }
     }
 
+    /// Show a deleted Follow up card's hidden chat in History again. Only a
+    /// Follow up chat: other hidden chats (Background, idea talks) stay hidden.
+    pub(super) fn unpark_follow_up_chat(&mut self, thread_id: Option<&str>) -> bool {
+        let Some(tid) = thread_id else {
+            return false;
+        };
+        let Some(t) = self.threads.iter_mut().find(|t| {
+            t.id == tid && t.background && crate::threads::is_follow_up_title(&t.title)
+        }) else {
+            return false;
+        };
+        t.background = false;
+        true
+    }
+
     /// A chat for a card. A Follow up card's chat is `hidden`: scheduled work,
     /// read and answered on the card, never a History row.
     pub(super) fn make_card_thread(&mut self, title: &str, hidden: bool) -> String {
