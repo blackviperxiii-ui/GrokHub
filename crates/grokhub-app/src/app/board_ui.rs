@@ -1,8 +1,9 @@
 //! Workboard cards. Each card is short: a title, one line, and what it has
-//! (a chat, notes, a new report). Hover (or a click) opens it in place with the
-//! full text, its notes, and a real chat with the agent: the same bubbles,
-//! thoughts, and tool rows as the Chat page, streaming while it works. Starting
-//! a drag folds an open card back so it moves as one small card.
+//! (a chat, notes, a new report). A click opens it in place with the full text,
+//! its notes, and a real chat with the agent: the same bubbles, thoughts, and
+//! tool rows as the Chat page, streaming while it works. A second click on its
+//! title row or Esc folds it; hover alone does nothing. Starting a drag folds an
+//! open card back so it moves as one small card.
 //!
 //! Follow up cards come from scheduled runs that left something to read or act
 //! on (`file_automation_follow_up`). Each automation keeps one open card and one
@@ -15,10 +16,6 @@ use grokhub_core::{
     UpdateAction,
 };
 
-/// Rest on a card this long before it opens, so sweeping past does not flicker.
-const HOVER_OPEN_SECS: f64 = 0.3;
-/// Leave an open card this long before it folds back.
-const LEAVE_CLOSE_SECS: f64 = 0.6;
 /// Chat height inside an open card: a column card, and a full-width Follow up card.
 pub(super) const CARD_CHAT_H: f32 = 260.0;
 pub(super) const FOLLOW_CHAT_H: f32 = 340.0;
@@ -26,13 +23,14 @@ pub(super) const FOLLOW_CHAT_H: f32 = 340.0;
 /// What the Workboards page remembers between frames.
 #[derive(Clone, Debug, Default)]
 pub(super) struct BoardView {
+    /// The one card opened by a click. It stays open until you click it again,
+    /// press Esc, open another card, or start a drag.
     pub open: Option<String>,
-    /// Opened by a click: stays open until the pointer has been on it and left.
-    pub pinned: bool,
-    pub hover: Option<(String, f64)>,
-    pub left_at: Option<f64>,
     /// What you are typing to the agent, per card.
     pub composers: HashMap<String, String>,
+    /// A text field had the keyboard at the end of last frame's page, so this
+    /// frame's Esc is the field's even if the field already let go of it.
+    pub keys_held: bool,
     /// A line under one card: why Send or Work on it did not go through.
     pub note: Option<(String, String)>,
 }
@@ -79,68 +77,29 @@ pub(super) fn card_meta_line(card: &BoardCard, now_ms: u64) -> String {
     parts.join(" · ")
 }
 
-/// Hover opens a card after a short rest; leaving folds it back. A card you are
-/// typing in stays open. While a card is being dragged nothing opens, and the
-/// open card is already folded.
-pub(super) fn track_board_hover(
-    v: &mut BoardView,
-    now: f64,
-    hovered: Option<String>,
-    typing: bool,
-    dragging: bool,
-) -> bool {
+/// A click opens a card in place and a second click on it folds it. Clicking
+/// another card moves the open spot there. Hover alone never opens a card.
+pub(super) fn click_board_card(v: &mut BoardView, id: &str) {
+    if v.open.as_deref() == Some(id) {
+        v.open = None;
+    } else {
+        v.open = Some(id.to_string());
+    }
+}
+
+/// Starting a drag folds the open card, so it moves as one small card.
+pub(super) fn fold_board_on_drag(v: &mut BoardView, dragging: bool) {
     if dragging {
         v.open = None;
-        v.hover = None;
-        v.left_at = None;
-        v.pinned = false;
-        return false;
     }
-    match hovered {
-        Some(h) if v.open.as_deref() == Some(h.as_str()) => {
-            v.hover = None;
-            v.left_at = None;
-            v.pinned = false;
-            false
-        }
-        Some(_) if typing => {
-            v.hover = None;
-            false
-        }
-        Some(h) => match v.hover.clone() {
-            Some((id, since)) if id == h => {
-                if now - since >= HOVER_OPEN_SECS {
-                    v.open = Some(h);
-                    v.pinned = false;
-                    v.hover = None;
-                    v.left_at = None;
-                    false
-                } else {
-                    true
-                }
-            }
-            _ => {
-                v.hover = Some((h, now));
-                true
-            }
-        },
-        None => {
-            v.hover = None;
-            if v.open.is_some() && !v.pinned && !typing {
-                let since = *v.left_at.get_or_insert(now);
-                if now - since >= LEAVE_CLOSE_SECS {
-                    v.open = None;
-                    v.left_at = None;
-                    false
-                } else {
-                    true
-                }
-            } else {
-                v.left_at = None;
-                false
-            }
-        }
-    }
+}
+
+/// Esc folds the open card only when the key is free: no text field has focus
+/// (Esc leaves the field first), and no menu, popup, sheet, palette or dialog is
+/// up to take it. A bare press only, so a chord such as the Super+Shift+Esc Halt
+/// hotkey never folds a card, and folding a card never halts anything.
+pub(super) fn board_esc_folds(open: bool, bare_esc: bool, key_taken: bool) -> bool {
+    open && bare_esc && !key_taken
 }
 
 /// Six dots: the drag handle.
@@ -169,7 +128,7 @@ fn fresh_badge(ui: &mut egui::Ui) {
 
 impl Cabin {
     /// One card in a column or in the Follow up row: compact, or open in place.
-    /// Returns its rect for the hover tracker.
+    /// Returns its rect.
     pub(super) fn paint_board_card(
         &mut self,
         ui: &mut egui::Ui,
@@ -344,7 +303,8 @@ impl Cabin {
             .inner_margin(egui::Margin::same(14))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                // Only the title row drags here; the rest of the card has controls.
+                // Only the title row drags (or folds the card on a click); the rest
+                // of the card has controls.
                 let mut menu_rect = egui::Rect::NOTHING;
                 let head = ui.horizontal(|ui| {
                     paint_grip(ui);
@@ -382,13 +342,15 @@ impl Cabin {
                     .interact(
                         grip_rect,
                         egui::Id::new(("board-grip", id.as_str())),
-                        egui::Sense::drag(),
+                        egui::Sense::click_and_drag(),
                     )
                     .on_hover_cursor(egui::CursorIcon::Grab);
                 if grip.drag_started() {
                     // The card folds back and moves as one small card.
                     egui::DragAndDrop::set_payload(ui.ctx(), BoardDrag(id.clone()));
                     self.board_view.open = None;
+                } else if grip.clicked() {
+                    *act = Some(BoardAct::Expand(id.clone()));
                 }
                 if !card.detail.trim().is_empty() && card.automation.is_none() {
                     ui.add_space(4.0);
@@ -749,10 +711,6 @@ impl Cabin {
         v.composers.remove(id);
         if v.open.as_deref() == Some(id) {
             v.open = None;
-            v.pinned = false;
-        }
-        if v.hover.as_ref().is_some_and(|(h, _)| h == id) {
-            v.hover = None;
         }
         if v.note.as_ref().is_some_and(|(n, _)| n == id) {
             v.note = None;
