@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.90** — Scheduled jobs run like crons: nothing shows while they run, they never hold up your chat, and their results land on the Follow up and Home cards.
+**v2.10.91** — Ideas is now Pulse: "I can …" ideas by category and a feed of posts with real images, ranked by plain rules, with feed instructions that learn what you like.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.90.tar.gz`, AUR | **v2.10.90** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.90.exe`, `grokhub-windows-v2.10.90.zip` | **v2.10.90** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.91.tar.gz`, AUR | **v2.10.91** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.91.exe`, `grokhub-windows-v2.10.91.zip` | **v2.10.91** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
@@ -84,6 +84,14 @@ Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `updates.js
 Tokens stay in `secrets.json`. Never in markdown.
 
 Composer is a pill. **Ask anything** is a faint placeholder on the same center as the paperclip, mic, and send. Five quick chips sit centered under the bar and rank the next likely move (last slash, last mode, Imagine vs chat, unfinished work, skills). The empty-home greeting is time + name + last project, not a memory dump. The paperclip opens Upload / Paste. Session pills are Chat / Plan / btw; permission is Ask / Auto / Always. Hover a pill for what it does. Mic is Hey Grok (Ara). It eases while listening or speaking and sits still when idle. While voice is live, Listening / Speaking / Ready sits above the composer with Stop. The strip stays up while Listening or Speaking and auto-hides about a second after Ready. Stop, the live mic, or Ctrl+G / Super+G leave. Failed STT shows Ready, not Listening. Enter sends; Ctrl+Enter is a newline. Composer Stop is a disc with a small rounded mark; idle Stop sits still, and it eases while hovered, pressed, or a reply is running. The changing status text above the composer is gone. The context usage bar stays. No live dot or Thinking label sits on the turn; the composer glow shows a running reply, and Stop's hover names the current action. Shared buttons hover-scale to 1.035, rise 1px over 120ms, shrink on press, and scale plus fill on keyboard focus. Chips, permission segments, and the rail share one highlight that glides. Off-screen chat rows skip paint; height follows the pane width and each row keeps its id. Chat streams Grok Build tokens onto the thread that started the job. A message typed while a reply runs steers it: Enter stops the turn where it is, keeps what it said and did in the transcript, and carries on with your message plus a note of that progress. Alt+Enter (or `/queue <message>`) queues it for after the reply instead, and a cabin-wide Grok command such as `/compact`, or Grok's own background tasks on the turn, still queue. With text typed during a run, a small row above the composer offers Steer and Queue, and lists queued messages with Steer now and Remove. Tool cards, diffs, permission prompts, and desk frames render in the pane. Leftover pages (Devices, Memory, History, Automations, Workboard, Command) use the same catalog chrome. Command is a user `/sh` field, not the agent. `/v1/frame.jpg` serves the last ACP computer-use image when one exists.
+
+## Pulse
+
+**Pulse** (it was Ideas) is one page with two tabs. **Ideas** lists what the cabin could do next, grouped by category (up to four of the most useful first, then Financial Management, Productivity, Relationships, Health & Fitness, Shopping, and More ideas). Each row has a category icon, a bold "I can …" line, a short reason, and a ··· menu. **Feed** is a column of posts: the source, the headline, two or three sentences, the source's own image when it has one, and Like / Discuss. Images come only from the post's thumbnail or the linked page's `og:image`, are cached in `pulse-images/` in the config folder, and show a placeholder until they arrive.
+
+Every card is one of five kinds: **Do** (one tap), **Watch** (news and results), **Learn** ("I can learn this and do it your way"), **Automate** (a repeat that could run on a schedule), and **Quiet** (kept, but not shown). Plain rules rank them, not the model: a skill ask, something due within a day, unfinished work on the same topic, and a repeat move a card up; a card you accepted gets a bump; Not this and Dismiss push that topic down. The model only writes the sentence. The ··· menu has **Run in the background** (sends the idea as `/bg`, so it runs invisibly like any background task; Ask mode refuses it, as it refuses every `/bg`), **Snooze until 9:00**, **Always do this** (or **That's right** / **That's wrong** on a Learn card), **Open**, **Not this**, and **Dismiss**. Likes, Not this, Dismiss and right/wrong each add one line to `MEMORY.md`, for example `- [2026-10-04] pulse: dismissed "Sort the photos" reason=not-this`, and the next ranking reads them.
+
+**Feed instructions** on the Feed tab is a plain-text prompt that shapes every future post. Edit it any time. After three likes or skips the cabin rewrites it itself, keeping your words and adding what it learned under "Show more of" and "Show less of". Cards that arrive during quiet hours wait and come back as one "While you were in quiet hours" post. The Home and Ideas data from older builds moves into Pulse once on first launch; nothing is deleted. The card deck on the empty chat is off by default now; Settings → Behavior → **Cards on the empty chat** turns it back on.
 
 ## Background tasks
 
