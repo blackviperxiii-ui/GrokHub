@@ -36,8 +36,9 @@ pub const HOVER: Color32 = Color32::from_rgb(0x1c, 0x1f, 0x23);
 pub const FG: Color32 = Color32::from_rgb(0xe7, 0xe9, 0xea);
 /// Text secondary `#71767B`.
 pub const MUTED: Color32 = Color32::from_rgb(0x71, 0x76, 0x7b);
-/// Meta / thought — one step quieter than secondary.
-pub const SUBTLE: Color32 = Color32::from_rgb(0x5c, 0x61, 0x66);
+/// Small meta text (source lines, section labels, the silence line) `#8B9096`:
+/// 6.5:1 on black, so 11–12px text stays readable on a dim screen.
+pub const SUBTLE: Color32 = Color32::from_rgb(0x8b, 0x90, 0x96);
 /// Empty-home greeting — title 20–28, not a product wordmark.
 pub const GREET_HERO: f32 = 28.0;
 /// Hairline `#2F3336`.
@@ -404,7 +405,7 @@ pub const GROK_NAV: &[(&str, &str)] = &[
     ("automations", "Automations"),
     ("skills", "Skills and Connectors"),
     ("workboard", "Workboards"),
-    ("ideas", "Ideas"),
+    ("pulse", "Pulse"),
 ];
 
 /// Avatar-menu destinations besides Help / Sign in / Sign out.
@@ -418,7 +419,7 @@ pub fn stage_subtitle(id: &str) -> &'static str {
         "chat" => "Recent chat",
         "imagine" => "Images",
         "workboard" => "Tasks and plans",
-        "ideas" => "Worth doing",
+        "pulse" | "ideas" => "What I'd do next",
         "skills" => "Personal skills and connectors",
         "automations" => "Grok Build /loop scheduler",
         "command" => "Overview",
