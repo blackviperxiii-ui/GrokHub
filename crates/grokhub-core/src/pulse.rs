@@ -243,8 +243,57 @@ pub fn pulse_type(card: &UpdateCard) -> PulseType {
 }
 
 /// Ideas view: things to do. Feed view: things that happened or were found.
+/// The quiet-hours digest is news about what happened, so it reads on the Feed.
 pub fn is_idea_card(card: &UpdateCard) -> bool {
     matches!(card.kind, UpdateKind::Idea | UpdateKind::Suggestion | UpdateKind::AutomateOffer)
+        && card.source_id != QUIET_DIGEST_SOURCE
+}
+
+/// The bold line on an Ideas row, always in the cabin's own voice: "I can …".
+/// A title that already speaks that way stays; otherwise the idea's action is
+/// turned toward you ("draft my standup" → "I can draft your standup").
+pub fn i_can_title(card: &UpdateCard) -> String {
+    let title = card.title.trim();
+    let lower = title.to_ascii_lowercase();
+    if ["i can ", "i'll ", "i will ", "let me ", "tell me "].iter().any(|p| lower.starts_with(p)) {
+        return title.to_string();
+    }
+    let action = card.idea_action();
+    let action = action.trim().trim_end_matches('.');
+    let kind = pulse_type(card);
+    if kind == PulseType::Automate {
+        return format!("I can run \"{}\" for you on a schedule", lower_first(title));
+    }
+    if kind == PulseType::Learn {
+        return format!("I can learn this and do it your way: {}", lower_first(title));
+    }
+    if !action.is_empty() && action.chars().count() <= 90 && !action.contains('\n') {
+        return format!("I can {}", toward_you(&lower_first(action)));
+    }
+    format!("I can help with {}", lower_first(title))
+}
+
+fn lower_first(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        // Keep acronyms ("PR", "CI") as written.
+        Some(_) if chars.clone().next().is_some_and(|n| n.is_uppercase()) => text.to_string(),
+        Some(c) => c.to_lowercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+fn toward_you(text: &str) -> String {
+    text.split(' ')
+        .map(|w| match w {
+            "my" => "your",
+            "me" => "you",
+            "mine" => "yours",
+            "I" => "you",
+            _ => w,
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub fn is_feed_card(card: &UpdateCard) -> bool {
@@ -403,8 +452,10 @@ pub fn pulse_score(card: &UpdateCard, inputs: &PulseInputs) -> i64 {
     {
         score += SCORE_DUE;
     }
-    // 3. Unfinished work: you started it, or an open board card is about it.
+    // 3. Unfinished work: you started it, kept it pinned on the old Home deck,
+    // or an open board card is about it.
     if card.modified
+        || card.feed_pin
         || card.draft.is_some()
         || inputs.open_work.iter().any(|w| same_topic(w, &card.title))
     {
@@ -763,14 +814,15 @@ pub struct PulseMigration {
     pub ideas: usize,
     /// Live cards now on the Feed view.
     pub feed: usize,
-    /// Home deck pins cleared (the deck lives in Pulse now).
-    pub unpinned: usize,
+    /// Cards pinned to the old Home deck. They keep the pin and rank in
+    /// Pulse's top group (rule 3, unfinished work).
+    pub pinned: usize,
     /// Every card kept, live or dismissed.
     pub kept: usize,
 }
 
 /// One-time move of the Home deck and the Ideas board into Pulse. Keeps every
-/// card; stores a category on each idea; clears Home deck pins; marks the feed
+/// card and every pin; stores a category on each idea; marks the feed
 /// config so it never runs twice. `None` when it already ran.
 pub fn migrate_to_pulse(cards: &mut [UpdateCard], pulse: &mut FeedPulse) -> Option<PulseMigration> {
     if pulse.pulse_v1 {
@@ -785,8 +837,7 @@ pub fn migrate_to_pulse(cards: &mut [UpdateCard], pulse: &mut FeedPulse) -> Opti
             card.pulse.category = Some(categorize(&card_text(card)).key().to_string());
         }
         if card.feed_pin {
-            card.feed_pin = false;
-            out.unpinned += 1;
+            out.pinned += 1;
         }
         if card.pulse.source_name.is_none() {
             card.pulse.source_name = card.citations.first().and_then(|u| source_host(u));
@@ -976,6 +1027,28 @@ mod tests {
         assert!(snooze_card(&mut cards, "i", 2_000));
         assert!(!pulse_visible(&cards[0], 1_999));
         assert!(pulse_visible(&cards[0], 2_000));
+    }
+
+    #[test]
+    fn idea_rows_speak_as_i_can_and_the_quiet_digest_reads_on_the_feed() {
+        let mut c = idea("a", "Standup note", "", 1);
+        c.prompt = Some("Draft my standup from yesterday's commits".into());
+        assert_eq!(i_can_title(&c), "I can draft your standup from yesterday's commits");
+        let mut auto = idea("b", "Summarize the workboard", "", 1);
+        auto.idea_kind = Some(IdeaKind::Automation);
+        assert_eq!(i_can_title(&auto), "I can run \"summarize the workboard\" for you on a schedule");
+        let mut learn = idea("c", "Release notes", "", 1);
+        learn.idea_kind = Some(IdeaKind::Skill);
+        assert_eq!(i_can_title(&learn), "I can learn this and do it your way: release notes");
+        assert_eq!(i_can_title(&idea("d", "I can stage the TXU bill", "", 1)), "I can stage the TXU bill");
+        assert_eq!(i_can_title(&idea("e", "PR triage", "", 1)), "I can help with PR triage");
+        let mut held = vec![idea("x", "One", "", 1), idea("y", "Two", "", 2)];
+        for card in &mut held {
+            card.held = true;
+        }
+        let (_, id) = release_quiet_batch(&mut held, 50);
+        let digest = held.iter().find(|c| Some(&c.id) == id.as_ref()).expect("digest");
+        assert!(!is_idea_card(digest) && is_feed_card(digest));
     }
 
     #[test]

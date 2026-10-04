@@ -1234,7 +1234,8 @@ pub fn tick_feed_pulse(
     {
         pulse.last_quiet_release_ms = now.now_ms;
         if !now.quiet {
-            let n = release_quiet_hold(cards);
+            // Two or more held cards fold into one Pulse digest card.
+            let (n, _) = crate::pulse::release_quiet_batch(cards, now.now_ms);
             tick.released = n;
             if n > 0 {
                 tick.cards_changed = true;

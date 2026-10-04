@@ -2597,6 +2597,7 @@ pub fn nav_from_chip_value(value: &str) -> Option<&'static str> {
         "__nav:history" => Some("history"),
         "__nav:workboard" => Some("workboard"),
         "__nav:ideas" => Some("ideas"),
+        "__nav:pulse" => Some("pulse"),
         "__nav:skills" => Some("skills"),
         "__nav:automations" | "__nav:night" => Some("night"),
         "__nav:command" => Some("command"),

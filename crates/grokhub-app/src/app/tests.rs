@@ -1500,7 +1500,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "the chip id and the page have to agree"
         );
         assert!(
-            super::Cabin::nav_from_id("ideas") == super::Nav::Ideas,
+            super::Cabin::nav_from_id("ideas") == super::Nav::Pulse,
             "an ideas chip must open Ideas, not Chat"
         );
         assert!(
@@ -9925,6 +9925,7 @@ fn discuss_card_opens_one_local_chat() {
         skill: None,
         runs: 1,
         dismissed_at: 0,
+        pulse: Default::default(),
     });
     cabin.discuss_card("idea-harbor");
     let open_id = cabin
@@ -9937,7 +9938,7 @@ fn discuss_card_opens_one_local_chat() {
     let open = cabin.threads.iter().find(|t| t.id == open_id).unwrap();
     assert!(open.background);
     assert_ne!(cabin.threads[cabin.thread_idx].id, open_id);
-    assert!(cabin.idea_board.open.is_some() && cabin.nav == super::Nav::Ideas);
+    assert!(cabin.idea_board.open.is_some() && cabin.nav == super::Nav::Pulse);
     assert_eq!(
         cabin
             .threads
@@ -11367,7 +11368,7 @@ fn discuss_card_opens_a_local_chat() {
     let id = card.id.clone();
     cabin.updates.push(card);
     cabin.discuss_card(&id);
-    assert!(cabin.idea_board.open.is_some() && cabin.nav == super::Nav::Ideas);
+    assert!(cabin.idea_board.open.is_some() && cabin.nav == super::Nav::Pulse);
     assert!(!cabin.running);
     let thread_id = cabin
         .threads
@@ -11601,7 +11602,7 @@ fn chip_nav_changes_page_and_dismiss_drops_it() {
         primary: false,
     }];
     cabin.take_chip_act(crate::cards::ChipRowAct::Apply(0), &chips);
-    assert!(matches!(cabin.nav, Nav::Ideas));
+    assert!(matches!(cabin.nav, Nav::Pulse));
     assert!(!cabin.running);
     cabin.take_chip_act(crate::cards::ChipRowAct::Dismiss(0), &chips);
     assert!(cabin.chip_dismissed.iter().any(|d| d == "nav-ideas"));
@@ -11672,7 +11673,7 @@ fn feed_open_routes_an_idea_and_dismiss_removes_it() {
     cabin.updates.push(card);
     cabin.updates.last_mut().unwrap().feed_pin = true;
     cabin.open_feed_card(&id);
-    assert!(cabin.idea_board.open.is_some() && cabin.nav == super::Nav::Ideas);
+    assert!(cabin.idea_board.open.is_some() && cabin.nav == super::Nav::Pulse);
     assert!(cabin
         .threads
         .iter()
@@ -14260,6 +14261,7 @@ fn build_idea_files_one_todo() {
         skill: None,
         runs: 1,
         dismissed_at: 0,
+        pulse: Default::default(),
     }];
 
     cabin.build_idea("nope");
@@ -14404,6 +14406,7 @@ fn feed_card(id: &str, kind: grokhub_core::UpdateKind, held: bool) -> grokhub_co
         skill: None,
         runs: 1,
         dismissed_at: 0,
+        pulse: Default::default(),
     }
 }
 
@@ -14507,6 +14510,7 @@ fn offer_card(id: &str, title: &str, status: UpdateStatus) -> UpdateCard {
         skill: None,
         runs: 1,
         dismissed_at: 0,
+        pulse: Default::default(),
     }
 }
 
@@ -15253,6 +15257,7 @@ fn quiet_cabin() -> Cabin {
         chip_memory: grokhub_core::ChipMemory::default(),
         chip_dismissed: Vec::new(),
         idea_board: Default::default(),
+        pulse_view: Default::default(),
         board_view: Default::default(),
         llm_chips: Vec::new(),
         visible_chips: Vec::new(),
@@ -17013,7 +17018,7 @@ fn idea_card_chat_takes_the_agents_action_and_stays_on_the_board() {
     ));
     // Opening from the home feed lands on the Ideas board with the card open.
     cabin.discuss_card("idea-a");
-    assert_eq!(cabin.nav, super::Nav::Ideas);
+    assert_eq!(cabin.nav, super::Nav::Pulse);
     assert_eq!(cabin.idea_board.open.as_deref(), Some("idea-a"));
     let tid = cabin.updates[0].discuss_thread.clone().expect("card chat");
     // The agent's reply rewrites the action once and the raw line is hidden.
@@ -19458,7 +19463,7 @@ fn ideas_poll_clears_on_drop() {
     assert_eq!(cabin.status, "Harbor");
     assert!(!cabin.running);
     assert!(cabin.chat_job_thread.is_none());
-    assert!(!matches!(cabin.nav, Nav::Ideas));
+    assert!(!matches!(cabin.nav, Nav::Pulse));
 }
 
 // Folded from PR #318.

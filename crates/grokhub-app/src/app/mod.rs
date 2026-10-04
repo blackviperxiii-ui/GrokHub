@@ -171,6 +171,7 @@ mod chat_ui;
 mod pulse;
 mod feed_ui;
 mod ideas_ui;
+mod pulse_ui;
 mod board_ui;
 mod confirm;
 mod glance;
@@ -237,7 +238,7 @@ enum Nav {
     Devices,
     Memory,
     Workboard,
-    Ideas,
+    Pulse,
     Imagine,
     Skills,
     Night,
@@ -598,6 +599,8 @@ pub struct Cabin {
     chip_memory: ChipMemory,
     chip_dismissed: Vec<String>,
     idea_board: ideas_ui::IdeaBoardView,
+    /// Pulse page: Ideas | Feed, the instructions sheet, cached source images.
+    pulse_view: pulse_ui::PulseView,
     /// Workboards page: the open card and what you are typing on each.
     board_view: board_ui::BoardView,
     llm_chips: Vec<QuickChip>,
@@ -1199,6 +1202,7 @@ impl Cabin {
             chip_memory: crate::store::load_chips(),
             chip_dismissed: vec![],
             idea_board: Default::default(),
+            pulse_view: Default::default(),
             board_view: Default::default(),
             llm_chips: vec![],
             visible_chips: vec![],
@@ -1403,6 +1407,8 @@ impl Cabin {
             if dropped_leftover {
                 c.persist_bg();
             }
+            // Once: Home deck and Ideas board data move into Pulse.
+            c.migrate_pulse_store();
             c.ensure_useful_ideas();
             grokhub_acp::silence_windows_hard_errors();
             // Official alpha when missing/unusable; pin a working CLI. UAC is expected on Windows.
@@ -1624,6 +1630,7 @@ impl Cabin {
             chip_memory: Default::default(),
             chip_dismissed: Vec::new(),
             idea_board: Default::default(),
+            pulse_view: Default::default(),
             board_view: Default::default(),
             llm_chips: Vec::new(),
             visible_chips: Vec::new(),
@@ -4907,6 +4914,7 @@ impl eframe::App for Cabin {
         self.window_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
         self.poll_greeting();
         self.poll_ideas();
+        self.poll_pulse_rewrite();
         self.poll_goals();
         self.tick_home_surface();
         self.refresh_chips();
@@ -5135,7 +5143,7 @@ impl eframe::App for Cabin {
                 Nav::Devices => self.ui_devices(ui),
                 Nav::Memory => self.ui_memory(ui),
                 Nav::Workboard => self.ui_board(ui),
-                Nav::Ideas => self.ui_ideas(ui),
+                Nav::Pulse => self.ui_pulse(ui),
                 Nav::Imagine => self.ui_imagine(ui),
                 Nav::Skills => self.ui_skills(ui),
                 Nav::Night => self.ui_night(ui),

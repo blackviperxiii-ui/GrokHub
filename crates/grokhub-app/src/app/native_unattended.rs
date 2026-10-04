@@ -593,7 +593,7 @@ impl Cabin {
     }
 
     pub(super) fn spawn_native_digest(&mut self) {
-        let prompt = grokhub_core::digest_lookup_prompt(&self.digest_steer);
+        let prompt = grokhub_core::pulse::feed_prompt(&self.digest_steer, &self.cfg.feed_instructions);
         let ready = match unattended_model(self) {
             Ok(ready) => ready,
             Err(err) => {
