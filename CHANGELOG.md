@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.10.92 — 2026-10-04
+
+Hotfix: Lab mode (Settings → Labs, the native engine) now uses the Grok sign-in you already have. Since 2.10.70 it only looked at the Imagine page's own sign-in and the console API key, so if you signed in with Grok from Settings → Account (the sign-in the Grok CLI path and the rest of GrokHub use), every Lab mode message failed with "Sign in with Grok or add an API key." Lab mode now tries, in order: the Imagine sign-in, the Settings → Account sign-in, then your API key. A token inside its refresh window is renewed in the background; an expired one with a refresh token is renewed once and saved back to GrokHub's own `secrets.json` through the same atomic, owner-only write the rest of the app uses. A UI refresh and a Lab mode turn holding the same refresh token now share one refresh instead of both spending it. Lab mode still never reads or writes the Grok CLI's own login files. If only the Grok CLI is signed in, the message now says so: "Lab mode uses GrokHub's sign-in, not the Grok CLI's. Sign in with Grok in Settings → Account, or add an API key." With no sign-in and no key it still says "Sign in with Grok or add an API key." New tests run a Lab mode turn through the native engine against a local fake server, using fake tokens in a temp home: a signed-in, no-key turn sends `Authorization: Bearer test-access-token` and gets the fake reply, an expired token calls refresh once and the turn uses the new token, and a missing sign-in returns the exact message.
+
+- Linux: `grokhub-linux-v2.10.92.tar.gz` and AUR `pkgver=2.10.92`.
+- Windows: `GrokHub-Setup-2.10.92.exe` and `grokhub-windows-v2.10.92.zip`.
+
 ## 2.10.91 — 2026-10-04
 
 Ideas is now **Pulse**, one page with two tabs, and **Feed** comes first: Pulse opens on Feed, and the switch at the top reads Feed | Ideas. **Feed** is a column of posts with the source, the headline, two or three sentences, the source's own image, and Like / Discuss. **Ideas**, the second tab, lists what the cabin could do for you next, grouped by category: up to four of the strongest first, then Financial Management, Productivity, Relationships, Health & Fitness, Shopping, and More ideas. Each row has a category icon, a bold "I can …" line, a short reason, and a ··· menu. Images come only from the post's thumbnail or the linked page's `og:image`, are cached in `pulse-images/` in the config folder, and show a placeholder until they arrive; tests use local files and never the network. The Home card deck and the Ideas board move into Pulse once on first launch, with every saved idea, card, pin, and feed setting kept. The deck no longer sits on the empty chat by default; Settings → Behavior → Cards on the empty chat turns it back on.
