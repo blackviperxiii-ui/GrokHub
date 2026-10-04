@@ -2,9 +2,20 @@
 
 ## Unreleased
 
+## 2.10.88 — 2026-10-04
+
+A review of every open pull request, shipped as one release.
+
 Background work stays out of the sidebar History. A `/bg` run forks the chat's Grok session, and a `/loop` or a quick-chip reply through the CLI writes a session of its own; on the next launch those sessions came back as extra chats in History. Their ids are now filed on the hidden Background chat, so startup adoption and the Grok session list skip them, and chats a loop already leaked are hidden on load. Nothing is deleted: the sessions stay on disk, and deleting all chats still removes them.
 
 Hovering Send while no reply is running says just "Send" again. Since 2.10.87 the hover could read "Send · Read file" after a turn that used a tool, because the finished turn's tool cards are only cleared when the next turn starts, and it could also show another chat's pending permission title. The tool or wait name now only appears on Stop's hover while a reply is running here.
+
+Fixes from reviewing 2.10.55 to 2.10.63 (#456). Imagine no longer signs you out after a wall paint or a failed generation refreshed your token: refreshes run one at a time, the app always picks up the new tokens for the account signed in now, and a failed refresh offers "Use API key" or Settings instead of looping on "Sign in again". The device "Verify" link opens through the app's own browser opener. On X11, desktop control types capitals and shifted symbols (`Hello!` no longer comes out as `hello1`), handles tabs and CRLF, lines screenshots up with clicks when no monitor sits at 0,0, and always lets go of a mouse button or modifier key when a drag or key combo fails. Stopping a steered reply clears its steer and background notes so they don't ride into the next chat, and `/retry` keeps them. Ask mode no longer mistakes a prompt that reads like `--always-approve` for the flag. The daily read takes links from the whole reply, never cuts one in half, and drops links that don't answer. The check is a HEAD request to public hosts only: it never fetches localhost or private addresses and doesn't follow redirects, so a cited link can't bounce it onto one. While GrokHub sits in the tray it no longer replays the last keypress or file drop every tick.
+
+Tests from the last Cursor drafts are folded in (#483), with the ones that could pass against a stub strengthened. One of them, the nightly-review test, could have overwritten a real `suggestions.json` when run locally; it now writes only to a temp folder.
+
+- Linux: `grokhub-linux-v2.10.88.tar.gz` and AUR `pkgver=2.10.88`.
+- Windows: `GrokHub-Setup-2.10.88.exe` and `grokhub-windows-v2.10.88.zip`.
 
 ## 2.10.87 — 2026-10-03
 
