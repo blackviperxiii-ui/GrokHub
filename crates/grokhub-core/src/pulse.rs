@@ -328,6 +328,8 @@ pub fn pulse_type(card: &UpdateCard) -> PulseType {
             PulseType::Watch
         }
         UpdateKind::AutomateOffer => PulseType::Automate,
+        // The quiet-hours digest only reports what happened.
+        UpdateKind::Suggestion if card.source_id == QUIET_DIGEST_SOURCE => PulseType::Watch,
         UpdateKind::Suggestion => PulseType::Do,
         UpdateKind::Idea => {
             if card.skill.is_some() {
@@ -1369,6 +1371,7 @@ mod tests {
             .find(|c| Some(&c.id) == id.as_ref())
             .expect("digest");
         assert!(!is_idea_card(digest) && is_feed_card(digest));
+        assert_eq!(pulse_type(digest), PulseType::Watch);
     }
 
     #[test]
