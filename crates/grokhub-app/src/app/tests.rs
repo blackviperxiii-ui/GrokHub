@@ -22710,6 +22710,28 @@ fn stop_hover_names_the_live_turn_now_the_dot_is_gone() {
     assert_eq!(cabin.go_tip_here(), "Send");
 }
 
+/// 2.10.88: a finished turn's tool card (cleared only when the next turn starts)
+/// and a pending ask must not leak into the idle Send hover.
+#[test]
+fn idle_send_hover_ignores_leftover_tool_cards_and_asks() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.tool_cards.push(grokhub_acp::ToolCard {
+        id: "t1".into(),
+        title: "Read file".into(),
+        kind: String::new(),
+        status: "completed".into(),
+        detail: String::new(),
+        diff: String::new(),
+        image_data_url: None,
+    });
+    assert!(!cabin.thinking_here());
+    assert_eq!(cabin.run_action_here(), "Read file");
+    assert_eq!(cabin.go_tip_here(), "Send");
+    cabin.running = true;
+    cabin.chat_job_thread = Some(cabin.visible_thread_id());
+    assert_eq!(cabin.go_tip_here(), "Stop · Read file");
+}
+
 /// 2.10.87: with the Background button gone, bare `/bg` still moves a live
 /// reply off the composer and posts the whole answer when it lands.
 #[cfg(unix)]
