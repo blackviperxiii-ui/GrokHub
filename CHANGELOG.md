@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Fixes from a debug run of the whole app. GrokHub no longer refuses to open, silently, after a crash or reboot: a leftover `cabin.pid` could name a pid the system had since given to another program (or a zombie), and the new launch took it for a running cabin and quit. Now only a live process with GrokHub's own name counts. When the Grok Build CLI download fails on first run (offline, or blocked by a proxy), Get Started shows the real error, such as `curl: (22) … 403`, instead of "install finished but grok was not found". Digest cards no longer say "The brief steers the next edition." twice. `cabin_leader_socket_is_not_the_cli_leader` passes with `GROKHUB_CONFIG` set to a temp dir, as `CLAUDE.md` tells local runs to do.
+
 The quick chips under the chat box no longer offer "Continue Follow up · …" or "Continue Background". Hidden chats are skipped when chips suggest picking up another chat, so a Follow up card's chat stays on the card.
 
 ## 2.10.89 — 2026-10-04
