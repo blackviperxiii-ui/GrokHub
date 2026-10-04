@@ -524,6 +524,11 @@ impl Cabin {
                                                             ) {
                                                                 self.set_living_wall(living_wall);
                                                             }
+                                                            let mut home_deck = self.cfg.home_deck;
+                                                            if crate::cards::settings_toggle(ui, "Cards on the empty chat", "Pulse holds your cards now. Turn this on to also stack them over a new chat.", &mut home_deck) {
+                                                                self.cfg.home_deck = home_deck;
+                                                                self.persist_cfg();
+                                                            }
                                                             #[cfg(feature = "fx")]
                                                             {
                                                                 let mut composer_glow = self.cfg.composer_glow;

@@ -235,7 +235,7 @@ pub fn rail_icon_for(id: &str) -> RailIcon {
         "automations" => RailIcon::Clock,
         "skills" | "connectors" => RailIcon::Grid,
         "workboard" => RailIcon::Folder,
-        "ideas" => RailIcon::File,
+        "pulse" | "ideas" => RailIcon::File,
         "history" => RailIcon::Clock,
         "search" => RailIcon::Search,
         "new" => RailIcon::Compose,
@@ -1069,15 +1069,11 @@ pub fn paint_aspect_rect(ui: &mut egui::Ui, aspect: u8, size: f32, color: egui::
     let painter = ui.painter();
     let stroke = Stroke::new(1.4_f32, color);
     let (w, h) = match aspect % 5 {
-        0 => (size * 0.28, size * 0.46),
-        1 => (size * 0.46, size * 0.30),
-        2 => (size * 0.42, size * 0.42),
-        3 => (size * 0.24, size * 0.48),
-        4 => (size * 0.50, size * 0.28),
-        other => {
-            let _ = other;
-            (size * 0.42, size * 0.42)
-        }
+        0 => (size * 0.52, size * 0.78),
+        1 => (size * 0.78, size * 0.52),
+        3 => (size * 0.44, size * 0.78),
+        4 => (size * 0.78, size * 0.44),
+        _ => (size * 0.66, size * 0.66),
     };
     painter.rect_stroke(egui::Rect::from_center_size(rect.center(), Vec2::new(w, h)), 1.5, stroke, egui::StrokeKind::Middle);
 }

@@ -629,7 +629,7 @@ impl Cabin {
             "imagine" => Nav::Imagine,
             "history" => Nav::History,
             "workboard" => Nav::Workboard,
-            "ideas" => Nav::Ideas,
+            "pulse" | "ideas" => Nav::Pulse,
             "skills" => Nav::Skills,
             "night" | "automations" => Nav::Night,
             "agents" | "queue" => Nav::Agents,
