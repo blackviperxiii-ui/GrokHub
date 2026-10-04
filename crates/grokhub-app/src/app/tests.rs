@@ -23596,3 +23596,34 @@ fn a_due_job_waits_only_for_the_last_job_or_a_desktop_replay() {
     }
     assert!(!include_str!("native_unattended.rs").contains("\"Loop: "));
 }
+
+#[test]
+fn imagine_aspect_pill_drives_every_request() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.imagine_aspect = 4;
+    match cabin.imagine_call() {
+        super::imagine::ImagineCall::Generate { aspect, .. } => assert_eq!(aspect, "16:9"),
+        _ => panic!("Image mode generates"),
+    }
+    cabin.imagine_native.image_op = 1;
+    match cabin.imagine_call() {
+        super::imagine::ImagineCall::Edit { aspect, .. } => assert_eq!(aspect, "16:9"),
+        _ => panic!("Edit mode edits"),
+    }
+    cabin.imagine_kind = grokhub_core::ImagineKind::Video;
+    cabin.imagine_aspect = 3;
+    match cabin.imagine_call() {
+        super::imagine::ImagineCall::Video { aspect, .. } => assert_eq!(aspect, "9:16"),
+        _ => panic!("Video mode makes video"),
+    }
+    let src = include_str!("imagine.rs");
+    let ui = src
+        .split("fn ui_imagine(")
+        .nth(1)
+        .and_then(|s| s.split("fn ui_imagine_bar(").next())
+        .expect("ui_imagine");
+    assert!(
+        !ui.contains("small_button") && !ui.contains("ui_imagine_account"),
+        "no raw button rows above the Imagine composer: {ui}"
+    );
+}
