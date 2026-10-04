@@ -15365,7 +15365,6 @@ fn quiet_cabin() -> Cabin {
         tokens_seen: (0, 0, 0),
         grok_commands: Vec::new(),
         grok_tasks: Vec::new(),
-        loop_acp_id: None,
         followup_queue: Vec::new(),
         workflow_ctl_queue: Vec::new(),
         workflow_target: String::new(),
@@ -22131,6 +22130,16 @@ fn fake_bg_grok(root: &std::path::Path) -> (std::path::PathBuf, std::path::PathB
 printf '%s\n' "$@" >> 'ARGV'
 printf '%s\n' '-----' >> 'ARGV'
 case "$*" in
+  *harbor-snapshot*)
+    printf '%s\n' '{"type":"text","data":"Host snapshot\nDisk at 91% on /home."}'
+    i=0; while [ ! -f 'ARGV.bg-go' ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done
+    printf '%s\n' '{"type":"end","stopReason":"end_turn","sessionId":"sess-snap"}'
+    exit 0 ;;
+  *chat-gate*)
+    printf '%s\n' '{"type":"text","data":"Four."}'
+    i=0; while [ ! -f 'ARGV.chat-go' ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done
+    printf '%s\n' '{"type":"end","stopReason":"end_turn","sessionId":"sess-chat"}'
+    exit 0 ;;
   *STEER:*)
     printf '%s\n' '{"type":"text","data":"steered reply"}'
     printf '%s\n' '{"type":"end","stopReason":"end_turn","sessionId":"sess-steer"}'
@@ -23246,4 +23255,333 @@ fn bare_slash_bg_still_moves_a_live_reply() {
     cabin.send_chat("/bg stop".into());
     assert_eq!(cabin.status, "No background tasks running");
     end_bg_test(root, cabin, restore);
+}
+
+/// Painted text of the live-work strip, the one place background work shows.
+fn live_work_text(cabin: &mut super::Cabin) -> String {
+    let mut texts = Vec::new();
+    let ctx = egui::Context::default();
+    let _ = crate::theme::test_pass(&ctx, Default::default(), |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
+            cabin.paint_live_work(ui);
+            let layer = ui.layer_id();
+            ui.ctx().graphics(|layers| {
+                if let Some(list) = layers.get(layer) {
+                    for clipped in list.all_entries() {
+                        collect_shape_text(&clipped.shape, &mut texts);
+                    }
+                }
+            });
+        });
+    });
+    texts.join("|")
+}
+
+/// 2.10.90: a scheduled job runs like a cron, out of sight and out of your way.
+/// It starts and ends while your reply streams, your reply is never paused or
+/// cut, you can send and finish a turn while it works, nothing shows it running,
+/// and its report still lands on the Follow up card and the Home card.
+#[cfg(unix)]
+#[test]
+fn a_scheduled_run_never_blocks_pauses_or_shows_in_your_chat() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin, restore, argv) = bg_cabin("bg-cron");
+    let bg_go = std::path::PathBuf::from(format!("{}.bg-go", argv.display()));
+    let chat_go = std::path::PathBuf::from(format!("{}.chat-go", argv.display()));
+    cabin.board.clear();
+    cabin.updates.clear();
+    cabin.automations = vec![
+        test_automation(
+            "a-snap",
+            "Host snapshot",
+            "every day at 9, run a harbor-snapshot of the host and report what changed",
+        ),
+        test_automation(
+            "a-disk",
+            "Disk check",
+            "every day at 10, run a harbor-snapshot of disk use and report what changed",
+        ),
+    ];
+    cabin.nav = Nav::Chat;
+    let chat_id = cabin.threads[0].id.clone();
+
+    // 1. Your reply is streaming when the job comes due.
+    cabin.send_chat("chat-gate: what is 2+2?".into());
+    assert!(cabin.running, "{}", cabin.status);
+    let chat_pid = cabin.grok_p_pid.expect("your turn's child");
+    assert!(poll_until(&mut cabin, 10, |c| c
+        .stream_buf
+        .contains("Four.")));
+    let a = cabin.automations[0].clone();
+    assert!(
+        !cabin.scheduled_waits(&a),
+        "your turn does not hold the job back"
+    );
+    cabin.fire_night(a, now_ms());
+    assert!(cabin.bg.scheduled_live(), "{}", cabin.status);
+    assert_eq!(cabin.bg.live_count(), 0);
+    assert!(
+        cabin.running && cabin.grok_p_pid == Some(chat_pid),
+        "the start did not touch your turn"
+    );
+    assert_eq!(cabin.chat_job_thread.as_deref(), Some(chat_id.as_str()));
+    assert!(
+        !cabin.status.contains("Host snapshot") && !cabin.status.contains("Night"),
+        "{}",
+        cabin.status
+    );
+    assert_eq!(
+        live_work_text(&mut cabin),
+        "",
+        "the strip does not show the job"
+    );
+
+    // 2. The job ends while your reply is still streaming: nothing pauses or cuts it.
+    std::fs::write(&bg_go, "go").unwrap();
+    assert!(poll_until(&mut cabin, 10, |c| c.bg.runs.is_empty()));
+    assert!(
+        cabin.running && cabin.grok_p_pid == Some(chat_pid),
+        "your reply keeps going"
+    );
+    assert!(cabin.followup_queue.is_empty());
+    assert!(
+        !cabin.status.contains("Host snapshot") && !cabin.status.contains("Night"),
+        "{}",
+        cabin.status
+    );
+    std::fs::write(&chat_go, "go").unwrap();
+    assert!(poll_until(&mut cabin, 10, |c| !c.running));
+    assert_eq!(
+        cabin
+            .messages
+            .iter()
+            .map(|m| (m.0.as_str(), m.1.as_str()))
+            .collect::<Vec<_>>(),
+        vec![("user", "chat-gate: what is 2+2?"), ("assistant", "Four.")],
+        "your chat holds your turn and your reply, nothing else"
+    );
+    assert!(cabin.nav == Nav::Chat);
+
+    // Its report is on the Follow up card and the Home card.
+    let card = cabin
+        .board
+        .iter()
+        .find(|c| c.automation.as_deref() == Some("a-snap"))
+        .expect("follow up card")
+        .clone();
+    assert_eq!(card.status, grokhub_core::BoardStatus::FollowUp);
+    assert_eq!(card.title, "Host snapshot");
+    assert_eq!(card.report, "Host snapshot\nDisk at 91% on /home.");
+    let home = cabin
+        .updates
+        .iter()
+        .find(|u| grokhub_core::feed_group_key(u).as_deref() == Some("run:a-snap"))
+        .expect("home card");
+    assert_eq!(home.board_id.as_deref(), Some(card.id.as_str()));
+    assert_eq!(
+        home.body.as_deref(),
+        Some("In Follow up on your workboard. Open it to read and reply.")
+    );
+
+    // 3. A job is mid-turn: your next message sends at once and finishes first.
+    std::fs::remove_file(&bg_go).unwrap();
+    cabin.status.clear();
+    let b = cabin.automations[1].clone();
+    cabin.fire_night(b, now_ms());
+    assert!(cabin.bg.scheduled_live());
+    assert_eq!(cabin.status, "", "no status line while it runs");
+    assert!(
+        !cabin.running && cabin.chat_job_thread.is_none(),
+        "no glow, no Stop, the composer is yours"
+    );
+    assert_eq!(live_work_text(&mut cabin), "");
+    let hidden = cabin
+        .threads
+        .iter()
+        .position(|t| t.title == crate::threads::BACKGROUND_THREAD_TITLE)
+        .expect("Background chat");
+    assert!(cabin.threads[hidden].background);
+    cabin.send_chat("chat-gate: and 3+3?".into());
+    assert!(
+        cabin.running,
+        "your message sent, not queued: {}",
+        cabin.status
+    );
+    assert!(cabin.followup_queue.is_empty());
+    assert!(poll_until(&mut cabin, 10, |c| !c.running));
+    assert_eq!(
+        cabin.messages.last().map(|m| (m.0.as_str(), m.1.as_str())),
+        Some(("assistant", "Four."))
+    );
+    assert!(
+        cabin.bg.scheduled_live(),
+        "your turn finished while the job still works"
+    );
+    std::fs::write(&bg_go, "go").unwrap();
+    assert!(poll_until(&mut cabin, 10, |c| c.bg.runs.is_empty()));
+    assert_eq!(cabin.status, "", "its end is quiet too");
+    assert_eq!(cabin.messages.len(), 4);
+    let disk = cabin
+        .board
+        .iter()
+        .find(|c| c.automation.as_deref() == Some("a-disk"))
+        .expect("second follow up card");
+    assert_eq!(disk.report, "Host snapshot\nDisk at 91% on /home.");
+    end_bg_test(root, cabin, restore);
+}
+
+/// 2.10.90: a report never lands in the middle of your reply in its own chat.
+#[test]
+fn a_scheduled_report_waits_while_you_reply_in_its_follow_up_chat() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("bg-cron-follow-up");
+    std::fs::create_dir_all(&root).expect("config root");
+    cabin.board.clear();
+    cabin.automations = vec![test_automation(
+        "a-snap",
+        "Host snapshot",
+        "every day at 9, run a read-only host snapshot and report what changed",
+    )];
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.thread_idx = 0;
+    cabin.settle_scheduled_run(
+        Some("a-snap"),
+        &grokhub_core::BgEnd::Done,
+        "## Host snapshot\nDisk at 88% on /home.",
+    );
+    let card = cabin
+        .board
+        .iter()
+        .find(|c| c.automation.as_deref() == Some("a-snap"))
+        .expect("follow up card")
+        .clone();
+    let chat = card.thread_id.clone().expect("its chat");
+    let at = cabin
+        .threads
+        .iter()
+        .position(|t| t.id == chat)
+        .expect("thread");
+    assert_eq!(cabin.threads[at].messages.len(), 1);
+    // You answer the report in its chat; the next run ends while your reply streams.
+    cabin.thread_idx = at;
+    cabin.messages = cabin.threads[at].messages.clone();
+    cabin
+        .live_mut()
+        .push(("user".into(), "which mount grew?".into()));
+    cabin
+        .live_mut()
+        .push(("assistant".into(), "/home grew by".into()));
+    cabin.running = true;
+    cabin.chat_job_thread = Some(chat.clone());
+    let hidden = cabin.ensure_background_history_thread();
+    let bg_id = cabin.threads[hidden].id.clone();
+    cabin.bg.runs.push(super::background::BgRun {
+        id: 1,
+        thread_id: bg_id,
+        title: "Host snapshot".into(),
+        origin: grokhub_core::BgOrigin::Scheduled,
+        pid: None,
+        rx: None,
+        say: "## Host snapshot\nDisk at 91% on /home.".into(),
+        action: String::new(),
+        started: std::time::Instant::now(),
+        end: Some(grokhub_core::BgEnd::Done),
+        session: String::new(),
+        resumed: None,
+        fork_hold: false,
+        native_session: None,
+        automation: Some("a-snap".into()),
+    });
+    cabin.post_finished_bg_runs();
+    assert_eq!(cabin.bg.runs.len(), 1, "the report waits for your reply");
+    assert_eq!(
+        cabin.messages.last().map(|m| m.1.as_str()),
+        Some("/home grew by"),
+        "your live reply is untouched"
+    );
+    cabin.running = false;
+    cabin.chat_job_thread = None;
+    cabin.post_finished_bg_runs();
+    assert!(cabin.bg.runs.is_empty());
+    let last = cabin
+        .messages
+        .last()
+        .map(|m| m.1.clone())
+        .unwrap_or_default();
+    assert!(
+        last.ends_with("## Host snapshot\nDisk at 91% on /home."),
+        "{last}"
+    );
+    assert_eq!(cabin.messages.len(), 4);
+    release_isolated(&root, cabin);
+}
+
+/// 2.10.90: only the job before it, or your turn for a desktop replay, holds a job.
+#[test]
+fn a_due_job_waits_only_for_the_last_job_or_a_desktop_replay() {
+    let mut cabin = Cabin::quiet_for_test();
+    let snap = test_automation(
+        "a-snap",
+        "Host snapshot",
+        "every day at 9, run a host snapshot",
+    );
+    let replay = test_automation("a-replay", "Replay", "every day at 21, replay last");
+    assert!(!cabin.scheduled_waits(&snap));
+    cabin.running = true;
+    assert!(
+        !cabin.scheduled_waits(&snap),
+        "your turn does not hold a job"
+    );
+    assert!(
+        cabin.scheduled_waits(&replay),
+        "a replay drives the desktop you are using"
+    );
+    cabin.running = false;
+    assert!(!cabin.scheduled_waits(&replay));
+    let (_tx, rx) = std::sync::mpsc::channel();
+    cabin.bg.runs.push(super::background::BgRun {
+        id: 1,
+        thread_id: "bg".into(),
+        title: "Disk check".into(),
+        origin: grokhub_core::BgOrigin::Scheduled,
+        pid: None,
+        rx: Some(rx),
+        say: String::new(),
+        action: String::new(),
+        started: std::time::Instant::now(),
+        end: None,
+        session: String::new(),
+        resumed: None,
+        fork_hold: false,
+        native_session: None,
+        automation: Some("a-disk".into()),
+    });
+    assert!(cabin.scheduled_waits(&snap), "one scheduled run at a time");
+    let night = include_str!("night.rs");
+    let between = |from: &str, to: &str| -> String {
+        night
+            .split(from)
+            .nth(1)
+            .and_then(|s| s.split(to).next())
+            .unwrap_or_else(|| panic!("missing {from}"))
+            .to_string()
+    };
+    let tick = between("fn tick_night(", "fn poll_night_check(");
+    assert!(!tick.contains("self.running"), "{tick}");
+    assert!(tick.contains("self.scheduled_waits(&a)"), "{tick}");
+    let check = between("fn poll_night_check(", "fn spawn_night_check(");
+    assert!(
+        check.contains("night_check_may_fire(self.scheduled_waits(&a))"),
+        "{check}"
+    );
+    // A loop never rides your chat's Grok session, and no job writes the status line.
+    let fire_loop = between("fn fire_loop(", "fn tick_session_suggestions(");
+    assert!(
+        !fire_loop.contains("self.acp") && !fire_loop.contains("self.running = true"),
+        "{fire_loop}"
+    );
+    for said in ["\"Night: ", "\"Night check: ", "\"Loop: "] {
+        assert!(!night.contains(said), "no job shows itself running: {said}");
+    }
+    assert!(!include_str!("native_unattended.rs").contains("\"Loop: "));
 }
