@@ -153,7 +153,7 @@ pub fn idea_prompt(ctx: &IdeaContext) -> String {
          concrete thing to do now that moves open work forward."
             .into(),
         "- Be concrete: name the project, file, tool, or routine. No generic advice or productivity tips.".into(),
-        "Good: \"automation | Morning test run | Your GrokHub tests run before you sit down. | You asked to run \
+        "Good: \"automation | I can run your GrokHub tests before you sit down | Your GrokHub tests run before you sit down. | You asked to run \
          the GrokHub tests on 4 different days this week. | Every weekday at 8 the cabin runs the GrokHub tests \
          and posts any failure to your feed, so you start on red instead of finding it later. | every weekday at \
          8, run cargo test in ~/GrokHub and summarize failures\"."
@@ -165,7 +165,9 @@ pub fn idea_prompt(ctx: &IdeaContext) -> String {
         "Output only lines in exactly this form, nothing else:".into(),
         "IDEA: kind | title | short description | reason | details | what to send".into(),
         "- kind: automation, reminder, skill, or try".into(),
-        "- title: at most 60 characters, names the help".into(),
+        "- title: one natural line in your own voice that starts with \"I can\", at most 70 characters, naming the \
+         help (\"I can stage your electric bill before Friday\"). Never \"I can help with ...\" and no quotes."
+            .into(),
         "- short description: one line to them (\"you\"), at most 90 characters".into(),
         "- reason: why you are making this, pointing at the repeated work it answers, at most 120 characters"
             .into(),
