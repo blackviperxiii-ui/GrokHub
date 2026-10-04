@@ -49,7 +49,7 @@ pub(super) enum BoardAct {
     CancelNotes,
     /// Start a chat from this card, with its notes, and move it to Doing.
     Work(String),
-    /// Open the card in place (a click on the compact card).
+    /// A click on a card: opens a small card in place, folds the open one.
     Expand(String),
     /// Send a line to the agent from the card's chat box.
     Say { id: String, text: String },
@@ -953,8 +953,15 @@ impl Cabin {
     pub(super) fn ui_board(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let mut act: Option<BoardAct> = None;
-        let mut rects: Vec<(String, egui::Rect)> = Vec::new();
-        let mut view = egui::Rect::NOTHING;
+        // Esc belongs to a focused field, a menu, a sheet, the palette or a dialog
+        // first. A field painted earlier this frame (the sidebar) has already
+        // dropped its focus on this press, so last frame's focus counts too.
+        let key_taken = self.board_view.keys_held
+            || ctx.egui_wants_keyboard_input()
+            || super::chat_ui::overlay_over_chat(&ctx)
+            || self.palette_open
+            || self.shortcuts_open
+            || self.confirm.as_ref().is_some_and(|c| c.paints_overlay());
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::NONE
@@ -971,7 +978,7 @@ impl Cabin {
                 }
                 crate::cards::help_text(
                     ui,
-                    "Tasks from your chats and the ones you add, by status. Hover a card to open it and talk to the agent; drag it to move it.",
+                    "Tasks from your chats and the ones you add, by status. Click a card to open it and talk to the agent, click its title or press Esc to fold it, and drag it to move it.",
                 );
                 ui.add_space(12.0);
                 if self.board_compose {
@@ -1046,7 +1053,7 @@ impl Cabin {
                 let from = |board: &[BoardCard], drag: &BoardDrag| {
                     board.iter().find(|c| c.id == drag.0).map(|c| c.status)
                 };
-                let out = egui::ScrollArea::vertical()
+                egui::ScrollArea::vertical()
                     .id_salt("workboards")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
@@ -1080,8 +1087,7 @@ impl Cabin {
                             );
                             ui.add_space(6.0);
                             for (id, _) in &follow {
-                                let rect = self.paint_board_card(ui, id, true, &mut act);
-                                rects.push((id.clone(), rect));
+                                self.paint_board_card(ui, id, true, &mut act);
                                 ui.add_space(8.0);
                             }
                             let bottom = ui.cursor().min.y.max(top.y + 64.0);
@@ -1138,8 +1144,7 @@ impl Cabin {
                                     );
                                 }
                                 for id in ids {
-                                    let rect = self.paint_board_card(ui, &id, false, &mut act);
-                                    rects.push((id, rect));
+                                    self.paint_board_card(ui, &id, false, &mut act);
                                     ui.add_space(8.0);
                                 }
                                 let bottom = ui.cursor().min.y.max(col_top.y + BOARD_DROP_MIN_H);
@@ -1223,28 +1228,16 @@ impl Cabin {
                             }
                         }
                     });
-                view = out.inner_rect;
             });
-        // Hover opens a card, leaving folds it back, and a drag folds it at once.
-        let now = ctx.input(|i| i.time);
-        let hovered = ctx
-            .pointer_hover_pos()
-            .filter(|p| view.contains(*p))
-            .and_then(|p| rects.iter().find(|(_, r)| r.contains(p)))
-            .map(|(id, _)| id.clone());
-        let typing = self.board_view.open.as_deref().is_some_and(|o| {
-            let focused = ctx.memory(|m| m.focused());
-            focused == Some(super::board_ui::board_chat_edit_id(o))
-                || self.board_notes_edit.as_ref().is_some_and(|(n, _)| n == o)
-        });
+        // Only a click opens a card; hover does nothing. A drag folds it at once.
         let dragging = egui::DragAndDrop::has_payload_of_type::<BoardDrag>(&ctx);
-        // The open menu (···) keeps its card open while the pointer is on the popup.
-        let menu_open = egui::Popup::is_any_open(&ctx);
-        if !menu_open
-            && super::board_ui::track_board_hover(&mut self.board_view, now, hovered, typing, dragging)
-        {
-            ctx.request_repaint_after(Duration::from_millis(60));
+        super::board_ui::fold_board_on_drag(&mut self.board_view, dragging);
+        let bare_esc = super::chat_ui::bare_press(ui, egui::Key::Escape);
+        if super::board_ui::board_esc_folds(self.board_view.open.is_some(), bare_esc, key_taken) {
+            super::chat_ui::drop_key(ui, egui::Key::Escape);
+            self.board_view.open = None;
         }
+        self.board_view.keys_held = ctx.egui_wants_keyboard_input();
         if self.apply_board_act(act) {
             self.flush_board();
         }
@@ -1370,15 +1363,13 @@ impl Cabin {
             BoardAct::Work(id) => {
                 // Work happens on the card: open it and watch the chat there.
                 self.board_view.open = Some(id.clone());
-                self.board_view.pinned = true;
                 self.say_on_card(&id, "");
                 false
             }
             BoardAct::Expand(id) => {
-                self.board_view.open = Some(id.clone());
-                self.board_view.pinned = true;
-                self.board_view.hover = None;
-                self.board_view.left_at = None;
+                // A click on a small card opens it; a click on the open card's
+                // title row folds it.
+                super::board_ui::click_board_card(&mut self.board_view, &id);
                 match self.board.iter_mut().find(|c| c.id == id && c.fresh) {
                     Some(c) => {
                         c.fresh = false;

@@ -1313,7 +1313,6 @@ impl Cabin {
         if let Some(card) = board_card.filter(|b| self.board.iter().any(|c| &c.id == b)) {
             self.nav = Nav::Workboard;
             self.board_view.open = Some(card);
-            self.board_view.pinned = true;
         }
     }
 
