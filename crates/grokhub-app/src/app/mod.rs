@@ -44,7 +44,7 @@ use grokhub_core::{
     chat_attach_status, chat_bearer, chat_run_action, chat_run_hint,
     chat_run_phase, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
     chip_scan, chip_suggest_prompt, clamp_bubble_outer, clamp_row_width,
-    clear_pending_after_complete, cli_update_notice, cluster_gap, combined_update_cmds,
+    clear_pending_after_complete, cli_update_notice, cluster_gap, combined_update_cmds_in,
     compact_keep_start_from, compose_imagine_prompt, composer_enter,
     composer_go, composer_go_tip, computer_cmd_line, context_fingerprint, context_percent,
     create_folder, create_project, daily_units_blocked, dedicated_imagine_model,
@@ -3836,10 +3836,11 @@ impl Cabin {
         self.open_update_overlay();
         let pending = pending_for_manual_update(self.update_pending_now());
         let src = resolve_source(&self.cfg.source_dir);
+        let channel = crate::update::installed_channel();
         if pending != UpdatePending::Cli
             && src
                 .as_ref()
-                .is_some_and(|p| grokhub_core::overlay_clone_usable(p))
+                .is_some_and(|p| grokhub_core::overlay_clone_usable_in(p, channel))
         {
             if let Some(src) = src.as_ref() {
                 self.cfg.source_dir = src.display().to_string();
@@ -3847,10 +3848,10 @@ impl Cabin {
                 self.persist_cfg();
             }
         }
-        let plan = match combined_update_cmds(src.as_deref(), pending) {
+        let plan = match combined_update_cmds_in(src.as_deref(), pending, channel) {
             Ok(plan) => plan,
             Err(e) if pending == UpdatePending::Both => {
-                match combined_update_cmds(src.as_deref(), UpdatePending::Cli) {
+                match combined_update_cmds_in(src.as_deref(), UpdatePending::Cli, channel) {
                     Ok(mut plan) => {
                         plan.cabin_skipped = Some(e);
                         plan
