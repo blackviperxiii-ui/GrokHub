@@ -179,6 +179,9 @@ pub struct UpdateCard {
     /// When the user dismissed this event. A repeat stays hidden for a day.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub dismissed_at: u64,
+    /// Pulse page fields: category, snooze, due time, source images.
+    #[serde(default, flatten)]
+    pub pulse: crate::pulse::PulseMeta,
 }
 
 impl UpdateCard {
@@ -274,6 +277,16 @@ pub struct FeedPulse {
     /// Source → `created_at` of the failure Home last admitted through the safety floor.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub floor_shown: BTreeMap<String, u64>,
+    /// The Home deck and the Ideas board moved into Pulse (`crate::pulse::migrate_to_pulse`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pulse_v1: bool,
+    /// Like and dislike ledger lines since the feed instructions were last rewritten.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub taste_since_rewrite: u32,
+}
+
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
 }
 
 fn default_on() -> bool {
@@ -314,6 +327,8 @@ impl Default for FeedPulse {
             muted_sources: Vec::new(),
             less_until: BTreeMap::new(),
             floor_shown: BTreeMap::new(),
+            pulse_v1: false,
+            taste_since_rewrite: 0,
         }
     }
 }
@@ -2182,6 +2197,7 @@ fn blank_card(
         source_id: String::new(),
         runs: 1,
         dismissed_at: 0,
+        pulse: Default::default(),
     }
 }
 
