@@ -31,6 +31,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 - **Stacks:** order them so every PR ends green; one agent owns rebase and topology, others push only their own branch.
 - **Agent briefs** follow the template: intent, data shape, scope and non-goals, file boundaries, required evidence, file pointers, exact error plus at most 20 log lines.
 - **CI failures:** find and classify the cause before at most one rerun; a repeat failure is real.
+- **Latest main:** before touching a branch, fetch origin, confirm it is based on the latest `main`, and merge `main` into it (a merge commit; no rebase or force-push). Fetch and re-check right before merging and again before tagging. Never render or screenshot from a stale checkout. Every PR body and report names the `main` SHA the work started from.
 
 ## Commits, PRs, versions
 - Titles: `Cabin X.Y.Z: <what changed>`, or a plain sentence ending in `(X.Y.Z)`. Add a short bullet body and the PR number when merged.

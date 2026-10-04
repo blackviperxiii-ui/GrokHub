@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+The repo's bot rules (`CLAUDE.md` and `.cursor/rules`) add one more: fetch origin and work from the latest `main`, merge `main` into a branch before touching it, re-check right before merging and before tagging, never render or screenshot from a stale checkout, and name the starting `main` SHA in every PR body and report.
+
 ## 2.10.90 — 2026-10-04
 
 Scheduled jobs run like crons: completely in the background, separate from your chats, and never in your way. Nothing shows a job while it runs: no status line when a clock job, its check or a `/loop` starts or ends, no glow, no Stop, and no row in the live-work strip, even on the hidden Background chat. Its result still lands on the Follow up card and the Home card when it finishes. A due job no longer waits for your chat turn to end; only a saved desktop replay still does, because it drives the desktop you are using. A `/loop` always runs as its own `grok -p` instead of borrowing your chat's Grok session when it was idle, which made your chat look busy and held your next message behind the loop. A report that finishes while you are replying in its own Follow up chat waits for your reply to end, so your live reply can no longer overwrite it. Halt (the hotkey, the tray, or Ctrl+Alt+H) still stops a running job, and jobs keep the unattended rules and low effort. New tests run a job on the fake Grok CLI that starts and ends in the middle of your reply without pausing or cutting it, send and finish a chat turn while a job works, check that nothing shows the job, and check its report reaches Follow up and Home.
