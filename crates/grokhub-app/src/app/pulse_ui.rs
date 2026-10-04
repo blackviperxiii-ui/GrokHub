@@ -15,7 +15,7 @@ use grokhub_core::{CardReaction, UpdateAction, UpdateCard, UpdateKind};
 
 const ICON: f32 = 32.0;
 const COL_MAX_W: f32 = 680.0;
-const THUMB_H: f32 = 104.0;
+const THUMB_H: f32 = 96.0;
 const THUMB_MAX: usize = 3;
 /// A source page is read up to this much looking for its preview image.
 const PAGE_CAP: u64 = 512 * 1024;
@@ -377,15 +377,7 @@ pub(super) fn paint_pulse_row(
             );
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-            ui.menu_button(
-                RichText::new("···")
-                    .size(16.0)
-                    .strong()
-                    .color(crate::theme::muted()),
-                |ui| {
-                    pulse_menu(ui, card, kind, false, &mut act);
-                },
-            );
+            dots_menu(ui, |ui| pulse_menu(ui, card, kind, false, &mut act));
         });
     });
     act
@@ -708,15 +700,7 @@ impl Cabin {
                         );
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                        ui.menu_button(
-                            RichText::new("···")
-                                .size(16.0)
-                                .strong()
-                                .color(crate::theme::muted()),
-                            |ui| {
-                                pulse_menu(ui, card, kind, true, &mut act);
-                            },
-                        );
+                        dots_menu(ui, |ui| pulse_menu(ui, card, kind, true, &mut act));
                         ui.label(
                             RichText::new(pc::ago_label(card.created_at, now))
                                 .size(crate::theme::FONT_TIP)
@@ -1205,9 +1189,9 @@ fn paint_thumbs(ui: &mut egui::Ui, textures: &[Option<egui::TextureHandle>]) {
     let n = textures.len().max(1) as f32;
     let max_w = ui.available_width();
     let one = if textures.len() == 1 {
-        (max_w * 0.62).min(360.0)
+        (max_w * 0.5).min(300.0)
     } else {
-        ((max_w - gap * (n - 1.0)) / n).min(200.0)
+        ((max_w - gap * (n - 1.0)) / n).min(170.0)
     };
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = gap;
@@ -1267,6 +1251,22 @@ fn paint_thumbs(ui: &mut egui::Ui, textures: &[Option<egui::TextureHandle>]) {
                 }
             }
         }
+    });
+}
+
+/// "···" with no frame until hovered, like the rest of the page's quiet chrome.
+fn dots_menu(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    ui.scope(|ui| {
+        let w = &mut ui.style_mut().visuals.widgets;
+        w.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+        w.inactive.bg_stroke = egui::Stroke::NONE;
+        ui.menu_button(
+            RichText::new("···")
+                .size(16.0)
+                .strong()
+                .color(crate::theme::muted()),
+            add,
+        );
     });
 }
 
