@@ -396,6 +396,12 @@ pub fn access_for_job(tokens: &ImagineTokens) -> Result<(String, Option<ImagineT
     if !imagine_needs_refresh(tokens, grokhub_core::now_ms()) {
         return Ok((tokens.access_token.clone(), None));
     }
+    // One refresh at a time: a wall paint and a user job holding the same refresh
+    // token must not both spend it, or the loser is told to sign in again.
+    let _gate = REFRESH_GATE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(done) = refreshed_from(tokens) {
+        return Ok((done.access_token.clone(), Some(done)));
+    }
     let refresh = tokens
         .refresh_token
         .as_deref()
@@ -412,7 +418,53 @@ pub fn access_for_job(tokens: &ImagineTokens) -> Result<(String, Option<ImagineT
         .map_err(|_| IMAGINE_SIGN_IN_AGAIN.to_string())?;
     let merged = merge_imagine_refresh(tokens, imagine_tokens_from_xai(&next));
     KeyringStore.save(&merged)?;
+    note_refreshed(tokens, &merged);
     Ok((merged.access_token.clone(), Some(merged)))
+}
+
+/// The last refresh a job made, kept so the UI picks it up even when the job
+/// itself fails, and so a second job holding the old refresh token reuses it.
+struct Refreshed {
+    from_refresh: Option<String>,
+    tokens: ImagineTokens,
+    unseen: bool,
+}
+
+static REFRESH_GATE: Mutex<()> = Mutex::new(());
+static REFRESHED: Mutex<Option<Refreshed>> = Mutex::new(None);
+
+fn note_refreshed(old: &ImagineTokens, merged: &ImagineTokens) {
+    *REFRESHED.lock().unwrap_or_else(|e| e.into_inner()) = Some(Refreshed {
+        from_refresh: old.refresh_token.clone(),
+        tokens: merged.clone(),
+        unseen: true,
+    });
+}
+
+fn refreshed_from(old: &ImagineTokens) -> Option<ImagineTokens> {
+    let slot = REFRESHED.lock().unwrap_or_else(|e| e.into_inner());
+    let r = slot.as_ref()?;
+    (r.from_refresh.is_some()
+        && r.from_refresh == old.refresh_token
+        && !imagine_needs_refresh(&r.tokens, grokhub_core::now_ms()))
+    .then(|| r.tokens.clone())
+}
+
+/// Tokens a background job refreshed that the UI has not taken yet, only when
+/// they came from the refresh token the UI holds now (not an earlier account).
+/// Never blocks.
+pub fn take_refreshed(current_refresh: Option<&str>) -> Option<ImagineTokens> {
+    let mut slot = REFRESHED.try_lock().ok()?;
+    let r = slot
+        .as_mut()
+        .filter(|r| r.unseen && r.from_refresh.is_some() && r.from_refresh.as_deref() == current_refresh)?;
+    r.unseen = false;
+    Some(r.tokens.clone())
+}
+
+/// Forget any refreshed tokens, so a sign-out or a new sign-in is not undone by a job's leftovers.
+pub fn forget_refreshed() {
+    *REFRESHED.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 /// One source image per pick, through the cabin's own picker (no extra GUI toolkit).

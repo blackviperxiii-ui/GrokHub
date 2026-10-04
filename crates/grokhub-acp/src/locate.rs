@@ -997,8 +997,18 @@ pub fn with_ask_deny(mut args: Vec<String>, deny: bool) -> Vec<String> {
     if !deny {
         return args;
     }
-    args.retain(|a| a != "--always-approve");
-    if !args.iter().any(|a| a == "--permission-mode") {
+    // Drop the flag, never a prompt value (the word after `-p`) that reads the same.
+    let mut after_p = false;
+    args.retain(|a| {
+        let keep = after_p || a != "--always-approve";
+        after_p = a == "-p";
+        keep
+    });
+    let has_mode = args
+        .iter()
+        .enumerate()
+        .any(|(i, a)| a == "--permission-mode" && (i == 0 || args[i - 1] != "-p"));
+    if !has_mode {
         args.push("--permission-mode".into());
         args.push("dontAsk".into());
     }
@@ -1896,6 +1906,25 @@ mod tests {
             "Questions stays look-only, not the invalid CLI value ask: {look:?}"
         );
         assert!(!look.iter().any(|a| a == "--always-approve"), "{look:?}");
+    }
+
+    #[test]
+    fn ask_deny_keeps_a_prompt_that_reads_like_the_flag() {
+        let args: Vec<String> = ["-p", "--always-approve", "--always-approve", "--cwd", "/w"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let out = with_ask_deny(args, true);
+        assert_eq!(&out[..4], ["-p", "--always-approve", "--cwd", "/w"]);
+        let mode_prompt: Vec<String> = ["-p", "--permission-mode", "--cwd", "/w"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let out = with_ask_deny(mode_prompt, true);
+        assert!(
+            out.windows(2).any(|w| w[0] == "--permission-mode" && w[1] == "dontAsk"),
+            "{out:?}"
+        );
     }
 
     #[test]
