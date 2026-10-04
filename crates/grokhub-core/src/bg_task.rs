@@ -32,6 +32,8 @@ pub enum BgOrigin {
     Agent,
     /// A live reply moved off the composer.
     Detached,
+    /// A scheduled automation, run on the hidden Background chat.
+    Scheduled,
 }
 
 /// How a background run ended.
