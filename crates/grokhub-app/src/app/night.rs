@@ -360,8 +360,9 @@ impl Cabin {
     }
 
     pub(super) fn tick_night(&mut self) -> bool {
-        if self.running || self.last_auto_tick.elapsed() < Duration::from_secs(5) {
-            return self.running || self.night_check_rx.is_some();
+        // Your chat turn does not hold a job back: it runs in its own process.
+        if self.last_auto_tick.elapsed() < Duration::from_secs(5) {
+            return self.night_check_rx.is_some();
         }
         // One scheduled run at a time. The next due job waits for it.
         if self.bg.scheduled_live() {
@@ -390,8 +391,11 @@ impl Cabin {
         let Some(a) = due.into_iter().next() else {
             return false;
         };
+        if self.scheduled_waits(&a) {
+            return false;
+        }
         if let Some(cmd) = night_check_command(&a.check_command) {
-            self.spawn_night_check(a.id.clone(), a.name.clone(), cmd.to_string());
+            self.spawn_night_check(a.id.clone(), cmd.to_string());
             return true;
         }
         self.fire_night(a, clock.now_ms);
@@ -414,7 +418,7 @@ impl Cabin {
                     self.mark_auto_skipped(&id, now_ms);
                     self.status = format!("Night skipped {name} (check)");
                 } else if let Some(a) = self.automations.iter().find(|x| x.id == id).cloned() {
-                    if night_check_may_fire(self.running) {
+                    if night_check_may_fire(self.scheduled_waits(&a)) {
                         self.fire_night(a, now_ms);
                     }
                 }
@@ -428,7 +432,7 @@ impl Cabin {
         }
     }
 
-    pub(super) fn spawn_night_check(&mut self, id: String, name: String, cmd: String) {
+    pub(super) fn spawn_night_check(&mut self, id: String, cmd: String) {
         if let Some(why) = forbidden_reason(&cmd) {
             self.mark_auto_skipped(&id, now_ms());
             self.status = format!("Night check blocked: {why}");
@@ -441,7 +445,13 @@ impl Cabin {
             let _ = tx.send((out, code));
         });
         self.night_check_rx = Some((id, rx));
-        self.status = format!("Night check: {name}");
+    }
+
+    /// A due job waits only for the scheduled run before it, or, for a saved
+    /// recipe replay that drives the desktop, for your live turn.
+    pub(super) fn scheduled_waits(&self, a: &Automation) -> bool {
+        self.bg.scheduled_live()
+            || (self.running && replay_automation_target(&a.instructions).is_some())
     }
 
     pub(super) fn fire_night(&mut self, a: Automation, now_ms: u64) {
@@ -472,7 +482,7 @@ impl Cabin {
             self.note_auto_failed(&a.id, "Grok Build is not installed or not connected");
             return;
         }
-        self.status = format!("Night: {}", a.name);
+        // Nothing on screen while it runs: no status line, no glow, no strip.
         if replay.is_some() {
             self.mark_auto_ran(&a.id, now_ms);
             self.update_auto_health(&a.id, mark_automation_ok);
@@ -519,7 +529,6 @@ impl Cabin {
             run.automation = Some(a.id.clone());
             run.title = title.clone();
         }
-        self.status = format!("Night: {}", a.name);
         Ok(title)
     }
 
@@ -630,16 +639,8 @@ impl Cabin {
                         row.session_id = Some(turn.session_id);
                     }
                     self.persist_loops();
-                    let clip: String = turn.text.chars().take(160).collect();
-                    if !clip.is_empty() {
-                        self.status = format!("Loop: {clip}");
-                    }
                     turn.text
                 } else {
-                    let clip: String = text.chars().take(160).collect();
-                    if !clip.is_empty() {
-                        self.status = clip.clone();
-                    }
                     text
                 };
                 self.note_automation_done(&id, &prompt, &summary);
@@ -684,23 +685,8 @@ impl Cabin {
             self.session_mode,
             self.cfg.desktop_control,
         );
-        let title: String = row.prompt.chars().take(48).collect();
-        self.status = format!("Loop: {title}");
-        if self.acp.is_some() && !self.running {
-            let prompt = row.prompt.clone();
-            let idx = self.ensure_background_history_thread();
-            if let Some(t) = self.threads.get(idx) {
-                self.chat_job_thread = Some(t.id.clone());
-            }
-            if let Some(h) = &self.acp {
-                if h.prompt(&prompt).is_ok() {
-                    self.loop_acp_id = Some(row.id.clone());
-                    self.running = true;
-                    return;
-                }
-            }
-            self.chat_job_thread = None;
-        }
+        // Always its own `grok -p`, never your chat's Grok session: a loop on that
+        // session made your chat look busy and held your next message behind it.
         let (tx, rx) = mpsc::channel();
         self.grok_loop_rx = Some((row.id.clone(), rx));
         std::thread::spawn(move || {

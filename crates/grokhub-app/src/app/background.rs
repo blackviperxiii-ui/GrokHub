@@ -384,7 +384,6 @@ impl Cabin {
             || self.kick_cap_rx.is_some()
             || self.verify_rx.is_some()
             || self.host_diff_rx.is_some()
-            || self.loop_acp_id.is_some()
             || self.background_tasks_open()
             || self.job_on_background_thread()
             || self.job_is_idea_talk();
@@ -569,7 +568,11 @@ impl Cabin {
             .runs
             .iter()
             .enumerate()
-            .filter(|(_, r)| r.end.is_some() && busy.as_deref() != Some(r.thread_id.as_str()))
+            .filter(|(_, r)| {
+                r.end.is_some()
+                    && busy.as_deref() != Some(r.thread_id.as_str())
+                    && !self.scheduled_report_waits(r, busy.as_deref())
+            })
             .map(|(i, _)| i)
             .collect();
         if ready.is_empty() {
@@ -636,6 +639,21 @@ impl Cabin {
             }
         }
         self.persist();
+    }
+
+    /// A scheduled run's report lands in its Follow up card's chat. While you
+    /// are mid-reply in that chat, it waits: your live reply rewrites the last
+    /// assistant message, so the report would be lost or spliced into it.
+    fn scheduled_report_waits(&self, run: &BgRun, busy: Option<&str>) -> bool {
+        let (Some(busy), Some(id)) = (busy, run.automation.as_deref()) else {
+            return false;
+        };
+        run.origin == BgOrigin::Scheduled
+            && self.board.iter().any(|c| {
+                c.automation.as_deref() == Some(id)
+                    && !matches!(c.status, BoardStatus::Done | BoardStatus::Dismissed)
+                    && c.thread_id.as_deref() == Some(busy)
+            })
     }
 
     /// A moved-off turn wrote its chat's own session. Give that session back to
@@ -758,12 +776,11 @@ impl Cabin {
     }
 
     /// Steering is for a chat turn on this tab: not a `/compact` or other
-    /// cabin-wide Grok command, not a `/loop` riding the ACP session.
+    /// cabin-wide Grok command.
     pub(super) fn can_steer_live_turn(&self) -> bool {
         self.running
             && self.chat_job_thread.as_deref() == Some(self.visible_thread_id().as_str())
             && (self.grok_p_rx.is_some() || self.acp.is_some())
-            && self.loop_acp_id.is_none()
             && !self.scheduled_perm
             && !self.job_is_idea_talk()
     }
@@ -890,7 +907,7 @@ impl Cabin {
             .runs
             .iter()
             .enumerate()
-            .filter(|(_, r)| r.thread_id == vis)
+            .filter(|(_, r)| r.thread_id == vis && r.origin != BgOrigin::Scheduled)
             .map(|(i, _)| i)
             .collect();
         let elsewhere = self
