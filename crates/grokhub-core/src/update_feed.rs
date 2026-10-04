@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 /// Newest event cards painted in the home slot. Older undismissed event cards stay on disk.
 pub const FEED_PAINT_MAX: usize = 3;
-/// "Less like this" keeps that group off Home for two weeks.
+/// "Less like this" (card menu before 2.10.86) keeps that group off Home for two weeks.
 pub const LESS_MUTE_MS: u64 = 14 * DISMISS_HIDE_MS;
 /// Shown on Automations when this source's runs are hidden from Home.
 pub const HOME_HIDDEN_NOTE: &str = "Hidden from Home · Undo";
@@ -268,7 +268,7 @@ pub struct FeedPulse {
     /// Automation sources whose runs stay off Home until Undo. Failures can still use the floor.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub muted_sources: Vec<String>,
-    /// Group key → unix ms when a "Less like this" mute ends.
+    /// Group key → unix ms when a "Less like this" mute ends. Set only by builds before 2.10.86.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub less_until: BTreeMap<String, u64>,
     /// Source → `created_at` of the failure Home last admitted through the safety floor.

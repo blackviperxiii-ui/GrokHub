@@ -42,7 +42,7 @@ use grokhub_core::{
     build_hub_snapshot, build_quick_chips, build_review_digest, build_windshield, bump_skill_run,
     bump_usage, cabin_overlay_step, cabin_update_notice, cap_from_text, catalog_line,
     chat_attach_status, chat_bearer, chat_run_action, chat_run_hint,
-    chat_run_label, chat_run_phase, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
+    chat_run_phase, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
     chip_scan, chip_suggest_prompt, clamp_bubble_outer, clamp_row_width,
     clear_pending_after_complete, cli_update_notice, cluster_gap, combined_update_cmds,
     compact_keep_start_from, compose_imagine_prompt, composer_enter,
@@ -877,12 +877,21 @@ impl Cabin {
                 t.messages = Arc::new(config::load_chat());
                 threads.push(t);
             }
+            // Sessions a `/loop` wrote are background work, not chats to adopt.
+            let loop_sessions: Vec<String> = crate::loops::load()
+                .into_iter()
+                .filter_map(|l| l.session_id)
+                .collect();
+            let mut parked_learn = threads::file_background_sessions(&mut threads, &loop_sessions);
             let adopted = threads::adopt_sessions_from(&threads, &threads::grok_session_homes());
             let adopted_n = adopted.len();
             threads.extend(adopted);
-            let mut parked_learn = false;
             for t in &mut threads {
-                if threads::is_learn_map_title(&t.title) {
+                let loop_row = !t.background
+                    && t.grok_session
+                        .as_deref()
+                        .is_some_and(|s| loop_sessions.iter().any(|l| l == s.trim()));
+                if loop_row || threads::is_learn_map_title(&t.title) {
                     t.background = true;
                     parked_learn = true;
                 }
@@ -2042,6 +2051,18 @@ impl Cabin {
                     .map(|c| c.title.as_str())
             });
         chat_run_action(waiting, tool).to_string()
+    }
+
+    /// Send/Stop hover. The transcript has no Thinking dot any more (the composer
+    /// glow shows a live turn), so while running Stop's hover names what it stops.
+    fn go_tip_here(&self) -> String {
+        let tip = composer_go_tip(self.thinking_here());
+        let hint = chat_run_hint(self.run_phase_here(), &self.run_action_here());
+        if hint.is_empty() {
+            tip.to_string()
+        } else {
+            format!("{tip} · {hint}")
+        }
     }
 
     fn halt_in_flight(&mut self) {

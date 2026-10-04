@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+Background work stays out of the sidebar History. A `/bg` run forks the chat's Grok session, and a `/loop` or a quick-chip reply through the CLI writes a session of its own; on the next launch those sessions came back as extra chats in History. Their ids are now filed on the hidden Background chat, so startup adoption and the Grok session list skip them, and chats a loop already leaked are hidden on load. Nothing is deleted: the sessions stay on disk, and deleting all chats still removes them.
+
+## 2.10.87 — 2026-10-03
+
+"Minimal" is gone from the effort list. It was never a real level. Settings and the composer now offer None, Low, Medium, High and Extra High. A setting, session or `/effort` that still says "minimal" (or "mini") loads as **Low**, the smallest level that still reasons, so nothing breaks and reasoning doesn't switch off. The native engine also sends a saved "minimal" as `low`. The chat window loses its "Thinking" dot and its "Background" button. The glow around the chat box already shows a reply is running, and Stop's tooltip now says what it would stop (for example "Stop · Working on your reply"). `/bg` still moves a running reply to the background, and `/bg <task>` and `/bg stop` work as before. The repo's bot rules (`CLAUDE.md` and `.cursor/rules`) now say that finished, green work is a full ship: bots merge, tag, release and report the live link. They also add one-line rules for proof of work in PRs, literal test values, batched findings, green stacks with one rebase owner, a brief template, and finding the CI cause before at most one rerun.
+
+- Linux: `grokhub-linux-v2.10.87.tar.gz` and AUR `pkgver=2.10.87`.
+- Windows: `GrokHub-Setup-2.10.87.exe` and `grokhub-windows-v2.10.87.zip`.
+
+## 2.10.86 — 2026-10-03
+
+The Home card deck no longer flickers. On the empty chat screen the deck sits below the chat box, and since 2.10.66 the open fan moves above the box. Hover was checked against last frame's moving cards, and a card that crossed the chat box jumped about 260 px to the far side of it. With the pointer resting in the gap between the box and the deck, the deck opened and shut on almost every frame (98 times in 120 frames in a headless test), and moving the pointer up to the open cards closed the deck on the way. Hover now checks where the cards will settle, an open deck stays open over the pile, the fan and the chat box between them, and the cards slide without jumping. The "⋯" menu on Home cards (More like this, Less like this, Hide this automation's runs) is gone, and Home learns from what you do instead. Closing a card with × before you ever opened or used it counts as a strong "less like this" for its kind and topic. Opening, running and finishing a card are each remembered by how far you got and what you did (opened a chat, filed a todo, made an automation, finished the todo). A one-off card whose action you already ran or finished isn't offered again, while cards on the same kind of work and the same topics move up. Automation runs, schedules you set up and cards you pinned keep coming back. Everything stays on this computer, `card_prefs.json` keeps at most 100 uses, and older settings files and signal logs still load. Runs hidden from Home by an older build stay hidden until you undo it on the Automations page.
+
+- Linux: `grokhub-linux-v2.10.86.tar.gz` and AUR `pkgver=2.10.86`.
+- Windows: `GrokHub-Setup-2.10.86.exe` and `grokhub-windows-v2.10.86.zip`.
+
 ## 2.10.85 — 2026-10-03
 
 Delete all (Settings → History) no longer brings deleted chats back. It first halts whatever is running, which saves the chats as they were, and then saves the fresh empty chat. Each save is written by its own background thread, so the older save could finish last and overwrite `threads.json` with the deleted chats. They would then come back on the next start. Saves now carry a sequence number. A save that's older than the last one written never replaces the chats or settings. It only writes its project list or secrets when no newer save has written them. This also made the `delete_all_history_clears_seeded_chats` test fail now and then in CI.
