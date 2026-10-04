@@ -48,6 +48,7 @@ pub mod organs;
 pub mod pair;
 pub mod paths;
 pub mod project;
+pub mod pulse;
 pub mod recipe;
 pub mod redact;
 pub mod reflect;

@@ -21,7 +21,7 @@ pub(super) struct ImaginePickOut {
     uris: Result<Vec<String>, String>,
 }
 
-enum ImagineCall {
+pub(super) enum ImagineCall {
     Generate {
         model: String,
         n: u32,
@@ -58,19 +58,15 @@ pub(super) struct ImagineNative {
     pub image_op: u8,
     pub image_model: u8,
     pub count: u8,
-    pub resolution: u8,
-    pub res_custom: bool,
-    pub api_aspect: u8,
-    pub quality_tier: u8,
-    pub quality_custom: bool,
     pub edit_sources: Vec<String>,
     pub edit_mask: Option<String>,
     pub video_op: u8,
     pub video_model: u8,
     pub video_res_1080: bool,
-    pub video_dur_custom: Option<u32>,
     pub video_image: Option<String>,
     pub video_url: String,
+    pub more_open: bool,
+    pub more_anchor: egui::Rect,
     pub offer_key: bool,
     pub offer_settings: bool,
     pub force_key: bool,
@@ -98,19 +94,15 @@ impl Default for ImagineNative {
             image_op: 0,
             image_model: 0,
             count: 1,
-            resolution: 0,
-            res_custom: false,
-            api_aspect: 0,
-            quality_tier: 0,
-            quality_custom: false,
             edit_sources: Vec::new(),
             edit_mask: None,
             video_op: 0,
             video_model: 0,
             video_res_1080: false,
-            video_dur_custom: None,
             video_image: None,
             video_url: String::new(),
+            more_open: false,
+            more_anchor: egui::Rect::NOTHING,
             offer_key: false,
             offer_settings: false,
             force_key: false,
@@ -574,9 +566,6 @@ impl Cabin {
                     }
                     self.ui_attach_chip(ui, PlusTarget::Imagine);
                     self.paint_voice_mode_row(ui);
-                    if self.ui_imagine_account(ui) {
-                        go_settings = true;
-                    }
                     let bar = self.ui_imagine_bar(ui);
                     generate = bar.generate;
                     if bar.go_settings {
@@ -682,7 +671,8 @@ impl Cabin {
         };
         let model = dedicated_imagine_model(&self.cfg.imagine_model);
         let ready = !self.imagine_prompt.trim().is_empty();
-        let authed = self.llm_ready();
+        let signed_in =
+            self.imagine_native.tokens.is_some() || !self.console_key().trim().is_empty();
         egui::Frame::NONE
             .fill(crate::theme::surface())
             .corner_radius(crate::theme::IMAGINE_BAR_RADIUS)
@@ -849,6 +839,7 @@ impl Cabin {
                                     }) {
                                         self.imagine_video_audio = !self.imagine_video_audio;
                                     }
+                                    ui.end_row();
                                 }
                                 ImagineKind::Image | ImagineKind::Agent => {
                                     crate::cards::imagine_seg_track(ui, |ui| {
@@ -902,6 +893,7 @@ impl Cabin {
                             if style.clicked() {
                                 self.imagine_style_open = !self.imagine_style_open;
                                 self.imagine_aspect_open = false;
+                                self.imagine_native.more_open = false;
                                 self.imagine_style_anchor = style.rect;
                                 self.imagine_menu_ignore = true;
                             }
@@ -941,11 +933,49 @@ impl Cabin {
                             if aspect_hit.clicked() {
                                 self.imagine_aspect_open = !self.imagine_aspect_open;
                                 self.imagine_style_open = false;
+                                self.imagine_native.more_open = false;
                                 self.imagine_aspect_anchor = aspect_hit.rect;
                                 self.imagine_menu_ignore = true;
                             }
-                            if !authed && crate::cards::ghost_pill(ui, "Connect Grok") {
-                                out.go_settings = true;
+                            // Frames do not wrap on their own; a full first row would grow the box.
+                            if self.imagine_kind != ImagineKind::Video {
+                                ui.end_row();
+                            }
+                            let more_inner = egui::Frame::NONE
+                                .fill(crate::theme::panel())
+                                .corner_radius(crate::theme::IMAGINE_HIT)
+                                .inner_margin(egui::Margin::symmetric(10, 6))
+                                .show(ui, |ui| {
+                                    ui.set_height(crate::theme::IMAGINE_HIT - 12.0);
+                                    ui.horizontal_centered(|ui| {
+                                        ui.label(
+                                            RichText::new("More")
+                                                .size(crate::theme::FONT_CHROME)
+                                                .color(crate::theme::fg()),
+                                        );
+                                        ui.add_space(4.0);
+                                        crate::icons::paint_menu_caret(ui, crate::theme::muted());
+                                    });
+                                });
+                            let more = ui
+                                .interact(
+                                    more_inner.response.rect,
+                                    egui::Id::new("imagine-more-hit"),
+                                    egui::Sense::click(),
+                                )
+                                .on_hover_text("Account, mode, model, and sources");
+                            if more.clicked() {
+                                self.imagine_native.more_open = !self.imagine_native.more_open;
+                                self.imagine_style_open = false;
+                                self.imagine_aspect_open = false;
+                                self.imagine_native.more_anchor = more.rect;
+                                self.imagine_menu_ignore = true;
+                            }
+                            if !signed_in
+                                && !self.imagine_native.auth_busy
+                                && crate::cards::ghost_pill(ui, "Sign in")
+                            {
+                                self.start_imagine_auth(true);
                             } else if self.running && self.page_nav() == Nav::Imagine {
                                 ui.label(
                                     RichText::new("Imagining…")
@@ -998,6 +1028,9 @@ impl Cabin {
                         },
                     );
                 });
+                if self.ui_imagine_notice(ui) {
+                    out.go_settings = true;
+                }
             });
         out
     }
@@ -1189,52 +1222,23 @@ impl Cabin {
     }
 
     fn imagine_resolution_now(&self) -> String {
-        if self.imagine_native.res_custom {
-            if self.imagine_native.resolution == 1 {
-                "2k".into()
-            } else {
-                "1k".into()
-            }
-        } else {
-            imagine_image_resolution(self.imagine_quality).into()
-        }
+        imagine_image_resolution(self.imagine_quality).into()
     }
 
     fn imagine_quality_now(&self) -> String {
         if self.imagine_native.image_model != 0 {
             return String::new();
         }
-        if self.imagine_native.quality_custom {
-            match self.imagine_native.quality_tier {
-                1 => "low".into(),
-                2 => "medium".into(),
-                _ => "auto".into(),
-            }
-        } else {
-            grokhub_core::imagine_image_quality(self.imagine_quality).into()
-        }
+        grokhub_core::imagine_image_quality(self.imagine_quality).into()
     }
 
+    /// The composer's aspect pill is the one aspect control, for stills and video alike.
     fn imagine_api_aspect_now(&self) -> String {
-        if self.imagine_native.api_aspect == 0 {
-            String::new()
-        } else {
-            imagine_api_aspect_label(self.imagine_native.api_aspect).into()
-        }
-    }
-
-    fn video_aspect_now(&self) -> String {
-        if self.imagine_native.api_aspect == 0 {
-            imagine_aspect_label(self.imagine_aspect).into()
-        } else {
-            imagine_api_aspect_label(self.imagine_native.api_aspect).into()
-        }
+        imagine_aspect_label(self.imagine_aspect).into()
     }
 
     fn video_duration_now(&self) -> u32 {
-        self.imagine_native.video_dur_custom.unwrap_or_else(|| {
-            imagine_video_duration_secs(imagine_video_dur_label(self.imagine_video_dur))
-        })
+        imagine_video_duration_secs(imagine_video_dur_label(self.imagine_video_dur))
     }
 
     fn video_resolution_now(&self) -> String {
@@ -1246,7 +1250,7 @@ impl Cabin {
         }
     }
 
-    fn imagine_call(&self) -> ImagineCall {
+    pub(super) fn imagine_call(&self) -> ImagineCall {
         if self.imagine_kind == ImagineKind::Video {
             let op = match self.imagine_native.video_op {
                 1 => grokhub_core::ImagineVideoOp::ImageToVideo,
@@ -1264,7 +1268,7 @@ impl Cabin {
                 model: model.into(),
                 duration: self.video_duration_now(),
                 resolution: self.video_resolution_now(),
-                aspect: self.video_aspect_now(),
+                aspect: self.imagine_api_aspect_now(),
                 audio: self.imagine_video_audio,
                 image_url: self.imagine_native.video_image.clone().unwrap_or_default(),
                 video_url: self.imagine_native.video_url.clone(),
@@ -1573,211 +1577,176 @@ impl Cabin {
         }
     }
 
-    fn ui_imagine_account(&mut self, ui: &mut egui::Ui) -> bool {
+    /// Sign-in progress and recovery offers, inside the composer under the chips.
+    fn ui_imagine_notice(&mut self, ui: &mut egui::Ui) -> bool {
+        let n = &self.imagine_native;
+        if n.note.is_empty() && n.device_user_code.is_empty() && !n.offer_key && !n.offer_settings {
+            return false;
+        }
         let mut settings = false;
+        ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-            if self.imagine_native.tokens.is_some() {
-                ui.label(RichText::new(self.imagine_signed_in_label()).color(crate::theme::fg()));
-                if ui.small_button("Sign out").clicked() {
-                    self.start_imagine_sign_out();
-                }
-            } else if ui.small_button("Sign in with Grok for Imagine").clicked() {
-                self.start_imagine_auth(true);
-            }
-            if self.imagine_native.tokens.is_none() && ui.small_button("Use a code instead").clicked()
-            {
-                self.start_imagine_auth(false);
+            if !self.imagine_native.note.is_empty() {
+                ui.label(
+                    RichText::new(&self.imagine_native.note)
+                        .size(crate::theme::FONT_META)
+                        .color(crate::theme::muted()),
+                );
             }
             if !self.imagine_native.device_user_code.is_empty() {
-                ui.label(format!("Code {}", self.imagine_native.device_user_code));
+                ui.label(
+                    RichText::new(format!("Code {}", self.imagine_native.device_user_code))
+                        .size(crate::theme::FONT_CHROME)
+                        .color(crate::theme::fg()),
+                );
                 let uri = self.imagine_native.device_verify_uri.clone();
                 // Through the trusted opener, not egui's link: the URI came from the server.
-                if !uri.is_empty() && ui.small_button("Verify").clicked() {
+                if !uri.is_empty() && crate::cards::ghost_pill(ui, "Verify") {
                     if let Err(e) = crate::oauth::open_browser(&uri) {
                         self.status = e;
                     }
                 }
             }
-            if self.imagine_native.offer_key && ui.small_button("Use API key").clicked() {
+            if self.imagine_native.offer_key && crate::cards::ghost_pill(ui, "Use API key") {
                 self.imagine_native.force_key = true;
                 self.imagine_native.offer_key = false;
                 self.kick_imagine();
             }
-            if self.imagine_native.offer_settings && ui.small_button("Settings").clicked() {
+            if self.imagine_native.offer_settings && crate::cards::ghost_pill(ui, "Settings") {
                 self.imagine_native.offer_settings = false;
                 settings = true;
             }
         });
-        if !self.imagine_native.note.is_empty() {
-            ui.label(RichText::new(&self.imagine_native.note).color(crate::theme::muted()));
-        }
-        self.ui_imagine_controls(ui);
         settings
     }
 
-    fn ui_imagine_controls(&mut self, ui: &mut egui::Ui) {
-        if self.imagine_kind == ImagineKind::Image {
-            self.ui_imagine_image_controls(ui);
-        } else if self.imagine_kind == ImagineKind::Video {
-            self.ui_imagine_video_controls(ui);
-        }
+    /// Account, mode, model, count and sources behind the composer's More chip.
+    pub(super) fn ui_imagine_more(&mut self, ctx: &egui::Context) -> egui::Rect {
+        let anchor = self.imagine_native.more_anchor;
+        egui::Area::new(egui::Id::new("imagine_more_menu"))
+            .pivot(egui::Align2::LEFT_BOTTOM)
+            .fixed_pos(anchor.left_top() - egui::vec2(0.0, 6.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style())
+                    .inner_margin(egui::Margin::same(10))
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(6.0, 8.0);
+                        self.ui_imagine_more_account(ui);
+                        match self.imagine_kind {
+                            ImagineKind::Image => self.ui_imagine_more_image(ui),
+                            ImagineKind::Video => self.ui_imagine_more_video(ui),
+                            ImagineKind::Agent => {}
+                        }
+                    });
+            })
+            .response
+            .rect
     }
 
-    fn ui_imagine_image_controls(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-            if ui
-                .selectable_label(self.imagine_native.image_op == 0, "Generate")
-                .clicked()
-            {
-                self.imagine_native.image_op = 0;
-            }
-            if ui
-                .selectable_label(self.imagine_native.image_op == 1, "Edit")
-                .clicked()
-            {
-                self.imagine_native.image_op = 1;
-            }
-            for (i, label) in ["2.0", "Quality", "Image"].iter().enumerate() {
-                if ui
-                    .selectable_label(self.imagine_native.image_model == i as u8, *label)
-                    .clicked()
-                {
-                    self.imagine_native.image_model = i as u8;
+    fn ui_imagine_more_account(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            imagine_more_title(ui, "Account");
+            if self.imagine_native.tokens.is_some() {
+                ui.label(
+                    RichText::new(self.imagine_signed_in_label())
+                        .size(crate::theme::FONT_CHROME)
+                        .color(crate::theme::fg()),
+                );
+                if crate::cards::ghost_pill(ui, "Sign out") {
+                    self.start_imagine_sign_out();
                 }
-            }
-            if ui.small_button("-").clicked() {
-                self.imagine_native.count = self.imagine_native.count.saturating_sub(1).max(1);
-            }
-            ui.label(format!("n {}", self.imagine_native.count));
-            if ui.small_button("+").clicked() {
-                self.imagine_native.count = (self.imagine_native.count + 1).min(10);
-            }
-            let res = if self.imagine_native.res_custom {
-                if self.imagine_native.resolution == 1 {
-                    "2k"
-                } else {
-                    "1k"
-                }
-            } else if self.imagine_quality {
-                "2k"
             } else {
-                "1k"
-            };
-            if ui.small_button(format!("Res {res}")).clicked() {
-                self.imagine_native.resolution = if res == "1k" { 1 } else { 0 };
-                self.imagine_native.res_custom = true;
-            }
-            let aspect = imagine_api_aspect_label(self.imagine_native.api_aspect);
-            if ui.small_button(format!("Aspect {aspect}")).clicked() {
-                let n = grokhub_core::IMAGINE_API_ASPECTS.len() as u8 + 1;
-                self.imagine_native.api_aspect = (self.imagine_native.api_aspect + 1) % n.max(1);
-            }
-            if self.imagine_native.image_model == 0 {
-                let q = if self.imagine_native.quality_custom {
-                    match self.imagine_native.quality_tier {
-                        1 => "low",
-                        2 => "medium",
-                        _ => "auto",
-                    }
-                } else if self.imagine_quality {
-                    "medium"
-                } else {
-                    "low"
-                };
-                if ui.small_button(format!("Quality {q}")).clicked() {
-                    self.imagine_native.quality_tier = match q {
-                        "auto" => 1,
-                        "low" => 2,
-                        _ => 0,
-                    };
-                    self.imagine_native.quality_custom = true;
+                if crate::cards::ghost_pill(ui, "Sign in with Grok") {
+                    self.start_imagine_auth(true);
                 }
-            }
-            if self.imagine_native.image_op == 1 {
-                let n = self.imagine_native.edit_sources.len();
-                if ui.small_button(format!("Add image {n}/3")).clicked() {
-                    self.start_imagine_pick(ImaginePickKind::Sources);
-                }
-                if n > 0 && ui.small_button("Clear images").clicked() {
-                    self.imagine_native.edit_sources.clear();
-                }
-                let mask = if self.imagine_native.edit_mask.is_some() {
-                    "Mask on"
-                } else {
-                    "Add mask"
-                };
-                if ui.small_button(mask).clicked() {
-                    self.start_imagine_pick(ImaginePickKind::Mask);
-                }
-                if self.imagine_native.edit_mask.is_some() && ui.small_button("Clear mask").clicked()
-                {
-                    self.imagine_native.edit_mask = None;
+                if crate::cards::ghost_pill(ui, "Use a code") {
+                    self.start_imagine_auth(false);
                 }
             }
         });
     }
 
-    fn ui_imagine_video_controls(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-            for (i, label) in ["Text", "Image", "Edit", "Extend"].iter().enumerate() {
-                if ui
-                    .selectable_label(self.imagine_native.video_op == i as u8, *label)
-                    .clicked()
-                {
-                    self.imagine_native.video_op = i as u8;
-                }
+    fn ui_imagine_more_image(&mut self, ui: &mut egui::Ui) {
+        let n = &mut self.imagine_native;
+        if let Some(i) = imagine_more_seg(ui, "Mode", &["Generate", "Edit"], n.image_op) {
+            n.image_op = i;
+        }
+        if let Some(i) = imagine_more_seg(ui, "Model", &["2.0", "Quality", "Original"], n.image_model)
+        {
+            n.image_model = i;
+        }
+        let count = n.count.clamp(1, 4) - 1;
+        if let Some(i) = imagine_more_seg(ui, "Images", &["1", "2", "3", "4"], count) {
+            n.count = i + 1;
+        }
+        if n.image_op != 1 {
+            return;
+        }
+        let sources = n.edit_sources.len();
+        let masked = n.edit_mask.is_some();
+        ui.horizontal(|ui| {
+            imagine_more_title(ui, "Sources");
+            ui.label(
+                RichText::new(format!("{sources}/3"))
+                    .size(crate::theme::FONT_CHROME)
+                    .color(crate::theme::fg()),
+            );
+            if sources < 3 && crate::cards::ghost_pill(ui, "Add image") {
+                self.start_imagine_pick(ImaginePickKind::Sources);
             }
-            for (i, label) in ["1.5", "Video"].iter().enumerate() {
-                if ui
-                    .selectable_label(self.imagine_native.video_model == i as u8, *label)
-                    .clicked()
-                {
-                    self.imagine_native.video_model = i as u8;
-                }
-            }
-            let allow_1080 = self.imagine_native.video_model == 0 && self.imagine_native.video_op <= 1;
-            if allow_1080 {
-                let on = self.imagine_native.video_res_1080;
-                if ui.selectable_label(on, "1080p").clicked() {
-                    self.imagine_native.video_res_1080 = !on;
-                }
-            }
-            let dur = self.video_duration_now();
-            if ui.small_button("-").clicked() {
-                self.imagine_native.video_dur_custom = Some(dur.saturating_sub(1).max(1));
-            }
-            ui.label(format!("{dur}s"));
-            if ui.small_button("+").clicked() {
-                self.imagine_native.video_dur_custom = Some((dur + 1).min(15));
-            }
-            if self.imagine_native.video_op == 0 {
-                let aspect = if self.imagine_native.api_aspect == 0 {
-                    imagine_aspect_label(self.imagine_aspect)
-                } else {
-                    imagine_api_aspect_label(self.imagine_native.api_aspect)
-                };
-                if ui.small_button(format!("Aspect {aspect}")).clicked() {
-                    let n = grokhub_core::IMAGINE_API_ASPECTS.len() as u8 + 1;
-                    self.imagine_native.api_aspect = (self.imagine_native.api_aspect + 1) % n.max(1);
-                }
-            }
-            let audio = self.imagine_video_audio;
-            if ui.selectable_label(audio, "Audio").clicked() {
-                self.imagine_video_audio = !audio;
-            }
-            if self.imagine_native.video_op == 1 && ui.small_button("Source image").clicked() {
-                self.start_imagine_pick(ImaginePickKind::VideoStill);
+            if sources > 0 && crate::cards::ghost_pill(ui, "Clear") {
+                self.imagine_native.edit_sources.clear();
             }
         });
+        ui.horizontal(|ui| {
+            imagine_more_title(ui, "Mask");
+            if crate::cards::ghost_pill(ui, if masked { "Replace mask" } else { "Add mask" }) {
+                self.start_imagine_pick(ImaginePickKind::Mask);
+            }
+            if masked && crate::cards::ghost_pill(ui, "Clear") {
+                self.imagine_native.edit_mask = None;
+            }
+        });
+    }
+
+    fn ui_imagine_more_video(&mut self, ui: &mut egui::Ui) {
+        let composer_res = imagine_video_res_label(self.imagine_video_res);
+        let n = &mut self.imagine_native;
+        if let Some(i) =
+            imagine_more_seg(ui, "Mode", &["Text", "Image", "Edit", "Extend"], n.video_op)
+        {
+            n.video_op = i;
+        }
+        if let Some(i) = imagine_more_seg(ui, "Model", &["1.5", "Original"], n.video_model) {
+            n.video_model = i;
+        }
+        if n.video_model == 0 && n.video_op <= 1 {
+            let on = u8::from(n.video_res_1080);
+            if let Some(i) = imagine_more_seg(ui, "Resolution", &[composer_res, "1080p"], on) {
+                n.video_res_1080 = i == 1;
+            }
+        }
+        if n.video_op == 1 {
+            let picked = n.video_image.is_some();
+            ui.horizontal(|ui| {
+                imagine_more_title(ui, "Source");
+                if crate::cards::ghost_pill(ui, if picked { "Replace image" } else { "Choose image" })
+                {
+                    self.start_imagine_pick(ImaginePickKind::VideoStill);
+                }
+            });
+        }
         if matches!(self.imagine_native.video_op, 2 | 3) {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.imagine_native.video_url)
-                    .hint_text("Video URL")
-                    .desired_width(ui.available_width().min(420.0)),
-            );
+            ui.horizontal(|ui| {
+                imagine_more_title(ui, "Video");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.imagine_native.video_url)
+                        .hint_text("Video URL")
+                        .desired_width(280.0),
+                );
+            });
         }
     }
 
@@ -1838,15 +1807,38 @@ impl Cabin {
     }
 }
 
-fn imagine_api_aspect_label(i: u8) -> &'static str {
-    if i == 0 {
-        "auto"
-    } else {
-        grokhub_core::IMAGINE_API_ASPECTS
-            .get(i as usize - 1)
-            .copied()
-            .unwrap_or("auto")
-    }
+fn imagine_more_title(ui: &mut egui::Ui, title: &str) {
+    ui.add_sized(
+        [76.0, crate::theme::IMAGINE_HIT],
+        egui::Label::new(
+            RichText::new(title)
+                .size(crate::theme::FONT_CHROME)
+                .color(crate::theme::muted()),
+        ),
+    );
+}
+
+/// One labelled segmented row in the More menu; returns the index clicked.
+fn imagine_more_seg(ui: &mut egui::Ui, title: &str, labels: &[&str], selected: u8) -> Option<u8> {
+    let mut picked = None;
+    ui.horizontal(|ui| {
+        imagine_more_title(ui, title);
+        crate::cards::imagine_seg_track(ui, |ui| {
+            for (i, label) in labels.iter().enumerate() {
+                let on = selected == i as u8;
+                if crate::cards::imagine_seg_chip(ui, on, |ui| {
+                    ui.label(RichText::new(*label).size(crate::theme::FONT_CHROME).color(if on {
+                        crate::theme::fg()
+                    } else {
+                        crate::theme::muted()
+                    }));
+                }) {
+                    picked = Some(i as u8);
+                }
+            }
+        });
+    });
+    picked
 }
 
 fn run_imagine_call(

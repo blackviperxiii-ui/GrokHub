@@ -114,15 +114,25 @@ pub fn shortcut_help() -> String {
 
 pub fn filter_palette(q: &str) -> Vec<(&'static str, &'static str)> {
     let n = q.trim().to_ascii_lowercase();
+    // Named as the sidebar names them; older names still find them.
+    let synonyms: &[(&str, &str)] = &[
+        ("nav:night", "night"),
+        ("nav:night", "schedule"),
+        ("nav:skills", "skills"),
+        ("nav:pulse", "ideas"),
+        ("nav:pulse", "feed"),
+        ("nav:board", "workboard"),
+    ];
     let rows = [
         ("Chat", "nav:chat"),
-        ("Night", "nav:night"),
+        ("Automations", "nav:night"),
         ("History", "nav:history"),
         ("Devices", "nav:devices"),
         ("Connectors", "nav:connectors"),
         ("Agents", "nav:agents"),
-        ("Skills", "nav:skills"),
+        ("Skills and Connectors", "nav:skills"),
         ("Workboards", "nav:board"),
+        ("Pulse", "nav:pulse"),
         ("Imagine", "nav:imagine"),
         ("Memory", "nav:memory"),
         ("Settings", "nav:settings"),
@@ -135,7 +145,13 @@ pub fn filter_palette(q: &str) -> Vec<(&'static str, &'static str)> {
         ("Hey Grok", "voice"),
     ];
     rows.into_iter()
-        .filter(|(label, _)| n.is_empty() || label.to_ascii_lowercase().contains(&n))
+        .filter(|(label, action)| {
+            n.is_empty()
+                || label.to_ascii_lowercase().contains(&n)
+                || synonyms
+                    .iter()
+                    .any(|(a, word)| a == action && word.starts_with(n.as_str()))
+        })
         .collect()
 }
 
@@ -147,9 +163,17 @@ mod tests {
     fn palette_and_sheet() {
         assert!(shortcut_help().contains("Ctrl+K"));
         assert!(shortcut_help().contains("Super+G"));
-        assert!(filter_palette("night").iter().any(|(l, _)| *l == "Night"));
+        // 2.10.91: rows use the sidebar's names; the old name still finds the page.
+        assert_eq!(filter_palette("night"), vec![("Automations", "nav:night")]);
+        assert_eq!(
+            filter_palette("skills"),
+            vec![("Skills and Connectors", "nav:skills")]
+        );
+        assert_eq!(filter_palette("ideas"), vec![("Pulse", "nav:pulse")]);
         assert!(filter_palette("set").iter().any(|(l, _)| *l == "Settings"));
-        assert_eq!(filter_palette("").len(), 18);
+        // 2.10.91: Pulse joined the palette (18 -> 19).
+        assert_eq!(filter_palette("").len(), 19);
+        assert_eq!(filter_palette("pulse"), vec![("Pulse", "nav:pulse")]);
         assert!(filter_palette("").iter().all(|(l, _)| *l != "Command"));
     }
 

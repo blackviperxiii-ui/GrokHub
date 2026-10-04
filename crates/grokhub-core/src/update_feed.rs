@@ -179,6 +179,9 @@ pub struct UpdateCard {
     /// When the user dismissed this event. A repeat stays hidden for a day.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub dismissed_at: u64,
+    /// Pulse page fields: category, snooze, due time, source images.
+    #[serde(default, flatten)]
+    pub pulse: crate::pulse::PulseMeta,
 }
 
 impl UpdateCard {
@@ -274,6 +277,16 @@ pub struct FeedPulse {
     /// Source → `created_at` of the failure Home last admitted through the safety floor.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub floor_shown: BTreeMap<String, u64>,
+    /// The Home deck and the Ideas board moved into Pulse (`crate::pulse::migrate_to_pulse`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pulse_v1: bool,
+    /// Like and dislike ledger lines since the feed instructions were last rewritten.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub taste_since_rewrite: u32,
+}
+
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
 }
 
 fn default_on() -> bool {
@@ -314,6 +327,8 @@ impl Default for FeedPulse {
             muted_sources: Vec::new(),
             less_until: BTreeMap::new(),
             floor_shown: BTreeMap::new(),
+            pulse_v1: false,
+            taste_since_rewrite: 0,
         }
     }
 }
@@ -1219,7 +1234,8 @@ pub fn tick_feed_pulse(
     {
         pulse.last_quiet_release_ms = now.now_ms;
         if !now.quiet {
-            let n = release_quiet_hold(cards);
+            // Two or more held cards fold into one Pulse digest card.
+            let (n, _) = crate::pulse::release_quiet_batch(cards, now.now_ms);
             tick.released = n;
             if n > 0 {
                 tick.cards_changed = true;
@@ -2182,6 +2198,7 @@ fn blank_card(
         source_id: String::new(),
         runs: 1,
         dismissed_at: 0,
+        pulse: Default::default(),
     }
 }
 
@@ -2999,6 +3016,67 @@ mod tests {
         assert_eq!(release_quiet_hold(&mut cards), 1);
         assert!(feed_visible(&cards));
         assert_eq!(visible_updates(&cards).len(), 1);
+    }
+
+    #[test]
+    fn quiet_hours_end_folds_held_cards_into_one_pulse_digest() {
+        let mut cards = Vec::new();
+        for (i, title) in [
+            "Backup ran",
+            "Inbox sorted",
+            "Standup drafted",
+            "Prices checked",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let mut done =
+                automation_done_card(&format!("loop-{i}"), title, "ok", 10 + i as u64);
+            hold_if_quiet(&mut done, true);
+            cards.push(done);
+        }
+        let mut pulse = FeedPulse {
+            digest_on: false,
+            expiry_on: false,
+            ..FeedPulse::default()
+        };
+        // Still quiet: nothing is released and nothing is posted.
+        let tick = tick_feed_pulse(
+            &mut cards,
+            &mut pulse,
+            PulseNow {
+                now_ms: 1_000,
+                quiet: true,
+            },
+            material("", &[], &[]),
+        );
+        assert_eq!(tick.released, 0);
+        assert_eq!(cards.len(), 4);
+        assert!(!feed_visible(&cards));
+        // The window ends: four cards come back under one digest card.
+        let tick = tick_feed_pulse(
+            &mut cards,
+            &mut pulse,
+            PulseNow {
+                now_ms: 1_000 + DEFAULT_QUIET_RELEASE_MS,
+                quiet: false,
+            },
+            material("", &[], &[]),
+        );
+        assert_eq!(tick.released, 4);
+        assert!(tick.cards_changed);
+        let digest = cards
+            .iter()
+            .find(|c| c.id == "pulse-quiet-16000")
+            .expect("digest card");
+        assert_eq!(digest.title, "While you were in quiet hours");
+        assert_eq!(
+            digest.body.as_deref(),
+            Some("4 updates: Backup ran · Inbox sorted · Standup drafted · and 1 more")
+        );
+        assert_eq!(digest.source_id, "pulse:quiet");
+        assert_eq!(cards.iter().filter(|c| c.pulse.quiet_batched).count(), 4);
+        assert!(cards.iter().all(|c| !c.held));
     }
 
     #[test]

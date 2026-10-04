@@ -392,6 +392,14 @@ pub struct AppConfig {
     /// Settings → Labs. Off keeps the Grok CLI launch path.
     #[serde(default)]
     pub native_engine: bool,
+    /// Pulse → Feed → Feed instructions. Plain text that steers future posts;
+    /// the cabin rewrites it after likes and dislikes. Empty means our default.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub feed_instructions: String,
+    /// Settings → Behavior. The old card deck over the empty chat. Pulse holds
+    /// the cards now, so it is off unless turned back on.
+    #[serde(default)]
+    pub home_deck: bool,
 }
 
 fn default_yolo() -> bool {
@@ -505,6 +513,8 @@ impl Default for AppConfig {
             digest_brief: String::new(),
             feed_pulse: FeedPulse::default(),
             native_engine: false,
+            feed_instructions: String::new(),
+            home_deck: false,
         }
     }
 }

@@ -517,6 +517,7 @@ impl Cabin {
         if self.page_nav() != Nav::Imagine {
             self.imagine_style_open = false;
             self.imagine_aspect_open = false;
+            self.imagine_native.more_open = false;
             return;
         }
         let mut menu_rect = egui::Rect::NOTHING;
@@ -555,6 +556,9 @@ impl Cabin {
                 self.imagine_aspect = i as u8;
                 self.imagine_aspect_open = false;
             }
+        } else if self.imagine_native.more_open {
+            menu_rect = self.ui_imagine_more(ctx);
+            trigger = self.imagine_native.more_anchor;
         }
         let outside = ctx.input(|i| i.pointer.any_click())
             && ctx.pointer_interact_pos().is_some_and(|pos| {
@@ -563,6 +567,7 @@ impl Cabin {
         if cabin_menu_should_dismiss(self.imagine_menu_ignore, outside) {
             self.imagine_style_open = false;
             self.imagine_aspect_open = false;
+            self.imagine_native.more_open = false;
         }
         self.imagine_menu_ignore = false;
     }

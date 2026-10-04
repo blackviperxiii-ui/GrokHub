@@ -623,6 +623,7 @@ impl Cabin {
                 card.kind == UpdateKind::Suggestion
                     && card.status == UpdateStatus::Unread
                     && !card.held
+                    && !card.pulse.quiet_batched
             }) {
                 self.situation_ping = Some((
                     card.title.clone(),
@@ -653,7 +654,7 @@ impl Cabin {
         if key.trim().is_empty() {
             return;
         }
-        let prompt = grokhub_core::digest_lookup_prompt(&self.digest_steer);
+        let prompt = grokhub_core::pulse::feed_prompt(&self.digest_steer, &self.cfg.feed_instructions);
         let model = CABIN_FAST_MODEL.to_string();
         let (tx, rx) = mpsc::channel();
         self.digest_rx = Some(rx);
@@ -1191,7 +1192,7 @@ impl Cabin {
                     self.persist_updates();
                     self.persist_cfg();
                 }
-                if self.nav == Nav::Ideas {
+                if self.nav == Nav::Pulse {
                     self.status = match n {
                         0 => "No new ideas this time".into(),
                         1 => "1 new idea".into(),
@@ -1202,7 +1203,7 @@ impl Cabin {
             Err(mpsc::TryRecvError::Empty) => {
                 // A hung ask must not leave the Ideas button on "Thinking…" for good.
                 if now_ms().saturating_sub(self.cfg.feed_pulse.last_ideas_ms) > IDEAS_WAIT_MS {
-                    if self.nav == Nav::Ideas {
+                    if self.nav == Nav::Pulse {
                         self.status = "Ideas took too long. Try Suggest ideas again.".into();
                     }
                 } else {
