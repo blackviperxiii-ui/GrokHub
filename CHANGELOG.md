@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Background work stays out of the sidebar History. A `/bg` run forks the chat's Grok session, and a `/loop` or a quick-chip reply through the CLI writes a session of its own; on the next launch those sessions came back as extra chats in History. Their ids are now filed on the hidden Background chat, so startup adoption and the Grok session list skip them, and chats a loop already leaked are hidden on load. Nothing is deleted: the sessions stay on disk, and deleting all chats still removes them.
+
 ## 2.10.87 — 2026-10-03
 
 "Minimal" is gone from the effort list. It was never a real level. Settings and the composer now offer None, Low, Medium, High and Extra High. A setting, session or `/effort` that still says "minimal" (or "mini") loads as **Low**, the smallest level that still reasons, so nothing breaks and reasoning doesn't switch off. The native engine also sends a saved "minimal" as `low`. The chat window loses its "Thinking" dot and its "Background" button. The glow around the chat box already shows a reply is running, and Stop's tooltip now says what it would stop (for example "Stop · Working on your reply"). `/bg` still moves a running reply to the background, and `/bg <task>` and `/bg stop` work as before. The repo's bot rules (`CLAUDE.md` and `.cursor/rules`) now say that finished, green work is a full ship: bots merge, tag, release and report the live link. They also add one-line rules for proof of work in PRs, literal test values, batched findings, green stacks with one rebase owner, a brief template, and finding the CI cause before at most one rerun.
