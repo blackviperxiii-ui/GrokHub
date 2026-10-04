@@ -641,16 +641,23 @@ impl<B: DesktopBackend> DesktopServer<B> {
         let (sx1, sy1) = map_screenshot_point(&geom, x1, y1);
         self.backend.move_abs_on(&geom, sx0, sy0)?;
         self.backend.button(button, true)?;
+        let mut moved = Ok(());
         for step in 1..=DRAG_STEPS {
             let t = step as f64 / DRAG_STEPS as f64;
             let x = round_i32(sx0 as f64 + (sx1 - sx0) as f64 * t);
             let y = round_i32(sy0 as f64 + (sy1 - sy0) as f64 * t);
-            self.backend.move_abs_on(&geom, x, y)?;
+            moved = self.backend.move_abs_on(&geom, x, y);
+            if moved.is_err() {
+                break;
+            }
             if step != DRAG_STEPS {
                 self.backend.pace();
             }
         }
-        self.backend.button(button, false)?;
+        // Let go even when a move failed, so the user's button is not left held.
+        let up = self.backend.button(button, false);
+        moved?;
+        up?;
         Ok(self.input_ok("dragged"))
     }
 
@@ -1637,6 +1644,8 @@ mod tests {
         locked: bool,
         fail: Option<String>,
         log: Vec<String>,
+        fail_moves_while_down: bool,
+        down: bool,
     }
 
     impl DesktopBackend for Fake {
@@ -1674,10 +1683,14 @@ mod tests {
         }
         fn move_abs(&mut self, x: i32, y: i32) -> Result<(), String> {
             self.log.push(format!("move:{x},{y}"));
+            if self.fail_moves_while_down && self.down {
+                return Err("input desktop changed".into());
+            }
             Ok(())
         }
         fn button(&mut self, button: MouseButton, down: bool) -> Result<(), String> {
             self.log.push(format!("btn:{button:?}:{down}"));
+            self.down = down;
             Ok(())
         }
         fn scroll(&mut self, dx: i32, dy: i32) -> Result<(), String> {
@@ -1859,6 +1872,25 @@ mod tests {
         assert!(log.iter().filter(|e| e.starts_with("move:")).count() >= 8, "{log:?}");
         assert!(log.iter().any(|e| e.contains("btn:Left:true")));
         assert!(log.last().unwrap().contains("btn:Left:false"));
+    }
+
+    #[test]
+    fn drag_lets_go_when_a_move_fails() {
+        let mut s = server();
+        let _ = s.handle_line(
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"screenshot","arguments":{"monitor":"main"}}}"#,
+            on(),
+        );
+        s.backend_mut().fail_moves_while_down = true;
+        s.backend_mut().log.clear();
+        let drag = s.handle_line(
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"drag","arguments":{"from_x":0,"from_y":0,"to_x":10,"to_y":0,"monitor":"main"}}}"#,
+            on(),
+        );
+        assert_eq!(reply_of(&drag)["result"]["isError"], true);
+        let log = &s.backend_mut().log;
+        assert!(log.last().unwrap().contains("btn:Left:false"), "{log:?}");
+        assert!(!s.backend_mut().down);
     }
 
     #[test]

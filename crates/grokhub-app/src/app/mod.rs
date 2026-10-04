@@ -664,6 +664,9 @@ pub struct Cabin {
     goal_stale: bool,
     wall: ImagineWall,
     wall_rx: Option<mpsc::Receiver<Result<WallGif, String>>>,
+    /// The egui pass whose input `logic` last read. A hidden window's `logic`
+    /// sees the last shown frame's input again, so it must not act on it twice.
+    logic_input_pass: Option<u64>,
     wall_busy: bool,
     attach_url: Option<String>,
     attach_name: Option<String>,
@@ -1259,6 +1262,7 @@ impl Cabin {
             goal_stale: false,
             wall: crate::store::load_wall(),
             wall_rx: None,
+            logic_input_pass: None,
             wall_busy: false,
             attach_url: None,
             attach_name: None,
@@ -1685,6 +1689,7 @@ impl Cabin {
             goal_stale: false,
             wall: Default::default(),
             wall_rx: None,
+            logic_input_pass: None,
             wall_busy: false,
             attach_url: None,
             attach_name: None,
@@ -2051,7 +2056,12 @@ impl Cabin {
     /// Send/Stop hover. The transcript has no Thinking dot any more (the composer
     /// glow shows a live turn), so while running Stop's hover names what it stops.
     fn go_tip_here(&self) -> String {
-        let tip = composer_go_tip(self.thinking_here());
+        let live = self.thinking_here();
+        let tip = composer_go_tip(live);
+        if !live {
+            // Idle: tool_cards and another thread's ask outlive the turn.
+            return tip.to_string();
+        }
         let hint = chat_run_hint(self.run_phase_here(), &self.run_action_here());
         if hint.is_empty() {
             tip.to_string()
@@ -2061,6 +2071,9 @@ impl Cabin {
     }
 
     fn halt_in_flight(&mut self) {
+        // A stopped turn's steer and background notes must not ride into another chat.
+        self.bg.steer_follow = None;
+        self.bg.results_follow = None;
         crate::desktop_mcp::write_halt_stamp();
         crate::desktop_mcp::note_halt();
         self.host_halt.store(true, Ordering::SeqCst);
@@ -4728,6 +4741,55 @@ impl Cabin {
         ctx.request_repaint();
     }
 
+    /// Activity and keyboard shortcuts from this pass's input. `logic` calls it
+    /// once per egui pass, never again from a hidden window's stale input.
+    fn logic_input_actions(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| {
+            i.pointer.any_pressed()
+                || i.events.iter().any(|e| {
+                    matches!(
+                        e,
+                        egui::Event::Text(_) | egui::Event::Key { pressed: true, .. }
+                    )
+                })
+        }) {
+            self.touch();
+        }
+        if ctx.input(|i| {
+            i.modifiers.command
+                && i.modifiers.alt
+                && !i.modifiers.shift
+                && i.key_pressed(egui::Key::H)
+        }) {
+            self.halt_everything("Stopped");
+        }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::G) && !i.modifiers.shift) {
+            self.listen_voice();
+        }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::N) && !i.modifiers.shift) {
+            self.new_thread(false);
+        }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F) && !i.modifiers.shift)
+            && self.nav == Nav::Chat
+            && !self.messages.is_empty()
+        {
+            self.find.toggle();
+        }
+        if self.find.open && (self.nav != Nav::Chat || self.messages.is_empty()) {
+            self.find.close();
+        }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::K) && !i.modifiers.shift) {
+            if self.palette_open {
+                self.palette_open = false;
+            } else {
+                self.open_palette();
+            }
+        }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Slash)) {
+            self.shortcuts_open = !self.shortcuts_open;
+        }
+    }
+
     fn note_window_resume(&mut self, ctx: &egui::Context) {
         let minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
         if minimized {
@@ -4888,7 +4950,14 @@ impl eframe::App for Cabin {
         self.poll_native_automations();
         self.poll_native_side_events();
         self.poll_pick();
-        self.take_dropped_attach(ctx);
+        // While hidden, eframe hands `logic` the last shown frame's input every
+        // tick: keys, clicks, and drops are acted on once, on the pass they came in.
+        let pass = ctx.cumulative_pass_nr();
+        let fresh_input = self.logic_input_pass != Some(pass);
+        self.logic_input_pass = Some(pass);
+        if fresh_input {
+            self.take_dropped_attach(ctx);
+        }
         self.poll_pick_list();
         self.poll_eyes_cap();
         self.poll_recipe_cap();
@@ -4943,51 +5012,11 @@ impl eframe::App for Cabin {
         self.poll_oauth_photo(ctx);
         self.poll_profile_pick();
         self.poll_profile_photo(ctx);
-        if !self.composer.trim().is_empty()
-            || ctx.input(|i| {
-                i.pointer.any_pressed()
-                    || i.events.iter().any(|e| {
-                        matches!(
-                            e,
-                            egui::Event::Text(_) | egui::Event::Key { pressed: true, .. }
-                        )
-                    })
-            })
-        {
+        if !self.composer.trim().is_empty() {
             self.touch();
         }
-        if ctx.input(|i| {
-            i.modifiers.command
-                && i.modifiers.alt
-                && !i.modifiers.shift
-                && i.key_pressed(egui::Key::H)
-        }) {
-            self.halt_everything("Stopped");
-        }
-        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::G) && !i.modifiers.shift) {
-            self.listen_voice();
-        }
-        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::N) && !i.modifiers.shift) {
-            self.new_thread(false);
-        }
-        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F) && !i.modifiers.shift)
-            && self.nav == Nav::Chat
-            && !self.messages.is_empty()
-        {
-            self.find.toggle();
-        }
-        if self.find.open && (self.nav != Nav::Chat || self.messages.is_empty()) {
-            self.find.close();
-        }
-        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::K) && !i.modifiers.shift) {
-            if self.palette_open {
-                self.palette_open = false;
-            } else {
-                self.open_palette();
-            }
-        }
-        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Slash)) {
-            self.shortcuts_open = !self.shortcuts_open;
+        if fresh_input {
+            self.logic_input_actions(ctx);
         }
         self.capture_window(ctx);
         self.flush_window(ctx);

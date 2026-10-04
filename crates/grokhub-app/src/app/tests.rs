@@ -15304,6 +15304,7 @@ fn quiet_cabin() -> Cabin {
         goal_stale: false,
         wall: grokhub_core::ImagineWall::default(),
         wall_rx: None,
+        logic_input_pass: None,
         wall_busy: false,
         attach_url: None,
         attach_name: None,
@@ -22833,6 +22834,22 @@ fn bg_delete_chat_stops_its_runs() {
 }
 
 #[test]
+fn hidden_logic_acts_on_input_once_per_pass() {
+    // eframe 0.36 hands a hidden window's `logic` the last shown frame's input
+    // every tick; drops, shortcuts, and activity must not replay from it.
+    let src = cabin_src();
+    let logic = fn_src(&src, "logic");
+    let gate = logic.find("fresh_input = ").expect("logic tracks the input pass");
+    let drop = logic.find("take_dropped_attach").expect("logic attaches drops");
+    let keys = logic.find("logic_input_actions").expect("logic runs shortcuts");
+    assert!(gate < drop && gate < keys, "{logic}");
+    assert!(logic.contains("cumulative_pass_nr"), "{logic}");
+    assert!(!logic.contains("Key::N"), "shortcuts live behind the gate: {logic}");
+    let actions = fn_src(&src, "logic_input_actions");
+    assert!(actions.contains("self.touch()") && actions.contains("Key::K"), "{actions}");
+}
+
+#[test]
 fn x_on_an_untouched_card_is_a_rejection_and_on_an_opened_one_is_not() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("feed-reject");
@@ -22963,6 +22980,40 @@ fn stop_hover_names_the_live_turn_now_the_dot_is_gone() {
     cabin.running = false;
     cabin.chat_job_thread = None;
     assert_eq!(cabin.go_tip_here(), "Send");
+}
+
+/// 2.10.88: a finished turn's tool card (cleared only when the next turn starts)
+/// and a pending ask must not leak into the idle Send hover.
+#[test]
+fn idle_send_hover_ignores_leftover_tool_cards_and_asks() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.tool_cards.push(grokhub_acp::ToolCard {
+        id: "t1".into(),
+        title: "Read file".into(),
+        kind: String::new(),
+        status: "completed".into(),
+        detail: String::new(),
+        diff: String::new(),
+        image_data_url: None,
+    });
+    assert!(!cabin.thinking_here());
+    assert_eq!(cabin.run_action_here(), "Read file");
+    assert_eq!(cabin.go_tip_here(), "Send");
+    // A permission ask still pending from another chat's turn.
+    cabin.perm_ask = Some(grokhub_acp::PermissionAsk {
+        rpc_id: serde_json::Value::Null,
+        session_id: "other".into(),
+        title: "Write notes.md".into(),
+        tool_call_id: "t2".into(),
+        action: "write".into(),
+        reason: String::new(),
+        reject_option: None,
+    });
+    assert_eq!(cabin.go_tip_here(), "Send");
+    cabin.perm_ask = None;
+    cabin.running = true;
+    cabin.chat_job_thread = Some(cabin.visible_thread_id());
+    assert_eq!(cabin.go_tip_here(), "Stop · Read file");
 }
 
 /// 2.10.87: with the Background button gone, bare `/bg` still moves a live

@@ -200,14 +200,24 @@ impl X11Backend {
     fn with_keycode(&self, keysym: u32, press: impl FnOnce(u8) -> Result<(), String>) -> Result<(), String> {
         let (first, per, syms) = self.keycode_map()?;
         let per = per.max(1) as usize;
-        if let Some(kc) = find_keycode(first, per, &syms, keysym) {
-            return press(kc);
+        match find_keycode(first, per, &syms, keysym) {
+            Some((kc, 0)) => return press(kc),
+            Some((kc, _)) => {
+                // Second level (capitals, shifted symbols): hold Shift around the press.
+                if let Some((shift, 0)) = find_keycode(first, per, &syms, SHIFT_L) {
+                    self.fake(KEY_PRESS_EVENT, shift, 0, 0)?;
+                    let result = press(kc);
+                    let up = self.fake(KEY_RELEASE_EVENT, shift, 0, 0);
+                    return result.and(up);
+                }
+            }
+            None => {}
         }
         let spare = find_spare(first, per, &syms)
             .ok_or_else(|| "no free keycode to type this character".to_string())?;
         let old = syms_at(&syms, first, per, spare);
-        let mut next = vec![0u32; per];
-        next[0] = keysym;
+        // Every level holds the keysym, so a lone capital is not read as its lowercase.
+        let next = vec![keysym; per];
         self.remap(spare, per as u8, &next)?;
         let result = press(spare);
         let _ = self.remap(spare, per as u8, &old);
@@ -259,14 +269,11 @@ impl DesktopBackend for X11Backend {
 
     fn screenshot(&mut self, monitor: &str) -> Result<CapturedShot, String> {
         let mons = self.list_monitors()?;
-        let min_x = mons.iter().map(|m| m.x).min().unwrap_or(0);
-        let min_y = mons.iter().map(|m| m.y).min().unwrap_or(0);
         if monitor == "all" {
             let union = union_monitor(&mons).ok_or_else(|| "No monitors.".to_string())?;
-            let root_x = union.x - min_x;
-            let root_y = union.y - min_y;
+            // RandR monitor positions are already root-window coordinates.
             let (rgba, cw, ch) =
-                self.capture_root_rect(root_x, root_y, union.physical_w, union.physical_h)?;
+                self.capture_root_rect(union.x, union.y, union.physical_w, union.physical_h)?;
             return finish_shot(
                 "all",
                 union.x,
@@ -282,9 +289,7 @@ impl DesktopBackend for X11Backend {
             .find(|m| m.id == monitor || m.name == monitor)
             .cloned()
             .ok_or_else(|| format!("No monitor \"{monitor}\"."))?;
-        let root_x = mon.x - min_x;
-        let root_y = mon.y - min_y;
-        let (rgba, cw, ch) = self.capture_root_rect(root_x, root_y, mon.width, mon.height)?;
+        let (rgba, cw, ch) = self.capture_root_rect(mon.x, mon.y, mon.width, mon.height)?;
         finish_shot(&mon.id, mon.x, mon.y, cw, ch, mon.scale_factor, &rgba)
     }
 
@@ -308,30 +313,44 @@ impl DesktopBackend for X11Backend {
     }
 
     fn type_text(&mut self, text: &str) -> Result<(), String> {
-        for ch in text.chars() {
-            if ch == '\n' || ch == '\r' {
-                self.tap_keysym(keysym_of(&KeyName::Return))?;
-                continue;
-            }
-            self.tap_keysym(keysym_of(&KeyName::Char(ch)))?;
+        let mut chars = text.chars().peekable();
+        while let Some(ch) = chars.next() {
+            let key = match ch {
+                // CRLF is one line break, not two Enters.
+                '\r' if chars.peek() == Some(&'\n') => continue,
+                '\n' | '\r' => KeyName::Return,
+                '\t' => KeyName::Tab,
+                c => KeyName::Char(c),
+            };
+            self.tap_keysym(keysym_of(&key))?;
         }
         Ok(())
     }
 
     fn key_combo(&mut self, combo: &KeyCombo) -> Result<(), String> {
         let mods = keysym_mods(combo);
+        let mut held = 0;
+        let mut result = Ok(());
         for sym in &mods {
-            self.tap_keysym_down(*sym, true)?;
+            result = self.tap_keysym_down(*sym, true);
+            if result.is_err() {
+                break;
+            }
+            held += 1;
         }
-        let keysym = keysym_of(&combo.key);
-        self.with_keycode(keysym, |kc| {
-            self.fake(KEY_PRESS_EVENT, kc, 0, 0)?;
-            self.fake(KEY_RELEASE_EVENT, kc, 0, 0)
-        })?;
-        for sym in mods.iter().rev() {
-            self.tap_keysym_down(*sym, false)?;
+        if result.is_ok() {
+            let keysym = keysym_of(&combo.key);
+            result = self.with_keycode(keysym, |kc| {
+                self.fake(KEY_PRESS_EVENT, kc, 0, 0)?;
+                self.fake(KEY_RELEASE_EVENT, kc, 0, 0)
+            });
         }
-        Ok(())
+        // Release whatever went down, even on an error, so no modifier stays stuck.
+        for sym in mods[..held].iter().rev() {
+            let up = self.tap_keysym_down(*sym, false);
+            result = result.and(up);
+        }
+        result
     }
 
     fn is_locked(&mut self) -> bool {
@@ -410,10 +429,16 @@ fn clamp_i16(v: i32) -> i16 {
     v.clamp(i16::MIN as i32, i16::MAX as i32) as i16
 }
 
-fn find_keycode(first: u8, per: usize, syms: &[u32], keysym: u32) -> Option<u8> {
-    for (i, chunk) in syms.chunks(per).enumerate() {
-        if chunk.contains(&keysym) {
-            return Some(first.saturating_add(i as u8));
+const SHIFT_L: u32 = 0xffe1;
+
+/// Keycode and level (0 plain, 1 shifted) of the first key that has `keysym`.
+/// Higher levels need modifiers this backend does not press, so they are skipped.
+fn find_keycode(first: u8, per: usize, syms: &[u32], keysym: u32) -> Option<(u8, usize)> {
+    for level in 0..per.min(2) {
+        for (i, chunk) in syms.chunks(per).enumerate() {
+            if chunk.get(level) == Some(&keysym) {
+                return Some((first.saturating_add(i as u8), level));
+            }
         }
     }
     None
@@ -452,7 +477,12 @@ mod tests {
         assert!(clip_to_root(200, 0, 10, 10, 100, 50).is_none());
         assert_eq!(clamp_i16(40_000), i16::MAX);
         let syms = vec![0u32, 0, 0x61, 0, 0, 0];
-        assert_eq!(find_keycode(8, 2, &syms, 0x61), Some(9));
+        assert_eq!(find_keycode(8, 2, &syms, 0x61), Some((9, 0)));
+        // 'a'/'A' and '1'/'!' keys: the shifted keysym reports level 1.
+        let us = vec![0x61u32, 0x41, 0x31, 0x21];
+        assert_eq!(find_keycode(8, 2, &us, 0x41), Some((8, 1)));
+        assert_eq!(find_keycode(8, 2, &us, 0x21), Some((9, 1)));
+        assert_eq!(find_keycode(8, 2, &us, 0x31), Some((9, 0)));
         assert_eq!(find_spare(8, 2, &syms), Some(8));
         assert_eq!(syms_at(&syms, 8, 2, 9), vec![0x61, 0]);
         let cropped = crop_rgba(&[1, 2, 3, 255, 4, 5, 6, 255], 2, 1, 1, 0, 1, 1).unwrap();
