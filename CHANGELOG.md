@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.10.88 — 2026-10-04
+
+Hovering Send while no reply is running says just "Send" again. Since 2.10.87 the hover could read "Send · Read file" after a turn that used a tool, because the finished turn's tool cards are only cleared when the next turn starts, and it could also show another chat's pending permission title. The tool or wait name now only appears on Stop's hover while a reply is running here.
+
+- Linux: `grokhub-linux-v2.10.88.tar.gz` and AUR `pkgver=2.10.88`.
+- Windows: `GrokHub-Setup-2.10.88.exe` and `grokhub-windows-v2.10.88.zip`.
+
 ## 2.10.87 — 2026-10-03
 
 "Minimal" is gone from the effort list. It was never a real level. Settings and the composer now offer None, Low, Medium, High and Extra High. A setting, session or `/effort` that still says "minimal" (or "mini") loads as **Low**, the smallest level that still reasons, so nothing breaks and reasoning doesn't switch off. The native engine also sends a saved "minimal" as `low`. The chat window loses its "Thinking" dot and its "Background" button. The glow around the chat box already shows a reply is running, and Stop's tooltip now says what it would stop (for example "Stop · Working on your reply"). `/bg` still moves a running reply to the background, and `/bg <task>` and `/bg stop` work as before. The repo's bot rules (`CLAUDE.md` and `.cursor/rules`) now say that finished, green work is a full ship: bots merge, tag, release and report the live link. They also add one-line rules for proof of work in PRs, literal test values, batched findings, green stacks with one rebase owner, a brief template, and finding the CI cause before at most one rerun.
