@@ -334,7 +334,13 @@ pub fn responses_body(req: &ResponsesRequest) -> Value {
         "input": input,
         "tools": tools,
     });
-    if let Some(effort) = req.effort.as_deref().map(str::trim).filter(|s| !s.is_empty() && *s != "none") {
+    // Normalize here too, so a saved legacy level (e.g. `minimal`) never reaches the wire.
+    let effort = req
+        .effort
+        .as_deref()
+        .map(str::trim)
+        .map(|e| grokhub_core::parse_reasoning_effort(e).unwrap_or(e));
+    if let Some(effort) = effort.filter(|s| !s.is_empty() && *s != "none") {
         body["reasoning"] = json!({"effort": effort});
     }
     if has_image {
@@ -599,6 +605,28 @@ mod tests {
         assert!(map_http_status(500, "x", None, AuthKind::ApiKey).is_retryable());
         assert!(!ClientError::IdleTimeout.is_retryable());
         assert!(ClientError::Disconnect.is_retryable());
+    }
+
+    /// 2.10.87: native path. A saved `minimal` goes out as `low`; `off` sends none.
+    #[test]
+    fn responses_body_sends_a_legacy_minimal_effort_as_low() {
+        let req = |effort: &str| ResponsesRequest {
+            model: String::new(),
+            effort: Some(effort.into()),
+            input: vec![InputItem::Message {
+                role: "user".into(),
+                content: vec![ContentPart::InputText("hi".into())],
+            }],
+            conversation_id: "c".into(),
+            tools: crate::tool_schemas(),
+            hosted_search: true,
+            call_timeout: None,
+        };
+        assert_eq!(responses_body(&req("minimal"))["reasoning"]["effort"], "low");
+        assert_eq!(responses_body(&req("mini"))["reasoning"]["effort"], "low");
+        assert_eq!(responses_body(&req("max"))["reasoning"]["effort"], "xhigh");
+        assert_eq!(responses_body(&req("medium"))["reasoning"]["effort"], "medium");
+        assert!(responses_body(&req("off")).get("reasoning").is_none());
     }
 
     #[test]

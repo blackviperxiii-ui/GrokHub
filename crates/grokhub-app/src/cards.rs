@@ -3167,7 +3167,9 @@ mod tests {
         );
         assert_eq!(composer_modes().len(), 3);
         assert_eq!(permission_modes().len(), 3);
-        assert_eq!(effort_modes().len(), 6);
+        // 2.10.87: Minimal is off the ladder (a saved one loads as Low).
+        assert_eq!(effort_modes().len(), 5);
+        assert!(effort_modes().iter().all(|(id, label)| *id != "minimal" && *label != "Minimal"));
         assert!(effort_modes().iter().all(|(id, label)| *id != "max" && *label != "Max"));
         assert_eq!(effort_label("high"), "High");
         let session = include_str!("cards.rs")
