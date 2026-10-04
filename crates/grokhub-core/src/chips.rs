@@ -582,8 +582,8 @@ fn guide_chips(connected: bool) -> Vec<QuickChip> {
     ));
     out.push(chip(
         "guide-ideas",
-        "Show Ideas",
-        "Explain the Ideas board in two sentences, then tell me how to open it.",
+        "Show Pulse",
+        "Explain the Pulse page (Ideas and Feed) in two sentences, then tell me how to open it.",
         ChipKind::Chat,
         100.0,
         "New here",

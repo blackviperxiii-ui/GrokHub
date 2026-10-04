@@ -2,9 +2,20 @@
 
 ## Unreleased
 
+## 2.10.91 — 2026-10-04
+
+Ideas is now **Pulse**, one page with two tabs. **Ideas** lists what the cabin could do for you next, grouped by category: up to four of the strongest first, then Financial Management, Productivity, Relationships, Health & Fitness, Shopping, and More ideas. Each row has a category icon, a bold "I can …" line, a short reason, and a ··· menu. **Feed** is a column of posts with the source, the headline, two or three sentences, the source's own image, and Like / Discuss. Images come only from the post's thumbnail or the linked page's `og:image`, are cached in `pulse-images/` in the config folder, and show a placeholder until they arrive; tests use local files and never the network. The Home card deck and the Ideas board move into Pulse once on first launch, with every saved idea, card, pin, and feed setting kept. The deck no longer sits on the empty chat by default; Settings → Behavior → Cards on the empty chat turns it back on.
+
+Every card is now Do, Watch, Learn, Automate, or Quiet, and plain rules rank them instead of the model: a skill ask scores +1000, something due within a day +500, unfinished work on the same topic +250, a repeat +120, an idea you accepted +80, Not this −400, and Dismiss −200, on top of a base of 150 (Do), 140 (Automate), 130 (Learn), or 110 (Watch). Under 100 a card is Quiet and stays off the page. The model only writes the sentence. The ··· menu has Run in the background (it sends the idea as `/bg`, so it runs out of sight like other background work; Ask mode refuses it, as it refuses every `/bg`), Snooze until 9:00, Always do this (That's right / That's wrong on a Learn card), Open, Not this, and Dismiss. Likes, Not this, Dismiss, and right/wrong each add one line to `MEMORY.md`, such as `- [2026-10-04] pulse: dismissed "Sort the photos" reason=not-this`, and the next ranking reads them. Cards that arrive during quiet hours wait and come back as one "While you were in quiet hours" post.
+
+**Feed instructions** on the Feed tab is a plain-text prompt that shapes every future post. You can edit it any time, and after three likes or skips the cabin rewrites it itself, keeping your words and adding what it learned under "Show more of" and "Show less of". New tests cover the rename and old links, category order, the card types, each button (Run sends `/bg` with the idea's text on the fake Grok CLI, Snooze hides until 09:00, Dismiss removes, Not this writes the ledger line and drops the topic's score), the ranking scores, an instructions rewrite on the fake model, the quiet-hours post, the one-time move of old Home and Ideas data, and cached feed images with the placeholder.
+
 The repo's bot rules (`CLAUDE.md` and `.cursor/rules`) add one more: fetch origin and work from the latest `main`, merge `main` into a branch before touching it, re-check right before merging and before tagging, never render or screenshot from a stale checkout, and name the starting `main` SHA in every PR body and report.
 
 The Imagine page has one set of controls again. A row of unstyled debug buttons (sign in, use a code, Generate/Edit, the model picks, an image count stepper, Res, Aspect, Quality) sat above the chat box and duplicated the pills inside it. Those rows are gone. Sign in is a pill in the composer when Imagine has no Grok sign-in or API key, and account, mode, model, image count, edit sources, mask, and the video source live behind a new More pill. The composer's aspect pill now sets the aspect of every image, edit, and video request; before, stills ignored it and used only the separate Aspect button. The Speed/Quality pill alone picks resolution and quality, and the 6s/10s/15s and Video audio pills alone set duration and audio. The aspect icon is drawn larger, so the 2:3 shape no longer reads as a "0".
+
+- Linux: `grokhub-linux-v2.10.91.tar.gz` and AUR `pkgver=2.10.91`.
+- Windows: `GrokHub-Setup-2.10.91.exe` and `grokhub-windows-v2.10.91.zip`.
 
 ## 2.10.90 — 2026-10-04
 
