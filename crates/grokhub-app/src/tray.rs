@@ -247,7 +247,9 @@ pub fn cabin_pid_alive(pid: u32) -> bool {
     }
     #[cfg(target_os = "linux")]
     {
-        Path::new(&format!("/proc/{pid}")).exists()
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        let own = fs::read_to_string("/proc/self/stat").unwrap_or_default();
+        linux_stat_is_live_cabin(&stat, &own)
     }
     #[cfg(windows)]
     {
@@ -256,6 +258,25 @@ pub fn cabin_pid_alive(pid: u32) -> bool {
     #[cfg(not(any(target_os = "linux", windows)))]
     {
         true
+    }
+}
+
+/// A stale `cabin.pid` can name a pid the OS has since reused (after a crash or
+/// reboot) or a zombie. Only a running process with our own name holds the cabin.
+#[cfg(any(target_os = "linux", test))]
+fn linux_stat_is_live_cabin(stat: &str, own: &str) -> bool {
+    fn parts(stat: &str) -> Option<(&str, char)> {
+        let open = stat.find('(')?;
+        let close = stat.rfind(')')?;
+        let comm = stat.get(open + 1..close)?;
+        let state = stat.get(close + 1..)?.trim_start().chars().next()?;
+        Some((comm, state))
+    }
+    match (parts(stat), parts(own)) {
+        (Some((comm, state)), Some((own_comm, _))) => {
+            comm == own_comm && !matches!(state, 'Z' | 'X' | 'x')
+        }
+        _ => false,
     }
 }
 
@@ -956,6 +977,19 @@ mod tests {
         assert_eq!(parse_cabin_pid(" 42\n"), Some(42));
         assert_eq!(parse_cabin_pid("0"), None);
         assert!(!cabin_pid_alive(0));
+        #[cfg(target_os = "linux")]
+        {
+            assert!(cabin_pid_alive(std::process::id()));
+            assert!(
+                !cabin_pid_alive(1),
+                "a reused pid that is not a cabin must not block launch"
+            );
+        }
+        let own = "100 (grokhub) S 1 100";
+        assert!(linux_stat_is_live_cabin("4321 (grokhub) S 1 4321", own));
+        assert!(!linux_stat_is_live_cabin("4321 (systemd) S 1 4321", own));
+        assert!(!linux_stat_is_live_cabin("4321 (grokhub) Z 1 4321", own));
+        assert!(!linux_stat_is_live_cabin("", own));
         assert!(honor_cabin_raise(false));
         assert!(
             !honor_cabin_raise(true),
