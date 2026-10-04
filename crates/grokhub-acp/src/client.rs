@@ -189,6 +189,8 @@ enum Cmd {
     },
     Reject { id: Value },
     Ack { id: Value },
+    /// Mid-turn note for an engine that is not the CLI child.
+    Steer(String),
     Shutdown,
 }
 
@@ -842,6 +844,7 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
                 Cmd::Ack { id } => {
                     let _ = write_msg(&mut *stdin, &response(id, json!({})));
                 }
+                Cmd::Steer(_) => {}
             }
         }
     });
@@ -1020,6 +1023,30 @@ pub fn connect(opts: SpawnOpts) -> Result<AcpHandle, String> {
     })
 }
 
+/// One answer to a native permission card. The CLI path still writes JSON-RPC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativePerm {
+    Allow,
+    Always,
+    Deny,
+    Cancel,
+}
+
+/// Commands a native engine receives instead of a `grok` child.
+#[derive(Debug)]
+pub enum ExternalCmd {
+    Prompt { text: String, image: Option<String> },
+    Cancel,
+    Steer(String),
+    Permission { id: String, answer: NativePerm },
+    Elicit {
+        id: String,
+        action: String,
+        content: Option<Value>,
+    },
+    Shutdown,
+}
+
 impl AcpHandle {
     pub fn prompt(&self, text: &str) -> Result<(), String> {
         self.prompt_with_image(text, None)
@@ -1036,6 +1063,80 @@ impl AcpHandle {
 
     pub fn cancel(&self) -> Result<(), String> {
         self.cmd.send(Cmd::Cancel).map_err(|e| e.to_string())
+    }
+
+    pub fn steer(&self, text: &str) -> Result<(), String> {
+        self.cmd.send(Cmd::Steer(text.to_string())).map_err(|e| e.to_string())
+    }
+
+    /// A session with no CLI child. `Ready` is already queued. The caller owns
+    /// the event sender and the commands that leave this process.
+    pub fn external(
+        cwd: PathBuf,
+        session_id: String,
+    ) -> (AcpHandle, Receiver<ExternalCmd>, Sender<AcpEvent>) {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
+        let (evt_tx, evt_rx) = mpsc::channel();
+        let (ext_tx, ext_rx) = mpsc::channel();
+        let _ = evt_tx.send(AcpEvent::Ready {
+            session_id: session_id.clone(),
+        });
+        thread::spawn(move || {
+            for cmd in cmd_rx {
+                let mapped = match cmd {
+                    Cmd::Prompt { text, image } => ExternalCmd::Prompt { text, image },
+                    Cmd::Cancel => ExternalCmd::Cancel,
+                    Cmd::Steer(text) => ExternalCmd::Steer(text),
+                    Cmd::Shutdown => {
+                        let _ = ext_tx.send(ExternalCmd::Shutdown);
+                        return;
+                    }
+                    Cmd::Permission { id, answer } => {
+                        let id = match id {
+                            Value::String(text) => text,
+                            other => other.to_string(),
+                        };
+                        let answer = match answer {
+                            PermAnswer::Allow => NativePerm::Allow,
+                            PermAnswer::AllowAlways => NativePerm::Always,
+                            PermAnswer::Reject(_) => NativePerm::Deny,
+                            PermAnswer::Cancel => NativePerm::Cancel,
+                        };
+                        ExternalCmd::Permission { id, answer }
+                    }
+                    Cmd::Elicit {
+                        id,
+                        outcome,
+                        content,
+                    } => {
+                        let id = match id {
+                            Value::String(text) => text,
+                            other => other.to_string(),
+                        };
+                        ExternalCmd::Elicit {
+                            id,
+                            action: outcome.to_string(),
+                            content,
+                        }
+                    }
+                    Cmd::Reject { .. } | Cmd::Ack { .. } => continue,
+                };
+                if ext_tx.send(mapped).is_err() {
+                    return;
+                }
+            }
+        });
+        (
+            AcpHandle {
+                child: Arc::new(Mutex::new(None)),
+                cmd: cmd_tx,
+                events: evt_rx,
+                session_id,
+                cwd,
+            },
+            ext_rx,
+            evt_tx,
+        )
     }
 
     /// Allow (`true`), or withdraw the ask (`false`) because the turn is stopping.

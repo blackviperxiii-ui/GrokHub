@@ -78,6 +78,53 @@ pub(super) fn write_persist_disk(dir: &std::path::Path, snap: &PersistSnap) {
     }
 }
 
+/// What the full-snapshot workers have written. Each snapshot carries the
+/// generation it was taken at.
+#[derive(Default)]
+pub(super) struct PersistMark {
+    gen: u64,
+    projects: u64,
+    secrets: u64,
+}
+
+/// Write a full snapshot unless a newer one already reached the disk. Persist
+/// workers are separate threads, so two of them can take `persist_io` in either
+/// order: Delete all persists once from `halt_in_flight` (old chats) and once
+/// at the end (one fresh Chat), and the old snapshot used to land last. An older
+/// snapshot only writes the projects or secrets it alone carries. Call this
+/// with `persist_io` held.
+pub(super) fn write_persist_disk_in_order(
+    dir: &std::path::Path,
+    snap: &PersistSnap,
+    gen: u64,
+    mark: &Mutex<PersistMark>,
+) {
+    let mut mark = mark.lock().unwrap_or_else(|e| e.into_inner());
+    if gen > mark.gen {
+        write_persist_disk(dir, snap);
+        mark.gen = gen;
+        if snap.projects.is_some() {
+            mark.projects = gen;
+        }
+        if snap.secrets.is_some() {
+            mark.secrets = gen;
+        }
+        return;
+    }
+    if let Some(p) = &snap.projects {
+        if gen > mark.projects {
+            let _ = crate::store::save_projects(p);
+            mark.projects = gen;
+        }
+    }
+    if let Some(s) = &snap.secrets {
+        if gen > mark.secrets {
+            let _ = secrets::save(s);
+            mark.secrets = gen;
+        }
+    }
+}
+
 impl Cabin {
 
     pub(super) fn persist(&mut self) {
@@ -92,12 +139,19 @@ impl Cabin {
         self.geom_dirty = false;
         let io = self.persist_io.clone();
         let dir = config::config_dir();
+        let gen = self.next_persist_gen();
+        let mark = self.persist_mark.clone();
         std::thread::spawn(move || {
             let _pin = pin_scheduled_dir(dir.clone());
             if let Ok(_g) = io.lock() {
-                write_persist_disk(&dir, &snap);
+                write_persist_disk_in_order(&dir, &snap, gen, &mark);
             }
         });
+    }
+
+    pub(super) fn next_persist_gen(&mut self) -> u64 {
+        self.persist_gen = self.persist_gen.wrapping_add(1).max(1);
+        self.persist_gen
     }
 
     pub(super) fn persist_snap(&mut self) -> PersistSnap {
@@ -183,10 +237,12 @@ impl Cabin {
         let dir = config::config_dir();
         let (tx, rx) = mpsc::channel();
         self.persist_rx = Some(rx);
+        let gen = self.next_persist_gen();
+        let mark = self.persist_mark.clone();
         std::thread::spawn(move || {
             let _pin = pin_scheduled_dir(dir.clone());
             if let Ok(_g) = io.lock() {
-                write_persist_disk(&dir, &snap);
+                write_persist_disk_in_order(&dir, &snap, gen, &mark);
             }
             let _ = tx.send(());
         });
