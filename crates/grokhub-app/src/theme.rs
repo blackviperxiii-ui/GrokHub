@@ -404,7 +404,7 @@ pub const GROK_NAV: &[(&str, &str)] = &[
     ("automations", "Automations"),
     ("skills", "Skills and Connectors"),
     ("workboard", "Workboards"),
-    ("ideas", "Ideas"),
+    ("pulse", "Pulse"),
 ];
 
 /// Avatar-menu destinations besides Help / Sign in / Sign out.
@@ -418,7 +418,7 @@ pub fn stage_subtitle(id: &str) -> &'static str {
         "chat" => "Recent chat",
         "imagine" => "Images",
         "workboard" => "Tasks and plans",
-        "ideas" => "Worth doing",
+        "pulse" | "ideas" => "What I'd do next",
         "skills" => "Personal skills and connectors",
         "automations" => "Grok Build /loop scheduler",
         "command" => "Overview",

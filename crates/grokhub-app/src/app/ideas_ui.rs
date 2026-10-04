@@ -1,39 +1,28 @@
-//! Ideas board. Each idea is a short card: its type, a title, and one line.
-//! Hover (or a click) opens it in place with the details, the action Apply runs,
-//! and a chat with the agent about this card. Edits and the chat stay on the card
-//! when you move away, until it is applied or deleted.
+//! Pulse → Ideas. Each idea is a row (see `pulse_ui`). A click opens it in
+//! place with the details, the action Apply runs, and a chat with the agent
+//! about this card. Edits and the chat stay on the card when you close it,
+//! until it is applied or deleted.
 
 use super::*;
 use grokhub_core::{
-    dismiss_idea, idea_chat_open_line, ideas_board, mark_idea_modified, modified_ideas,
-    set_idea_draft, take_card_action, UpdateCard, UpdateKind, UpdateStatus, CARD_ACTION_TAG,
-    IDEA_BOARD_MAX, IDEA_MODIFIED_MAX,
+    dismiss_idea, idea_chat_open_line, mark_idea_modified, set_idea_draft, take_card_action,
+    UpdateCard, UpdateKind, UpdateStatus, CARD_ACTION_TAG,
 };
 
-const IDEA_CARD_H: f32 = 76.0;
 const IDEA_GAP: f32 = 8.0;
-/// Rest on a card this long before it opens, so sweeping past does not flicker.
-const HOVER_OPEN_SECS: f64 = 0.25;
-/// Leave an open card this long before it folds back.
-const LEAVE_CLOSE_SECS: f64 = 0.6;
 
 /// What the Ideas board remembers between frames. Drafts and chats live on the
 /// card itself; this holds the open card and what you are typing to the agent.
 #[derive(Clone, Debug, Default)]
 pub(super) struct IdeaBoardView {
     pub open: Option<String>,
-    /// Opened by a click or from the home feed: stays open until the pointer
-    /// has been on it and left, or rests on another card.
-    pub pinned: bool,
-    pub hover: Option<(String, f64)>,
-    pub left_at: Option<f64>,
     pub composers: std::collections::HashMap<String, String>,
     /// A line under one card: why Apply or Send did not go through.
     pub note: Option<(String, String)>,
 }
 
 enum IdeaAct {
-    Open(String),
+    Close(String),
     Apply(String),
     Delete(String),
     Board(String),
@@ -82,63 +71,16 @@ fn type_line(ui: &mut egui::Ui, card: &UpdateCard) {
     });
 }
 
-/// Type, title, one line. Nothing else until you hover.
-fn paint_idea_compact(ui: &mut egui::Ui, card: &UpdateCard, act: &mut Option<IdeaAct>) -> egui::Rect {
-    let w = ui.available_width();
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, IDEA_CARD_H), egui::Sense::click());
-    let stroke = if resp.hovered() {
-        crate::theme::border_strong()
-    } else {
-        crate::theme::border()
-    };
-    ui.painter().rect(
-        rect,
-        crate::theme::CARD_RADIUS,
-        crate::theme::elevated(),
-        egui::Stroke::new(1.0_f32, stroke),
-        egui::StrokeKind::Middle,
-    );
-    ui.scope_builder(egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(14.0, 10.0))), |ui| {
-        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
-        ui.spacing_mut().item_spacing.y = 3.0;
-        type_line(ui, card);
-        ui.label(
-            RichText::new(&card.title)
-                .size(crate::theme::FONT_UI)
-                .strong()
-                .color(crate::theme::fg()),
-        );
-        if let Some(body) = card.body.as_deref().filter(|b| !b.trim().is_empty()) {
-            ui.label(
-                RichText::new(body)
-                    .size(crate::theme::FONT_TIP)
-                    .color(crate::theme::muted()),
-            );
-        }
-    });
-    if resp.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-    if resp.clicked() {
-        *act = Some(IdeaAct::Open(card.id.clone()));
-    }
-    rect
-}
-
 impl Cabin {
+    /// Pulse → Ideas: rows under an unlabeled top group, then one header per
+    /// category. A click on the bold line (or Open in ···) opens the card in
+    /// place with its details, the action, and its chat.
     pub(super) fn ui_ideas(&mut self, ui: &mut egui::Ui) {
-        let ctx = ui.ctx().clone();
-        egui::CentralPanel::default()
-            .frame(
-                egui::Frame::NONE
-                    .fill(crate::theme::bg())
-                    .inner_margin(egui::Margin::same(24)),
-            )
-            .show(ui, |ui| {
-                // Same header as Automations, Skills, and Workboards.
-                let busy = self.ideas_rx.is_some();
-                let label = if busy { "Thinking up ideas…" } else { "Suggest ideas" };
-                if crate::cards::page_header(ui, "Ideas", label) && !busy {
+        let busy = self.ideas_rx.is_some();
+        let label = if busy { "Thinking up ideas…" } else { "Suggest ideas" };
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if crate::cards::ghost_pill(ui, label) && !busy {
                     if self.llm_ready() {
                         self.maybe_suggest_ideas(true);
                         self.status = "Thinking up ideas from your recent work…".into();
@@ -146,44 +88,46 @@ impl Cabin {
                         self.status = "Connect Grok in Settings to get ideas".into();
                     }
                 }
-                self.ensure_useful_ideas();
-                let ideas = ideas_board(&self.updates);
-                let working = modified_ideas(&self.updates);
-                ui.label(
-                    RichText::new(format!(
-                        "Hover a card to open it. New ideas push the oldest out after {IDEA_BOARD_MAX}; ones you change stay until you apply or delete them ({working} of {IDEA_MODIFIED_MAX})."
-                    ))
-                    .size(crate::theme::FONT_TIP)
-                    .color(crate::theme::muted()),
-                );
-                ui.add_space(12.0);
-                let mut act = None;
-                let mut rects = Vec::new();
-                let out = egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        if ideas.is_empty() {
-                            ui.label(
-                                RichText::new("No ideas yet. They come from your recent chats, board, and skills.")
-                                    .size(crate::theme::FONT_BODY)
-                                    .color(crate::theme::muted()),
-                            );
-                        }
-                        for card in &ideas {
-                            let open = self.idea_board.open.as_deref() == Some(card.id.as_str());
-                            let rect = if open {
-                                self.paint_idea_open(ui, card, &mut act)
-                            } else {
-                                paint_idea_compact(ui, card, &mut act)
-                            };
-                            rects.push((card.id.clone(), rect));
-                            ui.add_space(IDEA_GAP);
-                        }
-                    });
-                let view = out.inner_rect;
-                self.track_idea_hover(&ctx, view, &rects);
-                self.apply_idea_act(act);
             });
+        });
+        self.ensure_useful_ideas();
+        let groups = self.pulse_groups(now_ms());
+        if groups.is_empty() {
+            self.paint_pulse_silence(ui);
+            return;
+        }
+        let mut act = None;
+        let mut pulse_act = None;
+        for (cat, rows) in groups {
+            match cat {
+                Some(cat) => {
+                    ui.add_space(18.0);
+                    ui.label(
+                        RichText::new(cat.label())
+                            .size(crate::theme::FONT_SECTION)
+                            .strong()
+                            .color(crate::theme::fg()),
+                    );
+                    ui.add_space(8.0);
+                }
+                None => ui.add_space(4.0),
+            }
+            for row in rows {
+                let Some(card) = self.updates.iter().find(|c| c.id == row.id).cloned() else {
+                    continue;
+                };
+                if self.idea_board.open.as_deref() == Some(card.id.as_str()) && card.kind == UpdateKind::Idea {
+                    self.paint_idea_open(ui, &card, &mut act);
+                } else if let Some(a) = super::pulse_ui::paint_pulse_row(ui, &card, row.kind) {
+                    pulse_act = Some(a);
+                }
+                ui.add_space(IDEA_GAP + 6.0);
+            }
+        }
+        self.apply_idea_act(act);
+        if let Some(a) = pulse_act {
+            self.apply_pulse_act(a);
+        }
     }
 
     /// The card opened in place: details, the action, and the chat.
@@ -219,6 +163,9 @@ impl Cabin {
                 ui.horizontal(|ui| {
                     type_line(ui, card);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if crate::cards::ghost_pill(ui, "Close") {
+                            *act = Some(IdeaAct::Close(id.clone()));
+                        }
                         if crate::cards::ghost_pill(ui, "Delete") {
                             *act = Some(IdeaAct::Delete(id.clone()));
                         }
@@ -377,61 +324,9 @@ impl Cabin {
 
     /// Hover opens a card after a short rest; leaving folds it back. A card you
     /// are typing in stays open.
-    fn track_idea_hover(&mut self, ctx: &egui::Context, view: egui::Rect, rects: &[(String, egui::Rect)]) {
-        let now = ctx.input(|i| i.time);
-        let hovered = ctx
-            .pointer_hover_pos()
-            .filter(|p| view.contains(*p))
-            .and_then(|p| rects.iter().find(|(_, r)| r.contains(p)))
-            .map(|(id, _)| id.clone());
-        let typing = self.idea_board.open.as_deref().is_some_and(|o| {
-            let focused = ctx.memory(|m| m.focused());
-            focused == Some(action_edit_id(o)) || focused == Some(chat_edit_id(o))
-        });
-        let v = &mut self.idea_board;
-        match hovered {
-            Some(h) if v.open.as_deref() == Some(h.as_str()) => {
-                v.hover = None;
-                v.left_at = None;
-                v.pinned = false;
-            }
-            Some(_) if typing => v.hover = None,
-            Some(h) => match v.hover.clone() {
-                Some((id, since)) if id == h => {
-                    if now - since >= HOVER_OPEN_SECS {
-                        v.open = Some(h);
-                        v.pinned = false;
-                        v.hover = None;
-                        v.left_at = None;
-                    } else {
-                        ctx.request_repaint_after(std::time::Duration::from_millis(60));
-                    }
-                }
-                _ => {
-                    v.hover = Some((h, now));
-                    ctx.request_repaint_after(std::time::Duration::from_millis(60));
-                }
-            },
-            None => {
-                v.hover = None;
-                if v.open.is_some() && !v.pinned && !typing {
-                    let since = *v.left_at.get_or_insert(now);
-                    if now - since >= LEAVE_CLOSE_SECS {
-                        v.open = None;
-                        v.left_at = None;
-                    } else {
-                        ctx.request_repaint_after(std::time::Duration::from_millis(60));
-                    }
-                } else {
-                    v.left_at = None;
-                }
-            }
-        }
-    }
-
     fn apply_idea_act(&mut self, act: Option<IdeaAct>) {
         match act {
-            Some(IdeaAct::Open(id)) => self.open_idea_on_board(&id),
+            Some(IdeaAct::Close(id)) => self.forget_idea_view(&id),
             Some(IdeaAct::Apply(id)) => self.apply_idea(&id),
             Some(IdeaAct::Delete(id)) => self.delete_idea(&id),
             Some(IdeaAct::Board(id)) => self.build_idea(&id),
@@ -477,11 +372,8 @@ impl Cabin {
             grokhub_core::UseDepth::Opened,
             grokhub_core::UseAction::Discussed,
         );
-        self.nav = Nav::Ideas;
+        self.nav = Nav::Pulse;
         self.idea_board.open = Some(id.to_string());
-        self.idea_board.pinned = true;
-        self.idea_board.hover = None;
-        self.idea_board.left_at = None;
         self.persist_updates();
         self.persist();
         if first {
@@ -722,7 +614,6 @@ impl Cabin {
         v.composers.remove(id);
         if v.open.as_deref() == Some(id) {
             v.open = None;
-            v.pinned = false;
         }
         if v.note.as_ref().is_some_and(|(n, _)| n == id) {
             v.note = None;

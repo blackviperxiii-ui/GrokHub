@@ -36,6 +36,7 @@ impl Cabin {
             }
             "nav:skills" => self.nav = Nav::Skills,
             "nav:board" => self.nav = Nav::Workboard,
+            "nav:pulse" => self.nav = Nav::Pulse,
             "nav:imagine" => {
                 self.imagine_want_focus = true;
                 self.nav = Nav::Imagine;

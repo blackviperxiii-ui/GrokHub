@@ -123,6 +123,7 @@ pub fn filter_palette(q: &str) -> Vec<(&'static str, &'static str)> {
         ("Agents", "nav:agents"),
         ("Skills", "nav:skills"),
         ("Workboards", "nav:board"),
+        ("Pulse", "nav:pulse"),
         ("Imagine", "nav:imagine"),
         ("Memory", "nav:memory"),
         ("Settings", "nav:settings"),
@@ -149,7 +150,9 @@ mod tests {
         assert!(shortcut_help().contains("Super+G"));
         assert!(filter_palette("night").iter().any(|(l, _)| *l == "Night"));
         assert!(filter_palette("set").iter().any(|(l, _)| *l == "Settings"));
-        assert_eq!(filter_palette("").len(), 18);
+        // 2.10.91: Pulse joined the palette (18 -> 19).
+        assert_eq!(filter_palette("").len(), 19);
+        assert_eq!(filter_palette("pulse"), vec![("Pulse", "nav:pulse")]);
         assert!(filter_palette("").iter().all(|(l, _)| *l != "Command"));
     }
 

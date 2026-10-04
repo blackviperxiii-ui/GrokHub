@@ -567,7 +567,7 @@ impl Cabin {
             Nav::History => "history",
             Nav::Imagine => "imagine",
             Nav::Workboard => "workboard",
-            Nav::Ideas => "ideas",
+            Nav::Pulse => "pulse",
             Nav::Settings => "chat",
             Nav::Skills => "skills",
             Nav::Night => "automations",
@@ -587,7 +587,7 @@ impl Cabin {
                 Nav::Imagine
             }
             "workboard" => Nav::Workboard,
-            "ideas" => Nav::Ideas,
+            "pulse" | "ideas" => Nav::Pulse,
             "settings" => {
                 if self.nav != Nav::Settings {
                     self.settings_back = self.nav;
