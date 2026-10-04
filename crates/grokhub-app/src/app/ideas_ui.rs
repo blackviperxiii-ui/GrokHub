@@ -552,6 +552,8 @@ impl Cabin {
         self.idea_board.composers.remove(id);
         // Notes from the last Chat send must not ride along into this card's chat.
         self.card_notes_follow = None;
+        self.bg.steer_follow = None;
+        self.bg.results_follow = None;
         self.chat_job_thread = Some(thread_id);
         self.push_bound_msg("user", text);
         self.persist_updates();
