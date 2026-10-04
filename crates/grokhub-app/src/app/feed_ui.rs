@@ -333,9 +333,6 @@ pub(super) enum FeedAct {
     Archive(String),
     /// Remove an idea from the Ideas board.
     Drop(String),
-    More(String),
-    Less(String),
-    Hide(String),
 }
 
 impl Cabin {
@@ -387,38 +384,47 @@ impl Cabin {
         let _ = crate::card_prefs::save(&self.card_prefs);
     }
 
-    pub(super) fn more_like_this(&mut self, id: &str) {
-        let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() else {
-            return;
-        };
-        grokhub_core::clear_less_mute(&mut self.cfg.feed_pulse, &card);
-        self.log_card_signal(&card, grokhub_core::CardEvent::More, None);
-        self.persist_cfg();
-    }
-
-    pub(super) fn less_like_this(&mut self, id: &str) {
-        let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() else {
-            return;
-        };
-        grokhub_core::mute_less_like(&mut self.cfg.feed_pulse, &card, now_ms());
-        self.log_card_signal(&card, grokhub_core::CardEvent::Less, None);
-        self.persist_cfg();
-    }
-
-    pub(super) fn hide_automation_from_home(&mut self, id: &str) {
-        let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() else {
-            return;
-        };
-        if card.kind != UpdateKind::AutomationDone || card.source_id.trim().is_empty() {
+    /// Learn how far the user took a card. The same step twice logs once.
+    pub(super) fn log_card_use(
+        &mut self,
+        card: &UpdateCard,
+        depth: grokhub_core::UseDepth,
+        did: grokhub_core::UseAction,
+    ) {
+        let now = now_ms();
+        if !grokhub_core::record_card_use(&mut self.card_prefs, card, depth, did, now) {
             return;
         }
-        let before = self.cfg.feed_pulse.muted_sources.len();
-        grokhub_core::hide_home_source(&mut self.cfg.feed_pulse, &card.source_id);
-        if self.cfg.feed_pulse.muted_sources.len() == before {
-            return;
+        let row = grokhub_core::signal_for(card, grokhub_core::use_event(depth), now, None);
+        grokhub_core::append_signal(&crate::config::config_dir(), &row);
+        let _ = crate::card_prefs::save(&self.card_prefs);
+    }
+
+    /// A workboard card filed from a Home card reached Done: that use is complete.
+    pub(super) fn note_finished_card_uses(&mut self) {
+        let done: Vec<UpdateCard> = self
+            .updates
+            .iter()
+            .filter(|card| {
+                card.board_id.as_deref().is_some_and(|board_id| {
+                    self.board
+                        .iter()
+                        .any(|b| b.id == board_id && b.status == BoardStatus::Done)
+                })
+            })
+            .filter(|card| {
+                grokhub_core::used_depth(&self.card_prefs, card)
+                    < grokhub_core::UseDepth::Completed as u8
+            })
+            .cloned()
+            .collect();
+        for card in done {
+            self.log_card_use(
+                &card,
+                grokhub_core::UseDepth::Completed,
+                grokhub_core::UseAction::FinishedTodo,
+            );
         }
-        self.log_card_signal(&card, grokhub_core::CardEvent::Hidden, None);
-        self.persist_cfg();
     }
 
     pub(super) fn undo_hide_automation_from_home(&mut self, source_id: &str) {
@@ -501,6 +507,7 @@ impl Cabin {
         if tick.digest_needs_lookup {
             self.digest_steer = steer;
         }
+        self.note_finished_card_uses();
         let help_changed = self.note_help_offers(now, quiet);
         if tick.cards_changed || help_changed {
             self.persist_updates();
@@ -881,9 +888,6 @@ impl Cabin {
             Some(FeedAct::Discuss(id)) => self.discuss_card(&id),
             Some(FeedAct::Archive(id)) => self.archive_feed_digest(&id),
             Some(FeedAct::Drop(id)) => self.delete_idea(&id),
-            Some(FeedAct::More(id)) => self.more_like_this(&id),
-            Some(FeedAct::Less(id)) => self.less_like_this(&id),
-            Some(FeedAct::Hide(id)) => self.hide_automation_from_home(&id),
             None => {}
         }
     }
@@ -911,7 +915,11 @@ impl Cabin {
             card.status = UpdateStatus::Opened;
         }
         if let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() {
-            self.log_card_signal(&card, grokhub_core::CardEvent::Opened, None);
+            self.log_card_use(
+                &card,
+                grokhub_core::UseDepth::Ran,
+                grokhub_core::UseAction::FiledTodo,
+            );
         }
         self.persist_updates();
     }
@@ -929,7 +937,11 @@ impl Cabin {
             .unwrap_or_default();
         self.persist_updates();
         if let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() {
-            self.log_card_signal(&card, grokhub_core::CardEvent::Opened, None);
+            self.log_card_use(
+                &card,
+                grokhub_core::UseDepth::Opened,
+                grokhub_core::UseAction::OpenedAutomations,
+            );
         }
         self.night_nl = seed;
         self.auto_compose = true;
@@ -947,10 +959,16 @@ impl Cabin {
             .map(|c| c.title.clone())
             .unwrap_or_default();
         self.persist_updates();
+        let route = route_schedule(&seed);
+        let (depth, did) = if route.is_some() {
+            (grokhub_core::UseDepth::Ran, grokhub_core::UseAction::Automated)
+        } else {
+            (grokhub_core::UseDepth::Opened, grokhub_core::UseAction::OpenedAutomations)
+        };
         if let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() {
-            self.log_card_signal(&card, grokhub_core::CardEvent::Opened, None);
+            self.log_card_use(&card, depth, did);
         }
-        if let Some(route) = route_schedule(&seed) {
+        if let Some(route) = route {
             let _ = self.commit_schedule(route);
         }
     }
@@ -1205,7 +1223,11 @@ impl Cabin {
         if !matches!(card.kind, UpdateKind::Digest | UpdateKind::Suggestion) {
             return;
         }
-        self.log_card_signal(&card, grokhub_core::CardEvent::Opened, None);
+        self.log_card_use(
+            &card,
+            grokhub_core::UseDepth::Opened,
+            grokhub_core::UseAction::Discussed,
+        );
         if let Some(thread_id) = card.discuss_thread.as_deref() {
             if let Some(idx) = self.threads.iter().position(|t| t.id == thread_id) {
                 self.switch_thread(idx);
@@ -1268,7 +1290,13 @@ impl Cabin {
             .unwrap_or_default();
         self.persist_updates();
         if let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() {
-            self.log_card_signal(&card, grokhub_core::CardEvent::Opened, None);
+            let did = match &action {
+                Some(UpdateAction::OpenWorkboard) => grokhub_core::UseAction::OpenedBoard,
+                Some(UpdateAction::OpenAutomations) => grokhub_core::UseAction::OpenedAutomations,
+                Some(UpdateAction::DeepLink { .. }) => grokhub_core::UseAction::OpenedLink,
+                Some(UpdateAction::OpenSession { .. }) | None => grokhub_core::UseAction::OpenedChat,
+            };
+            self.log_card_use(&card, grokhub_core::UseDepth::Opened, did);
         }
         self.follow_update_action(action);
         // A run that filed a Follow up card opens that card on the board.
@@ -1282,9 +1310,13 @@ impl Cabin {
     pub(super) fn dismiss_feed_card(&mut self, id: &str) {
         let prior = self.updates.iter().find(|c| c.id == id).cloned();
         let kind = prior.as_ref().map(|c| c.kind);
-        let was_open = prior
-            .as_ref()
-            .is_some_and(|c| c.status == UpdateStatus::Opened);
+        // Opened, built, discussed, or used before: an X then is not a "no".
+        let touched = prior.as_ref().is_some_and(|c| {
+            c.status == UpdateStatus::Opened
+                || c.built
+                || c.discuss_thread.is_some()
+                || grokhub_core::used_depth(&self.card_prefs, c) > 0
+        });
         let (source, title) = prior
             .as_ref()
             .map(|c| (c.source_id.clone(), c.title.clone()))
@@ -1306,7 +1338,12 @@ impl Cabin {
             }
             self.persist_updates();
             if let Some(card) = prior {
-                self.log_card_signal(&card, grokhub_core::CardEvent::Dismissed, Some(was_open));
+                if touched {
+                    self.log_card_signal(&card, grokhub_core::CardEvent::Dismissed, Some(true));
+                } else {
+                    // Never opened or used: a strong "less like this" for its kind and topic.
+                    self.log_card_signal(&card, grokhub_core::CardEvent::Rejected, None);
+                }
             }
         }
     }
@@ -1617,15 +1654,7 @@ fn paint_feed_card(
         egui::pos2(rect.right() - 32.0, rect.top() + 6.0),
         egui::vec2(24.0, 24.0),
     );
-    let menu_rect = egui::Rect::from_min_size(
-        egui::pos2(x_rect.left() - 28.0, rect.top() + 6.0),
-        egui::vec2(24.0, 24.0),
-    );
-    let text_right = if card.kind.event() {
-        menu_rect.left() - 4.0
-    } else {
-        x_rect.left() - 4.0
-    };
+    let text_right = x_rect.left() - 4.0;
     let text_rect = egui::Rect::from_min_max(
         egui::pos2(rect.left() + 8.0, rect.top() + 6.0),
         egui::pos2(text_right, rect.bottom() - 6.0),
@@ -1692,20 +1721,6 @@ fn paint_feed_card(
         egui::Sense::click(),
     );
     let over_x = hit.hover_pos().is_some_and(|pos| x_rect.contains(pos));
-    let over_menu = card.kind.event() && hit.hover_pos().is_some_and(|pos| menu_rect.contains(pos));
-    if card.kind.event() {
-        ui.painter().text(
-            menu_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "⋯",
-            egui::FontId::proportional(16.0),
-            if over_menu {
-                crate::theme::fg()
-            } else {
-                crate::theme::muted()
-            },
-        );
-    }
     ui.painter().text(
         x_rect.center(),
         egui::Align2::CENTER_CENTER,
@@ -1720,50 +1735,7 @@ fn paint_feed_card(
     if hit.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
-    let mut menu_act = None;
-    if card.kind.event() {
-        let popup_id = egui::Id::new(("feed-card-menu", &card.id));
-        if hit.secondary_clicked() {
-            egui::Popup::open_id(ui.ctx(), popup_id);
-        }
-        let on_menu_click = hit.clicked()
-            && hit
-                .interact_pointer_pos()
-                .is_some_and(|pos| menu_rect.contains(pos));
-        if on_menu_click {
-            egui::Popup::toggle_id(ui.ctx(), popup_id);
-        }
-        let hide = card.kind == UpdateKind::AutomationDone && !card.source_id.trim().is_empty();
-        egui::Popup::new(popup_id, ui.ctx().clone(), menu_rect, ui.layer_id())
-            .kind(egui::PopupKind::Menu)
-            .close_behavior(egui::PopupCloseBehavior::CloseOnClick)
-            .layout(egui::Layout::top_down_justified(egui::Align::Min))
-            .show(|ui| {
-                if ui.button("More like this").clicked() {
-                    menu_act = Some(FeedAct::More(card.id.clone()));
-                    ui.close();
-                }
-                if ui.button("Less like this").clicked() {
-                    menu_act = Some(FeedAct::Less(card.id.clone()));
-                    ui.close();
-                }
-                if hide && ui.button("Hide this automation's runs from Home").clicked() {
-                    menu_act = Some(FeedAct::Hide(card.id.clone()));
-                    ui.close();
-                }
-            });
-    }
-    if menu_act.is_some() {
-        return menu_act;
-    }
     if !hit.clicked() {
-        return None;
-    }
-    let on_menu = card.kind.event()
-        && hit
-            .interact_pointer_pos()
-            .is_some_and(|pos| menu_rect.contains(pos));
-    if on_menu {
         return None;
     }
     let on_x = hit
@@ -2086,7 +2058,7 @@ mod deck_hover_tests {
         let frames = play(&mut cabin, &path);
         assert_eq!(flips(&frames.expanded[1..]), 0, "deck closed on the way up");
         assert!(frames.expanded.iter().skip(1).all(|open| *open));
-        assert!(COMPOSER_TOP > 200.0, "the path crosses the composer");
+        assert!(path[89].y < COMPOSER_TOP, "the path crosses the composer");
         // Off the deck, it closes once and stays closed.
         let mut away = vec![egui::pos2(500.0, 620.0); 40];
         away.extend(vec![egui::pos2(950.0, 60.0); 80]);
