@@ -3,9 +3,9 @@ use crate::host::run_host;
 use grokhub_core::{
     discover_source, forbidden_reason, parse_github_latest_tag, parse_installed_cli_version,
     parse_published_cli_alpha, restart_acts, restart_bin, systemd_user_restart_args,
-    systemd_user_stop_args, update_cmds, update_progress_pct, update_step_label,
-    update_wipes_config, RestartAct, CLI_ALPHA_VERSION_FALLBACK, CLI_ALPHA_VERSION_URL,
-    GITHUB_LATEST_API, TEXT_FILE_CAP,
+    systemd_user_stop_args, update_cmds_in, update_progress_pct, update_step_label,
+    update_wipes_config, Channel, RestartAct, CHANNEL_RECEIPT, CLI_ALPHA_VERSION_FALLBACK,
+    CLI_ALPHA_VERSION_URL, GITHUB_LATEST_API, TEXT_FILE_CAP,
 };
 use std::io::Read;
 use std::env;
@@ -55,6 +55,29 @@ pub fn remember_source(dir: &std::path::Path) {
     let _ = std::fs::write(config::config_dir().join("source"), dir.display().to_string());
 }
 
+/// The install channel from the `channel` receipt that `scripts/install.sh`
+/// writes next to `source`. Missing or unknown reads as stable.
+pub fn installed_channel() -> Channel {
+    std::fs::read_to_string(config::config_dir().join(CHANNEL_RECEIPT))
+        .map(|t| Channel::from_receipt(&t))
+        .unwrap_or_default()
+}
+
+/// The channel this binary was built for (`GROKHUB_BUILD_CHANNEL` from build.rs).
+pub fn build_channel() -> Channel {
+    Channel::parse(env!("GROKHUB_BUILD_CHANNEL")).unwrap_or_default()
+}
+
+/// `grokhub --version`: `GrokHub 2.10.92-beta (beta @ abc1234)` on beta.
+pub fn build_version_line() -> String {
+    grokhub_core::version_line(
+        env!("CARGO_PKG_VERSION"),
+        build_channel(),
+        env!("GROKHUB_BUILD_BRANCH"),
+        env!("GROKHUB_BUILD_SHA"),
+    )
+}
+
 pub fn host_receipt_failed(receipt: &str) -> bool {
     if receipt.contains("HOST_RECEIPT: timed out")
         || receipt.contains("HOST_RECEIPT: halted")
@@ -99,7 +122,7 @@ pub fn run_update_cmds_with_progress(
 }
 
 pub fn run_update(source: &std::path::Path) -> Result<String, String> {
-    let cmds = update_cmds(source)?;
+    let cmds = update_cmds_in(source, installed_channel())?;
     remember_source(source);
     run_update_cmds(&cmds)
 }
@@ -370,6 +393,77 @@ mod tests {
         }
         assert_eq!(found, Some(root.clone()));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_channel_receipt_defaults_to_stable_round_trips_and_steers_update_to_origin_beta() {
+        let _g = crate::config::hold_test_config();
+        let cfg = crate::config::test_config_root("channel-receipt");
+        let _ = fs::remove_dir_all(&cfg);
+        let _pin = crate::config::TestConfigDir::set(cfg.clone());
+        assert_eq!(installed_channel(), Channel::Stable);
+        fs::create_dir_all(&cfg).unwrap();
+        fs::write(cfg.join(CHANNEL_RECEIPT), Channel::Beta.receipt()).unwrap();
+        assert_eq!(fs::read_to_string(cfg.join("channel")).unwrap(), "beta\n");
+        assert_eq!(installed_channel(), Channel::Beta);
+        let root = cfg.join("src");
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        fs::create_dir_all(root.join("crates/grokhub-app")).unwrap();
+        fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
+        fs::write(root.join("scripts/install.sh"), "#!/bin/sh\n").unwrap();
+        for args in [
+            &["init", "-q", "-b", "beta"][..],
+            &["config", "user.email", "cabin@test"],
+            &["config", "user.name", "Cabin"],
+            &["add", "."],
+            &["commit", "-q", "-m", "seed"],
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/blackviperxiii-ui/GrokHub.git",
+            ],
+        ] {
+            assert!(Command::new("git")
+                .args(args)
+                .current_dir(&root)
+                .status()
+                .unwrap()
+                .success());
+        }
+        let plan = grokhub_core::combined_update_cmds_in(
+            Some(&root),
+            grokhub_core::UpdatePending::Cabin,
+            installed_channel(),
+        )
+        .expect("beta plan");
+        assert!(
+            plan.cmds[0].ends_with(" pull --ff-only origin beta"),
+            "{:?}",
+            plan.cmds
+        );
+        assert!(
+            !plan.cmds.iter().any(|c| c.contains("origin main")),
+            "{:?}",
+            plan.cmds
+        );
+        fs::write(cfg.join(CHANNEL_RECEIPT), Channel::Stable.receipt()).unwrap();
+        assert_eq!(fs::read_to_string(cfg.join("channel")).unwrap(), "stable\n");
+        assert_eq!(installed_channel(), Channel::Stable);
+        drop(_pin);
+        let _ = fs::remove_dir_all(&cfg);
+    }
+
+    #[test]
+    fn version_line_carries_the_build_channel_branch_and_sha() {
+        let line = build_version_line();
+        let parsed = grokhub_core::parse_version_line(&line).expect("parses");
+        assert_eq!(parsed.channel, build_channel());
+        let base = parsed.version.trim_end_matches("-beta");
+        assert_eq!(base, env!("CARGO_PKG_VERSION"));
+        assert!(line.starts_with("GrokHub 2.10."), "{line}");
+        assert_eq!(parsed.branch, env!("GROKHUB_BUILD_BRANCH"));
+        assert_eq!(parsed.sha, env!("GROKHUB_BUILD_SHA"));
     }
 
     #[test]

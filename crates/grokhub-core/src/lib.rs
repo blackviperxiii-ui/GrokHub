@@ -12,6 +12,7 @@ pub mod chat_bubble;
 pub mod chat_job;
 pub mod chat_view;
 pub mod cabin_engine;
+pub mod channel;
 pub mod chips;
 pub mod connector;
 pub mod consult;
@@ -172,6 +173,7 @@ pub use chat_view::{
     SKILL_SAVED_MARK, SKILL_SAVED_NOTE, THOUGHT_CLUSTER_GAP, THOUGHT_ROW_LABEL,
 };
 pub use cabin_engine::{absorb_cabin, brief_for, engine_slug, note_part, CabinDirective, PartNote};
+pub use channel::{parse_version_line, version_line, BuildVersion, Channel, CHANNEL_RECEIPT};
 pub use chips::{
     build_quick_chips, cabin_pace, chip_dismissed_for_good, chip_memory_key, chip_scan,
     local_lessons,
@@ -436,9 +438,11 @@ pub use turn_timeline::{
 };
 pub use update::{
     cabin_overlay_step, cabin_update_notice, cabin_version_newer, cli_alpha_is_newer,
-    cli_update_notice, combined_update_cmds, combined_update_cmds_for_host, combined_update_hint,
+    cli_update_notice, combined_update_cmds, combined_update_cmds_for_host,
+    combined_update_cmds_for_host_in, combined_update_cmds_in, combined_update_hint,
     discover_source, grok_cli_alpha_update_cmd, grok_cli_alpha_update_cmds, grok_cli_update_cmd,
-    is_grokhub_source, origin_needs_retarget, overlay_clone_usable, overlay_stop_targets,
+    is_grokhub_source, origin_needs_retarget, overlay_clone_usable, overlay_clone_usable_in,
+    overlay_stop_targets,
     overlay_update_begin, overlay_update_can_restart, overlay_update_finish,
     overlay_update_progress, parse_cabin_semver, parse_github_latest_tag,
     parse_installed_cli_version, parse_published_cli_alpha, pending_for_manual_update,
@@ -448,6 +452,7 @@ pub use update::{
     should_notify_cabin_update, should_show_cli_alpha_update, should_update_cli_alpha,
     stale_github_origin, systemd_user_restart_args, systemd_user_stop_args, unix_grok_update_cmd,
     update_check_due, update_chip_label, update_cmds, update_cmds_for, update_cmds_for_host,
+    update_cmds_for_host_in, update_cmds_in,
     update_pending, update_plan_steps, update_progress_pct, update_step_label, update_wipes_config,
     walk_up_source, windows_grok_update_cmd, windows_release_overlay_cmd,
     windows_release_update_cmds, CombinedUpdatePlan, OverlayUpdateView, RestartAct, UpdatePending,
