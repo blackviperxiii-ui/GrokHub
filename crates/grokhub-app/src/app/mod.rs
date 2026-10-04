@@ -733,8 +733,6 @@ pub struct Cabin {
     tokens_seen: (u64, u64, u64),
     grok_commands: Vec<SlashHit>,
     grok_tasks: Vec<(String, String, bool)>,
-    /// Cabin `/loop` that was prompted on the live ACP session.
-    loop_acp_id: Option<String>,
     followup_queue: Vec<String>,
     /// `/workflow pause|resume|stop` waiting until the live turn ends. Not saved.
     workflow_ctl_queue: Vec<String>,
@@ -1324,7 +1322,6 @@ impl Cabin {
             tokens_seen: (0, 0, 0),
             grok_commands: Vec::new(),
             grok_tasks: Vec::new(),
-            loop_acp_id: None,
             followup_queue: Vec::new(),
             workflow_ctl_queue: Vec::new(),
             workflow_target: String::new(),
@@ -1750,7 +1747,6 @@ impl Cabin {
             tokens_seen: (0, 0, 0),
             grok_commands: Vec::new(),
             grok_tasks: Vec::new(),
-            loop_acp_id: None,
             followup_queue: Vec::new(),
             workflow_ctl_queue: Vec::new(),
             workflow_target: String::new(),

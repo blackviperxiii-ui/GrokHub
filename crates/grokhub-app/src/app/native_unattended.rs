@@ -387,8 +387,6 @@ impl Cabin {
         self.daily_auto_used = self.usage.automation;
         self.daily_auto_day = self.usage.day.clone();
         self.persist_usage();
-        let title: String = row.prompt.chars().take(48).collect();
-        self.status = format!("Loop: {title}");
         let ready = match unattended_model(self) {
             Ok(ready) => ready,
             Err(err) => {
