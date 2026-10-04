@@ -183,7 +183,7 @@ impl Cabin {
         let worktree = thread.map(|t| t.grok_worktree).unwrap_or(false);
         let (yolo, auto) = self.permission_mode.scheduled_flags();
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
-        let effort = grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort);
+        let effort = self.bg_effort(origin);
         let prompt = bg_task_prompt(task);
         let (pid, rx) = grokhub_acp::spawn_grok_p_stream(
             &prompt,
@@ -224,6 +224,17 @@ impl Cabin {
             automation: None,
         });
         Ok(title)
+    }
+
+    /// Reasoning effort for a background run. A scheduled automation runs
+    /// unwatched, so it stays at low effort like every unattended run; your own
+    /// `/bg` work keeps the effort you picked.
+    pub(super) fn bg_effort(&self, origin: BgOrigin) -> Option<&'static str> {
+        if origin == BgOrigin::Scheduled {
+            Some(grokhub_core::BACKGROUND_EFFORT)
+        } else {
+            grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort)
+        }
     }
 
     fn native_bg_target(&self, thread_id: &str) -> bool {
@@ -280,8 +291,7 @@ impl Cabin {
         let (client, auth_kind, bearer) = native_bg_model(self)?;
         let gate = self.native_bg_gate();
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
-        let effort =
-            grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort).map(str::to_string);
+        let effort = self.bg_effort(origin).map(str::to_string);
         let rules = grokhub_acp::cabin_rules_for(
             &grokhub_core::brief_for(&self.learning, "chat"),
             self.cfg.desktop_control,

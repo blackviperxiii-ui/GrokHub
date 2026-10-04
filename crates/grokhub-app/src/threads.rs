@@ -557,6 +557,19 @@ pub fn is_follow_up_title(title: &str) -> bool {
     title.trim_start().starts_with(FOLLOW_UP_PREFIX)
 }
 
+/// Hide the Follow up chats a workboard card still links, since the card is
+/// where you read and answer them. One whose card was deleted stays in History.
+pub fn park_follow_up_chats(threads: &mut [ChatThread], linked: &[String]) -> bool {
+    let mut parked = false;
+    for t in threads.iter_mut() {
+        if !t.background && is_follow_up_title(&t.title) && linked.iter().any(|id| id == &t.id) {
+            t.background = true;
+            parked = true;
+        }
+    }
+    parked
+}
+
 /// Title of the one hidden chat that night, loops, and inbox work run in.
 pub const BACKGROUND_THREAD_TITLE: &str = "Background";
 
@@ -1699,6 +1712,23 @@ mod tests {
             global,
             "creating a project must not change the chat section"
         );
+    }
+
+    #[test]
+    fn only_follow_up_chats_a_card_still_links_are_parked() {
+        let mut linked_chat = ChatThread::new("Follow up · Host snapshot", false);
+        linked_chat.id = "t-linked".into();
+        let mut orphan = ChatThread::new("Follow up · Morning issues", false);
+        orphan.id = "t-orphan".into();
+        let mut mine = ChatThread::new("Release notes", false);
+        mine.id = "t-mine".into();
+        let mut threads = vec![linked_chat, orphan, mine];
+        let linked = vec!["t-linked".to_string(), "t-mine".to_string()];
+        assert!(park_follow_up_chats(&mut threads, &linked));
+        let hidden: Vec<(&str, bool)> =
+            threads.iter().map(|t| (t.id.as_str(), t.background)).collect();
+        assert_eq!(hidden, vec![("t-linked", true), ("t-orphan", false), ("t-mine", false)]);
+        assert!(!park_follow_up_chats(&mut threads, &linked));
     }
 
     #[test]
