@@ -10,6 +10,8 @@ Fixes from a debug run of the whole app. GrokHub no longer refuses to open, sile
 
 The quick chips under the chat box no longer offer "Continue Follow up · …" or "Continue Background". Hidden chats are skipped when chips suggest picking up another chat, so a Follow up card's chat stays on the card.
 
+The repo's bot rules (`CLAUDE.md` and `.cursor/rules`) add one more: fetch origin and work from the latest `main`, merge `main` into a branch before touching it, re-check right before merging and before tagging, never render or screenshot from a stale checkout, and name the starting `main` SHA in every PR body and report.
+
 - Linux: `grokhub-linux-v2.10.90.tar.gz` and AUR `pkgver=2.10.90`.
 - Windows: `GrokHub-Setup-2.10.90.exe` and `grokhub-windows-v2.10.90.zip`.
 

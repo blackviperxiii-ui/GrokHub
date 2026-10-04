@@ -7,6 +7,7 @@ alwaysApply: true
 
 When the work is done and CI is green, that counts as Jeremy's **full ship**. Bots ship it end to end:
 
+- **Latest main:** fetch origin and re-check that the branch holds the latest `main` right before merging and again before tagging; merge `main` in first when it doesn't. Name the starting `main` SHA in the PR body and the report.
 - **Merge** with a merge commit, in stack order. Record a PR that `main` already supersedes with `git merge -s ours`, so the merge doesn't revert `main`. Leave PRs he has parked open and untouched.
 - **Main CI** must pass after the merge before tagging (find the cause before at most one rerun).
 - **Tag** `vX.Y.Z` at the bumped merge commit and `git push origin vX.Y.Z`. `.github/workflows/release.yml` publishes the Release.
