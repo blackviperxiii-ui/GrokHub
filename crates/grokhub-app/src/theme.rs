@@ -498,6 +498,13 @@ pub fn install_fonts(ctx: &egui::Context) {
     }
 }
 
+/// The app fonts on this context even when another test's context already took
+/// the process-wide `install_fonts` turn, which would leave this one without them.
+#[cfg(test)]
+pub fn install_fonts_on(ctx: &egui::Context) {
+    install_inter(ctx);
+}
+
 pub fn apply(ctx: &egui::Context, dark: bool) {
     install_fonts(ctx);
     #[cfg(test)]
