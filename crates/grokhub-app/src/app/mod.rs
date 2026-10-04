@@ -883,13 +883,17 @@ impl Cabin {
             let adopted = threads::adopt_sessions_from(&threads, &threads::grok_session_homes());
             let adopted_n = adopted.len();
             threads.extend(adopted);
+            let card_chats: Vec<String> = config::load_board()
+                .into_iter()
+                .filter_map(|c| c.thread_id)
+                .collect();
+            parked_learn |= threads::park_follow_up_chats(&mut threads, &card_chats);
             for t in &mut threads {
                 let loop_row = !t.background
                     && t.grok_session
                         .as_deref()
                         .is_some_and(|s| loop_sessions.iter().any(|l| l == s.trim()));
-                let parked = threads::is_learn_map_title(&t.title)
-                    || threads::is_follow_up_title(&t.title);
+                let parked = threads::is_learn_map_title(&t.title);
                 if loop_row || parked {
                     t.background = true;
                     parked_learn = true;
