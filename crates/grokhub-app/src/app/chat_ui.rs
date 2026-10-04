@@ -1271,24 +1271,6 @@ impl Cabin {
                                 &self.live_blocks,
                             );
                         }
-                        if thinking {
-                            let phase = self.run_phase_here();
-                            let hint = chat_run_hint(phase, &self.run_action_here());
-                            if self.can_move_turn_to_background() {
-                                let moved = ui
-                                    .horizontal(|ui| {
-                                        paint_running(ui, chat_run_label(phase), &hint);
-                                        ui.add_space(8.0);
-                                        super::background::background_pill(ui)
-                                    })
-                                    .inner;
-                                if moved && self.move_turn_to_background() {
-                                    self.drain_followup_queue();
-                                }
-                            } else {
-                                paint_running(ui, chat_run_label(phase), &hint);
-                            }
-                        }
                         if let Some(code) = crate::markdown::take_code_copy(ui.ctx()) {
                             act = ChatBlockAct::Copy(code);
                         }
@@ -2566,7 +2548,7 @@ impl Cabin {
                                     ComposerGo::Send | ComposerGo::Stop => crate::theme::fg(),
                                 },
                             )
-                            .on_hover_text(composer_go_tip(self.thinking_here()));
+                            .on_hover_text(self.go_tip_here());
                             go_rect = send.rect;
                             let go_hit = send.clicked()
                                 || (send.is_pointer_button_down_on()
