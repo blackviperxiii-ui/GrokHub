@@ -22546,6 +22546,145 @@ fn a_scheduled_run_ends_on_follow_up_and_never_touches_your_chat() {
     release_isolated(&root, cabin);
 }
 
+/// 2.10.89 review of #485: Halt still reaches a scheduled run in its own process.
+#[test]
+fn halt_stops_a_scheduled_run_and_your_stop_does_not() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("bg-scheduled-halt");
+    std::fs::create_dir_all(&root).expect("config root");
+    cabin.board.clear();
+    cabin.automations = vec![test_automation(
+        "a-snap",
+        "Host snapshot",
+        "every day at 9, run a read-only host snapshot and report what changed",
+    )];
+    let hidden = cabin.ensure_background_history_thread();
+    let bg_id = cabin.threads[hidden].id.clone();
+    let (_tx, rx) = std::sync::mpsc::channel();
+    cabin.bg.runs.push(super::background::BgRun {
+        id: 1,
+        thread_id: bg_id,
+        title: "Host snapshot".into(),
+        origin: grokhub_core::BgOrigin::Scheduled,
+        pid: None,
+        rx: Some(rx),
+        say: "## Host snapshot\nHalf way.".into(),
+        action: String::new(),
+        started: std::time::Instant::now(),
+        end: None,
+        session: String::new(),
+        resumed: None,
+        fork_hold: false,
+        native_session: None,
+        automation: Some("a-snap".into()),
+    });
+    // Stop on your own turn (composer, /stop, the board) is for your chat only.
+    cabin.halt_work("Stopped");
+    assert!(cabin.bg.scheduled_live(), "your Stop leaves the scheduled run alone");
+    // Halt (hotkey, tray, Ctrl+Alt+H) stops everything, the scheduled run too.
+    cabin.halt_everything("Stopped");
+    assert!(!cabin.bg.scheduled_live());
+    assert!(cabin.bg.runs.is_empty());
+    assert_eq!(cabin.automations[0].health.outcome, grokhub_core::AutoOutcome::Stopped);
+    assert_eq!(cabin.status, "Stopped");
+    assert!(
+        !cabin.board.iter().any(|c| c.automation.as_deref() == Some("a-snap")),
+        "a stopped run files no Follow up card"
+    );
+    release_isolated(&root, cabin);
+}
+
+/// 2.10.89 review of #485: scheduled runs stay at low effort, like every unattended run.
+#[test]
+fn a_scheduled_run_uses_low_effort_and_your_bg_keeps_yours() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.reasoning_effort = "xhigh".into();
+    assert_eq!(cabin.bg_effort(grokhub_core::BgOrigin::Scheduled), Some("low"));
+    assert_eq!(cabin.bg_effort(grokhub_core::BgOrigin::Agent), Some("xhigh"));
+    assert_eq!(cabin.bg_effort(grokhub_core::BgOrigin::Detached), Some("xhigh"));
+    let src = include_str!("background.rs");
+    let cli = fn_src(src, "start_bg_task");
+    assert!(cli.contains("self.bg_effort(origin)"), "{cli}");
+    let native = fn_src(src, "start_native_bg");
+    assert!(native.contains("self.bg_effort(origin)"), "{native}");
+}
+
+/// 2.10.89 review of #485: an automation that names a skill still gets its steps.
+#[test]
+fn a_scheduled_run_keeps_a_matching_skills_steps() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.skill_list = vec![SkillMd {
+        name: "host-snapshot".into(),
+        description: "Read-only host report".into(),
+        slash: "/snapshot".into(),
+        trigger: "host snapshot".into(),
+        instructions: "1. `df -h`".into(),
+        pitfalls: "Never write.".into(),
+        verify: "Report disk use.".into(),
+        runs: 0,
+    }];
+    assert_eq!(
+        cabin.scheduled_task_text("/snapshot then report what changed"),
+        "Active skill host-snapshot — follow these steps:\n## Steps\n1. `df -h`\n\n## Pitfalls\nNever write.\n\n## Verify\nReport disk use.\n\n/snapshot then report what changed"
+    );
+    assert_eq!(
+        cabin.scheduled_task_text("summarize my open GitHub issues"),
+        "summarize my open GitHub issues"
+    );
+    let src = include_str!("night.rs");
+    let start = fn_src(src, "start_scheduled_run");
+    assert!(start.contains("scheduled_task_text(&a.instructions)"), "{start}");
+    assert!(start.contains("bg_task_title(&a.instructions)"), "{start}");
+}
+
+/// 2.10.89 review of #485: deleting a Follow up card puts its hidden chat back in
+/// History, as the status line promises, so a report or your reply is never lost.
+#[test]
+fn deleting_a_follow_up_card_brings_its_chat_back_to_history() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("follow-up-delete");
+    std::fs::create_dir_all(&root).expect("config root");
+    cabin.board.clear();
+    cabin.automations = vec![test_automation(
+        "a-issues",
+        "Morning issues",
+        "every day at 8, summarize my open GitHub issues and report",
+    )];
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.thread_idx = 0;
+    cabin.settle_scheduled_run(
+        Some("a-issues"),
+        &grokhub_core::BgEnd::Done,
+        "## Open issues\nThree opened overnight: crash on resume, tray icon, docs.",
+    );
+    let card = cabin
+        .board
+        .iter()
+        .find(|c| c.automation.as_deref() == Some("a-issues"))
+        .expect("follow up card")
+        .clone();
+    let chat = card.thread_id.clone().expect("its chat");
+    let at = cabin.threads.iter().position(|t| t.id == chat).expect("thread");
+    assert!(cabin.threads[at].background);
+    assert_eq!(
+        crate::threads::chat_section_indices(&cabin.threads, Some(0), false),
+        vec![0]
+    );
+    assert!(cabin.apply_board_act(Some(super::pages::BoardAct::Delete(card.id.clone()))));
+    assert_eq!(cabin.status, "Card deleted. Its chat stays in History.");
+    assert!(!cabin.threads[at].background);
+    assert_eq!(cabin.threads[at].title, "Follow up · Morning issues");
+    assert_eq!(
+        crate::threads::chat_section_indices(&cabin.threads, Some(0), false),
+        vec![0, at]
+    );
+    // The hidden Background chat stays hidden: only Follow up chats come back.
+    let bg = cabin.ensure_background_history_thread();
+    assert!(!cabin.unpark_follow_up_chat(Some(cabin.threads[bg].id.clone().as_str())));
+    assert!(cabin.threads[bg].background);
+    release_isolated(&root, cabin);
+}
+
 #[test]
 fn a_cabin_wide_grok_command_still_queues_instead_of_steering() {
     let _g = crate::config::hold_test_config();
