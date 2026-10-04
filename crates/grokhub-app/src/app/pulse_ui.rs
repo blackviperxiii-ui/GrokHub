@@ -8,7 +8,9 @@ use std::collections::{HashMap, HashSet};
 use std::io::Read as _;
 
 use super::*;
-use grokhub_core::pulse::{self as pc, LedgerEntry, LedgerReason, PulseCategory, PulseType, Ranked};
+use grokhub_core::pulse::{
+    self as pc, LedgerEntry, LedgerReason, PulseCategory, PulseType, Ranked,
+};
 use grokhub_core::{CardReaction, UpdateAction, UpdateCard, UpdateKind};
 
 const ICON: f32 = 32.0;
@@ -134,37 +136,77 @@ fn paint_glyph(painter: &egui::Painter, rect: egui::Rect, glyph: Glyph, tint: eg
     let tau = std::f32::consts::TAU;
     match glyph {
         Glyph::Play => {
-            let pts = vec![c + egui::vec2(-0.30 * s, -0.40 * s), c + egui::vec2(0.42 * s, 0.0), c + egui::vec2(-0.30 * s, 0.40 * s)];
+            let pts = vec![
+                c + egui::vec2(-0.30 * s, -0.40 * s),
+                c + egui::vec2(0.42 * s, 0.0),
+                c + egui::vec2(-0.30 * s, 0.40 * s),
+            ];
             painter.add(egui::Shape::convex_polygon(pts, tint, egui::Stroke::NONE));
         }
         Glyph::Eye => {
-            painter.add(egui::Shape::closed_line(ring(c, 0.55 * s, 0.32 * s, 0.0, tau, 28), stroke));
+            painter.add(egui::Shape::closed_line(
+                ring(c, 0.55 * s, 0.32 * s, 0.0, tau, 28),
+                stroke,
+            ));
             painter.circle_filled(c, 0.16 * s, tint);
         }
         Glyph::Spark => {
             for (a, b) in [((0.0, -0.55), (0.0, 0.55)), ((-0.55, 0.0), (0.55, 0.0))] {
-                painter.line_segment([c + egui::vec2(a.0 * s, a.1 * s), c + egui::vec2(b.0 * s, b.1 * s)], stroke);
+                painter.line_segment(
+                    [
+                        c + egui::vec2(a.0 * s, a.1 * s),
+                        c + egui::vec2(b.0 * s, b.1 * s),
+                    ],
+                    stroke,
+                );
             }
             for (x, y) in [(-0.28, -0.28), (0.28, 0.28), (-0.28, 0.28), (0.28, -0.28)] {
-                painter.line_segment([c + egui::vec2(x * 0.5 * s, y * 0.5 * s), c + egui::vec2(x * s, y * s)], stroke);
+                painter.line_segment(
+                    [
+                        c + egui::vec2(x * 0.5 * s, y * 0.5 * s),
+                        c + egui::vec2(x * s, y * s),
+                    ],
+                    stroke,
+                );
             }
         }
         Glyph::Loop => {
-            painter.add(egui::Shape::line(ring(c, 0.42 * s, 0.42 * s, -1.2, 4.4, 26), stroke));
+            painter.add(egui::Shape::line(
+                ring(c, 0.42 * s, 0.42 * s, -1.2, 4.4, 26),
+                stroke,
+            ));
             let tip = c + egui::vec2(0.42 * s * (-1.2_f32).cos(), 0.42 * s * (-1.2_f32).sin());
-            let pts = vec![tip + egui::vec2(-0.20 * s, -0.14 * s), tip + egui::vec2(0.20 * s, -0.02 * s), tip + egui::vec2(-0.04 * s, 0.22 * s)];
+            let pts = vec![
+                tip + egui::vec2(-0.20 * s, -0.14 * s),
+                tip + egui::vec2(0.20 * s, -0.02 * s),
+                tip + egui::vec2(-0.04 * s, 0.22 * s),
+            ];
             painter.add(egui::Shape::convex_polygon(pts, tint, egui::Stroke::NONE));
         }
         Glyph::Moon => {
             painter.circle_filled(c, 0.42 * s, tint);
-            painter.circle_filled(c + egui::vec2(0.22 * s, -0.16 * s), 0.36 * s, crate::theme::bg());
+            painter.circle_filled(
+                c + egui::vec2(0.22 * s, -0.16 * s),
+                0.36 * s,
+                crate::theme::bg(),
+            );
         }
         Glyph::Coin => {
             painter.circle_stroke(c, 0.50 * s, stroke);
-            painter.text(c, egui::Align2::CENTER_CENTER, "$", egui::FontId::proportional(0.72 * s), tint);
+            painter.text(
+                c,
+                egui::Align2::CENTER_CENTER,
+                "$",
+                egui::FontId::proportional(0.72 * s),
+                tint,
+            );
         }
         Glyph::Check => {
-            let pts = vec![c + egui::vec2(-0.42 * s, 0.02 * s), c + egui::vec2(-0.12 * s, 0.32 * s), c + egui::vec2(0.46 * s, -0.34 * s)];
+            let pts = vec![
+                c + egui::vec2(-0.42 * s, 0.02 * s),
+                c + egui::vec2(-0.12 * s, 0.32 * s),
+                c + egui::vec2(0.46 * s, -0.34 * s),
+            ];
             painter.add(egui::Shape::line(pts, egui::Stroke::new(2.4_f32, tint)));
         }
         Glyph::People => {
@@ -172,19 +214,39 @@ fn paint_glyph(painter: &egui::Painter, rect: egui::Rect, glyph: Glyph, tint: eg
                 let head = c + egui::vec2(dx * s, -0.20 * s);
                 painter.circle_stroke(head, 0.15 * s, stroke);
                 let body = c + egui::vec2(dx * s, 0.42 * s);
-                painter.add(egui::Shape::line(ring(body, 0.26 * s, 0.24 * s, std::f32::consts::PI, tau, 12), stroke));
+                painter.add(egui::Shape::line(
+                    ring(body, 0.26 * s, 0.24 * s, std::f32::consts::PI, tau, 12),
+                    stroke,
+                ));
             }
         }
         Glyph::Heart => {
             painter.circle_filled(c + egui::vec2(-0.20 * s, -0.12 * s), 0.22 * s, tint);
             painter.circle_filled(c + egui::vec2(0.20 * s, -0.12 * s), 0.22 * s, tint);
-            let pts = vec![c + egui::vec2(-0.41 * s, -0.04 * s), c + egui::vec2(0.41 * s, -0.04 * s), c + egui::vec2(0.0, 0.46 * s)];
+            let pts = vec![
+                c + egui::vec2(-0.41 * s, -0.04 * s),
+                c + egui::vec2(0.41 * s, -0.04 * s),
+                c + egui::vec2(0.0, 0.46 * s),
+            ];
             painter.add(egui::Shape::convex_polygon(pts, tint, egui::Stroke::NONE));
         }
         Glyph::Bag => {
-            let body = egui::Rect::from_center_size(c + egui::vec2(0.0, 0.14 * s), egui::vec2(0.84 * s, 0.62 * s));
+            let body = egui::Rect::from_center_size(
+                c + egui::vec2(0.0, 0.14 * s),
+                egui::vec2(0.84 * s, 0.62 * s),
+            );
             painter.rect_stroke(body, 3.0, stroke, egui::StrokeKind::Middle);
-            painter.add(egui::Shape::line(ring(c + egui::vec2(0.0, -0.17 * s), 0.22 * s, 0.24 * s, std::f32::consts::PI, tau, 12), stroke));
+            painter.add(egui::Shape::line(
+                ring(
+                    c + egui::vec2(0.0, -0.17 * s),
+                    0.22 * s,
+                    0.24 * s,
+                    std::f32::consts::PI,
+                    tau,
+                    12,
+                ),
+                stroke,
+            ));
         }
         Glyph::Star => {
             let pts: Vec<egui::Pos2> = (0..10)
@@ -230,7 +292,13 @@ fn idea_blurb(card: &UpdateCard) -> String {
 }
 
 /// The ··· menu on a row or a post. One click, one choice, then it closes.
-fn pulse_menu(ui: &mut egui::Ui, card: &UpdateCard, kind: PulseType, feed: bool, act: &mut Option<PulseAct>) {
+fn pulse_menu(
+    ui: &mut egui::Ui,
+    card: &UpdateCard,
+    kind: PulseType,
+    feed: bool,
+    act: &mut Option<PulseAct>,
+) {
     let id = card.id.clone();
     let pick = |ui: &mut egui::Ui, label: &str, a: PulseAct, act: &mut Option<PulseAct>| {
         if ui.button(label).clicked() {
@@ -243,7 +311,12 @@ fn pulse_menu(ui: &mut egui::Ui, card: &UpdateCard, kind: PulseType, feed: bool,
     }
     pick(ui, "Snooze until 9:00", PulseAct::Snooze(id.clone()), act);
     if kind == PulseType::Learn {
-        pick(ui, "That's right, keep it", PulseAct::Accept(id.clone()), act);
+        pick(
+            ui,
+            "That's right, keep it",
+            PulseAct::Accept(id.clone()),
+            act,
+        );
         pick(ui, "That's wrong", PulseAct::Wrong(id.clone()), act);
     } else if !feed {
         pick(ui, "Always do this", PulseAct::Always(id.clone()), act);
@@ -255,7 +328,11 @@ fn pulse_menu(ui: &mut egui::Ui, card: &UpdateCard, kind: PulseType, feed: bool,
 }
 
 /// One Ideas row: icon, bold "I can …" line, two or three lines of detail, ···.
-pub(super) fn paint_pulse_row(ui: &mut egui::Ui, card: &UpdateCard, kind: PulseType) -> Option<PulseAct> {
+pub(super) fn paint_pulse_row(
+    ui: &mut egui::Ui,
+    card: &UpdateCard,
+    kind: PulseType,
+) -> Option<PulseAct> {
     let mut act = None;
     let cat = pc::card_category(card);
     ui.horizontal_top(|ui| {
@@ -284,7 +361,13 @@ pub(super) fn paint_pulse_row(ui: &mut egui::Ui, card: &UpdateCard, kind: PulseT
             }
             let blurb = idea_blurb(card);
             if !blurb.is_empty() {
-                clamp_label(ui, &blurb, crate::theme::FONT_BODY, crate::theme::muted(), 3);
+                clamp_label(
+                    ui,
+                    &blurb,
+                    crate::theme::FONT_BODY,
+                    crate::theme::muted(),
+                    3,
+                );
             }
             ui.label(
                 RichText::new(kind.label().to_ascii_uppercase())
@@ -294,9 +377,15 @@ pub(super) fn paint_pulse_row(ui: &mut egui::Ui, card: &UpdateCard, kind: PulseT
             );
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-            ui.menu_button(RichText::new("···").size(16.0).strong().color(crate::theme::muted()), |ui| {
-                pulse_menu(ui, card, kind, false, &mut act);
-            });
+            ui.menu_button(
+                RichText::new("···")
+                    .size(16.0)
+                    .strong()
+                    .color(crate::theme::muted()),
+                |ui| {
+                    pulse_menu(ui, card, kind, false, &mut act);
+                },
+            );
         });
     });
     act
@@ -304,7 +393,12 @@ pub(super) fn paint_pulse_row(ui: &mut egui::Ui, card: &UpdateCard, kind: PulseT
 
 /// Where a post came from, for the line under its headline.
 pub(super) fn post_source(card: &UpdateCard) -> String {
-    if let Some(name) = card.pulse.source_name.as_deref().filter(|n| !n.trim().is_empty()) {
+    if let Some(name) = card
+        .pulse
+        .source_name
+        .as_deref()
+        .filter(|n| !n.trim().is_empty())
+    {
         return name.trim().to_string();
     }
     if let Some(host) = card.citations.first().and_then(|u| pc::source_host(u)) {
@@ -324,26 +418,55 @@ fn paint_heart_button(ui: &mut egui::Ui, on: bool) -> bool {
         .horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             let (rect, r1) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
-            let tint = if on { egui::Color32::from_rgb(0xf0, 0x4e, 0x6a) } else { crate::theme::muted() };
+            let tint = if on {
+                egui::Color32::from_rgb(0xf0, 0x4e, 0x6a)
+            } else {
+                crate::theme::muted()
+            };
             let c = rect.center();
             let s = 7.0;
             if on {
-                ui.painter().circle_filled(c + egui::vec2(-0.45 * s, -0.25 * s), 0.5 * s, tint);
-                ui.painter().circle_filled(c + egui::vec2(0.45 * s, -0.25 * s), 0.5 * s, tint);
-                let pts = vec![c + egui::vec2(-0.93 * s, -0.08 * s), c + egui::vec2(0.93 * s, -0.08 * s), c + egui::vec2(0.0, 0.95 * s)];
-                ui.painter().add(egui::Shape::convex_polygon(pts, tint, egui::Stroke::NONE));
+                ui.painter()
+                    .circle_filled(c + egui::vec2(-0.45 * s, -0.25 * s), 0.5 * s, tint);
+                ui.painter()
+                    .circle_filled(c + egui::vec2(0.45 * s, -0.25 * s), 0.5 * s, tint);
+                let pts = vec![
+                    c + egui::vec2(-0.93 * s, -0.08 * s),
+                    c + egui::vec2(0.93 * s, -0.08 * s),
+                    c + egui::vec2(0.0, 0.95 * s),
+                ];
+                ui.painter()
+                    .add(egui::Shape::convex_polygon(pts, tint, egui::Stroke::NONE));
             } else {
                 let stroke = egui::Stroke::new(1.4_f32, tint);
-                let mut pts = ring(c + egui::vec2(-0.45 * s, -0.25 * s), 0.5 * s, 0.5 * s, 2.6, 6.2, 10);
-                pts.extend(ring(c + egui::vec2(0.45 * s, -0.25 * s), 0.5 * s, 0.5 * s, 3.2, 6.9, 10));
+                let mut pts = ring(
+                    c + egui::vec2(-0.45 * s, -0.25 * s),
+                    0.5 * s,
+                    0.5 * s,
+                    2.6,
+                    6.2,
+                    10,
+                );
+                pts.extend(ring(
+                    c + egui::vec2(0.45 * s, -0.25 * s),
+                    0.5 * s,
+                    0.5 * s,
+                    3.2,
+                    6.9,
+                    10,
+                ));
                 pts.push(c + egui::vec2(0.0, 0.95 * s));
                 pts.push(pts[0]);
                 ui.painter().add(egui::Shape::line(pts, stroke));
             }
             let r2 = ui.add(
-                egui::Label::new(RichText::new(label).size(crate::theme::FONT_TIP).color(tint))
-                    .sense(egui::Sense::click())
-                    .selectable(false),
+                egui::Label::new(
+                    RichText::new(label)
+                        .size(crate::theme::FONT_TIP)
+                        .color(tint),
+                )
+                .sense(egui::Sense::click())
+                .selectable(false),
             );
             r1.clicked() || r2.clicked()
         })
@@ -396,7 +519,9 @@ impl Cabin {
                     .color(crate::theme::fg()),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if self.pulse_view.tab == PulseTab::Feed && crate::cards::ghost_pill(ui, "Feed instructions") {
+                if self.pulse_view.tab == PulseTab::Feed
+                    && crate::cards::ghost_pill(ui, "Feed instructions")
+                {
                     self.open_feed_instructions();
                 }
                 ui.add_space(6.0);
@@ -435,7 +560,9 @@ impl Cabin {
 
     pub(super) fn last_pulse_ms(&self) -> u64 {
         let p = &self.cfg.feed_pulse;
-        p.last_expiry_ms.max(p.last_quiet_release_ms).max(p.last_ideas_ms)
+        p.last_expiry_ms
+            .max(p.last_quiet_release_ms)
+            .max(p.last_ideas_ms)
     }
 
     // ------------------------------------------------------------ ranking inputs
@@ -463,7 +590,12 @@ impl Cabin {
     fn pulse_open_work(&self) -> Vec<String> {
         self.board
             .iter()
-            .filter(|c| !matches!(c.status, grokhub_core::BoardStatus::Done | grokhub_core::BoardStatus::Dismissed))
+            .filter(|c| {
+                !matches!(
+                    c.status,
+                    grokhub_core::BoardStatus::Done | grokhub_core::BoardStatus::Dismissed
+                )
+            })
             .map(|c| c.title.clone())
             .collect()
     }
@@ -538,7 +670,12 @@ impl Cabin {
         }
     }
 
-    fn paint_pulse_post(&mut self, ui: &mut egui::Ui, card: &UpdateCard, now: u64) -> Option<PulseAct> {
+    fn paint_pulse_post(
+        &mut self,
+        ui: &mut egui::Ui,
+        card: &UpdateCard,
+        now: u64,
+    ) -> Option<PulseAct> {
         let mut act = None;
         let kind = pc::pulse_type(card);
         let cat = pc::card_category(card);
@@ -571,9 +708,15 @@ impl Cabin {
                         );
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                        ui.menu_button(RichText::new("···").size(16.0).strong().color(crate::theme::muted()), |ui| {
-                            pulse_menu(ui, card, kind, true, &mut act);
-                        });
+                        ui.menu_button(
+                            RichText::new("···")
+                                .size(16.0)
+                                .strong()
+                                .color(crate::theme::muted()),
+                            |ui| {
+                                pulse_menu(ui, card, kind, true, &mut act);
+                            },
+                        );
                         ui.label(
                             RichText::new(pc::ago_label(card.created_at, now))
                                 .size(crate::theme::FONT_TIP)
@@ -588,7 +731,13 @@ impl Cabin {
                 );
                 let summary = card.body.as_deref().unwrap_or("").trim();
                 if !summary.is_empty() {
-                    clamp_label(ui, summary, crate::theme::FONT_BODY, crate::theme::muted(), 5);
+                    clamp_label(
+                        ui,
+                        summary,
+                        crate::theme::FONT_BODY,
+                        crate::theme::muted(),
+                        5,
+                    );
                 }
                 if let Some(url) = card.citations.first() {
                     let host = pc::source_host(url).unwrap_or_else(|| url.clone());
@@ -640,6 +789,14 @@ impl Cabin {
 
     // ------------------------------------------------------------ real images
 
+    #[cfg(test)]
+    pub(super) fn pulse_view_texture_size(&self, url: &str) -> Option<[usize; 2]> {
+        self.pulse_view
+            .textures
+            .get(&pc::image_cache_name(url))
+            .and_then(|t| t.as_ref().map(|t| t.size()))
+    }
+
     fn pulse_texture(&mut self, ctx: &egui::Context, url: &str) -> Option<egui::TextureHandle> {
         let name = pc::image_cache_name(url);
         if let Some(tex) = self.pulse_view.textures.get(&name) {
@@ -648,7 +805,12 @@ impl Cabin {
         let path = pulse_image_path(url);
         let bytes = std::fs::read(&path).ok()?;
         let tex = image::load_from_memory(&bytes).ok().map(|img| {
-            let thumb = img.thumbnail(480, 480).to_rgba8();
+            let img = if img.width() > 480 || img.height() > 480 {
+                img.thumbnail(480, 480)
+            } else {
+                img
+            };
+            let thumb = img.to_rgba8();
             let size = [thumb.width() as usize, thumb.height() as usize];
             ctx.load_texture(
                 format!("pulse-img-{name}"),
@@ -670,7 +832,11 @@ impl Cabin {
         let tried = &self.pulse_view.image_tried;
         let next = posts.iter().find(|c| {
             !tried.contains(&c.id)
-                && (c.pulse.image_urls.iter().any(|u| !pulse_image_path(u).exists())
+                && (c
+                    .pulse
+                    .image_urls
+                    .iter()
+                    .any(|u| !pulse_image_path(u).exists())
                     || (c.pulse.image_urls.is_empty() && !c.citations.is_empty()))
         });
         let Some(card) = next else {
@@ -730,7 +896,9 @@ impl Cabin {
             PulseAct::Like(id) => self.pulse_like(&id, &Self::local_day()),
             PulseAct::Open(id) => self.pulse_open(&id),
             PulseAct::Discuss(id) => self.discuss_card(&id),
-            PulseAct::Link(url) => self.follow_update_action(Some(UpdateAction::DeepLink { href: url })),
+            PulseAct::Link(url) => {
+                self.follow_update_action(Some(UpdateAction::DeepLink { href: url }))
+            }
         }
     }
 
@@ -822,10 +990,16 @@ impl Cabin {
         self.pulse_note(&card.title, LedgerReason::Accepted, day);
         match card.kind {
             UpdateKind::AutomateOffer => self.accept_automate_offer(id),
-            UpdateKind::Idea if card.idea_kind == Some(grokhub_core::IdeaKind::Automation) => self.apply_idea(id),
+            UpdateKind::Idea if card.idea_kind == Some(grokhub_core::IdeaKind::Automation) => {
+                self.apply_idea(id)
+            }
             _ => {
                 let action = card.idea_action();
-                self.night_nl = if action.is_empty() { card.title.clone() } else { action };
+                self.night_nl = if action.is_empty() {
+                    card.title.clone()
+                } else {
+                    action
+                };
                 self.auto_compose = true;
                 self.nav = Nav::Night;
             }
@@ -871,8 +1045,16 @@ impl Cabin {
     }
 
     pub(super) fn save_feed_instructions(&mut self, text: &str) {
-        let text: String = text.trim().chars().take(pc::FEED_INSTRUCTIONS_CAP).collect();
-        self.cfg.feed_instructions = if text == pc::DEFAULT_FEED_INSTRUCTIONS { String::new() } else { text };
+        let text: String = text
+            .trim()
+            .chars()
+            .take(pc::FEED_INSTRUCTIONS_CAP)
+            .collect();
+        self.cfg.feed_instructions = if text == pc::DEFAULT_FEED_INSTRUCTIONS {
+            String::new()
+        } else {
+            text
+        };
         self.persist_cfg();
         self.status = "Feed instructions saved. Future posts follow them.".into();
     }
@@ -992,7 +1174,8 @@ impl Cabin {
                     self.cfg.feed_instructions = text;
                     self.cfg.feed_pulse.taste_since_rewrite = 0;
                     self.persist_cfg();
-                    self.status = "Feed instructions updated from what you liked and skipped".into();
+                    self.status =
+                        "Feed instructions updated from what you liked and skipped".into();
                 }
             }
             Err(mpsc::TryRecvError::Empty) => self.pulse_view.rewrite_rx = Some(rx),
@@ -1007,7 +1190,8 @@ impl Cabin {
     /// becomes a Focus line in the feed instructions.
     pub(super) fn migrate_pulse_store(&mut self) -> Option<pc::PulseMigration> {
         let out = pc::migrate_to_pulse(&mut self.updates, &mut self.cfg.feed_pulse)?;
-        if self.cfg.feed_instructions.trim().is_empty() && !self.cfg.digest_brief.trim().is_empty() {
+        if self.cfg.feed_instructions.trim().is_empty() && !self.cfg.digest_brief.trim().is_empty()
+        {
             self.cfg.feed_instructions = pc::instructions_from_brief(&self.cfg.digest_brief);
         }
         self.persist_updates();
@@ -1020,11 +1204,19 @@ fn paint_thumbs(ui: &mut egui::Ui, textures: &[Option<egui::TextureHandle>]) {
     let gap = 6.0;
     let n = textures.len().max(1) as f32;
     let max_w = ui.available_width();
-    let one = if textures.len() == 1 { (max_w * 0.62).min(360.0) } else { ((max_w - gap * (n - 1.0)) / n).min(200.0) };
+    let one = if textures.len() == 1 {
+        (max_w * 0.62).min(360.0)
+    } else {
+        ((max_w - gap * (n - 1.0)) / n).min(200.0)
+    };
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = gap;
         for tex in textures {
-            let h = if textures.len() == 1 { (one * 0.56).min(200.0) } else { THUMB_H };
+            let h = if textures.len() == 1 {
+                (one * 0.56).min(200.0)
+            } else {
+                THUMB_H
+            };
             let (rect, _) = ui.allocate_exact_size(egui::vec2(one, h), egui::Sense::hover());
             match tex {
                 Some(tex) => {
@@ -1035,10 +1227,16 @@ fn paint_thumbs(ui: &mut egui::Ui, textures: &[Option<egui::TextureHandle>]) {
                     let img = tw / th.max(1.0);
                     let uv = if img > slot {
                         let w = slot / img;
-                        egui::Rect::from_min_max(egui::pos2(0.5 - w / 2.0, 0.0), egui::pos2(0.5 + w / 2.0, 1.0))
+                        egui::Rect::from_min_max(
+                            egui::pos2(0.5 - w / 2.0, 0.0),
+                            egui::pos2(0.5 + w / 2.0, 1.0),
+                        )
                     } else {
                         let h = img / slot;
-                        egui::Rect::from_min_max(egui::pos2(0.0, 0.5 - h / 2.0), egui::pos2(1.0, 0.5 + h / 2.0))
+                        egui::Rect::from_min_max(
+                            egui::pos2(0.0, 0.5 - h / 2.0),
+                            egui::pos2(1.0, 0.5 + h / 2.0),
+                        )
                     };
                     egui::Image::from_texture(tex)
                         .uv(uv)
@@ -1046,16 +1244,26 @@ fn paint_thumbs(ui: &mut egui::Ui, textures: &[Option<egui::TextureHandle>]) {
                         .paint_at(ui, rect);
                 }
                 None => {
-                    ui.painter().rect_filled(rect, 8.0, crate::theme::surface_hover());
+                    ui.painter()
+                        .rect_filled(rect, 8.0, crate::theme::surface_hover());
                     let c = rect.center();
                     let stroke = egui::Stroke::new(1.4_f32, crate::theme::subtle());
                     let frame = egui::Rect::from_center_size(c, egui::vec2(26.0, 20.0));
-                    ui.painter().rect_stroke(frame, 3.0, stroke, egui::StrokeKind::Middle);
+                    ui.painter()
+                        .rect_stroke(frame, 3.0, stroke, egui::StrokeKind::Middle);
                     ui.painter().line(
-                        vec![frame.left_bottom() + egui::vec2(3.0, -3.0), c + egui::vec2(-2.0, 1.0), c + egui::vec2(3.0, 5.0)],
+                        vec![
+                            frame.left_bottom() + egui::vec2(3.0, -3.0),
+                            c + egui::vec2(-2.0, 1.0),
+                            c + egui::vec2(3.0, 5.0),
+                        ],
                         stroke,
                     );
-                    ui.painter().circle_filled(c + egui::vec2(6.0, -4.0), 2.2, crate::theme::subtle());
+                    ui.painter().circle_filled(
+                        c + egui::vec2(6.0, -4.0),
+                        2.2,
+                        crate::theme::subtle(),
+                    );
                 }
             }
         }
@@ -1088,7 +1296,10 @@ fn source_preview(page: &str) -> Option<String> {
         return None;
     }
     let mut buf = Vec::new();
-    resp.into_reader().take(PAGE_CAP).read_to_end(&mut buf).ok()?;
+    resp.into_reader()
+        .take(PAGE_CAP)
+        .read_to_end(&mut buf)
+        .ok()?;
     pc::og_image(&String::from_utf8_lossy(&buf), page)
 }
 
@@ -1105,7 +1316,13 @@ fn cache_image(url: &str) -> bool {
         return false;
     };
     let mut buf = Vec::new();
-    if resp.into_reader().take(IMAGE_CAP).read_to_end(&mut buf).is_err() || image::load_from_memory(&buf).is_err() {
+    if resp
+        .into_reader()
+        .take(IMAGE_CAP)
+        .read_to_end(&mut buf)
+        .is_err()
+        || image::load_from_memory(&buf).is_err()
+    {
         return false;
     }
     if let Some(dir) = path.parent() {

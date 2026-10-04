@@ -1159,4 +1159,78 @@ mod tests {
         set_unattended_client_for_test(None);
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    /// Pulse: three likes and dislikes and the cabin rewrites the Feed
+    /// instructions itself, on the fake model.
+    #[test]
+    fn pulse_rewrites_feed_instructions_after_likes_and_dislikes() {
+        let (_lock, root, _env) = isolated("pulse-rewrite");
+        let after = "Keep my feed short.\n\nShow more of:\n- Rust and egui releases.\n\nShow less of:\n- Crypto price swings.";
+        let say = Arc::new(Say {
+            text: std::sync::Mutex::new(after.into()),
+            calls: AtomicUsize::new(0),
+        });
+        set_unattended_client_for_test(Some(say.clone()));
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.native_engine = true;
+        cabin.cfg.feed_instructions = "Keep my feed short.".into();
+        cabin.updates = vec![
+            grokhub_core::digest_card("d1", "Rust 1.92 ships", "Faster builds.", 1),
+            grokhub_core::digest_card("d2", "Crypto prices jump", "A big week.", 2),
+            grokhub_core::digest_card("d3", "egui 0.37 is out", "New layout tools.", 3),
+        ];
+        let id = |cabin: &Cabin, title: &str| {
+            cabin
+                .updates
+                .iter()
+                .find(|c| c.title == title)
+                .unwrap()
+                .id
+                .clone()
+        };
+        let rust = id(&cabin, "Rust 1.92 ships");
+        let crypto = id(&cabin, "Crypto prices jump");
+        let egui_post = id(&cabin, "egui 0.37 is out");
+        cabin.pulse_like(&rust, "2026-10-04");
+        cabin.pulse_not_this(&crypto, "2026-10-04");
+        assert_eq!(cabin.cfg.feed_pulse.taste_since_rewrite, 2);
+        assert!(
+            cabin.pulse_view.rewrite_rx.is_none(),
+            "no rewrite before the third"
+        );
+        assert_eq!(cabin.cfg.feed_instructions, "Keep my feed short.");
+        cabin.pulse_like(&egui_post, "2026-10-04");
+        assert!(cabin.pulse_view.rewrite_rx.is_some());
+        wait_until(|| {
+            cabin.poll_pulse_rewrite();
+            cabin.pulse_view.rewrite_rx.is_none()
+        });
+        assert_eq!(cabin.cfg.feed_instructions, after);
+        assert_eq!(cabin.cfg.feed_pulse.taste_since_rewrite, 0);
+        assert_eq!(say.calls.load(Ordering::SeqCst), 1);
+        let memory = crate::config::read_memory("MEMORY.md");
+        for line in [
+            "- [2026-10-04] pulse: liked \"Rust 1.92 ships\" reason=liked",
+            "- [2026-10-04] pulse: dismissed \"Crypto prices jump\" reason=not-this",
+            "- [2026-10-04] pulse: liked \"egui 0.37 is out\" reason=liked",
+        ] {
+            assert!(memory.contains(line), "{line} in {memory}");
+        }
+        // The next lookup carries the rewritten text.
+        let prompt = grokhub_core::pulse::feed_prompt("Rust", &cabin.cfg.feed_instructions);
+        assert!(prompt.ends_with("- Crypto price swings."), "{prompt}");
+        // A reply that is not instructions keeps the current text.
+        say.text
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .clone_from(&"NONE".to_string());
+        cabin.spawn_pulse_rewrite();
+        wait_until(|| {
+            cabin.poll_pulse_rewrite();
+            cabin.pulse_view.rewrite_rx.is_none()
+        });
+        assert_eq!(cabin.cfg.feed_instructions, after);
+        set_unattended_client_for_test(None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
