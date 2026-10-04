@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.85** — Delete all no longer brings deleted chats back: an older background save can't overwrite a newer one anymore.
+**v2.10.86** — Delete all no longer brings deleted chats back: an older background save can't overwrite a newer one anymore.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.85.tar.gz`, AUR | **v2.10.85** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.85.exe`, `grokhub-windows-v2.10.85.zip` | **v2.10.85** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.86.tar.gz`, AUR | **v2.10.86** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.86.exe`, `grokhub-windows-v2.10.86.zip` | **v2.10.86** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.

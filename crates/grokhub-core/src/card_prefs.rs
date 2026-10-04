@@ -20,6 +20,8 @@ use crate::update_feed::{
 pub const TOPIC_CAP: usize = 200;
 /// Group keys kept per store.
 pub const GROUP_CAP: usize = 200;
+/// Card uses kept. The oldest goes first.
+pub const USE_CAP: usize = 100;
 /// Half-life for `pos` and `neg`, in days.
 const HALF_LIFE_DAYS: f64 = 14.0;
 const DAY_MS: f64 = 86_400_000.0;
@@ -78,6 +80,41 @@ pub struct Weight {
     pub at: u64,
 }
 
+/// How far a click on a card went. Stored as a number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum UseDepth {
+    Opened = 1,
+    Ran = 2,
+    Completed = 3,
+}
+
+/// What the click did. Stored as a number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UseAction {
+    OpenedChat = 1,
+    OpenedBoard = 2,
+    OpenedAutomations = 3,
+    OpenedLink = 4,
+    Discussed = 5,
+    FiledTodo = 6,
+    Automated = 7,
+    FinishedTodo = 8,
+}
+
+/// One card action the user took, keyed by the card's group (its source).
+/// `depth` and `did` are the numbers of [`UseDepth`] and [`UseAction`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct CardUse {
+    #[serde(default)]
+    pub depth: u8,
+    #[serde(default)]
+    pub did: u8,
+    #[serde(default)]
+    pub n: u32,
+    #[serde(default)]
+    pub at: u64,
+}
+
 /// Kind names, group keys, and single title keywords. Values are numbers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct CardPrefs {
@@ -87,6 +124,9 @@ pub struct CardPrefs {
     pub groups: BTreeMap<String, Weight>,
     #[serde(default)]
     pub topics: BTreeMap<String, Weight>,
+    /// Group key → how the user used cards from that group. At most [`USE_CAP`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub uses: BTreeMap<String, CardUse>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -261,6 +301,9 @@ fn event_deltas(event: CardEvent, after_open: Option<bool>) -> (Option<Delta>, O
         CardEvent::Hidden => (None, Some(Delta::Neg(3.0)), None),
         CardEvent::Unhidden => (None, Some(Delta::Unhide), None),
         CardEvent::FollowUp => (Some(Delta::Count), Some(Delta::Count), Some(Delta::Count)),
+        CardEvent::Rejected => (Some(Delta::Neg(1.5)), Some(Delta::Neg(3.0)), Some(Delta::Neg(3.0))),
+        CardEvent::Ran => (Some(Delta::Pos(1.0)), Some(Delta::Pos(2.0)), Some(Delta::Pos(2.0))),
+        CardEvent::Completed => (Some(Delta::Pos(1.0)), Some(Delta::Pos(3.0)), Some(Delta::Pos(3.0))),
     }
 }
 
@@ -286,6 +329,75 @@ pub fn apply_card_event(
         }
         enforce_cap(&mut prefs.topics, now, TOPIC_CAP);
     }
+}
+
+/// The event a use step logs. Opening is the existing [`CardEvent::Opened`].
+pub fn use_event(depth: UseDepth) -> CardEvent {
+    match depth {
+        UseDepth::Opened => CardEvent::Opened,
+        UseDepth::Ran => CardEvent::Ran,
+        UseDepth::Completed => CardEvent::Completed,
+    }
+}
+
+/// Remember how far the user took this card, and learn from it. A use never
+/// goes back down: opening a card that already ran keeps "ran". Returns false
+/// when nothing changed (the same step again), so callers can skip a save.
+pub fn record_card_use(
+    prefs: &mut CardPrefs,
+    card: &UpdateCard,
+    depth: UseDepth,
+    did: UseAction,
+    now: u64,
+) -> bool {
+    let key = signal_group(card);
+    let prior = prefs.uses.get(&key).map(|row| row.depth).unwrap_or(0);
+    if depth != UseDepth::Opened && prior >= depth as u8 {
+        return false;
+    }
+    apply_card_event(prefs, card, use_event(depth), None, now);
+    let row = prefs.uses.entry(key).or_default();
+    if depth as u8 >= row.depth {
+        row.depth = depth as u8;
+        row.did = did as u8;
+    }
+    row.n = row.n.saturating_add(1);
+    row.at = now;
+    while prefs.uses.len() > USE_CAP {
+        let Some(oldest) = prefs
+            .uses
+            .iter()
+            .min_by(|a, b| a.1.at.cmp(&b.1.at).then(a.0.cmp(b.0)))
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        prefs.uses.remove(&oldest);
+    }
+    true
+}
+
+/// How far the user took cards from this card's group: 0 when never used.
+pub fn used_depth(prefs: &CardPrefs, card: &UpdateCard) -> u8 {
+    prefs
+        .uses
+        .get(&signal_group(card))
+        .map(|row| row.depth)
+        .unwrap_or(0)
+}
+
+/// A card the user asked to keep seeing: runs and schedules they set up,
+/// a card they pinned, or one that keeps coming back on its own.
+pub fn card_recurs(card: &UpdateCard) -> bool {
+    matches!(card.kind, UpdateKind::AutomationDone | UpdateKind::ScheduleCreated)
+        || card.feed_pin
+        || card.runs > 1
+}
+
+/// A one-off card whose action the user already ran or finished. Home does
+/// not offer it again; similar cards rise through the learned kind and topics.
+pub fn already_done(card: &UpdateCard, prefs: &CardPrefs) -> bool {
+    !card_recurs(card) && !card_needs_you(card) && used_depth(prefs, card) >= UseDepth::Ran as u8
 }
 
 fn apply_signal(prefs: &mut CardPrefs, signal: &CardSignal) {
@@ -496,6 +608,7 @@ pub fn rank_home_events(
     let mut prelim: Vec<(UpdateCard, f64)> = visible_updates(cards)
         .into_iter()
         .filter(|card| surfaces_on_home(card, pulse, now))
+        .filter(|card| !already_done(card, prefs))
         .map(|card| {
             let score = card_score(&card, prefs, now, false);
             (card, score)
@@ -819,6 +932,142 @@ mod tests {
                     assert!(matches!(field.as_str(), "pos" | "neg" | "n" | "at"), "{field}");
                 }
             }
+        }
+    }
+
+    fn ids(cards: &[UpdateCard]) -> Vec<String> {
+        cards.iter().map(|card| card.id.clone()).collect()
+    }
+
+    #[test]
+    fn x_without_use_is_a_strong_no_for_kind_and_topic() {
+        use crate::update_feed::{automate_offer_card, suggestion_card};
+        let now = 1_000;
+        let rejected = suggestion_card("src-a", "Clean ledger exports", "body", now);
+        let mut prefs = CardPrefs::default();
+        apply_card_event(&mut prefs, &rejected, CardEvent::Rejected, None, now);
+        assert_eq!(weight_of(&prefs.kinds, "suggestion").neg, 1.5);
+        assert_eq!(weight_of(&prefs.groups, &signal_group(&rejected)).neg, 3.0);
+        assert_eq!(weight_of(&prefs.topics, "clean").neg, 3.0);
+        assert_eq!(weight_of(&prefs.topics, "ledger").neg, 3.0);
+        assert_eq!(weight_of(&prefs.topics, "exports").neg, 3.0);
+        // Three times a dismiss after the card was looked at and dropped.
+        let mut soft = CardPrefs::default();
+        apply_card_event(&mut soft, &rejected, CardEvent::Dismissed, Some(false), now);
+        assert_eq!(weight_of(&soft.groups, &signal_group(&rejected)).neg, 1.0);
+
+        let similar = suggestion_card("src-b", "Clean ledger archive", "", now);
+        let other = automate_offer_card("src-j", "Rotate backup keys", now);
+        let score = card_score(&similar, &prefs, now, false);
+        // 0.3 base − 0.2142857 kind − 0.3 topics + 0.3 recency.
+        assert!((score - 0.085_714_285_714_285_7).abs() < 1e-9, "{score}");
+        assert!((card_score(&other, &prefs, now, false) - 0.6).abs() < 1e-9);
+        let rank = rank_home_events(
+            &[similar.clone(), other.clone()],
+            &FeedPulse::default(),
+            &prefs,
+            now,
+        );
+        assert_eq!(ids(&rank.deck), vec![other.id.clone()]);
+        assert_eq!(ids(&rank.folded), vec![similar.id.clone()]);
+    }
+
+    #[test]
+    fn a_finished_action_is_not_offered_again_but_a_related_one_is() {
+        use crate::update_feed::suggestion_card;
+        let now = 1_000;
+        let done = suggestion_card("chip-backup", "Backup photos library", "", now);
+        let mut prefs = CardPrefs::default();
+        assert!(record_card_use(&mut prefs, &done, UseDepth::Completed, UseAction::FinishedTodo, now));
+        assert_eq!(
+            prefs.uses.get("sugg:chip-backup"),
+            Some(&CardUse { depth: 3, did: 8, n: 1, at: now })
+        );
+        // The same step again is not a second use.
+        assert!(!record_card_use(&mut prefs, &done, UseDepth::Completed, UseAction::FinishedTodo, now));
+        assert!(!record_card_use(&mut prefs, &done, UseDepth::Ran, UseAction::FiledTodo, now));
+        assert_eq!(prefs.uses["sugg:chip-backup"].n, 1);
+        assert_eq!(weight_of(&prefs.kinds, "suggestion").pos, 1.0);
+        assert_eq!(weight_of(&prefs.groups, "sugg:chip-backup").pos, 3.0);
+        assert_eq!(weight_of(&prefs.topics, "backup").pos, 3.0);
+
+        let again = suggestion_card("chip-backup", "Backup photos library", "", now);
+        let related = suggestion_card("chip-sync", "Backup music folder", "", now);
+        let unrelated = suggestion_card("chip-logs", "Rotate server logs", "", now);
+        assert!(already_done(&again, &prefs));
+        assert!(!already_done(&related, &prefs));
+        let rank = rank_home_events(
+            &[again.clone(), unrelated.clone(), related.clone()],
+            &FeedPulse::default(),
+            &prefs,
+            now,
+        );
+        assert_eq!(ids(&rank.deck), vec![related.id.clone(), unrelated.id.clone()]);
+        assert!(rank.folded.is_empty());
+        assert!((card_score(&related, &prefs, now, false) - 1.066_666_666_666_666_7).abs() < 1e-9);
+        assert!((card_score(&unrelated, &prefs, now, false) - 0.766_666_666_666_666_7).abs() < 1e-9);
+
+        // Only opened: the card can still come back.
+        let peeked = suggestion_card("chip-peek", "Tidy downloads", "", now);
+        let mut looked = CardPrefs::default();
+        assert!(record_card_use(&mut looked, &peeked, UseDepth::Opened, UseAction::Discussed, now));
+        assert_eq!(used_depth(&looked, &peeked), 1);
+        let rank = rank_home_events(std::slice::from_ref(&peeked), &FeedPulse::default(), &looked, now);
+        assert_eq!(ids(&rank.deck), vec![peeked.id.clone()]);
+    }
+
+    #[test]
+    fn a_recurring_card_does_repeat() {
+        use crate::update_feed::suggestion_card;
+        let mut prefs = CardPrefs::default();
+        let first = automation_done_card("nightly-backup", "Nightly backup", "ok", 1_000);
+        assert!(record_card_use(&mut prefs, &first, UseDepth::Completed, UseAction::OpenedAutomations, 1_000));
+        let next = automation_done_card("nightly-backup", "Nightly backup", "ok again", 2_000);
+        assert!(card_recurs(&next));
+        assert!(!already_done(&next, &prefs));
+        let rank = rank_home_events(std::slice::from_ref(&next), &FeedPulse::default(), &prefs, 2_000);
+        assert_eq!(ids(&rank.deck), vec![next.id.clone()]);
+
+        // A card the user pinned asked to stay, even after it ran.
+        let mut pinned = suggestion_card("chip-pin", "Weekly invoice check", "", 1_000);
+        pinned.feed_pin = true;
+        assert!(record_card_use(&mut prefs, &pinned, UseDepth::Ran, UseAction::Automated, 1_000));
+        let rank = rank_home_events(std::slice::from_ref(&pinned), &FeedPulse::default(), &prefs, 1_000);
+        assert_eq!(ids(&rank.deck), vec![pinned.id.clone()]);
+    }
+
+    #[test]
+    fn card_uses_stay_bounded_and_old_files_still_load() {
+        use crate::update_feed::suggestion_card;
+        let mut prefs = CardPrefs::default();
+        for i in 0..(USE_CAP as u64 + 20) {
+            let card = suggestion_card(&format!("chip-{i:03}"), "Sort inbox", "", i);
+            assert!(record_card_use(&mut prefs, &card, UseDepth::Ran, UseAction::Automated, 10 + i));
+        }
+        assert_eq!(prefs.uses.len(), 100);
+        assert!(!prefs.uses.contains_key("sugg:chip-000"));
+        assert!(!prefs.uses.contains_key("sugg:chip-019"));
+        assert!(prefs.uses.contains_key("sugg:chip-020"));
+        assert!(prefs.uses.contains_key("sugg:chip-119"));
+
+        let old: CardPrefs = serde_json::from_str(
+            r#"{"kinds":{"suggestion":{"pos":1.0,"neg":3.0,"n":2,"at":5}},"groups":{},"topics":{}}"#,
+        )
+        .unwrap();
+        assert!(old.uses.is_empty());
+        assert_eq!(old.kinds["suggestion"].neg, 3.0);
+        // An empty use map is not written, so old builds read the file unchanged.
+        assert!(!card_prefs_json(&old).unwrap().contains("uses"));
+        let text = card_prefs_json(&prefs).unwrap();
+        let back: CardPrefs = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.uses.len(), 100);
+        // Legacy menu events in the signal log still parse.
+        for line in [
+            r#"{"ts":1,"card_id":"a","kind":"suggestion","group":"sugg:a","source_id":"a","event":"more"}"#,
+            r#"{"ts":1,"card_id":"a","kind":"suggestion","group":"sugg:a","source_id":"a","event":"less"}"#,
+            r#"{"ts":1,"card_id":"a","kind":"suggestion","group":"sugg:a","source_id":"a","event":"hidden"}"#,
+        ] {
+            assert!(serde_json::from_str::<CardSignal>(line).is_ok(), "{line}");
         }
     }
 }
