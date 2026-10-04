@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.89** — Scheduled automations run in the background without taking over your chat, and their Follow up chats live on the card instead of in History.
+**v2.10.90** — Scheduled jobs run like crons: nothing shows while they run, they never hold up your chat, and their results land on the Follow up and Home cards.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.89.tar.gz`, AUR | **v2.10.89** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.89.exe`, `grokhub-windows-v2.10.89.zip` | **v2.10.89** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.90.tar.gz`, AUR | **v2.10.90** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.90.exe`, `grokhub-windows-v2.10.90.zip` | **v2.10.90** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
