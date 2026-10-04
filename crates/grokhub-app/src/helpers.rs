@@ -11,7 +11,7 @@ pub fn collect_other_chip_threads(threads: &[threads::ChatThread], current_id: &
     threads
         .iter()
         .rev()
-        .filter(|t| t.id != current_id && !t.scratch)
+        .filter(|t| t.id != current_id && !t.scratch && !t.background)
         .filter_map(|t| chip_thread_from_messages(&t.title, &t.messages))
         .take(6)
         .collect()
