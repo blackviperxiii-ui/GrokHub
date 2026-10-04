@@ -549,6 +549,14 @@ pub fn is_background_history_title(title: &str) -> bool {
         || t.starts_with("summarize the workboard.")
 }
 
+/// Title prefix of a Follow up card's chat. Scheduled work, not a user chat.
+pub const FOLLOW_UP_PREFIX: &str = "Follow up · ";
+
+/// A Follow up card's chat. Ones filed before they were hidden are parked at startup.
+pub fn is_follow_up_title(title: &str) -> bool {
+    title.trim_start().starts_with(FOLLOW_UP_PREFIX)
+}
+
 /// Title of the one hidden chat that night, loops, and inbox work run in.
 pub const BACKGROUND_THREAD_TITLE: &str = "Background";
 
@@ -1691,6 +1699,14 @@ mod tests {
             global,
             "creating a project must not change the chat section"
         );
+    }
+
+    #[test]
+    fn follow_up_chats_are_scheduled_work() {
+        assert!(is_follow_up_title("Follow up · Run a read-only host snapshot"));
+        assert!(is_follow_up_title("  Follow up · Morning issues"));
+        assert!(!is_follow_up_title("Follow up on the release notes"));
+        assert!(!is_follow_up_title("Chat"));
     }
 
     #[test]

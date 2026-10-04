@@ -4,6 +4,8 @@
 
 Background work stays out of the sidebar History. A `/bg` run forks the chat's Grok session, and a `/loop` or a quick-chip reply through the CLI writes a session of its own; on the next launch those sessions came back as extra chats in History. Their ids are now filed on the hidden Background chat, so startup adoption and the Grok session list skip them, and chats a loop already leaked are hidden on load. Nothing is deleted: the sessions stay on disk, and deleting all chats still removes them.
 
+Scheduled automations run in the background on their own process and stay out of your chats. A clock automation used to borrow your chat's reply slot: it switched you to the chat page when it fired, and a message you sent while it ran stopped it. Its Follow up chat ("Follow up · …") was also a History row. Now each run is its own background `grok -p` (or native engine run) on the hidden Background chat, one at a time, and it doesn't use any of your three `/bg` slots or show in the chat's background strip. You stay on the page you're on, and your messages don't stop it. Its report still lands on the Follow up card on the workboard and the Home card, where you read and answer it, but that chat is no longer listed in History. Follow up chats filed by older builds are hidden on load. Nothing is deleted.
+
 Hovering Send while no reply is running says just "Send" again. Since 2.10.87 the hover could read "Send · Read file" after a turn that used a tool, because the finished turn's tool cards are only cleared when the next turn starts, and it could also show another chat's pending permission title. The tool or wait name now only appears on Stop's hover while a reply is running here.
 
 ## 2.10.87 — 2026-10-03

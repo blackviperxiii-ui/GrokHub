@@ -92,7 +92,6 @@ impl Cabin {
                     // The other chat's reply keeps going in the background
                     // instead of being cut off by this send.
                     if !self.move_turn_to_background() {
-                        self.settle_auto_run(AutoEnd::Stopped, None);
                         self.halt_in_flight();
                         self.finish_hub_dispatch("Interrupted", false);
                     }

@@ -3594,30 +3594,32 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "Ask must not silent always-approve a loop: {fire_loop}"
         );
         let fire_night = fn_src(&src, "fire_night");
+        let start = fn_src(&src, "start_scheduled_run");
         assert!(
-            fire_night.contains("send_scheduled_chat"),
-            "night chat must inherit PermissionMode, not a separate yolo path: {fire_night}"
+            start.contains("start_bg_task"),
+            "night runs in its own background process: {start}"
+        );
+        let bg = fn_src(&src, "start_bg_task");
+        assert!(
+            bg.contains("scheduled_flags") && bg.contains("needs_approval"),
+            "a background run must inherit PermissionMode, not a separate yolo path: {bg}"
         );
         let send_at = fire_night
-            .find("send_scheduled_chat")
-            .expect("night send");
+            .find("start_scheduled_run")
+            .expect("night start");
         let ran_at = fire_night
             .rfind("mark_auto_ran")
             .expect("night mark ran");
         assert!(
             send_at < ran_at,
-            "night must mark ran after a live kick, not before: {fire_night}"
-        );
-        assert!(
-            fire_night.contains("self.running")
-                && fire_night.contains("pending_kick")
-                && fire_night.contains("grok_p_rx"),
-            "night marks ran only after a live kick: {fire_night}"
+            "night must mark ran after the run started, not before: {fire_night}"
         );
         let send_block = &fire_night[send_at..];
         assert!(
-            send_block.contains("mark_auto_ran") && send_block.contains("mark_auto_skipped"),
-            "a night send that did not start a live kick must skip, not retry every 5s: {fire_night}"
+            send_block.contains("Ok(_)")
+                && send_block.contains("mark_auto_ran")
+                && send_block.contains("mark_auto_skipped"),
+            "a night run that did not start must skip, not retry every 5s: {fire_night}"
         );
         let inbox = fn_src(&src, "drain_inbox");
         assert!(
@@ -3972,8 +3974,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "a night replay must stamp usage.json without cloning every thread: {fire_night}"
         );
         assert!(
-            fire_night.contains("land_on_real_chat"),
-            "a night chat job must not land on Scratch: {fire_night}"
+            !fire_night.contains("land_on_real_chat") && !fire_night.contains("self.nav"),
+            "a night job runs in the background and never opens the chat page: {fire_night}"
         );
         let agent = fire_night
             .find("self.can_agent()")
@@ -15388,7 +15390,6 @@ fn quiet_cabin() -> Cabin {
         confirm: None,
         jump_last_you: false,
         find: super::chat_ui::ChatFind::default(),
-        auto_run: None,
         elicit_ask: None,
         elicit_draft: String::new(),
         secret_hold: Vec::new(),
@@ -16630,54 +16631,45 @@ fn a_failed_scheduled_turn_marks_the_job_and_posts_one_card() {
     app.automations = vec![health_job("a1")];
     let cards_before = app.updates.len();
 
-    app.auto_run = Some(("a1".into(), Some("t-auto".into())));
-    // A turn on another chat does not settle the job.
-    app.settle_auto_run(super::night::AutoEnd::Failed("other chat"), Some("t-other"));
-    assert!(app.auto_run.is_some());
+    // A run that settles no automation touches no job.
+    app.settle_scheduled_run(None, &grokhub_core::BgEnd::Failed("other run".into()), "");
     assert!(app.automations[0].health.is_clear());
 
-    app.settle_auto_run(super::night::AutoEnd::Failed("Error: credit limit"), Some("t-auto"));
-    assert!(app.auto_run.is_none());
+    app.settle_scheduled_run(Some("a1"), &grokhub_core::BgEnd::Failed("Error: credit limit".into()), "");
     assert_eq!(app.automations[0].health.outcome, grokhub_core::AutoOutcome::Failed);
     assert_eq!(app.automations[0].health.error, "credit limit");
     assert_eq!(app.updates.len(), cards_before + 1);
     assert!(app.updates.iter().any(|c| c.title == "Board summary failed"));
 
     // A second failure in the streak updates the job, not the feed.
-    app.auto_run = Some(("a1".into(), None));
-    app.settle_auto_run(super::night::AutoEnd::Failed("again"), Some("anything"));
+    app.settle_scheduled_run(Some("a1"), &grokhub_core::BgEnd::Failed("again".into()), "");
     assert_eq!(app.automations[0].health.fail_streak, 2);
     assert_eq!(app.updates.len(), cards_before + 1);
 
     // A halt is not a failure and not a success.
-    app.auto_run = Some(("a1".into(), None));
-    app.settle_auto_run(super::night::AutoEnd::Stopped, None);
+    app.settle_scheduled_run(Some("a1"), &grokhub_core::BgEnd::Stopped, "");
     assert_eq!(app.automations[0].health.outcome, grokhub_core::AutoOutcome::Stopped);
     assert_eq!(app.automations[0].health.fail_streak, 2);
 
-    app.auto_run = Some(("a1".into(), None));
-    app.settle_auto_run(super::night::AutoEnd::Ok, None);
+    app.settle_scheduled_run(Some("a1"), &grokhub_core::BgEnd::Done, "");
     assert!(!app.automations[0].health.failing());
     assert_eq!(app.automations[0].health.fail_streak, 0);
 
-    // Nothing in flight: a turn end touches no job.
-    app.settle_auto_run(super::night::AutoEnd::Failed("x"), None);
+    // A run with no automation touches no job.
+    app.settle_scheduled_run(None, &grokhub_core::BgEnd::Failed("x".into()), "");
     assert_eq!(app.automations[0].health.fail_streak, 0);
 }
 
 #[test]
 fn scheduled_turns_settle_on_every_turn_end() {
     let src = cabin_src();
-    let fail = fn_src(&src, "apply_job_fail");
-    assert!(fail.contains("AutoEnd::Failed(err)"), "{fail}");
-    assert!(fail.contains("AutoEnd::Stopped"), "{fail}");
-    let finish = fn_src(&src, "finish_acp_turn");
-    assert!(finish.contains("AutoEnd::Ok"), "{finish}");
-    let halt = fn_src(&src, "halt_work");
-    assert!(halt.contains("AutoEnd::Stopped"), "{halt}");
+    let posted = fn_src(&src, "post_finished_bg_runs");
+    assert!(posted.contains("BgOrigin::Scheduled") && posted.contains("settle_scheduled_run"), "{posted}");
     let fire = fn_src(&src, "fire_night");
-    assert!(fire.contains("self.auto_run = Some("), "{fire}");
+    assert!(fire.contains("start_scheduled_run"), "{fire}");
     assert!(fire.contains("note_auto_failed"), "{fire}");
+    let start = fn_src(&src, "start_scheduled_run");
+    assert!(start.contains("BgOrigin::Scheduled") && start.contains("run.automation = Some("), "{start}");
     let page = fn_src(&src, "ui_scheduled_automations");
     assert!(page.contains("automation_health_line"), "{page}");
 }
@@ -17432,23 +17424,17 @@ fn a_report_run_lands_in_follow_up_with_a_chat_and_a_chore_does_not() {
         test_automation("a-issues", "Morning issues", "every weekday at 9, summarize my open GitHub issues"),
         test_automation("a-tidy", "Tidy downloads", "every day at 18, clean the downloads folder"),
     ];
-    // You are on another chat; a scheduled chat run on its own thread ends with a report.
+    // You are on another chat; a scheduled run in its own process ends with a report.
     cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
     cabin.thread_idx = 0;
     cabin.messages = std::sync::Arc::new(Vec::new());
-    let run = crate::threads::ChatThread::new("Morning issues", false);
-    let run_id = run.id.clone();
-    cabin.threads.push(run);
-    if let Some(t) = cabin.threads.iter_mut().find(|t| t.id == run_id) {
-        t.messages_mut().push(("user".into(), "summarize my open GitHub issues".into()));
-        t.messages_mut().push((
-            "assistant".into(),
-            "## Open issues\nThree opened overnight: crash on resume, tray icon, docs.".into(),
-        ));
-    }
-    // A clock automation's chat run posts no feed card itself; filing the Follow up adds one.
-    cabin.auto_run = Some(("a-issues".into(), Some(run_id.clone())));
-    cabin.settle_auto_run(AutoEnd::Ok, Some(run_id.as_str()));
+    let mine = cabin.threads[0].id.clone();
+    // A clock automation's run posts no feed card itself; filing the Follow up adds one.
+    cabin.settle_scheduled_run(
+        Some("a-issues"),
+        &grokhub_core::BgEnd::Done,
+        "## Open issues\nThree opened overnight: crash on resume, tray icon, docs.",
+    );
     let follow: Vec<&grokhub_core::BoardCard> = cabin
         .board
         .iter()
@@ -17460,7 +17446,8 @@ fn a_report_run_lands_in_follow_up_with_a_chat_and_a_chore_does_not() {
     assert_eq!(card.automation.as_deref(), Some("a-issues"));
     assert!(card.fresh && card.detail == "Open issues", "{card:?}");
     let chat = card.thread_id.clone().expect("a follow up card has its own chat");
-    assert_ne!(chat, run_id, "its own chat, not the run's");
+    assert_ne!(chat, mine, "its own chat, not the one you are on");
+    assert!(cabin.messages.is_empty(), "nothing lands in your chat");
     let feed = cabin
         .updates
         .iter()
@@ -17472,8 +17459,13 @@ fn a_report_run_lands_in_follow_up_with_a_chat_and_a_chore_does_not() {
     assert!(cabin.nav == Nav::Workboard);
     assert_eq!(cabin.board_view.open.as_deref(), Some(card.id.as_str()));
     let thread = cabin.threads.iter().find(|t| t.id == chat).expect("thread");
-    assert!(!thread.background, "a real chat, listed in History");
+    assert!(thread.background, "scheduled work, read on the card");
     assert!(thread.title.starts_with("Follow up · "));
+    assert_eq!(
+        crate::threads::chat_section_indices(&cabin.threads, Some(cabin.thread_idx), true),
+        Vec::<usize>::new(),
+        "the Follow up chat is not a History row"
+    );
     assert!(thread.messages.last().unwrap().1.contains("Three opened overnight"));
 
     // The next run of the same automation adds to the same card and chat.
@@ -20115,16 +20107,16 @@ fn job_is_idea_talk_false_when_idle() {
 
 // Folded from PR #400.
 #[test]
-fn settle_auto_run_noop_when_idle() {
+fn settle_scheduled_run_noop_without_an_automation() {
     let mut cabin = Cabin::quiet_for_test();
     cabin.status = "Harbor".into();
-    assert!(cabin.auto_run.is_none());
     assert!(cabin.chat_job_thread.is_none());
     assert!(!cabin.running);
     assert!(cabin.rx.is_none());
-    // Quiet cabin with auto_run None → early return; status/Harbor unchanged.
-    cabin.settle_auto_run(super::night::AutoEnd::Failed("dummy"), None);
-    assert!(cabin.auto_run.is_none());
+    let cards = cabin.updates.len();
+    // No automation id → early return; status/Harbor unchanged, no feed card.
+    cabin.settle_scheduled_run(None, &grokhub_core::BgEnd::Failed("dummy".into()), "");
+    assert_eq!(cabin.updates.len(), cards);
     assert_eq!(cabin.status, "Harbor");
     assert!(!cabin.running);
     assert!(cabin.chat_job_thread.is_none());
@@ -22199,6 +22191,7 @@ fn a_background_result_waits_while_its_chat_is_mid_turn() {
         resumed: None,
         fork_hold: false,
         native_session: None,
+        automation: None,
     });
     cabin.running = true;
     cabin.chat_job_thread = Some(id.clone());
@@ -22216,6 +22209,74 @@ fn a_background_result_waits_while_its_chat_is_mid_turn() {
     let block = cabin.take_bg_results_follow(&id).expect("next turn hears it");
     assert!(block.contains("- checks (done): all green"), "{block}");
     assert!(cabin.take_bg_results_follow(&id).is_none(), "told once");
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn a_scheduled_run_ends_on_follow_up_and_never_touches_your_chat() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("bg-scheduled");
+    cabin.board.clear();
+    cabin.automations = vec![test_automation(
+        "a-snap",
+        "Host snapshot",
+        "every day at 9, run a read-only host snapshot and report what changed",
+    )];
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), "hi".into())]);
+    cabin.nav = Nav::Workboard;
+    let hidden = cabin.ensure_background_history_thread();
+    let bg_id = cabin.threads[hidden].id.clone();
+    let fork = "01a01b0f-7e06-74b1-8f22-5236c9d57d60".to_string();
+    cabin.bg.runs.push(super::background::BgRun {
+        id: 1,
+        thread_id: bg_id.clone(),
+        title: "Host snapshot".into(),
+        origin: grokhub_core::BgOrigin::Scheduled,
+        pid: None,
+        rx: None,
+        say: "## Host snapshot\nDisk at 91% on /home.".into(),
+        action: String::new(),
+        started: std::time::Instant::now(),
+        end: None,
+        session: fork.clone(),
+        resumed: None,
+        fork_hold: false,
+        native_session: None,
+        automation: Some("a-snap".into()),
+    });
+    assert!(cabin.bg.scheduled_live());
+    assert_eq!(cabin.bg.live_count(), 0, "a scheduled run takes none of your /bg slots");
+    // You keep chatting while it works: your turn does not hold its post.
+    cabin.running = true;
+    cabin.chat_job_thread = Some(cabin.threads[0].id.clone());
+    cabin.bg.runs[0].end = Some(grokhub_core::BgEnd::Done);
+    cabin.post_finished_bg_runs();
+    assert!(cabin.bg.runs.is_empty());
+    assert_eq!(cabin.messages.len(), 1, "nothing lands in your chat");
+    assert!(cabin.nav == Nav::Workboard, "the page you are on stays");
+    let card = cabin
+        .board
+        .iter()
+        .find(|c| c.automation.as_deref() == Some("a-snap"))
+        .expect("follow up card")
+        .clone();
+    assert_eq!(card.status, grokhub_core::BoardStatus::FollowUp);
+    let chat = card.thread_id.expect("its chat");
+    let thread = cabin.threads.iter().find(|t| t.id == chat).expect("thread");
+    assert!(thread.background && thread.title == "Follow up · Host snapshot");
+    assert!(thread.messages.last().unwrap().1.contains("Disk at 91% on /home."));
+    assert_eq!(
+        crate::threads::chat_section_indices(&cabin.threads, Some(0), false),
+        vec![0],
+        "History lists only your chat"
+    );
+    let bg = cabin.threads.iter().find(|t| t.id == bg_id).unwrap();
+    assert!(bg.retired_sessions.contains(&fork), "its session is filed off History");
+    assert_eq!(cabin.automations[0].health.outcome, grokhub_core::AutoOutcome::Ok);
+    cabin.running = false;
+    cabin.chat_job_thread = None;
     release_isolated(&root, cabin);
 }
 
@@ -22285,6 +22346,7 @@ fn the_live_work_strip_offers_steer_queue_and_background_stop() {
         resumed: None,
         fork_hold: false,
         native_session: None,
+        automation: None,
     });
     let shown = paint(&mut cabin);
     for want in [
