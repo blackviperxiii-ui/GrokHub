@@ -14,6 +14,7 @@ path = "src/main.rs"
 grokhub-core = { path = "../grokhub-core" }
 grokhub-hub = { path = "../grokhub-hub" }
 grokhub-acp = { path = "../grokhub-acp" }
+grokhub-agent = { path = "../grokhub-agent" }
 serde.workspace = true
 serde_json.workspace = true
 eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow"] }
@@ -28,6 +29,18 @@ keyring = "4"
 eframe = { version = "0.36.2", default-features = false, features = ["x11", "wayland"] }
 ksni = { version = "0.3.6", features = ["blocking"] }
 x11rb = { version = "0.13", features = ["randr", "xtest"] }
+
+# Wayland portal input (Phase 2a). tokio matches the zbus runtime already in
+# the tree. reis stays blocking on that same worker; do not enable its tokio
+# or async-io features.
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "remote_desktop", "screencast", "screenshot"] }
+reis = { version = "0.7", default-features = false }
+tokio = { version = "1", default-features = false, features = ["rt", "time"] }
+zbus = { version = "5.19", default-features = false, features = ["blocking-api"] }
+rustix = { version = "1", default-features = false, features = ["event", "time", "fs", "net"] }
+# Absolute uinput (Phase 2b). No tokio feature: the device is blocking evdev.
+evdev = { version = "0.13.2", default-features = false }
 
 [build-dependencies]
 winresource = "0.1"

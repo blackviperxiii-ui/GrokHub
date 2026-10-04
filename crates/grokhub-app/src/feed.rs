@@ -9,7 +9,11 @@ pub fn path() -> std::path::PathBuf {
 }
 
 pub fn load() -> Vec<UpdateCard> {
-    config::load_json(&path(), config::JSON_STORE_CAP)
+    let mut cards: Vec<UpdateCard> = config::load_json(&path(), config::JSON_STORE_CAP);
+    if grokhub_core::collapse_feed(&mut cards) {
+        let _ = save(&cards);
+    }
+    cards
 }
 
 pub fn save(list: &[UpdateCard]) -> Result<(), String> {

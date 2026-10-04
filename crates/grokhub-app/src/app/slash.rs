@@ -8,6 +8,9 @@ impl Cabin {
         if let Some(cmd) = home_slash_cmd(slash_kind(&slash)) {
             remember_home_slash(&mut self.chip_memory, cmd, now_ms());
         }
+        if self.dispatch_native_slash(&slash) {
+            return;
+        }
         match slash {
             Slash::Forget(topic) => {
                 if self.scratch() {
@@ -249,6 +252,11 @@ impl Cabin {
             }
             Slash::RewindFiles => self.rewind_project(),
             Slash::Compact => {
+                if self.native_compact_if_current() {
+                    self.stamp_current_access();
+                    self.persist();
+                    return;
+                }
                 self.send_grok_slash("/compact");
                 if !self.running {
                     return;
@@ -897,4 +905,302 @@ impl Cabin {
         });
         self.status = format!("Wrote {status_path}");
     }
+}
+
+impl Cabin {
+    /// Native-thread handlers. Returns false so the existing match still runs
+    /// when the lab flag is off or the thread is a CLI thread.
+    fn dispatch_native_slash(&mut self, slash: &Slash) -> bool {
+        let thread_native = self
+            .threads
+            .get(self.thread_idx)
+            .is_some_and(|thread| thread.native);
+        if !grokhub_agent::manual_compact_targets_native(self.cfg.native_engine, thread_native) {
+            return false;
+        }
+        match slash {
+            Slash::Remember(note) => {
+                if self.scratch() {
+                    self.status = "Scratch — no memory writes".into();
+                    return true;
+                }
+                let workspace = self.native_slash_workspace();
+                self.status = match grokhub_agent::remember(&workspace, note) {
+                    Ok(msg) => msg,
+                    Err(err) => err,
+                };
+                true
+            }
+            Slash::Dream => {
+                if self.scratch() {
+                    self.status = "Scratch — no memory writes".into();
+                    return true;
+                }
+                self.prompt_native_memory("/dream", "Dreaming…");
+                true
+            }
+            Slash::Inspect => {
+                self.show_native_session_info();
+                true
+            }
+            Slash::Fork => {
+                self.fork_native_thread();
+                true
+            }
+            Slash::Rewind => {
+                // Native sessions are append-only JSONL. Dropping only the bubble would
+                // leave the reply in the model's history, so this says so instead.
+                self.status =
+                    "N/A on native threads: the session is append-only. Use /fork to branch."
+                        .into();
+                true
+            }
+            Slash::Usage => {
+                self.status = self.native_usage_status();
+                true
+            }
+            Slash::Models => {
+                self.live_mut()
+                    .push(("assistant".into(), mark_slash_result(&catalog_line())));
+                self.stamp_current_access();
+                self.persist();
+                true
+            }
+            Slash::Workflow(_) | Slash::WorkflowCtl { .. } => {
+                self.status = "N/A: workflows stay on the Grok CLI".into();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// CLI slashes the cabin parser does not own. Native threads only.
+    pub(super) fn apply_unparsed_native_slash(&mut self, text: &str) -> bool {
+        let thread_native = self
+            .threads
+            .get(self.thread_idx)
+            .is_some_and(|thread| thread.native);
+        if !grokhub_agent::manual_compact_targets_native(self.cfg.native_engine, thread_native) {
+            return false;
+        }
+        let Some(cmd) = grokhub_agent::unparsed_native_slash(text) else {
+            return false;
+        };
+        match cmd {
+            grokhub_agent::UnparsedSlash::Flush => {
+                if self.scratch() {
+                    self.status = "Scratch — no memory writes".into();
+                } else {
+                    self.prompt_native_memory("/flush", "Flushing memory…");
+                }
+            }
+            grokhub_agent::UnparsedSlash::ContextWindow => {
+                let model = grokhub_core::cabin_spawn_model(&self.cfg.model);
+                let len = grokhub_agent::context_length_for(model, &[]);
+                self.status = format!("Context window {len} tokens");
+            }
+            grokhub_agent::UnparsedSlash::Copy => {
+                let last = self
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|message| message.0 == "assistant")
+                    .map(|message| one_line(&message.1, 160));
+                self.status = match last {
+                    Some(text) => format!("Last reply: {text}"),
+                    None => "Nothing to copy".into(),
+                };
+            }
+            grokhub_agent::UnparsedSlash::Tasks => {
+                self.status = "Native tasks show on the turn while a reply is running".into();
+            }
+            grokhub_agent::UnparsedSlash::History => {
+                self.nav = Nav::History;
+                self.status = "History".into();
+            }
+            grokhub_agent::UnparsedSlash::Transcript => {
+                let id = self
+                    .threads
+                    .get(self.thread_idx)
+                    .and_then(|thread| thread.grok_session.clone())
+                    .unwrap_or_default();
+                self.status = if id.trim().is_empty() {
+                    "No native transcript yet".into()
+                } else {
+                    match grokhub_agent::session_file(&id) {
+                        Ok(path) => format!("Transcript {id} ({})", path.display()),
+                        Err(_) => format!("Transcript {id}"),
+                    }
+                };
+            }
+            grokhub_agent::UnparsedSlash::Recap => {
+                let mut lines: Vec<String> = self
+                    .messages
+                    .iter()
+                    .rev()
+                    .filter(|message| message.0 == "user")
+                    .take(3)
+                    .map(|message| one_line(&message.1, 120))
+                    .collect();
+                lines.reverse();
+                self.status = if lines.is_empty() {
+                    "Nothing to recap".into()
+                } else {
+                    lines.join(" · ")
+                };
+            }
+            grokhub_agent::UnparsedSlash::Settings => {
+                self.nav = Nav::Settings;
+                self.status = "Settings".into();
+            }
+            grokhub_agent::UnparsedSlash::Memory => {
+                self.nav = Nav::Memory;
+                self.status = "Memory".into();
+            }
+            grokhub_agent::UnparsedSlash::ModelCatalog => {
+                self.live_mut()
+                    .push(("assistant".into(), mark_slash_result(&catalog_line())));
+                self.stamp_current_access();
+                self.persist();
+            }
+            grokhub_agent::UnparsedSlash::EffortHint => {
+                self.status = "Effort: none | minimal | low | medium | high | xhigh".into();
+            }
+            grokhub_agent::UnparsedSlash::Note(text) => {
+                self.status = text.into();
+            }
+        }
+        true
+    }
+
+    fn native_slash_workspace(&self) -> std::path::PathBuf {
+        self.threads
+            .get(self.thread_idx)
+            .and_then(|thread| thread.grok_cwd.clone())
+            .filter(|cwd| !cwd.trim().is_empty())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| self.grok_cwd())
+    }
+
+    fn show_native_session_info(&mut self) {
+        self.ensure_native_listing();
+        let mut lines = Vec::new();
+        let id = self
+            .threads
+            .get(self.thread_idx)
+            .and_then(|thread| thread.grok_session.clone())
+            .filter(|id| !id.trim().is_empty());
+        match id {
+            Some(id) => match grokhub_agent::load_session(&id) {
+                Ok(info) => lines.push(format!(
+                    "session {} · {} · {}",
+                    info.id, info.title, info.cwd
+                )),
+                Err(err) => lines.push(format!("session {id}: {err}")),
+            },
+            None => lines.push("session: none".into()),
+        }
+        let skills: Vec<&str> = self
+            .native_skills
+            .iter()
+            .take(8)
+            .map(|skill| skill.name.as_str())
+            .collect();
+        lines.push(format!(
+            "skills {}{}",
+            self.native_skills.len(),
+            if skills.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", skills.join(", "))
+            }
+        ));
+        lines.push(format!(
+            "hooks {} trusted {}",
+            self.native_hooks.len(),
+            self.native_hooks_trusted
+        ));
+        let rows = grokhub_agent::configured();
+        lines.push(format!("mcp {}", rows.len()));
+        for row in rows.iter().take(8) {
+            lines.push(format!("  {} {}", row.name, row.status));
+        }
+        self.inspect_text = lines.join("\n");
+        self.nav = Nav::Connectors;
+        self.status = "Native session".into();
+    }
+
+    fn fork_native_thread(&mut self) {
+        let (sid, cwd, user_home) = self
+            .threads
+            .get(self.thread_idx)
+            .map(|thread| {
+                (
+                    thread.grok_session.clone(),
+                    thread.grok_cwd.clone(),
+                    thread.grok_user_home,
+                )
+            })
+            .unwrap_or((None, None, false));
+        let forked = sid
+            .as_deref()
+            .filter(|id| !id.trim().is_empty())
+            .and_then(|id| grokhub_agent::fork_session(id).ok());
+        self.new_thread(false);
+        if let Some(thread) = self.threads.get_mut(self.thread_idx) {
+            thread.native = true;
+            thread.grok_fork = true;
+            thread.title = "Fork".into();
+            thread.grok_user_home = user_home;
+            if let Some(info) = forked {
+                thread.grok_session = Some(info.id);
+                thread.grok_cwd = if info.cwd.trim().is_empty() {
+                    cwd
+                } else {
+                    Some(info.cwd)
+                };
+                self.status = "Forked the native session".into();
+            } else {
+                thread.grok_session = None;
+                thread.grok_cwd = cwd;
+                self.status = "Forked — native session starts fresh".into();
+            }
+        }
+        self.acp = None;
+        self.stamp_current_access();
+        self.persist();
+    }
+
+    fn native_usage_status(&self) -> String {
+        let mut cabin = usage_line(&self.usage);
+        if self.cfg.daily_token_budget > 0 {
+            cabin = format!(
+                "{cabin} · budget {}",
+                grokhub_core::budget_line(&self.usage, self.cfg.daily_token_budget)
+            );
+        }
+        let native = grokhub_agent::usage_label(
+            self.grok_usage.input_tokens,
+            self.grok_usage.output_tokens,
+            self.grok_usage.reasoning_tokens,
+            self.grok_usage.cost_in_usd_ticks,
+            &self.grok_usage.meter,
+        );
+        if native.is_empty() {
+            cabin
+        } else {
+            format!("{cabin} · {native}")
+        }
+    }
+}
+
+fn one_line(text: &str, max_chars: usize) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let count = flat.chars().count();
+    if count <= max_chars {
+        return flat;
+    }
+    let mut out: String = flat.chars().take(max_chars).collect();
+    out.push('…');
+    out
 }

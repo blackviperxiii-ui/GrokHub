@@ -19,6 +19,10 @@ pub struct GrokUsage {
     pub context_tokens_used: u64,
     pub context_window_tokens: u64,
     pub stop_reason: String,
+    /// Millionths of a dollar, when the native engine reported a cost. Zero for the CLI.
+    pub cost_in_usd_ticks: i64,
+    /// "SuperGrok pool" or "API credits" from the native engine. Empty on the CLI path.
+    pub meter: String,
 }
 
 impl GrokUsage {
@@ -89,6 +93,12 @@ impl GrokUsage {
         if !other.stop_reason.is_empty() {
             self.stop_reason = other.stop_reason.clone();
         }
+        if other.cost_in_usd_ticks != 0 {
+            self.cost_in_usd_ticks = other.cost_in_usd_ticks;
+        }
+        if !other.meter.is_empty() {
+            self.meter = other.meter.clone();
+        }
     }
 }
 
@@ -102,6 +112,10 @@ pub fn grok_context_line(u: &GrokUsage) -> String {
     let mut s = format!("{pct}% · {}/{}", compact_k(used), compact_k(window));
     if u.reasoning_tokens > 0 {
         s.push_str(&format!(" · {} think", compact_k(u.reasoning_tokens)));
+    }
+    if !s.is_empty() && !u.meter.is_empty() {
+        s.push_str(" · ");
+        s.push_str(&u.meter);
     }
     s
 }
@@ -402,6 +416,8 @@ pub fn parse_usage(v: &Value) -> GrokUsage {
             ],
         ),
         stop_reason: json_str(v, &["stopReason", "stop_reason"]),
+        cost_in_usd_ticks: json_i64(body, &["cost_in_usd_ticks", "costInUsdTicks"]),
+        meter: json_str(body, &["meter"]),
     };
     if u.num_turns == 0 {
         u.num_turns = json_u64(body, &["num_turns", "numTurns", "modelCalls"]).min(u32::MAX as u64) as u32;
@@ -496,6 +512,22 @@ fn json_u64(v: &Value, keys: &[&str]) -> u64 {
         }
         if let Some(n) = x.as_f64() {
             return n.max(0.0) as u64;
+        }
+    }
+    0
+}
+
+fn json_i64(v: &Value, keys: &[&str]) -> i64 {
+    for k in keys {
+        let Some(x) = v.get(*k) else { continue };
+        if let Some(n) = x.as_i64() {
+            return n;
+        }
+        if let Some(n) = x.as_u64() {
+            return n as i64;
+        }
+        if let Some(n) = x.as_f64() {
+            return n as i64;
         }
     }
     0
