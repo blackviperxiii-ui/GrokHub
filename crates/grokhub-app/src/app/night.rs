@@ -3,16 +3,8 @@
 use super::*;
 use grokhub_core::{
     automation_failed_card, automation_health_line, hold_if_quiet, mark_automation_failed,
-    mark_automation_ok, mark_automation_stopped,
+    mark_automation_ok, mark_automation_stopped, BgEnd, BgOrigin,
 };
-
-/// How a scheduled turn ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum AutoEnd<'a> {
-    Ok,
-    Stopped,
-    Failed(&'a str),
-}
 
 impl Cabin {
 
@@ -371,6 +363,10 @@ impl Cabin {
         if self.running || self.last_auto_tick.elapsed() < Duration::from_secs(5) {
             return self.running || self.night_check_rx.is_some();
         }
+        // One scheduled run at a time. The next due job waits for it.
+        if self.bg.scheduled_live() {
+            return false;
+        }
         self.last_auto_tick = Instant::now();
         let clock = Self::local_clock();
         self.roll_today();
@@ -487,75 +483,60 @@ impl Cabin {
             self.persist_usage();
             return;
         }
-        self.land_on_real_chat();
-        self.send_scheduled_chat(a.instructions);
-        if self.running || self.pending_kick.is_some() || self.grok_p_rx.is_some() {
-            self.mark_auto_ran(&a.id, now_ms);
-            self.auto_run = Some((a.id.clone(), self.chat_job_thread.clone()));
-            bump_usage(&mut self.usage, "automation");
-            self.daily_auto_used = self.usage.automation;
-            self.daily_auto_day = self.usage.day.clone();
-            self.persist_usage();
-        } else if self.cfg.native_engine {
-            self.mark_auto_skipped(&a.id, now_ms);
-            let why = if self.status.trim().is_empty() {
-                "The run did not start".to_string()
-            } else {
-                self.status.clone()
-            };
-            self.note_auto_failed(&a.id, &why);
-        } else {
-            self.mark_auto_skipped(&a.id, now_ms);
-            self.status = format!("Night skipped {} (kick did not start)", a.name);
-            self.note_auto_failed(&a.id, "The run did not start");
+        // Its own process beside your chat: it never takes the composer, never
+        // opens the chat page, and a message you send does not stop it.
+        match self.start_scheduled_run(&a) {
+            Ok(_) => {
+                self.mark_auto_ran(&a.id, now_ms);
+                bump_usage(&mut self.usage, "automation");
+                self.daily_auto_used = self.usage.automation;
+                self.daily_auto_day = self.usage.day.clone();
+                self.persist_usage();
+            }
+            Err(why) => {
+                self.mark_auto_skipped(&a.id, now_ms);
+                self.status = format!("Night skipped {} ({why})", a.name);
+                self.note_auto_failed(&a.id, &why);
+            }
         }
     }
 
-    /// A scheduled turn ended. Only the job recorded in `auto_run` is touched, and
-    /// only when the ending turn is on that job's chat (or the thread is unknown).
-    pub(super) fn settle_auto_run(&mut self, end: AutoEnd, job_thread: Option<&str>) {
-        let Some((id, thread)) = self.auto_run.clone() else {
+    /// Start the job as a background run on the hidden Background chat. It forks
+    /// that chat's session, so runs never write into each other or into yours.
+    fn start_scheduled_run(&mut self, a: &Automation) -> Result<String, String> {
+        let idx = self.ensure_background_history_thread();
+        let native = self.cfg.native_engine;
+        let Some(thread) = self.threads.get_mut(idx) else {
+            return Err("The run did not start".into());
+        };
+        thread.native = native;
+        let thread_id = thread.id.clone();
+        let title = self.start_bg_task(&a.instructions, &thread_id, BgOrigin::Scheduled)?;
+        if let Some(run) = self.bg.runs.last_mut() {
+            run.automation = Some(a.id.clone());
+        }
+        self.status = format!("Night: {}", a.name);
+        Ok(title)
+    }
+
+    /// A scheduled run ended. A good run may leave a Follow up card with its report.
+    pub(super) fn settle_scheduled_run(&mut self, id: Option<&str>, end: &BgEnd, reply: &str) {
+        let Some(id) = id else {
             return;
         };
-        if let (Some(want), Some(got)) = (thread.as_deref(), job_thread) {
-            if want != got {
-                return;
-            }
-        }
-        self.auto_run = None;
         match end {
-            AutoEnd::Ok => {
-                self.update_auto_health(&id, mark_automation_ok);
-                self.follow_up_scheduled_chat(&id, thread.as_deref());
+            BgEnd::Done => {
+                self.update_auto_health(id, mark_automation_ok);
+                let Some(a) = self.automations.iter().find(|x| x.id == id).cloned() else {
+                    return;
+                };
+                if !reply.trim().is_empty() {
+                    self.file_automation_follow_up(&a.id, &a.name, &a.instructions, reply);
+                }
             }
-            AutoEnd::Stopped => self.update_auto_health(&id, mark_automation_stopped),
-            AutoEnd::Failed(why) => self.note_auto_failed(&id, why),
+            BgEnd::Stopped => self.update_auto_health(id, mark_automation_stopped),
+            BgEnd::Failed(why) => self.note_auto_failed(id, why),
         }
-    }
-
-    /// A scheduled chat run ended well: its last reply may need a Follow up card.
-    fn follow_up_scheduled_chat(&mut self, id: &str, thread: Option<&str>) {
-        let Some(a) = self.automations.iter().find(|x| x.id == id).cloned() else {
-            return;
-        };
-        let messages = match thread {
-            Some(tid) if tid != self.visible_thread_id() => self
-                .threads
-                .iter()
-                .find(|t| t.id == tid)
-                .map(|t| t.messages.clone()),
-            _ => Some(self.messages.clone()),
-        };
-        let Some(reply) = messages.and_then(|m| {
-            m.iter()
-                .rev()
-                .take_while(|(role, _)| role != "user")
-                .find(|(role, _)| role == "assistant")
-                .map(|(_, text)| text.clone())
-        }) else {
-            return;
-        };
-        self.file_automation_follow_up(&a.id, &a.name, &a.instructions, &reply);
     }
 
     pub(super) fn update_auto_health(&mut self, id: &str, f: fn(Automation) -> Automation) {

@@ -699,7 +699,7 @@ impl Cabin {
         {
             Some(tid) => tid,
             None => {
-                let tid = self.make_card_thread(&card.title);
+                let tid = self.make_card_thread(&card.title, card.automation.is_some());
                 if let Some(c) = self.board.iter_mut().find(|c| c.id == id) {
                     c.thread_id = Some(tid.clone());
                     if card.automation.is_none() {
@@ -743,7 +743,6 @@ impl Cabin {
         true
     }
 
-    /// A chat for a card, listed in History like any other chat.
     /// A deleted card leaves nothing open, typed, or noted behind.
     pub(super) fn forget_board_card_view(&mut self, id: &str) {
         let v = &mut self.board_view;
@@ -767,8 +766,11 @@ impl Cabin {
         }
     }
 
-    pub(super) fn make_card_thread(&mut self, title: &str) -> String {
+    /// A chat for a card. A Follow up card's chat is `hidden`: scheduled work,
+    /// read and answered on the card, never a History row.
+    pub(super) fn make_card_thread(&mut self, title: &str, hidden: bool) -> String {
         let mut thread = crate::threads::ChatThread::new(title.trim(), false);
+        thread.background = hidden;
         thread.title_locked = true;
         thread.accessed_ms = now_ms();
         let id = thread.id.clone();
@@ -814,7 +816,10 @@ impl Cabin {
         {
             Some(tid) => tid,
             None => {
-                let tid = self.make_card_thread(&format!("Follow up · {}", card.title));
+                let tid = self.make_card_thread(
+                    &format!("{}{}", crate::threads::FOLLOW_UP_PREFIX, card.title),
+                    true,
+                );
                 if let Some(c) = self.board.iter_mut().find(|c| c.id == card_id) {
                     c.thread_id = Some(tid.clone());
                 }

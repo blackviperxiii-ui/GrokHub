@@ -188,7 +188,6 @@ mod tests;
 use acp::*;
 #[allow(unused_imports)]
 use chat_ui::*;
-use night::AutoEnd;
 use background::BgWork;
 
 /// Title and body for a token budget warning.
@@ -781,8 +780,6 @@ pub struct Cabin {
     jump_last_you: bool,
     /// Ctrl+F in the open chat.
     find: ChatFind,
-    /// Scheduled job whose turn is running: (automation id, chat thread).
-    auto_run: Option<(String, Option<String>)>,
     elicit_ask: Option<grokhub_acp::ElicitAsk>,
     elicit_draft: String,
     /// Secret values typed into an elicit. Memory only — never persisted.
@@ -891,7 +888,9 @@ impl Cabin {
                     && t.grok_session
                         .as_deref()
                         .is_some_and(|s| loop_sessions.iter().any(|l| l == s.trim()));
-                if loop_row || threads::is_learn_map_title(&t.title) {
+                let parked = threads::is_learn_map_title(&t.title)
+                    || threads::is_follow_up_title(&t.title);
+                if loop_row || parked {
                     t.background = true;
                     parked_learn = true;
                 }
@@ -1346,7 +1345,6 @@ impl Cabin {
             confirm: None,
             jump_last_you: false,
             find: ChatFind::default(),
-            auto_run: None,
             elicit_ask: None,
             elicit_draft: String::new(),
             secret_hold: Vec::new(),
@@ -1773,7 +1771,6 @@ impl Cabin {
             confirm: None,
             jump_last_you: false,
             find: ChatFind::default(),
-            auto_run: None,
             elicit_ask: None,
             elicit_draft: String::new(),
             secret_hold: Vec::new(),
@@ -3994,12 +3991,9 @@ impl Cabin {
     }
 
     fn apply_job_fail(&mut self, err: &str) -> String {
-        let job = self.chat_job_thread.clone();
         if grokhub_acp::is_sigterm_status(err) {
-            self.settle_auto_run(AutoEnd::Stopped, job.as_deref());
             return "Stopped".into();
         }
-        self.settle_auto_run(AutoEnd::Failed(err), job.as_deref());
         if classify_stream_error(err) == StreamErrorKind::CreditLimit {
             self.try_again = true;
             self.last_receipt_ok = Some(false);
@@ -4590,7 +4584,6 @@ impl Cabin {
 
     fn halt_work(&mut self, status: impl Into<String>) {
         let status = status.into();
-        self.settle_auto_run(AutoEnd::Stopped, None);
         self.halt_in_flight();
         self.finish_hub_dispatch(&status, false);
         self.status = status;

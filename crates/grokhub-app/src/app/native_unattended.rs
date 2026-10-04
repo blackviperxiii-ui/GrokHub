@@ -739,11 +739,14 @@ mod tests {
         assert!(tick.contains("find_grok()"));
         assert!(tick.contains("self.cfg.native_engine"));
         let night = fn_body(include_str!("night.rs"), "fire_night");
-        assert!(night.contains("send_scheduled_chat"));
+        assert!(night.contains("start_scheduled_run"));
         assert!(night.contains("night_unauth_should_skip"));
         assert!(night.contains("self.can_agent()"));
-        assert!(night.contains("Night skipped {} (kick did not start)"));
-        assert!(night.contains("The run did not start"));
+        assert!(night.contains("Night skipped {} ({why})"));
+        let start = fn_body(include_str!("night.rs"), "start_scheduled_run");
+        assert!(start.contains("self.cfg.native_engine"));
+        assert!(start.contains("start_bg_task"));
+        assert!(start.contains("The run did not start"));
         let review = fn_body(include_str!("night.rs"), "spawn_review");
         assert!(review.contains("grok_chat"));
         assert!(review.contains("model_for_mode(\"balanced\")"));

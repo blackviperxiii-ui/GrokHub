@@ -62,6 +62,8 @@ pub(super) struct BgRun {
     pub fork_hold: bool,
     /// Native `/bg` session. Halt and delete cancel this engine. CLI runs leave it empty.
     pub native_session: Option<String>,
+    /// The automation a scheduled run settles when it ends.
+    pub automation: Option<String>,
 }
 
 impl BgRun {
@@ -92,8 +94,17 @@ pub(super) struct BgWork {
 }
 
 impl BgWork {
+    /// Your live background tasks. Scheduled runs have their own slot and do not count.
     pub fn live_count(&self) -> usize {
-        self.runs.iter().filter(|r| r.live()).count()
+        self.runs
+            .iter()
+            .filter(|r| r.live() && r.origin != BgOrigin::Scheduled)
+            .count()
+    }
+
+    /// A scheduled automation is running in its own process.
+    pub fn scheduled_live(&self) -> bool {
+        self.runs.iter().any(|r| r.live() && r.origin == BgOrigin::Scheduled)
     }
 
     pub fn busy(&self) -> bool {
@@ -140,7 +151,8 @@ impl Cabin {
         if task.is_empty() {
             return Err("Nothing to run".into());
         }
-        if self.bg.live_count() >= BG_TASK_MAX {
+        // A scheduled run has its own slot; `tick_night` starts one at a time.
+        if origin != BgOrigin::Scheduled && self.bg.live_count() >= BG_TASK_MAX {
             return Err(format!(
                 "{BG_TASK_MAX} background tasks are already running — stop one first"
             ));
@@ -209,6 +221,7 @@ impl Cabin {
             resumed: resume,
             fork_hold: false,
             native_session: None,
+            automation: None,
         });
         Ok(title)
     }
@@ -303,6 +316,7 @@ impl Cabin {
             resumed: parent,
             fork_hold: false,
             native_session: Some(child_id),
+            automation: None,
         });
         Ok(title)
     }
@@ -435,6 +449,7 @@ impl Cabin {
             resumed,
             fork_hold,
             native_session: None,
+            automation: None,
         });
         // The Doing card stays up: the work goes on. The run settles it.
         self.inflight_open = false;
@@ -559,6 +574,17 @@ impl Cabin {
         for run in done {
             let end = run.end.clone().unwrap_or(BgEnd::Done);
             let reply = self.scrub_transcript(run.say.clone());
+            if run.origin == BgOrigin::Scheduled {
+                // Its report goes to Follow up and the home feed, never a chat
+                // you can see. The hidden Background chat keeps a copy.
+                self.push_msg_on(&run.thread_id, "assistant", bg_result_post(&run.title, &end, &reply));
+                self.settle_scheduled_run(run.automation.as_deref(), &end, &reply);
+                threads::file_background_sessions(
+                    &mut self.threads,
+                    std::slice::from_ref(&run.session),
+                );
+                continue;
+            }
             if !self.threads.iter().any(|t| t.id == run.thread_id) {
                 threads::file_background_sessions(
                     &mut self.threads,
@@ -861,7 +887,7 @@ impl Cabin {
             .bg
             .runs
             .iter()
-            .filter(|r| r.thread_id != vis && r.live())
+            .filter(|r| r.thread_id != vis && r.live() && r.origin != BgOrigin::Scheduled)
             .count();
         let queued = if self.running { self.followup_queue.len() } else { 0 };
         if !typing && here.is_empty() && elsewhere == 0 && queued == 0 {

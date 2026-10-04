@@ -1325,7 +1325,6 @@ impl Cabin {
         } else {
             format!("IMAGINE: {first}")
         };
-        self.settle_auto_run(AutoEnd::Ok, self.chat_job_thread.clone().as_deref());
         self.finish_hub_dispatch(&summary, true);
         self.abandon_turn_card();
         self.chat_job_thread = None;
