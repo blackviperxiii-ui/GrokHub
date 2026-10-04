@@ -67,11 +67,13 @@ impl Cabin {
         if !self.cfg.native_engine {
             return;
         }
+        // Retired ids include background work filed on the hidden Background chat.
         let bound: HashSet<String> = self
             .threads
             .iter()
-            .filter_map(|thread| thread.grok_session.clone())
-            .filter(|id| !id.trim().is_empty())
+            .flat_map(|thread| thread.grok_session.iter().chain(thread.retired_sessions.iter()))
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty())
             .collect();
         let query = self.history_q.trim().to_ascii_lowercase();
         let mut rows = cached_merged_rows(ui);
