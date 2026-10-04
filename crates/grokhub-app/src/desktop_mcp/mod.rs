@@ -12,6 +12,18 @@ mod windows;
 mod x11;
 #[cfg(unix)]
 mod wayland;
+#[cfg(target_os = "linux")]
+mod kwin_shot;
+#[cfg(target_os = "linux")]
+mod portal;
+#[cfg(target_os = "linux")]
+mod uinput_dev;
+#[cfg(target_os = "linux")]
+mod fallback;
+#[cfg(target_os = "linux")]
+mod capture;
+#[cfg(target_os = "linux")]
+mod broker;
 
 use std::io::{BufRead, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,7 +42,7 @@ static REG_RX: Mutex<Option<mpsc::Receiver<String>>> = Mutex::new(None);
 pub fn run_stdio() -> i32 {
     #[cfg(windows)]
     windows::enable_per_monitor_dpi();
-    let started = grokhub_core::now_ms();
+    let started = process_started_ms();
     let mut server = DesktopServer::new(env!("CARGO_PKG_VERSION"), LiveBackend::new());
     let stdin = std::io::stdin();
     let mut reader = stdin.lock();
@@ -181,6 +193,171 @@ pub(crate) fn maybe_register_on_start(enabled: bool) {
     start_register(true, false);
 }
 
+static PROCESS_STARTED_MS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
+pub(crate) fn process_started_ms() -> u64 {
+    *PROCESS_STARTED_MS.get_or_init(grokhub_core::now_ms)
+}
+
+#[cfg(target_os = "linux")]
+static INPUT_BACKEND: Mutex<Option<String>> = Mutex::new(None);
+#[cfg(target_os = "linux")]
+static CAPTURE_BACKEND: Mutex<Option<String>> = Mutex::new(None);
+
+#[cfg(target_os = "linux")]
+pub(crate) fn publish_input_backend(label: &str) {
+    *INPUT_BACKEND.lock().unwrap_or_else(|err| err.into_inner()) = Some(label.to_string());
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn publish_capture_backend(label: &str) {
+    *CAPTURE_BACKEND.lock().unwrap_or_else(|err| err.into_inner()) = Some(label.to_string());
+}
+
+pub(crate) fn desktop_panel_lines() -> String {
+    grokhub_core::desktop_mcp::desktop_control_status(&active_input_label(), &active_capture_label())
+}
+
+fn active_input_label() -> String {
+    #[cfg(target_os = "linux")]
+    if let Some(label) = INPUT_BACKEND.lock().unwrap_or_else(|err| err.into_inner()).clone() {
+        return label;
+    }
+    predict_input_label()
+}
+
+fn active_capture_label() -> String {
+    #[cfg(target_os = "linux")]
+    if let Some(label) = CAPTURE_BACKEND.lock().unwrap_or_else(|err| err.into_inner()).clone() {
+        return label;
+    }
+    predict_capture_label()
+}
+
+fn predict_input_label() -> String {
+    #[cfg(windows)]
+    {
+        "Windows".into()
+    }
+    #[cfg(unix)]
+    {
+        match session_stack().input {
+            grokhub_core::desktop_mcp::DesktopInputKind::Portal => {
+                "RemoteDesktop portal (libei)".into()
+            }
+            grokhub_core::desktop_mcp::DesktopInputKind::Ydotool => "ydotool (imprecise)".into(),
+            grokhub_core::desktop_mcp::DesktopInputKind::X11rb => "X11".into(),
+            grokhub_core::desktop_mcp::DesktopInputKind::None => "unavailable".into(),
+        }
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        "unavailable".into()
+    }
+}
+
+fn predict_capture_label() -> String {
+    #[cfg(windows)]
+    {
+        "Windows".into()
+    }
+    #[cfg(unix)]
+    {
+        match session_stack().capture {
+            grokhub_core::desktop_mcp::DesktopCaptureKind::ScreenShot2 => "KWin ScreenShot2".into(),
+            grokhub_core::desktop_mcp::DesktopCaptureKind::Grim => "grim".into(),
+            grokhub_core::desktop_mcp::DesktopCaptureKind::X11rb => "X11".into(),
+            grokhub_core::desktop_mcp::DesktopCaptureKind::None => "unavailable".into(),
+        }
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        "unavailable".into()
+    }
+}
+
+#[cfg(unix)]
+fn session_stack() -> grokhub_core::desktop_mcp::DesktopStack {
+    let env = grokhub_core::desktop_mcp::DesktopSessionEnv {
+        wayland_display: std::env::var("WAYLAND_DISPLAY").ok(),
+        session_type: std::env::var("XDG_SESSION_TYPE").ok(),
+        current_desktop: std::env::var("XDG_CURRENT_DESKTOP").ok(),
+        display: std::env::var("DISPLAY").ok(),
+    };
+    grokhub_core::desktop_mcp::select_desktop_stack(
+        &env,
+        &grokhub_core::desktop_mcp::DesktopProbes { kwin: false },
+    )
+}
+
+static TEST_RX: Mutex<Option<mpsc::Receiver<String>>> = Mutex::new(None);
+
+pub(crate) fn request_desktop_test(enabled: bool) -> String {
+    if !enabled {
+        set_desktop_enabled(false);
+        return grokhub_core::desktop_mcp::OFF_MSG.to_string();
+    }
+    if read_halt_stamp().is_some_and(|ms| stamp_halts(ms, process_started_ms())) {
+        note_halt();
+        return grokhub_core::desktop_mcp::HALT_MSG.to_string();
+    }
+    #[cfg(all(target_os = "linux", not(test)))]
+    {
+        spawn_desktop_probe()
+    }
+    #[cfg(not(all(target_os = "linux", not(test))))]
+    {
+        "Desktop test did not open a session.".into()
+    }
+}
+
+#[cfg(all(target_os = "linux", not(test)))]
+fn spawn_desktop_probe() -> String {
+    if let Err(err) = broker::ensure_started() {
+        return err;
+    }
+    let (tx, rx) = mpsc::channel();
+    if let Ok(mut slot) = TEST_RX.lock() {
+        *slot = Some(rx);
+    }
+    std::thread::spawn(move || {
+        let msg = match broker::run_probe() {
+            Ok(report) => report,
+            Err(err) => err,
+        };
+        let _ = tx.send(msg);
+    });
+    "Testing each monitor...".into()
+}
+
+pub(crate) fn take_desktop_test_status() -> Option<String> {
+    let mut guard = TEST_RX.lock().ok()?;
+    let rx = guard.as_mut()?;
+    match rx.try_recv() {
+        Ok(msg) => {
+            *guard = None;
+            Some(msg)
+        }
+        Err(mpsc::TryRecvError::Empty) => None,
+        Err(mpsc::TryRecvError::Disconnected) => {
+            *guard = None;
+            None
+        }
+    }
+}
+
+pub(crate) fn set_desktop_enabled(on: bool) {
+    #[cfg(all(target_os = "linux", not(test)))]
+    broker::set_enabled(on);
+    #[cfg(not(all(target_os = "linux", not(test))))]
+    let _ = on;
+}
+
+pub(crate) fn note_halt() {
+    #[cfg(all(target_os = "linux", not(test)))]
+    broker::note_halt();
+}
+
 fn start_register(on: bool, announce: bool) {
     if REG_BUSY.swap(true, Ordering::SeqCst) {
         return;
@@ -321,6 +498,94 @@ impl DesktopBackend for LiveBackend {
             b.pace();
         }
     }
+    fn release_input(&mut self) {
+        if let Some(backend) = self.inner.as_mut() {
+            backend.release_input();
+        }
+    }
+    fn suspend_input(&mut self) {
+        if let Some(backend) = self.inner.as_mut() {
+            backend.suspend_input();
+        }
+    }
+    fn move_abs_on(
+        &mut self,
+        geom: &grokhub_core::desktop_mcp::ShotGeom,
+        x: i32,
+        y: i32,
+    ) -> Result<(), String> {
+        self.ensure()?.move_abs_on(geom, x, y)
+    }
+    fn status_note(&mut self) -> Option<String> {
+        self.ensure().ok().and_then(|backend| backend.status_note())
+    }
+}
+
+pub(crate) struct NativeDesktop {
+    inner: Mutex<DesktopServer<LiveBackend>>,
+}
+
+impl NativeDesktop {
+    pub(crate) fn new() -> Self {
+        Self {
+            inner: Mutex::new(DesktopServer::new(env!("CARGO_PKG_VERSION"), LiveBackend::new())),
+        }
+    }
+}
+
+impl grokhub_agent::DesktopOps for NativeDesktop {
+    fn halted(&self) -> bool {
+        read_halt_stamp().is_some_and(|ms| stamp_halts(ms, process_started_ms()))
+    }
+
+    fn locked(&self) -> bool {
+        self.inner
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .backend_mut()
+            .is_locked()
+    }
+
+    fn call(&self, name: &str, args: &serde_json::Value) -> grokhub_agent::ToolOutput {
+        let mut server = self.inner.lock().unwrap_or_else(|err| err.into_inner());
+        match server.invoke(name, args) {
+            Ok(body) => mcp_tool_output(body),
+            Err(err) => grokhub_agent::ToolOutput::err(err),
+        }
+    }
+}
+
+fn mcp_tool_output(body: serde_json::Value) -> grokhub_agent::ToolOutput {
+    let failed = body.get("isError").and_then(|value| value.as_bool()).unwrap_or(false);
+    let mut text = String::new();
+    let mut image = None;
+    if let Some(parts) = body.get("content").and_then(|value| value.as_array()) {
+        for part in parts {
+            match part.get("type").and_then(|value| value.as_str()) {
+                Some("text") => {
+                    if let Some(line) = part.get("text").and_then(|value| value.as_str()) {
+                        if !text.is_empty() {
+                            text.push('\n');
+                        }
+                        text.push_str(line);
+                    }
+                }
+                Some("image") => {
+                    let data = part.get("data").and_then(|value| value.as_str()).unwrap_or("");
+                    let mime = part.get("mimeType").and_then(|value| value.as_str()).unwrap_or("image/png");
+                    if !data.is_empty() {
+                        image = Some(format!("data:{mime};base64,{data}"));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    grokhub_agent::ToolOutput {
+        text,
+        image_data_url: image,
+        failed,
+    }
 }
 
 fn connect_backend() -> Result<Box<dyn DesktopBackend>, String> {
@@ -333,7 +598,14 @@ fn connect_backend() -> Result<Box<dyn DesktopBackend>, String> {
         let wayland = std::env::var("WAYLAND_DISPLAY").ok();
         let session = std::env::var("XDG_SESSION_TYPE").ok();
         if grokhub_core::session_is_wayland(wayland.as_deref(), session.as_deref()) {
-            return Ok(Box::new(wayland::WaylandBackend::new()));
+            #[cfg(target_os = "linux")]
+            {
+                return broker::connect_or_own();
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                return Ok(Box::new(wayland::WaylandBackend::new()));
+            }
         }
         if std::env::var_os("DISPLAY").is_some() {
             return x11::X11Backend::connect().map(|b| Box::new(b) as Box<dyn DesktopBackend>);
@@ -380,5 +652,57 @@ mod tests {
         assert!(stamp_halts(ms, ms.saturating_sub(1)));
         assert!(!stamp_halts(ms, ms));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn no_xdotool_on_wayland() {
+        let wayland = include_str!("wayland.rs");
+        let portal = include_str!("portal.rs");
+        assert!(
+            !wayland.contains("xdotool"),
+            "wayland input must not name the xwayland tool"
+        );
+        assert!(
+            !portal.contains("xdotool"),
+            "portal input must not name the xwayland tool"
+        );
+    }
+
+    #[test]
+    fn udev_rule_tags_uaccess() {
+        let text = include_str!("../../../../packaging/udev/60-grokhub-uinput.rules");
+        assert!(text.contains("KERNEL==\"uinput\""));
+        assert!(text.contains("GROUP=\"input\""));
+        assert!(text.contains("MODE=\"0660\""));
+        assert!(text.contains("TAG+=\"uaccess\""));
+        assert!(text.contains("OPTIONS+=\"static_node=uinput\""));
+        assert!(!text.contains("0666") && !text.contains("0777"), "uinput must never be world-writable");
+        assert_eq!(text.lines().filter(|l| !l.trim().is_empty() && !l.starts_with('#')).count(), 1, "one uinput rule only");
+    }
+
+    #[test]
+    fn settings_desktop_panel_reports_backends() {
+        let status = grokhub_core::desktop_mcp::desktop_control_status(
+            "RemoteDesktop portal (libei)",
+            "KWin ScreenShot2",
+        );
+        assert_eq!(
+            status,
+            "Input: RemoteDesktop portal (libei)\nCapture: KWin ScreenShot2"
+        );
+        let settings = include_str!("../app/settings.rs");
+        assert!(settings.contains("desktop_panel_lines"));
+        assert!(settings.contains("\"Test\""));
+        assert!(settings.contains("request_desktop_test"));
+    }
+
+    #[test]
+    fn desktop_entry_allows_kwin_screenshot2() {
+        let text = include_str!("../../../../packaging/grokhub.desktop");
+        assert!(text.lines().any(|line| line == "Version=1.5"));
+        assert!(text.lines().any(|line| line == "Exec=grokhub"));
+        assert!(text
+            .lines()
+            .any(|line| line == "X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2"));
     }
 }

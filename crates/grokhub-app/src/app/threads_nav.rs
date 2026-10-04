@@ -165,6 +165,7 @@ impl Cabin {
                 t.grok_session = None;
                 t.grok_cwd = None;
                 t.project_id = want_project.clone();
+                t.native = self.cfg.native_engine;
             }
             self.stamp_current_access();
             self.persist();
@@ -183,6 +184,7 @@ impl Cabin {
         let title = if scratch { "Scratch" } else { "Chat" };
         let mut created = ChatThread::new(title, scratch);
         created.project_id = want_project;
+        created.native = self.cfg.native_engine;
         self.threads.push(created);
         self.thread_idx = self.threads.len() - 1;
         self.messages = Arc::new(Vec::new());
@@ -330,7 +332,11 @@ impl Cabin {
         self.rename_focus = false;
         self.rename_lock = None;
         if let Some((shown, sid)) = applied {
+            let native = self.threads.get(idx).is_some_and(|t| t.native);
             if let Some(id) = sid {
+                if native {
+                    let _ = grokhub_agent::rename_session(&id, &shown);
+                }
                 if let Some(s) = self.grok_sessions.iter_mut().find(|s| s.id == id) {
                     s.title = shown.clone();
                 }
@@ -443,6 +449,7 @@ impl Cabin {
             .get(idx)
             .and_then(|t| t.grok_session.clone())
             .filter(|s| !s.trim().is_empty());
+        let native = self.threads.get(idx).is_some_and(|t| t.native);
         let retired = self
             .threads
             .get(idx)
@@ -497,7 +504,24 @@ impl Cabin {
             }
         }
         let ids = threads::sessions_deleted_with_chat(grok_id.as_deref(), &retired);
-        if let Some((first, rest)) = ids.split_first() {
+        if native
+            && self
+                .acp
+                .as_ref()
+                .is_some_and(|handle| ids.iter().any(|id| id == &handle.session_id))
+        {
+            self.halt_in_flight();
+            self.acp = None;
+        }
+        let mut cli_ids = Vec::new();
+        for id in &ids {
+            if native || id.starts_with("native-") {
+                let _ = grokhub_agent::delete_session(id);
+            } else {
+                cli_ids.push(id.clone());
+            }
+        }
+        if let Some((first, rest)) = cli_ids.split_first() {
             self.forget_grok_build_session(first, rest);
         }
         self.rename_idx = None;
@@ -512,19 +536,45 @@ impl Cabin {
         }
         self.finish_hub_dispatch("Chats deleted", false);
         let mut ids: Vec<String> = Vec::new();
+        let mut native_ids: Vec<String> = Vec::new();
         for t in &self.threads {
+            let native_thread = t.native;
             for id in
                 threads::sessions_deleted_with_chat(t.grok_session.as_deref(), &t.retired_sessions)
             {
-                if !ids.iter().any(|s| s == &id) {
+                if native_thread || id.starts_with("native-") {
+                    if !native_ids.iter().any(|s| s == &id) {
+                        native_ids.push(id);
+                    }
+                } else if !ids.iter().any(|s| s == &id) {
                     ids.push(id);
                 }
             }
         }
         for s in &self.grok_sessions {
+            if s.id.starts_with("native-") {
+                if !native_ids.iter().any(|id| id == &s.id) {
+                    native_ids.push(s.id.clone());
+                }
+                continue;
+            }
             if !ids.iter().any(|id| id == &s.id) {
                 ids.push(s.id.clone());
             }
+        }
+        if let Some(id) = self
+            .acp
+            .as_ref()
+            .map(|handle| handle.session_id.clone())
+            .filter(|id| id.starts_with("native-"))
+        {
+            if !native_ids.iter().any(|saved| saved == &id) {
+                native_ids.push(id);
+            }
+            self.acp = None;
+        }
+        for id in &native_ids {
+            let _ = grokhub_agent::delete_session(id);
         }
         for id in &ids {
             self.pending_grok_deletes.insert(id.clone());

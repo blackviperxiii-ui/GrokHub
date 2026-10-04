@@ -1,11 +1,13 @@
 .env
 .env.*
+!.env.example
 *.log
 .DS_Store
 /tmp/
 
 # Rust
 /target/
+target/
 **/*.rs.bk
 
 # Leftover / local
@@ -28,3 +30,14 @@ artifacts/
 AGENTS.md
 AGENTS.project.md
 startup.sh
+
+# Secrets, keys, credentials (never commit)
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+id_rsa*
+auth.json
+secrets.json
+credentials.json
