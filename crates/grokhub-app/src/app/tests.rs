@@ -1089,8 +1089,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "tools must sit in the live turn, not always under the last bubble: {chat}"
         );
         assert!(
-            chat.contains("paint_running") && chat.contains("chat_run_label"),
-            "a running pulse must show while the agent is working: {chat}"
+            !chat.contains("paint_running")
+                && !chat.contains("chat_run_label")
+                && !chat.contains("background_pill"),
+            "2.10.87: no Thinking dot or Background button in the transcript; the composer glow shows a live turn: {chat}"
         );
         assert!(
             !chat.contains("run_slash(Slash::Stop)"),
@@ -10563,8 +10565,24 @@ fn effort_slash_sets_extra_high_and_rejects_a_bad_level() {
     assert_eq!(cabin.cfg.reasoning_effort, "xhigh");
     assert_eq!(cabin.status, "Effort Extra High");
     cabin.run_slash_line("/effort banana");
-    assert_eq!(cabin.status, "Effort: none | minimal | low | medium | high | xhigh");
+    assert_eq!(cabin.status, "Effort: none | low | medium | high | xhigh");
     assert_eq!(cabin.cfg.reasoning_effort, "xhigh");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+/// 2.10.87: Minimal is gone. `/effort minimal` still works and picks Low.
+#[test]
+fn effort_slash_minimal_falls_back_to_low() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("effort-minimal");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_slash_line("/effort minimal");
+    assert_eq!(cabin.cfg.reasoning_effort, "low");
+    assert_eq!(cabin.status, "Effort Low");
+    cabin.run_slash_line("/effort none");
+    assert_eq!(cabin.cfg.reasoning_effort, "none");
+    assert_eq!(cabin.status, "Effort None");
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
@@ -21035,9 +21053,12 @@ fn cabin_default_efforts_lists_known_ids() {
     let efforts = cabin_default_efforts();
     assert!(!efforts.is_empty());
     let ids: Vec<&str> = efforts.iter().map(|(id, _)| *id).collect();
-    for want in ["none", "minimal", "low", "medium", "high", "xhigh"] {
+    for want in ["none", "low", "medium", "high", "xhigh"] {
         assert!(ids.contains(&want), "missing effort id {want}: {ids:?}");
     }
+    // 2.10.87: Minimal is not a real level; Settings must not offer it.
+    assert!(!ids.contains(&"minimal"), "{ids:?}");
+    assert_eq!(ids, vec!["none", "low", "medium", "high", "xhigh"]);
 }
 
 // Folded from PR #426.
@@ -21433,8 +21454,10 @@ fn home_feed_count_empty_and_one_event() {
     assert_eq!(home_feed_count(&cards, &pulse, 0), 1);
 }
 
+/// The card menu is gone (2.10.86). A run hidden from Home by an older build
+/// still stays off Home, still merges, and Automations still undoes it.
 #[test]
-fn card_menu_hide_and_undo_round_trip() {
+fn legacy_hidden_run_stays_off_home_until_undo() {
     let _hold = crate::config::hold_test_config();
     let root = crate::config::test_config_root("card-menu-hide");
     let _ = std::fs::remove_dir_all(&root);
@@ -21454,7 +21477,10 @@ fn card_menu_hide_and_undo_round_trip() {
         .expect("run card");
     assert_eq!(home_feed_count(&cabin.updates, &cabin.cfg.feed_pulse, now_ms()), 1);
 
-    cabin.hide_automation_from_home(&id);
+    // Hidden by an older build's card menu: the source sits in muted_sources.
+    assert!(!id.is_empty());
+    grokhub_core::hide_home_source(&mut cabin.cfg.feed_pulse, "zephyr-src-9f3a");
+    cabin.persist_cfg();
     assert!(
         grokhub_core::home_event_cards(&cabin.updates, &cabin.cfg.feed_pulse, now_ms()).is_empty(),
         "a hidden run stays off Home"
@@ -21482,13 +21508,15 @@ fn card_menu_hide_and_undo_round_trip() {
     );
     assert!(grokhub_core::HOME_HIDDEN_NOTE.contains("Undo"));
     let feed = include_str!("feed_ui.rs");
-    assert!(
-        feed.contains("More like this")
-            && feed.contains("Less like this")
-            && feed.contains("Hide this automation's runs from Home")
-            && feed.contains("secondary_clicked"),
-        "every event card has the ⋯ menu and a right-click"
-    );
+    let paint = feed
+        .split("fn paint_feed_card(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}\n").next())
+        .expect("paint_feed_card");
+    assert!(!paint.contains("Popup"), "feed cards have no menu");
+    assert!(!paint.contains("secondary_clicked"), "no right-click menu");
+    assert!(!paint.contains("\"⋯\""), "no ⋯ button");
+    assert!(paint.contains("\"×\""), "the X stays");
 
     let app_json = root.join("app.json");
     let mut saw_hide = false;
@@ -21518,7 +21546,7 @@ fn card_menu_hide_and_undo_round_trip() {
     assert!(saw_undo, "Undo drops the source from app.json");
 
     let signals = std::fs::read_to_string(root.join("card_signals.jsonl")).unwrap_or_default();
-    assert!(signals.contains("\"event\":\"hidden\""), "{signals}");
+    assert!(!signals.contains("\"event\":\"hidden\""), "nothing hides from a card now: {signals}");
     assert!(signals.contains("\"event\":\"unhidden\""), "{signals}");
     assert!(!signals.contains("ZephyrHideTitle9f3a"), "{signals}");
     assert!(!signals.contains("ZephyrHideBody9f3a"), "{signals}");
@@ -21546,8 +21574,15 @@ fn reset_all_clears_what_home_learned() {
         .find(|card| card.source_id == "learn-src")
         .map(|card| card.id.clone())
         .expect("run card");
-    cabin.more_like_this(&id);
-    cabin.less_like_this(&id);
+    cabin.open_feed_card(&id);
+    cabin.note_automation_done("learn-src-b", "Quarterly vendor audit", "ZephyrBodyShouldStayOut");
+    let other = cabin
+        .updates
+        .iter()
+        .find(|card| card.source_id == "learn-src-b")
+        .map(|card| card.id.clone())
+        .expect("second run card");
+    cabin.dismiss_feed_card(&other);
 
     let prefs_path = root.join("card_prefs.json");
     let body = std::fs::read_to_string(&prefs_path).unwrap_or_default();
@@ -21557,8 +21592,8 @@ fn reset_all_clears_what_home_learned() {
     );
     assert!(!body.contains("ZephyrBodyShouldStayOut"), "{body}");
     let signals_before = std::fs::read_to_string(root.join("card_signals.jsonl")).unwrap_or_default();
-    assert!(signals_before.contains("\"event\":\"more\""), "{signals_before}");
-    assert!(signals_before.contains("\"event\":\"less\""), "{signals_before}");
+    assert!(signals_before.contains("\"event\":\"opened\""), "{signals_before}");
+    assert!(signals_before.contains("\"event\":\"rejected\""), "{signals_before}");
     assert!(!signals_before.contains("ZephyrLedger"), "{signals_before}");
 
     cabin.reset_home_learned();
@@ -22539,5 +22574,169 @@ fn bg_delete_chat_stops_its_runs() {
             .args(["-KILL", &pid.to_string()])
             .status();
     }
+    end_bg_test(root, cabin, restore);
+}
+
+#[test]
+fn x_on_an_untouched_card_is_a_rejection_and_on_an_opened_one_is_not() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("feed-reject");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let _pin = crate::config::TestConfigDir::set(root.clone());
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.quiet_start = "00:00".into();
+    cabin.cfg.quiet_end = "00:00".into();
+    cabin.note_automation_done("seen-src", "Seen report", "ok");
+    cabin.note_automation_done("cold-src", "Cold report", "ok");
+    let id_of = |cabin: &Cabin, src: &str| {
+        cabin
+            .updates
+            .iter()
+            .find(|card| card.source_id == src)
+            .map(|card| card.id.clone())
+            .expect("card")
+    };
+    let seen = id_of(&cabin, "seen-src");
+    let cold = id_of(&cabin, "cold-src");
+    cabin.open_feed_card(&seen);
+    assert_eq!(cabin.card_prefs.uses["run:seen-src"].depth, 1);
+    assert_eq!(
+        cabin.card_prefs.uses["run:seen-src"].did,
+        grokhub_core::UseAction::OpenedAutomations as u8
+    );
+    cabin.dismiss_feed_card(&seen);
+    cabin.dismiss_feed_card(&cold);
+    assert_eq!(cabin.card_prefs.groups["run:seen-src"].neg, 0.0, "opened, then closed");
+    assert_eq!(cabin.card_prefs.groups["run:cold-src"].neg, 3.0, "closed unopened");
+    assert_eq!(cabin.card_prefs.kinds["automation_done"].neg, 1.5);
+    let signals = std::fs::read_to_string(root.join("card_signals.jsonl")).unwrap_or_default();
+    let events: Vec<String> = signals
+        .lines()
+        .filter_map(|line| serde_json::from_str::<grokhub_core::CardSignal>(line).ok())
+        .map(|row| format!("{}:{:?}:{:?}", row.group, row.event, row.after_open))
+        .collect();
+    assert_eq!(
+        events,
+        vec![
+            "run:seen-src:Opened:None".to_string(),
+            "run:seen-src:Dismissed:Some(true)".to_string(),
+            "run:cold-src:Rejected:None".to_string(),
+        ]
+    );
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn a_filed_idea_that_reaches_done_counts_as_completed_once() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("feed-complete");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let _pin = crate::config::TestConfigDir::set(root.clone());
+
+    let mut cabin = Cabin::quiet_for_test();
+    let idea = grokhub_core::idea_card("idea-src-7", "Draft a release checklist", "steps", now_ms());
+    let id = idea.id.clone();
+    let group = grokhub_core::signal_group(&idea);
+    cabin.updates.push(idea);
+    cabin.build_idea(&id);
+    assert_eq!(
+        cabin.card_prefs.uses.get(&group),
+        Some(&grokhub_core::CardUse {
+            depth: 2,
+            did: 6,
+            n: 1,
+            at: cabin.card_prefs.uses[&group].at,
+        })
+    );
+    cabin.note_finished_card_uses();
+    assert_eq!(cabin.card_prefs.uses[&group].depth, 2, "the todo is not done yet");
+    let board_id = cabin
+        .updates
+        .iter()
+        .find(|card| card.id == id)
+        .and_then(|card| card.board_id.clone())
+        .expect("filed");
+    for card in cabin.board.iter_mut().filter(|card| card.id == board_id) {
+        card.status = BoardStatus::Done;
+    }
+    cabin.note_finished_card_uses();
+    cabin.note_finished_card_uses();
+    let row = &cabin.card_prefs.uses[&group];
+    assert_eq!((row.depth, row.did, row.n), (3, 8, 2));
+    let signals = std::fs::read_to_string(root.join("card_signals.jsonl")).unwrap_or_default();
+    assert_eq!(signals.matches("\"event\":\"ran\"").count(), 1, "{signals}");
+    assert_eq!(signals.matches("\"event\":\"completed\"").count(), 1, "{signals}");
+    assert!(!signals.contains("release checklist"), "{signals}");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+/// 2.10.87: the chat window has no Thinking dot and no Background button.
+/// The composer glow shows a live turn; `/bg` stays as the way to move it.
+#[test]
+fn chat_window_has_no_thinking_dot_or_background_button() {
+    let chat = include_str!("chat_ui.rs");
+    let bg = include_str!("background.rs");
+    assert!(!chat.contains("background_pill"), "Background button call is gone");
+    assert!(!bg.contains("fn background_pill"), "dead Background button fn is gone");
+    assert!(!chat.contains("\"Background\""), "no Background label in the chat window");
+    assert!(!chat.contains("paint_running("), "no running dot in the chat transcript");
+    assert!(!chat.contains("chat_run_label("), "no Thinking/Running/Waiting label in chat");
+    assert_eq!(chat.matches("move_turn_to_background").count(), 0);
+    assert_eq!(bg.matches("fn run_bg_slash(").count(), 1, "/bg is kept");
+    assert_eq!(bg.matches("fn move_turn_to_background(").count(), 1, "/bg needs it");
+}
+
+/// The Thinking dot's hover moved onto Stop: idle says Send, a live turn says
+/// what Stop stops.
+#[test]
+fn stop_hover_names_the_live_turn_now_the_dot_is_gone() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert_eq!(cabin.go_tip_here(), "Send");
+    cabin.running = true;
+    cabin.chat_job_thread = Some(cabin.visible_thread_id());
+    assert!(cabin.thinking_here());
+    assert_eq!(cabin.go_tip_here(), "Stop · Working on your reply");
+    cabin.stream_buf = "Half way.".into();
+    assert_eq!(cabin.go_tip_here(), "Stop · Streaming a reply");
+    cabin.running = false;
+    cabin.chat_job_thread = None;
+    assert_eq!(cabin.go_tip_here(), "Send");
+}
+
+/// 2.10.87: with the Background button gone, bare `/bg` still moves a live
+/// reply off the composer and posts the whole answer when it lands.
+#[cfg(unix)]
+#[test]
+fn bare_slash_bg_still_moves_a_live_reply() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin, restore, _argv) = bg_cabin("bg-bare");
+    cabin.send_chat("finish-later please".into());
+    assert!(poll_until(&mut cabin, 5, |c| c.stream_buf.contains("Half way.")));
+    assert!(cabin.can_move_turn_to_background());
+    cabin.send_chat("/bg".into());
+    assert!(
+        !cabin.running && cabin.chat_job_thread.is_none() && cabin.grok_p_rx.is_none(),
+        "{}",
+        cabin.status
+    );
+    assert_eq!(cabin.bg.runs.len(), 1);
+    assert_eq!(cabin.bg.runs[0].origin, grokhub_core::BgOrigin::Detached);
+    assert!(poll_until(&mut cabin, 6, |c| c.bg.runs.is_empty()), "the run ends");
+    let post = cabin.messages.last().cloned().unwrap_or_default();
+    assert_eq!(post.0, "assistant");
+    assert!(
+        post.1.starts_with("**Background task done** · finish-later please")
+            && post.1.contains("Half way. All done."),
+        "{post:?}"
+    );
+    cabin.send_chat("/bg stop".into());
+    assert_eq!(cabin.status, "No background tasks running");
     end_bg_test(root, cabin, restore);
 }
