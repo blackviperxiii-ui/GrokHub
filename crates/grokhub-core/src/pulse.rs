@@ -7,7 +7,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ideas::{same_topic, IdeaKind};
-use crate::update_feed::{post_update, public_http_url, FeedPulse, UpdateCard, UpdateKind, UpdateStatus};
+use crate::update_feed::{
+    post_update, public_http_url, FeedPulse, UpdateCard, UpdateKind, UpdateStatus,
+};
 
 /// Pulse fields on a feed card. Every one defaults, so older `updates.json`
 /// files load unchanged and older builds ignore them.
@@ -53,7 +55,10 @@ pub fn silence_line(last_pulse_ms: u64, now_ms: u64) -> String {
     if last_pulse_ms == 0 {
         return "No pulse yet. Nothing to do.".into();
     }
-    format!("Last pulse {}. Nothing to do.", ago_label(last_pulse_ms, now_ms))
+    format!(
+        "Last pulse {}. Nothing to do.",
+        ago_label(last_pulse_ms, now_ms)
+    )
 }
 
 /// "just now", "2m ago", "3h ago", "2d ago".
@@ -121,27 +126,117 @@ impl PulseCategory {
 }
 
 const FINANCIAL: &[&str] = &[
-    "bill", "bills", "budget", "invoice", "invoices", "payment", "pay ", "paycheck", "payday",
-    "subscription", "subscriptions", "renewal", "renews", "insurance", "tax", "taxes", "bank",
-    "rent", "mortgage", "loan", "refund", "expense", "expenses", "spending", "savings", "price drop",
+    "bill",
+    "bills",
+    "budget",
+    "invoice",
+    "invoices",
+    "payment",
+    "pay ",
+    "paycheck",
+    "payday",
+    "subscription",
+    "subscriptions",
+    "renewal",
+    "renews",
+    "insurance",
+    "tax",
+    "taxes",
+    "bank",
+    "rent",
+    "mortgage",
+    "loan",
+    "refund",
+    "expense",
+    "expenses",
+    "spending",
+    "savings",
+    "price drop",
 ];
 const HEALTH: &[&str] = &[
-    "workout", "exercise", "gym", "run ", "running", "steps", "sleep", "doctor", "dentist",
-    "meal", "meals", "calorie", "calories", "habit", "health", "fitness", "stretch", "water",
-    "medication", "dinner plan", "grocery plan",
+    "workout",
+    "exercise",
+    "gym",
+    "run ",
+    "running",
+    "steps",
+    "sleep",
+    "doctor",
+    "dentist",
+    "meal",
+    "meals",
+    "calorie",
+    "calories",
+    "habit",
+    "health",
+    "fitness",
+    "stretch",
+    "water",
+    "medication",
+    "dinner plan",
+    "grocery plan",
 ];
 const RELATIONSHIPS: &[&str] = &[
-    "family", "friend", "friends", "birthday", "anniversary", "mom", "dad", "partner", "wife",
-    "husband", "kids", "invite", "catch up", "reunion", "pet ", "dog", "cat ",
+    "family",
+    "friend",
+    "friends",
+    "birthday",
+    "anniversary",
+    "mom",
+    "dad",
+    "partner",
+    "wife",
+    "husband",
+    "kids",
+    "invite",
+    "catch up",
+    "reunion",
+    "pet ",
+    "dog",
+    "cat ",
 ];
 const SHOPPING: &[&str] = &[
-    "buy", "shopping", "deal", "deals", "price", "prices", "compare", "order", "marketplace",
-    "best-reviewed", "cart", "gift", "laptop stand",
+    "buy",
+    "shopping",
+    "deal",
+    "deals",
+    "price",
+    "prices",
+    "compare",
+    "order",
+    "marketplace",
+    "best-reviewed",
+    "cart",
+    "gift",
+    "laptop stand",
 ];
 const PRODUCTIVITY: &[&str] = &[
-    "resume", "job", "jobs", "interview", "calendar", "meeting", "email", "inbox", "workboard",
-    "report", "review", "notes", "plan", "schedule", "build", "release", "repo", "pull request",
-    "deploy", "summarize", "summary", "brief", "draft", "folder", "files", "backup",
+    "resume",
+    "job",
+    "jobs",
+    "interview",
+    "calendar",
+    "meeting",
+    "email",
+    "inbox",
+    "workboard",
+    "report",
+    "review",
+    "notes",
+    "plan",
+    "schedule",
+    "build",
+    "release",
+    "repo",
+    "pull request",
+    "deploy",
+    "summarize",
+    "summary",
+    "brief",
+    "draft",
+    "folder",
+    "files",
+    "backup",
 ];
 
 /// Category from the card's words. Fixed keyword table, first match in this
@@ -188,7 +283,10 @@ pub fn card_category(card: &UpdateCard) -> PulseCategory {
 
 fn card_text(card: &UpdateCard) -> String {
     let mut text = card.title.clone();
-    for part in [card.body.as_deref(), card.prompt.as_deref()].into_iter().flatten() {
+    for part in [card.body.as_deref(), card.prompt.as_deref()]
+        .into_iter()
+        .flatten()
+    {
         text.push(' ');
         text.push_str(part);
     }
@@ -226,7 +324,9 @@ impl PulseType {
 /// The type a card is before scoring. Quiet only comes from the score.
 pub fn pulse_type(card: &UpdateCard) -> PulseType {
     match card.kind {
-        UpdateKind::AutomationDone | UpdateKind::ScheduleCreated | UpdateKind::Digest => PulseType::Watch,
+        UpdateKind::AutomationDone | UpdateKind::ScheduleCreated | UpdateKind::Digest => {
+            PulseType::Watch
+        }
         UpdateKind::AutomateOffer => PulseType::Automate,
         UpdateKind::Suggestion => PulseType::Do,
         UpdateKind::Idea => {
@@ -245,8 +345,10 @@ pub fn pulse_type(card: &UpdateCard) -> PulseType {
 /// Ideas view: things to do. Feed view: things that happened or were found.
 /// The quiet-hours digest is news about what happened, so it reads on the Feed.
 pub fn is_idea_card(card: &UpdateCard) -> bool {
-    matches!(card.kind, UpdateKind::Idea | UpdateKind::Suggestion | UpdateKind::AutomateOffer)
-        && card.source_id != QUIET_DIGEST_SOURCE
+    matches!(
+        card.kind,
+        UpdateKind::Idea | UpdateKind::Suggestion | UpdateKind::AutomateOffer
+    ) && card.source_id != QUIET_DIGEST_SOURCE
 }
 
 /// The bold line on an Ideas row, always in the cabin's own voice: "I can …".
@@ -255,7 +357,10 @@ pub fn is_idea_card(card: &UpdateCard) -> bool {
 pub fn i_can_title(card: &UpdateCard) -> String {
     let title = card.title.trim();
     let lower = title.to_ascii_lowercase();
-    if ["i can ", "i'll ", "i will ", "let me ", "tell me "].iter().any(|p| lower.starts_with(p)) {
+    if ["i can ", "i'll ", "i will ", "let me ", "tell me "]
+        .iter()
+        .any(|p| lower.starts_with(p))
+    {
         return title.to_string();
     }
     let action = card.idea_action();
@@ -265,7 +370,10 @@ pub fn i_can_title(card: &UpdateCard) -> String {
         return format!("I can run \"{}\" for you on a schedule", lower_first(title));
     }
     if kind == PulseType::Learn {
-        return format!("I can learn this and do it your way: {}", lower_first(title));
+        return format!(
+            "I can learn this and do it your way: {}",
+            lower_first(title)
+        );
     }
     if !action.is_empty() && action.chars().count() <= 90 && !action.contains('\n') {
         return format!("I can {}", toward_you(&lower_first(action)));
@@ -332,14 +440,23 @@ impl LedgerReason {
     }
 
     fn parse(key: &str) -> Option<Self> {
-        [Self::NotThis, Self::Dismiss, Self::Accepted, Self::Wrong, Self::Liked]
-            .into_iter()
-            .find(|r| r.key() == key.trim())
+        [
+            Self::NotThis,
+            Self::Dismiss,
+            Self::Accepted,
+            Self::Wrong,
+            Self::Liked,
+        ]
+        .into_iter()
+        .find(|r| r.key() == key.trim())
     }
 
     /// Likes and dislikes the feed instructions rewrite learns from.
     pub fn is_taste(self) -> bool {
-        matches!(self, Self::NotThis | Self::Wrong | Self::Liked | Self::Accepted)
+        matches!(
+            self,
+            Self::NotThis | Self::Wrong | Self::Liked | Self::Accepted
+        )
     }
 
     pub fn is_dislike(self) -> bool {
@@ -431,9 +548,15 @@ pub struct PulseInputs<'a> {
 
 fn asks_explicitly(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
-    ["remind me", "need to", "don't forget", "dont forget", "remember to"]
-        .iter()
-        .any(|p| lower.contains(p))
+    [
+        "remind me",
+        "need to",
+        "don't forget",
+        "dont forget",
+        "remember to",
+    ]
+    .iter()
+    .any(|p| lower.contains(p))
 }
 
 /// The card's score: base by type, plus each rule that fires.
@@ -468,7 +591,8 @@ pub fn pulse_score(card: &UpdateCard, inputs: &PulseInputs) -> i64 {
     // 5 and 6. The ledger: accepted Learn cards lift a topic, Not this and
     // Dismiss push it down.
     for entry in inputs.ledger {
-        let hit = entry.title.eq_ignore_ascii_case(card.title.trim()) || same_topic(&entry.title, &card.title);
+        let hit = entry.title.eq_ignore_ascii_case(card.title.trim())
+            || same_topic(&entry.title, &card.title);
         if !hit {
             continue;
         }
@@ -526,7 +650,10 @@ pub fn rank_pulse(cards: &[UpdateCard], inputs: &PulseInputs) -> Vec<Ranked> {
 /// The Ideas view: an unlabeled top group (`None`) of the strongest cards, then
 /// one group per category in `PulseCategory::ORDER`. Quiet cards and empty
 /// groups are left out.
-pub fn group_ideas(cards: &[UpdateCard], inputs: &PulseInputs) -> Vec<(Option<PulseCategory>, Vec<Ranked>)> {
+pub fn group_ideas(
+    cards: &[UpdateCard],
+    inputs: &PulseInputs,
+) -> Vec<(Option<PulseCategory>, Vec<Ranked>)> {
     let ranked: Vec<Ranked> = rank_pulse(cards, inputs)
         .into_iter()
         .filter(|r| r.kind != PulseType::Quiet)
@@ -572,7 +699,11 @@ pub fn feed_posts(cards: &[UpdateCard], inputs: &PulseInputs) -> Vec<UpdateCard>
 /// Run: the idea's own action as a background task. Never the composer.
 pub fn run_line(card: &UpdateCard) -> String {
     let action = card.idea_action();
-    let what = if action.is_empty() { card.title.trim().to_string() } else { action };
+    let what = if action.is_empty() {
+        card.title.trim().to_string()
+    } else {
+        action
+    };
     format!("/bg {what}")
 }
 
@@ -582,7 +713,11 @@ pub fn snooze_until(now_ms: u64, hour: u32, minute: u32) -> u64 {
     let since_midnight = u64::from(hour.min(23)) * 60 + u64::from(minute.min(59));
     let midnight = minute_start.saturating_sub(since_midnight * 60_000);
     let nine = 9 * 60;
-    let target = if since_midnight < nine { nine } else { nine + 24 * 60 };
+    let target = if since_midnight < nine {
+        nine
+    } else {
+        nine + 24 * 60
+    };
     midnight + target * 60_000
 }
 
@@ -644,7 +779,11 @@ pub fn feed_prompt(steer: &str, instructions: &str) -> String {
 pub fn rewrite_prompt(current: &str, taste: &[LedgerEntry]) -> String {
     let mut lines = String::new();
     for entry in taste {
-        let label = if entry.reason.is_dislike() { "Disliked" } else { "Liked" };
+        let label = if entry.reason.is_dislike() {
+            "Disliked"
+        } else {
+            "Liked"
+        };
         lines.push_str(&format!("- {label}: {}\n", entry.title));
     }
     format!(
@@ -671,7 +810,10 @@ pub fn parse_rewrite(reply: &str) -> Option<String> {
 /// The last `REWRITE_AFTER` taste lines, the ones a rewrite folds in.
 pub fn recent_taste(ledger: &[LedgerEntry], n: usize) -> Vec<LedgerEntry> {
     let taste: Vec<&LedgerEntry> = ledger.iter().filter(|e| e.reason.is_taste()).collect();
-    taste[taste.len().saturating_sub(n)..].iter().map(|e| (*e).clone()).collect()
+    taste[taste.len().saturating_sub(n)..]
+        .iter()
+        .map(|e| (*e).clone())
+        .collect()
 }
 
 // ---------------------------------------------------------------- quiet hours
@@ -692,7 +834,10 @@ pub fn release_quiet_batch(cards: &mut Vec<UpdateCard>, now_ms: u64) -> (usize, 
     if n < 2 {
         return (n, None);
     }
-    for card in cards.iter_mut().filter(|c| titles.contains(&c.title) && !c.pulse.quiet_batched) {
+    for card in cards
+        .iter_mut()
+        .filter(|c| titles.contains(&c.title) && !c.pulse.quiet_batched)
+    {
         if card.created_at <= now_ms {
             card.pulse.quiet_batched = true;
         }
@@ -703,7 +848,8 @@ pub fn release_quiet_batch(cards: &mut Vec<UpdateCard>, now_ms: u64) -> (usize, 
         body.push_str(&format!(" · and {} more", n - 3));
     }
     let id = format!("pulse-quiet-{now_ms}");
-    let mut digest = crate::update_feed::suggestion_card(QUIET_DIGEST_SOURCE, QUIET_DIGEST_TITLE, &body, now_ms);
+    let mut digest =
+        crate::update_feed::suggestion_card(QUIET_DIGEST_SOURCE, QUIET_DIGEST_TITLE, &body, now_ms);
     digest.id = id.clone();
     digest.source_id = QUIET_DIGEST_SOURCE.to_string();
     digest.pulse.source_name = Some("Quiet hours".into());
@@ -721,11 +867,17 @@ pub fn og_image(html: &str, page_url: &str) -> Option<String> {
         let mut from = 0;
         while let Some(pos) = lower[from..].find("<meta") {
             let start = from + pos;
-            let end = lower[start..].find('>').map(|e| start + e).unwrap_or(lower.len());
+            let end = lower[start..]
+                .find('>')
+                .map(|e| start + e)
+                .unwrap_or(lower.len());
             let tag = &html[start..end];
             let tag_lower = &lower[start..end];
             from = end;
-            let names = [attr(tag, tag_lower, "property"), attr(tag, tag_lower, "name")];
+            let names = [
+                attr(tag, tag_lower, "property"),
+                attr(tag, tag_lower, "name"),
+            ];
             if !names.iter().flatten().any(|n| n.eq_ignore_ascii_case(key)) {
                 continue;
             }
@@ -759,7 +911,9 @@ fn attr<'a>(tag: &'a str, tag_lower: &str, name: &str) -> Option<&'a str> {
             let inner = &tag[offset + 1..];
             inner.find(quote).map(|e| &inner[..e])
         } else {
-            let e = value.find(|c: char| c.is_whitespace() || c == '/').unwrap_or(value.len());
+            let e = value
+                .find(|c: char| c.is_whitespace() || c == '/')
+                .unwrap_or(value.len());
             Some(&value[..e])
         };
     }
@@ -772,7 +926,10 @@ fn resolve_url(url: &str, page_url: &str) -> Option<String> {
         return Some(url);
     }
     let scheme_end = page_url.find("://")? + 3;
-    let host_end = page_url[scheme_end..].find('/').map(|e| scheme_end + e).unwrap_or(page_url.len());
+    let host_end = page_url[scheme_end..]
+        .find('/')
+        .map(|e| scheme_end + e)
+        .unwrap_or(page_url.len());
     if let Some(rest) = url.strip_prefix("//") {
         return Some(format!("{}{}", &page_url[..scheme_end], rest));
     }
@@ -789,7 +946,11 @@ pub fn image_cache_name(url: &str) -> String {
         h ^= u64::from(b);
         h = h.wrapping_mul(0x0100_0000_01b3);
     }
-    let path = url.split(['?', '#']).next().unwrap_or("").to_ascii_lowercase();
+    let path = url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
     let ext = [".jpg", ".jpeg", ".png", ".webp"]
         .into_iter()
         .find(|e| path.ends_with(e))
@@ -800,8 +961,13 @@ pub fn image_cache_name(url: &str) -> String {
 
 /// Site name for a post's source line: `www.theverge.com/…` → `theverge.com`.
 pub fn source_host(url: &str) -> Option<String> {
-    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
-    let host = rest.split(['/', '?', '#', ':']).next()?.to_ascii_lowercase();
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    let host = rest
+        .split(['/', '?', '#', ':'])
+        .next()?
+        .to_ascii_lowercase();
     let host = host.strip_prefix("www.").unwrap_or(&host).to_string();
     (!host.is_empty()).then_some(host)
 }
@@ -858,7 +1024,9 @@ pub fn migrate_to_pulse(cards: &mut [UpdateCard], pulse: &mut FeedPulse) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::update_feed::{automate_offer_card, automation_done_card, digest_card, idea_card, suggestion_card};
+    use crate::update_feed::{
+        automate_offer_card, automation_done_card, digest_card, idea_card, suggestion_card,
+    };
 
     fn idea(id: &str, title: &str, body: &str, at: u64) -> UpdateCard {
         let mut c = idea_card("gen", title, body, at);
@@ -868,21 +1036,53 @@ mod tests {
 
     #[test]
     fn categories_follow_the_keyword_table_and_the_fixed_order() {
-        assert_eq!(categorize("I can stage your $287.63 power bill before October 5"), PulseCategory::Financial);
-        assert_eq!(categorize("I can find and cancel subscriptions you forgot"), PulseCategory::Financial);
-        assert_eq!(categorize("Name a habit you want to break; I'll nudge you"), PulseCategory::Health);
-        assert_eq!(categorize("Gather the family for a trivia night"), PulseCategory::Relationships);
-        assert_eq!(categorize("Tell me the item and I'll compare prices"), PulseCategory::Shopping);
-        assert_eq!(categorize("I can tailor your resume for entry-level jobs"), PulseCategory::Productivity);
-        assert_eq!(categorize("I can map a spoiler-free path through Witcher 3"), PulseCategory::More);
+        assert_eq!(
+            categorize("I can stage your $287.63 power bill before October 5"),
+            PulseCategory::Financial
+        );
+        assert_eq!(
+            categorize("I can find and cancel subscriptions you forgot"),
+            PulseCategory::Financial
+        );
+        assert_eq!(
+            categorize("Name a habit you want to break; I'll nudge you"),
+            PulseCategory::Health
+        );
+        assert_eq!(
+            categorize("Gather the family for a trivia night"),
+            PulseCategory::Relationships
+        );
+        assert_eq!(
+            categorize("Tell me the item and I'll compare prices"),
+            PulseCategory::Shopping
+        );
+        assert_eq!(
+            categorize("I can tailor your resume for entry-level jobs"),
+            PulseCategory::Productivity
+        );
+        assert_eq!(
+            categorize("I can map a spoiler-free path through Witcher 3"),
+            PulseCategory::More
+        );
         let labels: Vec<&str> = PulseCategory::ORDER.iter().map(|c| c.label()).collect();
         assert_eq!(
             labels,
-            vec!["Financial Management", "Productivity", "Relationships", "Health & Fitness", "Shopping", "More ideas"]
+            vec![
+                "Financial Management",
+                "Productivity",
+                "Relationships",
+                "Health & Fitness",
+                "Shopping",
+                "More ideas"
+            ]
         );
         let mut stored = idea("i1", "Witcher 3 route", "", 1);
         stored.pulse.category = Some("shopping".into());
-        assert_eq!(card_category(&stored), PulseCategory::Shopping, "a stored category wins");
+        assert_eq!(
+            card_category(&stored),
+            PulseCategory::Shopping,
+            "a stored category wins"
+        );
     }
 
     #[test]
@@ -908,20 +1108,38 @@ mod tests {
         .iter()
         .map(|c| pulse_type(c).label())
         .collect();
-        assert_eq!(got, vec!["Automate", "Do", "Learn", "Do", "Do", "Automate", "Watch", "Watch"]);
+        assert_eq!(
+            got,
+            vec!["Automate", "Do", "Learn", "Do", "Do", "Automate", "Watch", "Watch"]
+        );
     }
 
     #[test]
     fn ledger_lines_round_trip_through_memory_md() {
-        let line = ledger_line("2026-10-04", "summarize \"workboard\"", LedgerReason::NotThis);
-        assert_eq!(line, "- [2026-10-04] pulse: dismissed \"summarize workboard\" reason=not-this");
+        let line = ledger_line(
+            "2026-10-04",
+            "summarize \"workboard\"",
+            LedgerReason::NotThis,
+        );
+        assert_eq!(
+            line,
+            "- [2026-10-04] pulse: dismissed \"summarize workboard\" reason=not-this"
+        );
         let md = format!("# Long-term notes\n- prefer nvim\n{line}\n- [2026-10-05] pulse: accepted \"Packing list\" reason=accepted\n");
         let ledger = parse_ledger(&md);
         assert_eq!(
             ledger,
             vec![
-                LedgerEntry { date: "2026-10-04".into(), title: "summarize workboard".into(), reason: LedgerReason::NotThis },
-                LedgerEntry { date: "2026-10-05".into(), title: "Packing list".into(), reason: LedgerReason::Accepted },
+                LedgerEntry {
+                    date: "2026-10-04".into(),
+                    title: "summarize workboard".into(),
+                    reason: LedgerReason::NotThis
+                },
+                LedgerEntry {
+                    date: "2026-10-05".into(),
+                    title: "Packing list".into(),
+                    reason: LedgerReason::Accepted
+                },
             ]
         );
     }
@@ -936,15 +1154,29 @@ mod tests {
         let offer = automate_offer_card("loop", "Make the morning brief a loop", 30);
         let plain = idea("plain", "Map a route through Witcher 3", "", 40);
         let watch = automation_done_card("auto-1", "Nightly backup", "ok", 50);
-        let cards = vec![bill.clone(), started.clone(), offer.clone(), plain.clone(), watch.clone()];
+        let cards = vec![
+            bill.clone(),
+            started.clone(),
+            offer.clone(),
+            plain.clone(),
+            watch.clone(),
+        ];
         let skills = vec!["pay power bill".to_string()];
-        let inputs = PulseInputs { ledger: &[], skills: &skills, open_work: &[], now_ms: now };
+        let inputs = PulseInputs {
+            ledger: &[],
+            skills: &skills,
+            open_work: &[],
+            now_ms: now,
+        };
         assert_eq!(pulse_score(&bill, &inputs), 150 + 1000 + 500);
         assert_eq!(pulse_score(&started, &inputs), 150 + 250);
         assert_eq!(pulse_score(&offer, &inputs), 140 + 120);
         assert_eq!(pulse_score(&plain, &inputs), 150);
         assert_eq!(pulse_score(&watch, &inputs), 110);
-        let order: Vec<(String, i64)> = rank_pulse(&cards, &inputs).into_iter().map(|r| (r.id, r.score)).collect();
+        let order: Vec<(String, i64)> = rank_pulse(&cards, &inputs)
+            .into_iter()
+            .map(|r| (r.id, r.score))
+            .collect();
         let offer_id = offer.id.clone();
         let watch_id = watch.id.clone();
         assert_eq!(
@@ -957,7 +1189,11 @@ mod tests {
                 (watch_id, 110),
             ]
         );
-        assert_eq!(rank_pulse(&cards, &inputs), rank_pulse(&cards, &inputs), "same inputs, same order");
+        assert_eq!(
+            rank_pulse(&cards, &inputs),
+            rank_pulse(&cards, &inputs),
+            "same inputs, same order"
+        );
     }
 
     #[test]
@@ -966,21 +1202,60 @@ mod tests {
         let plain = idea("plain", "Map a route through Witcher 3", "", 40);
         let other = idea("other", "Build an Ace Combat handbook", "", 30);
         let cards = vec![plain.clone(), other.clone()];
-        let before: Vec<String> = rank_pulse(&cards, &PulseInputs { now_ms: now, ..Default::default() })
-            .into_iter()
-            .map(|r| r.id)
-            .collect();
+        let before: Vec<String> = rank_pulse(
+            &cards,
+            &PulseInputs {
+                now_ms: now,
+                ..Default::default()
+            },
+        )
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
         assert_eq!(before, vec!["plain", "other"], "same score: newer first");
-        let ledger = parse_ledger("- [2026-10-04] pulse: dismissed \"Map a route through Witcher 3\" reason=not-this\n");
-        let inputs = PulseInputs { ledger: &ledger, now_ms: now, ..Default::default() };
+        let ledger = parse_ledger(
+            "- [2026-10-04] pulse: dismissed \"Map a route through Witcher 3\" reason=not-this\n",
+        );
+        let inputs = PulseInputs {
+            ledger: &ledger,
+            now_ms: now,
+            ..Default::default()
+        };
         assert_eq!(pulse_score(&plain, &inputs), 150 - 400);
         let after = rank_pulse(&cards, &inputs);
         assert_eq!(after[0].id, "other");
-        assert_eq!((after[1].id.as_str(), after[1].score, after[1].kind), ("plain", -250, PulseType::Quiet));
-        let dismissed = parse_ledger("- [2026-10-04] pulse: dismissed \"Build an Ace Combat handbook\" reason=dismiss\n");
-        assert_eq!(pulse_score(&other, &PulseInputs { ledger: &dismissed, now_ms: now, ..Default::default() }), -50);
-        let accepted = parse_ledger("- [2026-10-04] pulse: accepted \"Ace Combat handbook\" reason=accepted\n");
-        assert_eq!(pulse_score(&other, &PulseInputs { ledger: &accepted, now_ms: now, ..Default::default() }), 230);
+        assert_eq!(
+            (after[1].id.as_str(), after[1].score, after[1].kind),
+            ("plain", -250, PulseType::Quiet)
+        );
+        let dismissed = parse_ledger(
+            "- [2026-10-04] pulse: dismissed \"Build an Ace Combat handbook\" reason=dismiss\n",
+        );
+        assert_eq!(
+            pulse_score(
+                &other,
+                &PulseInputs {
+                    ledger: &dismissed,
+                    now_ms: now,
+                    ..Default::default()
+                }
+            ),
+            -50
+        );
+        let accepted = parse_ledger(
+            "- [2026-10-04] pulse: accepted \"Ace Combat handbook\" reason=accepted\n",
+        );
+        assert_eq!(
+            pulse_score(
+                &other,
+                &PulseInputs {
+                    ledger: &accepted,
+                    now_ms: now,
+                    ..Default::default()
+                }
+            ),
+            230
+        );
     }
 
     #[test]
@@ -994,10 +1269,21 @@ mod tests {
         let witcher = idea("witcher", "I can map a path through Witcher 3", "", 5);
         let post = automation_done_card("a", "Nightly backup", "ok", 6);
         let cards = vec![bill, subs, resume, gym, witcher, post];
-        let groups: Vec<(Option<&str>, Vec<String>)> = group_ideas(&cards, &PulseInputs { now_ms: now, ..Default::default() })
-            .into_iter()
-            .map(|(cat, rows)| (cat.map(PulseCategory::label), rows.into_iter().map(|r| r.id).collect()))
-            .collect();
+        let groups: Vec<(Option<&str>, Vec<String>)> = group_ideas(
+            &cards,
+            &PulseInputs {
+                now_ms: now,
+                ..Default::default()
+            },
+        )
+        .into_iter()
+        .map(|(cat, rows)| {
+            (
+                cat.map(PulseCategory::label),
+                rows.into_iter().map(|r| r.id).collect(),
+            )
+        })
+        .collect();
         assert_eq!(
             groups,
             vec![
@@ -1014,15 +1300,31 @@ mod tests {
     fn run_snooze_and_feed_posts() {
         let mut c = idea("i", "Weekly price check", "", 1);
         c.prompt = Some("every weekday at 12, check the laptop stand price".into());
-        assert_eq!(run_line(&c), "/bg every weekday at 12, check the laptop stand price");
+        assert_eq!(
+            run_line(&c),
+            "/bg every weekday at 12, check the laptop stand price"
+        );
         c.draft = Some("check the stand price now".into());
-        assert_eq!(run_line(&c), "/bg check the stand price now", "your edited action wins");
-        assert_eq!(run_line(&idea("j", "Tidy the photos", "", 1)), "/bg Tidy the photos");
+        assert_eq!(
+            run_line(&c),
+            "/bg check the stand price now",
+            "your edited action wins"
+        );
+        assert_eq!(
+            run_line(&idea("j", "Tidy the photos", "", 1)),
+            "/bg Tidy the photos"
+        );
         // 14:30 local → tomorrow 09:00; 07:15 local → today 09:00.
         let now = 1_000_000_035_000;
-        assert_eq!(snooze_until(now, 14, 30), 1_000_000_020_000 - 870 * 60_000 + (540 + 1440) * 60_000);
+        assert_eq!(
+            snooze_until(now, 14, 30),
+            1_000_000_020_000 - 870 * 60_000 + (540 + 1440) * 60_000
+        );
         assert_eq!(snooze_until(now, 14, 30), 1_000_066_620_000);
-        assert_eq!(snooze_until(now, 7, 15), 1_000_000_020_000 - 435 * 60_000 + 540 * 60_000);
+        assert_eq!(
+            snooze_until(now, 7, 15),
+            1_000_000_020_000 - 435 * 60_000 + 540 * 60_000
+        );
         let mut cards = vec![c];
         assert!(snooze_card(&mut cards, "i", 2_000));
         assert!(!pulse_visible(&cards[0], 1_999));
@@ -1033,27 +1335,48 @@ mod tests {
     fn idea_rows_speak_as_i_can_and_the_quiet_digest_reads_on_the_feed() {
         let mut c = idea("a", "Standup note", "", 1);
         c.prompt = Some("Draft my standup from yesterday's commits".into());
-        assert_eq!(i_can_title(&c), "I can draft your standup from yesterday's commits");
+        assert_eq!(
+            i_can_title(&c),
+            "I can draft your standup from yesterday's commits"
+        );
         let mut auto = idea("b", "Summarize the workboard", "", 1);
         auto.idea_kind = Some(IdeaKind::Automation);
-        assert_eq!(i_can_title(&auto), "I can run \"summarize the workboard\" for you on a schedule");
+        assert_eq!(
+            i_can_title(&auto),
+            "I can run \"summarize the workboard\" for you on a schedule"
+        );
         let mut learn = idea("c", "Release notes", "", 1);
         learn.idea_kind = Some(IdeaKind::Skill);
-        assert_eq!(i_can_title(&learn), "I can learn this and do it your way: release notes");
-        assert_eq!(i_can_title(&idea("d", "I can stage the TXU bill", "", 1)), "I can stage the TXU bill");
-        assert_eq!(i_can_title(&idea("e", "PR triage", "", 1)), "I can help with PR triage");
+        assert_eq!(
+            i_can_title(&learn),
+            "I can learn this and do it your way: release notes"
+        );
+        assert_eq!(
+            i_can_title(&idea("d", "I can stage the TXU bill", "", 1)),
+            "I can stage the TXU bill"
+        );
+        assert_eq!(
+            i_can_title(&idea("e", "PR triage", "", 1)),
+            "I can help with PR triage"
+        );
         let mut held = vec![idea("x", "One", "", 1), idea("y", "Two", "", 2)];
         for card in &mut held {
             card.held = true;
         }
         let (_, id) = release_quiet_batch(&mut held, 50);
-        let digest = held.iter().find(|c| Some(&c.id) == id.as_ref()).expect("digest");
+        let digest = held
+            .iter()
+            .find(|c| Some(&c.id) == id.as_ref())
+            .expect("digest");
         assert!(!is_idea_card(digest) && is_feed_card(digest));
     }
 
     #[test]
     fn feed_instructions_prompt_rewrite_and_brief_migration() {
-        assert_eq!(feed_instructions_or_default("  "), DEFAULT_FEED_INSTRUCTIONS);
+        assert_eq!(
+            feed_instructions_or_default("  "),
+            DEFAULT_FEED_INSTRUCTIONS
+        );
         assert_eq!(
             instructions_from_brief("Rust and Linux gaming"),
             format!("{DEFAULT_FEED_INSTRUCTIONS}\n\nFocus: Rust and Linux gaming")
@@ -1067,25 +1390,36 @@ mod tests {
         assert_eq!(recent.len(), 2, "a plain Dismiss is not taste");
         let ask = rewrite_prompt("Only Rust.", &recent);
         assert!(ask.contains("Current instructions:\nOnly Rust.\n\nWhat they did:\n- Liked: Rust 1.95 ships\n- Disliked: NFL scores\n"), "{ask}");
-        assert_eq!(parse_rewrite("```\nOnly Rust. Show less of: sports scores.\n```").as_deref(), Some("Only Rust. Show less of: sports scores."));
+        assert_eq!(
+            parse_rewrite("```\nOnly Rust. Show less of: sports scores.\n```").as_deref(),
+            Some("Only Rust. Show less of: sports scores.")
+        );
         assert_eq!(parse_rewrite("NONE"), None);
         assert_eq!(parse_rewrite("short"), None);
     }
 
     #[test]
     fn quiet_hours_release_batches_into_one_digest_card() {
-        let mut cards: Vec<UpdateCard> = ["Backup ran", "Price check ran", "Brief ready", "Repo synced"]
-            .iter()
-            .enumerate()
-            .map(|(i, t)| {
-                let mut c = automation_done_card(&format!("auto-{i}"), t, "ok", 100 + i as u64);
-                c.held = true;
-                c
-            })
-            .collect();
+        let mut cards: Vec<UpdateCard> = [
+            "Backup ran",
+            "Price check ran",
+            "Brief ready",
+            "Repo synced",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let mut c = automation_done_card(&format!("auto-{i}"), t, "ok", 100 + i as u64);
+            c.held = true;
+            c
+        })
+        .collect();
         let (n, id) = release_quiet_batch(&mut cards, 9_000);
         assert_eq!((n, id.as_deref()), (4, Some("pulse-quiet-9000")));
-        let digest = cards.iter().find(|c| c.id == "pulse-quiet-9000").expect("digest");
+        let digest = cards
+            .iter()
+            .find(|c| c.id == "pulse-quiet-9000")
+            .expect("digest");
         assert_eq!(digest.title, "While you were in quiet hours");
         assert_eq!(
             digest.body.as_deref(),
@@ -1111,19 +1445,41 @@ mod tests {
             Some("https://news.example.com/img/lead.jpg?w=1200&q=80")
         );
         assert_eq!(
-            og_image(r#"<meta name="twitter:image" content="https://cdn.example.com/tw.jpg">"#, "https://a.example.com/").as_deref(),
+            og_image(
+                r#"<meta name="twitter:image" content="https://cdn.example.com/tw.jpg">"#,
+                "https://a.example.com/"
+            )
+            .as_deref(),
             Some("https://cdn.example.com/tw.jpg")
         );
-        assert_eq!(og_image(r#"<meta property="og:image" content="http://localhost/x.png">"#, "https://a.example.com/"), None);
+        assert_eq!(
+            og_image(
+                r#"<meta property="og:image" content="http://localhost/x.png">"#,
+                "https://a.example.com/"
+            ),
+            None
+        );
         assert_eq!(og_image("<p>no meta</p>", "https://a.example.com/"), None);
-        assert_eq!(image_cache_name("https://cdn.example.com/a.JPEG?x=1"), format!("{}.jpg", &image_cache_name("https://cdn.example.com/a.JPEG?x=1")[..16]));
+        assert_eq!(
+            image_cache_name("https://cdn.example.com/a.JPEG?x=1"),
+            format!(
+                "{}.jpg",
+                &image_cache_name("https://cdn.example.com/a.JPEG?x=1")[..16]
+            )
+        );
         assert!(image_cache_name("https://cdn.example.com/a").ends_with(".img"));
-        assert_eq!(source_host("https://www.theverge.com/2026/x").as_deref(), Some("theverge.com"));
+        assert_eq!(
+            source_host("https://www.theverge.com/2026/x").as_deref(),
+            Some("theverge.com")
+        );
     }
 
     #[test]
     fn silence_line_and_ago_labels() {
-        assert_eq!(silence_line(1_000_000, 1_120_000), "Last pulse 2m ago. Nothing to do.");
+        assert_eq!(
+            silence_line(1_000_000, 1_120_000),
+            "Last pulse 2m ago. Nothing to do."
+        );
         assert_eq!(silence_line(0, 5), "No pulse yet. Nothing to do.");
         assert_eq!(ago_label(0, 3 * 3_600_000 + 5), "3h ago");
     }

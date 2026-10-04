@@ -23632,3 +23632,560 @@ fn imagine_aspect_pill_drives_every_request() {
         "no raw button rows above the Imagine composer: {ui}"
     );
 }
+
+// Pulse (2.10.91): Ideas and the Home deck became one page.
+
+fn pulse_idea(id: &str, title: &str, prompt: &str, created_at: u64) -> grokhub_core::UpdateCard {
+    let mut c = grokhub_core::idea_card(id, title, "One short line about it", created_at);
+    c.id = id.into();
+    c.idea_kind = Some(grokhub_core::IdeaKind::Try);
+    c.prompt = Some(prompt.into());
+    c
+}
+
+fn pulse_texts(cabin: &mut super::Cabin, h: f32) -> Vec<String> {
+    let _paint = crate::theme::hold_paint_test();
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1400.0, h),
+        )),
+        ..Default::default()
+    };
+    let mut texts = Vec::new();
+    for _ in 0..2 {
+        texts.clear();
+        let out = crate::theme::test_pass(&ctx, raw.clone(), |ui| cabin.ui_pulse(ui));
+        for clipped in &out.shapes {
+            collect_shape_text(&clipped.shape, &mut texts);
+        }
+    }
+    texts
+}
+
+fn pulse_memory() -> String {
+    crate::config::read_memory("MEMORY.md")
+}
+
+fn pulse_ids(cabin: &mut super::Cabin, now: u64) -> Vec<(String, i64, &'static str)> {
+    cabin
+        .pulse_ranked(now)
+        .into_iter()
+        .map(|r| (r.id, r.score, r.kind.label()))
+        .collect()
+}
+
+#[test]
+fn pulse_replaces_ideas_on_the_rail_and_old_links_still_land() {
+    let mut quiet = QuietCabin::boot("pulse-nav");
+    let cabin = &mut quiet.cabin;
+    assert!(crate::theme::GROK_NAV.contains(&("pulse", "Pulse")));
+    assert!(crate::theme::GROK_NAV
+        .iter()
+        .all(|(id, label)| *id != "ideas" && *label != "Ideas"));
+    assert_eq!(crate::theme::stage_subtitle("pulse"), "What I'd do next");
+    assert_eq!(super::Cabin::nav_from_id("pulse"), super::Nav::Pulse);
+    assert_eq!(
+        super::Cabin::nav_from_id("ideas"),
+        super::Nav::Pulse,
+        "an old ideas link lands on Pulse"
+    );
+    assert_eq!(
+        grokhub_core::nav_from_chip_value("__nav:pulse"),
+        Some("pulse")
+    );
+    cabin.set_nav_id("ideas");
+    assert_eq!(cabin.nav, super::Nav::Pulse);
+    assert_eq!(cabin.nav_id(), "pulse");
+    cabin.nav = super::Nav::Chat;
+    cabin.run_palette("nav:pulse");
+    assert_eq!(cabin.nav, super::Nav::Pulse);
+    // The deck no longer stacks over a new chat unless Settings turns it back on.
+    assert!(!crate::config::AppConfig::default().home_deck);
+    let home = fn_src(&cabin_src(), "ui_empty_home").to_string();
+    assert!(
+        home.contains("let feed_n = if pulse_on && self.cfg.home_deck {"),
+        "{home}"
+    );
+    let texts = pulse_texts(cabin, 900.0);
+    assert_eq!(
+        texts.first().map(String::as_str),
+        Some("Pulse"),
+        "{texts:?}"
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|t| t == "What I'd do next, from how you use the cabin."),
+        "{texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t == "Ideas") && texts.iter().any(|t| t == "Feed"),
+        "{texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t == "Nothing actionable. Heartbeat is watching. Run, snooze, or dismiss a card and the next ones rank tighter."),
+        "{texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t == "No pulse yet. Nothing to do."),
+        "{texts:?}"
+    );
+}
+
+#[test]
+fn pulse_ideas_group_by_category_in_a_fixed_order() {
+    let mut quiet = QuietCabin::boot("pulse-groups");
+    let cabin = &mut quiet.cabin;
+    let now = now_ms();
+    cabin.updates.clear();
+    cabin.board.clear();
+    cabin.skill_list.clear();
+    let mut bill = pulse_idea("idea-bill", "TXU bill", "pay my TXU bill before Friday", 1);
+    bill.pulse.due_at = Some(now + 2 * 60 * 60 * 1000);
+    cabin.updates.push(bill);
+    cabin.updates.push(pulse_idea(
+        "idea-photos",
+        "Vacation photos",
+        "sort the vacation photos",
+        2,
+    ));
+    cabin.updates.push(pulse_idea(
+        "idea-stand",
+        "Laptop stand",
+        "compare laptop stand prices",
+        3,
+    ));
+    cabin.updates.push(pulse_idea(
+        "idea-gym",
+        "Gym",
+        "book a gym session for Tuesday",
+        4,
+    ));
+    cabin.updates.push(pulse_idea(
+        "idea-dinner",
+        "Dinner",
+        "plan a dinner with family",
+        5,
+    ));
+    cabin
+        .updates
+        .push(pulse_idea("idea-standup", "Standup", "draft my standup", 6));
+    let mut auto = pulse_idea(
+        "idea-auto",
+        "Summarize the workboard",
+        "every weekday at 9 summarize the workboard",
+        7,
+    );
+    auto.idea_kind = Some(grokhub_core::IdeaKind::Automation);
+    cabin.updates.push(auto);
+    let groups: Vec<(Option<&str>, Vec<String>)> = cabin
+        .pulse_groups(now)
+        .into_iter()
+        .map(|(cat, rows)| {
+            (
+                cat.map(|c| c.label()),
+                rows.into_iter().map(|r| r.id).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        groups,
+        vec![
+            (None, vec!["idea-bill".to_string()]),
+            (
+                Some("Productivity"),
+                vec!["idea-standup".to_string(), "idea-auto".to_string()]
+            ),
+            (Some("Relationships"), vec!["idea-dinner".to_string()]),
+            (Some("Health & Fitness"), vec!["idea-gym".to_string()]),
+            (Some("Shopping"), vec!["idea-stand".to_string()]),
+            (Some("More ideas"), vec!["idea-photos".to_string()]),
+        ]
+    );
+    let texts = pulse_texts(cabin, 2400.0);
+    let at = |needle: &str| {
+        texts
+            .iter()
+            .position(|t| t == needle)
+            .unwrap_or_else(|| panic!("missing {needle:?} in {texts:?}"))
+    };
+    let order = [
+        at("I can pay your TXU bill before Friday"),
+        at("Productivity"),
+        at("I can draft your standup"),
+        at("I can run \"summarize the workboard\" for you on a schedule"),
+        at("Relationships"),
+        at("I can plan a dinner with family"),
+        at("Health & Fitness"),
+        at("Shopping"),
+        at("More ideas"),
+        at("I can sort the vacation photos"),
+    ];
+    assert!(
+        order.windows(2).all(|w| w[0] < w[1]),
+        "{order:?} in {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|t| t == "Financial Management"),
+        "the bill sits in the top group: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t == "AUTOMATE") && texts.iter().any(|t| t == "DO"),
+        "{texts:?}"
+    );
+    assert_eq!(
+        texts.iter().filter(|t| t.as_str() == "···").count(),
+        7,
+        "one ··· menu per row"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn pulse_run_sends_the_ideas_prompt_as_bg() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin, restore, argv) = bg_cabin("pulse-run");
+    cabin
+        .updates
+        .push(pulse_idea("idea-run", "Checks", "run the checks", 5));
+    assert_eq!(
+        cabin.pulse_run("idea-run").as_deref(),
+        Some("/bg run the checks")
+    );
+    assert!(!cabin.running, "Run never takes the composer");
+    assert_eq!(cabin.bg.runs.len(), 1, "{}", cabin.status);
+    assert!(
+        cabin.status.starts_with("Background · run the checks"),
+        "{}",
+        cabin.status
+    );
+    assert!(poll_until(&mut cabin, 5, |c| c.bg.runs.is_empty()));
+    let sent = last_grok_argv(&argv);
+    assert!(sent.contains("Task: run the checks"), "{sent}");
+    assert_eq!(cabin.updates[0].status, UpdateStatus::Opened);
+    end_bg_test(root, cabin, restore);
+}
+
+#[test]
+fn pulse_snooze_dismiss_and_not_this_change_the_page_and_the_ledger() {
+    let mut quiet = QuietCabin::boot("pulse-buttons");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    cabin.board.clear();
+    cabin.skill_list.clear();
+    cabin.updates.push(pulse_idea(
+        "idea-a",
+        "Summarize the workboard",
+        "summarize the workboard",
+        10,
+    ));
+    cabin.updates.push(pulse_idea(
+        "idea-b",
+        "Summarize the workboard every Friday",
+        "summarize the workboard on Friday",
+        11,
+    ));
+    cabin
+        .updates
+        .push(pulse_idea("idea-c", "Standup", "draft my standup", 12));
+    cabin.updates.push(pulse_idea(
+        "idea-d",
+        "Vacation photos",
+        "sort the vacation photos",
+        13,
+    ));
+    let now = 1_000_000_035_000;
+
+    // Snooze: hidden until the next 09:00 local, to the millisecond.
+    let until = cabin.pulse_snooze_at("idea-d", now, 14, 30);
+    assert_eq!(until, 1_000_066_620_000);
+    assert_eq!(cabin.updates[3].pulse.snoozed_until, 1_000_066_620_000);
+    assert!(!cabin
+        .pulse_ranked(1_000_066_619_999)
+        .iter()
+        .any(|r| r.id == "idea-d"));
+    assert!(cabin
+        .pulse_ranked(1_000_066_620_000)
+        .iter()
+        .any(|r| r.id == "idea-d"));
+
+    assert_eq!(
+        pulse_ids(cabin, now),
+        vec![
+            ("idea-c".to_string(), 150, "Do"),
+            ("idea-b".to_string(), 150, "Do"),
+            ("idea-a".to_string(), 150, "Do"),
+        ]
+    );
+
+    // Not this: a dislike line, the card goes, and its topic sinks next pass.
+    cabin.pulse_not_this("idea-a", "2026-10-04");
+    assert!(!cabin.updates.iter().any(|c| c.id == "idea-a"));
+    assert!(
+        pulse_memory().contains(
+            "- [2026-10-04] pulse: dismissed \"Summarize the workboard\" reason=not-this"
+        ),
+        "{}",
+        pulse_memory()
+    );
+    assert_eq!(
+        pulse_ids(cabin, now),
+        vec![
+            ("idea-c".to_string(), 150, "Do"),
+            ("idea-b".to_string(), -250, "Quiet")
+        ]
+    );
+    let groups = cabin.pulse_groups(now);
+    assert_eq!(groups.len(), 1);
+    assert_eq!(
+        groups[0]
+            .1
+            .iter()
+            .map(|r| r.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["idea-c"]
+    );
+    assert_eq!(cabin.cfg.feed_pulse.taste_since_rewrite, 1);
+
+    // Dismiss: the card is removed and the ledger says so.
+    cabin.pulse_dismiss("idea-c", "2026-10-04");
+    assert!(!cabin.updates.iter().any(|c| c.id == "idea-c"));
+    assert!(pulse_memory().contains("- [2026-10-04] pulse: dismissed \"Standup\" reason=dismiss"));
+    assert_eq!(
+        cabin.cfg.feed_pulse.taste_since_rewrite, 1,
+        "a plain dismiss is not a taste line"
+    );
+    assert_eq!(
+        pulse_ids(cabin, now),
+        vec![("idea-b".to_string(), -250, "Quiet")]
+    );
+    assert!(cabin.pulse_groups(now).is_empty());
+}
+
+#[test]
+fn pulse_migrates_old_home_and_ideas_data_once() {
+    let mut quiet = QuietCabin::boot("pulse-migrate");
+    let cabin = &mut quiet.cabin;
+    // What 2.10.90 wrote: a pinned Home idea, a board idea, a digest with a
+    // source, an automation run, and an idea you had deleted.
+    let old = r#"[
+  {"id":"idea-pin","kind":"idea","title":"Pay the TXU bill","body":"Due Friday","createdAt":100,"status":"unread","feedPin":true,"prompt":"pay my TXU bill","ideaKind":"reminder","sourceId":"idea-pin"},
+  {"id":"idea-board","kind":"idea","title":"Draft the standup","createdAt":101,"status":"opened","prompt":"draft my standup","ideaKind":"try","modified":true,"draft":"draft my standup from git log"},
+  {"id":"digest-1","kind":"digest","title":"Rust 1.92 ships","body":"Faster builds.","createdAt":102,"status":"unread","citations":["https://www.rust-lang.org/news/1-92"],"reaction":"up"},
+  {"id":"run-1","kind":"automation_done","title":"Backup ran","body":"All good","createdAt":103,"status":"unread","sourceId":"loop-backup","runs":3},
+  {"id":"idea-gone","kind":"idea","title":"Gym plan","createdAt":104,"status":"dismissed"}
+]"#;
+    std::fs::write(crate::feed::path(), old).expect("old updates.json");
+    cabin.updates = crate::feed::load();
+    assert_eq!(cabin.updates.len(), 5, "older files load unchanged");
+    cabin.cfg.digest_brief = "Rust and egui news".into();
+    cabin.cfg.feed_instructions.clear();
+    cabin.cfg.feed_pulse.pulse_v1 = false;
+
+    let moved = cabin.migrate_pulse_store().expect("first run migrates");
+    assert_eq!(
+        moved,
+        grokhub_core::pulse::PulseMigration {
+            ideas: 2,
+            feed: 2,
+            pinned: 1,
+            kept: 5,
+        }
+    );
+    let cat = |id: &str| {
+        cabin
+            .updates
+            .iter()
+            .find(|c| c.id == id)
+            .and_then(|c| c.pulse.category.clone())
+    };
+    assert_eq!(cat("idea-pin").as_deref(), Some("financial"));
+    assert_eq!(cat("idea-board").as_deref(), Some("productivity"));
+    assert_eq!(cat("idea-gone").as_deref(), Some("health"));
+    assert_eq!(cat("digest-1"), None, "feed posts have no category header");
+    let pinned = cabin.updates.iter().find(|c| c.id == "idea-pin").unwrap();
+    assert!(pinned.feed_pin, "the Home pin is kept");
+    let board = cabin.updates.iter().find(|c| c.id == "idea-board").unwrap();
+    assert!(board.modified && board.draft.as_deref() == Some("draft my standup from git log"));
+    let digest = cabin.updates.iter().find(|c| c.id == "digest-1").unwrap();
+    assert_eq!(digest.pulse.source_name.as_deref(), Some("rust-lang.org"));
+    assert_eq!(digest.reaction, Some(grokhub_core::CardReaction::Up));
+    assert_eq!(
+        cabin.cfg.feed_instructions,
+        format!(
+            "{}\n\nFocus: Rust and egui news",
+            grokhub_core::pulse::DEFAULT_FEED_INSTRUCTIONS
+        )
+    );
+    assert!(cabin.cfg.feed_pulse.pulse_v1);
+    assert_eq!(cabin.migrate_pulse_store(), None, "it runs once");
+
+    // Both stores were written: a restart sees the migrated data.
+    let mut saved = Vec::new();
+    for _ in 0..150 {
+        saved = crate::feed::load();
+        if saved.iter().any(|c| c.pulse.category.is_some())
+            && crate::config::load().feed_pulse.pulse_v1
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(saved.len(), 5);
+    assert_eq!(
+        saved
+            .iter()
+            .find(|c| c.id == "idea-pin")
+            .and_then(|c| c.pulse.category.clone())
+            .as_deref(),
+        Some("financial")
+    );
+    let cfg = crate::config::load();
+    assert!(cfg.feed_pulse.pulse_v1);
+    assert!(cfg.feed_instructions.ends_with("Focus: Rust and egui news"));
+    // The pinned Home idea ranks with the one you were working on (rule 3,
+    // unfinished work), ahead of the run you repeat and the digest.
+    let now = 1_000;
+    assert_eq!(
+        pulse_ids(cabin, now),
+        vec![
+            ("idea-board".to_string(), 400, "Do"),
+            ("idea-pin".to_string(), 400, "Do"),
+            ("run-1".to_string(), 230, "Watch"),
+            ("digest-1".to_string(), 110, "Watch"),
+        ]
+    );
+}
+
+#[test]
+fn pulse_feed_shows_posts_with_cached_source_images_and_a_placeholder() {
+    let mut quiet = QuietCabin::boot("pulse-feed");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    let now = now_ms();
+    let mut post = grokhub_core::digest_card(
+        "digest",
+        "Rust 1.92 ships",
+        "Faster incremental builds and a new lint.",
+        now - 59 * 60 * 1000,
+    );
+    post.citations = vec!["https://www.rust-lang.org/news/1-92".into()];
+    post.pulse.image_urls = vec!["https://www.rust-lang.org/static/og.png".into()];
+    cabin.updates.push(post);
+    let mut run = grokhub_core::automation_done_card(
+        "loop-backup",
+        "Backup ran",
+        "Nothing new to copy.",
+        now - 3 * 60 * 60 * 1000,
+    );
+    run.pulse.image_urls = vec!["https://cdn.example.com/missing.jpg".into()];
+    cabin.updates.push(run);
+    // A local fixture stands in for the downloaded og:image.
+    let fixture = super::pulse_ui::pulse_image_path("https://www.rust-lang.org/static/og.png");
+    std::fs::create_dir_all(fixture.parent().unwrap()).unwrap();
+    image::RgbaImage::from_pixel(8, 4, image::Rgba([200, 80, 40, 255]))
+        .save_with_format(&fixture, image::ImageFormat::Png)
+        .expect("fixture png");
+    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Feed;
+    let texts = pulse_texts(cabin, 1200.0);
+    for want in [
+        "Rust 1.92 ships",
+        "59m ago",
+        "rust-lang.org · Watch",
+        "Faster incremental builds and a new lint.",
+        "Read at rust-lang.org",
+        "Backup ran",
+        "3h ago",
+        "Automation run · Watch",
+        "Discuss",
+        "Feed instructions",
+    ] {
+        assert!(
+            texts.iter().any(|t| t == want),
+            "missing {want:?} in {texts:?}"
+        );
+    }
+    assert_eq!(texts.iter().filter(|t| t.as_str() == "Like").count(), 2);
+    let posts: Vec<String> = cabin
+        .pulse_feed_posts(now)
+        .into_iter()
+        .map(|c| c.title)
+        .collect();
+    assert_eq!(
+        posts,
+        vec!["Rust 1.92 ships".to_string(), "Backup ran".to_string()]
+    );
+    let tex = cabin.pulse_view_texture_size("https://www.rust-lang.org/static/og.png");
+    assert_eq!(tex, Some([8, 4]), "the cached source image is drawn");
+    assert_eq!(
+        cabin.pulse_view_texture_size("https://cdn.example.com/missing.jpg"),
+        None,
+        "no file: a placeholder"
+    );
+
+    // Like: a ledger line and the heart stays on.
+    let id = cabin.updates[0].id.clone();
+    cabin.pulse_like(&id, "2026-10-04");
+    cabin.pulse_like(&id, "2026-10-04");
+    assert_eq!(
+        pulse_memory()
+            .matches("pulse: liked \"Rust 1.92 ships\" reason=liked")
+            .count(),
+        1
+    );
+    assert!(pulse_texts(cabin, 1200.0).iter().any(|t| t == "Liked"));
+}
+
+#[test]
+fn pulse_feed_instructions_sheet_edits_the_prompt_for_future_posts() {
+    let mut quiet = QuietCabin::boot("pulse-sheet");
+    let cabin = &mut quiet.cabin;
+    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Feed;
+    cabin.open_feed_instructions();
+    assert_eq!(
+        cabin.pulse_view.sheet.as_deref(),
+        Some(grokhub_core::pulse::DEFAULT_FEED_INSTRUCTIONS)
+    );
+    let texts = pulse_texts(cabin, 900.0);
+    for want in [
+        "Feed instructions",
+        "Save",
+        "Cancel",
+        "0 of 3 likes and skips toward the next rewrite.",
+    ] {
+        assert!(
+            texts.iter().any(|t| t == want),
+            "missing {want:?} in {texts:?}"
+        );
+    }
+    assert!(
+        cabin.pulse_view.sheet.is_some(),
+        "the sheet stays open until Save or Cancel"
+    );
+    cabin.save_feed_instructions("  Only Rust and egui news. No crypto.  ");
+    assert_eq!(
+        cabin.cfg.feed_instructions,
+        "Only Rust and egui news. No crypto."
+    );
+    let prompt = grokhub_core::pulse::feed_prompt("steer", &cabin.cfg.feed_instructions);
+    assert!(
+        prompt.ends_with("Only Rust and egui news. No crypto."),
+        "{prompt}"
+    );
+    cabin.save_feed_instructions(grokhub_core::pulse::DEFAULT_FEED_INSTRUCTIONS);
+    assert_eq!(
+        cabin.cfg.feed_instructions, "",
+        "our default is not stored as yours"
+    );
+    let feed = include_str!("feed_ui.rs");
+    assert!(feed.contains(
+        "grokhub_core::pulse::feed_prompt(&self.digest_steer, &self.cfg.feed_instructions)"
+    ));
+    let native = include_str!("native_unattended.rs");
+    assert!(native.contains(
+        "grokhub_core::pulse::feed_prompt(&self.digest_steer, &self.cfg.feed_instructions)"
+    ));
+}

@@ -3019,6 +3019,67 @@ mod tests {
     }
 
     #[test]
+    fn quiet_hours_end_folds_held_cards_into_one_pulse_digest() {
+        let mut cards = Vec::new();
+        for (i, title) in [
+            "Backup ran",
+            "Inbox sorted",
+            "Standup drafted",
+            "Prices checked",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let mut done =
+                automation_done_card(&format!("loop-{i}"), title, "ok", 10 + i as u64);
+            hold_if_quiet(&mut done, true);
+            cards.push(done);
+        }
+        let mut pulse = FeedPulse {
+            digest_on: false,
+            expiry_on: false,
+            ..FeedPulse::default()
+        };
+        // Still quiet: nothing is released and nothing is posted.
+        let tick = tick_feed_pulse(
+            &mut cards,
+            &mut pulse,
+            PulseNow {
+                now_ms: 1_000,
+                quiet: true,
+            },
+            material("", &[], &[]),
+        );
+        assert_eq!(tick.released, 0);
+        assert_eq!(cards.len(), 4);
+        assert!(!feed_visible(&cards));
+        // The window ends: four cards come back under one digest card.
+        let tick = tick_feed_pulse(
+            &mut cards,
+            &mut pulse,
+            PulseNow {
+                now_ms: 1_000 + DEFAULT_QUIET_RELEASE_MS,
+                quiet: false,
+            },
+            material("", &[], &[]),
+        );
+        assert_eq!(tick.released, 4);
+        assert!(tick.cards_changed);
+        let digest = cards
+            .iter()
+            .find(|c| c.id == "pulse-quiet-16000")
+            .expect("digest card");
+        assert_eq!(digest.title, "While you were in quiet hours");
+        assert_eq!(
+            digest.body.as_deref(),
+            Some("4 updates: Backup ran · Inbox sorted · Standup drafted · and 1 more")
+        );
+        assert_eq!(digest.source_id, "pulse:quiet");
+        assert_eq!(cards.iter().filter(|c| c.pulse.quiet_batched).count(), 4);
+        assert!(cards.iter().all(|c| !c.held));
+    }
+
+    #[test]
     fn quiet_pass_does_not_stamp_the_digest_clock() {
         let mut cards = Vec::new();
         let mut pulse = FeedPulse {
