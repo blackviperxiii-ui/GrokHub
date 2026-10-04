@@ -549,6 +549,51 @@ pub fn is_background_history_title(title: &str) -> bool {
         || t.starts_with("summarize the workboard.")
 }
 
+/// Title of the one hidden chat that night, loops, and inbox work run in.
+pub const BACKGROUND_THREAD_TITLE: &str = "Background";
+
+/// Sessions that background work wrote (a `/bg` run's fork, a loop, a fast
+/// `grok -p`) are filed on the hidden Background chat as retired ids. Startup
+/// adoption and the Grok session list then treat them as known, so they never
+/// come back as History rows. Ids a chat already holds are left alone.
+/// Returns true when something was filed.
+pub fn file_background_sessions(threads: &mut Vec<ChatThread>, ids: &[String]) -> bool {
+    let fresh: Vec<String> = ids
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .filter(|id| {
+            !threads.iter().any(|t| {
+                t.grok_session.as_deref().map(str::trim) == Some(*id)
+                    || t.retired_sessions.iter().any(|r| r.trim() == *id)
+            })
+        })
+        .map(str::to_string)
+        .collect();
+    if fresh.is_empty() {
+        return false;
+    }
+    let idx = match threads
+        .iter()
+        .position(|t| t.background && t.title == BACKGROUND_THREAD_TITLE)
+    {
+        Some(i) => i,
+        None => {
+            let mut created = ChatThread::new(BACKGROUND_THREAD_TITLE, false);
+            created.background = true;
+            threads.push(created);
+            threads.len() - 1
+        }
+    };
+    let held = &mut threads[idx].retired_sessions;
+    for id in fresh {
+        if !held.contains(&id) {
+            held.push(id);
+        }
+    }
+    true
+}
+
 /// Cabin History is the user's chats. Empty drafts and background jobs stay off it.
 pub fn user_history_row(background: bool, title: &str, empty: bool, has_session: bool) -> bool {
     if background || is_background_history_title(title) {
@@ -1646,6 +1691,37 @@ mod tests {
             global,
             "creating a project must not change the chat section"
         );
+    }
+
+    #[test]
+    fn background_sessions_are_filed_off_history() {
+        let fork = "01a01b0f-7e06-74b1-8f22-5236c9d57d50".to_string();
+        let open = "01a01b0f-7e06-74b1-8f22-5236c9d57d51".to_string();
+        let mut chat = ChatThread::new("Night watch", false);
+        chat.messages_mut().push(("user".into(), "hello".into()));
+        chat.grok_session = Some(open.clone());
+        let mut threads = vec![chat];
+        assert!(file_background_sessions(&mut threads, &[fork.clone(), open.clone()]));
+        assert_eq!(threads.len(), 2, "one hidden Background chat holds the fork");
+        let hidden = &threads[1];
+        assert!(hidden.background && hidden.title == BACKGROUND_THREAD_TITLE);
+        assert_eq!(hidden.retired_sessions, vec![fork.clone()], "a chat's own session stays");
+        assert!(!file_background_sessions(&mut threads, &[fork.clone(), " ".into()]));
+        assert_eq!(threads.len(), 2);
+        assert_eq!(chat_section_indices(&threads, None, false), vec![0]);
+        assert_eq!(history_corpus(&threads).len(), 1);
+
+        let dir = std::env::temp_dir().join(format!("grokhub-bg-adopt-{}", uid("t")));
+        let sess = dir.join("sessions").join("cwd").join(&fork);
+        std::fs::create_dir_all(&sess).unwrap();
+        std::fs::write(
+            sess.join("summary.json"),
+            format!(r#"{{"session_summary":"Background fork","info":{{"id":"{fork}"}}}}"#),
+        )
+        .unwrap();
+        let adopted = adopt_sessions_from(&threads, &[(dir.clone(), false)]);
+        assert!(adopted.is_empty(), "a filed fork is not adopted back into History");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

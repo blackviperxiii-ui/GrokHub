@@ -874,12 +874,21 @@ impl Cabin {
                 t.messages = Arc::new(config::load_chat());
                 threads.push(t);
             }
+            // Sessions a `/loop` wrote are background work, not chats to adopt.
+            let loop_sessions: Vec<String> = crate::loops::load()
+                .into_iter()
+                .filter_map(|l| l.session_id)
+                .collect();
+            let mut parked_learn = threads::file_background_sessions(&mut threads, &loop_sessions);
             let adopted = threads::adopt_sessions_from(&threads, &threads::grok_session_homes());
             let adopted_n = adopted.len();
             threads.extend(adopted);
-            let mut parked_learn = false;
             for t in &mut threads {
-                if threads::is_learn_map_title(&t.title) {
+                let loop_row = !t.background
+                    && t.grok_session
+                        .as_deref()
+                        .is_some_and(|s| loop_sessions.iter().any(|l| l == s.trim()));
+                if loop_row || threads::is_learn_map_title(&t.title) {
                     t.background = true;
                     parked_learn = true;
                 }
