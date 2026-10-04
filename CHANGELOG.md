@@ -14,6 +14,10 @@ A design pass tightened the page. Hover or arrow onto an idea and it lights up w
 
 The repo's bot rules (`CLAUDE.md` and `.cursor/rules`) add one more: fetch origin and work from the latest `main`, merge `main` into a branch before touching it, re-check right before merging and before tagging, never render or screenshot from a stale checkout, and name the starting `main` SHA in every PR body and report.
 
+Workboard cards open only when you click them, not when the pointer rests on them. A second click on the open card's title row folds it, and so does Esc, unless a text field, menu, dialog or the palette has the keyboard; Esc on a card never halts anything. Clicking another card opens that one instead, and dragging a card still moves it without opening it. Follow up cards work the same way.
+
+The bot rules drop done-and-green auto-ship: bots now get a PR green and ready to merge, with proof of work, and stop. Nothing is merged, tagged, or released, Claude's and Cursor's PRs included, without Jeremy's explicit say, and when he says merge it's squash and merge. The latest-`main` rule stays.
+
 The Imagine page has one set of controls again. A row of unstyled debug buttons (sign in, use a code, Generate/Edit, the model picks, an image count stepper, Res, Aspect, Quality) sat above the chat box and duplicated the pills inside it. Those rows are gone. Sign in is a pill in the composer when Imagine has no Grok sign-in or API key, and account, mode, model, image count, edit sources, mask, and the video source live behind a new More pill. The composer's aspect pill now sets the aspect of every image, edit, and video request; before, stills ignored it and used only the separate Aspect button. The Speed/Quality pill alone picks resolution and quality, and the 6s/10s/15s and Video audio pills alone set duration and audio. The aspect icon is drawn larger, so the 2:3 shape no longer reads as a "0".
 
 - Linux: `grokhub-linux-v2.10.91.tar.gz` and AUR `pkgver=2.10.91`.

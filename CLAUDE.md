@@ -2,9 +2,9 @@
 
 Native Rust cabin (`crates/`). These rules apply to every Cursor, Claude, and Grok chat working here. `.cursor/rules/repo-gates.mdc` holds the same rules.
 
-## Branches, merges, ship
+## Branches, merges, releases
 - Branch off `main`. Never push to `main`, never force-push, never delete branches unless Jeremy asks.
-- **Done and green is Jeremy's full ship.** Bots merge (merge commit, stack order), tag `vX.Y.Z`, check the Release is Latest with its assets, then report the live link. Steps: `.cursor/rules/merge-prs.mdc`.
+- **Green and ready, then stop.** Bots get a PR green (Linux and Windows CI passing) and ready to merge, with proof of work, then report it. Never merge, tag, or release anything, Claude's and Cursor's PRs included, without Jeremy's explicit say. When he says merge, it's squash and merge. Steps: `.cursor/rules/merge-prs.mdc`.
 - No changes to `.github/`, `clippy.toml`, or release scripts (`scripts/make-*release*`, `packaging/windows/`, `packaging/aur/`) without his OK. Version-bump lines (below) are the exception.
 
 ## Secrets
@@ -31,7 +31,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 - **Stacks:** order them so every PR ends green; one agent owns rebase and topology, others push only their own branch.
 - **Agent briefs** follow the template: intent, data shape, scope and non-goals, file boundaries, required evidence, file pointers, exact error plus at most 20 log lines.
 - **CI failures:** find and classify the cause before at most one rerun; a repeat failure is real.
-- **Latest main:** before touching a branch, fetch origin, confirm it is based on the latest `main`, and merge `main` into it (a merge commit; no rebase or force-push). Fetch and re-check right before merging and again before tagging. Never render or screenshot from a stale checkout. Every PR body and report names the `main` SHA the work started from.
+- **Latest main:** before touching a branch, fetch origin, confirm it is based on the latest `main`, and merge `main` into it (a merge commit; no rebase or force-push). Fetch and re-check before reporting a PR ready, right before a merge he asked for, and again before a tag he asked for. Never render or screenshot from a stale checkout. Every PR body and report names the `main` SHA the work started from.
 
 ## Commits, PRs, versions
 - Titles: `Cabin X.Y.Z: <what changed>`, or a plain sentence ending in `(X.Y.Z)`. Add a short bullet body and the PR number when merged.

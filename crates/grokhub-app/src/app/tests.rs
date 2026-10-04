@@ -11496,7 +11496,6 @@ fn workboard_delete_removes_the_card_and_keeps_its_chat() {
     let id = cabin.board[0].id.clone();
     assert!(cabin.apply_board_act(Some(BoardAct::Link(id.clone()))));
     cabin.board_view.open = Some(id.clone());
-    cabin.board_view.pinned = true;
     cabin.board_view.composers.insert(id.clone(), "half a thought".into());
     // A turn running in the card's chat has to stop first.
     cabin.running = true;
@@ -11509,7 +11508,7 @@ fn workboard_delete_removes_the_card_and_keeps_its_chat() {
     assert!(cabin.apply_board_act(Some(BoardAct::Delete(id.clone()))));
     assert_eq!(cabin.board.len(), 1);
     assert!(cabin.board.iter().all(|c| c.id != id));
-    assert!(cabin.board_view.open.is_none() && !cabin.board_view.pinned);
+    assert!(cabin.board_view.open.is_none());
     assert!(cabin.board_view.composers.is_empty() && cabin.board_view.note.is_none());
     assert!(cabin.threads.iter().any(|t| t.id == thread_id), "the chat stays in History");
     assert!(!cabin.apply_board_act(Some(BoardAct::Delete(id))), "already gone");
@@ -17564,24 +17563,39 @@ fn follow_up_runs_update_one_feed_card() {
 }
 
 #[test]
-fn board_cards_open_on_hover_fold_on_drag_and_chat_like_the_chat_page() {
-    use super::board_ui::{track_board_hover, BoardView};
+fn board_cards_open_on_click_fold_on_drag_and_chat_like_the_chat_page() {
+    use super::board_ui::{board_esc_folds, click_board_card, fold_board_on_drag, BoardView};
     let mut v = BoardView::default();
-    assert!(track_board_hover(&mut v, 0.0, Some("c1".into()), false, false), "rest starts");
-    assert!(v.open.is_none(), "sweeping past does not open");
-    track_board_hover(&mut v, 0.5, Some("c1".into()), false, false);
-    assert_eq!(v.open.as_deref(), Some("c1"), "a short rest opens it");
-    track_board_hover(&mut v, 0.6, Some("c1".into()), false, true);
+    assert!(v.open.is_none(), "nothing is open until a click");
+    click_board_card(&mut v, "c1");
+    assert_eq!(v.open.as_deref(), Some("c1"), "a click opens it");
+    fold_board_on_drag(&mut v, true);
     assert!(v.open.is_none(), "a drag folds the card back at once");
-    track_board_hover(&mut v, 1.0, Some("c1".into()), false, false);
-    track_board_hover(&mut v, 1.5, Some("c1".into()), false, false);
+    click_board_card(&mut v, "c1");
     assert_eq!(v.open.as_deref(), Some("c1"));
-    track_board_hover(&mut v, 2.0, None, true, false);
-    track_board_hover(&mut v, 5.0, None, true, false);
-    assert_eq!(v.open.as_deref(), Some("c1"), "a card you are typing in stays open");
-    track_board_hover(&mut v, 6.0, None, false, false);
-    track_board_hover(&mut v, 7.0, None, false, false);
-    assert!(v.open.is_none(), "leaving folds it back");
+    fold_board_on_drag(&mut v, false);
+    assert_eq!(v.open.as_deref(), Some("c1"), "no drag, no fold");
+    click_board_card(&mut v, "c2");
+    assert_eq!(
+        v.open.as_deref(),
+        Some("c2"),
+        "a click on another card moves the open spot"
+    );
+    click_board_card(&mut v, "c2");
+    assert!(v.open.is_none(), "a second click folds it");
+    assert!(
+        board_esc_folds(true, true, false),
+        "a bare Esc folds the open card"
+    );
+    assert!(
+        !board_esc_folds(false, true, false),
+        "nothing open, nothing to fold"
+    );
+    assert!(!board_esc_folds(true, false, false), "no bare Esc, no fold");
+    assert!(
+        !board_esc_folds(true, true, true),
+        "a field, menu or dialog takes Esc first"
+    );
 
     let src = cabin_src();
     let chat = fn_src(&src, "paint_card_chat");
@@ -23600,6 +23614,252 @@ fn a_due_job_waits_only_for_the_last_job_or_a_desktop_replay() {
         assert!(!night.contains(said), "no job shows itself running: {said}");
     }
     assert!(!include_str!("native_unattended.rs").contains("\"Loop: "));
+}
+
+/// Drives the real Workboards page one 60 fps frame at a time.
+struct BoardPage {
+    ctx: egui::Context,
+    frame: u32,
+    /// A text field painted above the page, standing in for any focused field.
+    field: Option<egui::Id>,
+}
+
+impl BoardPage {
+    fn new() -> Self {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        Self {
+            ctx,
+            frame: 0,
+            field: None,
+        }
+    }
+
+    fn step(&mut self, cabin: &mut Cabin, events: Vec<egui::Event>) {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            time: Some(f64::from(self.frame) / 60.0),
+            predicted_dt: 1.0 / 60.0,
+            events,
+            ..Default::default()
+        };
+        let field = self.field;
+        let _ = crate::theme::test_pass(&self.ctx, raw, |ui| {
+            if let Some(id) = field {
+                let mut text = String::from("half a thought");
+                ui.add(egui::TextEdit::singleline(&mut text).id(id));
+            }
+            cabin.ui_board(ui);
+        });
+        self.frame += 1;
+    }
+
+    fn rect(&self, key: (&str, &str)) -> egui::Rect {
+        self.ctx
+            .read_response(egui::Id::new(key))
+            .unwrap_or_else(|| panic!("{key:?} is painted"))
+            .rect
+    }
+
+    fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        }
+    }
+
+    fn click(&mut self, cabin: &mut Cabin, pos: egui::Pos2) {
+        self.step(
+            cabin,
+            vec![egui::Event::PointerMoved(pos), Self::press(pos, true)],
+        );
+        self.step(cabin, vec![Self::press(pos, false)]);
+        self.step(cabin, Vec::new());
+    }
+
+    fn esc(&mut self, cabin: &mut Cabin, modifiers: egui::Modifiers) {
+        self.step(
+            cabin,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            }],
+        );
+        self.step(
+            cabin,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers,
+            }],
+        );
+    }
+
+    /// Press at `from`, slide to `to` over 20 frames, let go there.
+    fn drag(&mut self, cabin: &mut Cabin, from: egui::Pos2, to: egui::Pos2) -> Vec<Option<String>> {
+        let mut open = Vec::new();
+        self.step(
+            cabin,
+            vec![egui::Event::PointerMoved(from), Self::press(from, true)],
+        );
+        for i in 1..=20 {
+            let at = from + (to - from) * (i as f32 / 20.0);
+            self.step(cabin, vec![egui::Event::PointerMoved(at)]);
+            open.push(cabin.board_view.open.clone());
+        }
+        self.step(cabin, vec![Self::press(to, false)]);
+        open.push(cabin.board_view.open.clone());
+        self.step(cabin, Vec::new());
+        open.push(cabin.board_view.open.clone());
+        open
+    }
+}
+
+#[test]
+fn workboard_cards_open_on_click_not_hover_and_fold_on_a_second_click_or_esc() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("board-click-open");
+    let mut a = grokhub_core::BoardCard::new("Harbor lamp", "Swap the bulb on the north pier.", "");
+    a.status = grokhub_core::BoardStatus::Todo;
+    a.id = "card-a".into();
+    let mut b = grokhub_core::BoardCard::new("Tide chart", "Print the October tides.", "");
+    // In its own column, so card A opening above it never pushes it off screen.
+    b.status = grokhub_core::BoardStatus::Blocked;
+    b.id = "card-b".into();
+    let mut f =
+        grokhub_core::BoardCard::new("Nightly ledger report", "Two invoices are overdue.", "");
+    f.status = grokhub_core::BoardStatus::FollowUp;
+    f.id = "card-f".into();
+    cabin.board = vec![a, b, f];
+    let mut page = BoardPage::new();
+    page.step(&mut cabin, Vec::new());
+    page.step(&mut cabin, Vec::new());
+    let card_a = page.rect(("board-card", "card-a")).center();
+    let card_f = page.rect(("board-card", "card-f")).center();
+
+    // Rest on card A for 2 s, far past the old 0.3 s hover delay.
+    page.step(&mut cabin, vec![egui::Event::PointerMoved(card_a)]);
+    for _ in 0..120 {
+        page.step(&mut cabin, Vec::new());
+    }
+    assert_eq!(
+        cabin.board_view.open, None,
+        "hover alone never opens a card"
+    );
+    // The same for a Follow up card.
+    page.step(&mut cabin, vec![egui::Event::PointerMoved(card_f)]);
+    for _ in 0..120 {
+        page.step(&mut cabin, Vec::new());
+    }
+    assert_eq!(
+        cabin.board_view.open, None,
+        "hover never opens a Follow up card"
+    );
+
+    // A click opens card A; a click on its title row folds it.
+    page.click(&mut cabin, card_a);
+    assert_eq!(cabin.board_view.open.as_deref(), Some("card-a"));
+    page.click(&mut cabin, page.rect(("board-grip", "card-a")).center());
+    assert_eq!(cabin.board_view.open, None, "a second click folds it");
+
+    // Esc folds it. A chord such as the Super+Shift+Esc Halt hotkey does not.
+    page.click(&mut cabin, card_a);
+    assert_eq!(cabin.board_view.open.as_deref(), Some("card-a"));
+    page.esc(
+        &mut cabin,
+        egui::Modifiers::SHIFT | egui::Modifiers::COMMAND,
+    );
+    assert_eq!(
+        cabin.board_view.open.as_deref(),
+        Some("card-a"),
+        "a chord is not a bare Esc"
+    );
+    page.esc(&mut cabin, egui::Modifiers::NONE);
+    assert_eq!(cabin.board_view.open, None, "Esc folds the open card");
+
+    // With a text field focused, Esc leaves the field first; the card stays open.
+    page.click(&mut cabin, card_a);
+    let field = egui::Id::new("board-click-open-field");
+    page.field = Some(field);
+    page.step(&mut cabin, Vec::new());
+    page.ctx.memory_mut(|m| m.request_focus(field));
+    page.step(&mut cabin, Vec::new());
+    assert!(
+        page.ctx.memory(|m| m.has_focus(field)),
+        "the field holds the keyboard"
+    );
+    page.esc(&mut cabin, egui::Modifiers::NONE);
+    assert_eq!(
+        cabin.board_view.open.as_deref(),
+        Some("card-a"),
+        "the field takes this Esc"
+    );
+    page.esc(&mut cabin, egui::Modifiers::NONE);
+    assert_eq!(cabin.board_view.open, None);
+    page.field = None;
+    page.step(&mut cabin, Vec::new());
+
+    // A click on card B after card A moves the open spot to B.
+    page.click(&mut cabin, card_a);
+    assert_eq!(cabin.board_view.open.as_deref(), Some("card-a"));
+    let card_b_now = page.rect(("board-card", "card-b")).center();
+    page.click(&mut cabin, card_b_now);
+    assert_eq!(cabin.board_view.open.as_deref(), Some("card-b"));
+    page.click(&mut cabin, page.rect(("board-grip", "card-b")).center());
+    assert_eq!(cabin.board_view.open, None);
+
+    // Follow up cards open and fold the same way.
+    page.click(&mut cabin, card_f);
+    assert_eq!(cabin.board_view.open.as_deref(), Some("card-f"));
+    page.click(&mut cabin, page.rect(("board-grip", "card-f")).center());
+    assert_eq!(cabin.board_view.open, None);
+    page.click(&mut cabin, card_f);
+    page.esc(&mut cabin, egui::Modifiers::NONE);
+    assert_eq!(cabin.board_view.open, None);
+
+    // A drag is not a click: card A moves to Doing and nothing opens.
+    let doing = page
+        .ctx
+        .read_response(egui::Id::new(("board-drop", 1_usize)))
+        .expect("Doing column")
+        .rect;
+    // Just under the column title: the column below it grows and shrinks with the drag.
+    let open_during = page.drag(
+        &mut cabin,
+        card_a,
+        doing.center_top() + egui::vec2(0.0, 40.0),
+    );
+    assert_eq!(open_during, vec![None; 22], "a drag never opens the card");
+    let moved = cabin
+        .board
+        .iter()
+        .find(|c| c.id == "card-a")
+        .expect("card A");
+    assert_eq!(
+        moved.status,
+        grokhub_core::BoardStatus::InProgress,
+        "the drag still moves the card"
+    );
+
+    // Dragging an open card by its title row folds it and does not reopen it on release.
+    page.click(&mut cabin, page.rect(("board-card", "card-b")).center());
+    assert_eq!(cabin.board_view.open.as_deref(), Some("card-b"));
+    let grip = page.rect(("board-grip", "card-b")).center();
+    let open_during = page.drag(&mut cabin, grip, grip + egui::vec2(0.0, 40.0));
+    assert_eq!(open_during.last(), Some(&None), "{open_during:?}");
+    assert_eq!(cabin.board_view.open, None);
+
+    release_isolated(&root, cabin);
 }
 
 #[test]
