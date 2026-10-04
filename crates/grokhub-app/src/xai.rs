@@ -50,6 +50,36 @@ fn json_error(v: &serde_json::Value) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Whether a model-given source URL is real enough to cite: a public http(s)
+/// host that answers. Only a failed connection or a 404/410 counts as dead, so
+/// a site that blocks HEAD or bots is still kept. Local and private hosts are
+/// never fetched, and redirects are not followed, so a public URL can't bounce
+/// the check onto one.
+pub fn url_answers(url: &str) -> bool {
+    if !grokhub_core::public_http_url(url) {
+        return false;
+    }
+    let code = match ureq::AgentBuilder::new()
+        .try_proxy_from_env(true)
+        .redirects(0)
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .head(url)
+        .call()
+    {
+        Ok(res) => Some(res.status()),
+        Err(ureq::Error::Status(code, _)) => Some(code),
+        Err(ureq::Error::Transport(_)) => None,
+    };
+    head_status_alive(code)
+}
+
+/// A HEAD answer that keeps a cited link: any status but 404/410 (a 3xx is
+/// kept unfollowed), never a failed connection (`None`).
+fn head_status_alive(code: Option<u16>) -> bool {
+    code.is_some_and(|c| !matches!(c, 404 | 410))
+}
+
 fn xai_agent(timeout_secs: u64) -> ureq::Agent {
     ureq::AgentBuilder::new()
         .try_proxy_from_env(true)
@@ -557,6 +587,25 @@ pub fn grok_realtime_secret(api_key: &str) -> Result<serde_json::Value, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cited_link_check_keeps_any_answer_but_gone_and_never_follows_redirects() {
+        assert!(head_status_alive(Some(200)));
+        assert!(head_status_alive(Some(302)));
+        assert!(head_status_alive(Some(403)));
+        assert!(head_status_alive(Some(500)));
+        assert!(!head_status_alive(Some(404)));
+        assert!(!head_status_alive(Some(410)));
+        assert!(!head_status_alive(None));
+        assert!(!url_answers("http://127.0.0.1:9/"));
+        let src = include_str!("xai.rs");
+        let check = src
+            .split("pub fn url_answers(")
+            .nth(1)
+            .and_then(|s| s.split("fn head_status_alive(").next())
+            .expect("url_answers");
+        assert!(check.contains(".redirects(0)"), "{check}");
+    }
 
     #[test]
     fn imagine_download_sends_the_bearer() {

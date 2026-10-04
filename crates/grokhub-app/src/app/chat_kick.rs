@@ -472,7 +472,13 @@ impl Cabin {
 
     pub(super) fn kick_model_retry(&mut self, t: String) {
         self.try_again = false;
+        // A retry re-runs the same ask: keep its steer and background notes,
+        // which halting clears and `send_chat` will not set again.
+        let steer = self.bg.steer_follow.take();
+        let results = self.bg.results_follow.take();
         self.halt_in_flight();
+        self.bg.steer_follow = steer;
+        self.bg.results_follow = results;
         self.active_skill_follow = None;
         if let Some(sk) = match_skill(&t, &self.skill_list) {
             if self.policy().injects_skill() {
