@@ -1,0 +1,36 @@
+[package]
+name = "grokhub-agent"
+version.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Native xAI responses engine"
+publish = false
+
+[dependencies]
+grokhub-core = { path = "../grokhub-core" }
+grokhub-acp = { path = "../grokhub-acp" }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+ureq = { version = "2.12", default-features = false, features = ["tls", "json"] }
+regex = "1.13"
+base64 = "0.22"
+ignore = "0.4"
+globset = "0.4"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# FTS5 memory index. Bundled sqlite so Windows GNU does not need a system libsqlite.
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.189"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }

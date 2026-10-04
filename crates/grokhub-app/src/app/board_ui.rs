@@ -12,7 +12,7 @@ use super::*;
 use super::pages::{BoardAct, BoardDrag};
 use grokhub_core::{
     encode_turn, visible_chat, visible_chat_refs, views_up_to_last_user, ChatView, ThoughtFold,
-    UpdateAction, UpdateCard, UpdateKind,
+    UpdateAction,
 };
 
 /// Rest on a card this long before it opens, so sweeping past does not flicker.
@@ -831,28 +831,41 @@ impl Cabin {
         }
         // The run's card on the home feed now leads to this card. A clock
         // automation's chat run posts no feed card of its own, so it gets one here.
-        let prefix = format!("done-{}-", automation_id.trim());
-        let fresh_feed = |c: &UpdateCard| {
-            c.kind == UpdateKind::AutomationDone
-                && c.id.starts_with(&prefix)
+        // One automation is one group (`run:<id>`), including a card filed earlier.
+        let group = format!("run:{}", automation_id.trim());
+        let fresh = self.updates.iter().any(|c| {
+            grokhub_core::feed_group_key(c).as_deref() == Some(group.as_str())
+                && c.status != grokhub_core::UpdateStatus::Dismissed
                 && now_ms().saturating_sub(c.created_at) < 10 * 60 * 1000
-        };
-        if !self.updates.iter().any(fresh_feed) {
+        });
+        if !fresh {
             self.note_automation_done(automation_id, &card.title, &card.detail);
         }
+        let mut followed = None;
         if let Some(feed) = self
             .updates
             .iter_mut()
-            .filter(|c| c.kind == UpdateKind::AutomationDone && c.id.starts_with(&prefix))
+            .filter(|c| {
+                grokhub_core::feed_group_key(c).as_deref() == Some(group.as_str())
+                    && c.status != grokhub_core::UpdateStatus::Dismissed
+            })
             .max_by_key(|c| c.created_at)
         {
             feed.action = Some(UpdateAction::OpenWorkboard);
             feed.board_id = Some(card_id.clone());
             feed.body = Some("In Follow up on your workboard. Open it to read and reply.".into());
+            grokhub_core::refresh_event_why(feed);
+            followed = Some(feed.clone());
             self.persist_updates();
         }
         self.flush_board();
         self.persist();
+        if let Some(card) = followed {
+            self.log_card_signal(&card, grokhub_core::CardEvent::FollowUp, None);
+        } else {
+            let stub = grokhub_core::automation_done_card(automation_id, "", "", now_ms());
+            self.log_card_signal(&stub, grokhub_core::CardEvent::FollowUp, None);
+        }
         true
     }
 }

@@ -159,6 +159,7 @@ impl Cabin {
                 ui.add_space(8.0);
             }
             let mut drop: Option<usize> = None;
+            let mut unhide_loop: Option<String> = None;
             if self.grok_loops.is_empty() {
                 if crate::cards::empty_prompt_tile(
                     ui,
@@ -199,6 +200,13 @@ impl Cabin {
                                     ui.label(
                                         RichText::new(&body).size(12.0).color(crate::theme::muted()),
                                     );
+                                    if grokhub_core::source_hidden(
+                                        &self.cfg.feed_pulse,
+                                        &self.grok_loops[i].id,
+                                    ) && crate::cards::ghost_pill(ui, grokhub_core::HOME_HIDDEN_NOTE)
+                                    {
+                                        unhide_loop = Some(self.grok_loops[i].id.clone());
+                                    }
                                 });
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
@@ -255,6 +263,9 @@ impl Cabin {
                     }
                 }
             }
+            if let Some(id) = unhide_loop {
+                self.undo_hide_automation_from_home(&id);
+            }
             });
         });
     }
@@ -271,6 +282,7 @@ impl Cabin {
         let clock = Self::local_clock();
         let mut remove: Option<usize> = None;
         let mut run: Option<usize> = None;
+        let mut unhide: Option<String> = None;
         let mut toggled = false;
         for i in 0..self.automations.len() {
             let title = match self.automations[i].name.trim() {
@@ -312,6 +324,11 @@ impl Cabin {
                                     .wrap(),
                                 );
                             }
+                            if grokhub_core::source_hidden(&self.cfg.feed_pulse, &self.automations[i].id)
+                                && crate::cards::ghost_pill(ui, grokhub_core::HOME_HIDDEN_NOTE)
+                            {
+                                unhide = Some(self.automations[i].id.clone());
+                            }
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if crate::cards::ghost_pill(ui, "Remove") {
@@ -343,6 +360,9 @@ impl Cabin {
             if let Some(a) = self.automations.get(i).cloned() {
                 self.fire_night(a, now);
             }
+        }
+        if let Some(id) = unhide {
+            self.undo_hide_automation_from_home(&id);
         }
         ui.add_space(12.0);
     }
@@ -438,7 +458,7 @@ impl Cabin {
             self.status = format!("Night skipped {} (quiet/policy)", a.name);
             return;
         }
-        if night_unauth_should_skip(self.llm_ready()) {
+        if night_unauth_should_skip(self.llm_ready()) && !self.cfg.native_engine {
             self.mark_auto_skipped(&a.id, now_ms);
             self.status = "Connect Grok OAuth in Settings".into();
             self.note_auto_failed(&a.id, "Not signed in — Connect Grok in Settings");
@@ -450,7 +470,7 @@ impl Cabin {
             self.mark_auto_skipped(&a.id, now_ms);
             return;
         }
-        if replay.is_none() && !self.can_agent() {
+        if replay.is_none() && !self.can_agent() && !self.cfg.native_engine {
             self.mark_auto_skipped(&a.id, now_ms);
             self.status = "Install Grok Build (x.ai/cli) or Connect Grok in Settings".into();
             self.note_auto_failed(&a.id, "Grok Build is not installed or not connected");
@@ -476,6 +496,14 @@ impl Cabin {
             self.daily_auto_used = self.usage.automation;
             self.daily_auto_day = self.usage.day.clone();
             self.persist_usage();
+        } else if self.cfg.native_engine {
+            self.mark_auto_skipped(&a.id, now_ms);
+            let why = if self.status.trim().is_empty() {
+                "The run did not start".to_string()
+            } else {
+                self.status.clone()
+            };
+            self.note_auto_failed(&a.id, &why);
         } else {
             self.mark_auto_skipped(&a.id, now_ms);
             self.status = format!("Night skipped {} (kick did not start)", a.name);
@@ -578,7 +606,7 @@ impl Cabin {
         if self.budget_holds_scheduled() {
             return false;
         }
-        if grokhub_acp::find_grok().is_none() {
+        if !self.cfg.native_engine && grokhub_acp::find_grok().is_none() {
             return false;
         }
         let due = due_loops(&self.grok_loops, now_ms());
@@ -637,6 +665,10 @@ impl Cabin {
             *slot = mark_loop_ran(slot.clone(), now);
         }
         self.persist_loops();
+        if self.cfg.native_engine {
+            self.spawn_native_loop(row);
+            return;
+        }
         let Some(bin) = grokhub_acp::find_grok() else {
             self.status = build_agent::grok_banner();
             return;
@@ -767,7 +799,7 @@ impl Cabin {
         ) {
             return;
         }
-        if !self.llm_ready() {
+        if !self.llm_ready() && !self.cfg.native_engine {
             return;
         }
         if !grokhub_core::review_worth_tokens(
@@ -857,6 +889,10 @@ impl Cabin {
 
     pub(super) fn spawn_review(&mut self) {
         if self.review_busy {
+            return;
+        }
+        if self.cfg.native_engine {
+            self.spawn_native_review();
             return;
         }
         let key = self.bearer();

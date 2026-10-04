@@ -14,3 +14,4 @@ StartupNotify=true
 StartupWMClass=grokhub
 SingleMainWindow=true
 X-GNOME-UsesNotifications=true
+X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2

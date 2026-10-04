@@ -28,6 +28,10 @@ fn main() {
     let models_id = std::env::var("FAKE_ACP_MODELS_ID").ok().as_deref() == Some("1");
     let mut models_acked = !models_id;
     let mut prompt_id: Option<Value> = None;
+    // Additive eval scenarios. Unset, the prompt path is unchanged.
+    let compact = std::env::var("FAKE_ACP_COMPACT").ok().as_deref() == Some("1");
+    let block_until_cancel =
+        std::env::var("FAKE_ACP_BLOCK_UNTIL_CANCEL").ok().as_deref() == Some("1");
 
     let stdin = io::stdin();
     for line in stdin.lock().lines() {
@@ -138,6 +142,11 @@ fn main() {
                 );
             }
             "session/cancel" => {
+                if block_until_cancel {
+                    if let Some(pid) = prompt_id.clone() {
+                        result(&pid, json!({ "stopReason": "cancelled" }));
+                    }
+                }
                 if let Some(id) = id {
                     result(&id, json!({ "stopReason": "cancelled" }));
                 }
@@ -162,6 +171,52 @@ fn main() {
                         "params": { "model_count": 2 }
                     }));
                     continue;
+                }
+                if block_until_cancel {
+                    notify(
+                        "session/update",
+                        json!({
+                            "sessionId": "sess-test",
+                            "update": {
+                                "sessionUpdate": "agent_thought_chunk",
+                                "content": { "text": thought }
+                            }
+                        }),
+                    );
+                    if !tool.is_empty() {
+                        notify(
+                            "session/update",
+                            json!({
+                                "sessionId": "sess-test",
+                                "update": {
+                                    "sessionUpdate": "tool_call",
+                                    "toolCallId": "tool-1",
+                                    "title": tool,
+                                    "kind": "other",
+                                    "status": "completed",
+                                    "content": [{ "type": "text", "text": "running" }]
+                                }
+                            }),
+                        );
+                    }
+                    prompt_id = id;
+                    continue;
+                }
+                if compact {
+                    notify(
+                        "session/update",
+                        json!({
+                            "sessionId": "sess-test",
+                            "update": { "sessionUpdate": "auto_compact_started" }
+                        }),
+                    );
+                    notify(
+                        "session/update",
+                        json!({
+                            "sessionId": "sess-test",
+                            "update": { "sessionUpdate": "auto_compact_completed" }
+                        }),
+                    );
                 }
                 notify(
                     "session/update",

@@ -7641,6 +7641,28 @@ fn settings_cabin_defaults_section() {
 }
 
 #[test]
+fn settings_permissions_editor_lists_rules_and_grants() {
+    let settings = include_str!("settings.rs");
+    assert!(settings.contains("(SettingsSec::Permissions, \"Permissions\")"));
+    assert!(settings.contains("SettingsSec::Permissions => \"Permissions\""));
+    assert!(settings.contains("SettingsSec::Permissions => self.ui_permission_editor(ui)"));
+    assert!(settings.contains("fn ui_permission_editor"));
+    assert!(settings.contains("load_rules"));
+    assert!(settings.contains("load_grants"));
+    assert!(settings.contains("load_claude_project"));
+    assert!(settings.contains("remember_allow_always"));
+    let chat = include_str!("chat_ui.rs");
+    assert!(!chat.contains("ui_permission_editor"));
+    assert!(!chat.contains("SettingsSec::Permissions"));
+    let defaults = settings
+        .split("SettingsSec::Defaults => {")
+        .nth(1)
+        .and_then(|slice| slice.split("if let Some(s) = next_sec").next())
+        .expect("defaults arm");
+    assert_eq!(defaults.matches("settings_dropdown").count(), 4);
+}
+
+#[test]
 fn session_thought_collapse_stays_on_one_thread() {
     let ctx = egui::Context::default();
     let a = "thread-a";
@@ -9886,6 +9908,8 @@ fn discuss_card_opens_one_local_chat() {
         modified: false,
         source_id: String::new(),
         skill: None,
+        runs: 1,
+        dismissed_at: 0,
     });
     cabin.discuss_card("idea-harbor");
     let open_id = cabin
@@ -10106,6 +10130,11 @@ fn delete_all_history_clears_seeded_chats() {
     );
     wait_tree_contains(&cfg.root, "Chat");
     join_persist(&cabin.persist_io);
+    let saved = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
+    assert!(
+        !saved.contains("Pier light") && !saved.contains("Salt lane"),
+        "the pre-delete snapshot from halt_in_flight must not land last: {saved}"
+    );
     assert!(
         cabin.threads.iter().all(|t| t.title != "Pier light"),
         "Pier light must be gone"
@@ -10122,6 +10151,44 @@ fn delete_all_history_clears_seeded_chats() {
         "the fresh chat has no transcript"
     );
     drop(hide);
+    drop(cfg);
+}
+
+#[test]
+fn an_older_persist_snapshot_never_overwrites_a_newer_one() {
+    let _lock = crate::config::hold_test_config();
+    let cfg = IsolatedConfig::arm("persist-order");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads = vec![crate::threads::ChatThread::new("Pier light", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = std::sync::Arc::new(Vec::new());
+    cabin.projects_dirty = true;
+    let mut old = cabin.persist_snap();
+    old.secrets = Some(cabin.secrets.clone());
+    let old_gen = cabin.next_persist_gen();
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.projects_dirty = false;
+    let new = cabin.persist_snap();
+    let new_gen = cabin.next_persist_gen();
+    assert_eq!((old_gen, new_gen), (1, 2));
+    assert!(old.projects.is_some() && new.projects.is_none());
+    assert!(new.secrets.is_none());
+    let mark = cabin.persist_mark.clone();
+    // The newer worker takes persist_io first, the older one second.
+    write_persist_disk_in_order(&cfg.root, &new, new_gen, &mark);
+    write_persist_disk_in_order(&cfg.root, &old, old_gen, &mark);
+    let threads = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
+    assert!(threads.contains("\"title\": \"Chat\""), "{threads}");
+    assert!(!threads.contains("Pier light"), "{threads}");
+    // Only the older snapshot carried projects and secrets, so those still land.
+    assert!(crate::store::projects_path().is_file());
+    assert!(cfg.root.join("secrets.json").is_file());
+    // A second older write of the same generation changes nothing.
+    std::fs::remove_file(crate::store::projects_path()).expect("projects");
+    write_persist_disk_in_order(&cfg.root, &old, old_gen, &mark);
+    assert!(!crate::store::projects_path().exists());
+    let again = std::fs::read_to_string(cfg.root.join("threads.json")).expect("threads.json");
+    assert_eq!(again, threads);
     drop(cfg);
 }
 
@@ -13174,7 +13241,7 @@ fn housekeep_keeps_ideas_until_newer_ones_push_them_out() {
     assert!(!cabin.running);
     assert!(
         grokhub_core::visible_updates(&cabin.updates).is_empty(),
-        "ideas must not invent event rows or take the paint cap of 4"
+        "ideas must not invent event rows or take the paint cap of 3"
     );
     assert_eq!(
         grokhub_core::visible_ideas(&cabin.updates)
@@ -14160,6 +14227,8 @@ fn build_idea_files_one_todo() {
         modified: false,
         source_id: String::new(),
         skill: None,
+        runs: 1,
+        dismissed_at: 0,
     }];
 
     cabin.build_idea("nope");
@@ -14302,6 +14371,8 @@ fn feed_card(id: &str, kind: grokhub_core::UpdateKind, held: bool) -> grokhub_co
         modified: false,
         source_id: String::new(),
         skill: None,
+        runs: 1,
+        dismissed_at: 0,
     }
 }
 
@@ -14403,6 +14474,8 @@ fn offer_card(id: &str, title: &str, status: UpdateStatus) -> UpdateCard {
         modified: false,
         source_id: String::new(),
         skill: None,
+        runs: 1,
+        dismissed_at: 0,
     }
 }
 
@@ -14994,6 +15067,8 @@ fn quiet_cabin() -> Cabin {
         persist_idle_key: String::new(),
         persist_rx: None,
         persist_io: std::sync::Arc::new(std::sync::Mutex::new(())),
+        persist_gen: 0,
+        persist_mark: std::sync::Arc::new(std::sync::Mutex::new(PersistMark::default())),
         cfg_slot: std::sync::Arc::new(std::sync::Mutex::new(super::CfgSlot { gen: 0, cfg })),
         board: Vec::new(),
         board_title: String::new(),
@@ -15045,6 +15120,8 @@ fn quiet_cabin() -> Cabin {
         automations: Vec::new(),
         grok_loops: Vec::new(),
         updates: Vec::new(),
+        card_prefs: grokhub_core::CardPrefs::default(),
+        home_fold_open: false,
         grok_loop_rx: None,
         night_nl: String::new(),
         watch_once: false,
@@ -15323,6 +15400,10 @@ fn quiet_cabin() -> Cabin {
         grok_catalog: grokhub_acp::GrokCatalog::default(),
         grok_catalog_loaded: false,
         grok_catalog_rx: None,
+        native_skills: Vec::new(),
+        native_hooks: Vec::new(),
+        native_listing_cwd: String::new(),
+        native_hooks_trusted: false,
         grok_ext_rx: None,
         grok_ext_q: Vec::new(),
         connector_note: String::new(),
@@ -17414,6 +17495,46 @@ fn a_report_run_lands_in_follow_up_with_a_chat_and_a_chore_does_not() {
     let block = grokhub_core::take_card_notes_block(&mut cabin.board, &chat).expect("report");
     assert!(block.contains("Two more today"), "{block}");
     assert_eq!(super::night::loop_card_name("/loop 12h summarize the workboard"), "Summarize the workboard");
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn follow_up_runs_update_one_feed_card() {
+    let (root, mut cabin) = isolated_cabin("follow-up-one-card");
+    cabin.board.clear();
+    cabin.updates.clear();
+    let instructions = "every weekday at 9, summarize my open GitHub issues";
+    for n in 1..=3 {
+        assert!(
+            cabin.file_automation_follow_up(
+                "a-issues",
+                "Morning issues",
+                instructions,
+                &format!("## Open issues\nReport {n}: crash on resume."),
+            ),
+            "run {n} should file follow up"
+        );
+    }
+    let feeds: Vec<&grokhub_core::UpdateCard> = cabin
+        .updates
+        .iter()
+        .filter(|c| {
+            c.kind == grokhub_core::UpdateKind::AutomationDone
+                && grokhub_core::feed_group_key(c).as_deref() == Some("run:a-issues")
+        })
+        .collect();
+    assert_eq!(feeds.len(), 1, "one automation keeps one feed card: {:?}", cabin.updates);
+    let board = cabin
+        .board
+        .iter()
+        .find(|c| c.automation.as_deref() == Some("a-issues"))
+        .expect("follow up card");
+    assert_eq!(feeds[0].board_id.as_deref(), Some(board.id.as_str()));
+    assert_eq!(feeds[0].action, Some(grokhub_core::UpdateAction::OpenWorkboard));
+    assert_eq!(
+        feeds[0].body.as_deref(),
+        Some("In Follow up on your workboard. Open it to read and reply.")
+    );
     release_isolated(&root, cabin);
 }
 
@@ -20788,6 +20909,126 @@ fn cabin_default_model_label_empty_unknown_and_known() {
     assert_eq!(cabin_default_model_label("grok-4.7"), "Grok 4.7");
 }
 
+#[test]
+fn native_skills_hooks_settings_listing_comes_from_discovery() {
+    let pages = include_str!("pages.rs");
+    let engine = include_str!("native_engine.rs");
+    let skills = fn_src(pages, "ui_skills");
+    let hooks = fn_src(pages, "ui_hooks_section");
+    assert!(skills.contains("ensure_native_listing"), "{skills}");
+    assert!(skills.contains("native_skills"), "{skills}");
+    assert!(skills.contains("reload_grok_catalog"), "{skills}");
+    assert!(hooks.contains("native_hooks"), "{hooks}");
+    assert!(hooks.contains("ensure_native_listing"), "{hooks}");
+    assert!(engine.contains("discover_skills"), "{engine}");
+    assert!(engine.contains("discover_hooks"), "{engine}");
+    assert!(!engine.contains("inspect"), "{engine}");
+    assert!(skills.contains("reload_grok_catalog"));
+}
+
+#[test]
+fn native_flag_off_cli_path_is_unchanged() {
+    assert!(!AppConfig::default().native_engine);
+    let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
+    assert!(!absent.native_engine);
+    let acp = include_str!("acp.rs");
+    let spawn = acp
+        .split("build_agent::spawn_session(")
+        .nth(1)
+        .expect("spawn_session");
+    let args = spawn.lines().take(12).collect::<Vec<_>>().join("\n");
+    assert!(args.contains("cwd.clone(),"), "{args}");
+    assert!(args.contains("auth_key.clone(),"), "{args}");
+    assert!(args.contains("xai_env.clone(),"), "{args}");
+    assert!(args.contains("perm,"), "{args}");
+    assert!(args.contains("mode,"), "{args}");
+    assert!(args.contains("reasoning_effort.clone()"), "{args}");
+    assert!(args.contains("resume,"), "{args}");
+    assert!(args.contains("user_home,"), "{args}");
+    assert!(args.contains("worktree,"), "{args}");
+    let src = cabin_src();
+    let kick = fn_src(&src, "kick_model");
+    assert!(kick.contains("spawn_grok_p_stream"), "{kick}");
+    assert_eq!(
+        crate::build_agent::cli_launch_args(false, Some("high")),
+        grokhub_acp::agent_args(false, Some("high"))
+    );
+}
+
+#[test]
+fn native_auto_keeps_the_permission_card() {
+    let acp = include_str!("acp.rs");
+    let poll = acp
+        .split("fn poll_acp(")
+        .nth(1)
+        .and_then(|src| src.split("fn finish_acp_turn").next())
+        .expect("poll_acp");
+    assert!(poll.contains("auto_allows()"), "{poll}");
+    assert!(poll.contains("starts_with(\"native-\")"), "{poll}");
+    assert!(poll.contains("&& !native_session"), "{poll}");
+    let engine = include_str!("native_engine.rs");
+    assert!(engine.contains("ExternalCmd::Permission"), "{engine}");
+    let kick = fn_src(engine, "kick_native_turn");
+    assert!(kick.contains("side_ask_kick = false"), "{kick}");
+}
+
+#[test]
+fn signin_button_and_keychain_move() {
+    let settings = include_str!("settings.rs");
+    assert!(settings.contains("Sign in with Grok"));
+    assert!(settings.contains("Connect Grok"));
+
+    struct Mem {
+        current: std::sync::Mutex<Option<grokhub_core::ImagineTokens>>,
+        legacy: std::sync::Mutex<Option<grokhub_core::ImagineTokens>>,
+    }
+    impl grokhub_core::OAuthAccountStore for Mem {
+        fn load_account(&self, account: &str) -> Result<Option<grokhub_core::ImagineTokens>, String> {
+            let slot = if account == grokhub_core::XAI_OAUTH_ACCOUNT {
+                &self.current
+            } else if account == grokhub_core::XAI_OAUTH_LEGACY_ACCOUNT {
+                &self.legacy
+            } else {
+                return Ok(None);
+            };
+            Ok(slot.lock().unwrap_or_else(|err| err.into_inner()).clone())
+        }
+        fn save_account(
+            &self,
+            account: &str,
+            tokens: &grokhub_core::ImagineTokens,
+        ) -> Result<(), String> {
+            if account == grokhub_core::XAI_OAUTH_ACCOUNT {
+                *self.current.lock().unwrap_or_else(|err| err.into_inner()) = Some(tokens.clone());
+                return Ok(());
+            }
+            Err("unexpected account".into())
+        }
+        fn delete_account(&self, account: &str) -> Result<(), String> {
+            let slot = if account == grokhub_core::XAI_OAUTH_ACCOUNT {
+                &self.current
+            } else {
+                &self.legacy
+            };
+            *slot.lock().unwrap_or_else(|err| err.into_inner()) = None;
+            Ok(())
+        }
+    }
+    let legacy = grokhub_core::ImagineTokens {
+        access_token: "moved".into(),
+        refresh_token: Some("r".into()),
+        ..grokhub_core::ImagineTokens::default()
+    };
+    let store = Mem {
+        current: std::sync::Mutex::new(None),
+        legacy: std::sync::Mutex::new(Some(legacy)),
+    };
+    let loaded = grokhub_core::load_xai_oauth(&store).unwrap().unwrap();
+    assert_eq!(loaded.access_token, "moved");
+    assert!(store.legacy.lock().unwrap().is_none());
+    assert!(store.current.lock().unwrap().is_some());
+}
+
 // Folded from PR #422.
 #[test]
 fn cabin_default_efforts_lists_known_ids() {
@@ -21000,14 +21241,14 @@ fn feed_deck_shift_keeps_the_top_card_on_screen() {
 #[test]
 fn feed_stack_height_peeks_two_edges() {
     assert_eq!(super::feed_ui::collapsed_stack_h(0), 0.0);
-    assert_eq!(super::feed_ui::collapsed_stack_h(1), 64.0);
+    assert_eq!(super::feed_ui::collapsed_stack_h(1), 96.0);
     assert_eq!(
         super::feed_ui::collapsed_stack_h(2),
-        64.0 + super::feed_ui::STACK_REST_DY_1
+        96.0 + super::feed_ui::STACK_REST_DY_1
     );
     assert_eq!(
         super::feed_ui::collapsed_stack_h(3),
-        64.0 + super::feed_ui::STACK_REST_DY_2
+        96.0 + super::feed_ui::STACK_REST_DY_2
     );
     assert!(super::feed_ui::collapsed_stack_h(1) < super::feed_ui::collapsed_stack_h(2));
     assert!(super::feed_ui::collapsed_stack_h(2) < super::feed_ui::collapsed_stack_h(3));
@@ -21018,7 +21259,7 @@ fn feed_stack_height_peeks_two_edges() {
     assert_eq!(super::feed_ui::STACK_REST_DY_1, 8.0);
     assert_eq!(super::feed_ui::STACK_REST_DY_2, 16.0);
     assert_eq!(super::feed_ui::stacked_feed_h(0), 0.0);
-    assert_eq!(super::feed_ui::stacked_feed_h(2), 64.0 * 2.0 + 6.0);
+    assert_eq!(super::feed_ui::stacked_feed_h(2), 96.0 * 2.0 + 6.0);
     assert!(super::feed_ui::stacked_feed_h(2) > super::feed_ui::collapsed_stack_h(2));
 }
 
@@ -21186,10 +21427,154 @@ fn device_glance_none_when_hub_off() {
 #[test]
 fn home_feed_count_empty_and_one_event() {
     // Real `home_feed_count` on a quiet slice — no cabin, spawn, or network.
-    assert_eq!(home_feed_count(&[]), 0);
+    let pulse = grokhub_core::FeedPulse::default();
+    assert_eq!(home_feed_count(&[], &pulse, 0), 0);
 
     let cards = vec![feed_card("event-1", UpdateKind::AutomationDone, false)];
-    assert_eq!(home_feed_count(&cards), 1);
+    assert_eq!(home_feed_count(&cards, &pulse, 0), 1);
+}
+
+#[test]
+fn card_menu_hide_and_undo_round_trip() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("card-menu-hide");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let _pin = crate::config::TestConfigDir::set(root.clone());
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.quiet_start = "00:00".into();
+    cabin.cfg.quiet_end = "00:00".into();
+    cabin.note_automation_done("zephyr-src-9f3a", "ZephyrHideTitle9f3a", "ZephyrHideBody9f3a");
+    let id = cabin
+        .updates
+        .iter()
+        .find(|card| card.source_id == "zephyr-src-9f3a")
+        .map(|card| card.id.clone())
+        .expect("run card");
+    assert_eq!(home_feed_count(&cabin.updates, &cabin.cfg.feed_pulse, now_ms()), 1);
+
+    cabin.hide_automation_from_home(&id);
+    assert!(
+        grokhub_core::home_event_cards(&cabin.updates, &cabin.cfg.feed_pulse, now_ms()).is_empty(),
+        "a hidden run stays off Home"
+    );
+    assert!(
+        cabin.updates.iter().any(|card| card.source_id == "zephyr-src-9f3a"),
+        "the card still updates in the store"
+    );
+    cabin.note_automation_done("zephyr-src-9f3a", "ZephyrHideTitle9f3a", "ZephyrHideBody9f3a again");
+    let stored = cabin
+        .updates
+        .iter()
+        .find(|card| card.source_id == "zephyr-src-9f3a")
+        .expect("merged");
+    assert!(stored.runs >= 2, "hidden runs still merge, runs={}", stored.runs);
+    assert!(grokhub_core::home_event_cards(&cabin.updates, &cabin.cfg.feed_pulse, now_ms()).is_empty());
+    assert_eq!(
+        grokhub_core::automation_home_note(&cabin.cfg.feed_pulse, "zephyr-src-9f3a"),
+        Some(grokhub_core::HOME_HIDDEN_NOTE)
+    );
+    let night = include_str!("night.rs");
+    assert!(
+        night.contains("HOME_HIDDEN_NOTE") && night.contains("undo_hide_automation_from_home"),
+        "Automations shows Hidden from Home · Undo"
+    );
+    assert!(grokhub_core::HOME_HIDDEN_NOTE.contains("Undo"));
+    let feed = include_str!("feed_ui.rs");
+    assert!(
+        feed.contains("More like this")
+            && feed.contains("Less like this")
+            && feed.contains("Hide this automation's runs from Home")
+            && feed.contains("secondary_clicked"),
+        "every event card has the ⋯ menu and a right-click"
+    );
+
+    let app_json = root.join("app.json");
+    let mut saw_hide = false;
+    for _ in 0..100 {
+        if std::fs::read_to_string(&app_json)
+            .unwrap_or_default()
+            .contains("zephyr-src-9f3a")
+        {
+            saw_hide = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(saw_hide, "muted source persisted in app.json");
+
+    cabin.undo_hide_automation_from_home("zephyr-src-9f3a");
+    assert_eq!(home_feed_count(&cabin.updates, &cabin.cfg.feed_pulse, now_ms()), 1);
+    let mut saw_undo = false;
+    for _ in 0..100 {
+        let body = std::fs::read_to_string(&app_json).unwrap_or_default();
+        if !body.contains("zephyr-src-9f3a") {
+            saw_undo = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(saw_undo, "Undo drops the source from app.json");
+
+    let signals = std::fs::read_to_string(root.join("card_signals.jsonl")).unwrap_or_default();
+    assert!(signals.contains("\"event\":\"hidden\""), "{signals}");
+    assert!(signals.contains("\"event\":\"unhidden\""), "{signals}");
+    assert!(!signals.contains("ZephyrHideTitle9f3a"), "{signals}");
+    assert!(!signals.contains("ZephyrHideBody9f3a"), "{signals}");
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn reset_all_clears_what_home_learned() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("home-learned-reset");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let _pin = crate::config::TestConfigDir::set(root.clone());
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.quiet_start = "00:00".into();
+    cabin.cfg.quiet_end = "00:00".into();
+    cabin.note_automation_done("learn-src", "ZephyrLedger snapshot", "ZephyrBodyShouldStayOut");
+    let id = cabin
+        .updates
+        .iter()
+        .find(|card| card.source_id == "learn-src")
+        .map(|card| card.id.clone())
+        .expect("run card");
+    cabin.more_like_this(&id);
+    cabin.less_like_this(&id);
+
+    let prefs_path = root.join("card_prefs.json");
+    let body = std::fs::read_to_string(&prefs_path).unwrap_or_default();
+    assert!(
+        body.contains("zephyrledger") && body.contains("snapshot"),
+        "title keywords landed in card_prefs.json: {body}"
+    );
+    assert!(!body.contains("ZephyrBodyShouldStayOut"), "{body}");
+    let signals_before = std::fs::read_to_string(root.join("card_signals.jsonl")).unwrap_or_default();
+    assert!(signals_before.contains("\"event\":\"more\""), "{signals_before}");
+    assert!(signals_before.contains("\"event\":\"less\""), "{signals_before}");
+    assert!(!signals_before.contains("ZephyrLedger"), "{signals_before}");
+
+    cabin.reset_home_learned();
+    let cleared = std::fs::read_to_string(&prefs_path).unwrap_or_default();
+    let parsed: grokhub_core::CardPrefs = serde_json::from_str(&cleared).expect("empty prefs still parse");
+    assert!(parsed.kinds.is_empty(), "{cleared}");
+    assert!(parsed.groups.is_empty(), "{cleared}");
+    assert!(parsed.topics.is_empty(), "{cleared}");
+    let loaded = grokhub_core::load_card_prefs(&root);
+    assert!(loaded.kinds.is_empty() && loaded.groups.is_empty() && loaded.topics.is_empty());
+    let signals_after = std::fs::read_to_string(root.join("card_signals.jsonl")).unwrap_or_default();
+    assert_eq!(signals_before, signals_after);
+
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
 }
 
 // Folded from PR #410.
@@ -21778,6 +22163,7 @@ fn a_background_result_waits_while_its_chat_is_mid_turn() {
         session: String::new(),
         resumed: None,
         fork_hold: false,
+        native_session: None,
     });
     cabin.running = true;
     cabin.chat_job_thread = Some(id.clone());
@@ -21863,6 +22249,7 @@ fn the_live_work_strip_offers_steer_queue_and_background_stop() {
         session: String::new(),
         resumed: None,
         fork_hold: false,
+        native_session: None,
     });
     let shown = paint(&mut cabin);
     for want in [
@@ -21919,6 +22306,51 @@ fn bg_ask_refuses_slash_task_and_live_move() {
         "idle /bg under Ask must not offer /bg <task>"
     );
     end_bg_test(root, cabin, restore);
+}
+
+/// Native `/bg` under Ask runs the engine and denies a write. It never opens a card.
+#[cfg(unix)]
+#[test]
+fn native_bg_ask_refuses_a_write_without_prompting() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("native-bg-ask");
+    let _ = std::fs::create_dir_all(&root);
+    cabin.cfg.native_engine = true;
+    cabin.permission_mode = PermissionMode::Ask;
+    cabin.session_mode = SessionMode::Chat;
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.thread_idx = 0;
+    cabin.messages = cabin.threads[0].messages.clone();
+    cabin.threads[0].native = true;
+    cabin.threads[0].grok_cwd = Some(root.display().to_string());
+    cabin.send_chat("/bg write a file".into());
+    assert_ne!(
+        cabin.status,
+        super::background::BG_ASK_OFF,
+        "{}",
+        cabin.status
+    );
+    let child = cabin
+        .bg
+        .runs
+        .first()
+        .and_then(|run| run.native_session.clone())
+        .unwrap_or_else(|| panic!("{}", cabin.status));
+    assert!(cabin.perm_ask.is_none());
+    let child_for_poll = child.clone();
+    assert!(
+        poll_until(&mut cabin, 8, move |_| {
+            grokhub_agent::session_file(&child_for_poll)
+                .ok()
+                .and_then(|path| std::fs::read_to_string(path).ok())
+                .is_some_and(|body| body.contains("deny rule on edit"))
+        }),
+        "native /bg should record the Ask denial"
+    );
+    assert!(cabin.perm_ask.is_none());
+    assert!(!root.join("written-by-bg.txt").exists());
+    cabin.stop_all_bg_runs();
+    release_isolated(&root, cabin);
 }
 
 #[cfg(unix)]

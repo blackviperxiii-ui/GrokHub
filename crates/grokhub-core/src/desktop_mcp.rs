@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 /// MCP server name. grok exposes tools as `grokhub-desktop__<tool>`.
@@ -15,17 +16,17 @@ pub const DESKTOP_MCP_RULE: &str = "MCPTool(grokhub-desktop__*)";
 const PREFERRED_PROTOCOL: &str = "2025-06-18";
 const PROTOCOLS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
-const OFF_MSG: &str = "Desktop control is off. Turn on Settings → Let Grok control the desktop.";
-const HALT_MSG: &str =
+pub const OFF_MSG: &str = "Desktop control is off. Turn on Settings → Let Grok control the desktop.";
+pub const HALT_MSG: &str =
     "Desktop control was halted (Ctrl+Alt+H). Open GrokHub again to use the screen.";
-const LOCK_MSG: &str = "The lock screen is up. Unlock this computer, then try again.";
+pub const LOCK_MSG: &str = "The lock screen is up. Unlock this computer, then try again.";
 
 const DRAG_STEPS: i32 = 8;
 
 const COORD_NOTE: &str = "Coordinates are pixels in the last screenshot of that monitor (or \"all\"), not physical screen pixels. With no screenshot yet, they are the monitor's native pixels.";
 
 /// One monitor in physical pixels. Origins may be negative on a virtual desktop.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MonitorGeom {
     pub id: String,
     pub name: String,
@@ -39,7 +40,7 @@ pub struct MonitorGeom {
 
 /// Last screenshot of one monitor, or of the whole desktop (`id` `"all"`).
 /// `scale_factor` is DPI. Mapping uses physical size over image size, not DPI.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ShotGeom {
     pub id: String,
     pub x: i32,
@@ -335,7 +336,8 @@ fn parse_key_token(token: &str) -> Result<(KeyName, bool), String> {
     Ok((KeyName::Char(ch), false))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum MouseButton {
     Left,
     Right,
@@ -362,6 +364,27 @@ pub trait DesktopBackend {
     fn is_locked(&mut self) -> bool;
     /// Pause between a double-click's halves and between drag steps.
     fn pace(&mut self) {}
+    /// Close a portal session and latch it shut. Halt and the lock screen call this.
+    /// The default does nothing so X11, Windows, and fakes stay quiet.
+    fn release_input(&mut self) {}
+    /// Close a session without latching it. The desktop switch uses this so
+    /// turning the switch back on can open a new session.
+    fn suspend_input(&mut self) {}
+    /// Move using the screenshot geometry. The default ignores `geom` and
+    /// calls [`move_abs`](DesktopBackend::move_abs) with the mapped point.
+    fn move_abs_on(&mut self, geom: &ShotGeom, x: i32, y: i32) -> Result<(), String> {
+        let _ = geom;
+        self.move_abs(x, y)
+    }
+    /// Sticky note for the next input reply (imprecise fallback, portal retry).
+    fn status_note(&mut self) -> Option<String> {
+        None
+    }
+    /// Where the pointer landed, when the backend can see it. `None` means
+    /// the Test button must say the offset was not measured.
+    fn landed_at(&mut self) -> Option<(i32, i32)> {
+        None
+    }
 }
 
 /// Re-read on every `tools/call`. Halt also ends the process after the reply.
@@ -511,31 +534,38 @@ impl<B: DesktopBackend> DesktopServer<B> {
             }
         };
         if !gate.enabled {
+            self.backend.suspend_input();
             return tool_fail(id, OFF_MSG, false);
         }
         if gate.halted {
+            self.backend.release_input();
             return tool_fail(id, HALT_MSG, true);
         }
         if is_input_tool(name) && self.backend.is_locked() {
+            self.backend.release_input();
             return tool_fail(id, LOCK_MSG, false);
         }
-        let result = match name {
-            "list_monitors" => self.tool_list_monitors(),
-            "screenshot" => self.tool_screenshot(&args),
-            "click" => self.tool_click(&args),
-            "move" => self.tool_move(&args),
-            "drag" => self.tool_drag(&args),
-            "scroll" => self.tool_scroll(&args),
-            "type" => self.tool_type(&args),
-            "key" => self.tool_key(&args),
-            other => Err(format!("Unknown tool \"{other}\".")),
-        };
-        match result {
+        match self.invoke(name, &args) {
             Ok(body) => RpcOutcome {
                 reply: Some(rpc_result(id, body)),
                 exit: false,
             },
             Err(msg) => tool_fail(id, &msg, false),
+        }
+    }
+
+    /// Run one desktop tool. Callers apply the switch, halt, and lock gates first.
+    pub fn invoke(&mut self, name: &str, args: &Value) -> Result<Value, String> {
+        match name {
+            "list_monitors" => self.tool_list_monitors(),
+            "screenshot" => self.tool_screenshot(args),
+            "click" => self.tool_click(args),
+            "move" => self.tool_move(args),
+            "drag" => self.tool_drag(args),
+            "scroll" => self.tool_scroll(args),
+            "type" => self.tool_type(args),
+            "key" => self.tool_key(args),
+            other => Err(format!("Unknown tool \"{other}\".")),
         }
     }
 
@@ -578,8 +608,10 @@ impl<B: DesktopBackend> DesktopServer<B> {
         let (x, y) = require_xy(args, "x", "y")?;
         let button = button_arg(args)?;
         let double = args.get("double").and_then(|v| v.as_bool()).unwrap_or(false);
-        let (sx, sy) = self.map_xy(&monitor_arg(args), x, y)?;
-        self.backend.move_abs(sx, sy)?;
+        let which = monitor_arg(args);
+        let geom = self.shot_for(&which)?;
+        let (sx, sy) = map_screenshot_point(&geom, x, y);
+        self.backend.move_abs_on(&geom, sx, sy)?;
         self.backend.button(button, true)?;
         self.backend.button(button, false)?;
         if double {
@@ -587,14 +619,16 @@ impl<B: DesktopBackend> DesktopServer<B> {
             self.backend.button(button, true)?;
             self.backend.button(button, false)?;
         }
-        Ok(text_ok("clicked"))
+        Ok(self.input_ok("clicked"))
     }
 
     fn tool_move(&mut self, args: &Value) -> Result<Value, String> {
         let (x, y) = require_xy(args, "x", "y")?;
-        let (sx, sy) = self.map_xy(&monitor_arg(args), x, y)?;
-        self.backend.move_abs(sx, sy)?;
-        Ok(text_ok("moved"))
+        let which = monitor_arg(args);
+        let geom = self.shot_for(&which)?;
+        let (sx, sy) = map_screenshot_point(&geom, x, y);
+        self.backend.move_abs_on(&geom, sx, sy)?;
+        Ok(self.input_ok("moved"))
     }
 
     fn tool_drag(&mut self, args: &Value) -> Result<Value, String> {
@@ -602,16 +636,17 @@ impl<B: DesktopBackend> DesktopServer<B> {
         let (x1, y1) = require_xy(args, "to_x", "to_y")?;
         let button = button_arg(args)?;
         let which = monitor_arg(args);
-        let (sx0, sy0) = self.map_xy(&which, x0, y0)?;
-        let (sx1, sy1) = self.map_xy(&which, x1, y1)?;
-        self.backend.move_abs(sx0, sy0)?;
+        let geom = self.shot_for(&which)?;
+        let (sx0, sy0) = map_screenshot_point(&geom, x0, y0);
+        let (sx1, sy1) = map_screenshot_point(&geom, x1, y1);
+        self.backend.move_abs_on(&geom, sx0, sy0)?;
         self.backend.button(button, true)?;
         let mut moved = Ok(());
         for step in 1..=DRAG_STEPS {
             let t = step as f64 / DRAG_STEPS as f64;
             let x = round_i32(sx0 as f64 + (sx1 - sx0) as f64 * t);
             let y = round_i32(sy0 as f64 + (sy1 - sy0) as f64 * t);
-            moved = self.backend.move_abs(x, y);
+            moved = self.backend.move_abs_on(&geom, x, y);
             if moved.is_err() {
                 break;
             }
@@ -623,17 +658,19 @@ impl<B: DesktopBackend> DesktopServer<B> {
         let up = self.backend.button(button, false);
         moved?;
         up?;
-        Ok(text_ok("dragged"))
+        Ok(self.input_ok("dragged"))
     }
 
     fn tool_scroll(&mut self, args: &Value) -> Result<Value, String> {
         let (x, y) = require_xy(args, "x", "y")?;
         let dx = args.get("dx").and_then(Value::as_f64).unwrap_or(0.0);
         let dy = args.get("dy").and_then(Value::as_f64).unwrap_or(0.0);
-        let (sx, sy) = self.map_xy(&monitor_arg(args), x, y)?;
-        self.backend.move_abs(sx, sy)?;
+        let which = monitor_arg(args);
+        let geom = self.shot_for(&which)?;
+        let (sx, sy) = map_screenshot_point(&geom, x, y);
+        self.backend.move_abs_on(&geom, sx, sy)?;
         self.backend.scroll(round_i32(dx), round_i32(dy))?;
-        Ok(text_ok("scrolled"))
+        Ok(self.input_ok("scrolled"))
     }
 
     fn tool_type(&mut self, args: &Value) -> Result<Value, String> {
@@ -642,7 +679,7 @@ impl<B: DesktopBackend> DesktopServer<B> {
             .and_then(|v| v.as_str())
             .ok_or_else(|| "type needs text.".to_string())?;
         self.backend.type_text(text)?;
-        Ok(text_ok("typed"))
+        Ok(self.input_ok("typed"))
     }
 
     fn tool_key(&mut self, args: &Value) -> Result<Value, String> {
@@ -652,12 +689,14 @@ impl<B: DesktopBackend> DesktopServer<B> {
             .ok_or_else(|| "key needs keys.".to_string())?;
         let combo = parse_key_combo(keys)?;
         self.backend.key_combo(&combo)?;
-        Ok(text_ok("keyed"))
+        Ok(self.input_ok("keyed"))
     }
 
-    fn map_xy(&mut self, monitor: &str, x: f64, y: f64) -> Result<(i32, i32), String> {
-        let geom = self.shot_for(monitor)?;
-        Ok(map_screenshot_point(&geom, x, y))
+    fn input_ok(&mut self, verb: &str) -> Value {
+        match self.backend.status_note() {
+            Some(note) if !note.is_empty() => text_ok(&format!("{verb}. {note}")),
+            _ => text_ok(verb),
+        }
     }
 
     fn shot_for(&mut self, monitor: &str) -> Result<ShotGeom, String> {
@@ -969,6 +1008,481 @@ fn strip_rule_flag(args: &mut Vec<String>, flag: &str) {
         }
         i += 1;
     }
+}
+
+/// One libei absolute region, in logical pixels. Origins may be negative.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EisRegion {
+    pub name: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Absolute pointer position in the same logical space as the EIS region
+/// offset. `motion_absolute` must fall inside a region, so the far edge clamps
+/// to `offset + size - 1` and a shared edge belongs to the region that starts
+/// there. Negative origins stay negative.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EisAbsolute {
+    pub region: usize,
+    pub x: f32,
+    pub y: f32,
+}
+
+fn positive_scale(scale: f64) -> f64 {
+    if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    }
+}
+
+/// Image pixel → physical (the existing formula, origin 0) → logical (`÷ scale`)
+/// → output logical origin → the EIS region that contains the point.
+/// `motion_absolute` uses that same logical space, clamped into the region:
+/// the far edge is `offset + size - 1`, and a shared edge belongs to the
+/// region that starts there. Negative origins stay negative.
+pub fn map_image_px_to_eis(
+    geom: &ShotGeom,
+    regions: &[EisRegion],
+    sx: f64,
+    sy: f64,
+) -> Option<EisAbsolute> {
+    if regions.is_empty() {
+        return None;
+    }
+    let scale = positive_scale(geom.scale_factor);
+    let phys_x = map_axis(0, sx, geom.physical_w, geom.image_w);
+    let phys_y = map_axis(0, sy, geom.physical_h, geom.image_h);
+    let global_x = geom.x as f64 + (phys_x as f64) / scale;
+    let global_y = geom.y as f64 + (phys_y as f64) / scale;
+    Some(pick_eis_region(regions, global_x, global_y))
+}
+
+/// Mapped screen point (`origin + physical pixel`) → EIS absolute.
+pub fn mapped_point_to_eis(
+    geom: &ShotGeom,
+    regions: &[EisRegion],
+    x: i32,
+    y: i32,
+) -> Option<EisAbsolute> {
+    if regions.is_empty() {
+        return None;
+    }
+    let scale = positive_scale(geom.scale_factor);
+    let phys_x = x.saturating_sub(geom.x);
+    let phys_y = y.saturating_sub(geom.y);
+    let global_x = geom.x as f64 + (phys_x as f64) / scale;
+    let global_y = geom.y as f64 + (phys_y as f64) / scale;
+    Some(pick_eis_region(regions, global_x, global_y))
+}
+
+/// Half-open region pick. An empty list is not called by the mappers.
+pub fn pick_eis_region(regions: &[EisRegion], x: f64, y: f64) -> EisAbsolute {
+    if let Some((index, region)) = regions
+        .iter()
+        .enumerate()
+        .find(|(_, region)| region_contains(region, x, y))
+    {
+        return region_local(index, region, x, y);
+    }
+    let Some((index, region)) = regions.iter().enumerate().min_by(|(_, a), (_, b)| {
+        region_dist2(a, x, y)
+            .partial_cmp(&region_dist2(b, x, y))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }) else {
+        return EisAbsolute {
+            region: 0,
+            x: 0.0,
+            y: 0.0,
+        };
+    };
+    region_local(index, region, x, y)
+}
+
+fn region_contains(region: &EisRegion, x: f64, y: f64) -> bool {
+    let x0 = region.x as f64;
+    let y0 = region.y as f64;
+    let x1 = x0 + region.width as f64;
+    let y1 = y0 + region.height as f64;
+    x >= x0 && x < x1 && y >= y0 && y < y1
+}
+
+fn region_dist2(region: &EisRegion, x: f64, y: f64) -> f64 {
+    let x0 = region.x as f64;
+    let y0 = region.y as f64;
+    let x1 = x0 + region.width as f64;
+    let y1 = y0 + region.height as f64;
+    let dx = x - x.clamp(x0, x1);
+    let dy = y - y.clamp(y0, y1);
+    dx * dx + dy * dy
+}
+
+fn region_local(index: usize, region: &EisRegion, x: f64, y: f64) -> EisAbsolute {
+    EisAbsolute {
+        region: index,
+        x: clamp_into_region(x, region.x, region.width),
+        y: clamp_into_region(y, region.y, region.height),
+    }
+}
+
+/// Keep a logical coordinate inside `[origin, origin + size - 1]`.
+fn clamp_into_region(value: f64, origin: i32, dim: u32) -> f32 {
+    if !value.is_finite() {
+        return origin as f32;
+    }
+    let lo = origin as f64;
+    if dim == 0 {
+        return lo as f32;
+    }
+    let hi = lo + (dim as f64) - 1.0;
+    value.clamp(lo, hi) as f32
+}
+
+/// How this process should drive the desktop. A pure function of the session
+/// environment and probes, so CI can cover KDE, wlroots, and X11 without a bus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DesktopInputKind {
+    Portal,
+    Ydotool,
+    X11rb,
+    None,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DesktopCaptureKind {
+    ScreenShot2,
+    Grim,
+    X11rb,
+    None,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DesktopMonitorKind {
+    Kscreen,
+    Wlroots,
+    X11Randr,
+    None,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DesktopStack {
+    pub input: DesktopInputKind,
+    pub capture: DesktopCaptureKind,
+    pub monitors: DesktopMonitorKind,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DesktopSessionEnv {
+    pub wayland_display: Option<String>,
+    pub session_type: Option<String>,
+    pub current_desktop: Option<String>,
+    pub display: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DesktopProbes {
+    pub kwin: bool,
+}
+
+pub fn current_desktop_is_kde(desktop: Option<&str>) -> bool {
+    desktop.is_some_and(|value| {
+        value
+            .split(':')
+            .any(|part| part.trim().eq_ignore_ascii_case("kde"))
+    })
+}
+
+pub fn select_desktop_stack(env: &DesktopSessionEnv, probes: &DesktopProbes) -> DesktopStack {
+    let wayland = crate::session_is_wayland(
+        env.wayland_display.as_deref(),
+        env.session_type.as_deref(),
+    );
+    if wayland && (current_desktop_is_kde(env.current_desktop.as_deref()) || probes.kwin) {
+        return DesktopStack {
+            input: DesktopInputKind::Portal,
+            capture: DesktopCaptureKind::ScreenShot2,
+            monitors: DesktopMonitorKind::Kscreen,
+        };
+    }
+    if wayland {
+        return DesktopStack {
+            input: DesktopInputKind::Ydotool,
+            capture: DesktopCaptureKind::Grim,
+            monitors: DesktopMonitorKind::Wlroots,
+        };
+    }
+    if env
+        .display
+        .as_deref()
+        .is_some_and(|display| !display.trim().is_empty())
+    {
+        return DesktopStack {
+            input: DesktopInputKind::X11rb,
+            capture: DesktopCaptureKind::X11rb,
+            monitors: DesktopMonitorKind::X11Randr,
+        };
+    }
+    DesktopStack {
+        input: DesktopInputKind::None,
+        capture: DesktopCaptureKind::None,
+        monitors: DesktopMonitorKind::None,
+    }
+}
+
+/// KWin `org.kde.KWin.ScreenShot2` result dictionary.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScreenShot2Meta {
+    pub width: u32,
+    pub height: u32,
+    pub stride: u32,
+    pub scale: f64,
+}
+
+pub fn parse_screenshot2_metadata(value: &Value) -> Result<ScreenShot2Meta, String> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| "ScreenShot2 metadata is not an object.".to_string())?;
+    let width = json_u32(obj.get("width")).ok_or_else(|| "ScreenShot2 metadata has no width.".to_string())?;
+    let height = json_u32(obj.get("height")).ok_or_else(|| "ScreenShot2 metadata has no height.".to_string())?;
+    if width == 0 || height == 0 {
+        return Err("ScreenShot2 returned an empty image.".into());
+    }
+    let stride = json_u32(obj.get("stride")).unwrap_or_else(|| width.saturating_mul(4));
+    if (stride as u64) < (width as u64) * 4 {
+        return Err("ScreenShot2 stride is shorter than one row.".into());
+    }
+    let scale = json_f64(obj.get("scale")).unwrap_or(1.0);
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    Ok(ScreenShot2Meta {
+        width,
+        height,
+        stride,
+        scale,
+    })
+}
+
+/// Qt `Format_ARGB32_Premultiplied` is little-endian B,G,R,A with the colors
+/// already multiplied by alpha. Straight RGBA un-premultiplies each channel.
+pub fn argb32_premul_to_rgba(
+    src: &[u8],
+    width: u32,
+    height: u32,
+    stride: u32,
+) -> Result<Vec<u8>, String> {
+    let row = (width as usize).saturating_mul(4);
+    if (stride as usize) < row {
+        return Err("ScreenShot2 stride is shorter than one row.".into());
+    }
+    let need = (stride as usize).saturating_mul(height as usize);
+    if src.len() < need {
+        return Err("ScreenShot2 buffer is shorter than width, height, and stride.".into());
+    }
+    let mut out = vec![0u8; row.saturating_mul(height as usize)];
+    for y in 0..height as usize {
+        let src_row = &src[y * stride as usize..];
+        let dst_off = y * row;
+        for x in 0..width as usize {
+            let i = x * 4;
+            let b = src_row[i] as u32;
+            let g = src_row[i + 1] as u32;
+            let r = src_row[i + 2] as u32;
+            let a = src_row[i + 3] as u32;
+            let (r, g, b) = if a == 0 {
+                (0, 0, 0)
+            } else {
+                (unpremultiply(r, a), unpremultiply(g, a), unpremultiply(b, a))
+            };
+            out[dst_off + i] = r;
+            out[dst_off + i + 1] = g;
+            out[dst_off + i + 2] = b;
+            out[dst_off + i + 3] = a as u8;
+        }
+    }
+    Ok(out)
+}
+
+fn unpremultiply(channel: u32, alpha: u32) -> u8 {
+    let value = (channel.saturating_mul(255) + alpha / 2) / alpha;
+    value.min(255) as u8
+}
+
+/// `kscreen-doctor -j`. Disabled, disconnected, and zero-size outputs are skipped.
+/// `pos` is the logical origin. `size` is the oriented pixel size KScreen serializes.
+pub fn parse_kscreen_doctor(text: &str) -> Result<Vec<MonitorGeom>, String> {
+    let value: Value = serde_json::from_str(text).map_err(|e| format!("kscreen-doctor: {e}"))?;
+    let outputs = value
+        .get("outputs")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "kscreen-doctor JSON has no outputs array.".to_string())?;
+    let mut monitors = Vec::new();
+    for output in outputs {
+        let Some(obj) = output.as_object() else {
+            continue;
+        };
+        if obj.get("connected").and_then(Value::as_bool) == Some(false) {
+            continue;
+        }
+        if obj.get("enabled").and_then(Value::as_bool) == Some(false) {
+            continue;
+        }
+        let name = obj.get("name").and_then(Value::as_str).unwrap_or("").trim();
+        if name.is_empty() {
+            continue;
+        }
+        let Some((width, height)) = json_size(obj.get("size")) else {
+            continue;
+        };
+        if width == 0 || height == 0 {
+            continue;
+        }
+        let (x, y) = json_pos(obj.get("pos")).unwrap_or((0, 0));
+        let scale = positive_scale(json_f64(obj.get("scale")).unwrap_or(1.0));
+        let priority = obj.get("priority").and_then(json_i64).unwrap_or(0);
+        let primary = obj.get("primary").and_then(Value::as_bool).unwrap_or(false) || priority == 1;
+        let id = match obj.get("id") {
+            Some(Value::String(id)) => id.clone(),
+            Some(Value::Number(id)) => id.to_string(),
+            _ => name.to_string(),
+        };
+        monitors.push(MonitorGeom {
+            id,
+            name: name.to_string(),
+            x,
+            y,
+            width,
+            height,
+            scale_factor: scale,
+            primary,
+        });
+    }
+    if monitors.is_empty() {
+        return Err("kscreen-doctor listed no enabled outputs.".into());
+    }
+    Ok(monitors)
+}
+
+/// EIS regions win for logical origin. Physical size and scale stay with kscreen
+/// when the output name matches. Used once the portal session is up.
+pub fn join_kscreen_with_eis(monitors: &[MonitorGeom], regions: &[EisRegion]) -> Vec<MonitorGeom> {
+    if regions.is_empty() {
+        return monitors.to_vec();
+    }
+    regions
+        .iter()
+        .enumerate()
+        .map(|(index, region)| {
+            let matched = monitors.iter().find(|monitor| {
+                !region.name.is_empty()
+                    && (monitor.name == region.name || monitor.id == region.name)
+            });
+            let scale = matched.map(|monitor| monitor.scale_factor).unwrap_or(1.0);
+            let scale = positive_scale(scale);
+            let (width, height) = matched
+                .map(|monitor| (monitor.width, monitor.height))
+                .unwrap_or_else(|| {
+                    (
+                        ((region.width as f64) * scale).round().max(1.0) as u32,
+                        ((region.height as f64) * scale).round().max(1.0) as u32,
+                    )
+                });
+            MonitorGeom {
+                id: matched
+                    .map(|monitor| monitor.id.clone())
+                    .unwrap_or_else(|| (index + 1).to_string()),
+                name: if region.name.is_empty() {
+                    matched
+                        .map(|monitor| monitor.name.clone())
+                        .unwrap_or_else(|| format!("output-{index}"))
+                } else {
+                    region.name.clone()
+                },
+                x: region.x,
+                y: region.y,
+                width,
+                height,
+                scale_factor: scale,
+                primary: matched.map(|monitor| monitor.primary).unwrap_or(index == 0),
+            }
+        })
+        .collect()
+}
+
+/// Prefer EIS `TEXT`. Otherwise each character needs a keycode. A missing
+/// character is an error (route 2 keysyms are out of scope).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EisTextPlan {
+    Text,
+    Keycodes(Vec<u16>),
+}
+
+pub fn plan_eis_text(
+    text_offered: bool,
+    text: &str,
+    mut keycode: impl FnMut(char) -> Option<u16>,
+) -> Result<EisTextPlan, String> {
+    if text_offered {
+        return Ok(EisTextPlan::Text);
+    }
+    let mut codes = Vec::new();
+    for ch in text.chars() {
+        match keycode(ch) {
+            Some(code) => codes.push(code),
+            None => {
+                return Err(format!(
+                    "Character {ch:?} is missing from the keymap. EIS TEXT is not offered."
+                ));
+            }
+        }
+    }
+    Ok(EisTextPlan::Keycodes(codes))
+}
+
+include!("desktop_routes.rs");
+
+fn json_u32(value: Option<&Value>) -> Option<u32> {
+    let value = value?;
+    if let Some(n) = value.as_u64() {
+        return u32::try_from(n).ok();
+    }
+    if let Some(n) = value.as_i64() {
+        return u32::try_from(n).ok();
+    }
+    if let Some(n) = value.as_f64() {
+        if n.is_finite() && n >= 0.0 && n <= u32::MAX as f64 {
+            return Some(n.round() as u32);
+        }
+    }
+    None
+}
+
+fn json_f64(value: Option<&Value>) -> Option<f64> {
+    value.and_then(Value::as_f64)
+}
+
+fn json_i64(value: &Value) -> Option<i64> {
+    value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|n| i64::try_from(n).ok()))
+        .or_else(|| value.as_f64().and_then(|n| if n.is_finite() { Some(n.round() as i64) } else { None }))
+}
+
+fn json_size(value: Option<&Value>) -> Option<(u32, u32)> {
+    let obj = value?.as_object()?;
+    Some((json_u32(obj.get("width"))?, json_u32(obj.get("height"))?))
+}
+
+fn json_pos(value: Option<&Value>) -> Option<(i32, i32)> {
+    let obj = value?.as_object()?;
+    let x = json_i64(obj.get("x")?)?;
+    let y = json_i64(obj.get("y")?)?;
+    Some((i32::try_from(x).unwrap_or(0), i32::try_from(y).unwrap_or(0)))
 }
 
 #[cfg(test)]
@@ -1487,5 +2001,592 @@ mod tests {
         let ask = vec!["--allow".into(), DESKTOP_MCP_RULE.into()];
         let left = apply_desktop_mcp_args(ask.clone(), DesktopPermMode::Ask, true, true);
         assert_eq!(left, ask);
+    }
+
+    fn eis(name: &str, x: i32, y: i32, w: u32, h: u32) -> EisRegion {
+        EisRegion {
+            name: name.into(),
+            x,
+            y,
+            width: w,
+            height: h,
+        }
+    }
+
+    fn shot_at(x: i32, y: i32, w: u32, h: u32, scale: f64) -> ShotGeom {
+        ShotGeom {
+            id: "m".into(),
+            x,
+            y,
+            physical_w: w,
+            physical_h: h,
+            scale_factor: scale,
+            image_w: w,
+            image_h: h,
+        }
+    }
+
+    fn near(got: f32, want: f32) {
+        assert!((got - want).abs() < 0.02, "{got} vs {want}");
+    }
+
+    #[test]
+    fn maps_image_pixels_to_eis_regions_at_common_scales() {
+        let span = [
+            eis("HDMI-A-2", 0, 0, 2560, 1440),
+            eis("DP-1", 2560, 0, 2800, 1440),
+            eis("DP-2", 5360, 0, 1920, 1440),
+        ];
+        let all = shot_at(0, 0, 7280, 1440, 1.0);
+        let left = map_image_px_to_eis(&all, &span, 0.0, 0.0).unwrap();
+        assert_eq!(left.region, 0);
+        near(left.x, 0.0);
+        near(left.y, 0.0);
+        let edge = map_image_px_to_eis(&all, &span, 2560.0, 10.0).unwrap();
+        assert_eq!(edge.region, 1);
+        near(edge.x, 2560.0);
+        near(edge.y, 10.0);
+        let right = map_image_px_to_eis(&all, &span, 5360.0, 100.0).unwrap();
+        assert_eq!(right.region, 2);
+        near(right.x, 5360.0);
+        let past = map_image_px_to_eis(&all, &span, 7285.0, 0.0).unwrap();
+        assert_eq!(past.region, 2);
+        near(past.x, 7279.0);
+
+        let s2 = shot_at(0, 0, 200, 100, 2.0);
+        let p = map_image_px_to_eis(&s2, &[eis("a", 0, 0, 100, 50)], 10.0, 8.0).unwrap();
+        near(p.x, 5.0);
+        near(p.y, 4.0);
+
+        let s125 = shot_at(100, 40, 2500, 1250, 1.25);
+        let p = map_image_px_to_eis(&s125, &[eis("a", 100, 40, 2000, 1000)], 125.0, 25.0).unwrap();
+        near(p.x, 200.0);
+        near(p.y, 60.0);
+
+        let s15 = shot_at(0, 0, 300, 150, 1.5);
+        let p = map_image_px_to_eis(&s15, &[eis("a", 0, 0, 200, 100)], 3.0, 6.0).unwrap();
+        near(p.x, 2.0);
+        near(p.y, 4.0);
+
+        let neg = shot_at(-1920, -120, 1920, 1080, 1.0);
+        let region = [eis("left", -1920, -120, 1920, 1080)];
+        let origin = map_image_px_to_eis(&neg, &region, 0.0, 0.0).unwrap();
+        near(origin.x, -1920.0);
+        near(origin.y, -120.0);
+        let inside = map_image_px_to_eis(&neg, &region, 10.0, 20.0).unwrap();
+        near(inside.x, -1910.0);
+        near(inside.y, -100.0);
+        let before = map_image_px_to_eis(&neg, &region, -40.0, -80.0).unwrap();
+        near(before.x, -1920.0);
+        near(before.y, -120.0);
+    }
+
+    #[test]
+    fn region_pick_at_output_edges() {
+        let span = [
+            eis("HDMI-A-2", 0, 0, 2560, 1440),
+            eis("DP-1", 2560, 0, 2800, 1440),
+            eis("DP-2", 5360, 0, 1920, 1440),
+        ];
+        let at = |x: f64, y: f64| pick_eis_region(&span, x, y);
+        assert_eq!(at(2559.0, 0.0).region, 0);
+        near(at(2559.0, 0.0).x, 2559.0);
+        assert_eq!(at(2560.0, 0.0).region, 1);
+        near(at(2560.0, 0.0).x, 2560.0);
+        assert_eq!(at(5359.0, 1439.0).region, 1);
+        assert_eq!(at(5360.0, 0.0).region, 2);
+        near(at(5360.0, 0.0).x, 5360.0);
+        assert_eq!(at(7279.0, 1439.0).region, 2);
+        near(at(7279.0, 1439.0).x, 7279.0);
+        near(at(7279.0, 1439.0).y, 1439.0);
+        let far = at(7280.0, 1440.0);
+        assert_eq!(far.region, 2);
+        near(far.x, 7279.0);
+        near(far.y, 1439.0);
+        let beyond = at(7285.0, -4.0);
+        assert_eq!(beyond.region, 2);
+        near(beyond.x, 7279.0);
+        near(beyond.y, 0.0);
+        let neg = [eis("left", -1920, -100, 1920, 1080), eis("main", 0, 0, 2560, 1440)];
+        assert_eq!(pick_eis_region(&neg, -1920.0, -100.0).region, 0);
+        near(pick_eis_region(&neg, -1920.0, -100.0).x, -1920.0);
+        assert_eq!(pick_eis_region(&neg, 0.0, 0.0).region, 1);
+        near(pick_eis_region(&neg, -1921.0, -100.0).x, -1920.0);
+        assert_eq!(pick_eis_region(&neg, -1921.0, -100.0).region, 0);
+    }
+
+    #[test]
+    fn backend_selection_matrix() {
+        let kde = select_desktop_stack(
+            &DesktopSessionEnv {
+                wayland_display: Some("wayland-0".into()),
+                current_desktop: Some("KDE".into()),
+                ..DesktopSessionEnv::default()
+            },
+            &DesktopProbes { kwin: false },
+        );
+        assert_eq!(kde.input, DesktopInputKind::Portal);
+        assert_eq!(kde.capture, DesktopCaptureKind::ScreenShot2);
+        assert_eq!(kde.monitors, DesktopMonitorKind::Kscreen);
+
+        let plasma = select_desktop_stack(
+            &DesktopSessionEnv {
+                session_type: Some("wayland".into()),
+                current_desktop: Some("KDE:plasma".into()),
+                ..DesktopSessionEnv::default()
+            },
+            &DesktopProbes::default(),
+        );
+        assert_eq!(plasma.input, DesktopInputKind::Portal);
+
+        let gnome_kwin = select_desktop_stack(
+            &DesktopSessionEnv {
+                wayland_display: Some("wayland-0".into()),
+                current_desktop: Some("ubuntu:GNOME".into()),
+                ..DesktopSessionEnv::default()
+            },
+            &DesktopProbes { kwin: true },
+        );
+        assert_eq!(gnome_kwin.input, DesktopInputKind::Portal);
+        assert_eq!(gnome_kwin.capture, DesktopCaptureKind::ScreenShot2);
+
+        let sway = select_desktop_stack(
+            &DesktopSessionEnv {
+                wayland_display: Some("wayland-1".into()),
+                current_desktop: Some("sway".into()),
+                ..DesktopSessionEnv::default()
+            },
+            &DesktopProbes { kwin: false },
+        );
+        assert_eq!(sway.input, DesktopInputKind::Ydotool);
+        assert_eq!(sway.capture, DesktopCaptureKind::Grim);
+        assert_eq!(sway.monitors, DesktopMonitorKind::Wlroots);
+
+        let x11 = select_desktop_stack(
+            &DesktopSessionEnv {
+                display: Some(":0".into()),
+                current_desktop: Some("KDE".into()),
+                ..DesktopSessionEnv::default()
+            },
+            &DesktopProbes { kwin: true },
+        );
+        assert_eq!(x11.input, DesktopInputKind::X11rb);
+        assert_eq!(x11.capture, DesktopCaptureKind::X11rb);
+        assert_eq!(x11.monitors, DesktopMonitorKind::X11Randr);
+
+        let none = select_desktop_stack(&DesktopSessionEnv::default(), &DesktopProbes::default());
+        assert_eq!(none.input, DesktopInputKind::None);
+        assert_eq!(none.capture, DesktopCaptureKind::None);
+        assert_eq!(none.monitors, DesktopMonitorKind::None);
+    }
+
+    #[test]
+    fn screenshot2_metadata_and_premultiplied_argb_to_rgba() {
+        let meta = parse_screenshot2_metadata(&json!({
+            "type": "raw",
+            "format": "argb32",
+            "width": 3,
+            "height": 1,
+            "stride": 16,
+            "scale": 1.5
+        }))
+        .unwrap();
+        assert_eq!(meta.width, 3);
+        assert_eq!(meta.height, 1);
+        assert_eq!(meta.stride, 16);
+        assert_eq!(meta.scale, 1.5);
+        assert!(parse_screenshot2_metadata(&json!({"width": 0, "height": 1})).is_err());
+
+        let mut src = vec![0u8; 16];
+        src[0..4].copy_from_slice(&[0, 0, 128, 128]);
+        src[4..8].copy_from_slice(&[255, 0, 0, 255]);
+        src[8..12].copy_from_slice(&[9, 8, 7, 0]);
+        let rgba = argb32_premul_to_rgba(&src, 3, 1, 16).unwrap();
+        assert_eq!(&rgba[0..4], &[255, 0, 0, 128]);
+        assert_eq!(&rgba[4..8], &[0, 0, 255, 255]);
+        assert_eq!(&rgba[8..12], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn parses_kscreen_doctor_outputs() {
+        let text = r#"{
+            "outputs": [
+                {
+                    "id": 42,
+                    "name": "HDMI-A-2",
+                    "pos": {"x": 0, "y": 0},
+                    "size": {"width": 2560, "height": 1440},
+                    "scale": 1.0,
+                    "rotation": 1,
+                    "connected": true,
+                    "enabled": true,
+                    "priority": 1
+                },
+                {
+                    "id": 7,
+                    "name": "DP-1",
+                    "pos": {"x": 2560, "y": 0},
+                    "size": {"width": 2800, "height": 1440},
+                    "scale": 1.25,
+                    "rotation": 1,
+                    "connected": true,
+                    "enabled": true,
+                    "priority": 2
+                },
+                {
+                    "id": 8,
+                    "name": "DP-2",
+                    "pos": {"x": -1920, "y": -100},
+                    "size": {"width": 1440, "height": 2560},
+                    "scale": 2,
+                    "rotation": 2,
+                    "connected": true,
+                    "enabled": false,
+                    "priority": 3
+                },
+                {
+                    "id": 9,
+                    "name": "eDP-1",
+                    "connected": false,
+                    "enabled": true,
+                    "pos": {"x": 0, "y": 0},
+                    "size": {"width": 1920, "height": 1080},
+                    "scale": 1
+                },
+                {
+                    "name": "VGA-1",
+                    "connected": true,
+                    "enabled": true,
+                    "pos": {"x": 0, "y": 0},
+                    "size": {"width": 0, "height": 0},
+                    "scale": 1
+                }
+            ]
+        }"#;
+        let mons = parse_kscreen_doctor(text).unwrap();
+        assert_eq!(mons.len(), 2);
+        assert_eq!(mons[0].name, "HDMI-A-2");
+        assert_eq!(mons[0].id, "42");
+        assert!(mons[0].primary);
+        assert_eq!((mons[0].width, mons[0].height), (2560, 1440));
+        assert_eq!(mons[1].name, "DP-1");
+        assert_eq!(mons[1].x, 2560);
+        assert!((mons[1].scale_factor - 1.25).abs() < f64::EPSILON);
+        assert!(!mons[1].primary);
+        let joined = join_kscreen_with_eis(
+            &mons,
+            &[eis("DP-1", 2000, 10, 2240, 1152), eis("HDMI-A-2", 0, 0, 2560, 1440)],
+        );
+        assert_eq!(joined[0].name, "DP-1");
+        assert_eq!(joined[0].x, 2000);
+        assert_eq!(joined[0].width, 2800);
+        assert!((joined[0].scale_factor - 1.25).abs() < f64::EPSILON);
+        assert_eq!(joined[1].name, "HDMI-A-2");
+        assert!(joined[1].primary);
+        assert_eq!(
+            plan_eis_text(true, "é", |_| None).unwrap(),
+            EisTextPlan::Text
+        );
+        assert_eq!(
+            plan_eis_text(false, "ab", |ch| match ch {
+                'a' => Some(30),
+                'b' => Some(48),
+                _ => None,
+            })
+            .unwrap(),
+            EisTextPlan::Keycodes(vec![30, 48])
+        );
+        assert!(plan_eis_text(false, "é", |_| None).unwrap_err().contains("missing"));
+    }
+
+    #[test]
+    fn spectacle_argv() {
+        assert_eq!(
+            super::spectacle_argv("/tmp/grokhub-shot.png", None),
+            vec![
+                "spectacle".to_string(),
+                "-b".into(),
+                "-n".into(),
+                "-f".into(),
+                "-o".into(),
+                "/tmp/grokhub-shot.png".into(),
+            ]
+        );
+        assert_eq!(
+            super::spectacle_argv("/tmp/out.png", Some(2)),
+            vec![
+                "spectacle", "-b", "-n", "-f", "-o", "/tmp/out.png", "-s", "2"
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+        );
+        assert!(spectacle_help_supports_screen(
+            "Usage: spectacle -b -n -f -o file -s, --screen <index>"
+        ));
+        assert!(!spectacle_help_supports_screen("Usage: spectacle -b -n -f -o file"));
+        assert_eq!(
+            monitor_index(
+                &[mon("HDMI-A-2", 0, 0, 100, 100, 1.0, true), mon("DP-1", 100, 0, 100, 100, 1.0, false)],
+                "DP-1"
+            ),
+            Some(1)
+        );
+        assert_eq!(monitor_index(&[mon("a", 0, 0, 1, 1, 1.0, true)], "all"), None);
+    }
+
+    #[test]
+    fn uinput_abs_device_spans_the_output_union() {
+        let mons = [
+            mon("HDMI-A-2", 0, 0, 2560, 1440, 1.0, true),
+            mon("DP-1", 2560, 0, 2800, 1440, 1.0, false),
+            mon("DP-2", 5360, 0, 1920, 1440, 1.0, false),
+        ];
+        let desc = uinput_abs_descriptor(&mons).unwrap();
+        assert_eq!(desc.name, "GrokHub absolute pointer");
+        assert_eq!(desc.width, 7280);
+        assert_eq!(desc.height, 1440);
+        assert_eq!(desc.origin_x, 0);
+        assert_eq!(desc.origin_y, 0);
+        assert_eq!(desc.abs_x.minimum, 0);
+        assert_eq!(desc.abs_x.maximum, 7279);
+        assert_eq!(desc.abs_y.maximum, 1439);
+        assert_eq!(
+            (desc.abs_x.maximum - desc.abs_x.minimum + 1) as u32,
+            desc.width
+        );
+        assert_eq!(map_point_to_uinput(&desc, 10, 20), (10, 20));
+        assert_eq!(map_point_to_uinput(&desc, 2560, 0), (2560, 0));
+        assert_eq!(map_point_to_uinput(&desc, 5360 + 100, 10), (5460, 10));
+        assert_eq!(map_point_to_uinput(&desc, 8000, 2000), (7279, 1439));
+
+        let shifted = [
+            mon("left", -1920, -100, 1920, 1080, 1.0, false),
+            mon("main", 0, 0, 2560, 1440, 1.0, true),
+        ];
+        let desc = uinput_abs_descriptor(&shifted).unwrap();
+        assert_eq!(desc.origin_x, -1920);
+        assert_eq!(desc.origin_y, -100);
+        assert_eq!(map_point_to_uinput(&desc, -1920, -100), (0, 0));
+        assert_eq!(map_point_to_uinput(&desc, 0, 0), (1920, 100));
+        assert!(uinput_access_denied_message().contains("TAG+=\"uaccess\""));
+        assert!(uinput_access_denied_message().contains("/dev/uinput"));
+    }
+
+    #[test]
+    fn broker_protocol_round_trip() {
+        let geom = ShotGeom {
+            id: "m".into(),
+            x: -1920,
+            y: 0,
+            physical_w: 1920,
+            physical_h: 1080,
+            scale_factor: 1.0,
+            image_w: 1920,
+            image_h: 1080,
+        };
+        let requests = vec![
+            DeskRequest::ListMonitors { id: 1 },
+            DeskRequest::Screenshot {
+                id: 2,
+                monitor: "HDMI-A-2".into(),
+            },
+            DeskRequest::MoveAbs { id: 3, x: 4, y: 5 },
+            DeskRequest::MoveOn {
+                id: 4,
+                geom: geom.clone(),
+                x: 8,
+                y: 9,
+            },
+            DeskRequest::Button {
+                id: 5,
+                button: MouseButton::Right,
+                down: true,
+            },
+            DeskRequest::Scroll { id: 6, dx: -1, dy: 2 },
+            DeskRequest::TypeText {
+                id: 7,
+                text: "hi".into(),
+            },
+            DeskRequest::Key {
+                id: 8,
+                keys: "ctrl+a".into(),
+            },
+            DeskRequest::Release { id: 9 },
+            DeskRequest::Locked { id: 10 },
+            DeskRequest::Status { id: 11 },
+            DeskRequest::Probe { id: 12 },
+        ];
+        for req in &requests {
+            let line = encode_desk_request(req).unwrap();
+            assert!(!line.contains("enabled"), "{line}");
+            assert!(!line.contains('\n'));
+            assert_eq!(&decode_desk_request(&line).unwrap(), req);
+        }
+        let full = DeskResponse {
+            id: 3,
+            ok: true,
+            error: Some("nope".into()),
+            exit: true,
+            monitors: Some(vec![mon("HDMI-A-2", 0, 0, 10, 10, 1.0, true)]),
+            image_b64: Some(b64(&[1, 2, 3])),
+            mime: Some("image/png".into()),
+            geom: Some(geom),
+            locked: Some(false),
+            input: Some(input_route_label(InputRouteId::Libei).into()),
+            capture: Some(capture_route_label(CaptureRouteId::ScreenShot2).into()),
+            note: Some("imprecise".into()),
+            report: Some("offset not measured".into()),
+        };
+        let encoded = encode_desk_response(&full).unwrap();
+        assert_eq!(decode_desk_response(&encoded).unwrap(), full);
+        let bare = DeskResponse::bare(9);
+        let bare_line = encode_desk_response(&bare).unwrap();
+        assert!(!bare_line.contains("image_b64"));
+        assert_eq!(decode_desk_response(&bare_line).unwrap(), bare);
+        assert_eq!(desk_b64_decode(&b64(b"Man")).unwrap(), b"Man");
+        assert!(desk_b64_decode("****").is_err());
+        assert!(peer_uid_allowed(1000, 1000));
+        assert!(!peer_uid_allowed(1000, 0));
+        assert_eq!(
+            input_route_order(),
+            &[
+                InputRouteId::Libei,
+                InputRouteId::Notify,
+                InputRouteId::Uinput,
+                InputRouteId::Ydotool
+            ]
+        );
+        assert_eq!(
+            capture_route_order(),
+            &[
+                CaptureRouteId::ScreenShot2,
+                CaptureRouteId::Spectacle,
+                CaptureRouteId::PortalScreenshot
+            ]
+        );
+        assert_eq!(
+            desktop_control_status(
+                input_route_label(InputRouteId::Libei),
+                capture_route_label(CaptureRouteId::ScreenShot2)
+            ),
+            "Input: RemoteDesktop portal (libei)\nCapture: KWin ScreenShot2"
+        );
+    }
+
+    struct GateFake {
+        locked: bool,
+        released: u32,
+        suspended: u32,
+        moves: u32,
+        shots: u32,
+        lists: u32,
+    }
+
+    impl DesktopBackend for GateFake {
+        fn list_monitors(&mut self) -> Result<Vec<MonitorGeom>, String> {
+            self.lists += 1;
+            Ok(vec![mon("main", 0, 0, 200, 100, 1.0, true)])
+        }
+        fn screenshot(&mut self, _monitor: &str) -> Result<CapturedShot, String> {
+            self.shots += 1;
+            Ok(CapturedShot {
+                bytes: vec![9],
+                mime: "image/png".into(),
+                geom: shot(0, 0, 200, 100, 200, 100, 1.0),
+            })
+        }
+        fn move_abs(&mut self, _x: i32, _y: i32) -> Result<(), String> {
+            self.moves += 1;
+            Ok(())
+        }
+        fn button(&mut self, _button: MouseButton, _down: bool) -> Result<(), String> {
+            Ok(())
+        }
+        fn scroll(&mut self, _dx: i32, _dy: i32) -> Result<(), String> {
+            Ok(())
+        }
+        fn type_text(&mut self, _text: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn key_combo(&mut self, _combo: &KeyCombo) -> Result<(), String> {
+            Ok(())
+        }
+        fn is_locked(&mut self) -> bool {
+            self.locked
+        }
+        fn release_input(&mut self) {
+            self.released += 1;
+        }
+        fn suspend_input(&mut self) {
+            self.suspended += 1;
+        }
+    }
+
+    #[test]
+    fn broker_refuses_when_halted_or_switch_off() {
+        let mut fake = GateFake {
+            locked: false,
+            released: 0,
+            suspended: 0,
+            moves: 0,
+            shots: 0,
+            lists: 0,
+        };
+        let off = apply_desk_request(
+            &mut fake,
+            CallGate {
+                enabled: false,
+                halted: false,
+            },
+            &DeskRequest::Screenshot {
+                id: 1,
+                monitor: "all".into(),
+            },
+        );
+        assert!(!off.ok);
+        assert!(!off.exit);
+        assert_eq!(off.error.as_deref(), Some(OFF_MSG));
+        assert_eq!(fake.suspended, 1);
+        assert_eq!(fake.shots, 0);
+
+        let halted = apply_desk_request(
+            &mut fake,
+            CallGate {
+                enabled: true,
+                halted: true,
+            },
+            &DeskRequest::MoveAbs { id: 2, x: 1, y: 1 },
+        );
+        assert!(!halted.ok);
+        assert!(halted.exit);
+        assert_eq!(halted.error.as_deref(), Some(HALT_MSG));
+        assert_eq!(fake.released, 1);
+        assert_eq!(fake.moves, 0);
+
+        fake.locked = true;
+        let locked = apply_desk_request(
+            &mut fake,
+            CallGate {
+                enabled: true,
+                halted: false,
+            },
+            &DeskRequest::Probe { id: 3 },
+        );
+        assert_eq!(locked.error.as_deref(), Some(LOCK_MSG));
+        assert_eq!(fake.released, 2);
+        assert_eq!(fake.moves, 0);
+
+        let shot = apply_desk_request(
+            &mut fake,
+            CallGate {
+                enabled: true,
+                halted: false,
+            },
+            &DeskRequest::ListMonitors { id: 4 },
+        );
+        assert!(shot.ok);
+        assert_eq!(fake.lists, 1);
+        assert_eq!(fake.released, 2);
     }
 }
