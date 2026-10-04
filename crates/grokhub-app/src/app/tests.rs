@@ -23725,8 +23725,11 @@ fn pulse_replaces_ideas_on_the_rail_and_old_links_still_land() {
         texts.iter().any(|t| t == "Ideas") && texts.iter().any(|t| t == "Feed"),
         "{texts:?}"
     );
+    // Pulse opens on Feed; its empty line says how to steer it.
     assert!(
-        texts.iter().any(|t| t == "Nothing actionable. Heartbeat is watching. Run, snooze, or dismiss a card and the next ones rank tighter."),
+        texts
+            .iter()
+            .any(|t| t == "No posts yet. Tell me what to watch in Feed instructions."),
         "{texts:?}"
     );
     assert!(
@@ -23805,6 +23808,7 @@ fn pulse_ideas_group_by_category_in_a_fixed_order() {
             (Some("More ideas"), vec!["idea-photos".to_string()]),
         ]
     );
+    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Ideas;
     let texts = pulse_texts(cabin, 2400.0);
     let at = |needle: &str| {
         texts
@@ -23813,10 +23817,11 @@ fn pulse_ideas_group_by_category_in_a_fixed_order() {
             .unwrap_or_else(|| panic!("missing {needle:?} in {texts:?}"))
     };
     let order = [
+        at("Up next"),
         at("I can pay your TXU bill before Friday"),
         at("Productivity"),
         at("I can draft your standup"),
-        at("I can run \"summarize the workboard\" for you on a schedule"),
+        at("I can summarize the workboard automatically"),
         at("Relationships"),
         at("I can plan a dinner with family"),
         at("Health & Fitness"),
@@ -24053,7 +24058,8 @@ fn pulse_migrates_old_home_and_ideas_data_once() {
         pulse_ids(cabin, now),
         vec![
             ("idea-board".to_string(), 400, "Do"),
-            ("idea-pin".to_string(), 400, "Do"),
+            // A reminder is scheduled by Apply, so it ranks as Automate (base 140).
+            ("idea-pin".to_string(), 390, "Automate"),
             ("run-1".to_string(), 230, "Watch"),
             ("digest-1".to_string(), 110, "Watch"),
         ]
@@ -24093,13 +24099,11 @@ fn pulse_feed_shows_posts_with_cached_source_images_and_a_placeholder() {
     let texts = pulse_texts(cabin, 1200.0);
     for want in [
         "Rust 1.92 ships",
-        "59m ago",
-        "rust-lang.org · Watch",
+        "rust-lang.org · 59m ago",
         "Faster incremental builds and a new lint.",
         "Read at rust-lang.org",
         "Backup ran",
-        "3h ago",
-        "Automation run · Watch",
+        "Automation run · 3h ago",
         "Discuss",
         "Feed instructions",
     ] {
@@ -24124,6 +24128,14 @@ fn pulse_feed_shows_posts_with_cached_source_images_and_a_placeholder() {
         cabin.pulse_view_texture_size("https://cdn.example.com/missing.jpg"),
         None,
         "no file: a placeholder"
+    );
+    assert!(
+        !cabin.pulse_image_failed("https://cdn.example.com/missing.jpg"),
+        "not on disk yet: still loading, so the slot stays"
+    );
+    assert!(
+        !texts.iter().any(|t| t.contains("· Watch")),
+        "the source line names the source, not the card type: {texts:?}"
     );
 
     // Like: a ledger line and the heart stays on.
@@ -24154,7 +24166,9 @@ fn pulse_feed_instructions_sheet_edits_the_prompt_for_future_posts() {
         "Feed instructions",
         "Save",
         "Cancel",
-        "0 of 3 likes and skips toward the next rewrite.",
+        "×",
+        "I'll update these after 3 more likes or skips.",
+        "Ctrl+Enter to save · Esc to cancel",
     ] {
         assert!(
             texts.iter().any(|t| t == want),
@@ -24188,4 +24202,314 @@ fn pulse_feed_instructions_sheet_edits_the_prompt_for_future_posts() {
     assert!(native.contains(
         "grokhub_core::pulse::feed_prompt(&self.digest_steer, &self.cfg.feed_instructions)"
     ));
+}
+
+/// Text shapes with their left edge, for "which comes first" checks.
+fn pulse_text_at(cabin: &mut super::Cabin, h: f32, events: Vec<egui::Event>) -> Vec<(String, f32)> {
+    let _paint = crate::theme::hold_paint_test();
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let screen = Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO,
+        egui::vec2(1400.0, h),
+    ));
+    let mut out = Vec::new();
+    // First pass carries the keys; the second paints what they did.
+    for events in [events, Vec::new()] {
+        let raw = egui::RawInput {
+            screen_rect: screen,
+            events,
+            ..Default::default()
+        };
+        out.clear();
+        let shapes = crate::theme::test_pass(&ctx, raw, |ui| cabin.ui_pulse(ui)).shapes;
+        for clipped in &shapes {
+            if let egui::Shape::Text(t) = &clipped.shape {
+                out.push((t.galley.job.text.clone(), t.pos.x));
+            }
+        }
+    }
+    out
+}
+
+fn pulse_key_event(key: egui::Key) -> egui::Event {
+    egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    }
+}
+
+#[test]
+fn pulse_opens_on_feed_and_the_tabs_read_feed_then_ideas() {
+    assert_eq!(
+        super::pulse_ui::PulseView::default().tab,
+        super::pulse_ui::PulseTab::Feed
+    );
+    let mut quiet = QuietCabin::boot("pulse-tabs");
+    let cabin = &mut quiet.cabin;
+    assert_eq!(cabin.pulse_view.tab, super::pulse_ui::PulseTab::Feed);
+    assert_eq!(
+        super::pulse_ui::PulseTab::ORDER.map(|t| t.label()),
+        ["Feed", "Ideas"]
+    );
+    let x = |texts: &[(String, f32)], needle: &str| {
+        texts
+            .iter()
+            .find(|(t, _)| t == needle)
+            .map(|(_, x)| *x)
+            .unwrap_or_else(|| panic!("missing {needle:?} in {texts:?}"))
+    };
+    let feed = pulse_text_at(cabin, 900.0, Vec::new());
+    let (feed_x, ideas_x) = (x(&feed, "Feed"), x(&feed, "Ideas"));
+    assert!(feed_x < ideas_x, "Feed sits left of Ideas: {feed:?}");
+    assert!(feed.iter().any(|(t, _)| t == "Feed instructions"));
+    // The switch stays put when the tab's action changes (one fixed slot).
+    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Ideas;
+    let ideas = pulse_text_at(cabin, 900.0, Vec::new());
+    assert_eq!(
+        (x(&ideas, "Feed"), x(&ideas, "Ideas")),
+        (feed_x, ideas_x),
+        "the Feed | Ideas switch does not move between tabs"
+    );
+    assert!(ideas.iter().any(|(t, _)| t == "Suggest ideas"));
+    assert!(!ideas.iter().any(|(t, _)| t == "Feed instructions"));
+    assert_eq!(super::pulse_ui::HEADER_SLOT_W, 150.0);
+}
+
+#[test]
+fn pulse_rows_show_run_snooze_dismiss_on_focus_and_keys_act_on_the_focused_row() {
+    let mut quiet = QuietCabin::boot("pulse-keys");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    cabin.board.clear();
+    cabin.skill_list.clear();
+    cabin.updates.push(pulse_idea(
+        "idea-trail",
+        "Trail map",
+        "print the trail map",
+        10,
+    ));
+    cabin.updates.push(pulse_idea(
+        "idea-beach",
+        "Beach photos",
+        "sort the beach photos",
+        11,
+    ));
+    cabin.updates.push(pulse_idea(
+        "idea-city",
+        "City guide",
+        "save the city guide",
+        12,
+    ));
+    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Ideas;
+    let rows: Vec<String> = cabin
+        .pulse_groups(now_ms())
+        .into_iter()
+        .flat_map(|(_, rows)| rows.into_iter().map(|r| r.id))
+        .collect();
+    assert_eq!(rows, vec!["idea-city", "idea-beach", "idea-trail"]);
+    let count =
+        |texts: &[(String, f32)], needle: &str| texts.iter().filter(|(t, _)| t == needle).count();
+
+    // At rest: no inline actions, just ··· on each row.
+    let rest = pulse_text_at(cabin, 1200.0, Vec::new());
+    assert_eq!(
+        (
+            count(&rest, "Run"),
+            count(&rest, "Snooze"),
+            count(&rest, "Dismiss")
+        ),
+        (0, 0, 0)
+    );
+    assert_eq!(count(&rest, "···"), 3);
+
+    // Down focuses the first row; its Run · Snooze · Dismiss show inline.
+    let down = pulse_text_at(cabin, 1200.0, vec![pulse_key_event(egui::Key::ArrowDown)]);
+    assert_eq!(cabin.pulse_view.focus.as_deref(), Some("idea-city"));
+    assert_eq!(
+        (
+            count(&down, "Run"),
+            count(&down, "Snooze"),
+            count(&down, "Dismiss")
+        ),
+        (1, 1, 1)
+    );
+    // J moves down, K back up.
+    assert_eq!(cabin.pulse_key(egui::Key::J, &rows), None);
+    assert_eq!(cabin.pulse_view.focus.as_deref(), Some("idea-beach"));
+    assert_eq!(cabin.pulse_key(egui::Key::K, &rows), None);
+    assert_eq!(cabin.pulse_view.focus.as_deref(), Some("idea-city"));
+    // R runs the focused row; S snoozes it and focus moves on.
+    assert_eq!(
+        cabin.pulse_key(egui::Key::R, &rows),
+        Some(super::pulse_ui::PulseAct::Run("idea-city".into()))
+    );
+    assert_eq!(
+        cabin.pulse_key(egui::Key::S, &rows),
+        Some(super::pulse_ui::PulseAct::Snooze("idea-city".into()))
+    );
+    assert_eq!(cabin.pulse_view.focus.as_deref(), Some("idea-beach"));
+
+    // D through the page: the focused row goes, the ledger says so, focus moves on.
+    let _ = pulse_text_at(cabin, 1200.0, vec![pulse_key_event(egui::Key::D)]);
+    assert!(!cabin.updates.iter().any(|c| c.id == "idea-beach"));
+    assert!(
+        pulse_memory().contains("pulse: dismissed \"Beach photos\" reason=dismiss"),
+        "{}",
+        pulse_memory()
+    );
+    assert_eq!(cabin.pulse_view.focus.as_deref(), Some("idea-trail"));
+
+    // N through the page: Not this on the last row, and focus steps back.
+    let _ = pulse_text_at(cabin, 1200.0, vec![pulse_key_event(egui::Key::N)]);
+    assert!(!cabin.updates.iter().any(|c| c.id == "idea-trail"));
+    assert!(
+        pulse_memory().contains("pulse: dismissed \"Trail map\" reason=not-this"),
+        "{}",
+        pulse_memory()
+    );
+    assert_eq!(cabin.pulse_view.focus.as_deref(), Some("idea-city"));
+
+    // Esc lets go; with nothing focused R does nothing.
+    let left = vec!["idea-city".to_string()];
+    assert_eq!(cabin.pulse_key(egui::Key::Escape, &left), None);
+    assert_eq!(cabin.pulse_view.focus, None);
+    assert_eq!(cabin.pulse_key(egui::Key::R, &left), None);
+}
+
+#[test]
+fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_rows() {
+    let mut quiet = QuietCabin::boot("pulse-empty");
+    let cabin = &mut quiet.cabin;
+    cabin.updates.clear();
+    cabin.board.clear();
+    cabin.cfg.native_engine = false;
+    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Ideas;
+    let empty = pulse_texts(cabin, 900.0);
+    assert!(
+        empty
+            .iter()
+            .any(|t| t == "No ideas yet. I'll add one when I spot something worth doing."),
+        "{empty:?}"
+    );
+    assert!(!empty.iter().any(|t| t.contains("Thinking")), "{empty:?}");
+    cabin.suggest_ideas_with(false);
+    assert!(cabin.pulse_view.signin_note);
+    assert_eq!(cabin.status, "Connect Grok in Settings to get ideas");
+    let signed_out = pulse_texts(cabin, 900.0);
+    for want in ["Sign in to Grok to get ideas.", "Open Settings"] {
+        assert!(
+            signed_out.iter().any(|t| t == want),
+            "missing {want:?} in {signed_out:?}"
+        );
+    }
+    // While a suggestion call runs: placeholder rows, and no empty line beside them.
+    let (_tx, rx) = mpsc::channel::<String>();
+    cabin.ideas_rx = Some((rx, Default::default()));
+    let loading = pulse_texts(cabin, 900.0);
+    assert!(
+        loading
+            .iter()
+            .any(|t| t == "Looking for ideas in your recent work…"),
+        "{loading:?}"
+    );
+    assert!(loading.iter().any(|t| t == "Suggesting…"), "{loading:?}");
+    assert!(
+        !loading
+            .iter()
+            .any(|t| t.starts_with("No ideas yet") || t.ends_with("Nothing to do.")),
+        "{loading:?}"
+    );
+    cabin.ideas_rx = None;
+}
+
+#[test]
+fn small_meta_text_is_readable_and_search_shows_its_key() {
+    assert_eq!(
+        crate::theme::SUBTLE,
+        egui::Color32::from_rgb(0x8b, 0x90, 0x96)
+    );
+    assert_eq!(super::sidebar::SEARCH_KEY_HINT, "Ctrl+K");
+    assert!(grokhub_core::shortcut_help().contains("Ctrl+K"));
+}
+
+#[test]
+fn the_palette_closes_on_navigation_and_uses_the_sidebar_names() {
+    let mut quiet = QuietCabin::boot("palette-close");
+    let cabin = &mut quiet.cabin;
+    let _paint = crate::theme::hold_paint_test();
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let raw = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(1400.0, 900.0),
+        )),
+        ..Default::default()
+    };
+    cabin.nav = super::Nav::Chat;
+    cabin.open_palette();
+    let mut texts = Vec::new();
+    for _ in 0..2 {
+        texts.clear();
+        let out = crate::theme::test_pass(&ctx, raw.clone(), |ui| cabin.ui_palette(ui.ctx()));
+        for clipped in &out.shapes {
+            collect_shape_text(&clipped.shape, &mut texts);
+        }
+    }
+    for want in [
+        "Search pages and commands",
+        "Automations",
+        "Skills and Connectors",
+        "Pulse",
+    ] {
+        assert!(
+            texts.iter().any(|t| t == want),
+            "missing {want:?} in {texts:?}"
+        );
+    }
+    assert!(
+        !texts
+            .iter()
+            .any(|t| t == "Palette" || t == "Go to…" || t == "Night"),
+        "{texts:?}"
+    );
+    assert!(cabin.palette_open);
+    let _ = crate::theme::test_pass(&ctx, raw.clone(), |ui| cabin.ui_palette(ui.ctx()));
+    assert!(cabin.palette_open, "nothing changed: it stays open");
+    // A sidebar click changes the page underneath: the palette goes.
+    cabin.nav = super::Nav::Pulse;
+    let _ = crate::theme::test_pass(&ctx, raw.clone(), |ui| cabin.ui_palette(ui.ctx()));
+    assert!(!cabin.palette_open);
+    // A click outside it closes it too.
+    cabin.open_palette();
+    let _ = crate::theme::test_pass(&ctx, raw.clone(), |ui| cabin.ui_palette(ui.ctx()));
+    let at = egui::pos2(1350.0, 850.0);
+    let click = egui::RawInput {
+        events: vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ],
+        ..raw.clone()
+    };
+    let _ = crate::theme::test_pass(&ctx, click, |ui| cabin.ui_palette(ui.ctx()));
+    let release = egui::RawInput {
+        events: vec![egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }],
+        ..raw
+    };
+    let _ = crate::theme::test_pass(&ctx, release, |ui| cabin.ui_palette(ui.ctx()));
+    assert!(!cabin.palette_open, "an outside click closes the palette");
 }

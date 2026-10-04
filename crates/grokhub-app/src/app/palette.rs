@@ -72,6 +72,19 @@ impl Cabin {
     pub(super) fn ui_palette(&mut self, ctx: &egui::Context) {
         self.tick_palette_search(ctx);
         let mut close = false;
+        // Picking a page anywhere else closes the palette: a nav change since it
+        // opened, or a click outside it (not the click that opened it).
+        let opening = self.palette_focus;
+        let nav_key = egui::Id::new("palette-opened-on");
+        let here = self.nav_id().to_string();
+        if opening {
+            ctx.data_mut(|d| d.insert_temp(nav_key, here.clone()));
+        } else if ctx
+            .data(|d| d.get_temp::<String>(nav_key))
+            .is_some_and(|was| was != here)
+        {
+            close = true;
+        }
         let mut picked: Option<String> = None;
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             close = true;
@@ -80,7 +93,8 @@ impl Cabin {
         let files = self.palette_files.clone();
         let root = self.palette_files_root.clone();
         let n = cmds.len() + files.len();
-        egui::Window::new("Palette")
+        let shown = egui::Window::new("Search")
+            .title_bar(false)
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_TOP, [0.0, 48.0])
@@ -88,7 +102,7 @@ impl Cabin {
                 ui.set_min_width(360.0);
                 let edit = ui.add(
                     egui::TextEdit::singleline(&mut self.palette_q)
-                        .hint_text(crate::theme::hint("Go to…"))
+                        .hint_text(crate::theme::hint("Search pages and commands"))
                         .desired_width(360.0),
                 );
                 if self.palette_focus {
@@ -130,6 +144,17 @@ impl Cabin {
                     close = true;
                 }
             });
+        if !opening {
+            if let Some(win) = shown.map(|s| s.response.rect) {
+                let outside = ctx.input(|i| {
+                    i.pointer.any_click()
+                        && i.pointer.interact_pos().is_some_and(|p| !win.contains(p))
+                });
+                if outside {
+                    close = true;
+                }
+            }
+        }
         if let Some(a) = picked {
             self.run_palette(&a);
         }

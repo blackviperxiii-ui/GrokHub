@@ -1233,4 +1233,65 @@ mod tests {
         set_unattended_client_for_test(None);
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn pulse_idea_titles_come_from_the_model_capped_at_70_with_a_plain_fallback() {
+        let (_lock, root, _env) = isolated("pulse-titles");
+        std::fs::create_dir_all(crate::config::memory_dir()).unwrap();
+        std::fs::write(
+            crate::config::memory_dir().join("USER.md"),
+            "- Keeps the GrokHub cargo suite green before standup each morning.\n- Ships a GrokHub release most weeks and writes the notes by hand.\n- Has a car registration renewal coming up at the county office.\n",
+        )
+        .unwrap();
+        let reply = [
+            "IDEA: automation | I can run your GrokHub tests before you sit down | Your tests are done before you start. | You keep the suite green before standup. | Every weekday at 8 the cabin runs cargo test in ~/GrokHub and posts failures to your feed. | every weekday at 8, run cargo test in ~/GrokHub and summarize failures",
+            "IDEA: reminder | I can remind you about the county car registration renewal before it lapses this month | A nudge before the renewal lapses. | Your renewal is coming up. | A reminder a week before the county renewal date, with the office hours. | every monday at 9, remind me to renew the car registration",
+            "IDEA: skill | Release notes from merged PRs | Notes drafted from what merged. | You write every release's notes by hand. | A saved procedure that reads the merged pull requests and drafts grouped notes for your review. | draft release notes from the merged pull requests since the last tag",
+        ]
+        .join("\n");
+        let say = Arc::new(Say {
+            text: std::sync::Mutex::new(reply),
+            calls: AtomicUsize::new(0),
+        });
+        set_unattended_client_for_test(Some(say.clone()));
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.native_engine = true;
+        cabin.updates.clear();
+        cabin.maybe_suggest_ideas(true);
+        wait_until(|| {
+            cabin.poll_ideas();
+            cabin.ideas_rx.is_none()
+        });
+        assert_eq!(say.calls.load(Ordering::SeqCst), 1);
+        let mut rows: Vec<(String, String)> = cabin
+            .updates
+            .iter()
+            .filter(|c| c.kind == grokhub_core::UpdateKind::Idea)
+            .map(|c| (c.title.clone(), grokhub_core::pulse::i_can_title(c)))
+            .collect();
+        rows.sort();
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "I can run your GrokHub tests before you sit down".to_string(),
+                    "I can run your GrokHub tests before you sit down".to_string()
+                ),
+                (
+                    "Release notes from merged PRs".to_string(),
+                    "I can learn your release notes from merged PRs".to_string()
+                ),
+            ],
+            "the model's own line is kept as written; a title over 70 is dropped; an old-style title gets the plain fallback"
+        );
+        for (_, line) in &rows {
+            assert!(
+                line.chars().count() <= grokhub_core::pulse::I_CAN_MAX,
+                "{line}"
+            );
+            assert!(!line.contains("help with") && !line.contains('"'), "{line}");
+        }
+        set_unattended_client_for_test(None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

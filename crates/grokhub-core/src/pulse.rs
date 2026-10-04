@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ideas::{same_topic, IdeaKind};
+use crate::ideas::same_topic;
 use crate::update_feed::{
     post_update, public_http_url, FeedPulse, UpdateCard, UpdateKind, UpdateStatus,
 };
@@ -47,8 +47,16 @@ fn is_false(v: &bool) -> bool {
 
 pub const PULSE_TITLE: &str = "Pulse";
 pub const PULSE_SUBTITLE: &str = "What I'd do next, from how you use the cabin.";
-pub const PULSE_EMPTY: &str =
-    "Nothing actionable. Heartbeat is watching. Run, snooze, or dismiss a card and the next ones rank tighter.";
+/// Ideas with nothing to show and nothing running.
+pub const IDEAS_EMPTY: &str = "No ideas yet. I'll add one when I spot something worth doing.";
+/// Feed with nothing to show.
+pub const FEED_EMPTY: &str = "No posts yet. Tell me what to watch in Feed instructions.";
+/// Ideas while a suggestion call is running: shown with placeholder rows.
+pub const IDEAS_LOADING: &str = "Looking for ideas in your recent work…";
+/// Suggest ideas pressed with no Grok sign-in or key.
+pub const IDEAS_SIGN_IN: &str = "Sign in to Grok to get ideas.";
+/// The longest bold line on an Ideas row.
+pub const I_CAN_MAX: usize = 70;
 
 /// "Last pulse 2m ago. Nothing to do." for the silence line.
 pub fn silence_line(last_pulse_ms: u64, now_ms: u64) -> String {
@@ -331,16 +339,13 @@ pub fn pulse_type(card: &UpdateCard) -> PulseType {
         // The quiet-hours digest only reports what happened.
         UpdateKind::Suggestion if card.source_id == QUIET_DIGEST_SOURCE => PulseType::Watch,
         UpdateKind::Suggestion => PulseType::Do,
-        UpdateKind::Idea => {
-            if card.skill.is_some() {
-                return PulseType::Learn;
-            }
-            match card.idea_kind {
-                Some(IdeaKind::Automation) => PulseType::Automate,
-                Some(IdeaKind::Skill) => PulseType::Learn,
-                Some(IdeaKind::Reminder) | Some(IdeaKind::Try) | None => PulseType::Do,
-            }
-        }
+        // Same source as the opened card and Apply: a reminder is scheduled, so
+        // it reads Automate on the row too.
+        UpdateKind::Idea => match card.idea_type_label() {
+            "Skill" => PulseType::Learn,
+            "Automation" => PulseType::Automate,
+            _ => PulseType::Do,
+        },
     }
 }
 
@@ -353,34 +358,120 @@ pub fn is_idea_card(card: &UpdateCard) -> bool {
     ) && card.source_id != QUIET_DIGEST_SOURCE
 }
 
-/// The bold line on an Ideas row, always in the cabin's own voice: "I can …".
-/// A title that already speaks that way stays; otherwise the idea's action is
-/// turned toward you ("draft my standup" → "I can draft your standup").
+/// The bold line on an Ideas row, always in the cabin's own voice and at most
+/// `I_CAN_MAX` characters. The model writes it as the idea's title ("I can …");
+/// a card without one gets a plain line from its action: Do "I can {action}",
+/// Automate "I can {action} {cadence}", Learn "I can learn how you {action}".
 pub fn i_can_title(card: &UpdateCard) -> String {
     let title = card.title.trim();
     let lower = title.to_ascii_lowercase();
-    if ["i can ", "i'll ", "i will ", "let me ", "tell me "]
-        .iter()
-        .any(|p| lower.starts_with(p))
-    {
+    if lower.starts_with("i can ") && title.chars().count() <= I_CAN_MAX {
         return title.to_string();
     }
     let action = card.idea_action();
-    let action = action.trim().trim_end_matches('.');
-    let kind = pulse_type(card);
-    if kind == PulseType::Automate {
-        return format!("I can run \"{}\" for you on a schedule", lower_first(title));
+    let action = one_line(&action);
+    let what = if action.is_empty() || action.starts_with('/') {
+        lower_first(title.trim_end_matches('.'))
+    } else {
+        lower_first(&action)
+    };
+    let mut lines: Vec<String> = Vec::new();
+    match pulse_type(card) {
+        PulseType::Automate => {
+            if let Some((cadence, rest)) = split_cadence(&what) {
+                lines.push(format!("I can {} {cadence}", toward_you(&rest)));
+                if let Some((head, _)) = rest.split_once(" and ") {
+                    lines.push(format!("I can {} {cadence}", toward_you(head)));
+                }
+            }
+            // A schedule with no comma can't be split: the title says what it does.
+            let plain = if schedule_led(&what) {
+                lower_first(title.trim_end_matches('.'))
+            } else {
+                what.clone()
+            };
+            lines.push(format!("I can {} automatically", toward_you(&plain)));
+        }
+        PulseType::Learn => {
+            let t = lower_first(title.trim_end_matches('.'));
+            if !action.is_empty() {
+                lines.push(format!("I can learn how you {}", toward_you(&what)));
+            } else if t.split_whitespace().count() >= 3 {
+                lines.push(format!("I can learn how you {}", toward_you(&t)));
+            }
+            lines.push(format!("I can learn your {}", toward_you(&t)));
+        }
+        _ => {
+            lines.push(format!("I can {}", toward_you(&what)));
+            if let Some((head, _)) = what.split_once(" and ") {
+                lines.push(format!("I can {}", toward_you(head)));
+            }
+        }
     }
-    if kind == PulseType::Learn {
-        return format!(
-            "I can learn this and do it your way: {}",
-            lower_first(title)
-        );
+    let first = lines[0].clone();
+    lines
+        .into_iter()
+        .find(|l| l.chars().count() <= I_CAN_MAX)
+        .unwrap_or_else(|| clip_words(&first, I_CAN_MAX))
+}
+
+fn one_line(text: &str) -> String {
+    text.lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .trim_end_matches('.')
+        .to_string()
+}
+
+fn schedule_led(action: &str) -> bool {
+    let l = action.to_ascii_lowercase();
+    ["every ", "each ", "daily", "weekdays", "on weekdays"]
+        .iter()
+        .any(|p| l.starts_with(p))
+}
+
+/// "every weekday at 8, run the tests" → ("every weekday at 8", "run the tests").
+fn split_cadence(action: &str) -> Option<(String, String)> {
+    if !schedule_led(action) {
+        return None;
     }
-    if !action.is_empty() && action.chars().count() <= 90 && !action.contains('\n') {
-        return format!("I can {}", toward_you(&lower_first(action)));
+    let (cadence, rest) = action.split_once(',')?;
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return None;
     }
-    format!("I can help with {}", lower_first(title))
+    Some((cadence.trim().to_string(), lower_first(rest)))
+}
+
+/// Cut at a word so the line plus "…" fits in `max` characters.
+fn clip_words(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    for word in text.split(' ') {
+        let next = if out.is_empty() {
+            word.to_string()
+        } else {
+            format!("{out} {word}")
+        };
+        if next.chars().count() + 1 > max {
+            break;
+        }
+        out = next;
+    }
+    out.push('…');
+    out
+}
+
+/// The Snooze label for the time it is now: today before nine, else tomorrow.
+pub fn snooze_label(hour: u32) -> &'static str {
+    if hour < 9 {
+        "Snooze until 9 AM"
+    } else {
+        "Snooze until tomorrow 9 AM"
+    }
 }
 
 fn lower_first(text: &str) -> String {
@@ -1026,6 +1117,7 @@ pub fn migrate_to_pulse(cards: &mut [UpdateCard], pulse: &mut FeedPulse) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ideas::IdeaKind;
     use crate::update_feed::{
         automate_offer_card, automation_done_card, digest_card, idea_card, suggestion_card,
     };
@@ -1112,8 +1204,21 @@ mod tests {
         .collect();
         assert_eq!(
             got,
-            vec!["Automate", "Do", "Learn", "Do", "Do", "Automate", "Watch", "Watch"]
+            vec!["Automate", "Automate", "Learn", "Do", "Do", "Automate", "Watch", "Watch"]
         );
+        // The row and the opened card read the same type: one source.
+        for card in [&auto, &remind, &skill, &try_it] {
+            let row = pulse_type(card).label();
+            let opened = card.idea_type_label();
+            assert_eq!(
+                (row, opened),
+                match opened {
+                    "Automation" => ("Automate", "Automation"),
+                    "Skill" => ("Learn", "Skill"),
+                    _ => ("Do", "Suggestion"),
+                }
+            );
+        }
     }
 
     #[test]
@@ -1345,22 +1450,78 @@ mod tests {
         auto.idea_kind = Some(IdeaKind::Automation);
         assert_eq!(
             i_can_title(&auto),
-            "I can run \"summarize the workboard\" for you on a schedule"
+            "I can summarize the workboard automatically"
+        );
+        let mut tests = idea("t", "Morning test run", "", 1);
+        tests.idea_kind = Some(IdeaKind::Automation);
+        tests.prompt =
+            Some("every weekday at 8, run cargo test in ~/GrokHub and summarize failures".into());
+        assert_eq!(
+            i_can_title(&tests),
+            "I can run cargo test in ~/GrokHub every weekday at 8"
+        );
+        let mut board = idea("q", "Summarize the workboard", "", 1);
+        board.idea_kind = Some(IdeaKind::Automation);
+        board.prompt = Some("every weekday at 9 summarize the workboard".into());
+        assert_eq!(
+            i_can_title(&board),
+            "I can summarize the workboard automatically"
         );
         let mut learn = idea("c", "Release notes", "", 1);
         learn.idea_kind = Some(IdeaKind::Skill);
+        assert_eq!(i_can_title(&learn), "I can learn your release notes");
+        let mut walks = idea("w", "Turn my evening walks into a weekly habit", "", 1);
+        walks.idea_kind = Some(IdeaKind::Skill);
         assert_eq!(
-            i_can_title(&learn),
-            "I can learn this and do it your way: release notes"
+            i_can_title(&walks),
+            "I can learn how you turn your evening walks into a weekly habit"
         );
         assert_eq!(
             i_can_title(&idea("d", "I can stage the TXU bill", "", 1)),
             "I can stage the TXU bill"
         );
-        assert_eq!(
-            i_can_title(&idea("e", "PR triage", "", 1)),
-            "I can help with PR triage"
+        // A model line over 70 characters falls back to the action.
+        let mut long = idea(
+            "l",
+            "I can file the open notes from last night's review into the right project folders",
+            "",
+            1,
         );
+        long.prompt = Some("file the open notes from last night's review".into());
+        assert_eq!(
+            i_can_title(&long),
+            "I can file the open notes from last night's review"
+        );
+        // Nothing ever reads "I can help with …", and nothing runs past 70.
+        let mut wordy = idea("v", "Notes", "", 1);
+        wordy.prompt = Some(
+            "go through every open note from the last two weeks of reviews and file each one"
+                .into(),
+        );
+        assert_eq!(
+            i_can_title(&wordy),
+            "I can go through every open note from the last two weeks of reviews"
+        );
+        let mut long_one = idea("o", "Notes", "", 1);
+        long_one.prompt = Some(
+            "go through every open note from the last two weeks of reviews to file each one".into(),
+        );
+        let line = i_can_title(&long_one);
+        assert_eq!(
+            line,
+            "I can go through every open note from the last two weeks of reviews…"
+        );
+        assert_eq!(line.chars().count(), 68);
+        for card in [&c, &auto, &tests, &learn, &walks, &long, &wordy, &long_one] {
+            let t = i_can_title(card);
+            assert!(
+                t.starts_with("I can ") && t.chars().count() <= I_CAN_MAX,
+                "{t}"
+            );
+            assert!(!t.contains("help with") && !t.contains('"'), "{t}");
+        }
+        assert_eq!(snooze_label(8), "Snooze until 9 AM");
+        assert_eq!(snooze_label(14), "Snooze until tomorrow 9 AM");
         let mut held = vec![idea("x", "One", "", 1), idea("y", "Two", "", 2)];
         for card in &mut held {
             card.held = true;
