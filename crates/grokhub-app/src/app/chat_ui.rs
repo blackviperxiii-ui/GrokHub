@@ -1965,7 +1965,8 @@ impl Cabin {
         } else {
             0.0
         };
-        let feed_n = if pulse_on {
+        // The deck moved to Pulse (2.10.91). Settings → Behavior can bring it back.
+        let feed_n = if pulse_on && self.cfg.home_deck {
             home_feed_count(&self.updates, &self.cfg.feed_pulse, now_ms())
         } else {
             0

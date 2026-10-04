@@ -582,8 +582,8 @@ fn guide_chips(connected: bool) -> Vec<QuickChip> {
     ));
     out.push(chip(
         "guide-ideas",
-        "Show Ideas",
-        "Explain the Ideas board in two sentences, then tell me how to open it.",
+        "Show Pulse",
+        "Explain the Pulse page (Ideas and Feed) in two sentences, then tell me how to open it.",
         ChipKind::Chat,
         100.0,
         "New here",
@@ -2597,6 +2597,7 @@ pub fn nav_from_chip_value(value: &str) -> Option<&'static str> {
         "__nav:history" => Some("history"),
         "__nav:workboard" => Some("workboard"),
         "__nav:ideas" => Some("ideas"),
+        "__nav:pulse" => Some("pulse"),
         "__nav:skills" => Some("skills"),
         "__nav:automations" | "__nav:night" => Some("night"),
         "__nav:command" => Some("command"),
