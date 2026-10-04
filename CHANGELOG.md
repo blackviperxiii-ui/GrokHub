@@ -2,12 +2,9 @@
 
 ## Unreleased
 
-## 2.10.88 — 2026-10-04
+Background work stays out of the sidebar History. A `/bg` run forks the chat's Grok session, and a `/loop` or a quick-chip reply through the CLI writes a session of its own; on the next launch those sessions came back as extra chats in History. Their ids are now filed on the hidden Background chat, so startup adoption and the Grok session list skip them, and chats a loop already leaked are hidden on load. Nothing is deleted: the sessions stay on disk, and deleting all chats still removes them.
 
 Hovering Send while no reply is running says just "Send" again. Since 2.10.87 the hover could read "Send · Read file" after a turn that used a tool, because the finished turn's tool cards are only cleared when the next turn starts, and it could also show another chat's pending permission title. The tool or wait name now only appears on Stop's hover while a reply is running here.
-
-- Linux: `grokhub-linux-v2.10.88.tar.gz` and AUR `pkgver=2.10.88`.
-- Windows: `GrokHub-Setup-2.10.88.exe` and `grokhub-windows-v2.10.88.zip`.
 
 ## 2.10.87 — 2026-10-03
 
