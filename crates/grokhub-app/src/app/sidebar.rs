@@ -2,6 +2,9 @@
 
 use super::*;
 
+/// Shown at the right of the rail's Search row: the key that opens the palette.
+pub(super) const SEARCH_KEY_HINT: &str = "Ctrl+K";
+
 pub(super) fn fit_rail_label(ui: &egui::Ui, label: &str, max_w: f32) -> String {
     let font = egui::FontId::proportional(crate::theme::FONT_CHROME);
     let fits = |s: &str| {
@@ -332,9 +335,17 @@ impl Cabin {
                 ui.set_clip_rect(rest.intersect(ui.clip_rect()));
                 ui.add_space(4.0);
                 crate::theme::glide_paint(ui, "rail");
-                if Self::nav_row(ui, false, crate::icons::RailIcon::Search, "Search", false)
-                    .clicked()
-                {
+                let search =
+                    Self::nav_row(ui, false, crate::icons::RailIcon::Search, "Search", false);
+                // The palette's key, where the action lives.
+                ui.painter().text(
+                    egui::pos2(search.rect.right() - 12.0, search.rect.center().y),
+                    egui::Align2::RIGHT_CENTER,
+                    SEARCH_KEY_HINT,
+                    egui::FontId::proportional(crate::theme::FONT_TIP),
+                    crate::theme::subtle(),
+                );
+                if search.clicked() {
                     self.open_palette();
                 }
                 ui.add_space(6.0);

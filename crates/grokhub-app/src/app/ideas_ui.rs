@@ -38,22 +38,15 @@ fn chat_edit_id(id: &str) -> egui::Id {
     egui::Id::new(("idea-chat", id))
 }
 
-fn type_color(label: &str) -> egui::Color32 {
-    match label {
-        "Skill" => crate::theme::link(),
-        "Automation" => crate::theme::live(),
-        _ => crate::theme::muted(),
-    }
-}
-
+/// The opened card reads the same type, in the same color, as its row.
 fn type_line(ui: &mut egui::Ui, card: &UpdateCard) {
     ui.horizontal(|ui| {
-        let label = card.idea_type_label();
+        let kind = grokhub_core::pulse::pulse_type(card);
         ui.label(
-            RichText::new(label.to_ascii_uppercase())
+            RichText::new(kind.label().to_ascii_uppercase())
                 .size(crate::theme::FONT_TIP)
                 .strong()
-                .color(type_color(label)),
+                .color(super::pulse_ui::type_color(kind)),
         );
         if card.modified {
             ui.label(
@@ -76,57 +69,87 @@ impl Cabin {
     /// category. A click on the bold line (or Open in ···) opens the card in
     /// place with its details, the action, and its chat.
     pub(super) fn ui_ideas(&mut self, ui: &mut egui::Ui) {
-        let busy = self.ideas_rx.is_some();
-        let label = if busy { "Thinking up ideas…" } else { "Suggest ideas" };
-        ui.horizontal(|ui| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if crate::cards::ghost_pill(ui, label) && !busy {
-                    if self.llm_ready() {
-                        self.maybe_suggest_ideas(true);
-                        self.status = "Thinking up ideas from your recent work…".into();
-                    } else {
-                        self.status = "Connect Grok in Settings to get ideas".into();
-                    }
-                }
-            });
-        });
         self.ensure_useful_ideas();
         let groups = self.pulse_groups(now_ms());
         if groups.is_empty() {
-            self.paint_pulse_silence(ui);
+            self.paint_pulse_silence(ui, false);
             return;
         }
+        let rows: Vec<String> = groups
+            .iter()
+            .flat_map(|(_, rows)| rows.iter().map(|r| r.id.clone()))
+            .collect();
+        let mut pulse_act = self.pulse_keys(ui.ctx(), &rows);
         let mut act = None;
-        let mut pulse_act = None;
+        let mut hover = None;
+        let mut title_hover = None;
         for (cat, rows) in groups {
-            match cat {
-                Some(cat) => {
-                    ui.add_space(18.0);
-                    ui.label(
-                        RichText::new(cat.label())
-                            .size(crate::theme::FONT_SECTION)
-                            .strong()
-                            .color(crate::theme::fg()),
-                    );
-                    ui.add_space(8.0);
-                }
-                None => ui.add_space(4.0),
-            }
+            ui.add_space(if cat.is_some() { 18.0 } else { 4.0 });
+            // The top group is a ranking, not a category: it says so.
+            ui.label(
+                RichText::new(cat.map_or("Up next", |c| c.label()))
+                    .size(if cat.is_some() {
+                        crate::theme::FONT_SECTION
+                    } else {
+                        crate::theme::FONT_TIP
+                    })
+                    .strong()
+                    .color(if cat.is_some() {
+                        crate::theme::fg()
+                    } else {
+                        crate::theme::subtle()
+                    }),
+            );
+            ui.add_space(if cat.is_some() { 8.0 } else { 4.0 });
             for row in rows {
                 let Some(card) = self.updates.iter().find(|c| c.id == row.id).cloned() else {
                     continue;
                 };
                 if self.idea_board.open.as_deref() == Some(card.id.as_str()) && card.kind == UpdateKind::Idea {
                     self.paint_idea_open(ui, &card, &mut act);
-                } else if let Some(a) = super::pulse_ui::paint_pulse_row(ui, &card, row.kind) {
-                    pulse_act = Some(a);
+                } else {
+                    let st = self.pulse_row_state(&card.id);
+                    let (a, rect, on_title) =
+                        super::pulse_ui::paint_pulse_row(ui, &card, row.kind, st);
+                    if a.is_some() {
+                        pulse_act = a;
+                    }
+                    if ui.rect_contains_pointer(rect) {
+                        hover = Some(card.id.clone());
+                        if on_title {
+                            title_hover = Some(card.id.clone());
+                        }
+                    }
                 }
-                ui.add_space(IDEA_GAP + 6.0);
+                ui.add_space(IDEA_GAP);
             }
         }
+        if self.pulse_row_state_changed(&hover, &title_hover) {
+            ui.ctx().request_repaint();
+        }
+        self.set_pulse_hover(hover, title_hover);
         self.apply_idea_act(act);
         if let Some(a) = pulse_act {
             self.apply_pulse_act(a);
+        }
+    }
+
+    /// "Suggest ideas" in the header: ask the model now, or say how to sign in.
+    pub(super) fn suggest_ideas_pressed(&mut self) {
+        let ready = self.llm_ready() || self.cfg.native_engine;
+        self.suggest_ideas_with(ready);
+    }
+
+    /// The press itself, with sign-in known. The sign-in line goes once a
+    /// press goes through.
+    pub(super) fn suggest_ideas_with(&mut self, ready: bool) {
+        if ready {
+            self.pulse_view.signin_note = false;
+            self.maybe_suggest_ideas(true);
+            self.status = grokhub_core::pulse::IDEAS_LOADING.into();
+        } else {
+            self.pulse_view.signin_note = true;
+            self.status = "Connect Grok in Settings to get ideas".into();
         }
     }
 
@@ -206,10 +229,10 @@ impl Cabin {
                 ui.add_space(8.0);
                 crate::cards::section_label(
                     ui,
-                    match card.idea_type_label() {
-                        "Skill" => "Steps Apply saves",
-                        "Automation" => "What Apply schedules",
-                        _ => "What Apply sends",
+                    match grokhub_core::pulse::pulse_type(card) {
+                        grokhub_core::pulse::PulseType::Learn => "What I'll learn",
+                        grokhub_core::pulse::PulseType::Automate => "What Apply will schedule",
+                        _ => "What Apply will do",
                     },
                 );
                 let mut action = card.idea_action();
