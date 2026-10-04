@@ -184,6 +184,8 @@ mod threads_nav;
 mod background;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod native_signin_tests;
 
 #[allow(unused_imports)]
 use acp::*;
@@ -3688,6 +3690,11 @@ impl Cabin {
             .as_ref()
             .is_some_and(|t| !t.access_token.trim().is_empty())
             || grokhub_acp::grok_cli_key().is_some()
+    }
+
+    /// Presence only. Lab mode never uses this token; it only picks the clearer message.
+    fn grok_cli_login_present(&self) -> bool {
+        grokhub_acp::grok_cli_key().is_some()
     }
 
     fn has_real_history(&self) -> bool {
