@@ -1293,10 +1293,14 @@ mod tests {
     fn cabin_leader_socket_is_not_the_cli_leader() {
         let p = cabin_leader_socket().expect("HOME");
         let s = p.to_string_lossy().replace('\\', "/");
-        assert!(
-            s.contains("GrokHub/grok-home") && s.ends_with("leader.sock"),
-            "{s}"
+        assert_eq!(
+            p,
+            cabin_config_root().unwrap().join("grok-home").join("leader.sock")
         );
+        // CLAUDE.md has local runs set GROKHUB_CONFIG to a temp dir.
+        if std::env::var_os("GROKHUB_CONFIG").is_none() {
+            assert!(s.contains("GrokHub/grok-home"), "{s}");
+        }
         assert!(
             !s.contains("/.grok/leader.sock"),
             "sharing ~/.grok/leader.sock lets the CLI SIGTERM cabin grok: {s}"
