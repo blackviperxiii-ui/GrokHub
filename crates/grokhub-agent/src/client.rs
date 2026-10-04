@@ -353,6 +353,20 @@ pub struct XaiClient {
     agent: ureq::Agent,
     bearer: String,
     auth_kind: AuthKind,
+    url: String,
+}
+
+/// `http://127.0.0.1:<port>/…` or `http://localhost:<port>/…` only.
+fn loopback_http(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.contains('@') {
+        return false;
+    }
+    let host = authority.rsplit_once(':').map(|(h, _)| h).unwrap_or(authority);
+    matches!(host, "127.0.0.1" | "localhost")
 }
 
 impl XaiClient {
@@ -365,7 +379,18 @@ impl XaiClient {
             agent,
             bearer: bearer.into(),
             auth_kind,
+            url: RESPONSES_URL.to_string(),
         }
+    }
+
+    /// Send to a local test server instead of api.x.ai. Only plain-http loopback
+    /// origins are accepted, so no caller can move real traffic to another host.
+    pub fn with_loopback_url(mut self, url: &str) -> Result<Self, String> {
+        if !loopback_http(url) {
+            return Err(format!("not a loopback URL: {url}"));
+        }
+        self.url = url.to_string();
+        Ok(self)
     }
 
     fn once(
@@ -380,7 +405,7 @@ impl XaiClient {
         let body = responses_body(req);
         let mut call = self
             .agent
-            .post(RESPONSES_URL)
+            .post(&self.url)
             .set("Authorization", &{
                 let bearer = &self.bearer;
                 format!("Bearer {bearer}")
@@ -562,6 +587,31 @@ fn fold_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn xai_client_loopback_url_accepts_only_local_http() {
+        let mk = || XaiClient::new("test-access-token", AuthKind::OAuth, Duration::from_secs(5));
+        assert_eq!(mk().url, "https://api.x.ai/v1/responses");
+        let ok = mk().with_loopback_url("http://127.0.0.1:4711/v1/responses").unwrap();
+        assert_eq!(ok.url, "http://127.0.0.1:4711/v1/responses");
+        let ok = mk().with_loopback_url("http://localhost:9/v1/responses").unwrap();
+        assert_eq!(ok.url, "http://localhost:9/v1/responses");
+        for bad in [
+            "https://api.x.ai/v1/responses",
+            "http://api.x.ai/v1/responses",
+            "https://127.0.0.1:4711/v1/responses",
+            "http://127.0.0.1.example.com/v1/responses",
+            "http://evil@example.com:80/v1/responses",
+            "http://127.0.0.1:80@example.com/v1/responses",
+            "http://10.0.0.5:4711/v1/responses",
+        ] {
+            assert_eq!(
+                mk().with_loopback_url(bad).unwrap_err(),
+                format!("not a loopback URL: {bad}")
+            );
+        }
+        assert!(!format!("{:?}", mk()).contains("test-access-token"));
+    }
 
     #[test]
     fn cancel_token_child_does_not_revive_when_the_parent_resets() {
