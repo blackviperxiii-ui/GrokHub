@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.91** — Ideas is now Pulse: a feed of posts with real images first, then "I can …" ideas by category, ranked by plain rules, with feed instructions that learn what you like.
+**v2.10.92** — Ideas is now Pulse: a feed of posts with real images first, then "I can …" ideas by category, ranked by plain rules, with feed instructions that learn what you like.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.91.tar.gz`, AUR | **v2.10.91** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.91.exe`, `grokhub-windows-v2.10.91.zip` | **v2.10.91** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.92.tar.gz`, AUR | **v2.10.92** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.92.exe`, `grokhub-windows-v2.10.92.zip` | **v2.10.92** |
 | **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.

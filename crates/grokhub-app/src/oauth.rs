@@ -123,13 +123,13 @@ pub fn poll_device(device_code: &str) -> Result<PollResult, String> {
 }
 
 pub fn refresh_tokens(refresh_token: &str) -> Result<XaiOAuthTokens, String> {
-    let d = discovery()?;
+    let token_url = refresh_token_url()?;
     let body = form(&[
         ("grant_type", "refresh_token"),
         ("client_id", XAI_OAUTH_CLIENT_ID),
         ("refresh_token", refresh_token),
     ]);
-    let (ok, v) = post_form(&d.token, &body)?;
+    let (ok, v) = post_form(&token_url, &body)?;
     if !ok {
         return Err(v
             .get("error_description")
@@ -346,12 +346,49 @@ pub fn ensure_access(tokens: &XaiOAuthTokens) -> Result<(String, XaiOAuthTokens,
         .as_ref()
         .filter(|s| !s.trim().is_empty())
         .ok_or_else(|| "Grok OAuth session expired — sign in again".to_string())?;
+    // One refresh per refresh token: the UI's background refresh and a native
+    // turn holding the same token must not both spend it.
+    let _gate = CABIN_REFRESH_GATE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(done) = cabin_refreshed_from(rt) {
+        return Ok((done.access_token.clone(), done, true));
+    }
     let next = refresh_tokens(rt)?;
-    Ok((
-        next.access_token.clone(),
-        merge_refreshed(tokens, next),
-        true,
-    ))
+    let merged = merge_refreshed(tokens, next);
+    *CABIN_REFRESHED.lock().unwrap_or_else(|e| e.into_inner()) = Some((rt.clone(), merged.clone()));
+    Ok((merged.access_token.clone(), merged, true))
+}
+
+static CABIN_REFRESH_GATE: Mutex<()> = Mutex::new(());
+/// The last refresh: the refresh token it spent, and what came back.
+static CABIN_REFRESHED: Mutex<Option<(String, XaiOAuthTokens)>> = Mutex::new(None);
+
+fn cabin_refreshed_from(spent: &str) -> Option<XaiOAuthTokens> {
+    let slot = CABIN_REFRESHED.lock().unwrap_or_else(|e| e.into_inner());
+    let (from, tokens) = slot.as_ref()?;
+    (from == spent && !token_needs_refresh(tokens, grokhub_core::now_ms())).then(|| tokens.clone())
+}
+
+/// The token endpoint from xAI discovery. Tests point it at a local server.
+fn refresh_token_url() -> Result<String, String> {
+    #[cfg(test)]
+    if let Some(url) = TEST_TOKEN_URL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+    {
+        return Ok(url);
+    }
+    Ok(discovery()?.token)
+}
+
+#[cfg(test)]
+static TEST_TOKEN_URL: Mutex<Option<String>> = Mutex::new(None);
+
+/// Test-only. Production builds do not compile this, so refresh always goes to xAI.
+#[cfg(test)]
+pub(crate) fn set_token_url_for_test(url: Option<&str>) {
+    *TEST_TOKEN_URL.lock().unwrap_or_else(|e| e.into_inner()) = url.map(str::to_string);
+    *CABIN_REFRESHED.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 pub fn open_browser(url: &str) -> Result<(), String> {

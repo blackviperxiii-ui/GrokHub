@@ -19,6 +19,10 @@ struct LiveCfg {
     gate: Gate,
 }
 
+/// The Grok CLI is signed in but GrokHub is not. Lab mode only uses GrokHub's own sign-in.
+pub(super) const NATIVE_NEEDS_CABIN_SIGNIN: &str =
+    "Lab mode uses GrokHub's sign-in, not the Grok CLI's. Sign in with Grok in Settings → Account, or add an API key.";
+
 fn live_map() -> &'static Mutex<HashMap<String, LiveCfg>> {
     static MAP: OnceLock<Mutex<HashMap<String, LiveCfg>>> = OnceLock::new();
     MAP.get_or_init(|| Mutex::new(HashMap::new()))
@@ -275,6 +279,9 @@ impl Cabin {
         self.native_listing_cwd = cwd;
     }
 
+    /// Lab mode's bearer, in this order: the Imagine sign-in, the Settings → Account
+    /// "Sign in with Grok" (the sign-in the CLI path and the rest of the cabin use),
+    /// then the console API key. The Grok CLI's own login file is never read here.
     pub(super) fn native_cred(&mut self) -> Result<(String, AuthKind), String> {
         let now = grokhub_core::now_ms();
         if let Some(tokens) = self.imagine_native.tokens.clone() {
@@ -290,11 +297,62 @@ impl Cabin {
                 }
             }
         }
+        if let Some(access) = self.native_account_access(now) {
+            return Ok((access, AuthKind::OAuth));
+        }
         let key = self.console_key().trim();
         if !key.is_empty() {
             return Ok((key.to_string(), AuthKind::ApiKey));
         }
+        if self.secrets.oauth.is_none() && self.grok_cli_login_present() {
+            return Err(NATIVE_NEEDS_CABIN_SIGNIN.into());
+        }
         Err(grokhub_core::XAI_NEED_SIGNIN.into())
+    }
+
+    /// The Settings → Account sign-in. A live token is used as is; inside the
+    /// refresh window it is renewed off the UI thread. An expired token with a
+    /// refresh token is renewed once, here, and saved back to the cabin's own store.
+    fn native_account_access(&mut self, now: u64) -> Option<String> {
+        let tokens = self.secrets.oauth.clone()?;
+        if tokens.access_token.trim().is_empty() {
+            return None;
+        }
+        if grokhub_core::oauth_access_live(&tokens, now) {
+            if grokhub_core::token_needs_refresh(&tokens, now) {
+                if let Some(next) = crate::oauth::refresh_cabin_oauth(&tokens) {
+                    let access = next.access_token.clone();
+                    self.keep_account_tokens(next);
+                    return Some(access);
+                }
+            }
+            return Some(tokens.access_token);
+        }
+        let has_refresh = tokens
+            .refresh_token
+            .as_deref()
+            .is_some_and(|s| !s.trim().is_empty());
+        if !has_refresh {
+            return None;
+        }
+        match crate::oauth::ensure_access(&tokens) {
+            Ok((access, next, true)) if !access.trim().is_empty() => {
+                self.keep_account_tokens(next);
+                Some(access)
+            }
+            _ => None,
+        }
+    }
+
+    fn keep_account_tokens(&mut self, next: grokhub_core::XaiOAuthTokens) {
+        self.secrets.oauth = Some(next);
+        let io = self.persist_io.clone();
+        let secrets = self.secrets.clone();
+        std::thread::spawn(move || {
+            if let Ok(_g) = io.lock() {
+                let _ = secrets::save(&secrets);
+            }
+        });
     }
 
     pub(super) fn paint_native_badge(&mut self, ui: &mut egui::Ui) {
@@ -446,6 +504,11 @@ fn serve_native(session_id: String, ext_rx: std::sync::mpsc::Receiver<ExternalCm
         engine.set_gate(cfg.gate);
         engine.set_imagine_bearer(&cfg.bearer);
         let client = XaiClient::new(cfg.bearer, cfg.auth_kind, Duration::from_secs(120));
+        #[cfg(test)]
+        let client = match test_responses_url() {
+            Some(url) => client.with_loopback_url(&url).expect("loopback test URL"),
+            None => client,
+        };
         engine.set_route(
             std::sync::Arc::new(client),
             cfg.model,
@@ -468,4 +531,23 @@ fn serve_native(session_id: String, ext_rx: std::sync::mpsc::Receiver<ExternalCm
         .unwrap_or_else(|err| err.into_inner())
         .remove(&session_id);
     grokhub_agent::mcp::detach_elicit(&session_id);
+}
+
+#[cfg(test)]
+static TEST_RESPONSES_URL: Mutex<Option<String>> = Mutex::new(None);
+
+#[cfg(test)]
+fn test_responses_url() -> Option<String> {
+    TEST_RESPONSES_URL
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clone()
+}
+
+/// Test-only. Production builds do not compile this, so native turns always go to xAI.
+#[cfg(test)]
+pub(super) fn set_responses_url_for_test(url: Option<&str>) {
+    *TEST_RESPONSES_URL
+        .lock()
+        .unwrap_or_else(|err| err.into_inner()) = url.map(str::to_string);
 }
