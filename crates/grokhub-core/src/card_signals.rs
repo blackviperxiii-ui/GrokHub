@@ -35,6 +35,12 @@ pub enum CardEvent {
     Hidden,
     Unhidden,
     FollowUp,
+    /// Closed with X before it was ever opened or used.
+    Rejected,
+    /// The card's action ran: an idea filed, an offer turned into an automation.
+    Ran,
+    /// What the card started is done, e.g. its workboard card reached Done.
+    Completed,
 }
 
 fn kind_name(kind: UpdateKind) -> &'static str {

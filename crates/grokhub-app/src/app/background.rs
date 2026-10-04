@@ -22,6 +22,23 @@ use grokhub_core::{
 /// has nobody to approve a tool, so it does not start.
 pub(super) const BG_ASK_OFF: &str = "Background tasks are off while Ask is on, because they can't ask you for approval. Switch to Auto to use /bg.";
 
+/// Session ids headless work reported from a worker thread. The UI files them
+/// on the hidden Background chat (`file_hidden_sessions`) so they stay out of History.
+static HIDDEN_SESSIONS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Keep a session that background work wrote out of the sidebar. Any thread may call this.
+pub(super) fn hide_background_session(id: &str) {
+    let id = id.trim();
+    if id.is_empty() {
+        return;
+    }
+    if let Ok(mut held) = HIDDEN_SESSIONS.lock() {
+        if !held.iter().any(|s| s == id) {
+            held.push(id.to_string());
+        }
+    }
+}
+
 /// One background `grok -p`. Not saved: the child dies with the cabin.
 pub(super) struct BgRun {
     pub id: u64,
@@ -82,22 +99,6 @@ impl BgWork {
     pub fn busy(&self) -> bool {
         !self.runs.is_empty()
     }
-}
-
-/// Beside the transcript's Running pulse: move this reply off the composer.
-pub(super) fn background_pill(ui: &mut egui::Ui) -> bool {
-    crate::theme::felt_label_button(
-        ui,
-        "Background",
-        Color32::TRANSPARENT,
-        crate::theme::muted(),
-        8.0,
-        egui::vec2(0.0, 24.0),
-        Some(egui::Stroke::new(1.0_f32, crate::theme::border())),
-        false,
-    )
-    .on_hover_text("Keep this reply running in the background and free the chat. Its answer posts here when it's done.")
-    .clicked()
 }
 
 /// What a click on the live-work strip asks for. Applied after painting.
@@ -461,8 +462,20 @@ impl Cabin {
         true
     }
 
+    /// File the sessions headless work reported on the hidden Background chat.
+    pub(super) fn file_hidden_sessions(&mut self) {
+        let ids = match HIDDEN_SESSIONS.lock() {
+            Ok(mut held) if !held.is_empty() => std::mem::take(&mut *held),
+            _ => return,
+        };
+        if threads::file_background_sessions(&mut self.threads, &ids) {
+            self.persist();
+        }
+    }
+
     /// Drain every run's events this frame, then post the ones that ended.
     pub(super) fn poll_bg_runs(&mut self) {
+        self.file_hidden_sessions();
         if self.bg.runs.is_empty() {
             return;
         }
@@ -547,6 +560,10 @@ impl Cabin {
             let end = run.end.clone().unwrap_or(BgEnd::Done);
             let reply = self.scrub_transcript(run.say.clone());
             if !self.threads.iter().any(|t| t.id == run.thread_id) {
+                threads::file_background_sessions(
+                    &mut self.threads,
+                    std::slice::from_ref(&run.session),
+                );
                 continue;
             }
             if end != BgEnd::Stopped || !reply.trim().is_empty() {
@@ -558,6 +575,14 @@ impl Cabin {
             }
             if run.origin == BgOrigin::Detached {
                 self.settle_detached_run(&run, &end, &reply);
+            }
+            // A fork is its own session on disk. Unless a chat took it back
+            // above, it is background work and not a History row.
+            if !run.session.trim().is_empty() {
+                threads::file_background_sessions(
+                    &mut self.threads,
+                    std::slice::from_ref(&run.session),
+                );
             }
             let head = match end {
                 BgEnd::Done => "Background task done",

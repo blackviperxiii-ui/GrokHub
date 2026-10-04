@@ -472,7 +472,11 @@ impl Cabin {
             saved.discuss_thread = Some(thread_id);
             saved.status = UpdateStatus::Opened;
         }
-        self.log_card_signal(&card, grokhub_core::CardEvent::Opened, None);
+        self.log_card_use(
+            &card,
+            grokhub_core::UseDepth::Opened,
+            grokhub_core::UseAction::Discussed,
+        );
         self.nav = Nav::Ideas;
         self.idea_board.open = Some(id.to_string());
         self.idea_board.pinned = true;

@@ -483,10 +483,11 @@ pub use windshield::{
     windshield_browser_line, windshield_prompt, AtspiRow, PendingStep, WindshieldFrame,
 };
 pub use card_prefs::{
-    apply_card_event, card_prefs_json, card_score, explain_hint, forget_learned, hint_open_topic,
-    load_card_prefs, rank_home_events, top_learned, topic_keywords, CardPrefs, HomeRank,
-    LearnedBucket, LearnedEntry, Weight, FOLD_BELOW, FOLD_NOTE, HINT_MIN, HINT_NEEDS, HINT_NEW,
-    HINT_OPEN_GROUP, NOVELTY_BONUS,
+    already_done, apply_card_event, card_prefs_json, card_recurs, card_score, explain_hint,
+    forget_learned, hint_open_topic, load_card_prefs, rank_home_events, record_card_use,
+    top_learned, topic_keywords, use_event, used_depth, CardPrefs, CardUse, HomeRank,
+    LearnedBucket, LearnedEntry, UseAction, UseDepth, Weight, FOLD_BELOW, FOLD_NOTE, HINT_MIN,
+    HINT_NEEDS, HINT_NEW, HINT_OPEN_GROUP, NOVELTY_BONUS, USE_CAP,
 };
 pub use card_signals::{append_signal, signal_for, signal_group, CardEvent, CardSignal, SIGNAL_CAP};
 pub use update_feed::{
