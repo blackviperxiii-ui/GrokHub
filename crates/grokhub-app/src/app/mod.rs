@@ -2056,7 +2056,12 @@ impl Cabin {
     /// Send/Stop hover. The transcript has no Thinking dot any more (the composer
     /// glow shows a live turn), so while running Stop's hover names what it stops.
     fn go_tip_here(&self) -> String {
-        let tip = composer_go_tip(self.thinking_here());
+        let live = self.thinking_here();
+        let tip = composer_go_tip(live);
+        if !live {
+            // Idle: tool_cards and another thread's ask outlive the turn.
+            return tip.to_string();
+        }
         let hint = chat_run_hint(self.run_phase_here(), &self.run_action_here());
         if hint.is_empty() {
             tip.to_string()
