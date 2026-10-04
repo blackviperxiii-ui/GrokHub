@@ -22727,6 +22727,18 @@ fn idle_send_hover_ignores_leftover_tool_cards_and_asks() {
     assert!(!cabin.thinking_here());
     assert_eq!(cabin.run_action_here(), "Read file");
     assert_eq!(cabin.go_tip_here(), "Send");
+    // A permission ask still pending from another chat's turn.
+    cabin.perm_ask = Some(grokhub_acp::PermissionAsk {
+        rpc_id: serde_json::Value::Null,
+        session_id: "other".into(),
+        title: "Write notes.md".into(),
+        tool_call_id: "t2".into(),
+        action: "write".into(),
+        reason: String::new(),
+        reject_option: None,
+    });
+    assert_eq!(cabin.go_tip_here(), "Send");
+    cabin.perm_ask = None;
     cabin.running = true;
     cabin.chat_job_thread = Some(cabin.visible_thread_id());
     assert_eq!(cabin.go_tip_here(), "Stop · Read file");
