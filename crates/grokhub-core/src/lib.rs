@@ -507,7 +507,7 @@ pub use update_feed::{
     unhide_home_source, HOME_HIDDEN_NOTE, LESS_MUTE_MS,
     post_update, release_quiet_hold, resume_needs_fresh_chat, schedule_created_card,
     suggestion_card, tick_feed_pulse, visible_digests, visible_ideas, visible_updates,
-    digest_lookup_prompt, digest_steer, parse_lookup, post_help, remember_dismissed_source,
+    digest_lookup_prompt, digest_steer, drop_dead_links, parse_lookup, public_http_url, post_help, remember_dismissed_source,
     remember_turned_down, turned_down_titles, turned_down_topic,
     DigestEdition, HelpTick, ParsedLookup, PausedJob, RepeatedAction, PAUSE_OFFER_MS,
     CardReaction, CitedLink, DigestMaterial, FeedPulse, PulseNow, PulseTick, TasteNote,

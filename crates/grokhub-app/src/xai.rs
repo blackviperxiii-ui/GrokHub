@@ -50,6 +50,27 @@ fn json_error(v: &serde_json::Value) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Whether a model-given source URL is real enough to cite: a public http(s)
+/// host that answers. Only a failed connection or a 404/410 counts as dead, so
+/// a site that blocks HEAD or bots is still kept. Local and private hosts are
+/// never fetched.
+pub fn url_answers(url: &str) -> bool {
+    if !grokhub_core::public_http_url(url) {
+        return false;
+    }
+    match ureq::AgentBuilder::new()
+        .try_proxy_from_env(true)
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .head(url)
+        .call()
+    {
+        Ok(_) => true,
+        Err(ureq::Error::Status(code, _)) => !matches!(code, 404 | 410),
+        Err(ureq::Error::Transport(_)) => false,
+    }
+}
+
 fn xai_agent(timeout_secs: u64) -> ureq::Agent {
     ureq::AgentBuilder::new()
         .try_proxy_from_env(true)
