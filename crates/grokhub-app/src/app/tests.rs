@@ -17725,8 +17725,9 @@ fn greeting_galley_h_drives_empty_home_greet_top() {
     let mut cabin = Cabin::quiet_for_test();
     cabin.greeting = "Hello from empty home".into();
     let ctx = egui::Context::default();
-    // The greeting is set in the app's bundled fonts.
-    crate::theme::install_fonts(&ctx);
+    // The greeting is set in the app's bundled fonts. `install_fonts` runs once
+    // per process, so in the full suite this fresh context would get none.
+    crate::theme::install_fonts_on(&ctx);
     let _ = crate::theme::test_pass(&ctx, egui::RawInput::default(), |ui| {
         let mark_h = 40.0 + 12.0;
         let short_h = super::greeting_galley_h(ui, &cabin.greeting, 480.0);
