@@ -1062,7 +1062,10 @@ mod tests {
         );
         assert_eq!(loaded.permission_mode, "ask");
         assert_eq!(loaded.model, "grok-4.7");
-        assert_eq!(loaded.reasoning_effort, "minimal");
+        assert_eq!(
+            loaded.reasoning_effort, "low",
+            "2.10.87: Minimal is gone; a saved minimal loads as Low"
+        );
         assert_eq!(loaded.session_mode, "chat");
         assert!(loaded.always_collapse_thoughts);
         fs::write(config_dir().join("app.json"), r#"{"closeToTray":true}"#).expect("bare");
