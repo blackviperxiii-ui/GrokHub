@@ -511,12 +511,25 @@ impl Cabin {
         };
         thread.native = native;
         let thread_id = thread.id.clone();
-        let title = self.start_bg_task(&a.instructions, &thread_id, BgOrigin::Scheduled)?;
+        let task = self.scheduled_task_text(&a.instructions);
+        self.start_bg_task(&task, &thread_id, BgOrigin::Scheduled)?;
+        // Named for the job, not the skill steps riding in front of it.
+        let title = grokhub_core::bg_task_title(&a.instructions);
         if let Some(run) = self.bg.runs.last_mut() {
             run.automation = Some(a.id.clone());
+            run.title = title.clone();
         }
         self.status = format!("Night: {}", a.name);
         Ok(title)
+    }
+
+    /// The job's instructions, with a matching skill's steps in front, as the
+    /// chat-slot run gave them before scheduled runs moved to the background.
+    pub(super) fn scheduled_task_text(&self, instructions: &str) -> String {
+        let follow = match_skill(instructions, &self.skill_list)
+            .filter(|_| self.policy().injects_skill())
+            .map(skill_follow_block);
+        apply_skill_follow(instructions, follow.as_deref())
     }
 
     /// A scheduled run ended. A good run may leave a Follow up card with its report.
