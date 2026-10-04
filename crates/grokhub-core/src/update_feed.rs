@@ -38,6 +38,9 @@ const FLOOR_WINDOW_MS: u64 = DISMISS_HIDE_MS;
 const TITLE_CHARS: usize = 72;
 const BODY_CHARS: usize = 160;
 const DIGEST_BODY_CHARS: usize = 900;
+/// The written edition's share of a digest body, leaving room for the taste
+/// and steer lines `compose_digest` adds after it.
+const DIGEST_EDITION_CHARS: usize = 680;
 /// A paused run has to sit this long before the situation card offers to resume it.
 pub const PAUSE_OFFER_MS: u64 = 30 * 60 * 1000;
 /// Workboard detail written by `abandon_inflight_card` when a run is parked.
@@ -395,6 +398,8 @@ pub struct ParsedLookup {
     pub body: String,
     pub found: bool,
     pub refused: bool,
+    /// Every URL in the whole reply, taken before the body is clipped.
+    pub links: Vec<CitedLink>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1858,6 +1863,88 @@ fn http_url_in(token: &str) -> Option<String> {
     }
 }
 
+/// Like `clip_line`, but cuts between words so a URL is never cut in half.
+/// A single word longer than `max_chars` still falls back to a character cut.
+fn clip_words(raw: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    let mut used = 0usize;
+    let mut cut = false;
+    for word in raw.split_whitespace() {
+        let n = word.chars().count() + usize::from(!out.is_empty());
+        if used + n > max_chars {
+            cut = true;
+            break;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(word);
+        used += n;
+    }
+    if out.is_empty() && cut {
+        return clip_line(raw, max_chars);
+    }
+    if cut {
+        out.push('…');
+    }
+    out
+}
+
+/// An http(s) URL whose host is a public name or address, not localhost, a
+/// private range, or link-local. Used before fetching a URL a model gave.
+pub fn public_http_url(url: &str) -> bool {
+    let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let hostport = authority.rsplit('@').next().unwrap_or("");
+    let host = if let Some(v6) = hostport.strip_prefix('[') {
+        v6.split(']').next().unwrap_or("")
+    } else {
+        hostport.split(':').next().unwrap_or("")
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty()
+        || host == "localhost"
+        || host.ends_with(".localhost")
+        || !host.contains(['.', ':'])
+    {
+        return false;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => {
+            !(ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified())
+        }
+        Ok(std::net::IpAddr::V6(ip)) => {
+            let seg = ip.segments()[0];
+            !(ip.is_loopback()
+                || ip.is_unspecified()
+                || (seg & 0xfe00) == 0xfc00
+                || (seg & 0xffc0) == 0xfe80)
+        }
+        Err(_) => true,
+    }
+}
+
+/// Drop the URLs a check found dead, so only links that answered can be cited.
+pub fn drop_dead_links(raw: &str, dead: &[String]) -> String {
+    if dead.is_empty() {
+        return raw.to_string();
+    }
+    raw.lines()
+        .map(|line| {
+            line.split_whitespace()
+                .filter(|token| http_url_in(token).is_none_or(|url| !dead.contains(&url)))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn clip_line(raw: &str, max_chars: usize) -> String {
     let flat = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut out: String = flat.chars().take(max_chars).collect();
@@ -2276,7 +2363,7 @@ pub fn digest_card(source_id: &str, title: &str, body: &str, created_at: u64) ->
         title
     };
     let body = {
-        let body = clip_line(body, DIGEST_BODY_CHARS);
+        let body = clip_words(body, DIGEST_BODY_CHARS);
         if body.is_empty() {
             None
         } else {
@@ -2337,6 +2424,7 @@ pub fn parse_lookup(raw: &str) -> ParsedLookup {
             body: String::new(),
             found: false,
             refused: false,
+            links: Vec::new(),
         };
     }
     if digest_topic_refused(raw) {
@@ -2345,6 +2433,7 @@ pub fn parse_lookup(raw: &str) -> ParsedLookup {
             body: raw.to_string(),
             found: false,
             refused: true,
+            links: Vec::new(),
         };
     }
     let links = links_from_research(raw);
@@ -2354,6 +2443,7 @@ pub fn parse_lookup(raw: &str) -> ParsedLookup {
             body: String::new(),
             found: false,
             refused: false,
+            links: Vec::new(),
         };
     }
     let title = raw
@@ -2365,9 +2455,10 @@ pub fn parse_lookup(raw: &str) -> ParsedLookup {
         .unwrap_or_else(|| "For you".into());
     ParsedLookup {
         title,
-        body: clip_line(raw, DIGEST_BODY_CHARS),
+        body: clip_words(raw, DIGEST_EDITION_CHARS),
         found: true,
         refused: false,
+        links,
     }
 }
 
@@ -2558,6 +2649,46 @@ fn source_gone(pulse: &FeedPulse, source_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn digest_links_come_from_the_whole_reply_and_never_split() {
+        let filler = "word ".repeat(200);
+        let raw = format!("News note\n{filler}\nhttps://example.com/a-real-story");
+        let parsed = parse_lookup(&raw);
+        assert!(parsed.found);
+        assert_eq!(parsed.links.len(), 1, "a link past the clip still counts");
+        assert_eq!(parsed.links[0].url, "https://example.com/a-real-story");
+        assert!(!parsed.body.contains("https://example.com/a-real"), "{}", parsed.body);
+        assert!(parsed.body.chars().count() <= DIGEST_EDITION_CHARS + 1);
+        let cut = clip_words("see https://example.com/long-path here", 20);
+        assert_eq!(cut, "see…");
+    }
+
+    #[test]
+    fn digest_dead_links_are_dropped_and_private_hosts_never_fetched() {
+        let raw = "One https://made.up/x\nTwo https://real.example/y";
+        let kept = drop_dead_links(raw, &["https://made.up/x".to_string()]);
+        assert_eq!(kept, "One\nTwo https://real.example/y");
+        assert!(!parse_lookup(&drop_dead_links(raw, &[
+            "https://made.up/x".to_string(),
+            "https://real.example/y".to_string(),
+        ]))
+        .found);
+        assert!(public_http_url("https://news.example.com/a"));
+        for bad in [
+            "http://localhost:8080/",
+            "http://127.0.0.1/",
+            "http://192.168.1.4/admin",
+            "http://10.0.0.1",
+            "http://169.254.169.254/latest",
+            "http://[::1]:3000/",
+            "http://intranet/",
+            "ftp://example.com/",
+            "http://user@127.0.0.1/",
+        ] {
+            assert!(!public_http_url(bad), "{bad}");
+        }
+    }
 
     fn card(id: &str, at: u64, status: UpdateStatus) -> UpdateCard {
         let mut card = blank_card(id.into(), UpdateKind::AutomationDone, id.into(), None, at);

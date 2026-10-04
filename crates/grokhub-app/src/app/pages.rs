@@ -495,6 +495,8 @@ impl Cabin {
         if !tid.is_empty() {
             self.chat_job_thread = Some(tid);
         }
+        self.bg.steer_follow = None;
+        self.bg.results_follow = None;
         self.push_bound_msg("user", p);
         self.persist();
         true
