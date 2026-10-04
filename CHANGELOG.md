@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+The repo's bot rules (`CLAUDE.md` and `.cursor/rules`) add one more: fetch origin and work from the latest `main`, merge `main` into a branch before touching it, re-check right before merging and before tagging, never render or screenshot from a stale checkout, and name the starting `main` SHA in every PR body and report.
+
 ## 2.10.90 — 2026-10-04
 
 Scheduled jobs run like crons: completely in the background, separate from your chats, and never in your way. Nothing shows a job while it runs: no status line when a clock job, its check or a `/loop` starts or ends, no glow, no Stop, and no row in the live-work strip, even on the hidden Background chat. Its result still lands on the Follow up card and the Home card when it finishes. A due job no longer waits for your chat turn to end; only a saved desktop replay still does, because it drives the desktop you are using. A `/loop` always runs as its own `grok -p` instead of borrowing your chat's Grok session when it was idle, which made your chat look busy and held your next message behind the loop. A report that finishes while you are replying in its own Follow up chat waits for your reply to end, so your live reply can no longer overwrite it. Halt (the hotkey, the tray, or Ctrl+Alt+H) still stops a running job, and jobs keep the unattended rules and low effort. New tests run a job on the fake Grok CLI that starts and ends in the middle of your reply without pausing or cutting it, send and finish a chat turn while a job works, check that nothing shows the job, and check its report reaches Follow up and Home.
@@ -9,8 +11,6 @@ Scheduled jobs run like crons: completely in the background, separate from your 
 Fixes from a debug run of the whole app. GrokHub no longer refuses to open, silently, after a crash or reboot: a leftover `cabin.pid` could name a pid the system had since given to another program (or a zombie), and the new launch took it for a running cabin and quit. Now only a live process with GrokHub's own name counts. When the Grok Build CLI download fails on first run (offline, or blocked by a proxy), Get Started shows the real error, such as `curl: (22) … 403`, instead of "install finished but grok was not found". Digest cards no longer say "The brief steers the next edition." twice. `cabin_leader_socket_is_not_the_cli_leader` passes with `GROKHUB_CONFIG` set to a temp dir, as `CLAUDE.md` tells local runs to do.
 
 The quick chips under the chat box no longer offer "Continue Follow up · …" or "Continue Background". Hidden chats are skipped when chips suggest picking up another chat, so a Follow up card's chat stays on the card.
-
-The repo's bot rules (`CLAUDE.md` and `.cursor/rules`) add one more: fetch origin and work from the latest `main`, merge `main` into a branch before touching it, re-check right before merging and before tagging, never render or screenshot from a stale checkout, and name the starting `main` SHA in every PR body and report.
 
 - Linux: `grokhub-linux-v2.10.90.tar.gz` and AUR `pkgver=2.10.90`.
 - Windows: `GrokHub-Setup-2.10.90.exe` and `grokhub-windows-v2.10.90.zip`.
