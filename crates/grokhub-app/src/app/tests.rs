@@ -17641,6 +17641,261 @@ fn ideas_from_a_one_time_install_go_and_new_ones_need_a_reason() {
     release_isolated(&root, cabin);
 }
 
+// ---- Folded Cursor test drafts (#259, #266, #433–#446, reviewed 2026-10-04). Each test notes its source PR. ----
+
+// Folded from PR #266. Test only: `append_composer` already drops whitespace-only text, so the PR's code guard was redundant.
+#[test]
+fn chat_paste_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    app.composer = "chat line".into();
+    app.imagine_prompt = "sunset".into();
+    app.apply_clipboard(PlusTarget::Chat, "over the harbor\n");
+    assert_eq!(app.composer, "chat line\nover the harbor");
+    assert_eq!(app.imagine_prompt, "sunset");
+    assert_eq!(app.status, "Pasted clipboard");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+    app.apply_clipboard(PlusTarget::Chat, "   \n");
+    assert_eq!(app.composer, "chat line\nover the harbor");
+    assert_eq!(app.imagine_prompt, "sunset");
+    assert_eq!(app.status, "Pasted clipboard");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #259. Test only, for the same reason as #266.
+#[test]
+fn imagine_paste_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    app.composer = "chat line".into();
+    app.imagine_prompt = "sunset".into();
+    app.apply_clipboard(PlusTarget::Imagine, "over the harbor\n");
+    assert_eq!(app.imagine_prompt, "sunset\nover the harbor");
+    assert_eq!(app.composer, "chat line");
+    assert_eq!(app.status, "Pasted clipboard");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+    app.apply_clipboard(PlusTarget::Imagine, "   \n");
+    assert_eq!(app.imagine_prompt, "sunset\nover the harbor");
+    assert_eq!(app.status, "Pasted clipboard");
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #433. The Err path saves suggestions on a worker thread, which
+// can't see a thread-local test dir: point GROKHUB_CONFIG at a temp root and wait
+// for the save, so the test never writes the real suggestions.json.
+#[test]
+fn apply_review_reply_err_stays_idle() {
+    let _hold = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("review-reply-err");
+    std::fs::create_dir_all(&root).expect("config root");
+    assert!(cabin.suggestions.last_review_day.is_none());
+    assert!(!cabin.host_diff_kick);
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rx.is_none());
+
+    // Err only: Ok would parse suggestions and spawn more work.
+    cabin.apply_review_reply(Err("timeout".into()));
+
+    assert_eq!(cabin.status, "Nightly review held — timeout");
+    assert_eq!(
+        cabin.suggestions.last_review_day.as_deref(),
+        Some(Cabin::local_day().as_str())
+    );
+    assert!(!cabin.host_diff_kick);
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+    assert!(cabin.rx.is_none());
+    let saved = root.join("suggestions.json");
+    let start = std::time::Instant::now();
+    while !saved.exists() && start.elapsed() < std::time::Duration::from_secs(3) {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let body = std::fs::read_to_string(&saved).expect("held review saved under the test root");
+    assert!(body.contains(&Cabin::local_day()), "{body}");
+    release_isolated(&root, cabin);
+}
+
+// Folded from PR #434.
+#[test]
+fn greeting_galley_h_drives_empty_home_greet_top() {
+    // Real empty-home placement path: `greeting_galley_h` + mark → `empty_home_greet_top`.
+    // Quiet cabin only: no greeting model call.
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.greeting = "Hello from empty home".into();
+    let ctx = egui::Context::default();
+    // The greeting is set in the app's bundled fonts. `install_fonts` runs once
+    // per process, so in the full suite this fresh context would get none.
+    crate::theme::install_fonts_on(&ctx);
+    let _ = crate::theme::test_pass(&ctx, egui::RawInput::default(), |ui| {
+        let mark_h = 40.0 + 12.0;
+        let short_h = super::greeting_galley_h(ui, &cabin.greeting, 480.0);
+        assert!(
+            short_h >= crate::theme::GREET_HERO,
+            "galley height is at least GREET_HERO: {short_h}"
+        );
+        let composer_top = super::empty_home_composer_top(800.0, crate::theme::QUERY_MIN_H);
+        let short_top = super::empty_home_greet_top(composer_top, short_h + mark_h, 12.0);
+        assert!(
+            short_top >= 0.0,
+            "greeting top stays non-negative: {short_top}"
+        );
+        let long = "word ".repeat(80);
+        let long_h = super::greeting_galley_h(ui, &long, 200.0);
+        assert!(
+            long_h > short_h,
+            "narrow wrap grows galley height: {long_h} vs {short_h}"
+        );
+        let long_top = super::empty_home_greet_top(composer_top, long_h + mark_h, 12.0);
+        assert!(
+            long_top < short_top,
+            "taller wrapped greeting rises: {long_top} vs {short_top}"
+        );
+    });
+    assert!(!cabin.running, "galley height must not start a run");
+    assert!(
+        cabin.chat_job_thread.is_none(),
+        "galley height must not spawn a chat job"
+    );
+}
+
+// Folded from PR #436.
+#[test]
+fn name_project_keeps_harbor() {
+    let mut app = Cabin::quiet_for_test();
+    app.stage_new_folder();
+    let id = app.proj_staged.clone().expect("staged");
+    app.proj_rename_buf = "Harbor".into();
+    app.finish_proj_rename();
+    assert_eq!(app.status, "Renamed Harbor");
+    assert!(app.proj_staged.is_none());
+    assert!(app.proj_rename.is_none());
+    assert!(!app.proj_rename_focus);
+    assert!(app.proj_rename_buf.is_empty());
+    let node = app.projects.iter().find(|n| n.id == id).expect("named");
+    assert_eq!(node.name, "Harbor");
+    assert_eq!(node.kind, ProjectKind::Folder);
+    assert!(node.path.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #441, plus the matching and other-project rows (an idle-only
+// check would pass against a stub that always returns None).
+#[test]
+fn dream_rewind_id_matches_only_this_project() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.rewind_rows.is_empty());
+    assert_eq!(cabin.dream_rewind_id(), None);
+    cabin.cfg.project_dir = "/tmp/harbor-proj".into();
+    cabin.rewind_rows.push(RewindRecord {
+        job_id: "job-7".into(),
+        path: "/tmp/harbor-snap".into(),
+        root: "/tmp/harbor-proj".into(),
+        created_at: 1,
+        method: "copy".into(),
+    });
+    assert_eq!(cabin.dream_rewind_id(), Some("job-7"));
+    cabin.cfg.project_dir = "/tmp/other-proj".into();
+    assert_eq!(cabin.dream_rewind_id(), None);
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #442.
+#[test]
+fn update_probe_poll_clears_on_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.last_update_probe = Some(std::time::Instant::now());
+    let ctx = egui::Context::default();
+    cabin.poll_update_probe(&ctx);
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.update_probe_rx.is_none());
+    let (tx, rx) = std::sync::mpsc::channel::<crate::update::UpdateProbe>();
+    cabin.update_probe_rx = Some(rx);
+    cabin.poll_update_probe(&ctx);
+    assert!(cabin.update_probe_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+    drop(tx);
+    cabin.poll_update_probe(&ctx);
+    assert!(cabin.update_probe_rx.is_none());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #443.
+#[test]
+fn palette_search_poll_clears_on_drop() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Harbor".into();
+    cabin.poll_palette_search();
+    assert_eq!(cabin.status, "Harbor");
+    assert!(cabin.palette_file_rx.is_none());
+    let (tx, rx) = std::sync::mpsc::channel::<(String, String, Vec<String>)>();
+    cabin.palette_file_rx = Some(rx);
+    cabin.poll_palette_search();
+    assert!(cabin.palette_file_rx.is_some());
+    assert_eq!(cabin.status, "Harbor");
+    drop(tx);
+    cabin.poll_palette_search();
+    assert!(cabin.palette_file_rx.is_none());
+    assert_eq!(cabin.status, "Harbor");
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
+// Folded from PR #444.
+#[test]
+fn inspect_poll_while_idle_stays_off_a_run() {
+    let mut app = Cabin::quiet_for_test();
+    app.inspect_text = "Harbor".into();
+    app.poll_inspect();
+    assert_eq!(app.inspect_text, "Harbor");
+    assert!(app.inspect_rx.is_none());
+    assert!(app.messages.is_empty());
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    app.inspect_rx = Some(rx);
+    app.poll_inspect();
+    assert!(app.inspect_rx.is_some());
+    assert_eq!(app.inspect_text, "Harbor");
+    drop(tx);
+    app.poll_inspect();
+    assert!(app.inspect_rx.is_none());
+    assert_eq!(app.inspect_text, "Harbor");
+    assert!(app.messages.is_empty());
+    assert!(!app.running);
+    assert!(app.chat_job_thread.is_none());
+}
+
+// Folded from PR #446, plus the two commands that do flip it (idle-only would
+// pass against a stub).
+#[test]
+fn note_combined_update_landed_flips_only_for_its_steps() {
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.last_host.is_empty());
+    cabin.cli_alpha = Some("0.1.9-alpha".into());
+    cabin.note_combined_update_landed();
+    assert_eq!(cabin.cli_installed, None);
+    assert!(!cabin.cabin_overlay_done);
+    cabin.last_host = vec!["ls -la".into()];
+    cabin.note_combined_update_landed();
+    assert_eq!(cabin.cli_installed, None);
+    assert!(!cabin.cabin_overlay_done);
+    cabin.last_host = vec!["grok update".into()];
+    cabin.note_combined_update_landed();
+    assert_eq!(cabin.cli_installed.as_deref(), Some("0.1.9-alpha"));
+    assert!(!cabin.cabin_overlay_done);
+    cabin.last_host = vec!["git -C ~/GrokHub pull --ff-only".into()];
+    cabin.note_combined_update_landed();
+    assert!(cabin.cabin_overlay_done);
+    assert!(!cabin.running);
+    assert!(cabin.chat_job_thread.is_none());
+}
+
 // ---- Folded Cursor test drafts (#251–#431, base v2.10.54). Each test notes its source PR. ----
 
 // ---- Cursor fold: Composer, plus menu, file pick and attach ----
