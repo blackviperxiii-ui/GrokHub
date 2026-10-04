@@ -1,3 +1,4 @@
+use crate::channel::Channel;
 use crate::host_plan::{explain_host_risk, host_risk, HostPlanStep, HostRisk};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -149,21 +150,31 @@ pub fn stale_github_origin(url: &str) -> bool {
 }
 
 pub fn update_cmds(source: &Path) -> Result<Vec<String>, String> {
-    update_cmds_on(source, cfg!(windows))
+    update_cmds_on(source, cfg!(windows), Channel::Stable)
+}
+
+/// The plan for the channel in the install receipt: a beta clone pulls
+/// `origin beta`, never `origin main`.
+pub fn update_cmds_in(source: &Path, channel: Channel) -> Result<Vec<String>, String> {
+    update_cmds_on(source, cfg!(windows), channel)
 }
 
 /// Same plan as `update_cmds`, for the host the caller named.
 /// `combined_update_cmds_for_host` passes that flag so a Windows test can
 /// still assert the Linux `install.sh` plan.
-fn update_cmds_on(source: &Path, windows: bool) -> Result<Vec<String>, String> {
+fn update_cmds_on(source: &Path, windows: bool, channel: Channel) -> Result<Vec<String>, String> {
     if !is_grokhub_source(source) {
         return Err("not a GrokHub source tree — set Settings → source or GROKHUB_SRC".into());
     }
+    let want = channel.branch();
     let branch = git_head_branch(source)?;
-    if branch != "main" {
-        return Err(format!(
-            "source clone is on {branch} — checkout main, then Update"
-        ));
+    if branch != want {
+        return Err(match channel {
+            Channel::Stable => format!("source clone is on {branch} — checkout main, then Update"),
+            Channel::Beta => format!(
+                "source clone is on {branch} — run ./scripts/install.sh --user --channel beta, then Update"
+            ),
+        });
     }
     let src = host_quote_for(&source.display().to_string(), windows);
     let mut cmds = Vec::new();
@@ -180,7 +191,7 @@ fn update_cmds_on(source: &Path, windows: bool) -> Result<Vec<String>, String> {
             ));
         }
     }
-    cmds.push(format!("git -C {src} pull --ff-only origin main"));
+    cmds.push(format!("git -C {src} pull --ff-only origin {want}"));
     cmds.push(overlay_install_cmd(source, &src, windows));
     cmds.push(overlay_grok_update_for(windows).into());
     Ok(cmds)
@@ -189,7 +200,12 @@ fn update_cmds_on(source: &Path, windows: bool) -> Result<Vec<String>, String> {
 /// A real product checkout: GrokHub tree on `main`. Leftover `cursor/*`
 /// (or any other branch) is not this — Windows Setup must still Update.
 pub fn overlay_clone_usable(source: &Path) -> bool {
-    is_grokhub_source(source) && git_head_branch(source).ok().as_deref() == Some("main")
+    overlay_clone_usable_in(source, Channel::Stable)
+}
+
+/// Same check for the receipt's channel (`beta` clone for a beta install).
+pub fn overlay_clone_usable_in(source: &Path, channel: Channel) -> bool {
+    is_grokhub_source(source) && git_head_branch(source).ok().as_deref() == Some(channel.branch())
 }
 
 /// Windows Setup users have no clone and no cargo. Download the latest zip.
@@ -199,13 +215,25 @@ pub fn update_cmds_for(source: Option<&Path>) -> Result<Vec<String>, String> {
 }
 
 pub fn update_cmds_for_host(source: Option<&Path>, windows: bool) -> Result<Vec<String>, String> {
+    update_cmds_for_host_in(source, windows, Channel::Stable)
+}
+
+/// A stable Windows host without a usable clone takes the latest release zip.
+/// Beta never does: the zip is a stable release.
+pub fn update_cmds_for_host_in(
+    source: Option<&Path>,
+    windows: bool,
+    channel: Channel,
+) -> Result<Vec<String>, String> {
+    // The release zip is stable; a beta install must never fall back to it.
+    let zip_ok = windows && channel == Channel::Stable;
     match source {
-        Some(src) => match update_cmds_on(src, windows) {
+        Some(src) => match update_cmds_on(src, windows, channel) {
             Ok(cmds) => Ok(cmds),
-            Err(_) if windows => Ok(windows_release_update_cmds()),
+            Err(_) if zip_ok => Ok(windows_release_update_cmds()),
             Err(e) => Err(e),
         },
-        None if windows => Ok(windows_release_update_cmds()),
+        None if zip_ok => Ok(windows_release_update_cmds()),
         None => Err("not a GrokHub source tree — set Settings → source or GROKHUB_SRC".into()),
     }
 }
@@ -482,8 +510,12 @@ pub fn cabin_overlay_step(cmd: &str) -> bool {
             || cmd.contains("grokhub-windows-v"))
 }
 
-fn cabin_only_cmds_for_host(source: Option<&Path>, windows: bool) -> Result<Vec<String>, String> {
-    let cmds: Vec<String> = update_cmds_for_host(source, windows)?
+fn cabin_only_cmds_for_host(
+    source: Option<&Path>,
+    windows: bool,
+    channel: Channel,
+) -> Result<Vec<String>, String> {
+    let cmds: Vec<String> = update_cmds_for_host_in(source, windows, channel)?
         .into_iter()
         .filter(|c| !grok_cli_update_cmd(c))
         .collect();
@@ -510,6 +542,16 @@ pub fn combined_update_cmds_for_host(
     pending: UpdatePending,
     windows: bool,
 ) -> Result<CombinedUpdatePlan, String> {
+    combined_update_cmds_for_host_in(source, pending, windows, Channel::Stable)
+}
+
+/// `combined_update_cmds_for_host` for the receipt's channel.
+pub fn combined_update_cmds_for_host_in(
+    source: Option<&Path>,
+    pending: UpdatePending,
+    windows: bool,
+    channel: Channel,
+) -> Result<CombinedUpdatePlan, String> {
     let cli_cmd = if windows {
         windows_grok_update_cmd()
     } else {
@@ -522,14 +564,14 @@ pub fn combined_update_cmds_for_host(
             cabin_skipped: None,
         }),
         UpdatePending::Cabin => {
-            cabin_only_cmds_for_host(source, windows).map(|cmds| CombinedUpdatePlan {
+            cabin_only_cmds_for_host(source, windows, channel).map(|cmds| CombinedUpdatePlan {
                 cmds,
                 cabin_skipped: None,
             })
         }
         UpdatePending::Both => {
             let mut cmds = vec![cli_cmd.into()];
-            let cabin_skipped = match cabin_only_cmds_for_host(source, windows) {
+            let cabin_skipped = match cabin_only_cmds_for_host(source, windows, channel) {
                 Ok(cabin) => {
                     cmds.extend(cabin);
                     None
@@ -549,6 +591,15 @@ pub fn combined_update_cmds(
     pending: UpdatePending,
 ) -> Result<CombinedUpdatePlan, String> {
     combined_update_cmds_for_host(source, pending, cfg!(windows))
+}
+
+/// What the cabin's Update runs: follows the channel in the install receipt.
+pub fn combined_update_cmds_in(
+    source: Option<&Path>,
+    pending: UpdatePending,
+    channel: Channel,
+) -> Result<CombinedUpdatePlan, String> {
+    combined_update_cmds_for_host_in(source, pending, cfg!(windows), channel)
 }
 
 pub fn grok_cli_alpha_update_cmd() -> &'static str {
@@ -948,6 +999,69 @@ mod tests {
         run(&["config", "user.name", "Cabin"]);
         run(&["add", "."]);
         run(&["commit", "-m", "seed"]);
+    }
+
+    #[test]
+    fn a_beta_receipt_updates_from_origin_beta_and_never_pulls_main() {
+        let root = std::env::temp_dir().join(format!("grokhub-src-beta-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        seed_git_source(&root, "beta");
+        std::process::Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/blackviperxiii-ui/GrokHub.git",
+            ])
+            .current_dir(&root)
+            .status()
+            .unwrap();
+        let q = host_quote_for(&root.display().to_string(), cfg!(windows));
+        let beta = update_cmds_in(&root, Channel::Beta).unwrap();
+        assert_eq!(beta[0], format!("git -C {q} pull --ff-only origin beta"));
+        assert_overlay_install(&beta[1]);
+        assert!(!beta.iter().any(|c| c.contains("origin main")), "{beta:?}");
+        assert!(overlay_clone_usable_in(&root, Channel::Beta));
+        assert!(!overlay_clone_usable(&root));
+        let plan = combined_update_cmds_for_host_in(
+            Some(&root),
+            UpdatePending::Cabin,
+            false,
+            Channel::Beta,
+        )
+        .unwrap();
+        assert_eq!(
+            plan.cmds[0],
+            format!(
+                "git -C {} pull --ff-only origin beta",
+                host_quote_for(&root.display().to_string(), false)
+            )
+        );
+        assert_eq!(
+            update_cmds_for_host_in(None, true, Channel::Beta).unwrap_err(),
+            "not a GrokHub source tree — set Settings → source or GROKHUB_SRC"
+        );
+        assert_eq!(
+            update_cmds_for_host_in(None, true, Channel::Stable).unwrap(),
+            windows_release_update_cmds()
+        );
+        // A stable receipt on the same beta clone refuses instead of pulling main into it.
+        assert_eq!(
+            update_cmds_in(&root, Channel::Stable).unwrap_err(),
+            "source clone is on beta — checkout main, then Update"
+        );
+        std::process::Command::new("git")
+            .args(["checkout", "-B", "main"])
+            .current_dir(&root)
+            .status()
+            .unwrap();
+        assert_eq!(
+            update_cmds_in(&root, Channel::Beta).unwrap_err(),
+            "source clone is on main — run ./scripts/install.sh --user --channel beta, then Update"
+        );
+        let stable = update_cmds_in(&root, Channel::Stable).unwrap();
+        assert_eq!(stable[0], format!("git -C {q} pull --ff-only origin main"));
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

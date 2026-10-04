@@ -73,7 +73,7 @@ fn main() {
     }
     match launch {
         Launch::Version => {
-            println!("{}", env!("CARGO_PKG_VERSION"));
+            println!("{}", update::build_version_line());
         }
         Launch::Help => {
             #[cfg(windows)]
@@ -195,6 +195,7 @@ fn run_doctor() {
 fn run_update_cli() {
     let cfg = config::load();
     let src = update::resolve_source(&cfg.source_dir);
+    let channel = update::installed_channel();
     let probe = update::blocking_update_probe();
     let pending = grokhub_core::pending_from_versions(
         env!("CARGO_PKG_VERSION"),
@@ -209,17 +210,20 @@ fn run_update_cli() {
     if pending != grokhub_core::UpdatePending::Cli
         && src
             .as_ref()
-            .is_some_and(|p| grokhub_core::overlay_clone_usable(p))
+            .is_some_and(|p| grokhub_core::overlay_clone_usable_in(p, channel))
     {
         if let Some(src) = src.as_ref() {
             update::remember_source(src);
         }
     }
-    let plan = match grokhub_core::combined_update_cmds(src.as_deref(), pending) {
+    let plan = match grokhub_core::combined_update_cmds_in(src.as_deref(), pending, channel) {
         Ok(plan) => plan,
         Err(e) if pending == grokhub_core::UpdatePending::Both => {
-            match grokhub_core::combined_update_cmds(src.as_deref(), grokhub_core::UpdatePending::Cli)
-            {
+            match grokhub_core::combined_update_cmds_in(
+                src.as_deref(),
+                grokhub_core::UpdatePending::Cli,
+                channel,
+            ) {
                 Ok(mut plan) => {
                     plan.cabin_skipped = Some(e);
                     plan
