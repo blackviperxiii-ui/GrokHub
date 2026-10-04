@@ -6549,7 +6549,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     }
 
     #[test]
-    fn other_chip_threads_skip_current_and_scratch() {
+    fn other_chip_threads_skip_current_scratch_and_background() {
         let mut current = crate::threads::ChatThread::new("Now", false);
         current.id = "cur".into();
         current
@@ -6566,7 +6566,18 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         scratch
             .messages_mut()
             .push(("user".into(), "ignore me".into()));
-        let others = super::collect_other_chip_threads(&[current, prev, scratch], "cur");
+        // A Follow up card's chat is scheduled work: no "Continue Follow up · …" chip.
+        let mut follow = crate::threads::ChatThread::new("Follow up · Host snapshot", false);
+        follow.id = "fu".into();
+        follow.background = true;
+        follow
+            .messages_mut()
+            .push(("user".into(), "which ports are new".into()));
+        follow
+            .messages_mut()
+            .push(("assistant".into(), "Disk at 91% on /home.".into()));
+        let others =
+            super::collect_other_chip_threads(&[current, prev, scratch, follow], "cur");
         assert_eq!(others.len(), 1);
         assert_eq!(others[0].title, "Night cabin");
         assert_eq!(others[0].last_user, "paint the wall");
