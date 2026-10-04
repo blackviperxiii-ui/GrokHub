@@ -482,7 +482,7 @@ impl Cabin {
         });
         let links = parsed
             .as_ref()
-            .map(|item| links_from_research(&item.body))
+            .map(|item| item.links.clone())
             .unwrap_or_default();
         let material = DigestMaterial {
             brief: &steer,
@@ -661,7 +661,17 @@ impl Cabin {
         std::thread::spawn(move || {
             let messages = [("user".into(), prompt)];
             let effort = Some(grokhub_core::BACKGROUND_EFFORT);
-            let _ = tx.send(grok_chat(&key, &model, &messages, None, effort));
+            // The completion has no live search, so a URL it gives is only a claim:
+            // keep the ones that answer.
+            let reply = grok_chat(&key, &model, &messages, None, effort).map(|text| {
+                let dead: Vec<String> = links_from_research(&text)
+                    .into_iter()
+                    .map(|link| link.url)
+                    .filter(|url| !crate::xai::url_answers(url))
+                    .collect();
+                grokhub_core::drop_dead_links(&text, &dead)
+            });
+            let _ = tx.send(reply);
         });
     }
 
