@@ -188,10 +188,18 @@ fn wait_child_draining(mut child: Child, fail_label: &str) -> Result<(), String>
     }
 }
 
+/// `pipefail` so a blocked or failed download fails the install. Without it bash
+/// runs an empty script, exits 0, and the cabin says "install finished but grok
+/// was not found".
+#[cfg(not(windows))]
+fn official_sh_script() -> String {
+    format!("set -o pipefail; {OFFICIAL_SH}")
+}
+
 #[cfg(not(windows))]
 fn run_official_sh() -> Result<(), String> {
     let mut cmd = Command::new("bash");
-    cmd.args(["-lc", OFFICIAL_SH])
+    cmd.args(["-lc", &official_sh_script()])
         .env("GROK_CHANNEL", "alpha")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -470,6 +478,15 @@ mod tests {
                 src.contains("run_official_sh") || src.contains("install.sh"),
                 "Linux first-run must actually run the alpha installer: {src}"
             );
+            assert_eq!(
+                official_sh_script(),
+                "set -o pipefail; curl -fsSL https://x.ai/cli/install.sh | GROK_CHANNEL=alpha bash"
+            );
+            // A failed download (proxy 403, offline) must fail the install.
+            let blocked =
+                official_sh_script().replace("curl -fsSL https://x.ai/cli/install.sh", "false");
+            let st = Command::new("bash").args(["-c", &blocked]).status().expect("bash");
+            assert!(!st.success(), "failed download must not read as installed");
         }
         assert!(
             src.contains("run_elevated_powershell") && src.contains("Verb RunAs"),
