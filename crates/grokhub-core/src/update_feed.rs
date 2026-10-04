@@ -1750,9 +1750,8 @@ fn compose_digest(
     let allowed = real_links(material.links);
     if !edition.found || allowed.is_empty() {
         let body = format!("{HONEST_EMPTY} {STEER_LINE}");
-        let mut card = digest_card("edition", &format!("Digest {n}"), &body, now);
-        card.why = Some(STEER_LINE.into());
-        return Some(card);
+        // The body already ends with the steer line; a `why` too painted it twice.
+        return Some(digest_card("edition", &format!("Digest {n}"), &body, now));
     }
     let title = {
         let given = clip_line(edition.title, TITLE_CHARS);
@@ -1791,7 +1790,6 @@ fn compose_digest(
     }
     let mut card = digest_card("edition", &title, &body, now);
     card.citations = urls;
-    card.why = Some(STEER_LINE.into());
     Some(card)
 }
 
@@ -3106,6 +3104,7 @@ mod tests {
         assert!(blob.contains("https://news.example/f1"));
         assert!(blob.contains("bank"));
         assert!(blob.contains("The brief steers the next edition."));
+        assert_eq!(digest.why, None, "the steer line must not paint twice");
         assert!(!blob.contains("evil.example"));
         let mut refused = Vec::new();
         let mut pulse = FeedPulse::default();
@@ -3637,7 +3636,11 @@ mod tests {
         assert!(tick.digest_posted);
         assert!(tick.digest_consumed);
         let body = cards[0].body.as_deref().unwrap();
-        assert!(body.contains("did not find a source"));
+        assert_eq!(
+            body,
+            "I looked and did not find a source worth your time. The brief steers the next edition."
+        );
+        assert_eq!(cards[0].why, None, "the steer line is in the body; once is enough");
         assert!(cards[0].citations.is_empty());
     }
 
