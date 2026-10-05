@@ -77,10 +77,12 @@ impl TokenStore for KeyringStore {
 }
 
 /// Test double. Holds the JSON value in memory and never touches the disk.
+#[cfg(test)]
 pub struct MemoryTokenStore {
     inner: Mutex<Option<ImagineTokens>>,
 }
 
+#[cfg(test)]
 impl MemoryTokenStore {
     pub fn new() -> Self {
         Self {
@@ -89,6 +91,7 @@ impl MemoryTokenStore {
     }
 }
 
+#[cfg(test)]
 impl TokenStore for MemoryTokenStore {
     fn load(&self) -> Result<Option<ImagineTokens>, String> {
         Ok(self
