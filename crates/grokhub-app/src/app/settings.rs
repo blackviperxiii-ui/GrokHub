@@ -896,21 +896,28 @@ impl Cabin {
             self.restart_after_update(ctx);
         }
         if copy_diag {
-            let bundle = diagnostics_bundle(
-                env!("CARGO_PKG_VERSION"),
-                self.has_key(),
-                HUB_KIND,
-                self.skill_list.len(),
-                self.last_receipt_ok,
-                self.board.len(),
-                &self.status,
-            );
-            ctx.copy_text(bundle);
-            self.status = "Diagnostics copied".into();
+            self.copy_diagnostics(ctx);
         }
         if save {
             self.save_settings();
         }
+    }
+
+    /// Settings → Copy diagnostics and the palette row: the bundle goes to the
+    /// clipboard, and the status line only says so.
+    pub(super) fn copy_diagnostics(&mut self, ctx: &egui::Context) {
+        let version = crate::update::build_version_line();
+        let bundle = diagnostics_bundle(
+            version.strip_prefix("GrokHub ").unwrap_or(&version),
+            self.has_key(),
+            HUB_KIND,
+            self.skill_list.len(),
+            self.last_receipt_ok,
+            self.board.len(),
+            &self.status,
+        );
+        ctx.copy_text(bundle);
+        self.status = "Diagnostics copied".into();
     }
 
     fn ui_permission_editor(&mut self, ui: &mut egui::Ui) {
