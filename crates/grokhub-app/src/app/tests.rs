@@ -7879,7 +7879,7 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     assert!(
         !paint.contains("ghost_pill")
             && paint.contains("\"×\"")
-            && paint.contains("FeedAct::Archive")
+            && !paint.contains("FeedAct::Archive")
             && paint.contains("FeedAct::Discuss")
             && paint.contains("FeedAct::Dismiss")
             && paint.contains("FeedAct::Open"),
@@ -10230,37 +10230,33 @@ fn react_card_keeps_the_reaction() {
 }
 
 #[test]
-fn archive_feed_digest_drops_the_digest() {
+fn home_x_on_a_digest_keeps_it_in_pulse() {
     let _lock = crate::config::hold_test_config();
     let cfg = IsolatedConfig::arm("archive-digest");
     let mut cabin = Cabin::quiet_for_test();
     let card = grokhub_core::digest_card("week", "Week notes", "rolled up", 2);
     let id = card.id.clone();
     cabin.updates.push(card);
+    let on_deck = |cabin: &Cabin| {
+        super::feed_ui::home_deck(&cabin.updates, &cabin.cfg.feed_pulse, &cabin.card_prefs, now_ms())
+            .cards
+            .iter()
+            .any(|c| c.id == id)
+    };
+    assert!(on_deck(&cabin), "the digest starts on the main deck");
+    cabin.apply_feed_act(Some(FeedAct::Dismiss(id.clone())));
+    wait_tree_contains(&cfg.root, "offHome");
+    assert!(!on_deck(&cabin), "× takes it off the main deck");
     assert!(
         grokhub_core::visible_digests(&cabin.updates)
             .iter()
             .any(|c| c.id == id),
-        "the digest starts on the live feed"
+        "Pulse still lists the digest"
     );
-    cabin.archive_feed_digest(&id);
-    wait_tree_contains(&cfg.root, "Week notes");
-    assert!(
-        grokhub_core::visible_digests(&cabin.updates)
-            .iter()
-            .all(|c| c.id != id),
-        "archive drops the digest from the live feed"
-    );
-    assert!(
-        grokhub_core::archived_digests(&cabin.updates)
-            .iter()
-            .any(|c| c.id == id),
-        "the dropped digest is the archived row"
-    );
-    assert_eq!(
-        cabin.updates.iter().find(|c| c.id == id).map(|c| c.status),
-        Some(grokhub_core::UpdateStatus::Dismissed)
-    );
+    assert!(grokhub_core::archived_digests(&cabin.updates).is_empty());
+    let kept = cabin.updates.iter().find(|c| c.id == id).expect("digest kept");
+    assert_eq!(kept.status, grokhub_core::UpdateStatus::Unread);
+    assert!(kept.pulse.off_home);
     drop(cfg);
 }
 
@@ -14358,23 +14354,25 @@ fn react_and_archive_stay_on_the_card() {
         .expect("event");
     assert!(event.reaction.is_none());
 
-    cabin.archive_feed_digest("digest-1");
+    cabin.close_home_card("digest-1");
     let digest = cabin
         .updates
         .iter()
         .find(|card| card.id == "digest-1")
         .expect("digest stays");
-    assert_eq!(digest.status, grokhub_core::UpdateStatus::Dismissed);
-    assert!(!digest.held);
+    assert_ne!(digest.status, grokhub_core::UpdateStatus::Dismissed);
+    assert!(digest.pulse.off_home);
+    assert!(digest.held);
     assert!(!cabin.running);
 
-    cabin.archive_feed_digest("idea-1");
+    cabin.close_home_card("idea-1");
     let idea = cabin
         .updates
         .iter()
         .find(|card| card.id == "idea-1")
         .expect("idea stays");
     assert_ne!(idea.status, grokhub_core::UpdateStatus::Dismissed);
+    assert!(!idea.pulse.off_home);
 }
 
 fn feed_card(id: &str, kind: grokhub_core::UpdateKind, held: bool) -> grokhub_core::UpdateCard {
@@ -21432,31 +21430,15 @@ fn pulse_paints_only_on_an_empty_signed_in_chat() {
 // Folded from PR #280.
 #[test]
 fn feed_deck_hover_lifts_the_card_behind() {
-    let front = super::open_slide(0);
-    assert_eq!(front, super::SlidePose { dy: 0.0, scale: 1.0 });
-    let second = super::open_slide(1);
-    assert!(second.dy < 0.0);
-    assert_eq!(second.scale, 1.0);
-    assert!(super::open_slide(2).dy < second.dy);
+    let open = super::feed_ui::deck_poses(3, true, Some(1), 1_000.0);
+    assert_eq!(open[0], super::SlidePose { dy: 0.0, scale: 1.0 });
+    assert_eq!(open[1], super::SlidePose { dy: -102.0, scale: 1.0 });
+    assert_eq!(open[2], super::SlidePose { dy: -132.0, scale: 1.0 });
+    let rest = super::feed_ui::deck_poses(3, false, Some(1), 1_000.0);
+    assert_eq!(rest[1], super::rest_slide(1));
+    assert!(rest[1].dy > 0.0 && rest[1].scale < 1.0);
 
-    let rest = super::rest_slide(1);
-    let open = super::open_slide(1);
-    assert!(rest.dy > front.dy);
-    assert!(rest.scale < front.scale);
-    assert_ne!(rest, open);
-    assert_eq!(super::mix_slide(rest, open, 0.0), rest);
-    assert_eq!(super::mix_slide(rest, open, 1.0), open);
-    let mid = super::mix_slide(rest, open, 0.5);
-    assert!(open.dy < mid.dy && mid.dy < rest.dy);
-    assert!(rest.scale < mid.scale && mid.scale < open.scale);
-    assert_eq!(super::mix_slide(rest, open, 1.5), open);
-    assert_eq!(super::mix_slide(rest, open, -0.25), rest);
-
-    let closed = super::StackView {
-        expanded: false,
-        popped: None,
-    };
-    let pile = super::next_feed_stack(&closed, super::StackHit::Pile, Some("back".into()));
+    let pile = super::next_feed_stack(3, true, Some("back".into()), Some("front"));
     assert_eq!(
         pile,
         super::StackView {
@@ -21464,74 +21446,29 @@ fn feed_deck_hover_lifts_the_card_behind() {
             popped: Some("back".into()),
         }
     );
-    let away = super::next_feed_stack(&pile, super::StackHit::Away, Some("other".into()));
     assert_eq!(
-        away,
-        super::StackView {
-            expanded: false,
-            popped: Some("back".into()),
-        }
-    );
-    let on_card = super::next_feed_stack(&pile, super::StackHit::Card, Some("other".into()));
-    assert_eq!(on_card, pile);
-    let still_down = super::next_feed_stack(&away, super::StackHit::Card, Some("other".into()));
-    assert_eq!(still_down, away);
-    let cleared = super::next_feed_stack(&away, super::StackHit::Pile, None);
-    assert_eq!(
-        cleared,
-        super::StackView {
-            expanded: true,
-            popped: None,
-        }
-    );
-
-    assert_eq!(
-        super::pile_pop_target(Some("front"), Some("front".into())),
-        None
+        super::next_feed_stack(3, false, Some("back".into()), Some("front")),
+        super::StackView::default()
     );
     assert_eq!(
-        super::pile_pop_target(Some("front"), Some("back".into())),
-        Some("back".into())
-    );
-
-    assert_eq!(
-        super::stack_hit(super::StackHover {
-            on_card: true,
-            on_pile: true,
-        }),
-        super::StackHit::Card
-    );
-    assert_eq!(
-        super::stack_hit(super::StackHover {
-            on_card: false,
-            on_pile: true,
-        }),
-        super::StackHit::Pile
-    );
-    assert_eq!(
-        super::stack_hit(super::StackHover {
-            on_card: false,
-            on_pile: false,
-        }),
-        super::StackHit::Away
+        super::next_feed_stack(1, true, Some("front".into()), Some("front")),
+        super::StackView::default()
     );
 }
 
 // Folded from PR #289.
 #[test]
 fn feed_deck_shift_keeps_the_top_card_on_screen() {
-    assert_eq!(super::feed_ui::slide_up_shift(100.0, 0, 0.0), 0.0);
-    assert_eq!(super::feed_ui::slide_up_shift(100.0, 1, 0.0), 0.0);
-
-    let behind = super::feed_ui::open_slide(1).dy;
-    let top_card = super::feed_ui::open_slide(2).dy;
-    assert!(top_card < behind);
-    assert!(behind < 0.0 && top_card < 0.0);
-
-    let n = 3usize;
-    let front_y = 40.0;
-    assert!(super::feed_ui::slide_up_shift(front_y, n, 0.0) > 0.0);
-    assert_eq!(super::feed_ui::slide_up_shift(front_y, n, -1000.0), 0.0);
+    let tops: Vec<f32> = super::feed_ui::deck_poses(3, true, Some(2), 40.0)
+        .iter()
+        .map(|pose| pose.dy)
+        .collect();
+    assert_eq!(tops, vec![0.0, -30.0, -40.0]);
+    let none: Vec<f32> = super::feed_ui::deck_poses(3, true, None, 0.0)
+        .iter()
+        .map(|pose| pose.dy)
+        .collect();
+    assert_eq!(none, vec![0.0, 0.0, 0.0]);
 }
 
 // Folded from PR #292.
