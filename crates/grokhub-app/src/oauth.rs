@@ -240,6 +240,38 @@ pub fn refresh_cabin_oauth(tokens: &XaiOAuthTokens) -> Option<XaiOAuthTokens> {
     None
 }
 
+/// An expired cabin sign-in, renewed now for a caller that needs the token
+/// this turn. A refresh that failed in the last 30 seconds is not retried, so
+/// an offline machine or a dead refresh token does not stall every turn on
+/// the network timeouts. Shares that backoff with `refresh_cabin_oauth`.
+pub fn ensure_access_with_backoff(tokens: &XaiOAuthTokens) -> Option<XaiOAuthTokens> {
+    {
+        let mut held = cabin_oauth_refresh_state().lock().ok()?;
+        if let Some(tok) = held.ready.take() {
+            return Some(tok);
+        }
+        if held
+            .fail_at
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(30))
+        {
+            return None;
+        }
+    }
+    let out = ensure_access(tokens);
+    let mut held = cabin_oauth_refresh_state().lock().ok()?;
+    match out {
+        Ok((access, next, true)) if !access.trim().is_empty() => {
+            held.fail_at = None;
+            Some(next)
+        }
+        Ok(_) => None,
+        Err(_) => {
+            held.fail_at = Some(Instant::now());
+            None
+        }
+    }
+}
+
 fn refresh_grok_login_now() -> Option<String> {
     let path = grokhub_acp::grok_auth_path()?;
     let mut raw = String::new();
@@ -389,6 +421,10 @@ static TEST_TOKEN_URL: Mutex<Option<String>> = Mutex::new(None);
 pub(crate) fn set_token_url_for_test(url: Option<&str>) {
     *TEST_TOKEN_URL.lock().unwrap_or_else(|e| e.into_inner()) = url.map(str::to_string);
     *CABIN_REFRESHED.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    if let Ok(mut held) = cabin_oauth_refresh_state().lock() {
+        held.fail_at = None;
+        held.ready = None;
+    }
 }
 
 pub fn open_browser(url: &str) -> Result<(), String> {
