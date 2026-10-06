@@ -232,6 +232,7 @@ impl Cabin {
 }
 
 /// Contiguous scope runs, in sheet order. A scope that comes back later is a new group.
+#[cfg(test)]
 pub fn group_shortcut_scopes<'a>(scopes: impl IntoIterator<Item = &'a str>) -> Vec<(&'a str, usize)> {
     let mut out: Vec<(&str, usize)> = Vec::new();
     for scope in scopes {
