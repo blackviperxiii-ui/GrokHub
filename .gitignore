@@ -27,8 +27,6 @@ packaging/aur/*.pkg.tar*
 .github_repo
 .grok/
 artifacts/
-AGENTS.md
-AGENTS.project.md
 startup.sh
 
 # Secrets, keys, credentials (never commit)
