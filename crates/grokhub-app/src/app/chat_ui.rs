@@ -249,7 +249,25 @@ pub(super) fn overlay_over_chat(ctx: &egui::Context) -> bool {
         })
 }
 
-/// Enter sends. Control+Enter is left for TextEdit (`return_key`) to insert a newline.
+/// Shift+Enter breaks the line like Ctrl+Enter: its Enter presses take the
+/// Command bit, so the composer's `return_key` inserts the newline at the cursor.
+pub(super) fn shift_enter_as_newline(events: &mut [egui::Event]) {
+    for ev in events {
+        if let egui::Event::Key {
+            key: egui::Key::Enter,
+            modifiers,
+            ..
+        } = ev
+        {
+            if modifiers.shift && !modifiers.alt && !modifiers.ctrl && !modifiers.command {
+                modifiers.command = true;
+            }
+        }
+    }
+}
+
+/// Enter sends. Control+Enter and Shift+Enter are left for TextEdit (`return_key`)
+/// to insert a newline.
 pub(super) fn take_focused_composer(
     ui: &mut egui::Ui,
     composer: &mut String,
@@ -258,10 +276,11 @@ pub(super) fn take_focused_composer(
     if !focused {
         return None;
     }
+    ui.input_mut(|i| shift_enter_as_newline(&mut i.events));
     let (enter, control) = ui.input(|i| {
         (
             i.key_pressed(egui::Key::Enter),
-            i.modifiers.ctrl || i.modifiers.command,
+            i.modifiers.ctrl || i.modifiers.command || (i.modifiers.shift && !i.modifiers.alt),
         )
     });
     match composer_enter(enter, control) {
@@ -456,7 +475,8 @@ pub(super) fn paint_speech_bubble(
 
 pub(super) struct MsgActsPaint {
     pub act: ChatBlockAct,
-    /// Union of the Copy and Reply hit rects.
+    /// Union of the Copy and Reply hit rects. Layout tests read it.
+    #[cfg(test)]
     pub row: egui::Rect,
 }
 
@@ -504,6 +524,7 @@ pub(super) fn paint_msg_acts(
     align_w: f32,
 ) -> MsgActsPaint {
     let mut act = ChatBlockAct::None;
+    #[cfg(test)]
     let mut bounds: Option<egui::Rect> = None;
     let mut paint = |ui: &mut egui::Ui| {
         for &label in msg_act_labels(user) {
@@ -543,10 +564,13 @@ pub(super) fn paint_msg_acts(
                     _ => ChatBlockAct::Reply(body.to_string()),
                 };
             }
-            bounds = Some(match bounds {
-                Some(rect) => rect.union(resp.rect),
-                None => resp.rect,
-            });
+            #[cfg(test)]
+            {
+                bounds = Some(match bounds {
+                    Some(rect) => rect.union(resp.rect),
+                    None => resp.rect,
+                });
+            }
         }
     };
     // User bubbles sit on the right. Copy+Reply is wider than a short bubble
@@ -574,6 +598,7 @@ pub(super) fn paint_msg_acts(
     });
     MsgActsPaint {
         act,
+        #[cfg(test)]
         row: bounds.unwrap_or(egui::Rect::NOTHING),
     }
 }
@@ -721,6 +746,7 @@ pub(super) fn thought_fold_id(thread_id: &str, kind: &str, key: u64) -> egui::Id
     egui::Id::new(("cabin-thought-fold", thread_id, kind, key))
 }
 
+#[cfg(test)]
 pub(super) fn read_thought_fold(ctx: &egui::Context, id: egui::Id) -> ThoughtFold {
     ctx.data(|d| d.get_temp(id)).unwrap_or_default()
 }

@@ -8,6 +8,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+#[cfg(any(not(windows), test))]
 use std::thread;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -385,16 +386,20 @@ pub fn hide_to_tray_window() -> TrayWindow {
 }
 
 /// Win32 `WS_EX_TOOLWINDOW` — hidden from the taskbar and Alt-Tab.
+#[cfg(any(windows, test))]
 pub const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
 /// Win32 `WS_EX_APPWINDOW` — forced onto the taskbar.
+#[cfg(any(windows, test))]
 pub const WS_EX_APPWINDOW: u32 = 0x0004_0000;
 
 /// × / close-to-tray: keep the HWND so winit timers live, drop the taskbar stub.
+#[cfg(any(windows, test))]
 pub fn windows_unmap_exstyle(ex: u32) -> u32 {
     (ex | WS_EX_TOOLWINDOW) & !WS_EX_APPWINDOW
 }
 
 /// Show cabin: put the cabin back on the taskbar.
+#[cfg(any(windows, test))]
 pub fn windows_map_exstyle(ex: u32) -> u32 {
     (ex | WS_EX_APPWINDOW) & !WS_EX_TOOLWINDOW
 }
@@ -563,10 +568,12 @@ pub fn spawn() -> Option<TrayHost> {
 
 /// Linux installs `hicolor` + `icon_name = grokhub`. Windows has no icon
 /// theme — the tray must carry the same cabin PNG as RGBA.
+#[cfg(any(windows, test))]
 pub fn cabin_tray_png() -> &'static [u8] {
     include_bytes!("../../../packaging/icons/hicolor/32x32/apps/grokhub.png")
 }
 
+#[cfg(any(windows, test))]
 pub fn cabin_tray_rgba() -> Option<(Vec<u8>, u32, u32)> {
     let img = image::load_from_memory(cabin_tray_png()).ok()?.into_rgba8();
     let (width, height) = img.dimensions();
@@ -655,6 +662,7 @@ fn windows_tray_attach() -> Option<TrayHost> {
 
 /// ksni `spawn()` `block_on`s session-bus setup on the caller. Never do that
 /// on the UI thread — a missing bus hangs close/quit for tens of seconds.
+#[cfg(any(not(windows), test))]
 pub fn spawn_worker<F, T>(f: F) -> mpsc::Receiver<T>
 where
     F: FnOnce() -> T + Send + 'static,
@@ -702,6 +710,7 @@ pub fn keep_if_hidden<T>(_hidden: bool, host: T) -> Option<T> {
     Some(host)
 }
 
+#[cfg(any(unix, test))]
 pub fn drop_off_thread<T: Send + 'static>(value: T) {
     let _ = thread::Builder::new()
         .name("grokhub-tray-drop".into())
