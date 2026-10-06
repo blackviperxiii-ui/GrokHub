@@ -35,6 +35,9 @@ pub struct PulseMeta {
     /// Released from quiet hours inside one digest card: no ping of its own.
     #[serde(default, skip_serializing_if = "is_false")]
     pub quiet_batched: bool,
+    /// Closed on the main window's deck. Pulse still shows it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub off_home: bool,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -817,6 +820,20 @@ pub fn snooze_until(now_ms: u64, hour: u32, minute: u32) -> u64 {
     midnight + target * 60_000
 }
 
+/// × on the main window's deck: the card leaves that deck only. Pulse keeps it.
+pub fn hide_from_home(cards: &mut [UpdateCard], id: &str) -> bool {
+    match cards
+        .iter_mut()
+        .find(|c| c.id == id && c.status != UpdateStatus::Dismissed && !c.pulse.off_home)
+    {
+        Some(card) => {
+            card.pulse.off_home = true;
+            true
+        }
+        None => false,
+    }
+}
+
 pub fn snooze_card(cards: &mut [UpdateCard], id: &str, until: u64) -> bool {
     match cards.iter_mut().find(|c| c.id == id) {
         Some(card) => {
@@ -1440,6 +1457,29 @@ mod tests {
         assert!(snooze_card(&mut cards, "i", 2_000));
         assert!(!pulse_visible(&cards[0], 1_999));
         assert!(pulse_visible(&cards[0], 2_000));
+    }
+
+    #[test]
+    fn closing_a_card_on_the_main_deck_keeps_it_in_pulse() {
+        let mut cards = vec![automation_done_card("job", "Backup", "ok", 5)];
+        let id = cards[0].id.clone();
+        assert!(hide_from_home(&mut cards, &id));
+        assert!(cards[0].pulse.off_home);
+        assert_eq!(cards[0].status, UpdateStatus::Unread);
+        assert!(pulse_visible(&cards[0], 10), "Pulse still shows it");
+        assert!(!hide_from_home(&mut cards, &id), "already off the deck");
+        assert!(!hide_from_home(&mut cards, "missing"));
+        let saved = serde_json::to_string(&cards[0]).unwrap();
+        assert!(saved.contains("\"offHome\":true"), "{saved}");
+        let back: UpdateCard = serde_json::from_str(&saved).unwrap();
+        assert!(back.pulse.off_home);
+        let mut fresh = automation_done_card("job2", "Sync", "ok", 6);
+        let plain = serde_json::to_string(&fresh).unwrap();
+        assert!(!plain.contains("offHome"), "{plain}");
+        fresh.status = UpdateStatus::Dismissed;
+        let mut gone = vec![fresh];
+        let gone_id = gone[0].id.clone();
+        assert!(!hide_from_home(&mut gone, &gone_id), "a dismissed card stays dismissed");
     }
 
     #[test]
