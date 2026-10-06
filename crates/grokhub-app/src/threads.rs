@@ -481,6 +481,7 @@ pub fn chat_section_indices(
 
 /// Chats that belong to this folder or to a project inside it.
 /// They are listed under the open folder. They are not the chat section.
+#[cfg(test)]
 pub fn folder_chat_indices(
     threads: &[ChatThread],
     folder_id: &str,
@@ -519,12 +520,14 @@ pub fn project_section_chat_indices(
 }
 
 /// Clicking a chat in the project section leaves the chat section's rows as they were.
+#[cfg(test)]
 pub fn project_chat_click_keeps_chat_section(before: &[usize], after: &[usize]) -> bool {
     before == after
 }
 
 /// Extra History row for a project folder. Grok session rows are painted separately.
 /// An unused Chat draft (no dialogue, no session) stays off the rail.
+#[cfg(test)]
 pub fn project_folder_history_row(already_listed: bool, empty: bool, has_session: bool) -> bool {
     !already_listed && !empty_chat_draft(empty, has_session)
 }
@@ -625,6 +628,7 @@ pub fn user_history_row(background: bool, title: &str, empty: bool, has_session:
 
 
 /// User chats that exist, ignoring the project filter. Creating a project must not drop these.
+#[cfg(test)]
 pub fn history_corpus(threads: &[ChatThread]) -> Vec<(String, usize)> {
     let mut out = Vec::new();
     for t in threads {

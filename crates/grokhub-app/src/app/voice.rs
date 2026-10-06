@@ -66,7 +66,7 @@ impl Cabin {
     }
 
     pub(super) fn start_ptt_listen(&mut self) {
-        if !hey_grok_starts_ptt(self.voice_sock.is_some(), self.running) {
+        if self.running {
             return;
         }
         let speech = self.bearer();
@@ -87,9 +87,7 @@ impl Cabin {
         if !ptt_after_speak(self.voice_is_on()) {
             return;
         }
-        if self.voice_hold_rx.is_some()
-            || !hey_grok_starts_ptt(self.voice_sock.is_some(), self.running)
-        {
+        if self.voice_hold_rx.is_some() || self.running {
             return;
         }
         self.start_ptt_listen();
@@ -106,15 +104,12 @@ impl Cabin {
     }
 
     pub(super) fn voice_is_on(&self) -> bool {
-        voice_mode_active(self.voice_state, self.voice_sock.is_some())
+        self.voice_state != VoiceState::Idle
     }
 
     pub(super) fn leave_voice(&mut self) {
         self.voice_hold_rx = None;
         self.voice_ready_at = None;
-        if let Some(mut s) = self.voice_sock.take() {
-            s.halt();
-        }
         let ptt = self.running && self.voice_state != VoiceState::Idle;
         self.voice_state = VoiceState::Idle;
         self.voice_orb = "idle".into();
@@ -172,66 +167,6 @@ impl Cabin {
             self.listen_voice();
         }
         resp.rect
-    }
-
-    pub(super) fn poll_voice(&mut self) {
-        let Some(sock) = &self.voice_sock else {
-            return;
-        };
-        let mut evs = Vec::new();
-        while let Ok(ev) = sock.rx.try_recv() {
-            evs.push(ev);
-        }
-        for ev in evs {
-            self.voice_state = reduce_voice_state(self.voice_state, &ev);
-            self.voice_orb = match self.voice_state {
-                VoiceState::Listening => "listening",
-                VoiceState::Speaking => "speaking",
-                VoiceState::Hands => "hands",
-                VoiceState::Idle | VoiceState::Ready => "idle",
-            }
-            .into();
-            match ev {
-                VoiceEvent::Transcript { .. } => {
-                    if let Some((role, text, kind)) = voice_stream_token(&ev) {
-                        if voice_transcript_sends_chat(self.voice_sock.is_some()) {
-                            if voice_log_role(&ev).is_some() && role == "user" {
-                                self.send_chat(text.to_string());
-                            }
-                        } else {
-                            let push = {
-                                let last = self
-                                    .live_tail_mut()
-                                    .last_mut()
-                                    .map(|m| (m.0.as_str(), &mut m.1));
-                                fold_stream_fields(last, role, text, kind)
-                            };
-                            if let Some((role, content)) = push {
-                                self.live_tail_mut().push((role, content));
-                            }
-                            if matches!(kind, StreamTokenKind::Replace)
-                                && voice_log_role(&ev).is_some()
-                            {
-                                self.persist();
-                            } else {
-                                self.persist_idle_key = self.persist_idle_now();
-                            }
-                        }
-                    }
-                }
-                VoiceEvent::Fallback | VoiceEvent::Error(_) => {
-                    if let Some(mut s) = self.voice_sock.take() {
-                        s.halt();
-                    }
-                    self.status = "Voice socket failed — push-to-talk".into();
-                }
-                VoiceEvent::Close => {
-                    self.voice_sock = None;
-                    self.voice_state = VoiceState::Idle;
-                }
-                _ => {}
-            }
-        }
     }
 
     pub(super) fn sync_hub_voice(&self) {
