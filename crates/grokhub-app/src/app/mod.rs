@@ -53,7 +53,7 @@ use grokhub_core::{
     drop_selected, drop_trailing_assistant, due_automations, due_loops, ensure_automation_schedule,
     estimate_messages, estimate_messages_from, extract_imagine_prompt, extract_insights,
     abandon_inflight_card, apply_assistant_work_marks,
-    fact_candidates, fact_candidates_from, filter_palette, inflight_card_title,
+    fact_candidates, fact_candidates_from, filter_palette, inflight_card_title, palette_shortcut,
     release_inflight_card, settle_inflight_card, upsert_inflight_card,
     filter_slash_hits, flush_visible_goal, folder_choices, forbidden_reason,
     forget_topic, fork_offer_why, format_consult_reply, frame_bytes,
@@ -4625,6 +4625,11 @@ impl Cabin {
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Slash)) {
             self.shortcuts_open = !self.shortcuts_open;
+        }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Comma) && !i.modifiers.shift)
+        {
+            self.palette_open = false;
+            self.nav = Nav::Settings;
         }
     }
 
