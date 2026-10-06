@@ -3772,13 +3772,11 @@ impl Cabin {
     }
 
     /// Labs → Beta channel: fetch/build/install from beta or stable. Rollback on fail.
+    /// Linux only — Windows Labs shows a disabled toggle + note instead.
+    #[cfg(not(windows))]
     fn queue_channel_switch(&mut self, target: grokhub_core::Channel) {
         self.nav = Nav::Settings;
         self.settings_sec = SettingsSec::Labs;
-        if cfg!(windows) {
-            self.status = crate::update::channel_windows_note().into();
-            return;
-        }
         let src = match resolve_source(&self.cfg.source_dir) {
             Some(p) => p,
             None => {
