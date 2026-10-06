@@ -15,9 +15,9 @@ use grokhub_core::{
     links_from_research, mark_update_opened, parse_lookup, post_help, post_update,
     quiet_hours_active, remember_dismissed_source, route_schedule,
     schedule_created_card, tick_feed_pulse, visible_digests,
-    CardReaction, DigestEdition, DigestMaterial, PausedJob, PulseNow, RepeatedAction,
+    DigestEdition, DigestMaterial, PausedJob, PulseNow, RepeatedAction,
     TasteNote, UpdateAction, UpdateCard,
-    UpdateKind, UpdateStatus, DIGEST_PAINT_MAX, FEED_PAINT_MAX,
+    UpdateKind, UpdateStatus, DIGEST_PAINT_MAX,
 };
 
 /// What an ideas reply is checked against.
@@ -39,8 +39,10 @@ const FEED_CARD_H: f32 = 96.0;
 const DECK_CLEAR: f32 = 1.0;
 /// Longest wait for the model's idea list before the board gives up on that ask.
 pub(super) const IDEAS_WAIT_MS: u64 = 180_000;
+#[cfg(test)]
 const FEED_GAP: f32 = 6.0;
 /// Collapsed chat deck shows this many edges. The rest stay in the count.
+#[cfg(test)]
 pub(super) const HOME_STACK_SHOW: usize = 3;
 /// Second card, tucked under the front. Same offsets as a slide-up deck at rest.
 pub(super) const STACK_REST_DY_1: f32 = 8.0;
@@ -54,6 +56,7 @@ const SLIDE_UP: f32 = 1.10;
 const STACK_POP: f32 = 14.0;
 const SLIDE_SECS: f32 = 0.50;
 
+#[cfg(test)]
 pub(super) fn stacked_feed_h(n: usize) -> f32 {
     if n == 0 {
         return 0.0;
@@ -101,6 +104,7 @@ pub(super) fn rest_slide(index: usize) -> SlidePose {
 }
 
 /// Open pose. Card 0 stays. Each card behind it sits one stride higher, at full size.
+#[cfg(test)]
 pub(super) fn open_slide(index: usize) -> SlidePose {
     SlidePose {
         dy: -(index as f32) * slide_stride(),
@@ -108,6 +112,7 @@ pub(super) fn open_slide(index: usize) -> SlidePose {
     }
 }
 
+#[cfg(test)]
 pub(super) fn mix_slide(rest: SlidePose, open: SlidePose, t: f32) -> SlidePose {
     let t = t.clamp(0.0, 1.0);
     SlidePose {
@@ -117,6 +122,7 @@ pub(super) fn mix_slide(rest: SlidePose, open: SlidePose, t: f32) -> SlidePose {
 }
 
 /// How far to push the open deck down so the top card stays on screen.
+#[cfg(test)]
 pub(super) fn slide_up_shift(front_y: f32, n: usize, screen_top: f32) -> f32 {
     if n <= 1 {
         return 0.0;
@@ -242,6 +248,7 @@ fn settled_hits(
             }
             SlideHit {
                 id: cards[index].id.clone(),
+                #[cfg(test)]
                 index,
                 rect,
             }
@@ -317,10 +324,6 @@ pub(super) fn next_feed_stack(prev: &StackView, hit: StackHit, hovered: Option<S
     }
 }
 
-pub(super) fn update_feed_h(n: usize) -> f32 {
-    stacked_feed_h(n.min(FEED_PAINT_MAX))
-}
-
 pub(super) fn home_feed_count(cards: &[UpdateCard], pulse: &grokhub_core::FeedPulse, now: u64) -> usize {
     home_stack_cards(cards, pulse, now).len()
 }
@@ -328,11 +331,8 @@ pub(super) fn home_feed_count(cards: &[UpdateCard], pulse: &grokhub_core::FeedPu
 pub(super) enum FeedAct {
     Open(String),
     Dismiss(String),
-    Build(String),
     Discuss(String),
     Archive(String),
-    /// Remove an idea from the Ideas board.
-    Drop(String),
 }
 
 impl Cabin {
@@ -894,11 +894,9 @@ impl Cabin {
     pub(super) fn apply_feed_act(&mut self, act: Option<FeedAct>) {
         match act {
             Some(FeedAct::Dismiss(id)) => self.dismiss_feed_card(&id),
-            Some(FeedAct::Build(id)) => self.build_idea(&id),
             Some(FeedAct::Open(id)) => self.open_feed_card(&id),
             Some(FeedAct::Discuss(id)) => self.discuss_card(&id),
             Some(FeedAct::Archive(id)) => self.archive_feed_digest(&id),
-            Some(FeedAct::Drop(id)) => self.delete_idea(&id),
             None => {}
         }
     }
@@ -982,17 +980,6 @@ impl Cabin {
         if let Some(route) = route {
             let _ = self.commit_schedule(route);
         }
-    }
-
-    pub(super) fn react_card(&mut self, id: &str, reaction: CardReaction) {
-        let Some(card) = self.updates.iter_mut().find(|c| c.id == id) else {
-            return;
-        };
-        if !matches!(card.kind, UpdateKind::Idea | UpdateKind::Digest) {
-            return;
-        }
-        card.reaction = Some(reaction);
-        self.persist_updates();
     }
 
     /// Once per launch: purge template idea cards. The automatic model ask comes
@@ -1393,6 +1380,8 @@ struct DeckDefer {
 #[derive(Clone, Debug)]
 struct SlideHit {
     id: String,
+    /// Deck slot, read by tests to find the front card.
+    #[cfg(test)]
     index: usize,
     rect: egui::Rect,
 }

@@ -92,6 +92,7 @@ fn restrict_private(_path: &Path) {}
 
 /// True when an SDDL DACL grants read/write to Everyone, Users, Authenticated Users,
 /// Guests, or Anonymous. Owner / SYSTEM SIDs are fine (`OW` expands to `S-1-5-21-…`).
+#[cfg(any(windows, test))]
 pub(crate) fn sddl_allows_world(sddl: &str) -> bool {
     sddl.split('(')
         .skip(1)

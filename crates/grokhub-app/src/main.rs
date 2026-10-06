@@ -4,9 +4,6 @@
 //! kills the cabin. CLI flags attach the parent console when there is one.
 
 #![cfg_attr(not(test), windows_subsystem = "windows")]
-// Cabin leftovers (Ask ACP, unused tray/update/audio helpers) until a dedicated sweep.
-// Workspace clippy stays -D warnings without -A dead_code.
-#![allow(dead_code)]
 
 mod app;
 mod build_agent;
@@ -33,7 +30,6 @@ mod feed;
 mod recipes;
 mod notify;
 mod store;
-mod voice_ws;
 mod oauth;
 mod imagine_auth;
 mod secrets;
