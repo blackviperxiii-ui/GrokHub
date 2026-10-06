@@ -24187,8 +24187,8 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
         .iter()
         .filter(|t| t.as_str() == "Suggest ideas")
         .count();
-    assert!(
-        suggest_n >= 1 && suggest_n <= 1,
+    assert_eq!(
+        suggest_n, 1,
         "expected one Suggest ideas, got {suggest_n}: {empty:?}"
     );
     assert!(!empty.iter().any(|t| t.contains("Thinking")), "{empty:?}");
