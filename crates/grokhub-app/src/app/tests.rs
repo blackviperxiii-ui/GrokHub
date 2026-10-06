@@ -10156,11 +10156,11 @@ fn command_palette_opens_and_navigates() {
     cabin.open_palette();
     assert!(cabin.palette_open);
     assert!(cabin.palette_q.is_empty());
-    cabin.run_palette("nav:board");
+    cabin.run_palette(&egui::Context::default(), "nav:board");
     assert!(matches!(cabin.nav, Nav::Workboard));
     assert!(!cabin.palette_open);
     cabin.open_palette();
-    cabin.run_palette("nav:history");
+    cabin.run_palette(&egui::Context::default(), "nav:history");
     assert!(matches!(cabin.nav, Nav::History));
 }
 
@@ -13325,13 +13325,28 @@ fn palette_opens_and_diagnostics_stay_off_a_run() {
     assert!(!cabin.settings_menu_open);
     assert!(!cabin.running);
 
-    cabin.run_palette("diag");
+    // Copy diagnostics puts the bundle on the clipboard, not in the status line.
+    let ctx = egui::Context::default();
+    let out = crate::theme::test_pass(&ctx, Default::default(), |_| {
+        cabin.run_palette(&ctx, "diag");
+    });
     assert!(!cabin.palette_open);
-    assert!(cabin.status.contains("app GrokHub"));
-    assert!(cabin.status.contains(env!("CARGO_PKG_VERSION")));
+    assert_eq!(cabin.status, "Diagnostics copied");
+    let copied: Vec<&String> = out
+        .platform_output
+        .commands
+        .iter()
+        .filter_map(|c| match c {
+            egui::OutputCommand::CopyText(t) => Some(t),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(copied.len(), 1, "{copied:?}");
+    assert!(copied[0].starts_with("app GrokHub\nversion "), "{}", copied[0]);
+    assert!(copied[0].contains(env!("CARGO_PKG_VERSION")), "{}", copied[0]);
     assert!(!cabin.running);
 
-    cabin.run_palette("nav:night");
+    cabin.run_palette(&egui::Context::default(), "nav:night");
     assert!(matches!(cabin.nav, Nav::Night));
     assert!(!cabin.palette_open);
     assert!(!cabin.running);
@@ -23521,7 +23536,7 @@ fn pulse_replaces_ideas_on_the_rail_and_old_links_still_land() {
     assert_eq!(cabin.nav, super::Nav::Pulse);
     assert_eq!(cabin.nav_id(), "pulse");
     cabin.nav = super::Nav::Chat;
-    cabin.run_palette("nav:pulse");
+    cabin.run_palette(&egui::Context::default(), "nav:pulse");
     assert_eq!(cabin.nav, super::Nav::Pulse);
     // The deck no longer stacks over a new chat unless Settings turns it back on.
     assert!(!crate::config::AppConfig::default().home_deck);
@@ -24333,4 +24348,110 @@ fn the_palette_closes_on_navigation_and_uses_the_sidebar_names() {
     };
     let _ = crate::theme::test_pass(&ctx, release, |ui| cabin.ui_palette(ui.ctx()));
     assert!(!cabin.palette_open, "an outside click closes the palette");
+}
+
+/// One composer frame wired like the Chat pill: the send check runs before and
+/// after a multiline field whose `return_key` is Command+Enter.
+fn composer_key_frame(
+    ctx: &egui::Context,
+    composer: &mut String,
+    modifiers: egui::Modifiers,
+    keys: &[egui::Key],
+) -> Vec<String> {
+    let id = egui::Id::new("composer-key-frame");
+    let mut events = vec![egui::Event::ModifiersChanged(modifiers)];
+    events.extend(keys.iter().map(|&key| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers,
+    }));
+    let raw = egui::RawInput {
+        events,
+        ..Default::default()
+    };
+    let mut sent = Vec::new();
+    let _ = crate::theme::test_pass(ctx, raw, |ui| {
+        ui.memory_mut(|m| m.request_focus(id));
+        let focused = ui.memory(|m| m.has_focus(id));
+        if let Some(t) = super::take_focused_composer(ui, composer, focused) {
+            sent.push(t);
+        }
+        let edit = ui.add(
+            egui::TextEdit::multiline(composer)
+                .id(id)
+                .return_key(Some(egui::KeyboardShortcut::new(
+                    egui::Modifiers::COMMAND,
+                    egui::Key::Enter,
+                ))),
+        );
+        if let Some(t) = super::take_focused_composer(ui, composer, edit.has_focus()) {
+            sent.push(t);
+        }
+    });
+    sent
+}
+
+#[test]
+fn shift_enter_breaks_the_composer_line_and_enter_sends() {
+    let ctx = egui::Context::default();
+    let mut composer = String::from("first line");
+    // Settle focus with a frame that presses nothing.
+    assert!(composer_key_frame(&ctx, &mut composer, egui::Modifiers::NONE, &[]).is_empty());
+
+    let sent = composer_key_frame(&ctx, &mut composer, egui::Modifiers::SHIFT, &[egui::Key::Enter]);
+    assert!(sent.is_empty(), "Shift+Enter must not send: {sent:?}");
+    assert_eq!(composer, "first line\n");
+
+    // Ctrl on Linux and Windows sets both bits, as winit reports it.
+    let ctrl = egui::Modifiers::CTRL | egui::Modifiers::COMMAND;
+    let sent = composer_key_frame(&ctx, &mut composer, ctrl, &[egui::Key::Enter]);
+    assert!(sent.is_empty(), "Ctrl+Enter must not send: {sent:?}");
+    assert_eq!(composer, "first line\n\n");
+
+    composer = String::from("send me");
+    let sent = composer_key_frame(&ctx, &mut composer, egui::Modifiers::NONE, &[egui::Key::Enter]);
+    assert_eq!(sent, vec!["send me".to_string()]);
+    assert_eq!(composer, "");
+
+    // Alt+Enter still sends (it queues while a reply runs).
+    composer = String::from("queue me");
+    let sent = composer_key_frame(&ctx, &mut composer, egui::Modifiers::ALT, &[egui::Key::Enter]);
+    assert_eq!(sent, vec!["queue me".to_string()]);
+
+    let src = cabin_src();
+    let take = fn_src(&src, "take_focused_composer");
+    assert!(take.contains("shift_enter_as_newline"), "{take}");
+}
+
+#[test]
+fn ctrl_comma_opens_settings_and_the_palette_lists_shortcuts() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.nav = Nav::Chat;
+    cabin.palette_open = true;
+    let ctx = egui::Context::default();
+    let comma = egui::RawInput {
+        events: vec![
+            egui::Event::ModifiersChanged(egui::Modifiers::COMMAND),
+            egui::Event::Key {
+                key: egui::Key::Comma,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+            },
+        ],
+        ..Default::default()
+    };
+    let _ = crate::theme::test_pass(&ctx, comma, |ui| {
+        let ctx = ui.ctx().clone();
+        cabin.logic_input_actions(&ctx);
+    });
+    assert!(matches!(cabin.nav, Nav::Settings));
+    assert!(!cabin.palette_open);
+
+    cabin.shortcuts_open = false;
+    cabin.run_palette(&ctx, "shortcuts");
+    assert!(cabin.shortcuts_open);
 }
