@@ -443,10 +443,13 @@ mod tests {
         assert_eq!(crate::theme::composer_glow_rgb(), crate::theme::LIGHT_FG);
         crate::theme::set_paint_dark(true);
         let _ = accent;
+        // Only scan production source — this test body must not contain the forbid needle.
         let src = include_str!("mod.rs");
+        let prod = src.split("#[cfg(test)]").next().expect("prod");
+        let forbid = format!("{}{}", "let accent = crate::theme::", "live()");
         assert!(
-            src.contains("composer_glow_rgb()") && !src.contains("let accent = crate::theme::live()"),
-            "glow must take composer_glow_rgb, not live green: {src}"
+            prod.contains("composer_glow_rgb()") && !prod.contains(&forbid),
+            "glow must take composer_glow_rgb, not live green: {prod}"
         );
     }
 
