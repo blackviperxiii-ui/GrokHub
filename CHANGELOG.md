@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 2.10.93 — 2026-10-06
+
 Imagine reuses the Settings → Account Grok sign-in. Opening Imagine no longer asks for a second separate sign-in when Account is already signed in, and it stops re-prompting after a successful auth: credentials try Imagine's own keychain first, then Account (`secrets.oauth`, with the same live/refresh path Lab mode uses), then the console API key. The composer Sign in control and the need-signin message point at Settings → Account instead of starting another OAuth wall. Tests cover Account-only reuse, Imagine-keychain preference, no re-prompt on a second `imagine_cred` call, and the exact need-signin sentence.
 
 Composer streaming glow is a white breath (`#e7e9ea`, icons.rs breath math): idle α≈0.25, streaming 0.25↔0.55, settles to idle in 200ms. Always permission settles in 140ms (fill α + scale 0.98→1.0) to a white ring, then stops. Reduced-motion skips the animation. Branch-cleanup and bot-choice notes; Semgrep / dyl-review / Continual Learning wired in the rules. Grok Build explore/plan/implementer roles documented. No version bump.
@@ -22,6 +24,9 @@ Cleanup with no visible change: the cabin no longer switches off Rust's dead-cod
 Keyboard and palette polish. Shift+Enter now starts a new line in the chat composer, as it does in most chat apps; before, it sent the message. Ctrl+Enter still starts a new line, Enter still sends, and Alt+Enter still queues while a reply runs. Ctrl+, opens Settings. The command palette (Ctrl+K) shows each row's shortcut at the right (New chat Ctrl+N, Settings Ctrl+,, Hey Grok Ctrl+G), its rows line up on the left like the sidebar, and a new Keyboard shortcuts row opens the shortcut sheet. Copy diagnostics in the palette now copies the bundle to the clipboard, as the Settings button does, instead of pasting it into the status line. The bundle names the full build (`2.10.92-beta (beta @ abc1234)`) and the OS, and a key that shows up in the status line is redacted before it is copied. New tests drive Shift+Enter, Ctrl+Enter, Enter, and Alt+Enter through a composer field wired like the chat's, press Ctrl+, through the app's input handler, and read the clipboard command the palette's Copy diagnostics sends.
 
 The card deck on the main chat window stays where it is. Hovering it used to lift the whole deck above the chat box, and moving the pointer up to the cards dropped it back down. Now a single card doesn't move at all. With several, the cards behind the front one slide up just far enough to show their titles, and the card under the pointer rises only enough to read in full. × on a card there takes it off that deck only: Pulse keeps it, and nothing is marked dismissed. The deck holds at most three cards, and when one leaves, the next waiting card slides in. The count on the deck includes the cards still waiting.
+
+- Linux: `grokhub-linux-v2.10.93.tar.gz` and AUR `pkgver=2.10.93`.
+- Windows: `GrokHub-Setup-2.10.93.exe` and `grokhub-windows-v2.10.93.zip`.
 
 ## 2.10.92 — 2026-10-04
 
