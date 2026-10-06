@@ -707,8 +707,18 @@ pub(super) fn chat_row_outside_clip(
 impl Cabin {
     /// GPU glow behind the pill while a reply streams, on wgpu with the Settings switch on.
     fn paint_composer_glow(&self, ui: &egui::Ui, pill: egui::Rect) {
-        if self.running && self.cfg.composer_glow && crate::fx::renderer_is_wgpu() {
-            crate::fx::paint_composer_glow(ui, pill);
+        if !self.cfg.composer_glow || !crate::fx::renderer_is_wgpu() {
+            return;
+        }
+        // Keep painting while streaming or while the 200ms settle to idle α is in flight.
+        let settle = crate::theme::animate_selection_secs(
+            ui,
+            egui::Id::new("composer-glow-stream"),
+            self.running,
+            grokhub_core::GLOW_SETTLE_SECS,
+        );
+        if self.running || settle > 0.01 {
+            crate::fx::paint_composer_glow_at(ui, pill, self.running);
         }
     }
 }
