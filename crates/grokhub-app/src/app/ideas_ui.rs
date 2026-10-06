@@ -244,11 +244,7 @@ impl Cabin {
                 ui.add_space(8.0);
                 crate::cards::section_label(
                     ui,
-                    match grokhub_core::pulse::pulse_type(card) {
-                        grokhub_core::pulse::PulseType::Learn => "What I'll learn",
-                        grokhub_core::pulse::PulseType::Automate => "What Apply will schedule",
-                        _ => "What Apply will do",
-                    },
+                    grokhub_core::pulse::pulse_type(card).apply_heading(),
                 );
                 let mut action = card.idea_action();
                 let edit = ui.add(
