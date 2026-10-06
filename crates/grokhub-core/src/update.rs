@@ -112,6 +112,75 @@ fn git_origin_url(source: &Path) -> Result<String, String> {
     Ok(out.trim().to_string())
 }
 
+fn git_rev_parse(source: &Path, rev: &str) -> Result<String, String> {
+    let (ok, out) = git_stdout(source, &["rev-parse", "--verify", rev])?;
+    if !ok {
+        return Err(format!("missing {rev}"));
+    }
+    let sha = out.trim().to_string();
+    if sha.is_empty() {
+        return Err(format!("empty {rev}"));
+    }
+    Ok(sha)
+}
+
+/// Parse `git ls-remote` stdout for `refs/heads/beta` and `refs/heads/main`.
+/// Missing refs yield empty strings.
+pub fn parse_ls_remote_tips(stdout: &str) -> (String, String) {
+    let mut beta = String::new();
+    let mut main = String::new();
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let Some(sha) = parts.next() else {
+            continue;
+        };
+        let Some(name) = parts.next() else {
+            continue;
+        };
+        match name {
+            "refs/heads/beta" => beta = sha.to_string(),
+            "refs/heads/main" => main = sha.to_string(),
+            _ => {}
+        }
+    }
+    (beta, main)
+}
+
+/// Tip SHAs from cached remote-tracking refs (`origin/beta`, `origin/main`).
+/// No network — use after a fetch/pull, or when ls-remote is unavailable.
+pub fn remote_tracking_tips(source: &Path) -> Result<(String, String), String> {
+    let beta = git_rev_parse(source, "origin/beta").unwrap_or_default();
+    let main = git_rev_parse(source, "origin/main").unwrap_or_default();
+    if beta.is_empty() && main.is_empty() {
+        return Err("no origin/beta or origin/main in clone".into());
+    }
+    Ok((beta, main))
+}
+
+/// Network probe: `git ls-remote origin refs/heads/beta refs/heads/main`.
+pub fn ls_remote_channel_tips(source: &Path) -> Result<(String, String), String> {
+    if !is_grokhub_source(source) {
+        return Err("not a GrokHub source tree".into());
+    }
+    let (ok, out) = git_stdout(
+        source,
+        &[
+            "ls-remote",
+            "origin",
+            "refs/heads/beta",
+            "refs/heads/main",
+        ],
+    )?;
+    if !ok {
+        return Err("git ls-remote origin failed".into());
+    }
+    Ok(parse_ls_remote_tips(&out))
+}
+
 /// Overlay pulls this GitHub remote until Cursor Origin is live.
 pub const GITHUB_REMOTE_URL: &str = "https://github.com/blackviperxiii-ui/GrokHub.git";
 /// Leftover Cursor Origin clone — retarget to GitHub.
@@ -1764,5 +1833,28 @@ mod tests {
         assert!(cabin_unix.iter().all(|c| !grok_cli_update_cmd(c)));
         assert!(cabin_unix.iter().any(|c| c.contains("install.sh")));
         let _ = fs::remove_dir_all(&root);
+    }
+}
+
+
+#[cfg(test)]
+mod channel_tip_tests {
+    use super::*;
+
+    #[test]
+    fn parse_ls_remote_tips_reads_beta_and_main() {
+        let out = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/heads/beta\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/heads/main\n";
+        assert_eq!(
+            parse_ls_remote_tips(out),
+            (
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into()
+            )
+        );
+        assert_eq!(parse_ls_remote_tips(""), (String::new(), String::new()));
+        assert_eq!(
+            parse_ls_remote_tips("deadbeef refs/heads/beta\n"),
+            ("deadbeef".into(), String::new())
+        );
     }
 }
