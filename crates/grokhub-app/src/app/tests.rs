@@ -10098,41 +10098,6 @@ fn an_older_persist_snapshot_never_overwrites_a_newer_one() {
 }
 
 #[test]
-fn archive_feed_digest_drops_the_digest() {
-    let _lock = crate::config::hold_test_config();
-    let cfg = IsolatedConfig::arm("archive-digest");
-    let mut cabin = Cabin::quiet_for_test();
-    let card = grokhub_core::digest_card("week", "Week notes", "rolled up", 2);
-    let id = card.id.clone();
-    cabin.updates.push(card);
-    assert!(
-        grokhub_core::visible_digests(&cabin.updates)
-            .iter()
-            .any(|c| c.id == id),
-        "the digest starts on the live feed"
-    );
-    cabin.archive_feed_digest(&id);
-    wait_tree_contains(&cfg.root, "Week notes");
-    assert!(
-        grokhub_core::visible_digests(&cabin.updates)
-            .iter()
-            .all(|c| c.id != id),
-        "archive drops the digest from the live feed"
-    );
-    assert!(
-        grokhub_core::archived_digests(&cabin.updates)
-            .iter()
-            .any(|c| c.id == id),
-        "the dropped digest is the archived row"
-    );
-    assert_eq!(
-        cabin.updates.iter().find(|c| c.id == id).map(|c| c.status),
-        Some(grokhub_core::UpdateStatus::Dismissed)
-    );
-    drop(cfg);
-}
-
-#[test]
 fn home_x_on_a_digest_keeps_it_in_pulse() {
     let _lock = crate::config::hold_test_config();
     let cfg = IsolatedConfig::arm("home-x-digest");

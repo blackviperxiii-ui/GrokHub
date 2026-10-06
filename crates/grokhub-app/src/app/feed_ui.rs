@@ -8,7 +8,7 @@
 
 use super::*;
 use grokhub_core::{
-    archive_digest, automation_done_card,
+    automation_done_card,
     dismiss_update_at, feed_ideas, feed_visible, file_idea_todo, hold_if_quiet,
     idea_open_line, unpin_feed_idea,
     idea_todo_title,
@@ -37,10 +37,8 @@ pub(super) struct IdeaInputs {
 const FEED_CARD_H: f32 = 96.0;
 /// Longest wait for the model's idea list before the board gives up on that ask.
 pub(super) const IDEAS_WAIT_MS: u64 = 180_000;
-#[cfg(test)]
 const FEED_GAP: f32 = 6.0;
 /// Collapsed chat deck shows this many edges. The rest stay in the count.
-#[cfg(test)]
 pub(super) const HOME_STACK_SHOW: usize = 3;
 /// Second card, tucked under the front. Same offsets as a slide-up deck at rest.
 pub(super) const STACK_REST_DY_1: f32 = 8.0;
@@ -1097,12 +1095,6 @@ impl Cabin {
         self.nav = Nav::Chat;
         self.persist_updates();
         self.persist();
-    }
-
-    pub(super) fn archive_feed_digest(&mut self, id: &str) {
-        if archive_digest(&mut self.updates, id) {
-            self.persist_updates();
-        }
     }
 
     pub(super) fn open_feed_card(&mut self, id: &str) {
