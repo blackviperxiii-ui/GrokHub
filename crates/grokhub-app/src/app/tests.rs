@@ -23508,11 +23508,15 @@ fn pulse_replaces_ideas_on_the_rail_and_old_links_still_land() {
         texts.iter().any(|t| t == "Ideas") && texts.iter().any(|t| t == "Feed"),
         "{texts:?}"
     );
-    // Pulse opens on Feed; its empty line says how to steer it.
+    // Pulse opens on Feed; its empty line says how to steer it (link is separate).
     assert!(
         texts
             .iter()
-            .any(|t| t == "No posts yet. Tell me what to watch in Feed instructions."),
+            .any(|t| t == "No posts yet. Tell me what to watch in "),
+        "{texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t == "Feed instructions"),
         "{texts:?}"
     );
     assert!(
@@ -24178,17 +24182,28 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
             .any(|t| t == "No ideas yet. I'll add one when I spot something worth doing."),
         "{empty:?}"
     );
+    // PI-07: empty Ideas keeps Suggest ideas inline (header slot also has it).
+    assert!(
+        empty.iter().filter(|t| t.as_str() == "Suggest ideas").count() >= 2,
+        "{empty:?}"
+    );
     assert!(!empty.iter().any(|t| t.contains("Thinking")), "{empty:?}");
     cabin.suggest_ideas_with(false);
     assert!(cabin.pulse_view.signin_note);
     assert_eq!(cabin.status, "Connect Grok in Settings to get ideas");
     let signed_out = pulse_texts(cabin, 900.0);
+    assert!(cabin.pulse_view.signin_note, "note stays until Account/native signs in");
     for want in ["Sign in to Grok to get ideas.", "Open Settings"] {
         assert!(
             signed_out.iter().any(|t| t == want),
             "missing {want:?} in {signed_out:?}"
         );
     }
+    // PI-05: once signed in (native here), the amber line clears without another press.
+    cabin.cfg.native_engine = true;
+    let _ = pulse_texts(cabin, 900.0);
+    assert!(!cabin.pulse_view.signin_note);
+    cabin.cfg.native_engine = false;
     // While a suggestion call runs: placeholder rows, and no empty line beside them.
     let (_tx, rx) = mpsc::channel::<String>();
     cabin.ideas_rx = Some((rx, Default::default()));
@@ -24207,6 +24222,60 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
         "{loading:?}"
     );
     cabin.ideas_rx = None;
+
+    // Feed empty: lead + clickable "Feed instructions" + silence line.
+    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Feed;
+    let feed = pulse_texts(cabin, 900.0);
+    assert!(
+        feed
+            .iter()
+            .any(|t| t == "No posts yet. Tell me what to watch in "),
+        "{feed:?}"
+    );
+    assert!(feed.iter().any(|t| t == "Feed instructions"), "{feed:?}");
+    assert!(
+        !feed
+            .iter()
+            .any(|t| t == "No posts yet. Tell me what to watch in Feed instructions."),
+        "empty Feed paints the link separately: {feed:?}"
+    );
+}
+
+#[test]
+fn pulse_opened_idea_heading_matches_row_type() {
+    use grokhub_core::pulse::PulseType;
+    assert_eq!(PulseType::Do.apply_heading(), "What Apply will do");
+    assert_eq!(PulseType::Automate.apply_heading(), "What Apply will schedule");
+    assert_eq!(PulseType::Learn.apply_heading(), "What I'll learn");
+    let src = include_str!("ideas_ui.rs");
+    let open = src
+        .split("fn paint_idea_open(")
+        .nth(1)
+        .and_then(|s| s.split("fn apply_idea_act(").next())
+        .unwrap_or(src);
+    assert!(
+        open.contains("pulse_type(card).apply_heading()"),
+        "opened card must use the same type source as the row"
+    );
+    let skel = include_str!("pulse_ui.rs");
+    let paint = skel
+        .split("fn paint_skeleton_row(")
+        .nth(1)
+        .and_then(|s| s.split("fn paint_thumbs(").next())
+        .expect("skeleton");
+    assert!(
+        paint.contains("theme::elevated()") && paint.contains("52.0"),
+        "loading Ideas rows are #16181c blocks the size of a row: {paint}"
+    );
+    let loading = skel
+        .split("Thumb::Loading =>")
+        .nth(1)
+        .and_then(|s| s.split('}').next())
+        .expect("loading thumb");
+    assert!(
+        loading.contains("theme::elevated()") && !loading.to_ascii_lowercase().contains("icon"),
+        "loading image is a plain #16181c skeleton with no icon: {loading}"
+    );
 }
 
 #[test]
