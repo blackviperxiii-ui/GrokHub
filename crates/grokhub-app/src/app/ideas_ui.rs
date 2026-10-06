@@ -83,6 +83,9 @@ impl Cabin {
         let mut act = None;
         let mut hover = None;
         let mut title_hover = None;
+        let tab_t = self.pulse_view.tab_t;
+        let reduced = crate::motion::reduced_motion(ui);
+        let mut row_i = 0usize;
         for (cat, rows) in groups {
             ui.add_space(if cat.is_some() { 18.0 } else { 4.0 });
             // The top group is a ranking, not a category: it says so.
@@ -105,22 +108,34 @@ impl Cabin {
                 let Some(card) = self.updates.iter().find(|c| c.id == row.id).cloned() else {
                     continue;
                 };
-                if self.idea_board.open.as_deref() == Some(card.id.as_str()) && card.kind == UpdateKind::Idea {
-                    self.paint_idea_open(ui, &card, &mut act);
-                } else {
-                    let st = self.pulse_row_state(&card.id);
-                    let (a, rect, on_title) =
-                        super::pulse_ui::paint_pulse_row(ui, &card, row.kind, st);
-                    if a.is_some() {
-                        pulse_act = a;
-                    }
-                    if ui.rect_contains_pointer(rect) {
-                        hover = Some(card.id.clone());
-                        if on_title {
-                            title_hover = Some(card.id.clone());
+                let enter = crate::motion::ideas_row_enter(tab_t, row_i, reduced);
+                row_i = row_i.saturating_add(1);
+                if enter <= 0.001 {
+                    continue;
+                }
+                let avail = ui.available_rect_before_wrap();
+                let y_off = (1.0 - enter) * 6.0;
+                let rect_slot = avail.translate(egui::vec2(0.0, y_off));
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect_slot), |ui| {
+                    ui.set_min_width(avail.width());
+                    ui.multiply_opacity(enter.clamp(0.0, 1.0));
+                    if self.idea_board.open.as_deref() == Some(card.id.as_str()) && card.kind == UpdateKind::Idea {
+                        self.paint_idea_open(ui, &card, &mut act);
+                    } else {
+                        let st = self.pulse_row_state(&card.id);
+                        let (a, rect, on_title) =
+                            super::pulse_ui::paint_pulse_row(ui, &card, row.kind, st);
+                        if a.is_some() {
+                            pulse_act = a;
+                        }
+                        if ui.rect_contains_pointer(rect) {
+                            hover = Some(card.id.clone());
+                            if on_title {
+                                title_hover = Some(card.id.clone());
+                            }
                         }
                     }
-                }
+                });
                 ui.add_space(IDEA_GAP);
             }
         }
