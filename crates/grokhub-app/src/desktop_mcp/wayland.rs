@@ -599,10 +599,6 @@ mod route_tests {
                 log: Arc::new(Mutex::new(Vec::new())),
             }
         }
-
-        fn calls(&self) -> Vec<Vec<String>> {
-            self.log.lock().unwrap_or_else(|err| err.into_inner()).clone()
-        }
     }
 
     impl super::CommandRun for RecordingInjector {

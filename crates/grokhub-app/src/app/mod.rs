@@ -2,7 +2,7 @@ use crate::build_agent;
 use crate::config::{self, AppConfig};
 use crate::desktop::{
     capture_data_url, capture_webcam, clipboard_image, collect_rows, first_bin,
-    load_image_data_url, lock_titles, pick_file, play_audio, prepare_windshield, read_text_capped,
+    load_image_data_url, lock_titles, pick_file, play_audio, read_text_capped,
     record_once, run_computer_op_cancel, run_limited, transcribe_local,
 };
 use crate::helpers::{
@@ -29,7 +29,6 @@ use grokhub_acp::{
     merge_tool_card, retry_status_line, rewrite_truncation_error, turn_footer, AcpEvent,
     GrokPEvent, GrokUsage, PermissionMode, SessionMode, StreamErrorKind, ToolCard,
 };
-#[allow(unused_imports)]
 use grokhub_core::{
     add_to_folder, add_tokens, anticipate_consumes_slot, anticipated_need, appearance_choices,
     appearance_hint, append_composer, append_say, append_thought, append_tool, apply_auto_title_in,
@@ -37,9 +36,9 @@ use grokhub_core::{
     tool_status_failed, tool_status_running, turn_needs_timeline,
     apply_job_error, apply_manual_rename, attach_chip_label, attach_kind, attach_name,
     attach_prompt_line, attach_send_line, automation_blocked_by_policy, automation_schedule_label,
-    automation_summary_line, blend_thread_goal, bound_scan, btw_queues_without_interrupt,
+    automation_summary_line, blend_thread_goal, btw_queues_without_interrupt,
     bubble_outer_width, bubble_wrap_width,
-    build_hub_snapshot, build_quick_chips, build_review_digest, build_windshield, bump_skill_run,
+    build_hub_snapshot, build_quick_chips, build_review_digest, bump_skill_run,
     bump_usage, cabin_overlay_step, cabin_update_notice, cap_from_text, catalog_line,
     chat_attach_status, chat_bearer, chat_run_action, chat_run_hint,
     chat_run_phase, chat_send_kind, chat_shows_thinking, chat_stream_is_visible,
@@ -48,22 +47,20 @@ use grokhub_core::{
     compact_keep_start_from, compose_imagine_prompt, composer_enter,
     composer_go, composer_go_tip, computer_cmd_line, context_fingerprint, context_percent,
     create_folder, create_project, daily_units_blocked, dedicated_imagine_model,
-    dedicated_video_model, dedupe_hits, dedupe_suggestions, default_openclaw_paths, delete_thread,
+    dedupe_hits, dedupe_suggestions, default_openclaw_paths, delete_thread,
     dismiss_accepted_auto,
     devices_shows_pair_code, diagnostics_bundle, digest_line_from, drop_node,
     drop_selected, drop_trailing_assistant, due_automations, due_loops, ensure_automation_schedule,
     estimate_messages, estimate_messages_from, extract_imagine_prompt, extract_insights,
-    abandon_inflight_card, apply_assistant_work_marks, extract_work_pins, extract_work_updates,
-    fact_candidates, fact_candidates_from, filter_palette, inflight_card_title,
+    abandon_inflight_card, apply_assistant_work_marks,
+    fact_candidates, fact_candidates_from, filter_palette, inflight_card_title, palette_shortcut,
     release_inflight_card, settle_inflight_card, upsert_inflight_card,
-    filter_slash_hits, flush_visible_goal, fold_stream_fields, folder_choices, forbidden_reason,
-    forget_topic, fork_offer_why, format_consult_reply, frame_bytes, goal_continue_pin, goal_pin_for_job,
-    goal_step_after_outcome, greet_from_last_job, greeting_fingerprint, greeting_name,
+    filter_slash_hits, flush_visible_goal, folder_choices, forbidden_reason,
+    forget_topic, fork_offer_why, format_consult_reply, frame_bytes,
+    greet_from_last_job, greeting_fingerprint, greeting_name,
     greeting_prompt, grok_cli_update_cmd, grok_command_hits, halt_when_leaving_tab, has_auth,
-    has_verify_ok,
-    history_list_refresh_due,
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, hey_grok_on_press, hey_grok_route,
-    hey_grok_starts_ptt, home_slash_cmd, home_surface_from_nav, host_cmd_leaves_project,
+    home_slash_cmd, home_surface_from_nav, host_cmd_leaves_project,
     host_hour_blocked, host_risk, host_status_line, hub_dispatch_ok, hub_kind_from_health,
     hub_pair_url, imagine_aspect_label, imagine_aspect_name, imagine_image_resolution,
     imagine_ref_status, imagine_stage_h, imagine_stage_visible, imagine_style_label,
@@ -79,52 +76,52 @@ use grokhub_core::{
     local_greeting, lock_blocks_hands, mark_automation_ran, mark_automation_skipped, mark_loop_ran,
     mark_slash_result, match_skill, merge_hub_snapshots, merge_imported_memory,
     merge_suggestion_store, merge_thinking_capped, mint_host_halt, mode_from_chip_value,
-    model_for_mode, nav_from_chip_value, new_loop, next_chat_image, next_goal_prompt,
+    model_for_mode, nav_from_chip_value, new_loop, next_chat_image,
     next_heartbeat_wait_ms, night_check_command, night_check_exit_code, night_check_may_fire,
     night_counts_run, night_unauth_should_skip, normalize_hm, now_ms, oauth_access_live,
     overlay_update_begin, overlay_update_finish, pair_code_is_live, parse_computer_op,
-    parse_consult, parse_fast_topics, parse_goal_outcome, parse_hostname_i, parse_llm_chips,
-    parse_local_clock, parse_recipe, parse_slash, parse_suggest_lines, parse_suggest_skill_patches,
+    parse_fast_topics, parse_hostname_i, parse_llm_chips,
+    parse_local_clock, parse_slash, parse_suggest_lines, parse_suggest_skill_patches,
     parse_theme, parse_trajectory_jsonl, partition_suggestions, patch_skill,
     pending_for_manual_update, perm_key,
     palette_file_shown, palette_forget_stale_walk, palette_row_action,
-    palette_search_is_saved, persist_user_turn, pick_fresh_seed, pick_greeting, pick_greeting_against,
-    pick_lan_ipv4, pick_theme, plan_room,
+    palette_search_is_saved, persist_user_turn, pick_fresh_seed, pick_greeting_against,
+    pick_lan_ipv4, plan_room,
     plus_empty_status, plus_menu_rows, push_stream_capped, prefer_patch, presence_should_stream,
     project_menu_acts, project_menu_label, project_title_from_hint, propose_skill_from_turn,
     prune_live_suggestions, ptt_after_speak, ptt_after_stt, quiet_hours_active,
     quiet_hours_choice_label, quiet_hours_menu, quote_for_reply, realtime_can_connect, recall_hits,
     recipe_from_cmds, record_turn, redact_held_secrets, redact_secrets, redirect_prompt,
-    reduce_voice_state, refresh_last_stretch, refund_host_reserved, refused_lock,
+    refresh_last_stretch, refund_host_reserved,
     remember_chip_click, remember_chip_dismiss, remember_chip_outcome, remember_home_slash,
     remember_home_surface, remember_typed_prompt, rename_node, replay_automation_target,
-    replay_ops, reply_needs_followup, resolve_acp_cwd, resolve_bind_path, resolve_chat_model,
+    replay_ops, resolve_acp_cwd, resolve_bind_path, resolve_chat_model,
     resolve_dark, restore_bound_path, retain_held_plan, reuse_empty_thread_idx, review_due,
     review_status_line, review_system_prompt, rewind_allowed, rewind_blocked_reason,
     rewind_copy_cmd, rewind_dest, rewind_restore_matches, rewind_snapshot_ready, roll_usage_day,
     route_schedule, save_hub_state, screen_from_extents, scrolled_off_tail, search_corpus,
     search_corpus_tagged, search_place, search_thread_body, seed_from_bound, settings_pin_blocks_auto,
     settings_update_hint, settings_update_label,
-    settle_project_path, should_anticipate, should_auto_compact_now,
-    should_auto_continue_goal, should_capture_before_chat, should_idle_reflect, should_keep_frame,
+    settle_project_path, should_anticipate,
+    should_capture_before_chat, should_idle_reflect, should_keep_frame,
     should_name_thread, should_notify_cabin_update, should_paint_greeting, should_refresh_greeting,
     should_refresh_llm, should_seed_sidebar, should_send_screenshot, should_trim_result_bodies,
     should_update_cli_alpha, apply_skill_follow, skill_follow_block, skill_from_suggestion,
     skill_offer_chip, skill_use_in_chat_prompt,
     skip_night_check_receipt, slash_help, slash_kind, start_hub_rotates_pair,
     state_for_disk, stretch_saved_skill, strip_thinking, summarize_trajectory, summarize_write,
-    suggestions_from_sessions, surgical_memory_edit, take_ui_text, teach_routine, teachable_steps, theme_id, theme_label,
+    suggestions_from_sessions, surgical_memory_edit, take_ui_text, teachable_steps, theme_label,
     thought_body_key, thought_control_act, thought_fold_controls, thought_fold_draws,
     thought_shows_acts, thought_shows_label, thread_goal_prompt, thread_host_receipts,
     thread_host_receipts_from, toggle_pin, token_delta, top_habit_labels,
     trajectory_jsonl_line, transcribe_route, trim_result_bodies_in_place, uid, unified_diff_cite,
     unknown_cabin_slash, update_check_due, update_chip_label, update_pending, update_wipes_config,
-    upsert_assistant_turn, upsert_bound, usage_line, user_asked_to_schedule, user_pref_facts,
+    upsert_assistant_turn, upsert_bound, usage_line, user_pref_facts,
     verify_ok_after_user_turn, views_up_to_last_user, visible_chat_refs,
-    visible_goal_step_on_continue, visible_tree, visible_turn_count, visible_turn_count_from,
-    voice_log_role, voice_mode_active, voice_mode_label, voice_state_after_ptt_stt,
-    voice_stream_token, voice_strip_visible,
-    voice_transcript_sends_chat, voice_tts_script, wall_can_paint, wall_evict,
+    visible_tree, visible_turn_count, visible_turn_count_from,
+    voice_mode_label, voice_state_after_ptt_stt,
+    voice_strip_visible,
+    voice_tts_script, wall_can_paint, wall_evict,
     wall_gif_from_generation, worker_gone_status, yesterday_ms, AttachKind, Automation, BoardCard,
     BoardStatus, ChatKind, ChatRunPhase, ChatSendKind, ChatView, ChipInput, ChipKind, ChipMemory,
     KanbanColumn,
@@ -134,13 +131,13 @@ use grokhub_core::{
     ImagineWall, InhabitBundle, LearningState, LiveBlock, LiveKind, LocalClock, MemoryEdit,
     MintRealtimeFn, PermKey, PlusAct, PlusTarget, Policy, PresenceFrame, ProjectKind,
     ProjectMenuAct, ProjectNode, PttLine, QuickChip, Recipe, ReplayOp, ReviewDigest, RewindRecord,
-    ScheduleRoute, SkillMd, Slash, SlashHit, StreamTokenKind, SuggestionStore, ThreadReuseView,
-    ThreadTab, ThoughtFold, TranscribeRoute, UpdatePending, UsageDay, VerifyResult, VoiceEvent,
+    ScheduleRoute, SkillMd, Slash, SlashHit, SuggestionStore, ThreadReuseView,
+    ThreadTab, ThoughtFold, TranscribeRoute, UpdatePending, UsageDay, VerifyResult,
     VoiceState, WallGif, WorkflowVerb, BUBBLE_PAD_X, BUBBLE_PAD_Y, CABIN_FAST_FALLBACK,
     CABIN_FAST_MODEL, CABIN_GITHUB_TOOLS,
-    CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, CHIP_VISIBLE_MAX, CONTEXT_BUDGET_TOKENS, FOLLOWUP_MAX_STEPS,
+    CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, CHIP_VISIBLE_MAX, CONTEXT_BUDGET_TOKENS,
     FORK_EXPLAINER,
-    FOLLOWUP_PROMPT, FRAME_CAP, GOAL_DROP_AFTER, GOAL_MAX_STEPS, HEARTBEAT_MS, HUB_KIND,
+    FRAME_CAP, GOAL_DROP_AFTER, HEARTBEAT_MS, HUB_KIND,
     IDLE_REFLECT_MS, IMAGE_FILE_CAP, IMAGINE_ASPECTS, IMAGINE_STYLES, IMAGINE_WALL_GAP, LOOP_MAX,
     PRESENCE_RING_MS, RESULT_TRIM_KEEP_HOPS, REVIEW_NIGHT_HOUR, SKILL_SAVED_MARK, SKILL_SAVED_NOTE,
     TEXT_FILE_CAP, THOUGHT_ROW_LABEL, TRANSCRIBERS, UPDATE_CHECK_EVERY, WALL_GIF_EVERY_MS,
@@ -187,9 +184,7 @@ mod tests;
 #[cfg(test)]
 mod native_signin_tests;
 
-#[allow(unused_imports)]
 use acp::*;
-#[allow(unused_imports)]
 use chat_ui::*;
 use background::BgWork;
 
@@ -208,31 +203,20 @@ pub(super) fn token_budget_notice(
         _ => ("Token budget at 80%", format!("{line}.")),
     }
 }
-#[allow(unused_imports)]
 use chips::*;
-#[allow(unused_imports)]
 use imagine::*;
-#[allow(unused_imports)]
 use oauth::*;
-#[allow(unused_imports)]
 use plus::*;
-#[allow(unused_imports)]
-use pulse::*;
-#[allow(unused_imports)]
-use feed_ui::*;
-#[allow(unused_imports)]
-use confirm::*;
-#[allow(unused_imports)]
-use glance::*;
-#[allow(unused_imports)]
-use settings::*;
-#[allow(unused_imports)]
-use sidebar::*;
-#[allow(unused_imports)]
-use persist::*;
 #[cfg(test)]
-#[allow(unused_imports)]
-use pages::BoardAct;
+use pulse::*;
+use feed_ui::*;
+use confirm::*;
+use glance::*;
+#[cfg(test)]
+use settings::*;
+#[cfg(test)]
+use sidebar::*;
+use persist::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Nav {
@@ -326,14 +310,9 @@ enum TabAct {
     CommitRename(usize),
     CancelRename,
     Delete(usize),
-    OpenGrok(String),
-    DeleteGrok(String),
-    PinGrok(String),
-    StartRenameGrok(String),
 }
 
 enum JobOut {
-    Imagine(String),
     ImagineBatch(Vec<String>, Option<String>, Option<grokhub_core::ImagineTokens>),
     Voice(String),
     HostLine(String),
@@ -467,8 +446,6 @@ pub struct Cabin {
     /// Minimize or tray hide. The next show opens a fresh empty chat.
     resume_fresh: bool,
     saw_minimized: bool,
-    brief_buf: String,
-    ideas_q: String,
     /// Useful setup ideas were offered once this launch. Refresh clears it.
     ideas_filled: bool,
     /// Model call for Ideas: the reply, and what it is checked against.
@@ -491,7 +468,6 @@ pub struct Cabin {
     /// One-shot watch on the Automations page. Not a second clock.
     watch_once: bool,
     watched_steps: Vec<String>,
-    teach_nl: String,
     /// Frames left pulling the chat pane to its newest message after a chat opens.
     chat_tail_frames: u8,
     /// Cap fields are typed, so they hold text until Save parses them.
@@ -506,6 +482,8 @@ pub struct Cabin {
     history_q_at: Option<Instant>,
     history_hits: Vec<(String, String)>,
     last_receipt_ok: Option<bool>,
+    /// Last Labs Beta auto-off tip check (cooldown so we do not ls-remote every frame).
+    beta_auto_off_checked_at: Option<Instant>,
     last_receipts: Vec<(String, bool)>,
     try_again: bool,
     last_rewind_id: Option<String>,
@@ -570,7 +548,6 @@ pub struct Cabin {
     /// `messages_body_mark` the cached views were built from.
     chat_view_body: (u64, usize),
     presence_ring: Vec<(u64, String)>,
-    voice_sock: Option<crate::voice_ws::VoiceSock>,
     voice_state: VoiceState,
     voice_ready_at: Option<Instant>,
     voice_hold_rx: Option<mpsc::Receiver<()>>,
@@ -589,7 +566,6 @@ pub struct Cabin {
     host_diff_rx: Option<mpsc::Receiver<Option<String>>>,
     host_diff_kick: bool,
     verify_rx: Option<mpsc::Receiver<Option<VerifyResult>>>,
-    #[allow(dead_code)]
     hotkeys: Option<GlobalHotKeyManager>,
     hotkey_hey: u32,
     hotkey_halt: u32,
@@ -1004,7 +980,6 @@ impl Cabin {
         let cfg_auto_cap = cfg.daily_auto_cap;
         let cfg_host_cap = cfg.host_hour_cap;
         let cfg_quiet_start = cfg.quiet_start.clone();
-        let brief_buf = cfg.digest_brief.clone();
         let cfg_quiet_end = cfg.quiet_end.clone();
         let boot_session = SessionMode::parse(&cfg.session_mode).unwrap_or(SessionMode::Chat);
         let boot_perm = PermissionMode::parse(&cfg.permission_mode).unwrap_or(PermissionMode::Ask);
@@ -1090,8 +1065,6 @@ impl Cabin {
             window_visible: !hidden,
             resume_fresh: false,
             saw_minimized: false,
-            brief_buf,
-            ideas_q: String::new(),
             ideas_filled: false,
             ideas_rx: None,
             tray_saw_unfocused: false,
@@ -1108,7 +1081,6 @@ impl Cabin {
             night_nl: String::new(),
             watch_once: false,
             watched_steps: Vec::new(),
-            teach_nl: String::new(),
             chat_tail_frames: CHAT_TAIL_FRAMES,
             cap_auto_buf: cfg_auto_cap.to_string(),
             cap_host_buf: cfg_host_cap.to_string(),
@@ -1119,6 +1091,7 @@ impl Cabin {
             history_q_at: None,
             history_hits: vec![],
             last_receipt_ok: None,
+            beta_auto_off_checked_at: None,
             last_receipts: vec![],
             try_again: false,
             last_rewind_id: None,
@@ -1174,7 +1147,6 @@ impl Cabin {
             chat_view_rev: 0,
             chat_view_body: (0, 0),
             presence_ring: vec![],
-            voice_sock: None,
             voice_state: VoiceState::Idle,
             voice_ready_at: None,
             voice_hold_rx: None,
@@ -1448,6 +1420,7 @@ impl Cabin {
         Self::new(true)
     }
 
+    #[cfg(test)]
     pub(super) fn quiet_for_test() -> Self {
         let (grok_sessions_tx, grok_sessions_rx) = mpsc::channel();
         let cfg = AppConfig::default();
@@ -1518,8 +1491,6 @@ impl Cabin {
             window_visible: true,
             resume_fresh: false,
             saw_minimized: false,
-            brief_buf: String::new(),
-            ideas_q: String::new(),
             ideas_filled: false,
             ideas_rx: None,
             tray_saw_unfocused: false,
@@ -1536,7 +1507,6 @@ impl Cabin {
             night_nl: String::new(),
             watch_once: false,
             watched_steps: Vec::new(),
-            teach_nl: String::new(),
             chat_tail_frames: 0,
             cap_auto_buf: String::new(),
             cap_host_buf: String::new(),
@@ -1547,6 +1517,7 @@ impl Cabin {
             history_q_at: None,
             history_hits: Vec::new(),
             last_receipt_ok: None,
+            beta_auto_off_checked_at: None,
             last_receipts: Vec::new(),
             try_again: false,
             last_rewind_id: None,
@@ -1602,7 +1573,6 @@ impl Cabin {
             chat_view_rev: 0,
             chat_view_body: (0, 0),
             presence_ring: Vec::new(),
-            voice_sock: None,
             voice_state: VoiceState::Idle,
             voice_ready_at: None,
             voice_hold_rx: None,
@@ -2161,11 +2131,6 @@ impl Cabin {
         self.abandon_turn_card();
         self.chat_job_thread = None;
         self.persist();
-        if let Some(mut s) = self.voice_sock.take() {
-            s.halt();
-            self.voice_state = VoiceState::Idle;
-            self.voice_orb = "idle".into();
-        }
     }
 
     fn scrub_transcript(&self, content: String) -> String {
@@ -2599,24 +2564,6 @@ impl Cabin {
         Policy::max()
     }
 
-    fn job_stored_pairs(
-        &self,
-        job_thread_id: Option<&str>,
-        visible_thread_id: &str,
-    ) -> Vec<(String, Vec<(String, String)>)> {
-        let Some(id) = job_thread_id else {
-            return Vec::new();
-        };
-        if id == visible_thread_id {
-            return Vec::new();
-        }
-        self.threads
-            .iter()
-            .find(|t| t.id == id)
-            .map(|t| vec![(t.id.clone(), t.messages.as_ref().clone())])
-            .unwrap_or_default()
-    }
-
     fn last_user_on_job(&self) -> String {
         let vis = self.visible_thread_id();
         let job = self.chat_job_thread.as_deref();
@@ -2902,37 +2849,6 @@ impl Cabin {
             let _ = crate::night::save_rewinds(&rows);
         });
         Some(cmd)
-    }
-
-    fn run_grok_extension(&mut self, args: &[&str]) {
-        let Some(bin) = grokhub_acp::find_grok() else {
-            self.inspect_text = build_agent::grok_banner();
-            self.status = self.inspect_text.clone();
-            return;
-        };
-        if self.inspect_rx.is_some() {
-            return;
-        }
-        let cwd = self.grok_cwd();
-        let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-        let (tx, rx) = mpsc::channel();
-        self.inspect_rx = Some(rx);
-        self.inspect_text = "Inspecting…".into();
-        self.status = format!("grok {}", owned.join(" "));
-        std::thread::spawn(move || {
-            let arg_refs: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
-            let text = match grokhub_acp::grok_stdout(&bin, &cwd, &arg_refs) {
-                Ok(t) => {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) {
-                        serde_json::to_string_pretty(&v).unwrap_or(t)
-                    } else {
-                        t
-                    }
-                }
-                Err(e) => e,
-            };
-            let _ = tx.send(text);
-        });
     }
 
     fn doctor_text(&self) -> String {
@@ -3830,6 +3746,63 @@ impl Cabin {
         self.settings_sec = SettingsSec::Update;
     }
 
+    /// When beta tip == main tip, write stable receipt and refresh Labs status.
+    /// Cooldown avoids network on every Labs frame. Call after a successful update
+    /// with `force` so a post-pull check is not skipped.
+    fn maybe_auto_off_beta_channel(&mut self, force: bool) {
+        if cfg!(windows) {
+            return;
+        }
+        if crate::update::installed_channel() != grokhub_core::Channel::Beta {
+            return;
+        }
+        let now = Instant::now();
+        if !force {
+            if let Some(at) = self.beta_auto_off_checked_at {
+                if now.duration_since(at) < std::time::Duration::from_secs(60) {
+                    return;
+                }
+            }
+        }
+        self.beta_auto_off_checked_at = Some(now);
+        let src = resolve_source(&self.cfg.source_dir);
+        if let Some(msg) = crate::update::try_auto_off_beta_channel(src.as_deref()) {
+            self.status = msg;
+        }
+    }
+
+    /// Labs → Beta channel: fetch/build/install from beta or stable. Rollback on fail.
+    /// Linux only — Windows Labs shows a disabled toggle + note instead.
+    #[cfg(not(windows))]
+    fn queue_channel_switch(&mut self, target: grokhub_core::Channel) {
+        self.nav = Nav::Settings;
+        self.settings_sec = SettingsSec::Labs;
+        let src = match resolve_source(&self.cfg.source_dir) {
+            Some(p) => p,
+            None => {
+                self.status = crate::update::map_channel_switch_error("no clone");
+                return;
+            }
+        };
+        self.cfg.source_dir = src.display().to_string();
+        remember_source(&src);
+        self.persist_cfg();
+        let cmds = match crate::update::channel_switch_cmds(&src, target) {
+            Ok(c) => c,
+            Err(e) => {
+                self.status = crate::update::map_channel_switch_error(&e);
+                return;
+            }
+        };
+        self.update_cabin_note = Some(format!(
+            "Switching to {}…",
+            target.as_str()
+        ));
+        self.start_overlay_update(cmds);
+        // Keep Labs visible while the switch runs (start_overlay_update jumps to Update).
+        self.settings_sec = SettingsSec::Labs;
+    }
+
     /// One control: CLI alpha first when it is newer, then the cabin when it is newer.
     /// A Settings / `/update` click with nothing pending still overlays both.
     fn queue_combined_update(&mut self) {
@@ -3887,6 +3860,8 @@ impl Cabin {
         if self.last_host.iter().any(|c| cabin_overlay_step(c)) {
             self.cabin_overlay_done = true;
         }
+        // After a successful cabin/channel update on beta, flip to stable when tips match.
+        self.maybe_auto_off_beta_channel(true);
     }
 
     fn poll_grok_install(&mut self) {
@@ -4463,88 +4438,6 @@ impl Cabin {
         });
     }
 
-    #[allow(dead_code)]
-    fn refresh_eyes(&mut self) {
-        let pending = self.poll_eyes_cap();
-        let rows = collect_rows();
-        let labels: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
-        let refused = refused_lock(&labels);
-        let ask = self
-            .messages
-            .iter()
-            .rev()
-            .find(|m| m.0 == "user")
-            .map(|m| m.1.as_str());
-        let mut frame_note = None;
-        let captured_ok = if self.cfg.cabin_eyes {
-            self.last_window_title = rows
-                .iter()
-                .map(|r| r.name.as_str())
-                .find(|n| !n.is_empty() && *n != "cursor")
-                .unwrap_or("")
-                .to_string();
-            let lock = lock_titles();
-            if lock_blocks_hands(&lock.iter().map(|s| s.as_str()).collect::<Vec<_>>())
-                || !should_send_screenshot(&self.last_window_title, "")
-            {
-                frame_note = Some("frame: skipped lock/password\n".into());
-                false
-            } else if let Some(cap) = pending {
-                match cap {
-                    Ok(_) => {
-                        frame_note = Some("frame: captured (on hub, not disk)\n".into());
-                        true
-                    }
-                    Err(e) => {
-                        frame_note = Some(format!("frame: {e}\n"));
-                        false
-                    }
-                }
-            } else {
-                if self.eyes_cap_rx.is_none() {
-                    let (tx, rx) = mpsc::channel();
-                    self.eyes_cap_rx = Some(rx);
-                    std::thread::spawn(move || {
-                        let _ = tx.send(capture_data_url());
-                    });
-                }
-                frame_note = Some("frame: capturing…\n".into());
-                false
-            }
-        } else {
-            false
-        };
-        let (rows, header) = prepare_windshield(&rows, ask, captured_ok);
-        let frame = build_windshield(
-            &rows,
-            None,
-            refused,
-            self.board.first().map(|c| c.title.as_str()),
-            self.skill_list.first().map(|s| s.name.as_str()),
-            4,
-        );
-        let mut t = format!(
-            "AT-SPI/wmctrl · autonomy {} · {} objects\n",
-            frame.autonomy,
-            frame.objects.len()
-        );
-        t.push_str(&header);
-        for o in &frame.objects {
-            t.push_str(&format!(
-                "- [{}] {} @{},{} {}x{}\n",
-                o.kind, o.label, o.x, o.y, o.w, o.h
-            ));
-        }
-        if let Some(g) = &frame.goal {
-            t.push_str(&format!("goal: {g}\n"));
-        }
-        if let Some(n) = frame_note {
-            t.push_str(&n);
-        }
-        self.eyes_text = t;
-        self.status = format!("{} objects", frame.objects.len());
-    }
-
     fn poll_eyes_cap(&mut self) -> Option<Result<String, String>> {
         let rx = self.eyes_cap_rx.take()?;
         match rx.try_recv() {
@@ -4796,6 +4689,11 @@ impl Cabin {
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Slash)) {
             self.shortcuts_open = !self.shortcuts_open;
         }
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Comma) && !i.modifiers.shift)
+        {
+            self.palette_open = false;
+            self.nav = Nav::Settings;
+        }
     }
 
     fn note_window_resume(&mut self, ctx: &egui::Context) {
@@ -4929,7 +4827,6 @@ impl eframe::App for Cabin {
         self.refresh_greeting();
         self.drain_inbox();
         self.poll_tray(ctx);
-        self.poll_voice();
         self.poll_voice_hold();
         self.poll_global_hotkeys();
         self.poll_night_check(now_ms());

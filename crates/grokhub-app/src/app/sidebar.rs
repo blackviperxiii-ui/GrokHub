@@ -767,21 +767,6 @@ impl Cabin {
                 self.rename_lock = None;
             }
             TabAct::Delete(i) => self.delete_thread_at(i),
-            TabAct::OpenGrok(id) => {
-                self.open_grok_session(&id);
-                self.composer_want_focus = true;
-            }
-            TabAct::DeleteGrok(id) => self.delete_grok_history(&id),
-            TabAct::PinGrok(id) => {
-                if let Some(i) = self.ensure_grok_thread(&id) {
-                    self.pin_thread(i);
-                }
-            }
-            TabAct::StartRenameGrok(id) => {
-                if let Some(i) = self.ensure_grok_thread(&id) {
-                    self.begin_chat_rename(i);
-                }
-            }
         }
     }
 }

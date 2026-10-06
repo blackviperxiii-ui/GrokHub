@@ -270,4 +270,291 @@ mod tests {
         assert_eq!(run(&["--bogus"]).0, Some(2));
         let _ = std::fs::remove_dir_all(&cfg);
     }
+
+    /// A plain install with a beta receipt on a `main` checkout stops before
+    /// cargo, instead of labeling a main build as beta.
+    #[cfg(unix)]
+    #[test]
+    fn install_sh_refuses_a_checkout_on_the_other_channel() {
+        let base = std::env::temp_dir().join(format!("grokhub-chan-mix-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let repo = base.join("clone");
+        let cfg = base.join("cfg");
+        std::fs::create_dir_all(repo.join("scripts")).unwrap();
+        std::fs::create_dir_all(&cfg).unwrap();
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/install.sh");
+        std::fs::copy(script, repo.join("scripts/install.sh")).unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        std::fs::write(cfg.join("channel"), Channel::Beta.receipt()).unwrap();
+        let out = std::process::Command::new("bash")
+            .arg(repo.join("scripts/install.sh"))
+            .arg("--user")
+            .env("GROKHUB_CONFIG", &cfg)
+            .env("PREFIX", base.join("prefix"))
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1));
+        assert_eq!(
+            String::from_utf8_lossy(&out.stderr).trim(),
+            format!(
+                "error: {} is on main but the beta channel builds beta; run with --channel stable to switch, or git checkout beta",
+                repo.display()
+            )
+        );
+        assert!(!base.join("prefix").exists(), "nothing installed");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+/// Shown next to the Labs Beta channel toggle: `beta · beta @ abc1234`.
+pub fn channel_status_line(channel: Channel, branch: &str, sha: &str) -> String {
+    let ch = channel.as_str();
+    match (branch.trim(), sha.trim()) {
+        ("", "") => ch.to_string(),
+        ("", sha) => format!("{ch} · {sha}"),
+        (branch, "") => format!("{ch} · {branch}"),
+        (branch, sha) => format!("{ch} · {branch} @ {sha}"),
+    }
+}
+
+
+/// True when both tip SHAs are non-empty and name the same commit
+/// (exact match, or one is a prefix of the other for short vs full SHA).
+/// Empty or whitespace-only tips never count as caught up.
+pub fn beta_caught_up_to_main(beta_sha: &str, main_sha: &str) -> bool {
+    let b = normalize_git_sha(beta_sha);
+    let m = normalize_git_sha(main_sha);
+    // Need a real short SHA (git default is 7) before treating a prefix as equal.
+    if b.len() < 7 || m.len() < 7 {
+        return false;
+    }
+    if !b.bytes().all(|c| c.is_ascii_hexdigit()) || !m.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return false;
+    }
+    b == m || b.starts_with(&m) || m.starts_with(&b)
+}
+
+fn normalize_git_sha(s: &str) -> String {
+    s.trim().to_ascii_lowercase()
+}
+
+/// When the receipt is Beta and `origin/beta` tip == `origin/main` tip, return
+/// [`Channel::Stable`] so the caller can rewrite the receipt and flip the Labs
+/// toggle off. Otherwise `None` (stay put). Pure — no I/O.
+pub fn auto_off_target(current: Channel, beta_sha: &str, main_sha: &str) -> Option<Channel> {
+    if current == Channel::Beta && beta_caught_up_to_main(beta_sha, main_sha) {
+        Some(Channel::Stable)
+    } else {
+        None
+    }
+}
+
+/// Windows Labs copy until the installer supports channels.
+pub const CHANNEL_WINDOWS_NOTE: &str =
+    "Channel switching is not available on Windows yet — the installer does not support channels. When channels land, Beta will also turn off automatically once beta matches main.";
+
+/// Labs / docs copy: auto-off when beta tip == main tip (Linux now; Windows with channels).
+pub const CHANNEL_AUTO_OFF_NOTE: &str =
+    "When beta catches up to main (same tip), Labs Beta turns off and stays on stable — re-enable anytime.";
+
+/// Clear Labs failure copy for a channel switch.
+pub fn channel_switch_fail_hint(stderr_or_status: &str) -> &'static str {
+    let s = stderr_or_status.to_ascii_lowercase();
+    if s.contains("uncommitted changes") {
+        "Uncommitted changes in the clone — commit or stash them, then try again."
+    } else if s.contains("not a grokhub source")
+        || s.contains("no clone")
+        || s.contains("set settings → source")
+        || s.contains("grokhub_src")
+    {
+        "No GrokHub clone found — set Settings → source or GROKHUB_SRC."
+    } else if s.contains("build failed")
+        || s.contains("cargo")
+        || s.contains("could not compile")
+        || s.contains("error: could not compile")
+    {
+        "Build failed — previous install kept."
+    } else if s.contains("channel switching is not available on windows")
+        || s.contains("windows") && s.contains("channel")
+    {
+        CHANNEL_WINDOWS_NOTE
+    } else {
+        "Channel switch failed — previous install kept."
+    }
+}
+
+/// Shell plan that backups binaries, runs `install.sh --user --channel …`, and
+/// restores the previous binaries if the install exits non-zero.
+pub fn channel_switch_shell(source: &str, target: Channel, home: &str) -> String {
+    let src = source.trim().trim_end_matches('/');
+    let home = home.trim().trim_end_matches('/');
+    let channel = target.as_str();
+    let bak = format!("{home}/.local/share/grokhub/channel-bak");
+    let bin = format!("{home}/.local/bin");
+    // Single host command so a failed install always restores before we return.
+    format!(
+        "set -euo pipefail; \
+bak='{bak}'; bin='{bin}'; \
+mkdir -p \"$bak\" \"$bin\"; \
+cp -f \"$bin/grokhub\" \"$bak/grokhub\" 2>/dev/null || true; \
+cp -f \"$bin/grokhub-hub\" \"$bak/grokhub-hub\" 2>/dev/null || true; \
+if ! '{src}/scripts/install.sh' --user --channel {channel}; then \
+  cp -f \"$bak/grokhub\" \"$bin/grokhub\" 2>/dev/null || true; \
+  cp -f \"$bak/grokhub-hub\" \"$bin/grokhub-hub\" 2>/dev/null || true; \
+  echo 'channel switch failed — previous install kept' >&2; \
+  exit 1; \
+fi"
+    )
+}
+
+/// Preflight errors before spawning the switch. `windows` is passed in so
+/// Linux unit tests can assert the Windows note.
+pub fn channel_switch_preflight(
+    windows: bool,
+    source: Option<&std::path::Path>,
+) -> Result<(), String> {
+    if windows {
+        return Err(CHANNEL_WINDOWS_NOTE.to_string());
+    }
+    match source {
+        Some(p) if is_source_tree(p) => Ok(()),
+        Some(_) | None => Err(
+            "No GrokHub clone found — set Settings → source or GROKHUB_SRC.".into(),
+        ),
+    }
+}
+
+fn is_source_tree(dir: &std::path::Path) -> bool {
+    dir.join("Cargo.toml").is_file()
+        && dir.join("scripts/install.sh").is_file()
+        && dir.join("crates/grokhub-app").is_dir()
+}
+
+#[cfg(test)]
+mod channel_switch_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn status_line_names_channel_branch_and_sha() {
+        assert_eq!(
+            channel_status_line(Channel::Beta, "beta", "abc1234"),
+            "beta · beta @ abc1234"
+        );
+        assert_eq!(
+            channel_status_line(Channel::Stable, "main", "0f1e2d3"),
+            "stable · main @ 0f1e2d3"
+        );
+        assert_eq!(channel_status_line(Channel::Stable, "", ""), "stable");
+        assert_eq!(
+            channel_status_line(Channel::Beta, "", "deadbeef"),
+            "beta · deadbeef"
+        );
+    }
+
+    #[test]
+    fn fail_hints_are_literal_and_specific() {
+        assert_eq!(
+            channel_switch_fail_hint("error: /x has uncommitted changes; commit or stash"),
+            "Uncommitted changes in the clone — commit or stash them, then try again."
+        );
+        assert_eq!(
+            channel_switch_fail_hint("not a GrokHub source tree — set Settings → source"),
+            "No GrokHub clone found — set Settings → source or GROKHUB_SRC."
+        );
+        assert_eq!(
+            channel_switch_fail_hint("error: could not compile `grokhub-app`"),
+            "Build failed — previous install kept."
+        );
+        assert_eq!(
+            channel_switch_fail_hint("something else blew up"),
+            "Channel switch failed — previous install kept."
+        );
+        assert_eq!(
+            channel_switch_fail_hint(CHANNEL_WINDOWS_NOTE),
+            CHANNEL_WINDOWS_NOTE
+        );
+    }
+
+    #[test]
+    fn switch_shell_backs_up_runs_install_and_restores_on_fail() {
+        let sh = channel_switch_shell("/repo/GrokHub", Channel::Beta, "/home/box");
+        assert!(sh.contains("--channel beta"), "{sh}");
+        assert!(sh.contains("/repo/GrokHub/scripts/install.sh"), "{sh}");
+        assert!(sh.contains("/home/box/.local/share/grokhub/channel-bak"), "{sh}");
+        assert!(sh.contains("cp -f \"$bak/grokhub\" \"$bin/grokhub\""), "{sh}");
+        assert!(sh.contains("previous install kept"), "{sh}");
+        let stable = channel_switch_shell("/repo", Channel::Stable, "/home/u");
+        assert!(stable.contains("--channel stable"), "{stable}");
+        assert!(!stable.contains("--channel beta"), "{stable}");
+    }
+
+    #[test]
+    fn preflight_blocks_windows_and_missing_clone() {
+        assert_eq!(
+            channel_switch_preflight(true, Some(Path::new("/tmp"))),
+            Err(CHANNEL_WINDOWS_NOTE.to_string())
+        );
+        assert_eq!(
+            channel_switch_preflight(false, None),
+            Err("No GrokHub clone found — set Settings → source or GROKHUB_SRC.".into())
+        );
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        assert!(channel_switch_preflight(false, Some(&root)).is_ok());
+    }
+
+    #[test]
+    fn windows_note_is_the_labs_copy() {
+        assert!(CHANNEL_WINDOWS_NOTE.starts_with(
+            "Channel switching is not available on Windows yet — the installer does not support channels."
+        ));
+        assert!(CHANNEL_WINDOWS_NOTE.contains("turn off automatically once beta matches main"));
+    }
+
+    #[test]
+    fn beta_caught_up_to_main_true_false_and_prefix() {
+        assert!(beta_caught_up_to_main(
+            "abc1234deadbeef",
+            "abc1234deadbeef"
+        ));
+        assert!(beta_caught_up_to_main("abc1234", "abc1234deadbeef"));
+        assert!(beta_caught_up_to_main("ABC1234DEADBEEF", "abc1234deadbeef"));
+        assert!(!beta_caught_up_to_main("abc1234", "def5678"));
+        assert!(!beta_caught_up_to_main("", "abc1234"));
+        assert!(!beta_caught_up_to_main("abc1234", ""));
+        assert!(!beta_caught_up_to_main("  ", "abc"));
+        assert!(!beta_caught_up_to_main("ab", "abc1234")); // under 7 chars
+        assert!(!beta_caught_up_to_main("abc12xx", "abc1234")); // non-hex
+    }
+
+    #[test]
+    fn auto_off_target_flips_beta_when_tips_match_only() {
+        assert_eq!(
+            auto_off_target(Channel::Beta, "abc1234", "abc1234"),
+            Some(Channel::Stable)
+        );
+        assert_eq!(auto_off_target(Channel::Beta, "aaa", "bbb"), None);
+        assert_eq!(
+            auto_off_target(Channel::Stable, "abc1234", "abc1234"),
+            None
+        );
+        assert_eq!(auto_off_target(Channel::Beta, "", "abc"), None);
+    }
+
+    #[test]
+    fn auto_off_note_documents_linux_and_future_windows() {
+        assert!(CHANNEL_AUTO_OFF_NOTE.contains("beta catches up to main"));
+        assert!(CHANNEL_WINDOWS_NOTE.contains("turn off automatically once beta matches main"));
+    }
+
 }

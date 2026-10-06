@@ -16,7 +16,7 @@ impl Cabin {
         self.settings_menu_open = false;
     }
 
-    pub(super) fn run_palette(&mut self, action: &str) {
+    pub(super) fn run_palette(&mut self, ctx: &egui::Context, action: &str) {
         self.palette_open = false;
         self.settings_menu_open = false;
         match action {
@@ -44,17 +44,8 @@ impl Cabin {
             "nav:memory" => self.nav = Nav::Memory,
             "nav:settings" => self.nav = Nav::Settings,
             "oauth" => self.start_oauth(),
-            "diag" => {
-                self.status = diagnostics_bundle(
-                    env!("CARGO_PKG_VERSION"),
-                    self.has_key(),
-                    HUB_KIND,
-                    self.skill_list.len(),
-                    self.last_receipt_ok,
-                    self.board.len(),
-                    &self.status,
-                );
-            }
+            "diag" => self.copy_diagnostics(ctx),
+            "shortcuts" => self.shortcuts_open = true,
             "voice" => self.listen_voice(),
             slash if slash.starts_with('/') => self.run_slash_line(slash),
             path if path.starts_with("file:") => {
@@ -129,11 +120,17 @@ impl Cabin {
                             } else {
                                 files[i - cmds.len()].clone()
                             };
+                            // Every row takes the shortcut slot, so labels line up
+                            // whether or not a key shows at the right.
+                            let keys = cmds.get(i).and_then(|c| palette_shortcut(c.1));
+                            let row = egui::Button::selectable(i == self.palette_pick, label)
+                                .shortcut_text(
+                                    egui::RichText::new(keys.unwrap_or_default())
+                                        .size(crate::theme::FONT_TIP)
+                                        .color(crate::theme::muted()),
+                                );
                             if ui
-                                .add_sized(
-                                    [ui.available_width(), 28.0],
-                                    egui::Button::selectable(i == self.palette_pick, label),
-                                )
+                                .add_sized([ui.available_width(), 28.0], row)
                                 .clicked()
                             {
                                 picked = palette_row_action(&cmds, &files, &root, i);
@@ -156,7 +153,7 @@ impl Cabin {
             }
         }
         if let Some(a) = picked {
-            self.run_palette(&a);
+            self.run_palette(ctx, &a);
         }
         if close {
             self.palette_open = false;
@@ -235,6 +232,7 @@ impl Cabin {
 }
 
 /// Contiguous scope runs, in sheet order. A scope that comes back later is a new group.
+#[cfg(test)]
 pub fn group_shortcut_scopes<'a>(scopes: impl IntoIterator<Item = &'a str>) -> Vec<(&'a str, usize)> {
     let mut out: Vec<(&str, usize)> = Vec::new();
     for scope in scopes {
