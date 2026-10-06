@@ -196,16 +196,6 @@ impl Cabin {
         }
     }
 
-    pub(super) fn send_followup_turn(&mut self) {
-        if self.followup_step >= FOLLOWUP_MAX_STEPS {
-            return;
-        }
-        self.followup_step += 1;
-        self.push_bound_msg("user", FOLLOWUP_PROMPT.into());
-        self.persist();
-        self.kick_model(false);
-    }
-
     pub(super) fn kick_model(&mut self, consume_attach: bool) {
         if !self.can_agent() && !(self.cfg.native_engine && self.scheduled_perm) {
             self.running = false;
