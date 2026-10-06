@@ -482,6 +482,8 @@ pub struct Cabin {
     history_q_at: Option<Instant>,
     history_hits: Vec<(String, String)>,
     last_receipt_ok: Option<bool>,
+    /// Last Labs Beta auto-off tip check (cooldown so we do not ls-remote every frame).
+    beta_auto_off_checked_at: Option<Instant>,
     last_receipts: Vec<(String, bool)>,
     try_again: bool,
     last_rewind_id: Option<String>,
@@ -1089,6 +1091,7 @@ impl Cabin {
             history_q_at: None,
             history_hits: vec![],
             last_receipt_ok: None,
+            beta_auto_off_checked_at: None,
             last_receipts: vec![],
             try_again: false,
             last_rewind_id: None,
@@ -1514,6 +1517,7 @@ impl Cabin {
             history_q_at: None,
             history_hits: Vec::new(),
             last_receipt_ok: None,
+            beta_auto_off_checked_at: None,
             last_receipts: Vec::new(),
             try_again: false,
             last_rewind_id: None,
@@ -3742,6 +3746,31 @@ impl Cabin {
         self.settings_sec = SettingsSec::Update;
     }
 
+    /// When beta tip == main tip, write stable receipt and refresh Labs status.
+    /// Cooldown avoids network on every Labs frame. Call after a successful update
+    /// with `force` so a post-pull check is not skipped.
+    fn maybe_auto_off_beta_channel(&mut self, force: bool) {
+        if cfg!(windows) {
+            return;
+        }
+        if crate::update::installed_channel() != grokhub_core::Channel::Beta {
+            return;
+        }
+        let now = Instant::now();
+        if !force {
+            if let Some(at) = self.beta_auto_off_checked_at {
+                if now.duration_since(at) < std::time::Duration::from_secs(60) {
+                    return;
+                }
+            }
+        }
+        self.beta_auto_off_checked_at = Some(now);
+        let src = resolve_source(&self.cfg.source_dir);
+        if let Some(msg) = crate::update::try_auto_off_beta_channel(src.as_deref()) {
+            self.status = msg;
+        }
+    }
+
     /// Labs → Beta channel: fetch/build/install from beta or stable. Rollback on fail.
     fn queue_channel_switch(&mut self, target: grokhub_core::Channel) {
         self.nav = Nav::Settings;
@@ -3833,6 +3862,8 @@ impl Cabin {
         if self.last_host.iter().any(|c| cabin_overlay_step(c)) {
             self.cabin_overlay_done = true;
         }
+        // After a successful cabin/channel update on beta, flip to stable when tips match.
+        self.maybe_auto_off_beta_channel(true);
     }
 
     fn poll_grok_install(&mut self) {

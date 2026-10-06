@@ -839,6 +839,8 @@ impl Cabin {
                                                         SettingsSec::Labs => {
                                                             // Beta channel: Linux switches via install.sh --channel;
                                                             // Windows stays disabled until the installer supports it.
+                                                            // Also: when beta tip == main tip, auto-turn off (cooldown).
+                                                            self.maybe_auto_off_beta_channel(false);
                                                             let channel_on = crate::update::installed_channel()
                                                                 == grokhub_core::Channel::Beta;
                                                             let mut beta_on = channel_on;
@@ -859,6 +861,10 @@ impl Cabin {
                                                                 crate::cards::settings_note(
                                                                     ui,
                                                                     crate::update::channel_windows_note(),
+                                                                );
+                                                                crate::cards::settings_note(
+                                                                    ui,
+                                                                    crate::update::channel_auto_off_note(),
                                                                 );
                                                                 crate::cards::settings_note(ui, &status_line);
                                                             }
@@ -886,6 +892,10 @@ impl Cabin {
                                                                     }
                                                                 });
                                                                 crate::cards::settings_note(ui, &status_line);
+                                                                crate::cards::settings_note(
+                                                                    ui,
+                                                                    crate::update::channel_auto_off_note(),
+                                                                );
                                                                 if let Some(pct) = self.update_pct {
                                                                     let fill = if self.last_receipt_ok
                                                                         == Some(false)

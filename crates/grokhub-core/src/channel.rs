@@ -327,9 +327,45 @@ pub fn channel_status_line(channel: Channel, branch: &str, sha: &str) -> String 
     }
 }
 
+
+/// True when both tip SHAs are non-empty and name the same commit
+/// (exact match, or one is a prefix of the other for short vs full SHA).
+/// Empty or whitespace-only tips never count as caught up.
+pub fn beta_caught_up_to_main(beta_sha: &str, main_sha: &str) -> bool {
+    let b = normalize_git_sha(beta_sha);
+    let m = normalize_git_sha(main_sha);
+    // Need a real short SHA (git default is 7) before treating a prefix as equal.
+    if b.len() < 7 || m.len() < 7 {
+        return false;
+    }
+    if !b.bytes().all(|c| c.is_ascii_hexdigit()) || !m.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return false;
+    }
+    b == m || b.starts_with(&m) || m.starts_with(&b)
+}
+
+fn normalize_git_sha(s: &str) -> String {
+    s.trim().to_ascii_lowercase()
+}
+
+/// When the receipt is Beta and `origin/beta` tip == `origin/main` tip, return
+/// [`Channel::Stable`] so the caller can rewrite the receipt and flip the Labs
+/// toggle off. Otherwise `None` (stay put). Pure — no I/O.
+pub fn auto_off_target(current: Channel, beta_sha: &str, main_sha: &str) -> Option<Channel> {
+    if current == Channel::Beta && beta_caught_up_to_main(beta_sha, main_sha) {
+        Some(Channel::Stable)
+    } else {
+        None
+    }
+}
+
 /// Windows Labs copy until the installer supports channels.
 pub const CHANNEL_WINDOWS_NOTE: &str =
-    "Channel switching is not available on Windows yet — the installer does not support channels.";
+    "Channel switching is not available on Windows yet — the installer does not support channels. When channels land, Beta will also turn off automatically once beta matches main.";
+
+/// Labs / docs copy: auto-off when beta tip == main tip (Linux now; Windows with channels).
+pub const CHANNEL_AUTO_OFF_NOTE: &str =
+    "When beta catches up to main (same tip), Labs Beta turns off and stays on stable — re-enable anytime.";
 
 /// Clear Labs failure copy for a channel switch.
 pub fn channel_switch_fail_hint(stderr_or_status: &str) -> &'static str {
@@ -479,9 +515,46 @@ mod channel_switch_tests {
 
     #[test]
     fn windows_note_is_the_labs_copy() {
-        assert_eq!(
-            CHANNEL_WINDOWS_NOTE,
+        assert!(CHANNEL_WINDOWS_NOTE.starts_with(
             "Channel switching is not available on Windows yet — the installer does not support channels."
-        );
+        ));
+        assert!(CHANNEL_WINDOWS_NOTE.contains("turn off automatically once beta matches main"));
     }
+
+    #[test]
+    fn beta_caught_up_to_main_true_false_and_prefix() {
+        assert!(beta_caught_up_to_main(
+            "abc1234deadbeef",
+            "abc1234deadbeef"
+        ));
+        assert!(beta_caught_up_to_main("abc1234", "abc1234deadbeef"));
+        assert!(beta_caught_up_to_main("ABC1234DEADBEEF", "abc1234deadbeef"));
+        assert!(!beta_caught_up_to_main("abc1234", "def5678"));
+        assert!(!beta_caught_up_to_main("", "abc1234"));
+        assert!(!beta_caught_up_to_main("abc1234", ""));
+        assert!(!beta_caught_up_to_main("  ", "abc"));
+        assert!(!beta_caught_up_to_main("ab", "abc1234")); // under 7 chars
+        assert!(!beta_caught_up_to_main("abc12xx", "abc1234")); // non-hex
+    }
+
+    #[test]
+    fn auto_off_target_flips_beta_when_tips_match_only() {
+        assert_eq!(
+            auto_off_target(Channel::Beta, "abc1234", "abc1234"),
+            Some(Channel::Stable)
+        );
+        assert_eq!(auto_off_target(Channel::Beta, "aaa", "bbb"), None);
+        assert_eq!(
+            auto_off_target(Channel::Stable, "abc1234", "abc1234"),
+            None
+        );
+        assert_eq!(auto_off_target(Channel::Beta, "", "abc"), None);
+    }
+
+    #[test]
+    fn auto_off_note_documents_linux_and_future_windows() {
+        assert!(CHANNEL_AUTO_OFF_NOTE.contains("beta catches up to main"));
+        assert!(CHANNEL_WINDOWS_NOTE.contains("turn off automatically once beta matches main"));
+    }
+
 }
