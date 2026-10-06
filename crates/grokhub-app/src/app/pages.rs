@@ -1410,36 +1410,6 @@ impl Cabin {
         }
     }
 
-    /// Opens the linked chat. Workboards stays on the rail; one click comes back.
-    /// Work on it: a fresh chat linked to this card, first message = the card and
-    /// its notes. The card becomes that chat's run card, so it moves to Done when
-    /// the run finishes instead of a second card being filed.
-    pub(super) fn work_on_card(&mut self, id: &str) {
-        let Some(card) = self.board.iter().find(|c| c.id == id).cloned() else {
-            return;
-        };
-        if self.running {
-            self.status = "Finish the open chat first".into();
-            return;
-        }
-        if !self.can_agent() {
-            self.status = "Install Grok Build (x.ai/cli) or Connect Grok in Settings".into();
-            return;
-        }
-        let prompt = grokhub_core::card_work_prompt(&card);
-        self.new_thread(false);
-        let thread = self.visible_thread_id();
-        if let Some(c) = self.board.iter_mut().find(|c| c.id == id) {
-            c.thread_id = Some(thread);
-            c.run = true;
-            c.status = BoardStatus::InProgress;
-            c.notes_sent = grokhub_core::card_notes_hash(&c.notes);
-        }
-        self.flush_board();
-        self.nav = Nav::Chat;
-        self.send_from_composer(prompt);
-    }
-
     pub(super) fn open_board_thread(&mut self, thread_id: &str) {
         let Some(idx) = self.threads.iter().position(|t| t.id == thread_id) else {
             self.status = "Linked chat is gone".into();

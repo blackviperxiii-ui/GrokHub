@@ -154,10 +154,6 @@ pub(super) fn paint_confirm_sheet(ui: &mut egui::Ui, spec: ConfirmSpec, detail: 
 }
 
 impl Cabin {
-    pub(super) fn clear_confirm(&mut self) {
-        self.perm_always_confirm = None;
-        self.confirm = None;
-    }
 
     pub(super) fn paint_confirm_overlay(&mut self, ctx: &egui::Context) {
         let Some(kind) = self.confirm.clone() else {
