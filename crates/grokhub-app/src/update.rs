@@ -3,7 +3,7 @@ use crate::host::run_host;
 use grokhub_core::{
     discover_source, forbidden_reason, parse_github_latest_tag, parse_installed_cli_version,
     parse_published_cli_alpha, restart_acts, restart_bin, systemd_user_restart_args,
-    systemd_user_stop_args, update_cmds_in, update_progress_pct, update_step_label,
+    systemd_user_stop_args, update_progress_pct, update_step_label,
     update_wipes_config, Channel, RestartAct, CHANNEL_RECEIPT, CLI_ALPHA_VERSION_FALLBACK,
     CLI_ALPHA_VERSION_URL, GITHUB_LATEST_API, TEXT_FILE_CAP,
 };
@@ -121,12 +121,6 @@ pub fn run_update_cmds_with_progress(
     Ok(out)
 }
 
-pub fn run_update(source: &std::path::Path) -> Result<String, String> {
-    let cmds = update_cmds_in(source, installed_channel())?;
-    remember_source(source);
-    run_update_cmds(&cmds)
-}
-
 pub fn fetch_github_latest_tag() -> Result<String, String> {
     let resp = match ureq::get(GITHUB_LATEST_API)
         .set("user-agent", "GrokHub")
@@ -162,14 +156,6 @@ pub fn fetch_github_latest_tag() -> Result<String, String> {
     }
     let body = String::from_utf8_lossy(&buf);
     parse_github_latest_tag(&body).ok_or_else(|| "GitHub Latest has no tag_name".into())
-}
-
-pub fn begin_cabin_latest_check() -> std::sync::mpsc::Receiver<Result<String, String>> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(fetch_github_latest_tag());
-    });
-    rx
 }
 
 pub struct UpdateProbe {
@@ -662,7 +648,7 @@ mod tests {
         let fetch = src
             .split("pub fn fetch_github_latest_tag(")
             .nth(1)
-            .and_then(|s| s.split("pub fn begin_cabin_latest_check(").next())
+            .and_then(|s| s.split("pub struct UpdateProbe").next())
             .expect("fetch_github_latest_tag");
         assert!(
             fetch.contains("GITHUB_LATEST_API")
