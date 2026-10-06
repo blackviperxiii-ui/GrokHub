@@ -24773,3 +24773,30 @@ fn the_palette_closes_on_navigation_and_uses_the_sidebar_names() {
     let _ = crate::theme::test_pass(&ctx, release, |ui| cabin.ui_palette(ui.ctx()));
     assert!(!cabin.palette_open, "an outside click closes the palette");
 }
+
+#[test]
+fn labs_beta_channel_toggle_is_wired() {
+    let settings = include_str!("settings.rs");
+    assert!(
+        settings.contains("Beta channel")
+            && settings.contains("queue_channel_switch")
+            && settings.contains("channel_labs_status")
+            && settings.contains("channel_windows_note"),
+        "Labs must wire the Beta channel toggle, status line, and Windows note"
+    );
+    let app = include_str!("mod.rs");
+    assert!(
+        app.contains("fn queue_channel_switch")
+            && app.contains("channel_switch_cmds")
+            && app.contains("SettingsSec::Labs"),
+        "App must queue a channel switch from Labs"
+    );
+    let update = include_str!("../update.rs");
+    assert!(
+        update.contains("channel_switch_shell")
+            && update.contains("--channel")
+            && update.contains("CHANNEL_WINDOWS_NOTE"),
+        "Update helper must build the install.sh --channel plan with rollback"
+    );
+}
+

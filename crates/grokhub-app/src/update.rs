@@ -1,11 +1,12 @@
 use crate::config;
 use crate::host::run_host;
 use grokhub_core::{
+    channel_status_line, channel_switch_fail_hint, channel_switch_preflight, channel_switch_shell,
     discover_source, forbidden_reason, parse_github_latest_tag, parse_installed_cli_version,
     parse_published_cli_alpha, restart_acts, restart_bin, systemd_user_restart_args,
     systemd_user_stop_args, update_cmds_in, update_progress_pct, update_step_label,
-    update_wipes_config, Channel, RestartAct, CHANNEL_RECEIPT, CLI_ALPHA_VERSION_FALLBACK,
-    CLI_ALPHA_VERSION_URL, GITHUB_LATEST_API, TEXT_FILE_CAP,
+    update_wipes_config, Channel, RestartAct, CHANNEL_RECEIPT, CHANNEL_WINDOWS_NOTE,
+    CLI_ALPHA_VERSION_FALLBACK, CLI_ALPHA_VERSION_URL, GITHUB_LATEST_API, TEXT_FILE_CAP,
 };
 use std::io::Read;
 use std::env;
@@ -76,6 +77,38 @@ pub fn build_version_line() -> String {
         env!("GROKHUB_BUILD_BRANCH"),
         env!("GROKHUB_BUILD_SHA"),
     )
+}
+
+/// Labs line for the Beta channel toggle: receipt channel + build branch/SHA.
+pub fn channel_labs_status() -> String {
+    channel_status_line(
+        installed_channel(),
+        env!("GROKHUB_BUILD_BRANCH"),
+        env!("GROKHUB_BUILD_SHA"),
+    )
+}
+
+/// One host command: backup binaries, `install.sh --user --channel`, restore on fail.
+pub fn channel_switch_cmds(source: &std::path::Path, target: Channel) -> Result<Vec<String>, String> {
+    channel_switch_preflight(cfg!(windows), Some(source))?;
+    let home = grokhub_core::user_home()
+        .ok_or_else(|| "No home directory — cannot install".to_string())?;
+    let home = home
+        .to_str()
+        .ok_or_else(|| "Home path is not UTF-8".to_string())?;
+    Ok(vec![channel_switch_shell(
+        &source.display().to_string(),
+        target,
+        home,
+    )])
+}
+
+pub fn map_channel_switch_error(raw: &str) -> String {
+    channel_switch_fail_hint(raw).to_string()
+}
+
+pub fn channel_windows_note() -> &'static str {
+    CHANNEL_WINDOWS_NOTE
 }
 
 pub fn host_receipt_failed(receipt: &str) -> bool {
@@ -723,5 +756,36 @@ mod tests {
             installed.contains("grok_version") && installed.contains("parse_installed_cli_version"),
             "installed CLI version comes from grok --version: {installed}"
         );
+    }
+
+    #[test]
+    fn channel_switch_cmds_name_install_sh_and_backup() {
+        if cfg!(windows) {
+            let err = channel_switch_cmds(std::path::Path::new("."), Channel::Beta).unwrap_err();
+            assert_eq!(err, CHANNEL_WINDOWS_NOTE);
+            return;
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let cmds = channel_switch_cmds(&root, Channel::Beta).expect("linux cmds");
+        assert_eq!(cmds.len(), 1);
+        assert!(cmds[0].contains("--channel beta"), "{}", cmds[0]);
+        assert!(cmds[0].contains("scripts/install.sh"), "{}", cmds[0]);
+        assert!(cmds[0].contains("channel-bak"), "{}", cmds[0]);
+        let stable = channel_switch_cmds(&root, Channel::Stable).expect("stable");
+        assert!(stable[0].contains("--channel stable"), "{}", stable[0]);
+    }
+
+    #[test]
+    fn channel_labs_status_includes_receipt_channel() {
+        let line = channel_labs_status();
+        assert!(
+            line.starts_with("stable") || line.starts_with("beta"),
+            "unexpected labs status: {line}"
+        );
+        assert_eq!(
+            map_channel_switch_error("error: could not compile `grokhub-app`"),
+            "Build failed — previous install kept."
+        );
+        assert_eq!(channel_windows_note(), CHANNEL_WINDOWS_NOTE);
     }
 }

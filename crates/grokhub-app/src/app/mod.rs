@@ -3830,6 +3830,40 @@ impl Cabin {
         self.settings_sec = SettingsSec::Update;
     }
 
+    /// Labs → Beta channel: fetch/build/install from beta or stable. Rollback on fail.
+    fn queue_channel_switch(&mut self, target: grokhub_core::Channel) {
+        self.nav = Nav::Settings;
+        self.settings_sec = SettingsSec::Labs;
+        if cfg!(windows) {
+            self.status = crate::update::channel_windows_note().into();
+            return;
+        }
+        let src = match resolve_source(&self.cfg.source_dir) {
+            Some(p) => p,
+            None => {
+                self.status = crate::update::map_channel_switch_error("no clone").into();
+                return;
+            }
+        };
+        self.cfg.source_dir = src.display().to_string();
+        remember_source(&src);
+        self.persist_cfg();
+        let cmds = match crate::update::channel_switch_cmds(&src, target) {
+            Ok(c) => c,
+            Err(e) => {
+                self.status = crate::update::map_channel_switch_error(&e);
+                return;
+            }
+        };
+        self.update_cabin_note = Some(format!(
+            "Switching to {}…",
+            target.as_str()
+        ));
+        self.start_overlay_update(cmds);
+        // Keep Labs visible while the switch runs (start_overlay_update jumps to Update).
+        self.settings_sec = SettingsSec::Labs;
+    }
+
     /// One control: CLI alpha first when it is newer, then the cabin when it is newer.
     /// A Settings / `/update` click with nothing pending still overlays both.
     fn queue_combined_update(&mut self) {

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Settings → Labs **Beta channel** toggle: on fetches, builds, and installs from `beta` (same as `install.sh --user --channel beta`); off returns to stable/`main`. Shows the current channel, branch, and commit next to the toggle, progress while it builds, and a restart prompt when done. Failures keep the previous binary (backup + restore) and spell out dirty clone, build failed, or no clone. Windows shows the toggle disabled with a short note until the installer supports channels.
+
 Stable and beta channels. `./scripts/install.sh --user --channel beta` fetches origin, checks out the `beta` branch, builds, and installs; `--channel stable` goes back to `main`. The choice is saved in a `channel` receipt in the config folder, so a plain `./scripts/install.sh --user` stays on it, and Settings → Update, `/update`, and `grokhub --update` pull `origin beta` on a beta install, never `origin main`. `grokhub --version` now reads `GrokHub 2.10.92-beta (beta @ abc1234)` on beta and `GrokHub 2.10.92 (main @ f7dcf9a)` on stable; `build.rs` reads the branch and SHA from git, and the Cargo version is unchanged. CI also runs on `beta`. Channels are Linux-only for now.
 
 The bot rules go beta first: every new feature and fix PR targets `beta`, `beta` moves to `main` only on Jeremy's say as a squash-merged PR, and hotfixes go to `main` on his say and are merged back into `beta`. PRs into `beta` don't bump the version; each promotion to `main` carries one bump and one release. The rules are in `CLAUDE.md`, `.cursor/rules`, and a new `CONTRIBUTING.md`.
