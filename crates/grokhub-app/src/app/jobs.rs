@@ -174,9 +174,6 @@ impl Cabin {
                     }
                 }
             }
-            Ok(JobOut::Imagine(url)) => {
-                self.finish_imagine_job(vec![url], None, None);
-            }
             Ok(JobOut::ImagineBatch(urls, note, tokens)) => {
                 self.finish_imagine_job(urls, note, tokens);
             }
@@ -225,7 +222,19 @@ impl Cabin {
                 let view = overlay_update_finish(ok, self.update_pct.unwrap_or(0));
                 self.update_pct = Some(view.pct);
                 self.update_can_restart = view.can_restart;
-                self.status = view.status;
+                let channel_switch = self
+                    .last_host
+                    .iter()
+                    .any(|c| c.contains("--channel ") && c.contains("install.sh"));
+                self.status = if ok && channel_switch {
+                    "Channel switch finished — restart GrokHub".into()
+                } else if ok {
+                    view.status
+                } else if channel_switch {
+                    crate::update::map_channel_switch_error(&view.status)
+                } else {
+                    view.status
+                };
                 if ok {
                     self.note_combined_update_landed();
                 }

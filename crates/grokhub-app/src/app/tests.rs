@@ -609,6 +609,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         );
     }
 
+    #[test]
     fn long_assistant_bubble_wraps_instead_of_one_line() {
         with_fonts_ui(|ui| {
             ui.allocate_ui(egui::vec2(800.0, 400.0), |ui| {
@@ -618,11 +619,6 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 assert!(
                     resp.rect.width() <= grokhub_core::bubble_max_width(800.0) + 8.0,
                     "bubble {}",
-                    resp.rect.width()
-                );
-                assert!(
-                    resp.rect.width() <= grokhub_core::bubble_max_width(800.0) + 8.0,
-                    "pane column {}",
                     resp.rect.width()
                 );
                 assert!(
@@ -1205,19 +1201,6 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             cache.contains("refresh_last_stretch") || cache.contains("visible_chat_refs"),
             "last-message growth must refresh the trailing stretch without a full transcript clone: {cache}"
-        );
-        let voice = src
-            .split("fn poll_voice(")
-            .nth(1)
-            .and_then(|s| s.split("fn poll_tray(").next())
-            .expect("poll_voice");
-        assert!(
-            voice.contains("fold_stream_fields") && !voice.contains("content.clone()"),
-            "a voice token must not clone an 8MB transcript to append a delta: {voice}"
-        );
-        assert!(
-            voice.contains("persist_idle_key") && voice.contains("self.persist()"),
-            "a live voice delta must not clone every thread 2s later — bump the idle key so persist_bg skips: {voice}"
         );
     }
 
@@ -2234,12 +2217,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             stay.contains("hide_cabin"),
             "leftover focus after × must re-unmap the Windows taskbar stub: {stay}"
         );
-        let teach = fn_src(&src, "teach_watched_routine");
         let finish = fn_src(&src, "finish_acp_turn");
         let apply = fn_src(&src, "apply_single_turn");
         assert!(
-            teach.contains("user_asked_to_schedule")
-                && !finish.contains("save_schedule")
+            !finish.contains("save_schedule")
                 && !apply.contains("save_schedule"),
             "ordinary replies that mention every day at / heartbeat every must not become live jobs"
         );
@@ -2845,23 +2826,6 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && room.contains("tree_changed"),
             "/room to the current tree must not clone every thread: {room}"
         );
-        let ext = src
-            .split("fn run_grok_extension(")
-            .nth(1)
-            .and_then(|s| s.split("fn doctor_text(").next())
-            .expect("run_grok_extension");
-        assert!(
-            ext.contains("grok_cwd") && !ext.contains("current_dir"),
-            "Connectors inspect must use grok_cwd, not `.`: {ext}"
-        );
-        let ext_spawn = ext
-            .find("thread::spawn")
-            .expect("extension must leave the UI thread");
-        let ext_out = ext.find("grok_stdout").expect("grok_stdout");
-        assert!(
-            ext_spawn < ext_out,
-            "Connectors inspect/mcp/plugin must not freeze the cabin: {ext}"
-        );
         let fast = src
             .split("fn cabin_fast_llm(")
             .nth(1)
@@ -3159,15 +3123,6 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             del < list,
             "History delete must run grok sessions delete before listing or the row comes back: {forget}"
         );
-        let delh = src
-            .split("fn delete_grok_history(")
-            .nth(1)
-            .and_then(|s| s.split("fn reload_grok_sessions(").next())
-            .expect("delete_grok_history");
-        assert!(
-            delh.contains("forget_grok_build_session") && !delh.contains("reload_grok_sessions"),
-            "Delete must not list until grok sessions delete finishes: {delh}"
-        );
         let dta = src
             .split("fn delete_thread_at")
             .nth(1)
@@ -3312,7 +3267,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let speak = src
             .split("fn speak_reply(")
             .nth(1)
-            .and_then(|s| s.split("fn refresh_eyes(").next())
+            .and_then(|s| s.split("fn poll_eyes_cap(").next())
             .expect("speak_reply");
         let clone = speak.find("to_string()").expect("tts clone");
         assert!(
@@ -3401,7 +3356,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let show = src
             .split("fn show_from_tray(")
             .nth(1)
-            .and_then(|s| s.split("fn poll_voice(").next())
+            .and_then(|s| s.split("fn poll_tray(").next())
             .expect("show_from_tray");
         assert!(
             show.contains("apply_saved_geom"),
@@ -3468,25 +3423,6 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             !idle_key.contains("projects_dirty"),
             "folder click must not clone every thread twice — persist_idle_key must ignore the dirty flag: {idle_key}"
-        );
-    }
-
-    #[test]
-    fn refresh_eyes_captures_off_the_ui_thread() {
-        let src = cabin_src();
-        let eyes = src
-            .split("fn refresh_eyes")
-            .nth(1)
-            .and_then(|s| s.split("fn halt_work").next())
-            .expect("refresh_eyes");
-        let spawn = eyes
-            .find("thread::spawn")
-            .expect("Eyes Scan grim must leave the UI thread");
-        let shot = eyes.find("capture_data_url").expect("screen capture");
-        assert!(spawn < shot, "Eyes Scan must not block the cabin: {eyes}");
-        assert!(
-            eyes.contains("lock_titles") && eyes.contains("should_send_screenshot"),
-            "Eyes Scan lock gates stay on the UI thread: {eyes}"
         );
     }
 
@@ -3866,10 +3802,6 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "GOAL_BLOCKED must not complete a phone task as done"
         );
         assert!(
-            src.contains("visible_goal_step_on_continue"),
-            "a background goal continue must not bump the visible tab step"
-        );
-        assert!(
             src.contains("oauth_access_live"),
             "expired OAuth without refresh must not hide a console key"
         );
@@ -4224,15 +4156,6 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             pinned.contains("accessed_ms") && pinned.contains("pinned_ms"),
             "pin must bump accessed_ms and record pinned_ms or /sync LWW can drop the pin: {pinned}"
-        );
-        let bound = src
-            .split("fn ensure_grok_thread(")
-            .nth(1)
-            .and_then(|s| s.split("fn delete_thread_at").next())
-            .expect("ensure_grok_thread");
-        assert!(
-            bound.contains("grok_show_pending = true") && bound.contains("kick_session_show"),
-            "pin or rename must not store an empty transcript for an unloaded session: {bound}"
         );
         let goal = src
             .split("fn apply_thread_goal")
@@ -5064,21 +4987,6 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             start_hub.contains("self.persist_hub()") && !start_hub.contains("persist_snap"),
             "Start share must not clone every thread just to stamp sharing: {start_hub}"
-        );
-        let eyes = src
-            .split("fn refresh_eyes")
-            .nth(1)
-            .and_then(|s| s.split("fn halt_work").next())
-            .expect("refresh_eyes");
-        let store = eyes.find("store_hub_frame").expect("eyes store");
-        assert!(
-            eyes[..store].contains("should_send_screenshot")
-                || eyes[..store].contains("lock_blocks_hands"),
-            "Eyes Scan must not put a lock-screen frame on the hub: {eyes}"
-        );
-        assert!(
-            eyes[..store].contains("lock_titles"),
-            "Eyes Scan must see lock windows that collect_rows drops: {eyes}"
         );
         let live = src
             .split("fn live_room")
@@ -6467,8 +6375,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("fn paint_voice_mode_row(").next())
             .expect("leave_voice");
         assert!(
-            leave.contains("s.halt()") && leave.contains("Voice off"),
-            "leave voice must close the socket: {leave}"
+            leave.contains("Voice off"),
+            "leave voice must say Voice off: {leave}"
         );
         let row = src
             .split("fn paint_voice_mode_row(")
@@ -6526,7 +6434,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let speak = src
             .split("fn speak_reply(")
             .nth(1)
-            .and_then(|s| s.split("fn refresh_eyes(").next())
+            .and_then(|s| s.split("fn poll_eyes_cap(").next())
             .expect("speak_reply");
         assert!(
             speak.contains("voice_hold_rx") && speak.contains("maybe_continue_ptt"),
@@ -6731,7 +6639,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let tick = src
             .split("fn tick_review(")
             .nth(1)
-            .and_then(|s| s.split("fn review_digest(").next())
+            .and_then(|s| s.split("fn review_chat_digest(").next())
             .expect("tick_review");
         assert!(
             !tick.contains("send_chat")
@@ -6770,10 +6678,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "Scratch is a chat tab — unsaved Memory editor edits must still reach the nightly digest: {spawn}"
         );
         let digest_fn = src
-            .split("fn review_digest(")
+            .split("fn review_chat_digest(")
             .nth(1)
             .and_then(|s| s.split("fn spawn_review(").next())
-            .expect("review_digest");
+            .expect("review_chat_digest");
         assert!(
             digest_fn.contains("thread_host_receipts")
                 && !digest_fn.contains("last_receipts")
@@ -7237,7 +7145,6 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let src = cabin_src();
         let apply = fn_src(&src, "apply_single_turn");
         let finish = fn_src(&src, "finish_acp_turn");
-        let follow = fn_src(&src, "send_followup_turn");
         let drain = fn_src(&src, "drain_followup_queue");
         let poll = fn_src(&src, "poll_single");
         assert!(
@@ -7247,14 +7154,6 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             apply.contains("drain_followup_queue"),
             "stream-end follow-up belongs on the grok -p complete path: {apply}"
-        );
-        assert!(
-            follow.contains("FOLLOWUP_MAX_STEPS") && follow.contains("followup_step"),
-            "auto-follow is capped per user turn: {follow}"
-        );
-        assert!(
-            follow.contains("kick_model(false)") && !follow.contains("send_chat("),
-            "follow-up kicks a quiet continue, not send_chat: {follow}"
         );
         assert!(
             drain.contains("send_chat"),
@@ -7359,7 +7258,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     );
     let tab_act = fn_src(&src, "apply_tab_act");
     assert!(
-        tab_act.contains("composer_want_focus = true") && tab_act.contains("OpenGrok"),
+        tab_act.contains("composer_want_focus = true"),
         "sidebar History clicks must focus the composer: {tab_act}"
     );
         let palette = src
@@ -7445,15 +7344,6 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             src.contains("Nav::Workboard") && src.contains("Nav::Night"),
             "pulse clicks reuse Workboard and Automations"
         );
-        let pulse = include_str!("pulse.rs");
-        assert!(
-            pulse.contains("allocate_exact_size")
-                && pulse.contains("pulse_row_label")
-                && pulse.contains(".wrap()")
-                && !pulse.contains(".truncate()")
-                && !pulse.contains("status_chip"),
-            "pulse rows wrap the full line inside the reserved slot: {pulse}"
-        );
         assert!(
             home.contains("paint_update_feed")
                 && home.contains("paint_device_glance_row")
@@ -7492,7 +7382,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let commit = night
             .split("fn commit_schedule(")
             .nth(1)
-            .and_then(|s| s.split("fn teach_watched_routine(").next())
+            .and_then(|s| s.split("fn ui_night(").next())
             .expect("commit_schedule");
         assert!(
             commit.contains("note_schedule_created"),
@@ -7594,7 +7484,6 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         assert!(
             acp.contains("note_live_grok_session")
                 && acp.contains("request_grok_sessions_refresh")
-                && acp.contains("history_list_refresh_due")
                 && acp.contains("grok_sessions_refresh_pending"),
             "Windows History must index live sessions and re-list when CLI lags"
         );
@@ -7852,7 +7741,7 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     let offer = pulse
         .split("fn accept_automate_offer(")
         .nth(1)
-        .and_then(|s| s.split("fn react_card(").next())
+        .and_then(|s| s.split("fn ensure_useful_ideas(").next())
         .expect("accept_automate_offer");
     assert!(
         offer.contains("c.title.clone()")
@@ -7879,7 +7768,7 @@ fn feed_pulse_and_fresh_home_stay_off_the_review() {
     assert!(
         !paint.contains("ghost_pill")
             && paint.contains("\"×\"")
-            && paint.contains("FeedAct::Archive")
+            && !paint.contains("FeedAct::Archive")
             && paint.contains("FeedAct::Discuss")
             && paint.contains("FeedAct::Dismiss")
             && paint.contains("FeedAct::Open"),
@@ -8712,7 +8601,7 @@ fn feed_accept_files_one_todo() {
     let id = card.id.clone();
     cabin.updates = vec![card];
 
-    cabin.apply_feed_act(Some(FeedAct::Build(id)));
+    cabin.build_idea(&id);
 
     assert_eq!(cabin.board.len(), 1);
     assert_eq!(cabin.board[0].status, grokhub_core::BoardStatus::Todo);
@@ -10209,58 +10098,33 @@ fn an_older_persist_snapshot_never_overwrites_a_newer_one() {
 }
 
 #[test]
-fn react_card_keeps_the_reaction() {
+fn home_x_on_a_digest_keeps_it_in_pulse() {
     let _lock = crate::config::hold_test_config();
-    let cfg = IsolatedConfig::arm("react-card");
-    let mut cabin = Cabin::quiet_for_test();
-    let card = grokhub_core::idea_card("harbor", "Harbor lamp", "fold the charts", 1);
-    let id = card.id.clone();
-    assert!(card.reaction.is_none());
-    cabin.updates.push(card);
-    cabin.react_card(&id, grokhub_core::CardReaction::Up);
-    wait_tree_contains(&cfg.root, "Harbor lamp");
-    let stuck = cabin
-        .updates
-        .iter()
-        .find(|c| c.id == id)
-        .expect("reaction card");
-    assert_eq!(stuck.reaction, Some(grokhub_core::CardReaction::Up));
-    assert_eq!(stuck.kind, grokhub_core::UpdateKind::Idea);
-    drop(cfg);
-}
-
-#[test]
-fn archive_feed_digest_drops_the_digest() {
-    let _lock = crate::config::hold_test_config();
-    let cfg = IsolatedConfig::arm("archive-digest");
+    let cfg = IsolatedConfig::arm("home-x-digest");
     let mut cabin = Cabin::quiet_for_test();
     let card = grokhub_core::digest_card("week", "Week notes", "rolled up", 2);
     let id = card.id.clone();
     cabin.updates.push(card);
+    let on_deck = |cabin: &Cabin| {
+        super::feed_ui::home_deck(&cabin.updates, &cabin.cfg.feed_pulse, &cabin.card_prefs, now_ms())
+            .cards
+            .iter()
+            .any(|c| c.id == id)
+    };
+    assert!(on_deck(&cabin), "the digest starts on the main deck");
+    cabin.apply_feed_act(Some(FeedAct::Dismiss(id.clone())));
+    wait_tree_contains(&cfg.root, "offHome");
+    assert!(!on_deck(&cabin), "× takes it off the main deck");
     assert!(
         grokhub_core::visible_digests(&cabin.updates)
             .iter()
             .any(|c| c.id == id),
-        "the digest starts on the live feed"
+        "Pulse still lists the digest"
     );
-    cabin.archive_feed_digest(&id);
-    wait_tree_contains(&cfg.root, "Week notes");
-    assert!(
-        grokhub_core::visible_digests(&cabin.updates)
-            .iter()
-            .all(|c| c.id != id),
-        "archive drops the digest from the live feed"
-    );
-    assert!(
-        grokhub_core::archived_digests(&cabin.updates)
-            .iter()
-            .any(|c| c.id == id),
-        "the dropped digest is the archived row"
-    );
-    assert_eq!(
-        cabin.updates.iter().find(|c| c.id == id).map(|c| c.status),
-        Some(grokhub_core::UpdateStatus::Dismissed)
-    );
+    assert!(grokhub_core::archived_digests(&cabin.updates).is_empty());
+    let kept = cabin.updates.iter().find(|c| c.id == id).expect("digest kept");
+    assert_eq!(kept.status, grokhub_core::UpdateStatus::Unread);
+    assert!(kept.pulse.off_home);
     drop(cfg);
 }
 
@@ -10288,38 +10152,12 @@ fn command_palette_opens_and_navigates() {
     cabin.open_palette();
     assert!(cabin.palette_open);
     assert!(cabin.palette_q.is_empty());
-    cabin.run_palette("nav:board");
+    cabin.run_palette(&egui::Context::default(), "nav:board");
     assert!(matches!(cabin.nav, Nav::Workboard));
     assert!(!cabin.palette_open);
     cabin.open_palette();
-    cabin.run_palette("nav:history");
+    cabin.run_palette(&egui::Context::default(), "nav:history");
     assert!(matches!(cabin.nav, Nav::History));
-}
-
-// Landed from PR #96.
-#[test]
-fn teach_watched_routine_saves_a_daily_job_and_rejects_a_plain_line() {
-    let mut cabin = Cabin::quiet_for_test();
-    cabin.teach_nl = "every day at 9, summarize the board".into();
-    cabin.teach_watched_routine();
-    assert!(
-        cabin.status.contains("added"),
-        "status should record the saved job: {}",
-        cabin.status
-    );
-    assert!(
-        cabin.status.contains("09:00"),
-        "status should name the clock time: {}",
-        cabin.status
-    );
-    assert!(cabin.teach_nl.is_empty());
-
-    cabin.teach_nl = "hello".into();
-    cabin.teach_watched_routine();
-    assert_eq!(
-        cabin.status,
-        "A job is saved only when you ask to schedule it."
-    );
 }
 
 // Landed from PR #97.
@@ -11822,7 +11660,7 @@ fn bubble_reply_quotes_into_the_composer() {
 
 // Landed from PR #146.
 #[test]
-fn grok_history_open_and_delete_stay_off_a_run() {
+fn grok_history_open_stays_off_a_run() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("grok-hist");
     let _ = std::fs::remove_dir_all(&root);
@@ -11850,24 +11688,6 @@ fn grok_history_open_and_delete_stay_off_a_run() {
     cabin.open_grok_session(id);
     assert_eq!(cabin.threads.len(), 1);
     assert_eq!(cabin.threads[0].grok_session.as_deref(), Some(id));
-    assert!(!cabin.running);
-
-    cabin.delete_grok_history(id);
-    assert!(cabin
-        .threads
-        .iter()
-        .all(|t| t.grok_session.as_deref() != Some(id)));
-    assert!(!cabin.running);
-
-    let threads_after = cabin.threads.len();
-    let missing = "not-a-thread-and-not-open";
-    cabin.delete_grok_history(missing);
-    assert_eq!(cabin.status, "Deleting session…");
-    assert_eq!(cabin.threads.len(), threads_after);
-    assert!(cabin
-        .threads
-        .iter()
-        .all(|t| t.grok_session.as_deref() != Some(missing)));
     assert!(!cabin.running);
 }
 
@@ -13501,13 +13321,28 @@ fn palette_opens_and_diagnostics_stay_off_a_run() {
     assert!(!cabin.settings_menu_open);
     assert!(!cabin.running);
 
-    cabin.run_palette("diag");
+    // Copy diagnostics puts the bundle on the clipboard, not in the status line.
+    let ctx = egui::Context::default();
+    let out = crate::theme::test_pass(&ctx, Default::default(), |_| {
+        cabin.run_palette(&ctx, "diag");
+    });
     assert!(!cabin.palette_open);
-    assert!(cabin.status.contains("app GrokHub"));
-    assert!(cabin.status.contains(env!("CARGO_PKG_VERSION")));
+    assert_eq!(cabin.status, "Diagnostics copied");
+    let copied: Vec<&String> = out
+        .platform_output
+        .commands
+        .iter()
+        .filter_map(|c| match c {
+            egui::OutputCommand::CopyText(t) => Some(t),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(copied.len(), 1, "{copied:?}");
+    assert!(copied[0].starts_with("app GrokHub\nversion "), "{}", copied[0]);
+    assert!(copied[0].contains(env!("CARGO_PKG_VERSION")), "{}", copied[0]);
     assert!(!cabin.running);
 
-    cabin.run_palette("nav:night");
+    cabin.run_palette(&egui::Context::default(), "nav:night");
     assert!(matches!(cabin.nav, Nav::Night));
     assert!(!cabin.palette_open);
     assert!(!cabin.running);
@@ -14341,40 +14176,25 @@ fn react_and_archive_stay_on_the_card() {
         feed_card("event-1", grokhub_core::UpdateKind::AutomationDone, false),
     ];
 
-    cabin.react_card("idea-1", grokhub_core::CardReaction::Up);
-    let idea = cabin
-        .updates
-        .iter()
-        .find(|card| card.id == "idea-1")
-        .expect("idea");
-    assert_eq!(idea.reaction, Some(grokhub_core::CardReaction::Up));
-    assert!(!cabin.running);
-
-    cabin.react_card("event-1", grokhub_core::CardReaction::Down);
-    let event = cabin
-        .updates
-        .iter()
-        .find(|card| card.id == "event-1")
-        .expect("event");
-    assert!(event.reaction.is_none());
-
-    cabin.archive_feed_digest("digest-1");
+    cabin.close_home_card("digest-1");
     let digest = cabin
         .updates
         .iter()
         .find(|card| card.id == "digest-1")
         .expect("digest stays");
-    assert_eq!(digest.status, grokhub_core::UpdateStatus::Dismissed);
-    assert!(!digest.held);
+    assert_ne!(digest.status, grokhub_core::UpdateStatus::Dismissed);
+    assert!(digest.pulse.off_home);
+    assert!(digest.held);
     assert!(!cabin.running);
 
-    cabin.archive_feed_digest("idea-1");
+    cabin.close_home_card("idea-1");
     let idea = cabin
         .updates
         .iter()
         .find(|card| card.id == "idea-1")
         .expect("idea stays");
     assert_ne!(idea.status, grokhub_core::UpdateStatus::Dismissed);
+    assert!(!idea.pulse.off_home);
 }
 
 fn feed_card(id: &str, kind: grokhub_core::UpdateKind, held: bool) -> grokhub_core::UpdateCard {
@@ -15142,8 +14962,6 @@ fn quiet_cabin() -> Cabin {
         window_visible: true,
         resume_fresh: false,
         saw_minimized: false,
-        brief_buf: String::new(),
-        ideas_q: String::new(),
         ideas_filled: false,
         ideas_rx: None,
         tray_saw_unfocused: false,
@@ -15160,7 +14978,6 @@ fn quiet_cabin() -> Cabin {
         night_nl: String::new(),
         watch_once: false,
         watched_steps: Vec::new(),
-        teach_nl: String::new(),
         chat_tail_frames: 0,
         cap_auto_buf: String::new(),
         cap_host_buf: String::new(),
@@ -15171,6 +14988,7 @@ fn quiet_cabin() -> Cabin {
         history_q_at: None,
         history_hits: Vec::new(),
         last_receipt_ok: None,
+        beta_auto_off_checked_at: None,
         last_receipts: Vec::new(),
         try_again: false,
         last_rewind_id: None,
@@ -15226,7 +15044,6 @@ fn quiet_cabin() -> Cabin {
         chat_view_rev: 0,
         chat_view_body: (0, 0),
         presence_ring: Vec::new(),
-        voice_sock: None,
         voice_state: grokhub_core::VoiceState::Idle,
         voice_ready_at: None,
         voice_hold_rx: None,
@@ -15948,36 +15765,6 @@ fn full_automation_list_stays_off_a_run() {
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
-// Landed from PR #208.
-#[test]
-fn plain_teach_stays_off_a_run() {
-    let _hold = crate::config::hold_test_config();
-    let root = crate::config::test_config_root("plain-teach");
-    let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("GROKHUB_CONFIG", &root);
-
-    let mut cabin = Cabin::quiet_for_test();
-    cabin.teach_nl = "follow along".to_string();
-    assert!(cabin.watched_steps.is_empty());
-    assert!(!cabin.teach_nl.contains("every ") && !cabin.teach_nl.contains("/loop"));
-    assert!(cabin.automations.is_empty());
-    assert!(cabin.grok_loops.is_empty());
-    assert!(!cabin.running);
-
-    cabin.teach_watched_routine();
-
-    assert_eq!(
-        cabin.status,
-        "A job is saved only when you ask to schedule it."
-    );
-    assert!(cabin.automations.is_empty());
-    assert!(cabin.grok_loops.is_empty());
-    assert!(!cabin.running);
-
-    std::env::remove_var("GROKHUB_CONFIG");
-    let _ = std::fs::remove_dir_all(&root);
-}
-
 // Landed from PR #209.
 #[test]
 fn imagine_while_busy_stays_halted() {
@@ -16014,24 +15801,6 @@ fn empty_update_plan_stays_off_a_run() {
         Some(v) => std::env::set_var("GROKHUB_CONFIG", v),
         None => std::env::remove_var("GROKHUB_CONFIG"),
     }
-}
-
-// Landed from PR #211.
-#[test]
-fn unparsed_teach_stays_off_a_run() {
-    let _hold = crate::config::hold_test_config();
-    let root = crate::config::test_config_root("unparsed-teach");
-    std::env::set_var("GROKHUB_CONFIG", &root);
-    let mut cabin = super::Cabin::quiet_for_test();
-    cabin.teach_nl = "every banana check".into();
-    cabin.teach_watched_routine();
-    assert_eq!(
-        cabin.status,
-        "Need `/loop 30m …`, `every 2h …`, or `every day at 9 …`"
-    );
-    assert!(cabin.automations.is_empty());
-    assert!(cabin.grok_loops.is_empty());
-    assert!(!cabin.running);
 }
 
 // Landed from PR #212.
@@ -16433,19 +16202,6 @@ fn blank_project_name_drops_it() {
     assert!(app.proj_rename.is_none());
     assert!(!app.proj_rename_focus);
     assert!(app.projects.iter().all(|n| n.id != id));
-    assert!(!app.running);
-    assert!(app.chat_job_thread.is_none());
-}
-
-// Landed from PR #229.
-#[test]
-fn clear_confirm_drops_the_sheet() {
-    let mut app = Cabin::quiet_for_test();
-    app.confirm = Some(ConfirmKind::DestructiveHost { cmd: "rm foo.txt".into() });
-    app.perm_always_confirm = Some(serde_json::json!({"rpc": 1}));
-    app.clear_confirm();
-    assert!(app.confirm.is_none());
-    assert!(app.perm_always_confirm.is_none());
     assert!(!app.running);
     assert!(app.chat_job_thread.is_none());
 }
@@ -16946,18 +16702,11 @@ fn board_card_notes_edit_save_and_ride_the_next_turn() {
     assert_eq!(app.board[0].notes, "bump pkgver, then makepkg");
     assert!(app.board[0].detail.is_empty(), "notes never land in the run status line");
 
-    // Work on it needs an agent; without one it says so and changes nothing.
-    app.work_on_card(&id);
-    assert!(app.status.contains("Grok"), "{}", app.status);
-    assert_eq!(app.board[0].status, grokhub_core::BoardStatus::Todo);
-
     let src = cabin_src();
     let kick = fn_src(&src, "kick_model");
     assert!(kick.contains("self.card_notes_follow.as_deref()"), "notes reach the agent's prompt: {kick}");
     let send = fn_src(&src, "send_chat");
     assert!(send.contains("take_card_notes_block"), "{send}");
-    let work = fn_src(&src, "work_on_card");
-    assert!(work.contains("card_work_prompt") && work.contains("c.run = true"), "{work}");
     let open = fn_src(&src, "paint_board_card_open");
     assert!(!open.contains("dnd_drag_source"), "an open card's controls must not sit inside a drag source");
     assert!(open.contains("egui::DragAndDrop::set_payload"), "the title row drags");
@@ -18587,7 +18336,6 @@ fn leave_voice_while_idle_stays_off_a_run() {
     assert_eq!(app.status, "Voice off");
     assert!(app.voice_hold_rx.is_none());
     assert!(app.voice_ready_at.is_none());
-    assert!(app.voice_sock.is_none());
     assert!(!app.running);
     assert!(app.chat_job_thread.is_none());
 }
@@ -18616,7 +18364,6 @@ fn voice_hold_while_idle_stays_off_a_run() {
 #[test]
 fn voice_mode_is_on_when_ready() {
     let mut app = Cabin::quiet_for_test();
-    app.voice_sock = None;
     app.voice_state = VoiceState::Idle;
     assert!(!app.voice_is_on());
     app.voice_state = VoiceState::Ready;
@@ -19615,24 +19362,6 @@ fn chips_poll_clears_busy_on_drop() {
 
 // ---- Cursor fold: Chat state on an idle cabin ----
 
-// Folded from PR #272.
-#[test]
-fn session_row_title_keeps_a_locked_name() {
-    let mut app = Cabin::quiet_for_test();
-    assert_eq!(app.session_row_title("sess-1", ""), "sess-1");
-    assert_eq!(app.session_row_title("sess-1", "sess-1"), "sess-1");
-    assert_eq!(app.session_row_title("sess-1", "Harbor"), "Harbor");
-
-    app.threads.push(crate::threads::ChatThread::new("Chat", false));
-    app.threads[0].grok_session = Some("sess-1".into());
-    app.threads[0].title_locked = true;
-    assert_eq!(app.session_row_title("sess-1", "Harbor"), "Chat");
-    app.threads[0].title_locked = false;
-    assert_eq!(app.session_row_title("sess-1", "Harbor"), "Harbor");
-    assert!(!app.running);
-    assert!(app.chat_job_thread.is_none());
-}
-
 // Folded from PR #273.
 #[test]
 fn offscreen_chat_row_stays_outside_the_clip() {
@@ -19644,27 +19373,6 @@ fn offscreen_chat_row_stays_outside_the_clip() {
     assert!(!chat_row_outside_clip(egui::pos2(10.0, 150.0), 100.0, 40.0, clip));
 }
 
-// Folded from PR #277.
-#[test]
-fn pinned_history_row_sorts_first() {
-    let mut app = Cabin::quiet_for_test();
-    app.threads.push(crate::threads::ChatThread::new("Chat", false));
-    app.threads[0].grok_session = Some("sess-1".into());
-    app.threads[0].pinned = true;
-    app.threads[0].pinned_ms = 9;
-    let pinned = app.session_sort_key("sess-1", 1);
-    assert!(pinned.pinned);
-    assert_eq!(pinned.pinned_ms, 9);
-    let missing = app.session_sort_key("other", 4);
-    assert!(!missing.pinned);
-    assert_eq!(missing.list_rank, 4);
-    assert_eq!(missing.accessed_ms, 0);
-    let order = crate::threads::session_list_order(&[missing, pinned]);
-    assert_eq!(order, vec![1, 0]);
-    assert!(!app.running);
-    assert!(app.chat_job_thread.is_none());
-}
-
 // Folded from PR #282.
 #[test]
 fn chip_pairs_cap_a_long_reply() {
@@ -19674,13 +19382,6 @@ fn chip_pairs_cap_a_long_reply() {
         ("user".into(), "Harbor".into()),
         ("assistant".into(), long.clone()),
     ]);
-
-    let pairs = cabin.chat_pairs();
-    assert_eq!(pairs.len(), 2);
-    assert_eq!(pairs[0].0, "user");
-    assert_eq!(pairs[0].1, "Harbor");
-    assert_eq!(pairs[1].0, "assistant");
-    assert_eq!(pairs[1].1.len(), 8000);
 
     let chips = cabin.chip_chat_pairs();
     let scanned = grokhub_core::chip_scan(&long);
@@ -19741,25 +19442,6 @@ fn project_flush_stays_off_when_clean() {
     assert!(app.projects_dirty);
     assert_eq!(app.status, "Harbor");
     // Leave dirty. Do not flush while dirty.
-    assert!(!app.running);
-    assert!(app.chat_job_thread.is_none());
-}
-
-// Folded from PR #288.
-#[test]
-fn chat_pairs_keeps_the_full_reply() {
-    let mut app = Cabin::quiet_for_test();
-    let long = "a".repeat(5000);
-    app.messages = std::sync::Arc::new(vec![
-        ("user".into(), "Harbor".into()),
-        ("assistant".into(), long.clone()),
-    ]);
-    let pairs = app.chat_pairs();
-    assert_eq!(pairs.len(), 2);
-    assert_eq!(pairs[0], ("user".into(), "Harbor".into()));
-    assert_eq!(pairs[1].0, "assistant");
-    assert_eq!(pairs[1].1.len(), 5000);
-    assert_eq!(pairs[1].1, long);
     assert!(!app.running);
     assert!(app.chat_job_thread.is_none());
 }
@@ -20095,18 +19777,6 @@ fn turn_transcript_returns_merged_when_idle() {
     let merged = "idle merged reply".to_string();
     // Empty turn_log → turn_needs_timeline false → merged unchanged. No spawn/network.
     assert_eq!(cabin.turn_transcript(merged.clone(), IMAGE_FILE_CAP), merged);
-}
-
-// Folded from PR #367.
-#[test]
-fn job_stored_pairs_empty_when_idle() {
-    let cabin = Cabin::quiet_for_test();
-    assert!(cabin.chat_job_thread.is_none());
-    let vis = cabin.visible_thread_id();
-    // Quiet cabin: None job id → empty. No spawn/network.
-    assert!(cabin.job_stored_pairs(None, &vis).is_empty());
-    // Job id equal to visible → empty.
-    assert!(cabin.job_stored_pairs(Some(vis.as_str()), &vis).is_empty());
 }
 
 // Folded from PR #372.
@@ -20772,10 +20442,6 @@ fn cabin_lane_flip_reorders_chips() {
     assert_eq!(persistable_cabin_lane("nope"), "coding");
     assert_eq!(cabin_lane("life"), CabinLane::Life);
     assert_eq!(cabin_lane("Coding"), CabinLane::Coding);
-    assert_eq!(cabin_lane_label(CabinLane::Life), "Life");
-    assert_eq!(cabin_lane_label(CabinLane::Coding), "Coding");
-    assert_eq!(flip_cabin_lane(CabinLane::Coding), CabinLane::Life);
-    assert_eq!(flip_cabin_lane(CabinLane::Life), CabinLane::Coding);
 
     let shell = QuickChip {
         id: "shell".into(),
@@ -21244,10 +20910,6 @@ fn native_flag_off_cli_path_is_unchanged() {
     let src = cabin_src();
     let kick = fn_src(&src, "kick_model");
     assert!(kick.contains("spawn_grok_p_stream"), "{kick}");
-    assert_eq!(
-        crate::build_agent::cli_launch_args(false, Some("high")),
-        grokhub_acp::agent_args(false, Some("high"))
-    );
 }
 
 #[test]
@@ -21426,38 +21088,20 @@ fn pulse_paints_only_on_an_empty_signed_in_chat() {
     assert!(!should_paint_pulse(false, false, true));
     assert!(!should_paint_pulse(true, true, true));
     assert!(!should_paint_pulse(true, false, false));
-    assert_eq!(pulse_row_label("Night", ""), "Night");
-    assert_eq!(pulse_row_label(" Night ", "done"), "Night · done");
 }
 
 // Folded from PR #280.
 #[test]
 fn feed_deck_hover_lifts_the_card_behind() {
-    let front = super::open_slide(0);
-    assert_eq!(front, super::SlidePose { dy: 0.0, scale: 1.0 });
-    let second = super::open_slide(1);
-    assert!(second.dy < 0.0);
-    assert_eq!(second.scale, 1.0);
-    assert!(super::open_slide(2).dy < second.dy);
+    let open = super::feed_ui::deck_poses(3, true, Some(1), 1_000.0);
+    assert_eq!(open[0], super::SlidePose { dy: 0.0, scale: 1.0 });
+    assert_eq!(open[1], super::SlidePose { dy: -102.0, scale: 1.0 });
+    assert_eq!(open[2], super::SlidePose { dy: -132.0, scale: 1.0 });
+    let rest = super::feed_ui::deck_poses(3, false, Some(1), 1_000.0);
+    assert_eq!(rest[1], super::rest_slide(1));
+    assert!(rest[1].dy > 0.0 && rest[1].scale < 1.0);
 
-    let rest = super::rest_slide(1);
-    let open = super::open_slide(1);
-    assert!(rest.dy > front.dy);
-    assert!(rest.scale < front.scale);
-    assert_ne!(rest, open);
-    assert_eq!(super::mix_slide(rest, open, 0.0), rest);
-    assert_eq!(super::mix_slide(rest, open, 1.0), open);
-    let mid = super::mix_slide(rest, open, 0.5);
-    assert!(open.dy < mid.dy && mid.dy < rest.dy);
-    assert!(rest.scale < mid.scale && mid.scale < open.scale);
-    assert_eq!(super::mix_slide(rest, open, 1.5), open);
-    assert_eq!(super::mix_slide(rest, open, -0.25), rest);
-
-    let closed = super::StackView {
-        expanded: false,
-        popped: None,
-    };
-    let pile = super::next_feed_stack(&closed, super::StackHit::Pile, Some("back".into()));
+    let pile = super::next_feed_stack(3, true, Some("back".into()), Some("front"));
     assert_eq!(
         pile,
         super::StackView {
@@ -21465,74 +21109,29 @@ fn feed_deck_hover_lifts_the_card_behind() {
             popped: Some("back".into()),
         }
     );
-    let away = super::next_feed_stack(&pile, super::StackHit::Away, Some("other".into()));
     assert_eq!(
-        away,
-        super::StackView {
-            expanded: false,
-            popped: Some("back".into()),
-        }
-    );
-    let on_card = super::next_feed_stack(&pile, super::StackHit::Card, Some("other".into()));
-    assert_eq!(on_card, pile);
-    let still_down = super::next_feed_stack(&away, super::StackHit::Card, Some("other".into()));
-    assert_eq!(still_down, away);
-    let cleared = super::next_feed_stack(&away, super::StackHit::Pile, None);
-    assert_eq!(
-        cleared,
-        super::StackView {
-            expanded: true,
-            popped: None,
-        }
-    );
-
-    assert_eq!(
-        super::pile_pop_target(Some("front"), Some("front".into())),
-        None
+        super::next_feed_stack(3, false, Some("back".into()), Some("front")),
+        super::StackView::default()
     );
     assert_eq!(
-        super::pile_pop_target(Some("front"), Some("back".into())),
-        Some("back".into())
-    );
-
-    assert_eq!(
-        super::stack_hit(super::StackHover {
-            on_card: true,
-            on_pile: true,
-        }),
-        super::StackHit::Card
-    );
-    assert_eq!(
-        super::stack_hit(super::StackHover {
-            on_card: false,
-            on_pile: true,
-        }),
-        super::StackHit::Pile
-    );
-    assert_eq!(
-        super::stack_hit(super::StackHover {
-            on_card: false,
-            on_pile: false,
-        }),
-        super::StackHit::Away
+        super::next_feed_stack(1, true, Some("front".into()), Some("front")),
+        super::StackView::default()
     );
 }
 
 // Folded from PR #289.
 #[test]
 fn feed_deck_shift_keeps_the_top_card_on_screen() {
-    assert_eq!(super::feed_ui::slide_up_shift(100.0, 0, 0.0), 0.0);
-    assert_eq!(super::feed_ui::slide_up_shift(100.0, 1, 0.0), 0.0);
-
-    let behind = super::feed_ui::open_slide(1).dy;
-    let top_card = super::feed_ui::open_slide(2).dy;
-    assert!(top_card < behind);
-    assert!(behind < 0.0 && top_card < 0.0);
-
-    let n = 3usize;
-    let front_y = 40.0;
-    assert!(super::feed_ui::slide_up_shift(front_y, n, 0.0) > 0.0);
-    assert_eq!(super::feed_ui::slide_up_shift(front_y, n, -1000.0), 0.0);
+    let tops: Vec<f32> = super::feed_ui::deck_poses(3, true, Some(2), 40.0)
+        .iter()
+        .map(|pose| pose.dy)
+        .collect();
+    assert_eq!(tops, vec![0.0, -30.0, -40.0]);
+    let none: Vec<f32> = super::feed_ui::deck_poses(3, true, None, 0.0)
+        .iter()
+        .map(|pose| pose.dy)
+        .collect();
+    assert_eq!(none, vec![0.0, 0.0, 0.0]);
 }
 
 // Folded from PR #292.
@@ -21580,51 +21179,6 @@ fn roll_today_stays_put_on_same_day() {
     drop(cabin);
     let _ = std::fs::remove_dir_all(&root);
     std::env::remove_var("GROKHUB_CONFIG");
-}
-
-// Folded from PR #331.
-#[test]
-fn collect_pulse_rows_lists_goal_and_loop() {
-    let _hold = crate::config::hold_test_config();
-    let root = crate::config::test_config_root("pulse-rows");
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).expect("config root");
-    std::env::set_var("GROKHUB_CONFIG", &root);
-
-    let mut cabin = Cabin::quiet_for_test();
-    cabin.status = "Harbor".into();
-    cabin.cfg.goal_pin = "Ship the pulse".into();
-    cabin.goal_step = 2;
-    cabin.grok_loops.push(grokhub_core::new_loop(
-        "30m".into(),
-        "check deploy".into(),
-        1_000,
-    ));
-
-    assert!(!cabin.running);
-    let status = cabin.status.clone();
-    let rows = cabin.collect_pulse_rows();
-
-    assert!(
-        rows.iter().any(|r| {
-            r.kind == super::pulse::PulseRowKind::Goal
-                && r.title == "Ship the pulse"
-                && r.detail.contains("step 2")
-        }),
-        "goal pin must surface as a Goal row: {rows:?}"
-    );
-    assert!(
-        rows.iter().any(|r| {
-            r.kind == super::pulse::PulseRowKind::Job && r.title == "check deploy"
-        }),
-        "enabled loop must surface as the Job row: {rows:?}"
-    );
-    assert!(!cabin.running);
-    assert_eq!(cabin.status, status);
-    assert_eq!(cabin.status, "Harbor");
-
-    std::env::remove_var("GROKHUB_CONFIG");
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 // Folded from PR #375.
@@ -21916,46 +21470,6 @@ fn composer_hint_ink_blends_subtle_and_muted() {
         crate::theme::blend_color(crate::theme::subtle(), crate::theme::muted(), 0.5),
         "hint ink is the subtle+muted mid blend"
     );
-}
-
-// Folded from PR #424.
-#[test]
-fn collect_pulse_rows_quiet_stable_rows() {
-    let cabin = Cabin::quiet_for_test();
-    assert!(cabin.automations.is_empty());
-    assert!(cabin.grok_loops.is_empty());
-    assert!(cabin.cfg.goal_pin.is_empty());
-    assert!(cabin.board.is_empty());
-    assert!(!cabin.running);
-    assert!(cabin.chat_job_thread.is_none());
-
-    let rows = cabin.collect_pulse_rows();
-
-    let seed = crate::cards::SUGGESTED_AUTOS
-        .iter()
-        .find(|s| s.title == "Morning brief")
-        .expect("Morning brief seed");
-    assert_eq!(
-        rows.len(),
-        2,
-        "quiet cabin yields seed Job + Usage only: {rows:?}"
-    );
-    assert_eq!(rows[0].kind, super::pulse::PulseRowKind::Job);
-    assert_eq!(rows[0].title, seed.title);
-    assert_eq!(rows[0].detail, seed.body);
-    assert_eq!(rows[0].nav, Some(super::pulse::PulseNav::Night));
-    assert_eq!(rows[1].kind, super::pulse::PulseRowKind::Usage);
-    assert_eq!(rows[1].title, grokhub_core::usage_line(&cabin.usage));
-    assert!(rows[1].detail.is_empty());
-    assert!(rows[1].nav.is_none());
-    assert!(!rows
-        .iter()
-        .any(|r| r.kind == super::pulse::PulseRowKind::Empty));
-    assert!(!rows
-        .iter()
-        .any(|r| r.kind == super::pulse::PulseRowKind::Goal));
-    assert!(!cabin.running);
-    assert!(cabin.chat_job_thread.is_none());
 }
 
 // ---- Cursor fold: Clock, day and host shells ----
@@ -23289,6 +22803,7 @@ fn bare_slash_bg_still_moves_a_live_reply() {
 }
 
 /// Painted text of the live-work strip, the one place background work shows.
+#[cfg(unix)]
 fn live_work_text(cabin: &mut super::Cabin) -> String {
     let mut texts = Vec::new();
     let ctx = egui::Context::default();
@@ -23946,7 +23461,6 @@ fn pulse_replaces_ideas_on_the_rail_and_old_links_still_land() {
     assert!(crate::theme::GROK_NAV
         .iter()
         .all(|(id, label)| *id != "ideas" && *label != "Ideas"));
-    assert_eq!(crate::theme::stage_subtitle("pulse"), "What I'd do next");
     assert_eq!(super::Cabin::nav_from_id("pulse"), super::Nav::Pulse);
     assert_eq!(
         super::Cabin::nav_from_id("ideas"),
@@ -23961,7 +23475,7 @@ fn pulse_replaces_ideas_on_the_rail_and_old_links_still_land() {
     assert_eq!(cabin.nav, super::Nav::Pulse);
     assert_eq!(cabin.nav_id(), "pulse");
     cabin.nav = super::Nav::Chat;
-    cabin.run_palette("nav:pulse");
+    cabin.run_palette(&egui::Context::default(), "nav:pulse");
     assert_eq!(cabin.nav, super::Nav::Pulse);
     // The deck no longer stacks over a new chat unless Settings turns it back on.
     assert!(!crate::config::AppConfig::default().home_deck);
@@ -24799,3 +24313,141 @@ fn motion_wave2e_module_wired() {
     assert!(motion.contains("CURSOR_SETTLE_SECS: f32 = 0.080"));
     assert!(motion.contains("no neon") || motion.contains("No neon") || motion.contains("no neon trail") || motion.contains("No neon trail"));
 }
+/// One composer frame wired like the Chat pill: the send check runs before and
+/// after a multiline field whose `return_key` is Command+Enter.
+fn composer_key_frame(
+    ctx: &egui::Context,
+    composer: &mut String,
+    modifiers: egui::Modifiers,
+    keys: &[egui::Key],
+) -> Vec<String> {
+    let id = egui::Id::new("composer-key-frame");
+    let mut events = vec![egui::Event::ModifiersChanged(modifiers)];
+    events.extend(keys.iter().map(|&key| egui::Event::Key {
+        key,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers,
+    }));
+    let raw = egui::RawInput {
+        events,
+        ..Default::default()
+    };
+    let mut sent = Vec::new();
+    let _ = crate::theme::test_pass(ctx, raw, |ui| {
+        ui.memory_mut(|m| m.request_focus(id));
+        let focused = ui.memory(|m| m.has_focus(id));
+        if let Some(t) = super::take_focused_composer(ui, composer, focused) {
+            sent.push(t);
+        }
+        let edit = ui.add(
+            egui::TextEdit::multiline(composer)
+                .id(id)
+                .return_key(Some(egui::KeyboardShortcut::new(
+                    egui::Modifiers::COMMAND,
+                    egui::Key::Enter,
+                ))),
+        );
+        if let Some(t) = super::take_focused_composer(ui, composer, edit.has_focus()) {
+            sent.push(t);
+        }
+    });
+    sent
+}
+
+#[test]
+fn shift_enter_breaks_the_composer_line_and_enter_sends() {
+    let ctx = egui::Context::default();
+    let mut composer = String::from("first line");
+    // Settle focus with a frame that presses nothing.
+    assert!(composer_key_frame(&ctx, &mut composer, egui::Modifiers::NONE, &[]).is_empty());
+
+    let sent = composer_key_frame(&ctx, &mut composer, egui::Modifiers::SHIFT, &[egui::Key::Enter]);
+    assert!(sent.is_empty(), "Shift+Enter must not send: {sent:?}");
+    assert_eq!(composer, "first line\n");
+
+    // Ctrl on Linux and Windows sets both bits, as winit reports it.
+    let ctrl = egui::Modifiers::CTRL | egui::Modifiers::COMMAND;
+    let sent = composer_key_frame(&ctx, &mut composer, ctrl, &[egui::Key::Enter]);
+    assert!(sent.is_empty(), "Ctrl+Enter must not send: {sent:?}");
+    assert_eq!(composer, "first line\n\n");
+
+    composer = String::from("send me");
+    let sent = composer_key_frame(&ctx, &mut composer, egui::Modifiers::NONE, &[egui::Key::Enter]);
+    assert_eq!(sent, vec!["send me".to_string()]);
+    assert_eq!(composer, "");
+
+    // Alt+Enter still sends (it queues while a reply runs).
+    composer = String::from("queue me");
+    let sent = composer_key_frame(&ctx, &mut composer, egui::Modifiers::ALT, &[egui::Key::Enter]);
+    assert_eq!(sent, vec!["queue me".to_string()]);
+
+    let src = cabin_src();
+    let take = fn_src(&src, "take_focused_composer");
+    assert!(take.contains("shift_enter_as_newline"), "{take}");
+}
+
+#[test]
+fn ctrl_comma_opens_settings_and_the_palette_lists_shortcuts() {
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.nav = Nav::Chat;
+    cabin.palette_open = true;
+    let ctx = egui::Context::default();
+    let comma = egui::RawInput {
+        events: vec![
+            egui::Event::ModifiersChanged(egui::Modifiers::COMMAND),
+            egui::Event::Key {
+                key: egui::Key::Comma,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+            },
+        ],
+        ..Default::default()
+    };
+    let _ = crate::theme::test_pass(&ctx, comma, |ui| {
+        let ctx = ui.ctx().clone();
+        cabin.logic_input_actions(&ctx);
+    });
+    assert!(matches!(cabin.nav, Nav::Settings));
+    assert!(!cabin.palette_open);
+
+    cabin.shortcuts_open = false;
+    cabin.run_palette(&ctx, "shortcuts");
+    assert!(cabin.shortcuts_open);
+}
+#[test]
+fn labs_beta_channel_toggle_is_wired() {
+    let settings = include_str!("settings.rs");
+    assert!(
+        settings.contains("Beta channel")
+            && settings.contains("queue_channel_switch")
+            && settings.contains("channel_labs_status")
+            && settings.contains("channel_windows_note")
+            && settings.contains("maybe_auto_off_beta_channel")
+            && settings.contains("channel_auto_off_note"),
+        "Labs must wire the Beta channel toggle, status line, Windows note, and auto-off"
+    );
+    let app = include_str!("mod.rs");
+    assert!(
+        app.contains("fn queue_channel_switch")
+            && app.contains("channel_switch_cmds")
+            && app.contains("SettingsSec::Labs")
+            && app.contains("fn maybe_auto_off_beta_channel")
+            && app.contains("try_auto_off_beta_channel"),
+        "App must queue a channel switch from Labs and auto-off when tips match"
+    );
+    let update = include_str!("../update.rs");
+    assert!(
+        update.contains("channel_switch_shell")
+            && update.contains("--channel")
+            && update.contains("CHANNEL_WINDOWS_NOTE")
+            && update.contains("try_auto_off_beta_channel")
+            && update.contains("write_installed_channel"),
+        "Update helper must build the install.sh --channel plan with rollback and auto-off"
+    );
+}
+
+

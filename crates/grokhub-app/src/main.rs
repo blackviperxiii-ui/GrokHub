@@ -4,9 +4,6 @@
 //! kills the cabin. CLI flags attach the parent console when there is one.
 
 #![cfg_attr(not(test), windows_subsystem = "windows")]
-// Cabin leftovers (Ask ACP, unused tray/update/audio helpers) until a dedicated sweep.
-// Workspace clippy stays -D warnings without -A dead_code.
-#![allow(dead_code)]
 
 mod app;
 mod build_agent;
@@ -34,7 +31,6 @@ mod feed;
 mod recipes;
 mod notify;
 mod store;
-mod voice_ws;
 mod oauth;
 mod imagine_auth;
 mod secrets;
@@ -198,11 +194,14 @@ fn run_update_cli() {
     let src = update::resolve_source(&cfg.source_dir);
     let channel = update::installed_channel();
     let probe = update::blocking_update_probe();
-    let pending = grokhub_core::pending_from_versions(
-        env!("CARGO_PKG_VERSION"),
-        probe.cabin_tag.as_deref(),
-        probe.cli_installed.as_deref(),
-        probe.cli_alpha.as_deref(),
+    let pending = grokhub_core::pending_on_channel(
+        grokhub_core::pending_from_versions(
+            env!("CARGO_PKG_VERSION"),
+            probe.cabin_tag.as_deref(),
+            probe.cli_installed.as_deref(),
+            probe.cli_alpha.as_deref(),
+        ),
+        channel,
     );
     if pending == grokhub_core::UpdatePending::None {
         println!("{}", grokhub_core::combined_update_hint(pending));
@@ -465,6 +464,7 @@ mod tests {
         assert!(
             upd.contains("combined_update_cmds")
                 && upd.contains("pending_from_versions")
+                && upd.contains("pending_on_channel")
                 && upd.contains("combined_update_hint")
                 && upd.contains("overlay_clone_usable")
                 && upd.contains("UpdatePending::Cli")

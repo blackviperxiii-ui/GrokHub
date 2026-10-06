@@ -79,6 +79,16 @@ if [[ "$SYSTEM" -eq 1 && "$(id -u)" -ne 0 ]]; then
 fi
 
 cd "$ROOT"
+if [[ "$SWITCH" -eq 0 ]]; then
+  # The remembered channel must match the checkout, or the build is labeled
+  # for one channel while it holds the other and Update then refuses the clone.
+  CUR="$(git symbolic-ref -q --short HEAD 2>/dev/null || true)"
+  if [[ ( "$CUR" == main || "$CUR" == beta ) && "$CUR" != "$BRANCH" ]]; then
+    if [[ "$CUR" == beta ]]; then OTHER=beta; else OTHER=stable; fi
+    echo "error: $ROOT is on $CUR but the $CHANNEL channel builds $BRANCH; run with --channel $OTHER to switch, or git checkout $BRANCH" >&2
+    exit 1
+  fi
+fi
 if [[ "$SWITCH" -eq 1 ]]; then
   if ! git diff --quiet || ! git diff --cached --quiet; then
     echo "error: $ROOT has uncommitted changes; commit or stash them before --channel $CHANNEL" >&2

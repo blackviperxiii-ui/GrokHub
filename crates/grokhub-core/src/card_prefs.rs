@@ -135,6 +135,8 @@ pub struct HomeRank {
     pub folded: Vec<UpdateCard>,
     /// The one card that received [`NOVELTY_BONUS`] this pass.
     pub novelty_id: Option<String>,
+    /// Ranked event cards past the deck's cap. The next one fills a slot when a card leaves.
+    pub waiting: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -652,10 +654,12 @@ pub fn rank_home_events(
     }
     picked.sort_by(rank_cmp);
     folded_scored.sort_by(rank_cmp);
+    let waiting = pool.len().saturating_sub(picked.len());
     HomeRank {
         deck: picked.into_iter().map(|(card, _)| card).collect(),
         folded: folded_scored.into_iter().map(|(card, _)| card).collect(),
         novelty_id,
+        waiting,
     }
 }
 
@@ -973,6 +977,21 @@ mod tests {
     }
 
     #[test]
+    fn cards_past_the_deck_cap_wait_for_a_slot() {
+        use crate::update_feed::automation_done_card;
+        let now = 10_000;
+        let cards: Vec<UpdateCard> = (0..5u64)
+            .map(|i| automation_done_card(&format!("job-{i}"), &format!("Run {i}"), "ok", now - i))
+            .collect();
+        let rank = rank_home_events(&cards, &FeedPulse::default(), &CardPrefs::default(), now);
+        assert_eq!(rank.deck.len(), 3);
+        assert_eq!(rank.waiting, 2);
+        let rank = rank_home_events(&cards[..2], &FeedPulse::default(), &CardPrefs::default(), now);
+        assert_eq!(rank.deck.len(), 2);
+        assert_eq!(rank.waiting, 0);
+    }
+
+    #[test]
     fn a_finished_action_is_not_offered_again_but_a_related_one_is() {
         use crate::update_feed::suggestion_card;
         let now = 1_000;
@@ -1004,6 +1023,7 @@ mod tests {
         );
         assert_eq!(ids(&rank.deck), vec![related.id.clone(), unrelated.id.clone()]);
         assert!(rank.folded.is_empty());
+        assert_eq!(rank.waiting, 0);
         assert!((card_score(&related, &prefs, now, false) - 1.066_666_666_666_666_7).abs() < 1e-9);
         assert!((card_score(&unrelated, &prefs, now, false) - 0.766_666_666_666_666_7).abs() < 1e-9);
 
