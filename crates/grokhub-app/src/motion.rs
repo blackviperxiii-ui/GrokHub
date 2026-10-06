@@ -101,6 +101,7 @@ fn ease_in_cubic(t: f32) -> f32 {
 }
 
 /// Linear progress 0..1 for an animation that started at `t0` lasting `duration`.
+#[cfg(test)]
 pub fn progress(now: f64, t0: f64, duration: f32, reduced: bool) -> f32 {
     if reduced || duration <= 0.0 {
         return 1.0;
@@ -315,27 +316,6 @@ pub fn needs_attention_summary(n: usize) -> String {
         1 => "1 thing needs a decision".into(),
         _ => format!("{n} things need a decision"),
     }
-}
-
-/// Wrap a child ui with approval enter opacity + y offset.
-pub fn with_approval_enter(
-    ui: &mut egui::Ui,
-    id: egui::Id,
-    show: bool,
-    add_contents: impl FnOnce(&mut egui::Ui),
-) {
-    let t = approval_enter_t(ui, id, show);
-    if t <= 0.001 && !show {
-        return;
-    }
-    let y = approval_y(t, !show && t < 1.0);
-    let avail = ui.available_rect_before_wrap();
-    let rect = avail.translate(Vec2::new(0.0, y));
-    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-        ui.set_min_width(avail.width());
-        ui.multiply_opacity(t.clamp(0.0, 1.0));
-        add_contents(ui);
-    });
 }
 
 /// Paint a 2px white thinking rim around `rect` when `thinking`.
