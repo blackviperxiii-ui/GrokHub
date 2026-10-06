@@ -723,6 +723,11 @@ impl Cabin {
                 .size(crate::theme::FONT_BODY)
                 .color(crate::theme::muted()),
         );
+        // PI-05: clear the signed-out note once Account (or native) is signed in.
+        // CLI-on-PATH alone is not "signed in to Grok" for this line.
+        if self.pulse_view.signin_note && (self.has_key() || self.cfg.native_engine) {
+            self.pulse_view.signin_note = false;
+        }
         if self.pulse_view.tab == PulseTab::Ideas && self.pulse_view.signin_note {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -754,7 +759,8 @@ impl Cabin {
 
     /// Nothing to show: placeholder rows while ideas are being found, else the
     /// empty line for this tab and when the heartbeat last ran.
-    pub(super) fn paint_pulse_silence(&self, ui: &mut egui::Ui, feed: bool) {
+    /// Ideas empty: inline Suggest ideas. Feed empty: Feed instructions link.
+    pub(super) fn paint_pulse_silence(&mut self, ui: &mut egui::Ui, feed: bool) {
         ui.add_space(8.0);
         if !feed && self.ideas_rx.is_some() {
             ui.label(
@@ -771,15 +777,47 @@ impl Cabin {
                 .request_repaint_after(std::time::Duration::from_millis(250));
             return;
         }
-        ui.label(
-            RichText::new(if feed {
-                pc::FEED_EMPTY
-            } else {
-                pc::IDEAS_EMPTY
-            })
-            .size(crate::theme::FONT_BODY)
-            .color(crate::theme::muted()),
-        );
+        if feed {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.label(
+                    RichText::new(pc::FEED_EMPTY_LEAD)
+                        .size(crate::theme::FONT_BODY)
+                        .color(crate::theme::muted()),
+                );
+                let link = ui.add(
+                    egui::Label::new(
+                        RichText::new(pc::FEED_EMPTY_LINK)
+                            .size(crate::theme::FONT_BODY)
+                            .underline()
+                            .color(crate::theme::link()),
+                    )
+                    .sense(egui::Sense::click())
+                    .selectable(false),
+                );
+                if link.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if link.clicked() {
+                    self.open_feed_instructions();
+                }
+                ui.label(
+                    RichText::new(".")
+                        .size(crate::theme::FONT_BODY)
+                        .color(crate::theme::muted()),
+                );
+            });
+        } else {
+            ui.label(
+                RichText::new(pc::IDEAS_EMPTY)
+                    .size(crate::theme::FONT_BODY)
+                    .color(crate::theme::muted()),
+            );
+            ui.add_space(8.0);
+            if crate::cards::ghost_pill(ui, "Suggest ideas") {
+                self.suggest_ideas_pressed();
+            }
+        }
         ui.add_space(4.0);
         ui.label(
             RichText::new(pc::silence_line(self.last_pulse_ms(), now_ms()))
