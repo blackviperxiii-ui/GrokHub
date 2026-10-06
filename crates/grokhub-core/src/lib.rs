@@ -386,8 +386,8 @@ pub use rewind::{
     rewind_snapshot_ready, RewindRecord,
 };
 pub use shortcuts::{
-    apply_composer_enter, composer_enter, composer_go, composer_go_tip, filter_palette, perm_key,
-    shortcut_help, ComposerEnter, ComposerGo, PermKey, SHORTCUTS,
+    apply_composer_enter, composer_enter, composer_go, composer_go_tip, filter_palette,
+    palette_shortcut, perm_key, shortcut_help, ComposerEnter, ComposerGo, PermKey, SHORTCUTS,
 };
 pub use skill::{
     is_feedback_ask, is_junk_skill, AUTO_SKILL_PITFALL,
