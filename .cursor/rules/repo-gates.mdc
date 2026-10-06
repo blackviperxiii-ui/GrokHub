@@ -43,3 +43,15 @@ cargo clippy --workspace --all-targets -- -D warnings
 - **Versions:** PRs into `beta` don't bump the version; they add their notes under `## Unreleased` in `CHANGELOG.md`. Beta builds show the base version plus `-beta`, with the branch and short SHA (`GrokHub 2.10.92-beta (beta @ abc1234)`), which `crates/grokhub-app/build.rs` reads from git; never edit the Cargo version for it. Each `beta` → `main` promotion carries exactly one patch bump and one release. A hotfix to `main` carries its own bump and is merged back into `beta`.
 - A bump changes `VERSION` once, in the same files as #453: `VERSION`, `Cargo.toml` `[workspace.package] version`, the `grokhub-*` entries in `Cargo.lock`, `README.md` (headline and both Latest rows), `packaging/PKGBUILD`, `packaging/aur/PKGBUILD`, `packaging/windows/grokhub.iss`, and the `cabin_reports_version` assert in `crates/grokhub-app/src/cli.rs`. Add a `CHANGELOG.md` section with the Linux and Windows artifact lines.
 - Don't bump the Imagine `Quality (v2.0)`, specs marked `(do not bump)`, the diagnostics fixture, or `packaging/grokhub.desktop` `Version=`.
+
+## Branch cleanup
+- Delete your own head branch after merge/close; delete scratch ASAP; never delete main/beta.
+- Auto-delete head branches on GitHub when the setting is on.
+
+## Bot choice
+- Prefer Grok Build for coding/CI on this box; Cursor Cloud out until Oct 11. One bot per job.
+- Grok Build roles: explore, plan, implementer (no separate "build" role).
+
+## Semgrep / dyl-review / Continual Learning
+- Semgrep before Ready; dyl-review quick only; Continual Learning → AGENTS.md. Never dyl-ready-pr merge/babysit.
+

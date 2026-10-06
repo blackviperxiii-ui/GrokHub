@@ -58,9 +58,11 @@ pub const LIVE: Color32 = Color32::from_rgb(0x22, 0xc5, 0x5e);
 pub const LIGHT_LIVE: Color32 = Color32::from_rgb(0x15, 0x80, 0x3d);
 pub const SETUP: Color32 = Color32::from_rgb(0xea, 0xb3, 0x08);
 /// Selected Always stroke only — dark OLED, ≥3:1 on `#16181C`.
-pub const ALWAYS_AMBER_DARK: Color32 = Color32::from_rgb(0xe8, 0xa8, 0x38);
+/// Selected Always ring. White on dark to match B&W chrome (was amber #e8a838).
+pub const ALWAYS_AMBER_DARK: Color32 = Color32::from_rgb(0xe7, 0xe9, 0xea);
 /// Selected Always stroke only — light surface, ≥3:1 on elevated white.
-pub const ALWAYS_AMBER_LIGHT: Color32 = Color32::from_rgb(0xb8, 0x6e, 0x00);
+/// Selected Always ring on light. Near-black (was amber #b86e00).
+pub const ALWAYS_AMBER_LIGHT: Color32 = Color32::from_rgb(0x0a, 0x0a, 0x0a);
 pub const OFFLINE: Color32 = Color32::from_rgb(0xef, 0x44, 0x44);
 /// grok.com light `--surface-base` (System when the desktop is light).
 pub const LIGHT_BG: Color32 = Color32::from_rgb(0xf4, 0xf4, 0xf5);
@@ -160,9 +162,14 @@ pub fn live() -> Color32 {
 pub fn setup() -> Color32 {
     SETUP
 }
-/// Selected Always ring. Idle Always never uses this.
+/// Selected Always ring (white on dark / near-black on light). Idle Always never uses this.
 pub fn always_amber() -> Color32 {
     tok(ALWAYS_AMBER_DARK, ALWAYS_AMBER_LIGHT)
+}
+
+/// Composer streaming glow: white on dark / near-black on light (was live green).
+pub fn composer_glow_rgb() -> Color32 {
+    tok(FG, LIGHT_FG)
 }
 pub fn offline() -> Color32 {
     OFFLINE
@@ -618,12 +625,24 @@ pub fn blend_color(from: Color32, to: Color32, t: f32) -> Color32 {
     )
 }
 
+/// False when the user prefers reduced motion (egui animation_time == 0).
+pub fn motion_ok(ui: &egui::Ui) -> bool {
+    ui.style().animation_time > 0.0
+}
+
 /// Animated on/off for toggles and segment selection. Same ease as button hover.
 pub fn animate_selection(ui: &egui::Ui, id: egui::Id, on: bool) -> f32 {
+    animate_selection_secs(ui, id, on, SELECT_SECS)
+}
+
+pub fn animate_selection_secs(ui: &egui::Ui, id: egui::Id, on: bool, secs: f32) -> f32 {
+    if !motion_ok(ui) {
+        return if on { 1.0 } else { 0.0 };
+    }
     ui.ctx().animate_bool_with_time_and_easing(
         id,
         on,
-        SELECT_SECS,
+        secs,
         egui::emath::easing::quadratic_out,
     )
 }
@@ -1239,8 +1258,10 @@ mod tests {
         assert_eq!(FONT_TIP, 12.0);
         assert!(FONT_TIP < FONT_BODY);
         assert!(FONT_SECTION > FONT_CHROME);
-        assert_eq!(ALWAYS_AMBER_DARK, Color32::from_rgb(0xe8, 0xa8, 0x38));
-        assert_eq!(ALWAYS_AMBER_LIGHT, Color32::from_rgb(0xb8, 0x6e, 0x00));
+        assert_eq!(ALWAYS_AMBER_DARK, Color32::from_rgb(0xe7, 0xe9, 0xea));
+        assert_eq!(ALWAYS_AMBER_LIGHT, Color32::from_rgb(0x0a, 0x0a, 0x0a));
+        assert_eq!(ALWAYS_AMBER_DARK, FG);
+        assert_eq!(ALWAYS_AMBER_LIGHT, LIGHT_FG);
         assert_ne!(ALWAYS_AMBER_DARK, SETUP);
         set_paint_dark(true);
         assert_eq!(always_amber(), ALWAYS_AMBER_DARK);

@@ -12,6 +12,10 @@ pub const FOCUS_WASH: f32 = 0.06;
 pub const PRESS_SECS: f32 = 0.08;
 /// Selection fill and the gliding row highlight.
 pub const SELECT_SECS: f32 = 0.16;
+/// Always permission select settle (Critiquito): fill α + scale 0.98→1.0.
+pub const ALWAYS_SETTLE_SECS: f32 = 0.14;
+/// Composer glow settle to idle α after stream ends.
+pub const GLOW_SETTLE_SECS: f32 = 0.20;
 /// One point of rise. Press brings the button back down.
 pub const BUTTON_LIFT: f32 = 1.0;
 pub const HOVER_EXPANSION: f32 = 1.0;

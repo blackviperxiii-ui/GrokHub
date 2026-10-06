@@ -422,7 +422,7 @@ pub fn felt_segment(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Res
     felt_segment_styled(ui, label, selected, None, false, crate::theme::FONT_BODY)
 }
 
-/// Idle Always matches Ask/Auto. Selected Always = 2px amber stroke, same fill.
+/// Idle Always matches Ask/Auto. Selected Always settles in 140ms: fill α 0→1, scale 0.98→1.0, 2px white ring — then stops.
 pub fn permission_risk_stroke_w(id: &str, selected: bool) -> f32 {
     if selected && id == "always-approve" {
         2.0
@@ -487,32 +487,51 @@ fn felt_segment_styled(
         FontId::proportional(font_size)
     };
     let galley = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER));
-    // Size to the label + 8px inset so a longer session word is not jammed.
     let size = egui::vec2(
         (galley.size().x + SEG_INSET_X * 2.0).max(52.0),
         (galley.size().y + SEG_INSET_Y * 2.0).max(28.0),
     );
-    let (_rect, resp) = ui.allocate_exact_size(size, Sense::click());
-    let on_t = crate::theme::animate_selection(ui, resp.id.with("seg"), selected);
+    let (_id_rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    // Always settles in 140ms (fill α + scale); other segments keep SELECT_SECS.
+    let settle = if strong {
+        grokhub_core::ALWAYS_SETTLE_SECS
+    } else {
+        grokhub_core::SELECT_SECS
+    };
+    let on_t = crate::theme::animate_selection_secs(ui, resp.id.with("seg"), selected, settle);
     let base_fill =
         crate::theme::blend_color(Color32::TRANSPARENT, permission_risk_fill(true), on_t);
     let text_color = crate::theme::blend_color(crate::theme::muted(), crate::theme::fg(), on_t);
     let (resp, rect, _) = crate::theme::feel_response(ui, resp, Color32::TRANSPARENT);
+    // Always: scale 0.98 → 1.0 as it settles (no perpetual pulse).
+    let scale = if strong {
+        0.98 + 0.02 * on_t
+    } else {
+        1.0
+    };
+    let (sx, sy, sw, sh) = grokhub_core::felt_rect(rect.min.x, rect.min.y, rect.width(), rect.height(), scale);
+    let draw = egui::Rect::from_min_size(egui::pos2(sx, sy), egui::vec2(sw, sh));
+    if base_fill.a() > 0 {
+        ui.painter().rect_filled(draw, 8.0, base_fill);
+    }
     if let Some(stroke) = stroke {
-        ui.painter().rect_stroke(rect, 8.0, stroke, egui::StrokeKind::Middle);
+        let idle = Stroke::new(1.0_f32, crate::theme::border());
+        let w = idle.width + (stroke.width - idle.width) * on_t;
+        let c = crate::theme::blend_color(idle.color, stroke.color, on_t);
+        ui.painter()
+            .rect_stroke(draw, 8.0, Stroke::new(w, c), egui::StrokeKind::Middle);
     } else {
         ui.painter().rect_stroke(
-            rect,
+            draw,
             8.0,
             Stroke::new(1.0_f32, crate::theme::border()),
             egui::StrokeKind::Middle,
         );
     }
-    let _ = base_fill;
     ui.painter().galley(
         egui::pos2(
-            rect.center().x - galley.size().x * 0.5,
-            rect.center().y - galley.size().y * 0.5,
+            draw.center().x - galley.size().x * 0.5,
+            draw.center().y - galley.size().y * 0.5,
         ),
         galley,
         text_color,
@@ -3229,6 +3248,19 @@ mod tests {
         assert!(!permission_risk_strong("always-approve", false));
         assert!(!permission_risk_strong("ask", true));
         assert!(!permission_risk_strong("auto", true));
+
+        let styled = include_str!("cards.rs")
+            .split("fn felt_segment_styled(")
+            .nth(1)
+            .and_then(|t| t.split("pub fn felt_tab(").next())
+            .expect("felt_segment_styled");
+        assert!(
+            styled.contains("0.98 + 0.02 * on_t")
+                && styled.contains("ALWAYS_SETTLE_SECS")
+                && styled.contains("idle.width + (stroke.width - idle.width) * on_t"),
+            "Always must settle scale+stroke over ALWAYS_SETTLE_SECS: {styled}"
+        );
+
         assert!(
             session.contains("composer_session_tip")
                 && session.contains("composer_perm_tip")
