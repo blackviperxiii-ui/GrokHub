@@ -4,7 +4,7 @@ use grokhub_core::{
     channel_status_line, channel_switch_fail_hint, channel_switch_preflight, channel_switch_shell,
     discover_source, forbidden_reason, parse_github_latest_tag, parse_installed_cli_version,
     parse_published_cli_alpha, restart_acts, restart_bin, systemd_user_restart_args,
-    systemd_user_stop_args, update_cmds_in, update_progress_pct, update_step_label,
+    systemd_user_stop_args, update_progress_pct, update_step_label,
     update_wipes_config, Channel, RestartAct, CHANNEL_RECEIPT, CHANNEL_WINDOWS_NOTE,
     CLI_ALPHA_VERSION_FALLBACK, CLI_ALPHA_VERSION_URL, GITHUB_LATEST_API, TEXT_FILE_CAP,
 };
