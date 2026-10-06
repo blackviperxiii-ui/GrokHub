@@ -19,3 +19,15 @@ Done and green is **not** a ship. Bots take a PR to **green and ready** and stop
 - **Versions:** PRs into `beta` don't bump. Each `beta` → `main` promotion carries exactly one bump and one release; a hotfix to `main` carries its own bump and is merged back into `beta`. The file list is in `repo-gates.mdc`. Docs (`README.md`, `/help` text, specs under `docs/`) must match what ships.
 
 "Don't ship it", "hold", or a PR he names as parked means leave it, its branch, and tags alone.
+
+## Branch cleanup
+- Delete your own head branch after merge/close; delete scratch ASAP; never delete main/beta.
+- Auto-delete head branches on GitHub when the setting is on.
+
+## Bot choice
+- Prefer Grok Build for coding/CI on this box; Cursor Cloud out until Oct 11. One bot per job.
+- Grok Build roles: explore, plan, implementer (no separate "build" role).
+
+## Semgrep / dyl-review / Continual Learning
+- Semgrep before Ready; dyl-review quick only; Continual Learning → AGENTS.md. Never dyl-ready-pr merge/babysit.
+

@@ -91,12 +91,13 @@ pub const SHORTCUTS: &[Shortcut] = &[
     Shortcut { keys: "Ctrl+N", action: "New chat", scope: "Global" },
     Shortcut { keys: "Ctrl+G", action: "Hey Grok (listen or halt)", scope: "Global" },
     Shortcut { keys: "Ctrl+Alt+H", action: "Halt", scope: "Global" },
+    Shortcut { keys: "Ctrl+,", action: "Settings", scope: "Global" },
     Shortcut { keys: "Ctrl+/", action: "Shortcut sheet", scope: "Global" },
     Shortcut { keys: "Ctrl+F", action: "Find in this chat (Enter next, Shift+Enter previous, Esc close)", scope: "Chat" },
     Shortcut { keys: "Enter / Esc", action: "Allow / deny tool permission (empty composer)", scope: "Chat" },
     Shortcut { keys: "Enter / Esc", action: "Confirm / cancel overlay sheet (empty composer; Ask Always stays Allow / Deny)", scope: "Chat" },
     Shortcut { keys: "Enter", action: "Send message", scope: "Composer" },
-    Shortcut { keys: "Ctrl+Enter", action: "New line", scope: "Composer" },
+    Shortcut { keys: "Shift+Enter / Ctrl+Enter", action: "New line", scope: "Composer" },
     Shortcut { keys: "Enter while a reply runs", action: "Steer the live reply", scope: "Composer" },
     Shortcut { keys: "Alt+Enter while a reply runs", action: "Queue for after the reply", scope: "Composer" },
     Shortcut { keys: "Tab", action: "Accept slash", scope: "Composer" },
@@ -112,6 +113,17 @@ pub fn shortcut_help() -> String {
         .join("\n")
 }
 
+/// The key a palette row also answers to, shown at the row's right edge.
+pub fn palette_shortcut(action: &str) -> Option<&'static str> {
+    match action {
+        "/new" => Some("Ctrl+N"),
+        "nav:settings" => Some("Ctrl+,"),
+        "voice" => Some("Ctrl+G"),
+        "shortcuts" => Some("Ctrl+/"),
+        _ => None,
+    }
+}
+
 pub fn filter_palette(q: &str) -> Vec<(&'static str, &'static str)> {
     let n = q.trim().to_ascii_lowercase();
     // Named as the sidebar names them; older names still find them.
@@ -122,6 +134,9 @@ pub fn filter_palette(q: &str) -> Vec<(&'static str, &'static str)> {
         ("nav:pulse", "ideas"),
         ("nav:pulse", "feed"),
         ("nav:board", "workboard"),
+        ("shortcuts", "keys"),
+        ("shortcuts", "keyboard"),
+        ("shortcuts", "hotkeys"),
     ];
     let rows = [
         ("Chat", "nav:chat"),
@@ -143,6 +158,7 @@ pub fn filter_palette(q: &str) -> Vec<(&'static str, &'static str)> {
         ("Copy diagnostics", "diag"),
         ("Import OpenClaw", "/import"),
         ("Hey Grok", "voice"),
+        ("Keyboard shortcuts", "shortcuts"),
     ];
     rows.into_iter()
         .filter(|(label, action)| {
@@ -171,8 +187,10 @@ mod tests {
         );
         assert_eq!(filter_palette("ideas"), vec![("Pulse", "nav:pulse")]);
         assert!(filter_palette("set").iter().any(|(l, _)| *l == "Settings"));
-        // 2.10.91: Pulse joined the palette (18 -> 19).
-        assert_eq!(filter_palette("").len(), 19);
+        // 2.10.91: Pulse joined the palette (18 -> 19); Keyboard shortcuts makes 20.
+        assert_eq!(filter_palette("").len(), 20);
+        assert_eq!(filter_palette("keyb"), vec![("Keyboard shortcuts", "shortcuts")]);
+        assert_eq!(filter_palette("hotkeys"), vec![("Keyboard shortcuts", "shortcuts")]);
         assert_eq!(filter_palette("pulse"), vec![("Pulse", "nav:pulse")]);
         assert!(filter_palette("").iter().all(|(l, _)| *l != "Command"));
     }
@@ -235,11 +253,27 @@ mod tests {
     }
 
     #[test]
+    fn palette_rows_show_the_keys_they_share() {
+        assert_eq!(palette_shortcut("/new"), Some("Ctrl+N"));
+        assert_eq!(palette_shortcut("nav:settings"), Some("Ctrl+,"));
+        assert_eq!(palette_shortcut("voice"), Some("Ctrl+G"));
+        assert_eq!(palette_shortcut("shortcuts"), Some("Ctrl+/"));
+        assert_eq!(palette_shortcut("nav:pulse"), None);
+        // Every hint is a key the sheet lists, so the two never disagree.
+        for (_, action) in filter_palette("") {
+            if let Some(keys) = palette_shortcut(action) {
+                assert!(SHORTCUTS.iter().any(|s| s.keys == keys), "{keys}");
+            }
+        }
+    }
+
+    #[test]
     fn composer_sheet_lists_enter_send() {
         let help = shortcut_help();
         let lines: Vec<_> = help.lines().collect();
         assert!(lines.contains(&"Enter — Send message (Composer)"));
-        assert!(lines.contains(&"Ctrl+Enter — New line (Composer)"));
+        assert!(lines.contains(&"Shift+Enter / Ctrl+Enter — New line (Composer)"));
+        assert!(lines.contains(&"Ctrl+, — Settings (Global)"));
         assert!(!lines.contains(&"Ctrl+Enter — Send message (Composer)"));
     }
 

@@ -112,6 +112,75 @@ fn git_origin_url(source: &Path) -> Result<String, String> {
     Ok(out.trim().to_string())
 }
 
+fn git_rev_parse(source: &Path, rev: &str) -> Result<String, String> {
+    let (ok, out) = git_stdout(source, &["rev-parse", "--verify", rev])?;
+    if !ok {
+        return Err(format!("missing {rev}"));
+    }
+    let sha = out.trim().to_string();
+    if sha.is_empty() {
+        return Err(format!("empty {rev}"));
+    }
+    Ok(sha)
+}
+
+/// Parse `git ls-remote` stdout for `refs/heads/beta` and `refs/heads/main`.
+/// Missing refs yield empty strings.
+pub fn parse_ls_remote_tips(stdout: &str) -> (String, String) {
+    let mut beta = String::new();
+    let mut main = String::new();
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let Some(sha) = parts.next() else {
+            continue;
+        };
+        let Some(name) = parts.next() else {
+            continue;
+        };
+        match name {
+            "refs/heads/beta" => beta = sha.to_string(),
+            "refs/heads/main" => main = sha.to_string(),
+            _ => {}
+        }
+    }
+    (beta, main)
+}
+
+/// Tip SHAs from cached remote-tracking refs (`origin/beta`, `origin/main`).
+/// No network — use after a fetch/pull, or when ls-remote is unavailable.
+pub fn remote_tracking_tips(source: &Path) -> Result<(String, String), String> {
+    let beta = git_rev_parse(source, "origin/beta").unwrap_or_default();
+    let main = git_rev_parse(source, "origin/main").unwrap_or_default();
+    if beta.is_empty() && main.is_empty() {
+        return Err("no origin/beta or origin/main in clone".into());
+    }
+    Ok((beta, main))
+}
+
+/// Network probe: `git ls-remote origin refs/heads/beta refs/heads/main`.
+pub fn ls_remote_channel_tips(source: &Path) -> Result<(String, String), String> {
+    if !is_grokhub_source(source) {
+        return Err("not a GrokHub source tree".into());
+    }
+    let (ok, out) = git_stdout(
+        source,
+        &[
+            "ls-remote",
+            "origin",
+            "refs/heads/beta",
+            "refs/heads/main",
+        ],
+    )?;
+    if !ok {
+        return Err("git ls-remote origin failed".into());
+    }
+    Ok(parse_ls_remote_tips(&out))
+}
+
 /// Overlay pulls this GitHub remote until Cursor Origin is live.
 pub const GITHUB_REMOTE_URL: &str = "https://github.com/blackviperxiii-ui/GrokHub.git";
 /// Leftover Cursor Origin clone — retarget to GitHub.
@@ -410,6 +479,18 @@ pub fn settings_update_label(pending: UpdatePending) -> &'static str {
     update_chip_label(pending).unwrap_or("Update")
 }
 
+/// `grokhub --update` on this install's channel. The release tag only tracks
+/// stable, and beta never bumps the version, so a beta install always pulls
+/// `origin beta` (a fast-forward that is a no-op when it is current).
+pub fn pending_on_channel(pending: UpdatePending, channel: Channel) -> UpdatePending {
+    match (channel, pending) {
+        (Channel::Stable, p) => p,
+        (Channel::Beta, UpdatePending::None) => UpdatePending::Cabin,
+        (Channel::Beta, UpdatePending::Cli) => UpdatePending::Both,
+        (Channel::Beta, p) => p,
+    }
+}
+
 /// Settings / `/update` click. A missed probe still overlays CLI then cabin.
 pub fn pending_for_manual_update(pending: UpdatePending) -> UpdatePending {
     match pending {
@@ -652,7 +733,9 @@ fn overlay_grok_update_for(windows: bool) -> &'static str {
 pub fn update_plan_steps(cmds: Vec<String>) -> Vec<HostPlanStep> {
     cmds.into_iter()
         .map(|cmd| {
-            let explain = if cmd.contains("pull --ff-only") {
+            let explain = if cmd.contains("pull --ff-only origin beta") {
+                "fast-forward origin/beta — config stays".into()
+            } else if cmd.contains("pull --ff-only") {
                 "fast-forward origin/main — config stays".into()
             } else if cmd.contains("remote set-url") || cmd.contains("remote add") {
                 "point origin at GitHub — Cursor Origin is not live yet".into()
@@ -711,7 +794,9 @@ pub fn grok_cli_update_cmd(cmd: &str) -> bool {
 }
 
 pub fn update_step_label(cmd: &str) -> &'static str {
-    if cmd.contains("pull --ff-only") {
+    if cmd.contains("pull --ff-only origin beta") {
+        "Pulling origin/beta…"
+    } else if cmd.contains("pull --ff-only") {
         "Pulling origin/main…"
     } else if cmd.contains("remote set-url") || cmd.contains("remote add") {
         "Retargeting origin…"
@@ -1275,11 +1360,37 @@ mod tests {
     }
 
     #[test]
+    fn beta_update_always_pulls_beta_and_stable_runs_only_what_is_newer() {
+        use UpdatePending::*;
+        assert_eq!(pending_on_channel(None, Channel::Beta), Cabin);
+        assert_eq!(pending_on_channel(Cli, Channel::Beta), Both);
+        assert_eq!(pending_on_channel(Cabin, Channel::Beta), Cabin);
+        assert_eq!(pending_on_channel(Both, Channel::Beta), Both);
+        assert_eq!(pending_on_channel(None, Channel::Stable), None);
+        assert_eq!(pending_on_channel(Cli, Channel::Stable), Cli);
+        // A beta build carries the released version, so the tag compare says current.
+        let same =
+            pending_from_versions("2.10.92", Some("v2.10.92"), Some("1.0.46"), Some("1.0.46"));
+        assert_eq!(same, None);
+        assert_eq!(pending_on_channel(same, Channel::Beta), Cabin);
+    }
+
+    #[test]
     fn overlay_step_labels_name_pull_and_install() {
         assert_eq!(
             update_step_label("git -C '/x' pull --ff-only origin main"),
             "Pulling origin/main…"
         );
+        assert_eq!(
+            update_step_label("git -C '/x' pull --ff-only origin beta"),
+            "Pulling origin/beta…"
+        );
+        let steps = update_plan_steps(vec![
+            "git -C '/x' pull --ff-only origin beta".into(),
+            "git -C '/x' pull --ff-only origin main".into(),
+        ]);
+        assert_eq!(steps[0].explain, "fast-forward origin/beta — config stays");
+        assert_eq!(steps[1].explain, "fast-forward origin/main — config stays");
         assert_eq!(
             update_step_label("'/x/scripts/install.sh' --user"),
             "Installing overlay…"
@@ -1722,5 +1833,28 @@ mod tests {
         assert!(cabin_unix.iter().all(|c| !grok_cli_update_cmd(c)));
         assert!(cabin_unix.iter().any(|c| c.contains("install.sh")));
         let _ = fs::remove_dir_all(&root);
+    }
+}
+
+
+#[cfg(test)]
+mod channel_tip_tests {
+    use super::*;
+
+    #[test]
+    fn parse_ls_remote_tips_reads_beta_and_main() {
+        let out = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/heads/beta\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/heads/main\n";
+        assert_eq!(
+            parse_ls_remote_tips(out),
+            (
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into()
+            )
+        );
+        assert_eq!(parse_ls_remote_tips(""), (String::new(), String::new()));
+        assert_eq!(
+            parse_ls_remote_tips("deadbeef refs/heads/beta\n"),
+            ("deadbeef".into(), String::new())
+        );
     }
 }

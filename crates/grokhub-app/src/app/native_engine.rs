@@ -313,7 +313,7 @@ impl Cabin {
     /// The Settings → Account sign-in. A live token is used as is; inside the
     /// refresh window it is renewed off the UI thread. An expired token with a
     /// refresh token is renewed once, here, and saved back to the cabin's own store.
-    fn native_account_access(&mut self, now: u64) -> Option<String> {
+    pub(super) fn native_account_access(&mut self, now: u64) -> Option<String> {
         let tokens = self.secrets.oauth.clone()?;
         if tokens.access_token.trim().is_empty() {
             return None;
@@ -335,13 +335,10 @@ impl Cabin {
         if !has_refresh {
             return None;
         }
-        match crate::oauth::ensure_access(&tokens) {
-            Ok((access, next, true)) if !access.trim().is_empty() => {
-                self.keep_account_tokens(next);
-                Some(access)
-            }
-            _ => None,
-        }
+        let next = crate::oauth::ensure_access_with_backoff(&tokens)?;
+        let access = next.access_token.clone();
+        self.keep_account_tokens(next);
+        Some(access)
     }
 
     fn keep_account_tokens(&mut self, next: grokhub_core::XaiOAuthTokens) {

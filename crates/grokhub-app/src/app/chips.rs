@@ -84,13 +84,6 @@ pub(super) fn fast_reply_text(stdout: &str) -> String {
 
 impl Cabin {
 
-    pub(super) fn chat_pairs(&self) -> Vec<(String, String)> {
-        self.messages
-            .iter()
-            .map(|m| (m.0.clone(), m.1.clone()))
-            .collect()
-    }
-
     /// Chat pairs for chip rebuild: scan a 4KB prefix so an 8MB complete
     /// does not get cloned into `chip_suggest_prompt` / `chip_thread_from_messages`.
     pub(super) fn chip_chat_pairs(&self) -> Vec<(String, String)> {
