@@ -603,6 +603,8 @@ pub struct Cabin {
     idea_board: ideas_ui::IdeaBoardView,
     /// Pulse page: Ideas | Feed, the instructions sheet, cached source images.
     pulse_view: pulse_ui::PulseView,
+    /// Desktop-agent cursor stub (Wave 2E). Labs demo or future CU path.
+    agent_cursor: Option<crate::motion::AgentCursorAnim>,
     /// Workboards page: the open card and what you are typing on each.
     board_view: board_ui::BoardView,
     llm_chips: Vec<QuickChip>,
@@ -1205,6 +1207,7 @@ impl Cabin {
             chip_dismissed: vec![],
             idea_board: Default::default(),
             pulse_view: Default::default(),
+            agent_cursor: None,
             board_view: Default::default(),
             llm_chips: vec![],
             visible_chips: vec![],
@@ -1633,6 +1636,7 @@ impl Cabin {
             chip_dismissed: Vec::new(),
             idea_board: Default::default(),
             pulse_view: Default::default(),
+            agent_cursor: None,
             board_view: Default::default(),
             llm_chips: Vec::new(),
             visible_chips: Vec::new(),
@@ -5178,6 +5182,16 @@ impl eframe::App for Cabin {
         self.ui_plus_overlays(&ctx);
         self.ui_imagine_overlays(&ctx);
         self.ui_project_overlays(&ctx);
+        if self.agent_cursor.is_some() {
+            egui::Area::new(egui::Id::new("wave2e-agent-cursor"))
+                .order(egui::Order::Foreground)
+                .interactable(false)
+                .fixed_pos(ctx.content_rect().min)
+                .show(&ctx, |ui| {
+                    ui.set_min_size(ctx.content_rect().size());
+                    crate::motion::tick_agent_cursor(ui, &mut self.agent_cursor);
+                });
+        }
         self.sync_idea_card_actions();
         self.release_workflow_ctl_if_idle();
     }

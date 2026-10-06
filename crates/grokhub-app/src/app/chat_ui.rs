@@ -1732,12 +1732,34 @@ impl Cabin {
             self.perm_always_confirm = None;
         }
         ui.add_space(8.0);
-        egui::Frame::NONE
-            .fill(egui::Color32::TRANSPARENT)
-            .corner_radius(crate::theme::CHROME_RADIUS)
-            .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-            .inner_margin(egui::Margin::same(12))
-            .show(ui, |ui| {
+        let ask_id = egui::Id::new(("perm-ask-motion", p.rpc_id.as_str()));
+        let enter_t = crate::motion::approval_enter_t(ui, ask_id, true);
+        let y = crate::motion::approval_y(enter_t, false);
+        let avail = ui.available_rect_before_wrap();
+        let slot = avail.translate(egui::vec2(0.0, y));
+        let waiting = 1 + self.perm_queue.len();
+        let summary = crate::motion::needs_attention_summary(waiting);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(slot), |ui| {
+            ui.set_min_width(avail.width());
+            ui.multiply_opacity(enter_t.clamp(0.0, 1.0));
+            let hover_t = crate::motion::approval_hover_t(ui, ask_id, ui.rect_contains_pointer(slot));
+            let fill = crate::theme::blend_color(
+                egui::Color32::TRANSPARENT,
+                crate::motion::HOVER_BG,
+                hover_t,
+            );
+            let framed = egui::Frame::NONE
+                .fill(fill)
+                .corner_radius(crate::theme::CHROME_RADIUS)
+                .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
+                .inner_margin(egui::Margin::same(12))
+                .show(ui, |ui| {
+                ui.label(
+                    RichText::new(summary)
+                        .size(12.0)
+                        .color(crate::theme::muted()),
+                );
+                ui.add_space(4.0);
                 ui.label(
                     RichText::new("Grok wants permission")
                         .size(14.0)
@@ -1845,6 +1867,21 @@ impl Cabin {
                     }
                 }
             });
+            let time = ui.ctx().input(|i| i.time) as f32;
+            crate::motion::paint_thinking_rim(
+                ui.painter(),
+                framed.response.rect,
+                self.running,
+                time,
+            );
+            // Primary one-shot breath envelope (Allow row); composer_breath while running.
+            let _primary = crate::motion::one_shot_breath(
+                ui.ctx().input(|i| i.time),
+                ui.ctx().input(|i| i.time) - f64::from(crate::motion::APPROVAL_ENTER_SECS),
+                crate::motion::reduced_motion(ui),
+            );
+            let _live = crate::icons::composer_breath(time);
+        });
     }
 
     pub(super) fn paint_elicit_ask(&mut self, ui: &mut egui::Ui) {
