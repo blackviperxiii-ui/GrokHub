@@ -24182,10 +24182,14 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
             .any(|t| t == "No ideas yet. I'll add one when I spot something worth doing."),
         "{empty:?}"
     );
-    // PI-07: empty Ideas keeps Suggest ideas inline (header slot also has it).
+    // Empty Ideas keeps one inline Suggest ideas. The header hides its duplicate.
+    let suggest_n = empty
+        .iter()
+        .filter(|t| t.as_str() == "Suggest ideas")
+        .count();
     assert!(
-        empty.iter().filter(|t| t.as_str() == "Suggest ideas").count() >= 2,
-        "{empty:?}"
+        suggest_n >= 1 && suggest_n <= 1,
+        "expected one Suggest ideas, got {suggest_n}: {empty:?}"
     );
     assert!(!empty.iter().any(|t| t.contains("Thinking")), "{empty:?}");
     cabin.suggest_ideas_with(false);

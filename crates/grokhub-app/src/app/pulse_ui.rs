@@ -15,7 +15,9 @@ use grokhub_core::{CardReaction, UpdateAction, UpdateCard, UpdateKind};
 
 const ICON: f32 = 32.0;
 /// The header's action slot: Feed instructions on Feed, Suggest ideas on
-/// Ideas. One width, so the Feed | Ideas switch never moves.
+/// Ideas when the list has rows or a suggestion is loading. An empty Ideas
+/// list already paints Suggest in the body, so the header slot stays blank.
+/// One width, so the Feed | Ideas switch never moves.
 pub(super) const HEADER_SLOT_W: f32 = 150.0;
 /// Behind a hovered or focused row.
 const ROW_HOVER: egui::Color32 = egui::Color32::from_rgb(0x0f, 0x10, 0x12);
@@ -698,14 +700,22 @@ impl Cabin {
                         }
                     }
                     PulseTab::Ideas => {
+                        // Same emptiness check as ui_ideas: purge once, then group.
+                        // Hide this control only when the body will paint the inline
+                        // Suggest (empty, and not mid-fetch). Loading keeps
+                        // "Suggesting…"; a list that has ideas keeps "Suggest ideas".
+                        self.ensure_useful_ideas();
                         let busy = self.ideas_rx.is_some();
-                        let label = if busy {
-                            "Suggesting…"
-                        } else {
-                            "Suggest ideas"
-                        };
-                        if crate::cards::ghost_pill(&mut cell, label) && !busy {
-                            self.suggest_ideas_pressed();
+                        let empty = self.pulse_groups(now_ms()).is_empty();
+                        if busy || !empty {
+                            let label = if busy {
+                                "Suggesting…"
+                            } else {
+                                "Suggest ideas"
+                            };
+                            if crate::cards::ghost_pill(&mut cell, label) && !busy {
+                                self.suggest_ideas_pressed();
+                            }
                         }
                     }
                 }
