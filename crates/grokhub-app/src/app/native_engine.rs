@@ -313,7 +313,7 @@ impl Cabin {
     /// The Settings → Account sign-in. A live token is used as is; inside the
     /// refresh window it is renewed off the UI thread. An expired token with a
     /// refresh token is renewed once, here, and saved back to the cabin's own store.
-    fn native_account_access(&mut self, now: u64) -> Option<String> {
+    pub(super) fn native_account_access(&mut self, now: u64) -> Option<String> {
         let tokens = self.secrets.oauth.clone()?;
         if tokens.access_token.trim().is_empty() {
             return None;
