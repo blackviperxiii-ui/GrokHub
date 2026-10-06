@@ -1,14 +1,16 @@
 use crate::config;
 use crate::host::run_host;
 use grokhub_core::{
-    auto_off_target, channel_status_line, channel_switch_fail_hint, channel_switch_preflight,
-    channel_switch_shell, discover_source, forbidden_reason, ls_remote_channel_tips,
-    parse_github_latest_tag, parse_installed_cli_version, parse_published_cli_alpha,
-    remote_tracking_tips, restart_acts, restart_bin, systemd_user_restart_args,
-    systemd_user_stop_args, update_progress_pct, update_step_label, update_wipes_config,
-    Channel, RestartAct, CHANNEL_AUTO_OFF_NOTE, CHANNEL_RECEIPT, CHANNEL_WINDOWS_NOTE,
-    CLI_ALPHA_VERSION_FALLBACK, CLI_ALPHA_VERSION_URL, GITHUB_LATEST_API, TEXT_FILE_CAP,
+    auto_off_target, channel_status_line, channel_switch_fail_hint, discover_source,
+    forbidden_reason, ls_remote_channel_tips, parse_github_latest_tag,
+    parse_installed_cli_version, parse_published_cli_alpha, remote_tracking_tips, restart_acts,
+    restart_bin, systemd_user_restart_args, systemd_user_stop_args, update_progress_pct,
+    update_step_label, update_wipes_config, Channel, RestartAct, CHANNEL_AUTO_OFF_NOTE,
+    CHANNEL_RECEIPT, CHANNEL_WINDOWS_NOTE, CLI_ALPHA_VERSION_FALLBACK, CLI_ALPHA_VERSION_URL,
+    GITHUB_LATEST_API, TEXT_FILE_CAP,
 };
+#[cfg(not(windows))]
+use grokhub_core::{channel_switch_preflight, channel_switch_shell};
 use std::io::Read;
 use std::env;
 use std::process::{Command, Stdio};
@@ -90,8 +92,10 @@ pub fn channel_labs_status() -> String {
 }
 
 /// One host command: backup binaries, `install.sh --user --channel`, restore on fail.
+/// Linux only — Windows Labs keeps the toggle disabled (see [`CHANNEL_WINDOWS_NOTE`]).
+#[cfg(not(windows))]
 pub fn channel_switch_cmds(source: &std::path::Path, target: Channel) -> Result<Vec<String>, String> {
-    channel_switch_preflight(cfg!(windows), Some(source))?;
+    channel_switch_preflight(false, Some(source))?;
     let home = grokhub_core::user_home()
         .ok_or_else(|| "No home directory — cannot install".to_string())?;
     let home = home
@@ -787,19 +791,26 @@ mod tests {
 
     #[test]
     fn channel_switch_cmds_name_install_sh_and_backup() {
-        if cfg!(windows) {
-            let err = channel_switch_cmds(std::path::Path::new("."), Channel::Beta).unwrap_err();
-            assert_eq!(err, CHANNEL_WINDOWS_NOTE);
-            return;
+        #[cfg(windows)]
+        {
+            // channel_switch_cmds is Linux-only; Windows Labs shows CHANNEL_WINDOWS_NOTE.
+            assert_eq!(
+                grokhub_core::channel_switch_preflight(true, Some(std::path::Path::new(".")))
+                    .unwrap_err(),
+                CHANNEL_WINDOWS_NOTE
+            );
         }
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let cmds = channel_switch_cmds(&root, Channel::Beta).expect("linux cmds");
-        assert_eq!(cmds.len(), 1);
-        assert!(cmds[0].contains("--channel beta"), "{}", cmds[0]);
-        assert!(cmds[0].contains("scripts/install.sh"), "{}", cmds[0]);
-        assert!(cmds[0].contains("channel-bak"), "{}", cmds[0]);
-        let stable = channel_switch_cmds(&root, Channel::Stable).expect("stable");
-        assert!(stable[0].contains("--channel stable"), "{}", stable[0]);
+        #[cfg(not(windows))]
+        {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+            let cmds = channel_switch_cmds(&root, Channel::Beta).expect("linux cmds");
+            assert_eq!(cmds.len(), 1);
+            assert!(cmds[0].contains("--channel beta"), "{}", cmds[0]);
+            assert!(cmds[0].contains("scripts/install.sh"), "{}", cmds[0]);
+            assert!(cmds[0].contains("channel-bak"), "{}", cmds[0]);
+            let stable = channel_switch_cmds(&root, Channel::Stable).expect("stable");
+            assert!(stable[0].contains("--channel stable"), "{}", stable[0]);
+        }
     }
 
     #[test]

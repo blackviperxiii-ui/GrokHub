@@ -841,12 +841,7 @@ impl Cabin {
                                                             // Windows stays disabled until the installer supports it.
                                                             // Also: when beta tip == main tip, auto-turn off (cooldown).
                                                             self.maybe_auto_off_beta_channel(false);
-                                                            let channel_on = crate::update::installed_channel()
-                                                                == grokhub_core::Channel::Beta;
-                                                            let mut beta_on = channel_on;
                                                             let status_line = crate::update::channel_labs_status();
-                                                            let channel_busy = self.running
-                                                                && self.update_pct.is_some();
                                                             #[cfg(windows)]
                                                             {
                                                                 ui.add_enabled_ui(false, |ui| {
@@ -870,6 +865,11 @@ impl Cabin {
                                                             }
                                                             #[cfg(not(windows))]
                                                             {
+                                                                let channel_on = crate::update::installed_channel()
+                                                                    == grokhub_core::Channel::Beta;
+                                                                let mut beta_on = channel_on;
+                                                                let channel_busy = self.running
+                                                                    && self.update_pct.is_some();
                                                                 let hint = if channel_busy {
                                                                     "Switching channel…"
                                                                 } else {
