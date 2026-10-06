@@ -271,3 +271,173 @@ mod tests {
         let _ = std::fs::remove_dir_all(&cfg);
     }
 }
+
+/// Shown next to the Labs Beta channel toggle: `beta · beta @ abc1234`.
+pub fn channel_status_line(channel: Channel, branch: &str, sha: &str) -> String {
+    let ch = channel.as_str();
+    match (branch.trim(), sha.trim()) {
+        ("", "") => ch.to_string(),
+        ("", sha) => format!("{ch} · {sha}"),
+        (branch, "") => format!("{ch} · {branch}"),
+        (branch, sha) => format!("{ch} · {branch} @ {sha}"),
+    }
+}
+
+/// Windows Labs copy until the installer supports channels.
+pub const CHANNEL_WINDOWS_NOTE: &str =
+    "Channel switching is not available on Windows yet — the installer does not support channels.";
+
+/// Clear Labs failure copy for a channel switch.
+pub fn channel_switch_fail_hint(stderr_or_status: &str) -> &'static str {
+    let s = stderr_or_status.to_ascii_lowercase();
+    if s.contains("uncommitted changes") {
+        "Uncommitted changes in the clone — commit or stash them, then try again."
+    } else if s.contains("not a grokhub source")
+        || s.contains("no clone")
+        || s.contains("set settings → source")
+        || s.contains("grokhub_src")
+    {
+        "No GrokHub clone found — set Settings → source or GROKHUB_SRC."
+    } else if s.contains("build failed")
+        || s.contains("cargo")
+        || s.contains("could not compile")
+        || s.contains("error: could not compile")
+    {
+        "Build failed — previous install kept."
+    } else if s.contains("channel switching is not available on windows")
+        || s.contains("windows") && s.contains("channel")
+    {
+        CHANNEL_WINDOWS_NOTE
+    } else {
+        "Channel switch failed — previous install kept."
+    }
+}
+
+/// Shell plan that backups binaries, runs `install.sh --user --channel …`, and
+/// restores the previous binaries if the install exits non-zero.
+pub fn channel_switch_shell(source: &str, target: Channel, home: &str) -> String {
+    let src = source.trim().trim_end_matches('/');
+    let home = home.trim().trim_end_matches('/');
+    let channel = target.as_str();
+    let bak = format!("{home}/.local/share/grokhub/channel-bak");
+    let bin = format!("{home}/.local/bin");
+    // Single host command so a failed install always restores before we return.
+    format!(
+        "set -euo pipefail; \
+bak='{bak}'; bin='{bin}'; \
+mkdir -p \"$bak\" \"$bin\"; \
+cp -f \"$bin/grokhub\" \"$bak/grokhub\" 2>/dev/null || true; \
+cp -f \"$bin/grokhub-hub\" \"$bak/grokhub-hub\" 2>/dev/null || true; \
+if ! '{src}/scripts/install.sh' --user --channel {channel}; then \
+  cp -f \"$bak/grokhub\" \"$bin/grokhub\" 2>/dev/null || true; \
+  cp -f \"$bak/grokhub-hub\" \"$bin/grokhub-hub\" 2>/dev/null || true; \
+  echo 'channel switch failed — previous install kept' >&2; \
+  exit 1; \
+fi"
+    )
+}
+
+/// Preflight errors before spawning the switch. `windows` is passed in so
+/// Linux unit tests can assert the Windows note.
+pub fn channel_switch_preflight(
+    windows: bool,
+    source: Option<&std::path::Path>,
+) -> Result<(), String> {
+    if windows {
+        return Err(CHANNEL_WINDOWS_NOTE.to_string());
+    }
+    match source {
+        Some(p) if is_source_tree(p) => Ok(()),
+        Some(_) | None => Err(
+            "No GrokHub clone found — set Settings → source or GROKHUB_SRC.".into(),
+        ),
+    }
+}
+
+fn is_source_tree(dir: &std::path::Path) -> bool {
+    dir.join("Cargo.toml").is_file()
+        && dir.join("scripts/install.sh").is_file()
+        && dir.join("crates/grokhub-app").is_dir()
+}
+
+#[cfg(test)]
+mod channel_switch_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn status_line_names_channel_branch_and_sha() {
+        assert_eq!(
+            channel_status_line(Channel::Beta, "beta", "abc1234"),
+            "beta · beta @ abc1234"
+        );
+        assert_eq!(
+            channel_status_line(Channel::Stable, "main", "0f1e2d3"),
+            "stable · main @ 0f1e2d3"
+        );
+        assert_eq!(channel_status_line(Channel::Stable, "", ""), "stable");
+        assert_eq!(
+            channel_status_line(Channel::Beta, "", "deadbeef"),
+            "beta · deadbeef"
+        );
+    }
+
+    #[test]
+    fn fail_hints_are_literal_and_specific() {
+        assert_eq!(
+            channel_switch_fail_hint("error: /x has uncommitted changes; commit or stash"),
+            "Uncommitted changes in the clone — commit or stash them, then try again."
+        );
+        assert_eq!(
+            channel_switch_fail_hint("not a GrokHub source tree — set Settings → source"),
+            "No GrokHub clone found — set Settings → source or GROKHUB_SRC."
+        );
+        assert_eq!(
+            channel_switch_fail_hint("error: could not compile `grokhub-app`"),
+            "Build failed — previous install kept."
+        );
+        assert_eq!(
+            channel_switch_fail_hint("something else blew up"),
+            "Channel switch failed — previous install kept."
+        );
+        assert_eq!(
+            channel_switch_fail_hint(CHANNEL_WINDOWS_NOTE),
+            CHANNEL_WINDOWS_NOTE
+        );
+    }
+
+    #[test]
+    fn switch_shell_backs_up_runs_install_and_restores_on_fail() {
+        let sh = channel_switch_shell("/repo/GrokHub", Channel::Beta, "/home/box");
+        assert!(sh.contains("--channel beta"), "{sh}");
+        assert!(sh.contains("/repo/GrokHub/scripts/install.sh"), "{sh}");
+        assert!(sh.contains("/home/box/.local/share/grokhub/channel-bak"), "{sh}");
+        assert!(sh.contains("cp -f \"$bak/grokhub\" \"$bin/grokhub\""), "{sh}");
+        assert!(sh.contains("previous install kept"), "{sh}");
+        let stable = channel_switch_shell("/repo", Channel::Stable, "/home/u");
+        assert!(stable.contains("--channel stable"), "{stable}");
+        assert!(!stable.contains("--channel beta"), "{stable}");
+    }
+
+    #[test]
+    fn preflight_blocks_windows_and_missing_clone() {
+        assert_eq!(
+            channel_switch_preflight(true, Some(Path::new("/tmp"))),
+            Err(CHANNEL_WINDOWS_NOTE.to_string())
+        );
+        assert_eq!(
+            channel_switch_preflight(false, None),
+            Err("No GrokHub clone found — set Settings → source or GROKHUB_SRC.".into())
+        );
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        assert!(channel_switch_preflight(false, Some(&root)).is_ok());
+    }
+
+    #[test]
+    fn windows_note_is_the_labs_copy() {
+        assert_eq!(
+            CHANNEL_WINDOWS_NOTE,
+            "Channel switching is not available on Windows yet — the installer does not support channels."
+        );
+    }
+}

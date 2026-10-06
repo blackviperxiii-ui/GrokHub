@@ -837,6 +837,89 @@ impl Cabin {
                                                             }
                                                         }
                                                         SettingsSec::Labs => {
+                                                            // Beta channel: Linux switches via install.sh --channel;
+                                                            // Windows stays disabled until the installer supports it.
+                                                            let channel_on = crate::update::installed_channel()
+                                                                == grokhub_core::Channel::Beta;
+                                                            let mut beta_on = channel_on;
+                                                            let status_line = crate::update::channel_labs_status();
+                                                            let channel_busy = self.running
+                                                                && self.update_pct.is_some();
+                                                            #[cfg(windows)]
+                                                            {
+                                                                ui.add_enabled_ui(false, |ui| {
+                                                                    let mut off = false;
+                                                                    let _ = crate::cards::settings_toggle(
+                                                                        ui,
+                                                                        "Beta channel",
+                                                                        "Fetch, build, and install from the beta branch.",
+                                                                        &mut off,
+                                                                    );
+                                                                });
+                                                                crate::cards::settings_note(
+                                                                    ui,
+                                                                    crate::update::channel_windows_note(),
+                                                                );
+                                                                crate::cards::settings_note(ui, &status_line);
+                                                            }
+                                                            #[cfg(not(windows))]
+                                                            {
+                                                                let hint = if channel_busy {
+                                                                    "Switching channel…"
+                                                                } else {
+                                                                    "On = beta branch. Off = stable (main). Same as install.sh --channel."
+                                                                };
+                                                                ui.add_enabled_ui(!channel_busy, |ui| {
+                                                                    if crate::cards::settings_toggle(
+                                                                        ui,
+                                                                        "Beta channel",
+                                                                        hint,
+                                                                        &mut beta_on,
+                                                                    ) && beta_on != channel_on
+                                                                    {
+                                                                        let target = if beta_on {
+                                                                            grokhub_core::Channel::Beta
+                                                                        } else {
+                                                                            grokhub_core::Channel::Stable
+                                                                        };
+                                                                        self.queue_channel_switch(target);
+                                                                    }
+                                                                });
+                                                                crate::cards::settings_note(ui, &status_line);
+                                                                if let Some(pct) = self.update_pct {
+                                                                    let fill = if self.last_receipt_ok
+                                                                        == Some(false)
+                                                                        && !self.running
+                                                                    {
+                                                                        crate::theme::OFFLINE
+                                                                    } else {
+                                                                        crate::theme::live()
+                                                                    };
+                                                                    crate::cards::settings_progress(
+                                                                        ui, pct, fill,
+                                                                    );
+                                                                }
+                                                                if self.update_can_restart
+                                                                    && crate::cards::settings_action(
+                                                                        ui,
+                                                                        "Restart GrokHub",
+                                                                        "Reload hub, then start a new cabin and exit this one.",
+                                                                        "Restart",
+                                                                    )
+                                                                {
+                                                                    restart = true;
+                                                                }
+                                                                if !self.status.is_empty()
+                                                                    && (channel_busy
+                                                                        || self.update_can_restart
+                                                                        || self.last_receipt_ok
+                                                                            == Some(false))
+                                                                {
+                                                                    crate::cards::settings_note(
+                                                                        ui, &self.status,
+                                                                    );
+                                                                }
+                                                            }
                                                             if crate::cards::settings_toggle(
                                                                 ui,
                                                                 "Native engine (no Grok CLI)",
