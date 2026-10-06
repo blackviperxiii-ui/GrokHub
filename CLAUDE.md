@@ -38,3 +38,22 @@ cargo clippy --workspace --all-targets -- -D warnings
 - **Versions:** PRs into `beta` don't bump the version; they add their notes under `## Unreleased` in `CHANGELOG.md`. Beta builds show the base version plus `-beta`, with the branch and short SHA (`GrokHub 2.10.92-beta (beta @ abc1234)`), which `crates/grokhub-app/build.rs` reads from git; never edit the Cargo version for it. Each `beta` → `main` promotion carries exactly one patch bump and one release. A hotfix to `main` carries its own bump and is merged back into `beta`.
 - A bump changes `VERSION` once, in the same files as #453: `VERSION`, `Cargo.toml` `[workspace.package] version`, the `grokhub-*` entries in `Cargo.lock`, `README.md` (headline and both Latest rows), `packaging/PKGBUILD`, `packaging/aur/PKGBUILD`, `packaging/windows/grokhub.iss`, and the `cabin_reports_version` assert in `crates/grokhub-app/src/cli.rs`. Add a `CHANGELOG.md` section with the Linux and Windows artifact lines.
 - Don't bump the Imagine `Quality (v2.0)`, specs marked `(do not bump)`, the diagnostics fixture, or `packaging/grokhub.desktop` `Version=`.
+
+## Branch cleanup
+- After a PR merges or closes, delete **your own** head branch (`gh pr view --json headRefName` then `git push origin --delete <branch>`). Prefer GitHub auto-delete when enabled.
+- Delete scratch / proof / throwaway branches as soon as the proof is done.
+- Never delete `main` or `beta`.
+
+## Which bot runs the job
+- **Grok Build** (this box): default for coding, PRs, CI watches, Semgrep, and GrokHub ship work while Cursor Cloud is out.
+- **Cursor**: UI Critiquito handoff coordination stays with the parent; Cursor Cloud agents resume after Oct 11. Prefer Grok Build for implement/explore/plan roles when both are available.
+- Pick one bot per job; do not double-run the same PR.
+
+## Grok Build roles (bundled)
+Grok Build 1.0.49+ ships explore / plan / implementer (and reviewer, test-writer, …) under `~/.grok/bundled/roles/`. There is no separate "build" role name — use **implementer** for build/code. Invoke with `grok --agent <role>` or project agent config when spawning subagents. Do not invent custom role TOML unless Jeremy asks.
+
+## Semgrep + dyl-review + Continual Learning
+- Run **Semgrep** on touched paths before marking a PR Ready (`semgrep --config=auto` or the Semgrep plugin). Fix or justify findings in the PR body. Do **not** use dyl-ready-pr merge/babysit.
+- **dyl-review** (quick): draft review asks for the human; never auto-post merge.
+- **Continual Learning**: when mining chats, update `AGENTS.md` via the continual-learning skill / agents-memory-updater. Keep AGENTS.md short and factual.
+

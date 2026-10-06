@@ -384,6 +384,45 @@ fn native_signin_missing_gives_exact_message() {
 }
 
 #[test]
+fn native_signin_failed_refresh_is_not_retried_every_turn() {
+    let sb = Sandbox::new("native-signin-refresh-fails");
+    let server = FakeXai::start();
+    // Not the token path: the server answers with an event stream, so the refresh fails.
+    crate::oauth::set_token_url_for_test(Some(&format!("{}/oauth2/broken", server.base)));
+    sb.write_signin(
+        r#"{"accessToken":"test-expired-token","refreshToken":"test-refresh-token","expiresAt":1000,"connectedAt":1}"#,
+    );
+    let mut cabin = sb.cabin();
+    let tries = || {
+        server
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|s| s.path == "/oauth2/broken")
+            .count()
+    };
+    assert_eq!(
+        cabin.native_cred().unwrap_err(),
+        "Sign in with Grok or add an API key."
+    );
+    assert_eq!(tries(), 1);
+    // The next turns inside the backoff do not wait on the network again.
+    for _ in 0..3 {
+        assert_eq!(
+            cabin.native_cred().unwrap_err(),
+            "Sign in with Grok or add an API key."
+        );
+    }
+    assert_eq!(tries(), 1, "a failed refresh is not retried every turn");
+    assert_eq!(
+        cabin.secrets.oauth.as_ref().map(|t| t.access_token.as_str()),
+        Some("test-expired-token"),
+        "a failed refresh keeps the saved sign-in"
+    );
+}
+
+#[test]
 fn native_signin_source_never_uses_cli_login_token() {
     let engine = include_str!("native_engine.rs");
     let cred = engine
@@ -398,5 +437,104 @@ fn native_signin_source_never_uses_cli_login_token() {
     assert!(
         !engine.contains(concat!("eprintln!(\"", "{bearer")),
         "never log a token"
+    );
+}
+
+/// Imagine must reuse Settings → Account the same way Lab mode does.
+/// Fake tokens only; no live xAI calls.
+#[test]
+fn imagine_cred_reuses_account_oauth_without_imagine_keychain() {
+    let sb = Sandbox::new("imagine-reuse-account");
+    sb.write_signin(&format!(
+        r#"{{"accessToken":"test-account-access","refreshToken":"test-refresh","expiresAt":{},"connectedAt":1,"email":"ada@example.com"}}"#,
+        future_ms()
+    ));
+    let mut cabin = sb.cabin();
+    cabin.cfg.native_engine = false;
+    assert!(
+        cabin.imagine_native.tokens.is_none(),
+        "Imagine keychain empty"
+    );
+    assert_eq!(cabin.console_key(), "");
+    assert!(cabin.account_oauth_present());
+    assert!(cabin.imagine_ui_ready(), "Account alone must count as signed in");
+
+    let cred = cabin.imagine_cred().expect("Account covers Imagine");
+    assert_eq!(cred.secret, "test-account-access");
+    assert_eq!(cred.kind, grokhub_core::ImagineCredKind::OAuth);
+
+    // Second call must not re-prompt / fail — same live Account token.
+    let again = cabin.imagine_cred().expect("no re-prompt");
+    assert_eq!(again.secret, "test-account-access");
+    assert_eq!(again.kind, grokhub_core::ImagineCredKind::OAuth);
+    assert!(cabin.imagine_native.tokens.is_none(), "must not invent Imagine keychain tokens");
+}
+
+#[test]
+fn imagine_cred_prefers_imagine_keychain_over_account() {
+    let sb = Sandbox::new("imagine-prefer-keychain");
+    sb.write_signin(&format!(
+        r#"{{"accessToken":"test-account-access","refreshToken":"test-refresh","expiresAt":{},"connectedAt":1}}"#,
+        future_ms()
+    ));
+    let mut cabin = sb.cabin();
+    cabin.imagine_native.tokens = Some(grokhub_core::ImagineTokens {
+        access_token: "test-imagine-access".into(),
+        refresh_token: Some("test-imagine-refresh".into()),
+        expires_at: Some(future_ms()),
+        id_token: None,
+        email: Some("imagine@example.com".into()),
+        connected_at: 1,
+    });
+    let cred = cabin.imagine_cred().expect("Imagine keychain wins");
+    assert_eq!(cred.secret, "test-imagine-access");
+    assert_eq!(cred.kind, grokhub_core::ImagineCredKind::OAuth);
+}
+
+#[test]
+fn kick_imagine_with_account_oauth_starts_without_second_signin() {
+    let sb = Sandbox::new("imagine-kick-account");
+    sb.write_signin(&format!(
+        r#"{{"accessToken":"test-account-access","refreshToken":"test-refresh","expiresAt":{},"connectedAt":1,"email":"ada@example.com"}}"#,
+        future_ms()
+    ));
+    let mut cabin = sb.cabin();
+    cabin.cfg.native_engine = false;
+    cabin.imagine_native.tokens = None;
+    cabin.imagine_prompt = "harbor at dusk".into();
+    // Force-key path off; no console key. Account alone must be enough to leave
+    // the need-signin path (job may still fail later on a fake token — we only
+    // prove it does not refuse with IMAGINE_NEED_SIGNIN).
+    cabin.kick_imagine();
+    assert_ne!(
+        cabin.imagine_error.as_str(),
+        grokhub_core::IMAGINE_NEED_SIGNIN,
+        "Account sign-in must not show the need-signin wall"
+    );
+    assert_ne!(cabin.status.as_str(), grokhub_core::IMAGINE_NEED_SIGNIN);
+    // Either running (job spawned) or some other non-signin status.
+    assert!(
+        cabin.running || cabin.rx.is_some() || !cabin.imagine_error.is_empty(),
+        "expected a started job or a non-signin error, got status={:?} err={:?}",
+        cabin.status,
+        cabin.imagine_error
+    );
+    // Clean up any spawned job thread so Drop is quiet.
+    if let Some(rx) = cabin.rx.take() {
+        cabin.running = false;
+        cabin.imagine_pending = false;
+        let _ = rx.recv_timeout(std::time::Duration::from_millis(200));
+    }
+}
+
+#[test]
+fn imagine_need_signin_message_points_at_account_settings() {
+    assert_eq!(
+        grokhub_core::IMAGINE_NEED_SIGNIN,
+        "Sign in with Grok in Settings → Account, or add a console API key."
+    );
+    assert!(
+        !grokhub_core::IMAGINE_NEED_SIGNIN.contains("for Imagine"),
+        "must not push a second Imagine-only sign-in"
     );
 }

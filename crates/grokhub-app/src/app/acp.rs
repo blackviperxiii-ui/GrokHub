@@ -1258,20 +1258,6 @@ impl Cabin {
         });
     }
 
-    pub(super) fn delete_grok_history(&mut self, id: &str) {
-        if let Some(i) = self
-            .threads
-            .iter()
-            .position(|t| t.grok_session.as_deref() == Some(id))
-        {
-            self.delete_thread_at(i);
-            return;
-        }
-        self.forget_grok_build_session(id, &[]);
-        self.status = "Deleting session…".into();
-        self.persist();
-    }
-
     pub(super) fn reload_grok_sessions(&mut self) {
         if self.grok_sessions_inflight > 0 {
             self.grok_sessions_refresh_pending = true;
@@ -1470,18 +1456,6 @@ impl Cabin {
         self.grok_sessions_loaded = false;
         if self.grok_sessions_inflight > 0 {
             self.grok_list_gen = self.grok_list_gen.wrapping_add(1);
-            self.grok_sessions_refresh_pending = true;
-            return;
-        }
-        self.reload_grok_sessions();
-    }
-
-    pub(super) fn maybe_refresh_grok_sessions(&mut self) {
-        let elapsed = self.last_grok_list_at.elapsed().as_millis() as u64;
-        if !history_list_refresh_due(cfg!(windows), self.grok_sessions_loaded, elapsed) {
-            return;
-        }
-        if self.grok_sessions_inflight > 0 {
             self.grok_sessions_refresh_pending = true;
             return;
         }

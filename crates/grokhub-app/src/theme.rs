@@ -58,9 +58,11 @@ pub const LIVE: Color32 = Color32::from_rgb(0x22, 0xc5, 0x5e);
 pub const LIGHT_LIVE: Color32 = Color32::from_rgb(0x15, 0x80, 0x3d);
 pub const SETUP: Color32 = Color32::from_rgb(0xea, 0xb3, 0x08);
 /// Selected Always stroke only — dark OLED, ≥3:1 on `#16181C`.
-pub const ALWAYS_AMBER_DARK: Color32 = Color32::from_rgb(0xe8, 0xa8, 0x38);
+/// Selected Always ring. White on dark to match B&W chrome (was amber #e8a838).
+pub const ALWAYS_AMBER_DARK: Color32 = Color32::from_rgb(0xe7, 0xe9, 0xea);
 /// Selected Always stroke only — light surface, ≥3:1 on elevated white.
-pub const ALWAYS_AMBER_LIGHT: Color32 = Color32::from_rgb(0xb8, 0x6e, 0x00);
+/// Selected Always ring on light. Near-black (was amber #b86e00).
+pub const ALWAYS_AMBER_LIGHT: Color32 = Color32::from_rgb(0x0a, 0x0a, 0x0a);
 pub const OFFLINE: Color32 = Color32::from_rgb(0xef, 0x44, 0x44);
 /// grok.com light `--surface-base` (System when the desktop is light).
 pub const LIGHT_BG: Color32 = Color32::from_rgb(0xf4, 0xf4, 0xf5);
@@ -160,9 +162,14 @@ pub fn live() -> Color32 {
 pub fn setup() -> Color32 {
     SETUP
 }
-/// Selected Always ring. Idle Always never uses this.
+/// Selected Always ring (white on dark / near-black on light). Idle Always never uses this.
 pub fn always_amber() -> Color32 {
     tok(ALWAYS_AMBER_DARK, ALWAYS_AMBER_LIGHT)
+}
+
+/// Composer streaming glow: white on dark / near-black on light (was live green).
+pub fn composer_glow_rgb() -> Color32 {
+    tok(FG, LIGHT_FG)
 }
 pub fn offline() -> Color32 {
     OFFLINE
@@ -320,6 +327,7 @@ fn probe_os_dark() -> bool {
     }
 }
 
+#[cfg(not(windows))]
 fn cmd_stdout(bin: &str, args: &[&str]) -> String {
     let mut cmd = std::process::Command::new(bin);
     cmd.args(args);
@@ -358,14 +366,6 @@ pub const QUERY_MIN_H: f32 = 60.0;
 /// `.query-bar` computed `border-radius: 160px`
 pub const QUERY_RADIUS: f32 = 160.0;
 
-/// Cap the composer / empty-home column. Transcript layout uses the full pane.
-pub fn chat_col_w(avail: f32) -> f32 {
-    if !avail.is_finite() || avail <= 0.0 {
-        CHAT_COL_W
-    } else {
-        avail.min(CHAT_COL_W)
-    }
-}
 /// Attach / Submit `h-10 w-10 rounded-full`
 pub const HIT: f32 = 40.0;
 /// Rail / chrome row (`h-10`, `--font-size-chrome`)
@@ -411,27 +411,6 @@ pub const GROK_NAV: &[(&str, &str)] = &[
 /// Avatar-menu destinations besides Help / Sign in / Sign out.
 /// Leftover panes stay reachable from slash, palette, and the sidebar.
 pub const CABIN_MENU: &[(&str, &str)] = &[("settings", "Settings")];
-
-#[allow(dead_code)]
-pub fn stage_subtitle(id: &str) -> &'static str {
-    match id {
-        "history" => "Past chats",
-        "chat" => "Recent chat",
-        "imagine" => "Images",
-        "workboard" => "Tasks and plans",
-        "pulse" | "ideas" => "What I'd do next",
-        "skills" => "Personal skills and connectors",
-        "automations" => "Grok Build /loop scheduler",
-        "command" => "Overview",
-        "queue" => "Background jobs",
-        "settings" => "Preferences",
-        "devices" => "Paired computers",
-        "memory" => "SOUL / USER / MEMORY",
-        "eyes" => "Computer-use frames",
-        "connectors" => "MCP / skills / plugins",
-        _ => "GrokHub",
-    }
-}
 
 fn install_inter(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
@@ -618,12 +597,24 @@ pub fn blend_color(from: Color32, to: Color32, t: f32) -> Color32 {
     )
 }
 
+/// False when the user prefers reduced motion (egui animation_time == 0).
+pub fn motion_ok(ui: &egui::Ui) -> bool {
+    ui.style().animation_time > 0.0
+}
+
 /// Animated on/off for toggles and segment selection. Same ease as button hover.
 pub fn animate_selection(ui: &egui::Ui, id: egui::Id, on: bool) -> f32 {
+    animate_selection_secs(ui, id, on, SELECT_SECS)
+}
+
+pub fn animate_selection_secs(ui: &egui::Ui, id: egui::Id, on: bool, secs: f32) -> f32 {
+    if !motion_ok(ui) {
+        return if on { 1.0 } else { 0.0 };
+    }
     ui.ctx().animate_bool_with_time_and_easing(
         id,
         on,
-        SELECT_SECS,
+        secs,
         egui::emath::easing::quadratic_out,
     )
 }
@@ -635,11 +626,6 @@ fn button_channel(ui: &egui::Ui, id: egui::Id, on: bool, secs: f32) -> f32 {
         secs,
         egui::emath::easing::quadratic_out,
     )
-}
-
-/// Quiet control fill. Same corner on every labeled button.
-pub fn paint_quiet_chrome(painter: &egui::Painter, rect: egui::Rect, fill: egui::Color32) {
-    painter.rect_filled(rect, 8.0, fill);
 }
 
 #[derive(Clone, Debug, Default)]
@@ -785,21 +771,6 @@ pub fn glide_aim(ui: &egui::Ui, group: &str) {
     });
 }
 
-/// Soft shadow under a rising button. Resting controls stay flat.
-pub fn paint_button_shadow(painter: &egui::Painter, rect: egui::Rect, hover_t: f32, press_t: f32) {
-    let t = (hover_t * (1.0 - 0.45 * press_t)).clamp(0.0, 1.0);
-    if t < 0.04 {
-        return;
-    }
-    let alpha = (56.0 * t) as u8;
-    let shadow = rect.translate(egui::vec2(0.0, 2.0 + 2.0 * t));
-    painter.rect_filled(
-        shadow,
-        rect.height().min(20.0) * 0.5,
-        egui::Color32::from_black_alpha(alpha),
-    );
-}
-
 /// How long a Copy button reads "Copied".
 pub const COPY_FLASH: Duration = Duration::from_millis(1500);
 
@@ -809,6 +780,7 @@ pub fn copy_flash_showing(clicked: Instant, now: Instant) -> bool {
 }
 
 /// "Copied" for [`COPY_FLASH`] after a click, otherwise "Copy".
+#[cfg(test)]
 pub fn copy_button_label(clicked: Option<Instant>, now: Instant) -> &'static str {
     match clicked {
         Some(t) if copy_flash_showing(t, now) => "Copied",
@@ -1218,8 +1190,6 @@ mod tests {
         assert!(GREET_HERO <= 28.0);
         assert_eq!(CHAT_COL_W, 768.0);
         assert!(CHAT_COL_W >= 720.0 && CHAT_COL_W <= 800.0);
-        assert_eq!(chat_col_w(1800.0), CHAT_COL_W);
-        assert_eq!(chat_col_w(600.0), 600.0);
         assert_eq!(USER_BUBBLE_RADIUS, 20.0);
         assert!(USER_BUBBLE_RADIUS < QUERY_RADIUS);
         assert_eq!(CHROME_RADIUS, 6.0);
@@ -1239,8 +1209,10 @@ mod tests {
         assert_eq!(FONT_TIP, 12.0);
         assert!(FONT_TIP < FONT_BODY);
         assert!(FONT_SECTION > FONT_CHROME);
-        assert_eq!(ALWAYS_AMBER_DARK, Color32::from_rgb(0xe8, 0xa8, 0x38));
-        assert_eq!(ALWAYS_AMBER_LIGHT, Color32::from_rgb(0xb8, 0x6e, 0x00));
+        assert_eq!(ALWAYS_AMBER_DARK, Color32::from_rgb(0xe7, 0xe9, 0xea));
+        assert_eq!(ALWAYS_AMBER_LIGHT, Color32::from_rgb(0x0a, 0x0a, 0x0a));
+        assert_eq!(ALWAYS_AMBER_DARK, FG);
+        assert_eq!(ALWAYS_AMBER_LIGHT, LIGHT_FG);
         assert_ne!(ALWAYS_AMBER_DARK, SETUP);
         set_paint_dark(true);
         assert_eq!(always_amber(), ALWAYS_AMBER_DARK);
@@ -1313,10 +1285,6 @@ mod tests {
                 "{gone} must not sit in the avatar menu"
             );
         }
-        assert_eq!(stage_subtitle("history"), "Past chats");
-        assert_eq!(stage_subtitle("chat"), "Recent chat");
-        assert_eq!(stage_subtitle("imagine"), "Images");
-        assert_eq!(stage_subtitle("connectors"), "MCP / skills / plugins");
         assert_eq!(title_font(40.0).size, 40.0);
         set_paint_dark(true);
         assert_eq!(bg(), BG);

@@ -671,8 +671,7 @@ impl Cabin {
         };
         let model = dedicated_imagine_model(&self.cfg.imagine_model);
         let ready = !self.imagine_prompt.trim().is_empty();
-        let signed_in =
-            self.imagine_native.tokens.is_some() || !self.console_key().trim().is_empty();
+        let signed_in = self.imagine_ui_ready();
         egui::Frame::NONE
             .fill(crate::theme::surface())
             .corner_radius(crate::theme::IMAGINE_BAR_RADIUS)
@@ -975,7 +974,10 @@ impl Cabin {
                                 && !self.imagine_native.auth_busy
                                 && crate::cards::ghost_pill(ui, "Sign in")
                             {
-                                self.start_imagine_auth(true);
+                                // One Account sign-in covers Imagine — send them
+                                // there instead of opening a second OAuth flow.
+                                self.nav = Nav::Settings;
+                                self.settings_sec = SettingsSec::Account;
                             } else if self.running && self.page_nav() == Nav::Imagine {
                                 ui.label(
                                     RichText::new("Imagining…")
@@ -1099,7 +1101,8 @@ impl Cabin {
             .imagine_native
             .tokens
             .as_ref()
-            .is_some_and(|t| grokhub_core::imagine_oauth_preferred(t, now_ms()));
+            .is_some_and(|t| grokhub_core::imagine_oauth_preferred(t, now_ms()))
+            || self.account_oauth_present();
         if !wall_can_paint(
             self.has_key() || imagine_signed_in,
             self.cfg.imagine_wall,
@@ -1166,23 +1169,52 @@ impl Cabin {
         });
     }
 
-    fn imagine_cred(&self) -> Result<grokhub_core::ImagineCred, &'static str> {
+    /// Imagine keychain first, then Settings → Account (`secrets.oauth`), then the
+    /// console key. Same order as Lab mode's `native_cred`, so one Grok sign-in
+    /// covers Imagine and nothing re-prompts when Account is already live.
+    pub(super) fn imagine_cred(&mut self) -> Result<grokhub_core::ImagineCred, &'static str> {
         let now = now_ms();
-        let preferred = self
-            .imagine_native
-            .tokens
+        if let Some(tokens) = self.imagine_native.tokens.clone() {
+            if grokhub_core::imagine_oauth_preferred(&tokens, now) {
+                if grokhub_core::imagine_access_usable(&tokens, now) {
+                    return Ok(grokhub_core::ImagineCred {
+                        secret: tokens.access_token,
+                        kind: grokhub_core::ImagineCredKind::OAuth,
+                    });
+                }
+                if let Ok((access, updated)) = crate::imagine_auth::access_for_job(&tokens) {
+                    if let Some(next) = updated {
+                        self.note_imagine_tokens(next);
+                    }
+                    return Ok(grokhub_core::ImagineCred {
+                        secret: access,
+                        kind: grokhub_core::ImagineCredKind::OAuth,
+                    });
+                }
+                // Imagine refresh failed — fall through to Account / key.
+            }
+        }
+        if let Some(access) = self.native_account_access(now) {
+            return Ok(grokhub_core::ImagineCred {
+                secret: access,
+                kind: grokhub_core::ImagineCredKind::OAuth,
+            });
+        }
+        grokhub_core::choose_imagine_bearer(None, false, self.console_key())
+    }
+
+    pub(super) fn account_oauth_present(&self) -> bool {
+        self.secrets
+            .oauth
             .as_ref()
-            .is_some_and(|t| grokhub_core::imagine_oauth_preferred(t, now));
-        let access = self
-            .imagine_native
-            .tokens
-            .as_ref()
-            .map(|t| t.access_token.as_str());
-        grokhub_core::choose_imagine_bearer(
-            if preferred { access } else { None },
-            preferred,
-            self.console_key(),
-        )
+            .is_some_and(|t| !t.access_token.trim().is_empty())
+    }
+
+    /// Composer / wall treat Account the same as Imagine's own keychain sign-in.
+    pub(super) fn imagine_ui_ready(&self) -> bool {
+        self.imagine_native.tokens.is_some()
+            || self.account_oauth_present()
+            || !self.console_key().trim().is_empty()
     }
 
     fn imagine_call_block(&self) -> Option<&'static str> {
@@ -1505,11 +1537,20 @@ impl Cabin {
     }
 
     fn imagine_signed_in_label(&self) -> String {
-        if self.imagine_native.email.trim().is_empty() {
-            "Signed in with Grok".into()
-        } else {
-            format!("Signed in as {}", self.imagine_native.email)
+        if !self.imagine_native.email.trim().is_empty() {
+            return format!("Signed in as {}", self.imagine_native.email);
         }
+        if let Some(email) = self
+            .secrets
+            .oauth
+            .as_ref()
+            .and_then(|t| t.email.as_ref())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            return format!("Signed in as {email}");
+        }
+        "Signed in with Grok".into()
     }
 
     fn start_imagine_auth(&mut self, pkce: bool) {
@@ -1657,9 +1698,18 @@ impl Cabin {
                 if crate::cards::ghost_pill(ui, "Sign out") {
                     self.start_imagine_sign_out();
                 }
+            } else if self.account_oauth_present() {
+                // Settings → Account already covers Imagine; do not offer a
+                // second Sign in that would re-prompt.
+                ui.label(
+                    RichText::new(self.imagine_signed_in_label())
+                        .size(crate::theme::FONT_CHROME)
+                        .color(crate::theme::fg()),
+                );
             } else {
                 if crate::cards::ghost_pill(ui, "Sign in with Grok") {
-                    self.start_imagine_auth(true);
+                    self.nav = Nav::Settings;
+                    self.settings_sec = SettingsSec::Account;
                 }
                 if crate::cards::ghost_pill(ui, "Use a code") {
                     self.start_imagine_auth(false);
