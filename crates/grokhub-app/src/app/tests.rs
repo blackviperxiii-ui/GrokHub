@@ -15074,6 +15074,7 @@ fn quiet_cabin() -> Cabin {
         chip_dismissed: Vec::new(),
         idea_board: Default::default(),
         pulse_view: Default::default(),
+        agent_cursor: None,
         board_view: Default::default(),
         llm_chips: Vec::new(),
         visible_chips: Vec::new(),
@@ -24288,6 +24289,30 @@ fn the_palette_closes_on_navigation_and_uses_the_sidebar_names() {
     assert!(!cabin.palette_open, "an outside click closes the palette");
 }
 
+
+#[test]
+fn motion_wave2e_pulse_header_control_unmoved() {
+    let pulse = include_str!("pulse_ui.rs");
+    assert!(
+        pulse.contains("HEADER_SLOT_W") && pulse.contains("felt_segment"),
+        "Feed|Ideas must keep the fixed header slot"
+    );
+    assert!(
+        pulse.contains("pulse_tab_t") && pulse.contains("ideas_axis_x"),
+        "Pulse must use Wave 2E crossfade helpers"
+    );
+}
+
+#[test]
+fn motion_wave2e_module_wired() {
+    let main = include_str!("../main.rs");
+    assert!(main.contains("mod motion;"), "motion module must be declared");
+    let motion = include_str!("../motion.rs");
+    assert!(motion.contains("PULSE_CROSSFADE_SECS: f32 = 0.180"));
+    assert!(motion.contains("APPROVAL_ENTER_SECS: f32 = 0.200"));
+    assert!(motion.contains("CURSOR_SETTLE_SECS: f32 = 0.080"));
+    assert!(motion.contains("no neon") || motion.contains("No neon") || motion.contains("no neon trail") || motion.contains("No neon trail"));
+}
 /// One composer frame wired like the Chat pill: the send check runs before and
 /// after a multiline field whose `return_key` is Command+Enter.
 fn composer_key_frame(
@@ -24424,4 +24449,5 @@ fn labs_beta_channel_toggle_is_wired() {
         "Update helper must build the install.sh --channel plan with rollback and auto-off"
     );
 }
+
 
