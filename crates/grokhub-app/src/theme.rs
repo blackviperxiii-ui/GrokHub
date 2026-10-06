@@ -327,6 +327,7 @@ fn probe_os_dark() -> bool {
     }
 }
 
+#[cfg(not(windows))]
 fn cmd_stdout(bin: &str, args: &[&str]) -> String {
     let mut cmd = std::process::Command::new(bin);
     cmd.args(args);
@@ -365,14 +366,6 @@ pub const QUERY_MIN_H: f32 = 60.0;
 /// `.query-bar` computed `border-radius: 160px`
 pub const QUERY_RADIUS: f32 = 160.0;
 
-/// Cap the composer / empty-home column. Transcript layout uses the full pane.
-pub fn chat_col_w(avail: f32) -> f32 {
-    if !avail.is_finite() || avail <= 0.0 {
-        CHAT_COL_W
-    } else {
-        avail.min(CHAT_COL_W)
-    }
-}
 /// Attach / Submit `h-10 w-10 rounded-full`
 pub const HIT: f32 = 40.0;
 /// Rail / chrome row (`h-10`, `--font-size-chrome`)
@@ -418,27 +411,6 @@ pub const GROK_NAV: &[(&str, &str)] = &[
 /// Avatar-menu destinations besides Help / Sign in / Sign out.
 /// Leftover panes stay reachable from slash, palette, and the sidebar.
 pub const CABIN_MENU: &[(&str, &str)] = &[("settings", "Settings")];
-
-#[allow(dead_code)]
-pub fn stage_subtitle(id: &str) -> &'static str {
-    match id {
-        "history" => "Past chats",
-        "chat" => "Recent chat",
-        "imagine" => "Images",
-        "workboard" => "Tasks and plans",
-        "pulse" | "ideas" => "What I'd do next",
-        "skills" => "Personal skills and connectors",
-        "automations" => "Grok Build /loop scheduler",
-        "command" => "Overview",
-        "queue" => "Background jobs",
-        "settings" => "Preferences",
-        "devices" => "Paired computers",
-        "memory" => "SOUL / USER / MEMORY",
-        "eyes" => "Computer-use frames",
-        "connectors" => "MCP / skills / plugins",
-        _ => "GrokHub",
-    }
-}
 
 fn install_inter(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
@@ -656,11 +628,6 @@ fn button_channel(ui: &egui::Ui, id: egui::Id, on: bool, secs: f32) -> f32 {
     )
 }
 
-/// Quiet control fill. Same corner on every labeled button.
-pub fn paint_quiet_chrome(painter: &egui::Painter, rect: egui::Rect, fill: egui::Color32) {
-    painter.rect_filled(rect, 8.0, fill);
-}
-
 #[derive(Clone, Debug, Default)]
 struct GlidePick {
     hover: Option<egui::Rect>,
@@ -804,21 +771,6 @@ pub fn glide_aim(ui: &egui::Ui, group: &str) {
     });
 }
 
-/// Soft shadow under a rising button. Resting controls stay flat.
-pub fn paint_button_shadow(painter: &egui::Painter, rect: egui::Rect, hover_t: f32, press_t: f32) {
-    let t = (hover_t * (1.0 - 0.45 * press_t)).clamp(0.0, 1.0);
-    if t < 0.04 {
-        return;
-    }
-    let alpha = (56.0 * t) as u8;
-    let shadow = rect.translate(egui::vec2(0.0, 2.0 + 2.0 * t));
-    painter.rect_filled(
-        shadow,
-        rect.height().min(20.0) * 0.5,
-        egui::Color32::from_black_alpha(alpha),
-    );
-}
-
 /// How long a Copy button reads "Copied".
 pub const COPY_FLASH: Duration = Duration::from_millis(1500);
 
@@ -828,6 +780,7 @@ pub fn copy_flash_showing(clicked: Instant, now: Instant) -> bool {
 }
 
 /// "Copied" for [`COPY_FLASH`] after a click, otherwise "Copy".
+#[cfg(test)]
 pub fn copy_button_label(clicked: Option<Instant>, now: Instant) -> &'static str {
     match clicked {
         Some(t) if copy_flash_showing(t, now) => "Copied",
@@ -1237,8 +1190,6 @@ mod tests {
         assert!(GREET_HERO <= 28.0);
         assert_eq!(CHAT_COL_W, 768.0);
         assert!(CHAT_COL_W >= 720.0 && CHAT_COL_W <= 800.0);
-        assert_eq!(chat_col_w(1800.0), CHAT_COL_W);
-        assert_eq!(chat_col_w(600.0), 600.0);
         assert_eq!(USER_BUBBLE_RADIUS, 20.0);
         assert!(USER_BUBBLE_RADIUS < QUERY_RADIUS);
         assert_eq!(CHROME_RADIUS, 6.0);
@@ -1334,10 +1285,6 @@ mod tests {
                 "{gone} must not sit in the avatar menu"
             );
         }
-        assert_eq!(stage_subtitle("history"), "Past chats");
-        assert_eq!(stage_subtitle("chat"), "Recent chat");
-        assert_eq!(stage_subtitle("imagine"), "Images");
-        assert_eq!(stage_subtitle("connectors"), "MCP / skills / plugins");
         assert_eq!(title_font(40.0).size, 40.0);
         set_paint_dark(true);
         assert_eq!(bg(), BG);

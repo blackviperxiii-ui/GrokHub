@@ -384,6 +384,45 @@ fn native_signin_missing_gives_exact_message() {
 }
 
 #[test]
+fn native_signin_failed_refresh_is_not_retried_every_turn() {
+    let sb = Sandbox::new("native-signin-refresh-fails");
+    let server = FakeXai::start();
+    // Not the token path: the server answers with an event stream, so the refresh fails.
+    crate::oauth::set_token_url_for_test(Some(&format!("{}/oauth2/broken", server.base)));
+    sb.write_signin(
+        r#"{"accessToken":"test-expired-token","refreshToken":"test-refresh-token","expiresAt":1000,"connectedAt":1}"#,
+    );
+    let mut cabin = sb.cabin();
+    let tries = || {
+        server
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|s| s.path == "/oauth2/broken")
+            .count()
+    };
+    assert_eq!(
+        cabin.native_cred().unwrap_err(),
+        "Sign in with Grok or add an API key."
+    );
+    assert_eq!(tries(), 1);
+    // The next turns inside the backoff do not wait on the network again.
+    for _ in 0..3 {
+        assert_eq!(
+            cabin.native_cred().unwrap_err(),
+            "Sign in with Grok or add an API key."
+        );
+    }
+    assert_eq!(tries(), 1, "a failed refresh is not retried every turn");
+    assert_eq!(
+        cabin.secrets.oauth.as_ref().map(|t| t.access_token.as_str()),
+        Some("test-expired-token"),
+        "a failed refresh keeps the saved sign-in"
+    );
+}
+
+#[test]
 fn native_signin_source_never_uses_cli_login_token() {
     let engine = include_str!("native_engine.rs");
     let cred = engine

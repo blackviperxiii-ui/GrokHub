@@ -809,6 +809,7 @@ impl Cabin {
     }
 
     /// Every visible card, best first, with its score and type.
+    #[cfg(test)]
     pub(super) fn pulse_ranked(&mut self, now: u64) -> Vec<Ranked> {
         let ledger = self.pulse_ledger();
         let skills = self.pulse_skills();
