@@ -1,12 +1,18 @@
 use crate::config;
 use crate::host::run_host;
 use grokhub_core::{
-    discover_source, forbidden_reason, parse_github_latest_tag, parse_installed_cli_version,
-    parse_published_cli_alpha, restart_acts, restart_bin, systemd_user_restart_args,
-    systemd_user_stop_args, update_progress_pct, update_step_label,
-    update_wipes_config, Channel, RestartAct, CHANNEL_RECEIPT, CLI_ALPHA_VERSION_FALLBACK,
-    CLI_ALPHA_VERSION_URL, GITHUB_LATEST_API, TEXT_FILE_CAP,
+    auto_off_target, channel_status_line, channel_switch_fail_hint, discover_source,
+    forbidden_reason, ls_remote_channel_tips, parse_github_latest_tag,
+    parse_installed_cli_version, parse_published_cli_alpha, remote_tracking_tips, restart_acts,
+    restart_bin, systemd_user_restart_args, systemd_user_stop_args, update_progress_pct,
+    update_step_label, update_wipes_config, Channel, RestartAct, CHANNEL_AUTO_OFF_NOTE,
+    CHANNEL_RECEIPT, CLI_ALPHA_VERSION_FALLBACK, CLI_ALPHA_VERSION_URL, GITHUB_LATEST_API,
+    TEXT_FILE_CAP,
 };
+#[cfg(any(test, windows))]
+use grokhub_core::CHANNEL_WINDOWS_NOTE;
+#[cfg(not(windows))]
+use grokhub_core::{channel_switch_preflight, channel_switch_shell};
 use std::io::Read;
 use std::env;
 use std::process::{Command, Stdio};
@@ -75,6 +81,82 @@ pub fn build_version_line() -> String {
         build_channel(),
         env!("GROKHUB_BUILD_BRANCH"),
         env!("GROKHUB_BUILD_SHA"),
+    )
+}
+
+/// Labs line for the Beta channel toggle: receipt channel + build branch/SHA.
+pub fn channel_labs_status() -> String {
+    channel_status_line(
+        installed_channel(),
+        env!("GROKHUB_BUILD_BRANCH"),
+        env!("GROKHUB_BUILD_SHA"),
+    )
+}
+
+/// One host command: backup binaries, `install.sh --user --channel`, restore on fail.
+/// Linux only — Windows Labs keeps the toggle disabled (see [`CHANNEL_WINDOWS_NOTE`]).
+#[cfg(not(windows))]
+pub fn channel_switch_cmds(source: &std::path::Path, target: Channel) -> Result<Vec<String>, String> {
+    channel_switch_preflight(false, Some(source))?;
+    let home = grokhub_core::user_home()
+        .ok_or_else(|| "No home directory — cannot install".to_string())?;
+    let home = home
+        .to_str()
+        .ok_or_else(|| "Home path is not UTF-8".to_string())?;
+    Ok(vec![channel_switch_shell(
+        &source.display().to_string(),
+        target,
+        home,
+    )])
+}
+
+pub fn map_channel_switch_error(raw: &str) -> String {
+    channel_switch_fail_hint(raw).to_string()
+}
+
+/// Windows Labs disabled-toggle copy. Compiled only on Windows (Linux never paints it).
+#[cfg(windows)]
+pub fn channel_windows_note() -> &'static str {
+    CHANNEL_WINDOWS_NOTE
+}
+
+pub fn channel_auto_off_note() -> &'static str {
+    CHANNEL_AUTO_OFF_NOTE
+}
+
+/// Write the install channel receipt (`channel` next to `source`).
+pub fn write_installed_channel(channel: Channel) -> Result<(), String> {
+    let dir = config::config_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("channel receipt: {e}"))?;
+    std::fs::write(dir.join(CHANNEL_RECEIPT), channel.receipt())
+        .map_err(|e| format!("channel receipt: {e}"))
+}
+
+/// When on Beta and `origin/beta` tip == `origin/main` tip, write `stable` so the
+/// Labs toggle reads off and future Updates pull main. Linux only; Windows no-ops
+/// (channels not supported yet — see [`CHANNEL_WINDOWS_NOTE`]).
+///
+/// Prefers a light `git ls-remote`; falls back to cached `origin/beta` /
+/// `origin/main` after a pull. Returns a status line when it flipped.
+pub fn try_auto_off_beta_channel(source: Option<&std::path::Path>) -> Option<String> {
+    if cfg!(windows) {
+        return None;
+    }
+    let current = installed_channel();
+    if current != Channel::Beta {
+        return None;
+    }
+    let source = source?;
+    let (beta, main) = match ls_remote_channel_tips(source) {
+        Ok(tips) => tips,
+        Err(_) => remote_tracking_tips(source).ok()?,
+    };
+    let Some(Channel::Stable) = auto_off_target(current, &beta, &main) else {
+        return None;
+    };
+    write_installed_channel(Channel::Stable).ok()?;
+    Some(
+        "Beta caught up to main — switched to stable. Re-enable Labs Beta anytime.".into(),
     )
 }
 
@@ -709,5 +791,86 @@ mod tests {
             installed.contains("grok_version") && installed.contains("parse_installed_cli_version"),
             "installed CLI version comes from grok --version: {installed}"
         );
+    }
+
+    #[test]
+    fn channel_switch_cmds_name_install_sh_and_backup() {
+        #[cfg(windows)]
+        {
+            // channel_switch_cmds is Linux-only; Windows Labs shows CHANNEL_WINDOWS_NOTE.
+            assert_eq!(
+                grokhub_core::channel_switch_preflight(true, Some(std::path::Path::new(".")))
+                    .unwrap_err(),
+                CHANNEL_WINDOWS_NOTE
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+            let cmds = channel_switch_cmds(&root, Channel::Beta).expect("linux cmds");
+            assert_eq!(cmds.len(), 1);
+            assert!(cmds[0].contains("--channel beta"), "{}", cmds[0]);
+            assert!(cmds[0].contains("scripts/install.sh"), "{}", cmds[0]);
+            assert!(cmds[0].contains("channel-bak"), "{}", cmds[0]);
+            let stable = channel_switch_cmds(&root, Channel::Stable).expect("stable");
+            assert!(stable[0].contains("--channel stable"), "{}", stable[0]);
+        }
+    }
+
+    #[test]
+    fn channel_labs_status_includes_receipt_channel() {
+        let line = channel_labs_status();
+        assert!(
+            line.starts_with("stable") || line.starts_with("beta"),
+            "unexpected labs status: {line}"
+        );
+        assert_eq!(
+            map_channel_switch_error("error: could not compile `grokhub-app`"),
+            "Build failed — previous install kept."
+        );
+        assert!(!CHANNEL_WINDOWS_NOTE.is_empty());
+        #[cfg(windows)]
+        assert_eq!(channel_windows_note(), CHANNEL_WINDOWS_NOTE);
+    }
+
+    #[test]
+    fn write_installed_channel_flips_receipt_to_stable() {
+        let _g = crate::config::hold_test_config();
+        let cfg = crate::config::test_config_root("channel-auto-off");
+        let _ = std::fs::remove_dir_all(&cfg);
+        let _pin = crate::config::TestConfigDir::set(cfg.clone());
+        std::fs::create_dir_all(&cfg).unwrap();
+        std::fs::write(cfg.join(CHANNEL_RECEIPT), Channel::Beta.receipt()).unwrap();
+        assert_eq!(installed_channel(), Channel::Beta);
+        write_installed_channel(Channel::Stable).unwrap();
+        assert_eq!(installed_channel(), Channel::Stable);
+        assert_eq!(
+            std::fs::read_to_string(cfg.join(CHANNEL_RECEIPT)).unwrap(),
+            "stable\n"
+        );
+    }
+
+    #[test]
+    fn try_auto_off_beta_noops_when_stable_or_windows_path() {
+        let _g = crate::config::hold_test_config();
+        let cfg = crate::config::test_config_root("channel-auto-off-stable");
+        let _ = std::fs::remove_dir_all(&cfg);
+        let _pin = crate::config::TestConfigDir::set(cfg.clone());
+        std::fs::create_dir_all(&cfg).unwrap();
+        std::fs::write(cfg.join(CHANNEL_RECEIPT), Channel::Stable.receipt()).unwrap();
+        // Not on beta → None even with a real tree.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        assert!(try_auto_off_beta_channel(Some(&root)).is_none());
+        assert!(try_auto_off_beta_channel(None).is_none());
+        assert_eq!(channel_auto_off_note(), CHANNEL_AUTO_OFF_NOTE);
+    }
+
+    #[test]
+    fn auto_off_target_from_core_drives_receipt_policy() {
+        assert_eq!(
+            auto_off_target(Channel::Beta, "abcdef0", "abcdef0"),
+            Some(Channel::Stable)
+        );
+        assert!(auto_off_target(Channel::Beta, "aaaaaaa", "bbbbbbb").is_none());
     }
 }

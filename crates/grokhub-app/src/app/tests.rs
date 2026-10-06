@@ -14988,6 +14988,7 @@ fn quiet_cabin() -> Cabin {
         history_q_at: None,
         history_hits: Vec::new(),
         last_receipt_ok: None,
+        beta_auto_off_checked_at: None,
         last_receipts: Vec::new(),
         try_again: false,
         last_rewind_id: None,
@@ -24392,3 +24393,35 @@ fn ctrl_comma_opens_settings_and_the_palette_lists_shortcuts() {
     cabin.run_palette(&ctx, "shortcuts");
     assert!(cabin.shortcuts_open);
 }
+#[test]
+fn labs_beta_channel_toggle_is_wired() {
+    let settings = include_str!("settings.rs");
+    assert!(
+        settings.contains("Beta channel")
+            && settings.contains("queue_channel_switch")
+            && settings.contains("channel_labs_status")
+            && settings.contains("channel_windows_note")
+            && settings.contains("maybe_auto_off_beta_channel")
+            && settings.contains("channel_auto_off_note"),
+        "Labs must wire the Beta channel toggle, status line, Windows note, and auto-off"
+    );
+    let app = include_str!("mod.rs");
+    assert!(
+        app.contains("fn queue_channel_switch")
+            && app.contains("channel_switch_cmds")
+            && app.contains("SettingsSec::Labs")
+            && app.contains("fn maybe_auto_off_beta_channel")
+            && app.contains("try_auto_off_beta_channel"),
+        "App must queue a channel switch from Labs and auto-off when tips match"
+    );
+    let update = include_str!("../update.rs");
+    assert!(
+        update.contains("channel_switch_shell")
+            && update.contains("--channel")
+            && update.contains("CHANNEL_WINDOWS_NOTE")
+            && update.contains("try_auto_off_beta_channel")
+            && update.contains("write_installed_channel"),
+        "Update helper must build the install.sh --channel plan with rollback and auto-off"
+    );
+}
+
