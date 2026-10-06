@@ -16,7 +16,7 @@ pub const IMAGINE_OAUTH_SCOPE: &str = "openid profile email offline_access api:a
 pub const IMAGINE_OAUTH_REFERRER: &str = "grokhub";
 
 pub const IMAGINE_NEED_SIGNIN: &str =
-    "Sign in with Grok for Imagine, or add a console API key.";
+    "Sign in with Grok in Settings → Account, or add a console API key.";
 pub const IMAGINE_OAUTH_DENIED: &str = "xAI didn't let this Grok sign-in use the Imagine API (their account allowlist). Use your console API key instead?";
 pub const IMAGINE_KEY_REJECTED: &str = "API key rejected.";
 pub const IMAGINE_RATE_LIMIT: &str = "Usage limit hit; try later or use the API key.";
