@@ -15,6 +15,7 @@ mod titlebar;
 mod cards;
 mod icons;
 mod theme;
+mod motion;
 mod cli;
 mod config;
 #[cfg(feature = "fx")]

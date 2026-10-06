@@ -851,6 +851,28 @@ impl Cabin {
                                                                 let cwd = self.grok_cwd();
                                                                 crate::native_plugins::paint(ui, &cwd);
                                                             }
+                                                            ui.add_space(12.0);
+                                                            ui.label(
+                                                                egui::RichText::new("Desktop-agent cursor (preview)")
+                                                                    .size(crate::theme::FONT_UI)
+                                                                    .color(crate::theme::fg()),
+                                                            );
+                                                            ui.label(
+                                                                egui::RichText::new(
+                                                                    "White/gray Cua-like path stub. Full desktop agent comes later.",
+                                                                )
+                                                                .size(crate::theme::FONT_TIP)
+                                                                .color(crate::theme::muted()),
+                                                            );
+                                                            ui.add_space(6.0);
+                                                            if crate::cards::ghost_pill(ui, "Preview cursor path") {
+                                                                let now = ui.ctx().input(|i| i.time);
+                                                                let origin = ui.ctx().content_rect().center()
+                                                                    - egui::vec2(80.0, 40.0);
+                                                                self.agent_cursor =
+                                                                    Some(crate::motion::AgentCursorAnim::demo(now, origin));
+                                                                self.status = "Cursor preview".into();
+                                                            }
                                                         }
                                                         SettingsSec::Permissions => self.ui_permission_editor(ui),
                                                     }

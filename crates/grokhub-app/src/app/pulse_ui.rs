@@ -56,6 +56,8 @@ impl PulseTab {
 #[derive(Default)]
 pub(super) struct PulseView {
     pub tab: PulseTab,
+    /// Crossfade progress Feed(0)→Ideas(1); set each frame in ui_pulse.
+    pub tab_t: f32,
     /// The Feed instructions sheet is open with this draft.
     pub sheet: Option<String>,
     ledger: Vec<LedgerEntry>,
@@ -639,9 +641,29 @@ impl Cabin {
                             ui.vertical(|ui| {
                                 ui.set_width(col);
                                 self.paint_pulse_header(ui);
-                                match self.pulse_view.tab {
-                                    PulseTab::Ideas => self.ui_ideas(ui),
-                                    PulseTab::Feed => self.ui_pulse_feed(ui),
+                                // Wave 2E: Feed↔Ideas crossfade 180ms + shared-axis ±8px.
+                                // Only the active tab paints (avoids stacked layout); opacity+x carry the feel.
+                                // Header Feed|Ideas control stays put (painted above).
+                                let ideas_on = self.pulse_view.tab == PulseTab::Ideas;
+                                let tab_t = crate::motion::pulse_tab_t(ui.ctx(), ideas_on);
+                                self.pulse_view.tab_t = tab_t;
+                                let (opacity, x) = if ideas_on {
+                                    (tab_t.clamp(0.0, 1.0), crate::motion::ideas_axis_x(tab_t))
+                                } else {
+                                    ((1.0 - tab_t).clamp(0.0, 1.0), crate::motion::feed_axis_x(tab_t))
+                                };
+                                let avail = ui.available_rect_before_wrap();
+                                let rect = avail.translate(egui::vec2(x, 0.0));
+                                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                                    ui.set_min_width(avail.width());
+                                    ui.multiply_opacity(opacity.max(0.001));
+                                    match self.pulse_view.tab {
+                                        PulseTab::Ideas => self.ui_ideas(ui),
+                                        PulseTab::Feed => self.ui_pulse_feed(ui),
+                                    }
+                                });
+                                if 0.001 < tab_t && tab_t < 0.999 {
+                                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
                                 }
                                 ui.add_space(24.0);
                             });
