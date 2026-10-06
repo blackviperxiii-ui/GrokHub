@@ -346,14 +346,9 @@ pub(crate) fn pack_glow_uniforms(
     out
 }
 
-/// Behind the pill, only while a reply is streaming on the wgpu renderer.
-/// White breath rim (#e7e9ea). Uses [`crate::icons::composer_breath`].
+/// Behind the pill. White breath rim (#e7e9ea). Uses [`crate::icons::composer_breath`].
 /// Idle α≈0.25; streaming α 0.25↔0.55; settles to idle in GLOW_SETTLE_SECS when stream ends.
 /// Skips animation when [`crate::theme::motion_ok`] is false.
-pub(crate) fn paint_composer_glow(ui: &egui::Ui, pill: egui::Rect) {
-    paint_composer_glow_at(ui, pill, true)
-}
-
 /// `streaming` false = settle toward idle α (caller keeps painting briefly after run ends).
 pub(crate) fn paint_composer_glow_at(ui: &egui::Ui, pill: egui::Rect, streaming: bool) {
     let motion = crate::theme::motion_ok(ui);
