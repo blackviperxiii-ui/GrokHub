@@ -249,7 +249,25 @@ pub(super) fn overlay_over_chat(ctx: &egui::Context) -> bool {
         })
 }
 
-/// Enter sends. Control+Enter is left for TextEdit (`return_key`) to insert a newline.
+/// Shift+Enter breaks the line like Ctrl+Enter: its Enter presses take the
+/// Command bit, so the composer's `return_key` inserts the newline at the cursor.
+pub(super) fn shift_enter_as_newline(events: &mut [egui::Event]) {
+    for ev in events {
+        if let egui::Event::Key {
+            key: egui::Key::Enter,
+            modifiers,
+            ..
+        } = ev
+        {
+            if modifiers.shift && !modifiers.alt && !modifiers.ctrl && !modifiers.command {
+                modifiers.command = true;
+            }
+        }
+    }
+}
+
+/// Enter sends. Control+Enter and Shift+Enter are left for TextEdit (`return_key`)
+/// to insert a newline.
 pub(super) fn take_focused_composer(
     ui: &mut egui::Ui,
     composer: &mut String,
@@ -258,10 +276,11 @@ pub(super) fn take_focused_composer(
     if !focused {
         return None;
     }
+    ui.input_mut(|i| shift_enter_as_newline(&mut i.events));
     let (enter, control) = ui.input(|i| {
         (
             i.key_pressed(egui::Key::Enter),
-            i.modifiers.ctrl || i.modifiers.command,
+            i.modifiers.ctrl || i.modifiers.command || (i.modifiers.shift && !i.modifiers.alt),
         )
     });
     match composer_enter(enter, control) {
@@ -456,7 +475,8 @@ pub(super) fn paint_speech_bubble(
 
 pub(super) struct MsgActsPaint {
     pub act: ChatBlockAct,
-    /// Union of the Copy and Reply hit rects.
+    /// Union of the Copy and Reply hit rects. Layout tests read it.
+    #[cfg(test)]
     pub row: egui::Rect,
 }
 
@@ -504,6 +524,7 @@ pub(super) fn paint_msg_acts(
     align_w: f32,
 ) -> MsgActsPaint {
     let mut act = ChatBlockAct::None;
+    #[cfg(test)]
     let mut bounds: Option<egui::Rect> = None;
     let mut paint = |ui: &mut egui::Ui| {
         for &label in msg_act_labels(user) {
@@ -543,10 +564,13 @@ pub(super) fn paint_msg_acts(
                     _ => ChatBlockAct::Reply(body.to_string()),
                 };
             }
-            bounds = Some(match bounds {
-                Some(rect) => rect.union(resp.rect),
-                None => resp.rect,
-            });
+            #[cfg(test)]
+            {
+                bounds = Some(match bounds {
+                    Some(rect) => rect.union(resp.rect),
+                    None => resp.rect,
+                });
+            }
         }
     };
     // User bubbles sit on the right. Copy+Reply is wider than a short bubble
@@ -574,6 +598,7 @@ pub(super) fn paint_msg_acts(
     });
     MsgActsPaint {
         act,
+        #[cfg(test)]
         row: bounds.unwrap_or(egui::Rect::NOTHING),
     }
 }
@@ -682,8 +707,18 @@ pub(super) fn chat_row_outside_clip(
 impl Cabin {
     /// GPU glow behind the pill while a reply streams, on wgpu with the Settings switch on.
     fn paint_composer_glow(&self, ui: &egui::Ui, pill: egui::Rect) {
-        if self.running && self.cfg.composer_glow && crate::fx::renderer_is_wgpu() {
-            crate::fx::paint_composer_glow(ui, pill);
+        if !self.cfg.composer_glow || !crate::fx::renderer_is_wgpu() {
+            return;
+        }
+        // Keep painting while streaming or while the 200ms settle to idle α is in flight.
+        let settle = crate::theme::animate_selection_secs(
+            ui,
+            egui::Id::new("composer-glow-stream"),
+            self.running,
+            grokhub_core::GLOW_SETTLE_SECS,
+        );
+        if self.running || settle > 0.01 {
+            crate::fx::paint_composer_glow_at(ui, pill, self.running);
         }
     }
 }
@@ -721,6 +756,7 @@ pub(super) fn thought_fold_id(thread_id: &str, kind: &str, key: u64) -> egui::Id
     egui::Id::new(("cabin-thought-fold", thread_id, kind, key))
 }
 
+#[cfg(test)]
 pub(super) fn read_thought_fold(ctx: &egui::Context, id: egui::Id) -> ThoughtFold {
     ctx.data(|d| d.get_temp(id)).unwrap_or_default()
 }
@@ -1732,12 +1768,34 @@ impl Cabin {
             self.perm_always_confirm = None;
         }
         ui.add_space(8.0);
-        egui::Frame::NONE
-            .fill(egui::Color32::TRANSPARENT)
-            .corner_radius(crate::theme::CHROME_RADIUS)
-            .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-            .inner_margin(egui::Margin::same(12))
-            .show(ui, |ui| {
+        let ask_id = egui::Id::new(("perm-ask-motion", p.rpc_id.as_str()));
+        let enter_t = crate::motion::approval_enter_t(ui, ask_id, true);
+        let y = crate::motion::approval_y(enter_t, false);
+        let avail = ui.available_rect_before_wrap();
+        let slot = avail.translate(egui::vec2(0.0, y));
+        let waiting = 1 + self.perm_queue.len();
+        let summary = crate::motion::needs_attention_summary(waiting);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(slot), |ui| {
+            ui.set_min_width(avail.width());
+            ui.multiply_opacity(enter_t.clamp(0.0, 1.0));
+            let hover_t = crate::motion::approval_hover_t(ui, ask_id, ui.rect_contains_pointer(slot));
+            let fill = crate::theme::blend_color(
+                egui::Color32::TRANSPARENT,
+                crate::motion::HOVER_BG,
+                hover_t,
+            );
+            let framed = egui::Frame::NONE
+                .fill(fill)
+                .corner_radius(crate::theme::CHROME_RADIUS)
+                .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
+                .inner_margin(egui::Margin::same(12))
+                .show(ui, |ui| {
+                ui.label(
+                    RichText::new(summary)
+                        .size(12.0)
+                        .color(crate::theme::muted()),
+                );
+                ui.add_space(4.0);
                 ui.label(
                     RichText::new("Grok wants permission")
                         .size(14.0)
@@ -1845,6 +1903,21 @@ impl Cabin {
                     }
                 }
             });
+            let time = ui.ctx().input(|i| i.time) as f32;
+            crate::motion::paint_thinking_rim(
+                ui.painter(),
+                framed.response.rect,
+                self.running,
+                time,
+            );
+            // Primary one-shot breath envelope (Allow row); composer_breath while running.
+            let _primary = crate::motion::one_shot_breath(
+                ui.ctx().input(|i| i.time),
+                ui.ctx().input(|i| i.time) - f64::from(crate::motion::APPROVAL_ENTER_SECS),
+                crate::motion::reduced_motion(ui),
+            );
+            let _live = crate::icons::composer_breath(time);
+        });
     }
 
     pub(super) fn paint_elicit_ask(&mut self, ui: &mut egui::Ui) {
@@ -2015,12 +2088,7 @@ impl Cabin {
                 egui::Layout::top_down_justified(egui::Align::Center),
                 |ui| {
                     ui.set_width(pane_w);
-                    let composer_origin = ui.cursor().min;
                     self.ui_composer_stack(ui);
-                    let composer_rect = egui::Rect::from_min_max(
-                        composer_origin,
-                        egui::pos2(composer_origin.x + pane_w, ui.cursor().min.y),
-                    );
                     if self.chrome_here() {
                         self.paint_perm_ask(ui);
                         self.paint_elicit_ask(ui);
@@ -2031,7 +2099,7 @@ impl Cabin {
                         let gap = ui.available_height();
                         ui.add_space(((gap - below) * 0.5).max(0.0));
                         if feed_n > 0 {
-                            self.paint_update_feed(ui, pane_w, composer_rect);
+                            self.paint_update_feed(ui, pane_w);
                         }
                         if device_on {
                             if feed_n > 0 {

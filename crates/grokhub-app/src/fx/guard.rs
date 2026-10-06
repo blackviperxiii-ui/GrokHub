@@ -7,7 +7,6 @@ pub(crate) const FALLBACK_NOTICE: &str =
     "Composer glow was turned off because the GPU renderer failed last time.";
 pub(crate) const SETTINGS_CAPTION: &str =
     "Soft light around the composer while Grok replies. Uses the GPU renderer after restart.";
-pub(crate) const BREATH_SECS: f32 = 1.6;
 pub(crate) const GLOW_EXPAND: f32 = 18.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -140,6 +139,7 @@ pub(crate) fn decide(setting_on: bool, marker_present: bool, env: EnvOverride) -
     }
 }
 
+#[cfg(test)]
 pub(crate) fn pick(setting_on: bool, marker_present: bool) -> Launch {
     decide(setting_on, marker_present, EnvOverride::None).launch
 }

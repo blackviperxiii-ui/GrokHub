@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use grokhub_core::desktop_mcp::{
     cast_stream_for_point, imprecise_fallback_note, input_route_is_imprecise, input_route_label,
-    input_route_order, mapped_point_to_eis, pick_eis_region, plan_eis_text, uinput_access_denied_message,
+    input_route_order, mapped_point_to_eis, pick_eis_region, plan_eis_text,
     CastStream, EisRegion, EisTextPlan, InputRouteId, KeyCombo, KeyName, MonitorGeom, MouseButton,
     ShotGeom,
 };
@@ -176,6 +176,8 @@ impl InputChain {
         }
     }
 
+    /// Test helper. Real routes with a recording ydotool and a denied uinput.
+    #[cfg(test)]
     pub(crate) fn fakes(share: Arc<Mutex<PortalShare>>, injector: Box<dyn CommandRun>) -> Self {
         let portal = Arc::clone(&share);
         Self {
@@ -560,8 +562,13 @@ impl DesktopRoute for LiveUinput {
     }
 }
 
+#[cfg(test)]
+use grokhub_core::desktop_mcp::uinput_access_denied_message;
+
+#[cfg(test)]
 struct DeniedUinput;
 
+#[cfg(test)]
 impl DesktopRoute for DeniedUinput {
     fn open(&mut self) -> Result<(), String> {
         Err(uinput_access_denied_message().to_string())
