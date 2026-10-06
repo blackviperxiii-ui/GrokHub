@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Composer streaming glow is a white breath (`#e7e9ea`, icons.rs breath math): idle α≈0.25, streaming 0.25↔0.55, settles to idle in 200ms. Always permission settles in 140ms (fill α + scale 0.98→1.0) to a white ring, then stops. Reduced-motion skips the animation. Branch-cleanup and bot-choice notes; Semgrep / dyl-review / Continual Learning wired in the rules. Grok Build explore/plan/implementer roles documented. No version bump.
+
 When Labs Beta is on and `origin/beta` tip matches `origin/main` (beta promoted / caught up), the cabin **auto-turns the Beta toggle off** and writes `stable` to the channel receipt so Updates pull main. Checked after a successful Update and when opening Settings → Labs (60s cooldown). Linux implements this now; Windows documents the same behavior for when channels land. Re-enable Beta anytime.
 
 Settings → Labs **Beta channel** toggle: on fetches, builds, and installs from `beta` (same as `install.sh --user --channel beta`); off returns to stable/`main`. Shows the current channel, branch, and commit next to the toggle, progress while it builds, and a restart prompt when done. Failures keep the previous binary (backup + restore) and spell out dirty clone, build failed, or no clone. Windows shows the toggle disabled with a short note until the installer supports channels.
