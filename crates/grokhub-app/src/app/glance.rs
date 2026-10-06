@@ -28,20 +28,6 @@ pub(super) fn cabin_lane(raw: &str) -> CabinLane {
     }
 }
 
-pub(super) fn cabin_lane_label(lane: CabinLane) -> &'static str {
-    match lane {
-        CabinLane::Coding => "Coding",
-        CabinLane::Life => "Life",
-    }
-}
-
-pub(super) fn flip_cabin_lane(lane: CabinLane) -> CabinLane {
-    match lane {
-        CabinLane::Coding => CabinLane::Life,
-        CabinLane::Life => CabinLane::Coding,
-    }
-}
-
 fn chip_leans_life(chip: &QuickChip) -> bool {
     let blob = format!("{} {} {}", chip.id, chip.label, chip.value).to_ascii_lowercase();
     blob.contains("imagine") || blob.contains("__nav:imagine")
@@ -244,8 +230,6 @@ mod tests {
         assert_eq!(persistable_cabin_lane(""), LANE_CODING);
         assert_eq!(persistable_cabin_lane("Life"), LANE_LIFE);
         assert_eq!(cabin_lane("nonsense"), CabinLane::Coding);
-        assert_eq!(cabin_lane_label(CabinLane::Coding), "Coding");
-        assert_eq!(flip_cabin_lane(CabinLane::Coding), CabinLane::Life);
     }
 
     #[test]

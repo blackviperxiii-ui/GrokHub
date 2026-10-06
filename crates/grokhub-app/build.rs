@@ -39,8 +39,14 @@ fn build_info(manifest: &Path) {
     println!("cargo:rustc-env=GROKHUB_BUILD_CHANNEL={channel}");
     println!("cargo:rustc-env=GROKHUB_BUILD_BRANCH={branch}");
     println!("cargo:rustc-env=GROKHUB_BUILD_SHA={sha}");
-    // Rebuild the label when HEAD moves (branch switch or new commit).
-    let mut watch = vec!["HEAD".to_string(), "packed-refs".to_string()];
+    // Rebuild the label when HEAD moves (branch switch or new commit). The
+    // reflog is appended on every commit, checkout, and pull, so it catches a
+    // pull that writes a loose ref after `git gc` packed the branch ref.
+    let mut watch = vec![
+        "HEAD".to_string(),
+        "packed-refs".to_string(),
+        "logs/HEAD".to_string(),
+    ];
     if let Some(r) = git(&root, &["symbolic-ref", "-q", "HEAD"]) {
         watch.push(r);
     }

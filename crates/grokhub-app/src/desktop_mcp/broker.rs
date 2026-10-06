@@ -29,6 +29,7 @@ use grokhub_core::desktop_mcp::{
 
 use super::wayland::WaylandBackend;
 
+#[cfg(not(test))]
 const LINE_CAP: usize = 16 << 20;
 
 pub(crate) struct SessionLock {

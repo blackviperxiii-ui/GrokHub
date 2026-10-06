@@ -140,6 +140,7 @@ pub(crate) fn decide(setting_on: bool, marker_present: bool, env: EnvOverride) -
     }
 }
 
+#[cfg(test)]
 pub(crate) fn pick(setting_on: bool, marker_present: bool) -> Launch {
     decide(setting_on, marker_present, EnvOverride::None).launch
 }

@@ -378,31 +378,6 @@ pub fn show_cabin(x: i32, y: i32, w: i32, h: i32, maximized: bool) -> bool {
     true
 }
 
-/// Re-apply size if the compositor left a stub after Visible(true).
-pub fn repair_stub_if_needed(x: i32, y: i32, w: i32, h: i32, maximized: bool) -> bool {
-    let Some(hwnd) = cabin_hwnd() else {
-        return false;
-    };
-    let mut rc = RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
-    };
-    unsafe {
-        if GetWindowRect(hwnd, &mut rc) == 0 {
-            return false;
-        }
-        let cw = rc.right - rc.left;
-        let ch = rc.bottom - rc.top;
-        let visible = IsWindowVisible(hwnd) != 0;
-        if !visible || cw < 200 || ch < 200 {
-            return show_cabin(x, y, w, h, maximized);
-        }
-    }
-    false
-}
-
 pub fn keep_awake(on: bool) {
     KEEP_AWAKE.store(on, Ordering::SeqCst);
     unsafe {
@@ -657,7 +632,7 @@ mod tests {
         let show = src
             .split("pub fn show_cabin(")
             .nth(1)
-            .and_then(|s| s.split("pub fn repair_stub_if_needed(").next())
+            .and_then(|s| s.split("pub fn keep_awake(").next())
             .expect("show_cabin");
         assert!(
             show.contains("map_to_taskbar") && show.contains("set_cloaked"),
