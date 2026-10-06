@@ -209,9 +209,6 @@ pub(super) enum FeedAct {
     /// × on the main window's deck.
     Dismiss(String),
     Discuss(String),
-    /// Remove an idea from the Ideas board.
-    Drop(String),
-    Archive(String),
 }
 
 impl Cabin {
@@ -738,8 +735,6 @@ impl Cabin {
             Some(FeedAct::Dismiss(id)) => self.close_home_card(&id),
             Some(FeedAct::Open(id)) => self.open_feed_card(&id),
             Some(FeedAct::Discuss(id)) => self.discuss_card(&id),
-            Some(FeedAct::Drop(id)) => self.delete_idea(&id),
-            Some(FeedAct::Archive(id)) => self.archive_feed_digest(&id),
             None => {}
         }
     }
