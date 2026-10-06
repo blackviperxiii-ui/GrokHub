@@ -76,32 +76,6 @@ impl Cabin {
         }
     }
 
-    pub(super) fn teach_watched_routine(&mut self) {
-        let ask = self.teach_nl.trim().to_string();
-        match teach_routine(&ask, &self.watched_steps) {
-            Some(route) => {
-                let status = self.commit_schedule(route);
-                let saved = status.contains("added");
-                self.status = status;
-                if saved {
-                    self.teach_nl.clear();
-                    self.watched_steps.clear();
-                    self.watch_once = false;
-                }
-            }
-            None => {
-                let tried = user_asked_to_schedule(&ask)
-                    || ask.contains("/loop")
-                    || ask.to_ascii_lowercase().contains("every ");
-                self.status = if tried {
-                    "Need `/loop 30m …`, `every 2h …`, or `every day at 9 …`".into()
-                } else {
-                    "A job is saved only when you ask to schedule it.".into()
-                };
-            }
-        }
-    }
-
     pub(super) fn ui_night(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(crate::theme::bg()).inner_margin(egui::Margin::same(24)))
@@ -791,35 +765,6 @@ impl Cabin {
         }
         self.learning.reviewed_turns = self.learning.total_turns;
         self.spawn_review();
-    }
-
-    pub(super) fn review_digest(&self) -> String {
-        let (thread_lines, host_receipts) = self.review_chat_digest();
-        let input = ReviewDigest {
-            insight_pin: insight_pin(&self.learning),
-            user_md: config::read_memory("USER.md"),
-            memory_md: config::read_memory("MEMORY.md"),
-            skill_names: self.skill_list.iter().map(|s| s.name.clone()).collect(),
-            automation_names: self.automations.iter().map(|a| a.name.clone()).collect(),
-            turned_down: self
-                .cfg
-                .feed_pulse
-                .turned_down
-                .iter()
-                .rev()
-                .cloned()
-                .collect(),
-            github_pat: !self.secrets.github_token.trim().is_empty(),
-            host_receipts,
-            chip_habits: top_habit_labels(&self.chip_memory, 6),
-            thread_lines,
-            trajectory: summarize_trajectory(
-                &parse_trajectory_jsonl(&crate::store::read_trajectory()),
-                yesterday_ms(now_ms()),
-                12,
-            ),
-        };
-        build_review_digest(&input)
     }
 
     pub(super) fn review_chat_digest(&self) -> (Vec<DigestLine>, Vec<String>) {
