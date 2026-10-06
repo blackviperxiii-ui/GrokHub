@@ -173,7 +173,7 @@ pub use chat_view::{
     SKILL_SAVED_MARK, SKILL_SAVED_NOTE, THOUGHT_CLUSTER_GAP, THOUGHT_ROW_LABEL,
 };
 pub use cabin_engine::{absorb_cabin, brief_for, engine_slug, note_part, CabinDirective, PartNote};
-pub use channel::{parse_version_line, version_line, BuildVersion, Channel, CHANNEL_RECEIPT};
+pub use channel::{auto_off_target, beta_caught_up_to_main, channel_status_line, channel_switch_fail_hint, channel_switch_preflight, channel_switch_shell, parse_version_line, version_line, BuildVersion, Channel, CHANNEL_AUTO_OFF_NOTE, CHANNEL_RECEIPT, CHANNEL_WINDOWS_NOTE};
 pub use chips::{
     build_quick_chips, cabin_pace, chip_dismissed_for_good, chip_memory_key, chip_scan,
     local_lessons,
@@ -386,8 +386,8 @@ pub use rewind::{
     rewind_snapshot_ready, RewindRecord,
 };
 pub use shortcuts::{
-    apply_composer_enter, composer_enter, composer_go, composer_go_tip, filter_palette, perm_key,
-    shortcut_help, ComposerEnter, ComposerGo, PermKey, SHORTCUTS,
+    apply_composer_enter, composer_enter, composer_go, composer_go_tip, filter_palette,
+    palette_shortcut, perm_key, shortcut_help, ComposerEnter, ComposerGo, PermKey, SHORTCUTS,
 };
 pub use skill::{
     is_feedback_ask, is_junk_skill, AUTO_SKILL_PITFALL,
@@ -436,7 +436,7 @@ pub use turn_timeline::{
     tool_status_failed, tool_status_running, turn_needs_timeline, turn_says, views_up_to_last_user,
     LiveBlock, LiveKind, ToolRow, TurnPart,
 };
-pub use update::{
+pub use update::{ls_remote_channel_tips, parse_ls_remote_tips, remote_tracking_tips, 
     cabin_overlay_step, cabin_update_notice, cabin_version_newer, cli_alpha_is_newer,
     cli_update_notice, combined_update_cmds, combined_update_cmds_for_host,
     combined_update_cmds_for_host_in, combined_update_cmds_in, combined_update_hint,
@@ -446,7 +446,7 @@ pub use update::{
     overlay_update_begin, overlay_update_can_restart, overlay_update_finish,
     overlay_update_progress, parse_cabin_semver, parse_github_latest_tag,
     parse_installed_cli_version, parse_published_cli_alpha, pending_for_manual_update,
-    pending_from_versions, restart_acts,
+    pending_from_versions, pending_on_channel, restart_acts,
     restart_argv, restart_bin, settings_update_action_hint, settings_update_hint,
     settings_update_label, settings_update_note,
     should_notify_cabin_update, should_show_cli_alpha_update, should_update_cli_alpha,

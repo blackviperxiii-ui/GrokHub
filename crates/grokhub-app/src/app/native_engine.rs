@@ -335,13 +335,10 @@ impl Cabin {
         if !has_refresh {
             return None;
         }
-        match crate::oauth::ensure_access(&tokens) {
-            Ok((access, next, true)) if !access.trim().is_empty() => {
-                self.keep_account_tokens(next);
-                Some(access)
-            }
-            _ => None,
-        }
+        let next = crate::oauth::ensure_access_with_backoff(&tokens)?;
+        let access = next.access_token.clone();
+        self.keep_account_tokens(next);
+        Some(access)
     }
 
     fn keep_account_tokens(&mut self, next: grokhub_core::XaiOAuthTokens) {
