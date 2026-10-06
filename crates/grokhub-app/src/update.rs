@@ -6,9 +6,11 @@ use grokhub_core::{
     parse_installed_cli_version, parse_published_cli_alpha, remote_tracking_tips, restart_acts,
     restart_bin, systemd_user_restart_args, systemd_user_stop_args, update_progress_pct,
     update_step_label, update_wipes_config, Channel, RestartAct, CHANNEL_AUTO_OFF_NOTE,
-    CHANNEL_RECEIPT, CHANNEL_WINDOWS_NOTE, CLI_ALPHA_VERSION_FALLBACK, CLI_ALPHA_VERSION_URL,
-    GITHUB_LATEST_API, TEXT_FILE_CAP,
+    CHANNEL_RECEIPT, CLI_ALPHA_VERSION_FALLBACK, CLI_ALPHA_VERSION_URL, GITHUB_LATEST_API,
+    TEXT_FILE_CAP,
 };
+#[cfg(any(test, windows))]
+use grokhub_core::CHANNEL_WINDOWS_NOTE;
 #[cfg(not(windows))]
 use grokhub_core::{channel_switch_preflight, channel_switch_shell};
 use std::io::Read;
@@ -112,6 +114,8 @@ pub fn map_channel_switch_error(raw: &str) -> String {
     channel_switch_fail_hint(raw).to_string()
 }
 
+/// Windows Labs disabled-toggle copy. Compiled only on Windows (Linux never paints it).
+#[cfg(windows)]
 pub fn channel_windows_note() -> &'static str {
     CHANNEL_WINDOWS_NOTE
 }
@@ -824,6 +828,8 @@ mod tests {
             map_channel_switch_error("error: could not compile `grokhub-app`"),
             "Build failed — previous install kept."
         );
+        assert!(!CHANNEL_WINDOWS_NOTE.is_empty());
+        #[cfg(windows)]
         assert_eq!(channel_windows_note(), CHANNEL_WINDOWS_NOTE);
     }
 
