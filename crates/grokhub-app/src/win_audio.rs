@@ -12,10 +12,8 @@ use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Media::Audio::{
     waveInAddBuffer, waveInClose, waveInOpen, waveInPrepareHeader, waveInReset, waveInStart,
-    waveInStop, waveInUnprepareHeader, waveOutClose, waveOutOpen, waveOutPrepareHeader,
-    waveOutReset, waveOutUnprepareHeader, waveOutWrite, HWAVEIN, HWAVEOUT, PlaySoundW,
-    WAVEFORMATEX, WAVEHDR, CALLBACK_NULL, SND_FILENAME, SND_NODEFAULT, SND_SYNC, WAVE_FORMAT_PCM,
-    WAVE_MAPPER, WHDR_DONE,
+    waveInStop, waveInUnprepareHeader, HWAVEIN, PlaySoundW, WAVEFORMATEX, WAVEHDR, CALLBACK_NULL,
+    SND_FILENAME, SND_NODEFAULT, SND_SYNC, WAVE_FORMAT_PCM, WAVE_MAPPER, WHDR_DONE,
 };
 use windows_sys::Win32::Media::Multimedia::mciSendStringW;
 
@@ -181,111 +179,7 @@ impl Drop for WaveIn {
     }
 }
 
-struct OutSlot {
-    _buf: Vec<u8>,
-    hdr: Box<WAVEHDR>,
-}
-
-pub struct WaveOut {
-    handle: HWAVEOUT,
-    pending: Vec<OutSlot>,
-}
-
-impl WaveOut {
-    pub fn start() -> Option<Self> {
-        let fmt = pcm_fmt();
-        let mut handle: HWAVEOUT = ptr::null_mut();
-        let err = unsafe {
-            waveOutOpen(
-                &mut handle,
-                WAVE_MAPPER,
-                &fmt,
-                0,
-                0,
-                CALLBACK_NULL,
-            )
-        };
-        if err != MMSYSERR_NOERROR || handle.is_null() {
-            return None;
-        }
-        Some(Self {
-            handle,
-            pending: Vec::new(),
-        })
-    }
-
-    pub fn push(&mut self, pcm: &[u8]) {
-        if pcm.is_empty() {
-            return;
-        }
-        self.reap();
-        let mut buf = pcm.to_vec();
-        let mut hdr = Box::new(WAVEHDR {
-            lpData: buf.as_mut_ptr(),
-            dwBufferLength: buf.len() as u32,
-            dwBytesRecorded: 0,
-            dwUser: 0,
-            dwFlags: 0,
-            dwLoops: 0,
-            lpNext: ptr::null_mut(),
-            reserved: 0,
-        });
-        unsafe {
-            if waveOutPrepareHeader(self.handle, hdr.as_mut(), std::mem::size_of::<WAVEHDR>() as u32)
-                != MMSYSERR_NOERROR
-            {
-                return;
-            }
-            if waveOutWrite(self.handle, hdr.as_mut(), std::mem::size_of::<WAVEHDR>() as u32)
-                != MMSYSERR_NOERROR
-            {
-                let _ = waveOutUnprepareHeader(
-                    self.handle,
-                    hdr.as_mut(),
-                    std::mem::size_of::<WAVEHDR>() as u32,
-                );
-                return;
-            }
-        }
-        self.pending.push(OutSlot { _buf: buf, hdr });
-    }
-
-    fn reap(&mut self) {
-        let mut keep = Vec::new();
-        for mut slot in self.pending.drain(..) {
-            if (slot.hdr.dwFlags & WHDR_DONE) != 0 {
-                unsafe {
-                    let _ = waveOutUnprepareHeader(
-                        self.handle,
-                        slot.hdr.as_mut(),
-                        std::mem::size_of::<WAVEHDR>() as u32,
-                    );
-                }
-            } else {
-                keep.push(slot);
-            }
-        }
-        self.pending = keep;
-    }
-}
-
-impl Drop for WaveOut {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = waveOutReset(self.handle);
-            for mut slot in self.pending.drain(..) {
-                let _ = waveOutUnprepareHeader(
-                    self.handle,
-                    slot.hdr.as_mut(),
-                    std::mem::size_of::<WAVEHDR>() as u32,
-                );
-            }
-            let _ = waveOutClose(self.handle);
-        }
-    }
-}
-
-/// Capture `secs` of 24 kHz s16le mono. Used for PTT and the duplex fallback.
+/// Capture `secs` of 24 kHz s16le mono for push-to-talk.
 pub fn record_pcm_secs(secs: u32) -> Result<Vec<u8>, String> {
     let mut mic = WaveIn::start().ok_or_else(|| {
         "Windows microphone unavailable — check Settings → Privacy → Microphone for GrokHub"
@@ -390,8 +284,8 @@ mod tests {
     fn wave_headers_live_on_the_heap() {
         let src = include_str!("win_audio.rs");
         assert!(
-            src.contains("inner: Box<WaveInInner>") && src.contains("hdr: Box<WAVEHDR>"),
-            "prepared WAVEHDRs must not move when WaveIn/WaveOut is moved: {src}"
+            src.contains("inner: Box<WaveInInner>"),
+            "prepared WAVEHDRs must not move when WaveIn is moved: {src}"
         );
         assert!(
             src.contains("STATUS_HEAP_CORRUPTION") || src.contains("0xc0000374"),

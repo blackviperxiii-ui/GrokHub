@@ -981,15 +981,6 @@ pub fn voice_mode_row(ui: &mut egui::Ui, label: &str) -> bool {
     stop
 }
 
-pub fn clip_status(text: &str, max_chars: usize) -> String {
-    let first = text.lines().next().unwrap_or("").trim();
-    if first.chars().count() <= max_chars {
-        return first.to_string();
-    }
-    let take = max_chars.saturating_sub(1);
-    format!("{}…", first.chars().take(take).collect::<String>())
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChipRowAct {
     Apply(usize),
@@ -1010,6 +1001,7 @@ pub const CHIP_LABEL_MAX_W: f32 = 180.0;
 /// Pad inside the fill. Drawn in the pill rect — Frame inner_margin clips the first glyphs.
 pub const CHIP_PAD_X: f32 = 14.0;
 /// Vertical pad budget so 13px type and descenders sit inside `CHIP_ROW_H`.
+#[cfg(test)]
 pub const CHIP_PAD_Y: f32 = 8.0;
 /// Gap between chips. Fluid fit uses the same gap the row paints.
 pub const CHIP_GAP: f32 = 6.0;
@@ -3256,7 +3248,7 @@ mod tests {
         let voice = include_str!("cards.rs")
             .split("pub fn voice_mode_row(")
             .nth(1)
-            .and_then(|s| s.split("pub fn clip_status(").next())
+            .and_then(|s| s.split("pub enum ChipRowAct").next())
             .expect("voice_mode_row");
         assert!(
             voice.contains("theme::live()") && voice.contains("ghost_pill(ui, \"Stop\")"),
@@ -3292,8 +3284,6 @@ mod tests {
                 && pills.contains("white_pill(ui, label, PillStyle::Solid)"),
             "white_pill must delegate to felt_pill"
         );
-        assert_eq!(clip_status("one\ntwo", 80), "one");
-        assert_eq!(clip_status("abcdefghij", 6), "abcde…");
         assert_eq!(chip_tone_color(ChipTone::Offline), crate::theme::offline());
     }
 

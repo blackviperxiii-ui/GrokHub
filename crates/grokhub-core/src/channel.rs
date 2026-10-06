@@ -270,6 +270,50 @@ mod tests {
         assert_eq!(run(&["--bogus"]).0, Some(2));
         let _ = std::fs::remove_dir_all(&cfg);
     }
+
+    /// A plain install with a beta receipt on a `main` checkout stops before
+    /// cargo, instead of labeling a main build as beta.
+    #[cfg(unix)]
+    #[test]
+    fn install_sh_refuses_a_checkout_on_the_other_channel() {
+        let base = std::env::temp_dir().join(format!("grokhub-chan-mix-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let repo = base.join("clone");
+        let cfg = base.join("cfg");
+        std::fs::create_dir_all(repo.join("scripts")).unwrap();
+        std::fs::create_dir_all(&cfg).unwrap();
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/install.sh");
+        std::fs::copy(script, repo.join("scripts/install.sh")).unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        std::fs::write(cfg.join("channel"), Channel::Beta.receipt()).unwrap();
+        let out = std::process::Command::new("bash")
+            .arg(repo.join("scripts/install.sh"))
+            .arg("--user")
+            .env("GROKHUB_CONFIG", &cfg)
+            .env("PREFIX", base.join("prefix"))
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1));
+        assert_eq!(
+            String::from_utf8_lossy(&out.stderr).trim(),
+            format!(
+                "error: {} is on main but the beta channel builds beta; run with --channel stable to switch, or git checkout beta",
+                repo.display()
+            )
+        );
+        assert!(!base.join("prefix").exists(), "nothing installed");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
 
 /// Shown next to the Labs Beta channel toggle: `beta · beta @ abc1234`.

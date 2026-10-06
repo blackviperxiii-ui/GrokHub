@@ -446,7 +446,7 @@ pub use update::{
     overlay_update_begin, overlay_update_can_restart, overlay_update_finish,
     overlay_update_progress, parse_cabin_semver, parse_github_latest_tag,
     parse_installed_cli_version, parse_published_cli_alpha, pending_for_manual_update,
-    pending_from_versions, restart_acts,
+    pending_from_versions, pending_on_channel, restart_acts,
     restart_argv, restart_bin, settings_update_action_hint, settings_update_hint,
     settings_update_label, settings_update_note,
     should_notify_cabin_update, should_show_cli_alpha_update, should_update_cli_alpha,

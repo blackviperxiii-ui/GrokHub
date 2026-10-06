@@ -174,9 +174,6 @@ impl Cabin {
                     }
                 }
             }
-            Ok(JobOut::Imagine(url)) => {
-                self.finish_imagine_job(vec![url], None, None);
-            }
             Ok(JobOut::ImagineBatch(urls, note, tokens)) => {
                 self.finish_imagine_job(urls, note, tokens);
             }

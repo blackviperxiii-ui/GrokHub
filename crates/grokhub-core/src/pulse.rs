@@ -682,7 +682,9 @@ pub fn pulse_score(card: &UpdateCard, inputs: &PulseInputs) -> i64 {
         score += SCORE_REPEAT;
     }
     // 5 and 6. The ledger: accepted Learn cards lift a topic, Not this and
-    // Dismiss push it down.
+    // Dismiss push it down. Dismiss only buries ideas: a dismissed Feed post is
+    // gone, but tomorrow's run report or quiet digest with that title still posts.
+    let idea = is_idea_card(card);
     for entry in inputs.ledger {
         let hit = entry.title.eq_ignore_ascii_case(card.title.trim())
             || same_topic(&entry.title, &card.title);
@@ -692,7 +694,8 @@ pub fn pulse_score(card: &UpdateCard, inputs: &PulseInputs) -> i64 {
         score += match entry.reason {
             LedgerReason::Accepted => SCORE_LEARN_BOOST,
             LedgerReason::NotThis | LedgerReason::Wrong => -PENALTY_NOT_THIS,
-            LedgerReason::Dismiss => -PENALTY_DISMISS,
+            LedgerReason::Dismiss if idea => -PENALTY_DISMISS,
+            LedgerReason::Dismiss => 0,
             LedgerReason::Liked => 0,
         };
     }
@@ -919,22 +922,23 @@ pub const QUIET_DIGEST_SOURCE: &str = "pulse:quiet";
 /// Returns how many were released and the digest id, if one was posted.
 pub fn release_quiet_batch(cards: &mut Vec<UpdateCard>, now_ms: u64) -> (usize, Option<String>) {
     let mut titles = Vec::new();
+    let mut ids = Vec::new();
     for card in cards.iter_mut().filter(|c| c.held) {
         card.held = false;
         titles.push(card.title.clone());
+        ids.push(card.id.clone());
     }
     let n = titles.len();
     if n < 2 {
         return (n, None);
     }
-    for card in cards
-        .iter_mut()
-        .filter(|c| titles.contains(&c.title) && !c.pulse.quiet_batched)
-    {
-        if card.created_at <= now_ms {
-            card.pulse.quiet_batched = true;
-        }
+    for card in cards.iter_mut().filter(|c| ids.contains(&c.id)) {
+        card.pulse.quiet_batched = true;
     }
+    // Yesterday's dismissed digest must not swallow today's.
+    cards.retain(|c| {
+        !(c.source_id == QUIET_DIGEST_SOURCE && c.status == UpdateStatus::Dismissed)
+    });
     let shown: Vec<&str> = titles.iter().take(3).map(String::as_str).collect();
     let mut body = format!("{n} updates: {}", shown.join(" · "));
     if n > 3 {
@@ -1596,6 +1600,69 @@ mod tests {
         assert_eq!(release_quiet_batch(&mut one, 9_000), (1, None));
         assert_eq!(one.len(), 1);
         assert!(!one[0].pulse.quiet_batched);
+    }
+
+    #[test]
+    fn a_dismissed_feed_post_does_not_bury_the_next_one_with_its_title() {
+        let ledger = parse_ledger(
+            "- [2026-10-04] pulse: dismissed \"Nightly backup\" reason=dismiss\n",
+        );
+        let inputs = PulseInputs {
+            ledger: &ledger,
+            now_ms: 9_000,
+            ..Default::default()
+        };
+        let tomorrow = automation_done_card("backup", "Nightly backup", "ok", 8_000);
+        assert_eq!(pulse_score(&tomorrow, &inputs), 110);
+        let posts: Vec<String> = feed_posts(&[tomorrow], &inputs)
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(posts.len(), 1, "{posts:?}");
+        // An idea with that title still drops below the line.
+        let idea = idea("i", "Nightly backup", "", 10);
+        assert_eq!(pulse_score(&idea, &inputs), 150 - 200);
+    }
+
+    #[test]
+    fn quiet_release_marks_only_held_cards_and_posts_after_a_dismissed_digest() {
+        let held = |id: &str, title: &str, at: u64| {
+            let mut c = automation_done_card(id, title, "ok", at);
+            c.held = true;
+            c
+        };
+        let mut cards = vec![
+            automation_done_card("old", "Backup ran", "ok", 10),
+            held("a", "Backup ran", 100),
+            held("b", "Brief ready", 110),
+        ];
+        let (_, first) = release_quiet_batch(&mut cards, 1_000);
+        let first = first.expect("digest");
+        let mut batched: Vec<&str> = cards
+            .iter()
+            .filter(|c| c.pulse.quiet_batched)
+            .map(|c| c.id.as_str())
+            .collect();
+        batched.sort();
+        assert_eq!(
+            batched,
+            vec!["done-a", "done-b"],
+            "an older post with the same title is not batched"
+        );
+        for c in cards.iter_mut().filter(|c| c.id == first) {
+            c.status = UpdateStatus::Dismissed;
+        }
+        // The next night, inside a day of that dismiss.
+        cards.push(held("c", "Repo synced", 2_000));
+        cards.push(held("d", "Price check ran", 2_100));
+        let (n, second) = release_quiet_batch(&mut cards, 3_000);
+        assert_eq!((n, second.as_deref()), (2, Some("pulse-quiet-3000")));
+        let digest = cards
+            .iter()
+            .find(|c| c.id == "pulse-quiet-3000")
+            .expect("tonight's digest posts");
+        assert_eq!(digest.status, UpdateStatus::Unread);
+        assert_eq!(digest.body.as_deref(), Some("2 updates: Repo synced · Price check ran"));
     }
 
     #[test]
