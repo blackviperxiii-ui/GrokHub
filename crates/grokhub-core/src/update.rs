@@ -410,6 +410,18 @@ pub fn settings_update_label(pending: UpdatePending) -> &'static str {
     update_chip_label(pending).unwrap_or("Update")
 }
 
+/// `grokhub --update` on this install's channel. The release tag only tracks
+/// stable, and beta never bumps the version, so a beta install always pulls
+/// `origin beta` (a fast-forward that is a no-op when it is current).
+pub fn pending_on_channel(pending: UpdatePending, channel: Channel) -> UpdatePending {
+    match (channel, pending) {
+        (Channel::Stable, p) => p,
+        (Channel::Beta, UpdatePending::None) => UpdatePending::Cabin,
+        (Channel::Beta, UpdatePending::Cli) => UpdatePending::Both,
+        (Channel::Beta, p) => p,
+    }
+}
+
 /// Settings / `/update` click. A missed probe still overlays CLI then cabin.
 pub fn pending_for_manual_update(pending: UpdatePending) -> UpdatePending {
     match pending {
@@ -652,7 +664,9 @@ fn overlay_grok_update_for(windows: bool) -> &'static str {
 pub fn update_plan_steps(cmds: Vec<String>) -> Vec<HostPlanStep> {
     cmds.into_iter()
         .map(|cmd| {
-            let explain = if cmd.contains("pull --ff-only") {
+            let explain = if cmd.contains("pull --ff-only origin beta") {
+                "fast-forward origin/beta — config stays".into()
+            } else if cmd.contains("pull --ff-only") {
                 "fast-forward origin/main — config stays".into()
             } else if cmd.contains("remote set-url") || cmd.contains("remote add") {
                 "point origin at GitHub — Cursor Origin is not live yet".into()
@@ -711,7 +725,9 @@ pub fn grok_cli_update_cmd(cmd: &str) -> bool {
 }
 
 pub fn update_step_label(cmd: &str) -> &'static str {
-    if cmd.contains("pull --ff-only") {
+    if cmd.contains("pull --ff-only origin beta") {
+        "Pulling origin/beta…"
+    } else if cmd.contains("pull --ff-only") {
         "Pulling origin/main…"
     } else if cmd.contains("remote set-url") || cmd.contains("remote add") {
         "Retargeting origin…"
@@ -1275,11 +1291,37 @@ mod tests {
     }
 
     #[test]
+    fn beta_update_always_pulls_beta_and_stable_runs_only_what_is_newer() {
+        use UpdatePending::*;
+        assert_eq!(pending_on_channel(None, Channel::Beta), Cabin);
+        assert_eq!(pending_on_channel(Cli, Channel::Beta), Both);
+        assert_eq!(pending_on_channel(Cabin, Channel::Beta), Cabin);
+        assert_eq!(pending_on_channel(Both, Channel::Beta), Both);
+        assert_eq!(pending_on_channel(None, Channel::Stable), None);
+        assert_eq!(pending_on_channel(Cli, Channel::Stable), Cli);
+        // A beta build carries the released version, so the tag compare says current.
+        let same =
+            pending_from_versions("2.10.92", Some("v2.10.92"), Some("1.0.46"), Some("1.0.46"));
+        assert_eq!(same, None);
+        assert_eq!(pending_on_channel(same, Channel::Beta), Cabin);
+    }
+
+    #[test]
     fn overlay_step_labels_name_pull_and_install() {
         assert_eq!(
             update_step_label("git -C '/x' pull --ff-only origin main"),
             "Pulling origin/main…"
         );
+        assert_eq!(
+            update_step_label("git -C '/x' pull --ff-only origin beta"),
+            "Pulling origin/beta…"
+        );
+        let steps = update_plan_steps(vec![
+            "git -C '/x' pull --ff-only origin beta".into(),
+            "git -C '/x' pull --ff-only origin main".into(),
+        ]);
+        assert_eq!(steps[0].explain, "fast-forward origin/beta — config stays");
+        assert_eq!(steps[1].explain, "fast-forward origin/main — config stays");
         assert_eq!(
             update_step_label("'/x/scripts/install.sh' --user"),
             "Installing overlay…"

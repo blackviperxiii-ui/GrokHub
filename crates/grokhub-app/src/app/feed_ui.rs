@@ -8,16 +8,16 @@
 
 use super::*;
 use grokhub_core::{
-    automation_done_card,
+    archive_digest, automation_done_card,
     dismiss_update_at, feed_ideas, feed_visible, file_idea_todo, hold_if_quiet,
     idea_open_line, unpin_feed_idea,
     idea_todo_title,
     links_from_research, mark_update_opened, parse_lookup, post_help, post_update,
     quiet_hours_active, remember_dismissed_source, route_schedule,
     schedule_created_card, tick_feed_pulse, visible_digests,
-    CardReaction, DigestEdition, DigestMaterial, PausedJob, PulseNow, RepeatedAction,
+    DigestEdition, DigestMaterial, PausedJob, PulseNow, RepeatedAction,
     TasteNote, UpdateAction, UpdateCard,
-    UpdateKind, UpdateStatus, DIGEST_PAINT_MAX, FEED_PAINT_MAX,
+    UpdateKind, UpdateStatus, DIGEST_PAINT_MAX,
 };
 
 /// What an ideas reply is checked against.
@@ -37,8 +37,10 @@ pub(super) struct IdeaInputs {
 const FEED_CARD_H: f32 = 96.0;
 /// Longest wait for the model's idea list before the board gives up on that ask.
 pub(super) const IDEAS_WAIT_MS: u64 = 180_000;
+#[cfg(test)]
 const FEED_GAP: f32 = 6.0;
 /// Collapsed chat deck shows this many edges. The rest stay in the count.
+#[cfg(test)]
 pub(super) const HOME_STACK_SHOW: usize = 3;
 /// Second card, tucked under the front. Same offsets as a slide-up deck at rest.
 pub(super) const STACK_REST_DY_1: f32 = 8.0;
@@ -56,6 +58,7 @@ const FLY_SECS: f32 = 0.45;
 const FLY_DX: f32 = 48.0;
 const FLY_DY: f32 = 36.0;
 
+#[cfg(test)]
 pub(super) fn stacked_feed_h(n: usize) -> f32 {
     if n == 0 {
         return 0.0;
@@ -152,6 +155,7 @@ fn settled_hits(
             }
             SlideHit {
                 id: cards[index].id.clone(),
+                #[cfg(test)]
                 index,
                 rect,
             }
@@ -196,10 +200,6 @@ fn lifted_index(cards: &[UpdateCard], view: &StackView) -> Option<usize> {
     cards.iter().position(|card| card.id == id)
 }
 
-pub(super) fn update_feed_h(n: usize) -> f32 {
-    stacked_feed_h(n.min(FEED_PAINT_MAX))
-}
-
 pub(super) fn home_feed_count(cards: &[UpdateCard], pulse: &grokhub_core::FeedPulse, now: u64) -> usize {
     home_stack_cards(cards, pulse, now).len()
 }
@@ -208,10 +208,10 @@ pub(super) enum FeedAct {
     Open(String),
     /// × on the main window's deck.
     Dismiss(String),
-    Build(String),
     Discuss(String),
     /// Remove an idea from the Ideas board.
     Drop(String),
+    Archive(String),
 }
 
 impl Cabin {
@@ -736,10 +736,10 @@ impl Cabin {
     pub(super) fn apply_feed_act(&mut self, act: Option<FeedAct>) {
         match act {
             Some(FeedAct::Dismiss(id)) => self.close_home_card(&id),
-            Some(FeedAct::Build(id)) => self.build_idea(&id),
             Some(FeedAct::Open(id)) => self.open_feed_card(&id),
             Some(FeedAct::Discuss(id)) => self.discuss_card(&id),
             Some(FeedAct::Drop(id)) => self.delete_idea(&id),
+            Some(FeedAct::Archive(id)) => self.archive_feed_digest(&id),
             None => {}
         }
     }
@@ -823,17 +823,6 @@ impl Cabin {
         if let Some(route) = route {
             let _ = self.commit_schedule(route);
         }
-    }
-
-    pub(super) fn react_card(&mut self, id: &str, reaction: CardReaction) {
-        let Some(card) = self.updates.iter_mut().find(|c| c.id == id) else {
-            return;
-        };
-        if !matches!(card.kind, UpdateKind::Idea | UpdateKind::Digest) {
-            return;
-        }
-        card.reaction = Some(reaction);
-        self.persist_updates();
     }
 
     /// Once per launch: purge template idea cards. The automatic model ask comes
@@ -1115,6 +1104,12 @@ impl Cabin {
         self.persist();
     }
 
+    pub(super) fn archive_feed_digest(&mut self, id: &str) {
+        if archive_digest(&mut self.updates, id) {
+            self.persist_updates();
+        }
+    }
+
     pub(super) fn open_feed_card(&mut self, id: &str) {
         let kind = self.updates.iter().find(|c| c.id == id).map(|c| c.kind);
         if matches!(kind, Some(UpdateKind::Idea)) {
@@ -1250,6 +1245,8 @@ struct DeckDefer {
 #[derive(Clone, Debug)]
 struct SlideHit {
     id: String,
+    /// Deck slot, read by tests to find the front card.
+    #[cfg(test)]
     index: usize,
     rect: egui::Rect,
 }

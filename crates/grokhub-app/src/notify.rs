@@ -10,6 +10,7 @@ pub fn should_ping_long(elapsed: Duration) -> bool {
     elapsed >= Duration::from_secs(30)
 }
 
+#[cfg(any(not(windows), test))]
 pub fn ping_args<'a>(title: &'a str, body: &'a str) -> Vec<&'a str> {
     vec![
         "-a",

@@ -386,8 +386,8 @@ pub use rewind::{
     rewind_snapshot_ready, RewindRecord,
 };
 pub use shortcuts::{
-    apply_composer_enter, composer_enter, composer_go, composer_go_tip, filter_palette, perm_key,
-    shortcut_help, ComposerEnter, ComposerGo, PermKey, SHORTCUTS,
+    apply_composer_enter, composer_enter, composer_go, composer_go_tip, filter_palette,
+    palette_shortcut, perm_key, shortcut_help, ComposerEnter, ComposerGo, PermKey, SHORTCUTS,
 };
 pub use skill::{
     is_feedback_ask, is_junk_skill, AUTO_SKILL_PITFALL,
@@ -446,7 +446,7 @@ pub use update::{
     overlay_update_begin, overlay_update_can_restart, overlay_update_finish,
     overlay_update_progress, parse_cabin_semver, parse_github_latest_tag,
     parse_installed_cli_version, parse_published_cli_alpha, pending_for_manual_update,
-    pending_from_versions, restart_acts,
+    pending_from_versions, pending_on_channel, restart_acts,
     restart_argv, restart_bin, settings_update_action_hint, settings_update_hint,
     settings_update_label, settings_update_note,
     should_notify_cabin_update, should_show_cli_alpha_update, should_update_cli_alpha,

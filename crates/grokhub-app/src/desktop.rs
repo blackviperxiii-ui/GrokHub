@@ -1,22 +1,22 @@
 use grokhub_core::{
-    act_window_search_bin, browser_windshield_line, capture_kinds, cdp_new_tab_path,
+    act_window_search_bin, capture_kinds, cdp_new_tab_path,
     cdp_page_close_payload, cdp_page_focus_payload, clamp_to_desktop, clip_image_args,
     computer_cmd_line, computer_drive_for, cursor_on_output, diagnose_hands, empty_hands_steps_error,
     ffmpeg_webcam_args, ffmpeg_x11_args, filter_atspi_rows, format_cursor_line_miss,
     format_tab_list, frame_is_blank, frame_origin_for, gnome_shell_screenshot_args, grim_capture_args,
-    hands_backend_name, hands_blocked_by_lock, hands_down_receipt,
-    hands_windshield_line, image_pixels_ok, image_to_global, infer_wayland_display, jpeg_data_url,
-    layout_prompt, live_pcm_argv, live_pcm_frame_bytes, luma_mean_var, monitor_local_to_global,
+    hands_blocked_by_lock, hands_down_receipt,
+    image_pixels_ok, image_to_global, infer_wayland_display, jpeg_data_url,
+    luma_mean_var, monitor_local_to_global,
     parse_atspi_line, parse_cdp_targets, parse_picker_stdout, parse_wmctrl_line, parse_xdotool_mouse,
-    parse_xrandr_outputs, pcm_from_capture, pick_browser_tab, pick_capture_output, pick_hands_backend,
-    pick_named_row, picker_args, png_ihdr_size, pointer_slop_miss, rank_atspi_rows, relative_move_steps,
+    parse_xrandr_outputs, pick_browser_tab, pick_capture_output, pick_hands_backend,
+    pick_named_row, picker_args, png_ihdr_size, pointer_slop_miss, relative_move_steps,
     resolve_bin_in, session_is_wayland, tab_list_from_rows, take_text_body, IMAGE_FILE_CAP,
-    TEXT_FILE_CAP, virtual_desktop_size, windshield_frame_geom, x11_grab_size, ydotool_socket_path,
+    TEXT_FILE_CAP, virtual_desktop_size, x11_grab_size, ydotool_socket_path,
     AtspiRow, BrowserTab, CaptureKind, ComputerDrive, ComputerOp, DisplayOutput, HandsBackend,
     HandsDown, TabAction, CDP_DOWN, CDP_PORTS, RECORDERS, TRANSCRIBERS,
 };
 use image::GenericImageView;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -211,17 +211,6 @@ fn remember_desk_frame(
     }
 }
 
-fn last_desk_frame_geom() -> (u32, u32, i32, i32) {
-    LAST_DESK_FRAME
-        .lock()
-        .ok()
-        .and_then(|g| {
-            g.as_ref()
-                .map(|f| (f.jpeg_w, f.jpeg_h, f.origin_x, f.origin_y))
-        })
-        .unwrap_or((0, 0, 0, 0))
-}
-
 pub fn read_display_outputs() -> Vec<DisplayOutput> {
     let mut cmd = Command::new("xrandr");
     cmd.arg("-q");
@@ -229,87 +218,6 @@ pub fn read_display_outputs() -> Vec<DisplayOutput> {
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|t| parse_xrandr_outputs(&t))
         .unwrap_or_default()
-}
-
-pub fn prepare_windshield(
-    rows: &[AtspiRow],
-    ask: Option<&str>,
-    captured_this_turn: bool,
-) -> (Vec<AtspiRow>, String) {
-    let outputs = read_display_outputs();
-    let (dw, dh) = virtual_desktop_size(&outputs)
-        .map(|(w, h)| (w as i32, h as i32))
-        .unwrap_or((0, 0));
-    let kept = filter_atspi_rows(rows, dw, dh);
-    let ranked = rank_atspi_rows(&kept, ask, 40);
-    let (fw, fh, ox, oy) = windshield_frame_geom(captured_this_turn, last_desk_frame_geom());
-    let mut header = layout_prompt(&outputs, fw, fh, ox, oy, read_cursor_xy());
-    let (up, n) = cached_cdp_status();
-    header.push_str(&browser_windshield_line(up, n));
-    header.push_str(&hands_windshield_line(hands_peek(), hands_driver_name()));
-    (ranked, header)
-}
-
-struct CdpCache {
-    at: Instant,
-    up: bool,
-    n: usize,
-    inflight: bool,
-}
-
-static CDP_CACHE: Mutex<Option<CdpCache>> = Mutex::new(None);
-
-fn cached_cdp_status() -> (bool, usize) {
-    if let Ok(g) = CDP_CACHE.lock() {
-        if let Some(c) = g.as_ref() {
-            let hit = (c.up, c.n);
-            let fresh = c.at.elapsed() < Duration::from_secs(2);
-            let busy = c.inflight;
-            drop(g);
-            if !fresh && !busy {
-                kick_cdp_status();
-            }
-            return hit;
-        }
-    }
-    cdp_status_now()
-}
-
-fn cdp_status_now() -> (bool, usize) {
-    let hit = probe_cdp();
-    let (up, n) = match &hit {
-        Some((_, tabs)) => (true, tabs.len()),
-        None => (false, 0),
-    };
-    if let Ok(mut g) = CDP_CACHE.lock() {
-        *g = Some(CdpCache {
-            at: Instant::now(),
-            up,
-            n,
-            inflight: false,
-        });
-    }
-    (up, n)
-}
-
-fn kick_cdp_status() {
-    if let Ok(mut g) = CDP_CACHE.lock() {
-        if let Some(c) = g.as_mut() {
-            if c.inflight {
-                return;
-            }
-            c.inflight = true;
-        }
-    }
-    std::thread::spawn(|| {
-        let _ = cdp_status_now();
-    });
-}
-
-fn invalidate_cdp_cache() {
-    if let Ok(mut g) = CDP_CACHE.lock() {
-        *g = None;
-    }
 }
 
 pub fn probe_hub_health_body(port: u16) -> Option<String> {
@@ -355,7 +263,6 @@ fn run_tab_op(action: TabAction, query: &str, cancel: Option<&AtomicBool>) -> Re
         return Err("halted".into());
     }
     if let Some((port, tabs)) = probe_cdp() {
-        invalidate_cdp_cache();
         return run_tab_op_cdp(port, &tabs, action, query);
     }
     run_tab_op_fallback(action, query, cancel)
@@ -871,10 +778,6 @@ pub fn live_hands_backend() -> Option<HandsBackend> {
         std::env::var("XDG_SESSION_TYPE").ok().as_deref(),
     );
     pick_hands_backend(wayland, which("ydotool"), which("xdotool"))
-}
-
-pub fn hands_driver_name() -> &'static str {
-    hands_backend_name(live_hands_backend())
 }
 
 fn run_bin_steps(bin: &str, steps: &[Vec<String>], cancel: Option<&AtomicBool>) -> Result<(), String> {
@@ -1487,163 +1390,6 @@ pub fn play_audio(path: &Path) -> Result<(), String> {
     }
 }
 
-/// Stream 24 kHz s16le mono PCM to the speakers (realtime Voice output).
-#[derive(Default)]
-pub struct PcmSink {
-    child: Option<Child>,
-    #[cfg(windows)]
-    win: Option<crate::win_audio::WaveOut>,
-}
-
-
-impl PcmSink {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn push(&mut self, pcm: &[u8]) {
-        if pcm.is_empty() {
-            return;
-        }
-        #[cfg(windows)]
-        {
-            if let Some(out) = self.win.as_mut() {
-                out.push(pcm);
-                return;
-            }
-            if let Some(out) = crate::win_audio::WaveOut::start() {
-                self.win = Some(out);
-                if let Some(out) = self.win.as_mut() {
-                    out.push(pcm);
-                    return;
-                }
-            }
-        }
-        if self.ensure().is_err() {
-            return;
-        }
-        if let Some(child) = self.child.as_mut() {
-            if let Some(stdin) = child.stdin.as_mut() {
-                let _ = stdin.write_all(pcm);
-            }
-        }
-    }
-
-    fn ensure(&mut self) -> Result<(), String> {
-        if let Some(c) = self.child.as_mut() {
-            match c.try_wait() {
-                Ok(None) => return Ok(()),
-                _ => {
-                    self.child = None;
-                }
-            }
-        }
-        let child = if which("paplay") {
-            Command::new("paplay")
-                .args(["--raw", "--rate=24000", "--channels=1", "--format=s16le"])
-                .stdin(Stdio::piped())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .map_err(|e| e.to_string())?
-        } else if which("ffplay") {
-            Command::new("ffplay")
-                .args([
-                    "-nodisp",
-                    "-loglevel",
-                    "error",
-                    "-f",
-                    "s16le",
-                    "-ar",
-                    "24000",
-                    "-ac",
-                    "1",
-                    "-i",
-                    "pipe:0",
-                ])
-                .stdin(Stdio::piped())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .map_err(|e| e.to_string())?
-        } else {
-            return Err("no paplay/ffplay for pcm".into());
-        };
-        self.child = Some(child);
-        Ok(())
-    }
-}
-
-impl Drop for PcmSink {
-    fn drop(&mut self) {
-        if let Some(mut c) = self.child.take() {
-            let _ = c.stdin.take();
-            let _ = c.kill();
-            std::thread::spawn(move || {
-                let _ = c.wait();
-            });
-        }
-    }
-}
-
-/// Long-running raw PCM capture for duplex Voice. Kill on drop.
-pub struct LivePcm {
-    child: Option<Child>,
-    #[cfg(windows)]
-    win: Option<crate::win_audio::WaveIn>,
-}
-
-impl LivePcm {
-    pub fn start() -> Option<Self> {
-        #[cfg(windows)]
-        {
-            if let Some(win) = crate::win_audio::WaveIn::start() {
-                return Some(Self {
-                    child: None,
-                    win: Some(win),
-                });
-            }
-        }
-        let bin = first_bin(RECORDERS)?;
-        let args = live_pcm_argv(bin.as_str())?;
-        let child = Command::new(&bin)
-            .args(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
-        Some(Self {
-            child: Some(child),
-            #[cfg(windows)]
-            win: None,
-        })
-    }
-
-    pub fn read_frame(&mut self) -> Option<Vec<u8>> {
-        #[cfg(windows)]
-        {
-            if let Some(win) = self.win.as_mut() {
-                return win.read_frame();
-            }
-        }
-        let stdout = self.child.as_mut()?.stdout.as_mut()?;
-        let mut buf = vec![0u8; live_pcm_frame_bytes()];
-        stdout.read_exact(&mut buf).ok()?;
-        Some(buf)
-    }
-}
-
-impl Drop for LivePcm {
-    fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            std::thread::spawn(move || {
-                let _ = child.wait();
-            });
-        }
-    }
-}
-
 fn record_wav(path: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
@@ -1912,55 +1658,6 @@ pub fn ensure_video_poster(video: &str) -> Option<String> {
         return None;
     }
     video_poster_ready(video)
-}
-
-/// Short PCM chunks for the realtime socket. Empty iterator if no recorder.
-pub fn record_pcm_chunks() -> Vec<Vec<u8>> {
-    #[cfg(windows)]
-    {
-        if let Ok(pcm) = crate::win_audio::record_pcm_secs(1) {
-            if pcm.len() >= 64 {
-                return vec![pcm];
-            }
-        }
-    }
-    let dest = std::env::temp_dir().join("grokhub-voice-live.wav");
-    let path = dest.to_string_lossy().to_string();
-    let ok = match first_bin(RECORDERS).as_deref() {
-        Some("arecord") => {
-            let mut cmd = Command::new("arecord");
-            cmd.args([
-                "-q", "-d", "1", "-f", "S16_LE", "-r", "24000", "-c", "1", "-t", "wav", &path,
-            ]);
-            run_limited(cmd, DESK_CAPTURE_TIMEOUT).is_some_and(|o| o.status.success())
-        }
-        Some("ffmpeg") => {
-            let mut cmd = Command::new("ffmpeg");
-            cmd.args([
-                "-y", "-hide_banner", "-loglevel", "error",
-                "-f", "pulse", "-i", "default", "-t", "1", "-ac", "1", "-ar", "24000",
-                "-f", "s16le", &path,
-            ]);
-            run_limited(cmd, DESK_CAPTURE_TIMEOUT).is_some_and(|o| o.status.success())
-        }
-        _ => false,
-    };
-    if !ok {
-        return vec![];
-    }
-    let len = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(u64::MAX);
-    if len > IMAGE_FILE_CAP {
-        let _ = std::fs::remove_file(&dest);
-        return vec![];
-    }
-    let bytes = std::fs::read(&dest).unwrap_or_default();
-    let _ = std::fs::remove_file(&dest);
-    let pcm = pcm_from_capture(&bytes);
-    if pcm.len() < 64 {
-        vec![]
-    } else {
-        vec![pcm.to_vec()]
-    }
 }
 
 pub fn save_file_dialog(suggested: &str) -> Option<PathBuf> {
@@ -2438,7 +2135,6 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        assert!(["ydotool", "xdotool", "missing"].contains(&hands_driver_name()));
     }
 
     #[test]
@@ -2513,7 +2209,7 @@ mod tests {
         let cam = src
             .split("pub fn capture_webcam(")
             .nth(1)
-            .and_then(|s| s.split("\npub fn record_pcm_chunks(").next())
+            .and_then(|s| s.split("\npub fn save_file_dialog(").next())
             .expect("capture_webcam");
         assert!(
             !cam.contains("\"grokhub-cam.jpg\"") && cam.contains("capture_temp("),
@@ -2653,20 +2349,6 @@ mod tests {
             tr.contains("read_text_capped") && !tr.contains("read_to_string"),
             "whisper must not slurp a huge transcript: {tr}"
         );
-        let pcm = src
-            .split("pub fn record_pcm_chunks(")
-            .nth(1)
-            .and_then(|s| s.split("\npub fn pick_file(").next())
-            .expect("record_pcm_chunks");
-        assert!(
-            pcm.contains("run_limited(") && !pcm.contains(".status()"),
-            "live mic arecord must time out so Voice halt can finish: {pcm}"
-        );
-        let pcm_read = pcm.find("std::fs::read(&dest)").expect("pcm read");
-        assert!(
-            pcm.contains("IMAGE_FILE_CAP") && pcm.find("IMAGE_FILE_CAP").expect("pcm cap") < pcm_read,
-            "live mic must not slurp a huge wav: {pcm}"
-        );
     }
 
     #[test]
@@ -2716,7 +2398,7 @@ mod tests {
         let cam = src
             .split("pub fn capture_webcam(")
             .nth(1)
-            .and_then(|s| s.split("\npub fn record_pcm_chunks(").next())
+            .and_then(|s| s.split("\npub fn save_file_dialog(").next())
             .expect("capture_webcam");
         let cam_read = cam.find("std::fs::read(&path)").expect("cam read");
         assert!(
@@ -2743,15 +2425,6 @@ mod tests {
                 || out.contains("act "),
             "tab list must run or fall back, not stall: {out}"
         );
-        let (_, header) = prepare_windshield(&[], None, false);
-        assert!(
-            header.contains("browser: cdp"),
-            "windshield must report cdp up or down: {header}"
-        );
-        assert!(
-            header.contains("hands:"),
-            "windshield must report hands health: {header}"
-        );
         let cdp = include_str!("desktop.rs")
             .split("fn cdp_http(")
             .nth(1)
@@ -2764,15 +2437,6 @@ mod tests {
         assert!(
             cdp.contains("TEXT_FILE_CAP") || cdp.contains("IMAGE_FILE_CAP"),
             "CDP HTTP must stop at a cabin cap: {cdp}"
-        );
-        let status = include_str!("desktop.rs")
-            .split("fn cached_cdp_status()")
-            .nth(1)
-            .and_then(|s| s.split("fn probe_cdp(").next())
-            .expect("cached_cdp_status");
-        assert!(
-            status.contains("thread::spawn") && status.contains("inflight"),
-            "stale CDP windshield probe must refresh off the UI thread: {status}"
         );
     }
 
