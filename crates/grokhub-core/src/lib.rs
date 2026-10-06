@@ -214,7 +214,7 @@ pub use feel::{
     lerp_f32,
     lift_rgb, mix_channel, BUTTON_LIFT, FOCUS_GROW, FOCUS_WASH, HOVER_EXPANSION, HOVER_SECS,
     HOVER_WASH,
-    PRESS_EXPANSION, PRESS_SECS, SELECT_SECS,
+    PRESS_EXPANSION, PRESS_SECS, SELECT_SECS, ALWAYS_SETTLE_SECS, GLOW_SETTLE_SECS,
 };
 pub use frame::{
     encode_b64, frame_bytes, jpeg_data_url, store_frame, FrameGet, PresenceFrame, FRAME_CAP,

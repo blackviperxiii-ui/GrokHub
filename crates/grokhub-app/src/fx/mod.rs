@@ -347,19 +347,42 @@ pub(crate) fn pack_glow_uniforms(
 }
 
 /// Behind the pill, only while a reply is streaming on the wgpu renderer.
+/// White breath rim (#e7e9ea). Uses [`crate::icons::composer_breath`].
+/// Idle α≈0.25; streaming α 0.25↔0.55; settles to idle in GLOW_SETTLE_SECS when stream ends.
+/// Skips animation when [`crate::theme::motion_ok`] is false.
 pub(crate) fn paint_composer_glow(ui: &egui::Ui, pill: egui::Rect) {
-    let animates = ui.style().animation_time > 0.0;
-    if animates {
+    paint_composer_glow_at(ui, pill, true)
+}
+
+/// `streaming` false = settle toward idle α (caller keeps painting briefly after run ends).
+pub(crate) fn paint_composer_glow_at(ui: &egui::Ui, pill: egui::Rect, streaming: bool) {
+    let motion = crate::theme::motion_ok(ui);
+    if motion {
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(33));
     }
-    let time = if animates {
-        let period = f64::from(guard::BREATH_SECS);
-        ui.input(|input| input.time).rem_euclid(period) as f32
+    let breath = if motion && streaming {
+        crate::icons::composer_breath(ui.input(|input| input.time) as f32)
     } else {
         0.0
     };
-    let accent = crate::theme::live();
+    // Critiquito: idle 0.25; streaming pulses 0.25↔0.55 via icons breath.
+    let stream_alpha = 0.25 + 0.30 * breath;
+    let target_idle = 0.25_f32;
+    let live_t = crate::theme::animate_selection_secs(
+        ui,
+        egui::Id::new("composer-glow-stream"),
+        streaming,
+        grokhub_core::GLOW_SETTLE_SECS,
+    );
+    let intensity = if motion {
+        target_idle + (stream_alpha - target_idle) * live_t
+    } else if streaming {
+        0.40
+    } else {
+        target_idle
+    };
+    let accent = crate::theme::composer_glow_rgb();
     let callback = eframe::egui_wgpu::Callback::new_paint_callback(
         pill.expand(guard::GLOW_EXPAND),
         ComposerGlowCallback {
@@ -371,13 +394,14 @@ pub(crate) fn paint_composer_glow(ui: &egui::Ui, pill: egui::Rect) {
                 f32::from(accent.g()) / 255.0,
                 f32::from(accent.b()) / 255.0,
             ],
-            time,
-            intensity: if animates { 1.0 } else { 0.72 },
-            animate: animates,
+            time: 0.0,
+            intensity,
+            animate: false, // intensity already carries icons.rs breath; WGSL must not double-pulse
         },
     );
     ui.ctx().layer_painter(ui.layer_id()).add(callback);
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -389,6 +413,41 @@ mod tests {
         assert!(COMPOSER_GLOW_WGSL.contains("@fragment"));
         assert!(COMPOSER_GLOW_WGSL.contains("fn vs_main"));
         assert!(COMPOSER_GLOW_WGSL.contains("fn fs_main"));
+    }
+
+    
+    #[test]
+    fn composer_glow_breath_alphas_and_icons_math() {
+        assert_eq!(crate::theme::FG, egui::Color32::from_rgb(0xe7, 0xe9, 0xea));
+        assert_eq!(grokhub_core::GLOW_SETTLE_SECS, 0.20);
+        assert_eq!(grokhub_core::ALWAYS_SETTLE_SECS, 0.14);
+        let src = include_str!("mod.rs");
+        assert!(
+            src.contains("composer_breath")
+                && src.contains("0.25 + 0.30 * breath")
+                && src.contains("GLOW_SETTLE_SECS")
+                && src.contains("animate: false"),
+            "glow must use icons breath + Critiquito alphas, no WGSL double pulse: {src}"
+        );
+        let breath0 = crate::icons::composer_breath(0.0);
+        assert!((0.0..=1.0).contains(&breath0));
+    }
+
+    #[test]
+    fn composer_glow_uses_white_not_live_green() {
+        let accent = crate::theme::composer_glow_rgb();
+        crate::theme::set_paint_dark(true);
+        assert_eq!(crate::theme::composer_glow_rgb(), crate::theme::FG);
+        assert_ne!(crate::theme::composer_glow_rgb(), crate::theme::LIVE);
+        crate::theme::set_paint_dark(false);
+        assert_eq!(crate::theme::composer_glow_rgb(), crate::theme::LIGHT_FG);
+        crate::theme::set_paint_dark(true);
+        let _ = accent;
+        let src = include_str!("mod.rs");
+        assert!(
+            src.contains("composer_glow_rgb()") && !src.contains("let accent = crate::theme::live()"),
+            "glow must take composer_glow_rgb, not live green: {src}"
+        );
     }
 
     #[test]

@@ -36,3 +36,14 @@ These rules apply to every contributor and every bot (Cursor, Claude, GrokHub). 
 - `./scripts/install.sh --user --channel beta` switches a Linux install to beta.
 - `./scripts/install.sh --user --channel stable` switches it back to `main`.
 - See the README's **Channels** section for details.
+
+## Branch cleanup
+After merge or close, delete your head branch. Scratch branches go as soon as the proof is done. Never delete `main` or `beta`.
+
+## Merge-back (main → beta)
+After a hotfix or a promotion lands on `main`, bring `beta` up with a **PR from main into beta**, merged with a **merge commit** (not squash), after linux + windows CI. Direct pushes to `beta` are blocked when the branch ruleset is active.
+
+## Tooling
+- Semgrep before Ready. dyl-review for draft asks only. Continual Learning updates `AGENTS.md`. No dyl-ready-pr merge/babysit.
+- Grok Build bundled roles: explore, plan, implementer (use implementer for build/code).
+

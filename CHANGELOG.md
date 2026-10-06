@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+Composer streaming glow is a white breath (`#e7e9ea`, icons.rs breath math): idle α≈0.25, streaming 0.25↔0.55, settles to idle in 200ms. Always permission settles in 140ms (fill α + scale 0.98→1.0) to a white ring, then stops. Reduced-motion skips the animation. Branch-cleanup and bot-choice notes; Semgrep / dyl-review / Continual Learning wired in the rules. Grok Build explore/plan/implementer roles documented. No version bump.
+
+
 Stable and beta channels. `./scripts/install.sh --user --channel beta` fetches origin, checks out the `beta` branch, builds, and installs; `--channel stable` goes back to `main`. The choice is saved in a `channel` receipt in the config folder, so a plain `./scripts/install.sh --user` stays on it, and Settings → Update, `/update`, and `grokhub --update` pull `origin beta` on a beta install, never `origin main`. `grokhub --version` now reads `GrokHub 2.10.92-beta (beta @ abc1234)` on beta and `GrokHub 2.10.92 (main @ f7dcf9a)` on stable; `build.rs` reads the branch and SHA from git, and the Cargo version is unchanged. CI also runs on `beta`. Channels are Linux-only for now.
 
 The bot rules go beta first: every new feature and fix PR targets `beta`, `beta` moves to `main` only on Jeremy's say as a squash-merged PR, and hotfixes go to `main` on his say and are merged back into `beta`. PRs into `beta` don't bump the version; each promotion to `main` carries one bump and one release. The rules are in `CLAUDE.md`, `.cursor/rules`, and a new `CONTRIBUTING.md`.
