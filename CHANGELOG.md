@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+Skill changes GrokHub makes on its own can be undone (harness design §12 P3, first slice of the Spike-5 ChangeLedger). `harness::decide` and the hard-card rules are unchanged.
+
+- **Every version is kept.** Before the nightly review patches a skill, before a skill learned from a host run is written, and before cleanup moves a never-used skill aside, the current `SKILL.md` is copied to `changes/skills/<name>/` in the cabin config (the last 20 versions per skill). Each write adds one line to `changes/skills.jsonl`: skill, time, who (`self_manage` or `user`), a short reason, and the file hash before and after. The ledger holds no skill text, and secrets in the reason are redacted. Adding a skill from Suggested is logged too.
+- **`/skills undo <name>`** puts back the version before the newest change, byte for byte, and logs the undo. Run it again to step back further. Undoing a skill GrokHub created removes its folder; its text stays in history. **`/skills restore <name>`** brings back a removed skill. **`/skills changes`** lists recent changes, with an Undo or Restore button per skill under the newest list. The buttons answer a mouse click only.
+- **Only you undo.** Undo and restore run only from a line you type in the composer or a click. The same text from a night job, an automation, a phone task, a Pulse run, an idea, or a model reply only shows the list. A patch you undid is not applied again by the next nightly review.
+
+No new crates, no network calls. No version bump.
+
 Spike-4b trust floor (privacy and consent, second slice). The consent rules are unchanged: grants still come only from a click in Settings, and a hard card still has no Always, Enter does not approve it, and Esc or the timeout denies it.
 
 - **Private data is encrypted on disk.** `consent.jsonl`, `egress.jsonl` (and its rolled `egress.1.jsonl`) and private AMR notes (`amr/nodes/<id>.sealed`) are sealed with ChaCha20-Poly1305. The key is made on the first private write and lives in your OS keyring (Secret Service on Linux, Credential Manager on Windows, Keychain on macOS); only a short hash of it is stored next to the data. Your existing plain-text ledger and send log keep working and are sealed in place, line by line, on the next write. Nothing is dropped.

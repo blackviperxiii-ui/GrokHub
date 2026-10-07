@@ -244,8 +244,26 @@ impl Cabin {
     }
 }
 
+/// A ghost pill that answers a pointer click only: Enter or Space on a
+/// focused Undo does nothing (same rule as `cards::grant_pill`).
+fn undo_pill(ui: &mut egui::Ui, label: &str) -> bool {
+    let resp = crate::theme::felt_label_button(
+        ui,
+        label,
+        Color32::TRANSPARENT,
+        crate::theme::muted(),
+        8.0,
+        egui::vec2(0.0, 28.0),
+        Some(egui::Stroke::new(1.0_f32, crate::theme::border())),
+        false,
+    );
+    let enabled = resp.enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp.clicked_by(egui::PointerButton::Primary)
+}
+
 /// Under the newest `/skills changes` bubble: one row per skill with a ghost
-/// Undo or Restore. Returns the clicked row. Typed text never answers it.
+/// Undo or Restore. Returns the clicked row. Typed text and keys never answer it.
 pub(super) fn paint_skill_undo_rows(ui: &mut egui::Ui, rows: &[SkillRow]) -> Option<SkillRow> {
     let mut hit = None;
     for row in rows {
@@ -253,7 +271,7 @@ pub(super) fn paint_skill_undo_rows(ui: &mut egui::Ui, rows: &[SkillRow]) -> Opt
             let size = egui::vec2(ui.available_width(), SKILL_ROW_H);
             ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.label(RichText::new(&row.label).size(13.0).color(crate::theme::muted()));
-                if crate::cards::ghost_pill(ui, row.act.label()) {
+                if undo_pill(ui, row.act.label()) {
                     hit = Some(row.clone());
                 }
             });
@@ -270,4 +288,109 @@ pub(super) fn newest_skill_changes_row(views: &[grokhub_core::ChatView]) -> Opti
     views
         .iter()
         .rposition(|v| v.kind == grokhub_core::ChatKind::Result && v.body.starts_with(SKILL_CHANGES_HEAD))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture(label: &str) -> std::path::PathBuf {
+        let root = crate::config::test_config_root(label);
+        let _ = std::fs::remove_dir_all(&root);
+        let skills = root.join("skills");
+        let put = |name: &str, body: &str| {
+            std::fs::create_dir_all(skills.join(name)).unwrap();
+            std::fs::write(skills.join(name).join("SKILL.md"), body).unwrap();
+        };
+        put("weekly-report", "v1\n");
+        hx::record_skill_change(&root, &skills, "weekly-report", Origin::SelfManage, "nightly review: 1. Open report.md 2. Fill the numbers 3. Save a copy as PDF and mail it to the team", || {
+            put("weekly-report", "v2\n");
+            Ok(())
+        })
+        .unwrap();
+        hx::record_skill_change(&root, &skills, "board-status", Origin::SelfManage, "learned from a host run", || {
+            put("board-status", "b1\n");
+            Ok(())
+        })
+        .unwrap();
+        hx::undo_skill_change(&root, &skills, "board-status", hx::UndoAsk::from_click()).unwrap();
+        root
+    }
+
+    #[test]
+    fn report_and_rows_from_the_ledger() {
+        let root = fixture("skill-report");
+        let ledger = hx::ChangeLedger::load(&root);
+        let now = ledger.all().last().unwrap().at + 2 * 3_600_000;
+        assert_eq!(
+            skill_changes_report(&ledger, now),
+            [
+                "/skills changes — what GrokHub changed in your skills",
+                "",
+                "- board-status · undone by you · 2h ago",
+                "- board-status · added by GrokHub · learned from a host run · 2h ago",
+                "- weekly-report · changed by GrokHub · nightly review: 1. Open report.md 2. Fill the numbers 3. Save a copy as… · 2h ago",
+                "",
+                "Each skill keeps its last 20 versions. Undo puts back the one before. It runs only when you type it or click it.",
+            ]
+            .join("\n")
+        );
+        assert_eq!(
+            skill_undo_rows(&ledger, now),
+            vec![
+                SkillRow { id: "board-status".into(), label: "board-status · removed 2h ago".into(), act: SkillAct::Restore },
+                SkillRow { id: "weekly-report".into(), label: "weekly-report · changed 2h ago".into(), act: SkillAct::Undo },
+            ]
+        );
+        let empty = skill_changes_report(&hx::ChangeLedger::default(), now);
+        assert!(empty.contains("- Nothing yet. When GrokHub adds, changes, or removes a skill on its own, it shows here with Undo."), "{empty}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn rows_paint_under_the_newest_report() {
+        let root = fixture("skill-paint");
+        let ledger = hx::ChangeLedger::load(&root);
+        let now = ledger.all().last().unwrap().at + 60_000;
+        let rows = skill_undo_rows(&ledger, now);
+        let view = grokhub_core::ChatView {
+            kind: grokhub_core::ChatKind::Result,
+            title: String::new(),
+            body: skill_changes_report(&ledger, now),
+        };
+        let other = grokhub_core::ChatView { kind: grokhub_core::ChatKind::Assistant, title: String::new(), body: "hi".into() };
+        assert_eq!(newest_skill_changes_row(&[view.clone(), other.clone()]), Some(0));
+        assert_eq!(newest_skill_changes_row(&[other]), None);
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 900.0))),
+            ..Default::default()
+        };
+        let mut hit = None;
+        let out = crate::theme::test_pass(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                hit = paint_skill_undo_rows(ui, &rows);
+            });
+        });
+        let mut texts = String::new();
+        for clipped in &out.shapes {
+            collect_text(&clipped.shape, &mut texts);
+        }
+        assert!(texts.contains("Undo\n") && texts.contains("Restore\n"), "{texts}");
+        assert!(texts.contains("weekly-report · changed 1m ago"), "{texts}");
+        assert_eq!(hit, None, "painting alone never undoes");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn collect_text(shape: &egui::Shape, out: &mut String) {
+        match shape {
+            egui::Shape::Text(t) => {
+                out.push_str(t.galley.text());
+                out.push('\n');
+            }
+            egui::Shape::Vec(v) => v.iter().for_each(|c| collect_text(c, out)),
+            _ => {}
+        }
+    }
 }
