@@ -2,6 +2,14 @@
 
 use super::*;
 
+/// Memory lines for `/recall` when `memory_backend` is `amr`.
+/// Creates `{config}/amr` on this path only. Legacy recall never calls it.
+fn recall_amr_lines(query: &str) -> Vec<String> {
+    let store = grokhub_core::amr::AmrStore::at(config::config_dir().join("amr"));
+    let _ = store.init();
+    grokhub_core::amr::MemoryEngine::recall(&store, query)
+}
+
 impl Cabin {
 
     pub(super) fn run_slash(&mut self, slash: Slash) {
@@ -774,38 +782,51 @@ impl Cabin {
                     };
                     thread_rows.push((t.title.clone(), body));
                 }
+                let backend = self.cfg.memory_backend;
                 let (tx, rx) = mpsc::channel();
                 self.recall_rx = Some(rx);
                 self.status = "Recalling…".into();
                 std::thread::spawn(move || {
-                    let soul = if mem_name == "SOUL.md" {
-                        mem_body.clone()
+                    // AMR reads amr/nodes only. Legacy keeps SOUL/USER/MEMORY/learned.
+                    // Thread rows are searched on both paths.
+                    let (mut hits, mut rows) = if backend == grokhub_core::amr::MemoryBackend::Amr
+                    {
+                        (recall_amr_lines(&q_owned), Vec::new())
                     } else {
-                        config::read_memory("SOUL.md")
+                        let soul = if mem_name == "SOUL.md" {
+                            mem_body.clone()
+                        } else {
+                            config::read_memory("SOUL.md")
+                        };
+                        let user = if mem_name == "USER.md" {
+                            mem_body.clone()
+                        } else {
+                            config::read_memory("USER.md")
+                        };
+                        let memory = if mem_name == "MEMORY.md" {
+                            mem_body.clone()
+                        } else {
+                            config::read_memory("MEMORY.md")
+                        };
+                        let corpus = [
+                            ("SOUL.md", soul),
+                            ("USER.md", user),
+                            ("MEMORY.md", memory),
+                            ("learned", insights),
+                        ];
+                        let legacy = grokhub_core::amr::LegacyMemory::new(
+                            corpus
+                                .iter()
+                                .map(|(name, body)| ((*name).to_string(), body.clone()))
+                                .collect(),
+                        );
+                        let hits = grokhub_core::amr::MemoryEngine::recall(&legacy, &q_owned);
+                        let rows = corpus
+                            .into_iter()
+                            .map(|(name, body)| (name.to_string(), body))
+                            .collect();
+                        (hits, rows)
                     };
-                    let user = if mem_name == "USER.md" {
-                        mem_body.clone()
-                    } else {
-                        config::read_memory("USER.md")
-                    };
-                    let memory = if mem_name == "MEMORY.md" {
-                        mem_body.clone()
-                    } else {
-                        config::read_memory("MEMORY.md")
-                    };
-                    let corpus = [
-                        ("SOUL.md", soul),
-                        ("USER.md", user),
-                        ("MEMORY.md", memory),
-                        ("learned", insights),
-                    ];
-                    let refs: Vec<(&str, &str)> =
-                        corpus.iter().map(|(n, b)| (*n, b.as_str())).collect();
-                    let mut hits = recall_hits(&q_owned, &refs);
-                    let mut rows: Vec<(String, String)> = corpus
-                        .iter()
-                        .map(|(n, b)| ((*n).to_string(), b.clone()))
-                        .collect();
                     rows.extend(thread_rows);
                     hits.extend(search_corpus(&q_owned, &rows));
                     let hits = dedupe_hits(hits);
