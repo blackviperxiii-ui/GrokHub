@@ -10,6 +10,9 @@ use serde_json::{json, Value};
 /// MCP server name. grok exposes tools as `grokhub-desktop__<tool>`.
 pub const DESKTOP_MCP_SERVER: &str = "grokhub-desktop";
 
+/// Spike-5c: Grok's own skill, connection, and automation tools (`grokhub --mcp-self`).
+pub const SELF_MCP_SERVER: &str = "grokhub-self";
+
 /// grok permission rule for every desktop tool.
 pub const DESKTOP_MCP_RULE: &str = "MCPTool(grokhub-desktop__*)";
 

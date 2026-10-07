@@ -27096,3 +27096,34 @@ fn heartbeat_halt_skips_every_organ_that_starts_work() {
         "Halt holds the pulse before anything else: {halt}"
     );
 }
+
+/// Spike-5c: a skill Grok made through `grokhub-self` under Always is one
+/// self_manage ledger line, and the user's Undo click removes it.
+#[test]
+fn self_made_skill_undo_click_removes_it() {
+    use crate::self_mcp::tests::{call, FakeIo};
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("self-made-undo");
+    let mut server = crate::self_mcp::SelfServer::new(&root);
+    let mut io = FakeIo::answering(false);
+    let (ok, text) = call(
+        &mut server,
+        &mut io,
+        "skill_create",
+        serde_json::json!({ "name": "inbox-zero", "instructions": "1. Archive read mail\n2. Star replies", "reason": "you do this every morning" }),
+    );
+    assert_eq!((ok, text.as_str()), (true, "created skill inbox-zero (change #1; the user can Undo it)"));
+    let folder = skills::skill_folder("inbox-zero");
+    assert!(folder.join("SKILL.md").exists());
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.skill_list = skills::list_skills();
+    let rows = cabin.skill_rows_now();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].label.starts_with("inbox-zero · added "), "{}", rows[0].label);
+    cabin.skill_row_clicked(&rows[0]);
+    assert!(!folder.exists(), "Undo removes the self-made skill");
+    let ledger = grokhub_agent::harness::ChangeLedger::load(&root);
+    let ops: Vec<(&str, &str)> = ledger.all().iter().map(|c| (c.op.as_str(), c.origin.as_str())).collect();
+    assert_eq!(ops, vec![("create", "self_manage"), ("undo", "user")]);
+    let _ = std::fs::remove_dir_all(&root);
+}

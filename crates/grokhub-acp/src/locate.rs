@@ -1102,6 +1102,26 @@ pub fn unregister_desktop_mcp(bin: &Path, cwd: &Path) -> Result<String, String> 
     grok_stdout_timeout(bin, cwd, &refs, 20)
 }
 
+/// `grok mcp add grokhub-self -- <exe> --mcp-self` (Spike-5c).
+pub fn self_mcp_add_argv(exe: &str) -> Vec<String> {
+    vec![
+        "mcp".into(),
+        "add".into(),
+        grokhub_core::SELF_MCP_SERVER.into(),
+        "--".into(),
+        exe.into(),
+        "--mcp-self".into(),
+    ]
+}
+
+/// Register Grok's self-manage server in the cabin `GROK_HOME`, never
+/// `~/.grok` (rule 5). Same isolated runner as [`register_desktop_mcp`].
+pub fn register_self_mcp(bin: &Path, cwd: &Path, exe: &Path) -> Result<String, String> {
+    let argv = self_mcp_add_argv(&exe.display().to_string());
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    grok_stdout_timeout(bin, cwd, &refs, 20)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2138,6 +2158,14 @@ mod tests {
                 .windows(2)
                 .any(|w| w[0] == "--permission-mode" && w[1] == "dontAsk"),
             "{stripped:?}"
+        );
+    }
+
+    #[test]
+    fn self_mcp_add_argv_names_the_self_server() {
+        assert_eq!(
+            self_mcp_add_argv("/usr/bin/grokhub"),
+            ["mcp", "add", "grokhub-self", "--", "/usr/bin/grokhub", "--mcp-self"]
         );
     }
 

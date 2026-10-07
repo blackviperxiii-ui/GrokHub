@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 pub use ops::{run, skill_creates_today, SelfCtx};
 
 /// The MCP server name Grok Build registers (tools show as `grokhub-self__<tool>`).
-pub const SELF_MCP_SERVER: &str = "grokhub-self";
+pub use grokhub_core::SELF_MCP_SERVER;
 
 /// At most this many new skills a day from these tools (flagged for Jeremy).
 pub const SKILL_CREATE_DAY_CAP: usize = 5;

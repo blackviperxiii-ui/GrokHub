@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Grok manages itself (Spike-5c). A new `grokhub-self` tool server, registered in the cabin's own Grok home, lets Grok list, create, change, turn off and remove its skills, connections and automations; the native Lab engine gets the same tools. Creates and changes are logged with Undo and follow your permission pill, deletes and anything needing a secret always wait for your click, a secret is typed on a card and never reaches Grok, logs or the change ledger, and nothing can touch consent, egress, Access or harness policy. At most 5 new skills a day and 2 new automations a week. No new UI.
+
 Safety loop (Spike-1a). The harness now catches a click that changed nothing, a step repeated with no effect, "done" with no check, and a claim no step backs; it retries once, backtracks, then pauses for you (hard actions never retry), and typing into a password, PIN, OTP, 2FA or verification-code field is a hard credentials action whose value never reaches spans or logs. No UI changes.
 
 Release bump list: the version strings that were in the old README (headline, both Latest rows, `--version` examples) now live in `docs/REFERENCE.md`, so `CLAUDE.md`, `.cursor/rules/repo-gates.mdc` and the versions compass list that file instead. `README.md` has no version strings. Docs only, no version bump.

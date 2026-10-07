@@ -205,7 +205,7 @@ pub use context::{
 pub use desktop_entry::{desktop_bin_path, desktop_entry_uses_prefix_bin, rewrite_desktop_entry};
 pub use desktop_mcp::{
     apply_desktop_mcp_args, desktop_mcp_args, stamp_halts, DesktopPermMode, DESKTOP_MCP_RULE,
-    DESKTOP_MCP_SERVER,
+    DESKTOP_MCP_SERVER, SELF_MCP_SERVER,
 };
 pub use diagnostics::diagnostics_bundle;
 pub use doctor::{
