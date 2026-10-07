@@ -94,8 +94,13 @@ impl Cabin {
         };
         let written = parsed.clone();
         std::thread::spawn(move || {
-            let _ = crate::skills::save_skill(&written);
+            let _ = crate::skills::save_skill_logged(
+                &written,
+                grokhub_agent::harness::Origin::User,
+                "added from Suggested",
+            );
         });
+        self.harness.skill_rows = None;
         self.remember_skill(parsed.clone());
         let name = parsed.name.clone();
         self.status = format!("Wrote skill {name}");

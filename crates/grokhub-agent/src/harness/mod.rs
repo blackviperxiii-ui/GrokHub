@@ -18,11 +18,16 @@
 //! Spike-4b: `at_rest` seals the learned tier (consent and egress logs,
 //! personal and sensitive AMR nodes) with a key held in the OS keyring, and
 //! fails closed without it.
+//!
+//! Spike-5 slice: `changes` (ChangeLedger for skills) keeps every version a
+//! self-managed skill write replaces; undo and restore need a user's typing
+//! or click (`UndoAsk`).
 
 mod access;
 mod approval;
 mod at_rest;
 mod backend;
+mod changes;
 mod consent;
 mod detect;
 mod egress;
@@ -43,6 +48,11 @@ pub use at_rest::{
 pub use backend::{
     computer_tool_names, desk_args, desk_decide, desk_span, grok_build_click, ClickOutcome,
     ClickRequest, ComputerUseBackend, DeskCall, CU_TRACE,
+};
+pub use changes::{
+    change_id, content_hash, record_skill_change, restore_skill, skill_history_dir, skill_ledger_path,
+    undo_skill_change, Change, ChangeLedger, ChangeOp, Reverted, UndoAsk, CHANGES_DIR, HISTORY_CAP,
+    LEDGER_LINE_CAP, SKILL_LEDGER_FILE,
 };
 pub use consent::{
     consent_path, grant_destination, grant_scope, revoke_grant, scope_excluded, scope_refusal,
