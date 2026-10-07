@@ -161,7 +161,7 @@ pub struct DeskCall<'a> {
 }
 
 pub fn desk_span(call: &DeskCall<'_>, chat_id: &str, turn: u32) -> Option<Span> {
-    if !matches!(call.tool, "click" | "drag" | "scroll" | "type" | "key") {
+    if !matches!(call.tool, "click" | "drag" | "scroll" | "type" | "key" | "open_app" | "focus_window" | "delete_files") {
         return None;
     }
     let trace = if chat_id.is_empty() { CU_TRACE } else { chat_id };
@@ -191,7 +191,7 @@ pub fn desk_span(call: &DeskCall<'_>, chat_id: &str, turn: u32) -> Option<Span> 
 
 pub fn computer_tool_names(access: AccessMode) -> &'static [&'static str] {
     if access.allows_computer() {
-        &["screenshot", "click", "move", "drag", "scroll", "type", "key"]
+        &["screenshot", "click", "move", "drag", "scroll", "type", "key", "open_app", "focus_window", "delete_files"]
     } else {
         &[]
     }
