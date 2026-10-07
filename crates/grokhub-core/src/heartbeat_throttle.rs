@@ -127,7 +127,7 @@ fn default_halt_hold_min() -> u32 {
     PACE_NORMAL.halt_hold_min
 }
 
-/// The default: at most one act per 15 min, 3 an hour, 8 a day (harness design §12 P2).
+/// The default (config only, no Settings control): at most one act per 15 min, 3 an hour, 8 a day (harness design §12 P2).
 pub const PACE_NORMAL: HeartbeatPace = HeartbeatPace {
     min_interval_min: 15,
     max_per_hour: 3,
@@ -136,27 +136,6 @@ pub const PACE_NORMAL: HeartbeatPace = HeartbeatPace {
     backoff_max_min: 240,
     halt_hold_min: 15,
 };
-
-pub const PACE_CALM: HeartbeatPace = HeartbeatPace {
-    min_interval_min: 60,
-    max_per_hour: 1,
-    max_per_day: 4,
-    ..PACE_NORMAL
-};
-
-pub const PACE_OFF: HeartbeatPace = HeartbeatPace {
-    max_per_day: 0,
-    ..PACE_NORMAL
-};
-
-/// Settings → Behavior → Proactive pace. A preset only sets the interval and caps.
-pub const PACE_PRESETS: [(&str, HeartbeatPace); 3] = [
-    ("Normal · every 15 min at most, 8 a day", PACE_NORMAL),
-    ("Calm · once an hour at most, 4 a day", PACE_CALM),
-    ("Off", PACE_OFF),
-];
-
-pub const PACE_CUSTOM_LABEL: &str = "Custom (app.json)";
 
 impl Default for HeartbeatPace {
     fn default() -> Self {
@@ -188,33 +167,6 @@ impl HeartbeatPace {
         let steps = (streak - self.backoff_after + 1).min(MAX_BACKOFF_STEPS);
         let cap = (u64::from(self.backoff_max_min) * MINUTE_MS).max(base);
         (base << steps).min(cap)
-    }
-}
-
-/// The preset label for `pace`, `Off` when acts are off, else `PACE_CUSTOM_LABEL`.
-pub fn pace_label(pace: &HeartbeatPace) -> &'static str {
-    if pace.is_off() {
-        return "Off";
-    }
-    PACE_PRESETS
-        .iter()
-        .find(|(_, p)| {
-            !p.is_off()
-                && p.min_interval_min == pace.min_interval_min
-                && p.max_per_hour == pace.max_per_hour
-                && p.max_per_day == pace.max_per_day
-        })
-        .map(|(l, _)| *l)
-        .unwrap_or(PACE_CUSTOM_LABEL)
-}
-
-/// Apply a preset's interval and caps; backoff and halt hold stay as configured.
-pub fn with_pace_preset(cur: &HeartbeatPace, preset: &HeartbeatPace) -> HeartbeatPace {
-    HeartbeatPace {
-        min_interval_min: preset.min_interval_min,
-        max_per_hour: preset.max_per_hour,
-        max_per_day: preset.max_per_day,
-        ..*cur
     }
 }
 
@@ -568,7 +520,11 @@ mod tests {
     #[test]
     fn off_holds_everything() {
         let mut t = HeartbeatThrottle::default();
-        assert_eq!(t.gate(&PACE_OFF, T0, false), PaceGate::Hold(PaceHold::Off));
+        let no_day = HeartbeatPace {
+            max_per_day: 0,
+            ..PACE_NORMAL
+        };
+        assert_eq!(t.gate(&no_day, T0, false), PaceGate::Hold(PaceHold::Off));
         let no_hour = HeartbeatPace {
             max_per_hour: 0,
             ..PACE_NORMAL
@@ -603,36 +559,6 @@ mod tests {
             t.gate(&PACE_NORMAL, T0 + 5 * MIN, false),
             PaceGate::Hold(PaceHold::MinInterval)
         );
-    }
-
-    #[test]
-    fn presets_and_labels() {
-        assert_eq!(pace_label(&PACE_NORMAL), "Normal · every 15 min at most, 8 a day");
-        assert_eq!(pace_label(&PACE_CALM), "Calm · once an hour at most, 4 a day");
-        assert_eq!(pace_label(&PACE_OFF), "Off");
-        let custom = HeartbeatPace {
-            max_per_day: 20,
-            ..PACE_NORMAL
-        };
-        assert_eq!(pace_label(&custom), PACE_CUSTOM_LABEL);
-        let tuned = HeartbeatPace {
-            backoff_after: 5,
-            halt_hold_min: 30,
-            ..PACE_NORMAL
-        };
-        let calm = with_pace_preset(&tuned, &PACE_CALM);
-        assert_eq!(
-            calm,
-            HeartbeatPace {
-                min_interval_min: 60,
-                max_per_hour: 1,
-                max_per_day: 4,
-                backoff_after: 5,
-                backoff_max_min: 240,
-                halt_hold_min: 30,
-            }
-        );
-        assert_eq!(pace_label(&calm), "Calm · once an hour at most, 4 a day");
     }
 
     #[test]

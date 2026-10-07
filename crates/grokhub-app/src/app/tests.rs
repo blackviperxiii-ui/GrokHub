@@ -26736,7 +26736,7 @@ fn pace_spans() -> Vec<grokhub_agent::harness::Span> {
 
 #[test]
 fn heartbeat_pace_holds_while_busy_and_traces_reasons_without_content() {
-    use grokhub_core::{ProactiveAct, PACE_CALM};
+    use grokhub_core::{HeartbeatPace, ProactiveAct, PACE_NORMAL};
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("heartbeat-pace-busy");
     let _ = std::fs::remove_file(grokhub_agent::harness::span_path(
@@ -26786,9 +26786,13 @@ fn heartbeat_pace_holds_while_busy_and_traces_reasons_without_content() {
     .expect("raw spans");
     assert!(!raw.contains("standup"), "the draft never reaches the trace: {raw}");
 
-    // Config override: Calm needs an hour between acts, Normal 15 min.
+    // Config override (as from app.json): one an hour instead of three.
     assert!(cabin.heartbeat_may(ProactiveAct::Ideas, T0 + 45_000 + 15 * MIN));
-    cabin.cfg.heartbeat = PACE_CALM;
+    cabin.cfg.heartbeat = HeartbeatPace {
+        min_interval_min: 60,
+        max_per_hour: 1,
+        ..PACE_NORMAL
+    };
     cabin.heartbeat_outcome(ProactiveAct::Ideas, grokhub_core::ActOutcome::Useful);
     assert!(!cabin.heartbeat_may(ProactiveAct::Review, T0 + 45_000 + 45 * MIN));
     assert_eq!(pace_spans().last().map(|s| s.result.clone()).as_deref(), Some("hour_cap"));

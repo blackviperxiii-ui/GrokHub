@@ -6,16 +6,10 @@
 
 use super::*;
 use grokhub_agent::harness as hx;
-use grokhub_core::{
-    pace_label, with_pace_preset, ActOutcome, PaceGate, ProactiveAct, PACE_PRESETS,
-};
+use grokhub_core::{ActOutcome, PaceGate, ProactiveAct};
 
 /// Span session for pulse decisions, beside the chat span files.
 pub(super) const HEARTBEAT_TRACE: &str = "heartbeat";
-
-/// One line, like the Quiet hours hint. The acts it covers are in the CHANGELOG.
-const PACE_HINT: &str =
-    "How often Grok acts on its own. It waits while you're busy, slows after dismissals, and Halt pauses it.";
 
 impl Cabin {
     /// The user is mid-turn or mid-thought: a live or queued turn, text in the
@@ -106,23 +100,5 @@ impl Cabin {
         .on_path("heartbeat");
         span.decision = decision.into();
         let _ = hx::append_span(&crate::config::config_dir(), &span);
-    }
-
-    /// Settings → Behavior: one dropdown for the pace presets.
-    pub(super) fn ui_heartbeat_pace(&mut self, ui: &mut egui::Ui) {
-        let labels: Vec<String> = PACE_PRESETS.iter().map(|(l, _)| (*l).to_string()).collect();
-        let picked = crate::cards::settings_dropdown(
-            ui,
-            "Proactive pace",
-            PACE_HINT,
-            pace_label(&self.cfg.heartbeat),
-            &labels,
-        );
-        if let Some((_, preset)) = picked.and_then(|i| PACE_PRESETS.get(i)) {
-            self.cfg.heartbeat = with_pace_preset(&self.cfg.heartbeat, preset);
-            self.pace_traced.clear();
-            self.persist_cfg();
-            self.status = "Saved".into();
-        }
     }
 }
