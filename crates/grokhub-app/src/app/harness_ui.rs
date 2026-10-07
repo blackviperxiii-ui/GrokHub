@@ -250,6 +250,8 @@ pub(super) struct HarnessState {
     pub inbox_open: bool,
     /// The card an inbox row asked to scroll into view, painted once.
     pub jump: Option<&'static str>,
+    /// Spike-8a local indexers: the scheduler, the in-memory index, the asks.
+    pub indexer: super::indexer_ui::IndexerUi,
 }
 
 /// Readonly until the desktop switch is on; Full only after Grant full.
@@ -378,6 +380,7 @@ impl Cabin {
             + usize::from(self.perm_ask.is_some())
             + self.perm_queue.len()
             + usize::from(self.elicit_ask.is_some())
+            + self.harness.indexer.asks.len()
     }
 
     pub(super) fn trace_id(&self) -> String {
@@ -1260,6 +1263,8 @@ impl Cabin {
                 self.resolve_grant_full(grant, "Jeremy kept Supervised");
             }
         }
+        // Spike-8a: in-context scope asks, same card shape, click only.
+        self.paint_scope_asks(ui);
     }
 
     /// An inbox row asked for this card: bring what was just painted (from
@@ -1278,19 +1283,19 @@ impl Cabin {
 /// White accents on the dark cabin: #E7E9EA ring and title on the surface
 /// fill, the approval enter motion, the thinking rim while a reply runs. No
 /// Thinking label, no pulse at rest.
-struct CardText<'a> {
-    eyebrow: &'a str,
-    title: &'a str,
-    action: &'a str,
-    note: &'a str,
-    primary: &'a str,
-    secondary: &'a str,
+pub(super) struct CardText<'a> {
+    pub(super) eyebrow: &'a str,
+    pub(super) title: &'a str,
+    pub(super) action: &'a str,
+    pub(super) note: &'a str,
+    pub(super) primary: &'a str,
+    pub(super) secondary: &'a str,
     /// Hard: danger Approve, 2px stroke, monospace command. Soft: white primary, proportional.
-    hard: bool,
+    pub(super) hard: bool,
 }
 
 /// Some(true) primary, Some(false) secondary. Click only: no Enter.
-fn harness_card(
+pub(super) fn harness_card(
     ui: &mut egui::Ui,
     id: (&str, String),
     text: CardText<'_>,

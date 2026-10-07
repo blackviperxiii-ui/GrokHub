@@ -28,6 +28,6 @@
 - Diagnose never elevates: a probe marked `needs_admin` (zypper verify) is skipped with "needs admin, skipped". Apt uses `dpkg --audit` because `apt-get check` takes the dpkg lock.
 - Findings are worded by the interpreter, so diagnose makes no model call. The first sentence never names a command.
 - Fix steps never type a password: Linux steps that need root use `pkexec` (polkit's own prompt), Windows ones a UAC `RunAs`; `sudo -S` or `--stdin` is hard credentials. Grok Build replies `STEP_OK` or `STEP_FAILED`; no reply or a send it couldn't take stops the fix. A failed snapshot step keeps going on the file backup. Undo can't roll a snapshot back; it prints the plain steps with the snapshot's name.
-- `probes_for_intent` is narrow on purpose: "the build is broken on my machine" still goes to the model. No `system_state` grant means zero probes and the `SCOPE_ASK` line, never a new card or chrome.
+- `probes_for_intent` is narrow on purpose: "the build is broken on my machine" still goes to the model. No `system_state` grant means zero probes, the `SCOPE_ASK` line, and Spike-8a's `ScopeAsks` card (`SCOPE_ASK_WHY`); no new chrome.
 ## See also
 - [harness](harness.md), [slash](slash.md), [grokhub-agent](grokhub-agent.md)

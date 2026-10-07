@@ -1,7 +1,8 @@
 //! Spike-8b: `/diagnose` and the "something's wrong with my computer" intent.
 //! The cabin runs the read-only probes (`grokhub_agent::repair`) off the UI
 //! thread and posts the plain findings as a chat line. No new chrome (D2).
-//! Without the `system_state` grant no probe runs and the answer is the ask.
+//! Without the `system_state` grant no probe runs: the answer is the ask, and
+//! Spike-8a's inline ask card (`ScopeAsks`) is queued in the Work tree.
 //!
 //! Spike-9: findings with a safe fix get one proposal card each on the
 //! approval stack (What's wrong / What I'll do / Why / How to undo / Risk).
@@ -14,8 +15,8 @@ use super::*;
 use grokhub_agent::harness as hx;
 use grokhub_agent::repair;
 
-/// A diagnose answer and the fixes it found.
-pub(super) type DiagnoseDone = (String, Vec<repair::FixPlan>);
+/// A diagnose answer, whether it needs the System state ask, and the fixes it found.
+pub(super) type DiagnoseDone = (String, bool, Vec<repair::FixPlan>);
 
 /// Fix proposals and the fix being applied.
 #[derive(Debug, Default)]
@@ -122,7 +123,7 @@ impl Cabin {
             };
             let report = repair::diagnose(&ctx, &probes);
             let plans = repair::plans_for(&report.findings, os, &repair::on_path);
-            let _ = tx.send((repair::report_text(&report), plans));
+            let _ = tx.send((repair::report_text(&report), report.ask.is_some(), plans));
         });
     }
 
@@ -132,7 +133,11 @@ impl Cabin {
             return;
         };
         match rx.try_recv() {
-            Ok((body, plans)) => {
+            Ok((body, ask, plans)) => {
+                if ask {
+                    let ledger = hx::ConsentLedger::load_now(&crate::config::config_dir());
+                    self.harness.indexer.asks.ask(hx::Scope::SystemState, repair::SCOPE_ASK_WHY, &ledger, now_ms());
+                }
                 let body = if self.harness.diagnose_slash { mark_slash_result(&body) } else { body };
                 self.live_mut().push(("assistant".into(), body));
                 self.status.clear();
