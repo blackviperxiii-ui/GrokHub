@@ -22,7 +22,7 @@
 - Grok Build computer use (via `grok mcp add grokhub-desktop -- <exe> --mcp-desktop`), Settings → Let Grok control the desktop, and the harness spans and parked cards in the cabin.
 ## Non-obvious
 - `desktop_control` is re-read from `app.json` for every call, so the Settings switch takes effect without restarting the server. Halt is a stamp file compared with the process start time (`stamp_halts`).
-- Coordinates are pixels in the last screenshot of that monitor (or `all`), not physical pixels.
+- Coordinates are pixels in the last screenshot of that monitor (or `all`), not physical pixels; before any screenshot they are the monitor's native pixels (`COORD_NOTE`).
 - On Linux the cabin holds the portal session and lock; the MCP process talks to it over `desk.sock` (broker), and a second process cannot open another session.
 - An update can move the exe, so startup re-registers unless this exact binary path is in the cabin `config.toml` (TOML doubles Windows backslashes).
 - Desktop tools are on the unwatched-Ask deny list (`ASK_DENY_RULES`); Plan and btw deny them even on Auto or Always.

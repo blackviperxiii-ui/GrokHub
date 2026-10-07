@@ -23,6 +23,6 @@ The format follows Meta's "compass, not encyclopedia" write-up (Engineering at M
 
 ## Keeping them true
 
-`crates/grokhub-core/tests/compass_paths.rs` runs in the normal `cargo test --workspace` CI job. It fails when a backtick-quoted repo path (anything under `crates/`, `scripts/`, `docs/`, `packaging/`, `.cursor/`, `.github/`, or a root file such as `CLAUDE.md`) no longer exists, when a backtick-quoted identifier (snake_case, CamelCase, SCREAMING_CASE, or a::b paths) no longer appears anywhere in the tree, when a relative link breaks, when a file leaves 25–35 lines or drops a section, or when this table misses a file.
+`crates/grokhub-core/tests/compass_paths.rs` runs in the normal `cargo test --workspace` CI job. It fails when a backtick-quoted repo path (anything under `crates/`, `scripts/`, `docs/`, `packaging/`, `research/`, `screenshots/`, `.cursor/`, `.github/`, or a root file such as `CLAUDE.md`) no longer exists, when a backtick-quoted identifier (snake_case, CamelCase, SCREAMING_CASE, or a::b paths) no longer appears in those dirs or root files (the compass files and the test itself do not count), when a relative link breaks, when a file leaves 25–35 lines or drops a section, or when this table misses a file.
 
 Run it with `cargo test -p grokhub-core --test compass_paths`. When it fails, fix the compass file in the same PR that moved the code. Write concrete paths (no `<placeholders>` or globs inside a repo path) so the check can see them.

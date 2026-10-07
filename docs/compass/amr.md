@@ -23,8 +23,8 @@
 - `/recall` in the cabin, gated by `AppConfig::memory_backend` in `crates/grokhub-app/src/config.rs`.
 ## Non-obvious
 - The JSON key is snake_case `memory_backend` while the rest of `AppConfig` is camelCase. No Settings control exists.
-- `AmrStore::at` and `recall` never create directories; only `init` does, and the app calls it on the amr path only.
-- `recall` is a case-insensitive substring match, sorted by id, capped at 20; a broken store reads as empty.
+- `AmrStore::at` and `recall` never create directories. `init` makes the tree, and `remember` / `link` also `create_dir_all` their `nodes/` or `edges/` dir, so a new write path can create `amr/` without `init`.
+- `recall` is a case-insensitive substring match, sorted by id, capped at 20. A missing `nodes/` dir reads as empty; a bad node file is skipped and the rest still return.
 - Scratch is a store flag (`set_scratch`), not a trait method: writes return `AmrError::Scratch`.
 - Not synced: do not add `amr/` to hub sync. `forget` is M1+ (a tombstone). Separate from the native engine's sqlite memory in `crates/grokhub-agent/src/memory.rs`.
 - The trait doc cites "harness design §9.4"; that design doc is not in `docs/superpowers/specs/`.
