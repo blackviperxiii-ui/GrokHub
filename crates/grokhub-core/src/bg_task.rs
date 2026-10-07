@@ -65,7 +65,7 @@ pub fn live_send(queue_asked: bool, grok_tasks_open: bool) -> LiveSend {
 
 /// A live reply can move to the background only when it is a plain headless
 /// `grok -p` chat turn. ACP (Ask) needs you at the permission card, scheduled
-/// and phone runs settle their own bookkeeping when they end, and a capture,
+/// and `/send` runs settle their own bookkeeping when they end, and a capture,
 /// verify, or host step still has work queued behind the turn.
 pub fn can_detach_turn(headless: bool, acp: bool, scheduled: bool, side_work: bool) -> bool {
     headless && !acp && !scheduled && !side_work

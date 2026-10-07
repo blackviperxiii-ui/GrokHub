@@ -5,6 +5,10 @@
 
 use grokhub_core::host_safety;
 
+/// Spike-1c path D `--deny` rules for GB's own computer-use tools. They live
+/// in `grokhub_acp` next to `apply_desktop_spawn_args`, which adds them.
+pub use grokhub_acp::BUILTIN_CU_DENY;
+
 /// Hard class: Always / Auto / Full cannot skip. Parks a Jeremy approval card.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HardClass {
@@ -68,8 +72,14 @@ fn command_arg(arguments: &str) -> Option<String> {
     v.get("command").and_then(|c| c.as_str()).map(str::to_string)
 }
 
-/// Classify a tool call. Floor wins over class.
+/// Classify a tool call. Floor wins over class. A `use_tool` call (deferred
+/// MCP tools, Spike-2b) is classified as the tool it names.
 pub fn classify(name: &str, arguments: &str) -> HardHit {
+    if name == "use_tool" {
+        if let Some((target, inner)) = use_tool_target(arguments) {
+            return classify(&target, &inner);
+        }
+    }
     if let Some(floor) = hard_floor(name, arguments) {
         return HardHit::Floor(floor);
     }
@@ -77,6 +87,21 @@ pub fn classify(name: &str, arguments: &str) -> HardHit {
         Some(class) => HardHit::Class(class),
         None => HardHit::None,
     }
+}
+
+/// The `server__tool` name and its JSON arguments inside a `use_tool` call.
+fn use_tool_target(arguments: &str) -> Option<(String, String)> {
+    let v: serde_json::Value = serde_json::from_str(arguments).ok()?;
+    let name = v.get("name")?.as_str()?.trim();
+    if name.is_empty() || name == "use_tool" {
+        return None;
+    }
+    let inner = match v.get("arguments") {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(a) if a.is_object() => a.to_string(),
+        _ => "{}".into(),
+    };
+    Some((name.to_string(), inner))
 }
 
 /// Classify a Grok Build permission ask (ACP / native side ask) from its title and
@@ -90,6 +115,9 @@ pub fn classify_ask(title: &str, action: &str) -> HardHit {
     if let Some(class) = command_class(&action.to_ascii_lowercase()) {
         return HardHit::Class(class);
     }
+    if let Some(rule) = ask_click(title, action) {
+        return HardHit::Class(rule.class);
+    }
     let slug = title.trim().to_ascii_lowercase().replace([' ', '-'], "_");
     let typing = field_words(title).iter().any(|w| matches!(w.as_str(), "type" | "typing" | "fill" | "input"));
     if typing && (credential_hint(title) || credential_hint(action)) {
@@ -101,10 +129,33 @@ pub fn classify_ask(title: &str, action: &str) -> HardHit {
     }
 }
 
+/// Paths B and D: an ask or tool card that clicks a control. The label is
+/// the first quoted text in the action, else the action after "click".
+fn ask_click(title: &str, action: &str) -> Option<ClickRule> {
+    let clicks = |s: &str| field_words(s).iter().any(|w| w == "click" || w == "tap");
+    if !clicks(title) && !clicks(action) {
+        return None;
+    }
+    let quoted = action.split(['"', '\u{201c}', '\u{201d}']).nth(1).filter(|q| !q.trim().is_empty());
+    let label = match quoted {
+        Some(q) => q.to_string(),
+        None => {
+            let words = field_words(action);
+            let from = words.iter().position(|w| w == "click" || w == "tap").map_or(0, |i| i + 1);
+            words[from..].iter().filter(|w| !matches!(w.as_str(), "on" | "the" | "button")).cloned().collect::<Vec<_>>().join(" ")
+        }
+    };
+    click_target_class(None, &label, "")
+}
+
 /// Path A: a `grokhub-desktop` tool call. Typed text is checked like a shell
 /// command (a terminal may have focus). Key combos that end the session are
 /// irreversible OS. Clicks, moves, scrolls, and screenshots are soft.
 pub fn desk_classify(tool: &str, args: &serde_json::Value) -> HardHit {
+    // Spike-2a: a Cua Driver call is read as the desk tool it matches.
+    if let Some((desk, mapped)) = crate::harness::cua::cua_as_desk(tool, args) {
+        return desk_classify(desk, &mapped);
+    }
     match tool {
         "type" => {
             let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("");
@@ -116,9 +167,9 @@ pub fn desk_classify(tool: &str, args: &serde_json::Value) -> HardHit {
             }
         }
         "key" => {
-            let keys = args
-                .get("keys")
-                .and_then(|v| v.as_str())
+            let keys = ["keys", "key"]
+                .iter()
+                .find_map(|k| args.get(*k).and_then(|v| v.as_str()))
                 .unwrap_or("")
                 .to_ascii_lowercase()
                 .replace(' ', "");
@@ -127,12 +178,340 @@ pub fn desk_classify(tool: &str, args: &serde_json::Value) -> HardHit {
                 "ctrl+alt+delete" | "ctrl+alt+del" | "ctrl+alt+backspace" | "ctrl+alt+end"
             ) {
                 HardHit::Class(HardClass::IrreversibleOs)
+            } else if is_delete_key(&keys) && file_manager_window(args) {
+                HardHit::Class(HardClass::Delete)
             } else {
                 HardHit::None
             }
         }
-        _ => HardHit::None,
+        // An app name is checked like a shell head (`shutdown` is not an app to open).
+        "open_app" => {
+            let app = args.get("app").and_then(|v| v.as_str()).unwrap_or("");
+            classify("run_terminal_command", &serde_json::json!({ "command": app }).to_string())
+        }
+        "focus_window" => HardHit::None,
+        // Spike-2b: what the control under the click does, checked before it runs.
+        "click" => match click_rule(args) {
+            Some(rule) => HardHit::Class(rule.class),
+            None => HardHit::None,
+        },
+        // `delete_files` and any later named tool: the same name words as MCP tools.
+        other => match name_class(&other.to_ascii_lowercase()) {
+            Some(class) => HardHit::Class(class),
+            None => HardHit::None,
+        },
     }
+}
+
+/// Spike-2b: the rule a click target matched. `id` names the rule
+/// (`send:Send`, `money:Place order`), never the on-screen label.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClickRule {
+    pub class: HardClass,
+    pub id: String,
+}
+
+impl ClickRule {
+    fn new(class: HardClass, word: &str) -> Self {
+        let mut w = word.to_string();
+        if let Some(first) = w.get_mut(0..1) {
+            first.make_ascii_uppercase();
+        }
+        Self { class, id: format!("{}:{w}", class.as_str()) }
+    }
+
+    /// What the card says Grok will click: the rule's word (`Send`).
+    pub fn word(&self) -> &str {
+        self.id.split_once(':').map_or("", |(_, w)| w)
+    }
+}
+
+/// Click label phrases per class, matched as whole words in order, any case.
+/// Longer phrases come first so the rule id names the longest match.
+const CLICK_MONEY: &[&str] =
+    &["confirm payment", "place order", "pay", "buy", "purchase", "checkout", "subscribe", "donate", "transfer"];
+const CLICK_SEND: &[&str] = &["send", "resend", "post", "publish", "reply", "tweet", "share", "upload"];
+const CLICK_DELETE: &[&str] =
+    &["empty recycle bin", "empty trash", "empty bin", "delete", "remove", "erase", "discard"];
+const CLICK_OS: &[&str] = &["factory reset", "reset", "wipe", "format"];
+
+/// "Reset zoom", "Reset view": a reset of what the window shows, not of data.
+const SOFT_RESETS: &[&str] = &["zoom", "view", "filter", "filters", "search", "sort", "layout", "columns", "selection", "font", "scale"];
+/// "Format" is only irreversible on a disk ("Format cells" is a dialog).
+const FORMAT_TARGETS: &[&str] = &["disk", "drive", "partition", "volume", "usb", "sd", "card", "device", "storage"];
+/// A label that undoes the action reads as soft ("Undo send", "Don't save").
+const UNDO_LEADS: &[&str] = &["undo", "don t", "dont", "do not"];
+/// Roles that show text and act on nothing.
+const TEXT_ROLES: &[&str] =
+    &["label", "static text", "statictext", "axstatictext", "heading", "paragraph", "tooltip", "status bar", "title bar"];
+/// Window or app words that make "Submit" a send or a payment.
+const SUBMIT_SEND: &[&str] =
+    &["message", "messages", "compose", "mail", "email", "chat", "reply", "comment", "post", "tweet", "inbox", "draft"];
+const SUBMIT_MONEY: &[&str] = &["checkout", "payment", "pay", "cart", "billing", "order", "purchase"];
+
+/// A declared effect (Cua tool metadata) as a hard class.
+fn effect_class(effect: &str) -> Option<HardClass> {
+    let words = field_words(effect);
+    let has = |list: &[&str]| words.iter().any(|w| list.contains(&w.as_str()));
+    if has(&["money", "payment", "purchase", "pay", "spend"]) {
+        Some(HardClass::Money)
+    } else if has(&["send", "post", "publish", "upload", "share", "message"]) {
+        Some(HardClass::Send)
+    } else if has(&["delete", "destructive", "remove", "erase"]) {
+        Some(HardClass::Delete)
+    } else if has(&["credentials", "credential", "secret", "password"]) {
+        Some(HardClass::Credentials)
+    } else if has(&["irreversible", "reset", "wipe", "format"]) {
+        Some(HardClass::IrreversibleOs)
+    } else {
+        None
+    }
+}
+
+/// Index where `phrase` starts as whole words in `words`.
+fn phrase_at(words: &[String], phrase: &str) -> Option<usize> {
+    let p: Vec<&str> = phrase.split(' ').collect();
+    (0..words.len().saturating_sub(p.len() - 1)).find(|&i| p.iter().enumerate().all(|(j, w)| words[i + j] == *w))
+}
+
+/// What a click on this control will do. A declared hard `effect` beats the
+/// label; a declared soft effect never makes a hard label soft (stricter
+/// only, D1). Labels match as whole words, any case, like
+/// `credential_field`. Unknown or empty labels are soft (`None`).
+pub fn click_target_class(effect: Option<&str>, label: &str, role: &str) -> Option<ClickRule> {
+    click_target_in(effect, label, role, "")
+}
+
+/// [`click_target_class`] with the window or app title as `context`, which
+/// decides whether "Submit" sends a message or pays.
+pub fn click_target_in(effect: Option<&str>, label: &str, role: &str, context: &str) -> Option<ClickRule> {
+    if let Some(class) = effect.and_then(effect_class) {
+        return Some(ClickRule { class, id: format!("{}:effect", class.as_str()) });
+    }
+    let words = field_words(label);
+    if words.is_empty() || TEXT_ROLES.contains(&field_words(role).join(" ").as_str()) {
+        return None;
+    }
+    let joined = words.join(" ");
+    if UNDO_LEADS.iter().any(|u| joined == *u || joined.starts_with(&format!("{u} "))) {
+        return None;
+    }
+    for (class, list) in [
+        (HardClass::Money, CLICK_MONEY),
+        (HardClass::Send, CLICK_SEND),
+        (HardClass::Delete, CLICK_DELETE),
+        (HardClass::IrreversibleOs, CLICK_OS),
+    ] {
+        for phrase in list {
+            let Some(at) = phrase_at(&words, phrase) else {
+                continue;
+            };
+            let rest = &words[at + phrase.split(' ').count()..];
+            let soft = match *phrase {
+                "reset" => rest.iter().any(|w| SOFT_RESETS.contains(&w.as_str())),
+                "format" => !rest.is_empty() && !rest.iter().any(|w| FORMAT_TARGETS.contains(&w.as_str())),
+                _ => false,
+            };
+            if !soft {
+                return Some(ClickRule::new(class, phrase));
+            }
+        }
+    }
+    if words.iter().any(|w| w == "submit") {
+        let around: Vec<String> = words.iter().cloned().chain(field_words(context)).collect();
+        let has = |list: &[&str]| around.iter().any(|w| list.contains(&w.as_str()));
+        if has(SUBMIT_MONEY) {
+            return Some(ClickRule::new(HardClass::Money, "submit"));
+        }
+        if has(SUBMIT_SEND) {
+            return Some(ClickRule::new(HardClass::Send, "submit"));
+        }
+    }
+    None
+}
+
+/// Where a click's target came from, for the span: the cabin's AX read
+/// (`ax`), the caller's own args (`args`), or nothing found (`unknown`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClickTarget {
+    pub label: String,
+    pub role: String,
+    pub effect: Option<String>,
+    pub context: String,
+    pub source: &'static str,
+}
+
+/// Cabin hint key on a desk click: what the gate read at the click point
+/// (`{"label","role","effect","window"}` or `{"unknown":true}`). Stripped
+/// before the call runs and before any span or park file.
+pub const TARGET_HINT: &str = "_target";
+
+fn str_at<'a>(v: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter().find_map(|k| v.get(*k).and_then(|s| s.as_str()).filter(|s| !s.trim().is_empty()))
+}
+
+/// The control a desk click lands on: the cabin's [`TARGET_HINT`], else what
+/// the caller named (`element`, `label`, `role`, `effect`).
+pub fn click_target(args: &serde_json::Value) -> ClickTarget {
+    const LABELS: &[&str] = &["label", "ax_label", "aria_label", "title", "name"];
+    const ROLES: &[&str] = &["role", "ax_role"];
+    let hint = args.get(TARGET_HINT).filter(|h| h.is_object());
+    let element = args.get("element").filter(|e| e.is_object());
+    let context = [hint, Some(args)]
+        .into_iter()
+        .flatten()
+        .find_map(|v| str_at(v, &["window", "app"]))
+        .unwrap_or("")
+        .to_string();
+    let effect = [hint, element, Some(args)].into_iter().flatten().find_map(|v| str_at(v, &["effect"])).map(str::to_string);
+    if let Some(label) = hint.and_then(|h| str_at(h, LABELS)) {
+        let role = hint.and_then(|h| str_at(h, ROLES)).unwrap_or("");
+        return ClickTarget { label: label.into(), role: role.into(), effect, context, source: "ax" };
+    }
+    let own = [element, Some(args)].into_iter().flatten().find_map(|v| str_at(v, &["label", "ax_label", "aria_label"]));
+    if let Some(label) = own {
+        let role = [element, Some(args)].into_iter().flatten().find_map(|v| str_at(v, ROLES)).unwrap_or("");
+        return ClickTarget { label: label.into(), role: role.into(), effect, context, source: "args" };
+    }
+    let unknown = hint.is_some_and(|h| h.get("unknown").and_then(|u| u.as_bool()) == Some(true));
+    ClickTarget { effect, context, source: if unknown { "unknown" } else { "" }, ..ClickTarget::default() }
+}
+
+/// The rule a desk click matches, if any.
+pub fn click_rule(args: &serde_json::Value) -> Option<ClickRule> {
+    let t = click_target(args);
+    click_target_in(t.effect.as_deref(), &t.label, &t.role, &t.context)
+}
+
+/// The hard card line for a parked click: "Grok wants to click Send in Mail".
+pub fn click_action(args: &serde_json::Value, rule: &ClickRule) -> String {
+    let t = click_target(args);
+    let place = if t.context.is_empty() { "the focused window".to_string() } else { t.context.chars().take(60).collect() };
+    format!("Grok wants to click {} in {place}", rule.word())
+}
+
+/// Delete and Shift+Delete. On a file manager they delete the selection.
+fn is_delete_key(keys: &str) -> bool {
+    matches!(keys, "delete" | "del" | "shift+delete" | "shift+del")
+}
+
+/// Window class or title words of a file manager. The path A gate adds the
+/// focused window as `window` before it asks `decide`.
+const FILE_MANAGER_WINDOWS: &[&str] =
+    &["cabinetwclass", "explorer.exe", "dolphin", "nautilus", "nemo", "thunar", "pcmanfm", "caja", "konqueror"];
+
+fn file_manager_window(args: &serde_json::Value) -> bool {
+    let window = args.get("window").and_then(|v| v.as_str()).unwrap_or("").to_ascii_lowercase();
+    FILE_MANAGER_WINDOWS.iter().any(|w| window.contains(w))
+}
+
+/// What a card, park file, and span say about a `delete_files` call: the
+/// verb, the count, and every path, so Approve names exactly what goes.
+pub fn delete_files_action(args: &serde_json::Value) -> String {
+    let paths: Vec<&str> = args
+        .get("paths")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|p| p.as_str()).collect())
+        .unwrap_or_default();
+    let verb = if args.get("to_trash").and_then(|v| v.as_bool()) == Some(true) {
+        "move to the trash"
+    } else {
+        "delete"
+    };
+    let noun = if paths.len() == 1 { "path" } else { "paths" };
+    format!("{verb} {} {noun}: {}", paths.len(), paths.join(", "))
+}
+
+/// The paths a shell delete names, in order: the words after a delete head
+/// (or `gio trash`) that are not flags. Quotes are dropped. Empty when the
+/// command deletes nothing it names (a glob is kept as written).
+pub fn delete_targets(cmd: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for seg in cmd.split([';', '|', '&']).map(str::trim).filter(|s| !s.is_empty()) {
+        let words = shell_words(seg);
+        let Some(at) = head_at(&words) else {
+            continue;
+        };
+        let head = leaf(&words[at]).to_ascii_lowercase();
+        let rest = if head == "gio" && matches!(words.get(at + 1).map(|w| w.to_ascii_lowercase()).as_deref(), Some("trash" | "remove")) {
+            &words[at + 2..]
+        } else if DELETE_HEADS.contains(&head.as_str()) {
+            &words[at + 1..]
+        } else {
+            continue;
+        };
+        let cmd_style = matches!(head.as_str(), "del" | "erase" | "rd");
+        for w in rest {
+            let lw = w.to_ascii_lowercase();
+            let flag = w.starts_with('-') || (cmd_style && lw.len() == 2 && lw.starts_with('/'));
+            if !flag && !w.is_empty() && lw != "-path" && lw != "-literalpath" {
+                out.push(w.clone());
+            }
+        }
+    }
+    out
+}
+
+/// Words of one shell segment. Single and double quotes group; backslashes
+/// stay as written (Windows paths).
+fn shell_words(seg: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    for c in seg.chars() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), c) => cur.push(c),
+            (None, '"' | '\'') => quote = Some(c),
+            (None, c) if c.is_whitespace() => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            (None, c) => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out.into_iter().map(|w| unquote(&w)).collect()
+}
+
+fn unquote(w: &str) -> String {
+    w.trim_matches(|c| matches!(c, '"' | '\'' | '(' | ')' | '{' | '}')).to_string()
+}
+
+fn leaf(w: &str) -> &str {
+    let w = w.rsplit(['/', '\\']).next().unwrap_or(w);
+    w.strip_suffix(".exe").unwrap_or(w)
+}
+
+/// Index of the real command head in a segment's words, past `sudo` / `doas`,
+/// `xargs` and its flags, `cmd /c`, `powershell -c` (and `pwsh`, `bash -c`, `sh -c`).
+fn head_at(words: &[String]) -> Option<usize> {
+    let mut i = 0;
+    while i < words.len() {
+        let w = leaf(&words[i]).to_ascii_lowercase();
+        match w.as_str() {
+            "sudo" | "doas" | "nohup" | "command" | "exec" => i += 1,
+            "xargs" | "powershell" | "pwsh" => {
+                i += 1;
+                while words.get(i).is_some_and(|n| n.starts_with('-')) {
+                    i += 1;
+                }
+            }
+            "cmd" => {
+                i += 1;
+                while words.get(i).is_some_and(|n| n.starts_with('/')) {
+                    i += 1;
+                }
+            }
+            "bash" | "sh" | "zsh" if words.get(i + 1).is_some_and(|n| n == "-c") => i += 2,
+            "" => i += 1,
+            _ => return Some(i),
+        }
+    }
+    None
 }
 
 /// Whole words that mark a credential field in an AX role or label, a field
@@ -321,6 +700,55 @@ pub const HEADLESS_DENY_RULES: &[&str] = &[
     "MCPTool(*trash*)",
     "MCPTool(*remove_file*)",
     "MCPTool(*purge*)",
+    // Hard class: delete on Windows, the trash, and the Recycle Bin (Spike-1b)
+    "Bash(del *)",
+    "Bash(sudo del *)",
+    "Bash(*; del *)",
+    "Bash(*&& del *)",
+    "Bash(*| del *)",
+    "Bash(erase *)",
+    "Bash(sudo erase *)",
+    "Bash(*; erase *)",
+    "Bash(*&& erase *)",
+    "Bash(*| erase *)",
+    "Bash(rd *)",
+    "Bash(sudo rd *)",
+    "Bash(*; rd *)",
+    "Bash(*&& rd *)",
+    "Bash(*| rd *)",
+    "Bash(remove-item *)",
+    "Bash(sudo remove-item *)",
+    "Bash(*; remove-item *)",
+    "Bash(*&& remove-item *)",
+    "Bash(*| remove-item *)",
+    "Bash(Remove-Item *)",
+    "Bash(sudo Remove-Item *)",
+    "Bash(*; Remove-Item *)",
+    "Bash(*&& Remove-Item *)",
+    "Bash(*| Remove-Item *)",
+    "Bash(remove-itemsafely *)",
+    "Bash(sudo remove-itemsafely *)",
+    "Bash(*; remove-itemsafely *)",
+    "Bash(*&& remove-itemsafely *)",
+    "Bash(*| remove-itemsafely *)",
+    "Bash(Remove-ItemSafely *)",
+    "Bash(sudo Remove-ItemSafely *)",
+    "Bash(*; Remove-ItemSafely *)",
+    "Bash(*&& Remove-ItemSafely *)",
+    "Bash(*| Remove-ItemSafely *)",
+    "Bash(recycle *)",
+    "Bash(sudo recycle *)",
+    "Bash(*; recycle *)",
+    "Bash(*&& recycle *)",
+    "Bash(*| recycle *)",
+    "Bash(*gio trash *)",
+    "Bash(*gio remove *)",
+    "Bash(*trash:/*)",
+    "Bash(*SendToRecycleBin*)",
+    "Bash(*sendtorecyclebin*)",
+    "Bash(*find * -delete*)",
+    "Bash(*-exec rm *)",
+    "Bash(*-execdir rm *)",
     // Hard class: irreversible OS
     "Bash(shutdown*)",
     "Bash(sudo shutdown*)",
@@ -423,13 +851,28 @@ pub const HEADLESS_DENY_RULES: &[&str] = &[
 /// Hard patterns no GB `--deny` rule can express, with a sample each. GB
 /// rules match a shell command line or a tool name, never a tool's args or a
 /// separator without spaces. These stay gated on paths A, B, and E only, and a
-/// path C run that does one is flagged by `approval_gate_violation`.
+/// path C run that does one is flagged by `approval_gate_violation`. The last
+/// entry is GB's own computer use (path D): no rule kind names a built-in
+/// tool, so the cabin's watchdog checks its frames instead.
 pub const GB_DENY_GAPS: &[(&str, &str)] = &[
     ("doas rm notes.txt", "`doas` prefix (only `sudo` forms are listed)"),
     ("/bin/rm notes.txt", "a head called by absolute path"),
     ("true&&rm notes.txt", "a separator with no space after it"),
+    ("cmd /c del notes.txt", "a wrapper (`cmd /c`, `powershell -c`, `bash -c`, `xargs`) in front of the head"),
+    ("$f.InvokeVerb('delete')", "a Recycle Bin move through the Windows shell verb"),
     ("grokhub-desktop__type", "typed text into a password, PIN, OTP, 2FA, or verification-code field (args, not the name)"),
-    ("grokhub-desktop__key", "Ctrl+Alt+Delete and other session-ending key combos (args, not the name)"),
+    (
+        "grokhub-desktop__key",
+        "Ctrl+Alt+Delete and other session-ending key combos, and Delete on a file manager's selection (args and the focused window, not the name)",
+    ),
+    (
+        "computer_screenshot",
+        "Grok Build's own (non-MCP) computer-use tools: GB rules name only Bash, Read, Edit/Write, Grep/Glob, MCPTool, WebFetch and WebSearch; the path D watchdog checks their frames",
+    ),
+    (
+        "grokhub-desktop__click",
+        "a click on a Send, Pay, Delete, or Reset control (the label under the click point, not the tool name)",
+    ),
 ];
 
 /// Floor for shell commands: host_safety paths, rm -rf /, fork bomb, mkfs, dd to a disk,
@@ -511,6 +954,13 @@ pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
     }
     let lower = name.to_ascii_lowercase();
     let leaf = lower.rsplit("__").next().unwrap_or(&lower);
+    // Spike-2b path E: a click that names its target is classified by it.
+    if matches!(leaf, "click" | "double_click" | "right_click") {
+        let args = serde_json::from_str::<serde_json::Value>(arguments).unwrap_or_default();
+        if let Some(rule) = click_rule(&args) {
+            return Some(rule.class);
+        }
+    }
     if is_typing_tool(leaf)
         && serde_json::from_str::<serde_json::Value>(arguments).is_ok_and(|v| credential_field(&v))
     {
@@ -527,7 +977,6 @@ fn name_class(name: &str) -> Option<HardClass> {
         return match leaf {
             "hard_money_stub" => Some(HardClass::Money),
             "hard_send_stub" => Some(HardClass::Send),
-            "hard_delete_stub" => Some(HardClass::Delete),
             "hard_credentials_stub" => Some(HardClass::Credentials),
             "hard_irreversible_stub" => Some(HardClass::IrreversibleOs),
             _ => None,
@@ -559,12 +1008,16 @@ const CREDENTIAL_NAMES: &[&str] = &["password", "credential", "secret", "api_key
 
 /// Shell command heads per hard class (the first word of a segment, after `sudo` / `doas`).
 const IRREVERSIBLE_HEADS: &[&str] = &["shutdown", "reboot", "poweroff", "halt", "wipefs", "shred", "diskpart"];
-const DELETE_HEADS: &[&str] = &["rm", "rmdir", "unlink", "trash", "trash-put"];
+const DELETE_HEADS: &[&str] = &[
+    "rm", "rmdir", "unlink", "trash", "trash-put", "del", "erase", "rd", "remove-item", "remove-itemsafely", "recycle",
+];
 const SEND_HEADS: &[&str] = &["sendmail", "mail", "mutt"];
 const CREDENTIAL_HEADS: &[&str] = &["passwd", "chpasswd"];
 /// Phrases anywhere in a segment.
 const IRREVERSIBLE_PHRASES: &[&str] = &["systemctl poweroff", "systemctl reboot"];
 const CREDENTIAL_PHRASES_SH: &[&str] = &["secret-tool", "gpg --export-secret", "security find-generic-password"];
+/// Trash and Recycle Bin moves, anywhere in a segment.
+const DELETE_PHRASES: &[&str] = &["gio trash", "gio remove", "trash:/", "sendtorecyclebin", "-exec rm ", "-execdir rm "];
 
 fn command_class(cmd: &str) -> Option<HardClass> {
     let segs: Vec<&str> = cmd
@@ -573,12 +1026,8 @@ fn command_class(cmd: &str) -> Option<HardClass> {
         .filter(|s| !s.is_empty())
         .collect();
     let head = |seg: &str| -> String {
-        let mut words = seg.split_whitespace();
-        let mut w = words.next().unwrap_or("");
-        if w == "sudo" || w == "doas" {
-            w = words.next().unwrap_or("");
-        }
-        w.rsplit('/').next().unwrap_or(w).to_string()
+        let words: Vec<String> = seg.split_whitespace().map(unquote).collect();
+        head_at(&words).map(|i| leaf(&words[i]).to_string()).unwrap_or_default()
     };
     for seg in &segs {
         let h = head(seg);
@@ -586,7 +1035,15 @@ fn command_class(cmd: &str) -> Option<HardClass> {
         if IRREVERSIBLE_HEADS.contains(&h) || IRREVERSIBLE_PHRASES.iter().any(|p| seg.contains(p)) {
             return Some(HardClass::IrreversibleOs);
         }
-        if DELETE_HEADS.contains(&h) || seg.starts_with("git push --delete") || seg.contains("git branch -d") {
+        let recycle_verb = seg.contains("invokeverb") && seg.contains("delete");
+        let find_delete = h == "find" && seg.contains(" -delete");
+        if DELETE_HEADS.contains(&h)
+            || DELETE_PHRASES.iter().any(|p| seg.contains(p))
+            || recycle_verb
+            || find_delete
+            || seg.starts_with("git push --delete")
+            || seg.contains("git branch -d")
+        {
             return Some(HardClass::Delete);
         }
         if SEND_HEADS.contains(&h) {
@@ -625,9 +1082,9 @@ mod tests {
 
     #[test]
     fn headless_deny_rules_cover_the_floor_and_stubs() {
-        assert_eq!(HEADLESS_DENY_RULES.len(), 154);
-        assert_eq!(HEADLESS_DENY_RULES[151], "Bash(*consent.jsonl*)");
-        assert_eq!(HEADLESS_DENY_RULES[153], "Write(**/consent.jsonl)");
+        assert_eq!(HEADLESS_DENY_RULES.len(), 202);
+        assert_eq!(HEADLESS_DENY_RULES[199], "Bash(*consent.jsonl*)");
+        assert_eq!(HEADLESS_DENY_RULES[201], "Write(**/consent.jsonl)");
         assert_eq!(HEADLESS_DENY_RULES[0], "Bash(rm -rf /)");
         assert!(HEADLESS_DENY_RULES.contains(&"Bash(rm *)"));
         assert!(HEADLESS_DENY_RULES.contains(&"MCPTool(*hard_send_stub*)"));
@@ -641,7 +1098,11 @@ mod tests {
     /// GB rule `Kind(glob)` against a command line or a tool name. Stand-in
     /// for GB's matcher: `*` (and `**`) spans any text, everything else is literal.
     fn gb_denies(kind: &str, subject: &str) -> bool {
-        HEADLESS_DENY_RULES.iter().any(|rule| {
+        rule_hits(HEADLESS_DENY_RULES, kind, subject)
+    }
+
+    fn rule_hits(rules: &[&str], kind: &str, subject: &str) -> bool {
+        rules.iter().any(|rule| {
             let Some(glob) = rule.strip_prefix(kind).and_then(|r| r.strip_prefix('(')).and_then(|r| r.strip_suffix(')')) else {
                 return false;
             };
@@ -659,7 +1120,7 @@ mod tests {
     #[test]
     fn gb_deny_rules_cover_every_hard_name_and_command() {
         let heads = [IRREVERSIBLE_HEADS, DELETE_HEADS, SEND_HEADS, CREDENTIAL_HEADS].concat();
-        assert_eq!(heads.len(), 17);
+        assert_eq!(heads.len(), 23);
         for h in &heads {
             for cmd in [
                 format!("{h} target"),
@@ -672,7 +1133,7 @@ mod tests {
                 assert!(gb_denies("Bash", &cmd), "no GB deny rule for `{cmd}`");
             }
         }
-        for phrase in [IRREVERSIBLE_PHRASES, CREDENTIAL_PHRASES_SH].concat() {
+        for phrase in [IRREVERSIBLE_PHRASES, CREDENTIAL_PHRASES_SH, DELETE_PHRASES].concat() {
             let cmd = format!("cd /tmp && {phrase} x");
             assert!(hard_shell(&cmd) && gb_denies("Bash", &cmd), "{cmd}");
         }
@@ -691,7 +1152,6 @@ mod tests {
             "chat__quick_send",
             "x__hard_money_stub",
             "x__hard_send_stub",
-            "x__hard_delete_stub",
             "x__hard_credentials_stub",
             "x__hard_irreversible_stub",
         ] {
@@ -737,15 +1197,47 @@ mod tests {
     }
 
     #[test]
+    fn builtin_cu_rules_deny_gb_computer_use_but_never_path_a() {
+        assert_eq!(BUILTIN_CU_DENY.len(), 6);
+        assert!(BUILTIN_CU_DENY.iter().all(|r| r.starts_with("MCPTool(")), "{BUILTIN_CU_DENY:?}");
+        for tool in [
+            "computer__click",
+            "computer-use__type",
+            "computer_use__screenshot",
+            "desk__computer_click",
+            "agent__mouse_move",
+            "agent__keyboard_type",
+        ] {
+            assert!(rule_hits(BUILTIN_CU_DENY, "MCPTool", tool), "no CU rule for `{tool}`");
+        }
+        for tool in crate::harness::computer_tool_names(crate::harness::AccessMode::Supervised) {
+            let path_a = format!("{}__{tool}", grokhub_core::DESKTOP_MCP_SERVER);
+            assert!(!rule_hits(BUILTIN_CU_DENY, "MCPTool", &path_a), "path A must stay open: {path_a}");
+        }
+        for tool in ["gmail__search_threads", "srv__list_files", "browser__fill", "chrome__browser_tab"] {
+            assert!(!rule_hits(BUILTIN_CU_DENY, "MCPTool", tool), "over-deny: {tool}");
+        }
+    }
+
+    #[test]
     fn gb_deny_gaps_are_hard_but_no_rule_can_match_them() {
-        assert_eq!(GB_DENY_GAPS.len(), 5);
-        for (sample, _) in &GB_DENY_GAPS[..3] {
+        assert_eq!(GB_DENY_GAPS.len(), 9);
+        for (sample, _) in &GB_DENY_GAPS[..5] {
             assert!(hard_shell(sample), "classifier: {sample}");
             assert!(!gb_denies("Bash", sample), "now covered, drop it from the gaps: {sample}");
         }
         // The desktop tools are one MCP name each; the hard part is in the args.
-        assert!(!gb_denies("MCPTool", GB_DENY_GAPS[3].0));
-        assert!(!gb_denies("MCPTool", GB_DENY_GAPS[4].0));
+        assert!(!gb_denies("MCPTool", GB_DENY_GAPS[5].0));
+        assert!(!gb_denies("MCPTool", GB_DENY_GAPS[6].0));
+        // GB's own computer use: a built-in name, not `server__tool`, so no
+        // MCPTool rule (hard or path D) can match it. The watchdog checks it.
+        let builtin = GB_DENY_GAPS[7].0;
+        assert_eq!(builtin, "computer_screenshot");
+        assert!(crate::harness::builtin_cu(builtin));
+        assert!(!gb_denies("MCPTool", builtin) && !rule_hits(BUILTIN_CU_DENY, "MCPTool", builtin));
+        // Spike-2b: a click's class is the control under it, not the tool name.
+        assert_eq!(GB_DENY_GAPS[8].0, "grokhub-desktop__click");
+        assert!(!gb_denies("MCPTool", GB_DENY_GAPS[8].0));
         assert_eq!(
             desk_classify("type", &serde_json::json!({ "text": "hunter22", "label": "Password" })),
             HardHit::Class(HardClass::Credentials)
@@ -871,7 +1363,8 @@ mod tests {
     #[test]
     fn hard_class_names_and_commands() {
         assert_eq!(hard_class("hard_send_stub", "{}"), Some(HardClass::Send));
-        assert_eq!(hard_class("hard_delete_stub", "{}"), Some(HardClass::Delete));
+        assert_eq!(hard_class("hard_delete_stub", "{}"), None, "Spike-1b: the stub is gone; delete_files is real");
+        assert_eq!(hard_class("grokhub-desktop__delete_files", "{}"), Some(HardClass::Delete));
         assert_eq!(hard_class("hard_money_stub", "{}"), Some(HardClass::Money));
         assert_eq!(hard_class("hard_credentials_stub", "{}"), Some(HardClass::Credentials));
         assert_eq!(hard_class("hard_irreversible_stub", "{}"), Some(HardClass::IrreversibleOs));
@@ -889,6 +1382,80 @@ mod tests {
         assert_eq!(classify("read_file", r#"{"path":"README.md"}"#), HardHit::None);
     }
 
+    /// Spike-1b: every delete shape parks, on Linux and Windows, plus the
+    /// trash and the Recycle Bin. Copy and open stay soft.
+    #[test]
+    fn every_delete_shape_is_hard_and_copy_open_stay_soft() {
+        let delete = HardHit::Class(HardClass::Delete);
+        for cmd in [
+            "rm -f notes.txt",
+            "rmdir old",
+            "gio trash notes.txt",
+            "gio remove notes.txt",
+            "trash-put notes.txt",
+            "kioclient5 move notes.txt trash:/",
+            "find . -name '*.tmp' -delete",
+            "find . -name x -exec rm {} +",
+            "ls *.log | xargs rm",
+            "del /q notes.txt",
+            "erase notes.txt",
+            "rd /s /q old",
+            "cmd /c del notes.txt",
+            "Remove-Item -Path C:\\Users\\me\\notes.txt -Force",
+            "powershell -NoProfile -Command \"Remove-Item notes.txt\"",
+            "Remove-ItemSafely notes.txt",
+            "recycle notes.txt",
+            "[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile('C:\\notes.txt','OnlyErrorDialogs','SendToRecycleBin')",
+            "(New-Object -ComObject Shell.Application).Namespace(0).ParseName('C:\\notes.txt').InvokeVerb('delete')",
+        ] {
+            assert_eq!(classify_ask("Run command", cmd), delete, "{cmd}");
+        }
+        for cmd in [
+            "cp notes.txt notes.bak",
+            "copy notes.txt notes.bak",
+            "Copy-Item notes.txt notes.bak",
+            "xdg-open notes.txt",
+            "open notes.txt",
+            "start notes.txt",
+            "gio open notes.txt",
+            "find . -name '*.tmp'",
+            "git rm --cached x",
+        ] {
+            let hit = classify_ask("Run command", cmd);
+            // `git rm` stops the tracking only; it is not a head.
+            assert_eq!(hit, HardHit::None, "{cmd}");
+        }
+        assert_eq!(desk_classify("open_app", &serde_json::json!({ "app": "org.kde.dolphin" })), HardHit::None);
+        assert_eq!(desk_classify("focus_window", &serde_json::json!({ "title": "Dolphin" })), HardHit::None);
+        assert_eq!(
+            desk_classify("open_app", &serde_json::json!({ "app": "shutdown" })),
+            HardHit::Class(HardClass::IrreversibleOs)
+        );
+        let files = serde_json::json!({ "paths": ["/tmp/a.txt", "/tmp/b.txt"] });
+        assert_eq!(desk_classify("delete_files", &files), delete);
+        assert_eq!(delete_files_action(&files), "delete 2 paths: /tmp/a.txt, /tmp/b.txt");
+        let trash = serde_json::json!({ "paths": ["/tmp/a.txt"], "to_trash": true });
+        assert_eq!(delete_files_action(&trash), "move to the trash 1 path: /tmp/a.txt");
+        // The Delete key deletes only where a file manager has focus.
+        let key = |keys: &str, window: &str| desk_classify("key", &serde_json::json!({ "keys": keys, "window": window }));
+        assert_eq!(key("Delete", "org.kde.dolphin Downloads — Dolphin"), delete);
+        assert_eq!(key("shift+Delete", "CabinetWClass Downloads"), delete);
+        assert_eq!(key("Delete", "kate notes.txt — Kate"), HardHit::None);
+        assert_eq!(key("ctrl+c", "org.kde.dolphin Downloads — Dolphin"), HardHit::None);
+        assert_eq!(desk_classify("key", &serde_json::json!({ "keys": "Delete" })), HardHit::None);
+    }
+
+    #[test]
+    fn delete_targets_name_the_exact_paths() {
+        assert_eq!(delete_targets("rm -rf build dist"), vec!["build", "dist"]);
+        assert_eq!(delete_targets("cd /tmp && rm -f 'a b.txt' c.txt"), vec!["a b.txt", "c.txt"]);
+        assert_eq!(delete_targets("gio trash ~/Downloads/x.zip"), vec!["~/Downloads/x.zip"]);
+        assert_eq!(delete_targets("del /q /f C:\\tmp\\x.txt"), vec!["C:\\tmp\\x.txt"]);
+        assert_eq!(delete_targets("Remove-Item -Path C:\\tmp\\x.txt -Force"), vec!["C:\\tmp\\x.txt"]);
+        assert_eq!(delete_targets("sudo rm /var/tmp/old.log"), vec!["/var/tmp/old.log"]);
+        assert_eq!(delete_targets("cargo test"), Vec::<String>::new());
+    }
+
     #[test]
     fn grok_build_asks_classify() {
         assert_eq!(classify_ask("Run command", "rm -f draft.md"), HardHit::Class(HardClass::Delete));
@@ -899,5 +1466,132 @@ mod tests {
         assert_eq!(classify_ask("send_email", "to jeremy"), HardHit::Class(HardClass::Send));
         assert_eq!(classify_ask("Run command", "ls -la"), HardHit::None);
         assert_eq!(classify_ask("grokhub-desktop__click", "click 10,20"), HardHit::None);
+    }
+
+    /// Spike-2b: (effect, label, role, context, expected rule id or "" for soft).
+    const CLICK_TABLE: &[(Option<&str>, &str, &str, &str, &str)] = &[
+        // Send (Hermes #4)
+        (None, "Send", "push button", "", "send:Send"),
+        (None, "send now", "button", "", "send:Send"),
+        (None, "Post", "push button", "", "send:Post"),
+        (None, "Publish", "link", "", "send:Publish"),
+        (None, "Reply", "push button", "", "send:Reply"),
+        (None, "Tweet", "push button", "", "send:Tweet"),
+        (None, "Share", "push button", "", "send:Share"),
+        (None, "Resend code", "link", "", "send:Resend"),
+        (None, "Submit", "push button", "Compose — Mail", "send:Submit"),
+        // Upload or Publish of a file or screenshot (Hermes #9)
+        (None, "Upload screenshot", "push button", "", "send:Upload"),
+        (None, "Publish file", "menu item", "", "send:Publish"),
+        // Money (Hermes #3)
+        (None, "Pay", "push button", "", "money:Pay"),
+        (None, "Pay now", "push button", "", "money:Pay"),
+        (None, "Buy now", "push button", "", "money:Buy"),
+        (None, "Purchase", "push button", "", "money:Purchase"),
+        (None, "Place order", "push button", "", "money:Place order"),
+        (None, "Proceed to Checkout", "link", "", "money:Checkout"),
+        (None, "Confirm payment", "push button", "", "money:Confirm payment"),
+        (None, "Subscribe", "push button", "", "money:Subscribe"),
+        (None, "Donate $5", "push button", "", "money:Donate"),
+        (None, "Transfer", "push button", "", "money:Transfer"),
+        (None, "Submit", "push button", "Checkout — Shop", "money:Submit"),
+        // Delete
+        (None, "Delete", "push button", "", "delete:Delete"),
+        (None, "Remove", "menu item", "", "delete:Remove"),
+        (None, "Empty Trash", "menu item", "", "delete:Empty trash"),
+        (None, "Erase", "push button", "", "delete:Erase"),
+        (None, "Discard draft", "push button", "", "delete:Discard"),
+        // Irreversible OS (Hermes #8)
+        (None, "Reset", "push button", "", "irreversible_os:Reset"),
+        (None, "Reset all settings", "push button", "", "irreversible_os:Reset"),
+        (None, "Factory reset", "push button", "", "irreversible_os:Factory reset"),
+        (None, "Wipe", "push button", "", "irreversible_os:Wipe"),
+        (None, "Format", "push button", "", "irreversible_os:Format"),
+        (None, "Format disk", "push button", "", "irreversible_os:Format"),
+        // A declared effect beats the label.
+        (Some("payment"), "Continue", "push button", "", "money:effect"),
+        (Some("destructive"), "OK", "push button", "", "delete:effect"),
+        (Some("send"), "Pay", "push button", "", "send:effect"),
+        // A soft declared effect never makes a hard label soft (D1).
+        (Some("none"), "Pay", "push button", "", "money:Pay"),
+        // Look-alikes that stay soft.
+        (None, "Sender", "push button", "", ""),
+        (None, "Sent", "tree item", "", ""),
+        (None, "Payload", "push button", "", ""),
+        (None, "Payment methods", "link", "", ""),
+        (None, "Removed items", "tree item", "", ""),
+        (None, "Deleted Items", "tree item", "", ""),
+        (None, "Reset zoom", "menu item", "", ""),
+        (None, "Reset view", "menu item", "", ""),
+        (None, "Format cells", "menu item", "", ""),
+        (None, "Format painter", "toggle button", "", ""),
+        (None, "Shared with me", "link", "", ""),
+        (None, "Posts", "page tab", "", ""),
+        (None, "Unsubscribe", "link", "", ""),
+        (None, "Undo send", "push button", "", ""),
+        (None, "Don't save", "push button", "", ""),
+        (None, "Send", "heading", "", ""),
+        (None, "Submit", "push button", "Contact form", ""),
+        (None, "Save", "push button", "Save Screenshot", ""),
+        (None, "Dark mode", "toggle button", "", ""),
+        (None, "Card number", "text", "", ""),
+        (None, "", "push button", "", ""),
+        (None, "   ", "", "", ""),
+    ];
+
+    #[test]
+    fn click_targets_match_whole_words_and_look_alikes_stay_soft() {
+        assert!(CLICK_TABLE.len() >= 30, "{}", CLICK_TABLE.len());
+        for (effect, label, role, context, want) in CLICK_TABLE {
+            let got = click_target_in(*effect, label, role, context).map(|r| r.id).unwrap_or_default();
+            assert_eq!(got.as_str(), *want, "effect={effect:?} label={label:?} role={role:?} context={context:?}");
+        }
+        assert_eq!(click_target_class(None, "Send", "push button").map(|r| r.class), Some(HardClass::Send));
+        assert_eq!(click_target_class(None, "Send", "push button").unwrap().word(), "Send");
+        assert_eq!(click_target_class(None, "Place order", "").unwrap().word(), "Place order");
+        // Without a context, "Submit" can't say what it submits: soft.
+        assert_eq!(click_target_class(None, "Submit", "push button"), None);
+    }
+
+    #[test]
+    fn a_desk_click_is_classified_by_its_target_and_the_card_names_the_rule() {
+        let ax = serde_json::json!({"x": 10, "y": 20, "_target": {"label": "Send message", "role": "push button", "window": "Compose — Mail"}});
+        assert_eq!(desk_classify("click", &ax), HardHit::Class(HardClass::Send));
+        let rule = click_rule(&ax).unwrap();
+        assert_eq!(rule.id, "send:Send");
+        assert_eq!(click_action(&ax, &rule), "Grok wants to click Send in Compose — Mail");
+        assert_eq!(click_target(&ax).source, "ax");
+        // The caller's own element (Cua `element`, path D frames) counts too.
+        let named = serde_json::json!({"element": {"label": "Pay now", "role": "AXButton"}});
+        assert_eq!(desk_classify("click", &named), HardHit::Class(HardClass::Money));
+        assert_eq!(click_target(&named).source, "args");
+        assert_eq!(click_action(&named, &click_rule(&named).unwrap()), "Grok wants to click Pay in the focused window");
+        let unknown = serde_json::json!({"x": 1, "y": 2, "_target": {"unknown": true}});
+        assert_eq!(desk_classify("click", &unknown), HardHit::None);
+        assert_eq!(click_target(&unknown).source, "unknown");
+        assert_eq!(desk_classify("click", &serde_json::json!({"x": 1, "y": 2})), HardHit::None);
+        // Path E: a native click that names its target.
+        assert_eq!(classify("click", r#"{"x":1,"y":2,"label":"Factory reset"}"#), HardHit::Class(HardClass::IrreversibleOs));
+        assert_eq!(classify("click", r#"{"x":1,"y":2}"#), HardHit::None);
+    }
+
+    #[test]
+    fn ask_cards_that_click_are_classified_by_the_quoted_label() {
+        assert_eq!(classify_ask("computer_click", r#"click "Send""#), HardHit::Class(HardClass::Send));
+        assert_eq!(classify_ask("Click", "click on the Place order button"), HardHit::Class(HardClass::Money));
+        assert_eq!(classify_ask("computer_click", "click \u{201c}Reset zoom\u{201d}"), HardHit::None);
+        assert_eq!(classify_ask("computer_click", r#"click "Sender""#), HardHit::None);
+        assert_eq!(classify_ask("grokhub-desktop__click", "click 10,20"), HardHit::None);
+    }
+
+    #[test]
+    fn use_tool_is_classified_as_the_tool_it_names() {
+        let send = r#"{"name":"mail__send_message","arguments":{"to":"a@example.com"}}"#;
+        assert_eq!(classify("use_tool", send), HardHit::Class(HardClass::Send));
+        let pay = r#"{"name":"shop__checkout","arguments":"{\"cart\":1}"}"#;
+        assert_eq!(classify("use_tool", pay), HardHit::Class(HardClass::Money));
+        assert_eq!(classify("use_tool", r#"{"name":"box__echo","arguments":{}}"#), HardHit::None);
+        assert_eq!(classify("use_tool", r#"{"name":"use_tool"}"#), HardHit::None);
+        assert_eq!(classify("use_tool", "not json"), HardHit::None);
     }
 }

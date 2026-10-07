@@ -2,6 +2,7 @@
 //! Patterns only — no React deps. Cap ~180–240ms. Honor reduced motion.
 
 use eframe::egui::{self, Color32, Pos2, Vec2};
+use grokhub_core::cursor_motion::{travel_point, CursorMotion, TravelShape};
 
 /// Pulse Feed↔Ideas crossfade duration (seconds).
 pub const PULSE_CROSSFADE_SECS: f32 = 0.180;
@@ -20,6 +21,8 @@ pub const APPROVAL_ENTER_Y: f32 = 12.0;
 pub const APPROVAL_EXIT_Y: f32 = 8.0;
 /// Hover wash duration.
 pub const APPROVAL_HOVER_SECS: f32 = 0.120;
+/// Decision inbox rows open, then stop: the cabin's 140 ms settle.
+pub const INBOX_SETTLE_SECS: f32 = grokhub_core::ALWAYS_SETTLE_SECS;
 /// Thinking rim breath period (seconds).
 pub const THINKING_RIM_SECS: f32 = 1.2;
 /// Thinking rim alpha low/high.
@@ -42,6 +45,8 @@ pub const CURSOR_CLICK_SCALE: f32 = 0.92;
 pub const CURSOR_CLICK_SECS: f32 = 0.060;
 /// Arc bulge perpendicular to travel (pixels).
 pub const CURSOR_ARC_PX: f32 = 10.0;
+/// Spike-2a: the agent cursor's travel style. Cua Driver's default; no user setting.
+pub const AGENT_CURSOR_MOTION: CursorMotion = CursorMotion::SignatureArc;
 
 /// Hover bg matching Pulse row hover (#0f1012).
 pub const HOVER_BG: Color32 = Color32::from_rgb(0x0f, 0x10, 0x12);
@@ -65,6 +70,7 @@ pub struct AgentCursorAnim {
     pub t0: f64,
     pub duration: f32,
     pub phase: AgentCursorPhase,
+    pub motion: CursorMotion,
 }
 
 impl AgentCursorAnim {
@@ -75,6 +81,7 @@ impl AgentCursorAnim {
             t0: now,
             duration: CURSOR_TRAVEL_SECS,
             phase: AgentCursorPhase::Travel,
+            motion: AGENT_CURSOR_MOTION,
         }
     }
 
@@ -205,32 +212,19 @@ pub fn one_shot_breath(now: f64, t0: f64, reduced: bool) -> f32 {
 /// Position + scale for the agent cursor stub at `now`.
 pub fn cursor_sample(anim: &AgentCursorAnim, now: f64, reduced: bool) -> (Pos2, f32, bool) {
     let dur = if reduced { 0.0001 } else { anim.duration.max(0.0001) };
-    let raw = ((now - anim.t0) as f32 / dur).clamp(0.0, 1.0);
+    // Reduced motion snaps on the first frame.
+    let raw = if reduced { 1.0 } else { ((now - anim.t0) as f32 / dur).clamp(0.0, 1.0) };
     match anim.phase {
         AgentCursorPhase::Travel => {
-            let _t = ease_out_cubic(raw);
-            // Overshoot: push past `to` by 4–8px along travel, then settle in last settle window.
-            let delta = anim.to - anim.from;
-            let len = delta.length().max(1.0);
-            let dir = delta / len;
-            let overshoot = ((CURSOR_OVERSHOOT_MIN + CURSOR_OVERSHOOT_MAX) * 0.5).clamp(
-                CURSOR_OVERSHOOT_MIN,
-                CURSOR_OVERSHOOT_MAX,
-            );
-            let settle_frac = (CURSOR_SETTLE_SECS / dur).clamp(0.05, 0.4);
-            let pos = if raw < 1.0 - settle_frac {
-                let u = raw / (1.0 - settle_frac);
-                let e = ease_out_cubic(u);
-                let along = anim.from + dir * (len + overshoot) * e;
-                let perp = Vec2::new(-dir.y, dir.x);
-                let arc = (4.0 * u * (1.0 - u)) * CURSOR_ARC_PX;
-                along + perp * arc
-            } else {
-                let u = (raw - (1.0 - settle_frac)) / settle_frac;
-                let from = anim.to + dir * overshoot;
-                from.lerp(anim.to, ease_out_cubic(u))
+            // Overshoot: 4–8px past `to` along travel, then settle in the last settle window.
+            let shape = TravelShape {
+                arc_px: CURSOR_ARC_PX,
+                overshoot_px: ((CURSOR_OVERSHOOT_MIN + CURSOR_OVERSHOOT_MAX) * 0.5)
+                    .clamp(CURSOR_OVERSHOOT_MIN, CURSOR_OVERSHOOT_MAX),
+                settle_frac: CURSOR_SETTLE_SECS / dur,
             };
-            (pos, 1.0, raw < 1.0)
+            let (x, y) = travel_point(anim.motion, (anim.from.x, anim.from.y), (anim.to.x, anim.to.y), raw, shape);
+            (Pos2::new(x, y), 1.0, raw < 1.0)
         }
         AgentCursorPhase::HoverSettle => {
             // 1.0 → 1.08 → 1.0 over duration
@@ -447,6 +441,23 @@ mod tests {
         assert!(cursor_advance(&mut anim, 20.0, false));
         assert_eq!(anim.phase, AgentCursorPhase::ClickPress);
         assert!(!cursor_advance(&mut anim, 30.0, false));
+    }
+
+    #[test]
+    fn each_cua_motion_ends_exactly_at_the_target_and_reduced_snaps() {
+        let from = Pos2::new(12.0, 30.0);
+        let to = Pos2::new(240.0, 118.0);
+        assert_eq!(AGENT_CURSOR_MOTION, CursorMotion::SignatureArc);
+        for motion in grokhub_core::cursor_motion::CURSOR_MOTIONS {
+            let anim = AgentCursorAnim { motion, ..AgentCursorAnim::start_travel(from, to, 0.0) };
+            let (mid, _, live) = cursor_sample(&anim, f64::from(CURSOR_TRAVEL_SECS) * 0.4, false);
+            assert!(live, "{} is still travelling", motion.cua_name());
+            assert_ne!(mid, to, "{} does not jump", motion.cua_name());
+            let (end, scale, live) = cursor_sample(&anim, f64::from(CURSOR_TRAVEL_SECS), false);
+            assert_eq!((end, scale, live), (to, 1.0, false), "{}", motion.cua_name());
+            // Reduced motion: the first frame is already at the target.
+            assert_eq!(cursor_sample(&anim, 0.0, true), (to, 1.0, false), "{}", motion.cua_name());
+        }
     }
 
     #[test]
