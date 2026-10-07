@@ -5,7 +5,7 @@
 - The hand-written header `crates/grokhub-ffi/include/grokhub.h`.
 ## Quick commands
 - `cargo test -p grokhub-ffi`
-- `cargo build -p grokhub-ffi` (CI builds it with the app and hub)
+- `cargo build -p grokhub-ffi` (Linux CI builds it with the app and hub; Windows CI does not)
 ## Key files
 - `crates/grokhub-ffi/src/lib.rs`: every `#[no_mangle] extern "C"` fn, plus `cstr` / `read` helpers and the one ABI test.
 - `crates/grokhub-ffi/include/grokhub.h`: the C declarations callers compile against.

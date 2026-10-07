@@ -6,7 +6,7 @@
 ## Quick commands
 - `cargo run -p grokhub-app` (cabin) / `cargo run -p grokhub-app -- --version`
 - `GROKHUB_CONFIG=$(mktemp -d) cargo test -p grokhub-app -- --test-threads=1`
-- `cargo build -p grokhub-app -p grokhub-hub -p grokhub-ffi` (the CI build step)
+- `cargo build -p grokhub-app -p grokhub-hub -p grokhub-ffi` (Linux CI; the Windows release build skips `grokhub-ffi`)
 ## Key files
 - `crates/grokhub-app/src/main.rs`: `main`, the `Launch` dispatch, `run_cabin`, `run_hub`, Windows console handling.
 - `crates/grokhub-app/build.rs`: channel, branch, and short SHA for `--version`, and the Windows icon.
@@ -16,7 +16,7 @@
 - UI change: find the page in `crates/grokhub-app/src/app/` (read [app-module](app-module.md)), keep logic pure in grokhub-core, and add a cabin test.
 - New CLI flag: add a `Launch` variant and arm in `parse_args`, dispatch it in `main`, update both help strings (Windows and non-Windows), and add a `cli.rs` test.
 ## What breaks it
-- Dead code: CI runs clippy with `-D warnings` workspace-wide, and AGENTS rules forbid `#[allow(dead_code)]`. Delete it.
+- Dead code: CI runs clippy with `-D warnings` workspace-wide, and `CLAUDE.md` forbids `#[allow(dead_code)]`. Delete it.
 - Dropping `windows_subsystem = "windows"` or `AttachConsole` from `main.rs` (`windows_cabin_is_a_gui_subsystem`).
 - Editing the `cabin_reports_version` literal outside a release bump.
 ## What depends on it

@@ -1,7 +1,7 @@
 # Compass: grokhub-hub (LAN `/v1` hub)
 
 ## Owns
-- The tiny_http server for phones and second boxes: `/v1/health` (no auth), `/v1/pair`, then bearer-token routes `/v1/status`, `/v1/snapshot`, `/v1/task`, `/v1/inbox`, `/v1/results`, `/v1/inhabit`, `/v1/frame`, `/v1/frame.jpg`, `/v1/voice/client-secret`.
+- The tiny_http server for phones and second boxes: `/v1/health` and `/health` (no auth), `/v1/pair`, then bearer-token routes `/v1/status`, `/v1/snapshot`, `/v1/task` (plus `POST /v1/task/{id}/complete`), `/v1/inbox` (plus `POST /v1/inbox/{id}/ack`), `/v1/results`, `/v1/inhabit`, `/v1/frame`, `/v1/frame.jpg`, `/v1/voice/client-secret`.
 - Two entry points with one bootstrap (`run`): the standalone `grokhub-hub` binary and `grokhub --hub`; the cabin embeds it with `serve_lan`.
 ## Quick commands
 - `GROKHUB_HUB_PORT=18766 cargo run -p grokhub-hub` (the `.cursor/environment.json` terminal)

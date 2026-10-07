@@ -24,8 +24,8 @@
 ## Non-obvious
 - `/learn` belongs to the cabin: a Grok extra with the same verb must not become an insert-only chip.
 - `/workflow pause|resume|stop` with no target is `WorkflowUsage` and is not forwarded; any other first word is a launch name.
-- `/btw` keeps persist id `ask`; `/bg` with no task moves the live reply to the background.
+- `/btw` keeps persist id `ask`; `/bg` with no task moves the live reply to the background, except under Ask, where it shows `BG_ASK_OFF`.
 - Slash results are stored with `SLASH_RESULT_PREFIX` so they stay on the pane.
-- `dispatch_native_slash` runs first on native (Lab) threads and returns false so the normal match still runs on CLI threads.
+- `run_slash` calls `dispatch_native_slash` first on every thread. It returns false off native (Lab) threads; on them Remember, Dream, Inspect, Fork, Rewind, Usage, Models and Workflow return true and skip the cabin match.
 ## See also
 - [amr](amr.md), [grokhub-ffi](grokhub-ffi.md), [app-module](app-module.md), [grokhub-agent](grokhub-agent.md)

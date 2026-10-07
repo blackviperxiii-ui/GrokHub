@@ -14,7 +14,7 @@
 ## Change recipe
 - New UI state: add a `Cabin` field and initialize it in both `new` and `quiet_for_test`.
 - New behavior: put logic in a pure fn (often in grokhub-core) and unit-test it; keep the egui code thin. Then add a cabin test with `isolated_cabin` and finish with `release_isolated`.
-- Disk work never runs on the UI thread: spawn it and poll a channel, as `/recall` and persist do.
+- Disk work stays off the UI thread: spawn it and poll a channel, as `/recall` and persist do. The one exception is the final `config::save` in `on_exit`.
 ## What breaks it
 - Growing the `ComposerStackSlot::Pill` arm in `chat_ui.rs`: `chat_composer_pins_stop_on_the_right` reads a fixed 12,000-byte window after it (`CLAUDE.md`). Move code into helpers.
 - Moving a fn between files or renaming it: `fn_src` finds `fn name(` in `cabin_src()` (a fixed list of submodules) and ends at the next same-indent fn, and many tests assert on that slice.
@@ -26,6 +26,6 @@
 - `cabin_src()` does not include every submodule (for example `harness_ui.rs`, `feed_ui.rs`, `pulse_ui.rs`); those tests `include_str!` the file directly.
 - `on_exit` kills background `grok -p`, halts native sessions, and waits on `persist_io` because two writers of `app.json` share one temp file.
 - The composer glow and Always ring timings come from `GLOW_SETTLE_SECS` / `ALWAYS_SETTLE_SECS` in grokhub-core, and motion is skipped when `motion_ok` is false (AGENTS.md UI theme).
-- `cabin_signed_in_false_when_idle` and `board_cards_open_on_click_fold_on_drag_and_chat_like_the_chat_page` fail on a box with a logged-in Grok CLI; isolate HOME, PATH, and config or skip them.
+- `cabin_signed_in_false_when_idle` fails when the Grok CLI is logged in under HOME; the board test fails when `find_grok` sees `grok` on PATH (`can_agent`). `isolated_cabin` only pins config, so isolate HOME and PATH too, or skip them.
 ## See also
 - [grokhub-app](grokhub-app.md), [app-config](app-config.md), [slash](slash.md), [harness](harness.md)

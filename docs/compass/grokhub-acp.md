@@ -14,7 +14,7 @@
 - `crates/grokhub-acp/src/stream.rs` (streaming-json events) and `crates/grokhub-acp/src/install.rs` (alpha install).
 ## Change recipe
 - New spawn option: add the field to `SpawnOpts`, then fill it in every struct literal, including `fake_opts` in `crates/grokhub-acp/tests/fake_agent.rs` and the app callers.
-- New CLI flag: add it where argv is built in `crates/grokhub-acp/src/locate.rs` and keep the deny helpers append-only: they add `--deny` pairs, never an allow.
+- New CLI flag: add it where argv is built in `crates/grokhub-acp/src/locate.rs` and never add an allow. `with_hard_deny` only appends `--deny` pairs; `with_ask_deny` also strips `--always-approve` and may add `--permission-mode dontAsk`.
 ## What breaks it
 - Sharing `~/.grok/leader.sock` or `~/.grok` for the cabin child: the CLI leader SIGTERMs it (exit 143). Use `cabin_grok_home` and `cabin_leader_socket`.
 - An Ask turn that falls through to `grok -p`: Ask needs live ACP; if ACP is down the turn is denied (`ASK_ACP_DOWN`).

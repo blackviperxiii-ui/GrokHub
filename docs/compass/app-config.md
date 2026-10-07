@@ -24,7 +24,7 @@
 - `AppConfig` is camelCase on disk; `memory_backend` is the one snake_case key.
 - `load()` forces `host_on = true` and `yolo = false`, and `persistable_permission_mode` never lets Always survive a relaunch.
 - `save_in` clears `api_key` before writing: the console key lives in `secrets.json` only.
-- `config_dir()`: a test-thread pin (`TestConfigDir`), then `GROKHUB_CONFIG`, then `%APPDATA%\GrokHub` on Windows, then `~/.config/GrokHub`. Workers capture the dir at schedule time so a later env change cannot move the file.
+- `config_dir()`: a test-thread pin (`TestConfigDir`), then `GROKHUB_CONFIG`, then `%APPDATA%\GrokHub` on Windows, then `~/.config/GrokHub`, then `.grokhub` in the cwd. Workers capture the dir at schedule time so a later env change cannot move the file.
 - `GROKHUB_CONFIG` is process-global: tests take `hold_test_config` and a `test_config_root`; CI runs `--test-threads=1`.
 - `atomic_write` creates the temp file 0600 (user-only DACL on Windows via `crates/grokhub-app/src/win_acl.rs`) before any bytes land.
 ## See also
