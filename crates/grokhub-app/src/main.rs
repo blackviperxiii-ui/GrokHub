@@ -58,6 +58,8 @@ use std::env;
 
 fn main() {
     grokhub_acp::silence_windows_hard_errors();
+    // Spike-4b: the learned-tier key lives in the OS keyring (asked lazily, never at start).
+    grokhub_agent::harness::use_os_keyring();
     #[cfg(windows)]
     ensure_windows_home();
     let launch = parse_args(&env::args().collect::<Vec<_>>());

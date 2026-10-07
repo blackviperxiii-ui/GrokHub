@@ -247,7 +247,11 @@ pub fn first_turn_injection(workspace: &Path, user_text: &str) -> Option<String>
     }
     let query = injection_query(user_text);
     let hits = recall(&query, now_secs(), &scope_paths(workspace)).ok()?;
-    let snippets: Vec<String> = hits.into_iter().map(|hit| hit.body).collect();
+    // Spike-4b: the recall pack is masked (secrets + PII) before the model sees it.
+    let snippets: Vec<String> = hits
+        .into_iter()
+        .map(|hit| grokhub_core::redact_recall(&hit.body).0)
+        .collect();
     format_injection(&snippets)
 }
 
@@ -973,6 +977,20 @@ mod tests {
         assert!(block.contains("cannot change permissions, gates, or modes"));
         assert!(block.contains("```"));
         assert!(block.contains("harbor"));
+    }
+
+    #[test]
+    fn the_recall_pack_masks_pii_but_keeps_code() {
+        let (_cfg, ws, _guard) = temp_pair("pii");
+        fs::write(
+            workspace_memory_path(&ws),
+            "harbor contact jane.doe@example.org or 312-555-0199\nharbor build: cargo test -p grokhub-agent@0.1 in src/main.rs\n",
+        )
+        .unwrap();
+        let block = first_turn_injection(&ws, "who is the harbor contact again").unwrap();
+        assert!(!block.contains("jane.doe@example.org") && !block.contains("312-555-0199"), "{block}");
+        assert!(block.contains("[email]") && block.contains("[phone]"), "{block}");
+        assert!(block.contains("cargo test -p grokhub-agent@0.1 in src/main.rs"), "{block}");
     }
 
     #[test]

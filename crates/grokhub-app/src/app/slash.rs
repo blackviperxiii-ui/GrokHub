@@ -4,10 +4,28 @@ use super::*;
 
 /// Memory lines for `/recall` when `memory_backend` is `amr`.
 /// Creates `{config}/amr` on this path only. Legacy recall never calls it.
+/// Private notes (`nodes/<id>.sealed`) open with the learned-tier key; when
+/// they can't, one line says so instead (Spike-4b, fail closed).
 fn recall_amr_lines(query: &str) -> Vec<String> {
-    let store = grokhub_core::amr::AmrStore::at(config::config_dir().join("amr"));
+    let dir = config::config_dir();
+    let vault = grokhub_agent::harness::LearnedVault::new(&dir);
+    let store = grokhub_core::amr::AmrStore::at(dir.join("amr")).with_sealer(std::sync::Arc::new(vault));
     let _ = store.init();
-    grokhub_core::amr::MemoryEngine::recall(&store, query)
+    let report = store.recall_report(query);
+    let mut lines: Vec<String> = report.hits.iter().map(|hit| hit.display()).collect();
+    if let Some(line) = locked_recall_line(report.locked, report.why.as_deref()) {
+        lines.push(line);
+    }
+    lines
+}
+
+/// The `/recall` line for private notes that stayed shut.
+pub(super) fn locked_recall_line(locked: usize, why: Option<&str>) -> Option<String> {
+    if locked == 0 {
+        return None;
+    }
+    let notes = if locked == 1 { "1 private note".to_string() } else { format!("{locked} private notes") };
+    Some(format!("{notes} not searched. {}", why.unwrap_or("Private memory is locked.")))
 }
 
 impl Cabin {
