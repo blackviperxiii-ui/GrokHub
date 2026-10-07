@@ -1166,6 +1166,7 @@ impl Cabin {
                         );
                         let mut collapse_session = false;
                         let mut privacy_revoke: Option<String> = None;
+                        let mut skill_hit: Option<super::skill_undo::SkillRow> = None;
                         {
                             let thread_id = fold_thread.clone();
                             let row_h_id = chat_row_height_id(&thread_id, pane);
@@ -1178,6 +1179,10 @@ impl Cabin {
                             } else {
                                 Vec::new()
                             };
+                            // The newest /skills changes bubble gets Undo / Restore rows.
+                            let skill_at = super::skill_undo::newest_skill_changes_row(&self.chat_views);
+                            let skill_rows =
+                                if skill_at.is_some() { self.skill_rows_now() } else { Vec::new() };
                             let (views, keys) = (&self.chat_views, &self.chat_view_keys);
                             let shown = if live {
                                 views_up_to_last_user(views)
@@ -1248,7 +1253,8 @@ impl Cabin {
                                         .iter()
                                         .take_while(|v| v.kind != ChatKind::User)
                                         .any(|v| v.kind == ChatKind::Assistant);
-                                let privacy_here = privacy_at == Some(i) && !privacy_grants.is_empty();
+                                let privacy_here = (privacy_at == Some(i) && !privacy_grants.is_empty())
+                                    || (skill_at == Some(i) && !skill_rows.is_empty());
                                 let painted = ui
                                     .push_id(chat_row_id_salt(&thread_id, i), |ui| {
                                         let mut p = paint_chat_block_with(
@@ -1260,10 +1266,15 @@ impl Cabin {
                                             reply_acts && !privacy_here,
                                         );
                                         if privacy_here {
-                                            privacy_revoke = super::privacy_ui::paint_privacy_revokes(
-                                                ui,
-                                                &privacy_grants,
-                                            );
+                                            if skill_at == Some(i) {
+                                                skill_hit =
+                                                    super::skill_undo::paint_skill_undo_rows(ui, &skill_rows);
+                                            } else {
+                                                privacy_revoke = super::privacy_ui::paint_privacy_revokes(
+                                                    ui,
+                                                    &privacy_grants,
+                                                );
+                                            }
                                             if reply_acts {
                                                 let avail = clamp_row_width(
                                                     ui.available_width().min(ui.max_rect().width()),
@@ -1316,6 +1327,9 @@ impl Cabin {
                         }
                         if let Some(id) = privacy_revoke {
                             self.revoke_from_privacy(&id);
+                        }
+                        if let Some(row) = skill_hit {
+                            self.skill_row_clicked(&row);
                         }
                         if jumped_you {
                             self.jump_last_you = false;
@@ -1584,10 +1598,14 @@ impl Cabin {
 
     /// Sending from the composer follows your own message down. A night job or a phone
     /// task calls `send_scheduled_chat` directly, so it cannot yank the pane out of your reading.
+    /// Only the user's own typing comes through here, so this is also where a typed
+    /// `/skills undo` is marked as theirs (`typed_send`).
     pub(super) fn send_from_composer(&mut self, text: String) {
         self.pin_chat_tail();
         self.heartbeat_user_sent();
+        self.harness.typed_send = true;
         self.send_chat(text);
+        self.harness.typed_send = false;
     }
 
     pub(super) fn paint_live_blocks(
