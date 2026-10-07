@@ -132,7 +132,6 @@ impl Cabin {
         if snap.projects.is_some() {
             self.projects_dirty = false;
         }
-        self.sync_hub_voice();
         snap.secrets = Some(self.secrets.clone());
         self.persist_idle_key = self.persist_idle_now();
         self.last_persist = Instant::now();
@@ -230,7 +229,6 @@ impl Cabin {
         if snap.projects.is_some() {
             self.projects_dirty = false;
         }
-        self.sync_hub_voice();
         self.last_persist = Instant::now();
         self.geom_dirty = false;
         let io = self.persist_io.clone();
