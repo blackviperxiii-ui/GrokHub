@@ -13,16 +13,20 @@ use grokhub_agent::harness::{self as hx, GateOutcome, Step};
 pub(super) const LEAVING_HEAD: &str = "Leaving this computer";
 pub(super) const RULES_HEAD: &str = "Command rules";
 /// Under "Leaving this computer" in Settings → Permissions.
-pub(super) const PRIVACY_NOTE: &str = "Nothing new leaves this computer without your OK. xAI model hosts stay allowed for chats, memory. Grok Build's own traffic is outside GrokHub. /privacy shows what left.";
+pub(super) const PRIVACY_NOTE: &str = "Nothing new leaves this computer without your OK. xAI model hosts stay allowed for chats and memory. Grok Build's own traffic is outside GrokHub. /privacy shows what left.";
 pub(super) const HUB_ROW: &str = "Sync to paired computers";
 /// The one user-facing name for the hub sync data (SY-02). Logs and files keep
 /// the scope ids (`chat`, `personal`).
 pub(super) const HUB_SCOPE_LABEL: &str = "chats, memory";
+/// The same scope inside a sentence (SY-09): prose says "chats and memory";
+/// compact spots (the card command, `/privacy` grant and egress lines, row
+/// hints) keep [`HUB_SCOPE_LABEL`].
+pub(super) const HUB_SCOPE_PROSE: &str = "chats and memory";
 const HUB_OFF: &str = "Off. /sync asks each time. Sends chats, memory.";
 /// The hard card for an ungranted `/sync` with at least one paired computer.
 pub(super) const HUB_CARD_ACTION: &str = "/sync → paired computers (chats, memory)";
 pub(super) const HUB_CARD_NOTE: &str =
-    "Sends chats, memory to your paired computers. Approve sends once. Esc denies. Settings → Permissions can allow it every time.";
+    "Sends chats and memory to your paired computers. Approve sends once. Esc denies. Settings → Permissions can allow it every time.";
 /// `/sync` with no paired computer: nothing is sent and nothing is logged (SY-03).
 pub(super) const SYNC_NO_PEERS: &str = "Nothing paired yet. Start share to pair a computer.";
 /// First line of the `/privacy` report; the chat pane finds the bubble by it.
@@ -95,8 +99,8 @@ pub(super) fn grant_label(g: &hx::Grant) -> String {
 pub(super) fn sync_result_line(peers: usize) -> String {
     match peers {
         0 => SYNC_NO_PEERS.to_string(),
-        1 => "Synced chats and memory to 1 computer.".to_string(),
-        n => format!("Synced chats and memory to {n} computers."),
+        1 => format!("Synced {HUB_SCOPE_PROSE} to 1 computer."),
+        n => format!("Synced {HUB_SCOPE_PROSE} to {n} computers."),
     }
 }
 
@@ -113,7 +117,7 @@ pub(super) fn privacy_report(
         PRIVACY_HEAD.to_string(),
         String::new(),
         format!(
-            "Allowed by default: {} ({HUB_SCOPE_LABEL} in model prompts). Sending {HUB_SCOPE_LABEL} anywhere else waits for your OK: a hard card, or a grant in Settings → Permissions.",
+            "Allowed by default: {} ({HUB_SCOPE_PROSE} in model prompts). Sending {HUB_SCOPE_PROSE} anywhere else waits for your OK: a hard card, or a grant in Settings → Permissions.",
             grokhub_core::DEFAULT_CONNECTOR_HOSTS.join(", ")
         ),
         String::new(),
@@ -274,7 +278,7 @@ impl Cabin {
     /// and the hub grant row. The Allow click is the only place a grant is
     /// written (rule 4). Revoke is a ghost: it only takes access away (SY-05).
     pub(super) fn ui_privacy_rows(&mut self, ui: &mut egui::Ui) {
-        crate::cards::section_label(ui, LEAVING_HEAD);
+        crate::cards::section_heading(ui, LEAVING_HEAD);
         crate::cards::settings_note(ui, PRIVACY_NOTE);
         let granted = self
             .consent()
@@ -382,7 +386,7 @@ pub(super) fn paint_privacy_revokes(ui: &mut egui::Ui, grants: &[(String, String
 pub(super) fn newest_privacy_row(views: &[grokhub_core::ChatView]) -> Option<usize> {
     views
         .iter()
-        .rposition(|v| v.kind == grokhub_core::ChatKind::Assistant && v.body.starts_with(PRIVACY_HEAD))
+        .rposition(|v| v.kind == grokhub_core::ChatKind::Result && v.body.starts_with(PRIVACY_HEAD))
 }
 
 #[cfg(test)]
@@ -458,7 +462,7 @@ mod tests {
             [
                 "/privacy — what leaves this computer",
                 "",
-                "Allowed by default: grok.com, x.ai, api.x.ai (chats, memory in model prompts). Sending chats, memory anywhere else waits for your OK: a hard card, or a grant in Settings → Permissions.",
+                "Allowed by default: grok.com, x.ai, api.x.ai (chats and memory in model prompts). Sending chats and memory anywhere else waits for your OK: a hard card, or a grant in Settings → Permissions.",
                 "",
                 "Grants",
                 "- Sync to paired computers: off. /sync asks each time.",
@@ -500,16 +504,15 @@ mod tests {
     fn hub_scope_label_is_chats_memory_everywhere_the_user_reads_it() {
         assert_eq!(HUB_SCOPE_LABEL, "chats, memory");
         assert_eq!(HUB_CARD_ACTION, "/sync → paired computers (chats, memory)");
-        assert_eq!(
-            HUB_CARD_NOTE,
-            "Sends chats, memory to your paired computers. Approve sends once. Esc denies. Settings → Permissions can allow it every time."
-        );
         assert_eq!(HUB_OFF, "Off. /sync asks each time. Sends chats, memory.");
-        assert!(PRIVACY_NOTE.contains("chats, memory"), "{PRIVACY_NOTE}");
         assert_eq!(classes(hx::HUB_SYNC_DATA), HUB_SCOPE_LABEL);
+        // Compact spots keep the label form; sentences use the prose form (SY-09).
+        for compact in [HUB_CARD_ACTION, HUB_OFF] {
+            assert!(compact.contains(HUB_SCOPE_LABEL), "{compact}");
+            assert!(!compact.contains(HUB_SCOPE_PROSE), "{compact}");
+        }
         for user_text in [HUB_CARD_ACTION, HUB_CARD_NOTE, HUB_OFF, PRIVACY_NOTE] {
             assert!(!user_text.contains("chat, personal"), "{user_text}");
-            assert!(!user_text.contains("chats and memory"), "{user_text}");
         }
         let src = include_str!("privacy_ui.rs");
         let rows = src
@@ -523,6 +526,37 @@ mod tests {
             hx::HUB_SYNC_DATA.iter().map(|c| c.as_str()).collect::<Vec<_>>(),
             vec!["chat", "personal"]
         );
+    }
+
+    /// SY-09: sentences say "chats and memory": the `/sync` card body, the
+    /// Settings note and the `/privacy` intro (both places). Compact spots
+    /// (`/privacy` grant and egress lines) keep "chats, memory", and the scope
+    /// ids in logs stay `chat` / `personal`.
+    #[test]
+    fn prose_says_chats_and_memory() {
+        assert_eq!(HUB_SCOPE_PROSE, "chats and memory");
+        assert_eq!(
+            HUB_CARD_NOTE,
+            "Sends chats and memory to your paired computers. Approve sends once. Esc denies. Settings → Permissions can allow it every time."
+        );
+        assert!(PRIVACY_NOTE.contains("allowed for chats and memory."), "{PRIVACY_NOTE}");
+        assert!(!PRIVACY_NOTE.contains("chats, memory"), "{PRIVACY_NOTE}");
+        assert!(!HUB_CARD_NOTE.contains("chats, memory"), "{HUB_CARD_NOTE}");
+        let dir = crate::config::test_config_root("privacy-prose");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let g = hx::grant_destination(&dir, hx::HUB_DEST, hx::HUB_SYNC_DATA, hx::UserClick::from_click()).unwrap();
+        let ledger = hx::ConsentLedger::load(&dir);
+        let log = vec![line("hub", "grant", g.granted_at, &[hx::DataClass::Chat, hx::DataClass::Personal])];
+        let got = privacy_report(&ledger, &log, false, g.granted_at + 60_000);
+        let intro = got.lines().nth(2).unwrap_or_default();
+        assert_eq!(
+            intro,
+            "Allowed by default: grok.com, x.ai, api.x.ai (chats and memory in model prompts). Sending chats and memory anywhere else waits for your OK: a hard card, or a grant in Settings → Permissions."
+        );
+        assert!(got.contains("- Sync to paired computers: on since 1m ago · chats, memory\n"), "{got}");
+        assert!(got.contains("- paired computers · 1 time · chats, memory · your grant"), "{got}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// SY-08: the grant id never shows in `/privacy`, in the report or the
@@ -542,7 +576,7 @@ mod tests {
         assert!(!got.contains("egress.jsonl"), "{got}");
         let rows: Vec<(String, String)> = ledger.active().map(|g| (g.id.clone(), grant_label(g))).collect();
         let view = grokhub_core::ChatView {
-            kind: grokhub_core::ChatKind::Assistant,
+            kind: grokhub_core::ChatKind::Result,
             title: String::new(),
             body: got.clone(),
         };
