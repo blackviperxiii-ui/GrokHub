@@ -2,6 +2,32 @@
 
 use super::*;
 
+/// Memory lines for `/recall` when `memory_backend` is `amr`.
+/// Creates `{config}/amr` on this path only. Legacy recall never calls it.
+/// Private notes (`nodes/<id>.sealed`) open with the learned-tier key; when
+/// they can't, one line says so instead (Spike-4b, fail closed).
+fn recall_amr_lines(query: &str) -> Vec<String> {
+    let dir = config::config_dir();
+    let vault = grokhub_agent::harness::LearnedVault::new(&dir);
+    let store = grokhub_core::amr::AmrStore::at(dir.join("amr")).with_sealer(std::sync::Arc::new(vault));
+    let _ = store.init();
+    let report = store.recall_report(query);
+    let mut lines: Vec<String> = report.hits.iter().map(|hit| hit.display()).collect();
+    if let Some(line) = locked_recall_line(report.locked, report.why.as_deref()) {
+        lines.push(line);
+    }
+    lines
+}
+
+/// The `/recall` line for private notes that stayed shut.
+pub(super) fn locked_recall_line(locked: usize, why: Option<&str>) -> Option<String> {
+    if locked == 0 {
+        return None;
+    }
+    let notes = if locked == 1 { "1 private note".to_string() } else { format!("{locked} private notes") };
+    Some(format!("{notes} not searched. {}", why.unwrap_or("Private memory is locked.")))
+}
+
 impl Cabin {
 
     pub(super) fn run_slash(&mut self, slash: Slash) {
@@ -125,6 +151,9 @@ impl Cabin {
                 self.skills_tab_connectors = false;
                 self.reload_grok_catalog();
             }
+            Slash::SkillChanges => self.run_skill_changes(),
+            Slash::SkillUndo(name) => self.run_skill_undo(&name),
+            Slash::SkillRestore(name) => self.run_skill_restore(&name),
             Slash::GrokWorkflows => {
                 self.nav = Nav::Skills;
                 self.skills_tab_connectors = false;
@@ -666,6 +695,7 @@ impl Cabin {
             }
             Slash::Send(task) => self.dispatch_send(task),
             Slash::Sync => self.sync_hub(),
+            Slash::Privacy => self.run_privacy(),
             Slash::Hub => {
                 self.nav = Nav::Devices;
                 self.status = if self.hub_on {
@@ -774,38 +804,51 @@ impl Cabin {
                     };
                     thread_rows.push((t.title.clone(), body));
                 }
+                let backend = self.cfg.memory_backend;
                 let (tx, rx) = mpsc::channel();
                 self.recall_rx = Some(rx);
                 self.status = "Recalling…".into();
                 std::thread::spawn(move || {
-                    let soul = if mem_name == "SOUL.md" {
-                        mem_body.clone()
+                    // AMR reads amr/nodes only. Legacy keeps SOUL/USER/MEMORY/learned.
+                    // Thread rows are searched on both paths.
+                    let (mut hits, mut rows) = if backend == grokhub_core::amr::MemoryBackend::Amr
+                    {
+                        (recall_amr_lines(&q_owned), Vec::new())
                     } else {
-                        config::read_memory("SOUL.md")
+                        let soul = if mem_name == "SOUL.md" {
+                            mem_body.clone()
+                        } else {
+                            config::read_memory("SOUL.md")
+                        };
+                        let user = if mem_name == "USER.md" {
+                            mem_body.clone()
+                        } else {
+                            config::read_memory("USER.md")
+                        };
+                        let memory = if mem_name == "MEMORY.md" {
+                            mem_body.clone()
+                        } else {
+                            config::read_memory("MEMORY.md")
+                        };
+                        let corpus = [
+                            ("SOUL.md", soul),
+                            ("USER.md", user),
+                            ("MEMORY.md", memory),
+                            ("learned", insights),
+                        ];
+                        let legacy = grokhub_core::amr::LegacyMemory::new(
+                            corpus
+                                .iter()
+                                .map(|(name, body)| ((*name).to_string(), body.clone()))
+                                .collect(),
+                        );
+                        let hits = grokhub_core::amr::MemoryEngine::recall(&legacy, &q_owned);
+                        let rows = corpus
+                            .into_iter()
+                            .map(|(name, body)| (name.to_string(), body))
+                            .collect();
+                        (hits, rows)
                     };
-                    let user = if mem_name == "USER.md" {
-                        mem_body.clone()
-                    } else {
-                        config::read_memory("USER.md")
-                    };
-                    let memory = if mem_name == "MEMORY.md" {
-                        mem_body.clone()
-                    } else {
-                        config::read_memory("MEMORY.md")
-                    };
-                    let corpus = [
-                        ("SOUL.md", soul),
-                        ("USER.md", user),
-                        ("MEMORY.md", memory),
-                        ("learned", insights),
-                    ];
-                    let refs: Vec<(&str, &str)> =
-                        corpus.iter().map(|(n, b)| (*n, b.as_str())).collect();
-                    let mut hits = recall_hits(&q_owned, &refs);
-                    let mut rows: Vec<(String, String)> = corpus
-                        .iter()
-                        .map(|(n, b)| ((*n).to_string(), b.clone()))
-                        .collect();
                     rows.extend(thread_rows);
                     hits.extend(search_corpus(&q_owned, &rows));
                     let hits = dedupe_hits(hits);

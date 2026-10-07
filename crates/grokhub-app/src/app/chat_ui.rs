@@ -359,6 +359,28 @@ pub(super) fn is_error_reply(body: &str) -> bool {
     body.trim_start().starts_with("Error:")
 }
 
+/// The reply mark left of an assistant or result bubble, and the gap after it.
+const REPLY_MARK_W: f32 = 16.0;
+const REPLY_MARK_GAP: f32 = 6.0;
+/// Where a result bubble's text starts, from the row's left edge: mark, gap,
+/// then the bubble's own padding. The `/privacy` Revoke rows (SB-11) and the
+/// `/skills changes` Undo rows (SU-06) line up here.
+pub(super) const RESULT_TEXT_INSET: f32 = REPLY_MARK_W + REPLY_MARK_GAP + BUBBLE_PAD_X;
+/// Label size of the action rows under a result bubble.
+pub(super) const RESULT_ROW_LABEL_SIZE: f32 = 13.0;
+
+/// Room to add after each action-row label so the pills under a result
+/// bubble share one column: every label takes the widest label's width.
+pub(super) fn result_row_label_pads(ui: &egui::Ui, labels: &[&str]) -> Vec<f32> {
+    let font = egui::FontId::proportional(RESULT_ROW_LABEL_SIZE);
+    let widths: Vec<f32> = labels
+        .iter()
+        .map(|l| ui.fonts_mut(|f| f.layout_no_wrap((*l).to_string(), font.clone(), egui::Color32::WHITE).size().x))
+        .collect();
+    let widest = widths.iter().copied().fold(0.0_f32, f32::max);
+    widths.into_iter().map(|w| widest - w).collect()
+}
+
 pub(super) fn paint_speech_bubble(
     ui: &mut egui::Ui,
     body: &str,
@@ -367,7 +389,7 @@ pub(super) fn paint_speech_bubble(
 ) -> egui::Response {
     let body = crate::markdown::display_text(body);
     let avail = clamp_row_width(ui.available_width().min(ui.max_rect().width()));
-    let mark_w = if user { 0.0 } else { 22.0 };
+    let mark_w = if user { 0.0 } else { REPLY_MARK_W + REPLY_MARK_GAP };
     let bubble_avail = (avail - mark_w).max(1.0);
     let wrap = bubble_wrap_width(bubble_avail, BUBBLE_PAD_X);
     let content_w = if markdown && !user {
@@ -454,10 +476,10 @@ pub(super) fn paint_speech_bubble(
         ui.set_max_width(avail);
         ui.horizontal_top(|ui| {
             ui.set_max_width(avail);
-            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.spacing_mut().item_spacing.x = REPLY_MARK_GAP;
             let mark = crate::theme::mark(ui.ctx());
             let (mark_rect, _) =
-                ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.allocate_exact_size(egui::vec2(REPLY_MARK_W, REPLY_MARK_W), egui::Sense::hover());
             ui.painter().image(
                 mark.id(),
                 mark_rect,
@@ -601,6 +623,12 @@ pub(super) fn paint_msg_acts(
         #[cfg(test)]
         row: bounds.unwrap_or(egui::Rect::NOTHING),
     }
+}
+
+/// A cabin result (GL-05): the plain reply bubble, upright and in the body
+/// colour, the same on the newest row and on an old one.
+pub(super) fn paint_result_bubble(ui: &mut egui::Ui, body: &str) -> egui::Response {
+    paint_speech_bubble(ui, body, false, true)
 }
 
 pub(super) fn paint_thought_bubble(ui: &mut egui::Ui, body: &str) -> egui::Response {
@@ -996,6 +1024,21 @@ pub(super) fn paint_chat_block_with(
                 thought_fold,
             }
         }
+        ChatKind::Result => {
+            // GL-05: a slash or system result keeps this one bubble as it ages.
+            // It never takes the thought frame, its slanted text, or its label.
+            let resp = paint_result_bubble(ui, &block.body);
+            let act = if reply_acts {
+                paint_msg_acts(ui, false, &block.body, avail, resp.rect.width()).act
+            } else {
+                ChatBlockAct::None
+            };
+            ChatBlockPaint {
+                act,
+                drawn: true,
+                thought_fold,
+            }
+        }
         ChatKind::Thought => {
             let mut fold = thought_fold;
             let mut act = ChatBlockAct::None;
@@ -1144,10 +1187,29 @@ impl Cabin {
                             read_session_thoughts_collapsed(ui.ctx(), &fold_thread),
                         );
                         let mut collapse_session = false;
+                        let mut privacy_revoke: Option<String> = None;
+                        let mut skill_hit: Option<super::skill_undo::SkillRow> = None;
                         {
                             let thread_id = fold_thread.clone();
                             let row_h_id = chat_row_height_id(&thread_id, pane);
                             self.cached_chat_views();
+                            // SY-04: the newest /privacy bubble gets a ghost Revoke per
+                            // live grant. Read the ledger only when that bubble exists.
+                            let privacy_at = super::privacy_ui::newest_privacy_row(&self.chat_views);
+                            let privacy_grants = if privacy_at.is_some() {
+                                self.privacy_revoke_rows()
+                            } else {
+                                Vec::new()
+                            };
+                            let privacy_locked = if privacy_at.is_some() {
+                                self.private_lock_for_paint().map(|why| super::privacy_ui::lock_hover(&why))
+                            } else {
+                                None
+                            };
+                            // The newest /skills changes bubble gets Undo / Restore rows.
+                            let skill_at = super::skill_undo::newest_skill_changes_row(&self.chat_views);
+                            let skill_rows =
+                                if skill_at.is_some() { self.skill_rows_now() } else { Vec::new() };
                             let (views, keys) = (&self.chat_views, &self.chat_view_keys);
                             let shown = if live {
                                 views_up_to_last_user(views)
@@ -1218,16 +1280,38 @@ impl Cabin {
                                         .iter()
                                         .take_while(|v| v.kind != ChatKind::User)
                                         .any(|v| v.kind == ChatKind::Assistant);
+                                let privacy_here = (privacy_at == Some(i) && !privacy_grants.is_empty())
+                                    || (skill_at == Some(i) && !skill_rows.is_empty());
                                 let painted = ui
                                     .push_id(chat_row_id_salt(&thread_id, i), |ui| {
-                                        paint_chat_block_with(
+                                        let mut p = paint_chat_block_with(
                                             ui,
                                             block,
                                             thought_shows_label(prev_expanded),
                                             thought_shows_acts(next_expanded),
                                             fold,
-                                            reply_acts,
-                                        )
+                                            reply_acts && !privacy_here,
+                                        );
+                                        if privacy_here {
+                                            if skill_at == Some(i) {
+                                                skill_hit =
+                                                    super::skill_undo::paint_skill_undo_rows(ui, &skill_rows);
+                                            } else {
+                                                privacy_revoke = super::privacy_ui::paint_privacy_revokes(
+                                                    ui,
+                                                    &privacy_grants,
+                                                    privacy_locked,
+                                                );
+                                            }
+                                            if reply_acts {
+                                                let avail = clamp_row_width(
+                                                    ui.available_width().min(ui.max_rect().width()),
+                                                );
+                                                let w = crate::markdown::bubble_width(avail);
+                                                p.act = paint_msg_acts(ui, false, &block.body, avail, w).act;
+                                            }
+                                        }
+                                        p
                                     });
                                 if jump_you && last_you_i == Some(i) {
                                     ui.scroll_to_rect(painted.response.rect, Some(egui::Align::Center));
@@ -1268,6 +1352,12 @@ impl Cabin {
                                 next_heights.push((ui.cursor().min.y - y0).max(0.0));
                             }
                             ui.ctx().data_mut(|d| d.insert_temp(row_h_id, next_heights));
+                        }
+                        if let Some(id) = privacy_revoke {
+                            self.revoke_from_privacy(&id);
+                        }
+                        if let Some(row) = skill_hit {
+                            self.skill_row_clicked(&row);
                         }
                         if jumped_you {
                             self.jump_last_you = false;
@@ -1330,8 +1420,7 @@ impl Cabin {
                             ChatBlockAct::None => {}
                         }
                         if self.chrome_here() {
-                            self.paint_perm_ask(ui);
-                            self.paint_elicit_ask(ui);
+                            self.paint_approval_stack(ui);
                         }
                         self.paint_try_again(ui);
                         if pin_tail {
@@ -1537,9 +1626,14 @@ impl Cabin {
 
     /// Sending from the composer follows your own message down. A night job or a phone
     /// task calls `send_scheduled_chat` directly, so it cannot yank the pane out of your reading.
+    /// Only the user's own typing comes through here, so this is also where a typed
+    /// `/skills undo` is marked as theirs (`typed_send`).
     pub(super) fn send_from_composer(&mut self, text: String) {
         self.pin_chat_tail();
+        self.heartbeat_user_sent();
+        self.harness.typed_send = true;
         self.send_chat(text);
+        self.harness.typed_send = false;
     }
 
     pub(super) fn paint_live_blocks(
@@ -1718,6 +1812,7 @@ impl Cabin {
                                         detail: b.tool_detail.clone(),
                                         diff: String::new(),
                                         image_data_url: None,
+                                        raw_input: String::new(),
                                     }),
                                 })
                                 .collect();
@@ -1757,8 +1852,29 @@ impl Cabin {
                 paint_tool_card_body(ui, card);
                 ui.add_space(6.0);
             }
+            let cards: Vec<&ToolCard> = self.tool_cards.iter().collect();
+            super::harness_ui::paint_click_marker(ui, &cards);
         });
     }
+    /// One needs-attention line, then the hard card, Grant full, the permission ask, and elicit.
+    /// Always the left-aligned chat-column stack: the empty chat lays the composer out
+    /// centered and justified, and cards must not inherit that (SY-01).
+    pub(super) fn paint_approval_stack(&mut self, ui: &mut egui::Ui) {
+        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+            let n = self.decisions_waiting();
+            if n > 0 {
+                let line = crate::motion::needs_attention_summary(n);
+                ui.add(
+                    egui::Label::new(RichText::new(line).size(12.0).color(crate::theme::muted()))
+                        .wrap(),
+                );
+            }
+            self.paint_harness_cards(ui);
+            self.paint_perm_ask(ui);
+            self.paint_elicit_ask(ui);
+        });
+    }
+
     pub(super) fn paint_perm_ask(&mut self, ui: &mut egui::Ui) {
         let Some(p) = self.perm_ask.clone() else {
             self.perm_always_confirm = None;
@@ -1773,12 +1889,15 @@ impl Cabin {
         let y = crate::motion::approval_y(enter_t, false);
         let avail = ui.available_rect_before_wrap();
         let slot = avail.translate(egui::vec2(0.0, y));
-        let waiting = 1 + self.perm_queue.len();
-        let summary = crate::motion::needs_attention_summary(waiting);
+        let eyebrow = super::harness_ui::perm_card_eyebrow(&p);
         ui.scope_builder(egui::UiBuilder::new().max_rect(slot), |ui| {
-            ui.set_min_width(avail.width());
             ui.multiply_opacity(enter_t.clamp(0.0, 1.0));
-            let hover_t = crate::motion::approval_hover_t(ui, ask_id, ui.rect_contains_pointer(slot));
+            let column = ui.available_width();
+            let outer = super::harness_ui::approval_card_width(column);
+            let inner = super::harness_ui::approval_card_inner(column, 1.0);
+            let card_slot = egui::Rect::from_min_size(slot.min, egui::vec2(outer, slot.height()));
+            let hover_t =
+                crate::motion::approval_hover_t(ui, ask_id, ui.rect_contains_pointer(card_slot));
             let fill = crate::theme::blend_color(
                 egui::Color32::TRANSPARENT,
                 crate::motion::HOVER_BG,
@@ -1790,8 +1909,10 @@ impl Cabin {
                 .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                 .inner_margin(egui::Margin::same(12))
                 .show(ui, |ui| {
+                ui.set_min_width(inner);
+                ui.set_max_width(inner);
                 ui.label(
-                    RichText::new(summary)
+                    RichText::new(eyebrow)
                         .size(12.0)
                         .color(crate::theme::muted()),
                 );
@@ -1815,14 +1936,25 @@ impl Cabin {
                 };
                 if !action.is_empty() {
                     ui.add_space(4.0);
-                    ui.label(RichText::new(action).size(13.0).color(crate::theme::fg()));
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(action)
+                                .size(13.0)
+                                .monospace()
+                                .color(crate::theme::fg()),
+                        )
+                        .wrap(),
+                    );
                 }
                 if !p.reason.trim().is_empty() && p.reason.trim() != action {
                     ui.add_space(4.0);
-                    ui.label(
-                        RichText::new(&p.reason)
-                            .size(13.0)
-                            .color(crate::theme::muted()),
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(&p.reason)
+                                .size(13.0)
+                                .color(crate::theme::muted()),
+                        )
+                        .wrap(),
                     );
                 }
                 if !self.perm_queue.is_empty() {
@@ -1925,12 +2057,16 @@ impl Cabin {
             return;
         };
         ui.add_space(8.0);
+        let column = ui.available_width();
+        let inner = super::harness_ui::approval_card_inner(column, 1.0);
         egui::Frame::NONE
             .fill(egui::Color32::TRANSPARENT)
             .corner_radius(crate::theme::CHROME_RADIUS)
             .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
             .inner_margin(egui::Margin::same(12))
             .show(ui, |ui| {
+                ui.set_min_width(inner);
+                ui.set_max_width(inner);
                 ui.label(
                     RichText::new(format!("{} wants input", p.server_name))
                         .size(14.0)
@@ -2090,8 +2226,7 @@ impl Cabin {
                     ui.set_width(pane_w);
                     self.ui_composer_stack(ui);
                     if self.chrome_here() {
-                        self.paint_perm_ask(ui);
-                        self.paint_elicit_ask(ui);
+                        self.paint_approval_stack(ui);
                     }
                     self.paint_try_again(ui);
                     if pulse_on && (feed_n > 0 || device_on) {

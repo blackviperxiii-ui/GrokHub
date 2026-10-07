@@ -8,6 +8,8 @@ use grokhub_core::{ProjectKind, ProjectNode};
 use std::sync::Arc;
 
 fn cabin_src() -> String {
+    // Windows CI checkouts often embed CRLF via include_str; source-inspection
+    // asserts match on \n, so normalize once here.
     concat!(
         include_str!("mod.rs"),
         include_str!("persist.rs"),
@@ -32,6 +34,7 @@ fn cabin_src() -> String {
         include_str!("board_ui.rs"),
         include_str!("background.rs"),
     )
+    .replace("\r\n", "\n")
     .replace("pub(super) ", "")
 }
 
@@ -48,6 +51,22 @@ fn fn_src<'a>(src: &'a str, name: &str) -> &'a str {
         .or_else(|| rest.find("\nfn "))
         .unwrap_or(rest.len());
     &after[..needle.len() + end]
+}
+
+#[test]
+fn cabin_src_strips_crlf_so_windows_checkout_matches_lf_asserts() {
+    // Simulate a Windows autocrlf checkout: the Halt-guard snippet must still
+    // match the LF needle used by heartbeat_halt_skips_every_organ_that_starts_work.
+    let crlf = "if !halted {\r\n                        self.follow_feed_lookup();";
+    let norm = crlf.replace("\r\n", "\n");
+    assert!(
+        norm.contains("if !halted {\n                        self.follow_feed_lookup();"),
+        "CRLF must normalize before the Halt-digest assert"
+    );
+    assert!(
+        !cabin_src().contains('\r'),
+        "cabin_src must not leave CR for source-inspection tests"
+    );
 }
 
 #[test]
@@ -604,7 +623,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             speech.contains("inner_margin(egui::Margin::ZERO)")
                 && speech.contains("add_space(BUBBLE_PAD_Y)")
                 && speech.contains("add_space(BUBBLE_PAD_X)")
-                && speech.contains("allocate_exact_size(egui::vec2(16.0, 16.0)"),
+                && speech.contains("allocate_exact_size(egui::vec2(REPLY_MARK_W, REPLY_MARK_W)")
+                && include_str!("chat_ui.rs").contains("const REPLY_MARK_W: f32 = 16.0;"),
             "bubble pad must sit inside the fill, not get clipped by rounded inner_margin: {speech}"
         );
     }
@@ -5357,6 +5377,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             sync_spawn < sync_read,
             "/sync must slurp SOUL/USER/MEMORY off the UI thread: {sync}"
         );
+        assert!(
+            sync.contains("pin_scheduled_dir"),
+            "/sync worker must pin config_dir like other persist workers: {sync}"
+        );
         let thread_rows = sync
             .split("let threads = snap")
             .nth(1)
@@ -5887,7 +5911,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "greeting is regular/medium weight: {slice}"
         );
         assert!(
-            slice.contains("paint_perm_ask"),
+            slice.contains("paint_approval_stack"),
             "empty home must still show a live permission bar: {slice}"
         );
         assert!(
@@ -6180,6 +6204,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                     detail: "ran ls -la and printed a long listing that must stay hidden".into(),
                     diff: String::new(),
                     image_data_url: None,
+                    raw_input: String::new(),
                 };
                 let body_h = ui
                     .scope(|ui| {
@@ -6941,8 +6966,12 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "Loops Suggested uses learned tiles first: {night}"
         );
         assert!(
-            night.contains("review_status_line"),
-            "Suggested header shows Reviewed today / due tonight: {night}"
+            night.contains("Suggested from your recent work"),
+            "Suggested says these tiles come from recent work: {night}"
+        );
+        assert!(
+            !night.contains("review_status_line"),
+            "night review status stays off the Automations Suggested line: {night}"
         );
         assert!(
             night.contains("/loop") && night.contains("New job") && night.contains("grok_loops"),
@@ -6977,12 +7006,12 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "re-enabling a paused job has to find its next slot: {sched}"
         );
         let enable = night
-            .split("checkbox")
+            .split("enabled_switch")
             .nth(1)
             .and_then(|s| s.split("ui.vertical").next())
             .expect("loop enable");
         assert!(
-            enable.contains(".changed()") && enable.contains("persist_loops"),
+            enable.contains("persist_loops"),
             "toggling a loop must persist enabled before restart: {enable}"
         );
         assert!(
@@ -10867,6 +10896,180 @@ fn recall_finds_a_memory_line_and_reports_a_miss() {
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
+fn wait_recall(cabin: &mut super::Cabin) -> String {
+    let start = std::time::Instant::now();
+    while cabin.recall_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(2) {
+        cabin.poll_recall();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        cabin.recall_rx.is_none(),
+        "recall did not finish: {}",
+        cabin.status
+    );
+    cabin
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.0 == "assistant")
+        .map(|m| m.1.clone())
+        .unwrap_or_default()
+}
+
+#[test]
+fn recall_legacy_finds_memory_line_and_skips_amr() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("recall-legacy-amr");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    assert_eq!(
+        cabin.cfg.memory_backend,
+        grokhub_core::amr::MemoryBackend::Legacy
+    );
+    cabin.mem_name = "MEMORY.md".into();
+    cabin.mem_body = "harbor light\n".into();
+    assert!(!root.join("amr").exists());
+    cabin.run_slash_line("/recall harbor");
+    assert_eq!(cabin.status, "Recalling…");
+    let body = wait_recall(&mut cabin);
+    assert!(
+        body.contains("MEMORY.md:1: harbor light"),
+        "legacy recall missed the memory line: {body}"
+    );
+    assert!(
+        !root.join("amr").exists(),
+        "legacy recall must not create amr/"
+    );
+
+    let store = grokhub_core::amr::AmrStore::at(root.join("amr"));
+    store.init().unwrap();
+    store
+        .remember(&grokhub_core::amr::NodeDraft {
+            id: "fact-harbor".into(),
+            node_type: grokhub_core::amr::NodeType::Fact,
+            created: "2026-10-07T00:00:00Z".into(),
+            updated: "2026-10-07T00:00:00Z".into(),
+            source: "user".into(),
+            confidence: 0.9,
+            tags: vec!["dock".into()],
+            body: "harbor lamp from amr\n".into(),
+            sensitivity: grokhub_core::amr::Sensitivity::Plain,
+        })
+        .unwrap();
+    cabin.run_slash_line("/recall harbor");
+    let body = wait_recall(&mut cabin);
+    assert!(
+        body.contains("MEMORY.md:1: harbor light"),
+        "legacy recall dropped the memory line: {body}"
+    );
+    assert!(
+        !body.contains("amr:"),
+        "legacy recall returned an AMR node: {body}"
+    );
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn recall_amr_returns_seeded_node_not_legacy_memory() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("recall-amr");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+    cabin.mem_name = "MEMORY.md".into();
+    cabin.mem_body = "harbor light\n".into();
+    assert!(!root.join("amr").exists());
+    cabin.run_slash_line("/recall zzznone");
+    assert_eq!(cabin.status, "Recalling…");
+    let miss = wait_recall(&mut cabin);
+    assert_eq!(miss, "SLASH_RESULT:\nNo recall for zzznone");
+    assert!(root.join("amr").join("nodes").is_dir());
+    assert!(root.join("amr").join("edges").is_dir());
+    assert!(root.join("amr").join("dreams").is_dir());
+    let readme = std::fs::read_to_string(root.join("amr").join("README.md")).unwrap();
+    assert!(
+        readme.contains("amr_schema: 1"),
+        "first AMR recall must init the store: {readme}"
+    );
+
+    let store = grokhub_core::amr::AmrStore::at(root.join("amr"));
+    store
+        .remember(&grokhub_core::amr::NodeDraft {
+            id: "pref-harbor".into(),
+            node_type: grokhub_core::amr::NodeType::Preference,
+            created: "2026-10-07T00:00:00Z".into(),
+            updated: "2026-10-07T00:00:00Z".into(),
+            source: "user".into(),
+            confidence: 0.8,
+            tags: vec!["dock".into()],
+            body: "pier light stays on\n".into(),
+            sensitivity: grokhub_core::amr::Sensitivity::Plain,
+        })
+        .unwrap();
+    cabin.run_slash_line("/recall pier");
+    let body = wait_recall(&mut cabin);
+    assert_eq!(body, "SLASH_RESULT:\namr:pref-harbor: pier light stays on");
+    assert!(
+        !body.contains("MEMORY.md"),
+        "AMR recall returned legacy memory: {body}"
+    );
+    assert!(!body.contains("harbor light"), "{body}");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Spike-4b: a private AMR note is sealed on disk, /recall opens it with the
+// keyring key, and a locked keyring leaves one plain line instead.
+#[test]
+fn recall_opens_private_notes_and_says_when_they_are_locked() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("recall-sealed");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let store_keys = std::sync::Arc::new(hx::MemoryKeyStore::new());
+    hx::use_key_store_for(&root, store_keys.clone());
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+    let store = grokhub_core::amr::AmrStore::at(root.join("amr"))
+        .with_sealer(std::sync::Arc::new(hx::LearnedVault::new(&root)));
+    store.init().unwrap();
+    store
+        .remember(&grokhub_core::amr::NodeDraft {
+            id: "fact-home".into(),
+            node_type: grokhub_core::amr::NodeType::Fact,
+            created: "2026-10-07T00:00:00Z".into(),
+            updated: "2026-10-07T00:00:00Z".into(),
+            source: "user".into(),
+            confidence: 0.8,
+            tags: vec![],
+            body: "pier nine is home\n".into(),
+            sensitivity: grokhub_core::amr::Sensitivity::Personal,
+        })
+        .unwrap();
+    let raw = std::fs::read_to_string(root.join("amr/nodes/fact-home.sealed")).unwrap();
+    assert!(!raw.contains("pier"), "{raw}");
+    cabin.run_slash_line("/recall pier");
+    assert_eq!(wait_recall(&mut cabin), "SLASH_RESULT:\namr:fact-home: pier nine is home");
+
+    store_keys.set_available(false);
+    hx::use_key_store_for(&root, store_keys.clone());
+    cabin.run_slash_line("/recall pier");
+    let body = wait_recall(&mut cabin);
+    assert_eq!(
+        body,
+        format!("SLASH_RESULT:\n1 private note not searched. {}", hx::Locked::Unavailable.message())
+    );
+    assert_eq!(super::slash::locked_recall_line(0, None), None);
+    assert_eq!(
+        super::slash::locked_recall_line(2, None).as_deref(),
+        Some("2 private notes not searched. Private memory is locked.")
+    );
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
 // Landed from PR #122.
 #[test]
 fn skills_connectors_and_sessions_without_grok() {
@@ -10898,23 +11101,1013 @@ fn skills_connectors_and_sessions_without_grok() {
 fn sync_writes_a_local_hub_snapshot() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("sync-local");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
     std::env::set_var("GROKHUB_CONFIG", &root);
+    // Spike-4a: /sync publishes chats and memory, so it needs the hub grant
+    // (the Settings → Permissions Allow click) or a hard-card click.
+    let grant = grokhub_agent::harness::grant_destination(
+        &root,
+        grokhub_agent::harness::HUB_DEST,
+        grokhub_agent::harness::HUB_SYNC_DATA,
+        grokhub_agent::harness::UserClick::from_click(),
+    )
+    .unwrap();
     let mut cabin = Cabin::quiet_for_test();
     cabin.cfg.device_name = "harbor".into();
+    // SY-03: /sync only sends when a computer is paired.
+    pair_test_peer(&cabin, "p1");
     cabin.run_slash_line("/sync");
     assert_eq!(cabin.status, "Syncing…");
     assert!(cabin.sync_rx.is_some());
     cabin.run_slash_line("/sync");
     assert_eq!(cabin.status, "Syncing…");
+    // Windows ACL + antivirus can make the sync worker's first secrets/app.json
+    // writes take longer than a tight 2s poll. Wait for the channel, not a wall clock.
     let start = std::time::Instant::now();
-    while cabin.sync_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(2) {
+    let budget = std::time::Duration::from_secs(8);
+    while cabin.sync_rx.is_some() && start.elapsed() < budget {
         cabin.poll_sync();
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    assert!(matches!(cabin.nav, Nav::Devices));
-    assert_eq!(cabin.status, "Merged hub snapshot from harbor");
-    assert!(cabin.sync_rx.is_none());
+    assert!(
+        cabin.sync_rx.is_none(),
+        " /sync must land the hub snapshot; status={:?} after {:?}",
+        cabin.status,
+        start.elapsed()
+    );
+    // SY-03: one result line in the chat; the pane stays on Chat.
+    assert!(matches!(cabin.nav, Nav::Chat), "nav={:?}", cabin.nav);
+    assert_eq!(cabin.status, "Synced chats and memory to 1 computer.");
+    let (role, body) = cabin.messages.last().cloned().expect("result line");
+    assert_eq!(role, "assistant");
+    assert!(grokhub_core::is_cabin_slash_turn(&role, &body), "stays out of the next model kick");
+    assert_eq!(grokhub_core::strip_slash_result(&body), "Synced chats and memory to 1 computer.");
+    assert!(cabin.hub.lock().unwrap().snapshot.is_some());
+    let log = grokhub_agent::harness::read_egress(&root);
+    assert_eq!(log.len(), 1, "{log:?}");
+    assert_eq!(log[0].dest, "hub");
+    assert_eq!(log[0].grant_id, grant.id);
+    assert_eq!(log[0].basis, "grant");
+    let spans = harness_spans(&root);
+    let sent = spans.iter().find(|s| s.tool == "hub_sync").expect("hub_sync span");
+    assert_eq!(sent.decision, "allow");
+    assert_eq!(sent.consent_ref, grant.id);
+    assert_eq!(sent.path, "egress");
+    assert_eq!(log[0].span_id, sent.span_ref());
     std::env::remove_var("GROKHUB_CONFIG");
+}
+
+/// Every span line under `{root}/spans/`, any session.
+fn harness_spans(root: &std::path::Path) -> Vec<grokhub_agent::harness::Span> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(root.join("spans")).into_iter().flatten().flatten() {
+        let text = std::fs::read_to_string(entry.path()).unwrap_or_default();
+        for line in text.lines().filter(|l| !l.trim().is_empty()) {
+            out.push(serde_json::from_str(line).expect("span line"));
+        }
+    }
+    out.sort_by_key(|s: &grokhub_agent::harness::Span| s.ts_ms);
+    out
+}
+
+/// Pair a fake computer with the cabin's hub (no network: just the peer row).
+fn pair_test_peer(cabin: &Cabin, id: &str) {
+    cabin.hub.lock().unwrap().peers.push(grokhub_core::state::Peer {
+        id: id.into(),
+        name: format!("box-{id}"),
+        token: format!("t-{id}"),
+        last_seen: 0,
+    });
+}
+
+fn wait_sync(cabin: &mut Cabin) {
+    let start = std::time::Instant::now();
+    while cabin.sync_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(8) {
+        cabin.poll_sync();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+// Spike-4a: chats and memory to a not-yet-granted destination are hard Send.
+#[test]
+fn sync_without_a_hub_grant_parks_a_hard_send_card_and_approve_sends_once() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("sync-park");
+    std::fs::create_dir_all(&root).unwrap();
+    // A paired computer and no grant: still the hard Send card (SY-03).
+    pair_test_peer(&cabin, "p1");
+    cabin.run_slash_line("/sync");
+    assert!(cabin.sync_rx.is_none(), "nothing leaves without a grant");
+    let park = cabin.harness.park.clone().expect("hard card");
+    assert_eq!(park.source, super::harness_ui::ParkSource::Egress("hub".into()));
+    assert_eq!(park.class, grokhub_agent::HardClass::Send);
+    assert_eq!(park.path, "egress");
+    assert_eq!(park.tool, "hub_sync");
+    assert_eq!(park.action, "/sync → paired computers (chats, memory)");
+    assert_eq!(cabin.hard_waiting(), 1);
+    assert!(cabin.hub.lock().unwrap().snapshot.is_none());
+    assert!(hx::read_egress(&root).is_empty());
+    // The same hard card: Enter never approves, Esc denies.
+    assert_eq!(hx::hard_card_key(true, false, false), None);
+    assert_eq!(hx::hard_card_key(false, true, false), Some(hx::HardAnswer::Deny));
+
+    cabin.resolve_hard_park(false, "Jeremy denied (Esc)");
+    assert!(cabin.sync_rx.is_none());
+    assert!(cabin.harness.park.is_none());
+    assert_eq!(cabin.status, "Denied · Send");
+    assert!(hx::read_egress(&root).is_empty());
+
+    cabin.run_slash_line("/sync");
+    assert!(cabin.harness.park.is_some());
+    cabin.resolve_hard_park(true, "");
+    assert!(cabin.sync_rx.is_some(), "Approve sends once");
+    wait_sync(&mut cabin);
+    assert_eq!(cabin.status, "Synced chats and memory to 1 computer.");
+    assert!(cabin.hub.lock().unwrap().snapshot.is_some());
+    let log = hx::read_egress(&root);
+    assert_eq!(log.len(), 1, "{log:?}");
+    assert_eq!(log[0].dest, "hub");
+    assert_eq!(log[0].grant_id, "approved-once");
+    assert_eq!(log[0].basis, "approved_once");
+    assert_eq!(
+        hx::ConsentLedger::load(&root),
+        hx::ConsentLedger::empty(),
+        "a hard card never writes a standing grant"
+    );
+    let spans = harness_spans(&root);
+    let decisions: Vec<&str> = spans.iter().map(|s| s.decision.as_str()).collect();
+    assert_eq!(decisions, vec!["park", "deny", "park", "approve", "allow"]);
+    assert!(spans.iter().all(|s| s.tool == "hub_sync" && s.path == "egress"));
+    assert_eq!(spans[4].consent_ref, "approved-once");
+    assert_eq!(log[0].span_id, spans[4].span_ref());
+    assert!(hx::approval_gate_violation(&spans).is_empty());
+
+    // Still no grant: the next /sync asks again.
+    cabin.run_slash_line("/sync");
+    assert!(cabin.sync_rx.is_none());
+    assert!(cabin.harness.park.is_some());
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn revoking_the_hub_grant_blocks_the_next_sync_and_drops_the_share() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("sync-revoke");
+    std::fs::create_dir_all(&root).unwrap();
+    pair_test_peer(&cabin, "p1");
+    let g = hx::grant_destination(&root, hx::HUB_DEST, hx::HUB_SYNC_DATA, hx::UserClick::from_click()).unwrap();
+    cabin.harness.consent = None;
+    assert!(cabin.consent().destination_grant("hub", hx::HUB_SYNC_DATA).is_some());
+    cabin.hub.lock().unwrap().snapshot = Some(std::sync::Arc::new(serde_json::json!({"kind": "grokhub-hub-v1"})));
+    cabin.revoke_hub_grant(&g.id);
+    assert_eq!(cabin.status, "Sync to paired computers revoked. /sync asks again.");
+    assert!(cabin.hub.lock().unwrap().snapshot.is_none(), "revoke stops serving the old share");
+    assert_eq!(cabin.consent().active().count(), 0);
+    cabin.run_slash_line("/sync");
+    assert!(cabin.sync_rx.is_none());
+    assert_eq!(
+        cabin.harness.park.as_ref().map(|p| p.source.clone()),
+        Some(super::harness_ui::ParkSource::Egress("hub".into()))
+    );
+    assert!(hx::read_egress(&root).is_empty());
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn privacy_slash_lists_grants_scopes_and_egress_without_content() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("privacy-slash");
+    std::fs::create_dir_all(&root).unwrap();
+    let before = cabin.messages.len();
+    assert_eq!(
+        hx::guard_egress(&root, &hx::EgressReq::new("https://api.x.ai/v1/responses", &[hx::DataClass::Chat])),
+        hx::GateOutcome::Allow
+    );
+    cabin.run_slash_line("/privacy");
+    assert!(!cabin.running, "/privacy never reaches the model");
+    let start = std::time::Instant::now();
+    while cabin.harness.privacy_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(4) {
+        cabin.poll_privacy();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(cabin.messages.len(), before + 1);
+    let (role, body) = cabin.messages.last().cloned().unwrap();
+    assert_eq!(role, "assistant");
+    assert!(grokhub_core::is_cabin_slash_turn(&role, &body), "stays out of the next model kick");
+    let text = grokhub_core::strip_slash_result(&body);
+    assert!(text.starts_with("/privacy — what leaves this computer\n"), "{text}");
+    assert!(text.contains("- Off: Sync to paired computers (/sync asks each time) · Files in a folder · "), "{text}");
+    assert!(text.contains("Nothing reads the folder, app, browser, calendar, mail or system grants yet."), "{text}");
+    assert!(text.contains("- api.x.ai · 1 time · chats · default · last just now"), "{text}");
+    release_isolated(&root, cabin);
+}
+
+// SY-03: nothing paired means nothing to send. No card, no egress line, no
+// span, with or without the grant; one plain result line instead.
+#[test]
+fn sync_with_no_paired_computer_posts_a_line_and_sends_nothing() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("sync-no-peers");
+    std::fs::create_dir_all(&root).unwrap();
+    assert!(cabin.hub.lock().unwrap().peers.is_empty());
+    let before = cabin.messages.len();
+    cabin.run_slash_line("/sync");
+    assert!(cabin.harness.park.is_none(), "no peer: no hard card");
+    assert_eq!(cabin.hard_waiting(), 0);
+    assert!(cabin.sync_rx.is_none(), "no peer: nothing is sent");
+    assert_eq!(cabin.status, "Nothing paired yet. Start share to pair a computer.");
+    assert_eq!(cabin.messages.len(), before + 1);
+    let (role, body) = cabin.messages.last().cloned().unwrap();
+    assert!(grokhub_core::is_cabin_slash_turn(&role, &body));
+    assert_eq!(
+        grokhub_core::strip_slash_result(&body),
+        "Nothing paired yet. Start share to pair a computer."
+    );
+    assert!(hx::read_egress(&root).is_empty(), "no peer: no egress line");
+    assert!(harness_spans(&root).is_empty(), "no peer: no span");
+    assert!(cabin.hub.lock().unwrap().snapshot.is_none());
+
+    // With the grant it is the same: nobody to send to.
+    hx::grant_destination(&root, hx::HUB_DEST, hx::HUB_SYNC_DATA, hx::UserClick::from_click()).unwrap();
+    cabin.harness.consent = None;
+    cabin.run_slash_line("/sync");
+    assert!(cabin.harness.park.is_none());
+    assert!(cabin.sync_rx.is_none());
+    assert!(hx::read_egress(&root).is_empty());
+    assert!(harness_spans(&root).is_empty());
+    assert!(cabin.hub.lock().unwrap().snapshot.is_none());
+
+    // A card approved after the last computer unpaired sends nothing either.
+    hx::revoke_grant(&root, &cabin.consent().active().next().unwrap().id.clone()).unwrap();
+    cabin.harness.consent = None;
+    pair_test_peer(&cabin, "p1");
+    cabin.run_slash_line("/sync");
+    assert!(cabin.harness.park.is_some(), "a peer and no grant parks the hard Send card");
+    cabin.hub.lock().unwrap().peers.clear();
+    cabin.resolve_hard_park(true, "");
+    assert!(cabin.sync_rx.is_none());
+    assert!(hx::read_egress(&root).is_empty());
+    assert_eq!(cabin.status, "Nothing paired yet. Start share to pair a computer.");
+    release_isolated(&root, cabin);
+}
+
+// SY-05/SY-06: Permissions groups the trust rows under "Leaving this computer"
+// and the rule editor under "Command rules". Allow is filled; Revoke is a ghost.
+#[test]
+fn permissions_page_groups_trust_rows_and_rules_with_a_ghost_revoke() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("perm-headings");
+    std::fs::create_dir_all(&root).unwrap();
+    struct Painted {
+        texts: Vec<(String, egui::Pos2)>,
+        filled: Vec<egui::Rect>,
+    }
+    fn walk(shape: &egui::Shape, p: &mut Painted) {
+        match shape {
+            egui::Shape::Text(t) => p.texts.push((t.galley.text().to_string(), t.pos + t.galley.rect.center().to_vec2())),
+            egui::Shape::Rect(r) if r.fill == crate::theme::fg() => p.filled.push(r.rect),
+            egui::Shape::Vec(v) => v.iter().for_each(|c| walk(c, p)),
+            _ => {}
+        }
+    }
+    let paint = |cabin: &mut Cabin| {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 2400.0))),
+            ..Default::default()
+        };
+        let out = crate::theme::test_pass(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| cabin.ui_permission_editor(ui));
+        });
+        let mut p = Painted { texts: Vec::new(), filled: Vec::new() };
+        for clipped in &out.shapes {
+            walk(&clipped.shape, &mut p);
+        }
+        p
+    };
+    let p = paint(&mut cabin);
+    let at = |p: &Painted, want: &str| {
+        p.texts
+            .iter()
+            .position(|t| t.0 == want)
+            .unwrap_or_else(|| panic!("{want} not painted: {:?}", p.texts.iter().map(|t| &t.0).collect::<Vec<_>>()))
+    };
+    let order = [
+        "Leaving this computer",
+        super::privacy_ui::PRIVACY_NOTE,
+        "Sync to paired computers",
+        "Allow",
+        "Command rules",
+        "Deny wins over ask, and ask wins over allow. Dangerous commands still ask, including after Allow always.",
+        "Rule",
+    ];
+    let idx: Vec<usize> = order.iter().map(|w| at(&p, w)).collect();
+    assert!(idx.windows(2).all(|w| w[0] < w[1]), "order {order:?} got {idx:?}");
+    let ys: Vec<f32> = idx.iter().map(|&i| p.texts[i].1.y).collect();
+    assert!(ys[4] > ys[2] && ys[6] > ys[5], "headings sit above their rows: {ys:?}");
+    let allow = p.texts[at(&p, "Allow")].1;
+    assert!(!p.filled.iter().any(|r| r.contains(allow)), "SB-08: Allow is an outline, not filled");
+
+    hx::grant_destination(&root, hx::HUB_DEST, hx::HUB_SYNC_DATA, hx::UserClick::from_click()).unwrap();
+    cabin.harness.consent = None;
+    let p = paint(&mut cabin);
+    let revoke = p.texts[at(&p, "Revoke")].1;
+    assert!(!p.filled.iter().any(|r| r.contains(revoke)), "Revoke is a ghost, not filled");
+    assert!(p.texts.iter().any(|t| t.0.ends_with("Sends chats, memory.")), "{:?}", p.texts.iter().map(|t| &t.0).collect::<Vec<_>>());
+    release_isolated(&root, cabin);
+}
+
+// SY-10: both Permissions headings open their group with SECTION_HEAD_GAP of
+// room above (same heading size), so "Command rules" no longer sits as close
+// to the Sync row as rows sit to each other.
+#[test]
+fn permissions_headings_get_room_above_them() {
+    let rows = include_str!("privacy_ui.rs")
+        .split("fn ui_privacy_rows(")
+        .nth(1)
+        .and_then(|s| s.split("fn privacy_revoke_rows(").next())
+        .expect("ui_privacy_rows");
+    assert!(rows.contains("section_heading(ui, LEAVING_HEAD)"), "{rows}");
+    let src = cabin_src();
+    let editor = fn_src(&src, "ui_permission_editor");
+    assert!(editor.contains("section_heading(ui, super::privacy_ui::RULES_HEAD)"), "{editor}");
+    assert!(!editor.contains("section_label(ui, super::privacy_ui::RULES_HEAD)"), "{editor}");
+    assert!((8.0..=12.0).contains(&crate::cards::SECTION_HEAD_GAP));
+
+    // Painted: the gap from the Sync row to "Command rules" beats the
+    // row-to-row gap by at least SECTION_HEAD_GAP (before: 21px vs 15px).
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("perm-head-gap");
+    std::fs::create_dir_all(&root).unwrap();
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 2400.0))),
+        ..Default::default()
+    };
+    let out = crate::theme::test_pass(&ctx, input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| cabin.ui_permission_editor(ui));
+    });
+    let mut tops: Vec<(String, f32, f32)> = Vec::new();
+    for clipped in &out.shapes {
+        if let egui::Shape::Text(t) = &clipped.shape {
+            tops.push((t.galley.text().to_string(), t.pos.y + t.galley.rect.top(), t.pos.y + t.galley.rect.bottom()));
+        }
+    }
+    let find = |want: &str| tops.iter().find(|t| t.0 == want).cloned().unwrap_or_else(|| panic!("{want}: {tops:?}"));
+    let hub_hint = tops.iter().find(|t| t.0.starts_with("Off. /sync asks")).cloned().expect("hub hint");
+    let rules = find("Command rules");
+    let gap = rules.1 - hub_hint.2;
+    // Row rhythm: a help line to the next row title in the same group.
+    let note = tops.iter().find(|t| t.0.starts_with("Deny wins over ask")).cloned().expect("rules note");
+    let row_gap = find("Rule").1 - note.2;
+    assert!(
+        gap - row_gap >= crate::cards::SECTION_HEAD_GAP - 0.5,
+        "Command rules sits {gap}px under the Sync row; rows sit {row_gap}px apart"
+    );
+    release_isolated(&root, cabin);
+}
+
+// GL-05: aged slash and system results keep the result bubble. They never
+// paint in the thought frame and never carry the "Thought process" label or
+// its fold control, even with the session's thoughts collapsed.
+#[test]
+fn aged_slash_results_never_render_in_the_thought_frame() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("gl05-result-style");
+    std::fs::create_dir_all(&root).unwrap();
+    let report = super::privacy_ui::privacy_report(
+        &grokhub_agent::harness::ConsentLedger::empty(),
+        &grokhub_agent::harness::EgressRead::default(),
+        None,
+        false,
+        1_000 * 86_400_000,
+    );
+    cabin.live_mut().push(("user".into(), "hello".into()));
+    cabin.live_mut().push(("assistant".into(), "Hi.".into()));
+    cabin.live_mut().push(("assistant".into(), mark_slash_result("Synced chats and memory to 1 computer.")));
+    cabin.live_mut().push(("assistant".into(), mark_slash_result(&report)));
+    cabin.live_mut().push(("assistant".into(), mark_slash_result("Sync to paired computers revoked. /sync asks again.")));
+    let views = cabin.cached_chat_views().to_vec();
+    let kinds: Vec<ChatKind> = views.iter().map(|v| v.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![ChatKind::User, ChatKind::Assistant, ChatKind::Result, ChatKind::Result, ChatKind::Result]
+    );
+    // The aged /privacy report is still the one the ghost Revoke goes under.
+    assert_eq!(super::privacy_ui::newest_privacy_row(&views), Some(3));
+
+    let paint = |view: &ChatView, fold: ThoughtFold| {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 1400.0))),
+            ..Default::default()
+        };
+        let mut drawn = false;
+        let out = crate::theme::test_pass(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                drawn = super::chat_ui::paint_chat_block_with(ui, view, true, true, fold, true).drawn;
+            });
+        });
+        let mut texts: Vec<(String, bool)> = Vec::new();
+        fn walk(shape: &egui::Shape, out: &mut Vec<(String, bool)>) {
+            match shape {
+                egui::Shape::Text(t) => {
+                    let italic = t.galley.job.sections.iter().any(|s| s.format.italics);
+                    out.push((t.galley.text().to_string(), italic));
+                }
+                egui::Shape::Vec(v) => v.iter().for_each(|c| walk(c, out)),
+                _ => {}
+            }
+        }
+        for clipped in &out.shapes {
+            walk(&clipped.shape, &mut texts);
+        }
+        (drawn, texts)
+    };
+    for view in views.iter().filter(|v| v.kind == ChatKind::Result) {
+        // Expanded is what the pane passes; Minimized and Hidden are what an aged,
+        // collapsed thought would get. A result ignores all three.
+        for fold in [ThoughtFold::Expanded, ThoughtFold::Minimized, ThoughtFold::Hidden] {
+            let (drawn, texts) = paint(view, fold);
+            assert!(drawn, "a result is never folded away");
+            for (t, italic) in &texts {
+                assert!(!t.contains("Thought process"), "{t}");
+                assert_ne!(t, grokhub_core::THOUGHT_ROW_LABEL, "no thought row: {texts:?}");
+                assert_ne!(t, "Collapse", "no thought fold control: {texts:?}");
+                assert_ne!(t, "Expand", "no thought fold control: {texts:?}");
+                assert!(!italic, "a result is upright, not thought italics: {t}");
+            }
+            let first = view.body.lines().next().unwrap_or_default();
+            assert!(texts.iter().any(|(t, _)| t.contains(first)), "{first} painted: {texts:?}");
+        }
+    }
+    // The pane paints a result with the result bubble, not the thought bubble.
+    let src = include_str!("chat_ui.rs");
+    let arm = src
+        .split("ChatKind::Result => {")
+        .nth(1)
+        .and_then(|s| s.split("ChatKind::Thought => {").next())
+        .expect("Result arm");
+    assert!(arm.contains("paint_result_bubble"), "{arm}");
+    assert!(!arm.contains("paint_thought_bubble") && !arm.contains("Thought process") && !arm.contains("italics"), "{arm}");
+    release_isolated(&root, cabin);
+}
+
+// GL-05 guard: aged model reasoning still collapses exactly as before: the
+// "Thought process" label and Collapse while expanded, the "Thought" row and
+// Expand when minimized, nothing when hidden.
+#[test]
+fn aged_model_reasoning_still_collapses() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("gl05-thought");
+    std::fs::create_dir_all(&root).unwrap();
+    cabin.live_mut().push(("user".into(), "fix it".into()));
+    cabin.live_mut().push(("assistant".into(), grokhub_core::merge_thinking("Plan: read the file first.", "Looking now.")));
+    cabin.live_mut().push(("assistant".into(), "Fixed the typo in main.rs.".into()));
+    cabin.live_mut().push(("assistant".into(), mark_slash_result("Synced chats and memory to 1 computer.")));
+    let views = cabin.cached_chat_views().to_vec();
+    let kinds: Vec<ChatKind> = views.iter().map(|v| v.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![ChatKind::User, ChatKind::Thought, ChatKind::Thought, ChatKind::Assistant, ChatKind::Result]
+    );
+    let thought = &views[1];
+    let paint = |fold: ThoughtFold| {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 1400.0))),
+            ..Default::default()
+        };
+        let mut painted = None;
+        let out = crate::theme::test_pass(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                painted = Some(super::chat_ui::paint_chat_block_with(ui, thought, true, true, fold, true));
+            });
+        });
+        let mut texts = Vec::new();
+        for clipped in &out.shapes {
+            if let egui::Shape::Text(t) = &clipped.shape {
+                texts.push(t.galley.text().to_string());
+            }
+        }
+        (painted.expect("painted").drawn, texts)
+    };
+    let (drawn, texts) = paint(ThoughtFold::Expanded);
+    assert!(drawn);
+    assert!(texts.iter().any(|t| t == "Thought process"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "Collapse"), "{texts:?}");
+    assert!(texts.iter().any(|t| t.contains("Plan: read the file first.")), "{texts:?}");
+    let (drawn, texts) = paint(ThoughtFold::Minimized);
+    assert!(drawn);
+    assert!(texts.iter().any(|t| t == grokhub_core::THOUGHT_ROW_LABEL), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "Expand"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t.contains("Plan: read the file first.")), "{texts:?}");
+    let (drawn, _) = paint(ThoughtFold::Hidden);
+    assert!(!drawn, "a hidden thought still paints nothing");
+    release_isolated(&root, cabin);
+}
+
+// SY-04: the ghost Revoke under /privacy clears the grant and drops the share.
+// Only a pointer click answers it; Enter and typed text never do.
+#[test]
+fn revoke_from_privacy_clears_the_grant_on_a_click_only() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("privacy-revoke");
+    std::fs::create_dir_all(&root).unwrap();
+    let g = hx::grant_destination(&root, hx::HUB_DEST, hx::HUB_SYNC_DATA, hx::UserClick::from_click()).unwrap();
+    cabin.harness.consent = None;
+    cabin.hub.lock().unwrap().snapshot = Some(std::sync::Arc::new(serde_json::json!({"kind": "grokhub-hub-v1"})));
+    let rows = cabin.privacy_revoke_rows();
+    assert_eq!(
+        rows,
+        vec![super::privacy_ui::PrivacyRevoke {
+            id: g.id.clone(),
+            label: "Sync to paired computers".to_string(),
+            detail: None,
+        }]
+    );
+
+    // Slash text cannot revoke (or grant): it is not a click.
+    cabin.run_slash_line("/privacy revoke");
+    cabin.harness.consent = None;
+    assert_eq!(cabin.consent().active().count(), 1);
+
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 400.0));
+    let pass = |events: Vec<egui::Event>| {
+        let mut hit = None;
+        let mut texts = Vec::new();
+        let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+        let out = crate::theme::test_pass(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                hit = super::privacy_ui::paint_privacy_revokes(ui, &rows, None);
+            });
+        });
+        let mut revoke_at = None;
+        for clipped in &out.shapes {
+            if let egui::Shape::Text(t) = &clipped.shape {
+                let label = t.galley.text().to_string();
+                if label == "Revoke" {
+                    revoke_at = Some(t.pos + t.galley.rect.center().to_vec2());
+                }
+                texts.push(label);
+            }
+        }
+        (hit, revoke_at, texts)
+    };
+    let (hit, at, texts) = pass(vec![]);
+    assert_eq!(hit, None);
+    assert!(texts.iter().all(|t| !t.contains(&g.id)), "no grant id on screen: {texts:?}");
+    assert!(texts.iter().any(|t| t == "Sync to paired computers"), "{texts:?}");
+    let at = at.expect("Revoke pill");
+    let enter = egui::Event::Key {
+        key: egui::Key::Enter,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let (hit, _, _) = pass(vec![enter, egui::Event::Text("revoke".into())]);
+    assert_eq!(hit, None, "keys never revoke");
+    let press = |pressed| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let _ = pass(vec![egui::Event::PointerMoved(at)]);
+    let _ = pass(vec![press(true)]);
+    let (hit, _, _) = pass(vec![press(false)]);
+    assert_eq!(hit.as_deref(), Some(g.id.as_str()), "a click names the grant");
+
+    let before = cabin.messages.len();
+    cabin.revoke_from_privacy(&g.id);
+    assert_eq!(cabin.consent().active().count(), 0, "the grant is gone");
+    assert!(hx::ConsentLedger::load(&root).destination_grant(hx::HUB_DEST, hx::HUB_SYNC_DATA).is_none());
+    assert!(cabin.hub.lock().unwrap().snapshot.is_none(), "revoke drops the share");
+    assert_eq!(cabin.status, "Sync to paired computers revoked. /sync asks again.");
+    assert_eq!(cabin.messages.len(), before + 1);
+    assert!(cabin.privacy_revoke_rows().is_empty(), "no grant, no Revoke");
+    // An unknown or already revoked id is a no-op.
+    cabin.revoke_from_privacy(&g.id);
+    assert_eq!(cabin.messages.len(), before + 1);
+    release_isolated(&root, cabin);
+}
+
+// Spike-4b: Settings → Permissions paints the scope rows under "What GrokHub
+// can read". Texts with their centers, and which rects are filled.
+struct ScopePaint {
+    texts: Vec<(String, egui::Pos2)>,
+    filled: Vec<egui::Rect>,
+}
+
+impl ScopePaint {
+    fn has(&self, want: &str) -> bool {
+        self.texts.iter().any(|t| t.0 == want)
+    }
+    fn at(&self, want: &str) -> egui::Pos2 {
+        self.texts
+            .iter()
+            .find(|t| t.0 == want)
+            .unwrap_or_else(|| panic!("{want} not painted: {:?}", self.texts.iter().map(|t| &t.0).collect::<Vec<_>>()))
+            .1
+    }
+    /// The pill (`Allow` / `Revoke`) on the same row as `title`.
+    fn pill_by(&self, title: &str, pill: &str) -> egui::Pos2 {
+        let y = self.at(title).y;
+        self.texts
+            .iter()
+            .filter(|t| t.0 == pill)
+            .min_by(|a, b| (a.1.y - y).abs().total_cmp(&(b.1.y - y).abs()))
+            .map(|t| t.1)
+            .unwrap_or_else(|| panic!("no {pill} by {title}"))
+    }
+}
+
+fn paint_permissions(ctx: &egui::Context, cabin: &mut Cabin, events: Vec<egui::Event>) -> ScopePaint {
+    fn walk(shape: &egui::Shape, p: &mut ScopePaint) {
+        match shape {
+            egui::Shape::Text(t) => p.texts.push((t.galley.text().to_string(), t.pos + t.galley.rect.center().to_vec2())),
+            egui::Shape::Rect(r) if r.fill == crate::theme::fg() => p.filled.push(r.rect),
+            egui::Shape::Vec(v) => v.iter().for_each(|c| walk(c, p)),
+            _ => {}
+        }
+    }
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 2400.0))),
+        events,
+        ..Default::default()
+    };
+    let out = crate::theme::test_pass(ctx, input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| cabin.ui_permission_editor(ui));
+    });
+    let mut p = ScopePaint { texts: Vec::new(), filled: Vec::new() };
+    for clipped in &out.shapes {
+        walk(&clipped.shape, &mut p);
+    }
+    p
+}
+
+fn click_at(ctx: &egui::Context, cabin: &mut Cabin, at: egui::Pos2) {
+    let press = |pressed| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let _ = paint_permissions(ctx, cabin, vec![egui::Event::PointerMoved(at)]);
+    let _ = paint_permissions(ctx, cabin, vec![press(true)]);
+    let _ = paint_permissions(ctx, cabin, vec![press(false)]);
+}
+
+fn key(key: egui::Key) -> egui::Event {
+    egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }
+}
+
+#[test]
+fn scope_rows_are_all_off_under_what_grokhub_can_read() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("scope-rows");
+    std::fs::create_dir_all(&root).unwrap();
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    let ys: Vec<f32> = [
+        "Leaving this computer",
+        "Sync to paired computers",
+        "What GrokHub can read",
+        super::scope_ui::SCOPES_NOTE,
+        "Files in a folder",
+        "Installed apps",
+        "Browser history",
+        "Calendar",
+        "Mail",
+        "System state",
+        "Command rules",
+    ]
+    .iter()
+    .map(|w| p.at(w).y)
+    .collect();
+    assert!(ys.windows(2).all(|w| w[0] < w[1]), "rows in order: {ys:?}");
+    for (kind, label) in grokhub_agent::harness::SCOPE_KINDS {
+        let allow = p.pill_by(label, "Allow");
+        // The folder row's field, dialog button and Allow share a line under its hint.
+        let reach = if *kind == "files" { 56.0 } else { 24.0 };
+        assert!((allow.y - p.at(label).y).abs() < reach, "{kind}: Allow sits on its row");
+        // SB-08: an outline Allow, so the off rows read as the calm default.
+        assert!(!p.filled.iter().any(|r| r.contains(allow)), "{kind}: Allow is an outline, not filled");
+    }
+    assert!(!p.filled.iter().any(|r| r.contains(p.pill_by("Sync to paired computers", "Allow"))), "Sync's Allow too");
+    assert!(!p.has("Revoke"), "nothing granted, nothing to revoke");
+    assert!(p.has("Off. Your calendar events."), "plain hints");
+    // SB-04: the folder row offers the native dialog next to the typed path.
+    let choose = p.pill_by("Files in a folder", super::scope_ui::CHOOSE_FOLDER);
+    assert!((choose.y - p.pill_by("Files in a folder", "Allow").y).abs() < 2.0, "the dialog button sits by the folder's Allow");
+    assert!(!root.join("consent.jsonl").exists(), "painting writes nothing");
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn a_scope_is_granted_by_a_pointer_click_only_and_revoked_from_settings_or_privacy() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("scope-grant");
+    std::fs::create_dir_all(&root).unwrap();
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let _ = paint_permissions(&ctx, &mut cabin, vec![]);
+
+    // Keys never grant: walk focus over every widget and press Enter and Space.
+    for _ in 0..40 {
+        let _ = paint_permissions(&ctx, &mut cabin, vec![key(egui::Key::Tab)]);
+        let _ = paint_permissions(&ctx, &mut cabin, vec![key(egui::Key::Enter)]);
+        let _ = paint_permissions(&ctx, &mut cabin, vec![key(egui::Key::Space)]);
+    }
+    assert_eq!(hx::ConsentLedger::load(&root).active().count(), 0, "keyboard never grants");
+    // Neither does slash text.
+    cabin.run_slash_line("/privacy allow apps");
+    assert_eq!(hx::ConsentLedger::load(&root).active().count(), 0);
+
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    click_at(&ctx, &mut cabin, p.pill_by("Installed apps", "Allow"));
+    assert_eq!(cabin.status, "Installed apps allowed. Nothing reads it yet. Revoke it here any time.");
+    let ledger = hx::ConsentLedger::load(&root);
+    let g = ledger.scope_grant(&hx::Scope::Apps).cloned().expect("apps granted");
+    assert_eq!(ledger.active().count(), 1, "one click, one scope");
+    let raw = std::fs::read_to_string(root.join("consent.jsonl")).unwrap();
+    assert!(!raw.contains("apps") && !raw.contains(&g.id), "the ledger is sealed: {raw}");
+
+    // The row turns into a ghost Revoke; the others stay off.
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    let revoke = p.pill_by("Installed apps", "Revoke");
+    assert!(!p.filled.iter().any(|r| r.contains(revoke)), "Revoke is a ghost");
+    assert!(p.texts.iter().any(|t| t.0.starts_with("On since ") && t.0.ends_with("how often you open them.")));
+    assert!(p.has("Off. Your mail."));
+
+    // A folder: typed, then clicked. Home itself is refused even with a click.
+    let home = std::env::var("HOME").unwrap_or_default();
+    if !home.is_empty() {
+        cabin.harness.scope_folder = home.clone();
+        let p = paint_permissions(&ctx, &mut cabin, vec![]);
+        click_at(&ctx, &mut cabin, p.pill_by("Files in a folder", "Allow"));
+        assert_eq!(cabin.status, "Not allowed: files: one folder at a time, never all of your home folder");
+        let p = paint_permissions(&ctx, &mut cabin, vec![]);
+        assert!(p.has(&cabin.status), "the refusal shows in Settings, not only on the hidden status line");
+        assert!(p.at(&cabin.status).y > p.at("What GrokHub can read").y);
+    }
+    cabin.harness.scope_folder = "/srv/notes/".into();
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    click_at(&ctx, &mut cabin, p.pill_by("Files in a folder", "Allow"));
+    assert_eq!(cabin.status, "Files in notes allowed. Nothing reads it yet. Revoke it here any time.");
+    assert!(cabin.harness.scope_folder.is_empty());
+    // SB-03 / SB-06: the folder name titles the row, the path is in the hint,
+    // and the next folder row reads "Add a folder".
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    assert!(p.has("Files in notes") && p.has(super::scope_ui::ADD_FOLDER), "{:?}", p.texts.iter().map(|t| &t.0).collect::<Vec<_>>());
+    assert!(p.texts.iter().any(|t| t.0.starts_with("On since ") && t.0.ends_with(". /srv/notes")));
+    assert!(!p.has("Files in a folder"));
+
+    // /privacy lists both by plain name, and its ghost Revoke works for scopes.
+    cabin.harness.consent = None;
+    let rows = cabin.privacy_revoke_rows();
+    let names: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
+    assert_eq!(names, vec!["Installed apps", "Files in notes"]);
+    assert_eq!(rows[1].detail.as_deref(), Some("/srv/notes"), "the whole path rides along for hover");
+    let report = super::privacy_ui::privacy_report(&hx::ConsentLedger::load(&root), &hx::EgressRead::default(), None, false, g.granted_at + 60_000);
+    assert!(report.contains("\n- Installed apps: on since 1m ago\n- Files in notes: on since "), "{report}");
+    assert!(report.contains("\n- Off: Sync to paired computers (/sync asks each time) · Browser history · Calendar · Mail · System state\n"), "{report}");
+    assert!(!report.contains("Read apps") && !report.contains(&g.id), "{report}");
+    let files_id = rows[1].id.clone();
+    let before = cabin.messages.len();
+    cabin.revoke_from_privacy(&files_id);
+    assert_eq!(cabin.status, "Files in notes revoked. It's off until you allow it again.");
+    assert_eq!(cabin.messages.len(), before + 1);
+
+    // Settings Revoke.
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    click_at(&ctx, &mut cabin, p.pill_by("Installed apps", "Revoke"));
+    assert_eq!(cabin.status, "Installed apps revoked. It's off until you allow it again.");
+    assert_eq!(hx::ConsentLedger::load(&root).active().count(), 0);
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    assert!(!p.has("Revoke"), "all off again");
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn locked_private_data_shows_one_message_and_grants_or_syncs_nothing() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("scope-locked");
+    std::fs::create_dir_all(&root).unwrap();
+    hx::use_key_store_for(&root, std::sync::Arc::new(hx::MemoryKeyStore::unavailable()));
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    let msg = hx::Locked::Unavailable.message();
+    let next = super::privacy_ui::lock_next_step_short(&hx::Locked::Unavailable, hx::KeyringOs::current());
+    assert!(msg.starts_with("Private data is locked: GrokHub can't reach your "), "{msg}");
+    assert!(p.has(&msg), "{:?}", p.texts.iter().map(|t| &t.0).collect::<Vec<_>>());
+    assert_eq!(p.texts.iter().filter(|t| t.0 == msg).count(), 1, "said once");
+    assert!(p.at(&msg).y < p.at("Sync to paired computers").y, "said at the top, above every row it holds");
+    // SB-01: every Allow is disabled, so a click does nothing at all.
+    cabin.status.clear();
+    click_at(&ctx, &mut cabin, p.pill_by("Calendar", "Allow"));
+    assert_eq!(cabin.status, "", "a disabled Allow takes no click");
+    click_at(&ctx, &mut cabin, p.pill_by("Sync to paired computers", "Allow"));
+    assert_eq!(cabin.status, "");
+    assert!(!root.join("consent.jsonl").exists(), "no plaintext fallback");
+    assert!(!root.join(hx::KEY_ID_FILE).exists());
+
+    pair_test_peer(&cabin, "p1");
+    cabin.run_slash_line("/sync");
+    assert!(cabin.harness.park.is_none() && cabin.sync_rx.is_none(), "nothing is sent");
+    assert_eq!(cabin.status, format!("Not synced. {msg} {next}"));
+    let ledger = hx::ConsentLedger::load(&root);
+    let lock = super::privacy_ui::private_lock(&root, &ledger, true);
+    let report = super::privacy_ui::privacy_report(
+        &ledger,
+        &hx::read_egress_report(&root),
+        lock.as_ref(),
+        false,
+        1_000,
+    );
+    assert!(report.contains(&format!("\n\n{msg}\n{next}\n\nGrants\n")), "{report}");
+    assert!(!root.join("egress.jsonl").exists());
+    release_isolated(&root, cabin);
+}
+
+// SB-01: while locked, each "Allow" (and the folder dialog button) is painted
+// faded by egui's disabled look; returns (label, opacity) for each pill text.
+// The opacity is the painted text colour's alpha (egui multiplies it by
+// `disabled_alpha`). Only rows above "Command rules" count.
+fn pill_opacity(ctx: &egui::Context, cabin: &mut Cabin, events: Vec<egui::Event>) -> (Vec<(String, f32)>, Vec<String>) {
+    fn walk(shape: &egui::Shape, pills: &mut Vec<(String, f32, f32)>, all: &mut Vec<(String, f32)>) {
+        match shape {
+            egui::Shape::Text(t) => {
+                let text = t.galley.text().to_string();
+                if ["Allow", "Revoke", super::scope_ui::CHOOSE_FOLDER, super::privacy_ui::TRY_AGAIN].contains(&text.as_str()) {
+                    pills.push((text.clone(), t.fallback_color.a() as f32 / 255.0, t.pos.y));
+                }
+                all.push((text, t.pos.y));
+            }
+            egui::Shape::Vec(v) => v.iter().for_each(|c| walk(c, pills, all)),
+            _ => {}
+        }
+    }
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 2400.0))),
+        events,
+        ..Default::default()
+    };
+    let out = crate::theme::test_pass(ctx, input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| cabin.ui_permission_editor(ui));
+    });
+    let (mut pills, mut all) = (Vec::new(), Vec::new());
+    for clipped in &out.shapes {
+        walk(&clipped.shape, &mut pills, &mut all);
+    }
+    let rules = all.iter().find(|t| t.0 == "Command rules").map(|t| t.1).unwrap_or(f32::MAX);
+    let pills = pills.into_iter().filter(|p| p.2 < rules).map(|p| (p.0, p.1)).collect();
+    (pills, all.into_iter().map(|t| t.0).collect())
+}
+
+#[test]
+fn locked_state_disables_every_allow_with_the_lock_on_hover() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("scope-locked-disabled");
+    std::fs::create_dir_all(&root).unwrap();
+    hx::use_key_store_for(&root, std::sync::Arc::new(hx::MemoryKeyStore::unavailable()));
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    ctx.global_style_mut(|s| s.interaction.tooltip_delay = 0.0);
+    let (pills, texts) = pill_opacity(&ctx, &mut cabin, vec![]);
+    let allows: Vec<f32> = pills.iter().filter(|p| p.0 == "Allow").map(|p| p.1).collect();
+    assert_eq!(allows.len(), 7, "six scope rows and Sync: {pills:?}");
+    assert!(allows.iter().all(|o| *o < 1.0), "every Allow takes the disabled look: {pills:?}");
+    let choose = pills.iter().find(|p| p.0 == super::scope_ui::CHOOSE_FOLDER).expect("dialog button");
+    assert!(choose.1 < 1.0, "the folder dialog is disabled too: {pills:?}");
+    let retry = pills.iter().find(|p| p.0 == super::privacy_ui::TRY_AGAIN).expect("Try again");
+    assert!((retry.1 - 1.0).abs() < f32::EPSILON, "Try again stays live: {pills:?}");
+    assert!(!texts.iter().any(|t| t == "Locked: keyring unavailable"), "no hover yet");
+
+    // Hover a disabled Allow: the lock shows.
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    let at = p.pill_by("Calendar", "Allow");
+    let mut shown = false;
+    for _ in 0..4 {
+        let (_, texts) = pill_opacity(&ctx, &mut cabin, vec![egui::Event::PointerMoved(at)]);
+        shown |= texts.iter().any(|t| t == "Locked: keyring unavailable");
+    }
+    assert!(shown, "hover names the lock");
+    assert_eq!(super::privacy_ui::lock_hover(&hx::Locked::Unavailable), "Locked: keyring unavailable");
+
+    // A click on any of them writes nothing and says nothing new.
+    cabin.status.clear();
+    for title in ["Calendar", "Installed apps", "Sync to paired computers", "Files in a folder"] {
+        click_at(&ctx, &mut cabin, p.pill_by(title, "Allow"));
+    }
+    assert_eq!(cabin.status, "");
+    assert!(cabin.harness.scope_pick_rx.is_none(), "the dialog never opened");
+    assert!(!root.join("consent.jsonl").exists());
+
+    // Unlocked, the same pills are live.
+    hx::use_key_store_for(&root, std::sync::Arc::new(hx::MemoryKeyStore::new()));
+    cabin.retry_keyring();
+    let (pills, _) = pill_opacity(&ctx, &mut cabin, vec![]);
+    assert!(pills.iter().filter(|p| p.0 == "Allow").all(|p| (p.1 - 1.0).abs() < f32::EPSILON), "{pills:?}");
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn try_again_asks_the_keyring_again_and_refreshes_permissions() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("scope-try-again");
+    std::fs::create_dir_all(&root).unwrap();
+    let store = std::sync::Arc::new(hx::MemoryKeyStore::unavailable());
+    hx::use_key_store_for(&root, store.clone());
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let msg = hx::Locked::Unavailable.message();
+    let step = super::privacy_ui::lock_next_step(&hx::Locked::Unavailable, hx::KeyringOs::current());
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    assert!(p.has(&msg) && p.has(&step), "{:?}", p.texts.iter().map(|t| &t.0).collect::<Vec<_>>());
+    let retry = p.pill_by(&step, super::privacy_ui::TRY_AGAIN);
+    assert!((retry.y - p.at(&step).y).abs() < 24.0, "Try again sits on the next-step line");
+
+    // The keyring comes back, but its "down" answer is reused for 30 s, so
+    // the page alone stays locked.
+    store.set_available(true);
+    std::thread::sleep(std::time::Duration::from_millis(1_100));
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    assert!(p.has(&msg), "the cached answer still holds");
+
+    // Try again asks now, and the page refreshes: no lock, live Allow.
+    click_at(&ctx, &mut cabin, p.pill_by(&step, super::privacy_ui::TRY_AGAIN));
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    assert!(!p.has(&msg) && !p.has(&step), "{:?}", p.texts.iter().map(|t| &t.0).collect::<Vec<_>>());
+    assert_eq!(cabin.status, "Your keyring answered. Private data is open again.");
+    let (pills, _) = pill_opacity(&ctx, &mut cabin, vec![]);
+    assert!(pills.iter().filter(|p| p.0 == "Allow").all(|p| (p.1 - 1.0).abs() < f32::EPSILON), "{pills:?}");
+    // It granted nothing on its own.
+    assert_eq!(hx::ConsentLedger::load(&root).active().count(), 0);
+
+    // Down again: Try again says it is still locked, and when it checked.
+    store.set_available(false);
+    cabin.retry_keyring();
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    assert!(p.has(&msg));
+    assert!(p.has("Still locked. Checked just now."), "{:?}", p.texts.iter().map(|t| &t.0).collect::<Vec<_>>());
+    release_isolated(&root, cabin);
+}
+
+// SB-05: /privacy names each scope once: on ones as bullets with a since-time,
+// the rest on one "Off:" line, all under one Grants heading.
+#[test]
+fn privacy_lists_each_scope_once_under_one_grants_heading() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, cabin) = isolated_cabin("privacy-once");
+    std::fs::create_dir_all(&root).unwrap();
+    let home = std::path::Path::new("/home/someone");
+    for scope in [hx::Scope::Calendar, hx::Scope::Files("/home/someone/Documents/notes".into())] {
+        hx::grant_scope(&root, &scope, Some(home), hx::UserClick::from_click()).unwrap();
+    }
+    let ledger = hx::ConsentLedger::load(&root);
+    let at = ledger.active().map(|g| g.granted_at).max().unwrap_or_default();
+    let report = super::privacy_ui::privacy_report(&ledger, &hx::EgressRead::default(), None, false, at + 60_000);
+    let grants = report.split("\nGrants\n").nth(1).and_then(|r| r.split("\n\n").next()).expect("Grants");
+    assert_eq!(
+        grants,
+        [
+            "- Calendar: on since 1m ago",
+            "- Files in notes: on since 1m ago",
+            "- Off: Sync to paired computers (/sync asks each time) · Installed apps · Browser history · Mail · System state",
+            "- Screen: \"Let Grok control the desktop\" in Settings → Cabin defaults (off)",
+            "Nothing reads the folder, app, browser, calendar, mail or system grants yet.",
+        ]
+        .join("\n")
+    );
+    for word in ["Calendar", "Files in", "Installed apps", "Browser history", "Mail", "System state", "Sync to paired computers"] {
+        assert_eq!(report.matches(word).count(), 1, "{word} once: {report}");
+    }
+    assert_eq!(report.matches("Grants").count(), 1, "one heading: {report}");
+    assert!(!report.contains(super::scope_ui::SCOPES_HEAD), "no second grants heading: {report}");
+    assert!(!report.contains("/home/someone/Documents"), "the short label, not the path: {report}");
+    release_isolated(&root, cabin);
 }
 
 // Landed from PR #124.
@@ -15009,6 +16202,8 @@ fn quiet_cabin() -> Cabin {
         last_night_tick: std::time::Instant::now(),
         last_auto_tick: std::time::Instant::now(),
         last_heartbeat: std::time::Instant::now(),
+        pace: Default::default(),
+        pace_traced: Vec::new(),
         night_check_rx: None,
         learning: grokhub_core::LearningState::default(),
         suggestions: grokhub_core::SuggestionStore::default(),
@@ -15232,6 +16427,7 @@ fn quiet_cabin() -> Cabin {
         secret_hold: Vec::new(),
         session_mode: grokhub_acp::SessionMode::Chat,
         permission_mode: grokhub_acp::PermissionMode::Ask,
+        harness: Default::default(),
         scheduled_perm: false,
         grok_sessions: Vec::new(),
         grok_sessions_loaded: false,
@@ -15256,6 +16452,7 @@ fn quiet_cabin() -> Cabin {
         grok_catalog: grokhub_acp::GrokCatalog::default(),
         grok_catalog_loaded: false,
         grok_catalog_rx: None,
+        grok_catalog_started: None,
         native_skills: Vec::new(),
         native_hooks: Vec::new(),
         native_listing_cwd: String::new(),
@@ -16232,6 +17429,109 @@ fn cancel_project_drops_the_staged_one() {
     assert!(app.chat_job_thread.is_none());
 }
 
+/// Projects “+” paints Cancel next to Name. That control calls the same
+/// `cancel_proj_rename` Esc uses, which drops the staged folder.
+#[test]
+fn projects_add_cancel_drops_the_staged_folder() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("proj-add-cancel");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.stage_new_folder();
+    let id = cabin.proj_staged.clone().expect("staged folder");
+    assert_eq!(cabin.projects.len(), 1);
+    assert_eq!(cabin.projects[0].name, "Folder");
+    assert_eq!(cabin.projects[0].kind, ProjectKind::Folder);
+    assert_eq!(cabin.proj_rename.as_deref(), Some(id.as_str()));
+    assert_eq!(cabin.status, "Name this folder");
+
+    cabin.cancel_proj_rename();
+    assert!(cabin.projects.is_empty(), "Cancel drops the staged folder");
+    assert!(cabin.projects.iter().all(|n| n.id != id));
+    assert!(cabin.proj_staged.is_none());
+    assert!(cabin.proj_rename.is_none());
+    assert!(cabin.proj_rename_buf.is_empty());
+    assert!(!cabin.proj_rename_focus);
+    assert!(cabin.proj_rename_lock.is_none());
+    assert_eq!(cabin.status, "Name this folder");
+    assert!(!cabin.running);
+
+    let side = include_str!("sidebar.rs");
+    let row = side
+        .split("hint_text(crate::theme::hint(\"Name\"))")
+        .nth(1)
+        .and_then(|s| s.split("self.finish_proj_rename()").next())
+        .expect("proj rename row");
+    assert!(
+        row.contains("ghost_pill(ui, \"Cancel\")"),
+        "the rename row paints Cancel beside Name: {row}"
+    );
+    assert!(
+        row.contains("egui::Key::Escape"),
+        "Esc still cancels the rename: {row}"
+    );
+    assert_eq!(
+        row.matches("self.cancel_proj_rename()").count(),
+        2,
+        "Cancel click and Esc both call cancel_proj_rename: {row}"
+    );
+}
+
+/// Name and Cancel share one centered row: pill height, filled field, white focus stroke.
+#[test]
+fn projects_rename_row_lines_up_with_cancel() {
+    let side = include_str!("sidebar.rs");
+    let row = side
+        .split("if self.proj_rename.as_deref()")
+        .nth(1)
+        .and_then(|s| s.split("self.finish_proj_rename()").next())
+        .expect("proj rename row");
+    assert!(
+        row.contains("Layout::left_to_right(egui::Align::Center)"),
+        "rename row is vertically centered: {row}"
+    );
+    assert!(
+        row.contains(".min_size(egui::vec2(edit_w, 30.0))"),
+        "Name field is the pill height: {row}"
+    );
+    assert!(
+        row.contains("Margin::symmetric(10, 6)"),
+        "Name field has ~10px left padding: {row}"
+    );
+    assert!(
+        row.contains("crate::theme::elevated()"),
+        "Name field uses the filter fill: {row}"
+    );
+    assert!(
+        row.contains("corner_radius(15.0)"),
+        "Name field is full radius: {row}"
+    );
+    assert!(
+        row.contains("crate::theme::muted()"),
+        "Name hint is muted: {row}"
+    );
+    assert!(
+        row.contains("2.0_f32") && row.contains("crate::theme::fg()"),
+        "staged Name field draws a white focus stroke: {row}"
+    );
+    assert!(
+        row.contains("text_cursor.stroke"),
+        "staged Name field shows a caret: {row}"
+    );
+    assert!(
+        row.contains("edit.request_focus()"),
+        "staged Name field takes focus: {row}"
+    );
+    assert!(
+        row.contains("Layout::right_to_left(egui::Align::Center)"),
+        "Cancel's right edge meets the rail inset: {row}"
+    );
+    assert!(row.contains("cancel_w"), "{row}");
+}
+
 // Landed from PR #231.
 #[test]
 fn make_project_keeps_harbor() {
@@ -16451,6 +17751,646 @@ fn scheduled_turns_settle_on_every_turn_end() {
     assert!(start.contains("BgOrigin::Scheduled") && start.contains("run.automation = Some("), "{start}");
     let page = fn_src(&src, "ui_scheduled_automations");
     assert!(page.contains("automation_health_line"), "{page}");
+}
+
+fn pin_auto_config(label: &str) -> (crate::config::TestConfigDir, std::path::PathBuf) {
+    let root = crate::config::test_config_root(label);
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    (crate::config::TestConfigDir::set(root.clone()), root)
+}
+
+fn failing_price_job() -> grokhub_core::Automation {
+    let mut a = health_job("auto-price");
+    a.name = "Sample price check".into();
+    a.schedule = "weekdays".into();
+    a.time = "12:00".into();
+    a.instructions = "Check the saved laptop-stand price and note any drop.".into();
+    a.run_count = 7;
+    a.health = grokhub_core::AutoHealth {
+        outcome: grokhub_core::AutoOutcome::Failed,
+        error: "Sample error: page did not load".into(),
+        fail_streak: 2,
+    };
+    a
+}
+
+fn healthy_morning_job() -> grokhub_core::Automation {
+    let mut a = health_job("auto-morning");
+    a.name = "Sample morning brief".into();
+    a.schedule = "daily".into();
+    a.time = "07:30".into();
+    a.instructions = "Summarize the workboard and anything that changed overnight.".into();
+    a.run_count = 12;
+    a
+}
+
+fn collect_text_rects(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+    match shape {
+        egui::Shape::Text(text) => {
+            out.push((text.galley.job.text.clone(), text.visual_bounding_rect()));
+        }
+        egui::Shape::Vec(shapes) => {
+            for shape in shapes {
+                collect_text_rects(shape, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+struct AutoPage {
+    ctx: egui::Context,
+    frame: u32,
+}
+
+impl AutoPage {
+    fn new() -> Self {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        Self { ctx, frame: 0 }
+    }
+
+    fn step(&mut self, cabin: &mut Cabin, events: Vec<egui::Event>) -> Vec<(String, egui::Rect)> {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            time: Some(f64::from(self.frame) / 60.0),
+            predicted_dt: 1.0 / 60.0,
+            events,
+            ..Default::default()
+        };
+        let out = crate::theme::test_pass(&self.ctx, raw, |ui| {
+            cabin.ui_night(ui);
+        });
+        self.frame += 1;
+        let mut texts = Vec::new();
+        for clipped in &out.shapes {
+            collect_text_rects(&clipped.shape, &mut texts);
+        }
+        texts
+    }
+
+    fn settle(&mut self, cabin: &mut Cabin) -> Vec<(String, egui::Rect)> {
+        self.step(cabin, Vec::new());
+        self.step(cabin, Vec::new())
+    }
+
+    fn press(pos: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    fn click(&mut self, cabin: &mut Cabin, pos: egui::Pos2) -> Vec<(String, egui::Rect)> {
+        self.step(
+            cabin,
+            vec![egui::Event::PointerMoved(pos), Self::press(pos, true)],
+        );
+        let up = self.step(cabin, vec![Self::press(pos, false)]);
+        let rest = self.step(cabin, Vec::new());
+        let mut all = up;
+        all.extend(rest);
+        all
+    }
+
+    fn confirm_key(&mut self, cabin: &mut Cabin, key: egui::Key) {
+        let _ = self.overlay_frame(
+            cabin,
+            vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+    }
+
+    /// The confirm Area sizes itself on the first frame and paints on the next.
+    fn overlay_texts(&mut self, cabin: &mut Cabin) -> Vec<String> {
+        let _ = self.overlay_frame(cabin, Vec::new());
+        self.overlay_frame(cabin, Vec::new())
+    }
+
+    fn overlay_frame(&mut self, cabin: &mut Cabin, events: Vec<egui::Event>) -> Vec<String> {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1400.0, 900.0),
+            )),
+            time: Some(f64::from(self.frame) / 60.0),
+            predicted_dt: 1.0 / 60.0,
+            events,
+            ..Default::default()
+        };
+        let out = crate::theme::test_pass(&self.ctx, raw, |ui| {
+            cabin.paint_confirm_overlay(ui.ctx());
+        });
+        self.frame += 1;
+        let mut texts = Vec::new();
+        for clipped in &out.shapes {
+            collect_shape_text(&clipped.shape, &mut texts);
+        }
+        texts
+    }
+}
+
+fn label_rect(texts: &[(String, egui::Rect)], label: &str) -> egui::Rect {
+    texts
+        .iter()
+        .find(|(t, _)| t == label)
+        .map(|(_, r)| *r)
+        .unwrap_or_else(|| panic!("missing {label:?} in {texts:?}"))
+}
+
+fn count_label(texts: &[(String, egui::Rect)], label: &str) -> usize {
+    texts.iter().filter(|(t, _)| t == label).count()
+}
+
+// Names keep the brief's case-sensitive filters (`Retry`, `Run`, `View_last`, `Remove`).
+#[test]
+#[allow(non_snake_case)]
+fn failed_scheduled_row_primary_label_is_Retry() {
+    assert_eq!(super::night::scheduled_primary_label(true), "Retry");
+    assert_eq!(super::night::scheduled_primary_label(false), "Run");
+    let src = include_str!("night.rs");
+    let page = src
+        .split("fn ui_scheduled_automations(")
+        .nth(1)
+        .and_then(|s| s.split("\n    fn ").next())
+        .expect("ui_scheduled_automations");
+    assert!(
+        page.contains("scheduled_primary_label(health.is_some())")
+            && page.contains("job_row_menu")
+            && !page.contains("\"Retry\""),
+        "the paint asks scheduled_primary_label, which is Retry when failing: {page}"
+    );
+    let label = src
+        .split("fn scheduled_primary_label(")
+        .nth(1)
+        .and_then(|s| s.split("\nfn ").next())
+        .expect("scheduled_primary_label");
+    assert!(label.contains("\"Retry\"") && label.contains("\"Run\""), "{label}");
+
+    let _hold = crate::config::hold_test_config();
+    let _paint = crate::theme::hold_paint_test();
+    let (_pin, root) = pin_auto_config("auto-retry-label");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.automations = vec![failing_price_job(), healthy_morning_job()];
+    cabin.grok_loops.clear();
+    let mut page = AutoPage::new();
+    let texts = page.settle(&mut cabin);
+    assert_eq!(count_label(&texts, "Retry"), 1, "{texts:?}");
+    assert!(
+        count_label(&texts, "Run") >= 1,
+        "the healthy row still says Run: {texts:?}"
+    );
+    assert_eq!(count_label(&texts, "View last run"), 1, "{texts:?}");
+    let health = texts.iter().position(|(t, _)| t.starts_with("Failed 2 times"));
+    let view = texts.iter().position(|(t, _)| t == "View last run");
+    assert!(health.is_some() && view.is_some() && health < view, "{texts:?}");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn healthy_scheduled_row_still_says_Run() {
+    let _hold = crate::config::hold_test_config();
+    let _paint = crate::theme::hold_paint_test();
+    let (_pin, root) = pin_auto_config("auto-healthy-run");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.automations = vec![healthy_morning_job()];
+    cabin.grok_loops.clear();
+    let mut page = AutoPage::new();
+    let texts = page.settle(&mut cabin);
+    assert_eq!(count_label(&texts, "Run"), 1, "{texts:?}");
+    assert_eq!(count_label(&texts, "Retry"), 0, "{texts:?}");
+    assert_eq!(count_label(&texts, "View last run"), 0, "healthy rows have no link: {texts:?}");
+    assert_eq!(count_label(&texts, "Remove"), 0, "Remove is not an inline pill: {texts:?}");
+    assert_eq!(count_label(&texts, "···"), 1, "{texts:?}");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn failing_row_paints_View_last_run_and_opens_output() {
+    let _hold = crate::config::hold_test_config();
+    let _paint = crate::theme::hold_paint_test();
+    let (_pin, root) = pin_auto_config("auto-view-last");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.nav = super::Nav::Night;
+    cabin.automations = vec![failing_price_job()];
+    cabin.grok_loops.clear();
+    let mut card = grokhub_core::BoardCard::new(
+        "Sample price check",
+        "Sample error: page did not load",
+        "",
+    );
+    card.id = "card-price".into();
+    card.status = grokhub_core::BoardStatus::FollowUp;
+    card.automation = Some("auto-price".into());
+    card.report = "Page did not load — last reply".into();
+    card.updated_ms = 50;
+    cabin.board.push(card);
+    let mut page = AutoPage::new();
+    let texts = page.settle(&mut cabin);
+    let link = label_rect(&texts, "View last run");
+    let after = page.click(&mut cabin, link.center());
+    assert_eq!(cabin.nav, super::Nav::Workboard, "View last run opens the workboard");
+    assert_eq!(cabin.board_view.open.as_deref(), Some("card-price"));
+    assert!(
+        cabin.status.contains("Last run") && cabin.status.contains("Sample price check"),
+        "{}",
+        cabin.status
+    );
+    assert!(
+        after.iter().any(|(t, _)| t == "View last run") || cabin.board_view.open.is_some(),
+        "the click landed on the link"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn View_last_run_opens_background_history_when_there_is_no_card() {
+    let _hold = crate::config::hold_test_config();
+    let (_pin, root) = pin_auto_config("auto-view-bg");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.nav = super::Nav::Night;
+    cabin.automations = vec![failing_price_job()];
+    let idx = cabin.ensure_background_history_thread();
+    let post = grokhub_core::bg_result_post(
+        &grokhub_core::bg_task_title(&cabin.automations[0].instructions),
+        &grokhub_core::BgEnd::Failed("Sample error: page did not load".into()),
+        "The page returned 500.",
+    );
+    cabin.threads[idx].messages_mut().push(("assistant".into(), post));
+    cabin.open_last_scheduled_run(0);
+    assert_eq!(cabin.nav, super::Nav::Chat);
+    assert_eq!(
+        cabin.threads[cabin.thread_idx].title,
+        crate::threads::BACKGROUND_THREAD_TITLE
+    );
+    assert!(
+        cabin.messages.iter().any(|(_, b)| b.contains("The page returned 500.")),
+        "the Background chat shows the last reply: {:?}",
+        cabin.messages
+    );
+    assert!(cabin.board_view.open.is_none());
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn View_last_run_sheet_shows_the_stored_error() {
+    let _hold = crate::config::hold_test_config();
+    let _paint = crate::theme::hold_paint_test();
+    let (_pin, root) = pin_auto_config("auto-view-sheet");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.automations = vec![failing_price_job()];
+    cabin.open_last_scheduled_run(0);
+    match cabin.confirm.clone() {
+        Some(super::confirm::ConfirmKind::LastRun { title, body }) => {
+            assert_eq!(title, "Sample price check");
+            assert!(body.contains("Sample error: page did not load"), "{body}");
+        }
+        other => panic!("expected a last-run sheet, got {other:?}"),
+    }
+    let mut page = AutoPage::new();
+    let texts = page.overlay_texts(&mut cabin);
+    assert!(
+        texts.iter().any(|t| t.contains("Sample error: page did not load")),
+        "{texts:?}"
+    );
+    assert!(texts.iter().any(|t| t.contains("Last run")), "{texts:?}");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn automations_rows_keep_Remove_behind_the_dots_menu() {
+    let src = include_str!("night.rs");
+    for name in ["ui_scheduled_automations", "ui_night"] {
+        let body = src
+            .split(&format!("fn {name}("))
+            .nth(1)
+            .and_then(|s| s.split("\n    fn ").next())
+            .unwrap_or_else(|| panic!("missing {name}"));
+        assert!(
+            !body.contains("ghost_pill(ui, \"Remove\")"),
+            "{name} still paints an inline Remove: {body}"
+        );
+        assert!(
+            body.contains("job_row_menu"),
+            "{name} should use the ··· row menu: {body}"
+        );
+    }
+    let menu = src
+        .split("fn job_row_menu(")
+        .nth(1)
+        .and_then(|s| s.split("\nimpl ").next())
+        .expect("job_row_menu");
+    assert!(
+        menu.contains("dots_menu")
+            && menu.contains("\"Remove\"")
+            && menu.contains("job_primary_pill"),
+        "{menu}"
+    );
+    let sched = src
+        .split("fn ui_scheduled_automations(")
+        .nth(1)
+        .and_then(|s| s.split("\n    fn ").next())
+        .expect("scheduled");
+    let health_at = sched.find("RichText::new(line)").expect("health line");
+    let view_at = sched.find("\"View last run\"").expect("view link");
+    assert!(health_at < view_at, "View last run is painted after the health line");
+    assert!(sched[view_at..].contains(".size(12.0)"), "{sched}");
+
+    let _hold = crate::config::hold_test_config();
+    let _paint = crate::theme::hold_paint_test();
+    let (_pin, root) = pin_auto_config("auto-dots-menu");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.automations = vec![failing_price_job()];
+    cabin.grok_loops = vec![grokhub_core::new_loop(
+        "2h".into(),
+        "Sample: check the build status and post a short note".into(),
+        1,
+    )];
+    cabin.grok_loops[0].id = "loop-sample".into();
+    let mut page = AutoPage::new();
+    let texts = page.settle(&mut cabin);
+    assert_eq!(count_label(&texts, "Remove"), 0, "closed menus hide Remove: {texts:?}");
+    assert_eq!(count_label(&texts, "···"), 2, "scheduled and loop each have ···: {texts:?}");
+    let menu_at = label_rect(&texts, "···");
+    let opened = page.click(&mut cabin, menu_at.center());
+    assert!(
+        count_label(&opened, "Remove") >= 1,
+        "··· opens Remove: {opened:?}"
+    );
+    let remove_at = label_rect(&opened, "Remove");
+    let _ = page.click(&mut cabin, remove_at.center());
+    match cabin.confirm.clone() {
+        Some(super::confirm::ConfirmKind::RemoveJob { title, id, kind }) => {
+            assert!(title.contains("Sample"), "{title}");
+            assert!(!id.is_empty());
+            assert!(
+                kind == super::confirm::RemoveJobKind::Scheduled
+                    || kind == super::confirm::RemoveJobKind::Loop
+            );
+        }
+        other => panic!("Remove in ··· should arm confirm, got {other:?}"),
+    }
+    assert_eq!(cabin.automations.len(), 1, "the menu only asks");
+    assert_eq!(cabin.grok_loops.len(), 1);
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn healthy_Run_uses_ghost_pill_and_Retry_stays_white() {
+    let src = include_str!("night.rs");
+    let pill = src
+        .split("fn job_primary_pill(")
+        .nth(1)
+        .and_then(|s| s.split("\nimpl ").next())
+        .expect("job_primary_pill");
+    let retry = pill.find("\"Retry\"").expect("Retry branch");
+    let white = pill.find("white_pill").expect("filled Retry");
+    let ghost = pill.find("ghost_pill").expect("ghost Run");
+    assert!(
+        retry < white && white < ghost,
+        "Retry is filled white; Run falls through to ghost: {pill}"
+    );
+    let menu = src
+        .split("fn job_row_menu(")
+        .nth(1)
+        .and_then(|s| s.split("fn job_primary_pill(").next())
+        .expect("job_row_menu");
+    assert!(
+        menu.contains("job_primary_pill(ui, primary)"),
+        "both lists share the pill helper: {menu}"
+    );
+    assert!(!menu.contains("white_pill") && !menu.contains("ghost_pill"), "{menu}");
+    let loops = src
+        .split("fn ui_night(")
+        .nth(1)
+        .and_then(|s| s.split("pub(super) fn ui_scheduled_automations(").next())
+        .expect("ui_night");
+    assert!(
+        loops.contains("job_row_menu(ui, \"Run\")"),
+        "loops always Run, and the helper makes that a ghost: {loops}"
+    );
+    let sched = src
+        .split("fn ui_scheduled_automations(")
+        .nth(1)
+        .and_then(|s| s.split("pub(super) fn open_last_scheduled_run(").next())
+        .expect("scheduled");
+    assert!(
+        sched.contains("scheduled_primary_label(health.is_some())")
+            && sched.contains("job_row_menu(ui, primary)"),
+        "scheduled Retry/Run goes through the same helper: {sched}"
+    );
+}
+
+#[test]
+fn automations_intro_says_loops_repeat_on_an_interval() {
+    let src = include_str!("night.rs");
+    let page = src
+        .split("fn ui_night(")
+        .nth(1)
+        .and_then(|s| s.split("pub(super) fn ui_scheduled_automations(").next())
+        .expect("ui_night");
+    let line = "Loops repeat on an interval. Scheduled jobs run at a clock time. Stop a job when its work is done.";
+    assert!(page.contains(line), "{page}");
+    assert!(
+        !page.contains("Interval prompts run as Grok Build"),
+        "the intro dropped the jargon: {page}"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn automations_Suggested_line_is_from_your_recent_work() {
+    let src = include_str!("night.rs");
+    let page = src
+        .split("fn ui_night(")
+        .nth(1)
+        .and_then(|s| s.split("pub(super) fn ui_scheduled_automations(").next())
+        .expect("ui_night");
+    let suggested = page
+        .split("section_label(ui, \"Suggested\")")
+        .nth(1)
+        .expect("Suggested");
+    assert!(
+        suggested.contains("Suggested from your recent work"),
+        "{suggested}"
+    );
+    assert!(
+        !page.contains("review_status_line")
+            && !page.contains("Review due tonight")
+            && !page.contains("Reviewed today"),
+        "Suggested no longer uses the nightly review status: {page}"
+    );
+    let review = include_str!("../../../grokhub-core/src/review.rs");
+    assert!(
+        review.contains("pub fn review_status_line(")
+            && review.contains("\"Review due tonight\"")
+            && review.contains("\"Reviewed today\""),
+        "night review still has its own status line"
+    );
+}
+
+#[test]
+fn automations_job_rows_use_enabled_switch_not_a_checkbox() {
+    let src = include_str!("night.rs");
+    let loops = src
+        .split("fn ui_night(")
+        .nth(1)
+        .and_then(|s| s.split("pub(super) fn ui_scheduled_automations(").next())
+        .expect("ui_night");
+    let sched = src
+        .split("fn ui_scheduled_automations(")
+        .nth(1)
+        .and_then(|s| s.split("pub(super) fn open_last_scheduled_run(").next())
+        .expect("scheduled");
+    for (name, body) in [("loops", loops), ("scheduled", sched)] {
+        assert!(
+            !body.contains("checkbox"),
+            "{name} still paints a checkbox: {body}"
+        );
+        assert!(
+            body.contains("enabled_switch"),
+            "{name} should use the compact switch: {body}"
+        );
+    }
+    assert!(
+        loops.contains("persist_loops"),
+        "toggling a loop still persists: {loops}"
+    );
+    assert!(
+        sched.contains("toggled = true") && sched.contains("persist_automations"),
+        "toggling a scheduled job still refreshes its next slot: {sched}"
+    );
+    let cards = include_str!("../cards.rs");
+    let sw = cards
+        .split("pub fn enabled_switch(")
+        .nth(1)
+        .and_then(|s| s.split("fn paint_switch(").next())
+        .expect("enabled_switch");
+    assert!(
+        sw.contains("28.0")
+            && sw.contains("16.0")
+            && sw.contains("on_hover_text(\"Enabled\")")
+            && sw.contains("finish_switch"),
+        "{sw}"
+    );
+    let finish = cards
+        .split("fn finish_switch(")
+        .nth(1)
+        .and_then(|s| s.split("pub fn switch_access_name(").next())
+        .expect("finish_switch");
+    assert!(
+        finish.contains("switch_access_name") && finish.contains("WidgetType::Checkbox"),
+        "the switch keeps an On/Off name: {finish}"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn automations_page_paints_plain_intro_and_Suggested_from_recent_work() {
+    let _hold = crate::config::hold_test_config();
+    let _paint = crate::theme::hold_paint_test();
+    let (_pin, root) = pin_auto_config("auto-copy");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.automations = vec![healthy_morning_job()];
+    cabin.grok_loops.clear();
+    let mut page = AutoPage::new();
+    let texts = page.settle(&mut cabin);
+    let blob: String = texts.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>().join("\n");
+    assert!(
+        blob.contains("Loops repeat on an interval. Scheduled jobs run at a clock time. Stop a job when its work is done."),
+        "{blob}"
+    );
+    assert!(blob.contains("Suggested from your recent work"), "{blob}");
+    assert!(!blob.contains("Review due tonight") && !blob.contains("Reviewed today"), "{blob}");
+    assert!(!blob.contains("15s pulse") && !blob.contains("Interval prompts"), "{blob}");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn remove_job_confirm_names_the_title_and_confirming_removes() {
+    let _hold = crate::config::hold_test_config();
+    let _paint = crate::theme::hold_paint_test();
+    let (_pin, root) = pin_auto_config("auto-remove-confirm");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.automations = vec![failing_price_job(), healthy_morning_job()];
+    cabin.grok_loops = vec![grokhub_core::new_loop(
+        "2h".into(),
+        "Sample: check the build status and post a short note".into(),
+        1,
+    )];
+    cabin.grok_loops[0].id = "loop-sample".into();
+    cabin.arm_remove_job(
+        super::confirm::RemoveJobKind::Scheduled,
+        "auto-price".into(),
+        "Sample price check".into(),
+    );
+    let mut page = AutoPage::new();
+    let texts = page.overlay_texts(&mut cabin);
+    assert!(
+        texts.iter().any(|t| t.contains("Remove '") && t.contains("Sample price check")),
+        "{texts:?}"
+    );
+    page.confirm_key(&mut cabin, egui::Key::Escape);
+    assert!(cabin.confirm.is_none(), "Esc drops the sheet");
+    assert_eq!(cabin.automations.len(), 2, "cancel keeps the job");
+    assert!(cabin.automations.iter().any(|a| a.id == "auto-price"));
+
+    cabin.arm_remove_job(
+        super::confirm::RemoveJobKind::Scheduled,
+        "auto-price".into(),
+        "Sample price check".into(),
+    );
+    page.confirm_key(&mut cabin, egui::Key::Enter);
+    assert!(cabin.confirm.is_none());
+    assert!(
+        cabin.automations.iter().all(|a| a.id != "auto-price"),
+        "confirming removes the scheduled job"
+    );
+    assert!(cabin.automations.iter().any(|a| a.id == "auto-morning"));
+    assert_eq!(cabin.status, "Automation removed");
+
+    cabin.arm_remove_job(
+        super::confirm::RemoveJobKind::Loop,
+        "loop-sample".into(),
+        "Sample: check the build status and post a short note".into(),
+    );
+    page.confirm_key(&mut cabin, egui::Key::Escape);
+    assert_eq!(cabin.grok_loops.len(), 1, "cancel keeps the loop");
+    cabin.arm_remove_job(
+        super::confirm::RemoveJobKind::Loop,
+        "loop-sample".into(),
+        "Sample: check the build status and post a short note".into(),
+    );
+    page.confirm_key(&mut cabin, egui::Key::Enter);
+    assert!(cabin.grok_loops.is_empty(), "confirming removes the loop");
+    assert_eq!(cabin.status, "Loop removed");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
 }
 
 #[test]
@@ -16894,6 +18834,7 @@ fn a_finished_turn_keeps_each_reply_and_tool_run_apart() {
         detail: String::new(),
         diff: String::new(),
         image_data_url: None,
+        raw_input: String::new(),
     };
 
     // Thought summaries and post-tool messages arrive with no leading space.
@@ -17891,6 +19832,7 @@ fn drop_leaving_thread_chrome_clears_edit_state() {
         detail: String::new(),
         diff: String::new(),
         image_data_url: None,
+        raw_input: String::new(),
     });
     cabin.live_blocks.push(grokhub_core::LiveBlock {
         kind: grokhub_core::LiveKind::Say,
@@ -18140,6 +20082,171 @@ fn grok_catalog_poll_marks_loaded_on_drop() {
     assert_eq!(cabin.status, "Harbor");
     assert!(!cabin.running);
     assert!(cabin.chat_job_thread.is_none());
+}
+
+/// Debug shots may shorten the catalog wait. The default stays 18 seconds.
+#[test]
+fn grok_catalog_settle_is_18s_unless_the_debug_override_is_set() {
+    use std::time::Duration;
+
+    assert_eq!(super::acp::GROK_CATALOG_SETTLE, Duration::from_secs(18));
+    let prev = std::env::var("GROKHUB_CATALOG_SETTLE_MS").ok();
+    std::env::remove_var("GROKHUB_CATALOG_SETTLE_MS");
+    assert_eq!(super::acp::grok_catalog_settle(), Duration::from_secs(18));
+    std::env::set_var("GROKHUB_CATALOG_SETTLE_MS", "0");
+    assert_eq!(
+        super::acp::grok_catalog_settle(),
+        Duration::from_secs(18),
+        "zero does not collapse the wait"
+    );
+    std::env::set_var("GROKHUB_CATALOG_SETTLE_MS", "250");
+    #[cfg(debug_assertions)]
+    assert_eq!(
+        super::acp::grok_catalog_settle(),
+        Duration::from_millis(250)
+    );
+    #[cfg(not(debug_assertions))]
+    assert_eq!(super::acp::grok_catalog_settle(), Duration::from_secs(18));
+    std::env::set_var("GROKHUB_CATALOG_SETTLE_MS", "nope");
+    assert_eq!(super::acp::grok_catalog_settle(), Duration::from_secs(18));
+    match prev {
+        Some(v) => std::env::set_var("GROKHUB_CATALOG_SETTLE_MS", v),
+        None => std::env::remove_var("GROKHUB_CATALOG_SETTLE_MS"),
+    }
+}
+
+/// An open catalog channel that never replies settles after the deadline.
+/// Skills empty-copy is not stuck on Loading…, and a skill already loaded stays.
+#[test]
+fn grok_catalog_poll_settles_past_the_deadline() {
+    use std::time::{Duration, Instant};
+
+    let skills_empty = "None found. Refresh after installing a plugin.";
+    assert_eq!(super::acp::GROK_CATALOG_SETTLE, Duration::from_secs(18));
+    assert_eq!(
+        super::acp::GROK_CATALOG_TIMEOUT,
+        "Could not load Grok Build catalog (timed out)"
+    );
+
+    let mut cabin = Cabin::quiet_for_test();
+    let (tx, rx) = std::sync::mpsc::channel::<Result<grokhub_acp::GrokCatalog, String>>();
+    cabin.grok_catalog_rx = Some(rx);
+    cabin.grok_catalog_started = Some(Instant::now());
+    cabin.grok_catalog_loaded = false;
+    cabin.status = "Loading Grok Build catalog…".into();
+    cabin.poll_grok_catalog();
+    assert!(
+        cabin.grok_catalog_rx.is_some(),
+        "before the deadline the channel stays open"
+    );
+    assert!(!cabin.grok_catalog_loaded);
+    assert_eq!(cabin.status, "Loading Grok Build catalog…");
+    assert_eq!(
+        super::pages::catalog_empty_line(
+            cabin.grok_catalog_rx.is_some(),
+            "",
+            0,
+            skills_empty,
+            &cabin.status,
+        ),
+        "Loading…"
+    );
+
+    cabin.grok_catalog_started =
+        Some(Instant::now() - (super::acp::GROK_CATALOG_SETTLE + Duration::from_secs(1)));
+    cabin.grok_catalog.skills.push(grokhub_acp::GrokSkillRow {
+        name: "harbor".into(),
+        description: "notes".into(),
+        source: "bundled".into(),
+        plugin: String::new(),
+        user_invocable: true,
+    });
+    cabin.poll_grok_catalog();
+    assert!(cabin.grok_catalog_loaded);
+    assert!(cabin.grok_catalog_rx.is_none());
+    assert!(cabin.grok_catalog_started.is_none());
+    assert_eq!(cabin.status, "Could not load Grok Build catalog (timed out)");
+    assert!(
+        !cabin.status.contains("Loading"),
+        "status must leave Loading: {}",
+        cabin.status
+    );
+    assert_eq!(cabin.grok_catalog.skills.len(), 1);
+    assert_eq!(cabin.grok_catalog.skills[0].name, "harbor");
+    assert_eq!(
+        super::pages::catalog_empty_line(
+            cabin.grok_catalog_rx.is_some(),
+            "",
+            cabin.grok_catalog.skills.len(),
+            skills_empty,
+            &cabin.status,
+        ),
+        skills_empty,
+    );
+    assert_eq!(
+        super::pages::catalog_stale_line(&cabin.status, cabin.grok_catalog.skills.len()),
+        Some("Showing the last list — Grok Build timed out."),
+    );
+    drop(tx);
+
+    let (hold, rx) = std::sync::mpsc::channel::<Result<grokhub_acp::GrokCatalog, String>>();
+    cabin.grok_catalog = grokhub_acp::GrokCatalog::default();
+    cabin.grok_catalog_rx = Some(rx);
+    cabin.grok_catalog_loaded = false;
+    cabin.grok_catalog_started =
+        Some(Instant::now() - (super::acp::GROK_CATALOG_SETTLE + Duration::from_secs(1)));
+    cabin.status = "Loading Grok Build catalog…".into();
+    cabin.poll_grok_catalog();
+    assert!(cabin.grok_catalog.skills.is_empty());
+    assert!(cabin.grok_catalog_loaded);
+    assert!(cabin.grok_catalog_rx.is_none());
+    assert_eq!(cabin.status, super::acp::GROK_CATALOG_TIMEOUT);
+    assert_eq!(
+        super::pages::catalog_empty_line(
+            cabin.grok_catalog_rx.is_some(),
+            "",
+            0,
+            skills_empty,
+            &cabin.status,
+        ),
+        "Grok Build didn't answer. Refresh to try again.",
+    );
+    assert_eq!(super::pages::catalog_stale_line(&cabin.status, 0), None);
+    drop(hold);
+
+    let poll = include_str!("acp.rs");
+    let body = poll
+        .split("fn poll_grok_catalog(")
+        .nth(1)
+        .and_then(|s| s.split("fn submit_mcp_line(").next())
+        .expect("poll_grok_catalog");
+    assert!(body.contains("TryRecvError::Empty"), "{body}");
+    assert!(body.contains("grok_catalog_settle()"), "{body}");
+    assert!(body.contains("GROK_CATALOG_TIMEOUT"), "{body}");
+    let settle = poll
+        .split("fn grok_catalog_settle(")
+        .nth(1)
+        .and_then(|s| s.split("pub(super) const GROK_CATALOG_TIMEOUT").next())
+        .expect("grok_catalog_settle");
+    assert!(
+        settle.contains("GROK_CATALOG_SETTLE"),
+        "settle falls back to the 18s constant: {settle}"
+    );
+    assert!(
+        settle.contains("GROKHUB_CATALOG_SETTLE_MS"),
+        "debug shots can shorten the wait: {settle}"
+    );
+    assert!(body.contains("self.grok_catalog_loaded = true"), "{body}");
+    assert!(body.contains("self.grok_catalog_rx = Some(rx)"), "{body}");
+    let reload = poll
+        .split("fn reload_grok_catalog(")
+        .nth(1)
+        .and_then(|s| s.split("fn poll_grok_catalog(").next())
+        .expect("reload_grok_catalog");
+    assert!(
+        reload.contains("self.grok_catalog_started = Some(Instant::now())"),
+        "reload records when the channel opened: {reload}"
+    );
 }
 
 // Folded from PR #322.
@@ -20012,6 +22119,7 @@ fn ingest_tool_card_skips_live_when_stream_elsewhere() {
         detail: String::new(),
         diff: String::new(),
         image_data_url: None,
+        raw_input: String::new(),
     };
     cabin.ingest_tool_card(&card);
     assert!(cabin.live_blocks.is_empty());
@@ -20370,6 +22478,214 @@ fn scrub_live_blocks_noop_without_secrets() {
     assert!(cabin.live_keys.is_empty());
 }
 
+/// One config root for both this thread (`TestConfigDir`) and the skill-write
+/// threads (`GROKHUB_CONFIG`), with one skill saved the way the cabin saves it.
+fn pin_skill_config(label: &str) -> (crate::config::TestConfigDir, std::path::PathBuf) {
+    let root = crate::config::test_config_root(label);
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    (crate::config::TestConfigDir::set(root.clone()), root)
+}
+
+fn weekly_report_skill() -> SkillMd {
+    SkillMd {
+        name: "weekly-report".into(),
+        description: "Build the weekly report.".into(),
+        slash: "/weekly-report".into(),
+        trigger: "the user asks for the weekly report".into(),
+        instructions: "1. Open report.md\n2. Fill this week's numbers".into(),
+        pitfalls: String::new(),
+        verify: String::new(),
+        runs: 2,
+    }
+}
+
+/// The skill-write threads append to the ledger; wait for `n` lines.
+fn wait_ledger_lines(root: &std::path::Path, n: usize) -> grokhub_agent::harness::ChangeLedger {
+    for _ in 0..400 {
+        let ledger = grokhub_agent::harness::ChangeLedger::load(root);
+        if ledger.all().len() >= n {
+            return ledger;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("ledger never reached {n} lines");
+}
+
+const WEEKLY_PATCH: &str =
+    "SUGGEST_SKILL_PATCH: weekly-report | the user asks for the weekly report | 1. Open report.md 2. Fill the numbers 3. Save a copy as PDF";
+
+#[test]
+fn nightly_patch_keeps_the_prior_version_and_typed_undo_puts_it_back() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("skill-undo-typed");
+    let path = skills::save_skill(&weekly_report_skill()).expect("save");
+    let v1 = std::fs::read(&path).unwrap();
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.skill_list = skills::list_skills();
+    cabin.apply_review_skill_patches(WEEKLY_PATCH);
+    let ledger = wait_ledger_lines(&root, 1);
+    let c = &ledger.all()[0];
+    assert_eq!((c.id.as_str(), c.op.as_str(), c.origin.as_str()), ("weekly-report", "modify", "self_manage"));
+    assert_eq!(c.reason, "nightly review: 1. Open report.md 2. Fill the numbers 3. Save a copy as PDF");
+    assert_eq!(c.before_hash, grokhub_agent::harness::content_hash(&v1));
+    let v2 = std::fs::read(&path).unwrap();
+    assert_ne!(v2, v1, "the patch landed");
+    assert_eq!(c.after_hash, grokhub_agent::harness::content_hash(&v2));
+    let kept = grokhub_agent::harness::skill_history_dir(&root, "weekly-report");
+    let kept_v1: Vec<Vec<u8>> = std::fs::read_dir(&kept)
+        .unwrap()
+        .flatten()
+        .map(|e| std::fs::read(e.path()).unwrap())
+        .collect();
+    assert!(kept_v1.contains(&v1), "the prior version is kept before the write");
+    cabin.send_from_composer("/skills undo weekly-report".into());
+    assert_eq!(std::fs::read(&path).unwrap(), v1, "undo puts back the exact bytes");
+    assert_eq!(cabin.status, "Undid the newest change to weekly-report. The version before it is back.");
+    assert_eq!(
+        cabin.skill_list.iter().find(|s| s.name == "weekly-report").map(|s| s.instructions.as_str()),
+        Some("1. Open report.md\n2. Fill this week's numbers\n"),
+        "the cabin's list reads the restored file"
+    );
+    let ledger = grokhub_agent::harness::ChangeLedger::load(&root);
+    assert_eq!(ledger.all().len(), 2);
+    assert_eq!((ledger.all()[1].op.as_str(), ledger.all()[1].origin.as_str()), ("undo", "user"));
+    assert_eq!(ledger.all()[1].undoes, Some(1));
+    // The same patch next night is not written again on its own.
+    cabin.apply_review_skill_patches(WEEKLY_PATCH);
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(std::fs::read(&path).unwrap(), v1);
+    assert_eq!(grokhub_agent::harness::ChangeLedger::load(&root).all().len(), 2);
+    assert_eq!(
+        cabin.skill_list.iter().find(|s| s.name == "weekly-report").map(|s| s.instructions.as_str()),
+        Some("1. Open report.md\n2. Fill this week's numbers\n"),
+        "the cabin's list reads the restored file"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The model never undoes a skill change on its own: the same slash from a
+/// night job, a review reply, or any send that is not the user's typing only
+/// posts the `/skills changes` rows, and the file stays.
+#[test]
+fn the_model_cannot_undo_a_skill_change_on_its_own() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("skill-undo-model");
+    let path = skills::save_skill(&weekly_report_skill()).expect("save");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.skill_list = skills::list_skills();
+    cabin.apply_review_skill_patches(WEEKLY_PATCH);
+    wait_ledger_lines(&root, 1);
+    let patched = std::fs::read(&path).unwrap();
+    cabin.send_scheduled_chat("/skills undo weekly-report".into());
+    assert_eq!(cabin.status, super::skill_undo::UNDO_NEEDS_YOU);
+    cabin.send_chat("/skills undo weekly-report".into());
+    cabin.send_chat("/skills restore weekly-report".into());
+    cabin.apply_review_reply(Ok("/skills undo weekly-report\nUNDO weekly-report".into()));
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(std::fs::read(&path).unwrap(), patched, "nothing but the user undoes");
+    let ledger = grokhub_agent::harness::ChangeLedger::load(&root);
+    assert_eq!(ledger.all().len(), 1, "no undo line: {:?}", ledger.all());
+    let shown = cabin
+        .messages
+        .iter()
+        .filter(|m| m.1.contains(super::skill_undo::SKILL_CHANGES_HEAD))
+        .count();
+    assert_eq!(shown, 3, "each refused undo shows the rows instead");
+    assert!(!cabin.harness.typed_send, "the typed mark never sticks");
+    let rows = cabin.skill_rows_now();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "weekly-report");
+    assert_eq!(rows[0].act, super::skill_undo::SkillAct::Undo);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Outside tests, an `UndoAsk` is built only in `skill_undo.rs`, and only the
+/// composer send sets `typed_send`.
+#[test]
+fn only_typing_or_a_click_builds_an_undo_ask() {
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("crates dir").to_path_buf();
+    let mut hits = Vec::new();
+    let mut stack = vec![crates.clone()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if path.is_dir() {
+                if name != "target" && name != "tests" {
+                    stack.push(path);
+                }
+                continue;
+            }
+            if !name.ends_with(".rs") || name == "tests.rs" || name.ends_with("_tests.rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            let live = text.split("#[cfg(test)]").next().unwrap_or("");
+            for needle in ["UndoAsk::from_click(", "UndoAsk::from_typing(", "typed_send = true"] {
+                // chat_ui.rs has test helpers above the composer send, so the
+                // typed mark is counted in the whole file.
+                let hay = if needle == "typed_send = true" { text.as_str() } else { live };
+                for _ in hay.matches(needle) {
+                    let rel = path.strip_prefix(&crates).unwrap_or(&path).display().to_string().replace('\\', "/");
+                    hits.push(format!("{rel}: {needle}"));
+                }
+            }
+        }
+    }
+    hits.sort();
+    assert_eq!(
+        hits,
+        vec![
+            "grokhub-app/src/app/chat_ui.rs: typed_send = true",
+            "grokhub-app/src/app/skill_undo.rs: UndoAsk::from_click(",
+            "grokhub-app/src/app/skill_undo.rs: UndoAsk::from_click(",
+            "grokhub-app/src/app/skill_undo.rs: UndoAsk::from_typing(",
+            "grokhub-app/src/app/skill_undo.rs: UndoAsk::from_typing(",
+        ]
+    );
+}
+
+#[test]
+fn a_learned_skill_undone_by_click_is_removed_and_restore_brings_it_back() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("skill-undo-create");
+    let mut cabin = Cabin::quiet_for_test();
+    let mut skill = weekly_report_skill();
+    skill.name = "board-status".into();
+    skill.slash = "/board-status".into();
+    skill.verify = "test -f report.md".into();
+    cabin.commit_proposed_skill(skill);
+    let ledger = wait_ledger_lines(&root, 1);
+    assert_eq!(ledger.all()[0].op.as_str(), "create");
+    let folder = skills::skill_folder("board-status");
+    let v1 = std::fs::read(folder.join("SKILL.md")).unwrap();
+    assert!(folder.join("scripts/verify.sh").exists());
+    let rows = cabin.skill_rows_now();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].label.starts_with("board-status · added "), "{}", rows[0].label);
+    cabin.skill_row_clicked(&rows[0]);
+    assert!(!folder.exists(), "undoing a created skill removes its folder");
+    assert!(!cabin.skill_list.iter().any(|s| s.name == "board-status"));
+    assert_eq!(
+        cabin.status,
+        "Removed board-status: it was new. Its text is kept, and /skills restore board-status brings it back."
+    );
+    let kept = grokhub_agent::harness::skill_history_dir(&root, "board-status");
+    let kept: Vec<Vec<u8>> = std::fs::read_dir(&kept).unwrap().flatten().map(|e| std::fs::read(e.path()).unwrap()).collect();
+    assert_eq!(kept, vec![v1.clone()], "its text stays in history");
+    let rows = cabin.skill_rows_now();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].act, super::skill_undo::SkillAct::Restore);
+    cabin.send_from_composer("/skills restore board-status".into());
+    assert_eq!(std::fs::read(folder.join("SKILL.md")).unwrap(), v1);
+    assert!(folder.join("scripts/verify.sh").exists(), "verify scripts follow the restored file");
+    assert!(cabin.skill_list.iter().any(|s| s.name == "board-status"));
+    assert_eq!(cabin.status, "Restored board-status from its kept copy.");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 // Folded from PR #392.
 #[test]
 fn apply_review_skill_patches_noop_when_idle() {
@@ -20672,6 +22988,67 @@ fn has_key_false_when_idle() {
     assert!(!cabin.has_key());
 }
 
+#[test]
+fn account_settings_pulls_disk_oauth_and_shows_connected_chrome() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("acct-oauth-ui");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    // quiet_for_test: no install/update workers that can outlive the test on Windows.
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(
+        cabin.secrets.oauth.is_none(),
+        "quiet cabin starts without oauth in memory"
+    );
+    // Simulate grokhub --oauth writing secrets while the cabin is already open.
+    let tokens = grokhub_core::XaiOAuthTokens {
+        access_token: "qa-access".into(),
+        name: Some("GrokHub QA".into()),
+        email: Some("grokhub-qa@agentmail.to".into()),
+        connected_at: 1,
+        ..Default::default()
+    };
+    crate::secrets::save(&crate::secrets::Secrets {
+        oauth: Some(tokens),
+        ..Default::default()
+    })
+    .expect("save secrets");
+    assert!(
+        cabin.secrets.oauth.is_none(),
+        "in-memory oauth stays empty until Account pulls disk"
+    );
+    cabin.pull_account_oauth_from_disk();
+    assert!(cabin.account_oauth_present(), "disk oauth must load into Account");
+    let chrome = account_connect_chrome(cabin.secrets.oauth.as_ref());
+    assert!(chrome.connected);
+    assert_eq!(chrome.action, "Sign out");
+    assert_eq!(chrome.title, "Connected");
+    assert_eq!(chrome.hint, "GrokHub QA · grokhub-qa@agentmail.to");
+    // Signed-out chrome stays for the empty case.
+    let signed_out = account_connect_chrome(None);
+    assert_eq!(signed_out.action, "Sign in with Grok");
+    let settings = include_str!("settings.rs");
+    let account = settings
+        .split("SettingsSec::Account => {")
+        .nth(1)
+        .and_then(|s| s.split("SettingsSec::Appearance => {").next())
+        .expect("Account");
+    assert!(
+        account.contains("account_auth.title")
+            && account.contains("account_auth.hint")
+            && account.contains("account_auth.action")
+            && account.contains("account_auth.connected"),
+        "Account must paint Connect Grok from account_connect_chrome: {account}"
+    );
+    assert!(
+        settings.contains("pull_account_oauth_from_disk"),
+        "Settings must pull secrets.json oauth before painting Account"
+    );
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+
 // Folded from PR #354.
 #[test]
 fn update_pending_now_none_when_idle() {
@@ -20940,8 +23317,15 @@ fn native_auto_keeps_the_permission_card() {
 #[test]
 fn signin_button_and_keychain_move() {
     let settings = include_str!("settings.rs");
-    assert!(settings.contains("Sign in with Grok"));
-    assert!(settings.contains("Connect Grok"));
+    let oauth = include_str!("oauth.rs");
+    assert!(
+        settings.contains("account_connect_chrome")
+            && settings.contains("pull_account_oauth_from_disk")
+            && oauth.contains("Sign in with Grok")
+            && oauth.contains("Sign out"),
+        "Account Connect Grok chrome must pull disk oauth and paint Sign in / Sign out"
+    );
+    assert!(settings.contains("Connect Grok") || oauth.contains("Connect Grok"));
 
     struct Mem {
         current: std::sync::Mutex<Option<grokhub_core::ImagineTokens>>,
@@ -21103,8 +23487,14 @@ fn pulse_paints_only_on_an_empty_signed_in_chat() {
 fn feed_deck_hover_lifts_the_card_behind() {
     let open = super::feed_ui::deck_poses(3, true, Some(1), 1_000.0);
     assert_eq!(open[0], super::SlidePose { dy: 0.0, scale: 1.0 });
-    assert_eq!(open[1], super::SlidePose { dy: -102.0, scale: 1.0 });
-    assert_eq!(open[2], super::SlidePose { dy: -132.0, scale: 1.0 });
+    assert_eq!(open[1], super::SlidePose { dy: -super::feed_ui::LIFT_STEP, scale: 1.0 });
+    assert_eq!(
+        open[2],
+        super::SlidePose {
+            dy: -(super::feed_ui::LIFT_STEP + super::feed_ui::PEEK_H),
+            scale: 1.0
+        }
+    );
     let rest = super::feed_ui::deck_poses(3, false, Some(1), 1_000.0);
     assert_eq!(rest[1], super::rest_slide(1));
     assert!(rest[1].dy > 0.0 && rest[1].scale < 1.0);
@@ -21134,7 +23524,8 @@ fn feed_deck_shift_keeps_the_top_card_on_screen() {
         .iter()
         .map(|pose| pose.dy)
         .collect();
-    assert_eq!(tops, vec![0.0, -30.0, -40.0]);
+    // room=40 caps the lifted back card; open peek uses PEEK_H.
+    assert_eq!(tops, vec![0.0, -super::feed_ui::PEEK_H, -40.0]);
     let none: Vec<f32> = super::feed_ui::deck_poses(3, true, None, 0.0)
         .iter()
         .map(|pose| pose.dy)
@@ -22449,7 +24840,8 @@ fn bg_ask_spawn_passes_deny_args() {
     );
     assert!(!sent.contains("--always-approve"), "{sent}");
 
-    // Auto denies no tools; only the desktop server stays denied while its switch is off.
+    // Auto denies no coding tools; the desktop server stays denied while its switch is off,
+    // and the Spike-0 hard floor / hard class rules ride on every unattended run (path C).
     cabin.permission_mode = PermissionMode::Auto;
     cabin.cfg.desktop_control = false;
     let started = cabin.start_bg_task("run the checks", &id, grokhub_core::BgOrigin::User);
@@ -22457,11 +24849,14 @@ fn bg_ask_spawn_passes_deny_args() {
     assert!(poll_until(&mut cabin, 5, |c| c.bg.runs.is_empty()), "auto run ends");
     let sent = last_grok_argv(&argv);
     let desktop_deny = format!("--deny\n{}", grokhub_core::DESKTOP_MCP_RULE);
-    assert_eq!(sent.matches("--deny").count(), 1, "{sent}");
+    let hard = grokhub_agent::harness::HEADLESS_DENY_RULES.len() + grokhub_acp::CLI_CREDENTIAL_DENY.len();
+    assert_eq!(sent.matches("--deny").count(), 1 + hard, "{sent}");
     assert!(sent.contains(&desktop_deny), "{sent}");
-    assert!(!sent.contains("--deny\nBash"), "{sent}");
-    assert!(!sent.contains("--deny\nEdit"), "{sent}");
-    assert!(!sent.contains("--deny\nWrite"), "{sent}");
+    assert!(sent.contains("--deny\nBash(rm -rf /)\n"), "{sent}");
+    assert!(sent.contains("--deny\nRead(**/.grok/auth.json)\n"), "{sent}");
+    assert!(!sent.contains("--deny\nBash\n"), "{sent}");
+    assert!(!sent.contains("--deny\nEdit\n"), "{sent}");
+    assert!(!sent.contains("--deny\nWrite\n"), "{sent}");
     assert!(!sent.contains("dontAsk"), "{sent}");
 
     cabin.cfg.desktop_control = true;
@@ -22469,7 +24864,8 @@ fn bg_ask_spawn_passes_deny_args() {
     assert!(started.is_ok(), "{started:?}");
     assert!(poll_until(&mut cabin, 5, |c| c.bg.runs.is_empty()), "auto desktop run ends");
     let sent = last_grok_argv(&argv);
-    assert!(!sent.contains("--deny"), "{sent}");
+    assert_eq!(sent.matches("--deny").count(), hard, "{sent}");
+    assert!(!sent.contains(&desktop_deny), "{sent}");
     assert!(
         sent.contains(&format!("--allow\n{}", grokhub_core::DESKTOP_MCP_RULE)),
         "{sent}"
@@ -22758,6 +25154,7 @@ fn idle_send_hover_ignores_leftover_tool_cards_and_asks() {
         detail: String::new(),
         diff: String::new(),
         image_data_url: None,
+        raw_input: String::new(),
     });
     assert!(!cabin.thinking_here());
     assert_eq!(cabin.run_action_here(), "Read file");
@@ -23508,11 +25905,15 @@ fn pulse_replaces_ideas_on_the_rail_and_old_links_still_land() {
         texts.iter().any(|t| t == "Ideas") && texts.iter().any(|t| t == "Feed"),
         "{texts:?}"
     );
-    // Pulse opens on Feed; its empty line says how to steer it.
+    // Pulse opens on Feed; its empty line says how to steer it (link is separate).
     assert!(
         texts
             .iter()
-            .any(|t| t == "No posts yet. Tell me what to watch in Feed instructions."),
+            .any(|t| t == "No posts yet. Tell me what to watch in "),
+        "{texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t == "Feed instructions"),
         "{texts:?}"
     );
     assert!(
@@ -24178,17 +26579,32 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
             .any(|t| t == "No ideas yet. I'll add one when I spot something worth doing."),
         "{empty:?}"
     );
+    // Empty Ideas keeps one inline Suggest ideas. The header hides its duplicate.
+    let suggest_n = empty
+        .iter()
+        .filter(|t| t.as_str() == "Suggest ideas")
+        .count();
+    assert_eq!(
+        suggest_n, 1,
+        "expected one Suggest ideas, got {suggest_n}: {empty:?}"
+    );
     assert!(!empty.iter().any(|t| t.contains("Thinking")), "{empty:?}");
     cabin.suggest_ideas_with(false);
     assert!(cabin.pulse_view.signin_note);
     assert_eq!(cabin.status, "Connect Grok in Settings to get ideas");
     let signed_out = pulse_texts(cabin, 900.0);
+    assert!(cabin.pulse_view.signin_note, "note stays until Account/native signs in");
     for want in ["Sign in to Grok to get ideas.", "Open Settings"] {
         assert!(
             signed_out.iter().any(|t| t == want),
             "missing {want:?} in {signed_out:?}"
         );
     }
+    // PI-05: once signed in (native here), the amber line clears without another press.
+    cabin.cfg.native_engine = true;
+    let _ = pulse_texts(cabin, 900.0);
+    assert!(!cabin.pulse_view.signin_note);
+    cabin.cfg.native_engine = false;
     // While a suggestion call runs: placeholder rows, and no empty line beside them.
     let (_tx, rx) = mpsc::channel::<String>();
     cabin.ideas_rx = Some((rx, Default::default()));
@@ -24207,6 +26623,60 @@ fn pulse_suggest_signed_out_says_how_to_sign_in_and_loading_shows_placeholder_ro
         "{loading:?}"
     );
     cabin.ideas_rx = None;
+
+    // Feed empty: lead + clickable "Feed instructions" + silence line.
+    cabin.pulse_view.tab = super::pulse_ui::PulseTab::Feed;
+    let feed = pulse_texts(cabin, 900.0);
+    assert!(
+        feed
+            .iter()
+            .any(|t| t == "No posts yet. Tell me what to watch in "),
+        "{feed:?}"
+    );
+    assert!(feed.iter().any(|t| t == "Feed instructions"), "{feed:?}");
+    assert!(
+        !feed
+            .iter()
+            .any(|t| t == "No posts yet. Tell me what to watch in Feed instructions."),
+        "empty Feed paints the link separately: {feed:?}"
+    );
+}
+
+#[test]
+fn pulse_opened_idea_heading_matches_row_type() {
+    use grokhub_core::pulse::PulseType;
+    assert_eq!(PulseType::Do.apply_heading(), "What Apply will do");
+    assert_eq!(PulseType::Automate.apply_heading(), "What Apply will schedule");
+    assert_eq!(PulseType::Learn.apply_heading(), "What I'll learn");
+    let src = include_str!("ideas_ui.rs");
+    let open = src
+        .split("fn paint_idea_open(")
+        .nth(1)
+        .and_then(|s| s.split("fn apply_idea_act(").next())
+        .unwrap_or(src);
+    assert!(
+        open.contains("pulse_type(card).apply_heading()"),
+        "opened card must use the same type source as the row"
+    );
+    let skel = include_str!("pulse_ui.rs");
+    let paint = skel
+        .split("fn paint_skeleton_row(")
+        .nth(1)
+        .and_then(|s| s.split("fn paint_thumbs(").next())
+        .expect("skeleton");
+    assert!(
+        paint.contains("theme::elevated()") && paint.contains("52.0"),
+        "loading Ideas rows are #16181c blocks the size of a row: {paint}"
+    );
+    let loading = skel
+        .split("Thumb::Loading =>")
+        .nth(1)
+        .and_then(|s| s.split('}').next())
+        .expect("loading thumb");
+    assert!(
+        loading.contains("theme::elevated()") && !loading.to_ascii_lowercase().contains("icon"),
+        "loading image is a plain #16181c skeleton with no icon: {loading}"
+    );
 }
 
 #[test]
@@ -24459,3 +26929,170 @@ fn labs_beta_channel_toggle_is_wired() {
 }
 
 
+
+fn pace_spans() -> Vec<grokhub_agent::harness::Span> {
+    grokhub_agent::harness::read_spans(
+        &crate::config::config_dir(),
+        super::heartbeat_gate::HEARTBEAT_TRACE,
+    )
+    .expect("heartbeat spans")
+}
+
+#[test]
+fn heartbeat_pace_holds_while_busy_and_traces_reasons_without_content() {
+    use grokhub_core::{HeartbeatPace, ProactiveAct, PACE_NORMAL};
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("heartbeat-pace-busy");
+    let _ = std::fs::remove_file(grokhub_agent::harness::span_path(
+        &crate::config::config_dir(),
+        "heartbeat",
+    ));
+    const T0: u64 = 1_800_000_000_000;
+    const MIN: u64 = 60_000;
+    cabin.running = false;
+    cabin.composer = "half a thought about the standup".into();
+    assert!(cabin.heartbeat_busy());
+    assert!(!cabin.heartbeat_may(ProactiveAct::Anticipate, T0));
+    assert!(!cabin.heartbeat_may(ProactiveAct::Anticipate, T0 + 15_000));
+    cabin.composer.clear();
+    cabin.running = true;
+    assert!(!cabin.heartbeat_may(ProactiveAct::Anticipate, T0 + 30_000), "mid-turn");
+    cabin.running = false;
+    assert!(!cabin.heartbeat_busy());
+    assert!(cabin.heartbeat_may(ProactiveAct::Anticipate, T0 + 45_000));
+    assert!(!cabin.heartbeat_may(ProactiveAct::Ideas, T0 + 46_000));
+    let spans = pace_spans();
+    let lines: Vec<(&str, &str, &str)> = spans
+        .iter()
+        .map(|s| (s.tool.as_str(), s.decision.as_str(), s.result.as_str()))
+        .collect();
+    assert_eq!(
+        lines,
+        vec![
+            ("heartbeat.anticipate", "hold", "busy"),
+            ("heartbeat.anticipate", "allow", "under_budget"),
+            ("heartbeat.ideas", "hold", "min_interval"),
+        ],
+        "a repeated hold is traced once; each act and change is traced"
+    );
+    for s in &spans {
+        assert_eq!(s.session_id, "heartbeat");
+        assert_eq!(s.args_redacted, "", "no content in a pace span");
+        assert_eq!(s.claim, "pace");
+        assert_eq!(s.chat_id, "");
+        assert_eq!(s.path, "heartbeat");
+        assert_eq!(s.origin, grokhub_agent::harness::Origin::Proactive);
+    }
+    let raw = std::fs::read_to_string(grokhub_agent::harness::span_path(
+        &crate::config::config_dir(),
+        "heartbeat",
+    ))
+    .expect("raw spans");
+    assert!(!raw.contains("standup"), "the draft never reaches the trace: {raw}");
+
+    // Config override (as from app.json): one an hour instead of three.
+    assert!(cabin.heartbeat_may(ProactiveAct::Ideas, T0 + 45_000 + 15 * MIN));
+    cabin.cfg.heartbeat = HeartbeatPace {
+        min_interval_min: 60,
+        max_per_hour: 1,
+        ..PACE_NORMAL
+    };
+    cabin.heartbeat_outcome(ProactiveAct::Ideas, grokhub_core::ActOutcome::Useful);
+    assert!(!cabin.heartbeat_may(ProactiveAct::Review, T0 + 45_000 + 45 * MIN));
+    assert_eq!(pace_spans().last().map(|s| s.result.clone()).as_deref(), Some("hour_cap"));
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn halt_stops_the_heartbeat_at_once_and_your_send_resumes_it() {
+    use grokhub_core::ProactiveAct;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("heartbeat-pace-halt");
+    let _ = std::fs::remove_file(grokhub_agent::harness::span_path(
+        &crate::config::config_dir(),
+        "heartbeat",
+    ));
+    let now = grokhub_core::now_ms();
+    cabin.running = false;
+    cabin.composer.clear();
+    let (_tx, rx) = std::sync::mpsc::channel();
+    cabin.ideas_rx = Some((rx, Default::default()));
+    let (_rtx, rrx) = std::sync::mpsc::channel();
+    cabin.review_rx = Some(rrx);
+    cabin.review_busy = true;
+    cabin.halt_everything("Stopped");
+    assert!(cabin.ideas_rx.is_none(), "an ideas ask already out lands nowhere");
+    assert!(cabin.review_rx.is_none() && !cabin.review_busy);
+    assert!(cabin.heartbeat_halted(now));
+    assert!(!cabin.heartbeat_may(ProactiveAct::Anticipate, now));
+    assert!(!cabin.heartbeat_may(ProactiveAct::Review, now + 14 * 60_000));
+    let tail: Vec<(String, String)> = pace_spans()
+        .iter()
+        .map(|s| (s.tool.clone(), s.result.clone()))
+        .collect();
+    assert_eq!(
+        tail,
+        vec![
+            ("heartbeat.halt".to_string(), "halted".to_string()),
+            ("heartbeat.anticipate".to_string(), "halted".to_string()),
+            ("heartbeat.review".to_string(), "halted".to_string()),
+        ]
+    );
+    cabin.heartbeat_user_sent();
+    assert!(!cabin.heartbeat_halted(now));
+    assert!(cabin.heartbeat_may(ProactiveAct::Anticipate, now));
+    // Stop on that live anticipate turn counts as a dismissal.
+    cabin.running = true;
+    cabin.heartbeat_turn_stopped();
+    assert_eq!(cabin.pace.quiet_streak(), 1);
+    assert_eq!(cabin.pace.pending(), None);
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn heartbeat_halt_skips_every_organ_that_starts_work() {
+    let src = cabin_src();
+    let beat = src
+        .split("fn tick_heartbeat")
+        .nth(1)
+        .and_then(|s| s.split("fn tick_anticipate").next())
+        .expect("tick_heartbeat");
+    assert!(
+        beat.contains("heartbeat_halted(") && beat.contains("runs_while_halted()"),
+        "Halt must hold the pulse before any organ runs: {beat}"
+    );
+    assert!(
+        beat.contains("if !halted {\n                        self.follow_feed_lookup();"),
+        "the digest lookup is a model call and waits out a Halt: {beat}"
+    );
+    let anticipate = fn_src(&src, "tick_anticipate");
+    let gate = anticipate.find("heartbeat_may(").expect("anticipate meets the pace gate");
+    let fire = anticipate.find("send_scheduled_chat(").expect("anticipate send");
+    assert!(gate < fire, "the gate comes before the turn: {anticipate}");
+    let review = src
+        .split("fn tick_review(")
+        .nth(1)
+        .and_then(|s| s.split("fn review_chat_digest(").next())
+        .expect("tick_review");
+    let gate = review.find("ProactiveAct::Review").expect("review meets the pace gate");
+    assert!(gate < review.find("spawn_review()").expect("spawn"), "{review}");
+    let ideas = include_str!("feed_ui.rs")
+        .split("fn maybe_suggest_ideas(")
+        .nth(1)
+        .and_then(|s| s.split("fn idea_request(").next())
+        .expect("maybe_suggest_ideas");
+    let gate = ideas.find("ProactiveAct::Ideas").expect("ideas meet the pace gate");
+    assert!(gate < ideas.find("cabin_fast_llm").expect("ask"), "{ideas}");
+    // Scheduled jobs are not budgeted and never take the composer.
+    let night = src
+        .split("fn tick_night(")
+        .nth(1)
+        .and_then(|s| s.split("fn poll_night_check(").next())
+        .expect("tick_night");
+    assert!(!night.contains("heartbeat_may") && !night.contains("send_scheduled_chat"), "{night}");
+    let halt = fn_src(&src, "halt_everything");
+    assert!(
+        halt.find("heartbeat_halt(").expect("halt") < halt.find("halt_work(").expect("work"),
+        "Halt holds the pulse before anything else: {halt}"
+    );
+}

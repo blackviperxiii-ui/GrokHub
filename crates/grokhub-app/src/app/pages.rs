@@ -15,20 +15,53 @@ pub(super) fn queue_task_label(title: &str, done: bool) -> &'static str {
     }
 }
 
+/// Shown when the catalog timed out and the list is empty.
+pub(super) const CATALOG_TIMEOUT_EMPTY: &str =
+    "Grok Build didn't answer. Refresh to try again.";
+
+/// Shown above tiles when a timeout kept the previous list.
+pub(super) const CATALOG_TIMEOUT_STALE: &str =
+    "Showing the last list — Grok Build timed out.";
+
 /// Empty catalog copy. Loading wins, then a search that filtered a non-empty list.
+/// A timed-out empty list is not "none found".
 pub(super) fn catalog_empty_line<'a>(
     loading: bool,
     query: &str,
     total: usize,
     empty_text: &'a str,
+    status: &str,
 ) -> &'a str {
     if loading {
         "Loading…"
     } else if !query.is_empty() && total > 0 {
         "None matched."
+    } else if status == super::acp::GROK_CATALOG_TIMEOUT && total == 0 {
+        CATALOG_TIMEOUT_EMPTY
     } else {
         empty_text
     }
+}
+
+/// One muted line above tiles when the timeout kept a non-empty list.
+pub(super) fn catalog_stale_line(status: &str, total: usize) -> Option<&'static str> {
+    if status == super::acp::GROK_CATALOG_TIMEOUT && total > 0 {
+        Some(CATALOG_TIMEOUT_STALE)
+    } else {
+        None
+    }
+}
+
+fn paint_catalog_stale(ui: &mut egui::Ui, status: &str, total: usize) {
+    let Some(line) = catalog_stale_line(status, total) else {
+        return;
+    };
+    ui.label(
+        RichText::new(line)
+            .size(crate::theme::FONT_BODY)
+            .color(crate::theme::muted()),
+    );
+    ui.add_space(6.0);
 }
 
 pub(super) enum BoardAct {
@@ -1563,10 +1596,12 @@ impl Cabin {
                             &q,
                             self.grok_catalog.mcp.len(),
                             "No MCP servers in ~/.grok — add one with grok mcp add.",
+                            &self.status,
                         ))
                         .color(crate::theme::muted()),
                     );
                 } else {
+                    paint_catalog_stale(ui, &self.status, self.grok_catalog.mcp.len());
                     crate::cards::tile_row(ui, mcp.len(), |ui, i| {
                         let (s, status) = &mcp[i];
                         let add = if s.enabled { "Disable" } else { "Enable" };
@@ -1633,10 +1668,12 @@ impl Cabin {
                             &q,
                             installed_total,
                             "No plugins installed yet — browse Marketplace below.",
+                            &self.status,
                         ))
                         .color(crate::theme::muted()),
                     );
                 } else {
+                    paint_catalog_stale(ui, &self.status, installed.len());
                     crate::cards::tile_row(ui, installed.len(), |ui, i| {
                         let p = &installed[i];
                         let add = if p.enabled { "Disable" } else { "Enable" };
@@ -1691,10 +1728,12 @@ impl Cabin {
                             &q,
                             market_total,
                             "No marketplace plugins to install.",
+                            &self.status,
                         ))
                         .color(crate::theme::muted()),
                     );
                 } else {
+                    paint_catalog_stale(ui, &self.status, market.len());
                     crate::cards::tile_row(ui, market.len(), |ui, i| {
                         let p = &market[i];
                         let body = if p.description.is_empty() {
@@ -1933,11 +1972,13 @@ impl Cabin {
                         &q,
                         self.grok_catalog.skills.len(),
                         "None found. Refresh after installing a plugin.",
+                        &self.status,
                     ))
                     .size(crate::theme::FONT_BODY)
                     .color(crate::theme::muted()),
                 );
             } else {
+                paint_catalog_stale(ui, &self.status, self.grok_catalog.skills.len());
                 crate::cards::tile_row(ui, skills.len(), |ui, i| {
                     let s = &skills[i];
                     let src = grokhub_acp::skill_source_label(s);
@@ -2180,12 +2221,53 @@ mod tests {
         let plugins = "No plugins installed yet — browse Marketplace below.";
         let market = "No marketplace plugins to install.";
         let skills = "None found. Refresh after installing a plugin.";
-        assert_eq!(catalog_empty_line(true, "", 0, mcp), "Loading…");
-        assert_eq!(catalog_empty_line(true, "grok", 4, plugins), "Loading…");
-        assert_eq!(catalog_empty_line(false, "zzz", 3, market), "None matched.");
-        assert_eq!(catalog_empty_line(false, "zzz", 0, skills), skills);
-        assert_eq!(catalog_empty_line(false, "", 0, mcp), mcp);
-        assert_eq!(catalog_empty_line(false, "", 2, plugins), plugins);
-        assert_eq!(catalog_empty_line(false, "  ", 2, skills), "None matched.");
+        assert_eq!(catalog_empty_line(true, "", 0, mcp, ""), "Loading…");
+        assert_eq!(catalog_empty_line(true, "grok", 4, plugins, ""), "Loading…");
+        assert_eq!(catalog_empty_line(false, "zzz", 3, market, ""), "None matched.");
+        assert_eq!(catalog_empty_line(false, "zzz", 0, skills, ""), skills);
+        assert_eq!(catalog_empty_line(false, "", 0, mcp, ""), mcp);
+        assert_eq!(catalog_empty_line(false, "", 2, plugins, ""), plugins);
+        assert_eq!(catalog_empty_line(false, "  ", 2, skills, ""), "None matched.");
+    }
+
+    #[test]
+    fn catalog_timeout_copy_names_a_missed_answer_and_a_stale_list() {
+        let skills = "None found. Refresh after installing a plugin.";
+        let timeout = crate::app::acp::GROK_CATALOG_TIMEOUT;
+        assert_eq!(
+            CATALOG_TIMEOUT_EMPTY,
+            "Grok Build didn't answer. Refresh to try again."
+        );
+        assert_eq!(
+            CATALOG_TIMEOUT_STALE,
+            "Showing the last list — Grok Build timed out."
+        );
+        assert_eq!(
+            catalog_empty_line(false, "", 0, skills, timeout),
+            "Grok Build didn't answer. Refresh to try again."
+        );
+        assert_eq!(
+            catalog_empty_line(false, "zzz", 0, skills, timeout),
+            "Grok Build didn't answer. Refresh to try again."
+        );
+        assert_eq!(catalog_empty_line(true, "", 0, skills, timeout), "Loading…");
+        assert_eq!(catalog_empty_line(false, "", 0, skills, "Harbor"), skills);
+        assert_eq!(catalog_empty_line(false, "", 2, skills, timeout), skills);
+        assert_eq!(
+            catalog_stale_line(timeout, 3),
+            Some("Showing the last list — Grok Build timed out.")
+        );
+        assert_eq!(catalog_stale_line(timeout, 0), None);
+        assert_eq!(catalog_stale_line("Harbor", 4), None);
+        let ui = include_str!("pages.rs");
+        let skills_ui = ui
+            .split("fn ui_skills(")
+            .nth(1)
+            .and_then(|s| s.split("fn open_history_hit(").next())
+            .expect("ui_skills");
+        assert!(
+            skills_ui.matches("paint_catalog_stale(").count() >= 4,
+            "skills and connectors tile lists paint the stale line: {skills_ui}"
+        );
     }
 }

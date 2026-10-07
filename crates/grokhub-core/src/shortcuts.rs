@@ -127,6 +127,9 @@ pub fn palette_shortcut(action: &str) -> Option<&'static str> {
 pub fn filter_palette(q: &str) -> Vec<(&'static str, &'static str)> {
     let n = q.trim().to_ascii_lowercase();
     // Named as the sidebar names them; older names still find them.
+    // Devices, Agents, and Connectors are off the rail. A typed prefix still
+    // finds them: the label contains the query, and these synonyms match a
+    // type prefix (`device` → Devices) the same way `night` finds Automations.
     let synonyms: &[(&str, &str)] = &[
         ("nav:night", "night"),
         ("nav:night", "schedule"),
@@ -137,6 +140,12 @@ pub fn filter_palette(q: &str) -> Vec<(&'static str, &'static str)> {
         ("shortcuts", "keys"),
         ("shortcuts", "keyboard"),
         ("shortcuts", "hotkeys"),
+        ("nav:devices", "devices"),
+        ("nav:devices", "device"),
+        ("nav:agents", "agents"),
+        ("nav:agents", "agent"),
+        ("nav:connectors", "connectors"),
+        ("nav:connectors", "connector"),
     ];
     let rows = [
         ("Chat", "nav:chat"),
@@ -162,8 +171,11 @@ pub fn filter_palette(q: &str) -> Vec<(&'static str, &'static str)> {
     ];
     rows.into_iter()
         .filter(|(label, action)| {
-            n.is_empty()
-                || label.to_ascii_lowercase().contains(&n)
+            if n.is_empty() {
+                // Not on the sidebar rail. There is no Night row: that page is Automations.
+                return !matches!(*action, "nav:devices" | "nav:agents" | "nav:connectors");
+            }
+            label.to_ascii_lowercase().contains(&n)
                 || synonyms
                     .iter()
                     .any(|(a, word)| a == action && word.starts_with(n.as_str()))
@@ -187,8 +199,35 @@ mod tests {
         );
         assert_eq!(filter_palette("ideas"), vec![("Pulse", "nav:pulse")]);
         assert!(filter_palette("set").iter().any(|(l, _)| *l == "Settings"));
-        // 2.10.91: Pulse joined the palette (18 -> 19); Keyboard shortcuts makes 20.
-        assert_eq!(filter_palette("").len(), 20);
+        // Off the rail, so an empty query hides them (20 - Devices/Agents/Connectors).
+        // Night is not its own row; `night` still resolves to Automations above.
+        assert_eq!(filter_palette("").len(), 17);
+        let empty = filter_palette("");
+        for gone in ["Devices", "Agents", "Connectors", "Night"] {
+            assert!(
+                empty.iter().all(|(l, _)| *l != gone),
+                "{gone} is not a default palette row: {empty:?}"
+            );
+        }
+        assert_eq!(filter_palette("devices"), vec![("Devices", "nav:devices")]);
+        assert_eq!(filter_palette("device"), vec![("Devices", "nav:devices")]);
+        assert_eq!(filter_palette("agents"), vec![("Agents", "nav:agents")]);
+        assert_eq!(filter_palette("agent"), vec![("Agents", "nav:agents")]);
+        // The word also sits inside "Skills and Connectors".
+        assert_eq!(
+            filter_palette("connectors"),
+            vec![
+                ("Connectors", "nav:connectors"),
+                ("Skills and Connectors", "nav:skills"),
+            ]
+        );
+        assert_eq!(
+            filter_palette("connector"),
+            vec![
+                ("Connectors", "nav:connectors"),
+                ("Skills and Connectors", "nav:skills"),
+            ]
+        );
         assert_eq!(filter_palette("keyb"), vec![("Keyboard shortcuts", "shortcuts")]);
         assert_eq!(filter_palette("hotkeys"), vec![("Keyboard shortcuts", "shortcuts")]);
         assert_eq!(filter_palette("pulse"), vec![("Pulse", "nav:pulse")]);

@@ -15,7 +15,9 @@ use grokhub_core::{CardReaction, UpdateAction, UpdateCard, UpdateKind};
 
 const ICON: f32 = 32.0;
 /// The header's action slot: Feed instructions on Feed, Suggest ideas on
-/// Ideas. One width, so the Feed | Ideas switch never moves.
+/// Ideas when the list has rows or a suggestion is loading. An empty Ideas
+/// list already paints Suggest in the body, so the header slot stays blank.
+/// One width, so the Feed | Ideas switch never moves.
 pub(super) const HEADER_SLOT_W: f32 = 150.0;
 /// Behind a hovered or focused row.
 const ROW_HOVER: egui::Color32 = egui::Color32::from_rgb(0x0f, 0x10, 0x12);
@@ -511,7 +513,9 @@ pub(super) fn paint_pulse_row(
                     });
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                    dots_menu(ui, active, |ui| pulse_menu(ui, card, kind, false, &mut act));
+                    crate::cards::dots_menu(ui, active, |ui| {
+                        pulse_menu(ui, card, kind, false, &mut act)
+                    });
                 });
             });
         })
@@ -525,6 +529,96 @@ pub(super) fn paint_pulse_row(
         );
     }
     (act, resp.rect, title_hover)
+}
+
+/// "source · age" for the line above a post's title.
+pub(super) fn post_age_line(card: &UpdateCard, now: u64) -> String {
+    format!(
+        "{} · {}",
+        post_source(card),
+        pc::ago_label(card.created_at, now)
+    )
+}
+
+/// Star, list, or the card's type glyph. The deck and the feed use the same one.
+pub(super) fn paint_feed_icon(ui: &mut egui::Ui, card: &UpdateCard) {
+    icon(ui, feed_glyph(card), category_tint(pc::card_category(card)));
+}
+
+pub(super) enum FeedPostAct {
+    Like,
+    Discuss,
+    Link(String),
+}
+
+/// Title, short takeaway, Read at, images, then Like / Discuss.
+/// `thumbs` is empty when the post has no image yet.
+pub(super) fn paint_post_body(
+    ui: &mut egui::Ui,
+    card: &UpdateCard,
+    thumbs: &[Thumb],
+) -> Option<FeedPostAct> {
+    let mut act = None;
+    ui.add(
+        egui::Label::new(
+            RichText::new(&card.title)
+                .size(crate::theme::FONT_UI)
+                .strong()
+                .color(crate::theme::fg()),
+        )
+        .wrap()
+        .selectable(false),
+    );
+    let takeaway = grokhub_core::short_takeaway(card);
+    if !takeaway.is_empty() {
+        clamp_label(
+            ui,
+            &takeaway,
+            crate::theme::FONT_BODY,
+            crate::theme::muted(),
+            3,
+        );
+    }
+    if let Some(url) = card.citations.first() {
+        let host = pc::source_host(url).unwrap_or_else(|| url.clone());
+        let link = ui.add(
+            egui::Label::new(
+                RichText::new(format!("Read at {host}"))
+                    .size(crate::theme::FONT_TIP)
+                    .color(crate::theme::link()),
+            )
+            .sense(egui::Sense::click())
+            .selectable(false),
+        );
+        if link.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if link.clicked() {
+            act = Some(FeedPostAct::Link(url.clone()));
+        }
+    }
+    if !thumbs.is_empty() {
+        ui.add_space(2.0);
+        paint_thumbs(ui, thumbs);
+    }
+    ui.add_space(2.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 14.0;
+        if paint_heart_button(ui, card.reaction == Some(CardReaction::Up)) {
+            act = Some(FeedPostAct::Like);
+        }
+        if matches!(card.kind, UpdateKind::Digest | UpdateKind::Suggestion) {
+            let talk = ui.add(
+                egui::Button::new(RichText::new("Discuss").size(crate::theme::FONT_TIP))
+                    .frame(false)
+                    .min_size(egui::vec2(0.0, 24.0)),
+            );
+            if talk.clicked() {
+                act = Some(FeedPostAct::Discuss);
+            }
+        }
+    });
+    act
 }
 
 /// Where a post came from, for the line under its headline.
@@ -698,14 +792,22 @@ impl Cabin {
                         }
                     }
                     PulseTab::Ideas => {
+                        // Same emptiness check as ui_ideas: purge once, then group.
+                        // Hide this control only when the body will paint the inline
+                        // Suggest (empty, and not mid-fetch). Loading keeps
+                        // "Suggesting…"; a list that has ideas keeps "Suggest ideas".
+                        self.ensure_useful_ideas();
                         let busy = self.ideas_rx.is_some();
-                        let label = if busy {
-                            "Suggesting…"
-                        } else {
-                            "Suggest ideas"
-                        };
-                        if crate::cards::ghost_pill(&mut cell, label) && !busy {
-                            self.suggest_ideas_pressed();
+                        let empty = self.pulse_groups(now_ms()).is_empty();
+                        if busy || !empty {
+                            let label = if busy {
+                                "Suggesting…"
+                            } else {
+                                "Suggest ideas"
+                            };
+                            if crate::cards::ghost_pill(&mut cell, label) && !busy {
+                                self.suggest_ideas_pressed();
+                            }
                         }
                     }
                 }
@@ -723,6 +825,11 @@ impl Cabin {
                 .size(crate::theme::FONT_BODY)
                 .color(crate::theme::muted()),
         );
+        // PI-05: clear the signed-out note once Account (or native) is signed in.
+        // CLI-on-PATH alone is not "signed in to Grok" for this line.
+        if self.pulse_view.signin_note && (self.has_key() || self.cfg.native_engine) {
+            self.pulse_view.signin_note = false;
+        }
         if self.pulse_view.tab == PulseTab::Ideas && self.pulse_view.signin_note {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -754,7 +861,8 @@ impl Cabin {
 
     /// Nothing to show: placeholder rows while ideas are being found, else the
     /// empty line for this tab and when the heartbeat last ran.
-    pub(super) fn paint_pulse_silence(&self, ui: &mut egui::Ui, feed: bool) {
+    /// Ideas empty: inline Suggest ideas. Feed empty: Feed instructions link.
+    pub(super) fn paint_pulse_silence(&mut self, ui: &mut egui::Ui, feed: bool) {
         ui.add_space(8.0);
         if !feed && self.ideas_rx.is_some() {
             ui.label(
@@ -771,15 +879,47 @@ impl Cabin {
                 .request_repaint_after(std::time::Duration::from_millis(250));
             return;
         }
-        ui.label(
-            RichText::new(if feed {
-                pc::FEED_EMPTY
-            } else {
-                pc::IDEAS_EMPTY
-            })
-            .size(crate::theme::FONT_BODY)
-            .color(crate::theme::muted()),
-        );
+        if feed {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.label(
+                    RichText::new(pc::FEED_EMPTY_LEAD)
+                        .size(crate::theme::FONT_BODY)
+                        .color(crate::theme::muted()),
+                );
+                let link = ui.add(
+                    egui::Label::new(
+                        RichText::new(pc::FEED_EMPTY_LINK)
+                            .size(crate::theme::FONT_BODY)
+                            .underline()
+                            .color(crate::theme::link()),
+                    )
+                    .sense(egui::Sense::click())
+                    .selectable(false),
+                );
+                if link.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if link.clicked() {
+                    self.open_feed_instructions();
+                }
+                ui.label(
+                    RichText::new(".")
+                        .size(crate::theme::FONT_BODY)
+                        .color(crate::theme::muted()),
+                );
+            });
+        } else {
+            ui.label(
+                RichText::new(pc::IDEAS_EMPTY)
+                    .size(crate::theme::FONT_BODY)
+                    .color(crate::theme::muted()),
+            );
+            ui.add_space(8.0);
+            if crate::cards::ghost_pill(ui, "Suggest ideas") {
+                self.suggest_ideas_pressed();
+            }
+        }
         ui.add_space(4.0);
         ui.label(
             RichText::new(pc::silence_line(self.last_pulse_ms(), now_ms()))
@@ -901,8 +1041,8 @@ impl Cabin {
         }
     }
 
-    /// One post: "source · age" with ··· on top, the headline, the summary,
-    /// the source link, its images, then Like / Discuss.
+    /// One post: "source · age" with ··· on top, the headline, the short
+    /// takeaway, the source link, its images, then Like / Discuss.
     fn paint_pulse_post(
         &mut self,
         ui: &mut egui::Ui,
@@ -911,7 +1051,6 @@ impl Cabin {
     ) -> Option<PulseAct> {
         let mut act = None;
         let kind = pc::pulse_type(card);
-        let cat = pc::card_category(card);
         let thumbs: Vec<Thumb> = card
             .pulse
             .image_urls
@@ -920,86 +1059,30 @@ impl Cabin {
             .filter_map(|url| self.pulse_thumb(ui.ctx(), url))
             .collect();
         ui.horizontal_top(|ui| {
-            icon(ui, feed_glyph(card), category_tint(cat));
+            paint_feed_icon(ui, card);
             ui.add_space(10.0);
             ui.vertical(|ui| {
                 ui.set_width(ui.available_width());
                 ui.spacing_mut().item_spacing.y = 4.0;
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(format!(
-                            "{} · {}",
-                            post_source(card),
-                            pc::ago_label(card.created_at, now)
-                        ))
-                        .size(crate::theme::FONT_TIP)
-                        .color(crate::theme::subtle()),
+                        RichText::new(post_age_line(card, now))
+                            .size(crate::theme::FONT_TIP)
+                            .color(crate::theme::subtle()),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        dots_menu(ui, false, |ui| pulse_menu(ui, card, kind, true, &mut act));
+                        crate::cards::dots_menu(ui, false, |ui| {
+                            pulse_menu(ui, card, kind, true, &mut act)
+                        });
                     });
                 });
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(&card.title)
-                            .size(crate::theme::FONT_UI)
-                            .strong()
-                            .color(crate::theme::fg()),
-                    )
-                    .wrap()
-                    .selectable(false),
-                );
-                let summary = card.body.as_deref().unwrap_or("").trim();
-                if !summary.is_empty() {
-                    clamp_label(
-                        ui,
-                        summary,
-                        crate::theme::FONT_BODY,
-                        crate::theme::muted(),
-                        5,
-                    );
+                if let Some(did) = paint_post_body(ui, card, &thumbs) {
+                    act = Some(match did {
+                        FeedPostAct::Like => PulseAct::Like(card.id.clone()),
+                        FeedPostAct::Discuss => PulseAct::Discuss(card.id.clone()),
+                        FeedPostAct::Link(url) => PulseAct::Link(url),
+                    });
                 }
-                if let Some(url) = card.citations.first() {
-                    let host = pc::source_host(url).unwrap_or_else(|| url.clone());
-                    let link = ui.add(
-                        egui::Label::new(
-                            RichText::new(format!("Read at {host}"))
-                                .size(crate::theme::FONT_TIP)
-                                .color(crate::theme::link()),
-                        )
-                        .sense(egui::Sense::click())
-                        .selectable(false),
-                    );
-                    if link.hovered() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                    }
-                    if link.clicked() {
-                        act = Some(PulseAct::Link(url.clone()));
-                    }
-                }
-                if !thumbs.is_empty() {
-                    ui.add_space(2.0);
-                    paint_thumbs(ui, &thumbs);
-                }
-                ui.add_space(2.0);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 14.0;
-                    if paint_heart_button(ui, card.reaction == Some(CardReaction::Up)) {
-                        act = Some(PulseAct::Like(card.id.clone()));
-                    }
-                    if matches!(card.kind, UpdateKind::Digest | UpdateKind::Suggestion) {
-                        let talk = ui.add(
-                            egui::Button::new(
-                                RichText::new("Discuss").size(crate::theme::FONT_TIP),
-                            )
-                            .frame(false)
-                            .min_size(egui::vec2(0.0, 24.0)),
-                        );
-                        if talk.clicked() {
-                            act = Some(PulseAct::Discuss(card.id.clone()));
-                        }
-                    }
-                });
             });
         });
         act
@@ -1007,7 +1090,7 @@ impl Cabin {
 
     /// A post's image slot: drawn, still on its way, or gone (`None`) when the
     /// download or decode failed, so a broken image never sits as a placeholder.
-    fn pulse_thumb(&mut self, ctx: &egui::Context, url: &str) -> Option<Thumb> {
+    pub(super) fn pulse_thumb(&mut self, ctx: &egui::Context, url: &str) -> Option<Thumb> {
         let name = pc::image_cache_name(url);
         if self.pulse_view.image_failed.contains(&name) {
             return None;
@@ -1068,7 +1151,7 @@ impl Cabin {
 
     /// One post at a time, off the UI thread: the source page's own preview
     /// image, cached under the config dir. Unit tests never fetch.
-    fn kick_pulse_images(&mut self, posts: &[UpdateCard]) {
+    pub(super) fn kick_pulse_images(&mut self, posts: &[UpdateCard]) {
         if cfg!(test) || self.pulse_view.image_rx.is_some() {
             return;
         }
@@ -1323,6 +1406,7 @@ impl Cabin {
         };
         self.pulse_note(&card.title, LedgerReason::Dismiss, day);
         self.pulse_remove(&card);
+        self.heartbeat_card_dismissed();
     }
 
     /// Not this: a dislike line in the ledger, then the card goes. Cards on the
@@ -1333,6 +1417,7 @@ impl Cabin {
         };
         self.pulse_note(&card.title, LedgerReason::NotThis, day);
         self.pulse_remove(&card);
+        self.heartbeat_card_dismissed();
         self.status = "Got it. Less like this.".into();
     }
 
@@ -1598,7 +1683,7 @@ impl Cabin {
 }
 
 /// One image slot on a post.
-enum Thumb {
+pub(super) enum Thumb {
     Ready(egui::TextureHandle),
     /// Still downloading: a plain block, no icon.
     Loading,
@@ -1683,23 +1768,6 @@ fn paint_thumbs(ui: &mut egui::Ui, thumbs: &[Thumb]) {
                 }
             }
         }
-    });
-}
-
-/// "···" with no frame until hovered, like the rest of the page's quiet chrome.
-/// The dots brighten while their row is hovered or focused, and the frame
-/// stays while the menu is open.
-fn dots_menu(ui: &mut egui::Ui, bright: bool, add: impl FnOnce(&mut egui::Ui)) {
-    ui.scope(|ui| {
-        let w = &mut ui.style_mut().visuals.widgets;
-        w.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
-        w.inactive.bg_stroke = egui::Stroke::NONE;
-        let color = if bright {
-            crate::theme::fg()
-        } else {
-            crate::theme::muted()
-        };
-        ui.menu_button(RichText::new("···").size(16.0).strong().color(color), add);
     });
 }
 

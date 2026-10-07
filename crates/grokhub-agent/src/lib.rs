@@ -6,6 +6,7 @@ mod compact;
 mod eval;
 mod events;
 mod gate;
+pub mod harness;
 mod hooks;
 mod image_budget;
 pub mod mcp;
@@ -38,6 +39,7 @@ pub use compact::{estimate_input_tokens, manual_compact_targets_native, message_
 pub use eval::{parse_args, reject_live, render_report, run_suite, ItemResult, Opts, SUITE_ITEMS};
 pub use events::{meter_for, Engine, EngineParts, NativeEngine, StampHalt};
 pub use gate::{ClosedPermits, Gate, PermAnswer, PermMode, PermitInbox, PermitNote, PermitWait};
+pub use harness::{AccessMode, ComputerUseBackend, GateOutcome, HardClass, APPROVAL_GATE_VIOLATION};
 pub use hooks::{
     discover_hooks, folder_trusted, on_session_end, set_folder_trust, on_subagent_start, on_subagent_stop, HookInfo, HookOrigin,
 };

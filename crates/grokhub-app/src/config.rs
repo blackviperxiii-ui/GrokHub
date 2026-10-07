@@ -1,4 +1,4 @@
-use grokhub_core::{is_plain_text, BoardCard, FeedPulse};
+use grokhub_core::{is_plain_text, BoardCard, FeedPulse, HeartbeatPace};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Read, Write};
@@ -360,6 +360,11 @@ pub struct AppConfig {
     /// Over budget, night jobs, loops, and anticipate wait for tomorrow.
     #[serde(default = "default_budget_pause")]
     pub budget_pauses_scheduled: bool,
+    /// `app.json` only (no Settings control). How often the heartbeat may start a
+    /// proactive act (anticipate, ideas, nightly review), plus backoff and the Halt
+    /// hold. Omitted from `app.json` while it stays default.
+    #[serde(default, skip_serializing_if = "HeartbeatPace::is_default")]
+    pub heartbeat: HeartbeatPace,
     #[serde(default)]
     pub goal_pin: String,
     /// Cabin paints a new Imagine cover every few hours.
@@ -401,6 +406,16 @@ pub struct AppConfig {
     /// the cards now, so it is off unless turned back on.
     #[serde(default)]
     pub home_deck: bool,
+    /// Where `/recall` reads memory. Omitted from `app.json` while this stays
+    /// legacy, so an old file and a default save do not grow a new key.
+    /// Opt in with `"memory_backend": "amr"` (snake_case, not camelCase).
+    /// There is no Settings control for it.
+    #[serde(
+        default,
+        rename = "memory_backend",
+        skip_serializing_if = "grokhub_core::amr::MemoryBackend::is_legacy"
+    )]
+    pub memory_backend: grokhub_core::amr::MemoryBackend,
 }
 
 fn default_yolo() -> bool {
@@ -502,6 +517,7 @@ impl Default for AppConfig {
             daily_auto_cap: default_daily_auto(),
             daily_token_budget: 0,
             budget_pauses_scheduled: default_budget_pause(),
+            heartbeat: HeartbeatPace::default(),
             goal_pin: String::new(),
             imagine_wall: default_imagine_wall(),
             composer_glow: false,
@@ -516,6 +532,7 @@ impl Default for AppConfig {
             native_engine: false,
             feed_instructions: String::new(),
             home_deck: false,
+            memory_backend: grokhub_core::amr::MemoryBackend::Legacy,
         }
     }
 }
@@ -814,9 +831,21 @@ pub fn hold_test_config() -> std::sync::MutexGuard<'static, ()> {
     TEST_CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Tests never touch the OS keyring: one in-memory key store for the process.
+#[cfg(test)]
+pub fn use_test_key_store() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        grokhub_agent::harness::set_default_key_store(std::sync::Arc::new(
+            grokhub_agent::harness::MemoryKeyStore::new(),
+        ));
+    });
+}
+
 /// Isolated `GROKHUB_CONFIG` root so parallel tests do not share one temp tree.
 #[cfg(test)]
 pub fn test_config_root(label: &str) -> std::path::PathBuf {
+    use_test_key_store();
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     std::env::temp_dir().join(format!("grokhub-{label}-{}-{n}", std::process::id()))
@@ -825,6 +854,64 @@ pub fn test_config_root(label: &str) -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memory_backend_defaults_legacy_and_parses_amr() {
+        let json = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(
+            !json.contains("memory_backend"),
+            "default config must omit memory_backend: {json}"
+        );
+        let pretty = serde_json::to_string_pretty(&AppConfig::default()).unwrap();
+        assert!(
+            !pretty.contains("memory_backend"),
+            "default save must omit memory_backend: {pretty}"
+        );
+        let missing: AppConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            missing.memory_backend,
+            grokhub_core::amr::MemoryBackend::Legacy
+        );
+        let legacy: AppConfig = serde_json::from_str(r#"{"memory_backend":"legacy"}"#).unwrap();
+        assert_eq!(
+            legacy.memory_backend,
+            grokhub_core::amr::MemoryBackend::Legacy
+        );
+        let amr: AppConfig = serde_json::from_str(r#"{"memory_backend":"amr"}"#).unwrap();
+        assert_eq!(amr.memory_backend, grokhub_core::amr::MemoryBackend::Amr);
+        let saved = serde_json::to_string(&amr).unwrap();
+        assert!(
+            saved.contains("\"memory_backend\":\"amr\""),
+            "amr opt-in must keep the snake_case key: {saved}"
+        );
+    }
+
+    #[test]
+    fn heartbeat_pace_defaults_omitted_and_overrides_parse() {
+        let json = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(
+            !json.contains("heartbeat"),
+            "a default save must not grow a heartbeat key: {json}"
+        );
+        let old: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin","quietStart":"23:00"}"#).unwrap();
+        assert_eq!(old.heartbeat, grokhub_core::PACE_NORMAL);
+        assert_eq!(old.heartbeat.min_interval_min, 15);
+        assert_eq!(old.heartbeat.max_per_day, 8);
+        let tuned: AppConfig = serde_json::from_str(
+            r#"{"deviceName":"cabin","heartbeat":{"minIntervalMin":30,"maxPerHour":1,"backoffAfter":2}}"#,
+        )
+        .unwrap();
+        assert_eq!(tuned.heartbeat.min_interval_min, 30);
+        assert_eq!(tuned.heartbeat.max_per_hour, 1);
+        assert_eq!(tuned.heartbeat.backoff_after, 2);
+        assert_eq!(tuned.heartbeat.max_per_day, 8, "a missing key keeps its default");
+        assert_eq!(tuned.heartbeat.halt_hold_min, 15);
+        let saved = serde_json::to_string(&tuned).unwrap();
+        assert!(
+            saved.contains(r#""heartbeat":{"minIntervalMin":30,"maxPerHour":1,"maxPerDay":8,"backoffAfter":2,"backoffMaxMin":240,"haltHoldMin":15}"#),
+            "a tuned pace is saved camelCase: {saved}"
+        );
+    }
 
     #[test]
     fn desktop_mcp_setting_defaults_off() {

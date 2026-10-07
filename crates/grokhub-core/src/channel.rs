@@ -328,31 +328,51 @@ pub fn channel_status_line(channel: Channel, branch: &str, sha: &str) -> String 
 }
 
 
-/// True when both tip SHAs are non-empty and name the same commit
-/// (exact match, or one is a prefix of the other for short vs full SHA).
-/// Empty or whitespace-only tips never count as caught up.
-pub fn beta_caught_up_to_main(beta_sha: &str, main_sha: &str) -> bool {
-    let b = normalize_git_sha(beta_sha);
-    let m = normalize_git_sha(main_sha);
-    // Need a real short SHA (git default is 7) before treating a prefix as equal.
-    if b.len() < 7 || m.len() < 7 {
-        return false;
-    }
-    if !b.bytes().all(|c| c.is_ascii_hexdigit()) || !m.bytes().all(|c| c.is_ascii_hexdigit()) {
-        return false;
-    }
-    b == m || b.starts_with(&m) || m.starts_with(&b)
+/// Tips of `origin/beta` and `origin/main` after a fetch: commit SHAs plus
+/// their tree hashes (`origin/<branch>^{tree}`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChannelTips {
+    pub beta_sha: String,
+    pub main_sha: String,
+    pub beta_tree: String,
+    pub main_tree: String,
+}
+
+/// True when beta has caught up to main: the trees are identical, or the tips
+/// are the same commit. Main moves by squash and the main → beta sync always
+/// adds a merge commit, so after a promote the SHAs differ but the trees match.
+/// Empty, short (< 7) or non-hex values never count as caught up.
+pub fn beta_caught_up_to_main(tips: &ChannelTips) -> bool {
+    same_tip_sha(&tips.beta_sha, &tips.main_sha)
+        || same_tree(&tips.beta_tree, &tips.main_tree)
+}
+
+/// Same commit: exact match, or one is a prefix of the other (short vs full SHA).
+fn same_tip_sha(beta_sha: &str, main_sha: &str) -> bool {
+    let (b, m) = (normalize_git_sha(beta_sha), normalize_git_sha(main_sha));
+    valid_git_hash(&b) && valid_git_hash(&m) && (b == m || b.starts_with(&m) || m.starts_with(&b))
+}
+
+/// Same tree: the full tree hashes from `git rev-parse` are equal.
+fn same_tree(beta_tree: &str, main_tree: &str) -> bool {
+    let (b, m) = (normalize_git_sha(beta_tree), normalize_git_sha(main_tree));
+    valid_git_hash(&b) && b == m
+}
+
+/// A real hash (git's default short length is 7), hex only.
+fn valid_git_hash(s: &str) -> bool {
+    s.len() >= 7 && s.bytes().all(|c| c.is_ascii_hexdigit())
 }
 
 fn normalize_git_sha(s: &str) -> String {
     s.trim().to_ascii_lowercase()
 }
 
-/// When the receipt is Beta and `origin/beta` tip == `origin/main` tip, return
-/// [`Channel::Stable`] so the caller can rewrite the receipt and flip the Labs
-/// toggle off. Otherwise `None` (stay put). Pure — no I/O.
-pub fn auto_off_target(current: Channel, beta_sha: &str, main_sha: &str) -> Option<Channel> {
-    if current == Channel::Beta && beta_caught_up_to_main(beta_sha, main_sha) {
+/// When the receipt is Beta and beta has caught up to main (same tree or same
+/// tip), return [`Channel::Stable`] so the caller can rewrite the receipt and
+/// flip the Labs toggle off. Otherwise `None` (stay put). Pure — no I/O.
+pub fn auto_off_target(current: Channel, tips: &ChannelTips) -> Option<Channel> {
+    if current == Channel::Beta && beta_caught_up_to_main(tips) {
         Some(Channel::Stable)
     } else {
         None
@@ -363,27 +383,15 @@ pub fn auto_off_target(current: Channel, beta_sha: &str, main_sha: &str) -> Opti
 pub const CHANNEL_WINDOWS_NOTE: &str =
     "Channel switching is not available on Windows yet — the installer does not support channels. When channels land, Beta will also turn off automatically once beta matches main.";
 
-/// Labs / docs copy: auto-off when beta tip == main tip (Linux now; Windows with channels).
+/// Labs / docs copy: auto-off when beta catches up to main (Linux now; Windows with channels).
 pub const CHANNEL_AUTO_OFF_NOTE: &str =
-    "When beta catches up to main (same tip), Labs Beta turns off and stays on stable — re-enable anytime.";
+    "When beta catches up to main (same code), Labs Beta turns off and stays on stable — re-enable anytime.";
 
 /// Clear Labs failure copy for a channel switch.
 pub fn channel_switch_fail_hint(stderr_or_status: &str) -> &'static str {
     let s = stderr_or_status.to_ascii_lowercase();
-    if s.contains("uncommitted changes") {
-        "Uncommitted changes in the clone — commit or stash them, then try again."
-    } else if s.contains("not a grokhub source")
-        || s.contains("no clone")
-        || s.contains("set settings → source")
-        || s.contains("grokhub_src")
-    {
-        "No GrokHub clone found — set Settings → source or GROKHUB_SRC."
-    } else if s.contains("build failed")
-        || s.contains("cargo")
-        || s.contains("could not compile")
-        || s.contains("error: could not compile")
-    {
-        "Build failed — previous install kept."
+    if let Some(hint) = specific_fail_hint(&s) {
+        hint
     } else if s.contains("channel switching is not available on windows")
         || s.contains("windows") && s.contains("channel")
     {
@@ -391,6 +399,48 @@ pub fn channel_switch_fail_hint(stderr_or_status: &str) -> &'static str {
     } else {
         "Channel switch failed — previous install kept."
     }
+}
+
+/// Clear Settings → Update failure copy from the host output of an Update.
+/// Falls back to "Update failed" when nothing specific matches.
+pub fn update_fail_hint(output: &str) -> &'static str {
+    specific_fail_hint(&output.to_ascii_lowercase()).unwrap_or("Update failed")
+}
+
+/// The causes an Update or channel switch can name (input is lowercased):
+/// dirty clone, Rust too old, no clone, clone on the other branch, build failed.
+fn specific_fail_hint(s: &str) -> Option<&'static str> {
+    Some(if s.contains("uncommitted changes")
+        || s.contains("would be overwritten by")
+        || s.contains("you have unstaged changes")
+        || s.contains("commit your changes or stash them")
+    {
+        "Your GrokHub source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again."
+    } else if s.contains("requires rustc")
+        || s.contains("rustc") && s.contains("is not supported")
+        || s.contains("rust-version")
+    {
+        "GrokHub needs a newer Rust to build. Run rustup update, then try again."
+    } else if s.contains("not a grokhub source")
+        || s.contains("can't find its source folder")
+        || s.contains("no clone")
+        || s.contains("set settings → source")
+        || s.contains("grokhub_src")
+    {
+        "GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source)."
+    } else if s.contains("is on main but the beta channel") || s.contains("source clone is on main") {
+        "Your GrokHub source folder is on stable, but Labs Beta is on. Turn Labs Beta off, or switch the folder to beta (git checkout beta)."
+    } else if s.contains("is on beta but the stable channel") || s.contains("source clone is on beta") {
+        "Your GrokHub source folder is on beta, but GrokHub is set to stable. Turn Labs Beta on, or switch the folder to stable (git checkout main)."
+    } else if s.contains("build failed")
+        || s.contains("cargo")
+        || s.contains("could not compile")
+        || s.contains("error: could not compile")
+    {
+        "Build failed — previous install kept."
+    } else {
+        return None;
+    })
 }
 
 /// Shell plan that backups binaries, runs `install.sh --user --channel …`, and
@@ -429,7 +479,7 @@ pub fn channel_switch_preflight(
     match source {
         Some(p) if is_source_tree(p) => Ok(()),
         Some(_) | None => Err(
-            "No GrokHub clone found — set Settings → source or GROKHUB_SRC.".into(),
+            "GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).".into(),
         ),
     }
 }
@@ -466,11 +516,11 @@ mod channel_switch_tests {
     fn fail_hints_are_literal_and_specific() {
         assert_eq!(
             channel_switch_fail_hint("error: /x has uncommitted changes; commit or stash"),
-            "Uncommitted changes in the clone — commit or stash them, then try again."
+            "Your GrokHub source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again."
         );
         assert_eq!(
             channel_switch_fail_hint("not a GrokHub source tree — set Settings → source"),
-            "No GrokHub clone found — set Settings → source or GROKHUB_SRC."
+            "GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source)."
         );
         assert_eq!(
             channel_switch_fail_hint("error: could not compile `grokhub-app`"),
@@ -483,6 +533,32 @@ mod channel_switch_tests {
         assert_eq!(
             channel_switch_fail_hint(CHANNEL_WINDOWS_NOTE),
             CHANNEL_WINDOWS_NOTE
+        );
+    }
+
+    #[test]
+    fn update_and_switch_hints_name_the_real_cause() {
+        let dirty = "error: /src has uncommitted changes; commit or stash them before --channel stable";
+        let pull_dirty = "error: Your local changes to the following files would be overwritten by merge:\n\tREADME.md";
+        let rustc = "error: package `eframe v0.36.2` cannot be built because it requires rustc 1.88 or newer, while the currently active rustc version is 1.80.0";
+        let on_main = "error: /src is on main but the beta channel builds beta; run with --channel stable to switch, or git checkout beta";
+        let on_beta = "source clone is on beta — checkout main, then Update";
+        for (out, hint) in [
+            (dirty, "Your GrokHub source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again."),
+            (pull_dirty, "Your GrokHub source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again."),
+            (rustc, "GrokHub needs a newer Rust to build. Run rustup update, then try again."),
+            ("GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).", "GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source)."),
+            (on_main, "Your GrokHub source folder is on stable, but Labs Beta is on. Turn Labs Beta off, or switch the folder to beta (git checkout beta)."),
+            (on_beta, "Your GrokHub source folder is on beta, but GrokHub is set to stable. Turn Labs Beta on, or switch the folder to stable (git checkout main)."),
+            ("error: could not compile `grokhub-app`", "Build failed — previous install kept."),
+        ] {
+            assert_eq!(update_fail_hint(out), hint, "{out}");
+            assert_eq!(channel_switch_fail_hint(out), hint, "{out}");
+        }
+        assert_eq!(update_fail_hint("$ git pull\nexit 1 · 20ms\nfatal: unable to access"), "Update failed");
+        assert_eq!(
+            channel_switch_fail_hint("fatal: unable to access"),
+            "Channel switch failed — previous install kept."
         );
     }
 
@@ -507,7 +583,7 @@ mod channel_switch_tests {
         );
         assert_eq!(
             channel_switch_preflight(false, None),
-            Err("No GrokHub clone found — set Settings → source or GROKHUB_SRC.".into())
+            Err("GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).".into())
         );
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         assert!(channel_switch_preflight(false, Some(&root)).is_ok());
@@ -521,34 +597,72 @@ mod channel_switch_tests {
         assert!(CHANNEL_WINDOWS_NOTE.contains("turn off automatically once beta matches main"));
     }
 
-    #[test]
-    fn beta_caught_up_to_main_true_false_and_prefix() {
-        assert!(beta_caught_up_to_main(
-            "abc1234deadbeef",
-            "abc1234deadbeef"
-        ));
-        assert!(beta_caught_up_to_main("abc1234", "abc1234deadbeef"));
-        assert!(beta_caught_up_to_main("ABC1234DEADBEEF", "abc1234deadbeef"));
-        assert!(!beta_caught_up_to_main("abc1234", "def5678"));
-        assert!(!beta_caught_up_to_main("", "abc1234"));
-        assert!(!beta_caught_up_to_main("abc1234", ""));
-        assert!(!beta_caught_up_to_main("  ", "abc"));
-        assert!(!beta_caught_up_to_main("ab", "abc1234")); // under 7 chars
-        assert!(!beta_caught_up_to_main("abc12xx", "abc1234")); // non-hex
+    fn tips(beta_sha: &str, main_sha: &str, beta_tree: &str, main_tree: &str) -> ChannelTips {
+        ChannelTips {
+            beta_sha: beta_sha.into(),
+            main_sha: main_sha.into(),
+            beta_tree: beta_tree.into(),
+            main_tree: main_tree.into(),
+        }
     }
 
     #[test]
-    fn auto_off_target_flips_beta_when_tips_match_only() {
+    fn beta_caught_up_to_main_same_sha_true_false_and_prefix() {
+        let sha = |b: &str, m: &str| beta_caught_up_to_main(&tips(b, m, "", ""));
+        assert!(sha("abc1234deadbeef", "abc1234deadbeef"));
+        assert!(sha("abc1234", "abc1234deadbeef"));
+        assert!(sha("ABC1234DEADBEEF", "abc1234deadbeef"));
+        assert!(!sha("abc1234", "def5678"));
+        assert!(!sha("", "abc1234"));
+        assert!(!sha("abc1234", ""));
+        assert!(!sha("  ", "abc"));
+        assert!(!sha("ab", "abc1234")); // under 7 chars
+        assert!(!sha("abc12xx", "abc1234")); // non-hex
+    }
+
+    #[test]
+    fn beta_caught_up_to_main_same_tree_different_sha() {
+        // Squash promote + merge-commit sync (#507 / #508): SHAs differ, tree 47fd2b27 matches.
+        let tree = "47fd2b27aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        assert!(beta_caught_up_to_main(&tips("e79aa50f", "7266ae6a", tree, tree)));
+        assert!(beta_caught_up_to_main(&tips(
+            "e79aa50f",
+            "7266ae6a",
+            &tree.to_ascii_uppercase(),
+            &format!(" {tree}\n")
+        )));
+        // Different trees and different SHAs: not caught up.
+        assert!(!beta_caught_up_to_main(&tips(
+            "e79aa50f",
+            "7266ae6a",
+            tree,
+            "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        )));
+        // Trees compare in full — a prefix is not the same tree.
+        assert!(!beta_caught_up_to_main(&tips("e79aa50f", "7266ae6a", tree, "47fd2b27")));
+        // Missing or junk trees never match.
+        assert!(!beta_caught_up_to_main(&tips("e79aa50f", "7266ae6a", "", "")));
+        assert!(!beta_caught_up_to_main(&tips("e79aa50f", "7266ae6a", "zzzzzzzz", "zzzzzzzz")));
+        assert!(!beta_caught_up_to_main(&ChannelTips::default()));
+    }
+
+    #[test]
+    fn auto_off_target_flips_beta_when_caught_up_only() {
+        let tree = "47fd2b27aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         assert_eq!(
-            auto_off_target(Channel::Beta, "abc1234", "abc1234"),
+            auto_off_target(Channel::Beta, &tips("abc1234", "abc1234", "", "")),
             Some(Channel::Stable)
         );
-        assert_eq!(auto_off_target(Channel::Beta, "aaa", "bbb"), None);
         assert_eq!(
-            auto_off_target(Channel::Stable, "abc1234", "abc1234"),
+            auto_off_target(Channel::Beta, &tips("e79aa50f", "7266ae6a", tree, tree)),
+            Some(Channel::Stable)
+        );
+        assert_eq!(auto_off_target(Channel::Beta, &tips("aaa", "bbb", "", "")), None);
+        assert_eq!(
+            auto_off_target(Channel::Stable, &tips("abc1234", "abc1234", tree, tree)),
             None
         );
-        assert_eq!(auto_off_target(Channel::Beta, "", "abc"), None);
+        assert_eq!(auto_off_target(Channel::Beta, &ChannelTips::default()), None);
     }
 
     #[test]

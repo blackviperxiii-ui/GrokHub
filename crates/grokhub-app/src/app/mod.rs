@@ -90,14 +90,14 @@ use grokhub_core::{
     plus_empty_status, plus_menu_rows, push_stream_capped, prefer_patch, presence_should_stream,
     project_menu_acts, project_menu_label, project_title_from_hint, propose_skill_from_turn,
     prune_live_suggestions, ptt_after_speak, ptt_after_stt, quiet_hours_active,
-    quiet_hours_choice_label, quiet_hours_menu, quote_for_reply, realtime_can_connect, recall_hits,
+    quiet_hours_choice_label, quiet_hours_menu, quote_for_reply, realtime_can_connect,
     recipe_from_cmds, record_turn, redact_held_secrets, redact_secrets, redirect_prompt,
     refresh_last_stretch, refund_host_reserved,
     remember_chip_click, remember_chip_dismiss, remember_chip_outcome, remember_home_slash,
     remember_home_surface, remember_typed_prompt, rename_node, replay_automation_target,
     replay_ops, resolve_acp_cwd, resolve_bind_path, resolve_chat_model,
     resolve_dark, restore_bound_path, retain_held_plan, reuse_empty_thread_idx, review_due,
-    review_status_line, review_system_prompt, rewind_allowed, rewind_blocked_reason,
+    review_system_prompt, rewind_allowed, rewind_blocked_reason,
     rewind_copy_cmd, rewind_dest, rewind_restore_matches, rewind_snapshot_ready, roll_usage_day,
     route_schedule, save_hub_state, screen_from_extents, scrolled_off_tail, search_corpus,
     search_corpus_tagged, search_place, search_thread_body, seed_from_bound, settings_pin_blocks_auto,
@@ -171,6 +171,10 @@ mod ideas_ui;
 mod pulse_ui;
 mod board_ui;
 mod confirm;
+mod harness_ui;
+mod privacy_ui;
+mod scope_ui;
+mod skill_undo;
 mod glance;
 mod sidebar;
 mod pages;
@@ -179,6 +183,7 @@ mod chips;
 mod voice;
 mod threads_nav;
 mod background;
+mod heartbeat_gate;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -318,7 +323,8 @@ enum JobOut {
     HostLine(String),
     HostDone(String),
     UpdateProgress { pct: u8, msg: String },
-    UpdateDone { ok: bool },
+    /// `output` is the host output (success or failure) for the hint and log.
+    UpdateDone { ok: bool, output: String },
     Connector(String),
     Consult(String),
     Err(String),
@@ -499,6 +505,10 @@ pub struct Cabin {
     last_night_tick: Instant,
     last_auto_tick: Instant,
     last_heartbeat: Instant,
+    /// Heartbeat throttle state: budget, backoff streak, Halt hold.
+    pace: grokhub_core::HeartbeatThrottle,
+    /// Last traced decision per proactive act, so a hold is logged once.
+    pace_traced: Vec<(grokhub_core::ProactiveAct, &'static str)>,
     night_check_rx: Option<(String, mpsc::Receiver<(String, i32)>)>,
     learning: LearningState,
     suggestions: SuggestionStore,
@@ -767,6 +777,8 @@ pub struct Cabin {
     secret_hold: Vec<String>,
     session_mode: SessionMode,
     permission_mode: PermissionMode,
+    /// Spike-0 harness: Full grant, parked hard-class cards, path C hits.
+    harness: harness_ui::HarnessState,
     /// Night / loop / phone `/v1/task` inherit the composer PermissionMode pill.
     scheduled_perm: bool,
     grok_sessions: Vec<grokhub_acp::GrokSession>,
@@ -792,6 +804,9 @@ pub struct Cabin {
     grok_catalog: grokhub_acp::GrokCatalog,
     grok_catalog_loaded: bool,
     grok_catalog_rx: Option<mpsc::Receiver<Result<grokhub_acp::GrokCatalog, String>>>,
+    /// When the in-flight catalog channel opened. Empty past the settle deadline
+    /// drops the channel so Skills is not stuck on Loading….
+    grok_catalog_started: Option<Instant>,
     native_skills: Vec<grokhub_agent::Skill>,
     native_hooks: Vec<grokhub_agent::HookInfo>,
     native_listing_cwd: String,
@@ -1109,6 +1124,8 @@ impl Cabin {
             last_night_tick: Instant::now(),
             last_auto_tick: Instant::now(),
             last_heartbeat: Instant::now(),
+            pace: Default::default(),
+            pace_traced: Vec::new(),
             night_check_rx: None,
             learning: crate::store::load_learning(),
             suggestions: crate::store::load_suggestions(),
@@ -1332,6 +1349,10 @@ impl Cabin {
             secret_hold: Vec::new(),
             session_mode: boot_session,
             permission_mode: boot_perm,
+            harness: harness_ui::HarnessState {
+                full_card_on: harness_ui::grant_full_card_on(),
+                ..Default::default()
+            },
             scheduled_perm: false,
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
@@ -1356,6 +1377,7 @@ impl Cabin {
             grok_catalog: grokhub_acp::GrokCatalog::default(),
             grok_catalog_loaded: false,
             grok_catalog_rx: None,
+            grok_catalog_started: None,
             native_skills: Vec::new(),
             native_hooks: Vec::new(),
             native_listing_cwd: String::new(),
@@ -1425,6 +1447,7 @@ impl Cabin {
 
     #[cfg(test)]
     pub(super) fn quiet_for_test() -> Self {
+        crate::config::use_test_key_store();
         let (grok_sessions_tx, grok_sessions_rx) = mpsc::channel();
         let cfg = AppConfig::default();
         Self {
@@ -1536,6 +1559,8 @@ impl Cabin {
             last_night_tick: Instant::now(),
             last_auto_tick: Instant::now(),
             last_heartbeat: Instant::now(),
+            pace: Default::default(),
+            pace_traced: Vec::new(),
             night_check_rx: None,
             learning: Default::default(),
             suggestions: Default::default(),
@@ -1759,6 +1784,7 @@ impl Cabin {
             secret_hold: Vec::new(),
             session_mode: SessionMode::Chat,
             permission_mode: PermissionMode::Ask,
+            harness: Default::default(),
             scheduled_perm: false,
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
@@ -1783,6 +1809,7 @@ impl Cabin {
             grok_catalog: Default::default(),
             grok_catalog_loaded: false,
             grok_catalog_rx: None,
+            grok_catalog_started: None,
             native_skills: Vec::new(),
             native_hooks: Vec::new(),
             native_listing_cwd: String::new(),
@@ -2057,6 +2084,7 @@ impl Cabin {
         crate::desktop_mcp::write_halt_stamp();
         crate::desktop_mcp::note_halt();
         self.host_halt.store(true, Ordering::SeqCst);
+        self.halt_hard_parks();
         self.withdraw_perm_asks();
         if self.cfg.native_engine {
             grokhub_agent::halt_all_sessions();
@@ -2604,8 +2632,13 @@ impl Cabin {
         };
         let written = to_save.clone();
         std::thread::spawn(move || {
-            let _ = skills::save_skill(&written);
+            let _ = skills::save_skill_logged(
+                &written,
+                grokhub_agent::harness::Origin::SelfManage,
+                "learned from a host run",
+            );
         });
+        self.harness.skill_rows = None;
         self.remember_skill(to_save.clone());
         self.skill_name = to_save.name.clone();
         self.skill_body = grokhub_core::render_skill_md(&to_save);
@@ -2613,11 +2646,15 @@ impl Cabin {
         self.status = format!("Wrote skill {}", to_save.name);
     }
 
+    /// `SUGGEST_SKILL_PATCH` lines from the nightly review. Each write keeps
+    /// the version it replaces in the ChangeLedger (`/skills undo` puts it
+    /// back), and a patch the user already undid is not written again.
     fn apply_review_skill_patches(&mut self, raw: &str) {
         let patches = parse_suggest_skill_patches(raw);
         if patches.is_empty() {
             return;
         }
+        let ledger = grokhub_agent::harness::ChangeLedger::load(&config::config_dir());
         for p in patches {
             let Some(existing) = self
                 .skill_list
@@ -2638,13 +2675,25 @@ impl Cabin {
                 runs: existing.runs,
             };
             let patched = patch_skill(&existing, &proposed);
+            let after =
+                grokhub_agent::harness::content_hash(grokhub_core::render_skill_md(&patched).as_bytes());
+            if ledger.undone_by_user(&patched.name, &after) {
+                continue;
+            }
             if let Some(s) = self.skill_list.iter_mut().find(|s| s.name == patched.name) {
                 *s = patched.clone();
             }
+            let steps: Vec<&str> = patched.instructions.split_whitespace().collect();
+            let reason = format!("nightly review: {}", steps.join(" "));
             let written = patched;
             std::thread::spawn(move || {
-                let _ = skills::save_skill(&written);
+                let _ = skills::save_skill_logged(
+                    &written,
+                    grokhub_agent::harness::Origin::SelfManage,
+                    &reason,
+                );
             });
+            self.harness.skill_rows = None;
         }
     }
 
@@ -2947,11 +2996,30 @@ impl Cabin {
         self.send_chat(task);
     }
 
+    /// `/sync` asks the EgressGuard first (Spike-4a, `gate_hub_sync`): chats
+    /// and memory leave for paired computers only with a hub grant or one
+    /// click on the hard Send card.
     fn sync_hub(&mut self) {
         if self.sync_rx.is_some() {
             self.status = "Syncing…".into();
             return;
         }
+        self.gate_hub_sync();
+    }
+
+    /// The hub publish. Only `gate_hub_sync` (granted) and an approved hard
+    /// card (`HubSend::Once`) call it. A computer unpaired while the card
+    /// waited leaves nobody to send to: nothing is sent or logged.
+    fn run_hub_sync(&mut self, send: privacy_ui::HubSend) {
+        if self.sync_rx.is_some() {
+            self.status = "Syncing…".into();
+            return;
+        }
+        if self.hub_peer_count() == 0 {
+            self.post_sync_result(privacy_ui::SYNC_NO_PEERS);
+            return;
+        }
+        let span_ref = self.hub_sync_span(&send);
         if !self.scratch() {
             let name = self.mem_name.clone();
             let body = self.mem_body.clone();
@@ -3003,8 +3071,29 @@ impl Cabin {
         let gen = self.next_persist_gen();
         let mark = self.persist_mark.clone();
         std::thread::spawn(move || {
+            let _pin = pin_scheduled_dir(dir.clone());
             if let Ok(_g) = io.lock() {
                 write_persist_disk_in_order(&dir, &snap, gen, &mark);
+            }
+            // EgressGuard: log the send (no content) or send nothing. A grant
+            // revoked since the click blocks here; dropping `tx` reads as failed.
+            let egress = grokhub_agent::harness::EgressReq {
+                span_id: &span_ref,
+                ..grokhub_agent::harness::EgressReq::new(
+                    grokhub_agent::harness::HUB_DEST,
+                    grokhub_agent::harness::HUB_SYNC_DATA,
+                )
+            };
+            let sent = match send {
+                privacy_ui::HubSend::Once => {
+                    grokhub_agent::harness::record_approved_once(&dir, &egress).is_ok()
+                }
+                privacy_ui::HubSend::Grant(_) => {
+                    grokhub_agent::harness::guard_egress(&dir, &egress).is_allow()
+                }
+            };
+            if !sent {
+                return;
             }
             let mem = mem
                 .into_iter()
@@ -3163,15 +3252,21 @@ impl Cabin {
         match rx.try_recv() {
             Ok((from, files)) => {
                 self.persist_hub();
-                self.status = "Hub snapshot written — peers pull /v1/snapshot".into();
                 self.apply_inbound_snapshot(from, files);
-                self.nav = Nav::Devices;
+                // SY-03: one result line in the chat instead of a jump to Devices.
+                // The gate saw at least one paired computer before anything left.
+                let line = privacy_ui::sync_result_line(self.hub_peer_count().max(1));
+                self.post_sync_result(&line);
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.sync_rx = Some(rx);
             }
             Err(mpsc::TryRecvError::Disconnected) => {
-                self.status = "Hub sync failed".into();
+                // A send that couldn't be logged (locked private data) never left.
+                self.status = match grokhub_agent::harness::read_key(&config::config_dir(), false) {
+                    Some(Err(why)) => format!("Hub sync not sent: {}", why.short()),
+                    _ => "Hub sync failed".into(),
+                };
             }
         }
     }
@@ -3292,13 +3387,20 @@ impl Cabin {
             return;
         }
         self.last_heartbeat = Instant::now();
+        // Halt holds every organ that starts work; local upkeep still runs.
+        let halted = self.heartbeat_halted(now_ms());
         let mut night_fired = false;
         for act in heartbeat_acts() {
+            if halted && !act.runs_while_halted() {
+                continue;
+            }
             match act {
                 HeartbeatAct::Housekeep => {
                     self.roll_today();
                     self.tick_feed_pulse();
-                    self.follow_feed_lookup();
+                    if !halted {
+                        self.follow_feed_lookup();
+                    }
                     self.release_situation_ping();
                     if self.last_persist.elapsed() > Duration::from_secs(2) {
                         self.persist_bg();
@@ -3328,6 +3430,7 @@ impl Cabin {
                         IDLE_REFLECT_MS,
                     ) && !self.reflected_idle
                         && !self.scratch()
+                        && !self.heartbeat_busy()
                     {
                         self.reflected_idle = true;
                         self.run_reflect();
@@ -3369,6 +3472,9 @@ impl Cabin {
             return;
         }
         if !anticipate_consumes_slot(self.can_agent()) {
+            return;
+        }
+        if !self.heartbeat_may(grokhub_core::ProactiveAct::Anticipate, now_ms()) {
             return;
         }
         self.last_anticipate_ms = now_ms();
@@ -3750,8 +3856,8 @@ impl Cabin {
         self.settings_sec = SettingsSec::Update;
     }
 
-    /// When beta tip == main tip, write stable receipt and refresh Labs status.
-    /// Cooldown avoids network on every Labs frame. Call after a successful update
+    /// When beta caught up to main (same tree or tip), write stable receipt and
+    /// refresh Labs status. Cooldown avoids network on every Labs frame. Call after a successful update
     /// with `force` so a post-pull check is not skipped.
     fn maybe_auto_off_beta_channel(&mut self, force: bool) {
         if cfg!(windows) {
@@ -3851,7 +3957,11 @@ impl Cabin {
             self.status = "refusing an update that would wipe config".into();
             return;
         }
-        self.update_cabin_note = plan.cabin_skipped;
+        // Windows: a stray beta receipt updates as stable and says why.
+        self.update_cabin_note = match (plan.cabin_skipped, crate::update::stray_beta_receipt_note()) {
+            (Some(skip), Some(note)) => Some(format!("{note} {skip}")),
+            (skip, note) => skip.or_else(|| note.map(String::from)),
+        };
         self.start_overlay_update(plan.cmds);
     }
 
@@ -3864,7 +3974,7 @@ impl Cabin {
         if self.last_host.iter().any(|c| cabin_overlay_step(c)) {
             self.cabin_overlay_done = true;
         }
-        // After a successful cabin/channel update on beta, flip to stable when tips match.
+        // After a successful cabin/channel update on beta, flip to stable when beta caught up to main.
         self.maybe_auto_off_beta_channel(true);
     }
 
@@ -4066,6 +4176,7 @@ impl Cabin {
         self.update_can_restart = begin.can_restart;
         self.status = begin.status;
         self.last_host = cmds.clone();
+        let channel = crate::update::installed_channel();
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
@@ -4076,10 +4187,15 @@ impl Cabin {
                     msg: msg.to_string(),
                 });
             });
+            // Every attempt lands in config_dir()/update.log (redacted tail).
+            match &r {
+                Ok(out) => crate::update::log_update_attempt(channel, &cmds, true, out),
+                Err(e) => crate::update::log_update_attempt(channel, &cmds, false, e),
+            }
             let _ = tx.send(match r {
-                Ok(_) => JobOut::UpdateDone { ok: true },
-                Err(e) if crate::update::host_receipt_failed(&e) => {
-                    JobOut::UpdateDone { ok: false }
+                Ok(output) => JobOut::UpdateDone { ok: true, output },
+                Err(output) if crate::update::host_receipt_failed(&output) => {
+                    JobOut::UpdateDone { ok: false, output }
                 }
                 Err(e) => JobOut::Err(e),
             });
@@ -4496,6 +4612,7 @@ impl Cabin {
 
     fn halt_work(&mut self, status: impl Into<String>) {
         let status = status.into();
+        self.heartbeat_turn_stopped();
         self.halt_in_flight();
         self.finish_hub_dispatch(&status, false);
         self.status = status;
@@ -4505,6 +4622,7 @@ impl Cabin {
     /// Tray Halt and the halt hotkeys: the live turn and every background run.
     /// Composer Stop and `/stop` leave background runs alone.
     fn halt_everything(&mut self, status: impl Into<String>) {
+        self.heartbeat_halt(now_ms());
         self.stop_all_bg_runs();
         self.halt_work(status);
     }
@@ -4847,6 +4965,7 @@ impl eframe::App for Cabin {
         self.poll_mem_restore();
         self.poll_mem_file();
         self.poll_recall();
+        self.poll_privacy();
         self.poll_native_memory();
         self.drain_native_unattended_usage();
         self.poll_sync();
@@ -4962,6 +5081,7 @@ impl eframe::App for Cabin {
                 || self.mem_restore_rx.is_some()
                 || self.mem_file_rx.is_some()
                 || self.recall_rx.is_some()
+                || self.harness.privacy_rx.is_some()
                 || self.sync_rx.is_some()
                 || self.inhabit_rx.is_some()
                 || self.reflect_rx.is_some()
@@ -5217,6 +5337,7 @@ fn paint_one_tool_card(ui: &mut egui::Ui, card: &ToolCard) {
     .default_open(false)
     .show(ui, |ui| {
         paint_tool_card_body(ui, card);
+        harness_ui::paint_click_marker(ui, &[card]);
     });
 }
 
@@ -5248,6 +5369,8 @@ fn paint_tool_group(ui: &mut egui::Ui, cards: &[std::borrow::Cow<'_, ToolCard>])
             paint_tool_card_body(ui, card);
             ui.add_space(4.0);
         }
+        let refs: Vec<&ToolCard> = cards.iter().map(|c| c.as_ref()).collect();
+        harness_ui::paint_click_marker(ui, &refs);
     });
 }
 
@@ -5324,6 +5447,7 @@ fn paint_tool_card_body(ui: &mut egui::Ui, card: &ToolCard) {
                 && !card.detail.is_empty()
                 && !card.detail.trim().starts_with('{')
                 && !card.detail.trim().starts_with('[')
+                && !grokhub_core::tool_detail_is_status(&card.detail)
             {
                 ui.add_space(4.0);
                 ui.label(
@@ -5335,7 +5459,8 @@ fn paint_tool_card_body(ui: &mut egui::Ui, card: &ToolCard) {
             if let Some(url) = card.image_data_url.as_deref() {
                 if let Some((tex, size)) = eyes_frame_tex(ui.ctx(), url) {
                     let max_w = ui.available_width().min(360.0);
-                    crate::cards::framed_preview(ui, &tex, size, max_w);
+                    let shown = crate::cards::framed_preview(ui, &tex, size, max_w);
+                    harness_ui::remember_work_frame(ui, &card.id, shown, size);
                 }
             }
         });

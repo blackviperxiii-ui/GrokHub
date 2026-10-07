@@ -244,11 +244,7 @@ impl Cabin {
                 ui.add_space(8.0);
                 crate::cards::section_label(
                     ui,
-                    match grokhub_core::pulse::pulse_type(card) {
-                        grokhub_core::pulse::PulseType::Learn => "What I'll learn",
-                        grokhub_core::pulse::PulseType::Automate => "What Apply will schedule",
-                        _ => "What Apply will do",
-                    },
+                    grokhub_core::pulse::pulse_type(card).apply_heading(),
                 );
                 let mut action = card.idea_action();
                 let edit = ui.add(
@@ -610,7 +606,9 @@ impl Cabin {
         }
         self.new_thread(false);
         self.nav = Nav::Chat;
-        self.send_from_composer(text.to_string());
+        // Idea text is model-written: follow it down, but not as the user's typing.
+        self.pin_chat_tail();
+        self.send_chat(text.to_string());
         Ok("Sent to chat".into())
     }
 

@@ -214,6 +214,13 @@ pub fn unattended_deny(name: &str) -> String {
     format!("Tool `{name}` was not executed: Denied by permission policy: deny rule on {label}")
 }
 
+pub fn hard_class_unattended(name: &str, class: crate::harness::HardClass) -> String {
+    format!(
+        "Tool `{name}` was not executed: hard-class {} needs you, and nobody is here to approve it",
+        class.as_str()
+    )
+}
+
 pub fn user_rejected(name: &str) -> String {
     format!("User rejected the execution for tool `{name}`")
 }
@@ -265,6 +272,24 @@ pub fn decide_with(
     workspace: &Path,
     policy: Option<&crate::perm::Policy>,
 ) -> Decision {
+    // Harness kernel: hard floor + hard class before soft Always / MCP / policy.
+    // Access is applied by the cabin when building Gate (Readonly ⇒ desktop=false).
+    match crate::harness::decide(crate::harness::Step::Tool { name, arguments }) {
+        crate::harness::GateOutcome::Refuse { reason } => {
+            return Decision::Refuse(reason);
+        }
+        crate::harness::GateOutcome::Park { hard: Some(class), .. } => {
+            // Always cannot skip. Attended parks the card; unattended and plan refuse.
+            if gate.readonly_session {
+                return Decision::Refuse(readonly_refusal(name));
+            }
+            if !gate.attended {
+                return Decision::Refuse(hard_class_unattended(name, class));
+            }
+            return Decision::Ask;
+        }
+        _ => {}
+    }
     if let Some(decision) = crate::mcp::permission(gate, name, arguments, latched_always, policy) {
         return decision;
     }
@@ -429,5 +454,46 @@ mod tests {
             ),
             Decision::Refuse(unattended_deny("screenshot"))
         );
+    }
+
+    #[test]
+    fn hard_class_parks_under_always() {
+        let always = gate(PermMode::Always, false, true, true);
+        assert_eq!(
+            decide_with(&always, "hard_send_stub", "{}", true, None, Path::new("."), None),
+            Decision::Ask
+        );
+        assert_eq!(
+            decide_with(&always, "hard_delete_stub", "{}", true, None, Path::new("."), None),
+            Decision::Ask
+        );
+        let away = gate(PermMode::Always, false, false, true);
+        assert_eq!(
+            decide_with(&away, "hard_send_stub", "{}", true, None, Path::new("."), None),
+            Decision::Refuse(
+                "Tool `hard_send_stub` was not executed: hard-class send needs you, and nobody is here to approve it"
+                    .into()
+            )
+        );
+        // Soft write under Always still runs: the gate only tightens hard class.
+        assert_eq!(
+            decide_with(&always, "write", r#"{"path":"a.txt","contents":"x"}"#, true, None, Path::new("."), None),
+            Decision::Run
+        );
+    }
+
+    #[test]
+    fn hard_floor_refuses_without_ask() {
+        let always = gate(PermMode::Always, false, true, true);
+        let d = decide_with(
+            &always,
+            "run_terminal_command",
+            r#"{"command":"rm -rf /"}"#,
+            true,
+            None,
+            Path::new("."),
+            None,
+        );
+        assert_eq!(d, Decision::Refuse("hard floor: rm -rf /".into()));
     }
 }

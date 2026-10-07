@@ -2,6 +2,127 @@
 
 ## Unreleased
 
+## 2.10.94 — 2026-10-07
+
+Channel fixes: Labs Beta auto-off works after a promote and really switches back, Update and channel-switch errors say what went wrong, and Windows no longer trips over a beta receipt.
+
+- **Auto-off compares code, not commits (Linux).** Main moves by squash and the main → beta sync always adds a merge commit, so the two tips never matched and Beta stayed on. The cabin now fetches `beta` and `main` from your clone's `origin` and treats beta as caught up when `origin/beta` and `origin/main` have the same tree (the same tip commit still counts). Checked at the same times as before: opening Settings → Labs (at most once a minute) and after a successful Update.
+- **Auto-off really switches back.** It checks your clone out on `main` at `origin/main` and then writes `stable`, so the next Update pulls and builds main instead of failing with "source clone is on beta". No rebuild happens at that moment: the code is already the same. If the clone has uncommitted changes, is on another branch, or has a local `main` commit that isn't on `origin/main`, nothing is touched, Beta stays on, and the status line says why. If the fetch fails (offline, timeout, missing branch), Beta stays on and nothing is shown. Re-enable Beta anytime.
+- **Update errors name the cause.** A failed Update or channel switch now reads the real output and says which it was in plain words, with the command in parentheses: unsaved code changes in the source folder, Rust too old (`rustup update`), source folder not found, the folder on the other branch, or a build failure. The status ends with "Details:" and the path of the new `update.log` in the config folder. Each attempt (time, channel, the commands, and the last 60 lines of output with secrets redacted) is appended there; the log rotates once at about 256 KB. `grokhub --update` logs too.
+- **Windows: beta is Linux-only.** A leftover `beta` receipt on Windows reads as stable: Update runs as stable instead of failing and says "Beta is Linux-only for now, so GrokHub updated to stable." The Labs toggle stays disabled with its note.
+- **Cold builds get time.** A channel switch may run up to 40 minutes (was 15) with the progress bar still showing; other Update steps keep 15.
+
+No new crates, no new network destinations. No version bump.
+
+Heartbeat throttle. The pulse still wakes every 15 seconds, but the things it starts on its own (anticipating a need, the automatic ideas ask, the nightly review) now share a budget, so it can't burn tokens or keep nudging you. Approval rules and hard cards are unchanged.
+
+- **A budget for proactive acts.** At most one every 15 minutes, 3 an hour and 8 a day by default. To change them, edit `"heartbeat"` in `app.json` (`minIntervalMin`, `maxPerHour`, `maxPerDay`, `backoffAfter`, `backoffMaxMin`, `haltHoldMin`); `maxPerDay: 0` turns proactive acts off. There is no Settings control. A file without that key keeps the defaults and doesn't grow one.
+- **Backs off when it isn't helping.** After 3 acts in a row that came back empty (no new ideas, an empty review, an anticipate turn nobody answered within 15 minutes) or that you dismissed (Stop on its turn, Dismiss or Not this on a Pulse card), the gap doubles each time, up to 4 hours. One useful act brings the normal pace back.
+- **Waits for you.** Nothing proactive starts during a reply, with text in the composer, or while a card is waiting on you. Idle reflect waits too.
+- **Halt stops it at once.** Tray Halt and the halt hotkeys hold the pulse for 15 minutes or until you send a message. Only local upkeep runs in that time: no anticipate, ideas, review, digest lookup, living wall, phone inbox or scheduled job starts, and an ideas or review reply already on its way is dropped.
+- **Scheduled jobs are unchanged.** Automations and loops keep their own clock and daily cap, outside this budget, and still run as background runs that never take the composer.
+- **Traced without content.** Each decision goes to `spans/heartbeat.jsonl` as allow or hold with a reason (`busy`, `min_interval`, `hour_cap`, `day_cap`, `backoff`, `halted`, `off`). It never includes prompts, replies or chat ids. A repeated hold is written once.
+
+No version bump.
+
+Scopes and locked-state polish (Critiquito SB-01 to SB-11). The consent rules are unchanged: grants still come only from a mouse click in Settings, `harness::decide` and the fail-closed rules are untouched, and a hard card still has no Always.
+
+- **Locked means locked (SB-01).** While private data is locked (no keyring, missing or wrong key), every Allow in Settings → Permissions, the folder field, the browser picker and Choose folder… are shown disabled, and hovering one says "Locked: keyring unavailable" (or which lock it is). Revoke is disabled too, because a revoke is a ledger write and a locked ledger takes none.
+- **A way out (SB-02).** The lock message now has one next step for your OS and a **Try again** button that asks the keyring again right away and refreshes the page. Linux: "Unlock or start your keyring (GNOME Keyring or KWallet), then Try again." Windows names Windows Credential Manager and macOS the macOS Keychain; neither mentions Secret Service. `/sync` and `/privacy` give the same step in short form.
+- **Folder rows read by name (SB-03, SB-06).** A folder grant is titled "Files in notes". The hint shows the whole path cut in the middle, and hovering shows all of it. `/privacy` uses the same short name, with the path on hover over its Revoke row. You can allow several folders, one at a time: the row reads "Files in a folder", then "Add a folder".
+- **Choose folder… (SB-04).** A button next to the folder field opens your system's folder dialog (on Linux through the desktop portal, with no GTK). Picking a folder only fills the field; Allow still grants. If no dialog can open (no portal or zenity), the row says so and asks you to type the path. Typing a path still works, and the muted placeholder matches your OS (`C:\Users\you\Notes`, `/home/you/Notes`, `/Users/you/Notes`).
+- **`/privacy` lists each grant once (SB-05).** One Grants list: a bullet with its since-time for each grant that is on, then one "Off: …" line, then the screen setting. The duplicate summary line and the second heading are gone.
+- **Calmer rows (SB-07, SB-08, SB-09, SB-11).** Each hint starts with On or Off in the brighter text colour. Allow is an outline button on the scope rows and Sync, so nothing on the page nudges you to grant. The intro says 'Screen access is "Let Grok control the desktop" in Settings → Cabin defaults.' The `/privacy` Revoke rows and the `/skills changes` Undo / Restore rows (SU-06) line up with the report text, their pills in one column.
+- SB-10 (naming the calendar source and mail account) waits for the readers; there is a TODO in the code.
+
+One small new crate: `rfd` 0.17 (and `pollster` 0.4), with only its `xdg-portal` backend on Linux, so no new system libraries and no CI change. No version bump.
+
+Skill changes GrokHub makes on its own can be undone (harness design §12 P3, first slice of the Spike-5 ChangeLedger). `harness::decide` and the hard-card rules are unchanged.
+
+- **Every version is kept.** Before the nightly review patches a skill, before a skill learned from a host run is written, and before cleanup moves a never-used skill aside, the current `SKILL.md` is copied to `changes/skills/<name>/` in the cabin config (the last 20 versions per skill). Each write adds one line to `changes/skills.jsonl`: skill, time, who (`self_manage` or `user`), a short reason, and the file hash before and after. The ledger holds no skill text, and secrets in the reason are redacted. Adding a skill from Suggested is logged too.
+- **`/skills undo <name>`** puts back the version before the newest change, byte for byte, and logs the undo. Run it again to step back further. Undoing a skill GrokHub created removes its folder; its text stays in history. **`/skills restore <name>`** brings back a removed skill. **`/skills changes`** lists recent changes, with an Undo or Restore button per skill under the newest list. The buttons answer a mouse click only.
+- **Only you undo.** Undo and restore run only from a line you type in the composer or a click. The same text from a night job, an automation, a phone task, a Pulse run, an idea, or a model reply only shows the list. A patch you undid is not applied again by the next nightly review.
+
+No new crates, no network calls. No version bump.
+
+Spike-4b trust floor (privacy and consent, second slice). The consent rules are unchanged: grants still come only from a click in Settings, and a hard card still has no Always, Enter does not approve it, and Esc or the timeout denies it.
+
+- **Private data is encrypted on disk.** `consent.jsonl`, `egress.jsonl` (and its rolled `egress.1.jsonl`) and private AMR notes (`amr/nodes/<id>.sealed`) are sealed with ChaCha20-Poly1305. The key is made on the first private write and lives in your OS keyring (Secret Service on Linux, Credential Manager on Windows, Keychain on macOS); only a short hash of it is stored next to the data. Your existing plain-text ledger and send log keep working and are sealed in place, line by line, on the next write. Nothing is dropped.
+- **Fails closed.** If the keyring can't be reached, or the key is missing or doesn't match, GrokHub says so in Settings → Permissions, `/privacy` and `/recall`, no grant applies, nothing new is saved, and nothing is ever written as plain text. `/sync` doesn't send, because it couldn't be logged. Chats with Grok still work; their send-log lines are skipped until the keyring is back.
+- **Recall packs are masked.** Memory recalled into a native-engine prompt has emails, phone numbers, card numbers, SSN-shaped numbers and street addresses replaced with `[email]`, `[phone]`, `[card]`, `[ssn]` and `[address]`, on top of the existing secret redaction. Code, versions, hashes and `git@` remotes are left alone. Your own `/recall` view is not masked.
+- **Settings → Permissions → What GrokHub can read.** One row per scope (files in one folder, installed apps, browser history, calendar, mail, system state), all off. Allow (filled) takes a mouse click only, so Enter or Space on a focused button never grants; Revoke is a ghost. `/privacy` lists them by name, and its Revoke works for them too. Nothing reads a scope yet. Allow on Sync to paired computers is now mouse-click only as well. A files grant also refuses any folder that holds your home folder, like `/home`.
+
+No new crates (ring, zeroize and keyring were already in `Cargo.lock`). No version bump.
+
+Slash results get their own style, plus two small fixes (Critiquito GL-05, SY-09, SY-10). The consent rules are unchanged.
+
+- **Slash and system results keep their look (GL-05).** Older results, like the `/sync` line and the `/privacy` report, used to collapse under an italic "Thought process" header once something newer arrived, so app output looked like model thinking. They now stay in the normal reply bubble at every age and never get the thought label or its Collapse control. The pane tells them apart by the tag the cabin adds when it writes them, not by their text. Model reasoning still collapses exactly as before, and collapsing it no longer folds a result away with it. The ghost Revoke still sits under the newest `/privacy` report.
+- **"chats and memory" in sentences (SY-09).** The `/sync` card body, the Settings note and the `/privacy` intro now read "chats and memory". Compact spots keep "chats, memory": the card command, the `/privacy` grant and egress lines, and the row hints. Logs and files still keep the `chat` / `personal` ids.
+- **Settings → Permissions spacing (SY-10).** "Leaving this computer" and "Command rules" get 12px more space above them, at the same size, so each heading starts a new group instead of reading as another row.
+
+No version bump.
+
+Privacy and consent follow-ups (Critiquito SY-01 to SY-08). The consent rules are unchanged: grants still come only from a click in Settings, and a hard card still has no Always, Enter does not approve it, and Esc or the timeout denies it.
+
+- **`/sync` with nothing paired** sends nothing, logs nothing and parks no card. It posts "Nothing paired yet. Start share to pair a computer." With at least one paired computer it works as before (the hard Send card when there is no grant), then posts "Synced chats and memory to N computers" in the chat instead of jumping to Devices.
+- **The `/sync` card** on an empty chat now uses the same left-aligned card as the chat column (up to 520px wide, ragged-right text, buttons on the left), not a centered and justified one.
+- **One name for the data:** the card, `/privacy` and Settings all say "chats, memory". Logs and files keep the `chat` / `personal` ids. `/privacy` calls the hub destination "paired computers".
+- **`/privacy`:** under the newest report, each active grant gets a ghost Revoke button. Only a click can use it, and granting is still only in Settings. The grant id and the `egress.jsonl` name are gone (the heading is now "Sent in the last 7 days (no content stored)"), and a fresh report no longer adds "No grants yet." under the "off" line.
+- **Settings → Permissions:** the trust note and the Sync row sit under "Leaving this computer", and the rules note sits under "Command rules" above Rule. Revoke is a ghost button; Allow stays filled.
+
+No version bump.
+
+Spike-4a trust floor (privacy and consent, first slice). Nothing new leaves this computer without your OK:
+
+- **Consent ledger:** `consent.jsonl` in the config directory holds grants you make with a click. They are revocable, and slash text or the agent cannot write them (the hard floor refuses agent writes to the file). Learning scopes (files in one folder, apps, browser history, calendar, mail, system state) all start off, and nothing reads them yet.
+- **Egress guard:** cabin xAI calls stay allowed by default. Any other destination that would get personal data parks a hard Send card: Approve or Deny only, Enter does not approve, and Esc or the 5 min timeout denies. `egress.jsonl` records host, data classes, node ids and the grant, never content or raw secrets.
+- **`/sync` asks first:** syncing chats and memory to paired computers now parks that card unless Settings → Permissions → *Sync to paired computers* is allowed. Approve sends once. Revoking it drops the shared snapshot.
+- **`/privacy`:** lists your grants, the scopes, and what left this computer in the last 7 days. It replaces the Grok CLI pager builtin of the same name.
+
+Spans gain `origin` and `consent_ref`, and old span files still read. Grok Build's own traffic is outside GrokHub and is not guarded. AEAD at rest, PII redaction of recall packs, and per-scope Settings rows follow in 4b. No version bump.
+
+Compass files: `docs/compass/` adds 14 short maps (25–35 lines each) for the crates and the modules agents get lost in (AMR, slash, the Spike-0 harness, the `app/` UI, `config.rs`, the desktop MCP, install scripts, versions and channels), indexed in `docs/compass/README.md` and linked from AGENTS.md. A new `compass_paths` test in grokhub-core fails when a compass file names a repo path or identifier that no longer exists, breaks a link, leaves 25–35 lines, or drops out of the index. It runs in the existing `cargo test --workspace` CI step. Docs and a test only; no UI change. No version bump.
+
+Approval cards share one width (up to 520px) and one "N things need a decision" line. A hard action uses a danger Approve on a 2px frame, Deny stays a ghost, and the note says Esc denies (Enter still does not approve). Commands and tool ids are monospace; notes stay proportional. The Grant full card stays hidden unless `GROKHUB_GRANT_FULL=1`, and it says click and type skip asking while deletes, sends, money and credentials still ask. A finished tool no longer repeats a stale "running" next to its completed chip. The agent cursor has a dark outline, and the desktop toggle names that hard floor, with its hint wrapping clear of the switch. No version bump.
+
+AMR M0: a local agent-memory schema under `amr/` in the config directory, plus a `/recall` read path. The default stays legacy SOUL/USER/MEMORY. Opt in with `"memory_backend": "amr"` in `app.json`. No Settings control, no migration, and `amr/` is not hub-synced. No version bump.
+
+Spike-0 harness: the cabin adds a stricter pre-check on top of Grok Build. GB still owns Ask / Auto / Always and computer use; the cabin never loosens it. What the pre-check does:
+
+- **Hard floor deny, no bypass:** credential paths, `rm -rf /`, fork bomb, `mkfs`, `dd` to a disk, and `curl|sh` as root.
+- **Hard-class park, even under Always:** money, send, delete, credentials, and irreversible OS actions show a white card. It offers Approve / Deny only (no Always), Enter does not approve, Esc denies, and it times out to Deny after 5 min. Halt denies every parked card.
+- **Access:** Settings → *Let Grok control the desktop* is Readonly / Supervised, and it gates desktop tools only. Full is one inline Grant full card in the Work tree. Always never grants it.
+
+Where the checks run:
+
+- The `grokhub-desktop` MCP dispatch, on Linux and Windows.
+- ACP permission asks.
+- Headless `grok -p` on Auto / Always, via appended `--deny` rules. A denied hard step parks a card, and Approve re-runs it once on ACP Ask.
+- The native Lab engine.
+
+Every step writes a cabin-local span to `spans/<chat>.jsonl` (`path`, `chat_id`, `turn`, `ui_changed`, redacted args). The `approval_gate_violation` check flags a hard action with no approve span. The last approved click shows as the agent cursor marker on the Work-tree frame, and the parked count joins the needs-attention line. The grok-build-gui spec now says selected Always is white, not amber. No version bump.
+
+The Projects Name field lines up with Cancel: same height, centered on the row, filled like Filter chats, with a muted hint and a white focus ring while it is staged. Cancel's right edge meets the same rail inset as the “+”. If Grok Build never answers and the list is empty, Skills and Connectors say "Grok Build didn't answer. Refresh to try again." If a timeout keeps the previous list, a muted line above those tiles says "Showing the last list — Grok Build timed out." No version bump.
+
+Projects “+” asks for a folder name and shows Cancel beside the Name field. Cancel drops the staged folder the same way Esc does. Skills and Connectors no longer stay on Loading… when the Grok Build catalog is slow: the three catalog commands run together, and if nothing has arrived after 18 seconds the page settles (last list kept, or empty) with a timeout instead of spinning. Refresh tries again. No version bump.
+
+Settings → Account picks up a Grok sign-in written by `grokhub --oauth` (or another process) while the cabin is already open, so About/doctor saying xAI auth present no longer leaves Account on Sign in with Grok with a blank identity. When OAuth is present, Account shows Connected with the Grok name and/or email and Sign out; the device-code path stays for a true sign-out. No version bump.
+
+Card deck polish: after × the new front card eases in briefly instead of jump-cutting; each open peek strip shows that card's own title; fly-in snaps under reduced motion and the mid-flight offset reads more clearly; the New here chip tip says "Suggested because you're new here". No version bump.
+
+On Automations, Run is a ghost pill and a failed job's Retry stays filled, each job has an Enabled switch, next runs read as a local time such as today 7:30 AM or Tue 9:00 AM, the intro is plain, Suggested says the ideas come from your recent work, and Discuss says you opened the post from your feed.
+
+Failed Automations jobs show Retry and a View last run link, and Remove sits behind a ··· menu that asks Remove '…'? before deleting the job.
+
+Pulse leftovers (Critiquito re-check): opened idea headings follow the row type (Do → "What Apply will do", Automate → "What Apply will schedule", Learn → "What I'll learn"); Suggest ideas while signed out stays enabled and shows an amber "Sign in to Grok to get ideas." with Open Settings, cleared once signed in; Ideas loading replaces empty copy with "Looking for ideas in your recent work…" and three #16181c skeleton rows; empty Ideas / Feed use the new copy, with inline Suggest ideas and a Feed instructions link; Feed image slots are a plain #16181c skeleton while loading and drop on fail; Search palette closes on outside click or navigation, uses the "Search pages and commands" placeholder, and names rows as the sidebar does (old names still find them). No version bump.
+
+Feed cards show a short takeaway under the title (about two sentences, cut on a word or sentence, with URLs left on the Read link) instead of a long paragraph chopped mid-sentence. A digest skips the model's opening line ("I'll look up…") and leads with the news, followed by why it matters to you. Discuss on a digest or suggestion opens the main chat with that post's title, takeaway, source link, and why it matters, and puts the cursor in the composer. On the home deck, hovering a digest, suggestion, or image card expands it into the same card: source and age, the short takeaway, the image, Liked, and Discuss. × still only removes it from the deck. No version bump.
+
+The command palette hides Devices, Agents, and Connectors until a query names them. They are not on the sidebar rail. Typing devices, device, agents, agent, connectors, or connector still opens that page (connectors also matches Skills and Connectors, which contains the word). Night still opens Automations; there is no Night row. On Pulse, an empty Ideas list shows Suggest ideas once, in the body. The header button stays when ideas are listed, and it reads Suggesting… while a suggestion is loading.
+
+- Linux: `grokhub-linux-v2.10.94.tar.gz` and AUR `pkgver=2.10.94`.
+- Windows: `GrokHub-Setup-2.10.94.exe` and `grokhub-windows-v2.10.94.zip`.
+
 ## 2.10.93 — 2026-10-06
 
 Imagine reuses the Settings → Account Grok sign-in. Opening Imagine no longer asks for a second separate sign-in when Account is already signed in, and it stops re-prompting after a successful auth: credentials try Imagine's own keychain first, then Account (`secrets.oauth`, with the same live/refresh path Lab mode uses), then the console API key. The composer Sign in control and the need-signin message point at Settings → Account instead of starting another OAuth wall. Tests cover Account-only reuse, Imagine-keychain preference, no re-prompt on a second `imagine_cred` call, and the exact need-signin sentence.
