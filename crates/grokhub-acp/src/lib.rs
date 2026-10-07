@@ -35,15 +35,15 @@ pub use install::{
 };
 pub use locate::{
     agent_args, agent_args_resume, apply_desktop_spawn_args, cabin_grok_home, cabin_leader_socket,
-    cabin_rules_for, clear_grok_unusable, cli_install_should_skip, desktop_mcp_add_argv,
+    cabin_rules_for, clear_grok_unusable, cli_install_should_skip, cua_mcp_add_argv, cua_mcp_remove_argv, desktop_mcp_add_argv,
     desktop_mcp_remove_argv, doctor_broken_hint, doctor_grok_line, doctor_grok_line_blocking,
     doctor_line_busy, doctor_missing_hint, find_grok, grok_auth_path, grok_bin_looks_complete,
     grok_cli_channel, grok_cli_is_runnable, grok_cli_key, grok_cli_known_good, grok_home,
     grok_marked_unusable, grok_stdout, grok_stdout_timeout, grok_user_stdout_allow_fail,
     grok_user_stdout_timeout, grok_user_stdout_wait, grok_version, hide_windows_console,
     invalidate_grok_bin_cache, invalidate_grok_key_cache, is_cli_hard_failure, mark_grok_unusable,
-    parse_grok_auth_key, prepare_cabin_grok_home, register_desktop_mcp, silence_windows_hard_errors,
-    single_turn_args, single_turn_args_full, unregister_desktop_mcp, with_ask_deny, with_hard_deny, which,
+    parse_grok_auth_key, prepare_cabin_grok_home, register_cua_mcp, register_desktop_mcp, silence_windows_hard_errors,
+    single_turn_args, single_turn_args_full, unregister_cua_mcp, unregister_desktop_mcp, with_ask_deny, with_hard_deny, which,
     write_cli_auth_if_needed, builtin_cu_denied, ASK_DENY_RULES, BUILTIN_CU_DENY, CLI_CREDENTIAL_DENY,
 };
 pub use protocol::{

@@ -25254,9 +25254,11 @@ fn bg_ask_spawn_passes_deny_args() {
     // Spike-1c: Grok Build's own computer-use tools are denied on Auto, with the switch off or on.
     let cu = grokhub_acp::BUILTIN_CU_DENY.len();
     let has_cu = |sent: &str| grokhub_acp::BUILTIN_CU_DENY.iter().all(|r| sent.contains(&format!("--deny\n{r}\n")));
-    assert_eq!(sent.matches("--deny").count(), 1 + hard + cu, "{sent}");
+    // Spike-2a: the Cua proxy rule follows the desktop deny.
+    assert_eq!(sent.matches("--deny").count(), 2 + hard + cu, "{sent}");
     assert!(has_cu(&sent), "{sent}");
     assert!(sent.contains(&desktop_deny), "{sent}");
+    assert!(sent.contains(&format!("--deny\n{}\n", grokhub_core::CUA_MCP_RULE)), "{sent}");
     assert!(sent.contains("--deny\nBash(rm -rf /)\n"), "{sent}");
     assert!(sent.contains("--deny\nRead(**/.grok/auth.json)\n"), "{sent}");
     assert!(!sent.contains("--deny\nBash\n"), "{sent}");
