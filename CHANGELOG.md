@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+Channel fixes: Labs Beta auto-off works after a promote and really switches back, Update and channel-switch errors say what went wrong, and Windows no longer trips over a beta receipt.
+
+- **Auto-off compares code, not commits (Linux).** Main moves by squash and the main → beta sync always adds a merge commit, so the two tips never matched and Beta stayed on. The cabin now fetches `beta` and `main` from your clone's `origin` and treats beta as caught up when `origin/beta` and `origin/main` have the same tree (the same tip commit still counts). Checked at the same times as before: opening Settings → Labs (at most once a minute) and after a successful Update.
+- **Auto-off really switches back.** It checks your clone out on `main` at `origin/main` and then writes `stable`, so the next Update pulls and builds main instead of failing with "source clone is on beta". No rebuild happens at that moment: the code is already the same. If the clone has uncommitted changes, is on another branch, or has a local `main` commit that isn't on `origin/main`, nothing is touched, Beta stays on, and the status line says why. If the fetch fails (offline, timeout, missing branch), Beta stays on and nothing is shown. Re-enable Beta anytime.
+- **Update errors name the cause.** A failed Update or channel switch now reads the real output and says which it was: uncommitted changes, Rust too old (`rustup update`), no clone, the clone on the other branch, or a build failure. The status ends with the path of the new `update.log` in the config folder. Each attempt (time, channel, the commands, and the last 60 lines of output with secrets redacted) is appended there; the log rotates once at about 256 KB. `grokhub --update` logs too.
+- **Windows: beta is Linux-only.** A leftover `beta` receipt on Windows reads as stable, and Update says "Beta is Linux-only for now (built from source)" and goes ahead as stable instead of failing. The Labs toggle stays disabled with its note.
+- **Cold builds get time.** A channel switch may run up to 40 minutes (was 15) with the progress bar still showing; other Update steps keep 15.
+
+No new crates, no new network destinations. No version bump.
+
 Skill changes GrokHub makes on its own can be undone (harness design §12 P3, first slice of the Spike-5 ChangeLedger). `harness::decide` and the hard-card rules are unchanged.
 
 - **Every version is kept.** Before the nightly review patches a skill, before a skill learned from a host run is written, and before cleanup moves a never-used skill aside, the current `SKILL.md` is copied to `changes/skills/<name>/` in the cabin config (the last 20 versions per skill). Each write adds one line to `changes/skills.jsonl`: skill, time, who (`self_manage` or `user`), a short reason, and the file hash before and after. The ledger holds no skill text, and secrets in the reason are redacted. Adding a skill from Suggested is logged too.

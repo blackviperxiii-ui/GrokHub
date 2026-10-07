@@ -322,7 +322,8 @@ enum JobOut {
     HostLine(String),
     HostDone(String),
     UpdateProgress { pct: u8, msg: String },
-    UpdateDone { ok: bool },
+    /// `output` is the host output (success or failure) for the hint and log.
+    UpdateDone { ok: bool, output: String },
     Connector(String),
     Consult(String),
     Err(String),
@@ -3835,8 +3836,8 @@ impl Cabin {
         self.settings_sec = SettingsSec::Update;
     }
 
-    /// When beta tip == main tip, write stable receipt and refresh Labs status.
-    /// Cooldown avoids network on every Labs frame. Call after a successful update
+    /// When beta caught up to main (same tree or tip), write stable receipt and
+    /// refresh Labs status. Cooldown avoids network on every Labs frame. Call after a successful update
     /// with `force` so a post-pull check is not skipped.
     fn maybe_auto_off_beta_channel(&mut self, force: bool) {
         if cfg!(windows) {
@@ -3936,7 +3937,11 @@ impl Cabin {
             self.status = "refusing an update that would wipe config".into();
             return;
         }
-        self.update_cabin_note = plan.cabin_skipped;
+        // Windows: a stray beta receipt updates as stable and says why.
+        self.update_cabin_note = match (plan.cabin_skipped, crate::update::stray_beta_receipt_note()) {
+            (Some(skip), Some(note)) => Some(format!("{note}. {skip}")),
+            (skip, note) => skip.or_else(|| note.map(String::from)),
+        };
         self.start_overlay_update(plan.cmds);
     }
 
@@ -3949,7 +3954,7 @@ impl Cabin {
         if self.last_host.iter().any(|c| cabin_overlay_step(c)) {
             self.cabin_overlay_done = true;
         }
-        // After a successful cabin/channel update on beta, flip to stable when tips match.
+        // After a successful cabin/channel update on beta, flip to stable when beta caught up to main.
         self.maybe_auto_off_beta_channel(true);
     }
 
@@ -4151,6 +4156,7 @@ impl Cabin {
         self.update_can_restart = begin.can_restart;
         self.status = begin.status;
         self.last_host = cmds.clone();
+        let channel = crate::update::installed_channel();
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         std::thread::spawn(move || {
@@ -4161,10 +4167,15 @@ impl Cabin {
                     msg: msg.to_string(),
                 });
             });
+            // Every attempt lands in config_dir()/update.log (redacted tail).
+            match &r {
+                Ok(out) => crate::update::log_update_attempt(channel, &cmds, true, out),
+                Err(e) => crate::update::log_update_attempt(channel, &cmds, false, e),
+            }
             let _ = tx.send(match r {
-                Ok(_) => JobOut::UpdateDone { ok: true },
-                Err(e) if crate::update::host_receipt_failed(&e) => {
-                    JobOut::UpdateDone { ok: false }
+                Ok(output) => JobOut::UpdateDone { ok: true, output },
+                Err(output) if crate::update::host_receipt_failed(&output) => {
+                    JobOut::UpdateDone { ok: false, output }
                 }
                 Err(e) => JobOut::Err(e),
             });
