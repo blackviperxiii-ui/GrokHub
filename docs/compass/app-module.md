@@ -23,7 +23,7 @@
 ## What depends on it
 - `crates/grokhub-app/src/main.rs` launches it for the window and `--agent` (tray) modes.
 ## Non-obvious
-- `/sync` goes through `gate_hub_sync` (hard Send card without a grant) before `run_hub_sync`; tests grant `HUB_DEST` with `UserClick::from_click` first.
+- `/sync` with no paired computer only posts `SYNC_NO_PEERS` (no card, no egress line). Otherwise `gate_hub_sync` (hard Send card without a grant) runs before `run_hub_sync`, and `poll_sync` posts the result line. Tests call `pair_test_peer` and grant `HUB_DEST` with `UserClick::from_click` first.
 - `cabin_src()` does not include every submodule (for example `harness_ui.rs`, `feed_ui.rs`, `pulse_ui.rs`); those tests `include_str!` the file directly.
 - `on_exit` kills background `grok -p`, halts native sessions, and waits on `persist_io` because two writers of `app.json` share one temp file.
 - The composer glow and Always ring timings come from `GLOW_SETTLE_SECS` / `ALWAYS_SETTLE_SECS` in grokhub-core, and motion is skipped when `motion_ok` is false (AGENTS.md UI theme).
