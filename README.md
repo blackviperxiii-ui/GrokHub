@@ -72,7 +72,7 @@ Android / Windows: link `libgrokhub_ffi` and include `crates/grokhub-ffi/include
 | `grok` | xAI Grok Build CLI | Official coding-agent CLI (`https://x.ai/cli`) — installed with the cabin |
 | `libgrokhub_ffi` | `crates/grokhub-ffi` | C ABI for Android / Windows (pair/port/models; no HOST_CMD) |
 
-Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `updates.json`, `suggestions.json`, `secrets.json` mode 0600 / Windows user-only DACL, `memory/SOUL.md`, `USER.md`, `MEMORY.md`).
+Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `updates.json`, `suggestions.json`, `secrets.json` mode 0600 / Windows user-only DACL, `memory/SOUL.md`, `USER.md`, `MEMORY.md`). `/recall` reads those memory files unless `app.json` sets `"memory_backend": "amr"`, which reads local `amr/nodes` instead.
 
 ## Channels: stable and beta
 
