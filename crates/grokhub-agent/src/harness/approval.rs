@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 
 use crate::gate::{Decision, DeskFlags, Gate, PermMode};
 use crate::harness::access::AccessMode;
+use crate::harness::consent::{ConsentLedger, Scope};
+use crate::harness::egress::DataClass;
 use crate::harness::hard::{classify, classify_ask, desk_classify, HardClass, HardFloor, HardHit};
 
 /// How long a parked hard-class card may wait before fail-closed Deny.
@@ -119,6 +121,11 @@ pub enum Step<'a> {
     Desk { tool: &'a str, args: &'a serde_json::Value },
     /// A Grok Build permission ask: card title plus action text (paths B / E).
     Ask { title: &'a str, action: &'a str },
+    /// A cabin-owned outbound call (EgressGuard, Spike-4a): destination key
+    /// from `egress_dest`, the user data it carries, and the consent ledger.
+    Egress { dest: &'a str, data: &'a [DataClass], ledger: &'a ConsentLedger },
+    /// A read of a learning scope (P5). Off unless the user granted it.
+    Scope { scope: &'a Scope, ledger: &'a ConsentLedger },
 }
 
 /// The single entry for the hard floor and the hard class. Every caller asks
@@ -127,6 +134,17 @@ pub enum Step<'a> {
 /// to Grok Build's own Ask / Auto / Always.
 pub fn decide(step: Step<'_>) -> GateOutcome {
     let hit = match step {
+        Step::Egress { dest, data, ledger } => {
+            return crate::harness::egress::check(dest, data, ledger).0;
+        }
+        Step::Scope { scope, ledger } => {
+            return match ledger.scope_grant(scope) {
+                Some(_) => GateOutcome::Allow,
+                None => GateOutcome::Refuse {
+                    reason: format!("scope {} is off — only your click in Settings turns it on", scope.key()),
+                },
+            };
+        }
         Step::Tool { name, arguments } => classify(name, arguments),
         Step::Desk { tool, args } => desk_classify(tool, args),
         Step::Ask { title, action } => classify_ask(title, action),
@@ -207,6 +225,23 @@ mod tests {
             GateOutcome::Refuse { reason: "hard floor: rm -rf /".into() }
         );
         assert_eq!(decide(Step::Ask { title: "bash", action: "ls" }), GateOutcome::Allow);
+    }
+
+    #[test]
+    fn scopes_are_off_until_granted() {
+        let none = ConsentLedger::empty();
+        assert_eq!(
+            decide(Step::Scope { scope: &Scope::Calendar, ledger: &none }),
+            GateOutcome::Refuse {
+                reason: "scope calendar is off — only your click in Settings turns it on".into()
+            }
+        );
+        assert_eq!(
+            decide(Step::Scope { scope: &Scope::Files("/home/me/Documents".into()), ledger: &none }),
+            GateOutcome::Refuse {
+                reason: "scope files:/home/me/Documents is off — only your click in Settings turns it on".into()
+            }
+        );
     }
 
     #[test]

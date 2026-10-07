@@ -11,7 +11,9 @@
 //! them (path A lives in `desktop_mcp::run_stdio`).
 //!
 //! Paths handled here: B (ACP ask), E (native side ask), the cabin half of A
-//! (cards for parks the desktop MCP posts), and C (headless denials).
+//! (cards for parks the desktop MCP posts), and C (headless denials). Spike-4a
+//! adds the `egress` path: a cabin-owned send the EgressGuard parked as hard
+//! Send (today only `/sync`; see `privacy_ui.rs`).
 
 use super::*;
 use grokhub_agent::harness::{self as hx, GateOutcome, Step};
@@ -24,6 +26,9 @@ const HARD_NOTE: &str = "Always can't skip this. Approve runs it once. Esc denie
 const HEADLESS_NOTE: &str =
     "Grok Build's deny rule stopped this. Approve re-runs this one step with Grok's own Allow. Esc denies.";
 const HARD_EYEBROW: &str = "Hard action";
+/// The span tool and args for a `/sync` publish (no content).
+const HUB_SYNC_TOOL: &str = "hub_sync";
+const HUB_SYNC_ARGS: &str = r#"{"dest":"hub","data":["chat","personal"]}"#;
 const FULL_EYEBROW: &str = "Session access · Desktop control is on";
 const FULL_TITLE: &str = "Let Grok click and type without asking for this session?";
 const FULL_NOTE: &str = "Deletes, sends, money and credentials still ask.";
@@ -84,6 +89,9 @@ pub(super) enum ParkSource {
     Desk(String),
     /// Path C: GB's `--deny` rule already stopped it. Nothing is waiting.
     Headless,
+    /// A cabin-owned send to this destination (`hub`) the EgressGuard parked.
+    /// Nothing left; Approve sends it once.
+    Egress(String),
 }
 
 /// One hard-class action on the white card.
@@ -137,6 +145,10 @@ pub(super) struct HarnessState {
     pub oneshot: Option<OneShot>,
     pub last_poll: Option<Instant>,
     pub turn_ctx: Option<hx::TurnContext>,
+    /// The consent ledger as last read. `None` means read it again.
+    pub consent: Option<hx::ConsentLedger>,
+    /// `/privacy` output on its way from the reader thread.
+    pub privacy_rx: Option<mpsc::Receiver<String>>,
 }
 
 /// Readonly until the desktop switch is on; Full only after Grant full.
@@ -230,6 +242,33 @@ impl Cabin {
 
     fn turn_no(&self) -> u32 {
         self.messages.iter().filter(|(r, _)| r == "user").count() as u32
+    }
+
+    /// The allow span for one hub publish, tagged with its consent. Returns
+    /// the `{session}:{ts_ms}` ref the `egress.jsonl` line points at.
+    pub(super) fn hub_sync_span(&self, send: &super::privacy_ui::HubSend) -> String {
+        let mut span = hx::Span::soft_allow(
+            &self.trace_id(),
+            HUB_SYNC_TOOL,
+            HUB_SYNC_ARGS,
+            "sent",
+            "published chats and memory to paired computers",
+            self.access_mode(),
+            "none",
+        )
+        .with_consent(send.consent_ref());
+        span.approval_class = HardClass::Send.as_str().into();
+        let at = span.span_ref();
+        self.write_span(span, "egress");
+        at
+    }
+
+    /// No hub grant: park a hard Send card. Nothing has left.
+    pub(super) fn park_egress(&mut self, dest: &str, class: HardClass) {
+        let trace = self.trace_id();
+        self.write_span(hx::Span::hard_park(&trace, HUB_SYNC_TOOL, HUB_SYNC_ARGS, class), "egress");
+        let action = super::privacy_ui::HUB_CARD_ACTION.to_string();
+        self.park_hard(ParkSource::Egress(dest.into()), class, "egress", HUB_SYNC_TOOL.into(), action);
     }
 
     fn write_span(&self, span: hx::Span, path: &str) {
@@ -338,6 +377,7 @@ impl Cabin {
         let Some(park) = self.harness.park.take() else {
             return;
         };
+        let mut sync_once = false;
         let trace = self.trace_id();
         let span = if approve {
             hx::Span::hard_approve(&trace, &park.tool, &span_args(&park.tool, &park.action), park.class)
@@ -363,6 +403,9 @@ impl Cabin {
                     self.start_oneshot(&park.action);
                 }
             }
+            ParkSource::Egress(dest) => {
+                sync_once = approve && dest == hx::HUB_DEST;
+            }
         }
         self.status = if approve {
             format!("Approved once · {}", park.class.label())
@@ -370,14 +413,17 @@ impl Cabin {
             format!("Denied · {}", park.class.label())
         };
         self.harness.park = self.harness.queue.pop_front();
+        if sync_once {
+            self.run_hub_sync(super::privacy_ui::HubSend::Once);
+        }
     }
 
     /// A turn is stopping: parks that hold a GB ask or a desktop call fail closed.
-    /// Path C cards hold nothing and stay until clicked, TTL, or halt.
+    /// Path C and egress cards hold nothing and stay until clicked, TTL, or halt.
     pub(super) fn withdraw_hard_parks(&mut self) {
         let mut keep = VecDeque::new();
         while let Some(park) = self.harness.park.clone() {
-            if park.source == ParkSource::Headless {
+            if matches!(park.source, ParkSource::Headless | ParkSource::Egress(_)) {
                 keep.push_back(park);
                 self.harness.park = self.harness.queue.pop_front();
             } else {
@@ -583,10 +629,10 @@ impl Cabin {
             } else {
                 park.action.clone()
             };
-            let note = if park.source == ParkSource::Headless {
-                HEADLESS_NOTE
-            } else {
-                HARD_NOTE
+            let note = match park.source {
+                ParkSource::Headless => HEADLESS_NOTE,
+                ParkSource::Egress(_) => super::privacy_ui::HUB_CARD_NOTE,
+                _ => HARD_NOTE,
             };
             let overlay = self.palette_open || self.nav == Nav::Settings || self.find.focused;
             let key = hx::hard_card_key(

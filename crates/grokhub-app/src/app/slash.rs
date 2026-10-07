@@ -674,6 +674,7 @@ impl Cabin {
             }
             Slash::Send(task) => self.dispatch_send(task),
             Slash::Sync => self.sync_hub(),
+            Slash::Privacy => self.run_privacy(),
             Slash::Hub => {
                 self.nav = Nav::Devices;
                 self.status = if self.hub_on {

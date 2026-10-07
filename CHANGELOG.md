@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+Spike-4a trust floor (privacy and consent, first slice). Nothing new leaves this computer without your OK:
+
+- **Consent ledger:** `consent.jsonl` in the config directory holds grants you make with a click. They are revocable, and slash text or the agent cannot write them (the hard floor refuses agent writes to the file). Learning scopes (files in one folder, apps, browser history, calendar, mail, system state) all start off, and nothing reads them yet.
+- **Egress guard:** cabin xAI calls stay allowed by default. Any other destination that would get personal data parks a hard Send card: Approve or Deny only, Enter does not approve, and Esc or the 5 min timeout denies. `egress.jsonl` records host, data classes, node ids and the grant, never content or raw secrets.
+- **`/sync` asks first:** syncing chats and memory to paired computers now parks that card unless Settings → Permissions → *Sync to paired computers* is allowed. Approve sends once. Revoking it drops the shared snapshot.
+- **`/privacy`:** lists your grants, the scopes, and what left this computer in the last 7 days. It replaces the Grok CLI pager builtin of the same name.
+
+Spans gain `origin` and `consent_ref`, and old span files still read. Grok Build's own traffic is outside GrokHub and is not guarded. AEAD at rest, PII redaction of recall packs, and per-scope Settings rows follow in 4b. No version bump.
+
 Compass files: `docs/compass/` adds 14 short maps (25–35 lines each) for the crates and the modules agents get lost in (AMR, slash, the Spike-0 harness, the `app/` UI, `config.rs`, the desktop MCP, install scripts, versions and channels), indexed in `docs/compass/README.md` and linked from AGENTS.md. A new `compass_paths` test in grokhub-core fails when a compass file names a repo path or identifier that no longer exists, breaks a link, leaves 25–35 lines, or drops out of the index. It runs in the existing `cargo test --workspace` CI step. Docs and a test only; no UI change. No version bump.
 
 Approval cards share one width (up to 520px) and one "N things need a decision" line. A hard action uses a danger Approve on a 2px frame, Deny stays a ghost, and the note says Esc denies (Enter still does not approve). Commands and tool ids are monospace; notes stay proportional. The Grant full card stays hidden unless `GROKHUB_GRANT_FULL=1`, and it says click and type skip asking while deletes, sends, money and credentials still ask. A finished tool no longer repeats a stale "running" next to its completed chip. The agent cursor has a dark outline, and the desktop toggle names that hard floor, with its hint wrapping clear of the switch. No version bump.
