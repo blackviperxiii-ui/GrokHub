@@ -595,7 +595,7 @@ mod tests {
     }
 
     fn turn(dir: &Path) {
-        write_turn_context(dir, &TurnContext { chat_id: "chat-c".into(), turn: 2, access: "supervised".into() }).unwrap();
+        write_turn_context(dir, &TurnContext { chat_id: "chat-c".into(), turn: 2, access: "supervised".into(), origin: Default::default() }).unwrap();
     }
 
     fn text_of(reply: &str) -> String {
