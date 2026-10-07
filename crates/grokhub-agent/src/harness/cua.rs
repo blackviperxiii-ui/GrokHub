@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 
 use crate::harness::approval::{decide, GateOutcome, Step};
 use crate::harness::backend::{desk_access, desk_span, park_desk_call, ComputerUseBackend, DeskCall};
-use crate::harness::hard::HardClass;
+use crate::harness::hard::{HardClass, TARGET_HINT};
 use crate::harness::span::{append_span, read_turn_context};
 
 /// Pinned `cua-driver-rs` release (github.com/trycua/cua). Every
@@ -427,9 +427,17 @@ impl<C: CuaChild> CuaProxy<C> {
         let params = msg.get("params").cloned().unwrap_or(Value::Null);
         let tool = params.get("name").and_then(Value::as_str).unwrap_or("").to_string();
         let args = params.get("arguments").cloned().filter(Value::is_object).unwrap_or_else(|| json!({}));
-        let (desk_tool, desk) = desk_shape(&tool, &args);
+        let (desk_tool, mut desk) = desk_shape(&tool, &args);
         let live = gate.enabled && gate.flag && !self.halted;
         let access = desk_access(dir, gate.enabled);
+        let in_manifest = CUA_TOOLS.contains(&tool.as_str());
+        let probe = tool == "click" || tool == "double_click" || tool == "right_click";
+        // Spike-2b: look first. The AX tree names the control, so the gate
+        // knows what the click will do before it runs.
+        let before = if live && in_manifest && probe { self.observe(&args) } else { None };
+        if live && in_manifest && probe {
+            desk[TARGET_HINT] = cua_target(before.as_ref().map(|(_, state)| state), &args);
+        }
         let refuse = |reason: &str, parked: Option<(HardClass, bool)>| {
             let call = DeskCall { tool: &desk_tool, args: &desk, ok: false, result: reason, access, ui_changed: None, parked };
             write_cua_span(dir, &tool, &call);
@@ -438,7 +446,7 @@ impl<C: CuaChild> CuaProxy<C> {
         if !live {
             return refuse(&self.off_reason(gate), None);
         }
-        if !CUA_TOOLS.contains(&tool.as_str()) {
+        if !in_manifest {
             return refuse(CUA_NOT_IN_MANIFEST, None);
         }
         let mut parked = None;
@@ -461,8 +469,6 @@ impl<C: CuaChild> CuaProxy<C> {
             // No credential store yet: never type the slot or a guessed value.
             return refuse(CUA_NO_PASSWORD_MSG, parked);
         }
-        let probe = tool == "click" || tool == "double_click" || tool == "right_click";
-        let before = if probe { self.observe(&args) } else { None };
         let sent = json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":tool,"arguments":args}}).to_string();
         let reply = match self.child().and_then(|c| c.request(&sent, &id)) {
             Ok(r) => r,
@@ -470,7 +476,7 @@ impl<C: CuaChild> CuaProxy<C> {
         };
         let (ok, text) = reply_result(&reply);
         let ui_changed = match (before, ok) {
-            (Some(pre), true) => self.observe(&args).map(|post| post != pre),
+            (Some((pre, _)), true) => self.observe(&args).map(|(post, _)| post != pre),
             _ => None,
         };
         let call = DeskCall { tool: &desk_tool, args: &desk, ok, result: &text, access, ui_changed, parked };
@@ -478,8 +484,9 @@ impl<C: CuaChild> CuaProxy<C> {
         reply
     }
 
-    /// AX tree first, screenshot as fallback: a hash of what the window shows.
-    fn observe(&mut self, args: &Value) -> Option<u64> {
+    /// AX tree first, screenshot as fallback: a hash of what the window
+    /// shows, and the reply's `result` (the tree the click target is read from).
+    fn observe(&mut self, args: &Value) -> Option<(u64, Value)> {
         let mut scope = json!({});
         for k in ["pid", "window_id"] {
             if let Some(v) = args.get(k) {
@@ -495,11 +502,79 @@ impl<C: CuaChild> CuaProxy<C> {
             };
             let v: Value = serde_json::from_str(&reply).unwrap_or(Value::Null);
             if reply_result(&reply).0 {
-                return Some(content_hash(&v["result"]["content"].to_string()));
+                return Some((content_hash(&v["result"]["content"].to_string()), v["result"].clone()));
             }
         }
         None
     }
+}
+
+/// Spike-2b: the AX label and role of the control a Cua click names
+/// (`element_index`), read from the `get_window_state` result taken just
+/// before it, plus the window title for the card. `{"unknown":true}` when the
+/// click names no element or the tree does not list it. The tree shape
+/// (structured `elements` or `[N] role "label"` lines) is not yet checked
+/// against a live 0.34.0 driver.
+fn cua_target(state: Option<&Value>, args: &Value) -> Value {
+    let index = ["element_index", "element", "index"].iter().find_map(|k| args.get(*k).and_then(Value::as_u64));
+    let mut target = match state.zip(index).and_then(|(s, i)| tree_element(s, i)) {
+        Some(el) => el,
+        None => json!({"unknown": true}),
+    };
+    if let Some(w) = state.and_then(window_title) {
+        target["window"] = Value::String(w);
+    }
+    target
+}
+
+/// One element of a window-state result by its index: role, label, effect.
+fn tree_element(state: &Value, index: u64) -> Option<Value> {
+    if let Some(el) = state.get("structuredContent").and_then(|s| structured_element(s, index)) {
+        return Some(el);
+    }
+    let tag = format!("[{index}]");
+    let texts = state["content"].as_array().into_iter().flatten().filter_map(|c| c["text"].as_str());
+    for line in texts.flat_map(str::lines) {
+        let Some(at) = line.find(&tag) else { continue };
+        let rest = line[at + tag.len()..].trim();
+        let role = rest.split_whitespace().next().unwrap_or("").trim_end_matches(':');
+        let after = rest[role.len()..].trim().trim_start_matches(':').trim();
+        let label = after.split('"').nth(1).unwrap_or(after);
+        return Some(json!({"label": label, "role": role}));
+    }
+    None
+}
+
+fn structured_element(v: &Value, index: u64) -> Option<Value> {
+    match v {
+        Value::Object(m) => {
+            let at = ["element_index", "index"].iter().find_map(|k| m.get(*k).and_then(Value::as_u64));
+            if at == Some(index) {
+                let pick = |keys: &[&str]| keys.iter().find_map(|k| m.get(*k).and_then(Value::as_str)).unwrap_or("");
+                let mut el = json!({"label": pick(&["label", "title", "name", "description"]), "role": pick(&["role", "ax_role"])});
+                if let Some(e) = m.get("effect").and_then(Value::as_str) {
+                    el["effect"] = Value::String(e.into());
+                }
+                return Some(el);
+            }
+            m.values().find_map(|c| structured_element(c, index))
+        }
+        Value::Array(a) => a.iter().find_map(|c| structured_element(c, index)),
+        _ => None,
+    }
+}
+
+/// The window or app title a window-state result names, for the card.
+fn window_title(state: &Value) -> Option<String> {
+    let s = &state["structuredContent"];
+    let structured = ["window_title", "title", "app_name", "app"].iter().find_map(|k| s.get(*k).and_then(Value::as_str));
+    let text = || {
+        state["content"].as_array()?.iter().filter_map(|c| c["text"].as_str()).flat_map(str::lines).find_map(|l| {
+            let l = l.trim();
+            l.strip_prefix("Window:").or_else(|| l.strip_prefix("window:")).map(str::trim)
+        })
+    };
+    structured.or_else(text).filter(|t| !t.is_empty()).map(|t| t.chars().take(60).collect())
 }
 
 /// Keep only manifest tools in the child's `tools/list` reply.
@@ -560,6 +635,8 @@ mod tests {
     struct Fake {
         got: Rc<RefCell<Vec<Value>>>,
         killed: Rc<RefCell<bool>>,
+        /// Window-state text the fake shows above its click count.
+        tree: Rc<RefCell<String>>,
     }
 
     impl CuaChild for Fake {
@@ -568,7 +645,7 @@ mod tests {
             self.got.borrow_mut().push(v.clone());
             let clicks = self.got.borrow().iter().filter(|m| m["params"]["name"] == "click").count();
             let text = match v["params"]["name"].as_str() {
-                Some("get_window_state") => format!("tree after {clicks} clicks"),
+                Some("get_window_state") => format!("{}tree after {clicks} clicks", self.tree.borrow()),
                 Some(t) => format!("{t} done"),
                 None => "ok".into(),
             };
@@ -750,6 +827,122 @@ mod tests {
         let out = p.handle_line(&call("shell_execute", json!({"command":"ls"})), ON, &dir, &mut || false).unwrap();
         assert_eq!(text_of(&out), CUA_NOT_IN_MANIFEST);
         assert_eq!(sent_tools(&fake), vec!["press_key"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Hermes #3, #4, #8, #9 through the fake Cua child under Full: fields,
+    /// drafts, toggles and local saves stay soft; Pay, Send, Reset and Upload
+    /// park before the click is sent, and Deny or Halt never clicks.
+    #[test]
+    fn hermes_clicks_park_by_their_ax_label_before_the_click_is_sent() {
+        let dir = test_dir("cua-hermes");
+        write_turn_context(&dir, &TurnContext { chat_id: "chat-h".into(), turn: 1, access: "full".into() }).unwrap();
+        let fake = Fake::default();
+        *fake.tree.borrow_mut() = [
+            "Window: Checkout — Shop",
+            "[1] AXTextField \"Name on card\"",
+            "[2] AXTextField \"Address\"",
+            "[3] AXButton \"Pay now\"",
+            "[4] AXTextArea \"Message body\"",
+            "[5] AXButton \"Send\"",
+            "[6] AXSwitch \"Dark mode\"",
+            "[7] AXButton \"Reset all settings\"",
+            "[8] AXButton \"Save\"",
+            "[9] AXButton \"Upload screenshot\"",
+            "",
+        ]
+        .join("\n");
+        let mut p = proxy(&fake, Rc::new(RefCell::new(0)));
+        let click = |i: u64| call("click", json!({"pid": 42, "window_id": 7, "element_index": i}));
+        let parked = |p: &mut CuaProxy<Fake>, i: u64, approve: bool| {
+            let waiter = cabin_answers(&dir, approve);
+            let out = p.handle_line(&click(i), ON, &dir, &mut || false).unwrap();
+            (waiter.join().unwrap().expect("park posted"), text_of(&out))
+        };
+        // #3: typed fields are soft; Pay parks as money.
+        for (i, text) in [(1, "Jeremy Example"), (2, "1 Example Road")] {
+            let out = p.handle_line(&call("type_text", json!({"element_index": i, "text": text})), ON, &dir, &mut || false).unwrap();
+            assert_eq!(text_of(&out), "type_text done");
+        }
+        let (req, out) = parked(&mut p, 3, false);
+        assert_eq!((req.class.as_str(), req.action.as_str()), ("money", "Grok wants to click Pay in Checkout — Shop"));
+        assert!(out.starts_with("Denied: hard-class money"), "{out}");
+        // #4: the draft is soft; Send parks as send.
+        let out = p.handle_line(&call("type_text", json!({"element_index": 4, "text": "See you at 5"})), ON, &dir, &mut || false).unwrap();
+        assert_eq!(text_of(&out), "type_text done");
+        let (req, _) = parked(&mut p, 5, false);
+        assert_eq!((req.class.as_str(), req.action.as_str()), ("send", "Grok wants to click Send in Checkout — Shop"));
+        // #8: the toggle is soft and its change is seen; Reset parks, and Halt denies it.
+        let out = p.handle_line(&click(6), ON, &dir, &mut || false).unwrap();
+        assert_eq!(text_of(&out), "click done");
+        let out = p.handle_line(&click(7), ON, &dir, &mut || true).unwrap();
+        assert!(text_of(&out).starts_with("Denied: hard-class irreversible_os"), "{}", text_of(&out));
+        let mut p = proxy(&fake, Rc::new(RefCell::new(0)));
+        // #9: Save is soft; Upload parks as send.
+        let out = p.handle_line(&click(8), ON, &dir, &mut || false).unwrap();
+        assert_eq!(text_of(&out), "click done");
+        let (req, _) = parked(&mut p, 9, false);
+        assert_eq!((req.class.as_str(), req.action.as_str()), ("send", "Grok wants to click Upload in Checkout — Shop"));
+        // Only the soft clicks ever reached the child.
+        let clicked: Vec<Value> = fake
+            .got
+            .borrow()
+            .iter()
+            .filter(|m| m["params"]["name"] == "click")
+            .map(|m| m["params"]["arguments"]["element_index"].clone())
+            .collect();
+        assert_eq!(clicked, vec![json!(6), json!(8)]);
+        let spans = read_spans(&dir, "chat-h").unwrap();
+        let clicks: Vec<_> = spans
+            .iter()
+            .filter(|s| s.tool == "click")
+            .map(|s| (s.decision.as_str(), s.target.as_str(), s.target_rule.as_str(), s.access.as_str()))
+            .collect();
+        assert_eq!(
+            clicks,
+            vec![
+                ("park", "ax", "money:Pay", "full"),
+                ("deny", "ax", "money:Pay", "full"),
+                ("park", "ax", "send:Send", "full"),
+                ("deny", "ax", "send:Send", "full"),
+                ("allow", "ax", "", "full"),
+                ("park", "ax", "irreversible_os:Reset", "full"),
+                ("deny", "ax", "irreversible_os:Reset", "full"),
+                ("allow", "ax", "", "full"),
+                ("park", "ax", "send:Upload", "full"),
+                ("deny", "ax", "send:Upload", "full"),
+            ]
+        );
+        let toggle = spans.iter().find(|s| s.tool == "click" && s.decision == "allow").unwrap();
+        assert_eq!(toggle.ui_changed, Some(true), "the toggle is verified by a fresh look");
+        let trace = std::fs::read_to_string(span_path(&dir, "chat-h")).unwrap();
+        for never in ["Pay now", "Upload screenshot", "Reset all settings", "Checkout — Shop", "Jeremy Example", "See you at 5"] {
+            assert!(!trace.contains(never), "{never} reached a span: {trace}");
+        }
+        // Enter never approves a hard card; Esc denies.
+        assert_eq!(crate::harness::hard_card_key(true, false, false), None);
+        assert_eq!(crate::harness::hard_card_key(false, true, false), Some(crate::harness::HardAnswer::Deny));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_click_the_tree_does_not_list_is_soft_with_an_unknown_target() {
+        let dir = test_dir("cua-unknown");
+        turn(&dir);
+        let fake = Fake::default();
+        let mut p = proxy(&fake, Rc::new(RefCell::new(0)));
+        let out = p.handle_line(&call("click", json!({"element_index": 99})), ON, &dir, &mut || false).unwrap();
+        assert_eq!(text_of(&out), "click done");
+        let s = read_spans(&dir, "chat-c").unwrap().pop().unwrap();
+        assert_eq!((s.decision.as_str(), s.target.as_str(), s.target_rule.as_str()), ("allow", "unknown", ""));
+        // A structured tree names the control and its declared effect.
+        let state = json!({"structuredContent": {"title": "Mail", "elements": [{"element_index": 3, "role": "AXButton", "label": "Go", "effect": "send"}]}});
+        assert_eq!(
+            cua_target(Some(&state), &json!({"element_index": 3})),
+            json!({"label": "Go", "role": "AXButton", "effect": "send", "window": "Mail"})
+        );
+        assert_eq!(cua_target(Some(&state), &json!({"x": 1, "y": 2})), json!({"unknown": true, "window": "Mail"}));
+        assert_eq!(cua_target(None, &json!({"element_index": 3})), json!({"unknown": true}));
         let _ = std::fs::remove_dir_all(dir);
     }
 

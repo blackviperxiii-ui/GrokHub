@@ -623,6 +623,11 @@ impl DesktopBackend for LiveBackend {
     fn trash(&mut self, paths: &[std::path::PathBuf]) -> Result<(), String> {
         apps::trash(paths)
     }
+    // Spike-2b: AT-SPI on Linux. Windows keeps the default (unknown): no UIA reader (D3).
+    #[cfg(target_os = "linux")]
+    fn target_at(&mut self, x: i32, y: i32) -> Option<grokhub_core::desktop_mcp::ClickTarget> {
+        crate::desktop::atspi_target_at(x, y)
+    }
 }
 
 pub(crate) struct NativeDesktop {

@@ -420,6 +420,20 @@ pub trait DesktopBackend {
         let _ = paths;
         Err(TRASH_MSG.into())
     }
+    /// Spike-2b: the accessible control at a screen point, read-only. `None`
+    /// means unknown (no reader, a timeout, or no control there). The
+    /// default (Windows, fakes) is unknown: no UIA reader (D3).
+    fn target_at(&mut self, x: i32, y: i32) -> Option<ClickTarget> {
+        let _ = (x, y);
+        None
+    }
+}
+
+/// The accessible label and role of the control under a click (Spike-2b).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ClickTarget {
+    pub label: String,
+    pub role: String,
 }
 
 /// Top-level windows and the focused one, for the before/after check of
@@ -666,6 +680,16 @@ impl<B: DesktopBackend> DesktopServer<B> {
             "structuredContent": geom,
             "isError": false,
         }))
+    }
+
+    /// Spike-2b: the control a `click` with these args would land on, read
+    /// before it runs. `None` when the point or monitor is bad or the
+    /// backend can't tell.
+    pub fn click_target(&mut self, args: &Value) -> Option<ClickTarget> {
+        let (x, y) = require_xy(args, "x", "y").ok()?;
+        let geom = self.shot_for(&monitor_arg(args)).ok()?;
+        let (sx, sy) = map_screenshot_point(&geom, x, y);
+        self.backend.target_at(sx, sy)
     }
 
     fn tool_click(&mut self, args: &Value) -> Result<Value, String> {

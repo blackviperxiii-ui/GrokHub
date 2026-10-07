@@ -48,6 +48,9 @@
 //! node at turn end, from already-redacted span fields only; `span_search`
 //! reads `spans/*.jsonl` for History and palette search. Both only read
 //! spans and never execute anything.
+//! Spike-2b: a click is classified by the control it lands on (`hard.rs`
+//! `click_target_class`): a Send, Pay, Delete or Reset button parks before
+//! the click runs, on every path, and spans keep only the matched rule.
 
 mod access;
 mod approval;
@@ -123,9 +126,10 @@ pub use detect::{
     UNSUPPORTED_ASSURANCE,
 };
 pub use hard::{
-    classify, classify_ask, credential_action, credential_field, credential_hint, delete_files_action, delete_targets,
-    desk_classify, hard_class, hard_floor,
-    HardClass, HardFloor, HardHit, BUILTIN_CU_DENY, GB_DENY_GAPS, HEADLESS_DENY_RULES,
+    classify, classify_ask, click_action, click_rule, click_target, click_target_class, click_target_in, credential_action,
+    credential_field, credential_hint, delete_files_action, delete_targets, desk_classify, hard_class, hard_floor,
+    ClickRule, ClickTarget, HardClass, HardFloor, HardHit, BUILTIN_CU_DENY, GB_DENY_GAPS, HEADLESS_DENY_RULES,
+    TARGET_HINT,
 };
 pub use path_d::{builtin_cu, cu_look_only, decide_unasked, unasked_action, unasked_title};
 pub use ladder::{hard_target, ladder_span, Ladder, LadderStep, Rung, RECOVERY_TOOL};
