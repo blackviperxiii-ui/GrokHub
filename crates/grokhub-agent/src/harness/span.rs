@@ -44,6 +44,14 @@ pub struct Span {
     /// The consent grant that allowed this step (`g-…`, or `approved-once`). Empty when none applied.
     #[serde(default)]
     pub consent_ref: String,
+    /// Spike-2b: where a click's target came from: the cabin's AX read (`ax`),
+    /// the caller's args (`args`), or nothing found (`unknown`). Empty otherwise.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub target: String,
+    /// Spike-2b: the click-target rule that matched (`send:Send`). Never the
+    /// on-screen label.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub target_rule: String,
 }
 
 /// Who started a step. Every origin goes through `harness::decide`; none skips it.
@@ -98,6 +106,8 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            target: String::new(),
+            target_rule: String::new(),
         }
     }
 
@@ -120,6 +130,8 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            target: String::new(),
+            target_rule: String::new(),
         }
     }
 
@@ -142,6 +154,8 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            target: String::new(),
+            target_rule: String::new(),
         }
     }
 
@@ -164,6 +178,8 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            target: String::new(),
+            target_rule: String::new(),
         }
     }
 
@@ -187,6 +203,13 @@ impl Span {
 
     pub fn from_origin(mut self, origin: Origin) -> Self {
         self.origin = origin;
+        self
+    }
+
+    /// Tag a click's target source and matched rule (Spike-2b).
+    pub fn with_target(mut self, target: &str, rule: &str) -> Self {
+        self.target = target.into();
+        self.target_rule = rule.into();
         self
     }
 
@@ -461,6 +484,7 @@ mod tests {
         for s in &got {
             assert_eq!(s.origin, Origin::User);
             assert_eq!(s.consent_ref, "");
+            assert_eq!((s.target.as_str(), s.target_rule.as_str()), ("", ""));
         }
         assert_eq!(got[0].path, "A");
         assert_eq!(got[0].ui_changed, Some(true));
@@ -473,5 +497,10 @@ mod tests {
         let back: Span = serde_json::from_str(&line).unwrap();
         assert_eq!(back, tagged);
         assert_eq!(tagged.span_ref(), format!("chat-old:{}", tagged.ts_ms));
+        // Spike-2b: a click span adds its target and rule; nothing else changes.
+        let click = Span::soft_allow("chat-old", "click", "{}", "parked", "c", AccessMode::Full, "cua").with_target("ax", "send:Send");
+        let line = serde_json::to_string(&click).unwrap();
+        assert!(line.ends_with(r#","consent_ref":"","target":"ax","target_rule":"send:Send"}"#), "{line}");
+        assert_eq!(serde_json::from_str::<Span>(&line).unwrap(), click);
     }
 }
