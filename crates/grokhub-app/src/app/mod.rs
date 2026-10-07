@@ -151,12 +151,15 @@ use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 mod persist;
+mod amr_memory;
 mod acp;
 mod native_engine;
 mod native_sessions;
 mod native_unattended;
 mod chat_kick;
 mod palette;
+mod step_search;
+use step_search::{parse_step_target, step_hits, turn_jump_row};
 mod settings;
 mod plus;
 mod projects;
@@ -536,6 +539,10 @@ pub struct Cabin {
     palette_files_q: String,
     palette_files_root: String,
     palette_file_rx: Option<mpsc::Receiver<(String, String, Vec<String>)>>,
+    /// Spike-3a: tool-step rows for the palette query, `(step:<turn>:<chat>, line)`.
+    palette_steps: Vec<(String, String)>,
+    palette_steps_q: String,
+    palette_step_rx: Option<HistoryHitsRx>,
     shortcuts_open: bool,
     active_skill_follow: Option<String>,
     /// Changed notes from workboard cards linked to this chat, sent with this turn.
@@ -771,6 +778,8 @@ pub struct Cabin {
     confirm: Option<ConfirmKind>,
     /// History "Last you" scroll once the thread is open.
     jump_last_you: bool,
+    /// Spike-3a: a step hit opened this chat; scroll to that turn's Work card.
+    jump_turn: Option<u32>,
     /// Ctrl+F in the open chat.
     find: ChatFind,
     elicit_ask: Option<grokhub_acp::ElicitAsk>,
@@ -800,6 +809,10 @@ pub struct Cabin {
     sync_rx: Option<mpsc::Receiver<(String, Vec<HubMemoryFile>)>>,
     inhabit_rx: Option<mpsc::Receiver<InhabitBundle>>,
     reflect_rx: Option<mpsc::Receiver<(MemoryEdit, Option<MemoryEdit>)>>,
+    /// The one-time AMR import ran this session (AMR mode only).
+    amr_imported: bool,
+    /// The local day the AMR dream ran or was skipped (Halt), this session.
+    dream_day: Option<String>,
     session_show_rx: Option<(String, mpsc::Receiver<String>)>,
     import_rx: Option<mpsc::Receiver<ImportOpenclawOut>>,
     inspect_text: String,
@@ -1150,6 +1163,9 @@ impl Cabin {
             palette_files_q: String::new(),
             palette_files_root: String::new(),
             palette_file_rx: None,
+            palette_steps: Vec::new(),
+            palette_steps_q: String::new(),
+            palette_step_rx: None,
             shortcuts_open: false,
             active_skill_follow: None,
             card_notes_follow: None,
@@ -1345,6 +1361,7 @@ impl Cabin {
             perm_always_confirm: None,
             confirm: None,
             jump_last_you: false,
+            jump_turn: None,
             find: ChatFind::default(),
             elicit_ask: None,
             elicit_draft: String::new(),
@@ -1373,6 +1390,8 @@ impl Cabin {
             sync_rx: None,
             inhabit_rx: None,
             reflect_rx: None,
+            amr_imported: false,
+            dream_day: None,
             session_show_rx: None,
             import_rx: None,
             inspect_text: String::new(),
@@ -1585,6 +1604,9 @@ impl Cabin {
             palette_files_q: String::new(),
             palette_files_root: String::new(),
             palette_file_rx: None,
+            palette_steps: Vec::new(),
+            palette_steps_q: String::new(),
+            palette_step_rx: None,
             shortcuts_open: false,
             active_skill_follow: None,
             card_notes_follow: None,
@@ -1780,6 +1802,7 @@ impl Cabin {
             perm_always_confirm: None,
             confirm: None,
             jump_last_you: false,
+            jump_turn: None,
             find: ChatFind::default(),
             elicit_ask: None,
             elicit_draft: String::new(),
@@ -1805,6 +1828,8 @@ impl Cabin {
             sync_rx: None,
             inhabit_rx: None,
             reflect_rx: None,
+            amr_imported: false,
+            dream_day: None,
             session_show_rx: None,
             import_rx: None,
             inspect_text: String::new(),
@@ -2219,7 +2244,12 @@ impl Cabin {
             return;
         }
         if !facts.is_empty() {
-            extract_insights(&mut self.learning, &facts);
+            if self.amr_on() {
+                // Single write: new facts are nodes; the part notes below stay engine state.
+                let _ = self.amr_remember_facts(&facts, "insight");
+            } else {
+                extract_insights(&mut self.learning, &facts);
+            }
             for fact in &facts {
                 let key = format!("pref:{}", grokhub_core::engine_slug(fact));
                 grokhub_core::note_part(&mut self.learning, "chat", &key, fact);
@@ -3422,6 +3452,7 @@ impl Cabin {
                 HeartbeatAct::Review => {
                     if !night_fired && !self.running {
                         self.tick_review();
+                        self.tick_dream();
                     }
                 }
                 HeartbeatAct::Wall => self.tick_wall(),
@@ -4242,7 +4273,7 @@ impl Cabin {
                     fact_candidates_from(self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())))
                 })
         };
-        if self.policy().learns() {
+        if self.policy().learns() && !self.amr_on() {
             extract_insights(&mut self.learning, &facts);
             let learning = self.learning.clone();
             let io = self.persist_io.clone();
@@ -4259,6 +4290,11 @@ impl Cabin {
                 let _ = config::write_memory(&name, &body);
             }
         });
+        if self.amr_on() {
+            // Single write: the facts become nodes, not insights or MEMORY.md lines.
+            self.run_reflect_amr(&facts);
+            return;
+        }
         let mem_name = self.mem_name.clone();
         let mem_body = self.mem_body.clone();
         let writes_user = self.policy().writes_user_md();
@@ -4309,7 +4345,11 @@ impl Cabin {
         match rx.try_recv() {
             Ok((edit, user_edit)) => {
                 let mut wrote = !edit.diff.is_empty();
-                if wrote {
+                // AMR reflect sends an empty `next`: the lines went to the memory repo.
+                let amr = wrote && edit.next.is_empty();
+                if amr {
+                    self.reflect_diff = edit.diff;
+                } else if wrote {
                     self.reflect_diff = edit.diff;
                     if let Some(i) = Self::mem_file_idx("MEMORY.md") {
                         self.mem_cache_at[i] = config::memory_updated_at("MEMORY.md");
@@ -4340,7 +4380,9 @@ impl Cabin {
                     }
                     wrote = true;
                 }
-                self.status = if wrote {
+                self.status = if amr {
+                    "Reflected into the memory repo".into()
+                } else if wrote {
                     "Reflected MEMORY.md".into()
                 } else {
                     "Reflect: nothing new".into()

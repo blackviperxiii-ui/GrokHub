@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+Spike-3a: History and palette search now find tool steps too ("click OK" finds the click), shown as chat · turn · tool · decision, and Enter opens that chat at that turn's Work card. It reads the existing span files (newest 200 files, 20,000 lines, 40 rows) and works in either memory mode. With `"memory_backend": "amr"`, each turn with desktop or tool steps also leaves one trail note in `amr/` (tool counts, decisions, findings, verify result; typed text only as its length), sealed when the turn touched a hard-class step; `/recall` finds it. Scratch chats write no trail. No new pages or chrome.
+
+Memory repo M3 (only with `"memory_backend": "amr"`): once a night after the review, GrokHub tidies `amr/` with no model call. It merges near-duplicate notes (a `supersedes` edge and a tombstone), retires old low-confidence notes nothing links to, never deletes a file or edits USER.md or SOUL.md, skips private notes it can't unlock, and writes a plain report to `amr/dreams/<date>.md`. `/memory dream` shows the latest one. Halt skips the night. `/dream` (Imagine) is unchanged. No UI changes.
+
+Memory repo M1–M2 (only with `"memory_backend": "amr"` in `app.json`): reflect, chat insights, `/memory note` and `/remember`, Memory Save and native `/remember` now write one node each in `amr/` instead of a MEMORY.md line; `/recall`, History and the native first-turn pack read `amr/` and the old files together; `/forget <topic>` leaves a tombstone; and the first AMR use imports learned insights and chip preferences once, with a report in `amr/dreams/`. Legacy is unchanged. No UI changes.
+
 Safety loop (Spike-1a). The harness now catches a click that changed nothing, a step repeated with no effect, "done" with no check, and a claim no step backs; it retries once, backtracks, then pauses for you (hard actions never retry), and typing into a password, PIN, OTP, 2FA or verification-code field is a hard credentials action whose value never reaches spans or logs. No UI changes.
 
 Decision inbox and real desktop actions (Spike-1b). "N things need a decision. Everything else is on track." now opens into one row per waiting decision on Home and the Workboard, each with what Grok wants, the chat it is from, and Approve/Deny (hard rows need a mouse click, Esc denies, Halt denies them all); Grok can open an app, focus a window and type with `ui_changed` checked, and any delete (rm, del, Remove-Item, trash, the Recycle Bin, or Delete in a file manager) parks a hard card naming the exact paths.

@@ -693,6 +693,8 @@ impl Cabin {
                         if crate::cards::white_pill(ui, "Save") {
                             if self.scratch() {
                                 self.status = "Scratch — no memory writes".into();
+                            } else if self.amr_on() && self.mem_name == "MEMORY.md" {
+                                self.save_memory_amr();
                             } else {
                                 let name = self.mem_name.clone();
                                 let body = self.mem_body.clone();
@@ -2113,6 +2115,17 @@ impl Cabin {
             };
             thread_rows.push((format!("thread:{}", t.id), t.title.clone(), body));
         }
+        // Spike-3a: tool steps too, read from the span files in the thread below.
+        let step_titles = self.step_search_titles();
+        let held = self.secret_hold.clone();
+        let dir = config::config_dir();
+        // AMR mode: memory repo hits lead, the legacy files and chats follow.
+        let amr_store = if self.amr_on() {
+            let scratch = self.scratch();
+            Some(self.amr_store(scratch))
+        } else {
+            None
+        };
         let (tx, rx) = mpsc::channel();
         self.history_rx = Some(rx);
         self.status = "Searching…".into();
@@ -2138,7 +2151,11 @@ impl Cabin {
                 ("mem:MEMORY.md".to_string(), "MEMORY.md".to_string(), memory),
             ];
             rows.extend(thread_rows);
-            let hits = search_corpus_tagged(&q, &rows);
+            let mut hits = amr_store
+                .map(|store| amr_memory::amr_history_hits(&store, &q))
+                .unwrap_or_default();
+            hits.extend(search_corpus_tagged(&q, &rows));
+            hits.extend(step_hits(&dir, &q, &step_titles, &held));
             let _ = tx.send((q, hits));
         });
     }
@@ -2146,6 +2163,22 @@ impl Cabin {
     /// A hit is a door: memory hits open that file in the editor, chat hits open the
     /// thread they came from.
     pub(super) fn open_history_hit(&mut self, target: &str) {
+        if let Some((turn, chat)) = parse_step_target(target) {
+            // A tool step: open its chat and scroll to that turn's Work card.
+            let Some(idx) = self.threads.iter().position(|t| t.id == chat) else {
+                self.status = "That chat is gone".into();
+                return;
+            };
+            self.switch_thread(idx);
+            self.jump_turn = Some(turn);
+            self.nav = Nav::Chat;
+            return;
+        }
+        if let Some(id) = target.strip_prefix("amr:") {
+            // A memory repo node is a file, not an editor tab: say where it is.
+            self.status = format!("Memory repo: amr/nodes/{id}");
+            return;
+        }
         if let Some(name) = target.strip_prefix("mem:") {
             let name = name.to_string();
             self.open_memory_file(&name);
@@ -2164,6 +2197,16 @@ impl Cabin {
         self.pin_chat_tail();
         self.switch_thread(idx);
         self.nav = Nav::Chat;
+    }
+
+    /// Chats whose tool steps search may show, id → title. Scratch chats stay
+    /// out, and a deleted chat's spans have no title, so they stay out too.
+    pub(super) fn step_search_titles(&self) -> std::collections::HashMap<String, String> {
+        self.threads
+            .iter()
+            .filter(|t| !t.scratch)
+            .map(|t| (t.id.clone(), t.title.clone()))
+            .collect()
     }
 
     /// Show a memory file in the editor. The file being left is flushed to disk off the
