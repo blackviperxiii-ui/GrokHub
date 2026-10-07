@@ -66,7 +66,7 @@ pub use user_model::{
     edit_node, forget_node, memory_rows, memory_text, reflect_diff, strip_forgotten, MemoryRow, ReflectDiff, SourceLink,
     UserForget, REFLECT_MIN_CONFIDENCE,
 };
-pub use write::{line_id, node_type_for, remember_line, sensitivity_for, LineWrite, Remembered};
+pub use write::{line_id, node_type_for, remember_line, sensitivity_for, trail_id, LineWrite, Remembered};
 
 /// Seals and opens personal and sensitive nodes. `aad` binds a node to its id.
 /// Errors are plain sentences for the user and never carry key material.

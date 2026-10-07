@@ -59,7 +59,7 @@ pub struct MindSignal {
     pub key: String,
     pub at_ms: u64,
     pub event: MindEvent,
-    /// `span:<session>@<ms>`, `ledger:<seq>` or `pulse:card:<id>`: the "why".
+    /// `span:<session>:<ms>`, `ledger:<seq>` or `pulse:card:<id>`: the "why".
     pub source: String,
 }
 
@@ -217,7 +217,7 @@ pub fn signals_from_spans(spans: &[Span]) -> Vec<MindSignal> {
                 key: mind_key(s),
                 at_ms: s.ts_ms,
                 event,
-                source: format!("span:{}@{}", s.session_id, s.ts_ms),
+                source: format!("span:{}", s.span_ref()),
             })
         })
         .collect()
@@ -349,7 +349,7 @@ mod tests {
                 key: "proactive:tidy_downloads".into(),
                 at_ms: T0,
                 event: MindEvent::Deny,
-                source: format!("span:s1@{T0}"),
+                source: format!("span:s1:{T0}"),
             }]
         );
         mind.extend(signals);
@@ -389,7 +389,7 @@ mod tests {
             key: "proactive:tidy_downloads".into(),
             at_ms: T0 + 34 * DAY + i,
             event: MindEvent::Approve,
-            source: "span:s1@x".into(),
+            source: "span:s1:0".into(),
         }));
         assert_eq!(mind.mind_prior("proactive:tidy_downloads"), 0.0);
     }
@@ -404,7 +404,7 @@ mod tests {
             key: "proactive:tidy_downloads".into(),
             at_ms: T0 + i,
             event: MindEvent::Approve,
-            source: "span:s1@x".into(),
+            source: "span:s1:0".into(),
         }));
         let candidate = Candidate { key: "proactive:tidy_downloads", hard: None };
         c.0.store(T0 + 12, Ordering::SeqCst);
@@ -486,7 +486,7 @@ mod tests {
             key: "proactive:send_email".into(),
             at_ms: T0 - 40 * DAY + i,
             event: MindEvent::Approve,
-            source: "span:s1@x".into(),
+            source: "span:s1:0".into(),
         }));
         assert_eq!(mind.mind_route(&Candidate { key: "proactive:send_email", hard: None }), MindRoute::MayAuto);
         assert_eq!(
@@ -541,7 +541,7 @@ mod tests {
         assert_eq!(rows[0].node_type, NodeType::MindPrior);
         assert_eq!(
             rows[0].line(),
-            format!("- Ask first before proactive:tidy_downloads. · why: [from what you approved, denied or undid](span:s1@{T0})")
+            format!("- Ask first before proactive:tidy_downloads. · why: [from what you approved, denied or undid](span:s1:{T0})")
         );
         let _ = std::fs::remove_dir_all(dir);
     }

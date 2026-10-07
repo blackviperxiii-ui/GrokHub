@@ -27,7 +27,7 @@ pub const REFLECT_MIN_CONFIDENCE: f32 = 0.7;
 pub enum SourceLink {
     /// `chat:<thread>#<turn>` (old notes may have no turn).
     Chat { thread: String, turn: Option<u32> },
-    /// `span:<session>@<ms>` or another span ref.
+    /// `span:<session>:<ms>` or another span ref.
     Span(String),
     /// `pulse:<date>` or `pulse:card:<id>`.
     Pulse(String),

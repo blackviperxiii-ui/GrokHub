@@ -227,14 +227,14 @@ fn every_learned_row_has_a_source_link() {
     let store = tmp.store();
     note_chat(&store, &chat("My standup is at 9", 1), NOW).unwrap();
     import_pulse_ledger(&store, "- [2026-10-04] pulse: dismissed \"tidy downloads\" reason=not-this\n", NOW + 1_000).unwrap();
-    note_usage(&store, Usage::SkillRun { name: "inbox-zero" }, "s1@42", NOW + 2_000).unwrap();
+    note_usage(&store, Usage::SkillRun { name: "inbox-zero" }, "s1:42", NOW + 2_000).unwrap();
     let (rows, locked) = memory_rows(&store);
     assert_eq!(locked, 0);
     assert_eq!(rows.len(), 3);
     assert!(rows.iter().all(|r| !r.source.target().is_empty()));
     assert_eq!(
         memory_text(&store),
-        "- You use the inbox-zero skill. · why: [from what you approved, denied or undid](span:s1@42)\n\
+        "- You use the inbox-zero skill. · why: [from what you approved, denied or undid](span:s1:42)\n\
          - [2026-10-04] pulse: dismissed \"tidy downloads\" reason=not-this · why: [from a card you reacted to](pulse:2026-10-04)\n\
          - My standup is at 9 · why: [you said it in chat (turn 1)](chat:t-standup#1)"
     );
@@ -350,6 +350,6 @@ fn card_signals_and_usage_are_deterministic() {
     assert_eq!(note_card_signal(&store, &opened).unwrap(), Noted::Skipped("not a taste signal"));
     assert_eq!(store.recall("downloads")[0].line, "You hid automate offer cards (offer:downloads).");
     let ok = Usage::Automation { name: "nightly-backup", outcome: "done" };
-    let a = note_usage(&store, ok, "s2@7", NOW).unwrap();
-    assert_eq!(note_usage(&store, ok, "s2@9", NOW).unwrap(), Noted::Known(a.id().unwrap().into()));
+    let a = note_usage(&store, ok, "s2:7", NOW).unwrap();
+    assert_eq!(note_usage(&store, ok, "s2:9", NOW).unwrap(), Noted::Known(a.id().unwrap().into()));
 }

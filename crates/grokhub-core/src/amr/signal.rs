@@ -3,7 +3,7 @@
 //! the same input always writes the same node. Approvals, denials and undos
 //! are read from the span log by the harness (`harness::mindcheck`).
 //!
-//! Sources: `chat:<thread>#<turn>`, `span:<session>@<ms>`, `pulse:<date>`,
+//! Sources: `chat:<thread>#<turn>`, `span:<session>:<ms>`, `pulse:<date>`,
 //! `scope:<grant>`, or `user`. Scratch writes nothing, and a line holding a
 //! secret, a password, a PIN or a one-time code is skipped whole.
 

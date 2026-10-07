@@ -511,6 +511,31 @@ impl AmrStore {
         Ok(out)
     }
 
+    /// Live nodes whose `source` is exactly `source`, sorted by id. Sealed
+    /// nodes that can't be opened are left out.
+    pub fn nodes_from(&self, source: &str) -> Vec<Node> {
+        let mut nodes: Vec<Node> = self.load_live().nodes.into_iter().filter(|n| n.source == source).collect();
+        nodes.sort_by(|a, b| a.id.cmp(&b.id));
+        nodes
+    }
+
+    /// True when `nodes/<id>.md` or `nodes/<id>.sealed` is there.
+    pub fn has_node(&self, id: &str) -> bool {
+        NodeId::parse(id).and_then(|id| self.node_exists(&id)).unwrap_or(false)
+    }
+
+    /// [`Self::link`] unless the same edge is already in the log. True when
+    /// a line was written.
+    pub fn link_once(&self, from: &str, to: &str, rel: EdgeRel) -> Result<bool, AmrError> {
+        if self.scratch {
+            return Err(AmrError::Scratch);
+        }
+        if self.edges()?.iter().any(|e| e.from == from && e.to == to && e.rel == rel) {
+            return Ok(false);
+        }
+        self.link(from, to, rel).map(|()| true)
+    }
+
     fn node_exists(&self, id: &NodeId) -> Result<bool, AmrError> {
         let path = self.node_path(id)?;
         Ok(path.is_file() || path.with_extension(SEALED_EXT).is_file())
