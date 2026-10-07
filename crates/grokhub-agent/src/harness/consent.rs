@@ -9,15 +9,22 @@
 //!
 //! Scopes (P5) are all off: a scope reads as on only while a user grant for it
 //! is active. Nothing reads a scope yet; the indexers arrive in Spike-8.
+//!
+//! Spike-4b: every line is sealed at rest (`at_rest`, key in the OS keyring).
+//! With the keyring down or the key missing the ledger reads as locked: no
+//! grant applies (fail closed) and nothing is written, never as plain text.
+//! A revoke is sticky: once an id has a revoked line, no later copy of its
+//! grant line brings it back.
 
-use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
+use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::harness::at_rest::{self, Locked, AAD_CONSENT};
 use crate::harness::egress::DataClass;
 
 /// File name under the cabin config dir.
@@ -154,7 +161,9 @@ pub fn scope_refusal(scope: &Scope, home: Option<&Path>) -> Option<String> {
     }
     if let Some(home) = home {
         let h = home.display().to_string().replace('\\', "/");
-        if d == h.trim_end_matches('/') {
+        let h = h.trim_end_matches('/');
+        // The home folder itself, or any folder that holds it (`/home`).
+        if d == h || h.starts_with(&format!("{d}/")) {
             return Some("files: one folder at a time, never all of your home folder".into());
         }
     }
@@ -168,6 +177,12 @@ pub fn scope_refusal(scope: &Scope, home: Option<&Path>) -> Option<String> {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ConsentLedger {
     grants: Vec<Grant>,
+    /// Why the sealed ledger could not be read. Then no grant applies.
+    locked: Option<Locked>,
+    /// Lines that did not open (damaged, edited, or plaintext in a sealed file).
+    unreadable: usize,
+    /// The keyring hasn't answered yet (UI read); read again next frame.
+    pending: bool,
 }
 
 impl ConsentLedger {
@@ -177,8 +192,19 @@ impl ConsentLedger {
     }
 
     /// Read `{config_dir}/consent.jsonl`. Missing, unreadable, or oversized
-    /// reads as empty (fail closed). Bad lines are skipped.
+    /// reads as empty (fail closed). Bad lines are skipped. May wait on the
+    /// OS keyring once; off the UI thread use this, on it use [`Self::load_now`].
     pub fn load(config_dir: &Path) -> Self {
+        Self::load_with(config_dir, true)
+    }
+
+    /// Like [`Self::load`] but never waits on the keyring: until it has
+    /// answered, the ledger is empty and [`Self::pending`] is true.
+    pub fn load_now(config_dir: &Path) -> Self {
+        Self::load_with(config_dir, false)
+    }
+
+    fn load_with(config_dir: &Path, wait: bool) -> Self {
         let path = consent_path(config_dir);
         let Ok(f) = fs::File::open(&path) else {
             return Self::empty();
@@ -190,7 +216,12 @@ impl ConsentLedger {
         if f.take(CONSENT_CAP).read_to_string(&mut text).is_err() {
             return Self::empty();
         }
-        Self::from_lines(&text)
+        let read = at_rest::read_sealed_jsonl(config_dir, &text, AAD_CONSENT, wait);
+        let mut ledger = Self::from_lines(&read.lines.join("\n"));
+        ledger.locked = read.locked;
+        ledger.unreadable = read.unreadable;
+        ledger.pending = read.pending;
+        ledger
     }
 
     fn from_lines(text: &str) -> Self {
@@ -203,11 +234,28 @@ impl ConsentLedger {
                 continue;
             }
             match grants.iter_mut().find(|x| x.id == g.id) {
+                // Sticky revoke: a replayed grant line can't undo a revoke.
+                Some(slot) if slot.revoked_at.is_some() && g.revoked_at.is_none() => {}
                 Some(slot) => *slot = g,
                 None => grants.push(g),
             }
         }
-        Self { grants }
+        Self { grants, ..Self::default() }
+    }
+
+    /// Why the ledger is closed, if it is. Then no grant applies.
+    pub fn locked(&self) -> Option<&Locked> {
+        self.locked.as_ref()
+    }
+
+    /// Ledger lines that did not open (damaged or edited).
+    pub fn unreadable(&self) -> usize {
+        self.unreadable
+    }
+
+    /// True while a UI read waits for the keyring's first answer.
+    pub fn pending(&self) -> bool {
+        self.pending
     }
 
     /// Every grant, revoked ones included, oldest first.
@@ -256,19 +304,13 @@ fn grant_id(seed: &str) -> String {
     format!("g-{hex}")
 }
 
+/// Seal and append one line. Locked ⇒ nothing is written (no plaintext fallback).
 fn append_line(config_dir: &Path, g: &Grant) -> Result<(), String> {
     fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
     let line = serde_json::to_string(g).map_err(|e| e.to_string())?;
     let line = grokhub_core::redact_secrets(&line);
-    let mut opts = OpenOptions::new();
-    opts.create(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    let mut f = opts.open(consent_path(config_dir)).map_err(|e| e.to_string())?;
-    writeln!(f, "{line}").map_err(|e| e.to_string())
+    at_rest::append_sealed_line(config_dir, &consent_path(config_dir), AAD_CONSENT, &line)
+        .map_err(|why| why.message())
 }
 
 /// Grant one destination for these data classes. Click only.
@@ -325,6 +367,9 @@ pub fn grant_scope(
 /// only narrows, so it needs no click proof.
 pub fn revoke_grant(config_dir: &Path, id: &str) -> Result<bool, String> {
     let ledger = ConsentLedger::load(config_dir);
+    if let Some(why) = ledger.locked() {
+        return Err(why.message());
+    }
     let Some(g) = ledger.active().find(|g| g.id == id).cloned() else {
         return Ok(false);
     };
@@ -337,6 +382,7 @@ pub fn revoke_grant(config_dir: &Path, id: &str) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::harness::at_rest::{is_sealed_line, use_key_store_for, MemoryKeyStore};
     use crate::harness::egress::{DataClass, HUB_DEST};
 
     struct DirGuard(PathBuf);
@@ -349,6 +395,14 @@ mod tests {
     fn dir(label: &str) -> (PathBuf, DirGuard) {
         let p = crate::harness::test_dir(&format!("consent-{label}"));
         (p.clone(), DirGuard(p))
+    }
+
+    /// A test dir plus its in-memory keyring, so a test can take it away.
+    fn keyed_dir(label: &str) -> (PathBuf, std::sync::Arc<MemoryKeyStore>, DirGuard) {
+        let (d, g) = dir(label);
+        let store = std::sync::Arc::new(MemoryKeyStore::new());
+        use_key_store_for(&d, store.clone());
+        (d, store, g)
     }
 
     #[test]
@@ -405,6 +459,12 @@ mod tests {
             "files: one folder at a time, never all of your home folder"
         );
         assert_eq!(
+            scope_refusal(&Scope::Files("/home".into()), Some(home)).as_deref(),
+            Some("files: one folder at a time, never all of your home folder"),
+            "a folder that holds the home folder is the home folder too"
+        );
+        assert_eq!(scope_refusal(&Scope::Files("/home/meadow".into()), Some(home)), None);
+        assert_eq!(
             scope_refusal(&Scope::Files("/home/me/.ssh".into()), Some(home)).as_deref(),
             Some("files: that folder is always excluded")
         );
@@ -439,5 +499,69 @@ mod tests {
         assert_eq!(ledger.all()[0].id, "g-2");
         assert_eq!(ledger.destination_grant("hub", &[DataClass::Chat, DataClass::Personal]), None);
         assert!(ledger.destination_grant("hub", &[DataClass::Chat]).is_some());
+    }
+
+    #[test]
+    fn the_ledger_is_sealed_and_a_locked_ledger_grants_nothing() {
+        let (d, store, _g) = keyed_dir("sealed");
+        let data = [DataClass::Chat, DataClass::Personal];
+        let g = grant_destination(&d, HUB_DEST, &data, UserClick::from_click()).unwrap();
+        let text = fs::read_to_string(consent_path(&d)).unwrap();
+        assert!(text.lines().all(is_sealed_line), "{text}");
+        assert!(!text.contains("hub") && !text.contains(&g.id) && !text.contains("user"), "{text}");
+        assert!(ConsentLedger::load(&d).destination_grant(HUB_DEST, &data).is_some());
+
+        // The keyring goes away (next start): no grant applies, nothing is written.
+        store.set_available(false);
+        use_key_store_for(&d, store.clone());
+        let locked = ConsentLedger::load(&d);
+        assert_eq!(locked.locked(), Some(&Locked::Unavailable));
+        assert_eq!(locked.destination_grant(HUB_DEST, &data), None);
+        assert_eq!(locked.active().count(), 0);
+        let why = grant_scope(&d, &Scope::Calendar, None, UserClick::from_click()).unwrap_err();
+        assert!(why.starts_with("Private data is locked"), "{why}");
+        assert_eq!(revoke_grant(&d, &g.id), Err(Locked::Unavailable.message()));
+        assert_eq!(fs::read_to_string(consent_path(&d)).unwrap(), text, "nothing written, nothing dropped");
+
+        // It comes back: the grant is still there.
+        store.set_available(true);
+        use_key_store_for(&d, store.clone());
+        assert!(ConsentLedger::load(&d).destination_grant(HUB_DEST, &data).is_some());
+    }
+
+    #[test]
+    fn a_legacy_plaintext_ledger_keeps_working_and_is_sealed_on_the_next_write() {
+        let (d, store, _g) = keyed_dir("legacy");
+        let old = r#"{"id":"g-0000000000aa","destination":"hub","scope":"send","data_classes":["chat","personal"],"granted_at":1,"by":"user"}"#;
+        fs::write(consent_path(&d), format!("{old}\n")).unwrap();
+        let ledger = ConsentLedger::load(&d);
+        assert_eq!(ledger.locked(), None);
+        assert_eq!(ledger.active().count(), 1, "existing grants still count");
+        assert!(!d.join(crate::harness::KEY_ID_FILE).exists(), "reading makes no key");
+
+        // Without a keyring even the old plaintext ledger reads as locked.
+        store.set_available(false);
+        use_key_store_for(&d, store.clone());
+        assert_eq!(ConsentLedger::load(&d).locked(), Some(&Locked::Unavailable));
+        assert_eq!(ConsentLedger::load(&d).active().count(), 0);
+        store.set_available(true);
+        use_key_store_for(&d, store.clone());
+
+        assert_eq!(revoke_grant(&d, "g-0000000000aa"), Ok(true));
+        let text = fs::read_to_string(consent_path(&d)).unwrap();
+        assert_eq!(text.lines().count(), 2, "the old line is kept, sealed in place\n{text}");
+        assert!(text.lines().all(is_sealed_line), "{text}");
+        let after = ConsentLedger::load(&d);
+        assert_eq!(after.all().len(), 1);
+        assert_eq!(after.active().count(), 0);
+    }
+
+    #[test]
+    fn a_replayed_grant_line_cannot_undo_a_revoke() {
+        let grant = r#"{"id":"g-1","destination":"hub","scope":"send","data_classes":["chat"],"granted_at":1,"by":"user"}"#;
+        let revoke = r#"{"id":"g-1","destination":"hub","scope":"send","data_classes":["chat"],"granted_at":1,"by":"user","revoked_at":5}"#;
+        let ledger = ConsentLedger::from_lines(&[grant, revoke, grant].join("\n"));
+        assert_eq!(ledger.all().len(), 1);
+        assert_eq!(ledger.active().count(), 0);
     }
 }

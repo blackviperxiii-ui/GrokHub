@@ -1957,14 +1957,17 @@ dependencies = [
  "grokhub-core",
  "ignore",
  "image",
+ "keyring",
  "libc",
  "regex",
+ "ring",
  "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "ureq",
  "windows-sys 0.59.0",
+ "zeroize",
 ]
 
 [[package]]

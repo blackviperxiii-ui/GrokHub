@@ -21,6 +21,12 @@ globset = "0.4"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 # FTS5 memory index. Bundled sqlite so Windows GNU does not need a system libsqlite.
 rusqlite = { version = "0.32", features = ["bundled"] }
+# Spike-4b learned tier at rest. All three are already in Cargo.lock and build
+# on Windows CI today: ring (ChaCha20-Poly1305) via rustls/ureq, zeroize via
+# rustls, keyring 4 via grokhub-app (Secret Service / Credential Manager / Keychain).
+ring = "0.17"
+zeroize = "1"
+keyring = "4"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.189"

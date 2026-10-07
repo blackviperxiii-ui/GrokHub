@@ -24,7 +24,7 @@
 - Gate v0 still treats Auto like Ask; Plan and btw stay read-only (`READ_ONLY_PHASE`).
 - Unattended runs (`run_unattended`): Ask denies every non-read-only tool; Auto uses the Phase 5 judge and fails closed.
 - Subagents: Explore is read-only, General copies the parent gate, depth 2 stops grandchildren, a worktree never falls back to the parent tree.
-- Its `memory.rs` keeps `MEMORY.md` plus a rebuildable `index.sqlite` (bundled rusqlite); it never touches USER.md or SOUL.md and is not AMR.
+- Its `memory.rs` keeps `MEMORY.md` plus a rebuildable `index.sqlite` (bundled rusqlite); it never touches USER.md or SOUL.md and is not AMR; its recall pack (`first_turn_injection`) goes through `redact_recall` before the model sees it.
 - No tokio: MCP uses one worker thread per stdio child or HTTP read.
 ## See also
 - [harness](harness.md), [grokhub-acp](grokhub-acp.md), [slash](slash.md), [app-config](app-config.md)

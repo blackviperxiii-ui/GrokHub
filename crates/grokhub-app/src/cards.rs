@@ -1661,6 +1661,52 @@ pub fn settings_action_ghost(ui: &mut egui::Ui, title: &str, hint: &str, action:
     settings_action_styled(ui, title, hint, action, PillStyle::Ghost)
 }
 
+/// A filled pill that grants access. Pointer clicks only: Enter or Space on a
+/// focused Allow never grants (rule 4: only the user's click writes a grant).
+pub fn grant_pill(ui: &mut egui::Ui, label: &str) -> bool {
+    let resp = crate::theme::felt_label_button(
+        ui,
+        label,
+        crate::theme::fg(),
+        crate::theme::bg(),
+        8.0,
+        egui::vec2(0.0, 28.0),
+        None,
+        true,
+    );
+    let enabled = resp.enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp.clicked_by(egui::PointerButton::Primary)
+}
+
+/// A settings row whose action grants access: [`settings_action`]'s shape with
+/// a pointer-only [`grant_pill`]. `extra` paints left of the pill (a folder
+/// field, a browser picker) and is laid out right to left.
+pub fn settings_grant(
+    ui: &mut egui::Ui,
+    title: &str,
+    hint: &str,
+    action: &str,
+    extra: impl FnOnce(&mut egui::Ui),
+) -> bool {
+    let mut hit = false;
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.add_space(4.0);
+            ui.label(RichText::new(title).size(15.0).color(crate::theme::fg()));
+            if !hint.is_empty() {
+                ui.label(RichText::new(hint).size(12.0).color(crate::theme::muted()));
+            }
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            hit = grant_pill(ui, action);
+            extra(ui);
+        });
+    });
+    ui.add_space(10.0);
+    hit
+}
+
 fn settings_action_styled(
     ui: &mut egui::Ui,
     title: &str,
@@ -2909,6 +2955,55 @@ mod tests {
         let (head_y, head_h) = tops(true);
         assert!((head_y - plain_y - SECTION_HEAD_GAP).abs() < 0.5, "{plain_y} -> {head_y}");
         assert!((head_h - plain_h).abs() < 0.01, "the heading size stays: {plain_h} vs {head_h}");
+    }
+
+    /// Spike-4b: a focused Allow answers Enter/Space as a plain pill would, but
+    /// the grant pill only counts a pointer click.
+    #[test]
+    fn grant_pill_ignores_the_keyboard_and_takes_a_pointer_click() {
+        let run = |grant: bool| {
+            let ctx = egui::Context::default();
+            crate::theme::install_fonts_on(&ctx);
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0));
+            let pass = |events: Vec<egui::Event>| {
+                let mut hit = false;
+                let mut at = egui::Pos2::ZERO;
+                let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+                let out = crate::theme::test_pass(&ctx, input, |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        hit = if grant { grant_pill(ui, "Allow") } else { white_pill(ui, "Allow") };
+                    });
+                });
+                for clipped in &out.shapes {
+                    if let egui::Shape::Text(t) = &clipped.shape {
+                        at = t.pos + t.galley.rect.center().to_vec2();
+                    }
+                }
+                (hit, at)
+            };
+            let key = |key| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let (_, at) = pass(vec![]);
+            pass(vec![key(egui::Key::Tab)]);
+            let by_keys = pass(vec![key(egui::Key::Enter)]).0 | pass(vec![key(egui::Key::Space)]).0;
+            let press = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            pass(vec![egui::Event::PointerMoved(at)]);
+            pass(vec![press(true)]);
+            let by_click = pass(vec![press(false)]).0;
+            (by_keys, by_click)
+        };
+        assert_eq!(run(false), (true, true), "the plain pill takes keys: the test reaches the button");
+        assert_eq!(run(true), (false, true), "the grant pill takes the click only");
     }
 
     #[test]
