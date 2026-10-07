@@ -640,7 +640,7 @@ impl Cabin {
             ParkSource::Proactive(_) => {
                 if approve {
                     self.harness.next_origin = Some(hx::Origin::Proactive);
-                    self.start_oneshot(&park.action);
+                    self.start_oneshot(&park.action, None);
                 }
             }
             ParkSource::Egress(dest) => {
