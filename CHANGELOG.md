@@ -4,6 +4,8 @@
 
 Safety loop (Spike-1a). The harness now catches a click that changed nothing, a step repeated with no effect, "done" with no check, and a claim no step backs; it retries once, backtracks, then pauses for you (hard actions never retry), and typing into a password, PIN, OTP, 2FA or verification-code field is a hard credentials action whose value never reaches spans or logs. No UI changes.
 
+Decision inbox and real desktop actions (Spike-1b). "N things need a decision. Everything else is on track." now opens into one row per waiting decision on Home and the Workboard, each with what Grok wants, the chat it is from, and Approve/Deny (hard rows need a mouse click, Esc denies, Halt denies them all); Grok can open an app, focus a window and type with `ui_changed` checked, and any delete (rm, del, Remove-Item, trash, the Recycle Bin, or Delete in a file manager) parks a hard card naming the exact paths.
+
 Channel fixes: Labs Beta auto-off works after a promote and really switches back, Update and channel-switch errors say what went wrong, and Windows no longer trips over a beta receipt.
 
 - **Auto-off compares code, not commits (Linux).** Main moves by squash and the main → beta sync always adds a merge commit, so the two tips never matched and Beta stayed on. The cabin now fetches `beta` and `main` from your clone's `origin` and treats beta as caught up when `origin/beta` and `origin/main` have the same tree (the same tip commit still counts). Checked at the same times as before: opening Settings → Labs (at most once a minute) and after a successful Update.
