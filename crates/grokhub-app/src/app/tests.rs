@@ -22638,6 +22638,7 @@ fn only_typing_or_a_click_builds_an_undo_ask() {
     assert_eq!(
         hits,
         vec![
+            "grokhub-app/src/app/change_undo.rs: UndoAsk::from_click(",
             "grokhub-app/src/app/chat_ui.rs: typed_send = true",
             "grokhub-app/src/app/skill_undo.rs: UndoAsk::from_click(",
             "grokhub-app/src/app/skill_undo.rs: UndoAsk::from_click(",
@@ -27127,3 +27128,108 @@ fn self_made_skill_undo_click_removes_it() {
     assert_eq!(ops, vec![("create", "self_manage"), ("undo", "user")]);
     let _ = std::fs::remove_dir_all(&root);
 }
+/// Spike-5c: `grokhub --mcp-self` runs in its own process, so its ledger
+/// lines never reach the cabin's in-process queue. The cabin reads them from
+/// disk: a Work-tree row, a Home update, and an automations list that matches
+/// the file, each shown once.
+#[test]
+fn changes_from_the_self_server_process_show_as_work_rows() {
+    use crate::self_mcp::tests::{call, FakeIo};
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("self-elsewhere");
+    let _agent_pin = grokhub_agent::perm::ConfigGuard::set(&root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.poll_self_changes();
+    assert!(cabin.harness.work_rows.is_empty());
+    let mut server = crate::self_mcp::SelfServer::new(&root);
+    let mut io = FakeIo::answering(false);
+    assert!(call(&mut server, &mut io, "skill_create", serde_json::json!({ "name": "inbox-zero", "instructions": "archive read mail" })).0);
+    let (ok, made) = call(&mut server, &mut io, "automation_create", serde_json::json!({ "instructions": "sweep the inbox", "every": "1h" }));
+    assert!(ok, "{made}");
+    let id = made.lines().next().unwrap().trim_start_matches("created ").to_string();
+    // What the other process left behind: lines on disk only.
+    let _ = grokhub_agent::harness::take_self_changes(&root);
+    let _ = grokhub_agent::take_automation_changes();
+    assert!(cabin.automations.is_empty());
+    cabin.harness.ledger_watch.next_ms = 0;
+    cabin.poll_self_changes();
+    let labels: Vec<&str> = cabin.harness.work_rows.iter().map(|r| r.label.as_str()).collect();
+    assert_eq!(labels.len(), 2, "{labels:?}");
+    assert!(labels.contains(&"Grok added skill inbox-zero"), "{labels:?}");
+    let ids: Vec<&str> = cabin.automations.iter().map(|a| a.id.as_str()).collect();
+    assert_eq!(ids, vec![id.as_str()], "the cabin's list matches the file");
+    let cards = cabin.updates.iter().filter(|u| u.kind == grokhub_core::UpdateKind::SelfChange).count();
+    assert_eq!(cards, 2);
+    // Looked again: nothing new, nothing posted twice.
+    cabin.harness.ledger_watch.next_ms = 0;
+    cabin.poll_self_changes();
+    assert_eq!(cabin.harness.work_rows.len(), 2);
+    assert_eq!(cabin.updates.iter().filter(|u| u.kind == grokhub_core::UpdateKind::SelfChange).count(), 2);
+    let _ = std::fs::remove_dir_all(&root);
+}
+/// Spike-5b: an automation the model wrote (an Ideas Add, an Automate offer)
+/// is saved through the ChangeLedger. It shows as a Work-tree row and a Home
+/// update, and the row's Undo click removes it from the file and the
+/// cabin's own list, so the next save does not bring it back.
+#[test]
+fn a_model_written_automation_gets_a_work_row_a_home_update_and_undo() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("self-change-auto");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.poll_self_changes();
+    assert!(cabin.harness.work_rows.is_empty());
+    let route = route_schedule("every weekday at 9, summarize the board").expect("clock route");
+    let said = cabin.commit_schedule(route, grokhub_agent::harness::Origin::SelfManage, "from the idea Board digest");
+    assert!(said.starts_with("Automation added"), "{said}");
+    let id = cabin.automations[0].id.clone();
+    assert!(std::fs::read_to_string(crate::night::path()).unwrap().contains(&id), "saved now, not later");
+    let ledger = grokhub_agent::harness::ChangeLedger::load_kind(&root, grokhub_agent::harness::ChangeKind::Automation);
+    let c = &ledger.all()[0];
+    assert_eq!((c.op.as_str(), c.origin.as_str(), c.id.as_str()), ("create", "self_manage", id.as_str()));
+    assert_eq!(c.reason, "from the idea Board digest");
+    cabin.poll_self_changes();
+    assert_eq!(cabin.harness.work_rows.len(), 1);
+    let row = cabin.harness.work_rows[0].clone();
+    assert_eq!(row.label, format!("Grok added automation {}", cabin.automations[0].name));
+    let card = cabin
+        .updates
+        .iter()
+        .find(|u| u.kind == grokhub_core::UpdateKind::SelfChange)
+        .expect("a Home update");
+    assert_eq!(card.title, format!("GrokHub added automation {}", cabin.automations[0].name));
+    assert_eq!(
+        card.body.as_deref(),
+        Some("from the idea Board digest · Undo it from its Work-tree row or /automations changes.")
+    );
+    cabin.change_row_clicked(&row, super::change_undo::ChangeAct::Undo);
+    assert!(cabin.automations.is_empty(), "the cabin's list follows the file");
+    assert!(!std::fs::read_to_string(crate::night::path()).unwrap().contains(&id));
+    assert!(cabin.harness.work_rows.is_empty());
+    assert!(cabin.status.starts_with("Removed the automation "), "{}", cabin.status);
+    // A user-typed job stays outside the ledger, as before.
+    let route = route_schedule("every day at 7, water the plants").expect("clock route");
+    cabin.commit_schedule(route, grokhub_agent::harness::Origin::User, "");
+    std::thread::sleep(Duration::from_millis(100));
+    let ledger = grokhub_agent::harness::ChangeLedger::load_kind(&root, grokhub_agent::harness::ChangeKind::Automation);
+    assert_eq!(ledger.all().len(), 2, "create and its undo only: {:?}", ledger.all());
+    cabin.poll_self_changes();
+    assert!(cabin.harness.work_rows.is_empty());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// `/connections changes` and `/automations changes` post the report
+/// bubble; from a scheduled send they still only show rows (no slash undoes).
+#[test]
+fn connection_and_automation_changes_reports_post_a_bubble() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("self-change-report");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.send_from_composer("/connections changes".into());
+    cabin.send_scheduled_chat("/automations changes".into());
+    let bodies: Vec<&str> = cabin.messages.iter().map(|m| m.1.as_str()).collect();
+    assert!(bodies.iter().any(|b| b.contains(super::change_undo::CONNECTION_CHANGES_HEAD)), "{bodies:?}");
+    assert!(bodies.iter().any(|b| b.contains(super::change_undo::AUTOMATION_CHANGES_HEAD)), "{bodies:?}");
+    assert!(cabin.change_rows_now(grokhub_agent::harness::ChangeKind::Connection).is_empty());
+    let _ = std::fs::remove_dir_all(&root);
+}
+

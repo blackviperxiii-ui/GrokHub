@@ -13,7 +13,6 @@
 //! skills, connections, automations, and nothing else.
 
 mod ops;
-pub mod secrets;
 
 use serde_json::{json, Value};
 
@@ -34,7 +33,7 @@ pub enum SelfClass {
     Soft,
     /// Hard class delete: always parks a card.
     Delete,
-    /// Hard class credentials: a connection that needs a secret.
+    /// Hard class credentials: a connection that needs a token.
     Credentials,
 }
 
@@ -59,8 +58,8 @@ impl SelfClass {
 }
 
 /// Every self-manage tool and its base class. `connection_add` and
-/// `connection_modify` become [`SelfClass::Credentials`] when they name a
-/// secret ([`self_class`]).
+/// `connection_modify` become [`SelfClass::Credentials`] with `needs_token`
+/// ([`self_class`]).
 pub const SELF_TOOLS: &[(&str, SelfClass)] = &[
     ("skill_list", SelfClass::Read),
     ("skill_create", SelfClass::Soft),
@@ -92,32 +91,12 @@ pub fn self_tool(name: &str) -> Option<&'static str> {
     SELF_TOOLS.iter().find(|(n, _)| *n == leaf).map(|(n, _)| *n)
 }
 
-/// Path E: run one call on the native engine. A credentials call asks for
-/// each secret on the same masked card an MCP server's elicitation uses.
+/// Path E: run one call on the native engine. A token is asked on the
+/// cabin's masked elicit card, as Spike-5b's `connection_add` does.
 pub(crate) fn run_native(name: &str, args: &Value) -> crate::tools::ToolOutput {
     let dir = crate::perm::config_dir();
-    let mut ctx = SelfCtx::new(&dir);
-    if self_class(name, args) == Some(SelfClass::Credentials) {
-        let conn = args.get("name").and_then(|n| n.as_str()).unwrap_or("");
-        for var in secret_names(args) {
-            let msg = secret_prompt(conn, &var);
-            match crate::mcp::ask_secret(SELF_MCP_SERVER, &var, &msg) {
-                Some(v) => ctx.secrets.push((var, v)),
-                None => return crate::tools::ToolOutput::err(secret_missing(&var)),
-            }
-        }
-    }
-    run(&ctx, name, args)
-}
-
-/// What the masked card says.
-pub fn secret_prompt(conn: &str, var: &str) -> String {
-    format!("Grok is adding the connection {conn}. Paste {var} here; Grok never sees it.")
-}
-
-/// What the model reads when no secret came back.
-pub fn secret_missing(var: &str) -> String {
-    format!("The secret for {var} was not given. Nothing changed.")
+    let mut ask = |msg: &str| crate::mcp::ask_secret("GrokHub", msg, crate::tools::connections::TOKEN_TITLE);
+    run(&SelfCtx::new(&dir), name, args, &mut ask)
 }
 
 /// A list tool: runs like the read-only tools.
@@ -125,30 +104,20 @@ pub fn is_read(name: &str) -> bool {
     self_tool(name).is_some_and(|t| SELF_TOOLS.iter().any(|(n, c)| *n == t && *c == SelfClass::Read))
 }
 
-/// Class for one call. A connection write that names a secret is credentials.
+/// Class for one call. A connection write that needs a token is credentials.
 pub fn self_class(name: &str, args: &Value) -> Option<SelfClass> {
     let tool = self_tool(name)?;
     let base = SELF_TOOLS.iter().find(|(n, _)| *n == tool).map(|(_, c)| *c)?;
-    if matches!(tool, "connection_add" | "connection_modify") && !secret_names(args).is_empty() {
+    if matches!(tool, "connection_add" | "connection_modify") && needs_token(args) {
         return Some(SelfClass::Credentials);
     }
     Some(base)
 }
 
-/// Env var names a connection asks for (`secrets: ["GITHUB_TOKEN"]`). Values
-/// never travel in args: the user types them on the elicit card.
-pub fn secret_names(args: &Value) -> Vec<String> {
-    args.get("secrets")
-        .and_then(|v| v.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|s| s.as_str())
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
+/// `needs_token: true`: the user types a token on a masked card. The value
+/// never travels in args (Spike-5b `connection_add` refuses one).
+pub fn needs_token(args: &Value) -> bool {
+    args.get("needs_token").and_then(|v| v.as_bool()) == Some(true)
 }
 
 /// What a scope-guard refusal names. The words are matched on any string in
@@ -246,16 +215,23 @@ pub fn mcp_tools() -> Vec<Value> {
         "instructions": { "type": "string", "description": "The steps. Never a secret." },
     });
     let conn_body = json!({
-        "command": { "type": "string", "description": "stdio server command" },
+        "url": { "type": "string", "description": "http(s) server URL" },
+        "command": { "type": "string", "description": "local stdio server command (instead of url)" },
         "args": { "type": "array", "items": { "type": "string" } },
-        "url": { "type": "string", "description": "http server URL (instead of command)" },
-        "secrets": { "type": "array", "items": { "type": "string" }, "description": "Env var names the server needs (GITHUB_TOKEN). Never the value: the user types it on a card, and you see %secret%." },
+        "needs_token": { "type": "boolean", "description": "The server needs a token. Never pass the token: the user types it on a card, and you see %secret%." },
     });
     let auto_body = json!({
-        "instructions": { "type": "string" },
-        "schedule": { "type": "string", "description": "daily, weekdays, or a weekday name" },
-        "time": { "type": "string", "description": "HH:MM" },
+        "instructions": { "type": "string", "description": "What the run does." },
+        "every": { "type": "string", "description": "How often: 10m, 1h, 1d (at least 1m, at most 1d)." },
     });
+    let id = json!({ "id": { "type": "string", "description": "The automation id from automation_list." } });
+    let with_id = |extra: Value| {
+        let mut props = json!({ "id": id["id"], "reason": reason });
+        if let (Some(p), Some(e)) = (props.as_object_mut(), extra.as_object()) {
+            p.extend(e.clone());
+        }
+        props
+    };
     vec![
         tool("skill_list", "List GrokHub skills.", obj(json!({}), &[])),
         tool("skill_create", "Create a GrokHub skill. Logged with Undo. At most 5 new skills a day.", obj(named(skill_body.clone()), &["name", "instructions", "reason"])),
@@ -263,16 +239,16 @@ pub fn mcp_tools() -> Vec<Value> {
         tool("skill_disable", "Turn a GrokHub skill off. Logged with Undo.", obj(named(json!({})), &["name", "reason"])),
         tool("skill_enable", "Turn a disabled GrokHub skill back on. Logged with Undo.", obj(named(json!({})), &["name", "reason"])),
         tool("skill_delete", "Delete a GrokHub skill. Needs the user's click.", obj(named(json!({})), &["name", "reason"])),
-        tool("connection_list", "List connections (MCP servers) in the cabin Grok home.", obj(json!({}), &[])),
-        tool("connection_add", "Add a connection (MCP server) to the cabin Grok home. Logged with Undo. Naming a secret needs the user's click.", obj(named(conn_body.clone()), &["name", "reason"])),
-        tool("connection_modify", "Change a connection. Logged with Undo. Naming a secret needs the user's click.", obj(named(conn_body), &["name", "reason"])),
+        tool("connection_list", "List connections (MCP servers) in the cabin's own MCP config.", obj(json!({}), &[])),
+        tool("connection_add", "Add a connection (MCP server) to the cabin's own MCP config. Logged with Undo. needs_token takes the user's click and their typed token.", obj(named(conn_body.clone()), &["name", "reason"])),
+        tool("connection_modify", "Change a connection; fields left out stay. Logged with Undo. needs_token takes the user's click and their typed token.", obj(named(conn_body), &["name", "reason"])),
         tool("connection_disable", "Turn a connection off. Logged with Undo.", obj(named(json!({})), &["name", "reason"])),
         tool("connection_remove", "Remove a connection. Needs the user's click.", obj(named(json!({})), &["name", "reason"])),
         tool("automation_list", "List GrokHub automations.", obj(json!({}), &[])),
-        tool("automation_create", "Create a GrokHub automation. Logged with Undo. At most 2 a week until the user accepts one.", obj(named(auto_body.clone()), &["name", "instructions", "reason"])),
-        tool("automation_modify", "Change a GrokHub automation. Logged with Undo.", obj(named(auto_body), &["name", "reason"])),
-        tool("automation_disable", "Turn a GrokHub automation off. Logged with Undo.", obj(named(json!({})), &["name", "reason"])),
-        tool("automation_delete", "Delete a GrokHub automation. Needs the user's click.", obj(named(json!({})), &["name", "reason"])),
+        tool("automation_create", "Create a GrokHub automation. Logged with Undo. At most 2 a week until the user keeps one.", obj(json!({ "instructions": auto_body["instructions"], "every": auto_body["every"], "reason": reason }), &["instructions", "every", "reason"])),
+        tool("automation_modify", "Change a GrokHub automation. Logged with Undo.", obj(with_id(auto_body), &["id", "reason"])),
+        tool("automation_disable", "Turn a GrokHub automation off. Logged with Undo.", obj(with_id(json!({})), &["id", "reason"])),
+        tool("automation_delete", "Delete a GrokHub automation. Needs the user's click.", obj(with_id(json!({})), &["id", "reason"])),
     ]
 }
 

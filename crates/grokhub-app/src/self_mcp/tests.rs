@@ -214,3 +214,89 @@ fn policy_targets_are_refused_before_the_ledger() {
     assert!(s.iter().all(|s| s.decision == "deny" && s.origin.as_str() == "self_manage"));
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// Every file under `dir` whose bytes contain `needle`.
+fn files_holding(dir: &Path, needle: &str) -> Vec<PathBuf> {
+    snapshot(dir)
+        .into_iter()
+        .filter(|(_, bytes)| bytes.windows(needle.len()).any(|w| w == needle.as_bytes()))
+        .map(|(p, _)| p)
+        .collect()
+}
+
+#[test]
+fn a_token_connection_parks_a_credentials_card_and_the_token_never_shows() {
+    let _g = crate::config::hold_test_config();
+    let root = root("self-token");
+    let cabin = root.join("GrokHub");
+    let grok = root.join("home").join(".grok");
+    std::fs::create_dir_all(&cabin).unwrap();
+    std::fs::create_dir_all(&grok).unwrap();
+    std::fs::write(grok.join("mcp.json"), r#"{"mcpServers":{"cli":{"command":"cli-mcp"}}}"#).unwrap();
+    let grok_before = snapshot(&grok);
+    let _pin = grokhub_agent::perm::ConfigGuard::set(&cabin);
+    let token = "sk-abcdefghijklmnopqrstuv";
+    let mut server = SelfServer::new(&cabin);
+    let mut io = FakeIo::answering(true);
+    io.secret = Some(token.into());
+    init(&mut server, &mut io, true);
+    let (ok, text) = call(
+        &mut server,
+        &mut io,
+        "connection_add",
+        json!({ "name": "crm", "url": "http://127.0.0.1:9/mcp", "needs_token": true, "reason": "read the CRM" }),
+    );
+    assert_eq!((ok, text.as_str()), (true, "added connection crm (version 1 kept). The user can undo it from the Work tree."));
+    assert_eq!(io.parks.len(), 1);
+    let p = &io.parks[0];
+    assert_eq!(
+        (p.tool.as_str(), p.class.as_str(), p.action.as_str()),
+        ("grokhub-self__connection_add", "credentials", "connection add crm with a token you type")
+    );
+    assert_eq!(io.elicits.len(), 1, "the token comes from the elicit card");
+    assert_eq!(io.elicits[0].pointer("/requestedSchema/properties/token/format"), Some(&json!("password")));
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(cabin.join("mcp.json")).unwrap()).unwrap();
+    assert_eq!(saved["mcpServers"]["crm"]["tokenRef"], json!("crm"));
+    assert_eq!(files_holding(&root, token), Vec::<PathBuf>::new(), "spans, ledger, config: no plain token");
+    let listed = call(&mut server, &mut io, "connection_list", json!({})).1;
+    assert!(!listed.contains(token), "{listed}");
+    assert!(listed.contains("%secret%"), "{listed}");
+    assert_eq!(snapshot(&grok), grok_before, "the fake ~/.grok is byte-identical");
+    // Declined: the card closes and nothing is written.
+    let before = snapshot(&cabin);
+    io.secret = None;
+    let (ok, text) = call(&mut server, &mut io, "connection_add", json!({ "name": "wiki", "url": "http://127.0.0.1:9/wiki", "needs_token": true }));
+    assert_eq!((ok, text.as_str()), (false, "No token was given, so the connection was not added."));
+    let spans_dir = hx::span_path(&cabin, SELF_TRACE).parent().unwrap().to_path_buf();
+    let strip = |snap: Vec<(PathBuf, Vec<u8>)>| snap.into_iter().filter(|(p, _)| !p.starts_with(&spans_dir)).collect::<Vec<_>>();
+    assert_eq!(strip(snapshot(&cabin)), strip(before));
+    let _ = hx::take_self_changes(&cabin);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn connection_remove_and_automation_delete_park_and_deny_leaves_files_byte_identical() {
+    let _g = crate::config::hold_test_config();
+    let root = root("self-remove");
+    let _pin = grokhub_agent::perm::ConfigGuard::set(&root);
+    let mut server = SelfServer::new(&root);
+    let mut io = FakeIo::answering(false);
+    assert!(call(&mut server, &mut io, "connection_add", json!({ "name": "files", "command": "files-mcp" })).0);
+    let (ok, made) = call(&mut server, &mut io, "automation_create", json!({ "instructions": "sweep the inbox", "every": "1h" }));
+    assert!(ok, "{made}");
+    let id = made.lines().next().unwrap().trim_start_matches("created ").to_string();
+    assert!(io.parks.is_empty(), "soft calls never park");
+    let spans_dir = hx::span_path(&root, SELF_TRACE).parent().unwrap().to_path_buf();
+    let files = || snapshot(&root).into_iter().filter(|(p, _)| !p.starts_with(&spans_dir)).collect::<Vec<_>>();
+    let before = files();
+    let (ok, text) = call(&mut server, &mut io, "connection_remove", json!({ "name": "files" }));
+    assert!(!ok && text.ends_with("Jeremy did not approve it."), "{text}");
+    let (ok, text) = call(&mut server, &mut io, "automation_delete", json!({ "id": id }));
+    assert!(!ok && text.ends_with("Jeremy did not approve it."), "{text}");
+    let parked: Vec<(&str, &str)> = io.parks.iter().map(|p| (p.tool.as_str(), p.class.as_str())).collect();
+    assert_eq!(parked, vec![("grokhub-self__connection_remove", "delete"), ("grokhub-self__automation_delete", "delete")]);
+    assert_eq!(files(), before, "deny leaves every file byte-identical");
+    let _ = grokhub_agent::take_automation_changes();
+    let _ = hx::take_self_changes(&root);
+    let _ = std::fs::remove_dir_all(root);
+}

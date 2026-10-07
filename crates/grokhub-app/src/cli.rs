@@ -10,7 +10,6 @@ pub enum Launch {
     Help,
     McpDesktop,
     McpSelf,
-    McpSecretEnv,
 }
 
 pub fn parse_args(args: &[String]) -> Launch {
@@ -25,8 +24,6 @@ pub fn parse_args(args: &[String]) -> Launch {
             "--oauth" => return Launch::Oauth,
             "--mcp-desktop" => return Launch::McpDesktop,
             "--mcp-self" => return Launch::McpSelf,
-            // Everything after it belongs to the wrapped server.
-            "--mcp-secret-env" => return Launch::McpSecretEnv,
             "-h" | "--help" => return Launch::Help,
             _ => {}
         }

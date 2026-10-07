@@ -1,5 +1,6 @@
 //! Workspace tools. `execute` stays read-only. `dispatch` runs the gated set.
 
+pub(crate) mod connections;
 pub(crate) mod control;
 mod desktop;
 mod glob;
@@ -144,6 +145,9 @@ pub fn dispatch(ctx: &ToolCtx<'_>, name: &str, arguments: &str) -> ToolOutput {
         "monitor" => control::monitor(ctx, &args),
         "scheduler_create" => control::scheduler_create(&args),
         "scheduler_delete" => control::scheduler_delete(&args),
+        "connection_add" => connections::add(&args),
+        "connection_disable" => connections::disable(&args),
+        "connection_delete" => connections::delete(&args),
         "web_fetch" => web_fetch::run_with_ports(&args),
         "image_generate" | "image_edit" | "video_generate" | "video_edit" | "video_extend" => {
             media::run_with_ports(name, &args, ctx.stop)

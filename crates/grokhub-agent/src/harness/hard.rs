@@ -434,7 +434,7 @@ pub const GB_DENY_GAPS: &[(&str, &str)] = &[
     ("true&&rm notes.txt", "a separator with no space after it"),
     ("grokhub-desktop__type", "typed text into a password, PIN, OTP, 2FA, or verification-code field (args, not the name)"),
     ("grokhub-desktop__key", "Ctrl+Alt+Delete and other session-ending key combos (args, not the name)"),
-    ("grokhub-self__connection_add", "a connection that names a secret (args, not the name); same for connection_modify"),
+    ("grokhub-self__connection_add", "a connection with needs_token (args, not the name); same for connection_modify"),
 ];
 
 /// Floor for shell commands: host_safety paths, rm -rf /, fork bomb, mkfs, dd to a disk,
@@ -525,6 +525,13 @@ pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
     let leaf = lower.rsplit("__").next().unwrap_or(&lower);
     if is_typing_tool(leaf)
         && serde_json::from_str::<serde_json::Value>(arguments).is_ok_and(|v| credential_field(&v))
+    {
+        return Some(HardClass::Credentials);
+    }
+    // Spike-5b: a connection that needs a token (the user types it in).
+    if leaf == "connection_add"
+        && serde_json::from_str::<serde_json::Value>(arguments)
+            .is_ok_and(|v| v.get("needs_token").and_then(|b| b.as_bool()) == Some(true))
     {
         return Some(HardClass::Credentials);
     }
@@ -769,10 +776,10 @@ mod tests {
         // A connection that names a secret is credentials by its args; the name stays soft.
         assert!(!gb_denies("MCPTool", GB_DENY_GAPS[5].0));
         assert_eq!(
-            hard_class(GB_DENY_GAPS[5].0, r#"{"name":"github","command":"gh-mcp","secrets":["GITHUB_TOKEN"]}"#),
+            hard_class(GB_DENY_GAPS[5].0, r#"{"name":"crm","url":"http://127.0.0.1:9/mcp","needs_token":true}"#),
             Some(HardClass::Credentials)
         );
-        assert_eq!(hard_class(GB_DENY_GAPS[5].0, r#"{"name":"github","command":"gh-mcp"}"#), None);
+        assert_eq!(hard_class(GB_DENY_GAPS[5].0, r#"{"name":"crm","url":"http://127.0.0.1:9/mcp"}"#), None);
         assert_eq!(
             desk_classify("type", &serde_json::json!({ "text": "hunter22", "label": "Password" })),
             HardHit::Class(HardClass::Credentials)

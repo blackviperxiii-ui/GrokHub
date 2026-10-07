@@ -21,9 +21,6 @@ pub struct SelfCtx<'a> {
     pub config_dir: &'a Path,
     pub origin: Origin,
     pub now_ms: u64,
-    /// Values the user typed on the elicit card for a credentials call, by
-    /// env var name. Sealed on disk; never echoed back.
-    pub secrets: Vec<(String, String)>,
 }
 
 impl<'a> SelfCtx<'a> {
@@ -32,7 +29,7 @@ impl<'a> SelfCtx<'a> {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        Self { config_dir, origin: Origin::SelfManage, now_ms, secrets: Vec::new() }
+        Self { config_dir, origin: Origin::SelfManage, now_ms }
     }
 
     fn skills_dir(&self) -> PathBuf {
@@ -42,7 +39,10 @@ impl<'a> SelfCtx<'a> {
 
 /// Run one self-manage tool. The caller has already asked `harness::decide`
 /// (and parked and got the user's click for delete and credentials).
-pub fn run(ctx: &SelfCtx<'_>, name: &str, args: &Value) -> ToolOutput {
+/// `ask_token` shows the masked token card: the card's message in, the typed
+/// value out. Connections and automations go through Spike-5b's writers.
+pub fn run(ctx: &SelfCtx<'_>, name: &str, args: &Value, ask_token: &mut dyn FnMut(&str) -> Option<String>) -> ToolOutput {
+    use crate::tools::{connections, control};
     let Some(tool) = self_tool(name) else {
         return ToolOutput::err(format!("unknown self-manage tool `{name}`"));
     };
@@ -50,13 +50,48 @@ pub fn run(ctx: &SelfCtx<'_>, name: &str, args: &Value) -> ToolOutput {
         "skill_list" => Ok(skill_list(ctx)),
         "skill_create" => skill_create(ctx, args),
         "skill_modify" => skill_modify(ctx, args),
+        "skill_disable" => skill_move(ctx, args, false),
+        "skill_enable" => skill_move(ctx, args, true),
         "skill_delete" => skill_delete(ctx, args),
-        other => Err(format!("`{other}` is not built yet")),
+        "connection_list" => return connections::list(),
+        "connection_add" => return connections::add_with(args, ask_token),
+        "connection_modify" => return connections::modify_with(args, ask_token),
+        "connection_disable" => return connections::disable(args),
+        "connection_remove" => return connections::delete(args),
+        "automation_list" => control::list_automations(),
+        "automation_create" => automation_write(ctx, args, None),
+        "automation_modify" => {
+            let id = arg(args, "id");
+            automation_write(ctx, args, Some(&id))
+        }
+        "automation_disable" => control::disable_automation(&arg(args, "id"), &reason_of(args, "turned off by Grok")),
+        "automation_delete" => control::delete_automation(&arg(args, "id")),
+        other => Err(format!("unknown self-manage tool `{other}`")),
     };
     match out {
         Ok(text) => ToolOutput::ok(text),
         Err(e) => ToolOutput::err(e),
     }
+}
+
+/// `automation_create` / `automation_modify`: Spike-5b's scheduler writer
+/// (ledger, Work-tree row, the 2-a-week cap). A modify keeps what it leaves out.
+fn automation_write(ctx: &SelfCtx<'_>, args: &Value, id: Option<&str>) -> Result<String, String> {
+    let current = match id {
+        Some(id) => Some(crate::tools::control::find_automation(id)?.ok_or_else(|| format!("automation {id} not found"))?),
+        None => None,
+    };
+    let mut instructions = arg(args, "instructions");
+    if instructions.is_empty() {
+        instructions = current.as_ref().map(|a| a.instructions.clone()).ok_or("an automation needs instructions")?;
+    }
+    let every = arg(args, "every");
+    let mins = match (every.is_empty(), &current) {
+        (true, Some(a)) => a.heartbeat_every_min.max(1),
+        (true, None) => return Err("an automation needs `every` (10m, 1h, 1d)".into()),
+        (false, _) => crate::tools::control::interval_minutes(&every)?,
+    };
+    crate::tools::control::write_automation(&instructions, mins, false, id, ctx.now_ms)
 }
 
 fn arg(args: &Value, key: &str) -> String {
@@ -201,6 +236,39 @@ fn skill_delete(ctx: &SelfCtx<'_>, args: &Value) -> Result<String, String> {
     })?;
     Ok(match done {
         Some(c) => format!("deleted skill {name} (change #{}; its last version is kept)", c.seq),
+        None => format!("skill {name} unchanged"),
+    })
+}
+
+/// `skill_disable` moves the folder to `skills/.disabled/` (the cabin and the
+/// native engine skip dot folders); `skill_enable` moves it back. Each move
+/// is one ledger line, so Undo brings the skill back as it was.
+fn skill_move(ctx: &SelfCtx<'_>, args: &Value, enable: bool) -> Result<String, String> {
+    let name = line(&arg(args, "name"));
+    let on = skill_path(ctx, &name)?;
+    let on_dir = on.parent().map(Path::to_path_buf).unwrap_or_default();
+    let off_dir = ctx.skills_dir().join(".disabled").join(grokhub_core::skill_dir_name(&name));
+    let (from, to) = if enable { (&off_dir, &on_dir) } else { (&on_dir, &off_dir) };
+    if enable && on.exists() {
+        let _ = std::fs::remove_dir_all(&off_dir);
+        return Ok(format!("skill {name} is already on"));
+    }
+    if !from.join("SKILL.md").exists() {
+        return Err(if enable { format!("no turned-off skill named {name}") } else { format!("no skill named {name}") });
+    }
+    let reason = reason_of(args, if enable { "turned back on by Grok" } else { "turned off by Grok" });
+    let done = hx::record_skill_change(ctx.config_dir, &ctx.skills_dir(), &name, ctx.origin, &reason, || {
+        if to.exists() {
+            std::fs::remove_dir_all(to).map_err(|e| e.to_string())?;
+        }
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::rename(from, to).map_err(|e| e.to_string())
+    })?;
+    let verb = if enable { "turned on" } else { "turned off" };
+    Ok(match done {
+        Some(c) => format!("{verb} skill {name} (change #{}; the user can Undo it)", c.seq),
         None => format!("skill {name} unchanged"),
     })
 }

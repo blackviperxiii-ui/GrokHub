@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use grokhub_agent::harness::{self as hx, GateOutcome, HardClass, Origin};
-use grokhub_agent::self_manage::{self as sm, SelfClass, SELF_MCP_SERVER};
+use grokhub_agent::self_manage::{self as sm, SELF_MCP_SERVER};
 use serde_json::{json, Value};
 
 /// Span trace when no chat is open.
@@ -111,22 +111,10 @@ impl<'a> SelfServer<'a> {
                 Some(class)
             }
         };
-        let mut secrets = Vec::new();
-        if class == SelfClass::Credentials {
-            for var in sm::secret_names(args) {
-                match self.ask_secret(args, &var, io) {
-                    Some(value) => secrets.push((var, value)),
-                    None => {
-                        let why = sm::secret_missing(&var);
-                        self.span(hx::Span::deny("", &mcp, &span_args, &why, class.as_str()));
-                        return (false, why);
-                    }
-                }
-            }
-        }
-        let mut ctx = sm::SelfCtx::new(self.config_dir);
-        ctx.secrets = secrets;
-        let out = sm::run(&ctx, &mcp, args);
+        let ctx = sm::SelfCtx::new(self.config_dir);
+        let elicit_ok = self.elicit_ok;
+        let mut ask = |message: &str| ask_token(elicit_ok, message, io);
+        let out = sm::run(&ctx, &mcp, args, &mut ask);
         let mut span = hx::Span::soft_allow("", &mcp, &span_args, &out.text, "", hx::AccessMode::Supervised, "grokhub-self");
         span.approval_class = class.as_str().into();
         span.hard_approved = hard.is_some();
@@ -151,32 +139,6 @@ impl<'a> SelfServer<'a> {
         io.park(&req)
     }
 
-    /// One masked elicit card per env var. The value goes straight to the
-    /// sealed store; it is never echoed, logged, or returned.
-    fn ask_secret(&self, args: &Value, var: &str, io: &mut dyn SelfIo) -> Option<String> {
-        if !self.elicit_ok {
-            return None;
-        }
-        let conn = args.get("name").and_then(|n| n.as_str()).unwrap_or("");
-        let params = json!({
-            "message": sm::secret_prompt(conn, var),
-            "requestedSchema": {
-                "type": "object",
-                "properties": { var: { "type": "string", "title": var, "format": "password", "writeOnly": true } },
-                "required": [var],
-            },
-        });
-        let result = io.elicit(params)?;
-        if result.get("action").and_then(|a| a.as_str()) != Some("accept") {
-            return None;
-        }
-        result
-            .pointer(&format!("/content/{var}"))
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.trim().is_empty())
-            .map(str::to_string)
-    }
-
     fn span(&self, span: hx::Span) {
         let ctx = hx::read_turn_context(self.config_dir);
         let session = if ctx.chat_id.is_empty() { SELF_TRACE } else { ctx.chat_id.as_str() };
@@ -187,6 +149,34 @@ impl<'a> SelfServer<'a> {
         }
         let _ = hx::append_span(self.config_dir, &span);
     }
+}
+
+/// The masked token card over MCP elicitation, the same shape Spike-5b's
+/// native card uses. The value goes straight to the sealed store; it is
+/// never echoed, logged, or returned to the model. No elicitation support
+/// in the client means no token (fail closed).
+fn ask_token(elicit_ok: bool, message: &str, io: &mut dyn SelfIo) -> Option<String> {
+    if !elicit_ok {
+        return None;
+    }
+    let params = json!({
+        "message": message,
+        "requestedSchema": {
+            "type": "object",
+            "properties": { "token": { "type": "string", "title": "Token", "format": "password", "writeOnly": true } },
+            "required": ["token"],
+        },
+    });
+    let result = io.elicit(params)?;
+    if result.get("action").and_then(|a| a.as_str()) != Some("accept") {
+        return None;
+    }
+    result
+        .pointer("/content/token")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 /// Args as a span may keep them: secret-shaped values redacted, and anything
@@ -206,13 +196,13 @@ pub(crate) fn safe_args(args: &Value) -> String {
 /// The line the hard card shows.
 fn park_action(mcp: &str, args: &Value) -> String {
     let leaf = mcp.rsplit("__").next().unwrap_or(mcp);
-    let name = args.get("name").and_then(|n| n.as_str()).unwrap_or("?");
-    let secrets = sm::secret_names(args);
-    if secrets.is_empty() {
-        format!("{} {name}", leaf.replace('_', " "))
-    } else {
-        format!("{} {name} with secret {}", leaf.replace('_', " "), secrets.join(", "))
-    }
+    let what = args
+        .get("name")
+        .or_else(|| args.get("id"))
+        .and_then(|n| n.as_str())
+        .unwrap_or("?");
+    let token = if sm::needs_token(args) { " with a token you type" } else { "" };
+    format!("{} {what}{token}", leaf.replace('_', " "))
 }
 
 fn rpc_result(id: &Value, result: Value) -> String {
@@ -307,47 +297,6 @@ fn registered_here(exe: &Path) -> bool {
     std::fs::read_to_string(home.join("config.toml")).ok().is_some_and(|text| {
         text.contains(SELF_MCP_SERVER) && text.contains("--mcp-self") && (text.contains(&raw) || text.contains(&escaped))
     })
-}
-
-/// `[exe, …, --mcp-secret-env, <name>, --, <command>, <args>…]` ⇒ the
-/// connection name and the command line it wraps.
-pub(crate) fn secret_env_target(argv: &[String]) -> Option<(String, String, Vec<String>)> {
-    let at = argv.iter().position(|a| a == sm::secrets::SECRET_ENV_FLAG)?;
-    let conn = argv.get(at + 1)?.clone();
-    if argv.get(at + 2).map(String::as_str) != Some("--") {
-        return None;
-    }
-    let cmd = argv.get(at + 3)?.clone();
-    Some((conn, cmd, argv[at + 4..].to_vec()))
-}
-
-/// `grokhub --mcp-secret-env <name> -- <command> <args>…`: run a connection's
-/// server with its sealed secrets as env vars. A locked keyring or a damaged
-/// seal stops here (fail closed); the values are never printed.
-pub fn run_secret_env(argv: &[String]) -> i32 {
-    let Some((conn, cmd, args)) = secret_env_target(argv) else {
-        eprintln!("usage: grokhub --mcp-secret-env <name> -- <command> [args…]");
-        return 2;
-    };
-    let vals = match sm::secrets::open_secrets(&crate::config::config_dir(), &conn) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("mcp-secret-env: {conn}: {e}");
-            return 1;
-        }
-    };
-    let mut child = std::process::Command::new(&cmd);
-    child.args(&args);
-    for (k, v) in &vals {
-        child.env(k, v.as_str());
-    }
-    match child.status() {
-        Ok(status) => status.code().unwrap_or(1),
-        Err(e) => {
-            eprintln!("mcp-secret-env: {cmd}: {e}");
-            1
-        }
-    }
 }
 
 pub fn run_stdio() -> i32 {

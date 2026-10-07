@@ -65,7 +65,7 @@ fn main() {
     ensure_windows_home();
     let launch = parse_args(&env::args().collect::<Vec<_>>());
     match launch {
-        Launch::Cabin | Launch::Agent | Launch::McpDesktop | Launch::McpSelf | Launch::McpSecretEnv => {}
+        Launch::Cabin | Launch::Agent | Launch::McpDesktop | Launch::McpSelf => {}
         Launch::Hub => attach_cli_console(true),
         Launch::Version | Launch::Help | Launch::Doctor | Launch::Update | Launch::Oauth => {
             attach_cli_console(false)
@@ -97,10 +97,6 @@ fn main() {
         }
         Launch::McpSelf => {
             let code = self_mcp::run_stdio();
-            std::process::exit(code);
-        }
-        Launch::McpSecretEnv => {
-            let code = self_mcp::run_secret_env(&env::args().collect::<Vec<_>>());
             std::process::exit(code);
         }
         Launch::Agent => {

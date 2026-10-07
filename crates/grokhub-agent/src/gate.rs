@@ -34,6 +34,9 @@ const CONTROL: &[&str] = &[
     "monitor",
     "scheduler_create",
     "scheduler_delete",
+    "connection_add",
+    "connection_disable",
+    "connection_delete",
     "spawn_subagent",
     "send_subagent_message",
 ];
