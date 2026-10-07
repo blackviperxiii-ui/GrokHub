@@ -574,6 +574,11 @@ pub const HEADLESS_DENY_RULES: &[&str] = &[
     "Bash(*; format *)",
     "Bash(*&& format *)",
     "Bash(*| format *)",
+    "Bash(format.com*)",
+    "Bash(sudo format.com*)",
+    "Bash(*; format.com*)",
+    "Bash(*&& format.com*)",
+    "Bash(*| format.com*)",
     "Bash(stop-computer*)",
     "Bash(sudo stop-computer*)",
     "Bash(*; stop-computer*)",
@@ -904,9 +909,9 @@ mod tests {
 
     #[test]
     fn headless_deny_rules_cover_the_floor_and_stubs() {
-        assert_eq!(HEADLESS_DENY_RULES.len(), 257);
-        assert_eq!(HEADLESS_DENY_RULES[254], "Bash(*consent.jsonl*)");
-        assert_eq!(HEADLESS_DENY_RULES[256], "Write(**/consent.jsonl)");
+        assert_eq!(HEADLESS_DENY_RULES.len(), 262);
+        assert_eq!(HEADLESS_DENY_RULES[259], "Bash(*consent.jsonl*)");
+        assert_eq!(HEADLESS_DENY_RULES[261], "Write(**/consent.jsonl)");
         assert_eq!(HEADLESS_DENY_RULES[0], "Bash(rm -rf /)");
         assert!(HEADLESS_DENY_RULES.contains(&"Bash(rm *)"));
         assert!(HEADLESS_DENY_RULES.contains(&"MCPTool(*hard_send_stub*)"));
@@ -1294,6 +1299,9 @@ mod tests {
         for cmd in ["Stop-Computer -Force", "Restart-Computer", "format.com D: /q", "Format-Volume -DriveLetter D", "Clear-Disk -Number 1"] {
             assert_eq!(ask(cmd), os, "{cmd}");
         }
+        // `leaf` drops `.com`, so path C needs its own `format.com` rules.
+        assert!(gb_denies("Bash", "format.com D: /q"));
+        assert!(gb_denies("Bash", "cd C:\\; format.com D: /q"));
         assert_eq!(ask("powershell -ExecutionPolicy Bypass -Command Get-ChildItem"), HardHit::None);
         assert_eq!(ask("Format-Table Name"), HardHit::None);
     }

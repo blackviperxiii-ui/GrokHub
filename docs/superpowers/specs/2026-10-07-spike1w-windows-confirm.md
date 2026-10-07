@@ -62,7 +62,7 @@ backend).
    `format.com`) are irreversible OS; `Clear-RecycleBin` is a delete. Each
    head has its five GB `--deny` forms (lowercase and PascalCase for the
    cmdlets), so `gb_deny_rules_cover_every_hard_name_and_command` holds;
-   `HEADLESS_DENY_RULES` is 257 rules.
+   `HEADLESS_DENY_RULES` is 262 rules (`format.com` has its own five, since GB rules see the full name).
 
 ## Gaps left (written up, not fixed)
 
