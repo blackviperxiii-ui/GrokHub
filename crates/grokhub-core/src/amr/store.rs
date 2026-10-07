@@ -2,7 +2,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::schema::{check_confidence, Edge, EdgeRel, Node, NodeDraft, NodeHit, NodeId};
@@ -15,12 +15,13 @@ Local files only. Nothing in amr/ is hub-synced.
 nodes/<id>.md is one preference, fact, decision, trail, person, or project. You can cat it or git it.
 nodes/<id>.sealed is a personal or sensitive node, sealed at rest. Its key is in your OS keyring.
 edges/edges.jsonl stores one JSON edge per line.
-dreams/ is reserved for overnight reports. M0 does not write them.
-Secrets are redacted on write. forget is not implemented yet.
+dreams/ holds reports, such as import-<date>.md from the one-time import.
+Secrets are redacted on write. forget leaves nodes/<id>.tombstone: the node stays on disk and recall skips it.
 ";
 
 const RECALL_CAP: usize = 20;
 const SEALED_EXT: &str = "sealed";
+const TOMBSTONE_EXT: &str = "tombstone";
 
 /// Associated data for one sealed node: it can't be renamed to another id.
 fn node_aad(id: &str) -> String {
@@ -43,6 +44,22 @@ impl std::fmt::Debug for AmrStore {
             .field("sealer", &self.sealer.is_some())
             .finish()
     }
+}
+
+/// What [`AmrStore::forget_matching`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ForgetReport {
+    /// Ids that got a tombstone, sorted.
+    pub forgotten: Vec<String>,
+    /// Sealed nodes that stayed shut, so they could not be matched or forgotten.
+    pub locked: usize,
+}
+
+/// Every live node plus how many sealed ones stayed shut.
+pub(super) struct Loaded {
+    pub(super) nodes: Vec<Node>,
+    pub(super) locked: usize,
+    pub(super) why: Option<String>,
 }
 
 /// `/recall` hits plus how many sealed nodes could not be opened.
@@ -70,6 +87,15 @@ impl AmrStore {
     pub fn with_sealer(mut self, sealer: Arc<dyn Sealer>) -> Self {
         self.sealer = Some(sealer);
         self
+    }
+
+    /// The store's directory, `{config}/amr`.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn is_scratch(&self) -> bool {
+        self.scratch
     }
 
     /// Incognito. Later writes return [`AmrError::Scratch`] and touch nothing.
@@ -117,24 +143,142 @@ impl AmrStore {
 
     /// [`Self::recall`] plus the sealed nodes that could not be opened.
     /// Sealed nodes are opened in memory only; nothing is written.
+    /// Tombstoned nodes are skipped.
     pub fn recall_report(&self, query: &str) -> RecallReport {
         let mut report = RecallReport::default();
         let query = query.trim().to_ascii_lowercase();
         if query.is_empty() {
             return report;
         }
+        let loaded = self.load_live();
+        report.locked = loaded.locked;
+        report.why = loaded.why;
+        let mut hits = Vec::new();
+        for node in &loaded.nodes {
+            hits.extend(match_lines(node, &query));
+        }
+        hits.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+        hits.truncate(RECALL_CAP);
+        report.hits = hits
+            .into_iter()
+            .map(|(id, _, line)| NodeHit { id, line })
+            .collect();
+        report
+    }
+
+    /// True when `nodes/<id>.tombstone` is there.
+    pub fn is_forgotten(&self, id: &str) -> bool {
+        NodeId::parse(id)
+            .and_then(|id| self.node_path(&id))
+            .is_ok_and(|path| path.with_extension(TOMBSTONE_EXT).is_file())
+    }
+
+    /// Tombstone one node: the node file stays, `nodes/<id>.tombstone` marks it,
+    /// and recall, History and the first-turn pack skip it from then on.
+    /// Refuses scratch and ids with no node file. A second forget is a no-op.
+    pub fn forget(&self, id: &str) -> Result<(), AmrError> {
+        if self.scratch {
+            return Err(AmrError::Scratch);
+        }
+        let id = NodeId::parse(id)?;
+        if !self.node_exists(&id)? {
+            return Err(AmrError::MissingNode(id.as_str().to_string()));
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        self.write_tombstone(&id, now, "")
+    }
+
+    /// `forgotten: <stamp>` plus `extra` lines. An existing tombstone stays as it is.
+    pub(super) fn write_tombstone(&self, id: &NodeId, now_ms: u64, extra: &str) -> Result<(), AmrError> {
+        let marker = self.node_path(id)?.with_extension(TOMBSTONE_EXT);
+        if marker.is_file() {
+            return Ok(());
+        }
+        let stamp = crate::oauth::unix_ms_to_rfc3339(now_ms);
+        fs::write(&marker, format!("forgotten: {stamp}\n{extra}")).map_err(io_err)
+    }
+
+    /// True when the node is stored sealed (`nodes/<id>.sealed`).
+    pub(super) fn is_sealed(&self, id: &NodeId) -> bool {
+        self.node_path(id)
+            .is_ok_and(|path| path.with_extension(SEALED_EXT).is_file())
+    }
+
+    /// Tombstone every live node whose body, tags or id contains `query`
+    /// (the same match as recall, with no cap). Sealed nodes that can't be
+    /// opened are counted, not forgotten. Scratch refuses before any read.
+    pub fn forget_matching(&self, query: &str) -> Result<ForgetReport, AmrError> {
+        if self.scratch {
+            return Err(AmrError::Scratch);
+        }
+        let query = query.trim().to_ascii_lowercase();
+        let mut report = ForgetReport::default();
+        if query.is_empty() {
+            return Ok(report);
+        }
+        let loaded = self.load_live();
+        report.locked = loaded.locked;
+        for node in &loaded.nodes {
+            if match_lines(node, &query).is_empty() {
+                continue;
+            }
+            self.forget(&node.id)?;
+            report.forgotten.push(node.id.clone());
+        }
+        report.forgotten.sort();
+        Ok(report)
+    }
+
+    /// Lift a tombstone so an explicit remember of the same line counts again.
+    /// No tombstone is a no-op. Refuses scratch.
+    pub fn revive(&self, id: &str) -> Result<(), AmrError> {
+        if self.scratch {
+            return Err(AmrError::Scratch);
+        }
+        let id = NodeId::parse(id)?;
+        let marker = self.node_path(&id)?.with_extension(TOMBSTONE_EXT);
+        match fs::remove_file(&marker) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(io_err(err)),
+        }
+    }
+
+    /// Node files on disk (`.md` and `.sealed`), tombstoned ones included.
+    pub fn node_file_count(&self) -> usize {
         let Ok(read) = fs::read_dir(self.root.join("nodes")) else {
-            return report;
+            return 0;
+        };
+        read.flatten()
+            .filter(|entry| {
+                matches!(
+                    entry.path().extension().and_then(|ext| ext.to_str()),
+                    Some("md" | SEALED_EXT)
+                )
+            })
+            .count()
+    }
+
+    /// Every node that is not tombstoned, sorted by file name. Sealed nodes
+    /// that can't be opened are counted in `locked`. A bad file is skipped.
+    pub(super) fn load_live(&self) -> Loaded {
+        let mut loaded = Loaded { nodes: Vec::new(), locked: 0, why: None };
+        let Ok(read) = fs::read_dir(self.root.join("nodes")) else {
+            return loaded;
         };
         let mut files: Vec<PathBuf> = Vec::new();
         for entry in read.flatten() {
             let path = entry.path();
-            if matches!(path.extension().and_then(|ext| ext.to_str()), Some("md" | SEALED_EXT)) {
+            if matches!(path.extension().and_then(|ext| ext.to_str()), Some("md" | SEALED_EXT))
+                && !path.with_extension(TOMBSTONE_EXT).is_file()
+            {
                 files.push(path);
             }
         }
         files.sort();
-        let mut hits = Vec::new();
         for path in files {
             let Ok(text) = fs::read_to_string(&path) else {
                 continue;
@@ -148,26 +292,19 @@ impl AmrStore {
                 match opened {
                     Ok(plain) => plain,
                     Err(why) => {
-                        report.locked += 1;
-                        report.why.get_or_insert(why);
+                        loaded.locked += 1;
+                        loaded.why.get_or_insert(why);
                         continue;
                     }
                 }
             } else {
                 text
             };
-            let Ok(node) = Node::from_markdown(&text) else {
-                continue;
-            };
-            hits.extend(match_lines(&node, &query));
+            if let Ok(node) = Node::from_markdown(&text) {
+                loaded.nodes.push(node);
+            }
         }
-        hits.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-        hits.truncate(RECALL_CAP);
-        report.hits = hits
-            .into_iter()
-            .map(|(id, _, line)| NodeHit { id, line })
-            .collect();
-        report
+        loaded
     }
 
     /// Write `nodes/<id>.md`. Refuses duplicates, bad ids, and scratch.
