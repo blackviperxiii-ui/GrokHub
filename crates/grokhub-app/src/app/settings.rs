@@ -1040,6 +1040,7 @@ impl Cabin {
             draft.action = "allow".into();
         }
         self.ui_privacy_rows(ui);
+        self.ui_scope_rows(ui);
         let workspace = self.grok_cwd();
         let dir = grokhub_agent::perm::config_dir();
         crate::cards::section_heading(ui, super::privacy_ui::RULES_HEAD);

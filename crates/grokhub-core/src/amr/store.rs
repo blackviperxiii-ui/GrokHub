@@ -3,27 +3,56 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use super::schema::{check_confidence, Edge, EdgeRel, Node, NodeDraft, NodeHit, NodeId};
-use super::AmrError;
+use super::{AmrError, Sealer};
 use crate::redact::redact_secrets;
 
 const README: &str = "\
 amr_schema: 1
-Local markdown only. You can cat it or git it. Nothing in amr/ is hub-synced.
-nodes/<id>.md is one preference, fact, decision, trail, person, or project.
+Local files only. Nothing in amr/ is hub-synced.
+nodes/<id>.md is one preference, fact, decision, trail, person, or project. You can cat it or git it.
+nodes/<id>.sealed is a personal or sensitive node, sealed at rest. Its key is in your OS keyring.
 edges/edges.jsonl stores one JSON edge per line.
 dreams/ is reserved for overnight reports. M0 does not write them.
 Secrets are redacted on write. forget is not implemented yet.
 ";
 
 const RECALL_CAP: usize = 20;
+const SEALED_EXT: &str = "sealed";
+
+/// Associated data for one sealed node: it can't be renamed to another id.
+fn node_aad(id: &str) -> String {
+    format!("grokhub:amr-node:v1:{id}")
+}
 
 /// `{config}/amr`. Scratch refuses `remember` and `link` before any write.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AmrStore {
     root: PathBuf,
     scratch: bool,
+    sealer: Option<Arc<dyn Sealer>>,
+}
+
+impl std::fmt::Debug for AmrStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AmrStore")
+            .field("root", &self.root)
+            .field("scratch", &self.scratch)
+            .field("sealer", &self.sealer.is_some())
+            .finish()
+    }
+}
+
+/// `/recall` hits plus how many sealed nodes could not be opened.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RecallReport {
+    pub hits: Vec<NodeHit>,
+    /// Sealed nodes skipped (locked keyring, missing key, or damaged).
+    pub locked: usize,
+    /// The sealer's reason for the first skipped node.
+    pub why: Option<String>,
 }
 
 impl AmrStore {
@@ -32,7 +61,15 @@ impl AmrStore {
         Self {
             root: root.into(),
             scratch: false,
+            sealer: None,
         }
+    }
+
+    /// Seal personal and sensitive nodes with `sealer`. Without one they
+    /// are refused ([`AmrError::Paused`]) and sealed files read as locked.
+    pub fn with_sealer(mut self, sealer: Arc<dyn Sealer>) -> Self {
+        self.sealer = Some(sealer);
+        self
     }
 
     /// Incognito. Later writes return [`AmrError::Scratch`] and touch nothing.
@@ -75,17 +112,24 @@ impl AmrStore {
     /// Case-insensitive substring over body lines, tags, and id.
     /// Sorted by id. At most 20 hits. A missing or broken store is empty.
     pub fn recall(&self, query: &str) -> Vec<NodeHit> {
+        self.recall_report(query).hits
+    }
+
+    /// [`Self::recall`] plus the sealed nodes that could not be opened.
+    /// Sealed nodes are opened in memory only; nothing is written.
+    pub fn recall_report(&self, query: &str) -> RecallReport {
+        let mut report = RecallReport::default();
         let query = query.trim().to_ascii_lowercase();
         if query.is_empty() {
-            return Vec::new();
+            return report;
         }
         let Ok(read) = fs::read_dir(self.root.join("nodes")) else {
-            return Vec::new();
+            return report;
         };
         let mut files: Vec<PathBuf> = Vec::new();
         for entry in read.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) == Some("md") {
+            if matches!(path.extension().and_then(|ext| ext.to_str()), Some("md" | SEALED_EXT)) {
                 files.push(path);
             }
         }
@@ -95,6 +139,23 @@ impl AmrStore {
             let Ok(text) = fs::read_to_string(&path) else {
                 continue;
             };
+            let text = if path.extension().and_then(|ext| ext.to_str()) == Some(SEALED_EXT) {
+                let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                let opened = match &self.sealer {
+                    Some(sealer) => sealer.open(&node_aad(id), text.trim()),
+                    None => Err("private memory is locked".to_string()),
+                };
+                match opened {
+                    Ok(plain) => plain,
+                    Err(why) => {
+                        report.locked += 1;
+                        report.why.get_or_insert(why);
+                        continue;
+                    }
+                }
+            } else {
+                text
+            };
             let Ok(node) = Node::from_markdown(&text) else {
                 continue;
             };
@@ -102,9 +163,11 @@ impl AmrStore {
         }
         hits.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
         hits.truncate(RECALL_CAP);
-        hits.into_iter()
+        report.hits = hits
+            .into_iter()
             .map(|(id, _, line)| NodeHit { id, line })
-            .collect()
+            .collect();
+        report
     }
 
     /// Write `nodes/<id>.md`. Refuses duplicates, bad ids, and scratch.
@@ -137,19 +200,44 @@ impl AmrStore {
             tags,
             body,
         };
-        let path = self.node_path(&id)?;
+        let plain_path = self.node_path(&id)?;
+        let sealed_path = plain_path.with_extension(SEALED_EXT);
+        if plain_path.exists() || sealed_path.exists() {
+            return Err(AmrError::DuplicateId(id.as_str().to_string()));
+        }
+        // Seal before any file is created: a locked keyring writes nothing.
+        let (path, bytes) = if draft.sensitivity.sealed() {
+            let sealer = self
+                .sealer
+                .as_ref()
+                .ok_or_else(|| AmrError::Paused("private memory has no key store".into()))?;
+            let sealed = sealer
+                .seal(&node_aad(id.as_str()), &node.to_markdown())
+                .map_err(AmrError::Paused)?;
+            (sealed_path, format!("{sealed}\n"))
+        } else {
+            (plain_path, node.to_markdown())
+        };
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(io_err)?;
         }
-        let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
+        let mut opts = OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            if draft.sensitivity.sealed() {
+                opts.mode(0o600);
+            }
+        }
+        let mut file = match opts.open(&path) {
             Ok(file) => file,
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
                 return Err(AmrError::DuplicateId(id.as_str().to_string()));
             }
             Err(err) => return Err(io_err(err)),
         };
-        file.write_all(node.to_markdown().as_bytes())
-            .map_err(io_err)?;
+        file.write_all(bytes.as_bytes()).map_err(io_err)?;
         Ok(id)
     }
 
@@ -160,10 +248,10 @@ impl AmrStore {
         }
         let from_id = NodeId::parse(from)?;
         let to_id = NodeId::parse(to)?;
-        if !self.node_path(&from_id)?.is_file() {
+        if !self.node_exists(&from_id)? {
             return Err(AmrError::MissingNode(from_id.as_str().to_string()));
         }
-        if !self.node_path(&to_id)?.is_file() {
+        if !self.node_exists(&to_id)? {
             return Err(AmrError::MissingNode(to_id.as_str().to_string()));
         }
         let edge = Edge {
@@ -202,6 +290,11 @@ impl AmrStore {
             out.push(edge);
         }
         Ok(out)
+    }
+
+    fn node_exists(&self, id: &NodeId) -> Result<bool, AmrError> {
+        let path = self.node_path(id)?;
+        Ok(path.is_file() || path.with_extension(SEALED_EXT).is_file())
     }
 
     fn node_path(&self, id: &NodeId) -> Result<PathBuf, AmrError> {

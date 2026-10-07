@@ -13,16 +13,22 @@
 //! tools) is outside the cabin. This guard never sees it and does not claim to.
 //! The log holds no content: destination host, data classes, ids, counts.
 //!
+//! Spike-4b: each log line is sealed at rest (`at_rest`). With the keyring
+//! locked no line is written (never as plain text); model-host calls still go
+//! as they did before the guard, and `/privacy` says the log is locked. A
+//! send that rests on a grant or a one-time approval needs its line written.
+//!
 //! [`decide`]: crate::harness::decide
 
-use std::fs::{self, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
 use crate::harness::approval::{decide, GateOutcome, Step};
+use crate::harness::at_rest::{self, Locked, AAD_EGRESS};
 use crate::harness::consent::ConsentLedger;
 use crate::harness::hard::HardClass;
 use crate::harness::span::Origin;
@@ -35,6 +41,7 @@ pub const HUB_SYNC_DATA: &[DataClass] = &[DataClass::Chat, DataClass::Personal];
 pub const EGRESS_FILE: &str = "egress.jsonl";
 /// Past this size the log rolls to `egress.1.jsonl` (one old file kept).
 const EGRESS_ROLL: u64 = 1024 * 1024;
+const EGRESS_ROLLED: &str = "egress.1.jsonl";
 /// How much of the log tail `/privacy` reads.
 const EGRESS_TAIL: u64 = 256 * 1024;
 
@@ -208,7 +215,12 @@ pub fn guard_egress(config_dir: &Path, req: &EgressReq<'_>) -> GateOutcome {
     if outcome.is_allow() {
         let (_, basis, grant_id) = check(&dest, req.data, &ledger);
         if basis != EgressBasis::Local {
-            let _ = append_egress(config_dir, &line_for(req, &dest, basis.as_str(), &grant_id));
+            let logged = append_egress(config_dir, &line_for(req, &dest, basis.as_str(), &grant_id));
+            // A grant send that can't be logged doesn't go (fail closed).
+            // Model-host and public calls go as before the guard.
+            if let (Err(why), EgressBasis::Grant) = (logged, basis) {
+                return GateOutcome::Refuse { reason: format!("not sent: {why}") };
+            }
         }
     }
     outcome
@@ -244,49 +256,68 @@ pub fn egress_path(config_dir: &Path) -> PathBuf {
     config_dir.join(EGRESS_FILE)
 }
 
-/// Append one line (secrets redacted again on the way out). Rolls the file
-/// past [`EGRESS_ROLL`].
+/// Append one sealed line (secrets redacted again on the way out). Rolls the
+/// file past [`EGRESS_ROLL`]. Locked ⇒ nothing is written.
 pub fn append_egress(config_dir: &Path, line: &EgressLine) -> Result<(), String> {
     fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
     let path = egress_path(config_dir);
+    let rolled = config_dir.join(EGRESS_ROLLED);
     if fs::metadata(&path).map(|m| m.len() > EGRESS_ROLL).unwrap_or(false) {
-        let _ = fs::rename(&path, config_dir.join("egress.1.jsonl"));
+        let _ = fs::rename(&path, &rolled);
     }
     let text = serde_json::to_string(line).map_err(|e| e.to_string())?;
     let text = grokhub_core::redact_secrets(&text);
-    let mut opts = OpenOptions::new();
-    opts.create(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
+    at_rest::append_sealed_line(config_dir, &path, AAD_EGRESS, &text).map_err(|why| why.message())?;
+    // A pre-4b roll can still be plain text: seal it too (cheap once sealed).
+    if let Ok(key) = at_rest::write_key(config_dir) {
+        let _ = at_rest::migrate_file(&key, &rolled, AAD_EGRESS);
     }
-    let mut f = opts.open(&path).map_err(|e| e.to_string())?;
-    writeln!(f, "{text}").map_err(|e| e.to_string())
+    Ok(())
+}
+
+/// The egress tail as `/privacy` reads it: lines plus why some didn't open.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EgressRead {
+    pub lines: Vec<EgressLine>,
+    pub locked: Option<Locked>,
+    pub unreadable: usize,
 }
 
 /// The last lines of the log (up to [`EGRESS_TAIL`] bytes), oldest first.
 pub fn read_egress(config_dir: &Path) -> Vec<EgressLine> {
+    read_egress_report(config_dir).lines
+}
+
+/// [`read_egress`] plus the lock state. May wait on the keyring once.
+pub fn read_egress_report(config_dir: &Path) -> EgressRead {
     let Ok(mut f) = fs::File::open(egress_path(config_dir)) else {
-        return Vec::new();
+        return EgressRead::default();
     };
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     let from = len.saturating_sub(EGRESS_TAIL);
     if f.seek(SeekFrom::Start(from)).is_err() {
-        return Vec::new();
+        return EgressRead::default();
     }
     let mut buf = Vec::new();
     if f.take(EGRESS_TAIL).read_to_end(&mut buf).is_err() {
-        return Vec::new();
+        return EgressRead::default();
     }
     let text = String::from_utf8_lossy(&buf);
-    let mut lines = text.lines();
+    let mut rows = text.lines();
     if from > 0 {
-        lines.next();
+        rows.next();
     }
-    lines
-        .filter_map(|l| serde_json::from_str::<EgressLine>(l.trim()).ok())
-        .collect()
+    let tail: Vec<&str> = rows.collect();
+    let read = at_rest::read_sealed_jsonl(config_dir, &tail.join("\n"), AAD_EGRESS, true);
+    EgressRead {
+        lines: read
+            .lines
+            .iter()
+            .filter_map(|l| serde_json::from_str::<EgressLine>(l.trim()).ok())
+            .collect(),
+        locked: read.locked,
+        unreadable: read.unreadable,
+    }
 }
 
 #[cfg(test)]
@@ -395,9 +426,10 @@ mod tests {
         assert_eq!(guard_egress(&d, &req), GateOutcome::Allow);
         guard_egress(&d, &EgressReq::new("http://127.0.0.1:4711/v1/responses", &[DataClass::Chat]));
         let text = fs::read_to_string(egress_path(&d)).unwrap();
-        let line = text.lines().next().unwrap();
-        let v: serde_json::Value = serde_json::from_str(line).unwrap();
-        let mut v = v;
+        assert!(text.lines().all(at_rest::is_sealed_line), "egress log is sealed at rest");
+        let opened = at_rest::read_sealed_jsonl(&d, &text, AAD_EGRESS, true);
+        let line = opened.lines.first().unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(line).unwrap();
         v["ts_ms"] = serde_json::json!(0);
         assert_eq!(
             v,
@@ -415,6 +447,8 @@ mod tests {
         );
         assert_eq!(text.lines().count(), 1, "loopback is not egress: {text}");
         assert!(!text.contains("sk-abc"), "{text}");
+        assert!(!opened.lines.concat().contains("sk-abc"), "{:?}", opened.lines);
+        assert!(!text.contains("api.x.ai"), "nothing readable at rest: {text}");
     }
 
     #[test]
@@ -429,5 +463,42 @@ mod tests {
         assert_eq!(log[0].basis, "approved_once");
         assert_eq!(log[0].span_id, "chat-2:7");
         assert_eq!(ConsentLedger::load(&d), ConsentLedger::empty(), "approve once writes no grant");
+    }
+
+    #[test]
+    fn a_locked_log_writes_nothing_and_a_grant_send_does_not_go() {
+        let (d, _g) = dir("locked");
+        let store = std::sync::Arc::new(at_rest::MemoryKeyStore::new());
+        at_rest::use_key_store_for(&d, store.clone());
+        let req = EgressReq::new("https://example.org/upload", &[DataClass::Personal]);
+        grant_destination(&d, "example.org", &[DataClass::Personal], UserClick::from_click()).unwrap();
+        assert_eq!(guard_egress(&d, &req), GateOutcome::Allow);
+        let before = fs::read_to_string(egress_path(&d)).unwrap();
+
+        store.forget();
+        at_rest::use_key_store_for(&d, store.clone());
+        // The ledger is locked too, so the grant no longer applies: back to the hard card.
+        assert_eq!(guard_egress(&d, &req), send_park("example.org", "personal"));
+        let model = EgressReq::new("https://api.x.ai/v1/responses", &[DataClass::Chat]);
+        assert_eq!(guard_egress(&d, &model), GateOutcome::Allow, "model calls are not blocked");
+        let once = EgressReq::new(HUB_DEST, HUB_SYNC_DATA);
+        assert!(record_approved_once(&d, &once).is_err(), "approve-once can't be logged, so it isn't sent");
+        assert_eq!(fs::read_to_string(egress_path(&d)).unwrap(), before, "no line, no plaintext");
+        let report = read_egress_report(&d);
+        assert_eq!(report.locked, Some(Locked::Missing));
+        assert!(report.lines.is_empty());
+    }
+
+    #[test]
+    fn a_grant_send_that_cannot_be_logged_is_refused() {
+        let (d, _g) = dir("refuse");
+        grant_destination(&d, "example.org", &[DataClass::Personal], UserClick::from_click()).unwrap();
+        // The ledger opens, but the log can't be written (a directory sits where the file goes).
+        fs::create_dir_all(egress_path(&d)).unwrap();
+        let req = EgressReq::new("https://example.org/upload", &[DataClass::Personal]);
+        match guard_egress(&d, &req) {
+            GateOutcome::Refuse { reason } => assert!(reason.starts_with("not sent: "), "{reason}"),
+            other => panic!("expected a refusal, got {other:?}"),
+        }
     }
 }
