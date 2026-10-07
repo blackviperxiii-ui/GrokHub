@@ -151,8 +151,9 @@ pub struct ToolCard {
     pub diff: String,
     pub image_data_url: Option<String>,
     /// Tool name plus the raw-input keys the cabin pre-check reads (shell
-    /// `command`, MCP `name`, desktop `x` / `y`). Typed text and other args
-    /// stay out.
+    /// `command`, MCP `name`, desktop `x` / `y`, and a computer-use frame's
+    /// key chord, app, window, and field descriptors). Typed text and other
+    /// args stay out.
     pub raw_input: String,
 }
 
@@ -518,6 +519,15 @@ pub fn parse_tool_card(update: &Value) -> ToolCard {
     }
 }
 
+/// Raw-input keys a computer-use frame keeps for the cabin pre-check: key
+/// chords, the app and window, and field descriptors and secret flags (the
+/// same keys `harness::credential_field` reads).
+const CU_RAW_KEYS: &[&str] = &[
+    "keys", "key", "app", "window", "role", "ax_role", "label", "ax_label", "aria_label", "field_name", "placeholder",
+    "target", "element", "autocomplete", "input_type", "selector", "secret", "sensitive", "is_secret", "is_password",
+    "password_field", "masked",
+];
+
 /// See [`ToolCard::raw_input`].
 pub fn raw_summary(update: &Value) -> String {
     let raw = update.get("rawInput").unwrap_or(&Value::Null);
@@ -528,6 +538,19 @@ pub fn raw_summary(update: &Value) -> String {
     for k in ["command", "name", "x", "y"] {
         if let Some(v) = raw.get(k).filter(|v| v.is_string() || v.is_number()) {
             m.insert(k.into(), v.clone());
+        }
+    }
+    // Spike-1c path D: what the hard-class check reads on a computer-use
+    // frame. Key chords, the app and window, and words that describe the
+    // target field. Never the typed `text` or `value`.
+    for k in CU_RAW_KEYS {
+        if let Some(v) = raw.get(*k) {
+            let keep = match v {
+                Value::String(s) => Value::from(s.chars().take(80).collect::<String>()),
+                Value::Bool(_) | Value::Number(_) => v.clone(),
+                _ => continue,
+            };
+            m.insert((*k).into(), keep);
         }
     }
     if m.is_empty() {
@@ -1406,6 +1429,22 @@ mod tests {
             card.image_data_url.as_deref(),
             Some("data:image/jpeg;base64,AAAA")
         );
+    }
+
+    #[test]
+    fn computer_use_raw_keeps_field_words_and_chords_never_typed_text() {
+        let u = json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "t9",
+            "title": "computer_type",
+            "kind": "other",
+            "status": "pending",
+            "rawInput": { "text": "hunter22", "value": "hunter22", "label": "Password", "secret": true, "keys": "ctrl+v", "nested": { "a": 1 } }
+        });
+        let card = parse_tool_card(&u);
+        let raw: Value = serde_json::from_str(&card.raw_input).unwrap();
+        assert_eq!(raw, json!({ "label": "Password", "secret": true, "keys": "ctrl+v" }));
+        assert!(!card.raw_input.contains("hunter22"), "{}", card.raw_input);
     }
 
     #[test]
