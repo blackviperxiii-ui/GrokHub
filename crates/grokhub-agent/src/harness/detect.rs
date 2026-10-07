@@ -368,6 +368,8 @@ pub fn fixture_hard_allow_without_approve() -> Vec<Span> {
         ui_changed: None,
         origin: Origin::User,
         consent_ref: String::new(),
+        target: String::new(),
+        target_rule: String::new(),
     }]
 }
 
@@ -392,6 +394,8 @@ pub fn fixture_hard_with_approve() -> Vec<Span> {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            target: String::new(),
+            target_rule: String::new(),
         },
         Span {
             session_id: "fixture-ok".into(),
@@ -411,6 +415,8 @@ pub fn fixture_hard_with_approve() -> Vec<Span> {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            target: String::new(),
+            target_rule: String::new(),
         },
         Span {
             session_id: "fixture-ok".into(),
@@ -430,6 +436,8 @@ pub fn fixture_hard_with_approve() -> Vec<Span> {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            target: String::new(),
+            target_rule: String::new(),
         },
     ]
 }
@@ -655,6 +663,8 @@ mod tests {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            target: String::new(),
+            target_rule: String::new(),
         }];
         assert!(approval_gate_violation(&spans).is_empty());
     }

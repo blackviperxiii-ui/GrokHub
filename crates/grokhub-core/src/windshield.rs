@@ -164,6 +164,16 @@ pub fn keep_atspi_row(row: &AtspiRow, desk_w: i32, desk_h: i32) -> bool {
     !row.name.is_empty()
 }
 
+/// Spike-2b: the smallest interactive control (button, menu item, link,
+/// toggle, …) whose box holds the point. Frames, panels, and the cursor row
+/// never count, so a click on empty window space is unknown.
+pub fn control_at(rows: &[AtspiRow], x: i32, y: i32) -> Option<&AtspiRow> {
+    rows.iter()
+        .filter(|r| r.role != "cursor" && is_interactive_role(&r.role))
+        .filter(|r| r.w > 0 && r.h > 0 && x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h)
+        .min_by_key(|r| (r.w as i64).saturating_mul(r.h as i64))
+}
+
 pub fn filter_atspi_rows(rows: &[AtspiRow], desk_w: i32, desk_h: i32) -> Vec<AtspiRow> {
     rows.iter()
         .filter(|r| keep_atspi_row(r, desk_w, desk_h))
@@ -587,5 +597,23 @@ mod tests {
             window_name_from_wmctrl("0x02 0 0 0 1920 1080 Lock screen").as_deref(),
             Some("Lock screen")
         );
+    }
+
+    #[test]
+    fn control_at_picks_the_smallest_control_under_the_point() {
+        let rows = vec![
+            row("Mail", "frame", 0, 0, 800, 600),
+            row("Toolbar", "panel", 0, 0, 800, 40),
+            row("Send", "push button", 10, 5, 60, 30),
+            row("Send options", "menu item", 50, 5, 20, 30),
+            row("", "cursor", 20, 10, 1, 1),
+        ];
+        assert_eq!(control_at(&rows, 20, 10).map(|r| r.name.as_str()), Some("Send"));
+        assert_eq!(control_at(&rows, 55, 10).map(|r| r.name.as_str()), Some("Send options"));
+        assert_eq!(control_at(&rows, 400, 300), None, "a frame or panel is not a control");
+        assert_eq!(control_at(&rows, 70, 10), None, "the right edge is outside the box");
+        let line = "role=push-button name=Place_order x=10 y=5 w=60 h=30";
+        let parsed = parse_atspi_line(line).unwrap();
+        assert_eq!(control_at(std::slice::from_ref(&parsed), 12, 6).map(|r| (r.name.as_str(), r.role.as_str())), Some(("Place order", "push button")));
     }
 }

@@ -34,7 +34,9 @@ use crate::tools::ToolOutput;
 use config::TransportDef;
 use rpc::RawTool;
 
-/// Individual tool schemas at this count. Above it, `search_tool` and `use_tool`.
+/// Individual tool schemas at this count. Above it, `search_tool` and
+/// `use_tool`. Spike-2b: counts the native desktop tools and every MCP tool
+/// (Cua included) together.
 const DEFER_AFTER: usize = 40;
 
 static GEN: AtomicU64 = AtomicU64::new(0);
@@ -254,9 +256,12 @@ pub fn restart(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn schema_tools() -> Vec<Value> {
+/// MCP schemas for the native engine. `native` is how many desktop tools
+/// it registers beside them; past [`DEFER_AFTER`] in all, MCP tools hide
+/// behind `search_tool` and `use_tool`.
+pub(crate) fn schema_tools(native: usize) -> Vec<Value> {
     let tools = current_tools();
-    if tools.len() > DEFER_AFTER {
+    if tools.len() + native > DEFER_AFTER {
         return vec![search_schema(), use_schema()];
     }
     tools.iter().map(one_schema).collect()
@@ -271,9 +276,6 @@ pub(crate) fn try_dispatch(name: &str, args: &Value) -> Option<ToolOutput> {
     }
     let tools = current_tools();
     if name == "use_tool" {
-        if tools.len() <= DEFER_AFTER {
-            return None;
-        }
         return Some(use_output(&tools, args));
     }
     let rec = tools.into_iter().find(|tool| tool.qualified == name)?;
@@ -380,9 +382,6 @@ fn resolve(name: &str, arguments: &str) -> Option<Resolved> {
     }
     let tools = current_tools();
     if name == "use_tool" {
-        if tools.len() <= DEFER_AFTER {
-            return None;
-        }
         let target = arg_name(arguments);
         if target.is_empty() {
             return Some(Resolved::Missing("use_tool".into()));
@@ -1027,7 +1026,7 @@ mod tests {
             ),
             Decision::Run
         );
-        let schemas = schema_tools();
+        let schemas = schema_tools(0);
         let hint = schemas
             .iter()
             .find(|tool| tool["name"] == "box__peek")
@@ -1057,7 +1056,7 @@ mod tests {
             .collect();
         {
             let _guard = install_test_tools(&leaked);
-            let schemas = schema_tools();
+            let schemas = schema_tools(0);
             assert!(schemas.iter().any(|tool| tool["name"] == "box__t0"));
             assert!(schemas
                 .iter()
@@ -1071,7 +1070,7 @@ mod tests {
         let extra = "t40".to_string();
         more.push(("box", extra.as_str(), "widget beta", false));
         let _guard = install_test_tools(&more);
-        let schemas = schema_tools();
+        let schemas = schema_tools(0);
         assert_eq!(schemas.len(), 2);
         assert!(schemas.iter().any(|tool| tool["name"] == "search_tool"));
         assert!(schemas.iter().any(|tool| tool["name"] == "use_tool"));
@@ -1120,6 +1119,45 @@ mod tests {
             None,
         );
         assert!(matches!(denied, Decision::Refuse(ref msg) if msg.contains("deny rule on mcp")));
+    }
+
+    /// Spike-2b: the 40 counts the native desktop tools and MCP tools together,
+    /// and a deferred hard tool still parks through `harness::decide`.
+    #[test]
+    fn native_desktop_and_mcp_tools_pass_forty_together_and_hard_use_tool_parks() {
+        let desk_on = Gate { desktop: true, ..gate(PermMode::Always, false, true) };
+        let desk_off = gate(PermMode::Always, false, true);
+        let native = {
+            let _none = install_test_tools(&[]);
+            crate::tools::schemas_for(&desk_on).len() - crate::tools::schemas_for(&desk_off).len()
+        };
+        assert_eq!(native, 7, "desktop tools the native engine registers");
+        let names: Vec<String> = (0..41 - native).map(|n| format!("t{n}")).collect();
+        let mut rows: Vec<(&str, &str, &str, bool)> = names.iter().map(|n| ("box", n.as_str(), "other", false)).collect();
+        rows[0] = ("mail", "send_message", "Send an email", false);
+        let _guard = install_test_tools(&rows);
+        assert_eq!(rows.len() + native, 41);
+        let on = crate::tools::schemas_for(&desk_on);
+        assert!(on.iter().any(|t| t["name"] == "search_tool") && on.iter().any(|t| t["name"] == "use_tool"));
+        assert!(on.iter().all(|t| t["name"] != "box__t1"));
+        assert!(on.iter().any(|t| t["name"] == "click"), "desktop tools stay listed");
+        // 34 MCP tools alone stay listed one by one.
+        let off = crate::tools::schemas_for(&desk_off);
+        assert!(off.iter().any(|t| t["name"] == "box__t1"));
+        assert!(off.iter().all(|t| t["name"] != "search_tool"));
+        let ws = Path::new(".");
+        let send = r#"{"name":"mail__send_message","arguments":{"to":"a@example.com"}}"#;
+        // Always cannot skip a hard tool behind use_tool: attended parks, unattended refuses.
+        assert_eq!(decide_with(&desk_on, "use_tool", send, true, None, ws, None), Decision::Ask);
+        let away = Gate { attended: false, ..desk_on };
+        assert!(matches!(
+            decide_with(&away, "use_tool", send, true, None, ws, None),
+            Decision::Refuse(ref msg) if msg.contains("hard-class send")
+        ));
+        assert_eq!(
+            decide_with(&desk_on, "use_tool", r#"{"name":"box__t1","arguments":{}}"#, false, None, ws, None),
+            Decision::Run
+        );
     }
 
     #[test]
