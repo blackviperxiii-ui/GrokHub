@@ -109,6 +109,10 @@ pub fn classify_ask(title: &str, action: &str) -> HardHit {
 /// command (a terminal may have focus). Key combos that end the session are
 /// irreversible OS. Clicks, moves, scrolls, and screenshots are soft.
 pub fn desk_classify(tool: &str, args: &serde_json::Value) -> HardHit {
+    // Spike-2a: a Cua Driver call is read as the desk tool it matches.
+    if let Some((desk, mapped)) = crate::harness::cua::cua_as_desk(tool, args) {
+        return desk_classify(desk, &mapped);
+    }
     match tool {
         "type" => {
             let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("");

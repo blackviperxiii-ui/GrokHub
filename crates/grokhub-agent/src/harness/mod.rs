@@ -7,7 +7,9 @@
 //! D2: Readonly / Supervised is the Settings switch "Let Grok control the
 //! desktop"; Full is one inline Work-tree card. No new chrome.
 //! D3: Windows runs the same gate on the shipped `grokhub-desktop` tools.
-//! No Cua, no new cabin-native CU.
+//! No new cabin-native CU. Spike-2a: Cua Driver (MIT, `bounded`, pinned) is
+//! an optional second pair of hands on Linux behind `grokhub --mcp-cua`
+//! (`cua`), off by default; its calls go through the same `decide`.
 //!
 //! Paths: A `grokhub-desktop` dispatch, B ACP ask, C headless `--deny` rules,
 //! D Grok Build's own computer use (`path_d`: `--deny` rules plus a watchdog
@@ -37,6 +39,7 @@ mod audit;
 mod backend;
 mod changes;
 mod consent;
+mod cua;
 mod detect;
 mod egress;
 mod hard;
@@ -56,8 +59,14 @@ pub use at_rest::{
     SEALED_PREFIX,
 };
 pub use backend::{
-    computer_tool_names, desk_args, desk_decide, desk_span, grok_build_click, ClickOutcome,
+    computer_tool_names, desk_access, desk_args, desk_decide, desk_span, grok_build_click, park_desk_call, ClickOutcome,
     ClickRequest, ComputerUseBackend, DeskCall, CU_TRACE,
+};
+pub use cua::{
+    check_cua_version, cua_as_desk, cua_manifest, cua_manifest_path, cua_socket_path, cua_spawn_args, cua_spawn_env,
+    find_cua_driver, spawn_cua_child, verify_cua_driver, CuaChild, CuaGate, CuaProxy, StdioChild, CUA_DRIVER_LICENSE,
+    CUA_DRIVER_TAG, CUA_DRIVER_VERSION, CUA_ENV_REMOVE, CUA_LINUX_ASSET, CUA_LINUX_SHA256, CUA_LINUX_ONLY_MSG,
+    CUA_MISSING_MSG, CUA_OFF_MSG, CUA_PERMISSION_MODE, CUA_TOOLS,
 };
 pub use changes::{
     change_id, content_hash, record_skill_change, restore_skill, skill_history_dir, skill_ledger_path,
