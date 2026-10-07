@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Fix it (Spike-9). After a diagnose finds something, GrokHub shows one card per fix with what's wrong, what it will do, why, how to undo it and the risk. Fix it (a click, never Enter) backs up every settings file the fix touches, takes a system snapshot when snapper, Timeshift, btrfs or System Restore is there, then hands each step to Grok Build one at a time; deleting files, removing apps or drivers, boot and partition changes park a hard card, and wiping a disk is never done in the app. Your computer's own password prompt is yours to answer. GrokHub checks again and only says fixed when the problem is gone; Undo fix puts the files back exactly. Fixing never runs unattended.
+
 Diagnose (Spike-8b). Tell GrokHub "something's wrong with my computer" (or "my wifi doesn't work"), type `/diagnose`, or let a native thread call the `diagnose` tool: it checks disk, memory, services, logs, network and updates with a fixed list of read-only probes (no shell, 10 s timeout, output redacted) and answers in plain words. Needs System state in Settings → Permissions; without it nothing runs. Nothing is changed on your computer. No new UI.
 
 Safety loop (Spike-1a). The harness now catches a click that changed nothing, a step repeated with no effect, "done" with no check, and a claim no step backs; it retries once, backtracks, then pauses for you (hard actions never retry), and typing into a password, PIN, OTP, 2FA or verification-code field is a hard credentials action whose value never reaches spans or logs. No UI changes.

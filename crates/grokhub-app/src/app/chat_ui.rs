@@ -1873,6 +1873,7 @@ impl Cabin {
                 );
             }
             self.paint_harness_cards(ui);
+            self.paint_fix_cards(ui);
             self.paint_perm_ask(ui);
             self.paint_elicit_ask(ui);
         });

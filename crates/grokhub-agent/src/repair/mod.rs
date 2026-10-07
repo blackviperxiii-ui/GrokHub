@@ -1,6 +1,9 @@
 //! Spike-8b diagnose (pillar P6 step 1): "something's wrong with my computer"
 //! runs a fixed list of read-only probes and answers in plain words.
-//! Fixing comes in Spike-9.
+//! Spike-9 fixes what it found: `fix` drafts a plain-language plan per
+//! finding with every step classified by rules, `restore` takes a restore
+//! point, and `apply` hands soft steps to Grok Build one at a time, parks hard
+//! ones, never runs hard-floor ones, re-checks, and undoes.
 //!
 //! Every probe goes through `harness::decide` twice: `Step::Scope` for
 //! `system_state` (nothing runs without the user's grant), then the probe's
@@ -9,8 +12,11 @@
 //! reaches a span or the model. Spans carry `origin: repair`. Nothing elevates:
 //! a probe that needs admin is skipped with a note.
 
+mod apply;
+mod fix;
 mod interpret;
 mod probes;
+mod restore;
 mod run;
 
 use std::path::Path;
@@ -27,6 +33,16 @@ pub use probes::{
     LINUX_PROBES, LOG_LINE_CAP, OUTPUT_CAP, PROBE_TIMEOUT, WINDOWS_PROBES,
 };
 pub use run::{redact_output, run_spec, ProbeRun};
+pub use apply::{
+    gb_prompt, step_ok, Action, ApplyCtx, ApplyRun, APPLY_TOOL, REPAIR_TOOL, RESTORE_TOOL, STEP_FAILED, STEP_OK,
+    UNATTENDED, UNDO_TOOL,
+};
+pub(crate) use fix::repair_hit;
+pub use fix::{classify_step, elevate, gate_text, plans_for, DraftStep, FixPlan, FixStep, PlanError, StepClass, FLOOR_GUIDANCE};
+pub use restore::{
+    backup_dir, backup_files, detect_backends, restore_files, BackupEntry, FileBackup, RestorePoint, Snapshot,
+    SnapshotBackend, UndoReport,
+};
 
 /// The tool name in the native registry and in every probe span.
 pub const DIAGNOSE_TOOL: &str = "diagnose";
@@ -317,5 +333,7 @@ pub fn model_text(report: &DiagnoseReport) -> String {
     out
 }
 
+#[cfg(test)]
+mod fix_tests;
 #[cfg(test)]
 mod tests;

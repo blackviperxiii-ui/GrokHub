@@ -97,6 +97,9 @@ pub(super) enum ParkSource {
     /// A path A / B park whose turn was steered (Spike-1a). Its call was
     /// denied with the old turn; Approve re-runs the step once, like path C.
     Held,
+    /// A Spike-9 fix step classified hard. Nothing is running yet; Approve
+    /// sends it to Grok Build once, Deny stops the fix.
+    Repair,
 }
 
 /// A recovery-ladder pause waiting on the user (Spike-1a). Counts in the
@@ -170,9 +173,11 @@ pub(super) struct HarnessState {
     /// `/privacy` output on its way from the reader thread.
     pub privacy_rx: Option<mpsc::Receiver<String>>,
     /// `/diagnose` or a "check my computer" answer on its way (Spike-8b).
-    pub diagnose_rx: Option<mpsc::Receiver<String>>,
+    pub diagnose_rx: Option<mpsc::Receiver<super::repair_ui::DiagnoseDone>>,
     /// The running diagnose came from `/diagnose`, so it posts as a slash result.
     pub diagnose_slash: bool,
+    /// Spike-9 fix proposals and the fix being applied.
+    pub fixes: super::repair_ui::FixUi,
     /// Settings → Permissions: the folder typed for a new files scope.
     pub scope_folder: String,
     /// Settings → Permissions: the browser picked for a history scope.
@@ -437,12 +442,18 @@ impl Cabin {
         }
     }
 
+    /// A fix step classified hard parks the same white card (Spike-9).
+    pub(super) fn park_repair(&mut self, class: HardClass, command: String) {
+        self.park_hard(ParkSource::Repair, class, "repair", grokhub_agent::repair::REPAIR_TOOL.into(), command);
+    }
+
     /// Approve answers once (never Always). Deny, Esc, TTL, and halt reject.
     pub(super) fn resolve_hard_park(&mut self, approve: bool, why: &str) {
         let Some(park) = self.harness.park.take() else {
             return;
         };
         let mut sync_once = false;
+        let mut fix_answer = None;
         let trace = self.trace_id();
         let span = if approve {
             hx::Span::hard_approve(&trace, &park.tool, &span_args(&park.tool, &park.action), park.class)
@@ -471,6 +482,7 @@ impl Cabin {
             ParkSource::Egress(dest) => {
                 sync_once = approve && dest == hx::HUB_DEST;
             }
+            ParkSource::Repair => fix_answer = Some(approve),
         }
         self.status = if approve {
             format!("Approved once · {}", park.class.label())
@@ -481,6 +493,9 @@ impl Cabin {
         if sync_once {
             self.run_hub_sync(super::privacy_ui::HubSend::Once);
         }
+        if let Some(approve) = fix_answer {
+            self.fix_hard_answered(approve);
+        }
     }
 
     /// A turn is stopping: parks that hold a GB ask or a desktop call fail closed.
@@ -488,7 +503,7 @@ impl Cabin {
     pub(super) fn withdraw_hard_parks(&mut self) {
         let mut keep = VecDeque::new();
         while let Some(park) = self.harness.park.clone() {
-            if matches!(park.source, ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held) {
+            if matches!(park.source, ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held | ParkSource::Repair) {
                 keep.push_back(park);
                 self.harness.park = self.harness.queue.pop_front();
             } else {
@@ -520,7 +535,7 @@ impl Cabin {
                 ParkSource::Desk(id) => {
                     let _ = hx::answer_park(&dir, id, false);
                 }
-                ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held => continue,
+                ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held | ParkSource::Repair => continue,
             }
             let args = span_args(&park.tool, &park.action);
             let why = "turn steered — the call is gone, the card stays for a fresh approval";
@@ -638,6 +653,7 @@ impl Cabin {
 
     /// Halt denies every parked card with a span.
     pub(super) fn halt_hard_parks(&mut self) {
+        self.halt_fix();
         while self.harness.park.is_some() {
             self.resolve_hard_park(false, "halted — fail-closed Deny");
         }

@@ -126,6 +126,9 @@ pub enum Step<'a> {
     Egress { dest: &'a str, data: &'a [DataClass], ledger: &'a ConsentLedger },
     /// A read of a learning scope (P5). Off unless the user granted it.
     Scope { scope: &'a Scope, ledger: &'a ConsentLedger },
+    /// A Spike-9 repair step (its command plus the files it touches): the
+    /// shell floor and hard class, then the repair floor and repair table.
+    Repair { command: &'a str },
 }
 
 /// The single entry for the hard floor and the hard class. Every caller asks
@@ -148,6 +151,7 @@ pub fn decide(step: Step<'_>) -> GateOutcome {
         Step::Tool { name, arguments } => classify(name, arguments),
         Step::Desk { tool, args } => desk_classify(tool, args),
         Step::Ask { title, action } => classify_ask(title, action),
+        Step::Repair { command } => crate::repair::repair_hit(command),
     };
     match hit {
         HardHit::Floor(HardFloor { reason }) => GateOutcome::Refuse { reason },
