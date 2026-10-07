@@ -8,7 +8,7 @@
 //! commands that name this file.
 //!
 //! Scopes (P5) are all off: a scope reads as on only while a user grant for it
-//! is active. Nothing reads a scope yet; the indexers arrive in Spike-8.
+//! is active. Spike-8a's indexers (`crate::indexers`) read a scope only while it is.
 //!
 //! Spike-4b: every line is sealed at rest (`at_rest`, key in the OS keyring).
 //! With the keyring down or the key missing the ledger reads as locked: no
