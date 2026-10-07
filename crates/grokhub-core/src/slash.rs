@@ -57,6 +57,8 @@ pub enum Slash {
     ProjectDelete,
     Send(String),
     Sync,
+    /// `/privacy`: grants, learning scopes, and what left this computer (Spike-4a). Read only.
+    Privacy,
     Hub,
     Inhabit(String),
     Rewind,
@@ -279,6 +281,7 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         }
         "/send" if !rest.is_empty() => Some(Slash::Send(rest.to_string())),
         "/sync" => Some(Slash::Sync),
+        "/privacy" => Some(Slash::Privacy),
         "/hub" => Some(Slash::Hub),
         "/inhabit" if !rest.is_empty() => Some(Slash::Inhabit(rest.to_string())),
         "/rewind" if rest == "--files" || rest == "--code" || rest == "files" => {
@@ -388,6 +391,7 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::ProjectDelete => "project_delete",
         Slash::Send(_) => "send",
         Slash::Sync => "sync",
+        Slash::Privacy => "privacy",
         Slash::Hub => "hub",
         Slash::Inhabit(_) => "inhabit",
         Slash::Rewind => "rewind",
@@ -482,6 +486,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "$", hint: "Host shell shortcut", insert: "$ ", run_on_pick: false },
     SlashDef { cmd: "/hub", hint: "Device hub status", insert: "/hub", run_on_pick: true },
     SlashDef { cmd: "/sync", hint: "Sync chats & memory with paired computers", insert: "/sync", run_on_pick: true },
+    SlashDef { cmd: "/privacy", hint: "What left this computer, and your grants", insert: "/privacy", run_on_pick: true },
     SlashDef { cmd: "/send", hint: "Send a task to another computer", insert: "/send ", run_on_pick: false },
     SlashDef { cmd: "/rewind", hint: "Rewind Grok conversation", insert: "/rewind", run_on_pick: true },
     SlashDef { cmd: "/rewind --files", hint: "Restore last project snapshot", insert: "/rewind --files", run_on_pick: true },
@@ -680,7 +685,8 @@ pub fn slash_help() -> String {
             "/update — only what is newer, or both when Settings → Update or /update runs and the probe found nothing. CLI first (`grok update --alpha`, PATH prepends ~/.grok/bin and ~/.local/bin) when a newer alpha exists, then overlay install when the cabin is newer. A current alpha is left alone unless that manual check overlays. Restart on Settings. Settings → Update stays visible. The titlebar chip notifies in-app (Update CLI, Update cabin, or Update CLI and cabin) every 2 hours."
         },
         "/send <task> — task this box",
-        "/sync — merge chats and memory with paired computers",
+        "/sync — merge chats and memory with paired computers (asks first unless Settings → Permissions allows it)",
+        "/privacy — your grants, learning scopes (all off), and what left this computer",
         "/hub — devices / pair",
         "/inhabit <peer> — hand this Grok to another box (not the phone)",
         "/rewind — rewind Grok conversation; /rewind --files restores the last project snapshot",
@@ -1111,5 +1117,19 @@ mod tests {
         assert_eq!(parse_slash("/connectors"), Some(Slash::GrokConnectors));
         assert!(slash_help().contains("/hooks — open Connectors with the Hooks section in view"));
         assert!(!unknown_cabin_slash("/hooks"));
+    }
+
+    #[test]
+    fn privacy_slash_is_a_cabin_view() {
+        assert_eq!(parse_slash("/privacy"), Some(Slash::Privacy));
+        assert_eq!(parse_slash("/PRIVACY"), Some(Slash::Privacy));
+        assert_eq!(
+            parse_slash("/privacy").as_ref().map(slash_kind),
+            Some("privacy")
+        );
+        assert!(slash_help().contains(
+            "/privacy — your grants, learning scopes (all off), and what left this computer"
+        ));
+        assert!(!unknown_cabin_slash("/privacy"));
     }
 }
