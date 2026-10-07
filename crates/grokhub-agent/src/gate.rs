@@ -464,7 +464,7 @@ mod tests {
             Decision::Ask
         );
         assert_eq!(
-            decide_with(&always, "hard_delete_stub", "{}", true, None, Path::new("."), None),
+            decide_with(&always, "drive__delete_file", "{}", true, None, Path::new("."), None),
             Decision::Ask
         );
         let away = gate(PermMode::Always, false, false, true);
