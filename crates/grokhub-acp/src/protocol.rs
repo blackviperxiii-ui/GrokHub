@@ -544,6 +544,10 @@ pub fn merge_tool_card(old: ToolCard, new: ToolCard) -> ToolCard {
         new.title
     };
     let kind = if new.kind.is_empty() { old.kind } else { new.kind };
+    // A status flip with no new content must not keep a status-word detail
+    // ("Waiting for input", "running"). The chip is the one status. Real
+    // content on the update still replaces it.
+    let status_flipped = !new.status.is_empty() && new.status != old.status;
     let status = if new.status.is_empty() {
         old.status
     } else {
@@ -555,6 +559,11 @@ pub fn merge_tool_card(old: ToolCard, new: ToolCard) -> ToolCard {
         } else {
             old.detail
         }
+    } else if new.detail.is_empty()
+        && status_flipped
+        && grokhub_core::tool_detail_is_status(&old.detail)
+    {
+        String::new()
     } else if new.detail.is_empty() {
         old.detail
     } else {
@@ -1337,6 +1346,24 @@ mod tests {
         }));
         assert_eq!(waiting.status, "input_required");
         assert_eq!(waiting.detail, "Waiting for input");
+        let done = parse_tool_card(&json!({
+            "toolCallId": "t1",
+            "title": "click",
+            "status": "completed"
+        }));
+        assert_eq!(done.detail, "");
+        let cleared = merge_tool_card(waiting.clone(), done);
+        assert_eq!(cleared.status, "completed");
+        assert_eq!(cleared.detail, "");
+        let with_text = parse_tool_card(&json!({
+            "toolCallId": "t1",
+            "title": "click",
+            "status": "completed",
+            "content": [{ "type": "content", "content": { "type": "text", "text": "3 matches" } }]
+        }));
+        let kept = merge_tool_card(waiting, with_text);
+        assert_eq!(kept.status, "completed");
+        assert_eq!(kept.detail, "3 matches");
         assert!(split_image_data_url("data:text/plain;base64,QQ==").is_none());
         assert!(split_image_data_url("not-a-data-url").is_none());
         assert!(is_jwt_api_key("aaa.bbb.ccc"));
