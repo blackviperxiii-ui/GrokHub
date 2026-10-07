@@ -1457,14 +1457,13 @@ fn arm_front_settle(ctx: &egui::Context, cards: &[UpdateCard]) {
     let Some(front) = cards.first() else {
         return;
     };
-    if prev.as_deref() != Some(front.id.as_str()) {
-        // Under reduced motion, skip the 0-reset so the same-frame snap to 1.0
-        // is not fighting a forced restart (CD-01 / CD-04).
-        if !crate::motion::reduced_motion_ctx(ctx) {
+    // Only when the front *changes* (× promote). First paint must not settle-offset.
+    if let Some(prev) = prev.as_deref() {
+        if prev != front.id.as_str() && !crate::motion::reduced_motion_ctx(ctx) {
             ctx.animate_value_with_time(settle_id(&front.id), 0.0, 0.0);
         }
-        ctx.data_mut(|d| d.insert_temp(key, front.id.clone()));
     }
+    ctx.data_mut(|d| d.insert_temp(key, front.id.clone()));
 }
 
 /// A card that was not on the deck last frame flies in. The first deck painted
