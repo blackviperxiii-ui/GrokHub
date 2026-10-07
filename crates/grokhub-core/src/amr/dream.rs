@@ -349,6 +349,8 @@ impl AmrStore {
 
         let loaded = self.load_live();
         let mut nodes = loaded.nodes;
+        // Spike-8a: indexer facts belong to their scope ("Forget these"), not the dream.
+        nodes.retain(|n| !n.source.starts_with(super::SCOPE_SOURCE_PREFIX));
         nodes.sort_by(rank);
         let mut links: BTreeMap<String, Linked> = BTreeMap::new();
         for edge in self.edges()? {
@@ -682,6 +684,33 @@ mod tests {
             .collect();
         out.sort();
         out
+    }
+
+    /// Spike-8a: two near-identical indexer facts (same scope tag, most words
+    /// the same) and a stale low-confidence one are left alone: their scope's
+    /// "Forget these" owns them, not the dream.
+    #[test]
+    fn dream_leaves_indexer_scope_nodes_alone() {
+        let tmp = Tmp::new("scope");
+        let store = AmrStore::at(&tmp.0);
+        store.init().unwrap();
+        let mut a = node("scope-aaaaaaaaaaaa", "Visited github.com 42 times in Firefox", 0.9, RECENT, &["scope:browser_history:firefox"]);
+        a.source = "scope:browser_history:firefox".into();
+        let mut b = node("scope-bbbbbbbbbbbb", "Visited github.com 41 times in Firefox", 0.9, RECENT, &["scope:browser_history:firefox"]);
+        b.source = "scope:browser_history:firefox".into();
+        let mut c = node("scope-cccccccccccc", "System: disk / is 63% used", 0.1, OLD, &["scope:system_state"]);
+        c.source = "scope:system_state".into();
+        for d in [&a, &b, &c] {
+            store.remember(d).unwrap();
+        }
+        let report = store.dream_once(NOW, &DreamOpts::default()).unwrap();
+        assert_eq!(report.looked_at, 0);
+        assert_eq!(report.tombstoned(), 0);
+        for id in ["scope-aaaaaaaaaaaa", "scope-bbbbbbbbbbbb", "scope-cccccccccccc"] {
+            assert!(!store.is_forgotten(id), "{id}");
+        }
+        assert_eq!(store.live_from_source("scope:").0.len(), 3);
+        assert_eq!(store.live_from_source("scope:system_state").0.len(), 1);
     }
 
     #[test]

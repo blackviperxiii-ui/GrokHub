@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Local indexers (Spike-8a). Once you allow a scope in Settings → Permissions or on an inline ask card, GrokHub learns from it on this computer: one folder's files (names, dates, titles and headings), installed apps, one browser's visited sites (by host, from a read-only temp copy of the history table only), and disk, service, log and update counts. It reads one scope per heartbeat on a low-priority thread, never on battery, in quiet hours, while halted, or while private data is locked; keys, password stores, cookies and logins are never read. What it learns is sealed in the memory repo and listed under each row with "Forget these"; a revoke stops it on the next tick. Calendar and mail stay grant rows only. Nothing is sent anywhere.
+
 Memory repo M3 (only with `"memory_backend": "amr"`): once a night after the review, GrokHub tidies `amr/` with no model call. It merges near-duplicate notes (a `supersedes` edge and a tombstone), retires old low-confidence notes nothing links to, never deletes a file or edits USER.md or SOUL.md, skips private notes it can't unlock, and writes a plain report to `amr/dreams/<date>.md`. `/memory dream` shows the latest one. Halt skips the night. `/dream` (Imagine) is unchanged. No UI changes.
 
 Memory repo M1–M2 (only with `"memory_backend": "amr"` in `app.json`): reflect, chat insights, `/memory note` and `/remember`, Memory Save and native `/remember` now write one node each in `amr/` instead of a MEMORY.md line; `/recall`, History and the native first-turn pack read `amr/` and the old files together; `/forget <topic>` leaves a tombstone; and the first AMR use imports learned insights and chip preferences once, with a report in `amr/dreams/`. Legacy is unchanged. No UI changes.
