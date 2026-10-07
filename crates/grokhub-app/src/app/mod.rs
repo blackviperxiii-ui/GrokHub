@@ -5339,6 +5339,7 @@ fn paint_tool_card_body(ui: &mut egui::Ui, card: &ToolCard) {
                 && !card.detail.is_empty()
                 && !card.detail.trim().starts_with('{')
                 && !card.detail.trim().starts_with('[')
+                && !grokhub_core::tool_detail_is_status(&card.detail)
             {
                 ui.add_space(4.0);
                 ui.label(
