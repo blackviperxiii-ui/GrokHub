@@ -494,6 +494,16 @@ mod tests {
         hx::read_spans(root, "session").unwrap().into_iter().map(|s| (s.tool, s.decision)).collect()
     }
 
+    /// Windows always plans a System Restore checkpoint first. With no Grok
+    /// Build it can't run, so the fix goes on with the file backup alone.
+    fn snapshot_spans() -> Vec<(String, String)> {
+        if cfg!(windows) {
+            vec![(repair::REPAIR_TOOL.into(), "allow".into()), (repair::RESTORE_TOOL.into(), "deny".into())]
+        } else {
+            vec![]
+        }
+    }
+
     fn wait_fix(cabin: &mut Cabin) {
         let start = std::time::Instant::now();
         while cabin.harness.fixes.verify_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(4) {
@@ -537,14 +547,10 @@ mod tests {
         cabin.harness.fixes.proposals = vec![plan(vec![DraftStep::new("ipconfig /flushdns", "Clear the list.")])];
         cabin.apply_fix(0);
         assert!(cabin.harness.fixes.proposals.is_empty());
-        assert_eq!(
-            tools(&root),
-            vec![
-                (repair::RESTORE_TOOL.into(), "restore".into()),
-                (repair::REPAIR_TOOL.into(), "allow".into()),
-                (repair::REPAIR_TOOL.into(), "deny".into()),
-            ]
-        );
+        let mut want = vec![(repair::RESTORE_TOOL.to_string(), "restore".to_string())];
+        want.extend(snapshot_spans());
+        want.extend([(repair::REPAIR_TOOL.into(), "allow".into()), (repair::REPAIR_TOOL.into(), "deny".into())]);
+        assert_eq!(tools(&root), want);
         assert_eq!(
             cabin.messages.last().unwrap().1,
             "A step didn't work (Clear the list), so I stopped there. Undo fix puts back what I changed."
@@ -564,7 +570,7 @@ mod tests {
         let ctx = repair::ApplyCtx {
             config_dir: &root,
             session_id: "session",
-            os: repair::Os::current(),
+            os: repair::Os::Linux,
             attended: true,
             access: cabin.access_mode(),
             has_bin: &|_: &str| false,
@@ -612,16 +618,14 @@ mod tests {
         cabin.halt_hard_parks();
         assert!(cabin.harness.park.is_none());
         assert!(cabin.harness.fixes.run.as_ref().unwrap().is_done());
-        let decisions: Vec<(String, String)> = tools(&root);
-        assert_eq!(
-            decisions,
-            vec![
-                (repair::RESTORE_TOOL.into(), "restore".into()),
-                (repair::REPAIR_TOOL.into(), "park".into()),
-                (repair::APPLY_TOOL.into(), "deny".into()),
-                (repair::REPAIR_TOOL.into(), "deny".into()),
-            ]
-        );
+        let mut want = vec![(repair::RESTORE_TOOL.to_string(), "restore".to_string())];
+        want.extend(snapshot_spans());
+        want.extend([
+            (repair::REPAIR_TOOL.into(), "park".into()),
+            (repair::APPLY_TOOL.into(), "deny".into()),
+            (repair::REPAIR_TOOL.into(), "deny".into()),
+        ]);
+        assert_eq!(tools(&root), want);
         let fix_lines: Vec<&String> = cabin.messages.iter().filter(|(_, b)| b.contains("Undo fix")).map(|(_, b)| b).collect();
         assert_eq!(
             fix_lines,
