@@ -928,7 +928,7 @@ impl Cabin {
             self.log_card_use(&card, depth, did);
         }
         if let Some(route) = route {
-            let _ = self.commit_schedule(route);
+            let _ = self.commit_schedule(route, grokhub_agent::harness::Origin::SelfManage, "from an Automate offer");
         }
     }
 
@@ -1901,7 +1901,8 @@ fn paint_feed_card(
             }
             UpdateKind::AutomateOffer
             | UpdateKind::AutomationDone
-            | UpdateKind::ScheduleCreated => FeedAct::Open(card.id.clone()),
+            | UpdateKind::ScheduleCreated
+            | UpdateKind::SelfChange => FeedAct::Open(card.id.clone()),
         }
     })
 }

@@ -9,13 +9,13 @@ mod rpc;
 mod stdio;
 
 pub use config::{
-    config_file, import_documents, import_paths, load_servers, load_servers_for, read_mcp_text,
+    config_file, import_documents, import_paths, is_desktop_server, load_servers, load_servers_for, read_mcp_text,
     target_label, ImportReport, ServerDef,
 };
 pub use elicit::{
     alias_elicit, attach_elicit, detach_elicit, unalias_elicit, ElicitInbox, ElicitNote, ElicitView,
 };
-pub(crate) use elicit::{wait_elicit, ElicitAnswer};
+pub(crate) use elicit::{ask_secret, wait_elicit, ElicitAnswer};
 
 pub(crate) use elicit::with_elicit;
 
@@ -626,11 +626,17 @@ fn open_def(name: &str, def: &ServerDef, workspace: &Path) -> Result<(Conn, Vec<
             Ok((Conn::Stdio(conn), tools))
         }
         TransportDef::Http { url, sse } => {
+            let mut headers = def.headers.clone();
+            if let Some(token_name) = &def.token_ref {
+                let token = crate::harness::open_connection_token(&perm::config_dir(), token_name)
+                    .ok_or("its token is missing or locked: add the connection again")?;
+                headers.entry("Authorization".into()).or_insert_with(|| format!("Bearer {token}"));
+            }
             let (conn, tools) = http::connect(
                 name,
                 url,
                 *sse,
-                &def.headers,
+                &headers,
                 def.startup_timeout,
                 def.tool_timeout,
             )?;
