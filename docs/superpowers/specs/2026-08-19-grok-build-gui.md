@@ -47,6 +47,11 @@ The pre-check runs on four paths:
 
 Every step writes a cabin-local span to `spans/<chat>.jsonl` with `path`, `chat_id`, `turn`, `ui_changed`, and redacted args. The last approved click shows as the agent cursor marker on the Work-tree frame. GB `PreToolUse` hooks are not the lock, because they fail open.
 
+**Addendum (2026-10-07, Spike-1c, path D).** Grok Build's own (built-in) computer use is path D. Under Ask, path B classifies its ask as before. Under Auto or Always no ask reaches the cabin, so:
+
+- **Lock:** every `grok -p` spawn adds `--deny` rules for GB computer-use tools (`BUILTIN_CU_DENY`) when desktop control is off, or when it is on and the pill is Auto or Always, so desktop work goes to the gated path A tools. Only `--deny` pairs are added. GB rules can name a tool only as an MCP tool, so a built-in tool such as `computer_screenshot` is a `GB_DENY_GAPS` entry.
+- **Belt:** a computer-use frame no ask covered goes through `harness::decide`. Soft steps get a `path:"D"` allow span. A hard step or Readonly stops the turn and writes a deny span; a hard step also posts the hard card "Grok tried to … without asking", and Approve re-runs that one step once on ACP Ask. A fast step can finish before its first frame arrives, so the belt only stops the turn after it.
+
 ## History and extensions
 
 History search types across SOUL/USER/MEMORY and every chat. A new query drops the previous needle's hits; a finished walk only installs when it still matches the box. A hit opens that memory file or thread. Re-opening the file already in the Memory editor keeps unsaved typing.

@@ -18,6 +18,7 @@ pub mod chips;
 pub mod connector;
 pub mod consult;
 pub mod context;
+pub mod cursor_motion;
 pub mod desktop_entry;
 pub mod desktop_mcp;
 pub mod diagnostics;
@@ -204,8 +205,8 @@ pub use context::{
 };
 pub use desktop_entry::{desktop_bin_path, desktop_entry_uses_prefix_bin, rewrite_desktop_entry};
 pub use desktop_mcp::{
-    apply_desktop_mcp_args, desktop_mcp_args, stamp_halts, DesktopPermMode, DESKTOP_MCP_RULE,
-    DESKTOP_MCP_SERVER,
+    apply_desktop_mcp_args, desktop_mcp_args, stamp_halts, DesktopPermMode, CABIN_CU_SERVERS, CUA_MCP_RULE,
+    CUA_MCP_SERVER, DESKTOP_MCP_RULE, DESKTOP_MCP_SERVER,
 };
 pub use diagnostics::diagnostics_bundle;
 pub use doctor::{
@@ -495,7 +496,7 @@ pub use voice::{
 };
 pub use windshield::{
     build_windshield, filter_atspi_rows, is_interactive_role, keep_atspi_row, lock_check_titles,
-    parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse, pick_named_row, rank_atspi_rows,
+    control_at, parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse, pick_named_row, rank_atspi_rows,
     refused_lock, tab_list_from_rows, window_name_from_atspi, window_name_from_wmctrl,
     windshield_browser_line, windshield_prompt, AtspiRow, PendingStep, WindshieldFrame,
 };
