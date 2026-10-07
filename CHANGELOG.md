@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+Scopes and locked-state polish (Critiquito SB-01 to SB-11). The consent rules are unchanged: grants still come only from a mouse click in Settings, `harness::decide` and the fail-closed rules are untouched, and a hard card still has no Always.
+
+- **Locked means locked (SB-01).** While private data is locked (no keyring, missing or wrong key), every Allow in Settings → Permissions, the folder field, the browser picker and Choose folder… are shown disabled, and hovering one says "Locked: keyring unavailable" (or which lock it is). Revoke is disabled too, because a revoke is a ledger write and a locked ledger takes none.
+- **A way out (SB-02).** The lock message now has one next step for your OS and a **Try again** button that asks the keyring again right away and refreshes the page. Linux: "Unlock or start your keyring (GNOME Keyring or KWallet), then Try again." Windows names Windows Credential Manager and macOS the macOS Keychain; neither mentions Secret Service. `/sync` and `/privacy` give the same step in short form.
+- **Folder rows read by name (SB-03, SB-06).** A folder grant is titled "Files in notes". The hint shows the whole path cut in the middle, and hovering shows all of it. `/privacy` uses the same short name, with the path on hover over its Revoke row. You can allow several folders, one at a time: the row reads "Files in a folder", then "Add a folder".
+- **Choose folder… (SB-04).** A button next to the folder field opens your system's folder dialog (on Linux through the desktop portal, with no GTK). Picking a folder only fills the field; Allow still grants. If no dialog can open (no portal or zenity), the row says so and asks you to type the path. Typing a path still works, and the muted placeholder matches your OS (`C:\Users\you\Notes`, `/home/you/Notes`, `/Users/you/Notes`).
+- **`/privacy` lists each grant once (SB-05).** One Grants list: a bullet with its since-time for each grant that is on, then one "Off: …" line, then the screen setting. The duplicate summary line and the second heading are gone.
+- **Calmer rows (SB-07, SB-08, SB-09, SB-11).** Each hint starts with On or Off in the brighter text colour. Allow is an outline button on the scope rows and Sync, so nothing on the page nudges you to grant. The intro says 'Screen access is "Let Grok control the desktop" in Settings → Cabin defaults.' The `/privacy` Revoke rows and the `/skills changes` Undo / Restore rows (SU-06) line up with the report text, their pills in one column.
+- SB-10 (naming the calendar source and mail account) waits for the readers; there is a TODO in the code.
+
+One small new crate: `rfd` 0.17 (and `pollster` 0.4), with only its `xdg-portal` backend on Linux, so no new system libraries and no CI change. No version bump.
+
 Skill changes GrokHub makes on its own can be undone (harness design §12 P3, first slice of the Spike-5 ChangeLedger). `harness::decide` and the hard-card rules are unchanged.
 
 - **Every version is kept.** Before the nightly review patches a skill, before a skill learned from a host run is written, and before cleanup moves a never-used skill aside, the current `SKILL.md` is copied to `changes/skills/<name>/` in the cabin config (the last 20 versions per skill). Each write adds one line to `changes/skills.jsonl`: skill, time, who (`self_manage` or `user`), a short reason, and the file hash before and after. The ledger holds no skill text, and secrets in the reason are redacted. Adding a skill from Suggested is logged too.
