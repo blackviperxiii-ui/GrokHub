@@ -22,8 +22,8 @@ mod span;
 
 pub use access::{always_does_not_imply_full, AccessMode};
 pub use approval::{
-    always_keeps_access, apply_access, decide_harness, hard_card_key, resolve_park, GateOutcome,
-    HardAnswer, HardPark, APPROVAL_TTL,
+    always_keeps_access, apply_access, decide, decide_harness, hard_card_key, resolve_park, GateOutcome,
+    HardAnswer, HardPark, Step, APPROVAL_TTL,
 };
 pub use backend::{
     computer_tool_names, desk_args, desk_decide, desk_span, grok_build_click, ClickOutcome,

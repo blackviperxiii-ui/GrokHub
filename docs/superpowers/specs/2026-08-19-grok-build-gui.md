@@ -30,6 +30,7 @@ Grok Build owns computer-use. There is no Desk / Take over menu. The cabin keeps
 
 - **Hard floor deny, no UI bypass:** `host_safety` paths, `rm -rf /`, fork bomb, `mkfs`, `dd` to a disk, and `curl|sh` as root.
 - **Hard-class park, even under Always:** money, send, delete, credentials, and irreversible OS actions wait on a card.
+- **One entry:** every caller (native gate, desktop MCP, ACP asks, headless cards) gets its verdict from `harness::decide(Step)`. There is no side path around it. Spans stay cabin-local, only gain `#[serde(default)]` fields, and are written for deny, TTL, and Halt too.
 - **Access is the desktop switch, and it covers desktop tools only:**
   - Readonly: Settings → *Let Grok control the desktop* is off.
   - Supervised: the switch is on.

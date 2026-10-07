@@ -14,7 +14,7 @@
 //! (cards for parks the desktop MCP posts), and C (headless denials).
 
 use super::*;
-use grokhub_agent::harness::{self as hx, HardHit};
+use grokhub_agent::harness::{self as hx, GateOutcome, Step};
 use grokhub_agent::{AccessMode, HardClass};
 
 /// How often the cabin looks for desktop parks and refreshes the turn file.
@@ -52,7 +52,7 @@ pub(super) struct HeadlessHit {
     pub card_id: String,
     pub tool: String,
     pub action: String,
-    pub hit: HardHit,
+    pub hit: GateOutcome,
     pub status: String,
 }
 
@@ -115,7 +115,7 @@ fn is_desktop_card(card: &ToolCard) -> bool {
 
 /// Path C classifier for one headless tool card: the shell command when there
 /// is one, else the tool name (MCP `server__tool` or `use_tool` target).
-pub(super) fn headless_hit(card: &ToolCard) -> (String, String, HardHit) {
+pub(super) fn headless_hit(card: &ToolCard) -> (String, String, GateOutcome) {
     let raw = raw_of(card);
     let tool = raw
         .get("name")
@@ -125,10 +125,11 @@ pub(super) fn headless_hit(card: &ToolCard) -> (String, String, HardHit) {
         .to_string();
     if let Some(cmd) = raw.get("command").and_then(|v| v.as_str()) {
         let args = serde_json::json!({ "command": cmd }).to_string();
-        return (tool, cmd.to_string(), hx::classify("run_terminal_command", &args));
+        let verdict = hx::decide(Step::Tool { name: "run_terminal_command", arguments: &args });
+        return (tool, cmd.to_string(), verdict);
     }
-    let hit = hx::classify(&tool, "{}");
-    (tool.clone(), tool, hit)
+    let verdict = hx::decide(Step::Tool { name: &tool, arguments: "{}" });
+    (tool.clone(), tool, verdict)
 }
 
 fn ran(status: &str) -> bool {
@@ -180,16 +181,16 @@ impl Cabin {
         path: &'static str,
     ) -> Option<grokhub_acp::PermissionAsk> {
         let trace = self.trace_id();
-        match hx::classify_ask(&p.title, &p.action) {
-            HardHit::Floor(floor) => {
-                self.write_span(hx::Span::deny(&trace, &p.title, &span_args(&p.title, &p.action), &floor.reason, "floor"), path);
+        match hx::decide(Step::Ask { title: &p.title, action: &p.action }) {
+            GateOutcome::Refuse { reason } => {
+                self.write_span(hx::Span::deny(&trace, &p.title, &span_args(&p.title, &p.action), &reason, "floor"), path);
                 if let Some(h) = &self.acp {
                     let _ = h.reject_permission(&p);
                 }
-                self.status = format!("Denied: {}", floor.reason);
+                self.status = format!("Denied: {reason}");
                 None
             }
-            HardHit::Class(class) => {
+            GateOutcome::Park { hard: Some(class), .. } => {
                 if self.take_oneshot(&p.action) {
                     // Approved once on the path C card: Grok's own Allow card decides.
                     return Some(p);
@@ -199,7 +200,7 @@ impl Cabin {
                 self.park_hard(ParkSource::Ask(p), class, path, tool, action);
                 None
             }
-            HardHit::None if is_desktop_ask(&p) && !self.access_mode().allows_computer() => {
+            _ if is_desktop_ask(&p) && !self.access_mode().allows_computer() => {
                 let why = "Access is Readonly: turn on Let Grok control the desktop first";
                 self.write_span(hx::Span::deny(&trace, &p.title, &span_args(&p.title, &p.action), why, "soft"), path);
                 if let Some(h) = &self.acp {
@@ -208,7 +209,7 @@ impl Cabin {
                 self.status = why.into();
                 None
             }
-            HardHit::None => {
+            _ => {
                 if is_desktop_ask(&p) {
                     self.offer_full();
                 }
@@ -317,7 +318,9 @@ impl Cabin {
         while self.harness.park.is_some() {
             self.resolve_hard_park(false, "halted — fail-closed Deny");
         }
-        self.harness.full_card = None;
+        if self.harness.full_card.is_some() {
+            self.resolve_grant_full(false, "halted — stays Supervised");
+        }
     }
 
     /// Path C: remember hard-classified calls from a headless stream.
@@ -332,7 +335,7 @@ impl Cabin {
             return;
         }
         let (tool, action, hit) = headless_hit(card);
-        if hit != HardHit::None {
+        if !hit.is_allow() {
             self.harness.headless.push(HeadlessHit {
                 card_id: card.id.clone(),
                 tool,
@@ -350,16 +353,16 @@ impl Cabin {
         for h in std::mem::take(&mut self.harness.headless) {
             let done = ran(&h.status);
             match (&h.hit, done) {
-                (HardHit::Floor(f), false) => {
-                    self.write_span(hx::Span::deny(&trace, &h.tool, &h.action, &f.reason, "floor"), "C");
+                (GateOutcome::Refuse { reason }, false) => {
+                    self.write_span(hx::Span::deny(&trace, &h.tool, &h.action, reason, "floor"), "C");
                 }
-                (HardHit::Class(class), false) => {
+                (GateOutcome::Park { hard: Some(class), .. }, false) => {
                     self.write_span(hx::Span::hard_park(&trace, &h.tool, &h.action, *class), "C");
                     self.park_hard(ParkSource::Headless, *class, "C", h.tool, h.action);
                 }
-                (HardHit::Floor(_), true) | (HardHit::Class(_), true) => {
+                (GateOutcome::Refuse { .. } | GateOutcome::Park { hard: Some(_), .. }, true) => {
                     let class = match &h.hit {
-                        HardHit::Class(c) => *c,
+                        GateOutcome::Park { hard: Some(c), .. } => *c,
                         _ => HardClass::IrreversibleOs,
                     };
                     let mut s = hx::Span::soft_allow(
@@ -374,7 +377,7 @@ impl Cabin {
                     s.approval_class = class.as_str().into();
                     self.write_span(s, "C");
                 }
-                (HardHit::None, _) => {}
+                _ => {}
             }
         }
     }
@@ -825,6 +828,32 @@ mod tests {
         let spans = hx::read_spans(&root, "session").unwrap();
         assert_eq!(spans.last().unwrap().decision, "deny");
         assert_eq!(spans.last().unwrap().result, "timed out — fail-closed Deny");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn halt_denies_every_park_and_the_full_offer_with_spans() {
+        let (_pin, root) = pinned("harness-halt");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.desktop_control = true;
+        let _ = cabin.harness_precheck(ask("send_email", "to someone"));
+        let _ = cabin.harness_precheck(ask("bash", "rm -rf ~/old"));
+        cabin.offer_full();
+        assert_eq!(cabin.hard_waiting(), 2);
+        assert!(cabin.harness.full_card.is_some());
+        cabin.halt_hard_parks();
+        assert_eq!(cabin.hard_waiting(), 0);
+        assert!(cabin.harness.full_card.is_none());
+        let spans = hx::read_spans(&root, "session").unwrap();
+        let tail: Vec<_> = spans.iter().rev().take(3).map(|s| (s.decision.as_str(), s.result.as_str())).collect();
+        assert_eq!(
+            tail,
+            vec![
+                ("deny", "halted — stays Supervised"),
+                ("deny", "halted — fail-closed Deny"),
+                ("deny", "halted — fail-closed Deny"),
+            ]
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
