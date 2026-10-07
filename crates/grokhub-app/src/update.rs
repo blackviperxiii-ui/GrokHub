@@ -138,6 +138,10 @@ pub fn channel_switch_cmds(source: &std::path::Path, target: Channel) -> Result<
     )])
 }
 
+/// Plain-words hint for a failed Labs channel switch. Linux only, like its
+/// sole caller `queue_channel_switch`; on Windows it would be dead code and
+/// `clippy -D warnings` fails the windows job.
+#[cfg(not(windows))]
 pub fn map_channel_switch_error(raw: &str) -> String {
     channel_switch_fail_hint(raw).to_string()
 }
@@ -966,13 +970,96 @@ mod tests {
             line.starts_with("stable") || line.starts_with("beta"),
             "unexpected labs status: {line}"
         );
+        #[cfg(not(windows))]
         assert_eq!(
             map_channel_switch_error("error: could not compile `grokhub-app`"),
+            "Build failed — previous install kept."
+        );
+        // Every platform: the shared hint the Linux wrapper forwards.
+        assert_eq!(
+            channel_switch_fail_hint("error: could not compile `grokhub-app`"),
             "Build failed — previous install kept."
         );
         assert!(!CHANNEL_WINDOWS_NOTE.is_empty());
         #[cfg(windows)]
         assert_eq!(channel_windows_note(), CHANNEL_WINDOWS_NOTE);
+    }
+
+    /// Body of `fn <name>` in `src` (from its signature to the matching close brace).
+    fn fn_body<'a>(src: &'a str, sig: &str) -> &'a str {
+        let start = src.find(sig).unwrap_or_else(|| panic!("missing {sig}"));
+        let open = start + src[start..].find('{').expect("fn body");
+        let mut depth = 0usize;
+        for (i, c) in src[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return &src[start..open + i + 1];
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("unbalanced body for {sig}");
+    }
+
+    /// Simulates the Windows build: a helper whose only callers sit in a
+    /// `#[cfg(not(windows))]` fn must carry the same cfg, or it is dead code on
+    /// Windows and `clippy -D warnings` fails the windows job (#529).
+    /// CRLF-normalized so a Windows checkout reads the same source.
+    #[test]
+    fn linux_only_channel_helpers_are_cfg_gated_like_their_callers() {
+        assert_linux_only_helpers_gated(include_str!("update.rs"), include_str!("app/mod.rs"));
+    }
+
+    fn assert_linux_only_helpers_gated(update: &str, app: &str) {
+        // A Windows checkout (autocrlf) has CRLF sources; read them the same.
+        let update = &update.replace("\r\n", "\n");
+        let app = &app.replace("\r\n", "\n");
+        let caller_sig = "fn queue_channel_switch(";
+        let at = app.find(caller_sig).expect("queue_channel_switch");
+        let attrs = &app[..at];
+        let attrs = attrs.trim_end().rsplit_once("\n\n").map_or(attrs, |(_, a)| a);
+        assert!(
+            attrs.contains("#[cfg(not(windows))]"),
+            "queue_channel_switch must stay Linux-only"
+        );
+        let caller = fn_body(app, caller_sig);
+        for helper in ["map_channel_switch_error", "channel_switch_cmds"] {
+            let call = format!("crate::update::{helper}(");
+            let uses = app.matches(&call).count();
+            assert!(uses > 0, "{helper} has no caller in app/mod.rs");
+            assert_eq!(
+                caller.matches(&call).count(),
+                uses,
+                "{helper} is called outside the Linux-only queue_channel_switch; drop its cfg"
+            );
+            let def = format!("pub fn {helper}(");
+            let def_at = update.find(&def).unwrap_or_else(|| panic!("missing {def}"));
+            let before: Vec<&str> = update[..def_at]
+                .lines()
+                .rev()
+                .take_while(|l| l.trim_start().starts_with("#[") || l.trim_start().starts_with("///"))
+                .collect();
+            assert!(
+                before.iter().any(|l| l.trim() == "#[cfg(not(windows))]"),
+                "{helper} is only called from Linux-only code; gate it with #[cfg(not(windows))]"
+            );
+        }
+    }
+
+    #[test]
+    fn linux_only_helper_gate_check_catches_an_ungated_helper() {
+        let app = "    #[cfg(not(windows))]\n    fn queue_channel_switch(&mut self) {\n        crate::update::map_channel_switch_error(\"x\");\n        crate::update::channel_switch_cmds(1);\n    }\n";
+        let gated = "#[cfg(not(windows))]\npub fn channel_switch_cmds(a) {}\n\n/// doc\n#[cfg(not(windows))]\npub fn map_channel_switch_error(raw: &str) {}\n";
+        assert_linux_only_helpers_gated(gated, app);
+        // Same sources as a Windows (CRLF) checkout sees them.
+        assert_linux_only_helpers_gated(&gated.replace('\n', "\r\n"), &app.replace('\n', "\r\n"));
+        let ungated = gated.replace("/// doc\n#[cfg(not(windows))]\n", "/// doc\n");
+        let r = std::panic::catch_unwind(|| assert_linux_only_helpers_gated(&ungated, app));
+        assert!(r.is_err(), "an ungated Linux-only helper must fail the check");
     }
 
     #[test]
