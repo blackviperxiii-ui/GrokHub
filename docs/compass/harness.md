@@ -28,7 +28,7 @@
 - Park handoff is files: `{config_dir}/harness/park`, plus `harness/turn.json` so the `--mcp-desktop` process writes spans into the open chat's `spans/<chat>.jsonl`. No answer in `APPROVAL_TTL`, a halt, or a closed cabin means Deny.
 - Spans only gain `#[serde(default)]` fields (`origin`, `consent_ref` are the newest); old lines must still parse. Typed text is stored as its length.
 - Grok Build's own traffic is outside the cabin (owner decision D1); egress only guards calls GrokHub makes itself.
-- Only `main` calls `use_os_keyring`. Every other process and test defaults to a store with no key, so `test_dir` and `use_test_key_store` register a `MemoryKeyStore`. The keyring entry is `GrokHub` / `learned-tier-key`; `learned-key.id` holds only a hash.
+- Only `main` calls `use_os_keyring`. Every other process and test defaults to a store with no key, so `test_dir` and `use_test_key_store` register a `MemoryKeyStore`. The keyring entry is `GrokHub` / `learned-tier-key`; `learned-key.id` holds only a hash. User copy names the store per `KeyringOs` (Windows never says Secret Service), and `recheck_keyring` only drops the cached answer for Try again.
 - Hard and ACP cards share `approval_card_width` (`APPROVAL_CARD_MAX_W`, 520) in `harness_ui.rs`, and `paint_approval_stack` keeps them left-aligned even on the centered empty chat; Esc denies a hard card. The Grant full card shows only with `GROKHUB_GRANT_FULL=1`: `grant_full_card_on` is read in `Cabin::new`, not `quiet_for_test`, so tests set `full_card_on`.
 - GB `PreToolUse` hooks are not the lock: they fail open. `CLI_CREDENTIAL_DENY` from grokhub-acp rides along on path C.
 ## See also

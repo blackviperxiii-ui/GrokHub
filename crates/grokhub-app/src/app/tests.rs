@@ -604,7 +604,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             speech.contains("inner_margin(egui::Margin::ZERO)")
                 && speech.contains("add_space(BUBBLE_PAD_Y)")
                 && speech.contains("add_space(BUBBLE_PAD_X)")
-                && speech.contains("allocate_exact_size(egui::vec2(16.0, 16.0)"),
+                && speech.contains("allocate_exact_size(egui::vec2(REPLY_MARK_W, REPLY_MARK_W)")
+                && include_str!("chat_ui.rs").contains("const REPLY_MARK_W: f32 = 16.0;"),
             "bubble pad must sit inside the fill, not get clipped by rounded inner_margin: {speech}"
         );
     }
@@ -11280,8 +11281,8 @@ fn privacy_slash_lists_grants_scopes_and_egress_without_content() {
     assert!(grokhub_core::is_cabin_slash_turn(&role, &body), "stays out of the next model kick");
     let text = grokhub_core::strip_slash_result(&body);
     assert!(text.starts_with("/privacy — what leaves this computer\n"), "{text}");
-    assert!(text.contains("- Sync to paired computers: off. /sync asks each time."), "{text}");
-    assert!(text.contains("What GrokHub can read: all off. Nothing reads these yet."), "{text}");
+    assert!(text.contains("- Off: Sync to paired computers (/sync asks each time) · Files in a folder · "), "{text}");
+    assert!(text.contains("Nothing reads the folder, app, browser, calendar, mail or system grants yet."), "{text}");
     assert!(text.contains("- api.x.ai · 1 time · chats · default · last just now"), "{text}");
     release_isolated(&root, cabin);
 }
@@ -11393,7 +11394,7 @@ fn permissions_page_groups_trust_rows_and_rules_with_a_ghost_revoke() {
     let ys: Vec<f32> = idx.iter().map(|&i| p.texts[i].1.y).collect();
     assert!(ys[4] > ys[2] && ys[6] > ys[5], "headings sit above their rows: {ys:?}");
     let allow = p.texts[at(&p, "Allow")].1;
-    assert!(p.filled.iter().any(|r| r.contains(allow)), "Allow stays filled");
+    assert!(!p.filled.iter().any(|r| r.contains(allow)), "SB-08: Allow is an outline, not filled");
 
     hx::grant_destination(&root, hx::HUB_DEST, hx::HUB_SYNC_DATA, hx::UserClick::from_click()).unwrap();
     cabin.harness.consent = None;
@@ -11609,7 +11610,14 @@ fn revoke_from_privacy_clears_the_grant_on_a_click_only() {
     cabin.harness.consent = None;
     cabin.hub.lock().unwrap().snapshot = Some(std::sync::Arc::new(serde_json::json!({"kind": "grokhub-hub-v1"})));
     let rows = cabin.privacy_revoke_rows();
-    assert_eq!(rows, vec![(g.id.clone(), "Sync to paired computers".to_string())]);
+    assert_eq!(
+        rows,
+        vec![super::privacy_ui::PrivacyRevoke {
+            id: g.id.clone(),
+            label: "Sync to paired computers".to_string(),
+            detail: None,
+        }]
+    );
 
     // Slash text cannot revoke (or grant): it is not a click.
     cabin.run_slash_line("/privacy revoke");
@@ -11625,7 +11633,7 @@ fn revoke_from_privacy_clears_the_grant_on_a_click_only() {
         let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
         let out = crate::theme::test_pass(&ctx, input, |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
-                hit = super::privacy_ui::paint_privacy_revokes(ui, &rows);
+                hit = super::privacy_ui::paint_privacy_revokes(ui, &rows, None);
             });
         });
         let mut revoke_at = None;
@@ -11762,7 +11770,7 @@ fn scope_rows_are_all_off_under_what_grokhub_can_read() {
         "Sync to paired computers",
         "What GrokHub can read",
         super::scope_ui::SCOPES_NOTE,
-        "Files in one folder",
+        "Files in a folder",
         "Installed apps",
         "Browser history",
         "Calendar",
@@ -11776,11 +11784,18 @@ fn scope_rows_are_all_off_under_what_grokhub_can_read() {
     assert!(ys.windows(2).all(|w| w[0] < w[1]), "rows in order: {ys:?}");
     for (kind, label) in grokhub_agent::harness::SCOPE_KINDS {
         let allow = p.pill_by(label, "Allow");
-        assert!((allow.y - p.at(label).y).abs() < 24.0, "{kind}: Allow sits on its row");
-        assert!(p.filled.iter().any(|r| r.contains(allow)), "{kind}: Allow is filled");
+        // The folder row's field, dialog button and Allow share a line under its hint.
+        let reach = if *kind == "files" { 56.0 } else { 24.0 };
+        assert!((allow.y - p.at(label).y).abs() < reach, "{kind}: Allow sits on its row");
+        // SB-08: an outline Allow, so the off rows read as the calm default.
+        assert!(!p.filled.iter().any(|r| r.contains(allow)), "{kind}: Allow is an outline, not filled");
     }
+    assert!(!p.filled.iter().any(|r| r.contains(p.pill_by("Sync to paired computers", "Allow"))), "Sync's Allow too");
     assert!(!p.has("Revoke"), "nothing granted, nothing to revoke");
     assert!(p.has("Off. Your calendar events."), "plain hints");
+    // SB-04: the folder row offers the native dialog next to the typed path.
+    let choose = p.pill_by("Files in a folder", super::scope_ui::CHOOSE_FOLDER);
+    assert!((choose.y - p.pill_by("Files in a folder", "Allow").y).abs() < 2.0, "the dialog button sits by the folder's Allow");
     assert!(!root.join("consent.jsonl").exists(), "painting writes nothing");
     release_isolated(&root, cabin);
 }
@@ -11827,7 +11842,7 @@ fn a_scope_is_granted_by_a_pointer_click_only_and_revoked_from_settings_or_priva
     if !home.is_empty() {
         cabin.harness.scope_folder = home.clone();
         let p = paint_permissions(&ctx, &mut cabin, vec![]);
-        click_at(&ctx, &mut cabin, p.pill_by("Files in one folder", "Allow"));
+        click_at(&ctx, &mut cabin, p.pill_by("Files in a folder", "Allow"));
         assert_eq!(cabin.status, "Not allowed: files: one folder at a time, never all of your home folder");
         let p = paint_permissions(&ctx, &mut cabin, vec![]);
         assert!(p.has(&cabin.status), "the refusal shows in Settings, not only on the hidden status line");
@@ -11835,25 +11850,30 @@ fn a_scope_is_granted_by_a_pointer_click_only_and_revoked_from_settings_or_priva
     }
     cabin.harness.scope_folder = "/srv/notes/".into();
     let p = paint_permissions(&ctx, &mut cabin, vec![]);
-    click_at(&ctx, &mut cabin, p.pill_by("Files in one folder", "Allow"));
-    assert_eq!(cabin.status, "Files in /srv/notes allowed. Nothing reads it yet. Revoke it here any time.");
+    click_at(&ctx, &mut cabin, p.pill_by("Files in a folder", "Allow"));
+    assert_eq!(cabin.status, "Files in notes allowed. Nothing reads it yet. Revoke it here any time.");
     assert!(cabin.harness.scope_folder.is_empty());
+    // SB-03 / SB-06: the folder name titles the row, the path is in the hint,
+    // and the next folder row reads "Add a folder".
     let p = paint_permissions(&ctx, &mut cabin, vec![]);
-    assert!(p.has("Files in /srv/notes") && p.has("Add another folder."));
+    assert!(p.has("Files in notes") && p.has(super::scope_ui::ADD_FOLDER), "{:?}", p.texts.iter().map(|t| &t.0).collect::<Vec<_>>());
+    assert!(p.texts.iter().any(|t| t.0.starts_with("On since ") && t.0.ends_with(". /srv/notes")));
+    assert!(!p.has("Files in a folder"));
 
     // /privacy lists both by plain name, and its ghost Revoke works for scopes.
     cabin.harness.consent = None;
     let rows = cabin.privacy_revoke_rows();
-    let names: Vec<&str> = rows.iter().map(|r| r.1.as_str()).collect();
-    assert_eq!(names, vec!["Installed apps", "Files in /srv/notes"]);
+    let names: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
+    assert_eq!(names, vec!["Installed apps", "Files in notes"]);
+    assert_eq!(rows[1].detail.as_deref(), Some("/srv/notes"), "the whole path rides along for hover");
     let report = super::privacy_ui::privacy_report(&hx::ConsentLedger::load(&root), &hx::EgressRead::default(), None, false, g.granted_at + 60_000);
-    assert!(report.contains("What GrokHub can read: nothing reads these yet.\n- Files in one folder on · Installed apps on · Browser history off"), "{report}");
-    assert!(report.contains("\n- Installed apps: on since 1m ago\n"), "{report}");
+    assert!(report.contains("\n- Installed apps: on since 1m ago\n- Files in notes: on since "), "{report}");
+    assert!(report.contains("\n- Off: Sync to paired computers (/sync asks each time) · Browser history · Calendar · Mail · System state\n"), "{report}");
     assert!(!report.contains("Read apps") && !report.contains(&g.id), "{report}");
-    let files_id = rows[1].0.clone();
+    let files_id = rows[1].id.clone();
     let before = cabin.messages.len();
     cabin.revoke_from_privacy(&files_id);
-    assert_eq!(cabin.status, "Files in /srv/notes revoked. It's off until you allow it again.");
+    assert_eq!(cabin.status, "Files in notes revoked. It's off until you allow it again.");
     assert_eq!(cabin.messages.len(), before + 1);
 
     // Settings Revoke.
@@ -11877,21 +11897,24 @@ fn locked_private_data_shows_one_message_and_grants_or_syncs_nothing() {
     crate::theme::install_fonts_on(&ctx);
     let p = paint_permissions(&ctx, &mut cabin, vec![]);
     let msg = hx::Locked::Unavailable.message();
+    let next = super::privacy_ui::lock_next_step_short(&hx::Locked::Unavailable, hx::KeyringOs::current());
     assert!(msg.starts_with("Private data is locked: GrokHub can't reach your "), "{msg}");
     assert!(p.has(&msg), "{:?}", p.texts.iter().map(|t| &t.0).collect::<Vec<_>>());
     assert_eq!(p.texts.iter().filter(|t| t.0 == msg).count(), 1, "said once");
     assert!(p.at(&msg).y < p.at("Sync to paired computers").y, "said at the top, above every row it holds");
+    // SB-01: every Allow is disabled, so a click does nothing at all.
+    cabin.status.clear();
     click_at(&ctx, &mut cabin, p.pill_by("Calendar", "Allow"));
-    assert_eq!(cabin.status, format!("Not allowed: {msg}"));
+    assert_eq!(cabin.status, "", "a disabled Allow takes no click");
     click_at(&ctx, &mut cabin, p.pill_by("Sync to paired computers", "Allow"));
-    assert_eq!(cabin.status, format!("Could not save the grant: {msg}"));
+    assert_eq!(cabin.status, "");
     assert!(!root.join("consent.jsonl").exists(), "no plaintext fallback");
     assert!(!root.join(hx::KEY_ID_FILE).exists());
 
     pair_test_peer(&cabin, "p1");
     cabin.run_slash_line("/sync");
     assert!(cabin.harness.park.is_none() && cabin.sync_rx.is_none(), "nothing is sent");
-    assert_eq!(cabin.status, format!("Not synced. {msg}"));
+    assert_eq!(cabin.status, format!("Not synced. {msg} {next}"));
     let ledger = hx::ConsentLedger::load(&root);
     let lock = super::privacy_ui::private_lock(&root, &ledger, true);
     let report = super::privacy_ui::privacy_report(
@@ -11901,8 +11924,170 @@ fn locked_private_data_shows_one_message_and_grants_or_syncs_nothing() {
         false,
         1_000,
     );
-    assert!(report.contains(&format!("\n\n{msg}\n\nGrants\n")), "{report}");
+    assert!(report.contains(&format!("\n\n{msg}\n{next}\n\nGrants\n")), "{report}");
     assert!(!root.join("egress.jsonl").exists());
+    release_isolated(&root, cabin);
+}
+
+// SB-01: while locked, each "Allow" (and the folder dialog button) is painted
+// faded by egui's disabled look; returns (label, opacity) for each pill text.
+// The opacity is the painted text colour's alpha (egui multiplies it by
+// `disabled_alpha`). Only rows above "Command rules" count.
+fn pill_opacity(ctx: &egui::Context, cabin: &mut Cabin, events: Vec<egui::Event>) -> (Vec<(String, f32)>, Vec<String>) {
+    fn walk(shape: &egui::Shape, pills: &mut Vec<(String, f32, f32)>, all: &mut Vec<(String, f32)>) {
+        match shape {
+            egui::Shape::Text(t) => {
+                let text = t.galley.text().to_string();
+                if ["Allow", "Revoke", super::scope_ui::CHOOSE_FOLDER, super::privacy_ui::TRY_AGAIN].contains(&text.as_str()) {
+                    pills.push((text.clone(), t.fallback_color.a() as f32 / 255.0, t.pos.y));
+                }
+                all.push((text, t.pos.y));
+            }
+            egui::Shape::Vec(v) => v.iter().for_each(|c| walk(c, pills, all)),
+            _ => {}
+        }
+    }
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 2400.0))),
+        events,
+        ..Default::default()
+    };
+    let out = crate::theme::test_pass(ctx, input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| cabin.ui_permission_editor(ui));
+    });
+    let (mut pills, mut all) = (Vec::new(), Vec::new());
+    for clipped in &out.shapes {
+        walk(&clipped.shape, &mut pills, &mut all);
+    }
+    let rules = all.iter().find(|t| t.0 == "Command rules").map(|t| t.1).unwrap_or(f32::MAX);
+    let pills = pills.into_iter().filter(|p| p.2 < rules).map(|p| (p.0, p.1)).collect();
+    (pills, all.into_iter().map(|t| t.0).collect())
+}
+
+#[test]
+fn locked_state_disables_every_allow_with_the_lock_on_hover() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("scope-locked-disabled");
+    std::fs::create_dir_all(&root).unwrap();
+    hx::use_key_store_for(&root, std::sync::Arc::new(hx::MemoryKeyStore::unavailable()));
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    ctx.global_style_mut(|s| s.interaction.tooltip_delay = 0.0);
+    let (pills, texts) = pill_opacity(&ctx, &mut cabin, vec![]);
+    let allows: Vec<f32> = pills.iter().filter(|p| p.0 == "Allow").map(|p| p.1).collect();
+    assert_eq!(allows.len(), 7, "six scope rows and Sync: {pills:?}");
+    assert!(allows.iter().all(|o| *o < 1.0), "every Allow takes the disabled look: {pills:?}");
+    let choose = pills.iter().find(|p| p.0 == super::scope_ui::CHOOSE_FOLDER).expect("dialog button");
+    assert!(choose.1 < 1.0, "the folder dialog is disabled too: {pills:?}");
+    let retry = pills.iter().find(|p| p.0 == super::privacy_ui::TRY_AGAIN).expect("Try again");
+    assert!((retry.1 - 1.0).abs() < f32::EPSILON, "Try again stays live: {pills:?}");
+    assert!(!texts.iter().any(|t| t == "Locked: keyring unavailable"), "no hover yet");
+
+    // Hover a disabled Allow: the lock shows.
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    let at = p.pill_by("Calendar", "Allow");
+    let mut shown = false;
+    for _ in 0..4 {
+        let (_, texts) = pill_opacity(&ctx, &mut cabin, vec![egui::Event::PointerMoved(at)]);
+        shown |= texts.iter().any(|t| t == "Locked: keyring unavailable");
+    }
+    assert!(shown, "hover names the lock");
+    assert_eq!(super::privacy_ui::lock_hover(&hx::Locked::Unavailable), "Locked: keyring unavailable");
+
+    // A click on any of them writes nothing and says nothing new.
+    cabin.status.clear();
+    for title in ["Calendar", "Installed apps", "Sync to paired computers", "Files in a folder"] {
+        click_at(&ctx, &mut cabin, p.pill_by(title, "Allow"));
+    }
+    assert_eq!(cabin.status, "");
+    assert!(cabin.harness.scope_pick_rx.is_none(), "the dialog never opened");
+    assert!(!root.join("consent.jsonl").exists());
+
+    // Unlocked, the same pills are live.
+    hx::use_key_store_for(&root, std::sync::Arc::new(hx::MemoryKeyStore::new()));
+    cabin.retry_keyring();
+    let (pills, _) = pill_opacity(&ctx, &mut cabin, vec![]);
+    assert!(pills.iter().filter(|p| p.0 == "Allow").all(|p| (p.1 - 1.0).abs() < f32::EPSILON), "{pills:?}");
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn try_again_asks_the_keyring_again_and_refreshes_permissions() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("scope-try-again");
+    std::fs::create_dir_all(&root).unwrap();
+    let store = std::sync::Arc::new(hx::MemoryKeyStore::unavailable());
+    hx::use_key_store_for(&root, store.clone());
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let msg = hx::Locked::Unavailable.message();
+    let step = super::privacy_ui::lock_next_step(&hx::Locked::Unavailable, hx::KeyringOs::current());
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    assert!(p.has(&msg) && p.has(&step), "{:?}", p.texts.iter().map(|t| &t.0).collect::<Vec<_>>());
+    let retry = p.pill_by(&step, super::privacy_ui::TRY_AGAIN);
+    assert!((retry.y - p.at(&step).y).abs() < 24.0, "Try again sits on the next-step line");
+
+    // The keyring comes back, but its "down" answer is reused for 30 s, so
+    // the page alone stays locked.
+    store.set_available(true);
+    std::thread::sleep(std::time::Duration::from_millis(1_100));
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    assert!(p.has(&msg), "the cached answer still holds");
+
+    // Try again asks now, and the page refreshes: no lock, live Allow.
+    click_at(&ctx, &mut cabin, p.pill_by(&step, super::privacy_ui::TRY_AGAIN));
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    assert!(!p.has(&msg) && !p.has(&step), "{:?}", p.texts.iter().map(|t| &t.0).collect::<Vec<_>>());
+    assert_eq!(cabin.status, "Your keyring answered. Private data is open again.");
+    let (pills, _) = pill_opacity(&ctx, &mut cabin, vec![]);
+    assert!(pills.iter().filter(|p| p.0 == "Allow").all(|p| (p.1 - 1.0).abs() < f32::EPSILON), "{pills:?}");
+    // It granted nothing on its own.
+    assert_eq!(hx::ConsentLedger::load(&root).active().count(), 0);
+
+    // Down again: Try again says it is still locked, and when it checked.
+    store.set_available(false);
+    cabin.retry_keyring();
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    assert!(p.has(&msg));
+    assert!(p.has("Still locked. Checked just now."), "{:?}", p.texts.iter().map(|t| &t.0).collect::<Vec<_>>());
+    release_isolated(&root, cabin);
+}
+
+// SB-05: /privacy names each scope once: on ones as bullets with a since-time,
+// the rest on one "Off:" line, all under one Grants heading.
+#[test]
+fn privacy_lists_each_scope_once_under_one_grants_heading() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, cabin) = isolated_cabin("privacy-once");
+    std::fs::create_dir_all(&root).unwrap();
+    let home = std::path::Path::new("/home/someone");
+    for scope in [hx::Scope::Calendar, hx::Scope::Files("/home/someone/Documents/notes".into())] {
+        hx::grant_scope(&root, &scope, Some(home), hx::UserClick::from_click()).unwrap();
+    }
+    let ledger = hx::ConsentLedger::load(&root);
+    let at = ledger.active().map(|g| g.granted_at).max().unwrap_or_default();
+    let report = super::privacy_ui::privacy_report(&ledger, &hx::EgressRead::default(), None, false, at + 60_000);
+    let grants = report.split("\nGrants\n").nth(1).and_then(|r| r.split("\n\n").next()).expect("Grants");
+    assert_eq!(
+        grants,
+        [
+            "- Calendar: on since 1m ago",
+            "- Files in notes: on since 1m ago",
+            "- Off: Sync to paired computers (/sync asks each time) · Installed apps · Browser history · Mail · System state",
+            "- Screen: \"Let Grok control the desktop\" in Settings → Cabin defaults (off)",
+            "Nothing reads the folder, app, browser, calendar, mail or system grants yet.",
+        ]
+        .join("\n")
+    );
+    for word in ["Calendar", "Files in", "Installed apps", "Browser history", "Mail", "System state", "Sync to paired computers"] {
+        assert_eq!(report.matches(word).count(), 1, "{word} once: {report}");
+    }
+    assert_eq!(report.matches("Grants").count(), 1, "one heading: {report}");
+    assert!(!report.contains(super::scope_ui::SCOPES_HEAD), "no second grants heading: {report}");
+    assert!(!report.contains("/home/someone/Documents"), "the short label, not the path: {report}");
     release_isolated(&root, cabin);
 }
 

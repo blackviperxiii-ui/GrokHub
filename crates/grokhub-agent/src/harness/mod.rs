@@ -41,8 +41,8 @@ pub use approval::{
     HardAnswer, HardPark, Step, APPROVAL_TTL,
 };
 pub use at_rest::{
-    has_sealed_data, keyring_name, read_key, set_default_key_store, use_key_store_for, use_os_keyring,
-    KeyStore, LearnedVault, Locked, MemoryKeyStore, OsKeyring, KEY_ACCOUNT, KEY_ID_FILE, KEY_SERVICE,
+    has_sealed_data, keyring_name, keyring_name_for, read_key, recheck_keyring, set_default_key_store, use_key_store_for, use_os_keyring,
+    KeyStore, KeyringOs, LearnedVault, Locked, MemoryKeyStore, OsKeyring, KEY_ACCOUNT, KEY_ID_FILE, KEY_SERVICE,
     SEALED_PREFIX,
 };
 pub use backend::{
