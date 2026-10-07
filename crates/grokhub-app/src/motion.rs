@@ -48,6 +48,8 @@ pub const HOVER_BG: Color32 = Color32::from_rgb(0x0f, 0x10, 0x12);
 /// Cursor fill — white/gray, no neon.
 pub const CURSOR_FILL: Color32 = Color32::from_rgb(0xe7, 0xe9, 0xea);
 pub const CURSOR_EDGE: Color32 = Color32::from_rgb(0x9a, 0x9e, 0xa2);
+/// 1px outline just outside the light marker so it reads on a light grey target.
+pub const CURSOR_OUTLINE: Color32 = Color32::from_rgb(0x0b, 0x0b, 0x0c);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentCursorPhase {
@@ -275,18 +277,40 @@ pub fn cursor_advance(anim: &mut AgentCursorAnim, now: f64, reduced: bool) -> bo
 }
 
 /// Paint the white/gray circle + triangle pointer. No neon trail.
+/// A 1px dark outline sits just outside the light marker. Size and motion stay the same.
 pub fn paint_agent_cursor(painter: &egui::Painter, pos: Pos2, scale: f32) {
     let r = 5.5 * scale;
+    painter.circle_stroke(pos, r + 1.0, egui::Stroke::new(1.0, CURSOR_OUTLINE));
     painter.circle_filled(pos, r, CURSOR_FILL);
     painter.circle_stroke(pos, r, egui::Stroke::new(1.0, CURSOR_EDGE));
     let tip = pos + Vec2::new(0.0, r + 7.0 * scale);
     let left = pos + Vec2::new(-4.5 * scale, r * 0.2);
     let right = pos + Vec2::new(4.5 * scale, r * 0.2);
+    let [tip_o, left_o, right_o] = outset_triangle(tip, left, right, 1.0);
+    painter.add(egui::Shape::convex_polygon(
+        vec![tip_o, left_o, right_o],
+        CURSOR_OUTLINE,
+        egui::Stroke::NONE,
+    ));
     painter.add(egui::Shape::convex_polygon(
         vec![tip, left, right],
         CURSOR_FILL,
         egui::Stroke::new(1.0, CURSOR_EDGE),
     ));
+}
+
+/// Push each corner `px` away from the centroid so a fill reads as an outside outline.
+fn outset_triangle(tip: Pos2, left: Pos2, right: Pos2, px: f32) -> [Pos2; 3] {
+    let c = Pos2::new(
+        (tip.x + left.x + right.x) / 3.0,
+        (tip.y + left.y + right.y) / 3.0,
+    );
+    let push = |p: Pos2| {
+        let d = p - c;
+        let len = d.length().max(0.001);
+        p + d / len * px
+    };
+    [push(tip), push(left), push(right)]
 }
 
 /// Drive + paint an optional agent cursor; clears when finished. Requests repaint while live.
@@ -349,6 +373,7 @@ mod tests {
     fn cursor_colors_are_white_gray_not_neon() {
         assert_eq!(CURSOR_FILL, Color32::from_rgb(0xe7, 0xe9, 0xea));
         assert_eq!(CURSOR_EDGE, Color32::from_rgb(0x9a, 0x9e, 0xa2));
+        assert_eq!(CURSOR_OUTLINE, Color32::from_rgb(0x0b, 0x0b, 0x0c));
         // No saturated green/cyan neon.
         assert!(CURSOR_FILL.g() < 240 || CURSOR_FILL.r() > 200);
         assert_ne!(CURSOR_FILL, Color32::from_rgb(0x00, 0xff, 0x88));
