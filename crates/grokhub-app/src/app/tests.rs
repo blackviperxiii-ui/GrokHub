@@ -3536,7 +3536,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && ask_kick.contains("composer_headless_flags")
                 && ask_kick.contains("self.session_mode")
                 && ask_kick[grok_p..].contains("spawn_grok_p_stream"),
-            "scheduled night and phone stay on grok -p with the PermissionMode flags: {ask_kick}"
+            "scheduled night and /send stay on grok -p with the PermissionMode flags: {ask_kick}"
         );
         assert!(
             ask_kick.contains("apply_skill_follow") && ask_kick.contains("active_skill_follow"),
@@ -3545,7 +3545,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     }
 
     #[test]
-    fn scheduled_night_loop_and_phone_inherit_permission_mode() {
+    fn scheduled_night_loop_and_send_inherit_permission_mode() {
         let src = cabin_src();
         let fire_loop = fn_src(&src, "fire_loop");
         assert!(
@@ -3587,7 +3587,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let inbox = fn_src(&src, "drain_inbox");
         assert!(
             inbox.contains("send_scheduled_chat"),
-            "phone /v1/task must inherit PermissionMode: {inbox}"
+            "a queued /send task must inherit PermissionMode: {inbox}"
         );
         let anticipate = fn_src(&src, "tick_anticipate");
         assert!(
@@ -3822,11 +3822,11 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         );
         assert!(
             src.contains("finish_hub_dispatch"),
-            "phone dispatch must complete the hub task so GET /v1/results can see it"
+            "a queued /send task must complete its hub row"
         );
         assert!(
             src.contains("hub_dispatch_ok(&text)"),
-            "GOAL_BLOCKED must not complete a phone task as done"
+            "GOAL_BLOCKED must not complete a queued task as done"
         );
         assert!(
             src.contains("oauth_access_live"),
@@ -3876,15 +3876,15 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .expect("halt_work");
         assert!(
             halt.contains("finish_hub_dispatch"),
-            "Stop / tray halt must complete a claimed phone task"
+            "Stop / tray halt must complete a claimed /send task"
         );
         assert!(
             src.contains("self.finish_hub_dispatch(worker_gone_status(), false)"),
-            "a dropped worker must fail the claimed phone task"
+            "a dropped worker must fail the claimed /send task"
         );
         assert!(
             src.contains("inbox_claim_ready") && src.contains("requeue_claimed_for"),
-            "do not claim a phone task without auth, and unstick claimed rows on boot"
+            "do not claim a /send task without auth, and unstick claimed rows on boot"
         );
         let inbox = src
             .split("fn drain_inbox")
@@ -3893,15 +3893,15 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .expect("drain_inbox");
         assert!(
             inbox.contains("pending_hub_task.is_some()"),
-            "do not claim a second phone task while one is still pending: {inbox}"
+            "do not claim a second /send task while one is still pending: {inbox}"
         );
         assert!(
             inbox.contains("land_on_real_chat"),
-            "a claimed phone task must not land on Scratch: {inbox}"
+            "a claimed /send task must not land on Scratch: {inbox}"
         );
         assert!(
             inbox.contains("self.can_agent()") && !inbox.contains("self.llm_ready()"),
-            "OAuth-only must not claim a phone task — send_chat needs Grok Build: {inbox}"
+            "OAuth-only must not claim a /send task — send_chat needs Grok Build: {inbox}"
         );
         assert!(
             src.contains("night_counts_run"),
@@ -5241,10 +5241,6 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("fn ui_settings").next())
             .expect("save_settings");
         assert!(
-            settings_save.contains("sync_hub_voice"),
-            "Settings Save must refresh the hub voice mint key: {settings_save}"
-        );
-        assert!(
             settings_save.contains("upsert_bound") && settings_save.contains("touch_projects"),
             "Settings Save must keep the sidebar selection on the bound path: {settings_save}"
         );
@@ -5493,8 +5489,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "/inhabit must persist the staged bundle without cloning every thread: {inhabit}"
         );
         assert!(
-            inhabit.contains("inhabit_claim_allowed") && inhabit.contains("to_id"),
-            "/inhabit must name a real peer and skip headphones-as-phone: {inhabit}"
+            inhabit.contains("No paired peer named") && inhabit.contains("to_id"),
+            "/inhabit must name a real peer: {inhabit}"
         );
         let soul = inhabit
             .find("read_memory(\"SOUL.md\")")
@@ -5619,7 +5615,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .expect("persist hub complete");
         assert!(
             complete_at < persist_at && !finish.contains("persist_snap"),
-            "phone task completion must hit hub-state.json without cloning every thread: {finish}"
+            "/send task completion must hit hub-state.json without cloning every thread: {finish}"
         );
         let host_done = src
             .split("Ok(JobOut::HostDone(block))")
@@ -5645,7 +5641,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         );
         assert!(
             consult.contains("Interrupted by consult"),
-            "slash consult during a phone job must fail the dispatch: {consult}"
+            "slash consult during a /send job must fail the dispatch: {consult}"
         );
         let consult_out = src
             .split("Ok(JobOut::Consult(detail))")
@@ -5654,7 +5650,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .expect("Consult");
         assert!(
             !consult_out.contains("finish_hub_dispatch"),
-            "consult must not complete a phone task as the consult reply: {consult_out}"
+            "consult must not complete a /send task as the consult reply: {consult_out}"
         );
         assert!(
             consult_out.contains("status.clear()") || consult_out.contains("status ="),
@@ -5674,7 +5670,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let run_at = chat_consult.find("grok_chat");
         assert!(
             finish_at.is_some_and(|f| run_at.is_some_and(|r| f < r)),
-            "finish the phone task before starting consult: {chat_consult}"
+            "finish the /send task before starting consult: {chat_consult}"
         );
         let rewind = src
             .split("fn rewind_project")
@@ -9005,7 +9001,7 @@ fn kick_with_fake_grok_runs_the_prompt() {
         "a chat you type keeps the composer effort: {argv:?}"
     );
 
-    // A scheduled run (automation, loop, phone task) is background work: low effort.
+    // A scheduled run (automation, loop, /send task) is background work: low effort.
     let _ = std::fs::remove_file(&argv_path);
     cabin.scheduled_perm = true;
     cabin.kick_model(false);
@@ -12422,15 +12418,11 @@ fn room_binds_a_work_tree_and_rewind_files_needs_a_project() {
 
 // Landed from PR #125.
 #[test]
-fn inhabit_refuses_a_phone_and_a_missing_peer() {
+fn inhabit_refuses_a_missing_peer() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("inhabit");
     std::env::set_var("GROKHUB_CONFIG", &root);
     let mut cabin = Cabin::quiet_for_test();
-    cabin.run_slash_line("/inhabit phone");
-    assert_eq!(cabin.status, "will not inhabit onto the phone");
-    assert!(!cabin.running);
-    assert!(cabin.inhabit_rx.is_none());
     cabin.run_slash_line("/inhabit cabin-2");
     assert_eq!(cabin.status, "No paired peer named cabin-2");
     assert!(!cabin.running);
@@ -15292,6 +15284,14 @@ fn a_second_ask_waits_its_turn_instead_of_cancelling_the_first() {
         .nth(1)
         .and_then(|s| s.split("fn paint_elicit_ask(").next())
         .expect("paint_perm_ask");
+    // The card and the inbox answer through one function.
+    let answer = src
+        .split("fn answer_perm_at(")
+        .nth(1)
+        .and_then(|s| s.split("fn paint_perm_ask(").next())
+        .expect("answer_perm_at");
+    assert!(ask.contains("self.answer_perm_at(0, allow,"), "{ask}");
+    let ask = format!("{ask}{answer}");
     assert!(
         ask.contains("reject_permission(&p)")
             && !ask.contains("answer_permission(p.rpc_id.clone(), false)"),

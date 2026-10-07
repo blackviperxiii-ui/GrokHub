@@ -1421,6 +1421,9 @@ impl Cabin {
                         }
                         if self.chrome_here() {
                             self.paint_approval_stack(ui);
+                        } else {
+                            // Another chat's turn: its cards stay there, its rows show here.
+                            self.paint_inbox_only(ui);
                         }
                         self.paint_try_again(ui);
                         if pin_tail {
@@ -1624,7 +1627,7 @@ impl Cabin {
         self.chat_tail_frames = CHAT_TAIL_FRAMES;
     }
 
-    /// Sending from the composer follows your own message down. A night job or a phone
+    /// Sending from the composer follows your own message down. A night job or a `/send`
     /// task calls `send_scheduled_chat` directly, so it cannot yank the pane out of your reading.
     /// Only the user's own typing comes through here, so this is also where a typed
     /// `/skills undo` is marked as theirs (`typed_send`).
@@ -1862,20 +1865,64 @@ impl Cabin {
     /// One needs-attention line, then the hard card, Grant full, the permission ask, and elicit.
     /// Always the left-aligned chat-column stack: the empty chat lays the composer out
     /// centered and justified, and cards must not inherit that (SY-01).
+    /// The inbox rows without the cards, left-aligned like the stack.
+    fn paint_inbox_only(&mut self, ui: &mut egui::Ui) {
+        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| self.paint_inbox(ui));
+    }
+
     pub(super) fn paint_approval_stack(&mut self, ui: &mut egui::Ui) {
         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-            let n = self.decisions_waiting();
-            if n > 0 {
-                let line = crate::motion::needs_attention_summary(n);
-                ui.add(
-                    egui::Label::new(RichText::new(line).size(12.0).color(crate::theme::muted()))
-                        .wrap(),
-                );
-            }
+            self.paint_inbox(ui);
             self.paint_harness_cards(ui);
+            let top = ui.cursor().min.y;
             self.paint_perm_ask(ui);
+            self.scroll_if_jumped(ui, "ask", top);
+            let top = ui.cursor().min.y;
             self.paint_elicit_ask(ui);
+            self.scroll_if_jumped(ui, "elicit", top);
         });
+    }
+
+    /// Answer the `i`th Grok Build ask (0 is the card on screen, then the
+    /// queue), from its card or the inbox. Desktop asks write a path B span;
+    /// a plain coding ask writes none, as before, so a coding chat is not
+    /// audited as a harness turn.
+    pub(super) fn answer_perm_at(&mut self, i: usize, allow: bool, why: &str) {
+        let p = if i == 0 { self.perm_ask.take() } else { self.perm_queue.remove(i - 1) };
+        let Some(p) = p else {
+            return;
+        };
+        if let Some(h) = &self.acp {
+            if allow {
+                let _ = h.answer_permission(p.rpc_id.clone(), true);
+            } else {
+                let _ = h.reject_permission(&p);
+            }
+        }
+        if super::harness_ui::is_desktop_ask(&p) {
+            let trace = self.trace_id();
+            let args = super::harness_ui::span_args(&p.title, &p.action);
+            let span = if allow {
+                let mut s = grokhub_agent::harness::Span::soft_allow(
+                    &trace,
+                    &p.title,
+                    &args,
+                    "allowed once",
+                    "Jeremy allowed it once",
+                    self.access_mode(),
+                    "none",
+                );
+                // `approve`, not `allow`: the step runs on path A and logs its own span.
+                s.decision = "approve".into();
+                s
+            } else {
+                grokhub_agent::harness::Span::deny(&trace, &p.title, &args, why, "soft")
+            };
+            self.write_span(span, "B");
+        }
+        if i == 0 {
+            self.next_perm_ask();
+        }
     }
 
     pub(super) fn paint_perm_ask(&mut self, ui: &mut egui::Ui) {
@@ -1986,29 +2033,24 @@ impl Cabin {
                     }
                     None => false,
                 };
-                let mut answered = false;
+                let mut answered = None;
                 ui.horizontal(|ui| {
                     if crate::cards::white_pill(ui, "Allow") || key == Some(PermKey::Allow) {
-                        if let Some(h) = &self.acp {
-                            let _ = h.answer_permission(p.rpc_id.clone(), true);
-                        }
-                        answered = true;
+                        answered = Some(true);
                     } else if crate::cards::ghost_pill(ui, "Deny") || key == Some(PermKey::Deny) {
                         // Grok's own reject option: "denied", not "User cancelled".
-                        if let Some(h) = &self.acp {
-                            let _ = h.reject_permission(&p);
-                        }
-                        answered = true;
+                        answered = Some(false);
                     }
-                    if !answered
+                    if answered.is_none()
                         && self.perm_always_confirm.is_none()
                         && crate::cards::ghost_pill(ui, "Always")
                     {
                         self.perm_always_confirm = Some(p.rpc_id.clone());
                     }
                 });
-                if answered {
-                    self.next_perm_ask();
+                // The same answer the inbox row gives.
+                if let Some(allow) = answered {
+                    self.answer_perm_at(0, allow, super::harness_ui::SOFT_DENY);
                     return;
                 }
                 if always_confirm_matches_rpc(self.perm_always_confirm.as_ref(), &p.rpc_id) {
@@ -2230,6 +2272,8 @@ impl Cabin {
                     self.ui_composer_stack(ui);
                     if self.chrome_here() {
                         self.paint_approval_stack(ui);
+                    } else {
+                        self.paint_inbox_only(ui);
                     }
                     self.paint_try_again(ui);
                     if pulse_on && (feed_n > 0 || device_on) {
