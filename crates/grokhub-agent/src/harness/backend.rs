@@ -3,7 +3,7 @@
 use crate::gate::{DeskFlags, Gate};
 use crate::harness::access::AccessMode;
 use crate::harness::approval::{decide, decide_harness, GateOutcome, Step};
-use crate::harness::hard::HardClass;
+use crate::harness::hard::{credential_field, HardClass};
 use crate::harness::span::{append_span, redact_args, Origin, Span};
 use crate::tools::ToolOutput;
 use std::path::Path;
@@ -121,7 +121,8 @@ pub fn desk_decide(tool: &str, args: &serde_json::Value) -> GateOutcome {
     decide(Step::Desk { tool, args })
 }
 
-/// Args as a desktop span stores them. Typed text keeps only its length.
+/// Args as a desktop span stores them. Typed text keeps only its length, and
+/// a credential field's `text` / `value` never leaves (Spike-1a).
 pub fn desk_args(tool: &str, args: &serde_json::Value) -> String {
     match tool {
         "type" => {
@@ -131,6 +132,15 @@ pub fn desk_args(tool: &str, args: &serde_json::Value) -> String {
                 .map(|s| s.chars().count())
                 .unwrap_or(0);
             format!(r#"{{"chars":{n}}}"#)
+        }
+        _ if credential_field(args) => {
+            let mut v = args.clone();
+            for k in ["text", "value"] {
+                if let Some(slot) = v.get_mut(k) {
+                    *slot = serde_json::Value::String("%redacted%".into());
+                }
+            }
+            redact_args(&v.to_string())
         }
         _ => redact_args(&args.to_string()),
     }
@@ -311,6 +321,11 @@ mod tests {
         assert_eq!(t.args_redacted, r#"{"chars":7}"#);
         assert_eq!(t.decision, "deny");
         assert_eq!(t.access, "readonly");
+        // A credential field's value stays out on any desktop tool.
+        let pin = serde_json::json!({ "label": "PIN", "value": "4821" });
+        let a = desk_args("set_value", &pin);
+        assert!(a.contains("%redacted%") && !a.contains("4821"), "{a}");
+        assert_eq!(desk_args("set_value", &serde_json::json!({ "label": "Name", "value": "Ada" })), r#"{"label":"Name","value":"Ada"}"#);
         let mv = DeskCall {
             tool: "move",
             args: &click,

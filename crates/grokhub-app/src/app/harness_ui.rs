@@ -26,6 +26,8 @@ const HARD_NOTE: &str = "Always can't skip this. Approve runs it once. Esc denie
 const HEADLESS_NOTE: &str =
     "Grok Build's deny rule stopped this. Approve re-runs this one step with Grok's own Allow. Esc denies.";
 const HARD_EYEBROW: &str = "Hard action";
+/// What a path B credential card and its spans say instead of GB's action line.
+const CREDENTIAL_ACTION: &str = "type into a credential field (value hidden)";
 /// The span tool and args for a `/sync` publish (no content).
 const HUB_SYNC_TOOL: &str = "hub_sync";
 const HUB_SYNC_ARGS: &str = r#"{"dest":"hub","data":["chat","personal"]}"#;
@@ -92,6 +94,19 @@ pub(super) enum ParkSource {
     /// A cabin-owned send to this destination (`hub`) the EgressGuard parked.
     /// Nothing left; Approve sends it once.
     Egress(String),
+    /// A path A / B park whose turn was steered (Spike-1a). Its call was
+    /// denied with the old turn; Approve re-runs the step once, like path C.
+    Held,
+}
+
+/// A recovery-ladder pause waiting on the user (Spike-1a). Counts in the
+/// needs-attention line; the user's next message (not a Steer or a queued
+/// one) answers it.
+#[derive(Debug, Clone)]
+pub(super) struct SoftPark {
+    pub detector: String,
+    pub reason: String,
+    pub evidence: Vec<String>,
 }
 
 /// One hard-class action on the white card.
@@ -173,6 +188,16 @@ pub(super) struct HarnessState {
     /// to `send_chat`. `/skills undo` and `/skills restore` act on it; from
     /// anywhere else they only show the Undo rows.
     pub typed_send: bool,
+    /// Spike-1a recovery ladder for this cabin. The user's own message resets it.
+    pub ladder: hx::Ladder,
+    /// Ladder pauses waiting on the user.
+    pub soft_parks: Vec<SoftPark>,
+    /// A retry / backtrack turn, sent once the live reply and the user's
+    /// queued messages are done.
+    pub repair: Option<String>,
+    /// The last finished reply's prose, for the turn-end audit. `None` when
+    /// that turn was not on the visible chat.
+    pub last_reply: Option<String>,
 }
 
 /// Readonly until the desktop switch is on; Full only after Grant full.
@@ -248,9 +273,11 @@ impl Cabin {
     }
 
     /// Everything on the approval stack that has buttons: the hard card and its
-    /// queue, the Grant full card, the permission ask and its queue, and an elicit.
+    /// queue, the Grant full card, the permission ask and its queue, and an
+    /// elicit. Recovery-ladder pauses count too.
     pub(super) fn decisions_waiting(&self) -> usize {
         self.hard_waiting()
+            + self.harness.soft_parks.len()
             + usize::from(self.harness.full_card.is_some())
             + usize::from(self.perm_ask.is_some())
             + self.perm_queue.len()
@@ -264,7 +291,7 @@ impl Cabin {
             .unwrap_or_else(|| "session".into())
     }
 
-    fn turn_no(&self) -> u32 {
+    pub(super) fn turn_no(&self) -> u32 {
         self.messages.iter().filter(|(r, _)| r == "user").count() as u32
     }
 
@@ -296,8 +323,12 @@ impl Cabin {
     }
 
     fn write_span(&self, span: hx::Span, path: &str) {
+        self.write_span_at(span, path, self.turn_no());
+    }
+
+    fn write_span_at(&self, span: hx::Span, path: &str, turn: u32) {
         let trace = self.trace_id();
-        let mut span = span.on_path(path).in_turn(&trace, self.turn_no());
+        let mut span = span.on_path(path).in_turn(&trace, turn);
         if span.access.is_empty() {
             span.access = self.access_mode().as_str().into();
         }
@@ -333,8 +364,14 @@ impl Cabin {
                     // Approved once on the path C card: Grok's own Allow card decides.
                     return Some(p);
                 }
-                self.write_span(hx::Span::hard_park(&trace, &p.title, &span_args(&p.title, &p.action), class), path);
-                let (tool, action) = (p.title.clone(), p.action.clone());
+                // A credential field's typed value never reaches a span or the card.
+                let action = if class == HardClass::Credentials {
+                    CREDENTIAL_ACTION.to_string()
+                } else {
+                    p.action.clone()
+                };
+                self.write_span(hx::Span::hard_park(&trace, &p.title, &span_args(&p.title, &action), class), path);
+                let tool = p.title.clone();
                 self.park_hard(ParkSource::Ask(p), class, path, tool, action);
                 None
             }
@@ -422,7 +459,7 @@ impl Cabin {
             ParkSource::Desk(id) => {
                 let _ = hx::answer_park(&crate::config::config_dir(), id, approve);
             }
-            ParkSource::Headless => {
+            ParkSource::Headless | ParkSource::Held => {
                 if approve {
                     self.start_oneshot(&park.action);
                 }
@@ -447,7 +484,7 @@ impl Cabin {
     pub(super) fn withdraw_hard_parks(&mut self) {
         let mut keep = VecDeque::new();
         while let Some(park) = self.harness.park.clone() {
-            if matches!(park.source, ParkSource::Headless | ParkSource::Egress(_)) {
+            if matches!(park.source, ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held) {
                 keep.push_back(park);
                 self.harness.park = self.harness.queue.pop_front();
             } else {
@@ -456,6 +493,143 @@ impl Cabin {
         }
         self.harness.park = keep.pop_front();
         self.harness.queue = keep;
+    }
+
+    /// A Steer stops the turn, not the decisions on screen (Spike-1a). Take the
+    /// hard parks out before the halt: a park holding the stopped turn's GB ask
+    /// or desktop call is denied there with a span (that call is gone) and
+    /// kept as a held card that re-runs the step once on Approve. Path C and
+    /// egress cards hold nothing and keep as they are. Ladder pauses are not
+    /// touched by a halt.
+    pub(super) fn take_parks_for_steer(&mut self) -> VecDeque<HardParkUi> {
+        let dir = crate::config::config_dir();
+        let trace = self.trace_id();
+        let mut kept: VecDeque<HardParkUi> = self.harness.park.take().into_iter().collect();
+        kept.extend(self.harness.queue.drain(..));
+        for park in kept.iter_mut() {
+            match &park.source {
+                ParkSource::Ask(p) => {
+                    if let Some(h) = &self.acp {
+                        let _ = h.reject_permission(p);
+                    }
+                }
+                ParkSource::Desk(id) => {
+                    let _ = hx::answer_park(&dir, id, false);
+                }
+                ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held => continue,
+            }
+            let args = span_args(&park.tool, &park.action);
+            let why = "turn steered — the call is gone, the card stays for a fresh approval";
+            self.write_span(hx::Span::deny(&trace, &park.tool, &args, why, park.class.as_str()), park.path);
+            self.write_span(hx::Span::hard_park(&trace, &park.tool, &args, park.class), park.path);
+            park.source = ParkSource::Held;
+        }
+        kept
+    }
+
+    /// Put the steered parks back, ahead of anything parked since.
+    pub(super) fn restore_parks_after_steer(&mut self, mut kept: VecDeque<HardParkUi>) {
+        kept.extend(self.harness.park.take());
+        kept.extend(self.harness.queue.drain(..));
+        self.harness.park = kept.pop_front();
+        self.harness.queue = kept;
+    }
+
+    /// Spike-1a, at the end of a turn: write the reply's claim, audit this turn
+    /// in two passes, and take one ladder step for the first finding. Only a
+    /// turn that has harness spans (or says `GOAL_COMPLETE`) is audited, so a
+    /// plain coding chat writes nothing. While a pause waits on the user, the
+    /// ladder waits too.
+    pub(super) fn harness_turn_end(&mut self, reply: &str, turn: u32) {
+        let dir = crate::config::config_dir();
+        let trace = self.trace_id();
+        let this_turn = |a: &hx::Audit| a.windows.iter().any(|w| w.chat_id == trace && w.turn == turn);
+        let stepped = hx::audit_file(&dir, &trace, Some((&trace, turn))).is_ok_and(|a| this_turn(&a));
+        if !stepped && !grokhub_core::verify::has_goal_complete(reply) {
+            return;
+        }
+        self.write_span_at(hx::Span::reply(&trace, reply, &self.secret_hold), "audit", turn);
+        if !self.harness.soft_parks.is_empty() {
+            return;
+        }
+        let Ok(audit) = hx::audit_file(&dir, &trace, Some((&trace, turn))) else {
+            return;
+        };
+        let Some(window) = audit.flagged.iter().find(|w| !w.findings.is_empty()) else {
+            return;
+        };
+        let step = self.harness.ladder.next(&window.findings[0], &window.spans);
+        self.write_span_at(hx::ladder_span(&trace, &step), "audit", turn);
+        match step.rung {
+            hx::Rung::Retry | hx::Rung::Backtrack => self.harness.repair = step.prompt,
+            hx::Rung::Pause => {
+                self.harness.repair = None;
+                self.harness.soft_parks.push(SoftPark {
+                    detector: step.detector,
+                    reason: step.reason,
+                    evidence: step.evidence,
+                });
+                if self.chrome_here() {
+                    self.status = crate::motion::needs_attention_summary(self.decisions_waiting());
+                }
+            }
+        }
+    }
+
+    /// [`Self::harness_turn_end`] on the reply `finish_acp_turn` kept. `turn`
+    /// is the user turn that just ended (taken before a queued message could start).
+    pub(super) fn harness_turn_end_last_reply(&mut self, turn: u32) {
+        if let Some(reply) = self.harness.last_reply.take() {
+            self.harness_turn_end(&reply, turn);
+        }
+    }
+
+    /// The repair turn goes once nothing of the user's is waiting. Returns
+    /// true when it was sent.
+    pub(super) fn kick_repair(&mut self) -> bool {
+        match self.harness.repair.take() {
+            Some(prompt) => {
+                self.send_chat(prompt);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// A message the user queued goes first; the pending repair turn is
+    /// dropped with a span. Parks and pauses stay.
+    pub(super) fn harness_user_queued(&mut self) {
+        if self.harness.repair.take().is_some() {
+            let trace = self.trace_id();
+            let mut span = hx::Span::deny(&trace, hx::RECOVERY_TOOL, "{}", "skip", "soft")
+                .from_origin(hx::Origin::Repair);
+            span.decision = "skip".into();
+            span.claim = "your queued message goes first".into();
+            self.write_span(span, "audit");
+        }
+    }
+
+    /// The user typed a new message with no reply running: that answers the
+    /// ladder's pauses and starts every target over. A Steer or a queued
+    /// message does not come here.
+    pub(super) fn harness_user_sent(&mut self) {
+        let trace = self.trace_id();
+        for park in std::mem::take(&mut self.harness.soft_parks) {
+            let args = serde_json::json!({ "detector": park.detector, "evidence": park.evidence }).to_string();
+            let mut span = hx::Span::soft_allow(
+                &trace,
+                hx::RECOVERY_TOOL,
+                &args,
+                "resume",
+                &format!("you answered the pause ({})", park.reason),
+                self.access_mode(),
+                "none",
+            );
+            span.decision = "resume".into();
+            self.write_span(span, "audit");
+        }
+        self.harness.repair = None;
+        self.harness.ladder.reset();
     }
 
     /// Halt denies every parked card with a span.
@@ -1127,6 +1301,236 @@ mod tests {
         let kinds: Vec<_> = spans.iter().map(|s| (s.path.as_str(), s.decision.as_str())).collect();
         assert_eq!(kinds, vec![("C", "park"), ("C", "allow"), ("C", "deny")]);
         assert_eq!(hx::approval_gate_violation(&spans).len(), 1, "the unapproved run is flagged");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The plain-text send path with no Grok Build on PATH, so a send stays local.
+    struct NoGrok;
+    impl NoGrok {
+        fn set(root: &std::path::Path) -> Self {
+            std::env::set_var("GROKHUB_GROK", root.join("missing-grok"));
+            Self
+        }
+    }
+    impl Drop for NoGrok {
+        fn drop(&mut self) {
+            std::env::remove_var("GROKHUB_GROK");
+        }
+    }
+
+    fn decisions(root: &std::path::Path) -> Vec<(String, String, String)> {
+        hx::read_spans(root, "session")
+            .unwrap()
+            .into_iter()
+            .map(|s| (s.path, s.tool, s.decision))
+            .collect()
+    }
+
+    fn row(path: &str, tool: &str, decision: &str) -> (String, String, String) {
+        (path.into(), tool.into(), decision.into())
+    }
+
+    #[test]
+    fn parked_cards_and_spans_survive_a_steer_and_a_queued_message() {
+        let (_pin, root) = pinned("harness-steer");
+        let _grok = NoGrok::set(&root);
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.permission_mode = PermissionMode::AlwaysApprove;
+        // Path B hard ask, path A desk park, path C headless park, one ladder pause.
+        assert_eq!(cabin.harness_precheck(ask("Run command", "rm -f draft.md")), None);
+        hx::post_park(
+            &root,
+            &hx::ParkRequest {
+                id: "d9".into(),
+                path: "A".into(),
+                tool: "type".into(),
+                action: "rm -f disposable.txt".into(),
+                class: "delete".into(),
+                ts_ms: 1,
+            },
+        )
+        .unwrap();
+        cabin.poll_harness();
+        cabin.harness_note_headless(&card("c1", "pending", r#"{"tool":"run_terminal_command","command":"shred notes.txt"}"#));
+        cabin.harness_headless_end();
+        cabin.harness.soft_parks.push(SoftPark {
+            detector: "action_loop".into(),
+            reason: "action_loop: `click` ran 3 times".into(),
+            evidence: vec!["session:1".into()],
+        });
+        assert_eq!(cabin.decisions_waiting(), 4);
+        let before = decisions(&root);
+
+        // A Steer: the live turn on this chat stops and carries the new message.
+        let (_tx, rx) = mpsc::channel();
+        cabin.grok_p_rx = Some(rx);
+        cabin.running = true;
+        cabin.chat_job_thread = Some(cabin.visible_thread_id());
+        assert!(cabin.can_steer_live_turn());
+        cabin.send_from_composer("go left instead".into());
+        assert!(cabin.grok_p_rx.is_none(), "the old turn stopped");
+
+        assert_eq!(cabin.hard_waiting(), 3, "every hard card is still parked");
+        let sources: Vec<ParkSource> = cabin
+            .harness
+            .park
+            .iter()
+            .chain(cabin.harness.queue.iter())
+            .map(|p| p.source.clone())
+            .collect();
+        assert_eq!(sources, vec![ParkSource::Held, ParkSource::Held, ParkSource::Headless]);
+        assert_eq!(cabin.harness.soft_parks.len(), 1, "a Steer does not answer a pause");
+        assert_eq!(cabin.decisions_waiting(), 4);
+        assert_eq!(hx::take_answer(&root, "d9"), Some(false), "the stopped desk call was denied");
+        let after = decisions(&root);
+        assert_eq!(after[..before.len()], before[..], "earlier spans are untouched");
+        assert_eq!(
+            after[before.len()..],
+            [
+                row("B", "Run command", "deny"),
+                row("B", "Run command", "park"),
+                row("A", "type", "deny"),
+                row("A", "type", "park"),
+            ]
+        );
+        let spans = hx::read_spans(&root, "session").unwrap();
+        assert!(hx::approval_gate_violation(&spans).is_empty());
+        assert_eq!(
+            spans[before.len()].result,
+            "turn steered — the call is gone, the card stays for a fresh approval"
+        );
+
+        // A queued message runs after the reply: the cards and the pause stay,
+        // and a pending repair turn gives way with a span.
+        cabin.running = false;
+        cabin.harness.repair = Some("GrokHub's check: retry".into());
+        cabin.followup_queue = vec!["also rename the folder".into()];
+        cabin.drain_followup_queue();
+        assert!(cabin.followup_queue.is_empty());
+        assert_eq!(cabin.harness.repair, None);
+        assert_eq!(cabin.hard_waiting(), 3);
+        assert_eq!(cabin.harness.soft_parks.len(), 1);
+        let last = hx::read_spans(&root, "session").unwrap().pop().unwrap();
+        assert_eq!((last.tool.as_str(), last.decision.as_str()), (hx::RECOVERY_TOOL, "skip"));
+        assert_eq!(last.origin, hx::Origin::Repair);
+
+        // Approve on a held card re-runs that one step under Grok's own Allow.
+        cabin.resolve_hard_park(true, "");
+        assert_eq!(cabin.permission_mode, PermissionMode::Ask);
+        assert_eq!(cabin.harness.oneshot.as_ref().and_then(|o| o.action.clone()).as_deref(), Some("rm -f draft.md"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn turn_end_audit_retries_backtracks_then_pauses_with_spans() {
+        let (_pin, root) = pinned("harness-ladder");
+        let _grok = NoGrok::set(&root);
+        let mut cabin = Cabin::quiet_for_test();
+        let turn = cabin.turn_no();
+        let click = |ts: u64| {
+            let mut s = hx::Span::soft_allow("session", "click", r#"{"x":40,"y":12}"#, "clicked", "grokhub-desktop click", AccessMode::Supervised, "grok_build")
+                .on_path("A")
+                .in_turn("session", turn)
+                .with_ui_changed(Some(false));
+            s.ts_ms = ts;
+            hx::append_span(&root, &s).unwrap();
+        };
+        // A plain chat turn with no harness span writes nothing.
+        cabin.harness_turn_end("I've updated the README.", turn);
+        assert!(hx::read_spans(&root, "session").unwrap().is_empty());
+
+        click(1);
+        cabin.harness_turn_end("I clicked Save and it worked.", turn);
+        let repair = cabin.harness.repair.clone().expect("retry turn queued");
+        assert!(repair.starts_with("GrokHub's check: `click` changed nothing on screen"), "{repair}");
+        assert!(cabin.kick_repair(), "the retry goes once nothing else waits");
+        assert_eq!(cabin.harness.repair, None);
+
+        click(2);
+        cabin.harness_turn_end("Clicked Save again, done.", turn);
+        assert!(cabin.harness.repair.as_deref().unwrap().contains("try a different target"));
+        cabin.harness.repair = None;
+
+        click(3);
+        cabin.harness_turn_end("Saved.", turn);
+        assert_eq!(cabin.harness.repair, None);
+        assert_eq!(cabin.harness.soft_parks.len(), 1);
+        assert_eq!(cabin.decisions_waiting(), 1);
+        assert_eq!(cabin.status, "1 thing needs a decision");
+
+        // Paused: the ladder waits for the user.
+        click(4);
+        cabin.harness_turn_end("Saved it.", turn);
+        assert_eq!(cabin.harness.soft_parks.len(), 1);
+
+        let got: Vec<(String, String)> = hx::read_spans(&root, "session")
+            .unwrap()
+            .into_iter()
+            .map(|s| (s.tool, s.decision))
+            .collect();
+        let pair = |t: &str, d: &str| (t.to_string(), d.to_string());
+        assert_eq!(
+            got,
+            vec![
+                pair("click", "allow"),
+                pair("reply", "say"),
+                pair("harness_recovery", "retry"),
+                pair("click", "allow"),
+                pair("reply", "say"),
+                pair("harness_recovery", "backtrack"),
+                pair("click", "allow"),
+                pair("reply", "say"),
+                pair("harness_recovery", "pause"),
+                pair("click", "allow"),
+                pair("reply", "say"),
+            ]
+        );
+
+        // The user's own next message answers the pause and starts over.
+        cabin.send_from_composer("ok, use the File menu".into());
+        assert!(cabin.harness.soft_parks.is_empty());
+        let last = hx::read_spans(&root, "session").unwrap().pop().unwrap();
+        assert_eq!((last.tool.as_str(), last.decision.as_str()), ("harness_recovery", "resume"));
+        assert!(last.claim.starts_with("you answered the pause (claimed_click_no_change:"), "{}", last.claim);
+        assert_eq!(cabin.harness.ladder, hx::Ladder::new());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn denied_hard_send_claimed_as_sent_pauses_and_never_retries() {
+        let (_pin, root) = pinned("harness-ladder-hard");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.permission_mode = PermissionMode::AlwaysApprove;
+        let turn = cabin.turn_no();
+        assert_eq!(cabin.harness_precheck(ask("send_email", "to sam")), None);
+        cabin.resolve_hard_park(false, "Jeremy denied");
+        cabin.harness_turn_end("I sent the email to Sam.", turn);
+        assert_eq!(cabin.harness.repair, None, "a hard step is never retried on its own");
+        assert_eq!(cabin.harness.soft_parks.len(), 1);
+        let last = hx::read_spans(&root, "session").unwrap().pop().unwrap();
+        assert_eq!((last.decision.as_str(), last.approval_class.as_str()), ("pause", "send"));
+        assert_eq!(
+            last.claim,
+            "unsupported_assurance: hard-class send is never retried on its own; it needs your approval"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn credential_ask_parks_hard_and_keeps_the_value_out() {
+        let (_pin, root) = pinned("harness-cred");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.permission_mode = PermissionMode::AlwaysApprove;
+        assert_eq!(cabin.harness_precheck(ask("Type text", "into the Password field: hunter2222")), None);
+        let park = cabin.harness.park.clone().expect("hard card");
+        assert_eq!(park.class, HardClass::Credentials);
+        assert_eq!(park.action, CREDENTIAL_ACTION);
+        cabin.secret_hold = vec!["hunter2222".into()];
+        cabin.resolve_hard_park(false, "Jeremy denied");
+        cabin.harness_turn_end("I typed hunter2222 into the field and logged in.", cabin.turn_no());
+        let trace = std::fs::read_to_string(hx::span_path(&root, "session")).unwrap();
+        assert!(!trace.contains("hunter2222"), "{trace}");
+        assert!(trace.contains("I typed [redacted] into the field and logged in."), "{trace}");
         let _ = std::fs::remove_dir_all(root);
     }
 
