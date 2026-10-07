@@ -50,25 +50,6 @@ pub struct HubState {
     pub inhabit: Option<InhabitBundle>,
     #[serde(skip)]
     pub last_frame: Option<Arc<PresenceFrame>>,
-    /// Console API key for duplex Voice minting. Never written to hub-state.json.
-    #[serde(skip)]
-    pub console_api_key: String,
-    /// Cabin injects xAI `POST /realtime/client_secrets`. Tests stub this.
-    #[serde(skip)]
-    pub mint_realtime: Option<MintRealtimeFn>,
-}
-
-/// Console key in, xAI realtime client-secret JSON out.
-pub type MintRealtime = dyn Fn(&str) -> Result<Value, String> + Send + Sync;
-
-/// Mint an ephemeral realtime client secret with a console API key.
-#[derive(Clone)]
-pub struct MintRealtimeFn(pub Arc<MintRealtime>);
-
-impl std::fmt::Debug for MintRealtimeFn {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("MintRealtimeFn")
-    }
 }
 
 impl HubState {
@@ -85,8 +66,6 @@ impl HubState {
             last_incoming_at: 0,
             inhabit: None,
             last_frame: None,
-            console_api_key: String::new(),
-            mint_realtime: None,
         }
     }
 
@@ -176,28 +155,6 @@ impl HubState {
             .find(|p| ct_eq(p.token.as_bytes(), token.as_bytes()))
     }
 
-    pub fn enqueue_task(&mut self, from: &Peer, target: &str, title: &str, prompt: &str) -> Result<HubTask, String> {
-        let prompt = prompt.trim();
-        if prompt.is_empty() {
-            return Err("Task prompt is empty.".into());
-        }
-        let target = if target.trim().is_empty() {
-            self.device_id.as_str()
-        } else {
-            target.trim()
-        };
-        let task = HubTask::enqueue(&from.id, &from.name, target, title, prompt, now_ms());
-        self.inbox.insert(0, task.clone());
-        self.inbox.truncate(80);
-        Ok(task)
-    }
-
-    pub fn get_task(&self, id: &str, peer_id: &str) -> Option<&HubTask> {
-        self.inbox.iter().find(|t| {
-            t.id == id && (t.from_id == peer_id || t.target_device_id == peer_id)
-        })
-    }
-
     pub fn complete_task(
         &mut self,
         peer_id: &str,
@@ -239,64 +196,17 @@ impl HubState {
         n
     }
 
-    pub fn claim_inbox(&mut self, peer_id: &str) -> Vec<HubTask> {
-        let mut out = vec![];
-        for t in &mut self.inbox {
-            if t.status == "queued" && t.target_device_id == peer_id {
-                t.status = "claimed".into();
-                out.push(t.clone());
-            }
-        }
-        out
-    }
-
-    pub fn queued_for(&self, peer_id: &str) -> Vec<HubTask> {
-        self.inbox
-            .iter()
-            .filter(|t| t.status == "queued" && t.target_device_id == peer_id)
-            .cloned()
-            .collect()
-    }
-
-    pub fn ack_inbox(&mut self, id: &str, peer_id: &str) -> Result<(), CompleteError> {
-        if !self.inbox.iter().any(|t| t.id == id) {
-            return Err(CompleteError::NotFound);
-        }
-        let t = self
-            .inbox
-            .iter_mut()
-            .find(|t| t.id == id && t.target_device_id == peer_id)
-            .ok_or(CompleteError::Forbidden)?;
-        if t.status == "done" || t.status == "failed" {
-            return Ok(());
-        }
-        t.status = "acked".into();
-        Ok(())
-    }
-
+    /// `/send` queues work for this computer. `drain_inbox` claims it when chat is free.
     pub fn enqueue_local(&mut self, title: &str, prompt: &str) -> Result<HubTask, String> {
-        let from = Peer {
-            id: self.device_id.clone(),
-            name: self.device_name.clone(),
-            token: String::new(),
-            last_seen: now_ms(),
-        };
-        let target = self.device_id.clone();
-        self.enqueue_task(&from, &target, title, prompt)
-    }
-
-    pub fn claim_results(&mut self, peer_id: &str) -> Vec<HubTask> {
-        let mut out = vec![];
-        for t in &mut self.inbox {
-            if t.from_id == peer_id
-                && (t.status == "done" || t.status == "failed")
-                && !t.result_claimed
-            {
-                t.result_claimed = true;
-                out.push(t.clone());
-            }
+        let prompt = prompt.trim();
+        if prompt.is_empty() {
+            return Err("Task prompt is empty.".into());
         }
-        out
+        let id = self.device_id.clone();
+        let task = HubTask::enqueue(&id, &self.device_name, &id, title, prompt, now_ms());
+        self.inbox.insert(0, task.clone());
+        self.inbox.truncate(80);
+        Ok(task)
     }
 
     pub fn store_inhabit(&mut self, mut bundle: InhabitBundle, from: &Peer) {
@@ -354,7 +264,7 @@ pub enum CompleteError {
     Forbidden,
 }
 
-/// Do not claim a phone task when chat cannot run.
+/// Do not claim a queued `/send` task when chat cannot run.
 pub fn inbox_claim_ready(has_key: bool) -> bool {
     has_key
 }
@@ -412,8 +322,6 @@ pub fn state_for_disk(st: &HubState) -> HubState {
         last_incoming_at: st.last_incoming_at,
         inhabit: st.inhabit.clone(),
         last_frame: None,
-        console_api_key: String::new(),
-        mint_realtime: None,
     }
 }
 
@@ -514,44 +422,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pair_then_task() {
+    fn pair_then_local_task() {
         let mut st = HubState::empty();
         let code = st.rotate_pair().code;
-        let peer = st.pair_with(&code, "phone", "Pixel").unwrap();
+        let peer = st.pair_with(&code, "d-laptop", "Laptop").unwrap();
         assert!(!peer.token.is_empty());
         assert!(st.pair.is_none());
-        let task = st
-            .enqueue_task(&peer, &st.device_id.clone(), "Flash", "flash the pi")
-            .unwrap();
-        assert_eq!(st.get_task(&task.id, &peer.id).unwrap().prompt, "flash the pi");
-        st.complete_task(&st.device_id.clone(), &task.id, "blocked", vec![], Some("failed"))
-            .expect("hub target may complete");
-        let results = st.claim_results(&peer.id);
-        assert_eq!(results[0].status, "failed");
-        assert!(st.claim_results(&peer.id).is_empty());
-    }
-
-    #[test]
-    fn foreign_peer_cannot_complete_hub_task() {
-        let mut st = HubState::empty();
-        let phone_code = st.rotate_pair().code;
-        let phone = st.pair_with(&phone_code, "phone", "Pixel").unwrap();
-        let other_code = st.rotate_pair().code;
-        let other = st.pair_with(&other_code, "other", "Laptop").unwrap();
         let hub_id = st.device_id.clone();
-        let task = st
-            .enqueue_task(&phone, &hub_id, "Flash", "flash the pi")
-            .unwrap();
+        let task = st.enqueue_local("Flash", "flash the pi").unwrap();
+        assert_eq!(task.from_id, hub_id);
+        assert_eq!(task.target_device_id, hub_id);
+        assert_eq!(task.prompt, "flash the pi");
         assert_eq!(
-            st.complete_task(&other.id, &task.id, "nope", vec![], Some("done"))
+            st.complete_task(&peer.id, &task.id, "nope", vec![], Some("done"))
                 .unwrap_err(),
-            CompleteError::Forbidden
+            CompleteError::Forbidden,
+            "a paired computer must not complete this computer's task"
         );
-        assert_eq!(st.get_task(&task.id, &phone.id).unwrap().status, "queued");
+        assert_eq!(st.inbox[0].status, "queued");
         let done = st
-            .complete_task(&hub_id, &task.id, "flashed", vec![], Some("done"))
-            .expect("target completes");
-        assert_eq!(done.status, "done");
+            .complete_task(&hub_id, &task.id, "blocked", vec![], Some("failed"))
+            .expect("this computer completes its own task");
+        assert_eq!(done.status, "failed");
         assert_eq!(
             st.complete_task(&hub_id, "missing-id", "x", vec![], None)
                 .unwrap_err(),
@@ -569,15 +461,12 @@ mod tests {
             data_url: "data:image/jpeg;base64,SECRETFRAME".into(),
             at: 9,
         }));
-        st.console_api_key = "xai-should-not-persist".into();
         save_hub_state(&path, &st).expect("save");
         let raw = std::fs::read_to_string(&path).unwrap();
         assert!(!raw.contains("SECRETFRAME"));
-        assert!(!raw.contains("xai-should-not-persist"));
         let loaded = load_hub_state(&path).expect("load");
         assert_eq!(loaded.device_id, st.device_id);
         assert!(loaded.last_frame.is_none());
-        assert!(loaded.console_api_key.is_empty());
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -598,10 +487,6 @@ mod tests {
         assert!(
             !disk.contains("st.clone()") && disk.contains("last_frame: None"),
             "persist must not clone a 400KB cabin frame then throw it away: {disk}"
-        );
-        assert!(
-            disk.contains("console_api_key: String::new()") && disk.contains("mint_realtime: None"),
-            "hub-state.json must not keep the console key: {disk}"
         );
     }
 
@@ -685,7 +570,7 @@ mod tests {
             tries: 0,
         });
         assert_eq!(
-            st.pair_with("ABC-234", "phone", "Pixel").unwrap_err(),
+            st.pair_with("ABC-234", "d-laptop", "Laptop").unwrap_err(),
             PairError::NoCode
         );
         st.pair = Some(PairCode {
@@ -694,7 +579,7 @@ mod tests {
             tries: 0,
         });
         assert_eq!(
-            st.pair_with("ZZZ-999", "phone", "Pixel").unwrap_err(),
+            st.pair_with("ZZZ-999", "d-laptop", "Laptop").unwrap_err(),
             PairError::Mismatch
         );
         assert!(st.pair.is_some(), "a mismatch must leave the code live");
@@ -720,7 +605,7 @@ mod tests {
         );
         assert!(st.pair.is_none(), "the code must burn at PAIR_MAX_TRIES");
         assert_eq!(
-            st.pair_with(&code, "phone", "Pixel").unwrap_err(),
+            st.pair_with(&code, "d-laptop", "Laptop").unwrap_err(),
             PairError::NoCode,
             "even the real code is dead once it burned; the host rotates a new one"
         );
@@ -730,7 +615,7 @@ mod tests {
         let code = st.rotate_pair().code;
         for _ in 0..(crate::pair::PAIR_MAX_TRIES * 3) {
             let code = st.rotate_pair().code;
-            assert!(st.pair_with(&code, "phone", "Pixel").is_ok());
+            assert!(st.pair_with(&code, "d-laptop", "Laptop").is_ok());
         }
         let _ = code;
     }
@@ -742,7 +627,7 @@ mod tests {
         let code = st.rotate_pair().code;
         // `/v1/pair` and `/v1/status` both hand out the hub id, and every authorization
         // check downstream keys off these ids. A peer that could claim the hub's id would
-        // read tasks addressed to the hub and forge their completion.
+        // pose as the hub to every other paired computer.
         assert_eq!(
             st.pair_with(&code, &hub_id, "Impostor").unwrap_err(),
             PairError::ReservedId
@@ -750,16 +635,16 @@ mod tests {
         assert!(st.peers.is_empty(), "the impostor must not be registered");
         assert!(st.pair.is_some(), "a reserved id is not a wrong code");
         assert!(
-            st.pair_with(&code, " ", "Pixel").is_ok(),
+            st.pair_with(&code, " ", "Laptop").is_ok(),
             "an ordinary device still pairs"
         );
 
         // Re-pairing the same real device is still allowed to rotate its token.
         let mut st = HubState::empty();
         let code = st.rotate_pair().code;
-        let first = st.pair_with(&code, "phone", "Pixel").unwrap();
+        let first = st.pair_with(&code, "d-laptop", "Laptop").unwrap();
         let code = st.rotate_pair().code;
-        let again = st.pair_with(&code, "phone", "Pixel").unwrap();
+        let again = st.pair_with(&code, "d-laptop", "Laptop").unwrap();
         assert_eq!(st.peers.len(), 1, "re-pairing must not duplicate the peer");
         assert_ne!(first.token, again.token, "re-pairing rotates the token");
     }
@@ -776,44 +661,14 @@ mod tests {
     }
 
     #[test]
-    fn task_is_hidden_from_other_peers() {
+    fn local_task_queue_claims_and_requeues() {
         let mut st = HubState::empty();
-        let phone_code = st.rotate_pair().code;
-        let phone = st.pair_with(&phone_code, "phone", "Pixel").unwrap();
-        let other_code = st.rotate_pair().code;
-        let other = st.pair_with(&other_code, "other", "Laptop").unwrap();
         let hub_id = st.device_id.clone();
-        assert!(st.enqueue_task(&phone, &hub_id, "Flash", "   ").is_err());
-        let task = st
-            .enqueue_task(&phone, &hub_id, "Flash", "flash the pi")
-            .unwrap();
-        assert!(st.get_task(&task.id, &phone.id).is_some());
-        assert!(
-            st.get_task(&task.id, &other.id).is_none(),
-            "another paired box must not read this task"
-        );
-        assert_eq!(st.queued_for(&other.id).len(), 0);
-        assert_eq!(
-            st.ack_inbox("missing", &phone.id).unwrap_err(),
-            CompleteError::NotFound
-        );
-        assert_eq!(
-            st.ack_inbox(&task.id, &other.id).unwrap_err(),
-            CompleteError::Forbidden
-        );
-        st.ack_inbox(&task.id, &hub_id).expect("target acks");
-        assert_eq!(st.get_task(&task.id, &phone.id).unwrap().status, "acked");
-        let done = st
-            .enqueue_task(&phone, &hub_id, "Done", "finish me")
-            .unwrap();
+        assert!(st.enqueue_local("Flash", "   ").is_err());
+        let done = st.enqueue_local("Done", "finish me").unwrap();
         st.complete_task(&hub_id, &done.id, "ok", vec![], Some("done"))
             .unwrap();
-        st.ack_inbox(&done.id, &hub_id).expect("ack after complete");
-        assert_eq!(
-            st.get_task(&done.id, &phone.id).unwrap().status,
-            "done",
-            "ack must not hide a completed result from GET /v1/results"
-        );
+        assert_eq!(st.inbox[0].status, "done");
         assert!(clear_pending_after_complete(None));
         assert!(clear_pending_after_complete(Some(CompleteError::NotFound)));
         assert!(
@@ -823,20 +678,74 @@ mod tests {
         for i in 0..90 {
             st.enqueue_local("local", &format!("do {i}")).unwrap();
         }
-        assert!(st.inbox.len() <= 80);
+        assert_eq!(st.inbox.len(), 80);
         assert!(inbox_claim_ready(true));
         assert!(
             !inbox_claim_ready(false),
-            "do not claim a phone task when chat cannot run"
+            "do not claim a queued task when chat cannot run"
         );
         let mut stuck = HubState::empty();
         let hub = stuck.device_id.clone();
-        let mut row = HubTask::enqueue("phone", "Pixel", &hub, "Flash", "flash the pi", 1);
+        let mut row = HubTask::enqueue(&hub, "cabin", &hub, "Flash", "flash the pi", 1);
         row.status = "claimed".into();
         stuck.inbox.push(row);
         assert_eq!(stuck.requeue_claimed_for(&hub), 1);
         assert_eq!(stuck.inbox[0].status, "queued");
         assert_eq!(stuck.take_next_queued(&hub).unwrap().status, "claimed");
+        assert!(stuck.take_next_queued(&hub).is_none());
+    }
+
+    /// A hub-state.json written while phone pairing existed still loads: the phone's
+    /// peer row, a phone task with `resultClaimed` and receipts, and stray keys.
+    #[test]
+    fn old_hub_state_with_phone_rows_still_loads() {
+        let dir = std::env::temp_dir().join(format!("grokhub-old-hub-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("hub-state.json");
+        let old = r#"{
+  "deviceId": "d-hub",
+  "deviceName": "cabin",
+  "sharing": true,
+  "port": 18766,
+  "pair": null,
+  "peers": [
+    { "id": "d-phone", "name": "Pixel phone", "token": "tok-phone", "lastSeen": 5 }
+  ],
+  "inbox": [
+    {
+      "id": "task-1",
+      "fromId": "d-phone",
+      "fromName": "Pixel phone",
+      "targetDeviceId": "d-hub",
+      "title": "Flash",
+      "prompt": "flash the pi",
+      "status": "done",
+      "createdAt": 1,
+      "result": "flashed",
+      "receipts": [{ "cmd": "dd if=pi.img", "code": 0 }],
+      "resultClaimed": true
+    }
+  ],
+  "snapshot": null,
+  "lastIncomingAt": 0,
+  "inhabit": null,
+  "consoleApiKey": "",
+  "voiceClientSecret": null
+}"#;
+        std::fs::write(&path, old).unwrap();
+        let st = load_hub_state(&path).expect("old hub-state.json must load");
+        assert_eq!(st.device_id, "d-hub");
+        assert_eq!(st.peers.len(), 1);
+        assert_eq!(st.peers[0].name, "Pixel phone");
+        assert_eq!(st.inbox.len(), 1);
+        assert_eq!(st.inbox[0].status, "done");
+        assert_eq!(st.inbox[0].receipts[0].cmd, "dd if=pi.img");
+        assert!(path.exists(), "a loadable state must not be quarantined");
+        save_hub_state(&path, &st).expect("save");
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("resultClaimed"), "{raw}");
+        assert!(!raw.contains("consoleApiKey"), "{raw}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
