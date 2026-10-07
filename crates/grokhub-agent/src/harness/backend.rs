@@ -90,6 +90,9 @@ pub fn grok_build_click(req: ClickRequest<'_>) -> ClickOutcome {
                 consent_ref: String::new(),
                 target: String::new(),
                 target_rule: String::new(),
+                episode: String::new(),
+                goal_step: String::new(),
+                tokens: None,
             };
             let _ = append_span(req.config_dir, &span);
             ClickOutcome::Parked(reason)
@@ -292,7 +295,8 @@ pub fn park_desk_call(
         HardClass::parse(class).unwrap_or(HardClass::IrreversibleOs),
     )
     .on_path("A")
-    .in_turn(&ctx.chat_id, ctx.turn);
+    .in_turn(&ctx.chat_id, ctx.turn)
+    .in_episode(&ctx.episode);
     park_span.access = ctx.access.clone();
     let mut park_span = with_click_target(park_span, tool, args);
     if driver == ComputerUseBackend::CuaDriver {

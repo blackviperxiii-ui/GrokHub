@@ -1557,6 +1557,7 @@ mod tests {
                         output_tokens: 1,
                         reasoning_tokens: 0,
                         cost_in_usd_ticks: 0,
+                        cached_tokens: 0,
                     },
                 ));
             }
@@ -1568,6 +1569,7 @@ mod tests {
                         output_tokens: 2,
                         reasoning_tokens: 1,
                         cost_in_usd_ticks: 9,
+                        cached_tokens: 0,
                     },
                 ));
             }
@@ -1608,6 +1610,7 @@ mod tests {
                         output_tokens: 0,
                         reasoning_tokens: 0,
                         cost_in_usd_ticks: 0,
+                        cached_tokens: 0,
                     },
                 ));
             }
@@ -1626,6 +1629,7 @@ mod tests {
                         output_tokens: 0,
                         reasoning_tokens: 0,
                         cost_in_usd_ticks: 0,
+                        cached_tokens: 0,
                     },
                 ));
             }

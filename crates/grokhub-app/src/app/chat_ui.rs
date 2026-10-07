@@ -1854,6 +1854,7 @@ impl Cabin {
         .id_salt("chat-work-tree")
         .default_open(false)
         .show(ui, |ui| {
+            self.paint_episode_header(ui);
             for card in &self.tool_cards {
                 paint_tool_card_body(ui, card);
                 ui.add_space(6.0);

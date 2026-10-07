@@ -173,6 +173,7 @@ mod board_ui;
 mod confirm;
 mod harness_ui;
 mod inbox_ui;
+mod episode_ui;
 mod privacy_ui;
 mod scope_ui;
 mod skill_undo;
@@ -4614,6 +4615,10 @@ impl Cabin {
 
     fn halt_work(&mut self, status: impl Into<String>) {
         let status = status.into();
+        // A redirect steers the turn; every other stop ends the desktop episode.
+        if status != "Redirected" {
+            self.end_episode(grokhub_agent::episode::EpisodeEnd::Stop);
+        }
         self.heartbeat_turn_stopped();
         self.halt_in_flight();
         self.finish_hub_dispatch(&status, false);
@@ -4625,6 +4630,7 @@ impl Cabin {
     /// Composer Stop and `/stop` leave background runs alone.
     fn halt_everything(&mut self, status: impl Into<String>) {
         self.heartbeat_halt(now_ms());
+        self.end_episode(grokhub_agent::episode::EpisodeEnd::Halt);
         self.halt_inbox();
         self.stop_all_bg_runs();
         self.halt_work(status);
