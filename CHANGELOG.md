@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+Scopes and locked-state polish (Critiquito SB-01 to SB-11). The consent rules are unchanged: grants still come only from a mouse click in Settings, `harness::decide` and the fail-closed rules are untouched, and a hard card still has no Always.
+
+- **Locked means locked (SB-01).** While private data is locked (no keyring, missing or wrong key), every Allow in Settings → Permissions, the folder field, the browser picker and Choose folder… are shown disabled, and hovering one says "Locked: keyring unavailable" (or which lock it is). Revoke is disabled too, because a revoke is a ledger write and a locked ledger takes none.
+- **A way out (SB-02).** The lock message now has one next step for your OS and a **Try again** button that asks the keyring again right away and refreshes the page. Linux: "Unlock or start your keyring (GNOME Keyring or KWallet), then Try again." Windows names Windows Credential Manager and macOS the macOS Keychain; neither mentions Secret Service. `/sync` and `/privacy` give the same step in short form.
+- **Folder rows read by name (SB-03, SB-06).** A folder grant is titled "Files in notes". The hint shows the whole path cut in the middle, and hovering shows all of it. `/privacy` uses the same short name, with the path on hover over its Revoke row. You can allow several folders, one at a time: the row reads "Files in a folder", then "Add a folder".
+- **Choose folder… (SB-04).** A button next to the folder field opens your system's folder dialog (on Linux through the desktop portal, with no GTK). Picking a folder only fills the field; Allow still grants. If no dialog can open (no portal or zenity), the row says so and asks you to type the path. Typing a path still works, and the muted placeholder matches your OS (`C:\Users\you\Notes`, `/home/you/Notes`, `/Users/you/Notes`).
+- **`/privacy` lists each grant once (SB-05).** One Grants list: a bullet with its since-time for each grant that is on, then one "Off: …" line, then the screen setting. The duplicate summary line and the second heading are gone.
+- **Calmer rows (SB-07, SB-08, SB-09, SB-11).** Each hint starts with On or Off in the brighter text colour. Allow is an outline button on the scope rows and Sync, so nothing on the page nudges you to grant. The intro says 'Screen access is "Let Grok control the desktop" in Settings → Cabin defaults.' The `/privacy` Revoke rows line up with the report text.
+- SB-10 (naming the calendar source and mail account) waits for the readers; there is a TODO in the code.
+
+One small new crate: `rfd` 0.17 (and `pollster` 0.4), with only its `xdg-portal` backend on Linux, so no new system libraries and no CI change. No version bump.
+
 Spike-4b trust floor (privacy and consent, second slice). The consent rules are unchanged: grants still come only from a click in Settings, and a hard card still has no Always, Enter does not approve it, and Esc or the timeout denies it.
 
 - **Private data is encrypted on disk.** `consent.jsonl`, `egress.jsonl` (and its rolled `egress.1.jsonl`) and private AMR notes (`amr/nodes/<id>.sealed`) are sealed with ChaCha20-Poly1305. The key is made on the first private write and lives in your OS keyring (Secret Service on Linux, Credential Manager on Windows, Keychain on macOS); only a short hash of it is stored next to the data. Your existing plain-text ledger and send log keep working and are sealed in place, line by line, on the next write. Nothing is dropped.

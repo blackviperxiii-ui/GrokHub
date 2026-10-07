@@ -20,10 +20,11 @@
 - Moving a fn between files or renaming it: `fn_src` finds `fn name(` in `cabin_src()` (a fixed list of submodules) and ends at the next same-indent fn, and many tests assert on that slice.
 - Reordering `paint_approval_stack` / `paint_perm_ask` / `paint_elicit_ask` in `chat_ui.rs`: `needs_attention_summary_is_only_on_the_stack` slices between those signatures.
 - Blocking the frame on disk, network, or `grok`.
+- Letting a pill act while private data is locked: Settings grant rows go through `settings_grant_row` with `lock_hover` (disabled look, hover), Try again calls `retry_keyring`, and the `/privacy` Revoke rows start at `RESULT_TEXT_INSET`.
 ## What depends on it
 - `crates/grokhub-app/src/main.rs` launches it for the window and `--agent` (tray) modes.
 ## Non-obvious
-- `/sync` with no paired computer only posts `SYNC_NO_PEERS` (no card, no egress line). Otherwise `gate_hub_sync` (hard Send card without a grant) runs before `run_hub_sync`, and `poll_sync` posts the result line. Tests call `pair_test_peer` and grant `HUB_DEST` with `UserClick::from_click` first. A locked keyring (`private_lock`) stops `/sync` before any card.
+- `/sync` with no paired computer only posts `SYNC_NO_PEERS` (no card, no egress line). Otherwise `gate_hub_sync` (hard Send card without a grant) runs before `run_hub_sync`, and `poll_sync` posts the result line. Tests call `pair_test_peer` and grant `HUB_DEST` with `UserClick::from_click` first. A locked keyring (`private_lock`) stops `/sync` before any card, with the short per-OS next step (`lock_next_step_short`).
 - Chat rows come from `visible_chat` (`crates/grokhub-core/src/chat_view.rs`). Only `ChatKind::Thought` takes the thought frame and fold; a cabin result is `ChatKind::Result` and paints with `paint_result_bubble`. Settings group headings use `section_heading` (`SECTION_HEAD_GAP` above).
 - `cabin_src()` does not include every submodule (for example `harness_ui.rs`, `feed_ui.rs`, `pulse_ui.rs`); those tests `include_str!` the file directly.
 - `on_exit` kills background `grok -p`, halts native sessions, and waits on `persist_io` because two writers of `app.json` share one temp file.

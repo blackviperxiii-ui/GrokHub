@@ -160,6 +160,12 @@ pub(super) struct HarnessState {
     pub scope_browser: usize,
     /// Why the last scope Allow was refused, shown under the heading.
     pub scope_note: Option<String>,
+    /// The native folder dialog's answer on its way (SB-04).
+    pub scope_pick_rx: Option<mpsc::Receiver<super::scope_ui::FolderPick>>,
+    /// When Try again last asked the keyring again (SB-02).
+    pub lock_retry_at: Option<u64>,
+    /// The keyring hasn't answered the last lock check yet.
+    pub lock_pending: bool,
 }
 
 /// Readonly until the desktop switch is on; Full only after Grant full.
