@@ -172,6 +172,7 @@ mod pulse_ui;
 mod board_ui;
 mod confirm;
 mod harness_ui;
+mod inbox_ui;
 mod privacy_ui;
 mod scope_ui;
 mod skill_undo;
@@ -4623,6 +4624,7 @@ impl Cabin {
     /// Composer Stop and `/stop` leave background runs alone.
     fn halt_everything(&mut self, status: impl Into<String>) {
         self.heartbeat_halt(now_ms());
+        self.halt_inbox();
         self.stop_all_bg_runs();
         self.halt_work(status);
     }
