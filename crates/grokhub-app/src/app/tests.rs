@@ -16303,6 +16303,58 @@ fn projects_add_cancel_drops_the_staged_folder() {
     );
 }
 
+/// Name and Cancel share one centered row: pill height, filled field, white focus stroke.
+#[test]
+fn projects_rename_row_lines_up_with_cancel() {
+    let side = include_str!("sidebar.rs");
+    let row = side
+        .split("if self.proj_rename.as_deref()")
+        .nth(1)
+        .and_then(|s| s.split("self.finish_proj_rename()").next())
+        .expect("proj rename row");
+    assert!(
+        row.contains("Layout::left_to_right(egui::Align::Center)"),
+        "rename row is vertically centered: {row}"
+    );
+    assert!(
+        row.contains(".min_size(egui::vec2(edit_w, 30.0))"),
+        "Name field is the pill height: {row}"
+    );
+    assert!(
+        row.contains("Margin::symmetric(10, 6)"),
+        "Name field has ~10px left padding: {row}"
+    );
+    assert!(
+        row.contains("crate::theme::elevated()"),
+        "Name field uses the filter fill: {row}"
+    );
+    assert!(
+        row.contains("corner_radius(15.0)"),
+        "Name field is full radius: {row}"
+    );
+    assert!(
+        row.contains("crate::theme::muted()"),
+        "Name hint is muted: {row}"
+    );
+    assert!(
+        row.contains("2.0_f32") && row.contains("crate::theme::fg()"),
+        "staged Name field draws a white focus stroke: {row}"
+    );
+    assert!(
+        row.contains("text_cursor.stroke"),
+        "staged Name field shows a caret: {row}"
+    );
+    assert!(
+        row.contains("edit.request_focus()"),
+        "staged Name field takes focus: {row}"
+    );
+    assert!(
+        row.contains("Layout::right_to_left(egui::Align::Center)"),
+        "Cancel's right edge meets the rail inset: {row}"
+    );
+    assert!(row.contains("cancel_w"), "{row}");
+}
+
 // Landed from PR #231.
 #[test]
 fn make_project_keeps_harbor() {
@@ -18853,6 +18905,37 @@ fn grok_catalog_poll_marks_loaded_on_drop() {
     assert!(cabin.chat_job_thread.is_none());
 }
 
+/// Debug shots may shorten the catalog wait. The default stays 18 seconds.
+#[test]
+fn grok_catalog_settle_is_18s_unless_the_debug_override_is_set() {
+    use std::time::Duration;
+
+    assert_eq!(super::acp::GROK_CATALOG_SETTLE, Duration::from_secs(18));
+    let prev = std::env::var("GROKHUB_CATALOG_SETTLE_MS").ok();
+    std::env::remove_var("GROKHUB_CATALOG_SETTLE_MS");
+    assert_eq!(super::acp::grok_catalog_settle(), Duration::from_secs(18));
+    std::env::set_var("GROKHUB_CATALOG_SETTLE_MS", "0");
+    assert_eq!(
+        super::acp::grok_catalog_settle(),
+        Duration::from_secs(18),
+        "zero does not collapse the wait"
+    );
+    std::env::set_var("GROKHUB_CATALOG_SETTLE_MS", "250");
+    #[cfg(debug_assertions)]
+    assert_eq!(
+        super::acp::grok_catalog_settle(),
+        Duration::from_millis(250)
+    );
+    #[cfg(not(debug_assertions))]
+    assert_eq!(super::acp::grok_catalog_settle(), Duration::from_secs(18));
+    std::env::set_var("GROKHUB_CATALOG_SETTLE_MS", "nope");
+    assert_eq!(super::acp::grok_catalog_settle(), Duration::from_secs(18));
+    match prev {
+        Some(v) => std::env::set_var("GROKHUB_CATALOG_SETTLE_MS", v),
+        None => std::env::remove_var("GROKHUB_CATALOG_SETTLE_MS"),
+    }
+}
+
 /// An open catalog channel that never replies settles after the deadline.
 /// Skills empty-copy is not stuck on Loading…, and a skill already loaded stays.
 #[test]
@@ -18880,7 +18963,13 @@ fn grok_catalog_poll_settles_past_the_deadline() {
     assert!(!cabin.grok_catalog_loaded);
     assert_eq!(cabin.status, "Loading Grok Build catalog…");
     assert_eq!(
-        super::pages::catalog_empty_line(cabin.grok_catalog_rx.is_some(), "", 0, skills_empty),
+        super::pages::catalog_empty_line(
+            cabin.grok_catalog_rx.is_some(),
+            "",
+            0,
+            skills_empty,
+            &cabin.status,
+        ),
         "Loading…"
     );
 
@@ -18911,8 +19000,13 @@ fn grok_catalog_poll_settles_past_the_deadline() {
             "",
             cabin.grok_catalog.skills.len(),
             skills_empty,
+            &cabin.status,
         ),
         skills_empty,
+    );
+    assert_eq!(
+        super::pages::catalog_stale_line(&cabin.status, cabin.grok_catalog.skills.len()),
+        Some("Showing the last list — Grok Build timed out."),
     );
     drop(tx);
 
@@ -18929,9 +19023,16 @@ fn grok_catalog_poll_settles_past_the_deadline() {
     assert!(cabin.grok_catalog_rx.is_none());
     assert_eq!(cabin.status, super::acp::GROK_CATALOG_TIMEOUT);
     assert_eq!(
-        super::pages::catalog_empty_line(cabin.grok_catalog_rx.is_some(), "", 0, skills_empty),
-        skills_empty,
+        super::pages::catalog_empty_line(
+            cabin.grok_catalog_rx.is_some(),
+            "",
+            0,
+            skills_empty,
+            &cabin.status,
+        ),
+        "Grok Build didn't answer. Refresh to try again.",
     );
+    assert_eq!(super::pages::catalog_stale_line(&cabin.status, 0), None);
     drop(hold);
 
     let poll = include_str!("acp.rs");
@@ -18941,8 +19042,21 @@ fn grok_catalog_poll_settles_past_the_deadline() {
         .and_then(|s| s.split("fn submit_mcp_line(").next())
         .expect("poll_grok_catalog");
     assert!(body.contains("TryRecvError::Empty"), "{body}");
-    assert!(body.contains("GROK_CATALOG_SETTLE"), "{body}");
+    assert!(body.contains("grok_catalog_settle()"), "{body}");
     assert!(body.contains("GROK_CATALOG_TIMEOUT"), "{body}");
+    let settle = poll
+        .split("fn grok_catalog_settle(")
+        .nth(1)
+        .and_then(|s| s.split("pub(super) const GROK_CATALOG_TIMEOUT").next())
+        .expect("grok_catalog_settle");
+    assert!(
+        settle.contains("GROK_CATALOG_SETTLE"),
+        "settle falls back to the 18s constant: {settle}"
+    );
+    assert!(
+        settle.contains("GROKHUB_CATALOG_SETTLE_MS"),
+        "debug shots can shorten the wait: {settle}"
+    );
     assert!(body.contains("self.grok_catalog_loaded = true"), "{body}");
     assert!(body.contains("self.grok_catalog_rx = Some(rx)"), "{body}");
     let reload = poll
