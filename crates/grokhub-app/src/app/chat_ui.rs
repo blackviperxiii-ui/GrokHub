@@ -1144,10 +1144,19 @@ impl Cabin {
                             read_session_thoughts_collapsed(ui.ctx(), &fold_thread),
                         );
                         let mut collapse_session = false;
+                        let mut privacy_revoke: Option<String> = None;
                         {
                             let thread_id = fold_thread.clone();
                             let row_h_id = chat_row_height_id(&thread_id, pane);
                             self.cached_chat_views();
+                            // SY-04: the newest /privacy bubble gets a ghost Revoke per
+                            // live grant. Read the ledger only when that bubble exists.
+                            let privacy_at = super::privacy_ui::newest_privacy_row(&self.chat_views);
+                            let privacy_grants = if privacy_at.is_some() {
+                                self.privacy_revoke_rows()
+                            } else {
+                                Vec::new()
+                            };
                             let (views, keys) = (&self.chat_views, &self.chat_view_keys);
                             let shown = if live {
                                 views_up_to_last_user(views)
@@ -1218,16 +1227,31 @@ impl Cabin {
                                         .iter()
                                         .take_while(|v| v.kind != ChatKind::User)
                                         .any(|v| v.kind == ChatKind::Assistant);
+                                let privacy_here = privacy_at == Some(i) && !privacy_grants.is_empty();
                                 let painted = ui
                                     .push_id(chat_row_id_salt(&thread_id, i), |ui| {
-                                        paint_chat_block_with(
+                                        let mut p = paint_chat_block_with(
                                             ui,
                                             block,
                                             thought_shows_label(prev_expanded),
                                             thought_shows_acts(next_expanded),
                                             fold,
-                                            reply_acts,
-                                        )
+                                            reply_acts && !privacy_here,
+                                        );
+                                        if privacy_here {
+                                            privacy_revoke = super::privacy_ui::paint_privacy_revokes(
+                                                ui,
+                                                &privacy_grants,
+                                            );
+                                            if reply_acts {
+                                                let avail = clamp_row_width(
+                                                    ui.available_width().min(ui.max_rect().width()),
+                                                );
+                                                let w = crate::markdown::bubble_width(avail);
+                                                p.act = paint_msg_acts(ui, false, &block.body, avail, w).act;
+                                            }
+                                        }
+                                        p
                                     });
                                 if jump_you && last_you_i == Some(i) {
                                     ui.scroll_to_rect(painted.response.rect, Some(egui::Align::Center));
@@ -1268,6 +1292,9 @@ impl Cabin {
                                 next_heights.push((ui.cursor().min.y - y0).max(0.0));
                             }
                             ui.ctx().data_mut(|d| d.insert_temp(row_h_id, next_heights));
+                        }
+                        if let Some(id) = privacy_revoke {
+                            self.revoke_from_privacy(&id);
                         }
                         if jumped_you {
                             self.jump_last_you = false;
@@ -1762,18 +1789,22 @@ impl Cabin {
         });
     }
     /// One needs-attention line, then the hard card, Grant full, the permission ask, and elicit.
+    /// Always the left-aligned chat-column stack: the empty chat lays the composer out
+    /// centered and justified, and cards must not inherit that (SY-01).
     pub(super) fn paint_approval_stack(&mut self, ui: &mut egui::Ui) {
-        let n = self.decisions_waiting();
-        if n > 0 {
-            let line = crate::motion::needs_attention_summary(n);
-            ui.add(
-                egui::Label::new(RichText::new(line).size(12.0).color(crate::theme::muted()))
-                    .wrap(),
-            );
-        }
-        self.paint_harness_cards(ui);
-        self.paint_perm_ask(ui);
-        self.paint_elicit_ask(ui);
+        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+            let n = self.decisions_waiting();
+            if n > 0 {
+                let line = crate::motion::needs_attention_summary(n);
+                ui.add(
+                    egui::Label::new(RichText::new(line).size(12.0).color(crate::theme::muted()))
+                        .wrap(),
+                );
+            }
+            self.paint_harness_cards(ui);
+            self.paint_perm_ask(ui);
+            self.paint_elicit_ask(ui);
+        });
     }
 
     pub(super) fn paint_perm_ask(&mut self, ui: &mut egui::Ui) {

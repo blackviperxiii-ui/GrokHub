@@ -9,14 +9,26 @@
 use super::*;
 use grokhub_agent::harness::{self as hx, GateOutcome, Step};
 
-/// Top of Settings → Permissions.
-pub(super) const PRIVACY_NOTE: &str = "Nothing new leaves this computer without your OK. xAI model hosts stay allowed for chat. Grok Build's own traffic is outside GrokHub. /privacy shows what left.";
+/// Settings → Permissions headings (SY-06): the trust rows, then the rule editor.
+pub(super) const LEAVING_HEAD: &str = "Leaving this computer";
+pub(super) const RULES_HEAD: &str = "Command rules";
+/// Under "Leaving this computer" in Settings → Permissions.
+pub(super) const PRIVACY_NOTE: &str = "Nothing new leaves this computer without your OK. xAI model hosts stay allowed for chats, memory. Grok Build's own traffic is outside GrokHub. /privacy shows what left.";
 pub(super) const HUB_ROW: &str = "Sync to paired computers";
-const HUB_OFF: &str = "Off. /sync asks each time. Sends chats and memory.";
-/// The hard card for an ungranted `/sync`.
-pub(super) const HUB_CARD_ACTION: &str = "/sync → paired computers (chat, personal)";
+/// The one user-facing name for the hub sync data (SY-02). Logs and files keep
+/// the scope ids (`chat`, `personal`).
+pub(super) const HUB_SCOPE_LABEL: &str = "chats, memory";
+const HUB_OFF: &str = "Off. /sync asks each time. Sends chats, memory.";
+/// The hard card for an ungranted `/sync` with at least one paired computer.
+pub(super) const HUB_CARD_ACTION: &str = "/sync → paired computers (chats, memory)";
 pub(super) const HUB_CARD_NOTE: &str =
-    "Your chats and memory go to your paired computers. Approve sends once. Esc denies. Settings → Permissions can allow it every time.";
+    "Sends chats, memory to your paired computers. Approve sends once. Esc denies. Settings → Permissions can allow it every time.";
+/// `/sync` with no paired computer: nothing is sent and nothing is logged (SY-03).
+pub(super) const SYNC_NO_PEERS: &str = "Nothing paired yet. Start share to pair a computer.";
+/// First line of the `/privacy` report; the chat pane finds the bubble by it.
+pub(super) const PRIVACY_HEAD: &str = "/privacy — what leaves this computer";
+/// What `/privacy` calls the hub destination (SY-03: name it plainly).
+const HUB_DEST_LABEL: &str = "paired computers";
 /// Days of `egress.jsonl` that `/privacy` sums.
 const PRIVACY_DAYS: u64 = 7;
 
@@ -45,8 +57,47 @@ struct EgressRow {
     last: u64,
 }
 
-fn classes(data: &[hx::DataClass]) -> String {
-    data.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(", ")
+/// The words a user reads for a data class. The ids stay in logs and files.
+fn class_label(c: hx::DataClass) -> &'static str {
+    match c {
+        hx::DataClass::Chat => "chats",
+        hx::DataClass::Personal => "memory",
+        hx::DataClass::Sensitive => "sensitive data",
+    }
+}
+
+/// User words for a set of classes: the hub's pair reads "chats, memory".
+pub(super) fn classes(data: &[hx::DataClass]) -> String {
+    data.iter().map(|c| class_label(*c)).collect::<Vec<_>>().join(", ")
+}
+
+/// A destination as `/privacy` names it.
+fn dest_label(dest: &str) -> &str {
+    if dest.eq_ignore_ascii_case(hx::HUB_DEST) {
+        HUB_DEST_LABEL
+    } else {
+        dest
+    }
+}
+
+/// How `/privacy` names an active grant (no id: SY-08).
+pub(super) fn grant_label(g: &hx::Grant) -> String {
+    if g.destination == hx::HUB_DEST {
+        HUB_ROW.to_string()
+    } else if !g.destination.is_empty() {
+        format!("Send to {}", g.destination)
+    } else {
+        format!("Read {}", g.source)
+    }
+}
+
+/// `/sync` result line once the share has landed (SY-03).
+pub(super) fn sync_result_line(peers: usize) -> String {
+    match peers {
+        0 => SYNC_NO_PEERS.to_string(),
+        1 => "Synced chats and memory to 1 computer.".to_string(),
+        n => format!("Synced chats and memory to {n} computers."),
+    }
 }
 
 /// `/privacy` text: grants, scopes (all off), and recent egress by destination.
@@ -59,37 +110,27 @@ pub(super) fn privacy_report(
 ) -> String {
     let ago = |at: u64| grokhub_core::pulse::ago_label(at, now_ms);
     let mut out = vec![
-        "/privacy — what leaves this computer".to_string(),
+        PRIVACY_HEAD.to_string(),
         String::new(),
         format!(
-            "Allowed by default: {} (chat and memory in model prompts). Anywhere else, chat or memory waits for your OK: a hard card, or a grant in Settings → Permissions.",
+            "Allowed by default: {} ({HUB_SCOPE_LABEL} in model prompts). Sending {HUB_SCOPE_LABEL} anywhere else waits for your OK: a hard card, or a grant in Settings → Permissions.",
             grokhub_core::DEFAULT_CONNECTOR_HOSTS.join(", ")
         ),
         String::new(),
         "Grants".to_string(),
     ];
-    let mut any = false;
+    // The "off" line already says there is no hub grant (SY-07), and the
+    // grant id stays out of the text (SY-08).
     if ledger.destination_grant(hx::HUB_DEST, hx::HUB_SYNC_DATA).is_none() {
         out.push(format!("- {HUB_ROW}: off. /sync asks each time."));
     }
     for g in ledger.active() {
-        any = true;
-        let what = if g.destination == hx::HUB_DEST {
-            HUB_ROW.to_string()
-        } else if !g.destination.is_empty() {
-            format!("Send to {}", g.destination)
-        } else {
-            format!("Read {}", g.source)
-        };
         out.push(format!(
-            "- {what}: on since {} · {} · {}",
+            "- {}: on since {} · {}",
+            grant_label(g),
             ago(g.granted_at),
-            classes(&g.data_classes),
-            g.id
+            classes(&g.data_classes)
         ));
-    }
-    if !any && ledger.all().is_empty() {
-        out.push("- No grants yet.".into());
     }
     out.push(String::new());
     out.push("Learning scopes: all off. Nothing reads them yet.".into());
@@ -106,7 +147,7 @@ pub(super) fn privacy_report(
         if desktop_control { "on" } else { "off" }
     ));
     out.push(String::new());
-    out.push(format!("Sent in the last {PRIVACY_DAYS} days (egress.jsonl, no content)"));
+    out.push(format!("Sent in the last {PRIVACY_DAYS} days (no content stored)"));
     let since = now_ms.saturating_sub(PRIVACY_DAYS * 86_400_000);
     let mut rows: Vec<EgressRow> = Vec::new();
     for line in egress.iter().filter(|l| l.ts_ms >= since) {
@@ -143,7 +184,7 @@ pub(super) fn privacy_report(
     for r in rows {
         let times = if r.times == 1 { "1 time".to_string() } else { format!("{} times", r.times) };
         let data = if r.data.is_empty() { "no user data".to_string() } else { classes(&r.data) };
-        out.push(format!("- {} · {times} · {data} · {} · last {}", r.dest, r.basis, ago(r.last)));
+        out.push(format!("- {} · {times} · {data} · {} · last {}", dest_label(&r.dest), r.basis, ago(r.last)));
     }
     out.push(String::new());
     out.push("Not watched here: Grok Build's own traffic (its model calls, connectors, and web tools). GrokHub's feed reads, update checks, and Labs web fetch and MCP servers are not logged yet.".into());
@@ -159,9 +200,28 @@ impl Cabin {
         self.harness.consent.get_or_insert_with(hx::ConsentLedger::empty)
     }
 
+    /// Paired computers the hub would serve a share to.
+    pub(super) fn hub_peer_count(&self) -> usize {
+        self.hub.lock().map(|st| st.peers.len()).unwrap_or(0)
+    }
+
+    /// One `/sync` result line in the chat, kept out of the next model kick.
+    pub(super) fn post_sync_result(&mut self, line: &str) {
+        self.status = line.to_string();
+        self.live_mut().push(("assistant".into(), mark_slash_result(line)));
+        self.stamp_current_access();
+        self.persist();
+    }
+
     /// `/sync` publishes chats and memory to paired computers, so it asks the
-    /// EgressGuard first. Granted ⇒ sync; not granted ⇒ hard Send card.
+    /// EgressGuard first. No paired computer ⇒ nothing to send: one result
+    /// line, no card, no egress line (SY-03). Granted ⇒ sync; not granted ⇒
+    /// hard Send card.
     pub(super) fn gate_hub_sync(&mut self) {
+        if self.hub_peer_count() == 0 {
+            self.post_sync_result(SYNC_NO_PEERS);
+            return;
+        }
         let ledger = self.consent().clone();
         let step = Step::Egress { dest: hx::HUB_DEST, data: hx::HUB_SYNC_DATA, ledger: &ledger };
         match hx::decide(step) {
@@ -210,9 +270,11 @@ impl Cabin {
         }
     }
 
-    /// Settings → Permissions: the trust-floor note and the hub grant row.
-    /// The Allow click is the only place a grant is written (rule 4).
+    /// Settings → Permissions, "Leaving this computer": the trust-floor note
+    /// and the hub grant row. The Allow click is the only place a grant is
+    /// written (rule 4). Revoke is a ghost: it only takes access away (SY-05).
     pub(super) fn ui_privacy_rows(&mut self, ui: &mut egui::Ui) {
+        crate::cards::section_label(ui, LEAVING_HEAD);
         crate::cards::settings_note(ui, PRIVACY_NOTE);
         let granted = self
             .consent()
@@ -231,15 +293,47 @@ impl Cabin {
             }
             Some((id, at)) => {
                 let hint = format!(
-                    "On since {}. Chats and memory.",
+                    "On since {}. Sends {HUB_SCOPE_LABEL}.",
                     grokhub_core::pulse::ago_label(at, now_ms())
                 );
-                if crate::cards::settings_action(ui, HUB_ROW, &hint, "Revoke") {
+                if crate::cards::settings_action_ghost(ui, HUB_ROW, &hint, "Revoke") {
                     self.revoke_hub_grant(&id);
                 }
             }
         }
         ui.add_space(8.0);
+    }
+
+    /// Active grants as the `/privacy` bubble lists them: (id, label). The id
+    /// only rides along for the click; it is never painted (SY-08).
+    pub(super) fn privacy_revoke_rows(&mut self) -> Vec<(String, String)> {
+        self.consent().active().map(|g| (g.id.clone(), grant_label(g))).collect()
+    }
+
+    /// Revoke from the `/privacy` bubble (SY-04). Only `paint_privacy_revokes`
+    /// returns an id, and only for a pointer click: no slash, chip, or model
+    /// text reaches this. It only takes access away; granting stays in Settings.
+    pub(super) fn revoke_from_privacy(&mut self, id: &str) {
+        let hub = self
+            .consent()
+            .active()
+            .find(|g| g.id == id)
+            .map(|g| g.destination == hx::HUB_DEST);
+        match hub {
+            Some(true) => self.revoke_hub_grant(id),
+            Some(false) => {
+                self.status = match hx::revoke_grant(&crate::config::config_dir(), id) {
+                    Ok(_) => "Revoked. It asks again next time.".into(),
+                    Err(e) => format!("Could not revoke: {e}"),
+                };
+                self.harness.consent = None;
+            }
+            None => return,
+        }
+        let line = self.status.clone();
+        self.live_mut().push(("assistant".into(), mark_slash_result(&line)));
+        self.stamp_current_access();
+        self.persist();
     }
 
     /// Revoke stops sharing: the hub also drops the snapshot it was serving.
@@ -256,6 +350,39 @@ impl Cabin {
         }
         self.harness.consent = None;
     }
+}
+
+/// Height of one Revoke row: the pill's own height.
+const REVOKE_ROW_H: f32 = 28.0;
+
+/// Under the newest `/privacy` bubble: one row per active grant with a ghost
+/// Revoke. Returns the grant id whose Revoke was clicked. Pointer clicks only;
+/// Enter or any typed text never answers it.
+pub(super) fn paint_privacy_revokes(ui: &mut egui::Ui, grants: &[(String, String)]) -> Option<String> {
+    let mut hit = None;
+    for (id, label) in grants {
+        ui.push_id(("privacy-revoke", id.as_str()), |ui| {
+            // One pill-high row so the label centers on the Revoke pill.
+            let row = egui::vec2(ui.available_width(), REVOKE_ROW_H);
+            ui.allocate_ui_with_layout(row, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.label(RichText::new(label).size(13.0).color(crate::theme::muted()));
+                if crate::cards::ghost_pill(ui, "Revoke") {
+                    hit = Some(id.clone());
+                }
+            });
+        });
+    }
+    if !grants.is_empty() {
+        ui.add_space(4.0);
+    }
+    hit
+}
+
+/// The newest `/privacy` report among the painted rows, if any.
+pub(super) fn newest_privacy_row(views: &[grokhub_core::ChatView]) -> Option<usize> {
+    views
+        .iter()
+        .rposition(|v| v.kind == grokhub_core::ChatKind::Assistant && v.body.starts_with(PRIVACY_HEAD))
 }
 
 #[cfg(test)]
@@ -331,17 +458,16 @@ mod tests {
             [
                 "/privacy — what leaves this computer",
                 "",
-                "Allowed by default: grok.com, x.ai, api.x.ai (chat and memory in model prompts). Anywhere else, chat or memory waits for your OK: a hard card, or a grant in Settings → Permissions.",
+                "Allowed by default: grok.com, x.ai, api.x.ai (chats, memory in model prompts). Sending chats, memory anywhere else waits for your OK: a hard card, or a grant in Settings → Permissions.",
                 "",
                 "Grants",
                 "- Sync to paired computers: off. /sync asks each time.",
-                "- No grants yet.",
                 "",
                 "Learning scopes: all off. Nothing reads them yet.",
                 "- Files in one folder off · Installed apps off · Browser history off · Calendar off · Mail off · System state off",
                 "- Screen: Settings → Let Grok control the desktop (off)",
                 "",
-                "Sent in the last 7 days (egress.jsonl, no content)",
+                "Sent in the last 7 days (no content stored)",
                 "- Nothing logged yet.",
                 "",
                 "Not watched here: Grok Build's own traffic (its model calls, connectors, and web tools). GrokHub's feed reads, update checks, and Labs web fetch and MCP servers are not logged yet.",
@@ -361,8 +487,110 @@ mod tests {
             line("api.x.ai", "model_host", now - 8 * 86_400_000, &chat),
         ];
         let got = privacy_report(&hx::ConsentLedger::empty(), &log, true, now);
-        assert!(got.contains("- api.x.ai · 2 times · chat, personal · default · last 2m ago\n- hub · 1 time · chat, personal · approved once · last 2h ago\n"), "{got}");
+        assert!(got.contains("- api.x.ai · 2 times · chats, memory · default · last 2m ago\n- paired computers · 1 time · chats, memory · approved once · last 2h ago\n"), "{got}");
+        assert!(!got.contains("hub ·"), "the hub is named plainly: {got}");
         assert!(got.contains("- Screen: Settings → Let Grok control the desktop (on)"), "{got}");
         assert!(!got.contains("3 times"), "lines older than 7 days are not summed: {got}");
+    }
+
+    /// SY-02: one user-facing name for the hub data, "chats, memory", on the
+    /// card command, the card body, the Settings hint and `/privacy`. The scope
+    /// ids stay in the span args and the logs.
+    #[test]
+    fn hub_scope_label_is_chats_memory_everywhere_the_user_reads_it() {
+        assert_eq!(HUB_SCOPE_LABEL, "chats, memory");
+        assert_eq!(HUB_CARD_ACTION, "/sync → paired computers (chats, memory)");
+        assert_eq!(
+            HUB_CARD_NOTE,
+            "Sends chats, memory to your paired computers. Approve sends once. Esc denies. Settings → Permissions can allow it every time."
+        );
+        assert_eq!(HUB_OFF, "Off. /sync asks each time. Sends chats, memory.");
+        assert!(PRIVACY_NOTE.contains("chats, memory"), "{PRIVACY_NOTE}");
+        assert_eq!(classes(hx::HUB_SYNC_DATA), HUB_SCOPE_LABEL);
+        for user_text in [HUB_CARD_ACTION, HUB_CARD_NOTE, HUB_OFF, PRIVACY_NOTE] {
+            assert!(!user_text.contains("chat, personal"), "{user_text}");
+            assert!(!user_text.contains("chats and memory"), "{user_text}");
+        }
+        let src = include_str!("privacy_ui.rs");
+        let rows = src
+            .split("fn ui_privacy_rows(")
+            .nth(1)
+            .and_then(|s| s.split("fn privacy_revoke_rows(").next())
+            .expect("ui_privacy_rows");
+        assert!(rows.contains("Sends {HUB_SCOPE_LABEL}."), "the On hint names the scope the same way: {rows}");
+        // Logs keep the ids.
+        assert_eq!(
+            hx::HUB_SYNC_DATA.iter().map(|c| c.as_str()).collect::<Vec<_>>(),
+            vec!["chat", "personal"]
+        );
+    }
+
+    /// SY-08: the grant id never shows in `/privacy`, in the report or the
+    /// painted bubble with its Revoke row.
+    #[test]
+    fn privacy_report_hides_the_grant_id() {
+        let dir = crate::config::test_config_root("privacy-id");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let g = hx::grant_destination(&dir, hx::HUB_DEST, hx::HUB_SYNC_DATA, hx::UserClick::from_click()).unwrap();
+        let ledger = hx::ConsentLedger::load(&dir);
+        let now = g.granted_at + 60_000;
+        let got = privacy_report(&ledger, &[], false, now);
+        assert!(!got.contains(&g.id), "{got}");
+        assert!(got.contains("- Sync to paired computers: on since 1m ago · chats, memory\n"), "{got}");
+        assert!(!got.contains("No grants yet"), "{got}");
+        assert!(!got.contains("egress.jsonl"), "{got}");
+        let rows: Vec<(String, String)> = ledger.active().map(|g| (g.id.clone(), grant_label(g))).collect();
+        let view = grokhub_core::ChatView {
+            kind: grokhub_core::ChatKind::Assistant,
+            title: String::new(),
+            body: got.clone(),
+        };
+        assert_eq!(newest_privacy_row(std::slice::from_ref(&view)), Some(0));
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 1400.0))),
+            ..Default::default()
+        };
+        let out = crate::theme::test_pass(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let _ = super::super::chat_ui::paint_chat_block_with(
+                    ui,
+                    &view,
+                    true,
+                    true,
+                    grokhub_core::ThoughtFold::Expanded,
+                    false,
+                );
+                let _ = paint_privacy_revokes(ui, &rows);
+            });
+        });
+        let mut texts = String::new();
+        for clipped in &out.shapes {
+            collect_text(&clipped.shape, &mut texts);
+        }
+        assert!(texts.contains("Revoke"), "{texts}");
+        assert!(texts.contains("Sent in the last 7 days (no content stored)"), "{texts}");
+        assert!(!texts.contains(&g.id), "the grant id is not painted: {texts}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn collect_text(shape: &egui::Shape, out: &mut String) {
+        match shape {
+            egui::Shape::Text(t) => {
+                out.push_str(t.galley.text());
+                out.push('\n');
+            }
+            egui::Shape::Vec(v) => v.iter().for_each(|c| collect_text(c, out)),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn sync_result_line_counts_computers() {
+        assert_eq!(sync_result_line(0), "Nothing paired yet. Start share to pair a computer.");
+        assert_eq!(sync_result_line(1), "Synced chats and memory to 1 computer.");
+        assert_eq!(sync_result_line(3), "Synced chats and memory to 3 computers.");
     }
 }

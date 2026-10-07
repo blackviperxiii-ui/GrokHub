@@ -11042,6 +11042,8 @@ fn sync_writes_a_local_hub_snapshot() {
     .unwrap();
     let mut cabin = Cabin::quiet_for_test();
     cabin.cfg.device_name = "harbor".into();
+    // SY-03: /sync only sends when a computer is paired.
+    pair_test_peer(&cabin, "p1");
     cabin.run_slash_line("/sync");
     assert_eq!(cabin.status, "Syncing…");
     assert!(cabin.sync_rx.is_some());
@@ -11056,14 +11058,19 @@ fn sync_writes_a_local_hub_snapshot() {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     assert!(
-        matches!(cabin.nav, Nav::Devices),
-        " /sync must open Devices after the hub snapshot lands; status={:?} sync_rx={} after {:?}",
+        cabin.sync_rx.is_none(),
+        " /sync must land the hub snapshot; status={:?} after {:?}",
         cabin.status,
-        cabin.sync_rx.is_some(),
         start.elapsed()
     );
-    assert_eq!(cabin.status, "Merged hub snapshot from harbor");
-    assert!(cabin.sync_rx.is_none());
+    // SY-03: one result line in the chat; the pane stays on Chat.
+    assert!(matches!(cabin.nav, Nav::Chat), "nav={:?}", cabin.nav);
+    assert_eq!(cabin.status, "Synced chats and memory to 1 computer.");
+    let (role, body) = cabin.messages.last().cloned().expect("result line");
+    assert_eq!(role, "assistant");
+    assert!(grokhub_core::is_cabin_slash_turn(&role, &body), "stays out of the next model kick");
+    assert_eq!(grokhub_core::strip_slash_result(&body), "Synced chats and memory to 1 computer.");
+    assert!(cabin.hub.lock().unwrap().snapshot.is_some());
     let log = grokhub_agent::harness::read_egress(&root);
     assert_eq!(log.len(), 1, "{log:?}");
     assert_eq!(log[0].dest, "hub");
@@ -11091,6 +11098,16 @@ fn harness_spans(root: &std::path::Path) -> Vec<grokhub_agent::harness::Span> {
     out
 }
 
+/// Pair a fake computer with the cabin's hub (no network: just the peer row).
+fn pair_test_peer(cabin: &Cabin, id: &str) {
+    cabin.hub.lock().unwrap().peers.push(grokhub_core::state::Peer {
+        id: id.into(),
+        name: format!("box-{id}"),
+        token: format!("t-{id}"),
+        last_seen: 0,
+    });
+}
+
 fn wait_sync(cabin: &mut Cabin) {
     let start = std::time::Instant::now();
     while cabin.sync_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(8) {
@@ -11106,6 +11123,8 @@ fn sync_without_a_hub_grant_parks_a_hard_send_card_and_approve_sends_once() {
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("sync-park");
     std::fs::create_dir_all(&root).unwrap();
+    // A paired computer and no grant: still the hard Send card (SY-03).
+    pair_test_peer(&cabin, "p1");
     cabin.run_slash_line("/sync");
     assert!(cabin.sync_rx.is_none(), "nothing leaves without a grant");
     let park = cabin.harness.park.clone().expect("hard card");
@@ -11113,7 +11132,7 @@ fn sync_without_a_hub_grant_parks_a_hard_send_card_and_approve_sends_once() {
     assert_eq!(park.class, grokhub_agent::HardClass::Send);
     assert_eq!(park.path, "egress");
     assert_eq!(park.tool, "hub_sync");
-    assert_eq!(park.action, "/sync → paired computers (chat, personal)");
+    assert_eq!(park.action, "/sync → paired computers (chats, memory)");
     assert_eq!(cabin.hard_waiting(), 1);
     assert!(cabin.hub.lock().unwrap().snapshot.is_none());
     assert!(hx::read_egress(&root).is_empty());
@@ -11132,7 +11151,7 @@ fn sync_without_a_hub_grant_parks_a_hard_send_card_and_approve_sends_once() {
     cabin.resolve_hard_park(true, "");
     assert!(cabin.sync_rx.is_some(), "Approve sends once");
     wait_sync(&mut cabin);
-    assert!(matches!(cabin.nav, Nav::Devices), "status={:?}", cabin.status);
+    assert_eq!(cabin.status, "Synced chats and memory to 1 computer.");
     assert!(cabin.hub.lock().unwrap().snapshot.is_some());
     let log = hx::read_egress(&root);
     assert_eq!(log.len(), 1, "{log:?}");
@@ -11165,6 +11184,7 @@ fn revoking_the_hub_grant_blocks_the_next_sync_and_drops_the_share() {
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("sync-revoke");
     std::fs::create_dir_all(&root).unwrap();
+    pair_test_peer(&cabin, "p1");
     let g = hx::grant_destination(&root, hx::HUB_DEST, hx::HUB_SYNC_DATA, hx::UserClick::from_click()).unwrap();
     cabin.harness.consent = None;
     assert!(cabin.consent().destination_grant("hub", hx::HUB_SYNC_DATA).is_some());
@@ -11209,7 +11229,207 @@ fn privacy_slash_lists_grants_scopes_and_egress_without_content() {
     assert!(text.starts_with("/privacy — what leaves this computer\n"), "{text}");
     assert!(text.contains("- Sync to paired computers: off. /sync asks each time."), "{text}");
     assert!(text.contains("Learning scopes: all off. Nothing reads them yet."), "{text}");
-    assert!(text.contains("- api.x.ai · 1 time · chat · default · last just now"), "{text}");
+    assert!(text.contains("- api.x.ai · 1 time · chats · default · last just now"), "{text}");
+    release_isolated(&root, cabin);
+}
+
+// SY-03: nothing paired means nothing to send. No card, no egress line, no
+// span, with or without the grant; one plain result line instead.
+#[test]
+fn sync_with_no_paired_computer_posts_a_line_and_sends_nothing() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("sync-no-peers");
+    std::fs::create_dir_all(&root).unwrap();
+    assert!(cabin.hub.lock().unwrap().peers.is_empty());
+    let before = cabin.messages.len();
+    cabin.run_slash_line("/sync");
+    assert!(cabin.harness.park.is_none(), "no peer: no hard card");
+    assert_eq!(cabin.hard_waiting(), 0);
+    assert!(cabin.sync_rx.is_none(), "no peer: nothing is sent");
+    assert_eq!(cabin.status, "Nothing paired yet. Start share to pair a computer.");
+    assert_eq!(cabin.messages.len(), before + 1);
+    let (role, body) = cabin.messages.last().cloned().unwrap();
+    assert!(grokhub_core::is_cabin_slash_turn(&role, &body));
+    assert_eq!(
+        grokhub_core::strip_slash_result(&body),
+        "Nothing paired yet. Start share to pair a computer."
+    );
+    assert!(hx::read_egress(&root).is_empty(), "no peer: no egress line");
+    assert!(harness_spans(&root).is_empty(), "no peer: no span");
+    assert!(cabin.hub.lock().unwrap().snapshot.is_none());
+
+    // With the grant it is the same: nobody to send to.
+    hx::grant_destination(&root, hx::HUB_DEST, hx::HUB_SYNC_DATA, hx::UserClick::from_click()).unwrap();
+    cabin.harness.consent = None;
+    cabin.run_slash_line("/sync");
+    assert!(cabin.harness.park.is_none());
+    assert!(cabin.sync_rx.is_none());
+    assert!(hx::read_egress(&root).is_empty());
+    assert!(harness_spans(&root).is_empty());
+    assert!(cabin.hub.lock().unwrap().snapshot.is_none());
+
+    // A card approved after the last computer unpaired sends nothing either.
+    hx::revoke_grant(&root, &cabin.consent().active().next().unwrap().id.clone()).unwrap();
+    cabin.harness.consent = None;
+    pair_test_peer(&cabin, "p1");
+    cabin.run_slash_line("/sync");
+    assert!(cabin.harness.park.is_some(), "a peer and no grant parks the hard Send card");
+    cabin.hub.lock().unwrap().peers.clear();
+    cabin.resolve_hard_park(true, "");
+    assert!(cabin.sync_rx.is_none());
+    assert!(hx::read_egress(&root).is_empty());
+    assert_eq!(cabin.status, "Nothing paired yet. Start share to pair a computer.");
+    release_isolated(&root, cabin);
+}
+
+// SY-05/SY-06: Permissions groups the trust rows under "Leaving this computer"
+// and the rule editor under "Command rules". Allow is filled; Revoke is a ghost.
+#[test]
+fn permissions_page_groups_trust_rows_and_rules_with_a_ghost_revoke() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("perm-headings");
+    std::fs::create_dir_all(&root).unwrap();
+    struct Painted {
+        texts: Vec<(String, egui::Pos2)>,
+        filled: Vec<egui::Rect>,
+    }
+    fn walk(shape: &egui::Shape, p: &mut Painted) {
+        match shape {
+            egui::Shape::Text(t) => p.texts.push((t.galley.text().to_string(), t.pos + t.galley.rect.center().to_vec2())),
+            egui::Shape::Rect(r) if r.fill == crate::theme::fg() => p.filled.push(r.rect),
+            egui::Shape::Vec(v) => v.iter().for_each(|c| walk(c, p)),
+            _ => {}
+        }
+    }
+    let paint = |cabin: &mut Cabin| {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 2400.0))),
+            ..Default::default()
+        };
+        let out = crate::theme::test_pass(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| cabin.ui_permission_editor(ui));
+        });
+        let mut p = Painted { texts: Vec::new(), filled: Vec::new() };
+        for clipped in &out.shapes {
+            walk(&clipped.shape, &mut p);
+        }
+        p
+    };
+    let p = paint(&mut cabin);
+    let at = |p: &Painted, want: &str| {
+        p.texts
+            .iter()
+            .position(|t| t.0 == want)
+            .unwrap_or_else(|| panic!("{want} not painted: {:?}", p.texts.iter().map(|t| &t.0).collect::<Vec<_>>()))
+    };
+    let order = [
+        "Leaving this computer",
+        super::privacy_ui::PRIVACY_NOTE,
+        "Sync to paired computers",
+        "Allow",
+        "Command rules",
+        "Deny wins over ask, and ask wins over allow. Dangerous commands still ask, including after Allow always.",
+        "Rule",
+    ];
+    let idx: Vec<usize> = order.iter().map(|w| at(&p, w)).collect();
+    assert!(idx.windows(2).all(|w| w[0] < w[1]), "order {order:?} got {idx:?}");
+    let ys: Vec<f32> = idx.iter().map(|&i| p.texts[i].1.y).collect();
+    assert!(ys[4] > ys[2] && ys[6] > ys[5], "headings sit above their rows: {ys:?}");
+    let allow = p.texts[at(&p, "Allow")].1;
+    assert!(p.filled.iter().any(|r| r.contains(allow)), "Allow stays filled");
+
+    hx::grant_destination(&root, hx::HUB_DEST, hx::HUB_SYNC_DATA, hx::UserClick::from_click()).unwrap();
+    cabin.harness.consent = None;
+    let p = paint(&mut cabin);
+    let revoke = p.texts[at(&p, "Revoke")].1;
+    assert!(!p.filled.iter().any(|r| r.contains(revoke)), "Revoke is a ghost, not filled");
+    assert!(p.texts.iter().any(|t| t.0.ends_with("Sends chats, memory.")), "{:?}", p.texts.iter().map(|t| &t.0).collect::<Vec<_>>());
+    release_isolated(&root, cabin);
+}
+
+// SY-04: the ghost Revoke under /privacy clears the grant and drops the share.
+// Only a pointer click answers it; Enter and typed text never do.
+#[test]
+fn revoke_from_privacy_clears_the_grant_on_a_click_only() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("privacy-revoke");
+    std::fs::create_dir_all(&root).unwrap();
+    let g = hx::grant_destination(&root, hx::HUB_DEST, hx::HUB_SYNC_DATA, hx::UserClick::from_click()).unwrap();
+    cabin.harness.consent = None;
+    cabin.hub.lock().unwrap().snapshot = Some(std::sync::Arc::new(serde_json::json!({"kind": "grokhub-hub-v1"})));
+    let rows = cabin.privacy_revoke_rows();
+    assert_eq!(rows, vec![(g.id.clone(), "Sync to paired computers".to_string())]);
+
+    // Slash text cannot revoke (or grant): it is not a click.
+    cabin.run_slash_line("/privacy revoke");
+    cabin.harness.consent = None;
+    assert_eq!(cabin.consent().active().count(), 1);
+
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 400.0));
+    let pass = |events: Vec<egui::Event>| {
+        let mut hit = None;
+        let mut texts = Vec::new();
+        let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+        let out = crate::theme::test_pass(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                hit = super::privacy_ui::paint_privacy_revokes(ui, &rows);
+            });
+        });
+        let mut revoke_at = None;
+        for clipped in &out.shapes {
+            if let egui::Shape::Text(t) = &clipped.shape {
+                let label = t.galley.text().to_string();
+                if label == "Revoke" {
+                    revoke_at = Some(t.pos + t.galley.rect.center().to_vec2());
+                }
+                texts.push(label);
+            }
+        }
+        (hit, revoke_at, texts)
+    };
+    let (hit, at, texts) = pass(vec![]);
+    assert_eq!(hit, None);
+    assert!(texts.iter().all(|t| !t.contains(&g.id)), "no grant id on screen: {texts:?}");
+    assert!(texts.iter().any(|t| t == "Sync to paired computers"), "{texts:?}");
+    let at = at.expect("Revoke pill");
+    let enter = egui::Event::Key {
+        key: egui::Key::Enter,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let (hit, _, _) = pass(vec![enter, egui::Event::Text("revoke".into())]);
+    assert_eq!(hit, None, "keys never revoke");
+    let press = |pressed| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let _ = pass(vec![egui::Event::PointerMoved(at)]);
+    let _ = pass(vec![press(true)]);
+    let (hit, _, _) = pass(vec![press(false)]);
+    assert_eq!(hit.as_deref(), Some(g.id.as_str()), "a click names the grant");
+
+    let before = cabin.messages.len();
+    cabin.revoke_from_privacy(&g.id);
+    assert_eq!(cabin.consent().active().count(), 0, "the grant is gone");
+    assert!(hx::ConsentLedger::load(&root).destination_grant(hx::HUB_DEST, hx::HUB_SYNC_DATA).is_none());
+    assert!(cabin.hub.lock().unwrap().snapshot.is_none(), "revoke drops the share");
+    assert_eq!(cabin.status, "Sync to paired computers revoked. /sync asks again.");
+    assert_eq!(cabin.messages.len(), before + 1);
+    assert!(cabin.privacy_revoke_rows().is_empty(), "no grant, no Revoke");
+    // An unknown or already revoked id is a no-op.
+    cabin.revoke_from_privacy(&g.id);
+    assert_eq!(cabin.messages.len(), before + 1);
     release_isolated(&root, cabin);
 }
 

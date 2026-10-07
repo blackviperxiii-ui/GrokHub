@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+Privacy and consent follow-ups (Critiquito SY-01 to SY-08). The consent rules are unchanged: grants still come only from a click in Settings, and a hard card still has no Always, Enter does not approve it, and Esc or the timeout denies it.
+
+- **`/sync` with nothing paired** sends nothing, logs nothing and parks no card. It posts "Nothing paired yet. Start share to pair a computer." With at least one paired computer it works as before (the hard Send card when there is no grant), then posts "Synced chats and memory to N computers" in the chat instead of jumping to Devices.
+- **The `/sync` card** on an empty chat now uses the same left-aligned card as the chat column (up to 520px wide, ragged-right text, buttons on the left), not a centered and justified one.
+- **One name for the data:** the card, `/privacy` and Settings all say "chats, memory". Logs and files keep the `chat` / `personal` ids. `/privacy` calls the hub destination "paired computers".
+- **`/privacy`:** under the newest report, each active grant gets a ghost Revoke button. Only a click can use it, and granting is still only in Settings. The grant id and the `egress.jsonl` name are gone (the heading is now "Sent in the last 7 days (no content stored)"), and a fresh report no longer adds "No grants yet." under the "off" line.
+- **Settings → Permissions:** the trust note and the Sync row sit under "Leaving this computer", and the rules note sits under "Command rules" above Rule. Revoke is a ghost button; Allow stays filled.
+
+No version bump.
+
 Spike-4a trust floor (privacy and consent, first slice). Nothing new leaves this computer without your OK:
 
 - **Consent ledger:** `consent.jsonl` in the config directory holds grants you make with a click. They are revocable, and slash text or the agent cannot write them (the hard floor refuses agent writes to the file). Learning scopes (files in one folder, apps, browser history, calendar, mail, system state) all start off, and nothing reads them yet.
