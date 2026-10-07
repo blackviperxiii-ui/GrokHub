@@ -9,8 +9,8 @@
 - `cargo test -p grokhub-app cabin_reports_version`
 ## Key files
 - `crates/grokhub-app/build.rs`: sets `GROKHUB_BUILD_CHANNEL`, `GROKHUB_BUILD_BRANCH`, `GROKHUB_BUILD_SHA` from git and `GROKHUB_CHANNEL`.
-- `crates/grokhub-core/src/channel.rs`: `Channel`, `CHANNEL_RECEIPT`, `version_line`, `parse_version_line`, `beta_caught_up_to_main`, `channel_switch_shell`.
-- `crates/grokhub-app/src/update.rs`: `installed_channel`, `build_channel`, `build_version_line`, `channel_switch_cmds`.
+- `crates/grokhub-core/src/channel.rs`: `Channel`, `CHANNEL_RECEIPT`, `version_line`, `parse_version_line`, `ChannelTips`, `beta_caught_up_to_main`, `channel_switch_shell`; `fetch_channel_tips` in `update.rs`.
+- `crates/grokhub-app/src/update.rs`: `installed_channel`, `build_channel`, `build_version_line`, `channel_switch_cmds`, `try_auto_off_beta_channel`.
 - `CHANGELOG.md`: `## Unreleased` collects beta notes.
 ## Change recipe
 - PR into beta: no bump. Add notes under `## Unreleased` in `CHANGELOG.md` and stop.
@@ -24,8 +24,9 @@
 ## Non-obvious
 - build.rs reruns on `HEAD`, `packed-refs`, `logs/HEAD`, and the branch ref, so a pull or checkout relabels the next build; a detached HEAD reports branch `detached` unless an exact tag matches.
 - A missing, empty, or unknown receipt reads as stable.
-- When `origin/beta` and `origin/main` tips match (`beta_caught_up_to_main`), `auto_off_target` returns stable so the cabin can rewrite a beta receipt and turn the Labs toggle off.
-- Windows Labs keeps the channel toggle disabled (`CHANNEL_WINDOWS_NOTE`); Windows updates come from the GitHub zip or `scripts/install-windows.ps1`.
+- Labs Beta auto-off compares trees, not tips: main moves by squash and the main → beta sync always adds a merge commit, so the SHAs never match. `fetch_channel_tips` fetches both branches; `beta_caught_up_to_main` is true when `origin/beta^{tree}` equals `origin/main^{tree}` (or the tips are the same commit). Then `switch_clone_to_main` checks the clone out on main (no rebuild; the next Update builds main) and the receipt becomes stable. A failed fetch never flips; a dirty clone stays on beta and says why.
+- Windows has no beta: `installed_channel` reads a stray beta receipt as stable and Update says `BETA_LINUX_ONLY_NOTE`. Labs keeps the toggle disabled (`CHANNEL_WINDOWS_NOTE`); Windows updates come from the GitHub zip or `scripts/install-windows.ps1`.
+- Every Update or channel switch appends a redacted tail to `update.log` in the config dir (about 256 KB, rotated once); a failure shows `update_fail_hint` / `channel_switch_fail_hint` plus the log path. A switch step gets 2400 s (`host_timeout_for`).
 - `.github/`, `clippy.toml`, and release scripts change only with Jeremy's OK.
 ## See also
 - [install-scripts](install-scripts.md), [grokhub-app](grokhub-app.md)

@@ -834,7 +834,7 @@ impl Cabin {
                                                         SettingsSec::Labs => {
                                                             // Beta channel: Linux switches via install.sh --channel;
                                                             // Windows stays disabled until the installer supports it.
-                                                            // Also: when beta tip == main tip, auto-turn off (cooldown).
+                                                            // Also: when beta caught up to main (same tree), auto-turn off (cooldown).
                                                             self.maybe_auto_off_beta_channel(false);
                                                             let status_line = crate::update::channel_labs_status();
                                                             #[cfg(windows)]
