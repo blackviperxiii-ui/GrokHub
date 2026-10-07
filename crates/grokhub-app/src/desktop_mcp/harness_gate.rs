@@ -105,7 +105,9 @@ pub(crate) fn park_and_wait(
 ) -> bool {
     static N: AtomicU64 = AtomicU64::new(0);
     let id = format!("{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed));
+    // A credential field's value never reaches the park file, the card, or a span.
     let action = match call.tool.as_str() {
+        _ if class == hx::HardClass::Credentials.as_str() => hx::credential_action(&call.args),
         "type" => call.args["text"].as_str().unwrap_or("").to_string(),
         "key" => call.args["keys"].as_str().unwrap_or("").to_string(),
         _ => hx::desk_args(&call.tool, &call.args),
@@ -238,6 +240,36 @@ mod tests {
         assert_eq!(spans[0].path, "A");
         assert_eq!(spans[0].args_redacted, r#"{"chars":20}"#);
         assert!(hx::pending_parks(&dir).is_empty());
+        let pin = line("type", json!({ "text": "4821", "label": "PIN" }));
+        assert_eq!(
+            precheck(&pin, ON),
+            Precheck::Park {
+                class: "credentials".into(),
+                reason: "hard-class credentials: Credentials / secrets — Always cannot skip".into(),
+            }
+        );
+        // The cabin sees the park file while the MCP waits; Esc / Deny answers it.
+        let cabin_dir = dir.clone();
+        let waiter = std::thread::spawn(move || {
+            for _ in 0..200 {
+                if let Some(req) = hx::pending_parks(&cabin_dir).pop() {
+                    let _ = hx::answer_park(&cabin_dir, &req.id, false);
+                    return Some(req);
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            None
+        });
+        assert!(!park_and_wait(&dir, &pin, "credentials", &mut || false));
+        let req = waiter.join().unwrap().expect("park file posted");
+        assert_eq!(req.action, "type into PIN (4 chars hidden)");
+        assert_eq!(req.class, "credentials");
+        let spans = hx::read_spans(&dir, hx::CU_TRACE).unwrap();
+        let last = spans.last().unwrap();
+        assert_eq!((last.decision.as_str(), last.approval_class.as_str()), ("park", "credentials"));
+        assert_eq!(last.args_redacted, r#"{"chars":4}"#);
+        let trace = std::fs::read_to_string(hx::span_path(&dir, hx::CU_TRACE)).unwrap();
+        assert!(!trace.contains("4821"), "the typed PIN never reaches a span");
         assert_eq!(access_now(&dir, false), AccessMode::Readonly);
         assert_eq!(access_now(&dir, true), AccessMode::Supervised);
         let _ = std::fs::remove_dir_all(dir);

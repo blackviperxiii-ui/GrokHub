@@ -22,16 +22,23 @@
 //! Spike-5 slice: `changes` (ChangeLedger for skills) keeps every version a
 //! self-managed skill write replaces; undo and restore need a user's typing
 //! or click (`UndoAsk`).
+//!
+//! Spike-1a safety loop: `detect` catches failed or looping actions and
+//! unbacked claims, `audit` runs them in two cheap passes, and `ladder`
+//! recovers (retry once, backtrack) or pauses for the user. Hard class is
+//! never retried. Typing into a credential field is hard class credentials.
 
 mod access;
 mod approval;
 mod at_rest;
+mod audit;
 mod backend;
 mod changes;
 mod consent;
 mod detect;
 mod egress;
 mod hard;
+mod ladder;
 mod park;
 mod span;
 
@@ -64,21 +71,26 @@ pub use egress::{
     EgressRead, EgressReq, EGRESS_FILE,
     HUB_DEST, HUB_SYNC_DATA,
 };
+pub use audit::{audit_file, audit_spans, pass1, pass2, summarize, Audit, SpanDigest, Window, WindowAudit, WindowSummary};
 pub use detect::{
-    approval_gate_violation, fixture_hard_allow_without_approve, fixture_hard_with_approve,
-    Finding, APPROVAL_GATE_VIOLATION,
+    action_loop, approval_gate_violation, claimed_click_no_change, claims_done, claims_success, done_without_criteria,
+    fixture_action_loop, fixture_claimed_click_no_change, fixture_done_without_criteria, fixture_hard_allow_without_approve,
+    fixture_hard_with_approve, fixture_span, fixture_unsupported_assurance, span_kind, step_hash, unsupported_assurance,
+    Evidence, Finding, SpanKind, ACTION_LOOP, APPROVAL_GATE_VIOLATION, CLAIMED_CLICK_NO_CHANGE, DONE_WITHOUT_CRITERIA,
+    UNSUPPORTED_ASSURANCE,
 };
 pub use hard::{
-    classify, classify_ask, desk_classify, hard_class, hard_floor, HardClass, HardFloor, HardHit,
-    HEADLESS_DENY_RULES,
+    classify, classify_ask, credential_action, credential_field, credential_hint, desk_classify, hard_class, hard_floor,
+    HardClass, HardFloor, HardHit, GB_DENY_GAPS, HEADLESS_DENY_RULES,
 };
+pub use ladder::{hard_target, ladder_span, Ladder, LadderStep, Rung, RECOVERY_TOOL};
 pub use park::{
     answer_park, clear_park, park_dir, pending_parks, post_park, take_answer, wait_park,
     ParkRequest,
 };
 pub use span::{
     append_span, read_spans, read_turn_context, redact_args, span_path, turn_context_path,
-    write_turn_context, Origin, Span, TurnContext,
+    write_turn_context, Origin, Span, TurnContext, CLAIM_CAP, REPLY_TOOL, VERIFY_TOOL,
 };
 
 /// Scratch dir for harness tests, under the workspace `target/` (not the

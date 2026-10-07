@@ -833,7 +833,10 @@ impl Cabin {
             })
             .filter(|body| !body.trim().is_empty());
         // A steerable turn is never a scheduled one, so no automation settles here.
+        // Parked cards and their spans outlive the steer (Spike-1a).
+        let parks = self.take_parks_for_steer();
         self.halt_in_flight();
+        self.restore_parks_after_steer(parks);
         if let Some(body) = kept {
             let body = self.scrub_transcript(body);
             self.live_mut().push(("assistant".into(), body));
