@@ -97,7 +97,7 @@ use grokhub_core::{
     remember_home_surface, remember_typed_prompt, rename_node, replay_automation_target,
     replay_ops, resolve_acp_cwd, resolve_bind_path, resolve_chat_model,
     resolve_dark, restore_bound_path, retain_held_plan, reuse_empty_thread_idx, review_due,
-    review_status_line, review_system_prompt, rewind_allowed, rewind_blocked_reason,
+    review_system_prompt, rewind_allowed, rewind_blocked_reason,
     rewind_copy_cmd, rewind_dest, rewind_restore_matches, rewind_snapshot_ready, roll_usage_day,
     route_schedule, save_hub_state, screen_from_extents, scrolled_off_tail, search_corpus,
     search_corpus_tagged, search_place, search_thread_body, seed_from_bound, settings_pin_blocks_auto,
