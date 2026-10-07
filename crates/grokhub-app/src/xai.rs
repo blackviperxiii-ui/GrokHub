@@ -13,6 +13,7 @@ use grokhub_core::{
     ImagineVideoOp, PresenceFrame, VideoBodyReq, VideoJobStatus, MEDIA_FILE_CAP, TEXT_FILE_CAP,
     XAI_BASE,
 };
+use grokhub_agent::harness as hx;
 use std::io::Read;
 
 /// Production Imagine calls `XAI_BASE`. Tests can point the generations POST at a local origin.
@@ -88,12 +89,25 @@ fn xai_agent(timeout_secs: u64) -> ureq::Agent {
         .build()
 }
 
+/// EgressGuard (Spike-4a): a cabin xAI call asks `harness::decide` and, when it
+/// may leave, logs one `egress.jsonl` line (host and data classes, no content).
+/// xAI hosts are allowed by default, so nothing here changes what is sent.
+fn egress_ok(url: &str, data: &[hx::DataClass]) -> Result<(), String> {
+    match hx::guard_egress(&crate::config::config_dir(), &hx::EgressReq::new(url, data)) {
+        hx::GateOutcome::Allow => Ok(()),
+        hx::GateOutcome::Park { reason, .. } | hx::GateOutcome::Refuse { reason } => Err(reason),
+    }
+}
+
+const PROMPT_DATA: &[hx::DataClass] = &[hx::DataClass::Chat, hx::DataClass::Personal];
+
 fn grok_json(
     url: &str,
     key: &str,
     body: serde_json::Value,
     timeout_secs: u64,
 ) -> Result<serde_json::Value, String> {
+    egress_ok(url, PROMPT_DATA)?;
     let resp = xai_agent(timeout_secs)
         .post(url)
         .set("authorization", &format!("Bearer {key}"))
@@ -408,6 +422,7 @@ pub fn grok_stt(api_key: &str, wav: &[u8]) -> Result<String, String> {
     }
     let boundary = "----grokhubstt";
     let body = stt_multipart(wav, "grokhub-voice.wav", boundary);
+    egress_ok(&stt_url(), &[hx::DataClass::Chat])?;
     let resp = xai_agent(60)
         .post(&stt_url())
         .set("authorization", &format!("Bearer {key}"))
@@ -461,6 +476,7 @@ pub fn grok_tts(api_key: &str, text: &str) -> Result<Vec<u8>, String> {
     if text.is_empty() {
         return Err("nothing to speak".into());
     }
+    egress_ok(&tts_url(), &[hx::DataClass::Chat])?;
     let resp = xai_agent(60)
         .post(&tts_url())
         .set("authorization", &format!("Bearer {key}"))

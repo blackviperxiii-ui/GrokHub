@@ -11,11 +11,17 @@
 //!
 //! Paths: A `grokhub-desktop` dispatch, B ACP ask, C headless `--deny` rules,
 //! E native Lab engine (`gate.rs`). Every path writes the same span.
+//!
+//! Spike-4a trust floor: `consent` (ConsentLedger, scopes all off) and
+//! `egress` (EgressGuard + `egress.jsonl`) answer through the same `decide`
+//! (`Step::Egress`, `Step::Scope`). Grok Build's own traffic stays outside (D1).
 
 mod access;
 mod approval;
 mod backend;
+mod consent;
 mod detect;
+mod egress;
 mod hard;
 mod park;
 mod span;
@@ -28,6 +34,15 @@ pub use approval::{
 pub use backend::{
     computer_tool_names, desk_args, desk_decide, desk_span, grok_build_click, ClickOutcome,
     ClickRequest, ComputerUseBackend, DeskCall, CU_TRACE,
+};
+pub use consent::{
+    consent_path, grant_destination, grant_scope, revoke_grant, scope_excluded, scope_refusal,
+    ConsentLedger, Grant, Scope, UserClick, CONSENT_FILE, SCOPE_HARD_EXCLUDES, SCOPE_KINDS,
+};
+pub use egress::{
+    append_egress, egress_dest, egress_path, guard_egress, is_local_dest, is_model_host,
+    read_egress, record_approved_once, DataClass, EgressBasis, EgressLine, EgressReq, EGRESS_FILE,
+    HUB_DEST, HUB_SYNC_DATA,
 };
 pub use detect::{
     approval_gate_violation, fixture_hard_allow_without_approve, fixture_hard_with_approve,
@@ -43,7 +58,7 @@ pub use park::{
 };
 pub use span::{
     append_span, read_spans, read_turn_context, redact_args, span_path, turn_context_path,
-    write_turn_context, Span, TurnContext,
+    write_turn_context, Origin, Span, TurnContext,
 };
 
 /// Scratch dir for harness tests, under the workspace `target/` (not the
