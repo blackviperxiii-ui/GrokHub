@@ -26,6 +26,11 @@ const HARD_NOTE: &str = "Always can't skip this. Approve runs it once. Esc denie
 const HEADLESS_NOTE: &str =
     "Grok Build's deny rule stopped this. Approve re-runs this one step with Grok's own Allow. Esc denies.";
 const HARD_EYEBROW: &str = "Hard action";
+/// Why a ladder pause or an ask was denied from a card or the inbox.
+pub(super) const SOFT_DENY: &str = "Jeremy denied";
+pub(super) const HALT_DENY: &str = "halted — fail-closed Deny";
+const SOFT_EYEBROW: &str = "Paused";
+const SOFT_NOTE: &str = "Grok stopped after a step didn't work. Approve lets it try again; Deny stops it.";
 /// What a path B credential card and its spans say instead of GB's action line.
 const CREDENTIAL_ACTION: &str = "type into a credential field (value hidden)";
 /// The span tool and args for a `/sync` publish (no content).
@@ -110,6 +115,8 @@ pub(super) struct SoftPark {
     pub detector: String,
     pub reason: String,
     pub evidence: Vec<String>,
+    /// The chat whose turn paused (Spike-1b inbox).
+    pub chat_id: String,
 }
 
 /// One hard-class action on the white card.
@@ -121,6 +128,8 @@ pub(super) struct HardParkUi {
     pub tool: String,
     pub action: String,
     pub parked_at: Instant,
+    /// The chat that was visible when it parked (Spike-1b inbox).
+    pub chat_id: String,
 }
 
 /// Path C: a hard-classified call seen in a headless stream.
@@ -208,6 +217,10 @@ pub(super) struct HarnessState {
     /// The last finished reply's prose, for the turn-end audit. `None` when
     /// that turn was not on the visible chat.
     pub last_reply: Option<String>,
+    /// The decision inbox rows are open under the needs-attention line.
+    pub inbox_open: bool,
+    /// The card an inbox row asked to scroll into view, painted once.
+    pub jump: Option<&'static str>,
 }
 
 /// Readonly until the desktop switch is on; Full only after Grant full.
@@ -294,7 +307,7 @@ impl Cabin {
             + usize::from(self.elicit_ask.is_some())
     }
 
-    fn trace_id(&self) -> String {
+    pub(super) fn trace_id(&self) -> String {
         self.threads
             .get(self.thread_idx)
             .map(|t| t.id.clone())
@@ -332,7 +345,7 @@ impl Cabin {
         self.park_hard(ParkSource::Egress(dest.into()), class, "egress", HUB_SYNC_TOOL.into(), action);
     }
 
-    fn write_span(&self, span: hx::Span, path: &str) {
+    pub(super) fn write_span(&self, span: hx::Span, path: &str) {
         self.write_span_at(span, path, self.turn_no());
     }
 
@@ -434,6 +447,7 @@ impl Cabin {
             tool,
             action,
             parked_at: Instant::now(),
+            chat_id: self.trace_id(),
         };
         if self.harness.park.is_some() {
             self.harness.queue.push_back(park);
@@ -525,6 +539,73 @@ impl Cabin {
         self.harness.park = self.harness.queue.pop_front();
         if sync_once {
             self.run_hub_sync(super::privacy_ui::HubSend::Once);
+        }
+    }
+
+    /// Put the `i`th hard park (0 is the card on screen, then the queue) on the
+    /// card. The one it replaces goes back to the front of the queue.
+    pub(super) fn promote_hard_park(&mut self, i: usize) {
+        if i == 0 {
+            return;
+        }
+        if let Some(p) = self.harness.queue.remove(i - 1) {
+            if let Some(head) = self.harness.park.take() {
+                self.harness.queue.push_front(head);
+            }
+            self.harness.park = Some(p);
+        }
+    }
+
+    /// Answer the `i`th hard park: the same span and effect as its card.
+    pub(super) fn resolve_hard_park_at(&mut self, i: usize, approve: bool, why: &str) {
+        self.promote_hard_park(i);
+        self.resolve_hard_park(approve, why);
+    }
+
+    /// A ladder pause answered from its card or the inbox. Approve writes the
+    /// same `resume` span as the user's next message; Deny drops the pause
+    /// and the pending repair turn. Either way the ladder starts over.
+    pub(super) fn answer_soft_park(&mut self, i: usize, approve: bool, why: &str) {
+        if i >= self.harness.soft_parks.len() {
+            return;
+        }
+        let park = self.harness.soft_parks.remove(i);
+        let trace = self.trace_id();
+        let args = serde_json::json!({ "detector": park.detector, "evidence": park.evidence }).to_string();
+        let mut span = if approve {
+            let mut s = hx::Span::soft_allow(
+                &trace,
+                hx::RECOVERY_TOOL,
+                &args,
+                "resume",
+                &format!("you answered the pause ({})", park.reason),
+                self.access_mode(),
+                "none",
+            );
+            s.decision = "resume".into();
+            s
+        } else {
+            hx::Span::deny(&trace, hx::RECOVERY_TOOL, &args, why, "soft")
+        };
+        span.origin = hx::Origin::Repair;
+        self.write_span(span, "audit");
+        self.harness.repair = None;
+        self.harness.ladder.reset();
+        self.status = if approve { "Resumed".into() } else { "Stopped that step".into() };
+    }
+
+    /// Tray Halt and the halt hotkeys: every inbox row is denied with a span,
+    /// not only the hard cards. A Steer does not come here.
+    pub(super) fn halt_inbox(&mut self) {
+        self.halt_hard_parks();
+        while self.perm_ask.is_some() || !self.perm_queue.is_empty() {
+            if self.perm_ask.is_none() {
+                self.next_perm_ask();
+            }
+            self.answer_perm_at(0, false, HALT_DENY);
+        }
+        while !self.harness.soft_parks.is_empty() {
+            self.answer_soft_park(0, false, HALT_DENY);
         }
     }
 
@@ -621,6 +702,7 @@ impl Cabin {
                     detector: step.detector,
                     reason: step.reason,
                     evidence: step.evidence,
+                    chat_id: trace.clone(),
                 });
                 if self.chrome_here() {
                     self.status = crate::motion::needs_attention_summary(self.decisions_waiting());
@@ -915,11 +997,31 @@ impl Cabin {
                 ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
                 self.resolve_hard_park(false, "Jeremy denied (Esc)");
             } else {
-                match harness_card(ui, id, text, running) {
+                let top = ui.cursor().min.y;
+                let hit = harness_card(ui, id, text, running);
+                self.scroll_if_jumped(ui, "hard", top);
+                match hit {
                     Some(true) => self.resolve_hard_park(true, ""),
-                    Some(false) => self.resolve_hard_park(false, "Jeremy denied"),
+                    Some(false) => self.resolve_hard_park(false, SOFT_DENY),
                     None => {}
                 }
+            }
+        }
+        if let Some(park) = self.harness.soft_parks.first() {
+            let text = CardText {
+                eyebrow: SOFT_EYEBROW,
+                title: &park.reason.clone(),
+                action: "",
+                note: SOFT_NOTE,
+                primary: "Approve",
+                secondary: "Deny",
+                hard: false,
+            };
+            let top = ui.cursor().min.y;
+            let hit = harness_card(ui, ("soft-park", park.detector.clone()), text, running);
+            self.scroll_if_jumped(ui, "soft", top);
+            if let Some(approve) = hit {
+                self.answer_soft_park(0, approve, SOFT_DENY);
             }
         }
         if self.harness.full_card.is_some() {
@@ -932,11 +1034,26 @@ impl Cabin {
                 secondary: "Not now",
                 hard: false,
             };
-            if let Some(grant) = harness_card(ui, ("grant-full", String::new()), text, running) {
+            let top = ui.cursor().min.y;
+            let hit = harness_card(ui, ("grant-full", String::new()), text, running);
+            self.scroll_if_jumped(ui, "full", top);
+            if let Some(grant) = hit {
                 self.resolve_grant_full(grant, "Jeremy kept Supervised");
             }
         }
         self.paint_work_rows(ui);
+    }
+
+    /// An inbox row asked for this card: bring what was just painted (from
+    /// `top` to the cursor) into view once.
+    pub(super) fn scroll_if_jumped(&mut self, ui: &egui::Ui, card: &str, top: f32) {
+        if self.harness.jump != Some(card) {
+            return;
+        }
+        self.harness.jump = None;
+        let bottom = ui.cursor().min.y.max(top + 1.0);
+        let rect = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=bottom);
+        ui.scroll_to_rect(rect, Some(egui::Align::Center));
     }
 }
 
@@ -1027,7 +1144,9 @@ fn harness_card(
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     let clicked = match style.primary {
-                        PillKind::Danger => crate::cards::danger_pill(ui, primary),
+                        // A hard Approve takes a pointer click: Enter or Space on a focused pill does nothing.
+                        PillKind::Danger => crate::cards::felt_pill_at(ui, None, primary, PillKind::Danger)
+                            .clicked_by(egui::PointerButton::Primary),
                         PillKind::Solid => crate::cards::white_pill(ui, primary),
                         PillKind::Ghost => crate::cards::ghost_pill(ui, primary),
                     };
@@ -1421,6 +1540,7 @@ mod tests {
             detector: "action_loop".into(),
             reason: "action_loop: `click` ran 3 times".into(),
             evidence: vec!["session:1".into()],
+            chat_id: "session".into(),
         });
         assert_eq!(cabin.decisions_waiting(), 4);
         let before = decisions(&root);
@@ -1675,8 +1795,8 @@ mod tests {
             .and_then(|s| s.split("fn paint_perm_ask(").next())
             .expect("paint_approval_stack");
         assert!(
-            stack.contains("needs_attention_summary"),
-            "the stack line is the one count: {stack}"
+            stack.contains("paint_inbox"),
+            "the stack line is the one count (Spike-1b: the inbox line): {stack}"
         );
         let perm = chat
             .split("fn paint_perm_ask(")
@@ -1727,7 +1847,7 @@ mod tests {
         let (texts, _) = paint_stack(&mut cabin, Vec::new(), 1400.0);
         let counts = texts.iter().filter(|t| t.contains("need a decision")).count();
         assert_eq!(counts, 1, "one count line, got {texts:?}");
-        assert!(texts.iter().any(|t| t == "3 things need a decision"));
+        assert!(texts.iter().any(|t| t == "3 things need a decision. Everything else is on track."));
         assert!(texts.iter().any(|t| t == "Hard action"));
         assert!(texts.iter().any(|t| t == "Delete"));
         assert!(texts.iter().any(|t| t == "Desktop"));
@@ -1939,7 +2059,7 @@ mod tests {
         let (_, approve_x, _, _) = x_of("Approve");
         let (_, deny_x, _, _) = x_of("Deny");
         assert!(approve_x < left + 40.0 && approve_x < deny_x, "buttons start on the left: {approve_x} {deny_x}");
-        let (_, count_x, _, _) = x_of("1 thing needs a decision");
+        let (_, count_x, _, _) = x_of("1 thing needs a decision. Everything else is on track.");
         assert!((count_x - column.left()).abs() < 1.0, "the count line is left-aligned too: {count_x}");
         let _ = std::fs::remove_dir_all(root);
     }
