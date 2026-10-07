@@ -5,6 +5,10 @@
 
 use grokhub_core::host_safety;
 
+/// Spike-1c path D `--deny` rules for GB's own computer-use tools. They live
+/// in `grokhub_acp` next to `apply_desktop_spawn_args`, which adds them.
+pub use grokhub_acp::BUILTIN_CU_DENY;
+
 /// Hard class: Always / Auto / Full cannot skip. Parks a Jeremy approval card.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HardClass {
@@ -116,9 +120,9 @@ pub fn desk_classify(tool: &str, args: &serde_json::Value) -> HardHit {
             }
         }
         "key" => {
-            let keys = args
-                .get("keys")
-                .and_then(|v| v.as_str())
+            let keys = ["keys", "key"]
+                .iter()
+                .find_map(|k| args.get(*k).and_then(|v| v.as_str()))
                 .unwrap_or("")
                 .to_ascii_lowercase()
                 .replace(' ', "");
@@ -608,7 +612,9 @@ pub const HEADLESS_DENY_RULES: &[&str] = &[
 /// Hard patterns no GB `--deny` rule can express, with a sample each. GB
 /// rules match a shell command line or a tool name, never a tool's args or a
 /// separator without spaces. These stay gated on paths A, B, and E only, and a
-/// path C run that does one is flagged by `approval_gate_violation`.
+/// path C run that does one is flagged by `approval_gate_violation`. The last
+/// entry is GB's own computer use (path D): no rule kind names a built-in
+/// tool, so the cabin's watchdog checks its frames instead.
 pub const GB_DENY_GAPS: &[(&str, &str)] = &[
     ("doas rm notes.txt", "`doas` prefix (only `sudo` forms are listed)"),
     ("/bin/rm notes.txt", "a head called by absolute path"),
@@ -619,6 +625,10 @@ pub const GB_DENY_GAPS: &[(&str, &str)] = &[
     (
         "grokhub-desktop__key",
         "Ctrl+Alt+Delete and other session-ending key combos, and Delete on a file manager's selection (args and the focused window, not the name)",
+    ),
+    (
+        "computer_screenshot",
+        "Grok Build's own (non-MCP) computer-use tools: GB rules name only Bash, Read, Edit/Write, Grep/Glob, MCPTool, WebFetch and WebSearch; the path D watchdog checks their frames",
     ),
 ];
 
@@ -838,7 +848,11 @@ mod tests {
     /// GB rule `Kind(glob)` against a command line or a tool name. Stand-in
     /// for GB's matcher: `*` (and `**`) spans any text, everything else is literal.
     fn gb_denies(kind: &str, subject: &str) -> bool {
-        HEADLESS_DENY_RULES.iter().any(|rule| {
+        rule_hits(HEADLESS_DENY_RULES, kind, subject)
+    }
+
+    fn rule_hits(rules: &[&str], kind: &str, subject: &str) -> bool {
+        rules.iter().any(|rule| {
             let Some(glob) = rule.strip_prefix(kind).and_then(|r| r.strip_prefix('(')).and_then(|r| r.strip_suffix(')')) else {
                 return false;
             };
@@ -933,8 +947,31 @@ mod tests {
     }
 
     #[test]
+    fn builtin_cu_rules_deny_gb_computer_use_but_never_path_a() {
+        assert_eq!(BUILTIN_CU_DENY.len(), 6);
+        assert!(BUILTIN_CU_DENY.iter().all(|r| r.starts_with("MCPTool(")), "{BUILTIN_CU_DENY:?}");
+        for tool in [
+            "computer__click",
+            "computer-use__type",
+            "computer_use__screenshot",
+            "desk__computer_click",
+            "agent__mouse_move",
+            "agent__keyboard_type",
+        ] {
+            assert!(rule_hits(BUILTIN_CU_DENY, "MCPTool", tool), "no CU rule for `{tool}`");
+        }
+        for tool in crate::harness::computer_tool_names(crate::harness::AccessMode::Supervised) {
+            let path_a = format!("{}__{tool}", grokhub_core::DESKTOP_MCP_SERVER);
+            assert!(!rule_hits(BUILTIN_CU_DENY, "MCPTool", &path_a), "path A must stay open: {path_a}");
+        }
+        for tool in ["gmail__search_threads", "srv__list_files", "browser__fill", "chrome__browser_tab"] {
+            assert!(!rule_hits(BUILTIN_CU_DENY, "MCPTool", tool), "over-deny: {tool}");
+        }
+    }
+
+    #[test]
     fn gb_deny_gaps_are_hard_but_no_rule_can_match_them() {
-        assert_eq!(GB_DENY_GAPS.len(), 7);
+        assert_eq!(GB_DENY_GAPS.len(), 8);
         for (sample, _) in &GB_DENY_GAPS[..5] {
             assert!(hard_shell(sample), "classifier: {sample}");
             assert!(!gb_denies("Bash", sample), "now covered, drop it from the gaps: {sample}");
@@ -942,6 +979,12 @@ mod tests {
         // The desktop tools are one MCP name each; the hard part is in the args.
         assert!(!gb_denies("MCPTool", GB_DENY_GAPS[5].0));
         assert!(!gb_denies("MCPTool", GB_DENY_GAPS[6].0));
+        // GB's own computer use: a built-in name, not `server__tool`, so no
+        // MCPTool rule (hard or path D) can match it. The watchdog checks it.
+        let builtin = GB_DENY_GAPS[7].0;
+        assert_eq!(builtin, "computer_screenshot");
+        assert!(crate::harness::builtin_cu(builtin));
+        assert!(!gb_denies("MCPTool", builtin) && !rule_hits(BUILTIN_CU_DENY, "MCPTool", builtin));
         assert_eq!(
             desk_classify("type", &serde_json::json!({ "text": "hunter22", "label": "Password" })),
             HardHit::Class(HardClass::Credentials)

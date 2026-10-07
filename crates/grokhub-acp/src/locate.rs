@@ -1039,8 +1039,34 @@ pub fn with_hard_deny(mut args: Vec<String>, rules: &[&str]) -> Vec<String> {
     args
 }
 
+/// Spike-1c path D: Grok Build computer-use tools that drive the screen,
+/// mouse, or keyboard, in the only form a GB rule can name them: an MCP tool
+/// that is not the cabin's own `grokhub-desktop`. GB rules name only `Bash`,
+/// `Read`, `Edit`/`Write`, `Grep`/`Glob`, `MCPTool`, `WebFetch` and
+/// `WebSearch`, so a built-in (non-MCP) tool such as `computer_screenshot`
+/// has no rule; it is listed in `GB_DENY_GAPS` and the cabin's path D
+/// watchdog checks its frames. None of these match a `grokhub-desktop__*`
+/// tool, so desktop work goes to the gated path A tools.
+pub const BUILTIN_CU_DENY: &[&str] = &[
+    "MCPTool(computer__*)",
+    "MCPTool(computer-use__*)",
+    "MCPTool(computer_use__*)",
+    "MCPTool(*__computer_*)",
+    "MCPTool(*__mouse_*)",
+    "MCPTool(*__keyboard_*)",
+];
+
+/// Deny GB's own computer-use tools when desktop control is off (Readonly),
+/// or when it is on and the pill is Auto or Always (no ask reaches the
+/// cabin). Under Ask they stay: path B classifies each ask.
+pub fn builtin_cu_denied(permission: PermissionMode, desktop: bool) -> bool {
+    !desktop || permission.auto_allows()
+}
+
 /// Desktop allow/deny for every headless `grok -p`. Plan and btw (Ask) deny
 /// the desktop tools even on Auto or Always. Attended Ask never reaches here.
+/// GB's own computer-use tools get [`BUILTIN_CU_DENY`] per [`builtin_cu_denied`]:
+/// only `--deny` pairs, never an allow or a looser mode.
 pub fn apply_desktop_spawn_args(
     args: Vec<String>,
     permission: PermissionMode,
@@ -1055,7 +1081,12 @@ pub fn apply_desktop_spawn_args(
             PermissionMode::Ask => grokhub_core::DesktopPermMode::Ask,
         },
     };
-    grokhub_core::apply_desktop_mcp_args(args, mode, false, enabled)
+    let args = grokhub_core::apply_desktop_mcp_args(args, mode, false, enabled);
+    if builtin_cu_denied(permission, enabled) {
+        with_hard_deny(args, BUILTIN_CU_DENY)
+    } else {
+        args
+    }
 }
 
 pub fn agent_args_resume(
@@ -2177,6 +2208,59 @@ mod tests {
         assert!(
             unreg.contains("grok_stdout_timeout") && !unreg.contains("grok_user_stdout"),
             "desktop MCP remove must use the cabin GROK_HOME runner: {unreg}"
+        );
+    }
+
+    /// The rule after each `--deny` / `--allow` in an argv.
+    fn rules_after<'a>(argv: &'a [String], flag: &str) -> Vec<&'a str> {
+        argv.windows(2).filter(|w| w[0] == flag).map(|w| w[1].as_str()).collect()
+    }
+
+    #[test]
+    fn builtin_cu_deny_follows_access_and_the_pill() {
+        let pills = [PermissionMode::AlwaysApprove, PermissionMode::Auto, PermissionMode::Ask];
+        for perm in pills {
+            for desktop in [true, false] {
+                let base = perm.scheduled_args();
+                let without = grokhub_core::apply_desktop_mcp_args(
+                    base.clone(),
+                    match perm {
+                        PermissionMode::AlwaysApprove => grokhub_core::DesktopPermMode::Always,
+                        PermissionMode::Auto => grokhub_core::DesktopPermMode::Auto,
+                        PermissionMode::Ask => grokhub_core::DesktopPermMode::Ask,
+                    },
+                    false,
+                    desktop,
+                );
+                let argv = apply_desktop_spawn_args(base, perm, SessionMode::Chat, desktop);
+                let denied = rules_after(&argv, "--deny");
+                let want = !desktop || perm != PermissionMode::Ask;
+                assert_eq!(builtin_cu_denied(perm, desktop), want, "{perm:?} desktop={desktop}");
+                for rule in BUILTIN_CU_DENY {
+                    assert_eq!(denied.contains(rule), want, "{perm:?} desktop={desktop}: {rule} in {argv:?}");
+                    assert!(!rules_after(&argv, "--allow").contains(rule), "{argv:?}");
+                }
+                // The only change is `--deny` pairs on the end: no allow, no looser mode.
+                let mut tail = Vec::new();
+                if want {
+                    for rule in BUILTIN_CU_DENY {
+                        tail.push("--deny".to_string());
+                        tail.push((*rule).to_string());
+                    }
+                }
+                assert_eq!(argv, [without, tail].concat(), "{perm:?} desktop={desktop}");
+            }
+        }
+        assert_eq!(
+            BUILTIN_CU_DENY,
+            &[
+                "MCPTool(computer__*)",
+                "MCPTool(computer-use__*)",
+                "MCPTool(computer_use__*)",
+                "MCPTool(*__computer_*)",
+                "MCPTool(*__mouse_*)",
+                "MCPTool(*__keyboard_*)",
+            ]
         );
     }
 
