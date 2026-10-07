@@ -1460,7 +1460,10 @@ pub fn help_text(ui: &mut egui::Ui, text: &str) -> egui::Response {
 pub fn settings_toggle(ui: &mut egui::Ui, title: &str, hint: &str, on: &mut bool) -> bool {
     let mut hit = false;
     ui.horizontal(|ui| {
+        let text_w = settings_toggle_text_width(ui.available_width());
         ui.vertical(|ui| {
+            // A long hint wraps before the switch instead of running under it.
+            ui.set_max_width(text_w);
             ui.add_space(6.0);
             ui.label(RichText::new(title).size(15.0).color(crate::theme::fg()));
             if !hint.is_empty() {
@@ -1478,8 +1481,17 @@ pub fn settings_toggle(ui: &mut egui::Ui, title: &str, hint: &str, on: &mut bool
     hit
 }
 
+/// Settings switch track width and the gap kept between a toggle's text and its switch.
+const SETTINGS_SWITCH_W: f32 = 40.0;
+const SETTINGS_TOGGLE_GAP: f32 = 16.0;
+
+/// Text column width for a Settings toggle row: the row minus the switch and a gap.
+pub fn settings_toggle_text_width(row: f32) -> f32 {
+    (row - SETTINGS_SWITCH_W - SETTINGS_TOGGLE_GAP).max(0.0)
+}
+
 pub fn settings_switch(ui: &mut egui::Ui, on: bool) -> bool {
-    finish_switch(paint_switch(ui, on, egui::vec2(40.0, 24.0)), on)
+    finish_switch(paint_switch(ui, on, egui::vec2(SETTINGS_SWITCH_W, 24.0)), on)
 }
 
 /// Compact on/off for an Automations job row. About 28×16, tooltip "Enabled".
@@ -2833,6 +2845,40 @@ fn take_tile_metrics() -> Vec<TileMetric> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_toggle_hint_wraps_before_the_switch() {
+        assert_eq!(settings_toggle_text_width(600.0), 544.0);
+        assert_eq!(settings_toggle_text_width(30.0), 0.0);
+        let hint = "Grok can see the screen and use the mouse and keyboard through GrokHub. Ask still asks first. Deletes, sends, money and credentials always ask.";
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 400.0))),
+            ..Default::default()
+        };
+        let mut row_right = 0.0_f32;
+        let out = crate::theme::test_pass(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                row_right = ui.max_rect().right();
+                let mut on = true;
+                assert!(!settings_toggle(ui, "Let Grok control the desktop", hint, &mut on));
+            });
+        });
+        let mut hint_right = None;
+        for clipped in &out.shapes {
+            if let egui::Shape::Text(t) = &clipped.shape {
+                if t.galley.text().starts_with("Grok can see") {
+                    hint_right = Some(t.pos.x + t.galley.rect.right());
+                }
+            }
+        }
+        let hint_right = hint_right.expect("hint painted");
+        assert!(
+            hint_right <= row_right - SETTINGS_SWITCH_W - SETTINGS_TOGGLE_GAP + 0.5,
+            "hint runs under the switch: {hint_right} vs row {row_right}"
+        );
+    }
 
     #[test]
     fn help_text_paints_backticks_as_code_not_literals() {
