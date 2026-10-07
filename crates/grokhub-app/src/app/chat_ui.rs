@@ -1630,6 +1630,7 @@ impl Cabin {
     /// `/skills undo` is marked as theirs (`typed_send`).
     pub(super) fn send_from_composer(&mut self, text: String) {
         self.pin_chat_tail();
+        self.heartbeat_user_sent();
         self.harness.typed_send = true;
         self.send_chat(text);
         self.harness.typed_send = false;
