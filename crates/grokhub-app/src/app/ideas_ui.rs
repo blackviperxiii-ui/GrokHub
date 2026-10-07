@@ -606,7 +606,9 @@ impl Cabin {
         }
         self.new_thread(false);
         self.nav = Nav::Chat;
-        self.send_from_composer(text.to_string());
+        // Idea text is model-written: follow it down, but not as the user's typing.
+        self.pin_chat_tail();
+        self.send_chat(text.to_string());
         Ok("Sent to chat".into())
     }
 
