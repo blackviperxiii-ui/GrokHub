@@ -65,6 +65,23 @@ pub struct NodeDraft {
     pub confidence: f32,
     pub tags: Vec<String>,
     pub body: String,
+    /// Which tier the file lands in (harness design §12 P1/P4).
+    pub sensitivity: Sensitivity,
+}
+
+/// The tier of a learned node. Plain stays readable markdown; personal and
+/// sensitive are sealed at rest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sensitivity {
+    Plain,
+    Personal,
+    Sensitive,
+}
+
+impl Sensitivity {
+    pub fn sealed(self) -> bool {
+        !matches!(self, Self::Plain)
+    }
 }
 
 /// Validated node id. `[a-z0-9-]`, 1..=96 bytes, not starting with `-`.

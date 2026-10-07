@@ -20,12 +20,25 @@
 //! the Pulse ledger. `forget` lands in M1+ (a tombstone, not a silent delete).
 //! Scratch is a flag on [`AmrStore`]: `remember` and `link` then return
 //! [`AmrError::Scratch`] and write nothing.
+//!
+//! Spike-4b tiers: a [`Sensitivity::Plain`] node stays `nodes/<id>.md`. A
+//! personal or sensitive node is sealed at rest as `nodes/<id>.sealed` by the
+//! store's [`Sealer`] (AEAD, key in the OS keyring; grokhub-agent provides
+//! it). No sealer, or a locked one, means [`AmrError::Paused`] and no write.
+//! This crate stays free of crypto: it only calls the trait.
 
 mod schema;
 mod store;
 
-pub use schema::{Edge, EdgeRel, Node, NodeDraft, NodeHit, NodeId, NodeType, AMR_SCHEMA};
-pub use store::AmrStore;
+pub use schema::{Edge, EdgeRel, Node, NodeDraft, NodeHit, NodeId, NodeType, Sensitivity, AMR_SCHEMA};
+pub use store::{AmrStore, RecallReport};
+
+/// Seals and opens personal and sensitive nodes. `aad` binds a node to its id.
+/// Errors are plain sentences for the user and never carry key material.
+pub trait Sealer: Send + Sync {
+    fn seal(&self, aad: &str, plain: &str) -> Result<String, String>;
+    fn open(&self, aad: &str, sealed: &str) -> Result<String, String>;
+}
 
 /// Why a schema, store, or adapter call refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +65,9 @@ pub enum AmrError {
     Io(String),
     /// One `edges.jsonl` line was not an edge object.
     BadEdge(String),
+    /// A personal or sensitive node can't be sealed right now (no keyring,
+    /// missing key). Learning pauses; nothing was written.
+    Paused(String),
 }
 
 impl std::fmt::Display for AmrError {
@@ -68,6 +84,7 @@ impl std::fmt::Display for AmrError {
             Self::Unsupported => write!(f, "this memory backend does not support that write"),
             Self::Io(detail) => write!(f, "amr io: {detail}"),
             Self::BadEdge(detail) => write!(f, "bad amr edge: {detail}"),
+            Self::Paused(why) => write!(f, "learning paused: {why}"),
         }
     }
 }
@@ -197,6 +214,7 @@ Second line.
             confidence: 0.9,
             tags: vec!["dock".into()],
             body: body.into(),
+            sensitivity: Sensitivity::Plain,
         }
     }
 
@@ -542,6 +560,7 @@ Glow stays white.
                 confidence: 1.0,
                 tags: vec!["plain".into(), secret.into()],
                 body: format!("see {secret} now\n"),
+                sensitivity: Sensitivity::Plain,
             })
             .unwrap();
         assert_eq!(written.as_str(), "fact-key");
@@ -585,5 +604,73 @@ Glow stays white.
             .iter()
             .any(|hit| hit.contains("n20") || hit.contains("broken")));
         assert!(store.recall("not a node").is_empty());
+    }
+
+    /// A stand-in sealer for core tests (the real one is ChaCha20-Poly1305 in
+    /// grokhub-agent): hex with a label, refusing a wrong label or when "locked".
+    struct FakeSealer {
+        locked: std::sync::atomic::AtomicBool,
+    }
+
+    impl Sealer for FakeSealer {
+        fn seal(&self, aad: &str, plain: &str) -> Result<String, String> {
+            if self.locked.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err("Private data is locked".into());
+            }
+            Ok(format!("fake:{}:{}", hex::encode(aad), hex::encode(plain)))
+        }
+        fn open(&self, aad: &str, sealed: &str) -> Result<String, String> {
+            if self.locked.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err("Private data is locked".into());
+            }
+            let rest = sealed
+                .strip_prefix(&format!("fake:{}:", hex::encode(aad)))
+                .ok_or("wrong node")?;
+            String::from_utf8(hex::decode(rest).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+        }
+    }
+
+    #[test]
+    fn personal_nodes_are_sealed_and_a_locked_sealer_writes_nothing() {
+        let tmp = Tmp::new("sealed");
+        let sealer = std::sync::Arc::new(FakeSealer { locked: false.into() });
+        let store = AmrStore::at(&tmp.path).with_sealer(sealer.clone());
+        store.init().unwrap();
+        let personal = NodeDraft { sensitivity: Sensitivity::Personal, ..draft("fact-home", "Home harbor is Pier 9.") };
+        store.remember(&personal).unwrap();
+        store.remember(&draft("fact-dock", "Dock layout is plain.")).unwrap();
+        let sealed = tmp.path.join("nodes/fact-home.sealed");
+        let text = std::fs::read_to_string(&sealed).unwrap();
+        assert!(!text.contains("Pier 9") && !text.contains("harbor"), "{text}");
+        assert!(!tmp.path.join("nodes/fact-home.md").exists());
+        assert!(tmp.path.join("nodes/fact-dock.md").exists(), "plain nodes stay plain");
+        let hits = store.recall("pier");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "fact-home");
+        assert_eq!(store.remember(&personal), Err(AmrError::DuplicateId("fact-home".into())));
+        assert_eq!(
+            store.remember(&NodeDraft { sensitivity: Sensitivity::Plain, ..personal.clone() }),
+            Err(AmrError::DuplicateId("fact-home".into())),
+            "a sealed id can't be shadowed by a plain one"
+        );
+        store.link("fact-home", "fact-dock", EdgeRel::References).unwrap();
+
+        // Locked: recall skips sealed nodes and says so; writes pause and leave no file.
+        sealer.locked.store(true, std::sync::atomic::Ordering::SeqCst);
+        let report = store.recall_report("pier");
+        assert!(report.hits.is_empty());
+        assert_eq!(report.locked, 1);
+        assert_eq!(report.why.as_deref(), Some("Private data is locked"));
+        assert_eq!(store.recall("layout").len(), 1, "plain nodes still recall");
+        let more = NodeDraft { sensitivity: Sensitivity::Sensitive, ..draft("fact-card", "Card ends 4242.") };
+        assert_eq!(store.remember(&more), Err(AmrError::Paused("Private data is locked".into())));
+        assert!(!tmp.path.join("nodes/fact-card.sealed").exists());
+        assert!(!tmp.path.join("nodes/fact-card.md").exists(), "never a plaintext fallback");
+
+        // No sealer at all (a store opened without one): same, fail closed.
+        let bare = AmrStore::at(&tmp.path);
+        assert_eq!(bare.recall_report("pier").locked, 1);
+        assert!(matches!(bare.remember(&more), Err(AmrError::Paused(_))));
+        assert_eq!(std::fs::read_to_string(&sealed).unwrap(), text, "nothing dropped");
     }
 }

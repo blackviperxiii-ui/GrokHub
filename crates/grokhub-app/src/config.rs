@@ -825,9 +825,21 @@ pub fn hold_test_config() -> std::sync::MutexGuard<'static, ()> {
     TEST_CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Tests never touch the OS keyring: one in-memory key store for the process.
+#[cfg(test)]
+pub fn use_test_key_store() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        grokhub_agent::harness::set_default_key_store(std::sync::Arc::new(
+            grokhub_agent::harness::MemoryKeyStore::new(),
+        ));
+    });
+}
+
 /// Isolated `GROKHUB_CONFIG` root so parallel tests do not share one temp tree.
 #[cfg(test)]
 pub fn test_config_root(label: &str) -> std::path::PathBuf {
+    use_test_key_store();
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     std::env::temp_dir().join(format!("grokhub-{label}-{}-{n}", std::process::id()))

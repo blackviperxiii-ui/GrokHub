@@ -173,6 +173,7 @@ mod board_ui;
 mod confirm;
 mod harness_ui;
 mod privacy_ui;
+mod scope_ui;
 mod skill_undo;
 mod glance;
 mod sidebar;
@@ -1438,6 +1439,7 @@ impl Cabin {
 
     #[cfg(test)]
     pub(super) fn quiet_for_test() -> Self {
+        crate::config::use_test_key_store();
         let (grok_sessions_tx, grok_sessions_rx) = mpsc::channel();
         let cfg = AppConfig::default();
         Self {
@@ -3250,7 +3252,11 @@ impl Cabin {
                 self.sync_rx = Some(rx);
             }
             Err(mpsc::TryRecvError::Disconnected) => {
-                self.status = "Hub sync failed".into();
+                // A send that couldn't be logged (locked private data) never left.
+                self.status = match grokhub_agent::harness::read_key(&config::config_dir(), false) {
+                    Some(Err(why)) => format!("Hub sync not sent: {}", why.short()),
+                    _ => "Hub sync failed".into(),
+                };
             }
         }
     }
