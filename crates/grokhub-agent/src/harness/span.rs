@@ -38,6 +38,36 @@ pub struct Span {
     /// Pre/post screenshot hash differed. `None` when not measured.
     #[serde(default)]
     pub ui_changed: Option<bool>,
+    /// Who started the step (harness design §12.0 rule 1). Old lines read as `user`.
+    #[serde(default)]
+    pub origin: Origin,
+    /// The consent grant that allowed this step (`g-…`, or `approved-once`). Empty when none applied.
+    #[serde(default)]
+    pub consent_ref: String,
+}
+
+/// Who started a step. Every origin goes through `harness::decide`; none skips it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Origin {
+    #[default]
+    User,
+    Proactive,
+    Automation,
+    SelfManage,
+    Repair,
+}
+
+impl Origin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Proactive => "proactive",
+            Self::Automation => "automation",
+            Self::SelfManage => "self_manage",
+            Self::Repair => "repair",
+        }
+    }
 }
 
 impl Span {
@@ -66,6 +96,8 @@ impl Span {
             chat_id: String::new(),
             turn: 0,
             ui_changed: None,
+            origin: Origin::User,
+            consent_ref: String::new(),
         }
     }
 
@@ -86,6 +118,8 @@ impl Span {
             chat_id: String::new(),
             turn: 0,
             ui_changed: None,
+            origin: Origin::User,
+            consent_ref: String::new(),
         }
     }
 
@@ -106,6 +140,8 @@ impl Span {
             chat_id: String::new(),
             turn: 0,
             ui_changed: None,
+            origin: Origin::User,
+            consent_ref: String::new(),
         }
     }
 
@@ -126,6 +162,8 @@ impl Span {
             chat_id: String::new(),
             turn: 0,
             ui_changed: None,
+            origin: Origin::User,
+            consent_ref: String::new(),
         }
     }
 
@@ -145,6 +183,22 @@ impl Span {
     pub fn with_ui_changed(mut self, changed: Option<bool>) -> Self {
         self.ui_changed = changed;
         self
+    }
+
+    pub fn from_origin(mut self, origin: Origin) -> Self {
+        self.origin = origin;
+        self
+    }
+
+    /// Tag the consent grant that allowed the step.
+    pub fn with_consent(mut self, grant_id: &str) -> Self {
+        self.consent_ref = grant_id.into();
+        self
+    }
+
+    /// `{session}:{ts_ms}`, how `egress.jsonl` points at a span.
+    pub fn span_ref(&self) -> String {
+        format!("{}:{}", self.session_id, self.ts_ms)
     }
 }
 
@@ -354,5 +408,33 @@ mod tests {
         let back: Span = serde_json::from_str(old).unwrap();
         assert_eq!(back.ui_changed, None);
         assert_eq!(back.turn, 0);
+    }
+
+    #[test]
+    fn old_span_files_still_read_with_origin_user_and_no_consent_ref() {
+        let (dir, _guard) = temp_dir_named("old-origin");
+        let path = span_path(&dir, "chat-old");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // A Spike-0 line (path / chat_id / turn / ui_changed) and a pre-Spike-0 line.
+        let spike0 = r#"{"session_id":"chat-old","ts_ms":5,"tool":"click","args_redacted":"{}","result":"ok","claim":"c","access":"supervised","approval_class":"soft","decision":"allow","driver":"grok_build","hard_approved":false,"path":"A","chat_id":"chat-old","turn":2,"ui_changed":true}"#;
+        let older = r#"{"session_id":"chat-old","ts_ms":6,"tool":"t","args_redacted":"{}","result":"","claim":"","access":"","approval_class":"soft","decision":"allow","driver":"none"}"#;
+        std::fs::write(&path, format!("{spike0}\n{older}\n")).unwrap();
+        let got = read_spans(&dir, "chat-old").unwrap();
+        assert_eq!(got.len(), 2);
+        for s in &got {
+            assert_eq!(s.origin, Origin::User);
+            assert_eq!(s.consent_ref, "");
+        }
+        assert_eq!(got[0].path, "A");
+        assert_eq!(got[0].ui_changed, Some(true));
+
+        let tagged = Span::soft_allow("chat-old", "hub_sync", "{}", "sent", "c", AccessMode::Readonly, "none")
+            .from_origin(Origin::Automation)
+            .with_consent("g-0123456789ab");
+        let line = serde_json::to_string(&tagged).unwrap();
+        assert!(line.ends_with(r#","origin":"automation","consent_ref":"g-0123456789ab"}"#), "{line}");
+        let back: Span = serde_json::from_str(&line).unwrap();
+        assert_eq!(back, tagged);
+        assert_eq!(tagged.span_ref(), format!("chat-old:{}", tagged.ts_ms));
     }
 }

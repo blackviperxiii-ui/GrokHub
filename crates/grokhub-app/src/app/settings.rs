@@ -1039,6 +1039,7 @@ impl Cabin {
         if draft.action.is_empty() {
             draft.action = "allow".into();
         }
+        self.ui_privacy_rows(ui);
         let workspace = self.grok_cwd();
         let dir = grokhub_agent::perm::config_dir();
         crate::cards::settings_note(

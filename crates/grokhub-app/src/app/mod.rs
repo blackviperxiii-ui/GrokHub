@@ -172,6 +172,7 @@ mod pulse_ui;
 mod board_ui;
 mod confirm;
 mod harness_ui;
+mod privacy_ui;
 mod glance;
 mod sidebar;
 mod pages;
@@ -2961,11 +2962,25 @@ impl Cabin {
         self.send_chat(task);
     }
 
+    /// `/sync` asks the EgressGuard first (Spike-4a, `gate_hub_sync`): chats
+    /// and memory leave for paired computers only with a hub grant or one
+    /// click on the hard Send card.
     fn sync_hub(&mut self) {
         if self.sync_rx.is_some() {
             self.status = "Syncing…".into();
             return;
         }
+        self.gate_hub_sync();
+    }
+
+    /// The hub publish. Only `gate_hub_sync` (granted) and an approved hard
+    /// card (`HubSend::Once`) call it.
+    fn run_hub_sync(&mut self, send: privacy_ui::HubSend) {
+        if self.sync_rx.is_some() {
+            self.status = "Syncing…".into();
+            return;
+        }
+        let span_ref = self.hub_sync_span(&send);
         if !self.scratch() {
             let name = self.mem_name.clone();
             let body = self.mem_body.clone();
@@ -3020,6 +3035,26 @@ impl Cabin {
             let _pin = pin_scheduled_dir(dir.clone());
             if let Ok(_g) = io.lock() {
                 write_persist_disk_in_order(&dir, &snap, gen, &mark);
+            }
+            // EgressGuard: log the send (no content) or send nothing. A grant
+            // revoked since the click blocks here; dropping `tx` reads as failed.
+            let egress = grokhub_agent::harness::EgressReq {
+                span_id: &span_ref,
+                ..grokhub_agent::harness::EgressReq::new(
+                    grokhub_agent::harness::HUB_DEST,
+                    grokhub_agent::harness::HUB_SYNC_DATA,
+                )
+            };
+            let sent = match send {
+                privacy_ui::HubSend::Once => {
+                    grokhub_agent::harness::record_approved_once(&dir, &egress).is_ok()
+                }
+                privacy_ui::HubSend::Grant(_) => {
+                    grokhub_agent::harness::guard_egress(&dir, &egress).is_allow()
+                }
+            };
+            if !sent {
+                return;
             }
             let mem = mem
                 .into_iter()
@@ -4862,6 +4897,7 @@ impl eframe::App for Cabin {
         self.poll_mem_restore();
         self.poll_mem_file();
         self.poll_recall();
+        self.poll_privacy();
         self.poll_native_memory();
         self.drain_native_unattended_usage();
         self.poll_sync();
@@ -4977,6 +5013,7 @@ impl eframe::App for Cabin {
                 || self.mem_restore_rx.is_some()
                 || self.mem_file_rx.is_some()
                 || self.recall_rx.is_some()
+                || self.harness.privacy_rx.is_some()
                 || self.sync_rx.is_some()
                 || self.inhabit_rx.is_some()
                 || self.reflect_rx.is_some()

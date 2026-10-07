@@ -4,7 +4,7 @@ use crate::gate::{DeskFlags, Gate};
 use crate::harness::access::AccessMode;
 use crate::harness::approval::{decide, decide_harness, GateOutcome, Step};
 use crate::harness::hard::HardClass;
-use crate::harness::span::{append_span, redact_args, Span};
+use crate::harness::span::{append_span, redact_args, Origin, Span};
 use crate::tools::ToolOutput;
 use std::path::Path;
 
@@ -66,6 +66,8 @@ pub fn grok_build_click(req: ClickRequest<'_>) -> ClickOutcome {
                 chat_id: String::new(),
                 turn: 0,
                 ui_changed: None,
+                origin: Origin::User,
+                consent_ref: String::new(),
             };
             let _ = append_span(req.config_dir, &span);
             ClickOutcome::Parked(reason)

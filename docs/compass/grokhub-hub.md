@@ -24,6 +24,7 @@
 - `serve` binds `0.0.0.0`, so the hub is LAN-visible by design; pairing (15 min codes, burned after 10 wrong guesses) is the gate.
 - Standalone `main.rs` finds state via `GROKHUB_CONFIG`, then `HOME/.config/GrokHub`, then the cwd; it does not use `%APPDATA%` like `config_dir()` in grokhub-app.
 - `HUB_KIND` (`grokhub-hub-v1`) is what `--doctor` and FFI clients probe; changing it is a protocol break.
+- The cabin only fills `HubState.snapshot` after the `hub` destination grant or a one-time hard Send approve (`privacy_ui.rs`); revoking clears it. The `/v1/snapshot` route itself is unchanged.
 - Voice minting needs a console API key that is never written to `hub-state.json`; tests stub the xAI call.
 ## See also
 - [grokhub-core](grokhub-core.md), [grokhub-ffi](grokhub-ffi.md), [install-scripts](install-scripts.md)
