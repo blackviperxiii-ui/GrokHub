@@ -4,6 +4,8 @@
 
 Approval cards share one width (up to 520px) and one "N things need a decision" line. A hard action uses a danger Approve on a 2px frame, Deny stays a ghost, and the note says Esc denies (Enter still does not approve). Commands and tool ids are monospace; notes stay proportional. The Grant full card stays hidden unless `GROKHUB_GRANT_FULL=1`, and it says click and type skip asking while deletes, sends, money and credentials still ask. A finished tool no longer repeats a stale "running" next to its completed chip. The agent cursor has a dark outline, and the desktop toggle names that hard floor. No version bump.
 
+AMR M0: a local agent-memory schema under `amr/` in the config directory, plus a `/recall` read path. The default stays legacy SOUL/USER/MEMORY. Opt in with `"memory_backend": "amr"` in `app.json`. No Settings control, no migration, and `amr/` is not hub-synced. No version bump.
+
 Spike-0 harness: the cabin adds a stricter pre-check on top of Grok Build. GB still owns Ask / Auto / Always and computer use; the cabin never loosens it. What the pre-check does:
 
 - **Hard floor deny, no bypass:** credential paths, `rm -rf /`, fork bomb, `mkfs`, `dd` to a disk, and `curl|sh` as root.

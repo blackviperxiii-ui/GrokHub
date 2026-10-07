@@ -10876,6 +10876,127 @@ fn recall_finds_a_memory_line_and_reports_a_miss() {
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
+fn wait_recall(cabin: &mut super::Cabin) -> String {
+    let start = std::time::Instant::now();
+    while cabin.recall_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(2) {
+        cabin.poll_recall();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        cabin.recall_rx.is_none(),
+        "recall did not finish: {}",
+        cabin.status
+    );
+    cabin
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.0 == "assistant")
+        .map(|m| m.1.clone())
+        .unwrap_or_default()
+}
+
+#[test]
+fn recall_legacy_finds_memory_line_and_skips_amr() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("recall-legacy-amr");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    assert_eq!(
+        cabin.cfg.memory_backend,
+        grokhub_core::amr::MemoryBackend::Legacy
+    );
+    cabin.mem_name = "MEMORY.md".into();
+    cabin.mem_body = "harbor light\n".into();
+    assert!(!root.join("amr").exists());
+    cabin.run_slash_line("/recall harbor");
+    assert_eq!(cabin.status, "Recalling…");
+    let body = wait_recall(&mut cabin);
+    assert!(
+        body.contains("MEMORY.md:1: harbor light"),
+        "legacy recall missed the memory line: {body}"
+    );
+    assert!(
+        !root.join("amr").exists(),
+        "legacy recall must not create amr/"
+    );
+
+    let store = grokhub_core::amr::AmrStore::at(root.join("amr"));
+    store.init().unwrap();
+    store
+        .remember(&grokhub_core::amr::NodeDraft {
+            id: "fact-harbor".into(),
+            node_type: grokhub_core::amr::NodeType::Fact,
+            created: "2026-10-07T00:00:00Z".into(),
+            updated: "2026-10-07T00:00:00Z".into(),
+            source: "user".into(),
+            confidence: 0.9,
+            tags: vec!["dock".into()],
+            body: "harbor lamp from amr\n".into(),
+        })
+        .unwrap();
+    cabin.run_slash_line("/recall harbor");
+    let body = wait_recall(&mut cabin);
+    assert!(
+        body.contains("MEMORY.md:1: harbor light"),
+        "legacy recall dropped the memory line: {body}"
+    );
+    assert!(
+        !body.contains("amr:"),
+        "legacy recall returned an AMR node: {body}"
+    );
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn recall_amr_returns_seeded_node_not_legacy_memory() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("recall-amr");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+    cabin.mem_name = "MEMORY.md".into();
+    cabin.mem_body = "harbor light\n".into();
+    assert!(!root.join("amr").exists());
+    cabin.run_slash_line("/recall zzznone");
+    assert_eq!(cabin.status, "Recalling…");
+    let miss = wait_recall(&mut cabin);
+    assert_eq!(miss, "SLASH_RESULT:\nNo recall for zzznone");
+    assert!(root.join("amr").join("nodes").is_dir());
+    assert!(root.join("amr").join("edges").is_dir());
+    assert!(root.join("amr").join("dreams").is_dir());
+    let readme = std::fs::read_to_string(root.join("amr").join("README.md")).unwrap();
+    assert!(
+        readme.contains("amr_schema: 1"),
+        "first AMR recall must init the store: {readme}"
+    );
+
+    let store = grokhub_core::amr::AmrStore::at(root.join("amr"));
+    store
+        .remember(&grokhub_core::amr::NodeDraft {
+            id: "pref-harbor".into(),
+            node_type: grokhub_core::amr::NodeType::Preference,
+            created: "2026-10-07T00:00:00Z".into(),
+            updated: "2026-10-07T00:00:00Z".into(),
+            source: "user".into(),
+            confidence: 0.8,
+            tags: vec!["dock".into()],
+            body: "pier light stays on\n".into(),
+        })
+        .unwrap();
+    cabin.run_slash_line("/recall pier");
+    let body = wait_recall(&mut cabin);
+    assert_eq!(body, "SLASH_RESULT:\namr:pref-harbor: pier light stays on");
+    assert!(
+        !body.contains("MEMORY.md"),
+        "AMR recall returned legacy memory: {body}"
+    );
+    assert!(!body.contains("harbor light"), "{body}");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
 // Landed from PR #122.
 #[test]
 fn skills_connectors_and_sessions_without_grok() {

@@ -90,7 +90,7 @@ use grokhub_core::{
     plus_empty_status, plus_menu_rows, push_stream_capped, prefer_patch, presence_should_stream,
     project_menu_acts, project_menu_label, project_title_from_hint, propose_skill_from_turn,
     prune_live_suggestions, ptt_after_speak, ptt_after_stt, quiet_hours_active,
-    quiet_hours_choice_label, quiet_hours_menu, quote_for_reply, realtime_can_connect, recall_hits,
+    quiet_hours_choice_label, quiet_hours_menu, quote_for_reply, realtime_can_connect,
     recipe_from_cmds, record_turn, redact_held_secrets, redact_secrets, redirect_prompt,
     refresh_last_stretch, refund_host_reserved,
     remember_chip_click, remember_chip_dismiss, remember_chip_outcome, remember_home_slash,

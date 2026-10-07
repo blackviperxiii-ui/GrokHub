@@ -1,5 +1,6 @@
 //! Shared GrokHub brain. Linux, Windows, and Android must call this — not a second protocol.
 
+pub mod amr;
 pub mod appearance;
 pub mod attach;
 pub mod automation;
@@ -258,6 +259,10 @@ pub use host_plan::{
     retain_held_plan, step_from_cmd, strip_host_cmd_line, yolo_plan_split, HostPlanStep, HostRisk,
 };
 pub use host_safety::{forbidden_reason, mint_host_halt, recall_hits};
+pub use amr::{
+    AmrError, AmrStore, Edge, EdgeRel, LegacyMemory, MemoryBackend, MemoryEngine, Node, NodeDraft,
+    NodeHit, NodeId, NodeType, AMR_SCHEMA,
+};
 pub use hub_sync::{
     build_hub_snapshot, is_hub_snapshot, merge_hub_snapshots, HubMemoryFile, HubSnapshot,
 };
