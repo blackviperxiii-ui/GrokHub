@@ -35,7 +35,7 @@ These rules apply to every contributor and every bot (Cursor, Claude, GrokHub). 
 
 - `./scripts/install.sh --user --channel beta` switches a Linux install to beta.
 - `./scripts/install.sh --user --channel stable` switches it back to `main`.
-- See the README's **Channels** section for details.
+- See the **Channels** section of [docs/REFERENCE.md](docs/REFERENCE.md) for details.
 
 ## Branch cleanup
 After merge or close, delete your head branch. Scratch branches go as soon as the proof is done. Never delete `main` or `beta`.
