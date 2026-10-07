@@ -12,6 +12,7 @@ The format follows Meta's "compass, not encyclopedia" write-up (Engineering at M
 | [grokhub-acp](grokhub-acp.md) | `crates/grokhub-acp/`: the `grok` CLI client, ACP, headless `grok -p`, cabin `GROK_HOME` |
 | [grokhub-agent](grokhub-agent.md) | `crates/grokhub-agent/`: the native Lab engine |
 | [harness](harness.md) | `crates/grokhub-agent/src/harness/`: Spike-0 approval gate, paths A/B/C/E |
+| [repair](repair.md) | `crates/grokhub-agent/src/repair/`: Spike-8b read-only diagnose, `/diagnose`, apply later |
 | [grokhub-app](grokhub-app.md) | `crates/grokhub-app/`: the `grokhub` binary and its launch modes |
 | [app-module](app-module.md) | `crates/grokhub-app/src/app/`: the `Cabin` UI and its tests |
 | [app-config](app-config.md) | `crates/grokhub-app/src/config.rs`: `app.json` and safe disk stores |

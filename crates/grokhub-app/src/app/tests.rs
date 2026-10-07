@@ -27096,3 +27096,50 @@ fn heartbeat_halt_skips_every_organ_that_starts_work() {
         "Halt holds the pulse before anything else: {halt}"
     );
 }
+
+fn wait_diagnose(cabin: &mut Cabin) {
+    let start = std::time::Instant::now();
+    while cabin.harness.diagnose_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(4) {
+        cabin.poll_diagnose();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn wifi_intent_without_system_state_runs_no_probe_and_posts_the_ask() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("diagnose-intent");
+    std::fs::create_dir_all(&root).unwrap();
+    let before = cabin.messages.len();
+    cabin.send_chat("my wifi doesn't work".into());
+    assert!(!cabin.running, "a diagnose intent never reaches the model");
+    wait_diagnose(&mut cabin);
+    assert_eq!(cabin.messages.len(), before + 2);
+    assert_eq!(cabin.messages[before], ("user".into(), "my wifi doesn't work".into()));
+    assert_eq!(cabin.messages[before + 1], ("assistant".into(), grokhub_agent::repair::SCOPE_ASK.into()));
+    let trace = cabin.threads.get(cabin.thread_idx).map(|t| t.id.clone()).unwrap_or_else(|| "session".into());
+    let spans = hx::read_spans(&root, &trace).unwrap();
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].tool, "diagnose");
+    assert_eq!(spans[0].decision, "deny");
+    assert_eq!(spans[0].origin, hx::Origin::Repair);
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn diagnose_slash_without_system_state_is_a_slash_result_with_the_ask() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("diagnose-slash");
+    std::fs::create_dir_all(&root).unwrap();
+    let before = cabin.messages.len();
+    cabin.run_slash_line("/diagnose");
+    assert!(!cabin.running);
+    wait_diagnose(&mut cabin);
+    assert_eq!(cabin.messages.len(), before + 1);
+    let (role, body) = cabin.messages.last().cloned().unwrap();
+    assert_eq!(role, "assistant");
+    assert!(grokhub_core::is_cabin_slash_turn(&role, &body), "stays out of the next model kick");
+    assert!(body.ends_with(grokhub_agent::repair::SCOPE_ASK), "{body}");
+    release_isolated(&root, cabin);
+}
