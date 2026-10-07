@@ -89,6 +89,13 @@ pub enum Slash {
     Inspect,
     Loop(String),
     GrokSkills,
+    /// `/skills changes` (and bare `/skills undo`): what GrokHub changed in
+    /// your skills, with an Undo click per skill.
+    SkillChanges,
+    /// `/skills undo <name>`: put back the version before the newest change.
+    SkillUndo(String),
+    /// `/skills restore <name>`: bring back a skill that was removed.
+    SkillRestore(String),
     GrokConnectors,
     /// `/hooks` — Connectors tab, Hooks section.
     GrokHooks,
@@ -183,7 +190,7 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/workflow" if rest.is_empty() => Some(Slash::GrokWorkflows),
         "/workflow" => Some(parse_workflow_arg(rest)),
         "/worktree" => Some(Slash::Worktree),
-        "/skills" => Some(Slash::GrokSkills),
+        "/skills" => Some(parse_skills_arg(rest)),
         "/workflows" => Some(Slash::GrokWorkflows),
         "/plugins" | "/marketplace" | "/mcps" | "/connectors" => Some(Slash::GrokConnectors),
         "/hooks" => Some(Slash::GrokHooks),
@@ -292,6 +299,21 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/export" if rest.is_empty() => Some(Slash::Export),
         "/export" => Some(Slash::ExportAs(rest.to_string())),
         _ => None,
+    }
+}
+
+/// `/skills undo|restore <name>` and `/skills changes`. Anything else stays the catalog.
+fn parse_skills_arg(rest: &str) -> Slash {
+    let mut parts = rest.splitn(2, char::is_whitespace);
+    let head = parts.next().unwrap_or("").to_ascii_lowercase();
+    let name = parts.next().unwrap_or("").trim();
+    match head.as_str() {
+        "changes" | "history" => Slash::SkillChanges,
+        "undo" if name.is_empty() => Slash::SkillChanges,
+        "undo" => Slash::SkillUndo(name.to_string()),
+        "restore" if !name.is_empty() => Slash::SkillRestore(name.to_string()),
+        "restore" => Slash::SkillChanges,
+        _ => Slash::GrokSkills,
     }
 }
 
@@ -421,6 +443,9 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Inspect => "inspect",
         Slash::Loop(_) => "loop",
         Slash::GrokSkills => "grok_skills",
+        Slash::SkillChanges => "skill_changes",
+        Slash::SkillUndo(_) => "skill_undo",
+        Slash::SkillRestore(_) => "skill_restore",
         Slash::GrokConnectors => "grok_connectors",
         Slash::GrokHooks => "grok_hooks",
         Slash::GrokWorkflows => "grok_workflows",
@@ -516,6 +541,9 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/inspect", hint: "Inspect Grok Build config", insert: "/inspect", run_on_pick: true },
     SlashDef { cmd: "/loop", hint: "Schedule a Grok /loop…", insert: "/loop ", run_on_pick: false },
     SlashDef { cmd: "/skills", hint: "Grok Build skills", insert: "/skills", run_on_pick: true },
+    SlashDef { cmd: "/skills changes", hint: "What GrokHub changed in your skills", insert: "/skills changes", run_on_pick: true },
+    SlashDef { cmd: "/skills undo", hint: "Undo the newest change to a skill…", insert: "/skills undo ", run_on_pick: false },
+    SlashDef { cmd: "/skills restore", hint: "Bring back a removed skill…", insert: "/skills restore ", run_on_pick: false },
     SlashDef { cmd: "/plugins", hint: "Grok Build plugins and marketplace", insert: "/plugins", run_on_pick: true },
     SlashDef { cmd: "/mcps", hint: "Grok Build MCP servers", insert: "/mcps", run_on_pick: true },
     SlashDef { cmd: "/hooks", hint: "Grok Build hooks", insert: "/hooks", run_on_pick: true },
@@ -660,6 +688,9 @@ pub fn slash_help() -> String {
         "/loop [30m] <prompt> — Grok Build interval scheduler",
         "every weekday at 9, <task> — clock job on Automations; saving it posts a schedule card on the home update feed",
         "/skills — skills catalog: cabin skills and the Grok Build list",
+        "/skills changes — what GrokHub changed in your skills on its own, each with Undo",
+        "/skills undo <name> — put back the version before the newest change (typed by you or clicked; a removed skill comes back)",
+        "/skills restore <name> — bring back a skill that was removed, from its kept copy",
         "/plugins /marketplace /mcps — connectors",
         "/hooks — open Connectors with the Hooks section in view",
         "/model <id> — grok -p --model",
@@ -824,6 +855,22 @@ mod tests {
         assert!(!unknown_cabin_slash("/workflow runs"));
         assert_eq!(parse_slash("/loop 30m check deploy").as_ref().map(slash_kind), Some("loop"));
         assert_eq!(parse_slash("/skills"), Some(Slash::GrokSkills));
+        assert_eq!(parse_slash("/skills list"), Some(Slash::GrokSkills));
+        assert_eq!(parse_slash("/skills changes"), Some(Slash::SkillChanges));
+        assert_eq!(parse_slash("/skills undo"), Some(Slash::SkillChanges));
+        assert_eq!(parse_slash("/skills restore"), Some(Slash::SkillChanges));
+        assert_eq!(
+            parse_slash("/skills UNDO weekly-report"),
+            Some(Slash::SkillUndo("weekly-report".into()))
+        );
+        assert_eq!(
+            parse_slash("/skills restore board status"),
+            Some(Slash::SkillRestore("board status".into()))
+        );
+        assert_eq!(slash_kind(&Slash::SkillUndo("x".into())), "skill_undo");
+        assert_eq!(slash_kind(&Slash::SkillRestore("x".into())), "skill_restore");
+        assert_eq!(slash_kind(&Slash::SkillChanges), "skill_changes");
+        assert!(slash_help().contains("/skills undo <name> — put back the version before the newest change"));
         assert_eq!(parse_slash("/mcps"), Some(Slash::GrokConnectors));
         assert_eq!(parse_slash("/model grok-4.7").as_ref().map(slash_kind), Some("model"));
         assert_eq!(parse_slash("/m grok-4.5").as_ref().map(slash_kind), Some("model"));

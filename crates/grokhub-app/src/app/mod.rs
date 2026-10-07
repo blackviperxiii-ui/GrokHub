@@ -174,6 +174,7 @@ mod confirm;
 mod harness_ui;
 mod privacy_ui;
 mod scope_ui;
+mod skill_undo;
 mod glance;
 mod sidebar;
 mod pages;
@@ -2621,8 +2622,13 @@ impl Cabin {
         };
         let written = to_save.clone();
         std::thread::spawn(move || {
-            let _ = skills::save_skill(&written);
+            let _ = skills::save_skill_logged(
+                &written,
+                grokhub_agent::harness::Origin::SelfManage,
+                "learned from a host run",
+            );
         });
+        self.harness.skill_rows = None;
         self.remember_skill(to_save.clone());
         self.skill_name = to_save.name.clone();
         self.skill_body = grokhub_core::render_skill_md(&to_save);
@@ -2630,11 +2636,15 @@ impl Cabin {
         self.status = format!("Wrote skill {}", to_save.name);
     }
 
+    /// `SUGGEST_SKILL_PATCH` lines from the nightly review. Each write keeps
+    /// the version it replaces in the ChangeLedger (`/skills undo` puts it
+    /// back), and a patch the user already undid is not written again.
     fn apply_review_skill_patches(&mut self, raw: &str) {
         let patches = parse_suggest_skill_patches(raw);
         if patches.is_empty() {
             return;
         }
+        let ledger = grokhub_agent::harness::ChangeLedger::load(&config::config_dir());
         for p in patches {
             let Some(existing) = self
                 .skill_list
@@ -2655,13 +2665,25 @@ impl Cabin {
                 runs: existing.runs,
             };
             let patched = patch_skill(&existing, &proposed);
+            let after =
+                grokhub_agent::harness::content_hash(grokhub_core::render_skill_md(&patched).as_bytes());
+            if ledger.undone_by_user(&patched.name, &after) {
+                continue;
+            }
             if let Some(s) = self.skill_list.iter_mut().find(|s| s.name == patched.name) {
                 *s = patched.clone();
             }
+            let steps: Vec<&str> = patched.instructions.split_whitespace().collect();
+            let reason = format!("nightly review: {}", steps.join(" "));
             let written = patched;
             std::thread::spawn(move || {
-                let _ = skills::save_skill(&written);
+                let _ = skills::save_skill_logged(
+                    &written,
+                    grokhub_agent::harness::Origin::SelfManage,
+                    &reason,
+                );
             });
+            self.harness.skill_rows = None;
         }
     }
 
