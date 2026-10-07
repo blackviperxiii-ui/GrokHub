@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Removed the scrapped phone/Android pairing: the phone-only hub routes (`/v1/task`, `/v1/task/:id`, `/v1/inbox`, `/v1/results`, `/v1/frame.jpg`, `/v1/voice/client-secret`), the `grokhub-ffi` C ABI crate, and phone wording on Devices, slash help, and the Always sheet. Computer-to-computer pairing, `/sync`, `/inhabit`, `/send`, and desktop voice are unchanged, and an old `hub-state.json` with phone rows still loads. No version bump.
+
 Self-management ledger (Spike-5b). Connections and automations GrokHub adds, changes, or removes on its own now keep the version they replace, show a Work-tree row ("Grok added connection notes") with Undo and Keep, and appear in the next Home update; `/connections changes` and `/automations changes` list them. Agent-made connections land in the cabin's own MCP config (never `~/.grok`), deletes and token-needing connections are hard cards, a token is typed by you and sealed with your keychain key, and GrokHub adds at most 2 automations a week on its own until you keep one.
 
 Safety loop (Spike-1a). The harness now catches a click that changed nothing, a step repeated with no effect, "done" with no check, and a claim no step backs; it retries once, backtracks, then pauses for you (hard actions never retry), and typing into a password, PIN, OTP, 2FA or verification-code field is a hard credentials action whose value never reaches spans or logs. No UI changes.

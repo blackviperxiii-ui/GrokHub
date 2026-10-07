@@ -1,4 +1,4 @@
-//! Shared GrokHub brain. Linux, Windows, and Android must call this — not a second protocol.
+//! Shared GrokHub brain. Linux and Windows call this — not a second protocol.
 
 pub mod amr;
 pub mod appearance;
@@ -220,7 +220,7 @@ pub use feel::{
     PRESS_EXPANSION, PRESS_SECS, SELECT_SECS, ALWAYS_SETTLE_SECS, GLOW_SETTLE_SECS,
 };
 pub use frame::{
-    encode_b64, frame_bytes, jpeg_data_url, store_frame, FrameGet, PresenceFrame, FRAME_CAP,
+    encode_b64, frame_bytes, jpeg_data_url, store_frame, PresenceFrame, FRAME_CAP,
 };
 pub use goal::{
     blend_thread_goal, compact_keep_pin, compact_keep_start_from, flush_visible_goal,
@@ -312,7 +312,7 @@ pub use imagine_auth::{
 };
 pub use xai_signin::{choose_xai_bearer, delete_xai_oauth, load_xai_oauth, OAuthAccountStore};
 pub use inhabit::{
-    can_inhabit, inhabit_bundle_usable, inhabit_claim_allowed, inhabit_ready, InhabitBundle,
+    can_inhabit, inhabit_bundle_usable, inhabit_ready, InhabitBundle,
 };
 pub use learning::{
     apply_local_lessons, extract_insights, insight_key_for_fact, insight_pin, is_actionable_need,
@@ -415,7 +415,7 @@ pub use slash::{
 };
 pub use state::{
     clear_pending_after_complete, inbox_claim_ready, load_hub_state, merge_put_snapshot,
-    save_hub_state, state_for_disk, CompleteError, HubState, MintRealtimeFn, PairError,
+    save_hub_state, state_for_disk, CompleteError, HubState, PairError,
     DEFAULT_PORT, HUB_KIND,
 };
 pub use stream::{
@@ -481,14 +481,13 @@ pub use verify::{
     verify_script_path, VerifyResult,
 };
 pub use voice::{
-    cabin_eyes_for_turn, client_secret_ws_protocol, client_secrets_body, client_secrets_url,
-    dedicated_voice_model, encode_input_audio_append, encode_session_update, hey_grok_on_press,
+    cabin_eyes_for_turn, dedicated_voice_model, encode_input_audio_append, encode_session_update, hey_grok_on_press,
     hey_grok_route, hey_grok_starts_ptt, is_voice_error, live_pcm_argv, live_pcm_frame_bytes,
-    parse_client_secret, parse_realtime_event, parse_stt_text, parse_voice_event_text,
+    parse_realtime_event, parse_stt_text, parse_voice_event_text,
     pcm_from_capture, ptt_after_speak, ptt_after_stt, realtime_can_connect,
     redact_cabin_from_memory, reduce_voice_state, should_attach_cabin_frame,
     should_capture_before_chat, should_mute_speaker, speech_can_connect, stt_multipart, stt_url,
-    transcribe_route, tts_request_body, tts_url, voice_can_connect, voice_client_secret_denied,
+    transcribe_route, tts_request_body, tts_url, voice_can_connect,
     voice_log_role, voice_mode_active, voice_mode_label, voice_session_url, voice_state_after_ptt_stt,
     voice_stream_token, voice_strip_visible, voice_transcript_sends_chat, voice_tts_script,
     CabinEyesState, HeyGrokAction, HeyGrokRoute, PttLine, TranscribeRoute, VoiceEvent, VoiceRole,
@@ -680,12 +679,9 @@ mod tests {
             data_url: "data:image/jpeg;base64,AAAA".into(),
             at: 1,
         }));
-        st.console_api_key = "xai-should-not-persist".into();
         let disk = state_for_disk(&st);
         let s = serde_json::to_string(&disk).unwrap();
         assert!(!s.contains("data:image"));
-        assert!(!s.contains("xai-should-not-persist"));
-        assert!(disk.console_api_key.is_empty());
         assert!(s.contains(&st.device_id));
     }
 }
