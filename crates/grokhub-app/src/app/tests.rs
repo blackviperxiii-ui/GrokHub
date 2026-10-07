@@ -11334,6 +11334,121 @@ fn legacy_reflect_and_note_never_create_amr() {
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
+fn amr_dream_cabin(label: &str) -> (std::path::PathBuf, Cabin) {
+    let root = crate::config::test_config_root(label);
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.new_thread(false);
+    cabin.running = false;
+    cabin.composer.clear();
+    (root, cabin)
+}
+
+fn last_chat_text(cabin: &Cabin) -> String {
+    cabin.messages.last().map(|m| m.1.clone()).unwrap_or_default()
+}
+
+#[test]
+fn amr_dream_runs_once_a_night_and_memory_dream_prints_it() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = amr_dream_cabin("amr-dream");
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+    crate::config::write_memory("USER.md", "- Likes tea\n").unwrap();
+    crate::config::write_memory("SOUL.md", "Be brief.\n").unwrap();
+    let user_before = crate::config::read_memory("USER.md");
+    let soul_before = crate::config::read_memory("SOUL.md");
+    assert_eq!(user_before, "- Likes tea\n");
+
+    cabin.run_slash_line("/memory dream");
+    assert!(last_chat_text(&cabin).contains("No dream yet."), "{}", last_chat_text(&cabin));
+
+    let store = super::amr_memory::amr_store_at(&root);
+    store.init().unwrap();
+    let now = grokhub_core::now_ms();
+    let stamp = grokhub_core::oauth::unix_ms_to_rfc3339(now);
+    for (id, body, confidence) in [
+        ("quay-a", "The quay lantern is green at night", 0.9),
+        ("quay-b", "the quay lantern is green at night.", 0.5),
+    ] {
+        store
+            .remember(&grokhub_core::amr::NodeDraft {
+                id: id.into(),
+                node_type: grokhub_core::amr::NodeType::Fact,
+                created: stamp.clone(),
+                updated: stamp.clone(),
+                source: "user".into(),
+                confidence,
+                tags: vec![],
+                body: format!("{body}\n"),
+                sensitivity: grokhub_core::amr::Sensitivity::Plain,
+            })
+            .unwrap();
+    }
+    let files_before = amr_node_files(&root);
+
+    assert!(cabin.dream_tonight("2026-10-07", REVIEW_NIGHT_HOUR - 1, now).is_none(), "not before the review hour");
+    cabin.running = true;
+    assert!(cabin.dream_tonight("2026-10-07", REVIEW_NIGHT_HOUR, now).is_none(), "never during a turn");
+    cabin.running = false;
+    assert_eq!(cabin.dream_day, None, "a busy night is tried again");
+    cabin.dream_tonight("2026-10-07", REVIEW_NIGHT_HOUR, now)
+        .expect("due")
+        .join()
+        .unwrap();
+    assert!(cabin.dream_tonight("2026-10-07", 23, now).is_none(), "once a night");
+
+    let report = std::fs::read_to_string(root.join("amr").join("dreams").join("2026-10-07.md")).unwrap();
+    assert!(report.starts_with("# Memory dream 2026-10-07\n"), "{report}");
+    assert!(report.contains("- Merged: 1\n"), "{report}");
+    assert!(report.contains("Kept `quay-a`"), "{report}");
+    assert!(store.is_forgotten("quay-b") && !store.is_forgotten("quay-a"));
+    assert_eq!(amr_node_files(&root), files_before, "nothing removed");
+    assert_eq!(crate::config::read_memory("USER.md"), user_before, "USER.md is never written");
+    assert_eq!(crate::config::read_memory("SOUL.md"), soul_before, "SOUL.md is never written");
+
+    cabin.run_slash_line("/memory dream");
+    assert_eq!(cabin.status, "Memory dream");
+    let shown = last_chat_text(&cabin);
+    assert!(shown.contains("# Memory dream 2026-10-07"), "{shown}");
+    assert!(shown.contains("merged `quay-b`"), "{shown}");
+
+    // A new session the same night finds the report and does not run again.
+    let mut later = Cabin::quiet_for_test();
+    later.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+    later.running = false;
+    later.composer.clear();
+    assert!(later.dream_tonight("2026-10-07", REVIEW_NIGHT_HOUR, now).is_none());
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn amr_dream_halt_skips_the_night() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = amr_dream_cabin("amr-dream-halt");
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+    cabin.halt_everything("Stopped");
+    let now = grokhub_core::now_ms();
+    assert!(cabin.dream_tonight("2026-10-07", REVIEW_NIGHT_HOUR, now).is_none());
+    assert_eq!(cabin.dream_day.as_deref(), Some("2026-10-07"), "the night is skipped, not retried");
+    assert!(!root.join("amr").join("dreams").join("2026-10-07.md").exists());
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn legacy_never_dreams_or_creates_amr() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = amr_dream_cabin("legacy-no-dream");
+    let now = grokhub_core::now_ms();
+    assert!(cabin.dream_tonight("2026-10-07", REVIEW_NIGHT_HOUR, now).is_none());
+    cabin.tick_dream();
+    cabin.run_slash_line("/memory dream");
+    assert!(last_chat_text(&cabin).contains("No dream yet."));
+    assert!(!root.join("amr").exists(), "legacy must never create amr/");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
 // Landed from PR #122.
 #[test]
 fn skills_connectors_and_sessions_without_grok() {
@@ -16715,6 +16830,7 @@ fn quiet_cabin() -> Cabin {
         inhabit_rx: None,
         reflect_rx: None,
         amr_imported: false,
+        dream_day: None,
         session_show_rx: None,
         import_rx: None,
         inspect_text: String::new(),
@@ -25120,7 +25236,11 @@ fn bg_ask_spawn_passes_deny_args() {
     let sent = last_grok_argv(&argv);
     let desktop_deny = format!("--deny\n{}", grokhub_core::DESKTOP_MCP_RULE);
     let hard = grokhub_agent::harness::HEADLESS_DENY_RULES.len() + grokhub_acp::CLI_CREDENTIAL_DENY.len();
-    assert_eq!(sent.matches("--deny").count(), 1 + hard, "{sent}");
+    // Spike-1c: Grok Build's own computer-use tools are denied on Auto, with the switch off or on.
+    let cu = grokhub_acp::BUILTIN_CU_DENY.len();
+    let has_cu = |sent: &str| grokhub_acp::BUILTIN_CU_DENY.iter().all(|r| sent.contains(&format!("--deny\n{r}\n")));
+    assert_eq!(sent.matches("--deny").count(), 1 + hard + cu, "{sent}");
+    assert!(has_cu(&sent), "{sent}");
     assert!(sent.contains(&desktop_deny), "{sent}");
     assert!(sent.contains("--deny\nBash(rm -rf /)\n"), "{sent}");
     assert!(sent.contains("--deny\nRead(**/.grok/auth.json)\n"), "{sent}");
@@ -25134,7 +25254,8 @@ fn bg_ask_spawn_passes_deny_args() {
     assert!(started.is_ok(), "{started:?}");
     assert!(poll_until(&mut cabin, 5, |c| c.bg.runs.is_empty()), "auto desktop run ends");
     let sent = last_grok_argv(&argv);
-    assert_eq!(sent.matches("--deny").count(), hard, "{sent}");
+    assert_eq!(sent.matches("--deny").count(), hard + cu, "{sent}");
+    assert!(has_cu(&sent), "{sent}");
     assert!(!sent.contains(&desktop_deny), "{sent}");
     assert!(
         sent.contains(&format!("--allow\n{}", grokhub_core::DESKTOP_MCP_RULE)),

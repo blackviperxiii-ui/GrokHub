@@ -200,6 +200,7 @@ impl Cabin {
                     // Approved on the hard card: Grok's own Allow card asks once.
                     self.harness.oneshot = Some(super::harness_ui::OneShot {
                         action: Some(command),
+                        step: None,
                         restore: self.permission_mode,
                         started: false,
                     });

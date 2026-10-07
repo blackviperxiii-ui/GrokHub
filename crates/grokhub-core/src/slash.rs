@@ -32,6 +32,8 @@ pub enum Slash {
     Forget(Option<String>),
     MemoryNote(String),
     MemoryShow,
+    /// `/memory dream`: the latest AMR dream report, as chat text.
+    MemoryDream,
     Recall(String),
     Board,
     Imagine(String),
@@ -172,6 +174,9 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/memory" => {
             if rest.eq_ignore_ascii_case("show") || rest.is_empty() {
                 return Some(Slash::MemoryShow);
+            }
+            if rest.eq_ignore_ascii_case("dream") {
+                return Some(Slash::MemoryDream);
             }
             let note = rest
                 .strip_prefix("note")
@@ -391,6 +396,7 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Forget(_) => "forget",
         Slash::MemoryNote(_) => "memory",
         Slash::MemoryShow => "memory_show",
+        Slash::MemoryDream => "memory_dream",
         Slash::Recall(_) => "recall",
         Slash::Board => "board",
         Slash::Imagine(_) => "imagine",
@@ -711,6 +717,7 @@ pub fn slash_help() -> String {
         "/board — open Workboards",
         "/skill <name> — run a skill",
         "/memory note <fact> — write MEMORY.md",
+        "/memory dream — show the last overnight memory tidy (memory repo only)",
         "/learn — reflect this chat into MEMORY.md (alias /learn reflect)",
         "/recall <q> — search memory, learned insights, and chats",
         "/forget <topic> — drop memory lines that mention the topic (whole words)",
@@ -797,6 +804,8 @@ mod tests {
             parse_slash("/memory note prefer nvim"),
             Some(Slash::MemoryNote("prefer nvim".into()))
         );
+        assert_eq!(parse_slash("/memory dream"), Some(Slash::MemoryDream));
+        assert_eq!(parse_slash("/dream"), Some(Slash::Dream), "/dream stays the Imagine prompt");
         assert_eq!(parse_slash("/recall pi"), Some(Slash::Recall("pi".into())));
         assert_eq!(parse_slash("/forget wifi"), Some(Slash::Forget(Some("wifi".into()))));
         assert_eq!(parse_slash("/forget"), Some(Slash::Forget(None)));
