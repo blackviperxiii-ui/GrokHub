@@ -32,10 +32,10 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .and_then(|s| s.to_str())
         .ok_or_else(|| "atomic write needs a file name".to_string())?;
     // One temp name per write: two writers of the same file (a background
-    // persist and a ledgered save) must not rename each other's temp away.
-    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let tmp = dir.join(format!(".{name}.{}-{seq}.tmp", std::process::id()));
+    // persist and a ledger save) must not rename each other's temp away.
+    static NEXT_TMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT_TMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!(".{name}.{}-{n}.tmp", std::process::id()));
     // The temp file holds the same bytes as the destination, so it has to be private from
     // the moment it exists. Creating it 0644 and chmodding after the rename leaves the
     // console key and OAuth refresh token world-readable for the whole write.
@@ -1056,13 +1056,12 @@ mod tests {
         let dest = root.join("atomic.json");
         atomic_write(&dest, br#"{"ok":true}"#).expect("atomic");
         assert_eq!(fs::read_to_string(&dest).unwrap(), r#"{"ok":true}"#);
-        let left: Vec<String> = fs::read_dir(&root)
+        let left: Vec<_> = fs::read_dir(&root)
             .unwrap()
-            .flatten()
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n.starts_with(".atomic.json."))
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .filter(|n| n.starts_with(".atomic.json") && n.ends_with(".tmp"))
             .collect();
-        assert_eq!(left, Vec::<String>::new(), "no temp file is left behind");
+        assert_eq!(left, Vec::<String>::new(), "the temp file is renamed away");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
