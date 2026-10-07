@@ -122,7 +122,7 @@ pub fn desk_classify(tool: &str, args: &serde_json::Value) -> HardHit {
         // Read the combo the way the backend will press it, so modifier order
         // and aliases (`Alt+Ctrl+Del`, `control+alt+delete`) gate the same.
         "key" => {
-            let keys = args.get("keys").and_then(|v| v.as_str()).unwrap_or("");
+            let keys = ["keys", "key"].iter().find_map(|k| args.get(*k).and_then(|v| v.as_str())).unwrap_or("");
             match grokhub_core::desktop_mcp::parse_key_combo(keys) {
                 Ok(combo) if session_ending_combo(&combo) => HardHit::Class(HardClass::IrreversibleOs),
                 Ok(combo) if is_delete_combo(&combo) && file_manager_window(args) => HardHit::Class(HardClass::Delete),
