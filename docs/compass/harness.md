@@ -1,20 +1,19 @@
 # Compass: Spike-0 harness (approval gate)
 
 ## Owns
-- The cabin pre-check in front of Grok Build tool execution: hard floor (refuse, no bypass), hard class (park a card, even under Always), and the Access ladder (`AccessMode`: Readonly / Supervised / Full).
+- The cabin pre-check in front of Grok Build tool execution: hard floor (refuse, no bypass), hard class (park a card, even under Always), and the Access ladder (`AccessMode`: Readonly / Supervised / Full). Spike-1a safety loop: detectors in `detect.rs` (`claimed_click_no_change`, `action_loop`, `done_without_criteria`, `unsupported_assurance`, each citing span ids and quoted fields), the two-pass `audit.rs` (pass 1 digests, pass 2 full spans for flagged turns only), and `ladder.rs` (retry once, backtrack, then a soft pause; hard class always pauses). The cabin runs it at turn end (`harness_turn_end`) and writes `reply` / `harness_recovery` spans.
 - One entry, `harness::decide`, for paths A (`grokhub-desktop` MCP), B (ACP ask), C (headless `grok -p` `--deny` rules), and E (native Lab engine). Every step writes a span.
 - Spike-4a trust floor: `ConsentLedger` (`consent.jsonl`, user-click grants only), scopes all off (`Step::Scope`), and `guard_egress` (`Step::Egress`, log in `egress.jsonl`) on cabin-owned xAI calls and `/sync` (only once a computer is paired). Spike-4b seals both files at rest (`at_rest.rs`, key in the OS keyring, fail closed). Spike-5 slice: `ChangeLedger` (`changes/skills.jsonl` plus kept `SKILL.md` copies, `HISTORY_CAP` per skill) under every self-managed skill write; undo and restore need an `UndoAsk`.
 ## Quick commands
-- `cargo test -p grokhub-agent harness::`
-- `cargo test -p grokhub-app harness` (cabin cards; isolate `GROKHUB_CONFIG`)
+- `cargo test -p grokhub-agent harness::`, then `cargo test -p grokhub-app harness` (cabin cards; isolate `GROKHUB_CONFIG`)
 ## Key files
 - `crates/grokhub-agent/src/harness/hard.rs`: `HardClass`, `hard_floor`, `classify`, `classify_ask`, `desk_classify`, `HEADLESS_DENY_RULES`.
 - `crates/grokhub-agent/src/harness/approval.rs`: `decide`, `decide_harness`, `APPROVAL_TTL` (300 s), `hard_card_key`.
 - `crates/grokhub-agent/src/harness/consent.rs` (`Grant`, `Scope`, `UserClick`), `crates/grokhub-agent/src/harness/egress.rs` (`EgressReq`, `EgressLine`, `is_model_host`), `crates/grokhub-agent/src/harness/at_rest.rs` (`LearnedVault`, `KeyStore`, `Locked`), and `crates/grokhub-agent/src/harness/changes.rs` (`record_skill_change`, `undo_skill_change`, `restore_skill`).
-- `crates/grokhub-agent/src/harness/park.rs` and `crates/grokhub-agent/src/harness/span.rs`: park files and span JSONL.
+- `crates/grokhub-agent/src/harness/park.rs` and `crates/grokhub-agent/src/harness/span.rs`: park files and span JSONL. `crates/grokhub-agent/src/harness/detect.rs`, `crates/grokhub-agent/src/harness/audit.rs`, `crates/grokhub-agent/src/harness/ladder.rs`: Spike-1a detectors, audit, and recovery ladder.
 - `crates/grokhub-app/src/app/harness_ui.rs` (cards, paths B/C/E) and `crates/grokhub-app/src/desktop_mcp/harness_gate.rs` (path A).
 ## Change recipe
-- New hard pattern: classify it in `hard.rs`, add the matching `Bash(...)` / `MCPTool(...)` rule to `HEADLESS_DENY_RULES` if GB rules can express it, then bump the literal count in `headless_deny_rules_cover_the_floor_and_stubs` (47 today).
+- New hard pattern: classify it in `hard.rs` (add a head or name word to its const list), add the matching `Bash(...)` / `MCPTool(...)` rules to `HEADLESS_DENY_RULES` (five forms per shell head: bare, `sudo`, after `; `, `&& `, `| `) or a `GB_DENY_GAPS` entry if GB rules can't express it, then bump the literal count in `headless_deny_rules_cover_the_floor_and_stubs` (154 today). `gb_deny_rules_cover_every_hard_name_and_command` fails on a missing rule.
 - New caller: build a `Step` and call `decide`; never add a side path around it. New outbound call: wrap it in `guard_egress` with honest `DataClass` values.
 ## What breaks it
 - Anything that loosens Grok Build: an allow rule, a looser `--permission-mode`, or a `~/.grok` edit. The cabin may only tighten (`docs/superpowers/specs/2026-08-19-grok-build-gui.md`, Spike-0 addendum).
@@ -26,6 +25,7 @@
 - The harness lives in grokhub-agent, not grokhub-core, even though the desktop MCP and ACP paths use it.
 - The floor covers shell commands only (same scope as `host_safety`); read-only tools are never hard class.
 - Park handoff is files: `{config_dir}/harness/park`, plus `harness/turn.json` so the `--mcp-desktop` process writes spans into the open chat's `spans/<chat>.jsonl`. No answer in `APPROVAL_TTL`, a halt, or a closed cabin means Deny.
+- A Steer keeps every parked card (`take_parks_for_steer`): a park holding the stopped turn's GB ask or desktop call is denied with a span and kept as `ParkSource::Held`. Ladder pauses (`soft_parks`) count in the needs-attention line and only the user's own next message (not a Steer or a queued one) answers them. Typing into a password, PIN, OTP, 2FA, or verification-code field is hard class credentials (`credential_field`: AX role or label, field-name hints, or a secret flag). The value never reaches the park file, card, or span (`credential_action`).
 - Spans only gain `#[serde(default)]` fields (`origin`, `consent_ref` are the newest); old lines must still parse. Typed text is stored as its length.
 - Grok Build's own traffic is outside the cabin (owner decision D1); egress only guards calls GrokHub makes itself.
 - Only `main` calls `use_os_keyring`. Every other process and test defaults to a store with no key, so `test_dir` and `use_test_key_store` register a `MemoryKeyStore`. The keyring entry is `GrokHub` / `learned-tier-key`; `learned-key.id` holds only a hash. User copy names the store per `KeyringOs` (Windows never says Secret Service), and `recheck_keyring` only drops the cached answer for Try again.
