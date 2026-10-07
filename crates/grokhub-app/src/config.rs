@@ -31,7 +31,11 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .file_name()
         .and_then(|s| s.to_str())
         .ok_or_else(|| "atomic write needs a file name".to_string())?;
-    let tmp = dir.join(format!(".{name}.tmp"));
+    // One temp per write: two writers of the same file (a snapshot persist and a ledger
+    // save) sharing one temp name delete each other's temp, and the loser's rename fails.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!(".{name}.{}-{seq}.tmp", std::process::id()));
     // The temp file holds the same bytes as the destination, so it has to be private from
     // the moment it exists. Creating it 0644 and chmodding after the rename leaves the
     // console key and OAuth refresh token world-readable for the whole write.
@@ -1014,7 +1018,25 @@ mod tests {
         let dest = root.join("atomic.json");
         atomic_write(&dest, br#"{"ok":true}"#).expect("atomic");
         assert_eq!(fs::read_to_string(&dest).unwrap(), r#"{"ok":true}"#);
-        assert!(!root.join(".atomic.json.tmp").exists());
+        let left: Vec<_> = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .filter(|n| n.starts_with(".atomic.json"))
+            .collect();
+        assert_eq!(left, Vec::<String>::new(), "no temp is left behind");
+        let racers: Vec<_> = (0..8)
+            .map(|i| {
+                let dest = dest.clone();
+                std::thread::spawn(move || {
+                    (0..25).map(|_| atomic_write(&dest, format!("{{\"w\":{i}}}").as_bytes())).collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        for racer in racers {
+            for res in racer.join().unwrap() {
+                assert_eq!(res, Ok(()), "concurrent writers of one file must not break each other");
+            }
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
