@@ -6,6 +6,9 @@ Feature/fix PRs → `beta`. Hotfixes → `main` only on Jeremy's say, then merge
 ## Bot
 Prefer Grok Build on the box (roles: explore, plan, implementer). Cursor Cloud paused until Oct 11. One bot per job.
 
+## Compass files
+Read the compass file before editing a module: `docs/compass/README.md` lists one short map per crate and hot module (owns, change recipe, what breaks, gotchas). Fix it in the same PR when you move code; `compass_paths` fails on stale paths.
+
 ## Quality gates
 Semgrep before Ready. dyl-review quick for draft asks — never dyl-ready-pr merge/babysit. Continual Learning keeps this file current.
 
