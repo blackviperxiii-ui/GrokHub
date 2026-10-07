@@ -22910,6 +22910,23 @@ fn wait_ledger_lines(root: &std::path::Path, n: usize) -> grokhub_agent::harness
     panic!("ledger never reached {n} lines");
 }
 
+/// Spike-7: a skill patch only lands when a replay of the skill's last
+/// recorded run passes, so the patch tests record one successful run first.
+fn record_weekly_report_run(root: &std::path::Path) {
+    let mut verify = grokhub_agent::harness::fixture_span(1_000, "verify_script", "{}", "allow", "pass", None, "");
+    verify.session_id = "chat-weekly".into();
+    grokhub_agent::harness::append_span(root, &verify).unwrap();
+    let o = grokhub_agent::harness::outcome_from_spans(
+        "chat-weekly:1",
+        "skill:weekly-report",
+        std::slice::from_ref(&verify),
+        &[],
+        false,
+        1_001,
+    );
+    grokhub_core::outcome::append_outcome(root, &o).unwrap();
+}
+
 const WEEKLY_PATCH: &str =
     "SUGGEST_SKILL_PATCH: weekly-report | the user asks for the weekly report | 1. Open report.md 2. Fill the numbers 3. Save a copy as PDF";
 
@@ -22917,6 +22934,7 @@ const WEEKLY_PATCH: &str =
 fn nightly_patch_keeps_the_prior_version_and_typed_undo_puts_it_back() {
     let _g = crate::config::hold_test_config();
     let (_pin, root) = pin_skill_config("skill-undo-typed");
+    record_weekly_report_run(&root);
     let path = skills::save_skill(&weekly_report_skill()).expect("save");
     let v1 = std::fs::read(&path).unwrap();
     let mut cabin = Cabin::quiet_for_test();
@@ -22969,6 +22987,7 @@ fn nightly_patch_keeps_the_prior_version_and_typed_undo_puts_it_back() {
 fn the_model_cannot_undo_a_skill_change_on_its_own() {
     let _g = crate::config::hold_test_config();
     let (_pin, root) = pin_skill_config("skill-undo-model");
+    record_weekly_report_run(&root);
     let path = skills::save_skill(&weekly_report_skill()).expect("save");
     let mut cabin = Cabin::quiet_for_test();
     cabin.skill_list = skills::list_skills();
@@ -23037,6 +23056,7 @@ fn only_typing_or_a_click_builds_an_undo_ask() {
         vec![
             "grokhub-app/src/app/change_undo.rs: UndoAsk::from_click(",
             "grokhub-app/src/app/chat_ui.rs: typed_send = true",
+            "grokhub-app/src/app/self_review_ui.rs: UndoAsk::from_click(",
             "grokhub-app/src/app/skill_undo.rs: UndoAsk::from_click(",
             "grokhub-app/src/app/skill_undo.rs: UndoAsk::from_click(",
             "grokhub-app/src/app/skill_undo.rs: UndoAsk::from_typing(",

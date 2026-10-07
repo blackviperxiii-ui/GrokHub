@@ -716,6 +716,12 @@ fn note_scope_finding(config_dir: &Path, kind: ChangeKind, id: &str, file: &Path
     let _ = private_write(&findings_path(config_dir), text.as_bytes());
 }
 
+/// A weekly self-review proposal the scope guard refused (Spike-7): logged
+/// like a refused ledger write, with the target as the model named it.
+pub fn note_proposal_finding(config_dir: &Path, target: &str, why: &str) {
+    note_scope_finding(config_dir, ChangeKind::Skill, "", Path::new(target), why);
+}
+
 /// Run the scope guard for a target; a refusal is logged as a finding.
 fn guard(config_dir: &Path, target: &dyn ChangeTarget) -> Result<PathBuf, String> {
     let file = target.file()?;

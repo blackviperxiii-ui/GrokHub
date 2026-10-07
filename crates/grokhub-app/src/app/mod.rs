@@ -180,6 +180,7 @@ mod episode_ui;
 mod privacy_ui;
 mod scope_ui;
 mod skill_undo;
+mod self_review_ui;
 mod change_undo;
 mod glance;
 mod sidebar;
@@ -194,6 +195,8 @@ mod heartbeat_gate;
 mod tests;
 #[cfg(test)]
 mod native_signin_tests;
+#[cfg(test)]
+mod self_review_tests;
 
 use acp::*;
 use chat_ui::*;
@@ -2714,6 +2717,11 @@ impl Cabin {
             if ledger.undone_by_user(&patched.name, &after) {
                 continue;
             }
+            let (old, new) = (grokhub_core::render_skill_md(&existing), grokhub_core::render_skill_md(&patched));
+            if let Err(note) = grokhub_agent::harness::replay_gate(&config::config_dir(), &patched.name, &old, &new, now_ms()) {
+                self.status = note;
+                continue;
+            }
             if let Some(s) = self.skill_list.iter_mut().find(|s| s.name == patched.name) {
                 *s = patched.clone();
             }
@@ -3453,6 +3461,7 @@ impl Cabin {
                 HeartbeatAct::Review => {
                     if !night_fired && !self.running {
                         self.tick_review();
+                        self.tick_self_review();
                         self.tick_dream();
                     }
                 }
@@ -4990,6 +4999,7 @@ impl eframe::App for Cabin {
         self.poll_acp();
         self.poll_chips();
         self.poll_review();
+        self.poll_self_review();
         self.poll_digest_lookup();
         self.window_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
         self.poll_greeting();

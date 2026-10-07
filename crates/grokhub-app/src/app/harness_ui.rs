@@ -237,6 +237,8 @@ pub(super) struct HarnessState {
     pub ladder: hx::Ladder,
     /// Ladder pauses waiting on the user.
     pub soft_parks: Vec<SoftPark>,
+    /// Spike-7: the newest outcome and the weekly self-review on its way.
+    pub self_review: super::self_review_ui::SelfReviewState,
     /// A retry / backtrack turn, sent once the live reply and the user's
     /// queued messages are done.
     pub repair: Option<String>,
@@ -742,30 +744,36 @@ impl Cabin {
         }
         self.write_span_at(hx::Span::reply(&trace, reply, &self.secret_hold), "audit", turn);
         let _ = self.write_turn_trail(&trace, turn);
-        if !self.harness.soft_parks.is_empty() {
-            return;
-        }
-        let Ok(audit) = hx::audit_file(&dir, &trace, Some((&trace, turn))) else {
-            return;
-        };
+        let audit = hx::audit_file(&dir, &trace, Some((&trace, turn))).ok();
+        let paused = self.harness.soft_parks.is_empty() && audit.as_ref().is_some_and(|a| self.harness_ladder_step(&trace, turn, a));
+        self.record_turn_outcome(&trace, turn, audit.as_ref(), paused);
+    }
+
+    /// The retry ladder's next rung for this turn's first finding. True when
+    /// it ran out and paused for the user.
+    fn harness_ladder_step(&mut self, trace: &str, turn: u32, audit: &hx::Audit) -> bool {
         let Some(window) = audit.flagged.iter().find(|w| !w.findings.is_empty()) else {
-            return;
+            return false;
         };
         let step = self.harness.ladder.next(&window.findings[0], &window.spans);
-        self.write_span_at(hx::ladder_span(&trace, &step), "audit", turn);
+        self.write_span_at(hx::ladder_span(trace, &step), "audit", turn);
         match step.rung {
-            hx::Rung::Retry | hx::Rung::Backtrack => self.harness.repair = step.prompt,
+            hx::Rung::Retry | hx::Rung::Backtrack => {
+                self.harness.repair = step.prompt;
+                false
+            }
             hx::Rung::Pause => {
                 self.harness.repair = None;
                 self.harness.soft_parks.push(SoftPark {
                     detector: step.detector,
                     reason: step.reason,
                     evidence: step.evidence,
-                    chat_id: trace.clone(),
+                    chat_id: trace.to_string(),
                 });
                 if self.chrome_here() {
                     self.status = crate::motion::needs_attention_summary(self.decisions_waiting());
                 }
+                true
             }
         }
     }
