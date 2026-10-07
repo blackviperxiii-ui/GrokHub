@@ -216,7 +216,7 @@ impl Cabin {
                 self.update_can_restart = false;
                 self.status = msg;
             }
-            Ok(JobOut::UpdateDone { ok }) => {
+            Ok(JobOut::UpdateDone { ok, output }) => {
                 self.running = false;
                 self.last_receipt_ok = Some(ok);
                 let view = overlay_update_finish(ok, self.update_pct.unwrap_or(0));
@@ -225,15 +225,18 @@ impl Cabin {
                 let channel_switch = self
                     .last_host
                     .iter()
-                    .any(|c| c.contains("--channel ") && c.contains("install.sh"));
+                    .any(|c| crate::update::is_channel_switch_cmd(c));
                 self.status = if ok && channel_switch {
                     "Channel switch finished — restart GrokHub".into()
                 } else if ok {
                     view.status
-                } else if channel_switch {
-                    crate::update::map_channel_switch_error(&view.status)
                 } else {
-                    view.status
+                    // The real host output picks the hint; the log has the rest.
+                    crate::update::update_failure_status(
+                        &output,
+                        channel_switch,
+                        &crate::update::update_log_path(),
+                    )
                 };
                 if ok {
                     self.note_combined_update_landed();
