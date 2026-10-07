@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Compass files: `docs/compass/` adds 14 short maps (25–35 lines each) for the crates and the modules agents get lost in (AMR, slash, the Spike-0 harness, the `app/` UI, `config.rs`, the desktop MCP, install scripts, versions and channels), indexed in `docs/compass/README.md` and linked from AGENTS.md. A new `compass_paths` test in grokhub-core fails when a compass file names a repo path or identifier that no longer exists, breaks a link, leaves 25–35 lines, or drops out of the index. It runs in the existing `cargo test --workspace` CI step. Docs and a test only; no UI change. No version bump.
+
 Approval cards share one width (up to 520px) and one "N things need a decision" line. A hard action uses a danger Approve on a 2px frame, Deny stays a ghost, and the note says Esc denies (Enter still does not approve). Commands and tool ids are monospace; notes stay proportional. The Grant full card stays hidden unless `GROKHUB_GRANT_FULL=1`, and it says click and type skip asking while deletes, sends, money and credentials still ask. A finished tool no longer repeats a stale "running" next to its completed chip. The agent cursor has a dark outline, and the desktop toggle names that hard floor, with its hint wrapping clear of the switch. No version bump.
 
 AMR M0: a local agent-memory schema under `amr/` in the config directory, plus a `/recall` read path. The default stays legacy SOUL/USER/MEMORY. Opt in with `"memory_backend": "amr"` in `app.json`. No Settings control, no migration, and `amr/` is not hub-synced. No version bump.
