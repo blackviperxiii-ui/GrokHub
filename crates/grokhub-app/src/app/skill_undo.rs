@@ -264,13 +264,21 @@ fn undo_pill(ui: &mut egui::Ui, label: &str) -> bool {
 
 /// Under the newest `/skills changes` bubble: one row per skill with a ghost
 /// Undo or Restore. Returns the clicked row. Typed text and keys never answer it.
+/// Rows start at the bubble's text and the pills share one column, like the
+/// `/privacy` Revoke rows (SU-06).
 pub(super) fn paint_skill_undo_rows(ui: &mut egui::Ui, rows: &[SkillRow]) -> Option<SkillRow> {
     let mut hit = None;
-    for row in rows {
+    let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
+    let pads = super::chat_ui::result_row_label_pads(ui, &labels);
+    for (row, pad) in rows.iter().zip(pads) {
         ui.push_id(("skill-undo", row.id.as_str()), |ui| {
             let size = egui::vec2(ui.available_width(), SKILL_ROW_H);
             ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.label(RichText::new(&row.label).size(13.0).color(crate::theme::muted()));
+                ui.add_space(super::chat_ui::RESULT_TEXT_INSET);
+                ui.label(
+                    RichText::new(&row.label).size(super::chat_ui::RESULT_ROW_LABEL_SIZE).color(crate::theme::muted()),
+                );
+                ui.add_space(pad);
                 if undo_pill(ui, row.act.label()) {
                     hit = Some(row.clone());
                 }
@@ -380,6 +388,65 @@ mod tests {
         assert!(texts.contains("Undo\n") && texts.contains("Restore\n"), "{texts}");
         assert!(texts.contains("weekly-report · changed 1m ago"), "{texts}");
         assert_eq!(hit, None, "painting alone never undoes");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// SU-06: the Undo rows start where the bubble's text starts, and the
+    /// Undo / Restore pills share one column, as the `/privacy` Revoke rows do.
+    #[test]
+    fn skill_rows_line_up_with_the_bubble_text() {
+        let root = fixture("skill-rows-inset");
+        let ledger = hx::ChangeLedger::load(&root);
+        let now = ledger.all().last().unwrap().at + 60_000;
+        let rows = skill_undo_rows(&ledger, now);
+        assert!(rows.len() >= 2, "{rows:?}");
+        let view = grokhub_core::ChatView {
+            kind: grokhub_core::ChatKind::Result,
+            title: String::new(),
+            body: skill_changes_report(&ledger, now),
+        };
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 900.0))),
+            ..Default::default()
+        };
+        let out = crate::theme::test_pass(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let _ = super::super::chat_ui::paint_chat_block_with(
+                    ui,
+                    &view,
+                    true,
+                    true,
+                    grokhub_core::ThoughtFold::Expanded,
+                    false,
+                );
+                let _ = paint_skill_undo_rows(ui, &rows);
+            });
+        });
+        let mut lefts: Vec<(String, f32)> = Vec::new();
+        fn walk(shape: &egui::Shape, lefts: &mut Vec<(String, f32)>) {
+            match shape {
+                egui::Shape::Text(t) => lefts.push((t.galley.text().to_string(), t.pos.x + t.galley.rect.min.x)),
+                egui::Shape::Vec(v) => v.iter().for_each(|c| walk(c, lefts)),
+                _ => {}
+            }
+        }
+        for clipped in &out.shapes {
+            walk(&clipped.shape, &mut lefts);
+        }
+        let left = |want: &str| lefts.iter().find(|(t, _)| t.starts_with(want)).map(|(_, x)| *x);
+        let head = left(SKILL_CHANGES_HEAD).expect("bubble head");
+        for row in &rows {
+            let at = lefts.iter().rev().find(|(t, _)| *t == row.label).map(|(_, x)| *x).expect("row label");
+            assert!((head - at).abs() < 1.0, "bubble text at {head}, {} at {at}", row.label);
+        }
+        let pills: Vec<f32> = lefts.iter().filter(|(t, _)| t == "Undo" || t == "Restore").map(|(_, x)| *x).collect();
+        assert!(pills.len() >= 2, "{lefts:?}");
+        let spread = pills.iter().copied().fold(f32::MIN, f32::max) - pills.iter().copied().fold(f32::MAX, f32::min);
+        // Pill labels differ in width; their pills' left edges match, so the
+        // text sits within a few px of each other.
+        assert!(spread < 12.0, "Undo / Restore pills should share a column: {pills:?}");
         let _ = std::fs::remove_dir_all(&root);
     }
 

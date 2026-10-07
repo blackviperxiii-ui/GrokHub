@@ -73,30 +73,60 @@ pub enum Locked {
     Unwritable,
 }
 
+/// Which OS keyring the copy names. Picked with `cfg` at build time
+/// ([`KeyringOs::current`]); the other values exist so every OS's words can be
+/// tested on any OS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyringOs {
+    /// Linux and the other Unix desktops: Secret Service (GNOME Keyring, KWallet).
+    Linux,
+    Windows,
+    MacOs,
+}
+
+impl KeyringOs {
+    pub const fn current() -> Self {
+        if cfg!(windows) {
+            Self::Windows
+        } else if cfg!(target_os = "macos") {
+            Self::MacOs
+        } else {
+            Self::Linux
+        }
+    }
+}
+
 /// The store's name on this OS, for messages.
 pub fn keyring_name() -> &'static str {
-    if cfg!(windows) {
-        "Windows Credential Manager"
-    } else if cfg!(target_os = "macos") {
-        "macOS Keychain"
-    } else {
-        "Secret Service keyring"
+    keyring_name_for(KeyringOs::current())
+}
+
+/// The store's name on `os`. Windows and macOS never say "Secret Service".
+pub fn keyring_name_for(os: KeyringOs) -> &'static str {
+    match os {
+        KeyringOs::Windows => "Windows Credential Manager",
+        KeyringOs::MacOs => "macOS Keychain",
+        KeyringOs::Linux => "Secret Service keyring",
     }
 }
 
 impl Locked {
     /// One plain sentence for Settings, `/privacy` and `/recall`.
     pub fn message(&self) -> String {
+        self.message_for(KeyringOs::current())
+    }
+
+    /// [`Self::message`] as it reads on `os`.
+    pub fn message_for(&self, os: KeyringOs) -> String {
         let what = "GrokHub won't read or save grants, the send log or private memory until then, and never saves them as plain text.";
+        let name = keyring_name_for(os);
         match self {
-            Self::Unavailable => format!("Private data is locked: GrokHub can't reach your {}. {what}", keyring_name()),
-            Self::Missing => format!(
-                "Private data is locked: its key is missing from your {}. {what} Nothing was deleted.",
-                keyring_name()
-            ),
+            Self::Unavailable => format!("Private data is locked: GrokHub can't reach your {name}. {what}"),
+            Self::Missing => {
+                format!("Private data is locked: its key is missing from your {name}. {what} Nothing was deleted.")
+            }
             Self::WrongKey => format!(
-                "Private data is locked: the key in your {} doesn't match this data. {what} Nothing was deleted.",
-                keyring_name()
+                "Private data is locked: the key in your {name} doesn't match this data. {what} Nothing was deleted."
             ),
             Self::Busy => "Private data is busy: another GrokHub window is setting up its key. Try again in a moment.".into(),
             Self::Unwritable => {
@@ -378,6 +408,14 @@ type Overrides = Mutex<Vec<(PathBuf, Arc<Keys>)>>;
 fn overrides() -> &'static Overrides {
     static O: OnceLock<Overrides> = OnceLock::new();
     O.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Forget the last keyring answer for this config dir so the next read asks
+/// the keyring again now instead of after `RECHECK` (Settings → Permissions →
+/// Try again, SB-02). It only drops a cached answer: a locked tier stays
+/// locked until the keyring itself answers with the right key.
+pub fn recheck_keyring(config_dir: &Path) {
+    keys_for(config_dir).set(KeyCache::Unknown);
 }
 
 /// `grokhub` calls this once at start: the learned-tier key lives in the OS keyring.

@@ -86,7 +86,7 @@ pub enum Scope {
 
 /// Scope kinds in the order `/privacy` lists them.
 pub const SCOPE_KINDS: &[(&str, &str)] = &[
-    ("files", "Files in one folder"),
+    ("files", "Files in a folder"),
     ("apps", "Installed apps"),
     ("browser_history", "Browser history"),
     ("calendar", "Calendar"),

@@ -24,6 +24,9 @@ base64 = "0.22"
 global-hotkey = "0.6"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "ico"] }
 keyring = "4"
+# SB-04: native folder picker. On Linux only the xdg-desktop-portal backend
+# (no GTK, no new system libraries); Windows and macOS use their own dialogs.
+rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 
 [target.'cfg(unix)'.dependencies]
 eframe = { version = "0.36.2", default-features = false, features = ["x11", "wayland"] }
