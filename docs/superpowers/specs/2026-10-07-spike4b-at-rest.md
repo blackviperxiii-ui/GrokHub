@@ -43,7 +43,16 @@ A file with no sealed line is a legacy file. When the keyring answers, it is rea
 
 ## Scope rows
 
-Settings → Permissions → "What GrokHub can read", after "Leaving this computer": one row per 4a scope, off by default, with a plain hint. Allow is filled and takes a pointer click only (`cards::grant_pill`, `clicked_by(Primary)`); the hub Allow uses it too. Revoke is a ghost. A refused Allow says why under the heading, since the status line sits behind the modal. Files take a typed folder (home itself, any folder that holds it, relative and excluded paths are refused); browser history takes a browser from a list. `/privacy` lists scope grants by name and its Revoke works for them. Nothing reads a scope yet.
+Settings → Permissions → "What GrokHub can read", after "Leaving this computer": one row per 4a scope, off by default, with a plain hint. Allow takes a pointer click only (`cards::settings_grant_row`, `clicked_by(Primary)`); the hub Allow uses it too. Revoke is a ghost. A refused Allow says why under the heading, since the status line sits behind the modal. Files take a typed folder (home itself, any folder that holds it, relative and excluded paths are refused); browser history takes a browser from a list. `/privacy` lists scope grants by name and its Revoke works for them. Nothing reads a scope yet.
+
+## Polish (SB-01 to SB-11)
+
+Critiquito's follow-ups after #525. `decide`, `Locked`'s fail-closed handling and the hard-card rules are unchanged.
+
+- While locked, every Settings grant row is disabled (egui's disabled look) with `lock_hover` on hover; Revoke too, since `revoke_grant` refuses a locked ledger. The `/privacy` Revoke rows take the same lock.
+- The lock gets one next step per OS (`KeyringOs`, chosen with `cfg`) and a Try again that calls `recheck_keyring` (drops the cached keyring answer, nothing else) and re-reads the ledger. While the keyring hasn't answered, the last lock stays on screen. `/sync` and `/privacy` add the short form.
+- Folder grants are titled by folder name; the path is in the hint (middle ellipsis) and on hover. Several folders, one grant each. Choose folder… uses `rfd` (xdg-portal only on Linux) off the UI thread (on the main thread on macOS) and only fills the field. A `None` within 400 ms means no dialog opened, so the row says to type the path.
+- `/privacy` lists each grant once under one Grants heading, then "Off: …".
 
 ## Open
 

@@ -1656,55 +1656,126 @@ pub fn settings_action(ui: &mut egui::Ui, title: &str, hint: &str, action: &str)
     settings_action_styled(ui, title, hint, action, PillStyle::Solid)
 }
 
-/// A settings row whose action only takes something away (Revoke): ghost, not filled.
-pub fn settings_action_ghost(ui: &mut egui::Ui, title: &str, hint: &str, action: &str) -> bool {
-    settings_action_styled(ui, title, hint, action, PillStyle::Ghost)
-}
-
-/// A filled pill that grants access. Pointer clicks only: Enter or Space on a
+/// The pill that grants access: an outline, not a fill (SB-08), so the off
+/// rows read as the calm default and Allow is not the brightest column on
+/// the page. Count only `clicked_by(Primary)` on it: Enter or Space on a
 /// focused Allow never grants (rule 4: only the user's click writes a grant).
-pub fn grant_pill(ui: &mut egui::Ui, label: &str) -> bool {
+/// [`settings_grant_row`] does.
+fn grant_pill(ui: &mut egui::Ui, label: &str) -> egui::Response {
     let resp = crate::theme::felt_label_button(
         ui,
         label,
+        Color32::TRANSPARENT,
         crate::theme::fg(),
-        crate::theme::bg(),
         8.0,
         egui::vec2(0.0, 28.0),
-        None,
+        Some(Stroke::new(1.0_f32, crate::theme::border_strong())),
         true,
     );
     let enabled = resp.enabled();
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
-    resp.clicked_by(egui::PointerButton::Primary)
+    resp
 }
 
-/// A settings row whose action grants access: [`settings_action`]'s shape with
-/// a pointer-only [`grant_pill`]. `extra` paints left of the pill (a folder
-/// field, a browser picker) and is laid out right to left.
-pub fn settings_grant(
+/// SB-07: a row hint that leads with "On" or "Off" paints that word in the
+/// foreground colour (the rest stays muted), so a column of rows scans at a
+/// glance. Any other hint is all muted. The galley text is the hint as given.
+pub fn state_hint_job(hint: &str) -> LayoutJob {
+    let lead = ["On", "Off"]
+        .into_iter()
+        .find(|w| hint.strip_prefix(w).is_some_and(|rest| rest.starts_with([' ', '.'])))
+        .unwrap_or("");
+    let font = FontId::proportional(12.0);
+    let mut job = LayoutJob::default();
+    if !lead.is_empty() {
+        job.append(lead, 0.0, TextFormat { font_id: font.clone(), color: crate::theme::fg(), ..Default::default() });
+    }
+    job.append(&hint[lead.len()..], 0.0, TextFormat { font_id: font, color: crate::theme::muted(), ..Default::default() });
+    job
+}
+
+/// What a grant row's pill does: Allow (outline, pointer-only) or Revoke
+/// (ghost, it only takes access away).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrantPill {
+    Allow,
+    Revoke,
+}
+
+/// One Settings grant row: title, a state-led hint ([`state_hint_job`], with
+/// `hint_hover` on hover, e.g. a whole folder path), then the pill on the right
+/// and `extra` left of it (a folder field, a browser picker), laid out right to
+/// left. `extra_line` puts the pill and `extra` on their own line under the
+/// hint, for inputs too wide to share the title's line. `locked` = why
+/// nothing here can act right now (SB-01): the pill and `extra` take egui's
+/// disabled look and show `locked` on hover.
+pub fn settings_grant_row(
     ui: &mut egui::Ui,
     title: &str,
     hint: &str,
-    action: &str,
+    hint_hover: Option<&str>,
+    pill: GrantPill,
+    locked: Option<&str>,
+    extra_line: bool,
     extra: impl FnOnce(&mut egui::Ui),
 ) -> bool {
     let mut hit = false;
-    ui.horizontal(|ui| {
+    let labels = |ui: &mut egui::Ui| {
         ui.vertical(|ui| {
             ui.add_space(4.0);
             ui.label(RichText::new(title).size(15.0).color(crate::theme::fg()));
             if !hint.is_empty() {
-                ui.label(RichText::new(hint).size(12.0).color(crate::theme::muted()));
+                let r = ui.label(state_hint_job(hint));
+                if let Some(full) = hint_hover {
+                    r.on_hover_text(full);
+                }
             }
         });
+    };
+    let pills = |ui: &mut egui::Ui, hit: &mut bool| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            hit = grant_pill(ui, action);
-            extra(ui);
+            ui.add_enabled_ui(locked.is_none(), |ui| {
+                let resp = match pill {
+                    GrantPill::Allow => grant_pill(ui, "Allow"),
+                    GrantPill::Revoke => ghost_pill_response(ui, "Revoke"),
+                };
+                *hit = match pill {
+                    GrantPill::Allow => resp.clicked_by(egui::PointerButton::Primary),
+                    GrantPill::Revoke => resp.clicked(),
+                } && locked.is_none();
+                if let Some(why) = locked {
+                    resp.on_disabled_hover_text(why);
+                }
+                extra(ui);
+            });
         });
-    });
+    };
+    if extra_line {
+        labels(ui);
+        ui.add_space(4.0);
+        ui.horizontal(|ui| pills(ui, &mut hit));
+    } else {
+        ui.horizontal(|ui| {
+            labels(ui);
+            pills(ui, &mut hit);
+        });
+    }
     ui.add_space(10.0);
     hit
+}
+
+/// The ghost pill's response, for gated rows.
+fn ghost_pill_response(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    crate::theme::felt_label_button(
+        ui,
+        label,
+        Color32::TRANSPARENT,
+        crate::theme::muted(),
+        8.0,
+        egui::vec2(0.0, 28.0),
+        Some(Stroke::new(1.0_f32, crate::theme::border())),
+        false,
+    )
 }
 
 fn settings_action_styled(
@@ -2958,7 +3029,7 @@ mod tests {
     }
 
     /// Spike-4b: a focused Allow answers Enter/Space as a plain pill would, but
-    /// the grant pill only counts a pointer click.
+    /// a grant row's Allow only counts a pointer click.
     #[test]
     fn grant_pill_ignores_the_keyboard_and_takes_a_pointer_click() {
         let run = |grant: bool| {
@@ -2971,7 +3042,11 @@ mod tests {
                 let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
                 let out = crate::theme::test_pass(&ctx, input, |ui| {
                     egui::CentralPanel::default().show(ui, |ui| {
-                        hit = if grant { grant_pill(ui, "Allow") } else { white_pill(ui, "Allow") };
+                        hit = if grant {
+                            settings_grant_row(ui, "Row", "", None, GrantPill::Allow, None, false, |_| {})
+                        } else {
+                            white_pill(ui, "Allow")
+                        };
                     });
                 });
                 for clipped in &out.shapes {
