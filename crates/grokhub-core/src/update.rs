@@ -1,4 +1,4 @@
-use crate::channel::Channel;
+use crate::channel::{Channel, ChannelTips};
 use crate::host_plan::{explain_host_risk, host_risk, HostPlanStep, HostRisk};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -58,6 +58,16 @@ fn git_probe_timeout() -> Duration {
 }
 
 fn git_stdout(source: &Path, args: &[&str]) -> Result<(bool, String), String> {
+    git_stdout_within(source, args, git_probe_timeout())
+}
+
+/// `git_stdout` with its own timeout, for a local step that can take longer
+/// than a probe (a checkout that rewrites the work tree).
+fn git_stdout_within(
+    source: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<(bool, String), String> {
     let mut cmd = Command::new("git");
     cmd.arg("-C")
         .arg(source)
@@ -81,7 +91,7 @@ fn git_stdout(source: &Path, args: &[&str]) -> Result<(bool, String), String> {
                 }
                 return Ok((st.success(), out));
             }
-            Ok(None) if start.elapsed() > git_probe_timeout() => {
+            Ok(None) if start.elapsed() > timeout => {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err("git timed out — is the source clone reachable?".into());
@@ -181,6 +191,80 @@ pub fn ls_remote_channel_tips(source: &Path) -> Result<(String, String), String>
     Ok(parse_ls_remote_tips(&out))
 }
 
+/// Labs Beta auto-off probe: fetch `beta` and `main` from `origin` into
+/// `origin/beta` / `origin/main`, then read both tip SHAs and trees
+/// (`origin/<branch>^{tree}`). Uses only the clone's existing `origin` remote.
+/// Any fetch, timeout or ref error is `Err` — callers must not flip the
+/// channel then, and there is no fallback to stale cached refs.
+pub fn fetch_channel_tips(source: &Path) -> Result<ChannelTips, String> {
+    if !is_grokhub_source(source) {
+        return Err("not a GrokHub source tree".into());
+    }
+    let (ok, _) = git_stdout(
+        source,
+        &[
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "origin",
+            "+refs/heads/beta:refs/remotes/origin/beta",
+            "+refs/heads/main:refs/remotes/origin/main",
+        ],
+    )?;
+    if !ok {
+        return Err("git fetch origin beta main failed".into());
+    }
+    Ok(ChannelTips {
+        beta_sha: git_rev_parse(source, "refs/remotes/origin/beta")?,
+        main_sha: git_rev_parse(source, "refs/remotes/origin/main")?,
+        beta_tree: git_rev_parse(source, "refs/remotes/origin/beta^{tree}")?,
+        main_tree: git_rev_parse(source, "refs/remotes/origin/main^{tree}")?,
+    })
+}
+
+/// Labs Beta auto-off switch-back without a rebuild: move a clone that is on
+/// `beta` onto `main` at `origin/main` (call after [`fetch_channel_tips`]).
+/// Beta and main have the same tree then, so the next Update builds main.
+/// Ok when the clone is already on `main`. Refuses, touching nothing, when the
+/// clone is on another branch or detached, has uncommitted changes, or has a
+/// local `main` with commits that are not on `origin/main`.
+pub fn switch_clone_to_main(source: &Path) -> Result<(), String> {
+    if !is_grokhub_source(source) {
+        return Err("not a GrokHub source tree".into());
+    }
+    match git_head_branch(source)?.as_str() {
+        "main" => return Ok(()),
+        "beta" => {}
+        other => return Err(format!("source clone is on {other}, not beta — checkout main by hand")),
+    }
+    let clean = git_stdout(source, &["diff", "--quiet"])?.0
+        && git_stdout(source, &["diff", "--cached", "--quiet"])?.0;
+    if !clean {
+        return Err(format!(
+            "error: {} has uncommitted changes; commit or stash them before --channel stable",
+            source.display()
+        ));
+    }
+    if git_stdout(source, &["show-ref", "--verify", "--quiet", "refs/heads/main"])?.0
+        && !git_stdout(
+            source,
+            &["merge-base", "--is-ancestor", "refs/heads/main", "refs/remotes/origin/main"],
+        )?
+        .0
+    {
+        return Err("local main has commits that are not on origin/main; sort that out by hand".into());
+    }
+    let (ok, _) = git_stdout_within(
+        source,
+        &["checkout", "-q", "-B", "main", "--track", "origin/main"],
+        Duration::from_secs(30),
+    )?;
+    if !ok || git_head_branch(source)? != "main" {
+        return Err("git checkout main failed — previous checkout kept".into());
+    }
+    Ok(())
+}
+
 /// Overlay pulls this GitHub remote until Cursor Origin is live.
 pub const GITHUB_REMOTE_URL: &str = "https://github.com/blackviperxiii-ui/GrokHub.git";
 /// Leftover Cursor Origin clone — retarget to GitHub.
@@ -233,7 +317,7 @@ pub fn update_cmds_in(source: &Path, channel: Channel) -> Result<Vec<String>, St
 /// still assert the Linux `install.sh` plan.
 fn update_cmds_on(source: &Path, windows: bool, channel: Channel) -> Result<Vec<String>, String> {
     if !is_grokhub_source(source) {
-        return Err("not a GrokHub source tree — set Settings → source or GROKHUB_SRC".into());
+        return Err("GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).".into());
     }
     let want = channel.branch();
     let branch = git_head_branch(source)?;
@@ -303,7 +387,7 @@ pub fn update_cmds_for_host_in(
             Err(e) => Err(e),
         },
         None if zip_ok => Ok(windows_release_update_cmds()),
-        None => Err("not a GrokHub source tree — set Settings → source or GROKHUB_SRC".into()),
+        None => Err("GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).".into()),
     }
 }
 
@@ -1124,7 +1208,7 @@ mod tests {
         );
         assert_eq!(
             update_cmds_for_host_in(None, true, Channel::Beta).unwrap_err(),
-            "not a GrokHub source tree — set Settings → source or GROKHUB_SRC"
+            "GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source)."
         );
         assert_eq!(
             update_cmds_for_host_in(None, true, Channel::Stable).unwrap(),
@@ -1840,6 +1924,194 @@ mod tests {
 #[cfg(test)]
 mod channel_tip_tests {
     use super::*;
+
+    /// Temp fixture: a bare `origin` with `main` and `beta` (both at a seed
+    /// commit), a `work` clone that moves them, and a GrokHub-shaped `client`
+    /// clone whose `origin/*` refs stay stale until it fetches.
+    struct TipsFixture {
+        base: PathBuf,
+        work: PathBuf,
+        client: PathBuf,
+    }
+
+    fn git_ok(dir: &Path, args: &[&str]) {
+        let out = Command::new("git").args(args).current_dir(dir).output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    fn git_out(dir: &Path, args: &[&str]) -> String {
+        let out = Command::new("git").args(args).current_dir(dir).output().unwrap();
+        assert!(out.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    impl TipsFixture {
+        fn new(tag: &str) -> Self {
+            let base = std::env::temp_dir()
+                .join(format!("grokhub-channel-tips-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&base);
+            let (origin, work) = (base.join("origin.git"), base.join("work"));
+            std::fs::create_dir_all(work.join("scripts")).unwrap();
+            std::fs::create_dir_all(work.join("crates/grokhub-app")).unwrap();
+            std::fs::write(work.join("Cargo.toml"), "[workspace]\n").unwrap();
+            std::fs::write(work.join("scripts/install.sh"), "#!/bin/sh\n").unwrap();
+            std::fs::write(work.join("crates/grokhub-app/lib.rs"), "\n").unwrap();
+            git_ok(&base, &["init", "-q", "--bare", "-b", "main", "origin.git"]);
+            git_ok(&work, &["init", "-q", "-b", "main"]);
+            git_ok(&work, &["config", "user.email", "cabin@test"]);
+            git_ok(&work, &["config", "user.name", "Cabin"]);
+            git_ok(&work, &["config", "commit.gpgsign", "false"]);
+            git_ok(&work, &["add", "."]);
+            git_ok(&work, &["commit", "-q", "-m", "seed"]);
+            git_ok(&work, &["remote", "add", "origin", &origin.display().to_string()]);
+            git_ok(&work, &["push", "-q", "origin", "main", "main:beta"]);
+            git_ok(&base, &["clone", "-q", "origin.git", "client"]);
+            let client = base.join("client");
+            Self { base, work, client }
+        }
+
+        fn commit_on(&self, branch: &str, file: &str) {
+            git_ok(&self.work, &["checkout", "-q", "-B", branch, &format!("origin/{branch}")]);
+            std::fs::write(self.work.join(file), file).unwrap();
+            git_ok(&self.work, &["add", "."]);
+            git_ok(&self.work, &["commit", "-q", "-m", file]);
+            git_ok(&self.work, &["push", "-q", "origin", branch]);
+            git_ok(&self.work, &["fetch", "-q", "origin"]);
+        }
+
+        /// Squash promote beta → main, then merge-commit sync main → beta (#507 / #508).
+        fn squash_promote_and_merge_sync(&self) {
+            git_ok(&self.work, &["checkout", "-q", "-B", "main", "origin/main"]);
+            git_ok(&self.work, &["merge", "-q", "--squash", "origin/beta"]);
+            git_ok(&self.work, &["commit", "-q", "-m", "promote (squash)"]);
+            git_ok(&self.work, &["checkout", "-q", "-B", "beta", "origin/beta"]);
+            git_ok(&self.work, &["merge", "-q", "--no-ff", "main", "-m", "sync main into beta"]);
+            git_ok(&self.work, &["push", "-q", "origin", "main", "beta"]);
+            git_ok(&self.work, &["fetch", "-q", "origin"]);
+        }
+    }
+
+    impl Drop for TipsFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.base);
+        }
+    }
+
+    #[test]
+    fn same_tree_different_sha_after_squash_and_merge_sync_is_caught_up() {
+        let fx = TipsFixture::new("same-tree");
+        fx.commit_on("beta", "feature.txt");
+        fx.squash_promote_and_merge_sync();
+        let tips = fetch_channel_tips(&fx.client).expect("fetch");
+        // The fetch moved the stale client refs to the real tips.
+        assert_eq!(tips.beta_sha, git_out(&fx.work, &["rev-parse", "origin/beta"]));
+        assert_eq!(tips.main_sha, git_out(&fx.work, &["rev-parse", "origin/main"]));
+        assert_ne!(tips.beta_sha, tips.main_sha, "squash + merge commit: SHAs differ");
+        assert_eq!(tips.beta_tree, tips.main_tree, "same code: trees match");
+        assert_eq!(tips.beta_tree, git_out(&fx.work, &["rev-parse", "origin/beta^{tree}"]));
+        assert!(crate::channel::beta_caught_up_to_main(&tips));
+        assert_eq!(
+            crate::channel::auto_off_target(Channel::Beta, &tips),
+            Some(Channel::Stable)
+        );
+    }
+
+    #[test]
+    fn different_trees_are_not_caught_up() {
+        let fx = TipsFixture::new("diff-tree");
+        fx.commit_on("beta", "feature.txt");
+        fx.squash_promote_and_merge_sync();
+        fx.commit_on("beta", "next-beta-pr.txt");
+        let tips = fetch_channel_tips(&fx.client).expect("fetch");
+        assert_ne!(tips.beta_sha, tips.main_sha);
+        assert_ne!(tips.beta_tree, tips.main_tree);
+        assert!(!crate::channel::beta_caught_up_to_main(&tips));
+        assert_eq!(crate::channel::auto_off_target(Channel::Beta, &tips), None);
+    }
+
+    #[test]
+    fn same_sha_is_caught_up() {
+        let fx = TipsFixture::new("same-sha");
+        fx.commit_on("main", "hotfix.txt");
+        // Fast-forward beta to main: one commit on both branches.
+        git_ok(&fx.work, &["push", "-q", "origin", "origin/main:refs/heads/beta"]);
+        let tips = fetch_channel_tips(&fx.client).expect("fetch");
+        assert_eq!(tips.beta_sha, tips.main_sha);
+        assert_eq!(tips.main_sha, git_out(&fx.work, &["rev-parse", "origin/main"]));
+        assert!(crate::channel::beta_caught_up_to_main(&tips));
+    }
+
+    #[test]
+    fn fetch_or_ref_errors_are_not_caught_up_and_skip_stale_refs() {
+        let fx = TipsFixture::new("fetch-error");
+        // Stale cached refs say "same commit" — a fallback to them would flip.
+        let (b, m) = remote_tracking_tips(&fx.client).unwrap();
+        assert_eq!(b, m);
+        // Ref error: origin no longer has beta.
+        git_ok(&fx.work, &["push", "-q", "origin", "--delete", "beta"]);
+        assert!(fetch_channel_tips(&fx.client).is_err());
+        // Fetch error: origin unreachable (offline).
+        let gone = fx.base.join("gone.git").display().to_string();
+        git_ok(&fx.client, &["remote", "set-url", "origin", &gone]);
+        assert!(fetch_channel_tips(&fx.client).is_err());
+        // Not a GrokHub clone.
+        assert!(fetch_channel_tips(&fx.base).is_err());
+    }
+
+    #[test]
+    fn switch_clone_to_main_moves_a_beta_clone_onto_origin_main() {
+        let fx = TipsFixture::new("switch-main");
+        git_ok(&fx.client, &["checkout", "-q", "beta"]);
+        fx.commit_on("beta", "feature.txt");
+        fx.squash_promote_and_merge_sync();
+        let tips = fetch_channel_tips(&fx.client).expect("fetch");
+        assert!(crate::channel::beta_caught_up_to_main(&tips));
+        switch_clone_to_main(&fx.client).expect("switch");
+        assert_eq!(git_out(&fx.client, &["symbolic-ref", "--short", "HEAD"]), "main");
+        assert_eq!(git_out(&fx.client, &["rev-parse", "HEAD"]), tips.main_sha);
+        assert_eq!(
+            git_out(&fx.client, &["rev-parse", "--abbrev-ref", "main@{upstream}"]),
+            "origin/main"
+        );
+        // The next stable Update can use this clone; a second call is a no-op.
+        assert!(overlay_clone_usable_in(&fx.client, Channel::Stable));
+        assert!(update_cmds_in(&fx.client, Channel::Stable).is_ok());
+        switch_clone_to_main(&fx.client).expect("already on main");
+    }
+
+    #[test]
+    fn switch_clone_to_main_refuses_dirty_other_branch_and_diverged_main() {
+        let fx = TipsFixture::new("switch-refuse");
+        git_ok(&fx.client, &["config", "user.email", "cabin@test"]);
+        git_ok(&fx.client, &["config", "user.name", "Cabin"]);
+        git_ok(&fx.client, &["config", "commit.gpgsign", "false"]);
+        git_ok(&fx.client, &["checkout", "-q", "beta"]);
+        // Dirty tree: refused, still on beta, edit kept.
+        std::fs::write(fx.client.join("Cargo.toml"), "[workspace] # local edit\n").unwrap();
+        let err = switch_clone_to_main(&fx.client).unwrap_err();
+        assert!(err.contains("uncommitted changes"), "{err}");
+        assert_eq!(git_out(&fx.client, &["symbolic-ref", "--short", "HEAD"]), "beta");
+        assert_eq!(
+            std::fs::read_to_string(fx.client.join("Cargo.toml")).unwrap(),
+            "[workspace] # local edit\n"
+        );
+        git_ok(&fx.client, &["checkout", "-q", "--", "Cargo.toml"]);
+        // Local main with its own commit: refused.
+        git_ok(&fx.client, &["checkout", "-q", "main"]);
+        std::fs::write(fx.client.join("local.txt"), "local").unwrap();
+        git_ok(&fx.client, &["add", "."]);
+        git_ok(&fx.client, &["commit", "-q", "-m", "local only"]);
+        let local_main = git_out(&fx.client, &["rev-parse", "main"]);
+        git_ok(&fx.client, &["checkout", "-q", "beta"]);
+        let err = switch_clone_to_main(&fx.client).unwrap_err();
+        assert!(err.contains("not on origin/main"), "{err}");
+        assert_eq!(git_out(&fx.client, &["symbolic-ref", "--short", "HEAD"]), "beta");
+        assert_eq!(git_out(&fx.client, &["rev-parse", "main"]), local_main);
+        // Some other branch: refused.
+        git_ok(&fx.client, &["checkout", "-q", "-b", "cabin/feature"]);
+        assert!(switch_clone_to_main(&fx.client).is_err());
+        assert!(switch_clone_to_main(&fx.base).is_err());
+    }
 
     #[test]
     fn parse_ls_remote_tips_reads_beta_and_main() {

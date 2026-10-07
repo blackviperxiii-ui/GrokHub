@@ -4,6 +4,16 @@
 
 Safety loop (Spike-1a). The harness now catches a click that changed nothing, a step repeated with no effect, "done" with no check, and a claim no step backs; it retries once, backtracks, then pauses for you (hard actions never retry), and typing into a password, PIN, OTP, 2FA or verification-code field is a hard credentials action whose value never reaches spans or logs. No UI changes.
 
+Channel fixes: Labs Beta auto-off works after a promote and really switches back, Update and channel-switch errors say what went wrong, and Windows no longer trips over a beta receipt.
+
+- **Auto-off compares code, not commits (Linux).** Main moves by squash and the main → beta sync always adds a merge commit, so the two tips never matched and Beta stayed on. The cabin now fetches `beta` and `main` from your clone's `origin` and treats beta as caught up when `origin/beta` and `origin/main` have the same tree (the same tip commit still counts). Checked at the same times as before: opening Settings → Labs (at most once a minute) and after a successful Update.
+- **Auto-off really switches back.** It checks your clone out on `main` at `origin/main` and then writes `stable`, so the next Update pulls and builds main instead of failing with "source clone is on beta". No rebuild happens at that moment: the code is already the same. If the clone has uncommitted changes, is on another branch, or has a local `main` commit that isn't on `origin/main`, nothing is touched, Beta stays on, and the status line says why. If the fetch fails (offline, timeout, missing branch), Beta stays on and nothing is shown. Re-enable Beta anytime.
+- **Update errors name the cause.** A failed Update or channel switch now reads the real output and says which it was in plain words, with the command in parentheses: unsaved code changes in the source folder, Rust too old (`rustup update`), source folder not found, the folder on the other branch, or a build failure. The status ends with "Details:" and the path of the new `update.log` in the config folder. Each attempt (time, channel, the commands, and the last 60 lines of output with secrets redacted) is appended there; the log rotates once at about 256 KB. `grokhub --update` logs too.
+- **Windows: beta is Linux-only.** A leftover `beta` receipt on Windows reads as stable: Update runs as stable instead of failing and says "Beta is Linux-only for now, so GrokHub updated to stable." The Labs toggle stays disabled with its note.
+- **Cold builds get time.** A channel switch may run up to 40 minutes (was 15) with the progress bar still showing; other Update steps keep 15.
+
+No new crates, no new network destinations. No version bump.
+
 Heartbeat throttle. The pulse still wakes every 15 seconds, but the things it starts on its own (anticipating a need, the automatic ideas ask, the nightly review) now share a budget, so it can't burn tokens or keep nudging you. Approval rules and hard cards are unchanged.
 
 - **A budget for proactive acts.** At most one every 15 minutes, 3 an hour and 8 a day by default. To change them, edit `"heartbeat"` in `app.json` (`minIntervalMin`, `maxPerHour`, `maxPerDay`, `backoffAfter`, `backoffMaxMin`, `haltHoldMin`); `maxPerDay: 0` turns proactive acts off. There is no Settings control. A file without that key keeps the defaults and doesn't grow one.
