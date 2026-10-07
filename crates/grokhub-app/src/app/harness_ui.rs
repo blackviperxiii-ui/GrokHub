@@ -97,6 +97,9 @@ pub(super) enum ParkSource {
     /// A path A / B park whose turn was steered (Spike-1a). Its call was
     /// denied with the old turn; Approve re-runs the step once, like path C.
     Held,
+    /// Spike-6a: the final step of a proactive card (this card id). Nothing
+    /// ran; Approve runs the step once on its normal path.
+    Proactive(String),
 }
 
 /// A recovery-ladder pause waiting on the user (Spike-1a). Counts in the
@@ -416,7 +419,7 @@ impl Cabin {
         hit
     }
 
-    fn park_hard(
+    pub(super) fn park_hard(
         &mut self,
         source: ParkSource,
         class: HardClass,
@@ -468,7 +471,7 @@ impl Cabin {
             ParkSource::Desk(id) => {
                 let _ = hx::answer_park(&crate::config::config_dir(), id, approve);
             }
-            ParkSource::Headless | ParkSource::Held => {
+            ParkSource::Headless | ParkSource::Held | ParkSource::Proactive(_) => {
                 if approve {
                     self.start_oneshot(&park.action);
                 }
@@ -493,7 +496,10 @@ impl Cabin {
     pub(super) fn withdraw_hard_parks(&mut self) {
         let mut keep = VecDeque::new();
         while let Some(park) = self.harness.park.clone() {
-            if matches!(park.source, ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held) {
+            if matches!(
+                park.source,
+                ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held | ParkSource::Proactive(_)
+            ) {
                 keep.push_back(park);
                 self.harness.park = self.harness.queue.pop_front();
             } else {
@@ -525,7 +531,7 @@ impl Cabin {
                 ParkSource::Desk(id) => {
                     let _ = hx::answer_park(&dir, id, false);
                 }
-                ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held => continue,
+                ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held | ParkSource::Proactive(_) => continue,
             }
             let args = span_args(&park.tool, &park.action);
             let why = "turn steered — the call is gone, the card stays for a fresh approval";

@@ -365,6 +365,10 @@ pub struct AppConfig {
     /// hold. Omitted from `app.json` while it stays default.
     #[serde(default, skip_serializing_if = "HeartbeatPace::is_default")]
     pub heartbeat: HeartbeatPace,
+    /// Spike-6a: an OS notification for a proactive card due in under an hour.
+    /// Off unless you opt in (`app.json` only).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub proactive_reminders: bool,
     #[serde(default)]
     pub goal_pin: String,
     /// Cabin paints a new Imagine cover every few hours.
@@ -518,6 +522,7 @@ impl Default for AppConfig {
             daily_token_budget: 0,
             budget_pauses_scheduled: default_budget_pause(),
             heartbeat: HeartbeatPace::default(),
+            proactive_reminders: false,
             goal_pin: String::new(),
             imagine_wall: default_imagine_wall(),
             composer_glow: false,
