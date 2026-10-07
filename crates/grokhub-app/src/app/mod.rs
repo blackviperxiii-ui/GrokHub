@@ -3003,6 +3003,7 @@ impl Cabin {
         let gen = self.next_persist_gen();
         let mark = self.persist_mark.clone();
         std::thread::spawn(move || {
+            let _pin = pin_scheduled_dir(dir.clone());
             if let Ok(_g) = io.lock() {
                 write_persist_disk_in_order(&dir, &snap, gen, &mark);
             }

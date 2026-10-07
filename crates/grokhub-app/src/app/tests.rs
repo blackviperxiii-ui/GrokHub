@@ -5357,6 +5357,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             sync_spawn < sync_read,
             "/sync must slurp SOUL/USER/MEMORY off the UI thread: {sync}"
         );
+        assert!(
+            sync.contains("pin_scheduled_dir"),
+            "/sync worker must pin config_dir like other persist workers: {sync}"
+        );
         let thread_rows = sync
             .split("let threads = snap")
             .nth(1)
@@ -10902,6 +10906,8 @@ fn skills_connectors_and_sessions_without_grok() {
 fn sync_writes_a_local_hub_snapshot() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("sync-local");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
     std::env::set_var("GROKHUB_CONFIG", &root);
     let mut cabin = Cabin::quiet_for_test();
     cabin.cfg.device_name = "harbor".into();
@@ -10910,12 +10916,21 @@ fn sync_writes_a_local_hub_snapshot() {
     assert!(cabin.sync_rx.is_some());
     cabin.run_slash_line("/sync");
     assert_eq!(cabin.status, "Syncing…");
+    // Windows ACL + antivirus can make the sync worker's first secrets/app.json
+    // writes take longer than a tight 2s poll. Wait for the channel, not a wall clock.
     let start = std::time::Instant::now();
-    while cabin.sync_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(2) {
+    let budget = std::time::Duration::from_secs(8);
+    while cabin.sync_rx.is_some() && start.elapsed() < budget {
         cabin.poll_sync();
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    assert!(matches!(cabin.nav, Nav::Devices));
+    assert!(
+        matches!(cabin.nav, Nav::Devices),
+        " /sync must open Devices after the hub snapshot lands; status={:?} sync_rx={} after {:?}",
+        cabin.status,
+        cabin.sync_rx.is_some(),
+        start.elapsed()
+    );
     assert_eq!(cabin.status, "Merged hub snapshot from harbor");
     assert!(cabin.sync_rx.is_none());
     std::env::remove_var("GROKHUB_CONFIG");
@@ -21321,8 +21336,10 @@ fn account_settings_pulls_disk_oauth_and_shows_connected_chrome() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("acct-oauth-ui");
     let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
     std::env::set_var("GROKHUB_CONFIG", &root);
-    let mut cabin = Cabin::quiet_cabin(Vec::new(), 0);
+    // quiet_for_test: no install/update workers that can outlive the test on Windows.
+    let mut cabin = Cabin::quiet_for_test();
     assert!(
         cabin.secrets.oauth.is_none(),
         "quiet cabin starts without oauth in memory"
@@ -21371,6 +21388,7 @@ fn account_settings_pulls_disk_oauth_and_shows_connected_chrome() {
         settings.contains("pull_account_oauth_from_disk"),
         "Settings must pull secrets.json oauth before painting Account"
     );
+    std::env::remove_var("GROKHUB_CONFIG");
 }
 
 
