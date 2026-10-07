@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Trust floor, finished (Spike-4c). Every call GrokHub itself makes now goes through the egress guard and shows up in `/privacy`: Labs web fetch (each redirect too), HTTP MCP servers, Imagine, the plugin index, Pulse previews, the GitHub tool, update checks, cited-link checks, the voice-secret mint, sign-in, and local browser control (loopback, not logged). Memory sent to a place you haven't granted waits on a hard Send card and nothing goes until you click Approve. Spans and send-log lines say who started the step (you, a heartbeat act, or a scheduled job), and cabin model calls log their tokens and cost. A coverage test fails on any new fetch that skips the guard. Grok Build's own traffic stays outside, as before. No new UI beyond new `/privacy` rows. No version bump.
+
 Safety loop (Spike-1a). The harness now catches a click that changed nothing, a step repeated with no effect, "done" with no check, and a claim no step backs; it retries once, backtracks, then pauses for you (hard actions never retry), and typing into a password, PIN, OTP, 2FA or verification-code field is a hard credentials action whose value never reaches spans or logs. No UI changes.
 
 Release bump list: the version strings that were in the old README (headline, both Latest rows, `--version` examples) now live in `docs/REFERENCE.md`, so `CLAUDE.md`, `.cursor/rules/repo-gates.mdc` and the versions compass list that file instead. `README.md` has no version strings. Docs only, no version bump.

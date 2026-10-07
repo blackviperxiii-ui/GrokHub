@@ -20,10 +20,12 @@
 //!
 //! [`decide`]: crate::harness::decide
 
+use std::cell::{Cell, RefCell};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -31,7 +33,8 @@ use crate::harness::approval::{decide, GateOutcome, Step};
 use crate::harness::at_rest::{self, Locked, AAD_EGRESS};
 use crate::harness::consent::ConsentLedger;
 use crate::harness::hard::HardClass;
-use crate::harness::span::Origin;
+use crate::harness::park::{post_park, wait_park, ParkRequest};
+use crate::harness::span::{append_span, read_turn_context, Origin, Span};
 
 /// The paired computers reached through the LAN hub (`/sync`).
 pub const HUB_DEST: &str = "hub";
@@ -63,6 +66,15 @@ impl DataClass {
             Self::Chat => "chat",
             Self::Personal => "personal",
             Self::Sensitive => "sensitive",
+        }
+    }
+
+    /// The words a user reads (cards, `/privacy`). The ids stay in logs and files.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Chat => "chats",
+            Self::Personal => "memory",
+            Self::Sensitive => "sensitive data",
         }
     }
 }
@@ -191,6 +203,7 @@ pub struct EgressReq<'a> {
 }
 
 impl<'a> EgressReq<'a> {
+    /// The origin is this thread's [`OriginScope`] (`user` outside one).
     pub fn new(target: &'a str, data: &'a [DataClass]) -> Self {
         Self {
             target,
@@ -198,8 +211,107 @@ impl<'a> EgressReq<'a> {
             node_ids: &[],
             redactions: 0,
             span_id: "",
-            origin: Origin::User,
+            origin: current_origin(),
         }
+    }
+}
+
+thread_local! {
+    static ORIGIN: Cell<Origin> = const { Cell::new(Origin::User) };
+    static RECALL: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Who started the work on this thread (Spike-4c): a heartbeat act, a
+/// scheduled job, or the user. Egress lines and spans written on the thread
+/// carry it. Dropping the scope restores the previous origin.
+pub struct OriginScope {
+    prev: Origin,
+}
+
+impl OriginScope {
+    pub fn enter(origin: Origin) -> Self {
+        Self { prev: ORIGIN.with(|o| o.replace(origin)) }
+    }
+}
+
+impl Drop for OriginScope {
+    fn drop(&mut self) {
+        ORIGIN.with(|o| o.set(self.prev));
+    }
+}
+
+pub fn current_origin() -> Origin {
+    ORIGIN.with(Cell::get)
+}
+
+/// Shortest recall-pack line that marks a call as carrying memory. Shorter
+/// lines are too common to say anything.
+const RECALL_LINE_MIN: usize = 16;
+
+/// The recall-pack lines the model saw this turn, so a call that carries one
+/// of them is classed personal. Dropping the scope clears them.
+pub struct RecallScope {
+    prev: Vec<String>,
+}
+
+impl RecallScope {
+    pub fn enter(lines: Vec<String>) -> Self {
+        let lines = lines
+            .into_iter()
+            .map(|l| l.trim().to_lowercase())
+            .filter(|l| l.chars().count() >= RECALL_LINE_MIN)
+            .collect();
+        Self { prev: RECALL.with(|r| r.replace(lines)) }
+    }
+}
+
+impl Drop for RecallScope {
+    fn drop(&mut self) {
+        let prev = std::mem::take(&mut self.prev);
+        RECALL.with(|r| *r.borrow_mut() = prev);
+    }
+}
+
+/// `%41` and `+` decoded, for a URL that carries a recall line in its query.
+fn percent_decoded(text: &str) -> String {
+    let hex = |b: u8| (b as char).to_digit(16).map(|d| d as u8);
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let pair = bytes.get(i + 1).copied().and_then(hex).zip(bytes.get(i + 2).copied().and_then(hex));
+        match (bytes[i], pair) {
+            (b'%', Some((hi, lo))) => {
+                out.push(hi * 16 + lo);
+                i += 3;
+                continue;
+            }
+            (b'+', _) => out.push(b' '),
+            (b, _) => out.push(b),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Honest classes for text the model wrote into a call (a URL it picked, tool
+/// args): chat, plus personal when it carries a line of this turn's recall pack.
+pub fn model_text_classes(text: &str) -> &'static [DataClass] {
+    const CHAT: &[DataClass] = &[DataClass::Chat];
+    const CHAT_PERSONAL: &[DataClass] = &[DataClass::Chat, DataClass::Personal];
+    let carries = RECALL.with(|r| {
+        let lines = r.borrow();
+        if lines.is_empty() {
+            return false;
+        }
+        let raw = text.to_lowercase();
+        let decoded = percent_decoded(&raw);
+        lines.iter().any(|l| raw.contains(l.as_str()) || decoded.contains(l.as_str()))
+    });
+    if carries {
+        CHAT_PERSONAL
+    } else {
+        CHAT
     }
 }
 
@@ -230,6 +342,70 @@ pub fn guard_egress(config_dir: &Path, req: &EgressReq<'_>) -> GateOutcome {
 pub fn record_approved_once(config_dir: &Path, req: &EgressReq<'_>) -> Result<(), String> {
     let dest = egress_dest(req.target);
     append_egress(config_dir, &line_for(req, &dest, "approved_once", "approved-once"))
+}
+
+/// The guard for a call with no one to ask (a background read): it goes only
+/// on Allow, else nothing is sent and the reason comes back.
+pub fn guard_quiet(config_dir: &Path, req: &EgressReq<'_>) -> Result<(), String> {
+    match guard_egress(config_dir, req) {
+        GateOutcome::Allow => Ok(()),
+        GateOutcome::Park { reason, .. } | GateOutcome::Refuse { reason } => Err(reason),
+    }
+}
+
+/// The guard for a call that can wait on the user (Spike-4c, path E): on a
+/// hard Send it posts a park file the cabin shows as a hard card and waits.
+/// Approve logs one `approved_once` line and returns Ok; Deny, Esc, halt, or
+/// [`APPROVAL_TTL`] return Err and nothing is sent. The card text is the tool,
+/// host, and classes only.
+///
+/// [`APPROVAL_TTL`]: crate::harness::APPROVAL_TTL
+pub fn guard_or_park(
+    config_dir: &Path,
+    req: &EgressReq<'_>,
+    tool: &str,
+    halted: &mut dyn FnMut() -> bool,
+) -> Result<(), String> {
+    guard_or_park_within(config_dir, req, tool, crate::harness::APPROVAL_TTL, halted)
+}
+
+pub(crate) fn guard_or_park_within(
+    config_dir: &Path,
+    req: &EgressReq<'_>,
+    tool: &str,
+    ttl: Duration,
+    halted: &mut dyn FnMut() -> bool,
+) -> Result<(), String> {
+    let (reason, class) = match guard_egress(config_dir, req) {
+        GateOutcome::Allow => return Ok(()),
+        GateOutcome::Refuse { reason } => return Err(reason),
+        GateOutcome::Park { reason, hard, .. } => (reason, hard.unwrap_or(HardClass::Send)),
+    };
+    static N: AtomicU64 = AtomicU64::new(0);
+    let id = format!("egress-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed));
+    let dest = egress_dest(req.target);
+    let classes: Vec<&str> = req.data.iter().map(|c| c.label()).collect();
+    let action = format!("{tool} → {dest} ({})", classes.join(", "));
+    let park = ParkRequest {
+        id: id.clone(),
+        path: "E".into(),
+        tool: tool.into(),
+        action: action.clone(),
+        class: class.as_str().into(),
+        ts_ms: grokhub_core::now_ms(),
+    };
+    post_park(config_dir, &park).map_err(|why| format!("not sent: {why}"))?;
+    let ctx = read_turn_context(config_dir);
+    let trace = if ctx.chat_id.is_empty() { "egress" } else { ctx.chat_id.as_str() };
+    let span = Span::hard_park(trace, tool, &action, class)
+        .on_path("E")
+        .in_turn(&ctx.chat_id, ctx.turn)
+        .from_origin(req.origin);
+    let _ = append_span(config_dir, &span);
+    if !wait_park(config_dir, &id, ttl, Duration::from_millis(200), halted) {
+        return Err(format!("{reason}. Denied: nothing was sent."));
+    }
+    record_approved_once(config_dir, req).map_err(|why| format!("not sent: {why}"))
 }
 
 fn line_for(req: &EgressReq<'_>, dest: &str, basis: &str, grant_id: &str) -> EgressLine {
@@ -500,5 +676,60 @@ mod tests {
             GateOutcome::Refuse { reason } => assert!(reason.starts_with("not sent: "), "{reason}"),
             other => panic!("expected a refusal, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn model_text_is_chat_unless_it_carries_a_recall_line() {
+        const CHAT: &[DataClass] = &[DataClass::Chat];
+        const BOTH: &[DataClass] = &[DataClass::Chat, DataClass::Personal];
+        assert_eq!(model_text_classes("https://example.org/?q=pier+four"), CHAT, "no recall pack: chat");
+        let _recall = RecallScope::enter(vec!["The harbor ferry leaves at nine".into(), "short line".into()]);
+        assert_eq!(model_text_classes("https://example.org/?q=ferry"), CHAT);
+        assert_eq!(model_text_classes(r#"{"note":"the harbor ferry leaves at nine"}"#), BOTH);
+        assert_eq!(model_text_classes("https://example.org/?q=the+harbor+ferry+leaves+at+nine"), BOTH);
+        assert_eq!(model_text_classes("https://example.org/?q=The%20Harbor%20ferry%20leaves%20at%20nine"), BOTH);
+        assert_eq!(model_text_classes("a short line"), CHAT, "lines under 16 chars say nothing");
+        drop(_recall);
+        assert_eq!(model_text_classes("the harbor ferry leaves at nine"), CHAT, "the scope ends with the turn");
+        assert_eq!(percent_decoded("%zz%4"), "%zz%4", "bad escapes stay as typed");
+    }
+
+    #[test]
+    fn origin_scope_tags_requests_and_restores() {
+        assert_eq!(EgressReq::new("hub", &[]).origin, Origin::User);
+        {
+            let _a = OriginScope::enter(Origin::Automation);
+            assert_eq!(EgressReq::new("hub", &[]).origin, Origin::Automation);
+            {
+                let _p = OriginScope::enter(Origin::Proactive);
+                assert_eq!(current_origin(), Origin::Proactive);
+            }
+            assert_eq!(current_origin(), Origin::Automation);
+            let (d, _g) = dir("origin");
+            assert_eq!(guard_egress(&d, &EgressReq::new("https://api.x.ai/v1/x", &[DataClass::Chat])), GateOutcome::Allow);
+            assert_eq!(read_egress(&d)[0].origin, Origin::Automation);
+        }
+        assert_eq!(current_origin(), Origin::User);
+    }
+
+    #[test]
+    fn a_parked_send_times_out_to_deny_and_sends_nothing() {
+        let (d, _g) = dir("park-ttl");
+        let req = EgressReq::new("https://example.org/upload", &[DataClass::Personal]);
+        let started = std::time::Instant::now();
+        let got = guard_or_park_within(&d, &req, "web_fetch", Duration::from_millis(60), &mut || false);
+        assert_eq!(
+            got,
+            Err("hard-class send: Send to example.org (personal) with no grant — Always cannot skip. Denied: nothing was sent.".into())
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(crate::harness::pending_parks(&d).is_empty(), "the card is gone after TTL");
+        assert!(read_egress(&d).is_empty(), "no line for a send that never left");
+        // Model hosts, plain reads, and loopback never wait on a card.
+        assert_eq!(guard_or_park(&d, &EgressReq::new("https://api.x.ai/v1/x", &[DataClass::Personal]), "t", &mut || false), Ok(()));
+        assert_eq!(guard_or_park(&d, &EgressReq::new("https://example.org/feed", &[]), "t", &mut || false), Ok(()));
+        assert_eq!(guard_or_park(&d, &EgressReq::new("http://localhost:9/x", &[DataClass::Personal]), "t", &mut || false), Ok(()));
+        let rows: Vec<(String, String)> = read_egress(&d).into_iter().map(|l| (l.dest, l.basis)).collect();
+        assert_eq!(rows, vec![("api.x.ai".into(), "model_host".into()), ("example.org".into(), "public".into())]);
     }
 }

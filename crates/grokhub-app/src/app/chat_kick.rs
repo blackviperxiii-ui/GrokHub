@@ -26,6 +26,7 @@ impl Cabin {
             self.status = "Unknown command — /help".into();
             return;
         }
+        self.begin_turn_origin();
         let thread_native = self
             .threads
             .get(self.thread_idx)

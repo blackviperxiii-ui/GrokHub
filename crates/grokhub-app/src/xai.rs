@@ -14,6 +14,7 @@ use grokhub_core::{
     XAI_BASE,
 };
 use grokhub_agent::harness as hx;
+use grokhub_agent::route;
 use std::io::Read;
 
 /// Production Imagine calls `XAI_BASE`. Tests can point the generations POST at a local origin.
@@ -60,6 +61,11 @@ pub fn url_answers(url: &str) -> bool {
     if !grokhub_core::public_http_url(url) {
         return false;
     }
+    // The model picked this URL, so it is chat. A check the guard holds back
+    // is not a dead link: keep it unchecked.
+    if egress_ok(url, &[hx::DataClass::Chat]).is_err() {
+        return true;
+    }
     let code = match ureq::AgentBuilder::new()
         .try_proxy_from_env(true)
         .redirects(0)
@@ -89,14 +95,12 @@ fn xai_agent(timeout_secs: u64) -> ureq::Agent {
         .build()
 }
 
-/// EgressGuard (Spike-4a): a cabin xAI call asks `harness::decide` and, when it
-/// may leave, logs one `egress.jsonl` line (host and data classes, no content).
-/// xAI hosts are allowed by default, so nothing here changes what is sent.
-fn egress_ok(url: &str, data: &[hx::DataClass]) -> Result<(), String> {
-    match hx::guard_egress(&crate::config::config_dir(), &hx::EgressReq::new(url, data)) {
-        hx::GateOutcome::Allow => Ok(()),
-        hx::GateOutcome::Park { reason, .. } | hx::GateOutcome::Refuse { reason } => Err(reason),
-    }
+/// EgressGuard (Spike-4a): a cabin-owned call asks `harness::decide` and, when
+/// it may leave, logs one `egress.jsonl` line (host and data classes, no
+/// content). Anything held back sends nothing. Spike-4c routes every cabin
+/// `ureq` call here; the line carries this thread's origin.
+pub(crate) fn egress_ok(url: &str, data: &[hx::DataClass]) -> Result<(), String> {
+    hx::guard_quiet(&crate::config::config_dir(), &hx::EgressReq::new(url, data))
 }
 
 const PROMPT_DATA: &[hx::DataClass] = &[hx::DataClass::Chat, hx::DataClass::Personal];
@@ -150,21 +154,35 @@ pub fn grok_chat(
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
     }
-    let timeout = chat_timeout_secs(effort);
-    let responses = responses_request_body(model, messages, image_data_url, effort);
+    let call = route::ModelCall::new(route::Provider::Xai, model, effort);
+    route::call_model(&crate::config::config_dir(), &call, |call| {
+        grok_chat_once(key, call, messages, image_data_url)
+    })
+}
+
+/// One routed chat call: Responses first, then Chat Completions.
+fn grok_chat_once(
+    key: &str,
+    call: &route::ModelCall<'_>,
+    messages: &[(String, String)],
+    image_data_url: Option<&str>,
+) -> Result<(String, hx::ModelUsage), String> {
+    let timeout = chat_timeout_secs(call.effort);
+    let responses = responses_request_body(call.model, messages, image_data_url, call.effort);
     if let Ok(v) = grok_json(&responses_url(), key, responses, timeout) {
         if let Some(text) = merge_reply(&v) {
-            return Ok(text);
+            return Ok((text, route::xai_usage(&v)));
         }
     }
-    let body = chat_request_body_vision(model, messages, image_data_url, effort);
+    let body = chat_request_body_vision(call.model, messages, image_data_url, call.effort);
     let v = grok_json(
         &format!("{XAI_BASE}/chat/completions"),
         key,
         body,
         timeout,
     )?;
-    merge_reply(&v).ok_or_else(|| "empty Grok reply".into())
+    let text = merge_reply(&v).ok_or_else(|| "empty Grok reply".to_string())?;
+    Ok((text, route::xai_usage(&v)))
 }
 
 pub fn grok_imagine_opts(
@@ -315,8 +333,10 @@ fn poll_imagine_video(key: &str, request_id: &str, prompt: &str) -> Result<Strin
         if std::time::Instant::now() >= deadline {
             return Err(imagine_network_hint("video timed out"));
         }
+        let poll_url = format!("{}/videos/{request_id}", imagine_api_base());
+        egress_ok(&poll_url, &[])?;
         let poll = xai_agent(45)
-            .get(&format!("{}/videos/{request_id}", imagine_api_base()))
+            .get(&poll_url)
             .set("authorization", &format!("Bearer {key}"))
             .call()
             .map_err(|e| imagine_network_hint(&http_err(e)))?;
@@ -379,6 +399,8 @@ fn save_media(url: &str, prompt: &str, ext: &str, key: &str) -> Result<String, S
             .ok_or_else(|| "bad imagine data url".to_string())?
             .1
     } else {
+        // The result URL came back from xAI: a download with no user data.
+        egress_ok(url, &[])?;
         let fetch = |auth: bool| -> Result<Vec<u8>, String> {
             let mut req = xai_agent(120).get(url);
             if auth && !key.trim().is_empty() {
@@ -503,6 +525,8 @@ pub fn grok_realtime_secret(api_key: &str) -> Result<serde_json::Value, String> 
             .unwrap_or("Duplex Voice needs a console API key.")
             .into());
     }
+    // Mints a short-lived voice secret: the console key only, no user data.
+    egress_ok(&client_secrets_url(), &[])?;
     let resp = xai_agent(20)
         .post(&client_secrets_url())
         .set("authorization", &format!("Bearer {}", api_key.trim()))

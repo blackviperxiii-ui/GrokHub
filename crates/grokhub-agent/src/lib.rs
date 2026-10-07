@@ -17,6 +17,7 @@ pub mod plugins;
 mod prompt;
 mod research;
 mod retry;
+pub mod route;
 mod run;
 mod scan;
 mod session;
