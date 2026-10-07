@@ -2,8 +2,8 @@
 
 use crate::gate::{DeskFlags, Gate};
 use crate::harness::access::AccessMode;
-use crate::harness::approval::{decide_harness, GateOutcome};
-use crate::harness::hard::{desk_classify, HardClass, HardHit};
+use crate::harness::approval::{decide, decide_harness, GateOutcome, Step};
+use crate::harness::hard::HardClass;
 use crate::harness::span::{append_span, redact_args, Span};
 use crate::tools::ToolOutput;
 use std::path::Path;
@@ -116,19 +116,7 @@ pub const CU_TRACE: &str = "grok-build-cu";
 /// Settings switch, halt, and lock checks; this adds the hard floor and the
 /// hard-class park in front of them. Runs under Always too.
 pub fn desk_decide(tool: &str, args: &serde_json::Value) -> GateOutcome {
-    match desk_classify(tool, args) {
-        HardHit::Floor(floor) => GateOutcome::Refuse { reason: floor.reason },
-        HardHit::Class(class) => GateOutcome::Park {
-            reason: format!(
-                "hard-class {}: {} — Always cannot skip",
-                class.as_str(),
-                class.label()
-            ),
-            hard: Some(class),
-            needs_jeremy: true,
-        },
-        HardHit::None => GateOutcome::Allow,
-    }
+    decide(Step::Desk { tool, args })
 }
 
 /// Args as a desktop span stores them. Typed text keeps only its length.

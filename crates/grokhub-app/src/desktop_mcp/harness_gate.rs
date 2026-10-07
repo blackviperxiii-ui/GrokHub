@@ -53,7 +53,7 @@ pub(crate) fn precheck(call: &DeskCallLine, gate: CallGate) -> Precheck {
     if !gate.enabled || gate.halted {
         return Precheck::Pass;
     }
-    match hx::desk_decide(&call.tool, &call.args) {
+    match hx::decide(hx::Step::Desk { tool: &call.tool, args: &call.args }) {
         GateOutcome::Allow => Precheck::Pass,
         GateOutcome::Refuse { reason } => Precheck::Refuse(reason),
         GateOutcome::Park { reason, hard, .. } => Precheck::Park {

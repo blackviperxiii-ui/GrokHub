@@ -274,11 +274,11 @@ pub fn decide_with(
 ) -> Decision {
     // Harness kernel: hard floor + hard class before soft Always / MCP / policy.
     // Access is applied by the cabin when building Gate (Readonly ⇒ desktop=false).
-    match crate::harness::classify(name, arguments) {
-        crate::harness::HardHit::Floor(floor) => {
-            return Decision::Refuse(floor.reason);
+    match crate::harness::decide(crate::harness::Step::Tool { name, arguments }) {
+        crate::harness::GateOutcome::Refuse { reason } => {
+            return Decision::Refuse(reason);
         }
-        crate::harness::HardHit::Class(class) => {
+        crate::harness::GateOutcome::Park { hard: Some(class), .. } => {
             // Always cannot skip. Attended parks the card; unattended and plan refuse.
             if gate.readonly_session {
                 return Decision::Refuse(readonly_refusal(name));
@@ -288,7 +288,7 @@ pub fn decide_with(
             }
             return Decision::Ask;
         }
-        crate::harness::HardHit::None => {}
+        _ => {}
     }
     if let Some(decision) = crate::mcp::permission(gate, name, arguments, latched_always, policy) {
         return decision;
