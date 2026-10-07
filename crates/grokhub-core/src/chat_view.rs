@@ -9,6 +9,27 @@ pub enum ChatKind {
     Assistant,
     Thought,
     Tool,
+    /// A slash or system result the cabin wrote (`/sync`, `/privacy`, `/help`, ...).
+    /// It keeps one style as it ages and never folds into a thought (GL-05).
+    Result,
+}
+
+/// Who wrote a transcript message. The cabin tags its own results with
+/// `mark_slash_result` when it writes them, so the pane sorts by that origin
+/// and never by what the text says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageOrigin {
+    Person,
+    Model,
+    Cabin,
+}
+
+pub fn message_origin(role: &str, content: &str) -> MessageOrigin {
+    match role {
+        "user" => MessageOrigin::Person,
+        "assistant" if content.starts_with(crate::slash::SLASH_RESULT_PREFIX) => MessageOrigin::Cabin,
+        _ => MessageOrigin::Model,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,7 +186,7 @@ pub fn apply_session_thought_act(
 pub fn thought_fold_draws(kind: ChatKind, fold: ThoughtFold) -> bool {
     match kind {
         ChatKind::Thought => fold.paints_row(),
-        ChatKind::User | ChatKind::Assistant | ChatKind::Tool => true,
+        ChatKind::User | ChatKind::Assistant | ChatKind::Tool | ChatKind::Result => true,
     }
 }
 
@@ -404,6 +425,22 @@ fn emit_stretch(out: &mut Vec<ChatView>, stretch: &[(&str, &str)], ask: &str) {
             saved_skill = true;
             continue;
         }
+        // A cabin result is not part of the model's reply. The model's run so
+        // far settles as if the stretch ended here, so the result never ages a
+        // reply into a thought, and the result itself is never a thought.
+        if message_origin(role, content) == MessageOrigin::Cabin {
+            settle_reply(out, &mut last_final, last_was_work);
+            last_was_work = false;
+            let body = visible_assistant(view_text(content));
+            if !body.is_empty() {
+                out.push(ChatView {
+                    kind: ChatKind::Result,
+                    title: String::new(),
+                    body,
+                });
+            }
+            continue;
+        }
         // A timeline caps each part, not the whole turn, so a long run of
         // thoughts and tools cannot cut off the reply at its end.
         if role == "assistant" {
@@ -457,23 +494,29 @@ fn emit_stretch(out: &mut Vec<ChatView>, stretch: &[(&str, &str)], ask: &str) {
             }
         }
     }
-    if last_was_work {
-        if let Some(prev) = last_final.take() {
-            push_thought(out, prev);
-        }
-    }
-    if let Some(prose) = last_final {
-        out.push(ChatView {
-            kind: ChatKind::Assistant,
-            title: String::new(),
-            body: prose,
-        });
-    }
+    settle_reply(out, &mut last_final, last_was_work);
     if saved_skill {
         out.push(ChatView {
             kind: ChatKind::Assistant,
             title: String::new(),
             body: SKILL_SAVED_NOTE.into(),
+        });
+    }
+}
+
+/// End of a model run: the last prose is the reply, unless a work hop came
+/// after it, in which case it was progress and folds into a thought.
+fn settle_reply(out: &mut Vec<ChatView>, last_final: &mut Option<String>, last_was_work: bool) {
+    let Some(prose) = last_final.take() else {
+        return;
+    };
+    if last_was_work {
+        push_thought(out, prose);
+    } else {
+        out.push(ChatView {
+            kind: ChatKind::Assistant,
+            title: String::new(),
+            body: prose,
         });
     }
 }
@@ -1717,13 +1760,94 @@ mod tests {
             "assistant".into(),
             "SLASH_RESULT:\n/help — this list\n/new — new chat".into(),
         )]);
-        assert_eq!(kinds(&v), vec![ChatKind::Assistant]);
+        assert_eq!(kinds(&v), vec![ChatKind::Result]);
         assert_eq!(v[0].body, "/help — this list\n/new — new chat");
         assert!(!v[0].body.contains("SLASH_RESULT"));
         assert_eq!(
             assistant_prose("SLASH_RESULT:\nGrok 4.7 — chat"),
             "Grok 4.7 — chat"
         );
+    }
+
+    /// GL-05: a cabin result that ages (a newer message lands after it) stays a
+    /// `Result`, never a thought, and it never ages the model's reply either.
+    #[test]
+    fn aged_cabin_result_is_never_a_thought() {
+        let msgs: Vec<(String, String)> = vec![
+            ("user".into(), "hello".into()),
+            ("assistant".into(), "Hi.".into()),
+            ("assistant".into(), crate::mark_slash_result("Synced chats and memory to 1 computer.")),
+            ("assistant".into(), crate::mark_slash_result("/privacy — what leaves this computer\n\nGrants")),
+            ("assistant".into(), crate::mark_slash_result("Sync to paired computers revoked. /sync asks again.")),
+        ];
+        let v = visible_chat(&msgs);
+        assert_eq!(
+            kinds(&v),
+            vec![ChatKind::User, ChatKind::Assistant, ChatKind::Result, ChatKind::Result, ChatKind::Result]
+        );
+        assert_eq!(v[2].body, "Synced chats and memory to 1 computer.");
+        assert!(!v.iter().any(|x| x.kind == ChatKind::Thought), "{v:?}");
+        // The same after the user asks again: the old results stay results.
+        let mut later = msgs.clone();
+        later.push(("user".into(), "thanks".into()));
+        later.push(("assistant".into(), "Any time.".into()));
+        let v = visible_chat(&later);
+        assert_eq!(v.iter().filter(|x| x.kind == ChatKind::Result).count(), 3);
+        assert!(!v.iter().any(|x| x.kind == ChatKind::Thought), "{v:?}");
+        // A stream refresh of the trailing stretch sorts them the same way.
+        let refs: Vec<(&str, &str)> = msgs.iter().map(|(r, c)| (r.as_str(), c.as_str())).collect();
+        let mut views = Vec::new();
+        refresh_last_stretch(&mut views, &refs);
+        assert_eq!(kinds(&views), kinds(&visible_chat(&msgs)));
+    }
+
+    /// GL-05: the pane sorts by who wrote a message (the origin tag the cabin
+    /// writes), not by what the text says.
+    #[test]
+    fn result_kind_comes_from_origin_not_text() {
+        assert_eq!(message_origin("assistant", &crate::mark_slash_result("anything")), MessageOrigin::Cabin);
+        assert_eq!(message_origin("assistant", "/privacy — what leaves this computer"), MessageOrigin::Model);
+        assert_eq!(message_origin("user", &crate::mark_slash_result("x")), MessageOrigin::Person);
+        // Model prose that happens to look like a cabin report still ages like model prose.
+        let v = visible_chat(&[
+            ("user".into(), "what leaves?".into()),
+            ("assistant".into(), "/privacy — what leaves this computer".into()),
+            ("assistant".into(), "Synced chats and memory to 1 computer.".into()),
+        ]);
+        assert_eq!(kinds(&v), vec![ChatKind::User, ChatKind::Thought, ChatKind::Assistant]);
+        // A tagged result with any text is a result.
+        let v = visible_chat(&[
+            ("assistant".into(), crate::mark_slash_result("Thinking about it")),
+            ("assistant".into(), crate::mark_slash_result("Done.")),
+        ]);
+        assert_eq!(kinds(&v), vec![ChatKind::Result, ChatKind::Result]);
+    }
+
+    /// GL-05 guard: model reasoning keeps its collapse. A progress reply that
+    /// a newer reply replaces still ages into a thought, `<think>` text is
+    /// still a thought, and a cabin result after the turn changes neither.
+    #[test]
+    fn aged_model_reasoning_still_collapses() {
+        let model: Vec<(String, String)> = vec![
+            ("user".into(), "fix it".into()),
+            ("assistant".into(), merge_thinking("Plan: read the file first.", "Looking now.")),
+            ("assistant".into(), "Fixed the typo in main.rs.".into()),
+        ];
+        let v = visible_chat(&model);
+        assert_eq!(
+            kinds(&v),
+            vec![ChatKind::User, ChatKind::Thought, ChatKind::Thought, ChatKind::Assistant]
+        );
+        assert_eq!(v[1].body, "Plan: read the file first.");
+        assert_eq!(v[2].body, "Looking now.");
+        assert!(thought_fold_draws(ChatKind::Thought, ThoughtFold::Minimized));
+        assert!(!thought_fold_draws(ChatKind::Thought, ThoughtFold::Hidden));
+        assert!(thought_fold_draws(ChatKind::Result, ThoughtFold::Hidden), "a result is never folded away");
+        let mut with_result = model.clone();
+        with_result.push(("assistant".into(), crate::mark_slash_result("Synced chats and memory to 1 computer.")));
+        let w = visible_chat(&with_result);
+        assert_eq!(&w[..v.len()], &v[..], "the model part paints exactly as before");
+        assert_eq!(w.last().map(|x| x.kind), Some(ChatKind::Result));
     }
 
     #[test]

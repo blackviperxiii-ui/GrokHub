@@ -1399,6 +1399,17 @@ pub fn tab_pill(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     felt_tab(ui, label, active)
 }
 
+/// Extra room above a section heading that opens a group of settings rows
+/// (SY-10), so the heading reads as a break and not as one more row.
+pub const SECTION_HEAD_GAP: f32 = 12.0;
+
+/// A heading that starts a new group of rows: [`SECTION_HEAD_GAP`] above, then
+/// the same [`section_label`] (the size stays).
+pub fn section_heading(ui: &mut egui::Ui, label: &str) -> bool {
+    ui.add_space(SECTION_HEAD_GAP);
+    section_label(ui, label)
+}
+
 /// Section heading. Brighter and heavier than the muted help line under it.
 pub fn section_label(ui: &mut egui::Ui, label: &str) -> bool {
     let hit = ui
@@ -2906,6 +2917,45 @@ fn take_tile_metrics() -> Vec<TileMetric> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// SY-10: a group heading gets 8–12px more room above it than a plain
+    /// label, at the same size.
+    #[test]
+    fn section_heading_adds_room_above_at_the_same_size() {
+        assert!((8.0..=12.0).contains(&SECTION_HEAD_GAP), "{SECTION_HEAD_GAP}");
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let tops = |heading: bool| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 400.0))),
+                ..Default::default()
+            };
+            let mut top = 0.0_f32;
+            let out = crate::theme::test_pass(&ctx, input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    top = ui.cursor().min.y;
+                    if heading {
+                        section_heading(ui, "Command rules");
+                    } else {
+                        section_label(ui, "Command rules");
+                    }
+                });
+            });
+            let mut at = None;
+            for clipped in &out.shapes {
+                if let egui::Shape::Text(t) = &clipped.shape {
+                    if t.galley.text() == "Command rules" {
+                        at = Some((t.pos.y - top, t.galley.rect.height()));
+                    }
+                }
+            }
+            at.expect("heading painted")
+        };
+        let (plain_y, plain_h) = tops(false);
+        let (head_y, head_h) = tops(true);
+        assert!((head_y - plain_y - SECTION_HEAD_GAP).abs() < 0.5, "{plain_y} -> {head_y}");
+        assert!((head_h - plain_h).abs() < 0.01, "the heading size stays: {plain_h} vs {head_h}");
+    }
 
     #[test]
     fn settings_toggle_hint_wraps_before_the_switch() {
