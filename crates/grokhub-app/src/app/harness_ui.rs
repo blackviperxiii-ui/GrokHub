@@ -163,6 +163,9 @@ pub(super) struct HeadlessHit {
 #[derive(Debug, Clone)]
 pub(super) struct OneShot {
     pub action: Option<String>,
+    /// A path D card's tool and class. Its re-run comes back as a path B ask
+    /// whose action is Grok's own words, so the ask matches by tool name.
+    pub step: Option<(String, HardClass)>,
     pub restore: PermissionMode,
     pub started: bool,
 }
@@ -291,9 +294,10 @@ fn cu_name(card: &ToolCard, raw: &serde_json::Value) -> String {
 }
 
 /// Grok Build's own computer use (path D): not `grokhub-desktop`, not a
-/// browser tool, and named like a screen, mouse, or keyboard tool.
+/// browser tool, and named like a screen, mouse, or keyboard tool. The name
+/// is the stream's `toolName` when sent, so a generic title still counts.
 pub(super) fn is_builtin_cu_card(card: &ToolCard) -> bool {
-    card.is_computer_use() && !is_desktop_card(card) && hx::builtin_cu(&cu_name(card, &raw_of(card)))
+    !is_desktop_card(card) && hx::builtin_cu(&cu_name(card, &raw_of(card)))
 }
 
 /// What a path D check reads: the frame's kept keys without the tool name.
@@ -447,8 +451,8 @@ impl Cabin {
                 None
             }
             GateOutcome::Park { hard: Some(class), .. } => {
-                if self.take_oneshot(&p.action) {
-                    // Approved once on the path C card: Grok's own Allow card decides.
+                if self.take_oneshot(&p.action) || self.take_oneshot_step(&p.title, &p.action, class) {
+                    // Approved once on a path C or D card: Grok's own Allow card decides.
                     return Some(p);
                 }
                 // A credential field's typed value never reaches a span or the card.
@@ -490,6 +494,25 @@ impl Cabin {
             .is_some_and(|a| a.trim() == action.trim() || action.contains(a.trim()));
         if hit {
             shot.action = None;
+            shot.step = None;
+        }
+        hit
+    }
+
+    /// The path B ask for a path D re-run: same hard class, and its title or
+    /// action names the tool the card was for.
+    fn take_oneshot_step(&mut self, title: &str, action: &str, class: HardClass) -> bool {
+        let Some(shot) = self.harness.oneshot.as_mut() else {
+            return false;
+        };
+        let hit = shot.step.as_ref().is_some_and(|(tool, c)| {
+            let tool = tool.to_ascii_lowercase();
+            *c == class
+                && (title.to_ascii_lowercase().contains(&tool) || action.to_ascii_lowercase().contains(&tool))
+        });
+        if hit {
+            shot.action = None;
+            shot.step = None;
         }
         hit
     }
@@ -547,9 +570,14 @@ impl Cabin {
             ParkSource::Desk(id) => {
                 let _ = hx::answer_park(&crate::config::config_dir(), id, approve);
             }
-            ParkSource::Headless | ParkSource::Held | ParkSource::Unasked => {
+            ParkSource::Headless | ParkSource::Held => {
                 if approve {
-                    self.start_oneshot(&park.action);
+                    self.start_oneshot(&park.action, None);
+                }
+            }
+            ParkSource::Unasked => {
+                if approve {
+                    self.start_oneshot(&park.action, Some((park.tool.clone(), park.class)));
                 }
             }
             ParkSource::Egress(dest) => {
@@ -1011,9 +1039,10 @@ impl Cabin {
 
     /// Approve on a path C card: one ACP Ask turn for that step, then the pill
     /// goes back. Flags are never loosened; Grok's own Allow card decides.
-    fn start_oneshot(&mut self, action: &str) {
+    fn start_oneshot(&mut self, action: &str, step: Option<(String, HardClass)>) {
         self.harness.oneshot = Some(OneShot {
             action: Some(action.to_string()),
+            step,
             restore: self.permission_mode,
             started: false,
         });
@@ -2218,6 +2247,34 @@ mod tests {
             .map(|s| s.claim.as_str())
             .collect();
         assert_eq!(raw_runs, vec!["Grok Build ran a hard step with no ask"; 2], "each unapproved run keeps its raw span");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_generic_titled_keyboard_step_is_watched_and_its_approve_matches_the_rerun_ask() {
+        let (_pin, root) = pinned("path-d-rerun");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.desktop_control = true;
+        cabin.permission_mode = PermissionMode::AlwaysApprove;
+        cabin.running = true;
+        // The title says nothing; the stream's toolName says keyboard.
+        let card = card("tool-1", "completed", r#"{"tool":"keyboard_type","id":"login-password"}"#);
+        assert!(cabin.harness_watch_cu(&card, false), "a keyboard step is path D computer use");
+        let park = cabin.harness.park.clone().expect("hard card");
+        assert_eq!((park.source.clone(), park.class), (ParkSource::Unasked, HardClass::Credentials));
+
+        cabin.resolve_hard_park(true, "");
+        assert_eq!(cabin.permission_mode, PermissionMode::Ask);
+        // The re-run comes back as Grok's own path B ask, in its own words.
+        let rerun = ask("keyboard_type", "type into the password field");
+        assert!(matches!(
+            hx::decide(Step::Ask { title: &rerun.title, action: &rerun.action }),
+            GateOutcome::Park { hard: Some(HardClass::Credentials), .. }
+        ));
+        assert!(cabin.harness_precheck(rerun.clone()).is_some(), "the approved step reaches Grok's Allow once");
+        assert!(cabin.harness.park.is_none());
+        assert!(cabin.harness_precheck(rerun).is_none(), "a second ask parks again");
+        assert_eq!(cabin.harness.park.as_ref().map(|p| p.class), Some(HardClass::Credentials));
         let _ = std::fs::remove_dir_all(root);
     }
 
