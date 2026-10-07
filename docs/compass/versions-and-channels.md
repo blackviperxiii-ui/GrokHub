@@ -14,7 +14,7 @@
 - `CHANGELOG.md`: `## Unreleased` collects beta notes.
 ## Change recipe
 - PR into beta: no bump. Add notes under `## Unreleased` in `CHANGELOG.md` and stop.
-- Promotion or hotfix only, on Jeremy's say: one patch bump across `VERSION`, `Cargo.toml`, the `grokhub-*` entries in `Cargo.lock`, `README.md` (headline and both Latest rows), `packaging/PKGBUILD`, `packaging/aur/PKGBUILD`, `packaging/windows/grokhub.iss`, and `cabin_reports_version` in `crates/grokhub-app/src/cli.rs`, plus a `CHANGELOG.md` section with the Linux and Windows artifact lines (`CLAUDE.md`).
+- Promotion or hotfix only, on Jeremy's say: one patch bump across `VERSION`, `Cargo.toml`, the `grokhub-*` entries in `Cargo.lock`, `docs/REFERENCE.md` (headline, both Latest rows, and the `--version` examples; `README.md` has no version strings), `packaging/PKGBUILD`, `packaging/aur/PKGBUILD`, `packaging/windows/grokhub.iss`, and `cabin_reports_version` in `crates/grokhub-app/src/cli.rs`, plus a `CHANGELOG.md` section with the Linux and Windows artifact lines (`CLAUDE.md`).
 ## What breaks it
 - Editing the Cargo version to get a beta label: build.rs derives `-beta` from the branch or `GROKHUB_CHANNEL`.
 - Bumping things that must not move: Imagine `Quality (v2.0)`, specs marked `(do not bump)`, the diagnostics fixture, and `Version=` in `packaging/grokhub.desktop`.

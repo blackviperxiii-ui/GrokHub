@@ -8,7 +8,7 @@ The format follows Meta's "compass, not encyclopedia" write-up (Engineering at M
 | --- | --- |
 | [grokhub-core](grokhub-core.md) | `crates/grokhub-core/`: the shared brain, re-exports, script-text tests |
 | [amr](amr.md) | `crates/grokhub-core/src/amr/`: agent memory repo M0 and `/recall` |
-| [slash](slash.md) | slash parsing (core), dispatch (app), native parity (agent), FFI kind |
+| [slash](slash.md) | slash parsing (core), dispatch (app), native parity (agent) |
 | [grokhub-acp](grokhub-acp.md) | `crates/grokhub-acp/`: the `grok` CLI client, ACP, headless `grok -p`, cabin `GROK_HOME` |
 | [grokhub-agent](grokhub-agent.md) | `crates/grokhub-agent/`: the native Lab engine |
 | [harness](harness.md) | `crates/grokhub-agent/src/harness/`: Spike-0 approval gate, paths A/B/C/E |
@@ -18,7 +18,6 @@ The format follows Meta's "compass, not encyclopedia" write-up (Engineering at M
 | [heartbeat](heartbeat.md) | the 15 s pulse, the proactive-act throttle, scheduled jobs and Halt |
 | [desktop-mcp](desktop-mcp.md) | `crates/grokhub-app/src/desktop_mcp/` and `crates/grokhub-core/src/desktop_mcp.rs` |
 | [grokhub-hub](grokhub-hub.md) | `crates/grokhub-hub/`: LAN `/v1` hub and pairing |
-| [grokhub-ffi](grokhub-ffi.md) | `crates/grokhub-ffi/`: C ABI for Android and Windows |
 | [install-scripts](install-scripts.md) | `scripts/install.sh` and friends, plus the tests that pin their text |
 | [versions-and-channels](versions-and-channels.md) | version bumps, beta/stable channels, the build label |
 
