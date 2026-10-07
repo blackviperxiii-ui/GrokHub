@@ -24,6 +24,7 @@
 - The floor covers shell commands only (same scope as `host_safety`); read-only tools are never hard class.
 - Park handoff is files: `{config_dir}/harness/park`, plus `harness/turn.json` so the `--mcp-desktop` process writes spans into the open chat's `spans/<chat>.jsonl`. No answer in `APPROVAL_TTL`, a halt, or a closed cabin means Deny.
 - Spans only gain `#[serde(default)]` fields; old lines must still parse. Typed text is stored as its length.
+- Hard and ACP cards share `approval_card_width` (`APPROVAL_CARD_MAX_W`, 520) in `harness_ui.rs`; Esc denies a hard card. The Grant full card shows only with `GROKHUB_GRANT_FULL=1`: `grant_full_card_on` is read in `Cabin::new`, not `quiet_for_test`, so tests set `full_card_on`.
 - GB `PreToolUse` hooks are not the lock: they fail open. `CLI_CREDENTIAL_DENY` from grokhub-acp rides along on path C.
 ## See also
 - [desktop-mcp](desktop-mcp.md), [grokhub-agent](grokhub-agent.md), [grokhub-acp](grokhub-acp.md)
