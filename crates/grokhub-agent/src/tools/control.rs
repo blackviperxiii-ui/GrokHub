@@ -546,6 +546,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Spike-5b: scheduler writes are the agent's own, so each keeps a
+    /// version, and a third new job in a week is refused in plain words
+    /// until the user keeps one.
+    #[test]
+    fn agent_jobs_are_versioned_and_capped_at_two_a_week() {
+        let dir = crate::harness::test_dir("auto-cap");
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        let now = now_ms();
+        write_automation("check the build", 10, false, None, now).unwrap();
+        write_automation("sweep the inbox", 30, false, None, now).unwrap();
+        assert_eq!(
+            write_automation("water the plants", 60, false, None, now + 1).unwrap_err(),
+            "Not added: GrokHub already made 2 automations on its own this week. \
+             Keep one from its Work-tree row, or add this one yourself on the Automations page."
+        );
+        assert_eq!(load_list(&store_path()).unwrap().len(), 2, "the third was not written");
+        let week = crate::harness::WEEK_MS;
+        assert!(write_automation("water the plants", 60, false, None, now + week + 1).is_ok(), "a week on, room again");
+        let ledger = crate::harness::ChangeLedger::load_kind(&dir, crate::harness::ChangeKind::Automation);
+        let lines: Vec<(&str, &str, &str)> =
+            ledger.all().iter().map(|c| (c.op.as_str(), c.origin.as_str(), c.reason.as_str())).collect();
+        assert_eq!(
+            lines,
+            [
+                ("create", "self_manage", "scheduled every 10 min"),
+                ("create", "self_manage", "scheduled every 30 min"),
+                ("create", "self_manage", "scheduled every 60 min"),
+            ]
+        );
+        let id = ledger.all()[0].id.clone();
+        write_automation("check the build twice", 5, false, Some(&id), now).unwrap();
+        delete_automation(&id).unwrap();
+        let ops: Vec<&str> = crate::harness::ChangeLedger::load_kind(&dir, crate::harness::ChangeKind::Automation)
+            .all()
+            .iter()
+            .map(|c| c.op.as_str())
+            .collect();
+        assert_eq!(ops, ["create", "create", "create", "modify", "delete"]);
+        let _ = take_automation_changes();
+        let _ = crate::harness::take_self_changes(&dir);
+    }
+
     #[test]
     fn interval_rejects_a_short_or_long_gap() {
         assert!(interval_minutes("30s").is_err());

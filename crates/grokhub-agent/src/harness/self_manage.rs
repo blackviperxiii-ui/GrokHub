@@ -205,6 +205,27 @@ pub fn undo_connection(config_dir: &Path, mcp_file: &Path, name: &str, ask: Undo
     Ok(done)
 }
 
+/// Native tools that change a connection or an automation on the agent's
+/// own. Their spans carry `Origin::SelfManage`.
+pub const SELF_MANAGE_TOOLS: &[&str] = &[
+    "scheduler_create",
+    "scheduler_delete",
+    "connection_add",
+    "connection_disable",
+    "connection_delete",
+];
+
+/// The span origin for a tool call: `SelfManage` for [`SELF_MANAGE_TOOLS`]
+/// (also as an MCP leaf name), else `User`.
+pub fn tool_origin(name: &str) -> Origin {
+    let leaf = name.rsplit("__").next().unwrap_or(name);
+    if SELF_MANAGE_TOOLS.contains(&leaf) {
+        Origin::SelfManage
+    } else {
+        Origin::User
+    }
+}
+
 /// Why one more agent-made automation is refused, or `None` when it may go:
 /// [`SELF_AUTOMATION_WEEK_CAP`] creates in the [`WEEK_MS`] before `now_ms`,
 /// and the user has not kept one yet.
@@ -217,7 +238,8 @@ pub fn automation_cap_refusal(config_dir: &Path, now_ms: u64) -> Option<String> 
         .all()
         .iter()
         .filter(|c| c.op == ChangeOp::Create && c.origin == Origin::SelfManage)
-        .filter(|c| c.at <= now_ms && now_ms - c.at < WEEK_MS)
+        // A line stamped after `now_ms` (clock skew) still counts.
+        .filter(|c| now_ms.saturating_sub(c.at) < WEEK_MS)
         .count();
     (made >= SELF_AUTOMATION_WEEK_CAP).then(|| {
         format!(
@@ -385,6 +407,13 @@ mod tests {
         assert_eq!(ledger.open_self_change("auto-2"), None, "kept: no row");
         assert_eq!(ledger.open_self_change("auto-1").map(|c| c.seq), Some(1));
         assert_eq!(ledger.undo_target("auto-2").map(|c| c.seq), Some(2), "Keep is not an undo target");
+    }
+
+    #[test]
+    fn self_manage_tools_tag_their_spans() {
+        assert_eq!(tool_origin("connection_add"), Origin::SelfManage);
+        assert_eq!(tool_origin("grokhub__scheduler_delete"), Origin::SelfManage);
+        assert_eq!(tool_origin("run_terminal_command"), Origin::User);
     }
 
     #[test]

@@ -66,8 +66,8 @@ pub use changes::{
     CONNECTION_LEDGER_FILE, FINDINGS_FILE, HISTORY_CAP, LEDGER_LINE_CAP, LEDGER_SCOPE_VIOLATION, SKILL_LEDGER_FILE,
 };
 pub use self_manage::{
-    automation_cap_refusal, open_connection_token, undo_connection, AutomationsFile, McpFile,
-    SELF_AUTOMATION_WEEK_CAP, WEEK_MS,
+    automation_cap_refusal, open_connection_token, tool_origin, undo_connection, AutomationsFile, McpFile,
+    SELF_AUTOMATION_WEEK_CAP, SELF_MANAGE_TOOLS, WEEK_MS,
 };
 pub(crate) use self_manage::{forget_connection_token, seal_connection_token};
 pub use consent::{

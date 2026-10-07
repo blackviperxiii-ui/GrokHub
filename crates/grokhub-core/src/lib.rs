@@ -525,7 +525,7 @@ pub use update_feed::{
     automation_home_note, clear_less_mute, hide_home_source, home_event_cards, mute_less_like,
     record_home_floors, refresh_event_why, runs_latest_line, source_hidden, surfaces_on_home,
     unhide_home_source, HOME_HIDDEN_NOTE, LESS_MUTE_MS,
-    post_update, release_quiet_hold, resume_needs_fresh_chat, schedule_created_card,
+    post_update, release_quiet_hold, resume_needs_fresh_chat, schedule_created_card, self_change_card,
     suggestion_card, tick_feed_pulse, visible_digests, visible_ideas, visible_updates,
     digest_lookup_prompt, digest_steer, drop_dead_links, parse_lookup, public_http_url, post_help, remember_dismissed_source,
     remember_turned_down, turned_down_titles, turned_down_topic,

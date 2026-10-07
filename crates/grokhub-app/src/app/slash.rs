@@ -154,6 +154,8 @@ impl Cabin {
             Slash::SkillChanges => self.run_skill_changes(),
             Slash::SkillUndo(name) => self.run_skill_undo(&name),
             Slash::SkillRestore(name) => self.run_skill_restore(&name),
+            Slash::ConnectionChanges => self.run_change_report(grokhub_agent::harness::ChangeKind::Connection),
+            Slash::AutomationChanges => self.run_change_report(grokhub_agent::harness::ChangeKind::Automation),
             Slash::GrokWorkflows => {
                 self.nav = Nav::Skills;
                 self.skills_tab_connectors = false;
