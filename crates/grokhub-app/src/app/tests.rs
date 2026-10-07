@@ -5357,6 +5357,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             sync_spawn < sync_read,
             "/sync must slurp SOUL/USER/MEMORY off the UI thread: {sync}"
         );
+        assert!(
+            sync.contains("pin_scheduled_dir"),
+            "/sync worker must pin config_dir like other persist workers: {sync}"
+        );
         let thread_rows = sync
             .split("let threads = snap")
             .nth(1)
@@ -10902,6 +10906,8 @@ fn skills_connectors_and_sessions_without_grok() {
 fn sync_writes_a_local_hub_snapshot() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("sync-local");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
     std::env::set_var("GROKHUB_CONFIG", &root);
     let mut cabin = Cabin::quiet_for_test();
     cabin.cfg.device_name = "harbor".into();
@@ -10910,12 +10916,21 @@ fn sync_writes_a_local_hub_snapshot() {
     assert!(cabin.sync_rx.is_some());
     cabin.run_slash_line("/sync");
     assert_eq!(cabin.status, "Syncing…");
+    // Windows ACL + antivirus can make the sync worker's first secrets/app.json
+    // writes take longer than a tight 2s poll. Wait for the channel, not a wall clock.
     let start = std::time::Instant::now();
-    while cabin.sync_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(2) {
+    let budget = std::time::Duration::from_secs(8);
+    while cabin.sync_rx.is_some() && start.elapsed() < budget {
         cabin.poll_sync();
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    assert!(matches!(cabin.nav, Nav::Devices));
+    assert!(
+        matches!(cabin.nav, Nav::Devices),
+        " /sync must open Devices after the hub snapshot lands; status={:?} sync_rx={} after {:?}",
+        cabin.status,
+        cabin.sync_rx.is_some(),
+        start.elapsed()
+    );
     assert_eq!(cabin.status, "Merged hub snapshot from harbor");
     assert!(cabin.sync_rx.is_none());
     std::env::remove_var("GROKHUB_CONFIG");
@@ -21316,6 +21331,67 @@ fn has_key_false_when_idle() {
     assert!(!cabin.has_key());
 }
 
+#[test]
+fn account_settings_pulls_disk_oauth_and_shows_connected_chrome() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("acct-oauth-ui");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    // quiet_for_test: no install/update workers that can outlive the test on Windows.
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(
+        cabin.secrets.oauth.is_none(),
+        "quiet cabin starts without oauth in memory"
+    );
+    // Simulate grokhub --oauth writing secrets while the cabin is already open.
+    let tokens = grokhub_core::XaiOAuthTokens {
+        access_token: "qa-access".into(),
+        name: Some("GrokHub QA".into()),
+        email: Some("grokhub-qa@agentmail.to".into()),
+        connected_at: 1,
+        ..Default::default()
+    };
+    crate::secrets::save(&crate::secrets::Secrets {
+        oauth: Some(tokens),
+        ..Default::default()
+    })
+    .expect("save secrets");
+    assert!(
+        cabin.secrets.oauth.is_none(),
+        "in-memory oauth stays empty until Account pulls disk"
+    );
+    cabin.pull_account_oauth_from_disk();
+    assert!(cabin.account_oauth_present(), "disk oauth must load into Account");
+    let chrome = account_connect_chrome(cabin.secrets.oauth.as_ref());
+    assert!(chrome.connected);
+    assert_eq!(chrome.action, "Sign out");
+    assert_eq!(chrome.title, "Connected");
+    assert_eq!(chrome.hint, "GrokHub QA · grokhub-qa@agentmail.to");
+    // Signed-out chrome stays for the empty case.
+    let signed_out = account_connect_chrome(None);
+    assert_eq!(signed_out.action, "Sign in with Grok");
+    let settings = include_str!("settings.rs");
+    let account = settings
+        .split("SettingsSec::Account => {")
+        .nth(1)
+        .and_then(|s| s.split("SettingsSec::Appearance => {").next())
+        .expect("Account");
+    assert!(
+        account.contains("account_auth.title")
+            && account.contains("account_auth.hint")
+            && account.contains("account_auth.action")
+            && account.contains("account_auth.connected"),
+        "Account must paint Connect Grok from account_connect_chrome: {account}"
+    );
+    assert!(
+        settings.contains("pull_account_oauth_from_disk"),
+        "Settings must pull secrets.json oauth before painting Account"
+    );
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+
 // Folded from PR #354.
 #[test]
 fn update_pending_now_none_when_idle() {
@@ -21584,8 +21660,15 @@ fn native_auto_keeps_the_permission_card() {
 #[test]
 fn signin_button_and_keychain_move() {
     let settings = include_str!("settings.rs");
-    assert!(settings.contains("Sign in with Grok"));
-    assert!(settings.contains("Connect Grok"));
+    let oauth = include_str!("oauth.rs");
+    assert!(
+        settings.contains("account_connect_chrome")
+            && settings.contains("pull_account_oauth_from_disk")
+            && oauth.contains("Sign in with Grok")
+            && oauth.contains("Sign out"),
+        "Account Connect Grok chrome must pull disk oauth and paint Sign in / Sign out"
+    );
+    assert!(settings.contains("Connect Grok") || oauth.contains("Connect Grok"));
 
     struct Mem {
         current: std::sync::Mutex<Option<grokhub_core::ImagineTokens>>,
