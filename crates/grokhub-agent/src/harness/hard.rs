@@ -72,8 +72,14 @@ fn command_arg(arguments: &str) -> Option<String> {
     v.get("command").and_then(|c| c.as_str()).map(str::to_string)
 }
 
-/// Classify a tool call. Floor wins over class.
+/// Classify a tool call. Floor wins over class. A `use_tool` call (deferred
+/// MCP tools, Spike-2b) is classified as the tool it names.
 pub fn classify(name: &str, arguments: &str) -> HardHit {
+    if name == "use_tool" {
+        if let Some((target, inner)) = use_tool_target(arguments) {
+            return classify(&target, &inner);
+        }
+    }
     if let Some(floor) = hard_floor(name, arguments) {
         return HardHit::Floor(floor);
     }
@@ -81,6 +87,21 @@ pub fn classify(name: &str, arguments: &str) -> HardHit {
         Some(class) => HardHit::Class(class),
         None => HardHit::None,
     }
+}
+
+/// The `server__tool` name and its JSON arguments inside a `use_tool` call.
+fn use_tool_target(arguments: &str) -> Option<(String, String)> {
+    let v: serde_json::Value = serde_json::from_str(arguments).ok()?;
+    let name = v.get("name")?.as_str()?.trim();
+    if name.is_empty() || name == "use_tool" {
+        return None;
+    }
+    let inner = match v.get("arguments") {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(a) if a.is_object() => a.to_string(),
+        _ => "{}".into(),
+    };
+    Some((name.to_string(), inner))
 }
 
 /// Classify a Grok Build permission ask (ACP / native side ask) from its title and
@@ -94,6 +115,9 @@ pub fn classify_ask(title: &str, action: &str) -> HardHit {
     if let Some(class) = command_class(&action.to_ascii_lowercase()) {
         return HardHit::Class(class);
     }
+    if let Some(rule) = ask_click(title, action) {
+        return HardHit::Class(rule.class);
+    }
     let slug = title.trim().to_ascii_lowercase().replace([' ', '-'], "_");
     let typing = field_words(title).iter().any(|w| matches!(w.as_str(), "type" | "typing" | "fill" | "input"));
     if typing && (credential_hint(title) || credential_hint(action)) {
@@ -103,6 +127,25 @@ pub fn classify_ask(title: &str, action: &str) -> HardHit {
         Some(class) => HardHit::Class(class),
         None => HardHit::None,
     }
+}
+
+/// Paths B and D: an ask or tool card that clicks a control. The label is
+/// the first quoted text in the action, else the action after "click".
+fn ask_click(title: &str, action: &str) -> Option<ClickRule> {
+    let clicks = |s: &str| field_words(s).iter().any(|w| w == "click" || w == "tap");
+    if !clicks(title) && !clicks(action) {
+        return None;
+    }
+    let quoted = action.split(['"', '\u{201c}', '\u{201d}']).nth(1).filter(|q| !q.trim().is_empty());
+    let label = match quoted {
+        Some(q) => q.to_string(),
+        None => {
+            let words = field_words(action);
+            let from = words.iter().position(|w| w == "click" || w == "tap").map_or(0, |i| i + 1);
+            words[from..].iter().filter(|w| !matches!(w.as_str(), "on" | "the" | "button")).cloned().collect::<Vec<_>>().join(" ")
+        }
+    };
+    click_target_class(None, &label, "")
 }
 
 /// Path A: a `grokhub-desktop` tool call. Typed text is checked like a shell
@@ -147,12 +190,204 @@ pub fn desk_classify(tool: &str, args: &serde_json::Value) -> HardHit {
             classify("run_terminal_command", &serde_json::json!({ "command": app }).to_string())
         }
         "focus_window" => HardHit::None,
+        // Spike-2b: what the control under the click does, checked before it runs.
+        "click" => match click_rule(args) {
+            Some(rule) => HardHit::Class(rule.class),
+            None => HardHit::None,
+        },
         // `delete_files` and any later named tool: the same name words as MCP tools.
         other => match name_class(&other.to_ascii_lowercase()) {
             Some(class) => HardHit::Class(class),
             None => HardHit::None,
         },
     }
+}
+
+/// Spike-2b: the rule a click target matched. `id` names the rule
+/// (`send:Send`, `money:Place order`), never the on-screen label.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClickRule {
+    pub class: HardClass,
+    pub id: String,
+}
+
+impl ClickRule {
+    fn new(class: HardClass, word: &str) -> Self {
+        let mut w = word.to_string();
+        if let Some(first) = w.get_mut(0..1) {
+            first.make_ascii_uppercase();
+        }
+        Self { class, id: format!("{}:{w}", class.as_str()) }
+    }
+
+    /// What the card says Grok will click: the rule's word (`Send`).
+    pub fn word(&self) -> &str {
+        self.id.split_once(':').map_or("", |(_, w)| w)
+    }
+}
+
+/// Click label phrases per class, matched as whole words in order, any case.
+/// Longer phrases come first so the rule id names the longest match.
+const CLICK_MONEY: &[&str] =
+    &["confirm payment", "place order", "pay", "buy", "purchase", "checkout", "subscribe", "donate", "transfer"];
+const CLICK_SEND: &[&str] = &["send", "resend", "post", "publish", "reply", "tweet", "share", "upload"];
+const CLICK_DELETE: &[&str] =
+    &["empty recycle bin", "empty trash", "empty bin", "delete", "remove", "erase", "discard"];
+const CLICK_OS: &[&str] = &["factory reset", "reset", "wipe", "format"];
+
+/// "Reset zoom", "Reset view": a reset of what the window shows, not of data.
+const SOFT_RESETS: &[&str] = &["zoom", "view", "filter", "filters", "search", "sort", "layout", "columns", "selection", "font", "scale"];
+/// "Format" is only irreversible on a disk ("Format cells" is a dialog).
+const FORMAT_TARGETS: &[&str] = &["disk", "drive", "partition", "volume", "usb", "sd", "card", "device", "storage"];
+/// A label that undoes the action reads as soft ("Undo send", "Don't save").
+const UNDO_LEADS: &[&str] = &["undo", "don t", "dont", "do not"];
+/// Roles that show text and act on nothing.
+const TEXT_ROLES: &[&str] =
+    &["label", "static text", "statictext", "axstatictext", "heading", "paragraph", "tooltip", "status bar", "title bar"];
+/// Window or app words that make "Submit" a send or a payment.
+const SUBMIT_SEND: &[&str] =
+    &["message", "messages", "compose", "mail", "email", "chat", "reply", "comment", "post", "tweet", "inbox", "draft"];
+const SUBMIT_MONEY: &[&str] = &["checkout", "payment", "pay", "cart", "billing", "order", "purchase"];
+
+/// A declared effect (Cua tool metadata) as a hard class.
+fn effect_class(effect: &str) -> Option<HardClass> {
+    let words = field_words(effect);
+    let has = |list: &[&str]| words.iter().any(|w| list.contains(&w.as_str()));
+    if has(&["money", "payment", "purchase", "pay", "spend"]) {
+        Some(HardClass::Money)
+    } else if has(&["send", "post", "publish", "upload", "share", "message"]) {
+        Some(HardClass::Send)
+    } else if has(&["delete", "destructive", "remove", "erase"]) {
+        Some(HardClass::Delete)
+    } else if has(&["credentials", "credential", "secret", "password"]) {
+        Some(HardClass::Credentials)
+    } else if has(&["irreversible", "reset", "wipe", "format"]) {
+        Some(HardClass::IrreversibleOs)
+    } else {
+        None
+    }
+}
+
+/// Index where `phrase` starts as whole words in `words`.
+fn phrase_at(words: &[String], phrase: &str) -> Option<usize> {
+    let p: Vec<&str> = phrase.split(' ').collect();
+    (0..words.len().saturating_sub(p.len() - 1)).find(|&i| p.iter().enumerate().all(|(j, w)| words[i + j] == *w))
+}
+
+/// What a click on this control will do. A declared hard `effect` beats the
+/// label; a declared soft effect never makes a hard label soft (stricter
+/// only, D1). Labels match as whole words, any case, like
+/// `credential_field`. Unknown or empty labels are soft (`None`).
+pub fn click_target_class(effect: Option<&str>, label: &str, role: &str) -> Option<ClickRule> {
+    click_target_in(effect, label, role, "")
+}
+
+/// [`click_target_class`] with the window or app title as `context`, which
+/// decides whether "Submit" sends a message or pays.
+pub fn click_target_in(effect: Option<&str>, label: &str, role: &str, context: &str) -> Option<ClickRule> {
+    if let Some(class) = effect.and_then(effect_class) {
+        return Some(ClickRule { class, id: format!("{}:effect", class.as_str()) });
+    }
+    let words = field_words(label);
+    if words.is_empty() || TEXT_ROLES.contains(&field_words(role).join(" ").as_str()) {
+        return None;
+    }
+    let joined = words.join(" ");
+    if UNDO_LEADS.iter().any(|u| joined == *u || joined.starts_with(&format!("{u} "))) {
+        return None;
+    }
+    for (class, list) in [
+        (HardClass::Money, CLICK_MONEY),
+        (HardClass::Send, CLICK_SEND),
+        (HardClass::Delete, CLICK_DELETE),
+        (HardClass::IrreversibleOs, CLICK_OS),
+    ] {
+        for phrase in list {
+            let Some(at) = phrase_at(&words, phrase) else {
+                continue;
+            };
+            let rest = &words[at + phrase.split(' ').count()..];
+            let soft = match *phrase {
+                "reset" => rest.iter().any(|w| SOFT_RESETS.contains(&w.as_str())),
+                "format" => !rest.is_empty() && !rest.iter().any(|w| FORMAT_TARGETS.contains(&w.as_str())),
+                _ => false,
+            };
+            if !soft {
+                return Some(ClickRule::new(class, phrase));
+            }
+        }
+    }
+    if words.iter().any(|w| w == "submit") {
+        let around: Vec<String> = words.iter().cloned().chain(field_words(context)).collect();
+        let has = |list: &[&str]| around.iter().any(|w| list.contains(&w.as_str()));
+        if has(SUBMIT_MONEY) {
+            return Some(ClickRule::new(HardClass::Money, "submit"));
+        }
+        if has(SUBMIT_SEND) {
+            return Some(ClickRule::new(HardClass::Send, "submit"));
+        }
+    }
+    None
+}
+
+/// Where a click's target came from, for the span: the cabin's AX read
+/// (`ax`), the caller's own args (`args`), or nothing found (`unknown`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClickTarget {
+    pub label: String,
+    pub role: String,
+    pub effect: Option<String>,
+    pub context: String,
+    pub source: &'static str,
+}
+
+/// Cabin hint key on a desk click: what the gate read at the click point
+/// (`{"label","role","effect","window"}` or `{"unknown":true}`). Stripped
+/// before the call runs and before any span or park file.
+pub const TARGET_HINT: &str = "_target";
+
+fn str_at<'a>(v: &'a serde_json::Value, keys: &[&str]) -> Option<&'a str> {
+    keys.iter().find_map(|k| v.get(*k).and_then(|s| s.as_str()).filter(|s| !s.trim().is_empty()))
+}
+
+/// The control a desk click lands on: the cabin's [`TARGET_HINT`], else what
+/// the caller named (`element`, `label`, `role`, `effect`).
+pub fn click_target(args: &serde_json::Value) -> ClickTarget {
+    const LABELS: &[&str] = &["label", "ax_label", "aria_label", "title", "name"];
+    const ROLES: &[&str] = &["role", "ax_role"];
+    let hint = args.get(TARGET_HINT).filter(|h| h.is_object());
+    let element = args.get("element").filter(|e| e.is_object());
+    let context = [hint, Some(args)]
+        .into_iter()
+        .flatten()
+        .find_map(|v| str_at(v, &["window", "app"]))
+        .unwrap_or("")
+        .to_string();
+    let effect = [hint, element, Some(args)].into_iter().flatten().find_map(|v| str_at(v, &["effect"])).map(str::to_string);
+    if let Some(label) = hint.and_then(|h| str_at(h, LABELS)) {
+        let role = hint.and_then(|h| str_at(h, ROLES)).unwrap_or("");
+        return ClickTarget { label: label.into(), role: role.into(), effect, context, source: "ax" };
+    }
+    let own = [element, Some(args)].into_iter().flatten().find_map(|v| str_at(v, &["label", "ax_label", "aria_label"]));
+    if let Some(label) = own {
+        let role = [element, Some(args)].into_iter().flatten().find_map(|v| str_at(v, ROLES)).unwrap_or("");
+        return ClickTarget { label: label.into(), role: role.into(), effect, context, source: "args" };
+    }
+    let unknown = hint.is_some_and(|h| h.get("unknown").and_then(|u| u.as_bool()) == Some(true));
+    ClickTarget { effect, context, source: if unknown { "unknown" } else { "" }, ..ClickTarget::default() }
+}
+
+/// The rule a desk click matches, if any.
+pub fn click_rule(args: &serde_json::Value) -> Option<ClickRule> {
+    let t = click_target(args);
+    click_target_in(t.effect.as_deref(), &t.label, &t.role, &t.context)
+}
+
+/// The hard card line for a parked click: "Grok wants to click Send in Mail".
+pub fn click_action(args: &serde_json::Value, rule: &ClickRule) -> String {
+    let t = click_target(args);
+    let place = if t.context.is_empty() { "the focused window".to_string() } else { t.context.chars().take(60).collect() };
+    format!("Grok wants to click {} in {place}", rule.word())
 }
 
 /// Delete and Shift+Delete. On a file manager they delete the selection.
@@ -634,6 +869,10 @@ pub const GB_DENY_GAPS: &[(&str, &str)] = &[
         "computer_screenshot",
         "Grok Build's own (non-MCP) computer-use tools: GB rules name only Bash, Read, Edit/Write, Grep/Glob, MCPTool, WebFetch and WebSearch; the path D watchdog checks their frames",
     ),
+    (
+        "grokhub-desktop__click",
+        "a click on a Send, Pay, Delete, or Reset control (the label under the click point, not the tool name)",
+    ),
 ];
 
 /// Floor for shell commands: host_safety paths, rm -rf /, fork bomb, mkfs, dd to a disk,
@@ -715,6 +954,13 @@ pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
     }
     let lower = name.to_ascii_lowercase();
     let leaf = lower.rsplit("__").next().unwrap_or(&lower);
+    // Spike-2b path E: a click that names its target is classified by it.
+    if matches!(leaf, "click" | "double_click" | "right_click") {
+        let args = serde_json::from_str::<serde_json::Value>(arguments).unwrap_or_default();
+        if let Some(rule) = click_rule(&args) {
+            return Some(rule.class);
+        }
+    }
     if is_typing_tool(leaf)
         && serde_json::from_str::<serde_json::Value>(arguments).is_ok_and(|v| credential_field(&v))
     {
@@ -975,7 +1221,7 @@ mod tests {
 
     #[test]
     fn gb_deny_gaps_are_hard_but_no_rule_can_match_them() {
-        assert_eq!(GB_DENY_GAPS.len(), 8);
+        assert_eq!(GB_DENY_GAPS.len(), 9);
         for (sample, _) in &GB_DENY_GAPS[..5] {
             assert!(hard_shell(sample), "classifier: {sample}");
             assert!(!gb_denies("Bash", sample), "now covered, drop it from the gaps: {sample}");
@@ -989,6 +1235,9 @@ mod tests {
         assert_eq!(builtin, "computer_screenshot");
         assert!(crate::harness::builtin_cu(builtin));
         assert!(!gb_denies("MCPTool", builtin) && !rule_hits(BUILTIN_CU_DENY, "MCPTool", builtin));
+        // Spike-2b: a click's class is the control under it, not the tool name.
+        assert_eq!(GB_DENY_GAPS[8].0, "grokhub-desktop__click");
+        assert!(!gb_denies("MCPTool", GB_DENY_GAPS[8].0));
         assert_eq!(
             desk_classify("type", &serde_json::json!({ "text": "hunter22", "label": "Password" })),
             HardHit::Class(HardClass::Credentials)
@@ -1217,5 +1466,132 @@ mod tests {
         assert_eq!(classify_ask("send_email", "to jeremy"), HardHit::Class(HardClass::Send));
         assert_eq!(classify_ask("Run command", "ls -la"), HardHit::None);
         assert_eq!(classify_ask("grokhub-desktop__click", "click 10,20"), HardHit::None);
+    }
+
+    /// Spike-2b: (effect, label, role, context, expected rule id or "" for soft).
+    const CLICK_TABLE: &[(Option<&str>, &str, &str, &str, &str)] = &[
+        // Send (Hermes #4)
+        (None, "Send", "push button", "", "send:Send"),
+        (None, "send now", "button", "", "send:Send"),
+        (None, "Post", "push button", "", "send:Post"),
+        (None, "Publish", "link", "", "send:Publish"),
+        (None, "Reply", "push button", "", "send:Reply"),
+        (None, "Tweet", "push button", "", "send:Tweet"),
+        (None, "Share", "push button", "", "send:Share"),
+        (None, "Resend code", "link", "", "send:Resend"),
+        (None, "Submit", "push button", "Compose — Mail", "send:Submit"),
+        // Upload or Publish of a file or screenshot (Hermes #9)
+        (None, "Upload screenshot", "push button", "", "send:Upload"),
+        (None, "Publish file", "menu item", "", "send:Publish"),
+        // Money (Hermes #3)
+        (None, "Pay", "push button", "", "money:Pay"),
+        (None, "Pay now", "push button", "", "money:Pay"),
+        (None, "Buy now", "push button", "", "money:Buy"),
+        (None, "Purchase", "push button", "", "money:Purchase"),
+        (None, "Place order", "push button", "", "money:Place order"),
+        (None, "Proceed to Checkout", "link", "", "money:Checkout"),
+        (None, "Confirm payment", "push button", "", "money:Confirm payment"),
+        (None, "Subscribe", "push button", "", "money:Subscribe"),
+        (None, "Donate $5", "push button", "", "money:Donate"),
+        (None, "Transfer", "push button", "", "money:Transfer"),
+        (None, "Submit", "push button", "Checkout — Shop", "money:Submit"),
+        // Delete
+        (None, "Delete", "push button", "", "delete:Delete"),
+        (None, "Remove", "menu item", "", "delete:Remove"),
+        (None, "Empty Trash", "menu item", "", "delete:Empty trash"),
+        (None, "Erase", "push button", "", "delete:Erase"),
+        (None, "Discard draft", "push button", "", "delete:Discard"),
+        // Irreversible OS (Hermes #8)
+        (None, "Reset", "push button", "", "irreversible_os:Reset"),
+        (None, "Reset all settings", "push button", "", "irreversible_os:Reset"),
+        (None, "Factory reset", "push button", "", "irreversible_os:Factory reset"),
+        (None, "Wipe", "push button", "", "irreversible_os:Wipe"),
+        (None, "Format", "push button", "", "irreversible_os:Format"),
+        (None, "Format disk", "push button", "", "irreversible_os:Format"),
+        // A declared effect beats the label.
+        (Some("payment"), "Continue", "push button", "", "money:effect"),
+        (Some("destructive"), "OK", "push button", "", "delete:effect"),
+        (Some("send"), "Pay", "push button", "", "send:effect"),
+        // A soft declared effect never makes a hard label soft (D1).
+        (Some("none"), "Pay", "push button", "", "money:Pay"),
+        // Look-alikes that stay soft.
+        (None, "Sender", "push button", "", ""),
+        (None, "Sent", "tree item", "", ""),
+        (None, "Payload", "push button", "", ""),
+        (None, "Payment methods", "link", "", ""),
+        (None, "Removed items", "tree item", "", ""),
+        (None, "Deleted Items", "tree item", "", ""),
+        (None, "Reset zoom", "menu item", "", ""),
+        (None, "Reset view", "menu item", "", ""),
+        (None, "Format cells", "menu item", "", ""),
+        (None, "Format painter", "toggle button", "", ""),
+        (None, "Shared with me", "link", "", ""),
+        (None, "Posts", "page tab", "", ""),
+        (None, "Unsubscribe", "link", "", ""),
+        (None, "Undo send", "push button", "", ""),
+        (None, "Don't save", "push button", "", ""),
+        (None, "Send", "heading", "", ""),
+        (None, "Submit", "push button", "Contact form", ""),
+        (None, "Save", "push button", "Save Screenshot", ""),
+        (None, "Dark mode", "toggle button", "", ""),
+        (None, "Card number", "text", "", ""),
+        (None, "", "push button", "", ""),
+        (None, "   ", "", "", ""),
+    ];
+
+    #[test]
+    fn click_targets_match_whole_words_and_look_alikes_stay_soft() {
+        assert!(CLICK_TABLE.len() >= 30, "{}", CLICK_TABLE.len());
+        for (effect, label, role, context, want) in CLICK_TABLE {
+            let got = click_target_in(*effect, label, role, context).map(|r| r.id).unwrap_or_default();
+            assert_eq!(got.as_str(), *want, "effect={effect:?} label={label:?} role={role:?} context={context:?}");
+        }
+        assert_eq!(click_target_class(None, "Send", "push button").map(|r| r.class), Some(HardClass::Send));
+        assert_eq!(click_target_class(None, "Send", "push button").unwrap().word(), "Send");
+        assert_eq!(click_target_class(None, "Place order", "").unwrap().word(), "Place order");
+        // Without a context, "Submit" can't say what it submits: soft.
+        assert_eq!(click_target_class(None, "Submit", "push button"), None);
+    }
+
+    #[test]
+    fn a_desk_click_is_classified_by_its_target_and_the_card_names_the_rule() {
+        let ax = serde_json::json!({"x": 10, "y": 20, "_target": {"label": "Send message", "role": "push button", "window": "Compose — Mail"}});
+        assert_eq!(desk_classify("click", &ax), HardHit::Class(HardClass::Send));
+        let rule = click_rule(&ax).unwrap();
+        assert_eq!(rule.id, "send:Send");
+        assert_eq!(click_action(&ax, &rule), "Grok wants to click Send in Compose — Mail");
+        assert_eq!(click_target(&ax).source, "ax");
+        // The caller's own element (Cua `element`, path D frames) counts too.
+        let named = serde_json::json!({"element": {"label": "Pay now", "role": "AXButton"}});
+        assert_eq!(desk_classify("click", &named), HardHit::Class(HardClass::Money));
+        assert_eq!(click_target(&named).source, "args");
+        assert_eq!(click_action(&named, &click_rule(&named).unwrap()), "Grok wants to click Pay in the focused window");
+        let unknown = serde_json::json!({"x": 1, "y": 2, "_target": {"unknown": true}});
+        assert_eq!(desk_classify("click", &unknown), HardHit::None);
+        assert_eq!(click_target(&unknown).source, "unknown");
+        assert_eq!(desk_classify("click", &serde_json::json!({"x": 1, "y": 2})), HardHit::None);
+        // Path E: a native click that names its target.
+        assert_eq!(classify("click", r#"{"x":1,"y":2,"label":"Factory reset"}"#), HardHit::Class(HardClass::IrreversibleOs));
+        assert_eq!(classify("click", r#"{"x":1,"y":2}"#), HardHit::None);
+    }
+
+    #[test]
+    fn ask_cards_that_click_are_classified_by_the_quoted_label() {
+        assert_eq!(classify_ask("computer_click", r#"click "Send""#), HardHit::Class(HardClass::Send));
+        assert_eq!(classify_ask("Click", "click on the Place order button"), HardHit::Class(HardClass::Money));
+        assert_eq!(classify_ask("computer_click", "click \u{201c}Reset zoom\u{201d}"), HardHit::None);
+        assert_eq!(classify_ask("computer_click", r#"click "Sender""#), HardHit::None);
+        assert_eq!(classify_ask("grokhub-desktop__click", "click 10,20"), HardHit::None);
+    }
+
+    #[test]
+    fn use_tool_is_classified_as_the_tool_it_names() {
+        let send = r#"{"name":"mail__send_message","arguments":{"to":"a@example.com"}}"#;
+        assert_eq!(classify("use_tool", send), HardHit::Class(HardClass::Send));
+        let pay = r#"{"name":"shop__checkout","arguments":"{\"cart\":1}"}"#;
+        assert_eq!(classify("use_tool", pay), HardHit::Class(HardClass::Money));
+        assert_eq!(classify("use_tool", r#"{"name":"box__echo","arguments":{}}"#), HardHit::None);
+        assert_eq!(classify("use_tool", r#"{"name":"use_tool"}"#), HardHit::None);
+        assert_eq!(classify("use_tool", "not json"), HardHit::None);
     }
 }
