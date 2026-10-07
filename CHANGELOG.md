@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Failed Automations jobs show Retry and a View last run link, and Remove sits behind a ··· menu that asks Remove '…'? before deleting the job.
+
 Pulse leftovers (Critiquito re-check): opened idea headings follow the row type (Do → "What Apply will do", Automate → "What Apply will schedule", Learn → "What I'll learn"); Suggest ideas while signed out stays enabled and shows an amber "Sign in to Grok to get ideas." with Open Settings, cleared once signed in; Ideas loading replaces empty copy with "Looking for ideas in your recent work…" and three #16181c skeleton rows; empty Ideas / Feed use the new copy, with inline Suggest ideas and a Feed instructions link; Feed image slots are a plain #16181c skeleton while loading and drop on fail; Search palette closes on outside click or navigation, uses the "Search pages and commands" placeholder, and names rows as the sidebar does (old names still find them). No version bump.
 
 Feed cards show a short takeaway under the title (about two sentences, cut on a word or sentence, with URLs left on the Read link) instead of a long paragraph chopped mid-sentence. A digest skips the model's opening line ("I'll look up…") and leads with the news, followed by why it matters to you. Discuss on a digest or suggestion opens the main chat with that post's title, takeaway, source link, and why it matters, and puts the cursor in the composer. On the home deck, hovering a digest, suggestion, or image card expands it into the same card: source and age, the short takeaway, the image, Liked, and Discuss. × still only removes it from the deck. No version bump.
