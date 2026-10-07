@@ -1338,7 +1338,10 @@ impl Cabin {
             secret_hold: Vec::new(),
             session_mode: boot_session,
             permission_mode: boot_perm,
-            harness: Default::default(),
+            harness: harness_ui::HarnessState {
+                full_card_on: harness_ui::grant_full_card_on(),
+                ..Default::default()
+            },
             scheduled_perm: false,
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
