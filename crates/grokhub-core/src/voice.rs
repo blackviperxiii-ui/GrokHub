@@ -331,36 +331,6 @@ pub fn cabin_eyes_for_turn(user_opt_in: bool, triggered: bool, has_frame: bool) 
     }
 }
 
-pub fn client_secrets_url() -> String {
-    format!("{XAI_BASE}/realtime/client_secrets")
-}
-
-pub fn client_secrets_body() -> Value {
-    json!({
-        "expires_after": { "seconds": 300 }
-    })
-}
-
-pub fn parse_client_secret(body: &Value) -> Option<String> {
-    let from_str = |v: &Value| {
-        v.as_str()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-    };
-    body.get("value")
-        .and_then(from_str)
-        .or_else(|| {
-            body.get("client_secret").and_then(|v| {
-                from_str(v).or_else(|| v.get("value").and_then(from_str))
-            })
-        })
-}
-
-pub fn client_secret_ws_protocol(secret: &str) -> String {
-    format!("xai-client-secret.{}", secret.trim())
-}
-
 pub fn voice_transcript_sends_chat(live_duplex: bool) -> bool {
     !live_duplex
 }
@@ -395,15 +365,6 @@ pub fn ptt_after_speak(voice_on: bool) -> bool {
     voice_on
 }
 
-pub fn voice_client_secret_denied(has_api_key: bool) -> Option<&'static str> {
-    if has_api_key {
-        None
-    } else {
-        Some("Duplex Voice needs a console API key. OAuth covers STT and TTS.")
-    }
-}
-
-/// Raw s16le 24 kHz mono capture for the realtime socket. No WAV container.
 pub fn live_pcm_argv(bin: &str) -> Option<&'static [&'static str]> {
     match bin {
         "arecord" => Some(&["-q", "-t", "raw", "-f", "S16_LE", "-r", "24000", "-c", "1"]),
@@ -743,33 +704,6 @@ mod tests {
         assert!(sess.contains("24000"));
         assert!(!sess.contains("whisper-1"));
         assert!(!sess.contains("modalities"));
-        assert_eq!(
-            client_secrets_url(),
-            "https://api.x.ai/v1/realtime/client_secrets"
-        );
-        let body = client_secrets_body();
-        assert_eq!(body["expires_after"]["seconds"], 300);
-        assert!(body.get("session").is_none(), "xAI client_secrets rejects session");
-        assert_eq!(
-            parse_client_secret(&serde_json::json!({
-                "value": "xai-realtime-client-secret-abc",
-                "expires_at": 1
-            }))
-            .as_deref(),
-            Some("xai-realtime-client-secret-abc")
-        );
-        assert_eq!(
-            parse_client_secret(&serde_json::json!({
-                "client_secret": "ek_from_field"
-            }))
-            .as_deref(),
-            Some("ek_from_field")
-        );
-        assert!(parse_client_secret(&serde_json::json!({ "error": "nope" })).is_none());
-        assert_eq!(
-            client_secret_ws_protocol("ek_abc"),
-            "xai-client-secret.ek_abc"
-        );
         assert!(!voice_transcript_sends_chat(true));
         assert!(voice_transcript_sends_chat(false));
         assert!(!hey_grok_starts_ptt(true, false));
@@ -781,11 +715,6 @@ mod tests {
         assert_eq!(ptt_after_stt(false, false), PttLine::Leave);
         assert!(ptt_after_speak(true));
         assert!(!ptt_after_speak(false));
-        assert_eq!(
-            voice_client_secret_denied(false),
-            Some("Duplex Voice needs a console API key. OAuth covers STT and TTS.")
-        );
-        assert!(voice_client_secret_denied(true).is_none());
         let ev = parse_realtime_event(&serde_json::json!({
             "type": "response.output_audio.delta",
             "delta": "AAAA"
@@ -933,18 +862,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_secret_hands_and_bad_wav() {
-        assert_eq!(
-            parse_client_secret(&serde_json::json!({
-                "client_secret": { "value": "ek_nested" }
-            }))
-            .as_deref(),
-            Some("ek_nested")
-        );
-        assert!(parse_client_secret(&serde_json::json!({
-            "client_secret": { "value": "   " }
-        }))
-        .is_none());
+    fn hands_and_bad_wav() {
         assert_eq!(
             reduce_voice_state(VoiceState::Hands, &VoiceEvent::Start),
             VoiceState::Hands

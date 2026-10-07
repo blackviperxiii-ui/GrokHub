@@ -6,7 +6,7 @@
 ## Quick commands
 - `cargo run -p grokhub-app` (cabin) / `cargo run -p grokhub-app -- --version`
 - `GROKHUB_CONFIG=$(mktemp -d) cargo test -p grokhub-app -- --test-threads=1`
-- `cargo build -p grokhub-app -p grokhub-hub -p grokhub-ffi` (Linux CI; the Windows release build skips `grokhub-ffi`)
+- `cargo build -p grokhub-app -p grokhub-hub` (Linux CI builds both binaries)
 ## Key files
 - `crates/grokhub-app/src/main.rs`: `main`, the `Launch` dispatch, `run_cabin`, `run_hub`, Windows console handling.
 - `crates/grokhub-app/build.rs`: channel, branch, and short SHA for `--version`, and the Windows icon.
