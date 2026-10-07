@@ -133,6 +133,9 @@ impl Cabin {
                 self.skills_tab_connectors = false;
                 self.reload_grok_catalog();
             }
+            Slash::SkillChanges => self.run_skill_changes(),
+            Slash::SkillUndo(name) => self.run_skill_undo(&name),
+            Slash::SkillRestore(name) => self.run_skill_restore(&name),
             Slash::GrokWorkflows => {
                 self.nav = Nav::Skills;
                 self.skills_tab_connectors = false;

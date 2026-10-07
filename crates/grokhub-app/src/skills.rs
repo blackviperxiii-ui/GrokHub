@@ -11,6 +11,7 @@ use std::time::Duration;
 use std::os::unix::fs::PermissionsExt;
 
 use crate::config;
+use grokhub_agent::harness::{self as hx, Origin};
 
 pub fn skills_dir() -> PathBuf {
     config::config_dir().join("skills")
@@ -36,8 +37,12 @@ pub fn list_skills() -> Vec<SkillMd> {
 /// Auto-made skills that never ran and hold nothing reusable (see
 /// `is_junk_skill`: pitfalls contain `AUTO_SKILL_PITFALL`) move to
 /// `skills/.retired/<name>`. A hand-written skill stays. Nothing is deleted:
-/// moving a folder back restores it. Returns the names that moved.
+/// each move is a ChangeLedger delete, so `/skills undo <name>` brings it
+/// back, and a skill the user brought back is not moved again. Returns the
+/// names that moved.
 pub fn retire_junk_skills() -> Vec<String> {
+    let root = config::config_dir();
+    let ledger = hx::ChangeLedger::load(&root);
     let dir = skills_dir();
     let Ok(rd) = fs::read_dir(&dir) else {
         return Vec::new();
@@ -53,7 +58,8 @@ pub fn retire_junk_skills() -> Vec<String> {
             continue;
         };
         let skill = parse_skill_md(&raw);
-        if !grokhub_core::is_junk_skill(&skill) {
+        let folder = e.file_name().to_string_lossy().to_string();
+        if !grokhub_core::is_junk_skill(&skill) || ledger.kept_by_user(&folder) {
             continue;
         }
         if fs::create_dir_all(&retired).is_err() {
@@ -65,7 +71,15 @@ pub fn retire_junk_skills() -> Vec<String> {
             n += 1;
             dest = retired.join(format!("{}-{n}", e.file_name().to_string_lossy()));
         }
-        if fs::rename(&path, &dest).is_ok() {
+        let moved_ok = hx::record_skill_change(
+            &root,
+            &dir,
+            &folder,
+            Origin::SelfManage,
+            "cleanup: never ran and held nothing reusable",
+            || fs::rename(&path, &dest).map_err(|e| e.to_string()),
+        );
+        if moved_ok.is_ok() && !path.exists() {
             moved.push(skill.name);
         }
     }
@@ -80,7 +94,28 @@ pub fn save_skill(s: &SkillMd) -> Result<PathBuf, String> {
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join("SKILL.md");
     crate::config::atomic_write(&path, render_skill_md(s).as_bytes())?;
-    if let Some(script) = verify_as_script(&s.verify) {
+    write_verify_scripts(&dir, &s.verify)?;
+    Ok(path)
+}
+
+/// `save_skill` with the ChangeLedger around it: the version it replaces is
+/// kept and the write is logged, so `/skills undo` can put it back. For
+/// writes GrokHub makes on its own (`Origin::SelfManage`) and Suggested Add.
+pub fn save_skill_logged(s: &SkillMd, origin: Origin, reason: &str) -> Result<(), String> {
+    hx::record_skill_change(&config::config_dir(), &skills_dir(), &s.name, origin, reason, || {
+        save_skill(s).map(|_| ())
+    })
+    .map(|_| ())
+}
+
+/// After an undo or restore put `SKILL.md` back byte for byte, its verify
+/// scripts follow the `## Verify` it now holds.
+pub fn rewrite_verify_scripts(s: &SkillMd) -> Result<(), String> {
+    write_verify_scripts(&skill_folder(&s.name), &s.verify)
+}
+
+fn write_verify_scripts(dir: &std::path::Path, verify: &str) -> Result<(), String> {
+    if let Some(script) = verify_as_script(verify) {
         let scripts = dir.join("scripts");
         fs::create_dir_all(&scripts).map_err(|e| e.to_string())?;
         let sh = scripts.join("verify.sh");
@@ -89,11 +124,11 @@ pub fn save_skill(s: &SkillMd) -> Result<PathBuf, String> {
         {
             let _ = fs::set_permissions(&sh, fs::Permissions::from_mode(0o755));
         }
-        if let Some(cmd) = verify_as_cmd(&s.verify) {
+        if let Some(cmd) = verify_as_cmd(verify) {
             fs::write(scripts.join("verify.cmd"), cmd).map_err(|e| e.to_string())?;
         }
     }
-    Ok(path)
+    Ok(())
 }
 
 fn verify_as_script(verify: &str) -> Option<String> {
@@ -347,6 +382,26 @@ mod tests {
         assert_eq!(names, vec!["board-status".to_string()]);
         assert!(skills_dir().join(".retired").join("take-the-next-step").join("SKILL.md").exists());
         assert!(retire_junk_skills().is_empty(), "a second pass moves nothing");
+        let ledger = hx::ChangeLedger::load(&root);
+        let mut ops: Vec<(&str, &str, &str)> = ledger
+            .all()
+            .iter()
+            .map(|c| (c.id.as_str(), c.op.as_str(), c.origin.as_str()))
+            .collect();
+        ops.sort();
+        assert_eq!(
+            ops,
+            vec![
+                ("good-job-now-use-the-mouse-to-close-one-tab-of-firefox", "delete", "self_manage"),
+                ("take-the-next-step", "delete", "self_manage"),
+            ],
+            "each move aside is a ledger delete"
+        );
+        // Undo brings it back, and the next cleanup leaves it alone.
+        hx::undo_skill_change(&root, &skills_dir(), "take-the-next-step", hx::UndoAsk::from_click()).unwrap();
+        let names: Vec<String> = list_skills().into_iter().map(|s| s.name).collect();
+        assert_eq!(names, vec!["board-status".to_string(), "take-the-next-step".to_string()]);
+        assert!(retire_junk_skills().is_empty(), "a skill the user brought back stays");
         save_skill(&SkillMd {
             name: "stop-the-staging-server-and-clear-the-cache-now".into(),
             description: "Stop the staging server and clear the cache now".into(),

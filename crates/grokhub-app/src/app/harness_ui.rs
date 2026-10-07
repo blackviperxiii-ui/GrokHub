@@ -149,6 +149,13 @@ pub(super) struct HarnessState {
     pub consent: Option<hx::ConsentLedger>,
     /// `/privacy` output on its way from the reader thread.
     pub privacy_rx: Option<mpsc::Receiver<String>>,
+    /// Undo / Restore rows under the newest `/skills changes` bubble, as last
+    /// read from the ChangeLedger. `None` means read it again.
+    pub skill_rows: Option<Vec<super::skill_undo::SkillRow>>,
+    /// True only while `send_from_composer` hands the user's own typed line
+    /// to `send_chat`. `/skills undo` and `/skills restore` act on it; from
+    /// anywhere else they only show the Undo rows.
+    pub typed_send: bool,
 }
 
 /// Readonly until the desktop switch is on; Full only after Grant full.
