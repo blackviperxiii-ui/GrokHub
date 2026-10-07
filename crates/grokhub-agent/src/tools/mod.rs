@@ -1,5 +1,6 @@
 //! Workspace tools. `execute` stays read-only. `dispatch` runs the gated set.
 
+mod connections;
 pub(crate) mod control;
 mod desktop;
 mod glob;
@@ -94,6 +95,9 @@ pub fn schemas_for(gate: &Gate) -> Vec<Value> {
     tools.push(control::monitor_schema());
     tools.push(control::scheduler_create_schema());
     tools.push(control::scheduler_delete_schema());
+    tools.push(connections::add_schema());
+    tools.push(connections::disable_schema());
+    tools.push(connections::delete_schema());
     if gate.desktop {
         tools.extend(desktop::schemas());
     }
@@ -139,6 +143,9 @@ pub fn dispatch(ctx: &ToolCtx<'_>, name: &str, arguments: &str) -> ToolOutput {
         "monitor" => control::monitor(ctx, &args),
         "scheduler_create" => control::scheduler_create(&args),
         "scheduler_delete" => control::scheduler_delete(&args),
+        "connection_add" => connections::add(&args),
+        "connection_disable" => connections::disable(&args),
+        "connection_delete" => connections::delete(&args),
         "web_fetch" => web_fetch::run_with_ports(&args),
         "image_generate" | "image_edit" | "video_generate" | "video_edit" | "video_extend" => {
             media::run_with_ports(name, &args, ctx.stop)
