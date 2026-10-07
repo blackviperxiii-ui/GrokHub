@@ -268,10 +268,11 @@ pub(super) fn access_for(desktop_control: bool, full: bool) -> AccessMode {
     }
 }
 
-/// Grok Build computer use reaches the cabin as the `grokhub-desktop` MCP.
+/// Grok Build computer use reaches the cabin as the `grokhub-desktop` MCP
+/// (or the Spike-2a `grokhub-cua` proxy).
 pub(super) fn is_desktop_ask(p: &grokhub_acp::PermissionAsk) -> bool {
     let hay = format!("{} {}", p.title, p.action).to_ascii_lowercase();
-    hay.contains(grokhub_core::DESKTOP_MCP_SERVER)
+    grokhub_core::CABIN_CU_SERVERS.iter().any(|s| hay.contains(s))
 }
 
 /// Permission-card eyebrow: the kind of ask, not the decision count.
@@ -295,7 +296,7 @@ fn raw_of(card: &ToolCard) -> serde_json::Value {
 
 fn is_desktop_card(card: &ToolCard) -> bool {
     let hay = format!("{} {}", card.title, card.raw_input).to_ascii_lowercase();
-    hay.contains(grokhub_core::DESKTOP_MCP_SERVER)
+    grokhub_core::CABIN_CU_SERVERS.iter().any(|s| hay.contains(s))
 }
 
 /// The tool name of a computer-use frame: the stream's `toolName` when it
@@ -1450,7 +1451,9 @@ pub(super) fn marker_sample(
     now: f64,
     reduced: bool,
 ) -> (egui::Pos2, f32, bool) {
-    use crate::motion::{AgentCursorAnim, AgentCursorPhase, CURSOR_CLICK_SECS, CURSOR_TRAVEL_SECS};
+    use crate::motion::{
+        AgentCursorAnim, AgentCursorPhase, AGENT_CURSOR_MOTION, CURSOR_CLICK_SECS, CURSOR_TRAVEL_SECS,
+    };
     const HOVER: f32 = 0.200;
     if reduced {
         return (to, 1.0, false);
@@ -1472,6 +1475,7 @@ pub(super) fn marker_sample(
         t0: start,
         duration: dur,
         phase,
+        motion: AGENT_CURSOR_MOTION,
     };
     let (pos, scale, _) = crate::motion::cursor_sample(&anim, now, false);
     (pos, scale, true)
