@@ -2,6 +2,9 @@
 
 use super::*;
 
+/// Settings → Let Grok control the desktop. Names the hard floor next to the switch.
+pub(super) const DESKTOP_CONTROL_HINT: &str = "Grok can see the screen and use the mouse and keyboard through GrokHub. Ask still asks first. Deletes, sends, money and credentials always ask.";
+
 #[derive(Clone, Default)]
 struct PermDraft {
     rule: String,
@@ -189,6 +192,7 @@ impl Cabin {
         let mut connect = false;
         let mut disconnect = false;
         let mut help = false;
+        self.pull_account_oauth_from_disk();
         let authed = self.has_key();
         let chrome = self.avatar_chrome();
         let photo = self.photo_for_path(&chrome.picture_path);
@@ -302,7 +306,8 @@ impl Cabin {
         } else {
             "Installs Grok Build CLI alpha (GROK_CHANNEL=alpha / https://x.ai/cli/alpha) when grok is missing or broken."
         };
-        let oauth_on = self.secrets.oauth.is_some();
+        self.pull_account_oauth_from_disk();
+        let account_auth = account_connect_chrome(self.secrets.oauth.as_ref());
         let picture_set = !self.cfg.profile_picture.trim().is_empty();
         let picture_hint = if picture_set {
             "Saved in cabin config."
@@ -456,23 +461,13 @@ impl Cabin {
                                                             {
                                                                 clear_picture = true;
                                                             }
-                                                            let auth_title = if oauth_on {
-                                                                "Connected"
-                                                            } else {
-                                                                "Connect Grok"
-                                                            };
-                                                            let auth_hint = if oauth_on {
-                                                                "Signed in with Grok."
-                                                            } else {
-                                                                "Device-code OAuth. Also signs in the Grok Build CLI if it is not already connected."
-                                                            };
                                                             if crate::cards::settings_action(
                                                                 ui,
-                                                                auth_title,
-                                                                auth_hint,
-                                                                if oauth_on { "Sign out" } else { "Sign in with Grok" },
+                                                                account_auth.title,
+                                                                &account_auth.hint,
+                                                                account_auth.action,
                                                             ) {
-                                                                if oauth_on {
+                                                                if account_auth.connected {
                                                                     disconnect = true;
                                                                 } else {
                                                                     connect = true;
@@ -771,7 +766,7 @@ impl Cabin {
                                                             if crate::cards::settings_toggle(
                                                                 ui,
                                                                 "Let Grok control the desktop",
-                                                                "Grok can see the screen and use the mouse and keyboard through GrokHub. Ask still asks first.",
+                                                                DESKTOP_CONTROL_HINT,
                                                                 &mut self.cfg.desktop_control,
                                                             ) {
                                                                 let on = self.cfg.desktop_control;
@@ -839,7 +834,7 @@ impl Cabin {
                                                         SettingsSec::Labs => {
                                                             // Beta channel: Linux switches via install.sh --channel;
                                                             // Windows stays disabled until the installer supports it.
-                                                            // Also: when beta tip == main tip, auto-turn off (cooldown).
+                                                            // Also: when beta caught up to main (same tree), auto-turn off (cooldown).
                                                             self.maybe_auto_off_beta_channel(false);
                                                             let status_line = crate::update::channel_labs_status();
                                                             #[cfg(windows)]
@@ -1035,7 +1030,7 @@ impl Cabin {
         self.status = "Diagnostics copied".into();
     }
 
-    fn ui_permission_editor(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn ui_permission_editor(&mut self, ui: &mut egui::Ui) {
         let draft_id = egui::Id::new("grokhub-perm-draft");
         let mut draft = ui
             .ctx()
@@ -1044,8 +1039,11 @@ impl Cabin {
         if draft.action.is_empty() {
             draft.action = "allow".into();
         }
+        self.ui_privacy_rows(ui);
+        self.ui_scope_rows(ui);
         let workspace = self.grok_cwd();
         let dir = grokhub_agent::perm::config_dir();
+        crate::cards::section_heading(ui, super::privacy_ui::RULES_HEAD);
         crate::cards::settings_note(
             ui,
             "Deny wins over ask, and ask wins over allow. Dangerous commands still ask, including after Allow always.",

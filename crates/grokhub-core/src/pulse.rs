@@ -54,6 +54,10 @@ pub const PULSE_SUBTITLE: &str = "What I'd do next, from how you use the cabin."
 pub const IDEAS_EMPTY: &str = "No ideas yet. I'll add one when I spot something worth doing.";
 /// Feed with nothing to show.
 pub const FEED_EMPTY: &str = "No posts yet. Tell me what to watch in Feed instructions.";
+/// Lead before the Feed instructions link on the empty Feed.
+pub const FEED_EMPTY_LEAD: &str = "No posts yet. Tell me what to watch in ";
+/// Clickable end of the empty Feed line (opens the instructions sheet).
+pub const FEED_EMPTY_LINK: &str = "Feed instructions";
 /// Ideas while a suggestion call is running: shown with placeholder rows.
 pub const IDEAS_LOADING: &str = "Looking for ideas in your recent work…";
 /// Suggest ideas pressed with no Grok sign-in or key.
@@ -328,6 +332,16 @@ impl PulseType {
             Self::Learn => "Learn",
             Self::Automate => "Automate",
             Self::Quiet => "Quiet",
+        }
+    }
+
+    /// Opened-card section heading for this type (PI-03). One source with the row.
+    pub fn apply_heading(self) -> &'static str {
+        match self {
+            Self::Learn => "What I'll learn",
+            Self::Automate => "What Apply will schedule",
+            // Do / Watch / Quiet: one-shot Apply.
+            _ => "What Apply will do",
         }
     }
 }
@@ -1753,5 +1767,20 @@ mod tests {
         );
         assert_eq!(silence_line(0, 5), "No pulse yet. Nothing to do.");
         assert_eq!(ago_label(0, 3 * 3_600_000 + 5), "3h ago");
+    }
+
+    #[test]
+    fn apply_heading_follows_pulse_type() {
+        assert_eq!(PulseType::Do.apply_heading(), "What Apply will do");
+        assert_eq!(PulseType::Automate.apply_heading(), "What Apply will schedule");
+        assert_eq!(PulseType::Learn.apply_heading(), "What I'll learn");
+        assert_eq!(PulseType::Watch.apply_heading(), "What Apply will do");
+        assert_eq!(
+            format!("{}{}.", FEED_EMPTY_LEAD, FEED_EMPTY_LINK),
+            FEED_EMPTY
+        );
+        assert_eq!(IDEAS_EMPTY, "No ideas yet. I'll add one when I spot something worth doing.");
+        assert_eq!(IDEAS_LOADING, "Looking for ideas in your recent work…");
+        assert_eq!(IDEAS_SIGN_IN, "Sign in to Grok to get ideas.");
     }
 }
