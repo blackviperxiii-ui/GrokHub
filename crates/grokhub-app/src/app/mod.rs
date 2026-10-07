@@ -792,6 +792,9 @@ pub struct Cabin {
     grok_catalog: grokhub_acp::GrokCatalog,
     grok_catalog_loaded: bool,
     grok_catalog_rx: Option<mpsc::Receiver<Result<grokhub_acp::GrokCatalog, String>>>,
+    /// When the in-flight catalog channel opened. Empty past the settle deadline
+    /// drops the channel so Skills is not stuck on Loading….
+    grok_catalog_started: Option<Instant>,
     native_skills: Vec<grokhub_agent::Skill>,
     native_hooks: Vec<grokhub_agent::HookInfo>,
     native_listing_cwd: String,
@@ -1356,6 +1359,7 @@ impl Cabin {
             grok_catalog: grokhub_acp::GrokCatalog::default(),
             grok_catalog_loaded: false,
             grok_catalog_rx: None,
+            grok_catalog_started: None,
             native_skills: Vec::new(),
             native_hooks: Vec::new(),
             native_listing_cwd: String::new(),
@@ -1783,6 +1787,7 @@ impl Cabin {
             grok_catalog: Default::default(),
             grok_catalog_loaded: false,
             grok_catalog_rx: None,
+            grok_catalog_started: None,
             native_skills: Vec::new(),
             native_hooks: Vec::new(),
             native_listing_cwd: String::new(),

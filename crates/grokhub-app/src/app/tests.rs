@@ -15275,6 +15275,7 @@ fn quiet_cabin() -> Cabin {
         grok_catalog: grokhub_acp::GrokCatalog::default(),
         grok_catalog_loaded: false,
         grok_catalog_rx: None,
+        grok_catalog_started: None,
         native_skills: Vec::new(),
         native_hooks: Vec::new(),
         native_listing_cwd: String::new(),
@@ -16249,6 +16250,57 @@ fn cancel_project_drops_the_staged_one() {
     assert_eq!(app.status, "Name this folder");
     assert!(!app.running);
     assert!(app.chat_job_thread.is_none());
+}
+
+/// Projects “+” paints Cancel next to Name. That control calls the same
+/// `cancel_proj_rename` Esc uses, which drops the staged folder.
+#[test]
+fn projects_add_cancel_drops_the_staged_folder() {
+    let _hold = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("proj-add-cancel");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.stage_new_folder();
+    let id = cabin.proj_staged.clone().expect("staged folder");
+    assert_eq!(cabin.projects.len(), 1);
+    assert_eq!(cabin.projects[0].name, "Folder");
+    assert_eq!(cabin.projects[0].kind, ProjectKind::Folder);
+    assert_eq!(cabin.proj_rename.as_deref(), Some(id.as_str()));
+    assert_eq!(cabin.status, "Name this folder");
+
+    cabin.cancel_proj_rename();
+    assert!(cabin.projects.is_empty(), "Cancel drops the staged folder");
+    assert!(cabin.projects.iter().all(|n| n.id != id));
+    assert!(cabin.proj_staged.is_none());
+    assert!(cabin.proj_rename.is_none());
+    assert!(cabin.proj_rename_buf.is_empty());
+    assert!(!cabin.proj_rename_focus);
+    assert!(cabin.proj_rename_lock.is_none());
+    assert_eq!(cabin.status, "Name this folder");
+    assert!(!cabin.running);
+
+    let side = include_str!("sidebar.rs");
+    let row = side
+        .split("hint_text(crate::theme::hint(\"Name\"))")
+        .nth(1)
+        .and_then(|s| s.split("self.finish_proj_rename()").next())
+        .expect("proj rename row");
+    assert!(
+        row.contains("ghost_pill(ui, \"Cancel\")"),
+        "the rename row paints Cancel beside Name: {row}"
+    );
+    assert!(
+        row.contains("egui::Key::Escape"),
+        "Esc still cancels the rename: {row}"
+    );
+    assert_eq!(
+        row.matches("self.cancel_proj_rename()").count(),
+        2,
+        "Cancel click and Esc both call cancel_proj_rename: {row}"
+    );
 }
 
 // Landed from PR #231.
@@ -18799,6 +18851,109 @@ fn grok_catalog_poll_marks_loaded_on_drop() {
     assert_eq!(cabin.status, "Harbor");
     assert!(!cabin.running);
     assert!(cabin.chat_job_thread.is_none());
+}
+
+/// An open catalog channel that never replies settles after the deadline.
+/// Skills empty-copy is not stuck on Loading…, and a skill already loaded stays.
+#[test]
+fn grok_catalog_poll_settles_past_the_deadline() {
+    use std::time::{Duration, Instant};
+
+    let skills_empty = "None found. Refresh after installing a plugin.";
+    assert_eq!(super::acp::GROK_CATALOG_SETTLE, Duration::from_secs(18));
+    assert_eq!(
+        super::acp::GROK_CATALOG_TIMEOUT,
+        "Could not load Grok Build catalog (timed out)"
+    );
+
+    let mut cabin = Cabin::quiet_for_test();
+    let (tx, rx) = std::sync::mpsc::channel::<Result<grokhub_acp::GrokCatalog, String>>();
+    cabin.grok_catalog_rx = Some(rx);
+    cabin.grok_catalog_started = Some(Instant::now());
+    cabin.grok_catalog_loaded = false;
+    cabin.status = "Loading Grok Build catalog…".into();
+    cabin.poll_grok_catalog();
+    assert!(
+        cabin.grok_catalog_rx.is_some(),
+        "before the deadline the channel stays open"
+    );
+    assert!(!cabin.grok_catalog_loaded);
+    assert_eq!(cabin.status, "Loading Grok Build catalog…");
+    assert_eq!(
+        super::pages::catalog_empty_line(cabin.grok_catalog_rx.is_some(), "", 0, skills_empty),
+        "Loading…"
+    );
+
+    cabin.grok_catalog_started =
+        Some(Instant::now() - (super::acp::GROK_CATALOG_SETTLE + Duration::from_secs(1)));
+    cabin.grok_catalog.skills.push(grokhub_acp::GrokSkillRow {
+        name: "harbor".into(),
+        description: "notes".into(),
+        source: "bundled".into(),
+        plugin: String::new(),
+        user_invocable: true,
+    });
+    cabin.poll_grok_catalog();
+    assert!(cabin.grok_catalog_loaded);
+    assert!(cabin.grok_catalog_rx.is_none());
+    assert!(cabin.grok_catalog_started.is_none());
+    assert_eq!(cabin.status, "Could not load Grok Build catalog (timed out)");
+    assert!(
+        !cabin.status.contains("Loading"),
+        "status must leave Loading: {}",
+        cabin.status
+    );
+    assert_eq!(cabin.grok_catalog.skills.len(), 1);
+    assert_eq!(cabin.grok_catalog.skills[0].name, "harbor");
+    assert_eq!(
+        super::pages::catalog_empty_line(
+            cabin.grok_catalog_rx.is_some(),
+            "",
+            cabin.grok_catalog.skills.len(),
+            skills_empty,
+        ),
+        skills_empty,
+    );
+    drop(tx);
+
+    let (hold, rx) = std::sync::mpsc::channel::<Result<grokhub_acp::GrokCatalog, String>>();
+    cabin.grok_catalog = grokhub_acp::GrokCatalog::default();
+    cabin.grok_catalog_rx = Some(rx);
+    cabin.grok_catalog_loaded = false;
+    cabin.grok_catalog_started =
+        Some(Instant::now() - (super::acp::GROK_CATALOG_SETTLE + Duration::from_secs(1)));
+    cabin.status = "Loading Grok Build catalog…".into();
+    cabin.poll_grok_catalog();
+    assert!(cabin.grok_catalog.skills.is_empty());
+    assert!(cabin.grok_catalog_loaded);
+    assert!(cabin.grok_catalog_rx.is_none());
+    assert_eq!(cabin.status, super::acp::GROK_CATALOG_TIMEOUT);
+    assert_eq!(
+        super::pages::catalog_empty_line(cabin.grok_catalog_rx.is_some(), "", 0, skills_empty),
+        skills_empty,
+    );
+    drop(hold);
+
+    let poll = include_str!("acp.rs");
+    let body = poll
+        .split("fn poll_grok_catalog(")
+        .nth(1)
+        .and_then(|s| s.split("fn submit_mcp_line(").next())
+        .expect("poll_grok_catalog");
+    assert!(body.contains("TryRecvError::Empty"), "{body}");
+    assert!(body.contains("GROK_CATALOG_SETTLE"), "{body}");
+    assert!(body.contains("GROK_CATALOG_TIMEOUT"), "{body}");
+    assert!(body.contains("self.grok_catalog_loaded = true"), "{body}");
+    assert!(body.contains("self.grok_catalog_rx = Some(rx)"), "{body}");
+    let reload = poll
+        .split("fn reload_grok_catalog(")
+        .nth(1)
+        .and_then(|s| s.split("fn poll_grok_catalog(").next())
+        .expect("reload_grok_catalog");
+    assert!(
+        reload.contains("self.grok_catalog_started = Some(Instant::now())"),
+        "reload records when the channel opened: {reload}"
+    );
 }
 
 // Folded from PR #322.
