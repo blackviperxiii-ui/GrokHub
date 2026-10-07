@@ -47,6 +47,20 @@ pub(super) fn hide_pending_grok_sessions(
 /// kept) and Refresh can start again.
 pub(super) const GROK_CATALOG_SETTLE: Duration = Duration::from_secs(18);
 
+/// Debug builds honor `GROKHUB_CATALOG_SETTLE_MS` so a shot can force the timeout
+/// without waiting the full 18s. Release stays on [`GROK_CATALOG_SETTLE`].
+pub(super) fn grok_catalog_settle() -> Duration {
+    #[cfg(debug_assertions)]
+    if let Some(ms) = std::env::var("GROKHUB_CATALOG_SETTLE_MS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+    {
+        return Duration::from_millis(ms);
+    }
+    GROK_CATALOG_SETTLE
+}
+
 /// Status once [`GROK_CATALOG_SETTLE`] passes with no catalog reply.
 pub(super) const GROK_CATALOG_TIMEOUT: &str = "Could not load Grok Build catalog (timed out)";
 
@@ -1526,7 +1540,7 @@ impl Cabin {
             }
             Err(mpsc::TryRecvError::Empty) => {
                 let started = *self.grok_catalog_started.get_or_insert_with(Instant::now);
-                if started.elapsed() >= GROK_CATALOG_SETTLE {
+                if started.elapsed() >= grok_catalog_settle() {
                     self.grok_catalog_loaded = true;
                     self.grok_catalog_started = None;
                     self.status = GROK_CATALOG_TIMEOUT.into();
