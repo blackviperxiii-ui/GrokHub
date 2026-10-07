@@ -178,6 +178,7 @@ mod harness_ui;
 mod inbox_ui;
 mod privacy_ui;
 mod scope_ui;
+mod indexer_ui;
 mod skill_undo;
 mod glance;
 mod sidebar;
@@ -2110,6 +2111,7 @@ impl Cabin {
         crate::desktop_mcp::write_halt_stamp();
         crate::desktop_mcp::note_halt();
         self.host_halt.store(true, Ordering::SeqCst);
+        self.harness_watch_end();
         self.halt_hard_parks();
         self.withdraw_perm_asks();
         if self.cfg.native_engine {
@@ -3424,6 +3426,9 @@ impl Cabin {
                         self.follow_feed_lookup();
                     }
                     self.release_situation_ping();
+                    if !halted {
+                        self.tick_indexers();
+                    }
                     if self.last_persist.elapsed() > Duration::from_secs(2) {
                         self.persist_bg();
                     }
