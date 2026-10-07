@@ -95,7 +95,77 @@ pub(super) fn next_pick_token(current: u64) -> u64 {
     }
 }
 
+/// Settings → Account Connect Grok row: title, hint, primary action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct AccountConnectChrome {
+    pub(super) title: &'static str,
+    pub(super) hint: String,
+    pub(super) action: &'static str,
+    pub(super) connected: bool,
+}
+
+/// Identity line when OAuth tokens are present (email and/or Grok display name).
+pub(super) fn account_connected_hint(tokens: &grokhub_core::XaiOAuthTokens) -> String {
+    let email = tokens
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let name = tokens
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    match (name, email) {
+        (Some(n), Some(e)) => format!("{n} · {e}"),
+        (Some(n), None) => n.to_string(),
+        (None, Some(e)) => e.to_string(),
+        (None, None) => "Signed in with Grok.".into(),
+    }
+}
+
+/// Connect Grok chrome for Settings → Account. Connected when access token is live.
+pub(super) fn account_connect_chrome(
+    oauth: Option<&grokhub_core::XaiOAuthTokens>,
+) -> AccountConnectChrome {
+    let Some(tokens) = oauth.filter(|t| !t.access_token.trim().is_empty()) else {
+        return AccountConnectChrome {
+            title: "Connect Grok",
+            hint: "Device-code OAuth. Also signs in the Grok Build CLI if it is not already connected."
+                .into(),
+            action: "Sign in with Grok",
+            connected: false,
+        };
+    };
+    AccountConnectChrome {
+        title: "Connected",
+        hint: account_connected_hint(tokens),
+        action: "Sign out",
+        connected: true,
+    }
+}
+
 impl Cabin {
+
+    /// Adopt secrets.json OAuth written by `grokhub --oauth` (or another process)
+    /// while this cabin was already open. Does not overwrite an in-memory session.
+    pub(super) fn pull_account_oauth_from_disk(&mut self) {
+        if self.account_oauth_present() {
+            return;
+        }
+        let disk = secrets::load();
+        let Some(tok) = disk
+            .oauth
+            .filter(|t| !t.access_token.trim().is_empty())
+        else {
+            return;
+        };
+        self.secrets.oauth = Some(tok);
+        if self.secrets.api_key.trim().is_empty() && !disk.api_key.trim().is_empty() {
+            self.secrets.api_key = disk.api_key;
+        }
+        self.oauth_profile_tried = false;
+    }
 
     pub(super) fn start_oauth(&mut self) {
         if self.oauth_start_rx.is_some()
@@ -453,5 +523,56 @@ impl Cabin {
             let image = bytes.as_ref().and_then(|b| oauth_photo_image(b));
             let _ = tx.send(ProfilePhotoOut { path, image });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use grokhub_core::XaiOAuthTokens;
+
+    fn tok(access: &str, name: Option<&str>, email: Option<&str>) -> XaiOAuthTokens {
+        XaiOAuthTokens {
+            access_token: access.into(),
+            name: name.map(str::to_string),
+            email: email.map(str::to_string),
+            connected_at: 1,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn account_connect_chrome_signed_out() {
+        let c = account_connect_chrome(None);
+        assert!(!c.connected);
+        assert_eq!(c.title, "Connect Grok");
+        assert_eq!(c.action, "Sign in with Grok");
+        assert!(c.hint.contains("Device-code OAuth"));
+        let empty = tok("  ", None, None);
+        let c2 = account_connect_chrome(Some(&empty));
+        assert!(!c2.connected);
+        assert_eq!(c2.action, "Sign in with Grok");
+    }
+
+    #[test]
+    fn account_connect_chrome_signed_in_shows_identity_and_sign_out() {
+        let t = tok("access", Some("GrokHub QA"), Some("grokhub-qa@agentmail.to"));
+        let c = account_connect_chrome(Some(&t));
+        assert!(c.connected);
+        assert_eq!(c.title, "Connected");
+        assert_eq!(c.action, "Sign out");
+        assert_eq!(c.hint, "GrokHub QA · grokhub-qa@agentmail.to");
+        assert_eq!(
+            account_connected_hint(&tok("x", Some("Viper"), None)),
+            "Viper"
+        );
+        assert_eq!(
+            account_connected_hint(&tok("x", None, Some("a@b.co"))),
+            "a@b.co"
+        );
+        assert_eq!(
+            account_connected_hint(&tok("x", None, None)),
+            "Signed in with Grok."
+        );
     }
 }
