@@ -521,7 +521,9 @@ impl Cabin {
                             IMAGE_FILE_CAP as usize,
                         )
                     };
+                    let turn = self.turn_no();
                     self.finish_acp_turn(text);
+                    self.harness_turn_end_last_reply(turn);
                     self.drain_followup_queue();
                 }
                 AcpEvent::Err(e) => {
@@ -650,6 +652,8 @@ impl Cabin {
             Some(say) => grokhub_core::assistant_prose(say),
             None => grokhub_core::assistant_prose(&text),
         };
+        // The audit reads the visible chat's spans, so only a reply on it is kept.
+        self.harness.last_reply = here.then(|| prose.clone());
         if here {
             if !prose.is_empty() {
                 match self.live_blocks.last_mut() {
@@ -803,8 +807,11 @@ impl Cabin {
             }
             Ok(GrokPEvent::End(turn)) => {
                 self.grok_p_pid = None;
+                let turn_no = self.turn_no();
                 self.apply_single_turn(turn);
                 self.harness_headless_end();
+                self.harness_turn_end_last_reply(turn_no);
+                self.drain_followup_queue();
             }
             Ok(GrokPEvent::Err(e)) => {
                 self.grok_p_pid = None;
@@ -1184,9 +1191,11 @@ impl Cabin {
             return;
         }
         let Some(next) = self.followup_queue.first().cloned() else {
+            self.kick_repair();
             return;
         };
         self.followup_queue.remove(0);
+        self.harness_user_queued();
         self.send_chat(next);
     }
 
