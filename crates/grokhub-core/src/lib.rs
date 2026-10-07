@@ -437,7 +437,8 @@ pub use trajectory::{
 };
 pub use turn_timeline::{
     append_say, append_thought, append_tool, chunk_seam, decode_tool_rows, decode_turn,
-    encode_turn, last_say, split_at_last_sentence, tool_display_title, tool_group_label,
+    encode_turn, last_say, split_at_last_sentence, tool_detail_is_status, tool_display_title,
+    tool_group_label,
     tool_status_failed, tool_status_running, turn_needs_timeline, turn_says, views_up_to_last_user,
     LiveBlock, LiveKind, ToolRow, TurnPart,
 };
