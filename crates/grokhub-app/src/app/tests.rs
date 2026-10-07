@@ -8,6 +8,8 @@ use grokhub_core::{ProjectKind, ProjectNode};
 use std::sync::Arc;
 
 fn cabin_src() -> String {
+    // Windows CI checkouts often embed CRLF via include_str; source-inspection
+    // asserts match on \n, so normalize once here.
     concat!(
         include_str!("mod.rs"),
         include_str!("persist.rs"),
@@ -32,6 +34,7 @@ fn cabin_src() -> String {
         include_str!("board_ui.rs"),
         include_str!("background.rs"),
     )
+    .replace("\r\n", "\n")
     .replace("pub(super) ", "")
 }
 
@@ -48,6 +51,22 @@ fn fn_src<'a>(src: &'a str, name: &str) -> &'a str {
         .or_else(|| rest.find("\nfn "))
         .unwrap_or(rest.len());
     &after[..needle.len() + end]
+}
+
+#[test]
+fn cabin_src_strips_crlf_so_windows_checkout_matches_lf_asserts() {
+    // Simulate a Windows autocrlf checkout: the Halt-guard snippet must still
+    // match the LF needle used by heartbeat_halt_skips_every_organ_that_starts_work.
+    let crlf = "if !halted {\r\n                        self.follow_feed_lookup();";
+    let norm = crlf.replace("\r\n", "\n");
+    assert!(
+        norm.contains("if !halted {\n                        self.follow_feed_lookup();"),
+        "CRLF must normalize before the Halt-digest assert"
+    );
+    assert!(
+        !cabin_src().contains('\r'),
+        "cabin_src must not leave CR for source-inspection tests"
+    );
 }
 
 #[test]
