@@ -399,9 +399,13 @@ impl Cabin {
                     if self.proj_rename.as_deref() == Some(self.projects[idx].id.as_str()) {
                         ui.horizontal(|ui| {
                             crate::icons::paint_tree_gutter(ui, depth);
+                            // Leave room for Cancel on the narrow rail. Name stays editable.
+                            let cancel_w = 78.0;
+                            let gap = ui.spacing().item_spacing.x;
+                            let edit_w = (ui.available_width() - cancel_w - gap).max(48.0);
                             let edit = ui.add(
                                 egui::TextEdit::singleline(&mut self.proj_rename_buf)
-                                    .desired_width(ui.available_width() - 8.0)
+                                    .desired_width(edit_w)
                                     .hint_text(crate::theme::hint("Name"))
                                     .font(egui::FontId::proportional(13.0)),
                             );
@@ -418,7 +422,10 @@ impl Cabin {
                                     self.proj_rename_lock = None;
                                 }
                             }
-                            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            // Click wins over lost-focus commit: Cancel must not save the folder.
+                            if crate::cards::ghost_pill(ui, "Cancel") {
+                                self.cancel_proj_rename();
+                            } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                                 drop_key(ui, egui::Key::Escape);
                                 self.cancel_proj_rename();
                             } else if ui.input(|i| i.key_pressed(egui::Key::Enter))

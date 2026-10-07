@@ -403,18 +403,35 @@ pub fn skill_source_label(skill: &GrokSkillRow) -> String {
 const CATALOG_CMD_SECS: u64 = 120;
 
 pub fn load_grok_catalog(bin: &Path, cwd: &Path) -> Result<GrokCatalog, String> {
-    let inspect = grok_user_stdout_timeout(bin, cwd, &["inspect", "--json"], CATALOG_CMD_SECS)?;
+    // Overlap the three commands. Serial 3×120s kept Skills on Loading… past a
+    // short QA wait. Each command still has CATALOG_CMD_SECS (chrome-devtools).
+    let bin_mcp = bin.to_path_buf();
+    let cwd_mcp = cwd.to_path_buf();
+    let mcp_job = std::thread::spawn(move || {
+        grok_user_stdout_timeout(
+            &bin_mcp,
+            &cwd_mcp,
+            &["mcp", "list", "--json"],
+            CATALOG_CMD_SECS,
+        )
+        .unwrap_or_default()
+    });
+    let bin_plug = bin.to_path_buf();
+    let cwd_plug = cwd.to_path_buf();
+    let plug_job = std::thread::spawn(move || {
+        grok_user_stdout_timeout(
+            &bin_plug,
+            &cwd_plug,
+            &["plugin", "list", "--json", "--available"],
+            CATALOG_CMD_SECS,
+        )
+        .unwrap_or_default()
+    });
+    let inspect_res = grok_user_stdout_timeout(bin, cwd, &["inspect", "--json"], CATALOG_CMD_SECS);
+    let mcp_text = mcp_job.join().unwrap_or_default();
+    let plug_text = plug_job.join().unwrap_or_default();
+    let inspect = inspect_res?;
     let inspect_v: Value = serde_json::from_str(inspect.trim()).unwrap_or(Value::Null);
-    let mcp_text =
-        grok_user_stdout_timeout(bin, cwd, &["mcp", "list", "--json"], CATALOG_CMD_SECS)
-            .unwrap_or_default();
-    let plug_text = grok_user_stdout_timeout(
-        bin,
-        cwd,
-        &["plugin", "list", "--json", "--available"],
-        CATALOG_CMD_SECS,
-    )
-    .unwrap_or_default();
     let skills = parse_inspect_skills(&inspect_v);
     let hooks = parse_inspect_hooks(&inspect_v);
     let project_trusted = parse_inspect_project_trusted(&inspect_v);
@@ -639,6 +656,18 @@ mod tests {
         );
         assert!(load.contains("parse_inspect_hooks"), "{load}");
         assert!(load.contains("parse_inspect_project_trusted"), "{load}");
+        assert_eq!(
+            load.matches("std::thread::spawn").count(),
+            2,
+            "mcp list and plugin list must overlap inspect: {load}"
+        );
+        let first_spawn = load.find("std::thread::spawn").expect("spawn");
+        let inspect_at = load.find("\"inspect\"").expect("inspect");
+        let mcp_join = load.find("mcp_job.join()").expect("join mcp");
+        assert!(
+            first_spawn < inspect_at && inspect_at < mcp_join,
+            "inspect must start before either join, so the three commands overlap: {load}"
+        );
     }
 
     #[test]
