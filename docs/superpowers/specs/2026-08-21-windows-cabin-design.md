@@ -14,6 +14,14 @@ Grok Build owns: coding tools, sandbox, permissions, plan mode, skills/plugins/M
 
 Transport: spawn `grok.exe --no-auto-update agent stdio`. Do not vendor grok-build crates. Do not wrap the cabin in Electron or Tauri.
 
+**Addendum (2026-10-06, Spike-0 harness).** Windows gets no new cabin-native computer use (no UIA backend). The shipped `grokhub-desktop` MCP (xcap + SendInput) is the Windows desktop tool path, the same as on Linux. Its dispatch runs the same cabin pre-check (`desktop_mcp::harness_gate` → `harness::desk_decide`):
+
+- The switch off refuses.
+- A hard floor hit refuses.
+- A hard-class action parks a cabin card. A timeout or a halt denies it.
+
+GB's own computer use is gated the same way through ACP asks and the headless `--deny` rules. The cabin only tightens what Grok Build allows.
+
 ## Repository
 
 - Source: this repo. Windows vs Linux is `cfg(windows)` / `cfg(unix)` on the same `main`.
@@ -36,6 +44,7 @@ Same workspace crates: `grokhub-app` (`grokhub.exe`), `grokhub-hub` (`grokhub-hu
 | Leader socket | unix socket + `--leader-socket` | same flags if `grok.exe` accepts a filesystem path; otherwise isolate via `GROK_HOME` only |
 | Process spawn | `setsid` / close extra fds / `kill -- -pid` | skip unix `pre_exec`; `child.kill()` is enough |
 | Computer-use desktop.rs | x11/wayland helpers | compile stubs / unused; Grok Build owns this |
+| Desktop MCP (`grokhub --mcp-desktop`) | X11 / Wayland / portal | xcap + SendInput. Same `harness_gate` pre-check on both (addendum above) |
 | Install | `install.sh` + systemd user units | per-user `GrokHub-Setup.exe` |
 
 `HOME` reads must fall back to `USERPROFILE` on Windows so project roots, Grok locate, and memory paths work in a stock user session.

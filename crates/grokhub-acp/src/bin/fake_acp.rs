@@ -23,6 +23,10 @@ fn main() {
     let tool = std::env::var("FAKE_ACP_TOOL").unwrap_or_default();
     let want_perm = std::env::var("FAKE_ACP_PERMISSION").ok().as_deref() == Some("1");
     let image = std::env::var("FAKE_ACP_IMAGE").unwrap_or_default();
+    let perm_title = std::env::var("FAKE_ACP_PERM_TITLE").unwrap_or_else(|_| "bash".into());
+    let raw_input: Option<Value> = std::env::var("FAKE_ACP_RAW_INPUT")
+        .ok()
+        .and_then(|r| serde_json::from_str(&r).ok());
     let hs_req = std::env::var("FAKE_ACP_HS_REQ").ok().as_deref() == Some("1");
     let mut hs_req_answered = false;
     let models_id = std::env::var("FAKE_ACP_MODELS_ID").ok().as_deref() == Some("1");
@@ -237,19 +241,20 @@ fn main() {
                             "data": image
                         }));
                     }
+                    let mut update = json!({
+                        "sessionUpdate": "tool_call",
+                        "toolCallId": "tool-1",
+                        "title": tool,
+                        "kind": "other",
+                        "status": "completed",
+                        "content": content
+                    });
+                    if let Some(raw) = &raw_input {
+                        update["rawInput"] = raw.clone();
+                    }
                     notify(
                         "session/update",
-                        json!({
-                            "sessionId": "sess-test",
-                            "update": {
-                                "sessionUpdate": "tool_call",
-                                "toolCallId": "tool-1",
-                                "title": tool,
-                                "kind": "other",
-                                "status": "completed",
-                                "content": content
-                            }
-                        }),
+                        json!({ "sessionId": "sess-test", "update": update }),
                     );
                 }
                 if want_perm {
@@ -260,7 +265,7 @@ fn main() {
                         "method": "session/request_permission",
                         "params": {
                             "sessionId": "sess-test",
-                            "toolCall": { "toolCallId": "tool-1", "title": "bash" },
+                            "toolCall": { "toolCallId": "tool-1", "title": perm_title },
                             "options": [
                                 { "optionId": "allow-once", "name": "Allow", "kind": "allow_once" },
                                 { "optionId": "allow-always", "name": "Always", "kind": "allow_always" },

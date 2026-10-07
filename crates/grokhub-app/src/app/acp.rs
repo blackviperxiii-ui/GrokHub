@@ -458,6 +458,10 @@ impl Cabin {
                         }
                         continue;
                     }
+                    // Harness pre-check before Grok Build's pill answers: tighten only.
+                    let Some(p) = self.harness_precheck(p) else {
+                        continue;
+                    };
                     if self.permission_mode == PermissionMode::AlwaysApprove {
                         if let Some(h) = &self.acp {
                             let _ = h.answer_permission_always(p.rpc_id);
@@ -581,6 +585,7 @@ impl Cabin {
     /// The turn is stopping: withdraw the Ask on screen and every Ask queued
     /// behind it, so no RPC is left hanging.
     pub(super) fn withdraw_perm_asks(&mut self) {
+        self.withdraw_hard_parks();
         let asks: Vec<_> = self
             .perm_ask
             .take()
@@ -744,6 +749,7 @@ impl Cabin {
                     self.remember_last_frame(url);
                     self.store_hub_frame(url);
                 }
+                self.harness_note_headless(&card);
                 self.ingest_tool_card(&card);
                 if self.stream_here() {
                     self.scrub_live_blocks();
@@ -798,6 +804,7 @@ impl Cabin {
             Ok(GrokPEvent::End(turn)) => {
                 self.grok_p_pid = None;
                 self.apply_single_turn(turn);
+                self.harness_headless_end();
             }
             Ok(GrokPEvent::Err(e)) => {
                 self.grok_p_pid = None;
@@ -1035,6 +1042,7 @@ impl Cabin {
                 learned: &grokhub_core::brief_for(&self.learning, "chat"),
                 deny: self.permission_mode.needs_approval(),
                 desktop: self.cfg.desktop_control,
+                hard_deny: grokhub_agent::harness::HEADLESS_DENY_RULES,
             },
             false,
             user_home,
@@ -1091,6 +1099,9 @@ impl Cabin {
                     }
                 }
                 grokhub_agent::SideEvent::Permission(ask) => {
+                    let Some(ask) = self.harness_precheck_on(ask, "E") else {
+                        continue;
+                    };
                     if self.permission_mode == PermissionMode::AlwaysApprove {
                         if let Some(handle) = &self.acp {
                             let _ = handle.answer_permission_always(ask.rpc_id);
