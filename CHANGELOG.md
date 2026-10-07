@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+Slash results get their own style, plus two small fixes (Critiquito GL-05, SY-09, SY-10). The consent rules are unchanged.
+
+- **Slash and system results keep their look (GL-05).** Older results, like the `/sync` line and the `/privacy` report, used to collapse under an italic "Thought process" header once something newer arrived, so app output looked like model thinking. They now stay in the normal reply bubble at every age and never get the thought label or its Collapse control. The pane tells them apart by the tag the cabin adds when it writes them, not by their text. Model reasoning still collapses exactly as before, and collapsing it no longer folds a result away with it. The ghost Revoke still sits under the newest `/privacy` report.
+- **"chats and memory" in sentences (SY-09).** The `/sync` card body, the Settings note and the `/privacy` intro now read "chats and memory". Compact spots keep "chats, memory": the card command, the `/privacy` grant and egress lines, and the row hints. Logs and files still keep the `chat` / `personal` ids.
+- **Settings → Permissions spacing (SY-10).** "Leaving this computer" and "Command rules" get 12px more space above them, at the same size, so each heading starts a new group instead of reading as another row.
+
+No version bump.
+
 Privacy and consent follow-ups (Critiquito SY-01 to SY-08). The consent rules are unchanged: grants still come only from a click in Settings, and a hard card still has no Always, Enter does not approve it, and Esc or the timeout denies it.
 
 - **`/sync` with nothing paired** sends nothing, logs nothing and parks no card. It posts "Nothing paired yet. Start share to pair a computer." With at least one paired computer it works as before (the hard Send card when there is no grant), then posts "Synced chats and memory to N computers" in the chat instead of jumping to Devices.
