@@ -801,6 +801,8 @@ pub struct Cabin {
     reflect_rx: Option<mpsc::Receiver<(MemoryEdit, Option<MemoryEdit>)>>,
     /// The one-time AMR import ran this session (AMR mode only).
     amr_imported: bool,
+    /// The local day the AMR dream ran or was skipped (Halt), this session.
+    dream_day: Option<String>,
     session_show_rx: Option<(String, mpsc::Receiver<String>)>,
     import_rx: Option<mpsc::Receiver<ImportOpenclawOut>>,
     inspect_text: String,
@@ -1375,6 +1377,7 @@ impl Cabin {
             inhabit_rx: None,
             reflect_rx: None,
             amr_imported: false,
+            dream_day: None,
             session_show_rx: None,
             import_rx: None,
             inspect_text: String::new(),
@@ -1808,6 +1811,7 @@ impl Cabin {
             inhabit_rx: None,
             reflect_rx: None,
             amr_imported: false,
+            dream_day: None,
             session_show_rx: None,
             import_rx: None,
             inspect_text: String::new(),
@@ -3429,6 +3433,7 @@ impl Cabin {
                 HeartbeatAct::Review => {
                     if !night_fired && !self.running {
                         self.tick_review();
+                        self.tick_dream();
                     }
                 }
                 HeartbeatAct::Wall => self.tick_wall(),
