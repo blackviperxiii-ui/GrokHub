@@ -984,6 +984,7 @@ pub const ASK_DENY_RULES: &[&str] = &[
     "Edit",
     "Write",
     grokhub_core::DESKTOP_MCP_RULE,
+    grokhub_core::CUA_MCP_RULE,
 ];
 
 /// Fail closed on an unwatched `grok -p` while Ask is on.
@@ -1081,7 +1082,12 @@ pub fn apply_desktop_spawn_args(
             PermissionMode::Ask => grokhub_core::DesktopPermMode::Ask,
         },
     };
-    let args = grokhub_core::apply_desktop_mcp_args(args, mode, false, enabled);
+    let mut args = grokhub_core::apply_desktop_mcp_args(args, mode, false, enabled);
+    // Spike-2a: the Cua proxy is denied wherever the desktop tools are, and never allowed here.
+    let desk_denied = args.windows(2).any(|w| w[0] == "--deny" && w[1] == grokhub_core::DESKTOP_MCP_RULE);
+    if desk_denied && !args.windows(2).any(|w| w[0] == "--deny" && w[1] == grokhub_core::CUA_MCP_RULE) {
+        args = with_hard_deny(args, &[grokhub_core::CUA_MCP_RULE]);
+    }
     if builtin_cu_denied(permission, enabled) {
         with_hard_deny(args, BUILTIN_CU_DENY)
     } else {
@@ -1149,6 +1155,37 @@ pub fn self_mcp_add_argv(exe: &str) -> Vec<String> {
 /// `~/.grok` (rule 5). Same isolated runner as [`register_desktop_mcp`].
 pub fn register_self_mcp(bin: &Path, cwd: &Path, exe: &Path) -> Result<String, String> {
     let argv = self_mcp_add_argv(&exe.display().to_string());
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    grok_stdout_timeout(bin, cwd, &refs, 20)
+}
+
+/// Spike-2a: `grok mcp add grokhub-cua -- <exe> --mcp-cua`
+pub fn cua_mcp_add_argv(exe: &str) -> Vec<String> {
+    vec![
+        "mcp".into(),
+        "add".into(),
+        grokhub_core::CUA_MCP_SERVER.into(),
+        "--".into(),
+        exe.into(),
+        "--mcp-cua".into(),
+    ]
+}
+
+/// `grok mcp remove grokhub-cua`
+pub fn cua_mcp_remove_argv() -> Vec<String> {
+    vec!["mcp".into(), "remove".into(), grokhub_core::CUA_MCP_SERVER.into()]
+}
+
+/// Register the Cua gate proxy in the cabin `GROK_HOME`, never `~/.grok`.
+pub fn register_cua_mcp(bin: &Path, cwd: &Path, exe: &Path) -> Result<String, String> {
+    let argv = cua_mcp_add_argv(&exe.display().to_string());
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    grok_stdout_timeout(bin, cwd, &refs, 20)
+}
+
+/// Remove the Cua gate proxy from the cabin `GROK_HOME`.
+pub fn unregister_cua_mcp(bin: &Path, cwd: &Path) -> Result<String, String> {
+    let argv = cua_mcp_remove_argv();
     let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
     grok_stdout_timeout(bin, cwd, &refs, 20)
 }
@@ -2086,6 +2123,7 @@ mod tests {
                 "Edit",
                 "Write",
                 grokhub_core::DESKTOP_MCP_RULE,
+                grokhub_core::CUA_MCP_RULE,
             ]
             .as_slice()
         );
@@ -2239,6 +2277,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn cua_proxy_registers_in_the_cabin_home_and_is_denied_with_the_desktop_rule() {
+        assert_eq!(
+            cua_mcp_add_argv("/usr/bin/grokhub"),
+            ["mcp", "add", "grokhub-cua", "--", "/usr/bin/grokhub", "--mcp-cua"]
+        );
+        assert_eq!(cua_mcp_remove_argv(), ["mcp", "remove", "grokhub-cua"]);
+        let has = |argv: &[String], flag: &str| {
+            argv.windows(2).any(|w| w[0] == flag && w[1] == grokhub_core::CUA_MCP_RULE)
+        };
+        for perm in [PermissionMode::Ask, PermissionMode::Auto, PermissionMode::AlwaysApprove] {
+            for desktop in [false, true] {
+                let argv = apply_desktop_spawn_args(Vec::new(), perm, SessionMode::Chat, desktop);
+                let desk_denied = argv.windows(2).any(|w| w[0] == "--deny" && w[1] == grokhub_core::DESKTOP_MCP_RULE);
+                assert_eq!(has(&argv, "--deny"), desk_denied, "{perm:?} desktop={desktop}: {argv:?}");
+                assert!(!has(&argv, "--allow"), "never an allow: {argv:?}");
+            }
+            let plan = apply_desktop_spawn_args(Vec::new(), perm, SessionMode::Plan, true);
+            assert!(has(&plan, "--deny"), "Plan denies the Cua proxy: {plan:?}");
+        }
+        let off = apply_desktop_spawn_args(Vec::new(), PermissionMode::AlwaysApprove, SessionMode::Chat, false);
+        assert_eq!(off.iter().filter(|a| a.as_str() == grokhub_core::CUA_MCP_RULE).count(), 1);
+    }
+
     /// The rule after each `--deny` / `--allow` in an argv.
     fn rules_after<'a>(argv: &'a [String], flag: &str) -> Vec<&'a str> {
         argv.windows(2).filter(|w| w[0] == flag).map(|w| w[1].as_str()).collect()
@@ -2269,7 +2331,12 @@ mod tests {
                     assert!(!rules_after(&argv, "--allow").contains(rule), "{argv:?}");
                 }
                 // The only change is `--deny` pairs on the end: no allow, no looser mode.
+                // The Cua proxy rule (Spike-2a) follows the desktop deny.
                 let mut tail = Vec::new();
+                if rules_after(&without, "--deny").contains(&grokhub_core::DESKTOP_MCP_RULE) {
+                    tail.push("--deny".to_string());
+                    tail.push(grokhub_core::CUA_MCP_RULE.to_string());
+                }
                 if want {
                     for rule in BUILTIN_CU_DENY {
                         tail.push("--deny".to_string());
