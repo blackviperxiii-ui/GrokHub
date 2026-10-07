@@ -586,20 +586,17 @@ const REVOKE_ROW_H: f32 = 28.0;
 pub(super) fn paint_privacy_revokes(ui: &mut egui::Ui, grants: &[PrivacyRevoke], locked: Option<&str>) -> Option<String> {
     let mut hit = None;
     // The pills share one column: every label takes the widest label's room.
-    let font = egui::FontId::proportional(13.0);
-    let widths: Vec<f32> = grants
-        .iter()
-        .map(|g| ui.fonts_mut(|f| f.layout_no_wrap(g.label.clone(), font.clone(), egui::Color32::WHITE).size().x))
-        .collect();
-    let widest = widths.iter().copied().fold(0.0_f32, f32::max);
-    for (g, w) in grants.iter().zip(widths) {
-        let pad = widest - w;
+    let labels: Vec<&str> = grants.iter().map(|g| g.label.as_str()).collect();
+    let pads = super::chat_ui::result_row_label_pads(ui, &labels);
+    for (g, pad) in grants.iter().zip(pads) {
         ui.push_id(("privacy-revoke", g.id.as_str()), |ui| {
             // One pill-high row so the label centers on the Revoke pill.
             let row = egui::vec2(ui.available_width(), REVOKE_ROW_H);
             ui.allocate_ui_with_layout(row, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.add_space(super::chat_ui::RESULT_TEXT_INSET);
-                let r = ui.label(RichText::new(&g.label).size(13.0).color(crate::theme::muted()));
+                let r = ui.label(
+                    RichText::new(&g.label).size(super::chat_ui::RESULT_ROW_LABEL_SIZE).color(crate::theme::muted()),
+                );
                 if let Some(full) = &g.detail {
                     r.on_hover_text(full);
                 }

@@ -363,8 +363,23 @@ pub(super) fn is_error_reply(body: &str) -> bool {
 const REPLY_MARK_W: f32 = 16.0;
 const REPLY_MARK_GAP: f32 = 6.0;
 /// Where a result bubble's text starts, from the row's left edge: mark, gap,
-/// then the bubble's own padding. The `/privacy` Revoke rows line up here (SB-11).
+/// then the bubble's own padding. The `/privacy` Revoke rows (SB-11) and the
+/// `/skills changes` Undo rows (SU-06) line up here.
 pub(super) const RESULT_TEXT_INSET: f32 = REPLY_MARK_W + REPLY_MARK_GAP + BUBBLE_PAD_X;
+/// Label size of the action rows under a result bubble.
+pub(super) const RESULT_ROW_LABEL_SIZE: f32 = 13.0;
+
+/// Room to add after each action-row label so the pills under a result
+/// bubble share one column: every label takes the widest label's width.
+pub(super) fn result_row_label_pads(ui: &egui::Ui, labels: &[&str]) -> Vec<f32> {
+    let font = egui::FontId::proportional(RESULT_ROW_LABEL_SIZE);
+    let widths: Vec<f32> = labels
+        .iter()
+        .map(|l| ui.fonts_mut(|f| f.layout_no_wrap((*l).to_string(), font.clone(), egui::Color32::WHITE).size().x))
+        .collect();
+    let widest = widths.iter().copied().fold(0.0_f32, f32::max);
+    widths.into_iter().map(|w| widest - w).collect()
+}
 
 pub(super) fn paint_speech_bubble(
     ui: &mut egui::Ui,
@@ -1173,6 +1188,7 @@ impl Cabin {
                         );
                         let mut collapse_session = false;
                         let mut privacy_revoke: Option<String> = None;
+                        let mut skill_hit: Option<super::skill_undo::SkillRow> = None;
                         {
                             let thread_id = fold_thread.clone();
                             let row_h_id = chat_row_height_id(&thread_id, pane);
@@ -1190,6 +1206,10 @@ impl Cabin {
                             } else {
                                 None
                             };
+                            // The newest /skills changes bubble gets Undo / Restore rows.
+                            let skill_at = super::skill_undo::newest_skill_changes_row(&self.chat_views);
+                            let skill_rows =
+                                if skill_at.is_some() { self.skill_rows_now() } else { Vec::new() };
                             let (views, keys) = (&self.chat_views, &self.chat_view_keys);
                             let shown = if live {
                                 views_up_to_last_user(views)
@@ -1260,7 +1280,8 @@ impl Cabin {
                                         .iter()
                                         .take_while(|v| v.kind != ChatKind::User)
                                         .any(|v| v.kind == ChatKind::Assistant);
-                                let privacy_here = privacy_at == Some(i) && !privacy_grants.is_empty();
+                                let privacy_here = (privacy_at == Some(i) && !privacy_grants.is_empty())
+                                    || (skill_at == Some(i) && !skill_rows.is_empty());
                                 let painted = ui
                                     .push_id(chat_row_id_salt(&thread_id, i), |ui| {
                                         let mut p = paint_chat_block_with(
@@ -1272,11 +1293,16 @@ impl Cabin {
                                             reply_acts && !privacy_here,
                                         );
                                         if privacy_here {
-                                            privacy_revoke = super::privacy_ui::paint_privacy_revokes(
-                                                ui,
-                                                &privacy_grants,
-                                                privacy_locked,
-                                            );
+                                            if skill_at == Some(i) {
+                                                skill_hit =
+                                                    super::skill_undo::paint_skill_undo_rows(ui, &skill_rows);
+                                            } else {
+                                                privacy_revoke = super::privacy_ui::paint_privacy_revokes(
+                                                    ui,
+                                                    &privacy_grants,
+                                                    privacy_locked,
+                                                );
+                                            }
                                             if reply_acts {
                                                 let avail = clamp_row_width(
                                                     ui.available_width().min(ui.max_rect().width()),
@@ -1329,6 +1355,9 @@ impl Cabin {
                         }
                         if let Some(id) = privacy_revoke {
                             self.revoke_from_privacy(&id);
+                        }
+                        if let Some(row) = skill_hit {
+                            self.skill_row_clicked(&row);
                         }
                         if jumped_you {
                             self.jump_last_you = false;
@@ -1597,9 +1626,13 @@ impl Cabin {
 
     /// Sending from the composer follows your own message down. A night job or a phone
     /// task calls `send_scheduled_chat` directly, so it cannot yank the pane out of your reading.
+    /// Only the user's own typing comes through here, so this is also where a typed
+    /// `/skills undo` is marked as theirs (`typed_send`).
     pub(super) fn send_from_composer(&mut self, text: String) {
         self.pin_chat_tail();
+        self.harness.typed_send = true;
         self.send_chat(text);
+        self.harness.typed_send = false;
     }
 
     pub(super) fn paint_live_blocks(

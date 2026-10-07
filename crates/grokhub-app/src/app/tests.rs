@@ -22457,6 +22457,214 @@ fn scrub_live_blocks_noop_without_secrets() {
     assert!(cabin.live_keys.is_empty());
 }
 
+/// One config root for both this thread (`TestConfigDir`) and the skill-write
+/// threads (`GROKHUB_CONFIG`), with one skill saved the way the cabin saves it.
+fn pin_skill_config(label: &str) -> (crate::config::TestConfigDir, std::path::PathBuf) {
+    let root = crate::config::test_config_root(label);
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("config root");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    (crate::config::TestConfigDir::set(root.clone()), root)
+}
+
+fn weekly_report_skill() -> SkillMd {
+    SkillMd {
+        name: "weekly-report".into(),
+        description: "Build the weekly report.".into(),
+        slash: "/weekly-report".into(),
+        trigger: "the user asks for the weekly report".into(),
+        instructions: "1. Open report.md\n2. Fill this week's numbers".into(),
+        pitfalls: String::new(),
+        verify: String::new(),
+        runs: 2,
+    }
+}
+
+/// The skill-write threads append to the ledger; wait for `n` lines.
+fn wait_ledger_lines(root: &std::path::Path, n: usize) -> grokhub_agent::harness::ChangeLedger {
+    for _ in 0..400 {
+        let ledger = grokhub_agent::harness::ChangeLedger::load(root);
+        if ledger.all().len() >= n {
+            return ledger;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("ledger never reached {n} lines");
+}
+
+const WEEKLY_PATCH: &str =
+    "SUGGEST_SKILL_PATCH: weekly-report | the user asks for the weekly report | 1. Open report.md 2. Fill the numbers 3. Save a copy as PDF";
+
+#[test]
+fn nightly_patch_keeps_the_prior_version_and_typed_undo_puts_it_back() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("skill-undo-typed");
+    let path = skills::save_skill(&weekly_report_skill()).expect("save");
+    let v1 = std::fs::read(&path).unwrap();
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.skill_list = skills::list_skills();
+    cabin.apply_review_skill_patches(WEEKLY_PATCH);
+    let ledger = wait_ledger_lines(&root, 1);
+    let c = &ledger.all()[0];
+    assert_eq!((c.id.as_str(), c.op.as_str(), c.origin.as_str()), ("weekly-report", "modify", "self_manage"));
+    assert_eq!(c.reason, "nightly review: 1. Open report.md 2. Fill the numbers 3. Save a copy as PDF");
+    assert_eq!(c.before_hash, grokhub_agent::harness::content_hash(&v1));
+    let v2 = std::fs::read(&path).unwrap();
+    assert_ne!(v2, v1, "the patch landed");
+    assert_eq!(c.after_hash, grokhub_agent::harness::content_hash(&v2));
+    let kept = grokhub_agent::harness::skill_history_dir(&root, "weekly-report");
+    let kept_v1: Vec<Vec<u8>> = std::fs::read_dir(&kept)
+        .unwrap()
+        .flatten()
+        .map(|e| std::fs::read(e.path()).unwrap())
+        .collect();
+    assert!(kept_v1.contains(&v1), "the prior version is kept before the write");
+    cabin.send_from_composer("/skills undo weekly-report".into());
+    assert_eq!(std::fs::read(&path).unwrap(), v1, "undo puts back the exact bytes");
+    assert_eq!(cabin.status, "Undid the newest change to weekly-report. The version before it is back.");
+    assert_eq!(
+        cabin.skill_list.iter().find(|s| s.name == "weekly-report").map(|s| s.instructions.as_str()),
+        Some("1. Open report.md\n2. Fill this week's numbers\n"),
+        "the cabin's list reads the restored file"
+    );
+    let ledger = grokhub_agent::harness::ChangeLedger::load(&root);
+    assert_eq!(ledger.all().len(), 2);
+    assert_eq!((ledger.all()[1].op.as_str(), ledger.all()[1].origin.as_str()), ("undo", "user"));
+    assert_eq!(ledger.all()[1].undoes, Some(1));
+    // The same patch next night is not written again on its own.
+    cabin.apply_review_skill_patches(WEEKLY_PATCH);
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(std::fs::read(&path).unwrap(), v1);
+    assert_eq!(grokhub_agent::harness::ChangeLedger::load(&root).all().len(), 2);
+    assert_eq!(
+        cabin.skill_list.iter().find(|s| s.name == "weekly-report").map(|s| s.instructions.as_str()),
+        Some("1. Open report.md\n2. Fill this week's numbers\n"),
+        "the cabin's list reads the restored file"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The model never undoes a skill change on its own: the same slash from a
+/// night job, a review reply, or any send that is not the user's typing only
+/// posts the `/skills changes` rows, and the file stays.
+#[test]
+fn the_model_cannot_undo_a_skill_change_on_its_own() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("skill-undo-model");
+    let path = skills::save_skill(&weekly_report_skill()).expect("save");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.skill_list = skills::list_skills();
+    cabin.apply_review_skill_patches(WEEKLY_PATCH);
+    wait_ledger_lines(&root, 1);
+    let patched = std::fs::read(&path).unwrap();
+    cabin.send_scheduled_chat("/skills undo weekly-report".into());
+    assert_eq!(cabin.status, super::skill_undo::UNDO_NEEDS_YOU);
+    cabin.send_chat("/skills undo weekly-report".into());
+    cabin.send_chat("/skills restore weekly-report".into());
+    cabin.apply_review_reply(Ok("/skills undo weekly-report\nUNDO weekly-report".into()));
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(std::fs::read(&path).unwrap(), patched, "nothing but the user undoes");
+    let ledger = grokhub_agent::harness::ChangeLedger::load(&root);
+    assert_eq!(ledger.all().len(), 1, "no undo line: {:?}", ledger.all());
+    let shown = cabin
+        .messages
+        .iter()
+        .filter(|m| m.1.contains(super::skill_undo::SKILL_CHANGES_HEAD))
+        .count();
+    assert_eq!(shown, 3, "each refused undo shows the rows instead");
+    assert!(!cabin.harness.typed_send, "the typed mark never sticks");
+    let rows = cabin.skill_rows_now();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "weekly-report");
+    assert_eq!(rows[0].act, super::skill_undo::SkillAct::Undo);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Outside tests, an `UndoAsk` is built only in `skill_undo.rs`, and only the
+/// composer send sets `typed_send`.
+#[test]
+fn only_typing_or_a_click_builds_an_undo_ask() {
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().expect("crates dir").to_path_buf();
+    let mut hits = Vec::new();
+    let mut stack = vec![crates.clone()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if path.is_dir() {
+                if name != "target" && name != "tests" {
+                    stack.push(path);
+                }
+                continue;
+            }
+            if !name.ends_with(".rs") || name == "tests.rs" || name.ends_with("_tests.rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            let live = text.split("#[cfg(test)]").next().unwrap_or("");
+            for needle in ["UndoAsk::from_click(", "UndoAsk::from_typing(", "typed_send = true"] {
+                // chat_ui.rs has test helpers above the composer send, so the
+                // typed mark is counted in the whole file.
+                let hay = if needle == "typed_send = true" { text.as_str() } else { live };
+                for _ in hay.matches(needle) {
+                    let rel = path.strip_prefix(&crates).unwrap_or(&path).display().to_string().replace('\\', "/");
+                    hits.push(format!("{rel}: {needle}"));
+                }
+            }
+        }
+    }
+    hits.sort();
+    assert_eq!(
+        hits,
+        vec![
+            "grokhub-app/src/app/chat_ui.rs: typed_send = true",
+            "grokhub-app/src/app/skill_undo.rs: UndoAsk::from_click(",
+            "grokhub-app/src/app/skill_undo.rs: UndoAsk::from_click(",
+            "grokhub-app/src/app/skill_undo.rs: UndoAsk::from_typing(",
+            "grokhub-app/src/app/skill_undo.rs: UndoAsk::from_typing(",
+        ]
+    );
+}
+
+#[test]
+fn a_learned_skill_undone_by_click_is_removed_and_restore_brings_it_back() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("skill-undo-create");
+    let mut cabin = Cabin::quiet_for_test();
+    let mut skill = weekly_report_skill();
+    skill.name = "board-status".into();
+    skill.slash = "/board-status".into();
+    skill.verify = "test -f report.md".into();
+    cabin.commit_proposed_skill(skill);
+    let ledger = wait_ledger_lines(&root, 1);
+    assert_eq!(ledger.all()[0].op.as_str(), "create");
+    let folder = skills::skill_folder("board-status");
+    let v1 = std::fs::read(folder.join("SKILL.md")).unwrap();
+    assert!(folder.join("scripts/verify.sh").exists());
+    let rows = cabin.skill_rows_now();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].label.starts_with("board-status · added "), "{}", rows[0].label);
+    cabin.skill_row_clicked(&rows[0]);
+    assert!(!folder.exists(), "undoing a created skill removes its folder");
+    assert!(!cabin.skill_list.iter().any(|s| s.name == "board-status"));
+    assert_eq!(
+        cabin.status,
+        "Removed board-status: it was new. Its text is kept, and /skills restore board-status brings it back."
+    );
+    let kept = grokhub_agent::harness::skill_history_dir(&root, "board-status");
+    let kept: Vec<Vec<u8>> = std::fs::read_dir(&kept).unwrap().flatten().map(|e| std::fs::read(e.path()).unwrap()).collect();
+    assert_eq!(kept, vec![v1.clone()], "its text stays in history");
+    let rows = cabin.skill_rows_now();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].act, super::skill_undo::SkillAct::Restore);
+    cabin.send_from_composer("/skills restore board-status".into());
+    assert_eq!(std::fs::read(folder.join("SKILL.md")).unwrap(), v1);
+    assert!(folder.join("scripts/verify.sh").exists(), "verify scripts follow the restored file");
+    assert!(cabin.skill_list.iter().any(|s| s.name == "board-status"));
+    assert_eq!(cabin.status, "Restored board-status from its kept copy.");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 // Folded from PR #392.
 #[test]
 fn apply_review_skill_patches_noop_when_idle() {
