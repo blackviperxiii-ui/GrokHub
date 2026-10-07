@@ -1,5 +1,5 @@
 //! Cabin C chrome glances: Coding/Life lane (R6), quiet-hours chip (R9),
-//! session map (R7), device glance (R8). Fail soft. No Muse / phone stubs.
+//! session map (R7), device glance (R8). Fail soft. No Muse / device stubs.
 
 use super::*;
 use grokhub_core::{last_user_text, QuickChip};
@@ -140,7 +140,7 @@ pub(super) struct DeviceGlance {
     pub has_thumb: bool,
 }
 
-/// Omit when hub is off and no last frame is bound. Never names a phone.
+/// Omit when hub is off and no last frame is bound.
 pub(super) fn device_glance(hub_on: bool, last_frame_url: Option<&str>) -> Option<DeviceGlance> {
     let thumb = last_frame_url
         .map(str::trim)
@@ -270,18 +270,13 @@ mod tests {
     fn device_glance_omits_unbound() {
         assert!(device_glance(false, None).is_none());
         assert!(device_glance(false, Some("")).is_none());
-        assert!(device_glance(false, Some("https://example/phone.jpg")).is_none());
+        assert!(device_glance(false, Some("https://example/frame.jpg")).is_none());
         let share = device_glance(true, None).expect("sharing");
         assert_eq!(share.share_line, "Sharing");
         assert!(!share.has_thumb);
         let frame = device_glance(false, Some("data:image/jpeg;base64,xx")).expect("frame");
         assert_eq!(frame.share_line, "Last frame");
         assert!(frame.has_thumb);
-        let blob = format!("{} {:?}", share.share_line, frame);
-        assert!(
-            !blob.to_ascii_lowercase().contains("phone"),
-            "device glance must not stub a phone: {blob}"
-        );
     }
 
     #[test]

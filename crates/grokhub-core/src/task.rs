@@ -29,8 +29,6 @@ pub struct HubTask {
     pub result: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub receipts: Vec<Receipt>,
-    #[serde(default)]
-    pub result_claimed: bool,
 }
 
 impl HubTask {
@@ -59,7 +57,6 @@ impl HubTask {
             created_at,
             result: None,
             receipts: vec![],
-            result_claimed: false,
         }
     }
 

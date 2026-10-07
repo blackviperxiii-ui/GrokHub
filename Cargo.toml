@@ -4,7 +4,6 @@ members = [
     "crates/grokhub-core",
     "crates/grokhub-hub",
     "crates/grokhub-app",
-    "crates/grokhub-ffi",
     "crates/grokhub-acp",
     "crates/grokhub-agent",
 ]

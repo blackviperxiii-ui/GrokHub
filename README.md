@@ -8,7 +8,6 @@ Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — 
 |----------|----------|--------|
 | **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.93.tar.gz`, AUR | **v2.10.93** |
 | **Windows** (x86_64) | `GrokHub-Setup-2.10.93.exe`, `grokhub-windows-v2.10.93.zip` | **v2.10.93** |
-| **Android** | [Grok-Hub-Android](https://github.com/blackviperxiii-ui/Grok-Hub-Android) | key-fob — pair, task, JPEG |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
 
@@ -37,7 +36,7 @@ GROKHUB_HUB_PORT=18766 cargo run -p grokhub-hub
 
 The tray icon is there from launch. Close / titlebar × hides the cabin — the window unmaps and stays unmapped until it loses focus (then a pinned taskbar click, tray **Show cabin**, or a second `grokhub` raises it). It does not minimize to the taskbar. Drag the titlebar body to move the undecorated window. Size and position come back on the next launch. Jobs, hub, and idle reflect keep running. Tray: **Show cabin**, **Halt**, **Quit**. The first hide shows one “Still running in the tray” toast and writes `closeToTrayTipSeen` in `app.json`. Later hides, including after relaunch, do not toast. A first hide during quiet hours does not set that flag, so the next hide outside quiet hours can still tip once. The cabin status line still says it is in the tray. `grokhub --agent` starts already hidden. `GROKHUB_TRAY=0` quits on close.
 
-`./scripts/install.sh --user` installs [Grok Build](https://x.ai/cli) **alpha** (`GROK_CHANNEL=alpha`, `grok`) next to the cabin. First launch Get Started connects Super Grok and signs in `grok` too. Chat is headless **`grok -p --output-format streaming-json`** (Grok Build 1.0.21+) with `--sandbox off` and a desktop rule so Grok uses this machine. Ask/Allow/Deny is ACP (`grok agent stdio`) when the permission pill is Ask. MCP elicitation (form or URL) uses the same ACP session. Night, loops, inbox, and phone `/v1/task` stay on `grok -p` and inherit that same PermissionMode pill via `scheduled_args` (Ask is fail-closed, no ACP; Auto is `--permission-mode auto`; Always is `--always-approve`). btw (saved as ask) is a side ask: a live run keeps going, then the question sends look-safe on `grok -p` (`--permission-mode default`, no desktop-do-the-work rules). Idle btw sends that same look-safe ask. Bound project is `--cwd`; unbound uses `~/GrokHub-Work` (never the cabin process cwd). Overlay `/update` runs only what is newer: `grok update --alpha` when a newer alpha exists, then the cabin overlay when the cabin is newer. If `grok` is on stable after an upgrade, the cabin switches it back to alpha and does not yank a working alpha install. `/context` and `/usage` show Grok Build server tokens (including reasoning); `/usage` also totals today's cabin spend and, when a session is attached, `grok usage <id>` (1.0.14 per-turn cost). `/compact` and `/rewind` talk to Grok. Halt kills the `grok -p` child (`session/cancel` on ACP). Truncated replies and transient 5xx retries stay on the same turn. Credit-limit errors offer Try Again.
+`./scripts/install.sh --user` installs [Grok Build](https://x.ai/cli) **alpha** (`GROK_CHANNEL=alpha`, `grok`) next to the cabin. First launch Get Started connects Super Grok and signs in `grok` too. Chat is headless **`grok -p --output-format streaming-json`** (Grok Build 1.0.21+) with `--sandbox off` and a desktop rule so Grok uses this machine. Ask/Allow/Deny is ACP (`grok agent stdio`) when the permission pill is Ask. MCP elicitation (form or URL) uses the same ACP session. Night, loops, and `/send` tasks stay on `grok -p` and inherit that same PermissionMode pill via `scheduled_args` (Ask is fail-closed, no ACP; Auto is `--permission-mode auto`; Always is `--always-approve`). btw (saved as ask) is a side ask: a live run keeps going, then the question sends look-safe on `grok -p` (`--permission-mode default`, no desktop-do-the-work rules). Idle btw sends that same look-safe ask. Bound project is `--cwd`; unbound uses `~/GrokHub-Work` (never the cabin process cwd). Overlay `/update` runs only what is newer: `grok update --alpha` when a newer alpha exists, then the cabin overlay when the cabin is newer. If `grok` is on stable after an upgrade, the cabin switches it back to alpha and does not yank a working alpha install. `/context` and `/usage` show Grok Build server tokens (including reasoning); `/usage` also totals today's cabin spend and, when a session is attached, `grok usage <id>` (1.0.14 per-turn cost). `/compact` and `/rewind` talk to Grok. Halt kills the `grok -p` child (`session/cancel` on ACP). Truncated replies and transient 5xx retries stay on the same turn. Credit-limit errors offer Try Again.
 
 Slash: `/help` · `/new` · `/scratch` · `/clear` · `/undo` · `/retry` · `/stop` · `/sh` · `/host` · `/plan` · `/always-approve` · `/sessions` · `/inspect` · `/project` · `/memory` · `/recall` · `/forget` · `/board` · `/imagine` · `/skill` · `/compact` · `/learn` · `/update` · `/send` · `/sync` · `/hub` · `/inhabit` · `/rewind` · `/room` · `/export` · `/rename` · `/pin` · `/delete` · `/effort` · `/dream` · `/palette` · `/bg` · `/queue`. Type `/help` in the cabin for the rest. `/skill <name>` runs that skill. Skills and Connectors lists **Cabin skills** (`~/.config/GrokHub/skills`) next to the Grok Build catalog, with the run count and Use in chat, plus nightly **Suggested** tiles that Add via `save_skill`. Connectors holds the GitHub PAT and read-only Who am I / List repos tiles. `/compact` keeps the last 8 visible turns and, with `/workflow` and `/rewind`, honors the PermissionMode pill. `/workflow pause`, `/workflow resume`, and `/workflow stop` use that pill. Empty `/workflow` and `/workflows` open Skills on Workflows. `/context` counts visible turns. `/scratch` blocks `/forget` and Memory Save. `/rewind` restores the bound project root (or Grok conversation rewind when mapped). `/sync` merges chats and memory with paired computers. `/project` also takes `bind`, `new`, `folder`, `rename`, `move`, `delete`, `clear`. Right-click a sidebar project to rename or remove it — Delete drops the row, not the files.
 
@@ -61,16 +60,13 @@ Settings → **Update** is **Install Grok Build CLI** only when grok is still mi
 
 Settings → **About** is the app name, version, Grok Build line, doctor, and a redacted diagnostics copy. It does not list today's usage buckets or the model catalog (`/usage` and `/models` still do).
 
-Chat is headless `grok -p` on this desktop (full filesystem and shell; Grok is told not to claim it lacks computer access). Night, loops, and phone `/v1/task` enqueue the same on the bound project and inherit the composer PermissionMode pill. Halt / Stop / Ctrl+Shift+Esc kill the child. Chat only saves a night job when you asked to schedule one — a reply that mentions “every day at” or “heartbeat every” as advice does not. A clock ask (“every weekday at 9pm, summarize the board”) is saved as a cabin automation in `automations.json` with its hour intact; an interval ask (`/loop 30m`, “every 2 hours”) is saved as a Grok Build loop. The pulse fires both. Anticipate only fires a `Follow skill` on a real `need to` / `remind me` insight that matches a skill, not polite “if you need” chit-chat. A 15s heartbeat runs housekeep, inbox, night, review, wall, mid-thought, reflect, and anticipate. Hidden idle cabins wait for that pulse. Phone dispatch completes on halt / error. `/rewind` restores only the bound project root.
-
-Android / Windows: link `libgrokhub_ffi` and include `crates/grokhub-ffi/include/grokhub.h`.
+Chat is headless `grok -p` on this desktop (full filesystem and shell; Grok is told not to claim it lacks computer access). Night, loops, and `/send` tasks enqueue the same on the bound project and inherit the composer PermissionMode pill. Halt / Stop / Ctrl+Shift+Esc kill the child. Chat only saves a night job when you asked to schedule one — a reply that mentions “every day at” or “heartbeat every” as advice does not. A clock ask (“every weekday at 9pm, summarize the board”) is saved as a cabin automation in `automations.json` with its hour intact; an interval ask (`/loop 30m`, “every 2 hours”) is saved as a Grok Build loop. The pulse fires both. Anticipate only fires a `Follow skill` on a real `need to` / `remind me` insight that matches a skill, not polite “if you need” chit-chat. A 15s heartbeat runs housekeep, inbox, night, review, wall, mid-thought, reflect, and anticipate. Hidden idle cabins wait for that pulse. A queued `/send` task completes on halt / error. `/rewind` restores only the bound project root.
 
 | Binary | Crate | Job |
 |--------|-------|-----|
 | `grokhub` | `crates/grokhub-app` | Cabin GUI around Grok Build `grok -p` |
 | `grokhub-hub` | `crates/grokhub-hub` | Standalone LAN `/v1` hub (port **18766**) |
 | `grok` | xAI Grok Build CLI | Official coding-agent CLI (`https://x.ai/cli`) — installed with the cabin |
-| `libgrokhub_ffi` | `crates/grokhub-ffi` | C ABI for Android / Windows (pair/port/models; no HOST_CMD) |
 
 Config and memory: `~/.config/GrokHub` (`app.json`, `projects.json`, `updates.json`, `suggestions.json`, `secrets.json` mode 0600 / Windows user-only DACL, `memory/SOUL.md`, `USER.md`, `MEMORY.md`). `/recall` reads those memory files unless `app.json` sets `"memory_backend": "amr"`, which reads local `amr/nodes` instead.
 
@@ -97,7 +93,7 @@ Limits: channels are Linux-only for now. `scripts/install-windows.ps1` has no `-
 1. The installer already put **Grok Build CLI alpha** on PATH (`GROK_CHANNEL=alpha` / Windows `x.ai/cli/alpha`).
 2. Launch `grokhub`. **Get Started** asks to connect Super Grok (existing device-code OAuth). That also writes `~/.grok/auth.json` when the CLI has no session.
 3. Settings → Connect Grok OAuth repeats the CLI write if `grok` is still logged out.
-4. Optional: Devices → **Start share** for the Android key-fob. Auto/Always chat is `grok -p`. Halt stops the child. Ask shows Allow / Deny when ACP is up; if ACP is down, Ask denies the turn.
+4. Optional: Devices → **Start share** to pair another computer. Auto/Always chat is `grok -p`. Halt stops the child. Ask shows Allow / Deny when ACP is up; if ACP is down, Ask denies the turn.
 
 Tokens stay in `secrets.json`. Never in markdown.
 
@@ -113,7 +109,7 @@ Every card is one of five kinds: **Do** (one tap), **Watch** (news and results),
 
 ## Background tasks
 
-Work can run beside the chat while you keep talking. `/bg <task>` starts a headless `grok -p` that forks this chat's Grok session, so it knows the conversation without writing into it. A bare `/bg` moves the live reply off the composer; it keeps going and its answer posts on that chat when it ends. Sending in another chat does the same to a reply that is still running there instead of cutting it off. Grok can start one itself with a `BACKGROUND_TASK: <instructions>` line in its reply. Up to 3 run at once. Each shows above the composer with its time, last tool, and Stop; `/bg stop` stops them all, and tray Halt or Ctrl+Alt+H stops them with the live turn (composer Stop and `/stop` leave them running). A result waits while its chat is mid-reply, and the next turn on that chat is told what came back. With Ask on, `/bg` and Grok's `BACKGROUND_TASK:` lines are refused, because a background run can't ask for approval (switch to Auto). Unwatched runs under Ask (background, automations, night, phone) pass Grok Build `--permission-mode dontAsk` and `--deny` rules for shell, edit, and write. They end when the cabin quits.
+Work can run beside the chat while you keep talking. `/bg <task>` starts a headless `grok -p` that forks this chat's Grok session, so it knows the conversation without writing into it. A bare `/bg` moves the live reply off the composer; it keeps going and its answer posts on that chat when it ends. Sending in another chat does the same to a reply that is still running there instead of cutting it off. Grok can start one itself with a `BACKGROUND_TASK: <instructions>` line in its reply. Up to 3 run at once. Each shows above the composer with its time, last tool, and Stop; `/bg stop` stops them all, and tray Halt or Ctrl+Alt+H stops them with the live turn (composer Stop and `/stop` leave them running). A result waits while its chat is mid-reply, and the next turn on that chat is told what came back. With Ask on, `/bg` and Grok's `BACKGROUND_TASK:` lines are refused, because a background run can't ask for approval (switch to Auto). Unwatched runs under Ask (background, automations, night, `/send`) pass Grok Build `--permission-mode dontAsk` and `--deny` rules for shell, edit, and write. They end when the cabin quits.
 
 ## Always-on hub
 
@@ -126,21 +122,18 @@ systemctl --user daemon-reload
 systemctl --user enable --now grokhub-hub.service
 ```
 
-## Devices (phone / other PC)
+## Devices (other computers)
 
-Pair code `ABC-234`. Devices paints a real LAN IPv4 (`http://192.168.x.x:18766`), not a `<lan>` placeholder. Expired pair codes hide and rotate; New / rotated codes persist. The pair tile hides when the hub is not sharing. Android talks HTTP. Do not inhabit onto the phone. Hub `complete` is owner-only.
-
-Contract: [`docs/superpowers/plans/2026-08-14-dispatch-android-notes.md`](docs/superpowers/plans/2026-08-14-dispatch-android-notes.md).
+Pair code `ABC-234`. Devices paints a real LAN IPv4 (`http://192.168.x.x:18766`), not a `<lan>` placeholder. Expired pair codes hide and rotate; New / rotated codes persist. The pair tile hides when the hub is not sharing. Paired computers use the hub for `/sync` (chats and memory) and `/inhabit`. Phone pairing was scrapped on 2026-10-07.
 
 | Method | Path | Auth |
 |--------|------|------|
 | `GET` | `/v1/health` | none |
 | `POST` | `/v1/pair` | pairing code |
-| `POST` | `/v1/task` | Bearer |
-| `GET` | `/v1/task/:id` | Bearer |
-| `GET` | `/v1/results` | Bearer |
-| `GET` | `/v1/frame.jpg` | Bearer (`?since=` → 304) |
-| `POST` | `/v1/voice/client-secret` | Bearer — mints a 5-minute xAI realtime secret from the cabin console key. Android/browser use `wsProtocol` (`xai-client-secret.<token>`). OAuth cannot mint this. |
+| `GET` | `/v1/status` | Bearer |
+| `GET` / `PUT` | `/v1/snapshot` | Bearer (`/sync`) |
+| `GET` / `POST` | `/v1/inhabit` | Bearer |
+| `GET` / `POST` | `/v1/frame` | Bearer |
 
 ## Packaging
 
