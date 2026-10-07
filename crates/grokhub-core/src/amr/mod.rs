@@ -10,14 +10,20 @@
 //!   README.md          amr_schema: 1, plus the conventions
 //!   nodes/<id>.md      one preference, fact, decision, trail, person, or project
 //!   edges/edges.jsonl  one JSON edge per line
-//!   dreams/            overnight reports; M0 does not write them
+//!   dreams/            reports, such as the one-time import-<date>.md
 //! ```
 //!
 //! `/recall` stays on SOUL/USER/MEMORY unless `app.json` sets
 //! `"memory_backend": "amr"`. That file is the cabin settings file. The default
 //! backend is legacy, and a default save omits the key. M0 does not migrate old
 //! files, does not dream, and does not take writes from `/learn`, `/memory`, or
-//! the Pulse ledger. `forget` lands in M1+ (a tombstone, not a silent delete).
+//! the Pulse ledger.
+//!
+//! M1–M2 (only when the backend is `amr`): new remembers go here instead of
+//! MEMORY.md ([`remember_line`]), `/recall` reads this store and the legacy
+//! files together, `forget` leaves a tombstone (`nodes/<id>.tombstone`, the
+//! node stays on disk), and [`import_legacy`] copies LearningState insights
+//! and durable chip preferences in once, with deterministic ids.
 //! Scratch is a flag on [`AmrStore`]: `remember` and `link` then return
 //! [`AmrError::Scratch`] and write nothing.
 //!
@@ -27,11 +33,15 @@
 //! it). No sealer, or a locked one, means [`AmrError::Paused`] and no write.
 //! This crate stays free of crypto: it only calls the trait.
 
+mod import;
 mod schema;
 mod store;
+mod write;
 
+pub use import::{durable_chip_prefs, import_legacy, write_import_report, ImportReport, ImportTally};
 pub use schema::{Edge, EdgeRel, Node, NodeDraft, NodeHit, NodeId, NodeType, Sensitivity, AMR_SCHEMA};
-pub use store::{AmrStore, RecallReport};
+pub use store::{AmrStore, ForgetReport, RecallReport};
+pub use write::{line_id, node_type_for, remember_line, sensitivity_for, LineWrite, Remembered};
 
 /// Seals and opens personal and sensitive nodes. `aad` binds a node to its id.
 /// Errors are plain sentences for the user and never carry key material.
@@ -111,8 +121,8 @@ impl MemoryBackend {
 
 /// Host-facing memory seam (harness design §9.4).
 ///
-/// M0 is `recall`, `remember`, and `link`. `forget` lands in M1+. Scratch is
-/// not a trait method: set it on [`AmrStore`] so writes refuse.
+/// `recall`, `remember`, `link`, and `forget` (a tombstone, M1). Scratch is
+/// not a trait method: set it on [`AmrStore`] so writes and forgets refuse.
 pub trait MemoryEngine {
     /// Display lines for `/recall`. An empty store is an empty vec.
     fn recall(&self, query: &str) -> Vec<String>;
@@ -122,6 +132,10 @@ pub trait MemoryEngine {
 
     /// Record one edge. Legacy returns [`AmrError::Unsupported`].
     fn link(&self, from: &str, to: &str, rel: EdgeRel) -> Result<(), AmrError>;
+
+    /// Tombstone one node so recall stops returning it. Legacy returns
+    /// [`AmrError::Unsupported`].
+    fn forget(&self, id: &str) -> Result<(), AmrError>;
 }
 
 impl MemoryEngine for AmrStore {
@@ -138,6 +152,10 @@ impl MemoryEngine for AmrStore {
 
     fn link(&self, from: &str, to: &str, rel: EdgeRel) -> Result<(), AmrError> {
         AmrStore::link(self, from, to, rel)
+    }
+
+    fn forget(&self, id: &str) -> Result<(), AmrError> {
+        AmrStore::forget(self, id)
     }
 }
 
@@ -169,6 +187,10 @@ impl MemoryEngine for LegacyMemory {
     }
 
     fn link(&self, _from: &str, _to: &str, _rel: EdgeRel) -> Result<(), AmrError> {
+        Err(AmrError::Unsupported)
+    }
+
+    fn forget(&self, _id: &str) -> Result<(), AmrError> {
         Err(AmrError::Unsupported)
     }
 }
@@ -672,5 +694,226 @@ Glow stays white.
         assert_eq!(bare.recall_report("pier").locked, 1);
         assert!(matches!(bare.remember(&more), Err(AmrError::Paused(_))));
         assert_eq!(std::fs::read_to_string(&sealed).unwrap(), text, "nothing dropped");
+    }
+
+    fn node_files(root: &std::path::Path) -> Vec<String> {
+        let mut out: Vec<String> = std::fs::read_dir(root.join("nodes"))
+            .map(|read| {
+                read.flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn forget_leaves_a_tombstone_that_recall_skips_and_scratch_blocks() {
+        let tmp = Tmp::new("forget");
+        let mut store = AmrStore::at(&tmp.path);
+        store.init().unwrap();
+        store.remember(&draft("fact-harbor", "harbor light\n")).unwrap();
+        store.remember(&draft("fact-quay", "quay harbor lamp\n")).unwrap();
+        store.remember(&draft("fact-keel", "keel stays white\n")).unwrap();
+        let before = std::fs::read(tmp.path.join("nodes/fact-harbor.md")).unwrap();
+
+        MemoryEngine::forget(&store, "fact-harbor").unwrap();
+        assert!(store.is_forgotten("fact-harbor"));
+        assert_eq!(std::fs::read(tmp.path.join("nodes/fact-harbor.md")).unwrap(), before, "the node stays on disk");
+        let marker = std::fs::read_to_string(tmp.path.join("nodes/fact-harbor.tombstone")).unwrap();
+        assert!(marker.starts_with("forgotten: ") && marker.ends_with("Z\n"), "{marker}");
+        assert_eq!(MemoryEngine::recall(&store, "harbor"), vec!["amr:fact-quay: quay harbor lamp".to_string()]);
+        // A second forget is a no-op, a missing id is an error.
+        store.forget("fact-harbor").unwrap();
+        assert_eq!(store.forget("fact-nope"), Err(AmrError::MissingNode("fact-nope".into())));
+        assert_eq!(store.forget("../etc"), Err(AmrError::BadId("../etc".into())));
+
+        // forget_matching tombstones every live match and says which.
+        let report = store.forget_matching("HARBOR").unwrap();
+        assert_eq!(report, ForgetReport { forgotten: vec!["fact-quay".into()], locked: 0 });
+        assert!(store.recall("harbor").is_empty());
+        assert_eq!(store.recall("keel").len(), 1);
+        assert_eq!(store.node_file_count(), 3);
+
+        // Revive lifts it again.
+        store.revive("fact-quay").unwrap();
+        assert_eq!(store.recall("quay").len(), 1);
+
+        store.set_scratch(true);
+        assert_eq!(store.forget("fact-keel"), Err(AmrError::Scratch));
+        assert_eq!(store.forget_matching("keel"), Err(AmrError::Scratch));
+        assert_eq!(store.revive("fact-harbor"), Err(AmrError::Scratch));
+        assert!(!tmp.path.join("nodes/fact-keel.tombstone").exists());
+        assert!(tmp.path.join("nodes/fact-harbor.tombstone").exists());
+        assert_eq!(
+            LegacyMemory::new(Vec::new()).forget("fact-keel"),
+            Err(AmrError::Unsupported)
+        );
+    }
+
+    #[test]
+    fn remember_line_is_one_node_per_line_redacts_and_pauses_personal() {
+        let tmp = Tmp::new("line");
+        let store = AmrStore::at(&tmp.path);
+        let line = |text: &'static str, revive: bool| LineWrite {
+            text,
+            source: "chat:thread-7",
+            tags: vec!["reflect".into()],
+            confidence: 0.7,
+            revive,
+        };
+        let first = remember_line(&store, &line("I prefer the harbor light on", false), 1_791_331_200_000).unwrap();
+        let id = line_id("I prefer the harbor light on");
+        assert_eq!(id.len(), "mem-".len() + 12);
+        assert!(id.starts_with("mem-"), "{id}");
+        assert_eq!(first, Remembered::New(id.clone()));
+        assert_eq!(line_id("  i PREFER the   harbor light on "), id);
+        let again = remember_line(&store, &line("i prefer the harbor light on", false), 1_791_331_300_000).unwrap();
+        assert_eq!(again, Remembered::Known(id.clone()));
+        assert_eq!(node_files(&tmp.path), vec![format!("{id}.md")]);
+        let node = Node::from_markdown(&std::fs::read_to_string(tmp.path.join(format!("nodes/{id}.md"))).unwrap()).unwrap();
+        assert_eq!(node.node_type, NodeType::Preference);
+        assert_eq!(node.source, "chat:thread-7");
+        assert_eq!(node.created, "2026-10-07T00:00:00Z");
+        assert_eq!(node.tags, vec!["reflect".to_string()]);
+        assert_eq!(node.body, "I prefer the harbor light on\n");
+
+        // Forgotten stays forgotten for reflect; an explicit remember revives it.
+        store.forget(&id).unwrap();
+        remember_line(&store, &line("I prefer the harbor light on", false), 1).unwrap();
+        assert!(store.recall("harbor").is_empty());
+        remember_line(&store, &line("I prefer the harbor light on", true), 1).unwrap();
+        assert_eq!(store.recall("harbor").len(), 1);
+
+        let secret = "sk-abcdefghijklmnopqrstuv";
+        let keyed = remember_line(
+            &store,
+            &LineWrite { text: "the dock key is sk-abcdefghijklmnopqrstuv", ..line("", false) },
+            1,
+        )
+        .unwrap();
+        let disk = std::fs::read_to_string(tmp.path.join(format!("nodes/{}.md", keyed.id()))).unwrap();
+        assert!(!disk.contains(secret), "{disk}");
+        assert!(disk.contains("the dock key is [redacted]\n"), "{disk}");
+        assert_eq!(keyed.id(), line_id("the dock key is [redacted]"));
+
+        // Personal with no sealer: paused, and no file of either kind.
+        let personal = LineWrite { text: "my email is ada@example.com", ..line("", false) };
+        assert_eq!(sensitivity_for(personal.text), Sensitivity::Personal);
+        assert!(matches!(remember_line(&store, &personal, 1), Err(AmrError::Paused(_))));
+        let pid = line_id(personal.text);
+        assert!(!tmp.path.join(format!("nodes/{pid}.md")).exists());
+        assert!(!tmp.path.join(format!("nodes/{pid}.sealed")).exists());
+        assert_eq!(node_files(&tmp.path).len(), 2, "{:?}", node_files(&tmp.path));
+        assert_eq!(
+            remember_line(&store, &LineWrite { text: "  ", ..line("", false) }, 1),
+            Err(AmrError::BadFrontmatter("body".into()))
+        );
+        assert_eq!(node_type_for("the ferry leaves at nine"), NodeType::Fact);
+    }
+
+    fn import_fixture() -> (Vec<crate::learning::LearningInsight>, crate::chips::ChipMemory) {
+        let insight = |key: &str, text: &str, hits: u32| crate::learning::LearningInsight {
+            key: key.into(),
+            text: text.into(),
+            hits,
+        };
+        let insights = vec![
+            insight("pref:editor", "prefer nvim for quick edits", 3),
+            insight("fact:ferry", "the harbor ferry leaves at nine", 1),
+            insight("fact:dock", "dock seven holds the spare sails", 1),
+            insight("pref:style:short", "They want short replies.", 2),
+            insight("fact:quay", "the quay lantern is kept in the shed", 1),
+            insight("project:keel", "project keel ships on fridays", 1),
+            insight("fact:tide", "high tide is the best time to launch", 9),
+        ];
+        let chips: crate::chips::ChipMemory = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "hits": [
+                {"key": "chat:plan", "label": "Plan the week", "value": "typed words stay out", "kind": "chat", "uses": 4, "picks": 3},
+                {"key": "chat:once", "label": "Once only", "value": "x", "kind": "chat", "uses": 1, "picks": 1},
+                {"key": "chat:nope", "label": "Dismissed", "value": "y", "kind": "chat", "uses": 3, "picks": 3, "dismisses": 1},
+                {"key": "chat:typed", "label": "Typed", "value": "z", "kind": "chat", "uses": 5, "typedUses": 5, "picks": 0}
+            ],
+            "transitions": {"chat:plan": {"chat:once": 2}},
+            "lastChipKey": "chat:plan",
+            "lastSlash": "/imagine",
+            "lastSurface": "skills",
+            "totalEvents": 14,
+            "updatedAt": 1791331200000u64
+        }))
+        .unwrap();
+        (insights, chips)
+    }
+
+    #[test]
+    fn import_turns_seven_insights_and_three_chip_fields_into_ten_nodes_once() {
+        let tmp = Tmp::new("import");
+        let store = AmrStore::at(&tmp.path);
+        store.init().unwrap();
+        let (insights, chips) = import_fixture();
+        assert_eq!(
+            durable_chip_prefs(&chips),
+            vec![
+                ("last_slash".to_string(), "From home they reach for /imagine.".to_string()),
+                ("last_surface".to_string(), "From home they come back to skills.".to_string()),
+                ("pick:chat:plan".to_string(), "They pick the \"Plan the week\" chip.".to_string()),
+            ]
+        );
+        let report = import_legacy(&store, &insights, &chips, 1_791_331_200_000);
+        assert_eq!(report.imported(), 10);
+        assert_eq!(report.skipped(), 0);
+        assert_eq!(report.learning_state.imported, 7);
+        assert_eq!(report.chips.imported, 3);
+        assert_eq!(
+            report.status_line(),
+            "Memory import: 10 imported, 0 skipped (learning_state 7, chips 3)."
+        );
+        let files = node_files(&tmp.path);
+        assert_eq!(files.len(), 10, "{files:?}");
+        assert!(files.iter().all(|f| f.starts_with("import-") && f.len() == "import-".len() + 12 + ".md".len()), "{files:?}");
+        let path = write_import_report(&store, &report).unwrap();
+        assert_eq!(path, tmp.path.join("dreams").join("import-2026-10-07.md"));
+        let md = std::fs::read_to_string(&path).unwrap();
+        assert!(md.starts_with("# Import 2026-10-07\n\n10 imported, 0 skipped.\n"), "{md}");
+        assert!(md.contains("## learning_state\n\n7 imported, 0 skipped.\n"), "{md}");
+        assert!(md.contains("## chips\n\n3 imported, 0 skipped.\n"), "{md}");
+        assert!(!md.contains("nvim") && !md.contains("typed words"), "the report carries counts, not notes: {md}");
+
+        let pref = store.recall("nvim");
+        assert_eq!(pref.len(), 1);
+        let node = Node::from_markdown(
+            &std::fs::read_to_string(tmp.path.join(format!("nodes/{}.md", pref[0].id))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(node.node_type, NodeType::Preference);
+        assert_eq!(node.source, "learning_state");
+        assert_eq!(node.body, "prefer nvim for quick edits\n");
+        let tide = &store.recall("high tide")[0];
+        let tide = Node::from_markdown(&std::fs::read_to_string(tmp.path.join(format!("nodes/{}.md", tide.id))).unwrap()).unwrap();
+        assert_eq!(tide.node_type, NodeType::Fact);
+        assert_eq!(tide.confidence, 0.9);
+        let chip = &store.recall("plan the week")[0];
+        let chip = Node::from_markdown(&std::fs::read_to_string(tmp.path.join(format!("nodes/{}.md", chip.id))).unwrap()).unwrap();
+        assert_eq!(chip.source, "chips");
+        assert_eq!(chip.node_type, NodeType::Preference);
+        assert!(store.recall("typed words").is_empty(), "hit values never become nodes");
+
+        let second = import_legacy(&store, &insights, &chips, 1_791_331_300_000);
+        assert_eq!(second.imported(), 0);
+        assert_eq!(second.skipped(), 10);
+        assert_eq!(second.learning_state.skipped.get("already imported"), Some(&7));
+        assert_eq!(node_files(&tmp.path).len(), 10);
+
+        // Habit lines are rebuilt from chips, so they are skipped with a reason.
+        let habits = vec![crate::learning::LearningInsight {
+            key: "habit:21:chat:plan".into(),
+            text: "Around 21:00 they use Plan the week.".into(),
+            hits: 1,
+        }];
+        let third = import_legacy(&store, &habits, &crate::chips::ChipMemory::default(), 1);
+        assert_eq!(third.imported(), 0);
+        assert_eq!(third.learning_state.skipped.get("chip habit, rebuilt from chips each night"), Some(&1));
     }
 }
