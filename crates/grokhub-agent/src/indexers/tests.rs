@@ -537,6 +537,13 @@ fn a_scope_ask_queues_a_card_and_grants_nothing() {
     asks.expire(NOW + hx::APPROVAL_TTL.as_millis() as u64);
     assert!(asks.is_empty(), "timeout is Not now");
     assert!(asks.ask(Scope::Apps, "apps", &ledger, NOW));
+    assert!(asks.ask(Scope::BrowserHistory("firefox".into()), "sites", &ledger, NOW));
+    asks.promote(1);
+    let order: Vec<String> = asks.all().iter().map(|a| a.scope.key()).collect();
+    assert_eq!(order, ["browser_history:firefox", "apps"], "the inbox jump puts its ask on the card");
+    asks.promote(5);
+    assert_eq!(asks.len(), 2);
     asks.remove(&Scope::Apps);
+    asks.remove(&Scope::BrowserHistory("firefox".into()));
     assert_eq!(asks.len(), 0);
 }
