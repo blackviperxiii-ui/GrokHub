@@ -13,7 +13,9 @@ use grokhub_core::{
 /// Span session for pulse decisions, beside the chat span files.
 pub(super) const HEARTBEAT_TRACE: &str = "heartbeat";
 
-const PACE_HINT: &str = "How often Grok acts on its own: anticipating a need, new ideas, the nightly review. It waits while you're mid-turn, slows down after dismissals, and Halt pauses it. Automations keep their own times.";
+/// One line, like the Quiet hours hint. The acts it covers are in the CHANGELOG.
+const PACE_HINT: &str =
+    "How often Grok acts on its own. It waits while you're busy, slows after dismissals, and Halt pauses it.";
 
 impl Cabin {
     /// The user is mid-turn or mid-thought: a live or queued turn, text in the
