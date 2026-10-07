@@ -15016,6 +15016,14 @@ fn a_second_ask_waits_its_turn_instead_of_cancelling_the_first() {
         .nth(1)
         .and_then(|s| s.split("fn paint_elicit_ask(").next())
         .expect("paint_perm_ask");
+    // The card and the inbox answer through one function.
+    let answer = src
+        .split("fn answer_perm_at(")
+        .nth(1)
+        .and_then(|s| s.split("fn paint_perm_ask(").next())
+        .expect("answer_perm_at");
+    assert!(ask.contains("self.answer_perm_at(0, allow,"), "{ask}");
+    let ask = format!("{ask}{answer}");
     assert!(
         ask.contains("reject_permission(&p)")
             && !ask.contains("answer_permission(p.rpc_id.clone(), false)"),
