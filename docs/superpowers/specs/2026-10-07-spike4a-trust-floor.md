@@ -20,7 +20,7 @@ Files in one folder, installed apps, browser history, calendar, mail, system sta
 
 `Step::Egress { dest, data, ledger }`, in order: loopback allows; no personal data allows; an xAI model host (`grok.com`, `x.ai`, `api.x.ai` and subdomains) allows chat and personal data by default; a matching grant allows; anything else parks a hard Send card (no Always, Enter does not approve, Esc or 5 min timeout denies). A sensitive class never rides the model-host default.
 
-Guarded: cabin xAI calls (`grok_json`, STT, TTS in `crates/grokhub-app/src/xai.rs`, and `XaiClient::once` for native Lab turns) and `/sync`, whose snapshot goes to `HubState.snapshot` and then to any paired computer through `/v1/snapshot`. The hub counts as a new destination with personal data, so `/sync` without a grant parks a card; Approve sends once and writes no grant.
+Guarded: cabin xAI calls (`grok_json`, STT, TTS in `crates/grokhub-app/src/xai.rs`, and `XaiClient::once` for native Lab turns) and `/sync`, whose snapshot goes to `HubState.snapshot` and then to any paired computer through `/v1/snapshot`. The hub counts as a new destination with personal data, so `/sync` without a grant parks a card; Approve sends once and writes no grant. With no paired computer, `/sync` sends nothing, logs nothing and parks no card; it posts "Nothing paired yet. Start share to pair a computer." (follow-up SY-03).
 
 `{config}/egress.jsonl` gets one line per allowed non-loopback send: time, host only, data classes, node ids, redaction count, grant id or `approved-once`, span ref, basis, origin. Never content, never a raw secret. It rolls once to `egress.1.jsonl` past 1 MiB.
 

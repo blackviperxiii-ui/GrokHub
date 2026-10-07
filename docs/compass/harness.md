@@ -3,7 +3,7 @@
 ## Owns
 - The cabin pre-check in front of Grok Build tool execution: hard floor (refuse, no bypass), hard class (park a card, even under Always), and the Access ladder (`AccessMode`: Readonly / Supervised / Full).
 - One entry, `harness::decide`, for paths A (`grokhub-desktop` MCP), B (ACP ask), C (headless `grok -p` `--deny` rules), and E (native Lab engine). Every step writes a span.
-- Spike-4a trust floor: `ConsentLedger` (`consent.jsonl`, user-click grants only), scopes all off (`Step::Scope`), and `guard_egress` (`Step::Egress`, log in `egress.jsonl`) on cabin-owned xAI calls and `/sync`.
+- Spike-4a trust floor: `ConsentLedger` (`consent.jsonl`, user-click grants only), scopes all off (`Step::Scope`), and `guard_egress` (`Step::Egress`, log in `egress.jsonl`) on cabin-owned xAI calls and `/sync` (only once a computer is paired).
 ## Quick commands
 - `cargo test -p grokhub-agent harness::`
 - `cargo test -p grokhub-app harness` (cabin cards; isolate `GROKHUB_CONFIG`)
@@ -28,7 +28,7 @@
 - Park handoff is files: `{config_dir}/harness/park`, plus `harness/turn.json` so the `--mcp-desktop` process writes spans into the open chat's `spans/<chat>.jsonl`. No answer in `APPROVAL_TTL`, a halt, or a closed cabin means Deny.
 - Spans only gain `#[serde(default)]` fields (`origin`, `consent_ref` are the newest); old lines must still parse. Typed text is stored as its length.
 - Grok Build's own traffic is outside the cabin (owner decision D1); egress only guards calls GrokHub makes itself.
-- Hard and ACP cards share `approval_card_width` (`APPROVAL_CARD_MAX_W`, 520) in `harness_ui.rs`; Esc denies a hard card. The Grant full card shows only with `GROKHUB_GRANT_FULL=1`: `grant_full_card_on` is read in `Cabin::new`, not `quiet_for_test`, so tests set `full_card_on`.
+- Hard and ACP cards share `approval_card_width` (`APPROVAL_CARD_MAX_W`, 520) in `harness_ui.rs`, and `paint_approval_stack` keeps them left-aligned even on the centered empty chat; Esc denies a hard card. The Grant full card shows only with `GROKHUB_GRANT_FULL=1`: `grant_full_card_on` is read in `Cabin::new`, not `quiet_for_test`, so tests set `full_card_on`.
 - GB `PreToolUse` hooks are not the lock: they fail open. `CLI_CREDENTIAL_DENY` from grokhub-acp rides along on path C.
 ## See also
 - [desktop-mcp](desktop-mcp.md), [grokhub-agent](grokhub-agent.md), [grokhub-acp](grokhub-acp.md)
