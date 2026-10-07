@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Memory repo M3 (only with `"memory_backend": "amr"`): once a night after the review, GrokHub tidies `amr/` with no model call. It merges near-duplicate notes (a `supersedes` edge and a tombstone), retires old low-confidence notes nothing links to, never deletes a file or edits USER.md or SOUL.md, skips private notes it can't unlock, and writes a plain report to `amr/dreams/<date>.md`. `/memory dream` shows the latest one. Halt skips the night. `/dream` (Imagine) is unchanged. No UI changes.
+
 Memory repo M1–M2 (only with `"memory_backend": "amr"` in `app.json`): reflect, chat insights, `/memory note` and `/remember`, Memory Save and native `/remember` now write one node each in `amr/` instead of a MEMORY.md line; `/recall`, History and the native first-turn pack read `amr/` and the old files together; `/forget <topic>` leaves a tombstone; and the first AMR use imports learned insights and chip preferences once, with a report in `amr/dreams/`. Legacy is unchanged. No UI changes.
 
 Removed the scrapped phone/Android pairing: the phone-only hub routes (`/v1/task`, `/v1/task/:id`, `/v1/inbox`, `/v1/results`, `/v1/frame.jpg`, `/v1/voice/client-secret`), the `grokhub-ffi` C ABI crate, and phone wording on Devices, slash help, and the Always sheet. Computer-to-computer pairing, `/sync`, `/inhabit`, `/send`, and desktop voice are unchanged, and an old `hub-state.json` with phone rows still loads. No version bump.

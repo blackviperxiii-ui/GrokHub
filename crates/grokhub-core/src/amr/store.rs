@@ -56,10 +56,10 @@ pub struct ForgetReport {
 }
 
 /// Every live node plus how many sealed ones stayed shut.
-struct Loaded {
-    nodes: Vec<Node>,
-    locked: usize,
-    why: Option<String>,
+pub(super) struct Loaded {
+    pub(super) nodes: Vec<Node>,
+    pub(super) locked: usize,
+    pub(super) why: Option<String>,
 }
 
 /// `/recall` hits plus how many sealed nodes could not be opened.
@@ -92,6 +92,10 @@ impl AmrStore {
     /// The store's directory, `{config}/amr`.
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn is_scratch(&self) -> bool {
+        self.scratch
     }
 
     /// Incognito. Later writes return [`AmrError::Scratch`] and touch nothing.
@@ -180,16 +184,27 @@ impl AmrStore {
         if !self.node_exists(&id)? {
             return Err(AmrError::MissingNode(id.as_str().to_string()));
         }
-        let marker = self.node_path(&id)?.with_extension(TOMBSTONE_EXT);
-        if marker.is_file() {
-            return Ok(());
-        }
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        fs::write(&marker, format!("forgotten: {}\n", crate::oauth::unix_ms_to_rfc3339(now)))
-            .map_err(io_err)
+        self.write_tombstone(&id, now, "")
+    }
+
+    /// `forgotten: <stamp>` plus `extra` lines. An existing tombstone stays as it is.
+    pub(super) fn write_tombstone(&self, id: &NodeId, now_ms: u64, extra: &str) -> Result<(), AmrError> {
+        let marker = self.node_path(id)?.with_extension(TOMBSTONE_EXT);
+        if marker.is_file() {
+            return Ok(());
+        }
+        let stamp = crate::oauth::unix_ms_to_rfc3339(now_ms);
+        fs::write(&marker, format!("forgotten: {stamp}\n{extra}")).map_err(io_err)
+    }
+
+    /// True when the node is stored sealed (`nodes/<id>.sealed`).
+    pub(super) fn is_sealed(&self, id: &NodeId) -> bool {
+        self.node_path(id)
+            .is_ok_and(|path| path.with_extension(SEALED_EXT).is_file())
     }
 
     /// Tombstone every live node whose body, tags or id contains `query`
@@ -249,7 +264,7 @@ impl AmrStore {
 
     /// Every node that is not tombstoned, sorted by file name. Sealed nodes
     /// that can't be opened are counted in `locked`. A bad file is skipped.
-    fn load_live(&self) -> Loaded {
+    pub(super) fn load_live(&self) -> Loaded {
         let mut loaded = Loaded { nodes: Vec::new(), locked: 0, why: None };
         let Ok(read) = fs::read_dir(self.root.join("nodes")) else {
             return loaded;
