@@ -3959,7 +3959,7 @@ impl Cabin {
         }
         // Windows: a stray beta receipt updates as stable and says why.
         self.update_cabin_note = match (plan.cabin_skipped, crate::update::stray_beta_receipt_note()) {
-            (Some(skip), Some(note)) => Some(format!("{note}. {skip}")),
+            (Some(skip), Some(note)) => Some(format!("{note} {skip}")),
             (skip, note) => skip.or_else(|| note.map(String::from)),
         };
         self.start_overlay_update(plan.cmds);
