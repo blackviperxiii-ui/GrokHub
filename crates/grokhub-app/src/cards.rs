@@ -1199,6 +1199,10 @@ pub fn quick_chip_strong(primary: bool) -> bool {
 /// Hover-only why-this copy. No second chip row.
 pub fn chip_why_tip(hint: &str, label: &str) -> String {
     let why = hint.trim();
+    // CD-05 / HO-05: guide chips use a full sentence, not "Why this? / New here".
+    if why == "New here" {
+        return "Suggested because you're new here".into();
+    }
     if !why.is_empty() {
         format!("Why this?\n{why}")
     } else {
@@ -3363,6 +3367,10 @@ mod tests {
         assert_eq!(quick_chip_fg(false), crate::theme::muted());
         assert!(chip_why_tip("Last slash", "/plan").starts_with("Why this?"));
         assert_eq!(chip_why_tip("", "Continue"), "Why this?\nContinue");
+        assert_eq!(
+            chip_why_tip("New here", "Start here"),
+            "Suggested because you're new here"
+        );
         let max_w = chip_row_width_lock(640.0);
         assert_eq!(max_w, 640.0);
         assert_ne!(max_w, 0.0);
