@@ -164,7 +164,12 @@ pub(super) fn work_row(kind: ChangeKind, c: &hx::Change) -> ChangeRow {
 
 /// Work-tree rows after a restart: self-made changes from the last day that
 /// are still in effect and not kept, newest first.
-pub(super) fn work_rows_from_disk(config_dir: &std::path::Path, now_ms: u64) -> Vec<ChangeRow> {
+/// `skip` drops lines that already have their own Undo (a Done-for-you card).
+pub(super) fn work_rows_from_disk(
+    config_dir: &std::path::Path,
+    now_ms: u64,
+    skip: &dyn Fn(ChangeKind, u64) -> bool,
+) -> Vec<ChangeRow> {
     let mut found: Vec<(u64, ChangeRow)> = Vec::new();
     for kind in ChangeKind::ALL {
         let ledger = hx::ChangeLedger::load_kind(config_dir, kind);
@@ -175,7 +180,7 @@ pub(super) fn work_rows_from_disk(config_dir: &std::path::Path, now_ms: u64) -> 
             }
             seen.push(&c.id);
             if let Some(open) = ledger.open_self_change(&c.id) {
-                if now_ms.saturating_sub(open.at) < WORK_ROW_MS {
+                if now_ms.saturating_sub(open.at) < WORK_ROW_MS && !skip(kind, open.seq) {
                     found.push((open.at, work_row(kind, open)));
                 }
             }
@@ -253,7 +258,8 @@ impl Cabin {
         let dir = config::config_dir();
         if !self.harness.work_rows_loaded {
             self.harness.work_rows_loaded = true;
-            self.harness.work_rows = work_rows_from_disk(&dir, now_ms());
+            let auto = self.auto_lines();
+            self.harness.work_rows = work_rows_from_disk(&dir, now_ms(), &|kind, seq| auto.contains(&(kind, seq)));
         }
         let fresh = hx::take_self_changes(&dir);
         if fresh.is_empty() {
@@ -261,6 +267,10 @@ impl Cabin {
         }
         self.harness.change_rows = None;
         for (kind, c) in fresh {
+            // An auto-act's Done-for-you card already carries its Undo.
+            if self.auto_lines().contains(&(kind, c.seq)) {
+                continue;
+            }
             if kind == ChangeKind::Skill {
                 self.harness.skill_rows = None;
             }
@@ -273,9 +283,10 @@ impl Cabin {
         }
     }
 
-    /// Undo or Keep clicked on a Work-tree row or under a report bubble.
-    /// Only the row painters return a row, and only for a pointer click.
-    pub(super) fn change_row_clicked(&mut self, row: &ChangeRow, act: ChangeAct) {
+    /// Undo or Keep clicked on a Work-tree row, under a report bubble, or on
+    /// a Done-for-you card. Only those painters return a row, and only for a
+    /// pointer click. True when it worked.
+    pub(super) fn change_row_clicked(&mut self, row: &ChangeRow, act: ChangeAct) -> bool {
         let dir = config::config_dir();
         let ask = hx::UndoAsk::from_click();
         let done: Result<Option<Vec<u8>>, String> = match (act, row.kind) {
@@ -307,6 +318,7 @@ impl Cabin {
         self.harness.change_rows = None;
         self.harness.skill_rows = None;
         self.status = done_line(row, act, &done);
+        done.is_ok()
     }
 
     /// Work-tree rows under the approval cards. Click only.
@@ -323,7 +335,7 @@ impl Cabin {
 }
 
 /// A ghost pill that answers a pointer click only.
-fn click_pill(ui: &mut egui::Ui, label: &str) -> bool {
+pub(super) fn click_pill(ui: &mut egui::Ui, label: &str) -> bool {
     let resp = crate::theme::felt_label_button(
         ui,
         label,
@@ -461,16 +473,16 @@ mod tests {
         let root = fixture("change-work-rows");
         let ledger = hx::ChangeLedger::load_kind(&root, ChangeKind::Automation);
         let now = ledger.all().last().unwrap().at + 60_000;
-        let rows = work_rows_from_disk(&root, now);
+        let rows = work_rows_from_disk(&root, now, &|_, _| false);
         assert_eq!(
             rows.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(),
             ["Grok added automation inbox sweep", "Grok changed automation board digest"]
         );
         hx::accept_change(&root, ChangeKind::Automation, "auto-b", hx::UndoAsk::from_click()).unwrap();
-        let rows = work_rows_from_disk(&root, now);
+        let rows = work_rows_from_disk(&root, now, &|_, _| false);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "auto-a");
-        assert!(work_rows_from_disk(&root, now + WORK_ROW_MS).is_empty(), "a day later the row is gone");
+        assert!(work_rows_from_disk(&root, now + WORK_ROW_MS, &|_, _| false).is_empty(), "a day later the row is gone");
         let _ = std::fs::remove_dir_all(&root);
     }
 

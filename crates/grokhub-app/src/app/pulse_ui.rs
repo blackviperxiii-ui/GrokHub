@@ -100,6 +100,8 @@ pub(super) enum PulseAct {
     Like(String),
     Discuss(String),
     Link(String),
+    Undo(String),
+    NeverAgain(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -549,6 +551,29 @@ pub(super) enum FeedPostAct {
     Like,
     Discuss,
     Link(String),
+    /// Done-for-you Undo (pointer click only).
+    Undo,
+    /// Done-for-you "Don't do this again" (pointer click only).
+    NeverAgain,
+}
+
+/// The Done-for-you pills, while the card is unanswered.
+fn paint_done_for_you(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct> {
+    let open = card.kind == UpdateKind::DoneForYou && card.done_for_you.as_ref().is_some_and(|d| !d.answered);
+    if !open {
+        return None;
+    }
+    let mut act = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        if super::change_undo::click_pill(ui, "Undo") {
+            act = Some(FeedPostAct::Undo);
+        }
+        if super::change_undo::click_pill(ui, "Don't do this again") {
+            act = Some(FeedPostAct::NeverAgain);
+        }
+    });
+    act
 }
 
 /// Title, short takeaway, Read at, images, then Like / Discuss.
@@ -618,6 +643,9 @@ pub(super) fn paint_post_body(
             }
         }
     });
+    if let Some(done) = paint_done_for_you(ui, card) {
+        act = Some(done);
+    }
     act
 }
 
@@ -1081,6 +1109,8 @@ impl Cabin {
                         FeedPostAct::Like => PulseAct::Like(card.id.clone()),
                         FeedPostAct::Discuss => PulseAct::Discuss(card.id.clone()),
                         FeedPostAct::Link(url) => PulseAct::Link(url),
+                        FeedPostAct::Undo => PulseAct::Undo(card.id.clone()),
+                        FeedPostAct::NeverAgain => PulseAct::NeverAgain(card.id.clone()),
                     });
                 }
             });
@@ -1348,6 +1378,8 @@ impl Cabin {
             PulseAct::Like(id) => self.pulse_like(&id, &Self::local_day()),
             PulseAct::Open(id) => self.pulse_open(&id),
             PulseAct::Discuss(id) => self.discuss_card(&id),
+            PulseAct::Undo(id) => self.done_for_you_undo(&id),
+            PulseAct::NeverAgain(id) => self.done_for_you_never(&id),
             PulseAct::Link(url) => {
                 self.follow_update_action(Some(UpdateAction::DeepLink { href: url }))
             }

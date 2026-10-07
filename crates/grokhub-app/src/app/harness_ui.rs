@@ -97,6 +97,9 @@ pub(super) enum ParkSource {
     /// A path A / B park whose turn was steered (Spike-1a). Its call was
     /// denied with the old turn; Approve re-runs the step once, like path C.
     Held,
+    /// A hard-class step GrokHub prepared on its own (Spike-6b), with its
+    /// arguments. Nothing is waiting; Approve runs it once on path E.
+    Proactive(String),
 }
 
 /// A recovery-ladder pause waiting on the user (Spike-1a). Counts in the
@@ -442,19 +445,46 @@ impl Cabin {
         }
     }
 
+    /// A hard card past `APPROVAL_TTL` is denied with a span. Painting and the
+    /// unattended heartbeat both check, so no one watching still means Deny.
+    pub(super) fn expire_hard_park(&mut self) {
+        if self
+            .harness
+            .park
+            .as_ref()
+            .is_some_and(|p| p.parked_at.elapsed() >= hx::APPROVAL_TTL)
+        {
+            self.resolve_hard_park(false, "timed out — fail-closed Deny");
+        }
+    }
+
+    /// A hard step GrokHub prepared on its own waits on the white card.
+    pub(super) fn park_proactive(&mut self, class: HardClass, tool: String, arguments: String, prepared: String) {
+        self.park_hard(ParkSource::Proactive(arguments), class, "E", tool, prepared);
+    }
+
     /// Approve answers once (never Always). Deny, Esc, TTL, and halt reject.
     pub(super) fn resolve_hard_park(&mut self, approve: bool, why: &str) {
         let Some(park) = self.harness.park.take() else {
             return;
         };
         let mut sync_once = false;
-        let trace = self.trace_id();
+        let trace = match park.source {
+            ParkSource::Proactive(_) => hx::PROACTIVE_TRACE.to_string(),
+            _ => self.trace_id(),
+        };
         let span = if approve {
             hx::Span::hard_approve(&trace, &park.tool, &span_args(&park.tool, &park.action), park.class)
         } else {
             hx::Span::deny(&trace, &park.tool, &span_args(&park.tool, &park.action), why, park.class.as_str())
         };
-        self.write_span(span, park.path);
+        if let ParkSource::Proactive(_) = park.source {
+            let mut span = span.on_path(park.path).from_origin(hx::Origin::Proactive);
+            span.access = self.access_mode().as_str().into();
+            hx::note_proactive(&crate::config::config_dir(), &span);
+        } else {
+            self.write_span(span, park.path);
+        }
         match &park.source {
             ParkSource::Ask(p) => {
                 if let Some(h) = &self.acp {
@@ -476,6 +506,16 @@ impl Cabin {
             ParkSource::Egress(dest) => {
                 sync_once = approve && dest == hx::HUB_DEST;
             }
+            ParkSource::Proactive(args) => {
+                if approve {
+                    let (text, failed) = hx::run_approved_once(&self.native_workspace(), &park.tool, args);
+                    if failed {
+                        self.status = grokhub_core::redact_secrets(&text);
+                        self.harness.park = self.harness.queue.pop_front();
+                        return;
+                    }
+                }
+            }
         }
         self.status = if approve {
             format!("Approved once · {}", park.class.label())
@@ -493,7 +533,10 @@ impl Cabin {
     pub(super) fn withdraw_hard_parks(&mut self) {
         let mut keep = VecDeque::new();
         while let Some(park) = self.harness.park.clone() {
-            if matches!(park.source, ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held) {
+            if matches!(
+                park.source,
+                ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held | ParkSource::Proactive(_)
+            ) {
                 keep.push_back(park);
                 self.harness.park = self.harness.queue.pop_front();
             } else {
@@ -525,7 +568,7 @@ impl Cabin {
                 ParkSource::Desk(id) => {
                     let _ = hx::answer_park(&dir, id, false);
                 }
-                ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held => continue,
+                ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held | ParkSource::Proactive(_) => continue,
             }
             let args = span_args(&park.tool, &park.action);
             let why = "turn steered — the call is gone, the card stays for a fresh approval";
@@ -831,14 +874,7 @@ impl Cabin {
                 self.harness.oneshot = None;
             }
         }
-        if self
-            .harness
-            .park
-            .as_ref()
-            .is_some_and(|p| p.parked_at.elapsed() >= hx::APPROVAL_TTL)
-        {
-            self.resolve_hard_park(false, "timed out — fail-closed Deny");
-        }
+        self.expire_hard_park();
         if self
             .harness
             .full_card

@@ -5,7 +5,9 @@
 //! card signals in time order:
 //! - a deny or an Undo sets `p_mind = max(p_mind, 0.6)` and asks first for 30 days;
 //! - each later approve lowers it by 0.05, floor 0;
-//! - a Pulse Dismiss or "Not this" raises it by 0.1, cap 1.
+//! - a Pulse Dismiss or "Not this" raises it by 0.1, cap 1;
+//! - "Don't do this again" on a Done-for-you card sets it to 1.0 for good
+//!   (Spike-6b): that class never auto-acts again and asks if suggested.
 //!
 //! `p_mind >= 0.2`, an open ask-first window, or no history at all routes to
 //! [`MindRoute::Ask`] (a soft card), never auto. Priors never touch hard
@@ -51,6 +53,8 @@ pub enum MindEvent {
     Approve,
     /// A Pulse Dismiss or "Not this".
     Dismiss,
+    /// "Don't do this again" on a Done-for-you card: 1.0, ask from now on.
+    Never,
 }
 
 /// One event for one key.
@@ -89,6 +93,8 @@ pub struct Prior {
     pub ask_until_ms: u64,
     /// Events folded in.
     pub events: usize,
+    /// "Don't do this again": the prior stays 1.0 whatever follows.
+    pub never: bool,
 }
 
 impl Prior {
@@ -153,8 +159,17 @@ impl MindCheck {
                     prior.hundredths = prior.hundredths.max(MIND_DENY);
                     prior.ask_until_ms = prior.ask_until_ms.max(signal.at_ms.saturating_add(MIND_ASK_FIRST_MS));
                 }
-                MindEvent::Approve => prior.hundredths = prior.hundredths.saturating_sub(MIND_APPROVE_STEP),
+                MindEvent::Approve if !prior.never => {
+                    prior.hundredths = prior.hundredths.saturating_sub(MIND_APPROVE_STEP)
+                }
+                MindEvent::Approve => {}
+                MindEvent::Dismiss if prior.never => {}
                 MindEvent::Dismiss => prior.hundredths = (prior.hundredths + MIND_DISMISS_STEP).min(100),
+                MindEvent::Never => {
+                    prior.never = true;
+                    prior.hundredths = 100;
+                    prior.ask_until_ms = u64::MAX;
+                }
             }
         }
         Some(prior)
@@ -201,7 +216,8 @@ pub fn mind_key(span: &Span) -> String {
     }
 }
 
-/// Deny and approve spans as signals. Hard-class spans are skipped: priors
+/// Deny and approve spans as signals, plus a Done-for-you Undo (`undo`)
+/// and "Don't do this again" (`never`). Hard-class spans are skipped: priors
 /// never touch hard class. A TTL deny and a Halt are deny spans too.
 pub fn signals_from_spans(spans: &[Span]) -> Vec<MindSignal> {
     spans
@@ -211,6 +227,8 @@ pub fn signals_from_spans(spans: &[Span]) -> Vec<MindSignal> {
             let event = match s.decision.as_str() {
                 "deny" => MindEvent::Deny,
                 "approve" => MindEvent::Approve,
+                "undo" => MindEvent::Undo,
+                "never" => MindEvent::Never,
                 _ => return None,
             };
             Some(MindSignal {

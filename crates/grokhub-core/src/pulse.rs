@@ -352,7 +352,8 @@ pub fn pulse_type(card: &UpdateCard) -> PulseType {
         UpdateKind::AutomationDone
         | UpdateKind::ScheduleCreated
         | UpdateKind::Digest
-        | UpdateKind::SelfChange => PulseType::Watch,
+        | UpdateKind::SelfChange
+        | UpdateKind::DoneForYou => PulseType::Watch,
         UpdateKind::AutomateOffer => PulseType::Automate,
         // The quiet-hours digest only reports what happened.
         UpdateKind::Suggestion if card.source_id == QUIET_DIGEST_SOURCE => PulseType::Watch,

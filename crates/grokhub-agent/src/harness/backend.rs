@@ -68,6 +68,7 @@ pub fn grok_build_click(req: ClickRequest<'_>) -> ClickOutcome {
                 ui_changed: None,
                 origin: Origin::User,
                 consent_ref: String::new(),
+                undo_ref: String::new(),
             };
             let _ = append_span(req.config_dir, &span);
             ClickOutcome::Parked(reason)

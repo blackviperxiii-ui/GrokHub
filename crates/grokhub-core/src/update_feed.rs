@@ -73,6 +73,9 @@ pub enum UpdateKind {
     /// GrokHub added, changed, or removed a skill, connection, or automation
     /// on its own (Spike-5b). Undo lives on its Work-tree row.
     SelfChange,
+    /// GrokHub did a small, undoable thing on its own under the autonomy
+    /// ceiling (Spike-6b). Undo and "Don't do this again" sit on the card.
+    DoneForYou,
 }
 
 impl UpdateKind {
@@ -85,6 +88,7 @@ impl UpdateKind {
             Self::Idea => "Idea",
             Self::Digest => "Digest",
             Self::SelfChange => "Changed",
+            Self::DoneForYou => "Done for you",
         }
     }
 
@@ -96,6 +100,7 @@ impl UpdateKind {
                 | Self::Suggestion
                 | Self::AutomateOffer
                 | Self::SelfChange
+                | Self::DoneForYou
         )
     }
 }
@@ -190,6 +195,9 @@ pub struct UpdateCard {
     /// When the user dismissed this event. A repeat stays hidden for a day.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub dismissed_at: u64,
+    /// Done-for-you cards (Spike-6b): what Undo and "Don't do this again" act on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub done_for_you: Option<DoneForYou>,
     /// Pulse page fields: category, snooze, due time, source images.
     #[serde(default, flatten)]
     pub pulse: crate::pulse::PulseMeta,
@@ -2261,6 +2269,7 @@ pub fn feed_group_key(card: &UpdateCard) -> Option<String> {
             UpdateKind::AutomateOffer => "offer",
             UpdateKind::Suggestion => "sugg",
             UpdateKind::SelfChange => "chg",
+            UpdateKind::DoneForYou => "dfy",
             UpdateKind::Idea | UpdateKind::Digest => return None,
         };
         return Some(format!("{prefix}:{source}"));
@@ -2271,6 +2280,7 @@ pub fn feed_group_key(card: &UpdateCard) -> Option<String> {
         UpdateKind::AutomateOffer => "automate_offer",
         UpdateKind::Suggestion => "suggestion",
         UpdateKind::SelfChange => "self_change",
+        UpdateKind::DoneForYou => "done_for_you",
         UpdateKind::Idea | UpdateKind::Digest => return None,
     };
     Some(format!("{kind}:{}", title_hash(&card.title)))
@@ -2289,6 +2299,7 @@ fn stable_event_id(card: &UpdateCard) -> String {
         UpdateKind::Suggestion => "sugg",
         UpdateKind::AutomateOffer => "offer",
         UpdateKind::SelfChange => "chg",
+        UpdateKind::DoneForYou => "dfy",
         UpdateKind::Idea | UpdateKind::Digest => return card.id.clone(),
     };
     feed_card_id(prefix, &card.source_id, &card.title, card.created_at, true)
@@ -2468,6 +2479,7 @@ fn blank_card(
         source_id: String::new(),
         runs: 1,
         dismissed_at: 0,
+        done_for_you: None,
         pulse: Default::default(),
     }
 }
@@ -2557,6 +2569,43 @@ pub fn self_change_card(kind: &str, name: &str, verb: &str, reason: &str, create
         card.action = Some(UpdateAction::OpenAutomations);
     }
     card.source_id = source;
+    card
+}
+
+/// What a Done-for-you card points at: the ledger line it can undo and
+/// the MindCheck class "Don't do this again" closes. Ids and keys only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DoneForYou {
+    /// Ledger kind (`connection`, `automation`, `skill`).
+    pub kind: String,
+    /// Ledger id of the target.
+    pub target: String,
+    /// The ledger line the act wrote (its `undo_ref`).
+    pub undo_ref: u64,
+    /// MindCheck key (`proactive:connection_disable`).
+    pub mind_key: String,
+    /// Undo or "Don't do this again" was clicked; the pills go away.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub answered: bool,
+}
+
+/// The Done-for-you card for one auto-act: what was done, why, and the
+/// ledger line Undo reverts.
+pub fn done_for_you_card(summary: &str, why: &str, done: DoneForYou, created_at: u64) -> UpdateCard {
+    let title = clip_line(summary, TITLE_CHARS);
+    let why = clip_line(why, TITLE_CHARS);
+    let source = format!("{}:{}:{}", done.kind, done.target, done.undo_ref);
+    let body = if why.is_empty() { "Done for you. Undo puts it back.".to_string() } else { why };
+    let mut card = blank_card(
+        feed_card_id("dfy", &source, &title, created_at, false),
+        UpdateKind::DoneForYou,
+        title,
+        Some(body),
+        created_at,
+    );
+    card.source_id = source;
+    card.done_for_you = Some(done);
     card
 }
 
