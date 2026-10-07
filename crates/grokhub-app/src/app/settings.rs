@@ -1042,7 +1042,7 @@ impl Cabin {
         self.ui_privacy_rows(ui);
         let workspace = self.grok_cwd();
         let dir = grokhub_agent::perm::config_dir();
-        crate::cards::section_label(ui, super::privacy_ui::RULES_HEAD);
+        crate::cards::section_heading(ui, super::privacy_ui::RULES_HEAD);
         crate::cards::settings_note(
             ui,
             "Deny wins over ask, and ask wins over allow. Dangerous commands still ask, including after Allow always.",

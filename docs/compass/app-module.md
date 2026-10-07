@@ -24,6 +24,7 @@
 - `crates/grokhub-app/src/main.rs` launches it for the window and `--agent` (tray) modes.
 ## Non-obvious
 - `/sync` with no paired computer only posts `SYNC_NO_PEERS` (no card, no egress line). Otherwise `gate_hub_sync` (hard Send card without a grant) runs before `run_hub_sync`, and `poll_sync` posts the result line. Tests call `pair_test_peer` and grant `HUB_DEST` with `UserClick::from_click` first.
+- Chat rows come from `visible_chat` (`crates/grokhub-core/src/chat_view.rs`). Only `ChatKind::Thought` takes the thought frame and fold; a cabin result is `ChatKind::Result` and paints with `paint_result_bubble`. Settings group headings use `section_heading` (`SECTION_HEAD_GAP` above).
 - `cabin_src()` does not include every submodule (for example `harness_ui.rs`, `feed_ui.rs`, `pulse_ui.rs`); those tests `include_str!` the file directly.
 - `on_exit` kills background `grok -p`, halts native sessions, and waits on `persist_io` because two writers of `app.json` share one temp file.
 - The composer glow and Always ring timings come from `GLOW_SETTLE_SECS` / `ALWAYS_SETTLE_SECS` in grokhub-core, and motion is skipped when `motion_ok` is false (AGENTS.md UI theme).

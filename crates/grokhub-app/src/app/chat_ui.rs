@@ -603,6 +603,12 @@ pub(super) fn paint_msg_acts(
     }
 }
 
+/// A cabin result (GL-05): the plain reply bubble, upright and in the body
+/// colour, the same on the newest row and on an old one.
+pub(super) fn paint_result_bubble(ui: &mut egui::Ui, body: &str) -> egui::Response {
+    paint_speech_bubble(ui, body, false, true)
+}
+
 pub(super) fn paint_thought_bubble(ui: &mut egui::Ui, body: &str) -> egui::Response {
     let body = crate::markdown::display_text(body);
     let avail = clamp_row_width(ui.available_width().min(ui.max_rect().width()));
@@ -985,6 +991,21 @@ pub(super) fn paint_chat_block_with(
         }
         ChatKind::Assistant => {
             let resp = paint_speech_bubble(ui, &block.body, false, true);
+            let act = if reply_acts {
+                paint_msg_acts(ui, false, &block.body, avail, resp.rect.width()).act
+            } else {
+                ChatBlockAct::None
+            };
+            ChatBlockPaint {
+                act,
+                drawn: true,
+                thought_fold,
+            }
+        }
+        ChatKind::Result => {
+            // GL-05: a slash or system result keeps this one bubble as it ages.
+            // It never takes the thought frame, its slanted text, or its label.
+            let resp = paint_result_bubble(ui, &block.body);
             let act = if reply_acts {
                 paint_msg_acts(ui, false, &block.body, avail, resp.rect.width()).act
             } else {
