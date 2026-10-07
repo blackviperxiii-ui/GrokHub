@@ -5891,7 +5891,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "greeting is regular/medium weight: {slice}"
         );
         assert!(
-            slice.contains("paint_perm_ask"),
+            slice.contains("paint_approval_stack"),
             "empty home must still show a live permission bar: {slice}"
         );
         assert!(

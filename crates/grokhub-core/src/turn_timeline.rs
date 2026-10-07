@@ -410,8 +410,42 @@ fn clip_chars(s: &str, max: usize) -> String {
     format!("{}…", s.chars().take(max.saturating_sub(1)).collect::<String>())
 }
 
+/// True when `detail` is only a status word, so a header or body must not repeat the chip.
+/// One line, trimmed, lowercased, with a trailing `…` or `...` stripped.
+pub fn tool_detail_is_status(detail: &str) -> bool {
+    let line = detail.trim();
+    if line.contains('\n') || line.contains('\r') {
+        return false;
+    }
+    let lower = line.to_ascii_lowercase();
+    let stripped = if let Some(rest) = lower.strip_suffix('…') {
+        rest.trim()
+    } else if let Some(rest) = lower.strip_suffix("...") {
+        rest.trim()
+    } else {
+        lower.as_str()
+    };
+    matches!(
+        stripped,
+        "running"
+            | "pending"
+            | "in progress"
+            | "in_progress"
+            | "started"
+            | "completed"
+            | "complete"
+            | "done"
+            | "success"
+            | "succeeded"
+            | "finished"
+            | "ok"
+            | "waiting for input"
+    )
+}
+
 /// One quiet header for a run of tool calls (`title, status, detail`):
 /// `Read src/main.rs`, `Grep · 3 matches`, or `4 steps · Grep, Read file, Shell +1 · 1 failed`.
+/// A status-word detail (`running`, `Waiting for input`, …) is ignored: the chip is the status.
 pub fn tool_group_label<'a>(rows: impl IntoIterator<Item = (&'a str, &'a str, &'a str)>) -> String {
     let mut names: Vec<String> = Vec::new();
     let mut n = 0usize;
@@ -431,8 +465,13 @@ pub fn tool_group_label<'a>(rows: impl IntoIterator<Item = (&'a str, &'a str, &'
     let mut label = if n <= 1 {
         let name = names.first().cloned().unwrap_or_else(|| "Work".into());
         // A bare verb says little; its detail says what it touched.
+        // A status word does not: "Click" stays "Click" when detail is "running".
         let detail = one_line(only_detail);
-        if !name.contains(' ') && !detail.is_empty() && detail != name {
+        if !name.contains(' ')
+            && !detail.is_empty()
+            && detail != name
+            && !tool_detail_is_status(only_detail)
+        {
             format!("{name} · {}", clip_chars(&detail, 60))
         } else {
             name
@@ -694,7 +733,17 @@ mod tests {
     fn tool_group_labels_read_like_steps() {
         assert_eq!(tool_display_title("run_terminal_command"), "Run terminal command");
         assert_eq!(tool_display_title("Read `src/main.rs`"), "Read src/main.rs");
+        assert_eq!(tool_group_label([("click", "completed", "running")]), "Click");
         assert_eq!(tool_group_label([("grep", "completed", "3 matches")]), "Grep · 3 matches");
+        assert!(tool_detail_is_status(" Running… "));
+        assert!(tool_detail_is_status("waiting for input"));
+        assert!(tool_detail_is_status("in progress"));
+        assert!(tool_detail_is_status("in_progress"));
+        assert!(tool_detail_is_status("completed..."));
+        assert!(tool_detail_is_status("ok"));
+        assert!(!tool_detail_is_status("3 matches"));
+        assert!(!tool_detail_is_status("running fast"));
+        assert!(!tool_detail_is_status("running\nextra"));
         assert_eq!(
             tool_group_label([("Read `a.rs`", "completed", "fn main")]),
             "Read a.rs"

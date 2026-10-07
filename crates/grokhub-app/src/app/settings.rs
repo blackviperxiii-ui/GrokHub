@@ -2,6 +2,9 @@
 
 use super::*;
 
+/// Settings → Let Grok control the desktop. Names the hard floor next to the switch.
+pub(super) const DESKTOP_CONTROL_HINT: &str = "Grok can see the screen and use the mouse and keyboard through GrokHub. Ask still asks first. Deletes, sends, money and credentials always ask.";
+
 #[derive(Clone, Default)]
 struct PermDraft {
     rule: String,
@@ -763,7 +766,7 @@ impl Cabin {
                                                             if crate::cards::settings_toggle(
                                                                 ui,
                                                                 "Let Grok control the desktop",
-                                                                "Grok can see the screen and use the mouse and keyboard through GrokHub. Ask still asks first.",
+                                                                DESKTOP_CONTROL_HINT,
                                                                 &mut self.cfg.desktop_control,
                                                             ) {
                                                                 let on = self.cfg.desktop_control;
