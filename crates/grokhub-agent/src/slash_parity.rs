@@ -162,7 +162,7 @@ const SLASH_PARITY: &[SlashParity] = &[
     row("release-notes", "N/A: CLI release notes"),
     row("announcements", "N/A: CLI announcements"),
     row("feedback", "N/A: CLI feedback"),
-    row("privacy", "N/A: CLI privacy"),
+    row("privacy", "native: cabin /privacy (grants, scopes, egress log)"),
     row("doctor", "native: session, skills, hooks, and MCP"),
     row("import-claude", "N/A: cabin /import is OpenClaw"),
     row("login", "N/A: sign in from Settings"),

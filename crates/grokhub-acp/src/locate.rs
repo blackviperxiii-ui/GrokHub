@@ -1019,6 +1019,26 @@ pub fn with_ask_deny(mut args: Vec<String>, deny: bool) -> Vec<String> {
     args
 }
 
+/// Path C floor for the Grok CLI's own credential file. Appended with the
+/// cabin's hard-deny rules on every headless run that carries them.
+pub const CLI_CREDENTIAL_DENY: &[&str] = &[
+    "Read(**/.grok/auth.json)",
+    "Edit(**/.grok/auth.json)",
+    "Bash(*.grok/auth.json*)",
+];
+
+/// Path C: append the cabin's hard floor / hard-class `--deny` rules to a
+/// headless `grok -p`. Deny beats `--always-approve` and `auto` in Grok Build,
+/// so the cabin stays stricter than the pill without seeing a prompt. Only
+/// `--deny` pairs are added: never an allow, never a looser mode.
+pub fn with_hard_deny(mut args: Vec<String>, rules: &[&str]) -> Vec<String> {
+    for rule in rules {
+        args.push("--deny".into());
+        args.push((*rule).to_string());
+    }
+    args
+}
+
 /// Desktop allow/deny for every headless `grok -p`. Plan and btw (Ask) deny
 /// the desktop tools even on Auto or Always. Attended Ask never reaches here.
 pub fn apply_desktop_spawn_args(
@@ -1910,6 +1930,53 @@ mod tests {
             "Questions stays look-only, not the invalid CLI value ask: {look:?}"
         );
         assert!(!look.iter().any(|a| a == "--always-approve"), "{look:?}");
+    }
+
+    #[test]
+    fn hard_deny_builder_is_never_looser_than_the_pill() {
+        let rules = ["Bash(rm *)", "MCPTool(*hard_send_stub*)"];
+        let always = with_hard_deny(
+            vec!["-p".into(), "hi".into(), "--always-approve".into()],
+            &rules,
+        );
+        assert_eq!(
+            always,
+            vec![
+                "-p",
+                "hi",
+                "--always-approve",
+                "--deny",
+                "Bash(rm *)",
+                "--deny",
+                "MCPTool(*hard_send_stub*)",
+            ]
+        );
+        let auto = with_hard_deny(
+            vec!["-p".into(), "hi".into(), "--permission-mode".into(), "auto".into()],
+            &rules,
+        );
+        assert_eq!(
+            auto,
+            vec![
+                "-p",
+                "hi",
+                "--permission-mode",
+                "auto",
+                "--deny",
+                "Bash(rm *)",
+                "--deny",
+                "MCPTool(*hard_send_stub*)",
+            ]
+        );
+        assert_eq!(with_hard_deny(vec!["-p".into(), "hi".into()], &[]), vec!["-p", "hi"]);
+        assert_eq!(
+            CLI_CREDENTIAL_DENY,
+            &[
+                "Read(**/.grok/auth.json)",
+                "Edit(**/.grok/auth.json)",
+                "Bash(*.grok/auth.json*)",
+            ]
+        );
     }
 
     #[test]

@@ -363,6 +363,23 @@ pub fn danger_pill(ui: &mut egui::Ui, label: &str) -> bool {
     felt_pill(ui, label, PillStyle::Danger)
 }
 
+/// "···" with no frame until hovered, like the rest of the quiet chrome.
+/// The dots brighten while their row is hovered or focused, and the frame
+/// stays while the menu is open. The UI font has no "⋯" glyph.
+pub fn dots_menu(ui: &mut egui::Ui, bright: bool, add: impl FnOnce(&mut egui::Ui)) {
+    ui.scope(|ui| {
+        let w = &mut ui.style_mut().visuals.widgets;
+        w.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+        w.inactive.bg_stroke = egui::Stroke::NONE;
+        let color = if bright {
+            crate::theme::fg()
+        } else {
+            crate::theme::muted()
+        };
+        ui.menu_button(RichText::new("···").size(16.0).strong().color(color), add);
+    });
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PillStyle {
     Solid,
@@ -673,7 +690,13 @@ pub fn titlebar_update_chip(ui: &mut egui::Ui, label: &str) -> bool {
     crate::theme::pointing(resp).clicked()
 }
 
-pub fn framed_preview(ui: &mut egui::Ui, tex: &TextureHandle, size: [usize; 2], max_w: f32) {
+/// Returns the image rect so a marker can sit on the frame.
+pub fn framed_preview(
+    ui: &mut egui::Ui,
+    tex: &TextureHandle,
+    size: [usize; 2],
+    max_w: f32,
+) -> egui::Rect {
     let scale = max_w / size[0].max(1) as f32;
     let h = size[1] as f32 * scale;
     egui::Frame::NONE
@@ -683,8 +706,10 @@ pub fn framed_preview(ui: &mut egui::Ui, tex: &TextureHandle, size: [usize; 2], 
         .show(ui, |ui| {
             ui.add(
                 egui::Image::new((tex.id(), egui::vec2(max_w, h))).corner_radius(10.0),
-            );
-        });
+            )
+            .rect
+        })
+        .inner
 }
 
 pub fn composer_modes() -> &'static [(&'static str, &'static str)] {
@@ -1182,6 +1207,10 @@ pub fn quick_chip_strong(primary: bool) -> bool {
 /// Hover-only why-this copy. No second chip row.
 pub fn chip_why_tip(hint: &str, label: &str) -> String {
     let why = hint.trim();
+    // CD-05 / HO-05: guide chips use a full sentence, not "Why this? / New here".
+    if why == "New here" {
+        return "Suggested because you're new here".into();
+    }
     if !why.is_empty() {
         format!("Why this?\n{why}")
     } else {
@@ -1370,6 +1399,17 @@ pub fn tab_pill(ui: &mut egui::Ui, label: &str, active: bool) -> bool {
     felt_tab(ui, label, active)
 }
 
+/// Extra room above a section heading that opens a group of settings rows
+/// (SY-10), so the heading reads as a break and not as one more row.
+pub const SECTION_HEAD_GAP: f32 = 12.0;
+
+/// A heading that starts a new group of rows: [`SECTION_HEAD_GAP`] above, then
+/// the same [`section_label`] (the size stays).
+pub fn section_heading(ui: &mut egui::Ui, label: &str) -> bool {
+    ui.add_space(SECTION_HEAD_GAP);
+    section_label(ui, label)
+}
+
 /// Section heading. Brighter and heavier than the muted help line under it.
 pub fn section_label(ui: &mut egui::Ui, label: &str) -> bool {
     let hit = ui
@@ -1431,7 +1471,10 @@ pub fn help_text(ui: &mut egui::Ui, text: &str) -> egui::Response {
 pub fn settings_toggle(ui: &mut egui::Ui, title: &str, hint: &str, on: &mut bool) -> bool {
     let mut hit = false;
     ui.horizontal(|ui| {
+        let text_w = settings_toggle_text_width(ui.available_width());
         ui.vertical(|ui| {
+            // A long hint wraps before the switch instead of running under it.
+            ui.set_max_width(text_w);
             ui.add_space(6.0);
             ui.label(RichText::new(title).size(15.0).color(crate::theme::fg()));
             if !hint.is_empty() {
@@ -1449,25 +1492,50 @@ pub fn settings_toggle(ui: &mut egui::Ui, title: &str, hint: &str, on: &mut bool
     hit
 }
 
+/// Settings switch track width and the gap kept between a toggle's text and its switch.
+const SETTINGS_SWITCH_W: f32 = 40.0;
+const SETTINGS_TOGGLE_GAP: f32 = 16.0;
+
+/// Text column width for a Settings toggle row: the row minus the switch and a gap.
+pub fn settings_toggle_text_width(row: f32) -> f32 {
+    (row - SETTINGS_SWITCH_W - SETTINGS_TOGGLE_GAP).max(0.0)
+}
+
 pub fn settings_switch(ui: &mut egui::Ui, on: bool) -> bool {
-    let (_rect, resp) = ui.allocate_exact_size(egui::vec2(40.0, 24.0), Sense::click());
+    finish_switch(paint_switch(ui, on, egui::vec2(SETTINGS_SWITCH_W, 24.0)), on)
+}
+
+/// Compact on/off for an Automations job row. About 28×16, tooltip "Enabled".
+pub fn enabled_switch(ui: &mut egui::Ui, on: bool) -> bool {
+    let resp = paint_switch(ui, on, egui::vec2(28.0, 16.0)).on_hover_text("Enabled");
+    finish_switch(resp, on)
+}
+
+/// Same track and knob as the Settings switch, scaled from its 24px height.
+fn paint_switch(ui: &mut egui::Ui, on: bool, size: egui::Vec2) -> egui::Response {
+    let (_rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let on_t = crate::theme::animate_selection(ui, resp.id.with("sw-on"), on);
     let base_fill = crate::theme::blend_color(crate::theme::panel(), crate::theme::fg(), on_t);
     let (resp, rect, fill) = crate::theme::feel_button(ui, resp, base_fill);
-    ui.painter().rect_filled(rect, 8.0, fill);
+    let scale = size.y / 24.0;
+    ui.painter().rect_filled(rect, 8.0 * scale, fill);
     if on_t < 0.98 {
-        ui.painter()
-            .rect_stroke(
-                rect,
-                rect.height() * 0.5,
-                Stroke::new(1.0_f32, crate::theme::border_strong()),
-                egui::StrokeKind::Middle,
-            );
+        ui.painter().rect_stroke(
+            rect,
+            rect.height() * 0.5,
+            Stroke::new(1.0_f32, crate::theme::border_strong()),
+            egui::StrokeKind::Middle,
+        );
     }
-    let knob_x = grokhub_core::lerp_f32(rect.left() + 12.0, rect.right() - 12.0, on_t);
+    let inset = 12.0 * scale;
+    let knob_x = grokhub_core::lerp_f32(rect.left() + inset, rect.right() - inset, on_t);
     let knob = crate::theme::blend_color(crate::theme::muted(), crate::theme::bg(), on_t);
     ui.painter()
-        .circle_filled(egui::pos2(knob_x, rect.center().y), 8.0, knob);
+        .circle_filled(egui::pos2(knob_x, rect.center().y), 8.0 * scale, knob);
+    resp
+}
+
+fn finish_switch(resp: egui::Response, on: bool) -> bool {
     let enabled = resp.enabled();
     let name = switch_access_name(on);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, name));
@@ -1585,6 +1653,138 @@ pub fn get_started_panel(
 }
 
 pub fn settings_action(ui: &mut egui::Ui, title: &str, hint: &str, action: &str) -> bool {
+    settings_action_styled(ui, title, hint, action, PillStyle::Solid)
+}
+
+/// The pill that grants access: an outline, not a fill (SB-08), so the off
+/// rows read as the calm default and Allow is not the brightest column on
+/// the page. Count only `clicked_by(Primary)` on it: Enter or Space on a
+/// focused Allow never grants (rule 4: only the user's click writes a grant).
+/// [`settings_grant_row`] does.
+fn grant_pill(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let resp = crate::theme::felt_label_button(
+        ui,
+        label,
+        Color32::TRANSPARENT,
+        crate::theme::fg(),
+        8.0,
+        egui::vec2(0.0, 28.0),
+        Some(Stroke::new(1.0_f32, crate::theme::border_strong())),
+        true,
+    );
+    let enabled = resp.enabled();
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp
+}
+
+/// SB-07: a row hint that leads with "On" or "Off" paints that word in the
+/// foreground colour (the rest stays muted), so a column of rows scans at a
+/// glance. Any other hint is all muted. The galley text is the hint as given.
+pub fn state_hint_job(hint: &str) -> LayoutJob {
+    let lead = ["On", "Off"]
+        .into_iter()
+        .find(|w| hint.strip_prefix(w).is_some_and(|rest| rest.starts_with([' ', '.'])))
+        .unwrap_or("");
+    let font = FontId::proportional(12.0);
+    let mut job = LayoutJob::default();
+    if !lead.is_empty() {
+        job.append(lead, 0.0, TextFormat { font_id: font.clone(), color: crate::theme::fg(), ..Default::default() });
+    }
+    job.append(&hint[lead.len()..], 0.0, TextFormat { font_id: font, color: crate::theme::muted(), ..Default::default() });
+    job
+}
+
+/// What a grant row's pill does: Allow (outline, pointer-only) or Revoke
+/// (ghost, it only takes access away).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrantPill {
+    Allow,
+    Revoke,
+}
+
+/// One Settings grant row: title, a state-led hint ([`state_hint_job`], with
+/// `hint_hover` on hover, e.g. a whole folder path), then the pill on the right
+/// and `extra` left of it (a folder field, a browser picker), laid out right to
+/// left. `extra_line` puts the pill and `extra` on their own line under the
+/// hint, for inputs too wide to share the title's line. `locked` = why
+/// nothing here can act right now (SB-01): the pill and `extra` take egui's
+/// disabled look and show `locked` on hover.
+pub fn settings_grant_row(
+    ui: &mut egui::Ui,
+    title: &str,
+    hint: &str,
+    hint_hover: Option<&str>,
+    pill: GrantPill,
+    locked: Option<&str>,
+    extra_line: bool,
+    extra: impl FnOnce(&mut egui::Ui),
+) -> bool {
+    let mut hit = false;
+    let labels = |ui: &mut egui::Ui| {
+        ui.vertical(|ui| {
+            ui.add_space(4.0);
+            ui.label(RichText::new(title).size(15.0).color(crate::theme::fg()));
+            if !hint.is_empty() {
+                let r = ui.label(state_hint_job(hint));
+                if let Some(full) = hint_hover {
+                    r.on_hover_text(full);
+                }
+            }
+        });
+    };
+    let pills = |ui: &mut egui::Ui, hit: &mut bool| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_enabled_ui(locked.is_none(), |ui| {
+                let resp = match pill {
+                    GrantPill::Allow => grant_pill(ui, "Allow"),
+                    GrantPill::Revoke => ghost_pill_response(ui, "Revoke"),
+                };
+                *hit = match pill {
+                    GrantPill::Allow => resp.clicked_by(egui::PointerButton::Primary),
+                    GrantPill::Revoke => resp.clicked(),
+                } && locked.is_none();
+                if let Some(why) = locked {
+                    resp.on_disabled_hover_text(why);
+                }
+                extra(ui);
+            });
+        });
+    };
+    if extra_line {
+        labels(ui);
+        ui.add_space(4.0);
+        ui.horizontal(|ui| pills(ui, &mut hit));
+    } else {
+        ui.horizontal(|ui| {
+            labels(ui);
+            pills(ui, &mut hit);
+        });
+    }
+    ui.add_space(10.0);
+    hit
+}
+
+/// The ghost pill's response, for gated rows.
+fn ghost_pill_response(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    crate::theme::felt_label_button(
+        ui,
+        label,
+        Color32::TRANSPARENT,
+        crate::theme::muted(),
+        8.0,
+        egui::vec2(0.0, 28.0),
+        Some(Stroke::new(1.0_f32, crate::theme::border())),
+        false,
+    )
+}
+
+fn settings_action_styled(
+    ui: &mut egui::Ui,
+    title: &str,
+    hint: &str,
+    action: &str,
+    style: PillStyle,
+) -> bool {
     let mut hit = false;
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
@@ -1595,7 +1795,7 @@ pub fn settings_action(ui: &mut egui::Ui, title: &str, hint: &str, action: &str)
             }
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            hit = white_pill(ui, action);
+            hit = felt_pill(ui, action, style);
         });
     });
     ui.add_space(10.0);
@@ -2789,6 +2989,132 @@ fn take_tile_metrics() -> Vec<TileMetric> {
 mod tests {
     use super::*;
 
+    /// SY-10: a group heading gets 8–12px more room above it than a plain
+    /// label, at the same size.
+    #[test]
+    fn section_heading_adds_room_above_at_the_same_size() {
+        assert!((8.0..=12.0).contains(&SECTION_HEAD_GAP), "{SECTION_HEAD_GAP}");
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let tops = |heading: bool| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 400.0))),
+                ..Default::default()
+            };
+            let mut top = 0.0_f32;
+            let out = crate::theme::test_pass(&ctx, input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    top = ui.cursor().min.y;
+                    if heading {
+                        section_heading(ui, "Command rules");
+                    } else {
+                        section_label(ui, "Command rules");
+                    }
+                });
+            });
+            let mut at = None;
+            for clipped in &out.shapes {
+                if let egui::Shape::Text(t) = &clipped.shape {
+                    if t.galley.text() == "Command rules" {
+                        at = Some((t.pos.y - top, t.galley.rect.height()));
+                    }
+                }
+            }
+            at.expect("heading painted")
+        };
+        let (plain_y, plain_h) = tops(false);
+        let (head_y, head_h) = tops(true);
+        assert!((head_y - plain_y - SECTION_HEAD_GAP).abs() < 0.5, "{plain_y} -> {head_y}");
+        assert!((head_h - plain_h).abs() < 0.01, "the heading size stays: {plain_h} vs {head_h}");
+    }
+
+    /// Spike-4b: a focused Allow answers Enter/Space as a plain pill would, but
+    /// a grant row's Allow only counts a pointer click.
+    #[test]
+    fn grant_pill_ignores_the_keyboard_and_takes_a_pointer_click() {
+        let run = |grant: bool| {
+            let ctx = egui::Context::default();
+            crate::theme::install_fonts_on(&ctx);
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0));
+            let pass = |events: Vec<egui::Event>| {
+                let mut hit = false;
+                let mut at = egui::Pos2::ZERO;
+                let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+                let out = crate::theme::test_pass(&ctx, input, |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        hit = if grant {
+                            settings_grant_row(ui, "Row", "", None, GrantPill::Allow, None, false, |_| {})
+                        } else {
+                            white_pill(ui, "Allow")
+                        };
+                    });
+                });
+                for clipped in &out.shapes {
+                    if let egui::Shape::Text(t) = &clipped.shape {
+                        at = t.pos + t.galley.rect.center().to_vec2();
+                    }
+                }
+                (hit, at)
+            };
+            let key = |key| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let (_, at) = pass(vec![]);
+            pass(vec![key(egui::Key::Tab)]);
+            let by_keys = pass(vec![key(egui::Key::Enter)]).0 | pass(vec![key(egui::Key::Space)]).0;
+            let press = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            pass(vec![egui::Event::PointerMoved(at)]);
+            pass(vec![press(true)]);
+            let by_click = pass(vec![press(false)]).0;
+            (by_keys, by_click)
+        };
+        assert_eq!(run(false), (true, true), "the plain pill takes keys: the test reaches the button");
+        assert_eq!(run(true), (false, true), "the grant pill takes the click only");
+    }
+
+    #[test]
+    fn settings_toggle_hint_wraps_before_the_switch() {
+        assert_eq!(settings_toggle_text_width(600.0), 544.0);
+        assert_eq!(settings_toggle_text_width(30.0), 0.0);
+        let hint = "Grok can see the screen and use the mouse and keyboard through GrokHub. Ask still asks first. Deletes, sends, money and credentials always ask.";
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 400.0))),
+            ..Default::default()
+        };
+        let mut row_right = 0.0_f32;
+        let out = crate::theme::test_pass(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                row_right = ui.max_rect().right();
+                let mut on = true;
+                assert!(!settings_toggle(ui, "Let Grok control the desktop", hint, &mut on));
+            });
+        });
+        let mut hint_right = None;
+        for clipped in &out.shapes {
+            if let egui::Shape::Text(t) = &clipped.shape {
+                if t.galley.text().starts_with("Grok can see") {
+                    hint_right = Some(t.pos.x + t.galley.rect.right());
+                }
+            }
+        }
+        let hint_right = hint_right.expect("hint painted");
+        assert!(
+            hint_right <= row_right - SETTINGS_SWITCH_W - SETTINGS_TOGGLE_GAP + 0.5,
+            "hint runs under the switch: {hint_right} vs row {row_right}"
+        );
+    }
+
     #[test]
     fn help_text_paints_backticks_as_code_not_literals() {
         let job = inline_code_job("run `/loop 30m` now", 12.0, Color32::GRAY, 400.0);
@@ -3330,6 +3656,10 @@ mod tests {
         assert_eq!(quick_chip_fg(false), crate::theme::muted());
         assert!(chip_why_tip("Last slash", "/plan").starts_with("Why this?"));
         assert_eq!(chip_why_tip("", "Continue"), "Why this?\nContinue");
+        assert_eq!(
+            chip_why_tip("New here", "Start here"),
+            "Suggested because you're new here"
+        );
         let max_w = chip_row_width_lock(640.0);
         assert_eq!(max_w, 640.0);
         assert_ne!(max_w, 0.0);

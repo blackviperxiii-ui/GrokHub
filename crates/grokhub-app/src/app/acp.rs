@@ -42,6 +42,28 @@ pub(super) fn hide_pending_grok_sessions(
         .collect()
 }
 
+/// Skills must not sit on Loading… while catalog commands run.
+/// A healthy load finishes under this. Past it the page settles (last catalog
+/// kept) and Refresh can start again.
+pub(super) const GROK_CATALOG_SETTLE: Duration = Duration::from_secs(18);
+
+/// Debug builds honor `GROKHUB_CATALOG_SETTLE_MS` so a shot can force the timeout
+/// without waiting the full 18s. Release stays on [`GROK_CATALOG_SETTLE`].
+pub(super) fn grok_catalog_settle() -> Duration {
+    #[cfg(debug_assertions)]
+    if let Some(ms) = std::env::var("GROKHUB_CATALOG_SETTLE_MS")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+    {
+        return Duration::from_millis(ms);
+    }
+    GROK_CATALOG_SETTLE
+}
+
+/// Status once [`GROK_CATALOG_SETTLE`] passes with no catalog reply.
+pub(super) const GROK_CATALOG_TIMEOUT: &str = "Could not load Grok Build catalog (timed out)";
+
 impl Cabin {
 
     pub(super) fn poll_acp_spawn(&mut self) {
@@ -436,6 +458,10 @@ impl Cabin {
                         }
                         continue;
                     }
+                    // Harness pre-check before Grok Build's pill answers: tighten only.
+                    let Some(p) = self.harness_precheck(p) else {
+                        continue;
+                    };
                     if self.permission_mode == PermissionMode::AlwaysApprove {
                         if let Some(h) = &self.acp {
                             let _ = h.answer_permission_always(p.rpc_id);
@@ -559,6 +585,7 @@ impl Cabin {
     /// The turn is stopping: withdraw the Ask on screen and every Ask queued
     /// behind it, so no RPC is left hanging.
     pub(super) fn withdraw_perm_asks(&mut self) {
+        self.withdraw_hard_parks();
         let asks: Vec<_> = self
             .perm_ask
             .take()
@@ -722,6 +749,7 @@ impl Cabin {
                     self.remember_last_frame(url);
                     self.store_hub_frame(url);
                 }
+                self.harness_note_headless(&card);
                 self.ingest_tool_card(&card);
                 if self.stream_here() {
                     self.scrub_live_blocks();
@@ -776,6 +804,7 @@ impl Cabin {
             Ok(GrokPEvent::End(turn)) => {
                 self.grok_p_pid = None;
                 self.apply_single_turn(turn);
+                self.harness_headless_end();
             }
             Ok(GrokPEvent::Err(e)) => {
                 self.grok_p_pid = None;
@@ -1013,6 +1042,7 @@ impl Cabin {
                 learned: &grokhub_core::brief_for(&self.learning, "chat"),
                 deny: self.permission_mode.needs_approval(),
                 desktop: self.cfg.desktop_control,
+                hard_deny: grokhub_agent::harness::HEADLESS_DENY_RULES,
             },
             false,
             user_home,
@@ -1069,6 +1099,9 @@ impl Cabin {
                     }
                 }
                 grokhub_agent::SideEvent::Permission(ask) => {
+                    let Some(ask) = self.harness_precheck_on(ask, "E") else {
+                        continue;
+                    };
                     if self.permission_mode == PermissionMode::AlwaysApprove {
                         if let Some(handle) = &self.acp {
                             let _ = handle.answer_permission_always(ask.rpc_id);
@@ -1469,11 +1502,13 @@ impl Cabin {
         let Some(bin) = grokhub_acp::find_grok() else {
             self.status = build_agent::grok_banner();
             self.grok_catalog_loaded = true;
+            self.grok_catalog_started = None;
             return;
         };
         let cwd = self.grok_cwd();
         let (tx, rx) = mpsc::channel();
         self.grok_catalog_rx = Some(rx);
+        self.grok_catalog_started = Some(Instant::now());
         self.status = "Loading Grok Build catalog…".into();
         std::thread::spawn(move || {
             let _ = tx.send(grokhub_acp::load_grok_catalog(&bin, &cwd));
@@ -1488,6 +1523,7 @@ impl Cabin {
             Ok(Ok(cat)) => {
                 self.grok_catalog = cat;
                 self.grok_catalog_loaded = true;
+                self.grok_catalog_started = None;
                 self.status = format!(
                     "{} skills · {} MCP · {} hooks · {} plugins · {} workflows",
                     self.grok_catalog.skills.len(),
@@ -1499,13 +1535,22 @@ impl Cabin {
             }
             Ok(Err(e)) => {
                 self.grok_catalog_loaded = true;
+                self.grok_catalog_started = None;
                 self.status = e;
             }
             Err(mpsc::TryRecvError::Empty) => {
-                self.grok_catalog_rx = Some(rx);
+                let started = *self.grok_catalog_started.get_or_insert_with(Instant::now);
+                if started.elapsed() >= grok_catalog_settle() {
+                    self.grok_catalog_loaded = true;
+                    self.grok_catalog_started = None;
+                    self.status = GROK_CATALOG_TIMEOUT.into();
+                } else {
+                    self.grok_catalog_rx = Some(rx);
+                }
             }
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.grok_catalog_loaded = true;
+                self.grok_catalog_started = None;
             }
         }
     }

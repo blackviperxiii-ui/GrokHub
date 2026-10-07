@@ -1,5 +1,6 @@
 //! Shared GrokHub brain. Linux, Windows, and Android must call this — not a second protocol.
 
+pub mod amr;
 pub mod appearance;
 pub mod attach;
 pub mod automation;
@@ -29,6 +30,7 @@ pub mod greeting;
 pub mod grok_loop;
 pub mod hands;
 pub mod heartbeat;
+pub mod heartbeat_throttle;
 pub mod history;
 pub mod host_cite;
 pub mod host_plan;
@@ -51,6 +53,7 @@ pub mod paths;
 pub mod project;
 pub mod pulse;
 pub mod recipe;
+pub mod pii;
 pub mod redact;
 pub mod reflect;
 pub mod review;
@@ -168,12 +171,12 @@ pub use chat_view::{
     stretch_saved_skill, strip_thinking, thought_body_key, thought_control_act,
     thought_fold_controls, thought_fold_draws, thought_fold_transition, thought_shows_acts,
     thought_shows_label,
-    visible_chat, visible_chat_refs, visible_turn_count, visible_turn_count_from, ChatKind,
-    ChatView, ThoughtFold, ThoughtFoldAct, CHAT_BLOCK_GAP, CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK,
+    message_origin, visible_chat, visible_chat_refs, visible_turn_count, visible_turn_count_from,
+    ChatKind, ChatView, MessageOrigin, ThoughtFold, ThoughtFoldAct, CHAT_BLOCK_GAP, CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK,
     SKILL_SAVED_MARK, SKILL_SAVED_NOTE, THOUGHT_CLUSTER_GAP, THOUGHT_ROW_LABEL,
 };
 pub use cabin_engine::{absorb_cabin, brief_for, engine_slug, note_part, CabinDirective, PartNote};
-pub use channel::{auto_off_target, beta_caught_up_to_main, channel_status_line, channel_switch_fail_hint, channel_switch_preflight, channel_switch_shell, parse_version_line, version_line, BuildVersion, Channel, CHANNEL_AUTO_OFF_NOTE, CHANNEL_RECEIPT, CHANNEL_WINDOWS_NOTE};
+pub use channel::{auto_off_target, beta_caught_up_to_main, channel_status_line, channel_switch_fail_hint, channel_switch_preflight, channel_switch_shell, parse_version_line, update_fail_hint, version_line, BuildVersion, Channel, ChannelTips, CHANNEL_AUTO_OFF_NOTE, CHANNEL_RECEIPT, CHANNEL_WINDOWS_NOTE};
 pub use chips::{
     build_quick_chips, cabin_pace, chip_dismissed_for_good, chip_memory_key, chip_scan,
     local_lessons,
@@ -247,6 +250,9 @@ pub use heartbeat::{
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
     HEARTBEAT_MS,
 };
+pub use heartbeat_throttle::{
+    ActOutcome, HeartbeatPace, HeartbeatThrottle, PaceGate, PaceHold, ProactiveAct, PACE_NORMAL,
+};
 pub use history::{
     dedupe_hits, palette_file_shown, palette_forget_stale_walk, palette_row_action,
     palette_search_is_saved, search_corpus, search_corpus_tagged, search_place, search_text,
@@ -258,6 +264,10 @@ pub use host_plan::{
     retain_held_plan, step_from_cmd, strip_host_cmd_line, yolo_plan_split, HostPlanStep, HostRisk,
 };
 pub use host_safety::{forbidden_reason, mint_host_halt, recall_hits};
+pub use amr::{
+    AmrError, AmrStore, Edge, EdgeRel, LegacyMemory, MemoryBackend, MemoryEngine, Node, NodeDraft,
+    NodeHit, NodeId, NodeType, AMR_SCHEMA,
+};
 pub use hub_sync::{
     build_hub_snapshot, is_hub_snapshot, merge_hub_snapshots, HubMemoryFile, HubSnapshot,
 };
@@ -366,6 +376,7 @@ pub use recipe::{
     user_asks_guide_only, user_asks_takeover, ComputerDrive, ComputerOp, HandsBackend, Recipe,
     RecipeDoc, ReplayOp, ScreenSize, TabAction,
 };
+pub use pii::{redact_pii, redact_recall};
 pub use redact::{forget_topic, is_plain_text, redact_held_secrets, redact_secrets};
 pub use reflect::{
     fact_candidates, fact_candidates_from, restore_memory_prev, should_idle_reflect,
@@ -432,11 +443,12 @@ pub use trajectory::{
 };
 pub use turn_timeline::{
     append_say, append_thought, append_tool, chunk_seam, decode_tool_rows, decode_turn,
-    encode_turn, last_say, split_at_last_sentence, tool_display_title, tool_group_label,
+    encode_turn, last_say, split_at_last_sentence, tool_detail_is_status, tool_display_title,
+    tool_group_label,
     tool_status_failed, tool_status_running, turn_needs_timeline, turn_says, views_up_to_last_user,
     LiveBlock, LiveKind, ToolRow, TurnPart,
 };
-pub use update::{ls_remote_channel_tips, parse_ls_remote_tips, remote_tracking_tips, 
+pub use update::{fetch_channel_tips, switch_clone_to_main, ls_remote_channel_tips, parse_ls_remote_tips, remote_tracking_tips, 
     cabin_overlay_step, cabin_update_notice, cabin_version_newer, cli_alpha_is_newer,
     cli_update_notice, combined_update_cmds, combined_update_cmds_for_host,
     combined_update_cmds_for_host_in, combined_update_cmds_in, combined_update_hint,
@@ -503,7 +515,8 @@ pub use update_feed::{
     board_covers_topic, live_generated_ideas, post_generated_ideas, purge_one_off_ideas, purge_template_ideas,
     automation_failed_card,
     archive_digest, archived_digests, automate_offer_card, automation_done_card, card_matches,
-    digest_card, digest_topic_refused, discuss_context, dismiss_idea, dismiss_update, dismiss_update_at,
+    digest_card, digest_topic_refused, discuss_context, short_takeaway, TAKEAWAY_MAX,
+    dismiss_idea, dismiss_update, dismiss_update_at,
     collapse_feed, expire_ideas,
     feed_group_key, feed_ideas, feed_visible, hold_if_quiet, home_feed_n, idea_card, idea_dialogue,
     idea_open_line, idea_rank, lesson_rank_delta, setup_blocked_by_lessons,

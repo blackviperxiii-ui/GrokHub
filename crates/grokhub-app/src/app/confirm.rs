@@ -8,8 +8,10 @@
 //! - Palette or Settings open: never consume.
 //! - Ask-card Always confirm (inline): Enter = Allow, Esc = Deny. Sheet buttons
 //!   are pointer-only so the second beat does not steal those keys.
-//! - Session Always escalate and destructive host (overlay): Enter = Confirm,
-//!   Esc = Cancel when the composer is empty.
+//! - Session Always escalate, destructive host, and Remove job (overlay):
+//!   Enter = Confirm, Esc = Cancel when the composer is empty.
+//! - Last run (no Follow up card and no Background history) uses the same
+//!   sheet: Enter or Esc closes it.
 //!
 //! Focus: overlay requests focus on the primary when it opens. Tab stays on
 //! Confirm / Cancel. Cancel and Esc drop the sheet with no side effect.
@@ -24,6 +26,34 @@ pub(super) const ALWAYS_CONFIRM_LINE2: &str =
 pub(super) const ALWAYS_SESSION_TITLE: &str = "Always this launch";
 pub(super) const HOST_CONFIRM_TITLE: &str = "Destructive host";
 pub(super) const HOST_CONFIRM_PRIMARY: &str = "Run";
+pub(super) const REMOVE_JOB_PRIMARY: &str = "Remove";
+pub(super) const LAST_RUN_PRIMARY: &str = "Close";
+
+/// Scheduled clock job or a Grok Build `/loop` row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RemoveJobKind {
+    Scheduled,
+    Loop,
+}
+
+/// `Remove 'Sample price check'?` — the sheet title, with the job's own name.
+pub(super) fn remove_job_question(title: &str) -> String {
+    let title = title.trim();
+    let title = if title.is_empty() { "this job" } else { title };
+    format!("Remove '{title}'?")
+}
+
+/// Sheet body when a failed run has no Follow up card and no stored reply.
+pub(super) fn last_run_sheet_body(error: &str, reply: &str) -> String {
+    let error = error.trim();
+    let reply = reply.trim();
+    let error = if error.is_empty() { "Run failed" } else { error };
+    if reply.is_empty() || reply == error {
+        error.to_string()
+    } else {
+        format!("{error}\n\n{reply}")
+    }
+}
 
 /// Confirm sheet stays up only while Ask still shows this `rpc_id`.
 pub(super) fn always_confirm_matches_rpc(
@@ -37,12 +67,23 @@ pub(super) fn always_confirm_matches_rpc(
 pub(super) enum ConfirmKind {
     AlwaysSession,
     DestructiveHost { cmd: String },
+    /// Delete a scheduled job or a loop. `title` is the row name (name, or the prompt).
+    RemoveJob {
+        kind: RemoveJobKind,
+        id: String,
+        title: String,
+    },
+    /// Read-only: what the last scheduled run reported, when nothing else is stored.
+    LastRun { title: String, body: String },
 }
 
 impl ConfirmKind {
     pub(super) fn paints_overlay(&self) -> bool {
         match self {
-            Self::AlwaysSession | Self::DestructiveHost { .. } => true,
+            Self::AlwaysSession
+            | Self::DestructiveHost { .. }
+            | Self::RemoveJob { .. }
+            | Self::LastRun { .. } => true,
         }
     }
 }
@@ -79,6 +120,24 @@ pub(super) fn destructive_host_spec() -> ConfirmSpec {
     }
 }
 
+pub(super) fn remove_job_spec() -> ConfirmSpec {
+    ConfirmSpec {
+        title: "Remove job",
+        consequence: "The job is deleted and will not run again.",
+        primary: REMOVE_JOB_PRIMARY,
+        danger: true,
+    }
+}
+
+pub(super) fn last_run_spec() -> ConfirmSpec {
+    ConfirmSpec {
+        title: "Last run",
+        consequence: "The last run failed.",
+        primary: LAST_RUN_PRIMARY,
+        danger: false,
+    }
+}
+
 /// Overlay Enter/Esc. Ask-card Always passes `steal_keys = false`.
 pub(super) fn confirm_key(
     enter: bool,
@@ -103,7 +162,20 @@ pub(super) fn should_confirm_destructive_host(cmd: &str) -> bool {
     host_risk(cmd) == HostRisk::Destructive && !is_rewind_copy_cmd(cmd)
 }
 
-pub(super) fn paint_confirm_sheet(ui: &mut egui::Ui, spec: ConfirmSpec, detail: &str) -> Option<ConfirmAct> {
+pub(super) fn paint_confirm_sheet(
+    ui: &mut egui::Ui,
+    spec: ConfirmSpec,
+    detail: &str,
+) -> Option<ConfirmAct> {
+    paint_confirm_sheet_titled(ui, spec, spec.title, detail)
+}
+
+fn paint_confirm_sheet_titled(
+    ui: &mut egui::Ui,
+    spec: ConfirmSpec,
+    title: &str,
+    detail: &str,
+) -> Option<ConfirmAct> {
     let stroke = if spec.danger {
         crate::theme::offline()
     } else {
@@ -117,7 +189,7 @@ pub(super) fn paint_confirm_sheet(ui: &mut egui::Ui, spec: ConfirmSpec, detail: 
         .inner_margin(egui::Margin::same(10))
         .show(ui, |ui| {
             ui.label(
-                RichText::new(spec.title)
+                RichText::new(title)
                     .size(14.0)
                     .color(crate::theme::fg()),
             );
@@ -162,11 +234,23 @@ impl Cabin {
         if !kind.paints_overlay() {
             return;
         }
-        let (spec, detail) = match &kind {
-            ConfirmKind::AlwaysSession => (always_session_spec(), ALWAYS_CONFIRM_LINE2),
+        let (spec, title, detail) = match &kind {
+            ConfirmKind::AlwaysSession => (
+                always_session_spec(),
+                ALWAYS_SESSION_TITLE.to_string(),
+                ALWAYS_CONFIRM_LINE2.to_string(),
+            ),
             ConfirmKind::DestructiveHost { cmd } => {
-                (destructive_host_spec(), cmd.as_str())
+                (destructive_host_spec(), HOST_CONFIRM_TITLE.to_string(), cmd.clone())
             }
+            ConfirmKind::RemoveJob { title, .. } => {
+                (remove_job_spec(), remove_job_question(title), String::new())
+            }
+            ConfirmKind::LastRun { title, body } => (
+                last_run_spec(),
+                format!("Last run · {title}"),
+                body.clone(),
+            ),
         };
         let overlay_open = self.palette_open || self.nav == Nav::Settings || self.find.focused;
         let steal = confirm_key(
@@ -186,7 +270,7 @@ impl Cabin {
                 if ui.memory(|m| m.focused().is_none()) {
                     ui.memory_mut(|m| m.request_focus(id));
                 }
-                if let Some(hit) = paint_confirm_sheet(ui, spec, detail) {
+                if let Some(hit) = paint_confirm_sheet_titled(ui, spec, &title, &detail) {
                     act = Some(hit);
                 }
             });
@@ -204,7 +288,34 @@ impl Cabin {
             ConfirmKind::DestructiveHost { cmd } => {
                 self.run_cmds(vec![cmd]);
             }
+            ConfirmKind::RemoveJob { kind, id, .. } => self.delete_confirmed_job(kind, &id),
+            ConfirmKind::LastRun { .. } => {}
         }
+    }
+
+    fn delete_confirmed_job(&mut self, kind: RemoveJobKind, id: &str) {
+        match kind {
+            RemoveJobKind::Scheduled => {
+                let before = self.automations.len();
+                self.automations.retain(|a| a.id != id);
+                if self.automations.len() != before {
+                    self.persist_automations();
+                    self.status = "Automation removed".into();
+                }
+            }
+            RemoveJobKind::Loop => {
+                let before = self.grok_loops.len();
+                self.grok_loops.retain(|row| row.id != id);
+                if self.grok_loops.len() != before {
+                    self.persist_loops();
+                    self.status = "Loop removed".into();
+                }
+            }
+        }
+    }
+
+    pub(super) fn arm_remove_job(&mut self, kind: RemoveJobKind, id: String, title: String) {
+        self.confirm = Some(ConfirmKind::RemoveJob { kind, id, title });
     }
 
     pub(super) fn apply_session_always(&mut self) {
@@ -296,6 +407,30 @@ mod tests {
         assert_eq!(host.title, HOST_CONFIRM_TITLE);
         assert_eq!(host.primary, HOST_CONFIRM_PRIMARY);
         assert!(host.danger);
+        let remove = remove_job_spec();
+        assert_eq!(remove.primary, REMOVE_JOB_PRIMARY);
+        assert!(remove.danger);
+        let last = last_run_spec();
+        assert_eq!(last.primary, LAST_RUN_PRIMARY);
+        assert!(!last.danger);
+    }
+
+    #[test]
+    fn remove_job_question_includes_the_job_title() {
+        let q = remove_job_question("Sample price check");
+        assert!(q.contains("Remove '"), "{q}");
+        assert!(q.contains("Sample price check"), "{q}");
+        assert_eq!(q, "Remove 'Sample price check'?");
+        assert_eq!(remove_job_question("  "), "Remove 'this job'?");
+        assert_eq!(
+            last_run_sheet_body("Sample error: page did not load", ""),
+            "Sample error: page did not load"
+        );
+        assert_eq!(
+            last_run_sheet_body("credit limit", "The page returned 500."),
+            "credit limit\n\nThe page returned 500."
+        );
+        assert_eq!(last_run_sheet_body("", ""), "Run failed");
     }
 
     #[test]

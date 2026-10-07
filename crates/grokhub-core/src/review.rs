@@ -104,7 +104,7 @@ pub fn review_due(last_day: Option<&str>, today: &str, clock: &LocalClock, night
     clock.hour >= night_hour
 }
 
-/// Muted Suggested-header copy. No chat dump.
+/// "Reviewed today" or "Review due tonight". Automations Suggested does not use this.
 pub fn review_status_line(last_day: Option<&str>, today: &str) -> &'static str {
     if last_day == Some(today) {
         "Reviewed today"
