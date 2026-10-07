@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+On Automations, Run is a ghost pill and a failed job's Retry stays filled, each job has an Enabled switch, next runs read as a local time such as today 7:30 AM or Tue 9:00 AM, the intro is plain, Suggested says the ideas come from your recent work, and Discuss says you opened the post from your feed.
+
 Failed Automations jobs show Retry and a View last run link, and Remove sits behind a ··· menu that asks Remove '…'? before deleting the job.
 
 Pulse leftovers (Critiquito re-check): opened idea headings follow the row type (Do → "What Apply will do", Automate → "What Apply will schedule", Learn → "What I'll learn"); Suggest ideas while signed out stays enabled and shows an amber "Sign in to Grok to get ideas." with Open Settings, cleared once signed in; Ideas loading replaces empty copy with "Looking for ideas in your recent work…" and three #16181c skeleton rows; empty Ideas / Feed use the new copy, with inline Suggest ideas and a Feed instructions link; Feed image slots are a plain #16181c skeleton while loading and drop on fail; Search palette closes on outside click or navigation, uses the "Search pages and commands" placeholder, and names rows as the sidebar does (old names still find them). No version bump.
