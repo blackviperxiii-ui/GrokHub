@@ -52,6 +52,7 @@ pub mod paths;
 pub mod project;
 pub mod pulse;
 pub mod recipe;
+pub mod pii;
 pub mod redact;
 pub mod reflect;
 pub mod review;
@@ -371,6 +372,7 @@ pub use recipe::{
     user_asks_guide_only, user_asks_takeover, ComputerDrive, ComputerOp, HandsBackend, Recipe,
     RecipeDoc, ReplayOp, ScreenSize, TabAction,
 };
+pub use pii::{redact_pii, redact_recall};
 pub use redact::{forget_topic, is_plain_text, redact_held_secrets, redact_secrets};
 pub use reflect::{
     fact_candidates, fact_candidates_from, restore_memory_prev, should_idle_reflect,

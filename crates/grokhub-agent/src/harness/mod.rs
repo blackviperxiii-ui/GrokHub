@@ -15,9 +15,13 @@
 //! Spike-4a trust floor: `consent` (ConsentLedger, scopes all off) and
 //! `egress` (EgressGuard + `egress.jsonl`) answer through the same `decide`
 //! (`Step::Egress`, `Step::Scope`). Grok Build's own traffic stays outside (D1).
+//! Spike-4b: `at_rest` seals the learned tier (consent and egress logs,
+//! personal and sensitive AMR nodes) with a key held in the OS keyring, and
+//! fails closed without it.
 
 mod access;
 mod approval;
+mod at_rest;
 mod backend;
 mod consent;
 mod detect;
@@ -31,6 +35,11 @@ pub use approval::{
     always_keeps_access, apply_access, decide, decide_harness, hard_card_key, resolve_park, GateOutcome,
     HardAnswer, HardPark, Step, APPROVAL_TTL,
 };
+pub use at_rest::{
+    has_sealed_data, keyring_name, read_key, set_default_key_store, use_key_store_for, use_os_keyring,
+    KeyStore, LearnedVault, Locked, MemoryKeyStore, OsKeyring, KEY_ACCOUNT, KEY_ID_FILE, KEY_SERVICE,
+    SEALED_PREFIX,
+};
 pub use backend::{
     computer_tool_names, desk_args, desk_decide, desk_span, grok_build_click, ClickOutcome,
     ClickRequest, ComputerUseBackend, DeskCall, CU_TRACE,
@@ -41,7 +50,8 @@ pub use consent::{
 };
 pub use egress::{
     append_egress, egress_dest, egress_path, guard_egress, is_local_dest, is_model_host,
-    read_egress, record_approved_once, DataClass, EgressBasis, EgressLine, EgressReq, EGRESS_FILE,
+    read_egress, read_egress_report, record_approved_once, DataClass, EgressBasis, EgressLine,
+    EgressRead, EgressReq, EGRESS_FILE,
     HUB_DEST, HUB_SYNC_DATA,
 };
 pub use detect::{
@@ -62,7 +72,8 @@ pub use span::{
 };
 
 /// Scratch dir for harness tests, under the workspace `target/` (not the
-/// shared system temp dir).
+/// shared system temp dir). It gets its own in-memory keyring, so no test
+/// reaches the OS keyring.
 #[cfg(test)]
 pub(crate) fn test_dir(label: &str) -> std::path::PathBuf {
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -70,5 +81,6 @@ pub(crate) fn test_dir(label: &str) -> std::path::PathBuf {
         .join(format!("{label}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&p);
     std::fs::create_dir_all(&p).expect("harness test dir");
+    use_key_store_for(&p, std::sync::Arc::new(MemoryKeyStore::new()));
     p
 }

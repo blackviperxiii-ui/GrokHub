@@ -10934,6 +10934,7 @@ fn recall_legacy_finds_memory_line_and_skips_amr() {
             confidence: 0.9,
             tags: vec!["dock".into()],
             body: "harbor lamp from amr\n".into(),
+            sensitivity: grokhub_core::amr::Sensitivity::Plain,
         })
         .unwrap();
     cabin.run_slash_line("/recall harbor");
@@ -10984,6 +10985,7 @@ fn recall_amr_returns_seeded_node_not_legacy_memory() {
             confidence: 0.8,
             tags: vec!["dock".into()],
             body: "pier light stays on\n".into(),
+            sensitivity: grokhub_core::amr::Sensitivity::Plain,
         })
         .unwrap();
     cabin.run_slash_line("/recall pier");
