@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+AMR M0: a local agent-memory schema under `amr/` in the config directory, plus a `/recall` read path. The default stays legacy SOUL/USER/MEMORY. Opt in with `"memory_backend": "amr"` in `app.json`. No Settings control, no migration, and `amr/` is not hub-synced. No version bump.
+
 Spike-0 harness: the cabin adds a stricter pre-check on top of Grok Build. GB still owns Ask / Auto / Always and computer use; the cabin never loosens it. What the pre-check does:
 
 - **Hard floor deny, no bypass:** credential paths, `rm -rf /`, fork bomb, `mkfs`, `dd` to a disk, and `curl|sh` as root.
