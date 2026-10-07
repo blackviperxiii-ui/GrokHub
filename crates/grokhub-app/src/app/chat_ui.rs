@@ -1330,6 +1330,7 @@ impl Cabin {
                             ChatBlockAct::None => {}
                         }
                         if self.chrome_here() {
+                            self.paint_harness_cards(ui);
                             self.paint_perm_ask(ui);
                             self.paint_elicit_ask(ui);
                         }
@@ -1718,6 +1719,7 @@ impl Cabin {
                                         detail: b.tool_detail.clone(),
                                         diff: String::new(),
                                         image_data_url: None,
+                                        raw_input: String::new(),
                                     }),
                                 })
                                 .collect();
@@ -1757,6 +1759,7 @@ impl Cabin {
                 paint_tool_card_body(ui, card);
                 ui.add_space(6.0);
             }
+            super::harness_ui::paint_click_marker(ui, &self.tool_cards);
         });
     }
     pub(super) fn paint_perm_ask(&mut self, ui: &mut egui::Ui) {
@@ -1773,7 +1776,7 @@ impl Cabin {
         let y = crate::motion::approval_y(enter_t, false);
         let avail = ui.available_rect_before_wrap();
         let slot = avail.translate(egui::vec2(0.0, y));
-        let waiting = 1 + self.perm_queue.len();
+        let waiting = 1 + self.perm_queue.len() + self.hard_waiting();
         let summary = crate::motion::needs_attention_summary(waiting);
         ui.scope_builder(egui::UiBuilder::new().max_rect(slot), |ui| {
             ui.set_min_width(avail.width());
@@ -2090,6 +2093,7 @@ impl Cabin {
                     ui.set_width(pane_w);
                     self.ui_composer_stack(ui);
                     if self.chrome_here() {
+                        self.paint_harness_cards(ui);
                         self.paint_perm_ask(ui);
                         self.paint_elicit_ask(ui);
                     }

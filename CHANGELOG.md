@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+Spike-0 harness: the cabin adds a stricter pre-check on top of Grok Build. GB still owns Ask / Auto / Always and computer use; the cabin never loosens it. What the pre-check does:
+
+- **Hard floor deny, no bypass:** credential paths, `rm -rf /`, fork bomb, `mkfs`, `dd` to a disk, and `curl|sh` as root.
+- **Hard-class park, even under Always:** money, send, delete, credentials, and irreversible OS actions show a white card. It offers Approve / Deny only (no Always), Enter does not approve, Esc denies, and it times out to Deny after 5 min. Halt denies every parked card.
+- **Access:** Settings → *Let Grok control the desktop* is Readonly / Supervised, and it gates desktop tools only. Full is one inline Grant full card in the Work tree. Always never grants it.
+
+Where the checks run:
+
+- The `grokhub-desktop` MCP dispatch, on Linux and Windows.
+- ACP permission asks.
+- Headless `grok -p` on Auto / Always, via appended `--deny` rules. A denied hard step parks a card, and Approve re-runs it once on ACP Ask.
+- The native Lab engine.
+
+Every step writes a cabin-local span to `spans/<chat>.jsonl` (`path`, `chat_id`, `turn`, `ui_changed`, redacted args). The `approval_gate_violation` check flags a hard action with no approve span. The last approved click shows as the agent cursor marker on the Work-tree frame, and the parked count joins the needs-attention line. The grok-build-gui spec now says selected Always is white, not amber. No version bump.
+
 Settings → Account picks up a Grok sign-in written by `grokhub --oauth` (or another process) while the cabin is already open, so About/doctor saying xAI auth present no longer leaves Account on Sign in with Grok with a blank identity. When OAuth is present, Account shows Connected with the Grok name and/or email and Sign out; the device-code path stays for a true sign-out. No version bump.
 
 Card deck polish: after × the new front card eases in briefly instead of jump-cutting; each open peek strip shows that card's own title; fly-in snaps under reduced motion and the mid-flight offset reads more clearly; the New here chip tip says "Suggested because you're new here". No version bump.

@@ -409,6 +409,7 @@ fn to_acp(ev: LoopEvent, kind: AuthKind, session: &str, used: u64, limit: u64) -
             detail,
             diff: String::new(),
             image_data_url: image,
+            raw_input: String::new(),
         }),
         LoopEvent::Usage(usage) => grok_usage_event(&usage, kind, used, limit),
         LoopEvent::Meter { .. } | LoopEvent::Compact { .. } => return None,

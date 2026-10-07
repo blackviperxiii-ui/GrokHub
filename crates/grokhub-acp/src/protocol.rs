@@ -150,6 +150,10 @@ pub struct ToolCard {
     pub detail: String,
     pub diff: String,
     pub image_data_url: Option<String>,
+    /// Tool name plus the raw-input keys the cabin pre-check reads (shell
+    /// `command`, MCP `name`, desktop `x` / `y`). Typed text and other args
+    /// stay out.
+    pub raw_input: String,
 }
 
 impl ToolCard {
@@ -510,6 +514,26 @@ pub fn parse_tool_card(update: &Value) -> ToolCard {
         detail,
         diff,
         image_data_url: images.pop(),
+        raw_input: raw_summary(update),
+    }
+}
+
+/// See [`ToolCard::raw_input`].
+pub fn raw_summary(update: &Value) -> String {
+    let raw = update.get("rawInput").unwrap_or(&Value::Null);
+    let mut m = serde_json::Map::new();
+    if let Some(n) = update.get("toolName").and_then(|v| v.as_str()) {
+        m.insert("tool".into(), Value::from(n));
+    }
+    for k in ["command", "name", "x", "y"] {
+        if let Some(v) = raw.get(k).filter(|v| v.is_string() || v.is_number()) {
+            m.insert(k.into(), v.clone());
+        }
+    }
+    if m.is_empty() {
+        String::new()
+    } else {
+        Value::Object(m).to_string()
     }
 }
 
@@ -545,6 +569,11 @@ pub fn merge_tool_card(old: ToolCard, new: ToolCard) -> ToolCard {
         detail,
         diff,
         image_data_url: new.image_data_url.or(old.image_data_url),
+        raw_input: if new.raw_input.is_empty() {
+            old.raw_input
+        } else {
+            new.raw_input
+        },
     }
 }
 

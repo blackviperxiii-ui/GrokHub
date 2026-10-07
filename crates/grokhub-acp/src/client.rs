@@ -1359,6 +1359,8 @@ pub struct GrokPAttach<'a> {
     pub deny: bool,
     /// Settings → Let Grok control the desktop.
     pub desktop: bool,
+    /// Path C: the cabin's hard floor / hard-class `--deny` rules.
+    pub hard_deny: &'a [&'a str],
 }
 
 /// Live `grok -p --output-format streaming-json`. Halt kills `pid`.
@@ -1517,6 +1519,7 @@ fn grok_p_child(
         learned,
         deny,
         desktop,
+        hard_deny,
     } = attach;
     let program = find_grok().ok_or_else(|| {
         "Grok Build CLI missing — install from x.ai/cli or set GROKHUB_GROK".to_string()
@@ -1546,6 +1549,10 @@ fn grok_p_child(
     args = crate::locate::with_fork_session(args, fork);
     args = crate::locate::with_worktree(args, worktree);
     args = crate::locate::with_ask_deny(args, deny);
+    args = crate::locate::with_hard_deny(args, hard_deny);
+    if !hard_deny.is_empty() {
+        args = crate::locate::with_hard_deny(args, crate::locate::CLI_CREDENTIAL_DENY);
+    }
     let perm = if always_approve {
         PermissionMode::AlwaysApprove
     } else if auto {
@@ -1613,6 +1620,7 @@ fn grok_p_once(
             learned: "",
             deny: false,
             desktop: false,
+            hard_deny: &[],
         },
         fork,
         false,

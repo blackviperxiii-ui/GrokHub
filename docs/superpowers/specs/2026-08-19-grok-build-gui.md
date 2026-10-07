@@ -20,11 +20,31 @@ Left-rail **Chat** is the new-chat control. There is no separate New chat button
 
 `send_chat` on Auto/Always runs `grok -p` whose cwd is the bound project, or `~/GrokHub-Work` when unbound — never the cabin process cwd. Ask calls `ensure_acp` and prompts over ACP; a dead agent denies the turn. Stream user and assistant text into bubbles that use the full chat pane. Thinking is faded thought process, not a bubble. A thought starts expanded. Collapse leaves one short row that opens again. That fold survives the live-to-stored handoff. The reply stays. A long user bubble wraps inside the row and keeps its leading gap. No live dot or Thinking label sits on the turn; the composer glow shows a running reply, and Stop's hover names the current action. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The changing status text above the composer is gone. The context usage bar stays. Quick chips under the composer are one fixed-height line (ellipsis at max label width, fluid count, overflow dropped) on an empty chat and mid-thread. Stop / Halt / tray Halt SIGTERMs the `grok -p` child (`session/cancel` on ACP). A dead stored session id retries without `--resume`. Disk-full / permission-denied handshake errors land in the chat with the cwd named. Grok.com-style “I don’t have access to your computer” thoughts are stripped from the pane.
 
-Composer pills: Chat / Plan / btw, Ask / Auto / Always-approve, and Effort (None / Low / Medium / High / Extra High → `grok -p --reasoning-effort`; a saved Max loads as Extra High, a saved Minimal as Low). Session Chat / Plan / btw stay quieter than Ask / Auto / Always. The btw pill keeps id `ask`. Idle Always matches Ask/Auto chrome. Selected Always is a 2px amber stroke only (dark `#E8A838`, light `#B86E00`) on the same elevated fill — no yellow wash or text. Chat passes `--model grok-4.7` unless `/model` pins another id. Hover a pill for what it does. Shared buttons (segment pills, catalog triggers, settings switches, sidebar chrome, Copy, Reply, slash-pick rows, and the settings close control) hover-scale to 1.035, rise 1px over 120ms, shrink on press, and scale plus fill on keyboard focus. Chips, permission segments, and the rail share one highlight that glides. The ease matches the chat deck. The same paint runs on Linux and Windows. Skills cards, Automations cards, and the Imagine wall keep hover inside the slot. Off-screen chat rows skip paint. Row height is cached by thread and pane width, and each row has a stable id so a skip does not move selection or hover. Tool cards, diffs, and computer-use frames sit in a collapsed Work tree. Permission prompts Allow / Deny / Always. The Ask card names the command, path, or site. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out.
+Composer pills: Chat / Plan / btw, Ask / Auto / Always-approve, and Effort (None / Low / Medium / High / Extra High → `grok -p --reasoning-effort`; a saved Max loads as Extra High, a saved Minimal as Low). Session Chat / Plan / btw stay quieter than Ask / Auto / Always. The btw pill keeps id `ask`. Idle Always matches Ask/Auto chrome. Selected Always is a 2px white ring on dark (`#E7E9EA`; near-black `#0A0A0A` on light) on the same elevated fill. The fill settles in over 140ms (`ALWAYS_SETTLE_SECS`, α 0→1, scale 0.98→1.0) and stops: no amber, no yellow wash, no perpetual pulse. Chat passes `--model grok-4.7` unless `/model` pins another id. Hover a pill for what it does. Shared buttons (segment pills, catalog triggers, settings switches, sidebar chrome, Copy, Reply, slash-pick rows, and the settings close control) hover-scale to 1.035, rise 1px over 120ms, shrink on press, and scale plus fill on keyboard focus. Chips, permission segments, and the rail share one highlight that glides. The ease matches the chat deck. The same paint runs on Linux and Windows. Skills cards, Automations cards, and the Imagine wall keep hover inside the slot. Off-screen chat rows skip paint. Row height is cached by thread and pane width, and each row has a stable id so a skip does not move selection or hover. Tool cards, diffs, and computer-use frames sit in a collapsed Work tree. Permission prompts Allow / Deny / Always. The Ask card names the command, path, or site. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out.
 
 ## Desktop
 
 Grok Build owns computer-use. There is no Desk / Take over menu. The cabin keeps tool cards and the last ACP frame in a collapsed Work tree. Halt cancels the ACP turn.
+
+**Addendum (2026-10-06, Spike-0 harness).** This is a layer on top, not an ownership change. Grok Build still owns its permission prompts (Ask / Auto / Always) and computer use. In front of GB tool execution, the cabin adds one stricter pre-check, and it can only tighten: no looser flags than the pill, no GB allow rules, no `~/.grok` edits. The pre-check:
+
+- **Hard floor deny, no UI bypass:** `host_safety` paths, `rm -rf /`, fork bomb, `mkfs`, `dd` to a disk, and `curl|sh` as root.
+- **Hard-class park, even under Always:** money, send, delete, credentials, and irreversible OS actions wait on a card.
+- **Access is the desktop switch, and it covers desktop tools only:**
+  - Readonly: Settings → *Let Grok control the desktop* is off.
+  - Supervised: the switch is on.
+  - Full: one inline *Grant full* card in the Work tree. Always never grants it.
+
+The hard card is white on dark and offers Approve / Deny only: no Always button, Enter does not approve, Esc denies, and it times out to Deny after 5 min. Parked cards count in the needs-attention line.
+
+The pre-check runs on four paths:
+
+- **A:** the shipped `grokhub-desktop` MCP dispatch. This is the desktop tool path on Linux and Windows.
+- **B:** ACP `session/request_permission`.
+- **C:** headless `grok -p` on Auto / Always. The cabin appends `--deny` rules. When one stops a hard-class call, a card parks, and Approve re-runs that one step on ACP Ask under Grok's own Allow.
+- **E:** the native Lab engine.
+
+Every step writes a cabin-local span to `spans/<chat>.jsonl` with `path`, `chat_id`, `turn`, `ui_changed`, and redacted args. The last approved click shows as the agent cursor marker on the Work-tree frame. GB `PreToolUse` hooks are not the lock, because they fail open.
 
 ## History and extensions
 
