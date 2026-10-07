@@ -204,6 +204,8 @@ impl Cabin {
             }
             _ => {
                 self.proactive_span(&meta.topic, "approve", "clicked");
+                // The turn it starts carries origin proactive (Spike-4c).
+                self.harness.next_origin = Some(hx::Origin::Proactive);
                 self.pulse_run_line(id);
             }
         }
@@ -305,6 +307,12 @@ mod tests {
         assert_eq!(card.title, "I can tidy the board");
         assert_eq!(card.pulse.proactive.as_ref().map(|p| (p.route, p.help)), Some((ProactiveRoute::ICan, 405)));
         assert!(!cabin.running && cabin.messages.is_empty() && cabin.harness.park.is_none(), "a card, never an action");
+        // Your click is what runs it: soft, so no hard card, and the turn is
+        // tagged origin proactive.
+        let out = cabin.proactive_click(&card.id).unwrap();
+        assert_eq!(out, hx::GateOutcome::Allow);
+        assert!(cabin.harness.park.is_none());
+        assert_eq!(cabin.harness.next_origin, Some(hx::Origin::Proactive));
     }
 
     const NATO: [&str; 20] = [

@@ -146,7 +146,7 @@ pub fn dispatch(ctx: &ToolCtx<'_>, name: &str, arguments: &str) -> ToolOutput {
         "connection_add" => connections::add(&args),
         "connection_disable" => connections::disable(&args),
         "connection_delete" => connections::delete(&args),
-        "web_fetch" => web_fetch::run_with_ports(&args),
+        "web_fetch" => web_fetch::run_with_ports(&args, ctx.stop),
         "image_generate" | "image_edit" | "video_generate" | "video_edit" | "video_extend" => {
             media::run_with_ports(name, &args, ctx.stop)
         }

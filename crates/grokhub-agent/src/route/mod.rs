@@ -1,141 +1,141 @@
-//! Router-ready model calls (Spike-6a). Every model call a new step adds goes
-//! through [`call_model`] with its own (provider, model, effort), so effort and
-//! model routing can later be chosen per step in one place. This is the thin
-//! wrapper only: no effort UI and no `reasoning_effort` reads here.
-//!
-//! Each call writes one line to `{config_dir}/spans/model.jsonl` with tokens in,
-//! cached, out, reasoning and cost (provider ticks, 1e-6 USD). Never the prompt
-//! or the reply.
+//! Router-ready (Spike-4c): one helper every cabin model call goes through.
+//! A call names its (provider, model, effort) per step, so effort or model
+//! routing can later change in one place. Each call writes one span to
+//! `spans/model-calls.jsonl` with who started it and what it used (tokens in,
+//! cached, out, reasoning, and cost). No prompt, no reply.
 
-use std::io::Write;
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-/// One step's routing: who answers and how hard it thinks.
-#[derive(Debug, Clone, PartialEq, Eq)]
+use crate::harness::{append_span, current_origin, AccessMode, ModelUsage, Origin, Span};
+
+/// Span session for model calls.
+pub const MODEL_TRACE: &str = "model-calls";
+/// Span tool name for model calls.
+pub const MODEL_TOOL: &str = "model.call";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Provider {
+    Xai,
+}
+
+impl Provider {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Xai => "xai",
+        }
+    }
+}
+
+/// One model call: where it goes and how hard it thinks.
+#[derive(Debug, Clone, Copy)]
 pub struct ModelCall<'a> {
-    /// What the call is for (`proactive.draft`), for the span line.
-    pub step: &'a str,
-    pub provider: &'a str,
+    pub provider: Provider,
     pub model: &'a str,
     pub effort: Option<&'a str>,
+    pub origin: Origin,
 }
 
-/// What the provider reported for one call. Unknown fields stay 0.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ModelUsage {
-    pub tokens_in: u64,
-    pub cached: u64,
-    pub tokens_out: u64,
-    pub reasoning: u64,
-    /// Provider cost ticks (1e-6 USD).
-    pub cost_ticks: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModelReply {
-    pub text: String,
-    pub usage: ModelUsage,
-}
-
-/// The `spans/model.jsonl` line. Additive and serde-default.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ModelSpan {
-    #[serde(default)]
-    pub ts_ms: u64,
-    #[serde(default)]
-    pub step: String,
-    #[serde(default)]
-    pub provider: String,
-    #[serde(default)]
-    pub model: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub effort: Option<String>,
-    #[serde(default)]
-    pub ok: bool,
-    #[serde(default, flatten)]
-    pub usage: ModelUsage,
-}
-
-pub const MODEL_SPAN_FILE: &str = "model.jsonl";
-
-/// Run one model call through `send` and log its usage. `config_dir` `None`
-/// skips the log (tests, scratch).
-pub fn call_model(
-    config_dir: Option<&Path>,
-    call: &ModelCall<'_>,
-    prompt: &str,
-    send: impl FnOnce(&ModelCall<'_>, &str) -> Result<ModelReply, String>,
-) -> Result<String, String> {
-    let out = send(call, prompt);
-    if let Some(dir) = config_dir {
-        let span = ModelSpan {
-            ts_ms: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0),
-            step: call.step.to_string(),
-            provider: call.provider.to_string(),
-            model: call.model.to_string(),
-            effort: call.effort.map(str::to_string),
-            ok: out.is_ok(),
-            usage: out.as_ref().map(|r| r.usage).unwrap_or_default(),
-        };
-        let _ = append_model_span(dir, &span);
+impl<'a> ModelCall<'a> {
+    /// The origin is this thread's [`OriginScope`](crate::harness::OriginScope).
+    pub fn new(provider: Provider, model: &'a str, effort: Option<&'a str>) -> Self {
+        Self { provider, model, effort, origin: current_origin() }
     }
-    out.map(|r| r.text)
 }
 
-pub fn append_model_span(config_dir: &Path, span: &ModelSpan) -> Result<(), String> {
-    let dir = config_dir.join("spans");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let line = serde_json::to_string(span).map_err(|e| e.to_string())?;
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join(MODEL_SPAN_FILE))
-        .map_err(|e| e.to_string())?;
-    writeln!(f, "{line}").map_err(|e| e.to_string())
+/// Run `send` for `call` and write its span. `send` returns the result plus
+/// the provider's usage report; a failed call is logged with no usage.
+pub fn call_model<T>(
+    config_dir: &Path,
+    call: &ModelCall<'_>,
+    send: impl FnOnce(&ModelCall<'_>) -> Result<(T, ModelUsage), String>,
+) -> Result<T, String> {
+    let out = send(call);
+    let args = serde_json::json!({
+        "provider": call.provider.as_str(),
+        "model": call.model,
+        "effort": call.effort.unwrap_or(""),
+    })
+    .to_string();
+    let (result, usage) = match &out {
+        Ok((_, usage)) => ("ok", Some(*usage)),
+        Err(_) => ("error", None),
+    };
+    let mut span = Span::soft_allow(MODEL_TRACE, MODEL_TOOL, &args, result, "", AccessMode::Supervised, call.provider.as_str())
+        .from_origin(call.origin)
+        .on_path("model");
+    span.access = String::new();
+    span.usage = usage;
+    let _ = append_span(config_dir, &span);
+    out.map(|(value, _)| value)
+}
+
+/// The usage block of an xAI reply, Responses or Chat Completions shape.
+pub fn xai_usage(reply: &Value) -> ModelUsage {
+    let u = &reply["usage"];
+    let n = |v: &Value| v.as_u64().unwrap_or(0);
+    ModelUsage {
+        input_tokens: n(&u["input_tokens"]).max(n(&u["prompt_tokens"])),
+        cached_tokens: n(&u["input_tokens_details"]["cached_tokens"]).max(n(&u["prompt_tokens_details"]["cached_tokens"])),
+        output_tokens: n(&u["output_tokens"]).max(n(&u["completion_tokens"])),
+        reasoning_tokens: n(&u["output_tokens_details"]["reasoning_tokens"])
+            .max(n(&u["completion_tokens_details"]["reasoning_tokens"])),
+        cost_in_usd_ticks: u["cost_in_usd_ticks"].as_i64().unwrap_or(0),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::harness::{read_spans, OriginScope};
 
     #[test]
-    fn a_call_routes_by_step_and_logs_usage_without_content() {
-        let root = std::env::temp_dir().join(format!("grokhub-route-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let call = ModelCall { step: "proactive.draft", provider: "xai", model: "grok-4.7", effort: Some("low") };
-        let mut seen = None;
-        let text = call_model(Some(&root), &call, "secret prompt words", |c, p| {
-            seen = Some((c.model.to_string(), c.effort.map(str::to_string), p.to_string()));
-            Ok(ModelReply {
-                text: "Hi Sam".into(),
-                usage: ModelUsage { tokens_in: 120, cached: 80, tokens_out: 12, reasoning: 30, cost_ticks: 450 },
+    fn a_model_call_writes_one_span_with_origin_tokens_and_cost_but_no_text() {
+        let dir = crate::harness::test_dir("route-span");
+        let reply = serde_json::json!({
+            "output": [{"content": [{"text": "secret reply sk-abcdefghijklmnopqrstuv"}]}],
+            "usage": {
+                "input_tokens": 1200,
+                "input_tokens_details": {"cached_tokens": 800},
+                "output_tokens": 90,
+                "output_tokens_details": {"reasoning_tokens": 40},
+                "cost_in_usd_ticks": 31_000_000
+            }
+        });
+        let got = {
+            let _o = OriginScope::enter(Origin::Proactive);
+            let call = ModelCall::new(Provider::Xai, "grok-4-fast", Some("low"));
+            call_model(&dir, &call, |c| {
+                assert_eq!((c.model, c.effort), ("grok-4-fast", Some("low")));
+                Ok(("the reply", xai_usage(&reply)))
             })
-        })
-        .unwrap();
-        assert_eq!(text, "Hi Sam");
-        assert_eq!(seen, Some(("grok-4.7".into(), Some("low".into()), "secret prompt words".into())));
-        let log = std::fs::read_to_string(root.join("spans").join(MODEL_SPAN_FILE)).unwrap();
-        assert!(!log.contains("secret prompt") && !log.contains("Hi Sam"), "{log}");
-        let span: ModelSpan = serde_json::from_str(log.lines().next().unwrap()).unwrap();
+        };
+        assert_eq!(got, Ok("the reply"));
+        let failed = call_model(&dir, &ModelCall::new(Provider::Xai, "grok-4", None), |_| Err::<((), ModelUsage), _>("HTTP 500".into()));
+        assert_eq!(failed, Err("HTTP 500".to_string()));
+        let spans = read_spans(&dir, MODEL_TRACE).unwrap();
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].origin, Origin::Proactive);
+        assert_eq!(spans[0].args_redacted, r#"{"effort":"low","model":"grok-4-fast","provider":"xai"}"#);
         assert_eq!(
-            (span.step.as_str(), span.provider.as_str(), span.model.as_str(), span.effort.as_deref(), span.ok),
-            ("proactive.draft", "xai", "grok-4.7", Some("low"), true)
+            spans[0].usage,
+            Some(ModelUsage {
+                input_tokens: 1200,
+                cached_tokens: 800,
+                output_tokens: 90,
+                reasoning_tokens: 40,
+                cost_in_usd_ticks: 31_000_000
+            })
         );
+        assert_eq!((spans[1].origin, spans[1].result.as_str(), spans[1].usage), (Origin::User, "error", None));
+        let raw = std::fs::read_to_string(crate::harness::span_path(&dir, MODEL_TRACE)).unwrap();
+        assert!(!raw.contains("secret reply") && !raw.contains("sk-abc"), "{raw}");
+        let chat = serde_json::json!({"usage": {"prompt_tokens": 10, "prompt_tokens_details": {"cached_tokens": 4}, "completion_tokens": 3, "completion_tokens_details": {"reasoning_tokens": 1}}});
         assert_eq!(
-            span.usage,
-            ModelUsage { tokens_in: 120, cached: 80, tokens_out: 12, reasoning: 30, cost_ticks: 450 }
+            xai_usage(&chat),
+            ModelUsage { input_tokens: 10, cached_tokens: 4, output_tokens: 3, reasoning_tokens: 1, cost_in_usd_ticks: 0 }
         );
-        let err = call_model(Some(&root), &call, "p", |_, _| Err("offline".into()));
-        assert_eq!(err, Err("offline".to_string()));
-        let log = std::fs::read_to_string(root.join("spans").join(MODEL_SPAN_FILE)).unwrap();
-        let last: ModelSpan = serde_json::from_str(log.lines().last().unwrap()).unwrap();
-        assert!(!last.ok);
-        assert_eq!(last.usage, ModelUsage::default());
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

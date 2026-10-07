@@ -49,6 +49,8 @@ mod changes;
 mod consent;
 mod detect;
 mod egress;
+#[cfg(test)]
+mod egress_coverage;
 mod hard;
 mod ladder;
 mod mindcheck;
@@ -89,9 +91,9 @@ pub use consent::{
     ConsentLedger, Grant, Scope, UserClick, CONSENT_FILE, SCOPE_HARD_EXCLUDES, SCOPE_KINDS,
 };
 pub use egress::{
-    append_egress, egress_dest, egress_path, guard_egress, is_local_dest, is_model_host,
-    read_egress, read_egress_report, record_approved_once, DataClass, EgressBasis, EgressLine,
-    EgressRead, EgressReq, EGRESS_FILE,
+    append_egress, current_origin, egress_dest, egress_path, guard_egress, guard_or_park, guard_quiet,
+    is_local_dest, is_model_host, model_text_classes, read_egress, read_egress_report, record_approved_once,
+    DataClass, EgressBasis, EgressLine, EgressRead, EgressReq, OriginScope, RecallScope, EGRESS_FILE,
     HUB_DEST, HUB_SYNC_DATA,
 };
 pub use audit::{audit_file, audit_spans, pass1, pass2, summarize, Audit, SpanDigest, Window, WindowAudit, WindowSummary};
@@ -118,7 +120,7 @@ pub use park::{
 };
 pub use span::{
     append_span, read_spans, read_spans_tail, read_turn_context, redact_args, span_path, turn_context_path,
-    write_turn_context, Origin, Span, TurnContext, CLAIM_CAP, REPLY_TOOL, SPAN_TAIL_BYTES, VERIFY_TOOL,
+    write_turn_context, ModelUsage, Origin, Span, TurnContext, CLAIM_CAP, REPLY_TOOL, SPAN_TAIL_BYTES, VERIFY_TOOL,
 };
 pub use span_search::{search_spans, SpanHit, SpanSearch, SPAN_SEARCH_FILES, SPAN_SEARCH_HITS, SPAN_SEARCH_LINES};
 pub use trail::{link_learned, trail_body, trail_draft, write_trail, TrailWrite, TRAIL_BODY_CAP};
@@ -135,4 +137,21 @@ pub(crate) fn test_dir(label: &str) -> std::path::PathBuf {
     std::fs::create_dir_all(&p).expect("harness test dir");
     use_key_store_for(&p, std::sync::Arc::new(MemoryKeyStore::new()));
     p
+}
+
+/// Test stand-in for the cabin's click: answer the first park that shows up
+/// under `dir` (Approve or Deny) and hand back what the card would show.
+#[cfg(test)]
+pub(crate) fn answer_next_park(dir: std::path::PathBuf, approve: bool) -> std::thread::JoinHandle<Option<ParkRequest>> {
+    std::thread::spawn(move || {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < until {
+            if let Some(req) = pending_parks(&dir).into_iter().next() {
+                answer_park(&dir, &req.id, approve).expect("answer park");
+                return Some(req);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        None
+    })
 }

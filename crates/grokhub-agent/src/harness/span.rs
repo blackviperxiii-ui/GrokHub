@@ -44,6 +44,24 @@ pub struct Span {
     /// The consent grant that allowed this step (`g-…`, or `approved-once`). Empty when none applied.
     #[serde(default)]
     pub consent_ref: String,
+    /// Tokens and cost of a model call (Spike-4c router). Absent on every other step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<ModelUsage>,
+}
+
+/// What one model call used, as the provider reported it. Counts only.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelUsage {
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub cached_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub reasoning_tokens: u64,
+    #[serde(default)]
+    pub cost_in_usd_ticks: i64,
 }
 
 /// Who started a step. Every origin goes through `harness::decide`; none skips it.
@@ -98,6 +116,7 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            usage: None,
         }
     }
 
@@ -120,6 +139,7 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            usage: None,
         }
     }
 
@@ -142,6 +162,7 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            usage: None,
         }
     }
 
@@ -164,6 +185,7 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            usage: None,
         }
     }
 
@@ -274,6 +296,9 @@ pub struct TurnContext {
     pub chat_id: String,
     pub turn: u32,
     pub access: String,
+    /// Who started the turn (Spike-4c). Old files read as `user`.
+    #[serde(default)]
+    pub origin: Origin,
 }
 
 pub fn turn_context_path(config_dir: &Path) -> PathBuf {
@@ -463,9 +488,13 @@ mod tests {
             chat_id: "chat-9".into(),
             turn: 4,
             access: "full".into(),
+            origin: Origin::Proactive,
         };
         write_turn_context(&dir, &ctx).unwrap();
         assert_eq!(read_turn_context(&dir), ctx);
+        // A turn file from before Spike-4c has no origin: it reads as the user's.
+        fs::write(turn_context_path(&dir), r#"{"chat_id":"chat-1","turn":2,"access":"supervised"}"#).unwrap();
+        assert_eq!(read_turn_context(&dir).origin, Origin::User);
     }
 
     #[test]

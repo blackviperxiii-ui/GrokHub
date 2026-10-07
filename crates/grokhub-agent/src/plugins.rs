@@ -372,6 +372,8 @@ pub fn set_marketplace_url(url: &str) -> Result<(), String> {
 
 pub fn fetch_marketplace(url: &str) -> Result<Vec<MarketEntry>, String> {
     let url = https_index_url(url)?;
+    // EgressGuard (Spike-4c): a plain GET of the index, no user data.
+    crate::harness::guard_quiet(&crate::perm::config_dir(), &crate::harness::EgressReq::new(url, &[]))?;
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(20))
         .redirects(0)
