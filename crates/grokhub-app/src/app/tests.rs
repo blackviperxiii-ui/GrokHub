@@ -6184,6 +6184,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                     detail: "ran ls -la and printed a long listing that must stay hidden".into(),
                     diff: String::new(),
                     image_data_url: None,
+                    raw_input: String::new(),
                 };
                 let body_h = ui
                     .scope(|ui| {
@@ -15251,6 +15252,7 @@ fn quiet_cabin() -> Cabin {
         secret_hold: Vec::new(),
         session_mode: grokhub_acp::SessionMode::Chat,
         permission_mode: grokhub_acp::PermissionMode::Ask,
+        harness: Default::default(),
         scheduled_perm: false,
         grok_sessions: Vec::new(),
         grok_sessions_loaded: false,
@@ -17657,6 +17659,7 @@ fn a_finished_turn_keeps_each_reply_and_tool_run_apart() {
         detail: String::new(),
         diff: String::new(),
         image_data_url: None,
+        raw_input: String::new(),
     };
 
     // Thought summaries and post-tool messages arrive with no leading space.
@@ -18654,6 +18657,7 @@ fn drop_leaving_thread_chrome_clears_edit_state() {
         detail: String::new(),
         diff: String::new(),
         image_data_url: None,
+        raw_input: String::new(),
     });
     cabin.live_blocks.push(grokhub_core::LiveBlock {
         kind: grokhub_core::LiveKind::Say,
@@ -20940,6 +20944,7 @@ fn ingest_tool_card_skips_live_when_stream_elsewhere() {
         detail: String::new(),
         diff: String::new(),
         image_data_url: None,
+        raw_input: String::new(),
     };
     cabin.ingest_tool_card(&card);
     assert!(cabin.live_blocks.is_empty());
@@ -23452,7 +23457,8 @@ fn bg_ask_spawn_passes_deny_args() {
     );
     assert!(!sent.contains("--always-approve"), "{sent}");
 
-    // Auto denies no tools; only the desktop server stays denied while its switch is off.
+    // Auto denies no coding tools; the desktop server stays denied while its switch is off,
+    // and the Spike-0 hard floor / hard class rules ride on every unattended run (path C).
     cabin.permission_mode = PermissionMode::Auto;
     cabin.cfg.desktop_control = false;
     let started = cabin.start_bg_task("run the checks", &id, grokhub_core::BgOrigin::User);
@@ -23460,11 +23466,14 @@ fn bg_ask_spawn_passes_deny_args() {
     assert!(poll_until(&mut cabin, 5, |c| c.bg.runs.is_empty()), "auto run ends");
     let sent = last_grok_argv(&argv);
     let desktop_deny = format!("--deny\n{}", grokhub_core::DESKTOP_MCP_RULE);
-    assert_eq!(sent.matches("--deny").count(), 1, "{sent}");
+    let hard = grokhub_agent::harness::HEADLESS_DENY_RULES.len() + grokhub_acp::CLI_CREDENTIAL_DENY.len();
+    assert_eq!(sent.matches("--deny").count(), 1 + hard, "{sent}");
     assert!(sent.contains(&desktop_deny), "{sent}");
-    assert!(!sent.contains("--deny\nBash"), "{sent}");
-    assert!(!sent.contains("--deny\nEdit"), "{sent}");
-    assert!(!sent.contains("--deny\nWrite"), "{sent}");
+    assert!(sent.contains("--deny\nBash(rm -rf /)\n"), "{sent}");
+    assert!(sent.contains("--deny\nRead(**/.grok/auth.json)\n"), "{sent}");
+    assert!(!sent.contains("--deny\nBash\n"), "{sent}");
+    assert!(!sent.contains("--deny\nEdit\n"), "{sent}");
+    assert!(!sent.contains("--deny\nWrite\n"), "{sent}");
     assert!(!sent.contains("dontAsk"), "{sent}");
 
     cabin.cfg.desktop_control = true;
@@ -23472,7 +23481,8 @@ fn bg_ask_spawn_passes_deny_args() {
     assert!(started.is_ok(), "{started:?}");
     assert!(poll_until(&mut cabin, 5, |c| c.bg.runs.is_empty()), "auto desktop run ends");
     let sent = last_grok_argv(&argv);
-    assert!(!sent.contains("--deny"), "{sent}");
+    assert_eq!(sent.matches("--deny").count(), hard, "{sent}");
+    assert!(!sent.contains(&desktop_deny), "{sent}");
     assert!(
         sent.contains(&format!("--allow\n{}", grokhub_core::DESKTOP_MCP_RULE)),
         "{sent}"
@@ -23761,6 +23771,7 @@ fn idle_send_hover_ignores_leftover_tool_cards_and_asks() {
         detail: String::new(),
         diff: String::new(),
         image_data_url: None,
+        raw_input: String::new(),
     });
     assert!(!cabin.thinking_here());
     assert_eq!(cabin.run_action_here(), "Read file");
