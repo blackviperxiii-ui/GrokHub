@@ -21,6 +21,9 @@ pub struct ServerDef {
     pub startup_timeout: Duration,
     pub tool_timeout: Duration,
     pub headers: BTreeMap<String, String>,
+    /// A token sealed in the cabin (`tokenRef`), added as a bearer header
+    /// when the server connects. The entry never holds the value.
+    pub token_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -199,6 +202,9 @@ fn server_to_json(def: &ServerDef) -> Option<Value> {
             }
         }
     }
+    if let Some(name) = &def.token_ref {
+        spec.insert("tokenRef".into(), json!(name));
+    }
     if !def.enabled {
         spec.insert("enabled".into(), json!(false));
     }
@@ -270,12 +276,19 @@ fn parse_server(spec: &Value) -> Option<ServerDef> {
                 .map(PathBuf::from),
         }
     };
+    let token_ref = kept
+        .get("tokenRef")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     Some(ServerDef {
         transport,
         enabled,
         startup_timeout,
         tool_timeout,
         headers,
+        token_ref,
     })
 }
 
@@ -296,6 +309,7 @@ fn keep_server_fields(spec: &Map<String, Value>) -> Map<String, Value> {
         "toolTimeoutSec",
         "bearerToken",
         "bearer_token",
+        "tokenRef",
     ];
     let mut out = Map::new();
     for key in KEYS {

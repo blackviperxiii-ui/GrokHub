@@ -70,6 +70,9 @@ pub enum UpdateKind {
     AutomateOffer,
     Idea,
     Digest,
+    /// GrokHub added, changed, or removed a skill, connection, or automation
+    /// on its own (Spike-5b). Undo lives on its Work-tree row.
+    SelfChange,
 }
 
 impl UpdateKind {
@@ -81,13 +84,18 @@ impl UpdateKind {
             Self::AutomateOffer => "Automate",
             Self::Idea => "Idea",
             Self::Digest => "Digest",
+            Self::SelfChange => "Changed",
         }
     }
 
     pub fn event(self) -> bool {
         matches!(
             self,
-            Self::AutomationDone | Self::ScheduleCreated | Self::Suggestion | Self::AutomateOffer
+            Self::AutomationDone
+                | Self::ScheduleCreated
+                | Self::Suggestion
+                | Self::AutomateOffer
+                | Self::SelfChange
         )
     }
 }
@@ -2252,6 +2260,7 @@ pub fn feed_group_key(card: &UpdateCard) -> Option<String> {
             UpdateKind::ScheduleCreated => "sched",
             UpdateKind::AutomateOffer => "offer",
             UpdateKind::Suggestion => "sugg",
+            UpdateKind::SelfChange => "chg",
             UpdateKind::Idea | UpdateKind::Digest => return None,
         };
         return Some(format!("{prefix}:{source}"));
@@ -2261,6 +2270,7 @@ pub fn feed_group_key(card: &UpdateCard) -> Option<String> {
         UpdateKind::ScheduleCreated => "schedule_created",
         UpdateKind::AutomateOffer => "automate_offer",
         UpdateKind::Suggestion => "suggestion",
+        UpdateKind::SelfChange => "self_change",
         UpdateKind::Idea | UpdateKind::Digest => return None,
     };
     Some(format!("{kind}:{}", title_hash(&card.title)))
@@ -2278,6 +2288,7 @@ fn stable_event_id(card: &UpdateCard) -> String {
         UpdateKind::ScheduleCreated => "sched",
         UpdateKind::Suggestion => "sugg",
         UpdateKind::AutomateOffer => "offer",
+        UpdateKind::SelfChange => "chg",
         UpdateKind::Idea | UpdateKind::Digest => return card.id.clone(),
     };
     feed_card_id(prefix, &card.source_id, &card.title, card.created_at, true)
@@ -2524,6 +2535,31 @@ pub fn automation_failed_card(source_id: &str, name: &str, why: &str, created_at
 }
 
 /// User saved a clock job or an interval loop.
+/// Home update for a change GrokHub made on its own (Spike-5b): "GrokHub
+/// added connection notes". `kind` is `skill`, `connection`, or
+/// `automation`; `verb` is `added`, `changed`, or `removed`. Undo is on the
+/// Work-tree row and in `/<kind>s changes`, never on the card.
+pub fn self_change_card(kind: &str, name: &str, verb: &str, reason: &str, created_at: u64) -> UpdateCard {
+    let name = clip_line(name, TITLE_CHARS);
+    let title = clip_line(&format!("GrokHub {verb} {kind} {name}"), TITLE_CHARS);
+    let why = clip_line(reason, TITLE_CHARS);
+    let undo = format!("Undo it from its Work-tree row or /{kind}s changes.");
+    let body = if why.is_empty() { undo } else { format!("{why} · {undo}") };
+    let source = format!("{kind}:{name}");
+    let mut card = blank_card(
+        feed_card_id("chg", &source, &title, created_at, false),
+        UpdateKind::SelfChange,
+        title,
+        Some(body),
+        created_at,
+    );
+    if kind == "automation" {
+        card.action = Some(UpdateAction::OpenAutomations);
+    }
+    card.source_id = source;
+    card
+}
+
 pub fn schedule_created_card(
     source_id: &str,
     title: &str,
