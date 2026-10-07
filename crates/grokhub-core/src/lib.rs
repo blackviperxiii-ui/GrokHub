@@ -30,6 +30,7 @@ pub mod greeting;
 pub mod grok_loop;
 pub mod hands;
 pub mod heartbeat;
+pub mod heartbeat_throttle;
 pub mod history;
 pub mod host_cite;
 pub mod host_plan;
@@ -248,6 +249,9 @@ pub use hands::{
 pub use heartbeat::{
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, next_heartbeat_wait_ms, HeartbeatAct,
     HEARTBEAT_MS,
+};
+pub use heartbeat_throttle::{
+    ActOutcome, HeartbeatPace, HeartbeatThrottle, PaceGate, PaceHold, ProactiveAct, PACE_NORMAL,
 };
 pub use history::{
     dedupe_hits, palette_file_shown, palette_forget_stale_walk, palette_row_action,
