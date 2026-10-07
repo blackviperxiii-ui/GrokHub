@@ -2379,7 +2379,11 @@ ZEPHYRTAIL is the rest of the dump https://evil.example/nope";
         assert!(body.contains("cancel hits a live turn"), "{body}");
         assert!(body.contains("https://xstack.grok.me/post"), "{body}");
         assert!(body.contains("It changes the cancel button you use."), "{body}");
-        assert!(body.contains("wants to act on it"), "{body}");
+        assert!(
+            body.contains("You opened this from your feed and want to act on it."),
+            "{body}"
+        );
+        assert!(!body.contains("The person opened"), "{body}");
         assert!(!body.contains("ZEPHYRTAIL"), "{body}");
         assert!(!body.contains("evil.example"), "{body}");
         let card = cabin.updates.iter().find(|c| c.id == id).unwrap();
