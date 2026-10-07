@@ -189,6 +189,7 @@ impl Cabin {
         let mut connect = false;
         let mut disconnect = false;
         let mut help = false;
+        self.pull_account_oauth_from_disk();
         let authed = self.has_key();
         let chrome = self.avatar_chrome();
         let photo = self.photo_for_path(&chrome.picture_path);
@@ -302,7 +303,8 @@ impl Cabin {
         } else {
             "Installs Grok Build CLI alpha (GROK_CHANNEL=alpha / https://x.ai/cli/alpha) when grok is missing or broken."
         };
-        let oauth_on = self.secrets.oauth.is_some();
+        self.pull_account_oauth_from_disk();
+        let account_auth = account_connect_chrome(self.secrets.oauth.as_ref());
         let picture_set = !self.cfg.profile_picture.trim().is_empty();
         let picture_hint = if picture_set {
             "Saved in cabin config."
@@ -456,23 +458,13 @@ impl Cabin {
                                                             {
                                                                 clear_picture = true;
                                                             }
-                                                            let auth_title = if oauth_on {
-                                                                "Connected"
-                                                            } else {
-                                                                "Connect Grok"
-                                                            };
-                                                            let auth_hint = if oauth_on {
-                                                                "Signed in with Grok."
-                                                            } else {
-                                                                "Device-code OAuth. Also signs in the Grok Build CLI if it is not already connected."
-                                                            };
                                                             if crate::cards::settings_action(
                                                                 ui,
-                                                                auth_title,
-                                                                auth_hint,
-                                                                if oauth_on { "Sign out" } else { "Sign in with Grok" },
+                                                                account_auth.title,
+                                                                &account_auth.hint,
+                                                                account_auth.action,
                                                             ) {
-                                                                if oauth_on {
+                                                                if account_auth.connected {
                                                                     disconnect = true;
                                                                 } else {
                                                                     connect = true;
