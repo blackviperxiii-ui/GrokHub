@@ -51,6 +51,7 @@ fn kind_name(kind: UpdateKind) -> &'static str {
         UpdateKind::AutomateOffer => "automate_offer",
         UpdateKind::Idea => "idea",
         UpdateKind::Digest => "digest",
+        UpdateKind::SelfChange => "self_change",
     }
 }
 

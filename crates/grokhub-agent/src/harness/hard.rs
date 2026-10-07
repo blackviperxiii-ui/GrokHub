@@ -966,6 +966,13 @@ pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
     {
         return Some(HardClass::Credentials);
     }
+    // Spike-5b: a connection that needs a token (the user types it in).
+    if leaf == "connection_add"
+        && serde_json::from_str::<serde_json::Value>(arguments)
+            .is_ok_and(|v| v.get("needs_token").and_then(|b| b.as_bool()) == Some(true))
+    {
+        return Some(HardClass::Credentials);
+    }
     name_class(&lower)
 }
 
