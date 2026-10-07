@@ -42,6 +42,14 @@ pub(super) fn hide_pending_grok_sessions(
         .collect()
 }
 
+/// Skills must not sit on Loading… while catalog commands run.
+/// A healthy load finishes under this. Past it the page settles (last catalog
+/// kept) and Refresh can start again.
+pub(super) const GROK_CATALOG_SETTLE: Duration = Duration::from_secs(18);
+
+/// Status once [`GROK_CATALOG_SETTLE`] passes with no catalog reply.
+pub(super) const GROK_CATALOG_TIMEOUT: &str = "Could not load Grok Build catalog (timed out)";
+
 impl Cabin {
 
     pub(super) fn poll_acp_spawn(&mut self) {
@@ -1469,11 +1477,13 @@ impl Cabin {
         let Some(bin) = grokhub_acp::find_grok() else {
             self.status = build_agent::grok_banner();
             self.grok_catalog_loaded = true;
+            self.grok_catalog_started = None;
             return;
         };
         let cwd = self.grok_cwd();
         let (tx, rx) = mpsc::channel();
         self.grok_catalog_rx = Some(rx);
+        self.grok_catalog_started = Some(Instant::now());
         self.status = "Loading Grok Build catalog…".into();
         std::thread::spawn(move || {
             let _ = tx.send(grokhub_acp::load_grok_catalog(&bin, &cwd));
@@ -1488,6 +1498,7 @@ impl Cabin {
             Ok(Ok(cat)) => {
                 self.grok_catalog = cat;
                 self.grok_catalog_loaded = true;
+                self.grok_catalog_started = None;
                 self.status = format!(
                     "{} skills · {} MCP · {} hooks · {} plugins · {} workflows",
                     self.grok_catalog.skills.len(),
@@ -1499,13 +1510,22 @@ impl Cabin {
             }
             Ok(Err(e)) => {
                 self.grok_catalog_loaded = true;
+                self.grok_catalog_started = None;
                 self.status = e;
             }
             Err(mpsc::TryRecvError::Empty) => {
-                self.grok_catalog_rx = Some(rx);
+                let started = *self.grok_catalog_started.get_or_insert_with(Instant::now);
+                if started.elapsed() >= GROK_CATALOG_SETTLE {
+                    self.grok_catalog_loaded = true;
+                    self.grok_catalog_started = None;
+                    self.status = GROK_CATALOG_TIMEOUT.into();
+                } else {
+                    self.grok_catalog_rx = Some(rx);
+                }
             }
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.grok_catalog_loaded = true;
+                self.grok_catalog_started = None;
             }
         }
     }
