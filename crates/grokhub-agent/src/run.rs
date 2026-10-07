@@ -186,6 +186,8 @@ pub fn run_loop(
         }
     }
     history.push(user_message(user_text, image));
+    // Spike-4c: a tool call that carries a recalled line is personal egress.
+    let _recall = crate::harness::RecallScope::enter(crate::memory::recall_lines(history));
     input.permits.drain();
     let mut usage = input.usage_base.clone();
     let base_readonly = input.gate.readonly_session;

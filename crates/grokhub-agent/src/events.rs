@@ -40,6 +40,8 @@ pub struct NativeEngine {
     reopen_tasks: bool,
     /// Imagine and web_fetch bearer. Empty means those tools do not dial.
     imagine_bearer: String,
+    /// Who started the next prompt (Spike-4c): egress lines carry it.
+    origin: crate::harness::Origin,
 }
 
 pub struct EngineParts {
@@ -82,6 +84,7 @@ impl NativeEngine {
             context_length,
             reopen_tasks: true,
             imagine_bearer: String::new(),
+            origin: crate::harness::current_origin(),
         }
     }
 
@@ -100,6 +103,11 @@ impl NativeEngine {
 
     pub fn steer(&self) -> SteerQueue {
         self.steer.clone()
+    }
+
+    /// Who starts the next prompt: the user, a heartbeat act, or a scheduled job.
+    pub fn set_origin(&mut self, origin: crate::harness::Origin) {
+        self.origin = origin;
     }
 
     /// Credential for `web_fetch` and Imagine. Empty refuses those tools without a dial.
@@ -204,6 +212,7 @@ impl Engine for NativeEngine {
         let before_len = self.history.len();
         let before_usage = self.usage.clone();
         let _network = crate::tools::install_network(&self.imagine_bearer, &self.conversation_id);
+        let _origin = crate::harness::OriginScope::enter(self.origin);
         let mut meter_used = crate::compact::estimate_input_tokens(&self.history);
         let mut meter_limit = self.context_length;
         let out = run_loop(&input, &mut self.history, text, image, &mut |ev| match ev {

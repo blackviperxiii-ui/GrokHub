@@ -517,7 +517,7 @@ mod tests {
 
     fn turn(dir: &Path, access: &str) {
         let _ = std::fs::create_dir_all(dir);
-        hx::write_turn_context(dir, &hx::TurnContext { chat_id: "chat-1".into(), turn: 3, access: access.into() }).unwrap();
+        hx::write_turn_context(dir, &hx::TurnContext { chat_id: "chat-1".into(), turn: 3, access: access.into(), origin: Default::default() }).unwrap();
     }
 
     fn spans(dir: &Path) -> Vec<hx::Span> {

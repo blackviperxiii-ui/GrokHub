@@ -8,15 +8,16 @@
 //! - Admitted: `hx::run_auto_act` asks `harness::decide` and runs the step
 //!   through the native dispatch (path E, origin proactive). The ledger line
 //!   it wrote is the card's Undo.
-//! - Missed: the candidate and the `CeilingMiss` wait in `asked` for the
-//!   ask-card path (Spike-6a's "I can …" cards), with an `ask` span.
+//! - Missed: an `ask` span names the `CeilingMiss`, and the step becomes a
+//!   Spike-6a card under its card budget: "Should I …?" when MindCheck is
+//!   why, "I can …" otherwise. Quiet hours queue it; busy drops it.
 //! - Hard class: prepare, don't do. The prepared step parks a hard card,
 //!   whatever Access, the pill or the hour; an unattended park times out to
 //!   a Deny span.
 //!
-//! Spike-6a's `ProactiveEngine` and `ProactiveBudget` are not in this base
-//! yet: `ProactiveState::queue` is where its candidates come in, and
-//! `AutoBudget` is the auto slice of its budget.
+//! `AutoState::queue` is where auto-act candidates come in. The 6a engine's
+//! sources carry no tool arguments yet, so nothing fills it in the running
+//! app; `AutoBudget` (5 a day) sits beside 6a's card budget.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -24,15 +25,14 @@ use std::sync::Arc;
 use super::*;
 use grokhub_agent::harness::{self as hx, ChangeKind};
 use grokhub_agent::{AccessMode, HardClass};
+use grokhub_core::proactive as pro;
 use grokhub_core::UpdateKind;
 use grokhub_core::{AccessTier, AutoAct, AutoBudget, AutoCandidate, CeilingCtx, CeilingMiss, DoneForYou, PillMode};
 
 #[derive(Debug, Default)]
-pub(super) struct ProactiveState {
+pub(super) struct AutoState {
     /// Candidates waiting for the next tick, oldest first.
     pub queue: VecDeque<AutoCandidate>,
-    /// Candidates the ceiling sent to an ask card, with the term that missed.
-    pub asked: Vec<(AutoCandidate, CeilingMiss)>,
     /// Auto-acts spent today.
     pub budget: AutoBudget,
     /// Ledger lines auto-acts wrote. Their Done-for-you card stands in for
@@ -78,7 +78,7 @@ impl Cabin {
             quiet,
             busy,
             halted,
-            budget_left: self.proactive.budget.left(&Self::local_day(), quiet, busy),
+            budget_left: self.auto_act.budget.left(&Self::local_day(), quiet, busy),
         }
     }
 
@@ -86,13 +86,14 @@ impl Cabin {
     /// it to an ask card, and an admitted one runs through the harness.
     pub(super) fn tick_auto_act(&mut self) {
         self.expire_hard_park();
-        let Some(mut c) = self.proactive.queue.pop_front() else {
+        let Some(mut c) = self.auto_act.queue.pop_front() else {
             return;
         };
         let dir = config::config_dir();
         // The harness decides the class and the key, not the candidate's source.
         c.hard = hx::step_class(&c.tool, &c.arguments);
         c.key = hx::proactive_key(&c.tool, &c.arguments);
+        let by_hand = c.reversibility > 0.0;
         if hx::ledger_target(&c.tool, &c.arguments).is_none() {
             c.reversibility = 0.0;
         }
@@ -105,12 +106,12 @@ impl Cabin {
         let ctx = self.ceiling_ctx(&c, &mind);
         let act = match AutoAct::admit(c.clone(), &ctx) {
             Ok(act) => act,
-            Err(miss) => return self.send_to_ask(c, miss, access),
+            Err(miss) => return self.send_to_ask(c, miss, access, by_hand),
         };
         match hx::run_auto_act(&dir, &self.native_workspace(), &act, &mind, access) {
             hx::AutoRun::Done { kind, change } => {
-                self.proactive.budget.spend(&Self::local_day());
-                self.proactive.auto_lines.push((kind, change.seq));
+                self.auto_act.budget.spend(&Self::local_day());
+                self.auto_act.auto_lines.push((kind, change.seq));
                 let done = DoneForYou {
                     kind: kind.as_str().into(),
                     target: change.id.clone(),
@@ -121,16 +122,44 @@ impl Cabin {
                 self.post_feed_card(grokhub_core::done_for_you_card(&c.summary, &c.why, done, now_ms()));
             }
             // The gate disagreed with the ceiling: it asks.
-            hx::AutoRun::Asked(_) => self.proactive.asked.push((c, CeilingMiss::MindCheck)),
-            hx::AutoRun::NoUndo => self.proactive.asked.push((c, CeilingMiss::Reversibility)),
+            hx::AutoRun::Asked(_) => self.offer_card(&c, CeilingMiss::MindCheck, by_hand),
+            hx::AutoRun::NoUndo => self.offer_card(&c, CeilingMiss::Reversibility, by_hand),
             hx::AutoRun::Failed(why) => self.status = format!("GrokHub tried {} on its own and stopped: {why}", c.tool),
         }
     }
 
-    fn send_to_ask(&mut self, c: AutoCandidate, miss: CeilingMiss, access: AccessMode) {
+    fn send_to_ask(&mut self, c: AutoCandidate, miss: CeilingMiss, access: AccessMode, by_hand: bool) {
         let span = hx::proactive_span(&c.tool, &c.arguments, hx::DECISION_ASK, miss.as_str(), access);
         hx::note_proactive(&config::config_dir(), &span);
-        self.proactive.asked.push((c, miss));
+        self.offer_card(&c, miss, by_hand);
+    }
+
+    /// A step the ceiling did not admit becomes a Spike-6a card under its
+    /// card budget: "Should I …?" when MindCheck is why, "I can …" otherwise.
+    /// A click on it meets `harness::decide` like any proactive card.
+    fn offer_card(&mut self, c: &AutoCandidate, miss: CeilingMiss, by_hand: bool) {
+        let now = now_ms();
+        let mut cand = pro::Candidate::soft(pro::CandidateSource::SystemState, &c.offer, &c.offer, c.value, c.confidence, &c.why);
+        cand.scope = c.scope.clone();
+        cand.tool = c.tool.clone();
+        cand.reversible = match (c.reversibility >= 1.0, by_hand) {
+            (true, _) => pro::Reversibility::Ledger,
+            (false, true) => pro::Reversibility::ByHand,
+            (false, false) => pro::Reversibility::Irreversible,
+        };
+        let route = match miss {
+            CeilingMiss::PMind | CeilingMiss::MindCheck | CeilingMiss::NoHistory => pro::ProactiveRoute::Ask,
+            _ => pro::ProactiveRoute::ICan,
+        };
+        let (quiet, busy) = (self.quiet_now(), self.heartbeat_busy());
+        let out = self.proactive.surface(vec![cand], now, quiet, busy);
+        for cand in &out {
+            grokhub_core::post_update(&mut self.updates, pro::proactive_card(cand, route, now));
+        }
+        if !out.is_empty() {
+            self.persist_updates();
+        }
+        self.save_proactive();
     }
 
     /// Hard class: prepare, don't do. The prepared step waits on a hard card
@@ -155,7 +184,7 @@ impl Cabin {
     /// Ledger lines an auto-act wrote: this run's, plus those Done-for-you
     /// cards point at (after a restart).
     pub(super) fn auto_lines(&self) -> Vec<(ChangeKind, u64)> {
-        let mut out = self.proactive.auto_lines.clone();
+        let mut out = self.auto_act.auto_lines.clone();
         out.extend(
             self.updates
                 .iter()
@@ -283,6 +312,7 @@ mod tests {
             confidence: 0.9,
             reversibility: 1.0,
             summary: format!("Turned off the {name} connection"),
+            offer: format!("turn off the {name} connection"),
             why: "It failed every start this week.".into(),
         }
     }
@@ -299,6 +329,7 @@ mod tests {
             confidence: 0.95,
             reversibility: 1.0,
             summary: "Reply to Sam: Thanks Sam, Thursday at 3 works.".into(),
+            offer: "reply to Sam".into(),
             why: "Sam asked if Thursday works.".into(),
         }
     }
@@ -309,6 +340,20 @@ mod tests {
 
     fn proactive_spans(root: &std::path::Path) -> Vec<hx::Span> {
         hx::read_spans(root, hx::PROACTIVE_TRACE).unwrap_or_default()
+    }
+
+    /// Spike-6a cards a missed step became: (tool, route).
+    fn offer_cards(cabin: &Cabin) -> Vec<(String, pro::ProactiveRoute)> {
+        cabin
+            .updates
+            .iter()
+            .filter_map(|c| c.pulse.proactive.as_ref())
+            .map(|m| (m.tool.clone(), m.route))
+            .collect()
+    }
+
+    fn last_ask(root: &std::path::Path) -> String {
+        proactive_spans(root).into_iter().rfind(|s| s.decision == "ask").map(|s| s.claim).unwrap_or_default()
     }
 
     fn done_cards(cabin: &Cabin) -> Vec<grokhub_core::UpdateCard> {
@@ -324,10 +369,10 @@ mod tests {
         let mut r = rig("dfy-soft", &["notes", "calendar"]);
         approve_history(&r.root, 1);
         let before = mcp_bytes();
-        r.cabin.proactive.queue.push_back(turn_off("notes"));
+        r.cabin.auto_act.queue.push_back(turn_off("notes"));
         r.cabin.tick_auto_act();
 
-        assert!(r.cabin.proactive.asked.is_empty(), "{:?}", r.cabin.proactive.asked);
+        assert!(offer_cards(&r.cabin).is_empty());
         let after = String::from_utf8(mcp_bytes()).unwrap();
         assert!(after.contains("\"enabled\": false"), "{after}");
         let ledger = hx::ChangeLedger::load_kind(&r.root, ChangeKind::Connection);
@@ -409,7 +454,7 @@ mod tests {
                 "budget",
                 |r| {
                     for _ in 0..grokhub_core::AUTO_PER_DAY {
-                        r.cabin.proactive.budget.spend(&Cabin::local_day());
+                        r.cabin.auto_act.budget.spend(&Cabin::local_day());
                     }
                     turn_off_with(r)
                 },
@@ -442,15 +487,23 @@ mod tests {
             let mut r = rig(&format!("dfy-miss-{}", label.replace(' ', "-")), &["notes"]);
             let before = mcp_bytes();
             let c = setup(&mut r);
-            r.cabin.proactive.queue.push_back(c);
+            let tool = c.tool.clone();
+            r.cabin.auto_act.queue.push_back(c);
             r.cabin.tick_auto_act();
-            assert_eq!(r.cabin.proactive.asked.last().map(|a| a.1), Some(miss), "{label}");
+            assert_eq!(last_ask(&r.root), miss.as_str(), "{label}");
             assert!(done_cards(&r.cabin).is_empty(), "{label}");
             assert_eq!(mcp_bytes(), before, "{label}: nothing ran");
-            let spans = proactive_spans(&r.root);
-            assert!(spans.iter().all(|s| s.decision != "auto"), "{label}");
-            let ask = spans.iter().rfind(|s| s.decision == "ask").expect("ask span");
-            assert_eq!(ask.claim, miss.as_str(), "{label}");
+            assert!(proactive_spans(&r.root).iter().all(|s| s.decision != "auto"), "{label}");
+            let route = match miss {
+                CeilingMiss::PMind | CeilingMiss::NoHistory => pro::ProactiveRoute::Ask,
+                _ => pro::ProactiveRoute::ICan,
+            };
+            if miss == CeilingMiss::QuietHours {
+                assert!(offer_cards(&r.cabin).is_empty(), "quiet hours hold the card");
+                assert_eq!(r.cabin.proactive.queue.len(), 1, "it waits in 6a's quiet queue");
+            } else {
+                assert_eq!(offer_cards(&r.cabin), vec![(tool, route)], "{label}");
+            }
         }
     }
 
@@ -467,14 +520,14 @@ mod tests {
         let mut r = rig("dfy-sixth", &names);
         approve_history(&r.root, 1);
         for name in names {
-            r.cabin.proactive.queue.push_back(turn_off(name));
+            r.cabin.auto_act.queue.push_back(turn_off(name));
             r.cabin.tick_auto_act();
         }
         assert_eq!(done_cards(&r.cabin).len(), 5);
-        assert_eq!(
-            r.cabin.proactive.asked.iter().map(|a| (a.0.summary.as_str(), a.1)).collect::<Vec<_>>(),
-            vec![("Turned off the n6 connection", CeilingMiss::Budget)]
-        );
+        assert_eq!(last_ask(&r.root), "budget");
+        assert_eq!(offer_cards(&r.cabin), vec![("connection_disable".to_string(), pro::ProactiveRoute::ICan)]);
+        let offer = r.cabin.updates.iter().find(|c| c.pulse.proactive.is_some()).expect("offer card");
+        assert_eq!(grokhub_core::pulse::i_can_title(offer), "I can turn off the n6 connection");
         let text = String::from_utf8(mcp_bytes()).unwrap();
         let v: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(v["mcpServers"]["n6"], serde_json::json!({ "command": "n6-mcp" }), "the sixth never ran");
@@ -487,7 +540,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let mut r = rig("dfy-never", &["notes", "calendar"]);
         approve_history(&r.root, 1);
-        r.cabin.proactive.queue.push_back(turn_off("notes"));
+        r.cabin.auto_act.queue.push_back(turn_off("notes"));
         r.cabin.tick_auto_act();
         let id = done_cards(&r.cabin)[0].id.clone();
         r.cabin.done_for_you_never(&id);
@@ -499,9 +552,10 @@ mod tests {
 
         let before = mcp_bytes();
         approve_history(&r.root, 40);
-        r.cabin.proactive.queue.push_back(turn_off("calendar"));
+        r.cabin.auto_act.queue.push_back(turn_off("calendar"));
         r.cabin.tick_auto_act();
-        assert_eq!(r.cabin.proactive.asked.last().map(|a| a.1), Some(CeilingMiss::PMind));
+        assert_eq!(last_ask(&r.root), "p_mind");
+        assert_eq!(offer_cards(&r.cabin), vec![("connection_disable".to_string(), pro::ProactiveRoute::Ask)]);
         assert_eq!(done_cards(&r.cabin).len(), 1);
         assert_eq!(mcp_bytes(), before);
     }
@@ -514,7 +568,7 @@ mod tests {
         let mut r = rig("dfy-sam", &["notes"]);
         r.cabin.permission_mode = PermissionMode::AlwaysApprove;
         approve_history(&r.root, 100);
-        r.cabin.proactive.queue.push_back(reply_to_sam());
+        r.cabin.auto_act.queue.push_back(reply_to_sam());
         r.cabin.tick_auto_act();
 
         let park = r.cabin.harness.park.clone().expect("hard card");
@@ -522,9 +576,9 @@ mod tests {
         assert_eq!(park.tool, "mail_send");
         assert_eq!(park.action, "Reply to Sam: Thanks Sam, Thursday at 3 works.");
         assert_eq!(park.path, "E");
-        assert!(matches!(park.source, harness_ui::ParkSource::Proactive(_)));
+        assert!(matches!(park.source, harness_ui::ParkSource::AutoPrepared(_)));
         assert!(done_cards(&r.cabin).is_empty());
-        assert!(r.cabin.proactive.asked.is_empty());
+        assert!(offer_cards(&r.cabin).is_empty());
         let spans = proactive_spans(&r.root);
         let parked = spans.iter().rfind(|s| s.decision == "park").expect("park span");
         assert_eq!(parked.approval_class, "send");
@@ -540,7 +594,7 @@ mod tests {
         let _g = crate::config::hold_test_config();
         let mut r = rig("dfy-ttl", &["notes"]);
         approve_history(&r.root, 1);
-        r.cabin.proactive.queue.push_back(reply_to_sam());
+        r.cabin.auto_act.queue.push_back(reply_to_sam());
         r.cabin.tick_anticipate();
         assert!(r.cabin.harness.park.is_some());
         if let Some(p) = r.cabin.harness.park.as_mut() {

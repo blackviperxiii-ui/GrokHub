@@ -14,6 +14,7 @@ mod memory;
 mod models;
 pub mod perm;
 pub mod plugins;
+pub mod route;
 mod prompt;
 mod research;
 mod retry;

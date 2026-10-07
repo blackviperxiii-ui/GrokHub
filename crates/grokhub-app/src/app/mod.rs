@@ -190,6 +190,7 @@ mod voice;
 mod threads_nav;
 mod background;
 mod heartbeat_gate;
+mod proactive_ui;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -551,6 +552,9 @@ pub struct Cabin {
     /// Card whose notes are open for editing, and the text being typed.
     board_notes_edit: Option<(String, String)>,
     last_anticipate_ms: u64,
+    /// Spike-6a card budget (mutes, dismissal streak, quiet-hours queue).
+    proactive: grokhub_core::proactive::ProactiveBudget,
+    last_proactive_ms: u64,
     goal_step: u32,
     followup_step: u32,
     stream_buf: String,
@@ -793,7 +797,7 @@ pub struct Cabin {
     harness: harness_ui::HarnessState,
     /// Spike-6b: candidates waiting for the ceiling, today's auto budget,
     /// and the ledger lines auto-acts wrote.
-    proactive: proactive_auto::ProactiveState,
+    auto_act: proactive_auto::AutoState,
     /// Night / loop / `/send` tasks inherit the composer PermissionMode pill.
     scheduled_perm: bool,
     grok_sessions: Vec<grokhub_acp::GrokSession>,
@@ -1175,6 +1179,8 @@ impl Cabin {
             card_notes_follow: None,
             board_notes_edit: None,
             last_anticipate_ms: 0,
+            proactive: proactive_ui::load_budget(),
+            last_proactive_ms: 0,
             goal_step,
             followup_step: 0,
             stream_buf: String::new(),
@@ -1376,7 +1382,7 @@ impl Cabin {
                 full_card_on: harness_ui::grant_full_card_on(),
                 ..Default::default()
             },
-            proactive: Default::default(),
+            auto_act: Default::default(),
             scheduled_perm: false,
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
@@ -1617,6 +1623,8 @@ impl Cabin {
             card_notes_follow: None,
             board_notes_edit: None,
             last_anticipate_ms: 0,
+            proactive: proactive_ui::load_budget(),
+            last_proactive_ms: 0,
             goal_step: 0,
             followup_step: 0,
             stream_buf: String::new(),
@@ -1815,7 +1823,7 @@ impl Cabin {
             session_mode: SessionMode::Chat,
             permission_mode: PermissionMode::Ask,
             harness: Default::default(),
-            proactive: Default::default(),
+            auto_act: Default::default(),
             scheduled_perm: false,
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
@@ -3478,6 +3486,11 @@ impl Cabin {
         self.tick_auto_act();
         let clock = Self::local_clock();
         let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
+        // Spike-6a cards: busy is should_anticipate's seat check plus a card
+        // waiting on you; quiet hours only queue.
+        let busy = !should_anticipate(self.running, self.review_busy, self.composer.trim().is_empty(), false)
+            || self.heartbeat_busy();
+        self.tick_proactive(now_ms(), quiet, busy);
         if !should_anticipate(
             self.running,
             self.review_busy,
@@ -3512,6 +3525,7 @@ impl Cabin {
         bump_usage(&mut self.usage, "automation");
         self.daily_auto_used = self.usage.automation;
         self.daily_auto_day = self.usage.day.clone();
+        self.harness.next_origin = Some(grokhub_agent::harness::Origin::Proactive);
         self.send_scheduled_chat(prompt);
     }
 

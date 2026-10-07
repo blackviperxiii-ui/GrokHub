@@ -61,6 +61,9 @@ pub struct AutoCandidate {
     pub reversibility: f64,
     /// What the card says was done ("Turned off the notes connection").
     pub summary: String,
+    /// The same step offered, read after "I can …" ("turn off the notes
+    /// connection"), for the card it becomes when the ceiling misses.
+    pub offer: String,
     /// Why GrokHub thought it would help, one line.
     pub why: String,
 }
@@ -247,6 +250,7 @@ mod tests {
             confidence: 0.9,
             reversibility: 1.0,
             summary: "Turned off the notes connection".into(),
+            offer: "turn off the notes connection".into(),
             why: "It failed every start this week.".into(),
         }
     }

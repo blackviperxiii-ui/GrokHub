@@ -676,6 +676,7 @@ impl Cabin {
         let thread_id = thread.id.clone();
         let task = self.scheduled_task_text(&a.instructions);
         self.start_bg_task(&task, &thread_id, BgOrigin::Scheduled)?;
+        self.automation_span(&thread_id, &a.id);
         // Named for the job, not the skill steps riding in front of it.
         let title = grokhub_core::bg_task_title(&a.instructions);
         if let Some(run) = self.bg.runs.last_mut() {
@@ -814,6 +815,7 @@ impl Cabin {
             *slot = mark_loop_ran(slot.clone(), now);
         }
         self.persist_loops();
+        self.automation_span(super::background::LOOP_TRACE, &row.id);
         if self.cfg.native_engine {
             self.spawn_native_loop(row);
             return;
@@ -1031,6 +1033,7 @@ impl Cabin {
         self.review_rx = Some(rx);
         self.review_busy = true;
         std::thread::spawn(move || {
+            let _origin = grokhub_agent::harness::OriginScope::enter(grokhub_agent::harness::Origin::Proactive);
             if config::read_memory(&mem_name) != mem_body {
                 let _ = config::write_memory(&mem_name, &mem_body);
             }

@@ -16625,6 +16625,8 @@ fn quiet_cabin() -> Cabin {
         card_notes_follow: None,
         board_notes_edit: None,
         last_anticipate_ms: 0,
+        proactive: Default::default(),
+        last_proactive_ms: 0,
         goal_step: 0,
         followup_step: 0,
         stream_buf: String::new(),
@@ -16823,7 +16825,7 @@ fn quiet_cabin() -> Cabin {
         session_mode: grokhub_acp::SessionMode::Chat,
         permission_mode: grokhub_acp::PermissionMode::Ask,
         harness: Default::default(),
-        proactive: Default::default(),
+        auto_act: Default::default(),
         scheduled_perm: false,
         grok_sessions: Vec::new(),
         grok_sessions_loaded: false,
@@ -27687,6 +27689,7 @@ fn spike3a_adds_no_nav_page() {
     assert!(matches!(cabin.nav, Nav::Chat), "a step hit opens the chat, not a page of its own");
     std::env::remove_var("GROKHUB_CONFIG");
 }
+
 /// Spike-5b: an automation the model wrote (an Ideas Add, an Automate offer)
 /// is saved through the ChangeLedger. It shows as a Work-tree row and a Home
 /// update, and the row's Undo click removes it from the file and the

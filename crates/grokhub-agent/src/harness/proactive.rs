@@ -178,6 +178,7 @@ mod tests {
             confidence: 0.9,
             reversibility: 1.0,
             summary: "Turned off the notes connection".into(),
+            offer: "turn off the notes connection".into(),
             why: String::new(),
         }
     }

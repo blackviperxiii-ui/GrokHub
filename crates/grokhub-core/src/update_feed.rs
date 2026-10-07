@@ -2445,7 +2445,7 @@ fn title_hash(title: &str) -> String {
     format!("{:016x}", fnv1a64(normalize_title(title).as_bytes()))
 }
 
-fn blank_card(
+pub(crate) fn blank_card(
     id: String,
     kind: UpdateKind,
     title: String,
