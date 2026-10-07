@@ -46,7 +46,7 @@ pub use dream::{
 pub use import::{durable_chip_prefs, import_legacy, write_import_report, ImportReport, ImportTally};
 pub use schema::{Edge, EdgeRel, Node, NodeDraft, NodeHit, NodeId, NodeType, Sensitivity, AMR_SCHEMA};
 pub use store::{AmrStore, ForgetReport, RecallReport};
-pub use write::{line_id, node_type_for, remember_line, sensitivity_for, LineWrite, Remembered};
+pub use write::{line_id, node_type_for, remember_line, sensitivity_for, trail_id, LineWrite, Remembered};
 
 /// Seals and opens personal and sensitive nodes. `aad` binds a node to its id.
 /// Errors are plain sentences for the user and never carry key material.
