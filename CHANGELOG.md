@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Memory repo M1–M2 (only with `"memory_backend": "amr"` in `app.json`): reflect, chat insights, `/memory note` and `/remember`, Memory Save and native `/remember` now write one node each in `amr/` instead of a MEMORY.md line; `/recall`, History and the native first-turn pack read `amr/` and the old files together; `/forget <topic>` leaves a tombstone; and the first AMR use imports learned insights and chip preferences once, with a report in `amr/dreams/`. Legacy is unchanged. No UI changes.
+
 Removed the scrapped phone/Android pairing: the phone-only hub routes (`/v1/task`, `/v1/task/:id`, `/v1/inbox`, `/v1/results`, `/v1/frame.jpg`, `/v1/voice/client-secret`), the `grokhub-ffi` C ABI crate, and phone wording on Devices, slash help, and the Always sheet. Computer-to-computer pairing, `/sync`, `/inhabit`, `/send`, and desktop voice are unchanged, and an old `hub-state.json` with phone rows still loads. No version bump.
 
 Self-management ledger (Spike-5b). Connections and automations GrokHub adds, changes, or removes on its own now keep the version they replace, show a Work-tree row ("Grok added connection notes") with Undo and Keep, and appear in the next Home update; `/connections changes` and `/automations changes` list them. Agent-made connections land in the cabin's own MCP config (never `~/.grok`), deletes and token-needing connections are hard cards, a token is typed by you and sealed with your keychain key, and GrokHub adds at most 2 automations a week on its own until you keep one.
