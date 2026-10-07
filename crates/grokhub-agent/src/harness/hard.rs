@@ -127,12 +127,148 @@ pub fn desk_classify(tool: &str, args: &serde_json::Value) -> HardHit {
                 "ctrl+alt+delete" | "ctrl+alt+del" | "ctrl+alt+backspace" | "ctrl+alt+end"
             ) {
                 HardHit::Class(HardClass::IrreversibleOs)
+            } else if is_delete_key(&keys) && file_manager_window(args) {
+                HardHit::Class(HardClass::Delete)
             } else {
                 HardHit::None
             }
         }
-        _ => HardHit::None,
+        // An app name is checked like a shell head (`shutdown` is not an app to open).
+        "open_app" => {
+            let app = args.get("app").and_then(|v| v.as_str()).unwrap_or("");
+            classify("run_terminal_command", &serde_json::json!({ "command": app }).to_string())
+        }
+        "focus_window" => HardHit::None,
+        // `delete_files` and any later named tool: the same name words as MCP tools.
+        other => match name_class(&other.to_ascii_lowercase()) {
+            Some(class) => HardHit::Class(class),
+            None => HardHit::None,
+        },
     }
+}
+
+/// Delete and Shift+Delete. On a file manager they delete the selection.
+fn is_delete_key(keys: &str) -> bool {
+    matches!(keys, "delete" | "del" | "shift+delete" | "shift+del")
+}
+
+/// Window class or title words of a file manager. The path A gate adds the
+/// focused window as `window` before it asks `decide`.
+const FILE_MANAGER_WINDOWS: &[&str] =
+    &["cabinetwclass", "explorer.exe", "dolphin", "nautilus", "nemo", "thunar", "pcmanfm", "caja", "konqueror"];
+
+fn file_manager_window(args: &serde_json::Value) -> bool {
+    let window = args.get("window").and_then(|v| v.as_str()).unwrap_or("").to_ascii_lowercase();
+    FILE_MANAGER_WINDOWS.iter().any(|w| window.contains(w))
+}
+
+/// What a card, park file, and span say about a `delete_files` call: the
+/// verb, the count, and every path, so Approve names exactly what goes.
+pub fn delete_files_action(args: &serde_json::Value) -> String {
+    let paths: Vec<&str> = args
+        .get("paths")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|p| p.as_str()).collect())
+        .unwrap_or_default();
+    let verb = if args.get("to_trash").and_then(|v| v.as_bool()) == Some(true) {
+        "move to the trash"
+    } else {
+        "delete"
+    };
+    let noun = if paths.len() == 1 { "path" } else { "paths" };
+    format!("{verb} {} {noun}: {}", paths.len(), paths.join(", "))
+}
+
+/// The paths a shell delete names, in order: the words after a delete head
+/// (or `gio trash`) that are not flags. Quotes are dropped. Empty when the
+/// command deletes nothing it names (a glob is kept as written).
+pub fn delete_targets(cmd: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for seg in cmd.split([';', '|', '&']).map(str::trim).filter(|s| !s.is_empty()) {
+        let words = shell_words(seg);
+        let Some(at) = head_at(&words) else {
+            continue;
+        };
+        let head = leaf(&words[at]).to_ascii_lowercase();
+        let rest = if head == "gio" && matches!(words.get(at + 1).map(|w| w.to_ascii_lowercase()).as_deref(), Some("trash" | "remove")) {
+            &words[at + 2..]
+        } else if DELETE_HEADS.contains(&head.as_str()) {
+            &words[at + 1..]
+        } else {
+            continue;
+        };
+        let cmd_style = matches!(head.as_str(), "del" | "erase" | "rd");
+        for w in rest {
+            let lw = w.to_ascii_lowercase();
+            let flag = w.starts_with('-') || (cmd_style && lw.len() == 2 && lw.starts_with('/'));
+            if !flag && !w.is_empty() && lw != "-path" && lw != "-literalpath" {
+                out.push(w.clone());
+            }
+        }
+    }
+    out
+}
+
+/// Words of one shell segment. Single and double quotes group; backslashes
+/// stay as written (Windows paths).
+fn shell_words(seg: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    for c in seg.chars() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), c) => cur.push(c),
+            (None, '"' | '\'') => quote = Some(c),
+            (None, c) if c.is_whitespace() => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            (None, c) => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out.into_iter().map(|w| unquote(&w)).collect()
+}
+
+fn unquote(w: &str) -> String {
+    w.trim_matches(|c| matches!(c, '"' | '\'' | '(' | ')' | '{' | '}')).to_string()
+}
+
+fn leaf(w: &str) -> &str {
+    let w = w.rsplit(['/', '\\']).next().unwrap_or(w);
+    w.strip_suffix(".exe").unwrap_or(w)
+}
+
+/// Index of the real command head in a segment's words, past `sudo` / `doas`,
+/// `xargs` and its flags, `cmd /c`, `powershell -c` (and `pwsh`, `bash -c`, `sh -c`).
+fn head_at(words: &[String]) -> Option<usize> {
+    let mut i = 0;
+    while i < words.len() {
+        let w = leaf(&words[i]).to_ascii_lowercase();
+        match w.as_str() {
+            "sudo" | "doas" | "nohup" | "command" | "exec" => i += 1,
+            "xargs" | "powershell" | "pwsh" => {
+                i += 1;
+                while words.get(i).is_some_and(|n| n.starts_with('-')) {
+                    i += 1;
+                }
+            }
+            "cmd" => {
+                i += 1;
+                while words.get(i).is_some_and(|n| n.starts_with('/')) {
+                    i += 1;
+                }
+            }
+            "bash" | "sh" | "zsh" if words.get(i + 1).is_some_and(|n| n == "-c") => i += 2,
+            "" => i += 1,
+            _ => return Some(i),
+        }
+    }
+    None
 }
 
 /// Whole words that mark a credential field in an AX role or label, a field
@@ -321,6 +457,55 @@ pub const HEADLESS_DENY_RULES: &[&str] = &[
     "MCPTool(*trash*)",
     "MCPTool(*remove_file*)",
     "MCPTool(*purge*)",
+    // Hard class: delete on Windows, the trash, and the Recycle Bin (Spike-1b)
+    "Bash(del *)",
+    "Bash(sudo del *)",
+    "Bash(*; del *)",
+    "Bash(*&& del *)",
+    "Bash(*| del *)",
+    "Bash(erase *)",
+    "Bash(sudo erase *)",
+    "Bash(*; erase *)",
+    "Bash(*&& erase *)",
+    "Bash(*| erase *)",
+    "Bash(rd *)",
+    "Bash(sudo rd *)",
+    "Bash(*; rd *)",
+    "Bash(*&& rd *)",
+    "Bash(*| rd *)",
+    "Bash(remove-item *)",
+    "Bash(sudo remove-item *)",
+    "Bash(*; remove-item *)",
+    "Bash(*&& remove-item *)",
+    "Bash(*| remove-item *)",
+    "Bash(Remove-Item *)",
+    "Bash(sudo Remove-Item *)",
+    "Bash(*; Remove-Item *)",
+    "Bash(*&& Remove-Item *)",
+    "Bash(*| Remove-Item *)",
+    "Bash(remove-itemsafely *)",
+    "Bash(sudo remove-itemsafely *)",
+    "Bash(*; remove-itemsafely *)",
+    "Bash(*&& remove-itemsafely *)",
+    "Bash(*| remove-itemsafely *)",
+    "Bash(Remove-ItemSafely *)",
+    "Bash(sudo Remove-ItemSafely *)",
+    "Bash(*; Remove-ItemSafely *)",
+    "Bash(*&& Remove-ItemSafely *)",
+    "Bash(*| Remove-ItemSafely *)",
+    "Bash(recycle *)",
+    "Bash(sudo recycle *)",
+    "Bash(*; recycle *)",
+    "Bash(*&& recycle *)",
+    "Bash(*| recycle *)",
+    "Bash(*gio trash *)",
+    "Bash(*gio remove *)",
+    "Bash(*trash:/*)",
+    "Bash(*SendToRecycleBin*)",
+    "Bash(*sendtorecyclebin*)",
+    "Bash(*find * -delete*)",
+    "Bash(*-exec rm *)",
+    "Bash(*-execdir rm *)",
     // Hard class: irreversible OS
     "Bash(shutdown*)",
     "Bash(sudo shutdown*)",
@@ -432,8 +617,13 @@ pub const GB_DENY_GAPS: &[(&str, &str)] = &[
     ("doas rm notes.txt", "`doas` prefix (only `sudo` forms are listed)"),
     ("/bin/rm notes.txt", "a head called by absolute path"),
     ("true&&rm notes.txt", "a separator with no space after it"),
+    ("cmd /c del notes.txt", "a wrapper (`cmd /c`, `powershell -c`, `bash -c`, `xargs`) in front of the head"),
+    ("$f.InvokeVerb('delete')", "a Recycle Bin move through the Windows shell verb"),
     ("grokhub-desktop__type", "typed text into a password, PIN, OTP, 2FA, or verification-code field (args, not the name)"),
-    ("grokhub-desktop__key", "Ctrl+Alt+Delete and other session-ending key combos (args, not the name)"),
+    (
+        "grokhub-desktop__key",
+        "Ctrl+Alt+Delete and other session-ending key combos, and Delete on a file manager's selection (args and the focused window, not the name)",
+    ),
     ("grokhub-self__connection_add", "a connection with needs_token (args, not the name); same for connection_modify"),
 ];
 
@@ -546,7 +736,6 @@ fn name_class(name: &str) -> Option<HardClass> {
         return match leaf {
             "hard_money_stub" => Some(HardClass::Money),
             "hard_send_stub" => Some(HardClass::Send),
-            "hard_delete_stub" => Some(HardClass::Delete),
             "hard_credentials_stub" => Some(HardClass::Credentials),
             "hard_irreversible_stub" => Some(HardClass::IrreversibleOs),
             _ => None,
@@ -578,12 +767,16 @@ const CREDENTIAL_NAMES: &[&str] = &["password", "credential", "secret", "api_key
 
 /// Shell command heads per hard class (the first word of a segment, after `sudo` / `doas`).
 const IRREVERSIBLE_HEADS: &[&str] = &["shutdown", "reboot", "poweroff", "halt", "wipefs", "shred", "diskpart"];
-const DELETE_HEADS: &[&str] = &["rm", "rmdir", "unlink", "trash", "trash-put"];
+const DELETE_HEADS: &[&str] = &[
+    "rm", "rmdir", "unlink", "trash", "trash-put", "del", "erase", "rd", "remove-item", "remove-itemsafely", "recycle",
+];
 const SEND_HEADS: &[&str] = &["sendmail", "mail", "mutt"];
 const CREDENTIAL_HEADS: &[&str] = &["passwd", "chpasswd"];
 /// Phrases anywhere in a segment.
 const IRREVERSIBLE_PHRASES: &[&str] = &["systemctl poweroff", "systemctl reboot"];
 const CREDENTIAL_PHRASES_SH: &[&str] = &["secret-tool", "gpg --export-secret", "security find-generic-password"];
+/// Trash and Recycle Bin moves, anywhere in a segment.
+const DELETE_PHRASES: &[&str] = &["gio trash", "gio remove", "trash:/", "sendtorecyclebin", "-exec rm ", "-execdir rm "];
 
 fn command_class(cmd: &str) -> Option<HardClass> {
     let segs: Vec<&str> = cmd
@@ -592,12 +785,8 @@ fn command_class(cmd: &str) -> Option<HardClass> {
         .filter(|s| !s.is_empty())
         .collect();
     let head = |seg: &str| -> String {
-        let mut words = seg.split_whitespace();
-        let mut w = words.next().unwrap_or("");
-        if w == "sudo" || w == "doas" {
-            w = words.next().unwrap_or("");
-        }
-        w.rsplit('/').next().unwrap_or(w).to_string()
+        let words: Vec<String> = seg.split_whitespace().map(unquote).collect();
+        head_at(&words).map(|i| leaf(&words[i]).to_string()).unwrap_or_default()
     };
     for seg in &segs {
         let h = head(seg);
@@ -605,7 +794,15 @@ fn command_class(cmd: &str) -> Option<HardClass> {
         if IRREVERSIBLE_HEADS.contains(&h) || IRREVERSIBLE_PHRASES.iter().any(|p| seg.contains(p)) {
             return Some(HardClass::IrreversibleOs);
         }
-        if DELETE_HEADS.contains(&h) || seg.starts_with("git push --delete") || seg.contains("git branch -d") {
+        let recycle_verb = seg.contains("invokeverb") && seg.contains("delete");
+        let find_delete = h == "find" && seg.contains(" -delete");
+        if DELETE_HEADS.contains(&h)
+            || DELETE_PHRASES.iter().any(|p| seg.contains(p))
+            || recycle_verb
+            || find_delete
+            || seg.starts_with("git push --delete")
+            || seg.contains("git branch -d")
+        {
             return Some(HardClass::Delete);
         }
         if SEND_HEADS.contains(&h) {
@@ -644,12 +841,12 @@ mod tests {
 
     #[test]
     fn headless_deny_rules_cover_the_floor_and_stubs() {
-        assert_eq!(HEADLESS_DENY_RULES.len(), 157);
-        assert_eq!(HEADLESS_DENY_RULES[151], "Bash(*consent.jsonl*)");
-        assert_eq!(HEADLESS_DENY_RULES[153], "Write(**/consent.jsonl)");
-        assert_eq!(HEADLESS_DENY_RULES[154], "MCPTool(grokhub-self__skill_delete)");
-        assert_eq!(HEADLESS_DENY_RULES[155], "MCPTool(grokhub-self__connection_remove)");
-        assert_eq!(HEADLESS_DENY_RULES[156], "MCPTool(grokhub-self__automation_delete)");
+        assert_eq!(HEADLESS_DENY_RULES.len(), 205);
+        assert_eq!(HEADLESS_DENY_RULES[199], "Bash(*consent.jsonl*)");
+        assert_eq!(HEADLESS_DENY_RULES[201], "Write(**/consent.jsonl)");
+        assert_eq!(HEADLESS_DENY_RULES[202], "MCPTool(grokhub-self__skill_delete)");
+        assert_eq!(HEADLESS_DENY_RULES[203], "MCPTool(grokhub-self__connection_remove)");
+        assert_eq!(HEADLESS_DENY_RULES[204], "MCPTool(grokhub-self__automation_delete)");
         assert_eq!(HEADLESS_DENY_RULES[0], "Bash(rm -rf /)");
         assert!(HEADLESS_DENY_RULES.contains(&"Bash(rm *)"));
         assert!(HEADLESS_DENY_RULES.contains(&"MCPTool(*hard_send_stub*)"));
@@ -681,7 +878,7 @@ mod tests {
     #[test]
     fn gb_deny_rules_cover_every_hard_name_and_command() {
         let heads = [IRREVERSIBLE_HEADS, DELETE_HEADS, SEND_HEADS, CREDENTIAL_HEADS].concat();
-        assert_eq!(heads.len(), 17);
+        assert_eq!(heads.len(), 23);
         for h in &heads {
             for cmd in [
                 format!("{h} target"),
@@ -694,7 +891,7 @@ mod tests {
                 assert!(gb_denies("Bash", &cmd), "no GB deny rule for `{cmd}`");
             }
         }
-        for phrase in [IRREVERSIBLE_PHRASES, CREDENTIAL_PHRASES_SH].concat() {
+        for phrase in [IRREVERSIBLE_PHRASES, CREDENTIAL_PHRASES_SH, DELETE_PHRASES].concat() {
             let cmd = format!("cd /tmp && {phrase} x");
             assert!(hard_shell(&cmd) && gb_denies("Bash", &cmd), "{cmd}");
         }
@@ -713,7 +910,6 @@ mod tests {
             "chat__quick_send",
             "x__hard_money_stub",
             "x__hard_send_stub",
-            "x__hard_delete_stub",
             "x__hard_credentials_stub",
             "x__hard_irreversible_stub",
         ] {
@@ -765,21 +961,21 @@ mod tests {
 
     #[test]
     fn gb_deny_gaps_are_hard_but_no_rule_can_match_them() {
-        assert_eq!(GB_DENY_GAPS.len(), 6);
-        for (sample, _) in &GB_DENY_GAPS[..3] {
+        assert_eq!(GB_DENY_GAPS.len(), 8);
+        for (sample, _) in &GB_DENY_GAPS[..5] {
             assert!(hard_shell(sample), "classifier: {sample}");
             assert!(!gb_denies("Bash", sample), "now covered, drop it from the gaps: {sample}");
         }
         // The desktop tools are one MCP name each; the hard part is in the args.
-        assert!(!gb_denies("MCPTool", GB_DENY_GAPS[3].0));
-        assert!(!gb_denies("MCPTool", GB_DENY_GAPS[4].0));
-        // A connection that names a secret is credentials by its args; the name stays soft.
         assert!(!gb_denies("MCPTool", GB_DENY_GAPS[5].0));
+        assert!(!gb_denies("MCPTool", GB_DENY_GAPS[6].0));
+        // A connection that needs a token is credentials by its args; the name stays soft.
+        assert!(!gb_denies("MCPTool", GB_DENY_GAPS[7].0));
         assert_eq!(
-            hard_class(GB_DENY_GAPS[5].0, r#"{"name":"crm","url":"http://127.0.0.1:9/mcp","needs_token":true}"#),
+            hard_class(GB_DENY_GAPS[7].0, r#"{"name":"crm","url":"http://127.0.0.1:9/mcp","needs_token":true}"#),
             Some(HardClass::Credentials)
         );
-        assert_eq!(hard_class(GB_DENY_GAPS[5].0, r#"{"name":"crm","url":"http://127.0.0.1:9/mcp"}"#), None);
+        assert_eq!(hard_class(GB_DENY_GAPS[7].0, r#"{"name":"crm","url":"http://127.0.0.1:9/mcp"}"#), None);
         assert_eq!(
             desk_classify("type", &serde_json::json!({ "text": "hunter22", "label": "Password" })),
             HardHit::Class(HardClass::Credentials)
@@ -905,7 +1101,8 @@ mod tests {
     #[test]
     fn hard_class_names_and_commands() {
         assert_eq!(hard_class("hard_send_stub", "{}"), Some(HardClass::Send));
-        assert_eq!(hard_class("hard_delete_stub", "{}"), Some(HardClass::Delete));
+        assert_eq!(hard_class("hard_delete_stub", "{}"), None, "Spike-1b: the stub is gone; delete_files is real");
+        assert_eq!(hard_class("grokhub-desktop__delete_files", "{}"), Some(HardClass::Delete));
         assert_eq!(hard_class("hard_money_stub", "{}"), Some(HardClass::Money));
         assert_eq!(hard_class("hard_credentials_stub", "{}"), Some(HardClass::Credentials));
         assert_eq!(hard_class("hard_irreversible_stub", "{}"), Some(HardClass::IrreversibleOs));
@@ -921,6 +1118,80 @@ mod tests {
     fn soft_click_is_not_hard() {
         assert_eq!(classify("click", r#"{"x":10,"y":20}"#), HardHit::None);
         assert_eq!(classify("read_file", r#"{"path":"README.md"}"#), HardHit::None);
+    }
+
+    /// Spike-1b: every delete shape parks, on Linux and Windows, plus the
+    /// trash and the Recycle Bin. Copy and open stay soft.
+    #[test]
+    fn every_delete_shape_is_hard_and_copy_open_stay_soft() {
+        let delete = HardHit::Class(HardClass::Delete);
+        for cmd in [
+            "rm -f notes.txt",
+            "rmdir old",
+            "gio trash notes.txt",
+            "gio remove notes.txt",
+            "trash-put notes.txt",
+            "kioclient5 move notes.txt trash:/",
+            "find . -name '*.tmp' -delete",
+            "find . -name x -exec rm {} +",
+            "ls *.log | xargs rm",
+            "del /q notes.txt",
+            "erase notes.txt",
+            "rd /s /q old",
+            "cmd /c del notes.txt",
+            "Remove-Item -Path C:\\Users\\me\\notes.txt -Force",
+            "powershell -NoProfile -Command \"Remove-Item notes.txt\"",
+            "Remove-ItemSafely notes.txt",
+            "recycle notes.txt",
+            "[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile('C:\\notes.txt','OnlyErrorDialogs','SendToRecycleBin')",
+            "(New-Object -ComObject Shell.Application).Namespace(0).ParseName('C:\\notes.txt').InvokeVerb('delete')",
+        ] {
+            assert_eq!(classify_ask("Run command", cmd), delete, "{cmd}");
+        }
+        for cmd in [
+            "cp notes.txt notes.bak",
+            "copy notes.txt notes.bak",
+            "Copy-Item notes.txt notes.bak",
+            "xdg-open notes.txt",
+            "open notes.txt",
+            "start notes.txt",
+            "gio open notes.txt",
+            "find . -name '*.tmp'",
+            "git rm --cached x",
+        ] {
+            let hit = classify_ask("Run command", cmd);
+            // `git rm` stops the tracking only; it is not a head.
+            assert_eq!(hit, HardHit::None, "{cmd}");
+        }
+        assert_eq!(desk_classify("open_app", &serde_json::json!({ "app": "org.kde.dolphin" })), HardHit::None);
+        assert_eq!(desk_classify("focus_window", &serde_json::json!({ "title": "Dolphin" })), HardHit::None);
+        assert_eq!(
+            desk_classify("open_app", &serde_json::json!({ "app": "shutdown" })),
+            HardHit::Class(HardClass::IrreversibleOs)
+        );
+        let files = serde_json::json!({ "paths": ["/tmp/a.txt", "/tmp/b.txt"] });
+        assert_eq!(desk_classify("delete_files", &files), delete);
+        assert_eq!(delete_files_action(&files), "delete 2 paths: /tmp/a.txt, /tmp/b.txt");
+        let trash = serde_json::json!({ "paths": ["/tmp/a.txt"], "to_trash": true });
+        assert_eq!(delete_files_action(&trash), "move to the trash 1 path: /tmp/a.txt");
+        // The Delete key deletes only where a file manager has focus.
+        let key = |keys: &str, window: &str| desk_classify("key", &serde_json::json!({ "keys": keys, "window": window }));
+        assert_eq!(key("Delete", "org.kde.dolphin Downloads — Dolphin"), delete);
+        assert_eq!(key("shift+Delete", "CabinetWClass Downloads"), delete);
+        assert_eq!(key("Delete", "kate notes.txt — Kate"), HardHit::None);
+        assert_eq!(key("ctrl+c", "org.kde.dolphin Downloads — Dolphin"), HardHit::None);
+        assert_eq!(desk_classify("key", &serde_json::json!({ "keys": "Delete" })), HardHit::None);
+    }
+
+    #[test]
+    fn delete_targets_name_the_exact_paths() {
+        assert_eq!(delete_targets("rm -rf build dist"), vec!["build", "dist"]);
+        assert_eq!(delete_targets("cd /tmp && rm -f 'a b.txt' c.txt"), vec!["a b.txt", "c.txt"]);
+        assert_eq!(delete_targets("gio trash ~/Downloads/x.zip"), vec!["~/Downloads/x.zip"]);
+        assert_eq!(delete_targets("del /q /f C:\\tmp\\x.txt"), vec!["C:\\tmp\\x.txt"]);
+        assert_eq!(delete_targets("Remove-Item -Path C:\\tmp\\x.txt -Force"), vec!["C:\\tmp\\x.txt"]);
+        assert_eq!(delete_targets("sudo rm /var/tmp/old.log"), vec!["/var/tmp/old.log"]);
+        assert_eq!(delete_targets("cargo test"), Vec::<String>::new());
     }
 
     #[test]

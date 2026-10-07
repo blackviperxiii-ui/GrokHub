@@ -1,7 +1,7 @@
 # Compass: desktop MCP (`grokhub-desktop` server)
 
 ## Owns
-- `grokhub --mcp-desktop`: a stdio JSON-RPC MCP server that Grok Build registers as `grokhub-desktop` (tools appear as `grokhub-desktop__<tool>`): `list_monitors`, `screenshot`, `click`, `move`, `drag`, `scroll`, `type`, `key`.
+- `grokhub --mcp-desktop`: a stdio JSON-RPC MCP server that Grok Build registers as `grokhub-desktop` (tools appear as `grokhub-desktop__<tool>`): `list_monitors`, `screenshot`, `click`, `move`, `drag`, `scroll`, `type`, `key`, `open_app`, `focus_window`, `delete_files`.
 - Pure protocol, geometry, and key parsing in grokhub-core; the OS backends (X11, Wayland/KDE portal + libei, uinput, ydotool fallback, Windows SendInput + xcap) in grokhub-app.
 ## Quick commands
 - `cargo test -p grokhub-core desktop_mcp` (pure JSON-RPC, geometry, key combos)
@@ -9,14 +9,16 @@
 ## Key files
 - `crates/grokhub-core/src/desktop_mcp.rs`: `DesktopServer`, `DesktopBackend`, `CallGate`, `DESKTOP_MCP_SERVER`, `DESKTOP_MCP_RULE`, `OFF_MSG` / `HALT_MSG` / `LOCK_MSG`.
 - `crates/grokhub-app/src/desktop_mcp/mod.rs`: `run_stdio`, `LiveBackend`, halt stamp, registration.
-- `crates/grokhub-app/src/desktop_mcp/harness_gate.rs`: path A pre-check, park, and spans.
+- `crates/grokhub-app/src/desktop_mcp/harness_gate.rs`: path A pre-check, park, spans, and the `ui_changed` probe (`handle_desk_line`).
+- `crates/grokhub-app/src/desktop_mcp/apps.rs`: open an app, list and focus windows, and move files to the trash (Linux: gtk-launch / gio launch, X11 EWMH, a KWin script on KDE Wayland, gio trash / trash-put; Windows: ShellExecuteW, EnumWindows, SetForegroundWindow, SHFileOperationW with undo).
 - `crates/grokhub-app/src/desktop_mcp/wayland.rs`, `crates/grokhub-app/src/desktop_mcp/x11.rs`, `crates/grokhub-app/src/desktop_mcp/windows.rs`; Linux broker in `crates/grokhub-app/src/desktop_mcp/broker.rs`.
 ## Change recipe
 - New tool: add its schema in `tool_schemas` and its arm in `DesktopServer` dispatch (core), add it to `is_input_tool` if it moves input, extend `DesktopBackend` if the OS must act, implement it in each backend, then classify it in `desk_classify` (harness).
 - New Wayland route: add it to the chain in `crates/grokhub-app/src/desktop_mcp/fallback.rs` and drive it with the existing fakes.
 ## What breaks it
 - Any `println!` on the server path: stdout is JSON-RPC only; logs go to stderr.
-- Skipping the pre-check: `run_stdio` calls `harness_gate::precheck` before `handle_line` on every OS, even under Always.
+- Skipping the pre-check: `run_stdio` calls `harness_gate::handle_desk_line` (pre-check, park, then `handle_line`) on every OS, even under Always.
+- Deleting before the park: `delete_files` is hard class Delete and only runs after Jeremy's click; it checks every path first and deletes none if one is bad.
 - Registering into the user's `~/.grok`: `register_desktop_mcp` targets the cabin `GROK_HOME` only.
 ## What depends on it
 - Grok Build computer use (via `grok mcp add grokhub-desktop -- <exe> --mcp-desktop`), Settings → Let Grok control the desktop, and the harness spans and parked cards in the cabin.

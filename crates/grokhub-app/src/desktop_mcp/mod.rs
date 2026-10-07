@@ -1,6 +1,7 @@
 //! Headless `grokhub --mcp-desktop` stdio server.
 //! Stdout is JSON-RPC only. Logs go to stderr.
 
+mod apps;
 mod harness_gate;
 mod keys;
 #[cfg(any(unix, test))]
@@ -65,54 +66,9 @@ pub fn run_stdio() -> i32 {
             halted: read_halt_stamp().is_some_and(|ms| stamp_halts(ms, started)),
         };
         // Path A: the cabin pre-check runs before every desktop tool, on every OS.
-        let call = harness_gate::parse_call(&line);
         let dir = crate::config::config_dir();
-        let mut parked = None;
-        if let Some(c) = &call {
-            let access = harness_gate::access_now(&dir, gate.enabled);
-            let refused = match harness_gate::precheck(c, gate) {
-                harness_gate::Precheck::Pass => None,
-                harness_gate::Precheck::Refuse(reason) => Some(reason),
-                harness_gate::Precheck::Park { class, reason } => {
-                    let mut halted =
-                        || read_halt_stamp().is_some_and(|ms| stamp_halts(ms, started));
-                    let approved = harness_gate::park_and_wait(&dir, c, &class, &mut halted);
-                    parked = grokhub_agent::harness::HardClass::parse(&class).map(|h| (h, approved));
-                    if approved {
-                        None
-                    } else {
-                        Some(format!("Denied: {reason}. Jeremy did not approve it."))
-                    }
-                }
-            };
-            if let Some(reason) = refused {
-                harness_gate::write_span(&dir, c, false, &reason, access, None, parked);
-                emit(&harness_gate::refusal_reply(&c.id, &reason));
-                continue;
-            }
-        }
-        let measure = gate.enabled && !gate.halted && call.as_ref().is_some_and(|c| c.tool == "click");
-        let before = measure
-            .then(|| server.backend_mut().screenshot("all").ok())
-            .flatten()
-            .map(|s| harness_gate::shot_hash(&s.bytes));
-        let outcome = server.handle_line(&line, gate);
-        if let (Some(c), Some(reply)) = (&call, outcome.reply.as_deref()) {
-            let (ok, text) = harness_gate::reply_result(reply);
-            let ui_changed = match (before, ok) {
-                (Some(pre), true) => {
-                    std::thread::sleep(std::time::Duration::from_millis(150));
-                    server
-                        .backend_mut()
-                        .screenshot("all")
-                        .ok()
-                        .map(|s| harness_gate::shot_hash(&s.bytes) != pre)
-                }
-                _ => None,
-            };
-            let access = harness_gate::access_now(&dir, gate.enabled);
-            harness_gate::write_span(&dir, c, ok, &text, access, ui_changed, parked);
-        }
+        let mut halted = || read_halt_stamp().is_some_and(|ms| stamp_halts(ms, started));
+        let outcome = harness_gate::handle_desk_line(&mut server, &line, gate, &dir, &mut halted);
         if let Some(reply) = outcome.reply {
             emit(&reply);
         }
@@ -567,6 +523,20 @@ impl DesktopBackend for LiveBackend {
     }
     fn status_note(&mut self) -> Option<String> {
         self.ensure().ok().and_then(|backend| backend.status_note())
+    }
+    // Open, focus, list, and trash go straight to the OS, not the input
+    // backend, so they work on every session the input route supports.
+    fn open_app(&mut self, app: &str) -> Result<(), String> {
+        apps::open_app(app)
+    }
+    fn focus_window(&mut self, title: &str) -> Result<String, String> {
+        apps::focus_window(title)
+    }
+    fn list_windows(&mut self) -> Result<grokhub_core::desktop_mcp::DesktopWindows, String> {
+        apps::list_windows()
+    }
+    fn trash(&mut self, paths: &[std::path::PathBuf]) -> Result<(), String> {
+        apps::trash(paths)
     }
 }
 
