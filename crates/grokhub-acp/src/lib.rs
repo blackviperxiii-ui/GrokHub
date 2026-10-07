@@ -21,7 +21,7 @@ pub use client::{
     is_sigterm_status, jsonrpc_error_text, list_sessions, merge_grok_sessions, parse_session_list,
     history_label_after_plan, parse_session_markdown, parse_single_turn, preferred_history_title,
     run_single_turn, title_after_selecting_plan,
-    run_single_turn_full, spawn_grok_p_stream, session_usage, GrokPAttach,
+    grok_p_argv, run_single_turn_full, spawn_grok_p_stream, session_usage, GrokPAttach,
     session_title_from_chat_history,
     show_session, split_session_row, wait_event, AcpHandle, ExternalCmd, GrokSession, NativePerm,
     SingleTurn,
@@ -44,7 +44,7 @@ pub use locate::{
     invalidate_grok_bin_cache, invalidate_grok_key_cache, is_cli_hard_failure, mark_grok_unusable,
     parse_grok_auth_key, prepare_cabin_grok_home, register_desktop_mcp, silence_windows_hard_errors,
     single_turn_args, single_turn_args_full, unregister_desktop_mcp, with_ask_deny, with_hard_deny, which,
-    write_cli_auth_if_needed, ASK_DENY_RULES, CLI_CREDENTIAL_DENY,
+    write_cli_auth_if_needed, builtin_cu_denied, ASK_DENY_RULES, BUILTIN_CU_DENY, CLI_CREDENTIAL_DENY,
 };
 pub use protocol::{
     ask_denied_without_acp, merge_tool_card, AcpEvent, ElicitAsk, PermissionAsk, PermissionMode,

@@ -25235,7 +25235,11 @@ fn bg_ask_spawn_passes_deny_args() {
     let sent = last_grok_argv(&argv);
     let desktop_deny = format!("--deny\n{}", grokhub_core::DESKTOP_MCP_RULE);
     let hard = grokhub_agent::harness::HEADLESS_DENY_RULES.len() + grokhub_acp::CLI_CREDENTIAL_DENY.len();
-    assert_eq!(sent.matches("--deny").count(), 1 + hard, "{sent}");
+    // Spike-1c: Grok Build's own computer-use tools are denied on Auto, with the switch off or on.
+    let cu = grokhub_acp::BUILTIN_CU_DENY.len();
+    let has_cu = |sent: &str| grokhub_acp::BUILTIN_CU_DENY.iter().all(|r| sent.contains(&format!("--deny\n{r}\n")));
+    assert_eq!(sent.matches("--deny").count(), 1 + hard + cu, "{sent}");
+    assert!(has_cu(&sent), "{sent}");
     assert!(sent.contains(&desktop_deny), "{sent}");
     assert!(sent.contains("--deny\nBash(rm -rf /)\n"), "{sent}");
     assert!(sent.contains("--deny\nRead(**/.grok/auth.json)\n"), "{sent}");
@@ -25249,7 +25253,8 @@ fn bg_ask_spawn_passes_deny_args() {
     assert!(started.is_ok(), "{started:?}");
     assert!(poll_until(&mut cabin, 5, |c| c.bg.runs.is_empty()), "auto desktop run ends");
     let sent = last_grok_argv(&argv);
-    assert_eq!(sent.matches("--deny").count(), hard, "{sent}");
+    assert_eq!(sent.matches("--deny").count(), hard + cu, "{sent}");
+    assert!(has_cu(&sent), "{sent}");
     assert!(!sent.contains(&desktop_deny), "{sent}");
     assert!(
         sent.contains(&format!("--allow\n{}", grokhub_core::DESKTOP_MCP_RULE)),
