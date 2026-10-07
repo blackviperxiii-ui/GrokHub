@@ -97,6 +97,7 @@ pub fn schemas_for(gate: &Gate) -> Vec<Value> {
     if gate.desktop {
         tools.extend(desktop::schemas());
     }
+    tools.extend(crate::self_manage::native_schemas());
     tools.extend(crate::mcp::schema_tools());
     tools
 }
@@ -127,6 +128,11 @@ pub fn dispatch(ctx: &ToolCtx<'_>, name: &str, arguments: &str) -> ToolOutput {
     };
     if is_readonly(name) {
         return dispatch_readonly(ctx, name, &args);
+    }
+    if crate::self_manage::self_tool(name).is_some() {
+        // Path E: the loop already asked `harness::decide` (via `decide_with`).
+        let dir = crate::perm::config_dir();
+        return crate::self_manage::run(&crate::self_manage::SelfCtx::new(&dir), name, &args);
     }
     if let Some(output) = crate::mcp::try_dispatch(name, &args) {
         return output;

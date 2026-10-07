@@ -9,6 +9,7 @@ pub enum Launch {
     Oauth,
     Help,
     McpDesktop,
+    McpSelf,
 }
 
 pub fn parse_args(args: &[String]) -> Launch {
@@ -22,6 +23,7 @@ pub fn parse_args(args: &[String]) -> Launch {
             "--update" => return Launch::Update,
             "--oauth" => return Launch::Oauth,
             "--mcp-desktop" => return Launch::McpDesktop,
+            "--mcp-self" => return Launch::McpSelf,
             "-h" | "--help" => return Launch::Help,
             _ => {}
         }

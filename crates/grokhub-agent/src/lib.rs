@@ -19,6 +19,7 @@ mod research;
 mod retry;
 mod run;
 mod scan;
+pub mod self_manage;
 mod session;
 mod session_tools;
 mod skills;
