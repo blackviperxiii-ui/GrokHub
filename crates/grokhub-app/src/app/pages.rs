@@ -1014,6 +1014,11 @@ impl Cabin {
                     "Tasks from your chats and the ones you add, by status. Click a card to open it and talk to the agent, click its title or press Esc to fold it, and drag it to move it.",
                 );
                 ui.add_space(12.0);
+                // The same needs-attention line and decision rows as Home (Spike-1b).
+                if self.decisions_waiting() > 0 {
+                    self.paint_inbox(ui);
+                    ui.add_space(12.0);
+                }
                 if self.board_compose {
                     egui::Frame::NONE
                         .fill(crate::theme::elevated())

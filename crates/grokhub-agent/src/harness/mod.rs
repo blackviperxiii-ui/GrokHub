@@ -80,7 +80,8 @@ pub use detect::{
     UNSUPPORTED_ASSURANCE,
 };
 pub use hard::{
-    classify, classify_ask, credential_action, credential_field, credential_hint, desk_classify, hard_class, hard_floor,
+    classify, classify_ask, credential_action, credential_field, credential_hint, delete_files_action, delete_targets,
+    desk_classify, hard_class, hard_floor,
     HardClass, HardFloor, HardHit, GB_DENY_GAPS, HEADLESS_DENY_RULES,
 };
 pub use ladder::{hard_target, ladder_span, Ladder, LadderStep, Rung, RECOVERY_TOOL};

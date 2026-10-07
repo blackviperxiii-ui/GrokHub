@@ -20,6 +20,8 @@ pub const APPROVAL_ENTER_Y: f32 = 12.0;
 pub const APPROVAL_EXIT_Y: f32 = 8.0;
 /// Hover wash duration.
 pub const APPROVAL_HOVER_SECS: f32 = 0.120;
+/// Decision inbox rows open, then stop: the cabin's 140 ms settle.
+pub const INBOX_SETTLE_SECS: f32 = grokhub_core::ALWAYS_SETTLE_SECS;
 /// Thinking rim breath period (seconds).
 pub const THINKING_RIM_SECS: f32 = 1.2;
 /// Thinking rim alpha low/high.
