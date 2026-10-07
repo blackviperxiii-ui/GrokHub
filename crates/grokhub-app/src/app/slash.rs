@@ -2,15 +2,11 @@
 
 use super::*;
 
-/// Memory lines for `/recall` when `memory_backend` is `amr`.
-/// Creates `{config}/amr` on this path only. Legacy recall never calls it.
+/// Memory lines for `/recall` when `memory_backend` is `amr`. The cabin
+/// opens the store (and runs the one-time import) before this thread starts.
 /// Private notes (`nodes/<id>.sealed`) open with the learned-tier key; when
 /// they can't, one line says so instead (Spike-4b, fail closed).
-fn recall_amr_lines(query: &str) -> Vec<String> {
-    let dir = config::config_dir();
-    let vault = grokhub_agent::harness::LearnedVault::new(&dir);
-    let store = grokhub_core::amr::AmrStore::at(dir.join("amr")).with_sealer(std::sync::Arc::new(vault));
-    let _ = store.init();
+fn recall_amr_lines(store: &grokhub_core::amr::AmrStore, query: &str) -> Vec<String> {
     let report = store.recall_report(query);
     let mut lines: Vec<String> = report.hits.iter().map(|hit| hit.display()).collect();
     if let Some(line) = locked_recall_line(report.locked, report.why.as_deref()) {
@@ -54,6 +50,8 @@ impl Cabin {
                         self.status = "Forgot MEMORY.md".into();
                     }
                     Some(q) => {
+                        // AMR: tombstone matching nodes; MEMORY.md still drops the topic below.
+                        let amr_line = if self.amr_on() { Some(self.forget_amr(&q)) } else { None };
                         let name = self.mem_name.clone();
                         let body = self.mem_body.clone();
                         std::thread::spawn(move || {
@@ -77,6 +75,9 @@ impl Cabin {
                                 let _ = config::write_memory("MEMORY.md", &next);
                             });
                             self.status = format!("Forgot {q}");
+                        }
+                        if let Some(line) = amr_line {
+                            self.status = line;
                         }
                     }
                 }
@@ -102,6 +103,11 @@ impl Cabin {
                             let _ = config::write_memory(&name, &body);
                         }
                     });
+                }
+                if self.amr_on() {
+                    // Single write: the note is a node, not a MEMORY.md line.
+                    self.status = self.amr_remember_now(&note, "note");
+                    return;
                 }
                 if self.mem_name == "MEMORY.md" {
                     let mut next = self.mem_body.clone();
@@ -787,10 +793,14 @@ impl Cabin {
                 let mem_body = self.mem_body.clone();
                 // What the cabin learned by itself lives in learning.json, not the
                 // markdown, and /recall used to miss all of it.
+                // AMR imported the other insights; chip habits are rebuilt each night
+                // and stay in learning.json, so only they are read from there.
+                let amr = self.amr_on();
                 let insights = self
                     .learning
                     .insights
                     .iter()
+                    .filter(|i| !amr || i.key.starts_with("habit:") || i.key.starts_with("skip:"))
                     .map(|i| i.text.clone())
                     .collect::<Vec<_>>()
                     .join("\n");
@@ -804,17 +814,20 @@ impl Cabin {
                     };
                     thread_rows.push((t.title.clone(), body));
                 }
-                let backend = self.cfg.memory_backend;
+                let amr_store = if amr {
+                    let scratch = self.scratch();
+                    Some(self.amr_store(scratch))
+                } else {
+                    None
+                };
                 let (tx, rx) = mpsc::channel();
                 self.recall_rx = Some(rx);
                 self.status = "Recalling…".into();
                 std::thread::spawn(move || {
-                    // AMR reads amr/nodes only. Legacy keeps SOUL/USER/MEMORY/learned.
-                    // Thread rows are searched on both paths.
-                    let (mut hits, mut rows) = if backend == grokhub_core::amr::MemoryBackend::Amr
-                    {
-                        (recall_amr_lines(&q_owned), Vec::new())
-                    } else {
+                    // Legacy reads SOUL/USER/MEMORY/learned. AMR reads amr/nodes and the
+                    // same files (dual-read), identical lines once. Threads on both paths.
+                    let amr_hits = amr_store.as_ref().map(|store| recall_amr_lines(store, &q_owned));
+                    let (mut hits, mut rows) = {
                         let soul = if mem_name == "SOUL.md" {
                             mem_body.clone()
                         } else {
@@ -843,11 +856,14 @@ impl Cabin {
                                 .collect(),
                         );
                         let hits = grokhub_core::amr::MemoryEngine::recall(&legacy, &q_owned);
-                        let rows = corpus
+                        let rows: Vec<(String, String)> = corpus
                             .into_iter()
                             .map(|(name, body)| (name.to_string(), body))
                             .collect();
-                        (hits, rows)
+                        match amr_hits {
+                            Some(amr_hits) => (amr_memory::dual_read_hits(amr_hits, hits), rows),
+                            None => (hits, rows),
+                        }
                     };
                     rows.extend(thread_rows);
                     hits.extend(search_corpus(&q_owned, &rows));
@@ -965,6 +981,18 @@ impl Cabin {
             Slash::Remember(note) => {
                 if self.scratch() {
                     self.status = "Scratch — no memory writes".into();
+                    return true;
+                }
+                if self.amr_on() {
+                    let note = grokhub_agent::remember_note_text(note).to_string();
+                    // Like the legacy native path: secrets are redacted, not refused.
+                    self.status = if note.trim().is_empty() {
+                        "Nothing to remember".into()
+                    } else if !is_plain_text(&note) {
+                        format!("{} (secrets redacted)", self.amr_remember_now(&note, "native"))
+                    } else {
+                        self.amr_remember_now(&note, "native")
+                    };
                     return true;
                 }
                 let workspace = self.native_slash_workspace();
