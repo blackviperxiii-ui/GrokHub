@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 2.10.94 — 2026-10-07
+
 Channel fixes: Labs Beta auto-off works after a promote and really switches back, Update and channel-switch errors say what went wrong, and Windows no longer trips over a beta receipt.
 
 - **Auto-off compares code, not commits (Linux).** Main moves by squash and the main → beta sync always adds a merge commit, so the two tips never matched and Beta stayed on. The cabin now fetches `beta` and `main` from your clone's `origin` and treats beta as caught up when `origin/beta` and `origin/main` have the same tree (the same tip commit still counts). Checked at the same times as before: opening Settings → Labs (at most once a minute) and after a successful Update.
@@ -117,6 +119,9 @@ Pulse leftovers (Critiquito re-check): opened idea headings follow the row type 
 Feed cards show a short takeaway under the title (about two sentences, cut on a word or sentence, with URLs left on the Read link) instead of a long paragraph chopped mid-sentence. A digest skips the model's opening line ("I'll look up…") and leads with the news, followed by why it matters to you. Discuss on a digest or suggestion opens the main chat with that post's title, takeaway, source link, and why it matters, and puts the cursor in the composer. On the home deck, hovering a digest, suggestion, or image card expands it into the same card: source and age, the short takeaway, the image, Liked, and Discuss. × still only removes it from the deck. No version bump.
 
 The command palette hides Devices, Agents, and Connectors until a query names them. They are not on the sidebar rail. Typing devices, device, agents, agent, connectors, or connector still opens that page (connectors also matches Skills and Connectors, which contains the word). Night still opens Automations; there is no Night row. On Pulse, an empty Ideas list shows Suggest ideas once, in the body. The header button stays when ideas are listed, and it reads Suggesting… while a suggestion is loading.
+
+- Linux: `grokhub-linux-v2.10.94.tar.gz` and AUR `pkgver=2.10.94`.
+- Windows: `GrokHub-Setup-2.10.94.exe` and `grokhub-windows-v2.10.94.zip`.
 
 ## 2.10.93 — 2026-10-06
 
