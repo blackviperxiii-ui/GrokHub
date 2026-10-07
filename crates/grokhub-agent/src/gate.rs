@@ -229,6 +229,9 @@ pub fn user_cancelled(name: &str) -> String {
     format!("User cancelled the execution for tool `{name}`")
 }
 
+/// Spike-2b: what the steps after a denied hard step in the same batch return.
+pub const NOT_EXECUTED: &str = "Not executed: earlier action failed";
+
 pub fn decide(gate: &Gate, name: &str, latched_always: bool, desk: Option<DeskFlags>) -> Decision {
     if is_readonly(name) {
         return Decision::Run;
