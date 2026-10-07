@@ -1,7 +1,7 @@
 # Compass: grokhub-app app/ (the Cabin UI)
 
 ## Owns
-- `Cabin`, the eframe app: one struct in `crates/grokhub-app/src/app/mod.rs` plus `impl Cabin` blocks split by page or feature (`chat_ui`, `chat_kick`, `acp`, `settings`, `sidebar`, `pages`, `pulse_ui`, `feed_ui`, `board_ui`, `night`, `harness_ui`, `privacy_ui`, `scope_ui`, `skill_undo`, `background`, `native_*`, ...). Each submodule starts with `use super::*;`.
+- `Cabin`, the eframe app: one struct in `crates/grokhub-app/src/app/mod.rs` plus `impl Cabin` blocks split by page or feature (`chat_ui`, `chat_kick`, `acp`, `settings`, `sidebar`, `pages`, `pulse_ui`, `feed_ui`, `board_ui`, `night`, `harness_ui`, `privacy_ui`, `scope_ui`, `skill_undo`, `background`, `heartbeat_gate`, `native_*`, ...). Each submodule starts with `use super::*;`.
 - The frame loop (`impl eframe::App for Cabin`: `logic`, `ui`, `on_exit`) and the background job polls it drives.
 ## Quick commands
 - `GROKHUB_CONFIG=$(mktemp -d) cargo test -p grokhub-app app::tests::<name> -- --test-threads=1`
@@ -32,4 +32,4 @@
 - The composer glow and Always ring timings come from `GLOW_SETTLE_SECS` / `ALWAYS_SETTLE_SECS` in grokhub-core, and motion is skipped when `motion_ok` is false (AGENTS.md UI theme).
 - `cabin_signed_in_false_when_idle` fails when the Grok CLI is logged in under HOME; the board test fails when `find_grok` sees `grok` on PATH (`can_agent`). `isolated_cabin` only pins config, so isolate HOME and PATH too, or skip them.
 ## See also
-- [grokhub-app](grokhub-app.md), [app-config](app-config.md), [slash](slash.md), [harness](harness.md)
+- [grokhub-app](grokhub-app.md), [app-config](app-config.md), [slash](slash.md), [harness](harness.md), [heartbeat](heartbeat.md)

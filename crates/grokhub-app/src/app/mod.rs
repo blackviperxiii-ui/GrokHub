@@ -183,6 +183,7 @@ mod chips;
 mod voice;
 mod threads_nav;
 mod background;
+mod heartbeat_gate;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -504,6 +505,10 @@ pub struct Cabin {
     last_night_tick: Instant,
     last_auto_tick: Instant,
     last_heartbeat: Instant,
+    /// Heartbeat throttle state: budget, backoff streak, Halt hold.
+    pace: grokhub_core::HeartbeatThrottle,
+    /// Last traced decision per proactive act, so a hold is logged once.
+    pace_traced: Vec<(grokhub_core::ProactiveAct, &'static str)>,
     night_check_rx: Option<(String, mpsc::Receiver<(String, i32)>)>,
     learning: LearningState,
     suggestions: SuggestionStore,
@@ -1119,6 +1124,8 @@ impl Cabin {
             last_night_tick: Instant::now(),
             last_auto_tick: Instant::now(),
             last_heartbeat: Instant::now(),
+            pace: Default::default(),
+            pace_traced: Vec::new(),
             night_check_rx: None,
             learning: crate::store::load_learning(),
             suggestions: crate::store::load_suggestions(),
@@ -1552,6 +1559,8 @@ impl Cabin {
             last_night_tick: Instant::now(),
             last_auto_tick: Instant::now(),
             last_heartbeat: Instant::now(),
+            pace: Default::default(),
+            pace_traced: Vec::new(),
             night_check_rx: None,
             learning: Default::default(),
             suggestions: Default::default(),
@@ -3378,13 +3387,20 @@ impl Cabin {
             return;
         }
         self.last_heartbeat = Instant::now();
+        // Halt holds every organ that starts work; local upkeep still runs.
+        let halted = self.heartbeat_halted(now_ms());
         let mut night_fired = false;
         for act in heartbeat_acts() {
+            if halted && !act.runs_while_halted() {
+                continue;
+            }
             match act {
                 HeartbeatAct::Housekeep => {
                     self.roll_today();
                     self.tick_feed_pulse();
-                    self.follow_feed_lookup();
+                    if !halted {
+                        self.follow_feed_lookup();
+                    }
                     self.release_situation_ping();
                     if self.last_persist.elapsed() > Duration::from_secs(2) {
                         self.persist_bg();
@@ -3414,6 +3430,7 @@ impl Cabin {
                         IDLE_REFLECT_MS,
                     ) && !self.reflected_idle
                         && !self.scratch()
+                        && !self.heartbeat_busy()
                     {
                         self.reflected_idle = true;
                         self.run_reflect();
@@ -3455,6 +3472,9 @@ impl Cabin {
             return;
         }
         if !anticipate_consumes_slot(self.can_agent()) {
+            return;
+        }
+        if !self.heartbeat_may(grokhub_core::ProactiveAct::Anticipate, now_ms()) {
             return;
         }
         self.last_anticipate_ms = now_ms();
@@ -4592,6 +4612,7 @@ impl Cabin {
 
     fn halt_work(&mut self, status: impl Into<String>) {
         let status = status.into();
+        self.heartbeat_turn_stopped();
         self.halt_in_flight();
         self.finish_hub_dispatch(&status, false);
         self.status = status;
@@ -4601,6 +4622,7 @@ impl Cabin {
     /// Tray Halt and the halt hotkeys: the live turn and every background run.
     /// Composer Stop and `/stop` leave background runs alone.
     fn halt_everything(&mut self, status: impl Into<String>) {
+        self.heartbeat_halt(now_ms());
         self.stop_all_bg_runs();
         self.halt_work(status);
     }

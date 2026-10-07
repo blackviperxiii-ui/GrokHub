@@ -12,6 +12,17 @@ Channel fixes: Labs Beta auto-off works after a promote and really switches back
 
 No new crates, no new network destinations. No version bump.
 
+Heartbeat throttle. The pulse still wakes every 15 seconds, but the things it starts on its own (anticipating a need, the automatic ideas ask, the nightly review) now share a budget, so it can't burn tokens or keep nudging you. Approval rules and hard cards are unchanged.
+
+- **A budget for proactive acts.** At most one every 15 minutes, 3 an hour and 8 a day by default. To change them, edit `"heartbeat"` in `app.json` (`minIntervalMin`, `maxPerHour`, `maxPerDay`, `backoffAfter`, `backoffMaxMin`, `haltHoldMin`); `maxPerDay: 0` turns proactive acts off. There is no Settings control. A file without that key keeps the defaults and doesn't grow one.
+- **Backs off when it isn't helping.** After 3 acts in a row that came back empty (no new ideas, an empty review, an anticipate turn nobody answered within 15 minutes) or that you dismissed (Stop on its turn, Dismiss or Not this on a Pulse card), the gap doubles each time, up to 4 hours. One useful act brings the normal pace back.
+- **Waits for you.** Nothing proactive starts during a reply, with text in the composer, or while a card is waiting on you. Idle reflect waits too.
+- **Halt stops it at once.** Tray Halt and the halt hotkeys hold the pulse for 15 minutes or until you send a message. Only local upkeep runs in that time: no anticipate, ideas, review, digest lookup, living wall, phone inbox or scheduled job starts, and an ideas or review reply already on its way is dropped.
+- **Scheduled jobs are unchanged.** Automations and loops keep their own clock and daily cap, outside this budget, and still run as background runs that never take the composer.
+- **Traced without content.** Each decision goes to `spans/heartbeat.jsonl` as allow or hold with a reason (`busy`, `min_interval`, `hour_cap`, `day_cap`, `backoff`, `halted`, `off`). It never includes prompts, replies or chat ids. A repeated hold is written once.
+
+No version bump.
+
 Scopes and locked-state polish (Critiquito SB-01 to SB-11). The consent rules are unchanged: grants still come only from a mouse click in Settings, `harness::decide` and the fail-closed rules are untouched, and a hard card still has no Always.
 
 - **Locked means locked (SB-01).** While private data is locked (no keyring, missing or wrong key), every Allow in Settings → Permissions, the folder field, the browser picker and Choose folder… are shown disabled, and hovering one says "Locked: keyring unavailable" (or which lock it is). Revoke is disabled too, because a revoke is a ledger write and a locked ledger takes none.
