@@ -31,7 +31,11 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .file_name()
         .and_then(|s| s.to_str())
         .ok_or_else(|| "atomic write needs a file name".to_string())?;
-    let tmp = dir.join(format!(".{name}.tmp"));
+    // One temp name per write: two writers of the same file (a background
+    // persist and a ledgered save) must not rename each other's temp away.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!(".{name}.{}-{seq}.tmp", std::process::id()));
     // The temp file holds the same bytes as the destination, so it has to be private from
     // the moment it exists. Creating it 0644 and chmodding after the rename leaves the
     // console key and OAuth refresh token world-readable for the whole write.
@@ -39,7 +43,17 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     f.write_all(bytes).map_err(|e| e.to_string())?;
     f.sync_all().map_err(|e| e.to_string())?;
     drop(f);
-    fs::rename(&tmp, path).map_err(|e| {
+    // Windows refuses a replace while another writer's replace holds the
+    // destination; that clears within a few ms.
+    let mut renamed = fs::rename(&tmp, path);
+    for _ in 0..5 {
+        if renamed.is_ok() || !cfg!(windows) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        renamed = fs::rename(&tmp, path);
+    }
+    renamed.map_err(|e| {
         let _ = fs::remove_file(&tmp);
         e.to_string()
     })?;
@@ -1014,7 +1028,13 @@ mod tests {
         let dest = root.join("atomic.json");
         atomic_write(&dest, br#"{"ok":true}"#).expect("atomic");
         assert_eq!(fs::read_to_string(&dest).unwrap(), r#"{"ok":true}"#);
-        assert!(!root.join(".atomic.json.tmp").exists());
+        let left: Vec<String> = fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(".atomic.json."))
+            .collect();
+        assert_eq!(left, Vec::<String>::new(), "no temp file is left behind");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1540,6 +1560,27 @@ mod tests {
             atomic.contains("sync_all") && atomic.contains("rename"),
             "atomic_write must stay fsync+rename: {atomic}"
         );
+    }
+
+    /// A background persist and a ledgered save can write automations.json
+    /// at once; neither may lose its temp file to the other's rename.
+    #[test]
+    fn two_writers_of_one_file_both_succeed() {
+        let root = test_config_root("atomic-two");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("root");
+        let path = root.join("automations.json");
+        let writers: Vec<_> = (0..2)
+            .map(|w| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    (0..300).filter(|i| atomic_write(&path, format!("[{w},{i}]").as_bytes()).is_err()).count()
+                })
+            })
+            .collect();
+        let failed: usize = writers.into_iter().map(|h| h.join().unwrap()).sum();
+        assert_eq!(failed, 0);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[cfg(unix)]
