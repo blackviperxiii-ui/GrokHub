@@ -446,8 +446,12 @@ pub(crate) fn private_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
+    // One temp name per write, so an Undo and an agent save of the same file
+    // cannot rename each other's temp away.
+    static NEXT_TMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT_TMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut tmp_name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
-    tmp_name.push(".tmp");
+    tmp_name.push(format!(".{}-{n}.tmp", std::process::id()));
     let tmp = path.with_file_name(tmp_name);
     {
         let mut opts = OpenOptions::new();
