@@ -359,6 +359,28 @@ pub(super) fn is_error_reply(body: &str) -> bool {
     body.trim_start().starts_with("Error:")
 }
 
+/// The reply mark left of an assistant or result bubble, and the gap after it.
+const REPLY_MARK_W: f32 = 16.0;
+const REPLY_MARK_GAP: f32 = 6.0;
+/// Where a result bubble's text starts, from the row's left edge: mark, gap,
+/// then the bubble's own padding. The `/privacy` Revoke rows (SB-11) and the
+/// `/skills changes` Undo rows (SU-06) line up here.
+pub(super) const RESULT_TEXT_INSET: f32 = REPLY_MARK_W + REPLY_MARK_GAP + BUBBLE_PAD_X;
+/// Label size of the action rows under a result bubble.
+pub(super) const RESULT_ROW_LABEL_SIZE: f32 = 13.0;
+
+/// Room to add after each action-row label so the pills under a result
+/// bubble share one column: every label takes the widest label's width.
+pub(super) fn result_row_label_pads(ui: &egui::Ui, labels: &[&str]) -> Vec<f32> {
+    let font = egui::FontId::proportional(RESULT_ROW_LABEL_SIZE);
+    let widths: Vec<f32> = labels
+        .iter()
+        .map(|l| ui.fonts_mut(|f| f.layout_no_wrap((*l).to_string(), font.clone(), egui::Color32::WHITE).size().x))
+        .collect();
+    let widest = widths.iter().copied().fold(0.0_f32, f32::max);
+    widths.into_iter().map(|w| widest - w).collect()
+}
+
 pub(super) fn paint_speech_bubble(
     ui: &mut egui::Ui,
     body: &str,
@@ -367,7 +389,7 @@ pub(super) fn paint_speech_bubble(
 ) -> egui::Response {
     let body = crate::markdown::display_text(body);
     let avail = clamp_row_width(ui.available_width().min(ui.max_rect().width()));
-    let mark_w = if user { 0.0 } else { 22.0 };
+    let mark_w = if user { 0.0 } else { REPLY_MARK_W + REPLY_MARK_GAP };
     let bubble_avail = (avail - mark_w).max(1.0);
     let wrap = bubble_wrap_width(bubble_avail, BUBBLE_PAD_X);
     let content_w = if markdown && !user {
@@ -454,10 +476,10 @@ pub(super) fn paint_speech_bubble(
         ui.set_max_width(avail);
         ui.horizontal_top(|ui| {
             ui.set_max_width(avail);
-            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.spacing_mut().item_spacing.x = REPLY_MARK_GAP;
             let mark = crate::theme::mark(ui.ctx());
             let (mark_rect, _) =
-                ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.allocate_exact_size(egui::vec2(REPLY_MARK_W, REPLY_MARK_W), egui::Sense::hover());
             ui.painter().image(
                 mark.id(),
                 mark_rect,
@@ -1179,6 +1201,11 @@ impl Cabin {
                             } else {
                                 Vec::new()
                             };
+                            let privacy_locked = if privacy_at.is_some() {
+                                self.private_lock_for_paint().map(|why| super::privacy_ui::lock_hover(&why))
+                            } else {
+                                None
+                            };
                             // The newest /skills changes bubble gets Undo / Restore rows.
                             let skill_at = super::skill_undo::newest_skill_changes_row(&self.chat_views);
                             let skill_rows =
@@ -1273,6 +1300,7 @@ impl Cabin {
                                                 privacy_revoke = super::privacy_ui::paint_privacy_revokes(
                                                     ui,
                                                     &privacy_grants,
+                                                    privacy_locked,
                                                 );
                                             }
                                             if reply_acts {
