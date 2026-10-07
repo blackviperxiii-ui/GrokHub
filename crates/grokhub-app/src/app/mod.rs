@@ -2974,10 +2974,15 @@ impl Cabin {
     }
 
     /// The hub publish. Only `gate_hub_sync` (granted) and an approved hard
-    /// card (`HubSend::Once`) call it.
+    /// card (`HubSend::Once`) call it. A computer unpaired while the card
+    /// waited leaves nobody to send to: nothing is sent or logged.
     fn run_hub_sync(&mut self, send: privacy_ui::HubSend) {
         if self.sync_rx.is_some() {
             self.status = "Syncing…".into();
+            return;
+        }
+        if self.hub_peer_count() == 0 {
+            self.post_sync_result(privacy_ui::SYNC_NO_PEERS);
             return;
         }
         let span_ref = self.hub_sync_span(&send);
@@ -3213,9 +3218,11 @@ impl Cabin {
         match rx.try_recv() {
             Ok((from, files)) => {
                 self.persist_hub();
-                self.status = "Hub snapshot written — peers pull /v1/snapshot".into();
                 self.apply_inbound_snapshot(from, files);
-                self.nav = Nav::Devices;
+                // SY-03: one result line in the chat instead of a jump to Devices.
+                // The gate saw at least one paired computer before anything left.
+                let line = privacy_ui::sync_result_line(self.hub_peer_count().max(1));
+                self.post_sync_result(&line);
             }
             Err(mpsc::TryRecvError::Empty) => {
                 self.sync_rx = Some(rx);
