@@ -23,6 +23,6 @@
 ## Non-obvious
 - No elevation ever: a probe marked `needs_admin` (zypper verify) is skipped with "needs admin, skipped". Apt uses `dpkg --audit` because `apt-get check` takes the dpkg lock.
 - Findings are worded by the interpreter, so diagnose makes no model call. The first sentence never names a command.
-- `probes_for_intent` is narrow on purpose: "the build is broken on my machine" still goes to the model. No `system_state` grant means zero probes and the `SCOPE_ASK` line, never a new card or chrome.
+- `probes_for_intent` is narrow on purpose: "the build is broken on my machine" still goes to the model. No `system_state` grant means zero probes, the `SCOPE_ASK` line, and Spike-8a's `ScopeAsks` card (`SCOPE_ASK_WHY`); no new chrome.
 ## See also
 - [harness](harness.md), [slash](slash.md), [grokhub-agent](grokhub-agent.md)

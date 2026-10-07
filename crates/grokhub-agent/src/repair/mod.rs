@@ -31,7 +31,9 @@ pub use run::{redact_output, run_spec, ProbeRun};
 /// The tool name in the native registry and in every probe span.
 pub const DIAGNOSE_TOOL: &str = "diagnose";
 /// What the user reads when `system_state` is off. No probe has run.
-pub const SCOPE_ASK: &str = "To check your computer I need to read its system state: disk space, services, logs and updates, read only. Turn on \"System state\" in Settings → Permissions, then ask me again.";
+pub const SCOPE_ASK: &str = "To check your computer I need to read its system state: disk space, services, logs and updates, read only. Allow it on the card below (or turn on \"System state\" in Settings → Permissions), then ask me again.";
+/// The why line on the Spike-8a ask card diagnose posts when the scope is off.
+pub const SCOPE_ASK_WHY: &str = "To check what's wrong I'd read your disk space, services, logs and updates. Read only; nothing is changed.";
 /// The note on a probe that would need root or admin.
 pub const NEEDS_ADMIN: &str = "needs admin, skipped";
 /// Span result text kept per probe.

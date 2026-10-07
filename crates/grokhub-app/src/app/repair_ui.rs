@@ -1,7 +1,8 @@
 //! Spike-8b: `/diagnose` and the "something's wrong with my computer" intent.
 //! The cabin runs the read-only probes (`grokhub_agent::repair`) off the UI
 //! thread and posts the plain findings as a chat line. No new chrome (D2).
-//! Without the `system_state` grant no probe runs and the answer is the ask.
+//! Without the `system_state` grant no probe runs: the answer is the ask, and
+//! Spike-8a's inline ask card (`ScopeAsks`) is queued in the Work tree.
 
 use super::*;
 use grokhub_agent::harness as hx;
@@ -54,7 +55,8 @@ impl Cabin {
                 has_bin: &repair::on_path,
                 runner: &repair::run_spec,
             };
-            let _ = tx.send(repair::report_text(&repair::diagnose(&ctx, &probes)));
+            let report = repair::diagnose(&ctx, &probes);
+            let _ = tx.send((repair::report_text(&report), report.ask.is_some()));
         });
     }
 
@@ -63,7 +65,11 @@ impl Cabin {
             return;
         };
         match rx.try_recv() {
-            Ok(body) => {
+            Ok((body, ask)) => {
+                if ask {
+                    let ledger = hx::ConsentLedger::load_now(&crate::config::config_dir());
+                    self.harness.indexer.asks.ask(hx::Scope::SystemState, repair::SCOPE_ASK_WHY, &ledger, now_ms());
+                }
                 let body = if self.harness.diagnose_slash { mark_slash_result(&body) } else { body };
                 self.live_mut().push(("assistant".into(), body));
                 self.status.clear();

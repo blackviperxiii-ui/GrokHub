@@ -184,7 +184,7 @@ impl Cabin {
         self.kick_model(true);
     }
 
-    /// Night, anticipate, and phone `/v1/task` enqueue through `send_chat` so they
+    /// Night, anticipate, and `/send` tasks enqueue through `send_chat` so they
     /// share the composer PermissionMode pill — not a separate always-yolo path.
     /// `scheduled_perm` makes `kick_model` skip ACP and honor `scheduled_flags`
     /// / `scheduled_args` (Ask is fail-closed, no `--always-approve`).
@@ -383,7 +383,7 @@ impl Cabin {
             self.permission_mode.composer_headless_flags()
         };
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
-        // Automations, loops, and phone tasks run unwatched: always low effort.
+        // Automations, loops, and /send tasks run unwatched: always low effort.
         let effort = if self.scheduled_perm {
             Some(grokhub_core::BACKGROUND_EFFORT)
         } else {
