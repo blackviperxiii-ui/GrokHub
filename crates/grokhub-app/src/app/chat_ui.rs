@@ -1330,9 +1330,7 @@ impl Cabin {
                             ChatBlockAct::None => {}
                         }
                         if self.chrome_here() {
-                            self.paint_harness_cards(ui);
-                            self.paint_perm_ask(ui);
-                            self.paint_elicit_ask(ui);
+                            self.paint_approval_stack(ui);
                         }
                         self.paint_try_again(ui);
                         if pin_tail {
@@ -1763,6 +1761,21 @@ impl Cabin {
             super::harness_ui::paint_click_marker(ui, &cards);
         });
     }
+    /// One needs-attention line, then the hard card, Grant full, the permission ask, and elicit.
+    pub(super) fn paint_approval_stack(&mut self, ui: &mut egui::Ui) {
+        let n = self.decisions_waiting();
+        if n > 0 {
+            let line = crate::motion::needs_attention_summary(n);
+            ui.add(
+                egui::Label::new(RichText::new(line).size(12.0).color(crate::theme::muted()))
+                    .wrap(),
+            );
+        }
+        self.paint_harness_cards(ui);
+        self.paint_perm_ask(ui);
+        self.paint_elicit_ask(ui);
+    }
+
     pub(super) fn paint_perm_ask(&mut self, ui: &mut egui::Ui) {
         let Some(p) = self.perm_ask.clone() else {
             self.perm_always_confirm = None;
@@ -1777,12 +1790,15 @@ impl Cabin {
         let y = crate::motion::approval_y(enter_t, false);
         let avail = ui.available_rect_before_wrap();
         let slot = avail.translate(egui::vec2(0.0, y));
-        let waiting = 1 + self.perm_queue.len() + self.hard_waiting();
-        let summary = crate::motion::needs_attention_summary(waiting);
+        let eyebrow = super::harness_ui::perm_card_eyebrow(&p);
         ui.scope_builder(egui::UiBuilder::new().max_rect(slot), |ui| {
-            ui.set_min_width(avail.width());
             ui.multiply_opacity(enter_t.clamp(0.0, 1.0));
-            let hover_t = crate::motion::approval_hover_t(ui, ask_id, ui.rect_contains_pointer(slot));
+            let column = ui.available_width();
+            let outer = super::harness_ui::approval_card_width(column);
+            let inner = super::harness_ui::approval_card_inner(column, 1.0);
+            let card_slot = egui::Rect::from_min_size(slot.min, egui::vec2(outer, slot.height()));
+            let hover_t =
+                crate::motion::approval_hover_t(ui, ask_id, ui.rect_contains_pointer(card_slot));
             let fill = crate::theme::blend_color(
                 egui::Color32::TRANSPARENT,
                 crate::motion::HOVER_BG,
@@ -1794,8 +1810,10 @@ impl Cabin {
                 .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
                 .inner_margin(egui::Margin::same(12))
                 .show(ui, |ui| {
+                ui.set_min_width(inner);
+                ui.set_max_width(inner);
                 ui.label(
-                    RichText::new(summary)
+                    RichText::new(eyebrow)
                         .size(12.0)
                         .color(crate::theme::muted()),
                 );
@@ -1819,14 +1837,25 @@ impl Cabin {
                 };
                 if !action.is_empty() {
                     ui.add_space(4.0);
-                    ui.label(RichText::new(action).size(13.0).color(crate::theme::fg()));
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(action)
+                                .size(13.0)
+                                .monospace()
+                                .color(crate::theme::fg()),
+                        )
+                        .wrap(),
+                    );
                 }
                 if !p.reason.trim().is_empty() && p.reason.trim() != action {
                     ui.add_space(4.0);
-                    ui.label(
-                        RichText::new(&p.reason)
-                            .size(13.0)
-                            .color(crate::theme::muted()),
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(&p.reason)
+                                .size(13.0)
+                                .color(crate::theme::muted()),
+                        )
+                        .wrap(),
                     );
                 }
                 if !self.perm_queue.is_empty() {
@@ -1929,12 +1958,16 @@ impl Cabin {
             return;
         };
         ui.add_space(8.0);
+        let column = ui.available_width();
+        let inner = super::harness_ui::approval_card_inner(column, 1.0);
         egui::Frame::NONE
             .fill(egui::Color32::TRANSPARENT)
             .corner_radius(crate::theme::CHROME_RADIUS)
             .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
             .inner_margin(egui::Margin::same(12))
             .show(ui, |ui| {
+                ui.set_min_width(inner);
+                ui.set_max_width(inner);
                 ui.label(
                     RichText::new(format!("{} wants input", p.server_name))
                         .size(14.0)
@@ -2094,9 +2127,7 @@ impl Cabin {
                     ui.set_width(pane_w);
                     self.ui_composer_stack(ui);
                     if self.chrome_here() {
-                        self.paint_harness_cards(ui);
-                        self.paint_perm_ask(ui);
-                        self.paint_elicit_ask(ui);
+                        self.paint_approval_stack(ui);
                     }
                     self.paint_try_again(ui);
                     if pulse_on && (feed_n > 0 || device_on) {

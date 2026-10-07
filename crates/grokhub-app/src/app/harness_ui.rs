@@ -20,9 +20,60 @@ use grokhub_agent::{AccessMode, HardClass};
 /// How often the cabin looks for desktop parks and refreshes the turn file.
 const POLL: Duration = Duration::from_millis(250);
 
-const HARD_NOTE: &str = "Always cannot skip this. Approve runs it once.";
+const HARD_NOTE: &str = "Always can't skip this. Approve runs it once. Esc denies.";
 const HEADLESS_NOTE: &str =
-    "Grok Build's deny rule stopped this. Approve re-runs this one step with Grok's own Allow.";
+    "Grok Build's deny rule stopped this. Approve re-runs this one step with Grok's own Allow. Esc denies.";
+const HARD_EYEBROW: &str = "Hard action";
+const FULL_EYEBROW: &str = "Session access · Desktop control is on";
+const FULL_TITLE: &str = "Let Grok click and type without asking for this session?";
+const FULL_NOTE: &str = "Deletes, sends, money and credentials still ask.";
+
+/// One outer width for every approval card. Short content does not hug; long commands wrap.
+pub(super) const APPROVAL_CARD_MAX_W: f32 = 520.0;
+const APPROVAL_CARD_MARGIN_PX: i8 = 12;
+const APPROVAL_CARD_MARGIN: f32 = APPROVAL_CARD_MARGIN_PX as f32;
+
+pub(super) fn approval_card_width(column: f32) -> f32 {
+    column.min(APPROVAL_CARD_MAX_W)
+}
+
+/// Frame inner width so the painted outer edge is [`approval_card_width`].
+pub(super) fn approval_card_inner(column: f32, stroke_w: f32) -> f32 {
+    (approval_card_width(column) - 2.0 * APPROVAL_CARD_MARGIN - 2.0 * stroke_w).max(0.0)
+}
+
+pub(super) use crate::cards::PillStyle as PillKind;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CardStyle {
+    stroke_w: f32,
+    stroke_color: egui::Color32,
+    primary: PillKind,
+}
+
+/// Hard Approve is the danger pill with a 2px foreground stroke.
+/// Grant full stays the white pill on a 1px border, same family as a permission card.
+fn card_style(hard: bool) -> CardStyle {
+    if hard {
+        CardStyle {
+            stroke_w: 2.0,
+            stroke_color: crate::theme::fg(),
+            primary: PillKind::Danger,
+        }
+    } else {
+        CardStyle {
+            stroke_w: 1.0,
+            stroke_color: crate::theme::border(),
+            primary: PillKind::Solid,
+        }
+    }
+}
+
+/// `GROKHUB_GRANT_FULL=1` shows the Grant full card. `Cabin::new` reads this.
+/// `quiet_for_test` does not, so a test that wants the card sets `full_card_on`.
+pub(super) fn grant_full_card_on() -> bool {
+    std::env::var("GROKHUB_GRANT_FULL").ok().as_deref() == Some("1")
+}
 
 /// Who is waiting on a hard card.
 #[derive(Debug, Clone, PartialEq)]
@@ -68,6 +119,15 @@ pub(super) struct OneShot {
 pub(super) struct HarnessState {
     /// Session-only Grant full. The Always pill never sets this.
     pub access_full: bool,
+    /// Show the inline Grant full card. Off unless `GROKHUB_GRANT_FULL=1`.
+    ///
+    /// In this build `AccessMode::Full` is only recorded on spans and `turn.json`.
+    /// No gate reads `is_full`, `AccessMode::Full`, or `access_full` to skip an ask:
+    /// `decide` ignores access, `decide_harness` treats Full like Supervised
+    /// (`allows_computer` is true for both, and a hard class still parks), and the
+    /// desktop `precheck` calls `decide` only. `access_now` copies the turn-file
+    /// string onto the span.
+    pub full_card_on: bool,
     /// The inline Grant full card, with when it was offered (TTL → Deny).
     pub full_card: Option<Instant>,
     pub full_offered: bool,
@@ -92,6 +152,11 @@ pub(super) fn access_for(desktop_control: bool, full: bool) -> AccessMode {
 pub(super) fn is_desktop_ask(p: &grokhub_acp::PermissionAsk) -> bool {
     let hay = format!("{} {}", p.title, p.action).to_ascii_lowercase();
     hay.contains(grokhub_core::DESKTOP_MCP_SERVER)
+}
+
+/// Permission-card eyebrow: the kind of ask, not the decision count.
+pub(super) fn perm_card_eyebrow(p: &grokhub_acp::PermissionAsk) -> &'static str {
+    if is_desktop_ask(p) { "Desktop" } else { "Tool" }
 }
 
 /// Typed text never lands in a span: a desktop `type` logs its length only.
@@ -144,6 +209,16 @@ impl Cabin {
     /// Parked hard cards, for the needs-attention line.
     pub(super) fn hard_waiting(&self) -> usize {
         usize::from(self.harness.park.is_some()) + self.harness.queue.len()
+    }
+
+    /// Everything on the approval stack that has buttons: the hard card and its
+    /// queue, the Grant full card, the permission ask and its queue, and an elicit.
+    pub(super) fn decisions_waiting(&self) -> usize {
+        self.hard_waiting()
+            + usize::from(self.harness.full_card.is_some())
+            + usize::from(self.perm_ask.is_some())
+            + self.perm_queue.len()
+            + usize::from(self.elicit_ask.is_some())
     }
 
     fn trace_id(&self) -> String {
@@ -254,7 +329,7 @@ impl Cabin {
             self.harness.park = Some(park);
         }
         if self.chrome_here() {
-            self.status = crate::motion::needs_attention_summary(self.hard_waiting());
+            self.status = crate::motion::needs_attention_summary(self.decisions_waiting());
         }
     }
 
@@ -397,6 +472,10 @@ impl Cabin {
     }
 
     fn offer_full(&mut self) {
+        // Full changes nothing a gate reads, so the card stays hidden until the flag is on.
+        if !self.harness.full_card_on {
+            return;
+        }
         if self.access_mode() == AccessMode::Supervised
             && !self.harness.full_offered
             && self.harness.full_card.is_none()
@@ -498,9 +577,7 @@ impl Cabin {
         }
         let running = self.running;
         if let Some(park) = self.harness.park.clone() {
-            let waiting = self.hard_waiting() + usize::from(self.perm_ask.is_some()) + self.perm_queue.len();
-            let eyebrow = crate::motion::needs_attention_summary(waiting);
-            let title = format!("Hard action · {}", park.class.label());
+            let title = park.class.label();
             let action = if park.action.trim().is_empty() {
                 park.tool.clone()
             } else {
@@ -519,12 +596,13 @@ impl Cabin {
             );
             let id = ("hard-park", format!("{}:{}", park.path, park.action));
             let text = CardText {
-                eyebrow: &eyebrow,
-                title: &title,
+                eyebrow: HARD_EYEBROW,
+                title,
                 action: &action,
                 note,
                 primary: "Approve",
                 secondary: "Deny",
+                hard: true,
             };
             if key == Some(hx::HardAnswer::Deny) {
                 ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
@@ -539,12 +617,13 @@ impl Cabin {
         }
         if self.harness.full_card.is_some() {
             let text = CardText {
-                eyebrow: "Let Grok control the desktop is on",
-                title: "Grant full access for this session?",
-                action: "Desktop tools keep running under your permission pill.",
-                note: "Hard actions (send, delete, money, credentials) still ask. Always does not grant this.",
+                eyebrow: FULL_EYEBROW,
+                title: FULL_TITLE,
+                action: "",
+                note: FULL_NOTE,
                 primary: "Grant full",
                 secondary: "Not now",
+                hard: false,
             };
             if let Some(grant) = harness_card(ui, ("grant-full", String::new()), text, running) {
                 self.resolve_grant_full(grant, "Jeremy kept Supervised");
@@ -563,6 +642,8 @@ struct CardText<'a> {
     note: &'a str,
     primary: &'a str,
     secondary: &'a str,
+    /// Hard: danger Approve, 2px stroke, monospace command. Soft: white primary, proportional.
+    hard: bool,
 }
 
 /// Some(true) primary, Some(false) secondary. Click only: no Enter.
@@ -579,7 +660,9 @@ fn harness_card(
         note,
         primary,
         secondary,
+        hard,
     } = text;
+    let style = card_style(hard);
     ui.add_space(8.0);
     let card_id = egui::Id::new(("harness-card", id.0, id.1));
     let enter_t = crate::motion::approval_enter_t(ui, card_id, true);
@@ -588,28 +671,59 @@ fn harness_card(
     let slot = avail.translate(egui::vec2(0.0, y));
     let mut hit = None;
     ui.scope_builder(egui::UiBuilder::new().max_rect(slot), |ui| {
-        ui.set_min_width(avail.width());
         ui.multiply_opacity(enter_t.clamp(0.0, 1.0));
-        // Same transparent rest fill as the permission card, so muted text keeps its contrast;
-        // the white 1.5px stroke is what marks a hard card.
+        // Transparent rest fill keeps muted text at the permission card's contrast.
+        // Hard is a 2px foreground stroke; Grant full is the 1px border.
+        let column = ui.available_width();
+        let inner = approval_card_inner(column, style.stroke_w);
         let framed = egui::Frame::NONE
             .fill(egui::Color32::TRANSPARENT)
             .corner_radius(crate::theme::CHROME_RADIUS)
-            .stroke(egui::Stroke::new(1.5_f32, crate::theme::fg()))
-            .inner_margin(egui::Margin::same(12))
+            .stroke(egui::Stroke::new(style.stroke_w, style.stroke_color))
+            .inner_margin(egui::Margin::same(APPROVAL_CARD_MARGIN_PX))
             .show(ui, |ui| {
-                ui.label(RichText::new(eyebrow).size(12.0).color(crate::theme::muted()));
+                ui.set_min_width(inner);
+                ui.set_max_width(inner);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(eyebrow)
+                            .size(12.0)
+                            .color(crate::theme::muted()),
+                    )
+                    .wrap(),
+                );
                 ui.add_space(4.0);
-                ui.label(RichText::new(title).size(14.0).strong().color(crate::theme::fg()));
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(title)
+                            .size(14.0)
+                            .strong()
+                            .color(crate::theme::fg()),
+                    )
+                    .wrap(),
+                );
+                // Mono only for the literal command. Grant full passes an empty action.
                 if !action.trim().is_empty() {
                     ui.add_space(4.0);
-                    ui.label(RichText::new(action).size(13.0).monospace().color(crate::theme::fg()));
+                    let mut line = RichText::new(action).size(13.0).color(crate::theme::fg());
+                    if hard {
+                        line = line.monospace();
+                    }
+                    ui.add(egui::Label::new(line).wrap());
                 }
                 ui.add_space(4.0);
-                ui.label(RichText::new(note).size(12.0).color(crate::theme::muted()));
+                ui.add(
+                    egui::Label::new(RichText::new(note).size(12.0).color(crate::theme::muted()))
+                        .wrap(),
+                );
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if crate::cards::white_pill(ui, primary) {
+                    let clicked = match style.primary {
+                        PillKind::Danger => crate::cards::danger_pill(ui, primary),
+                        PillKind::Solid => crate::cards::white_pill(ui, primary),
+                        PillKind::Ghost => crate::cards::ghost_pill(ui, primary),
+                    };
+                    if clicked {
                         hit = Some(true);
                     } else if crate::cards::ghost_pill(ui, secondary) {
                         hit = Some(false);
@@ -775,6 +889,7 @@ mod tests {
         cabin.cfg.desktop_control = true;
         assert_eq!(cabin.access_mode(), AccessMode::Supervised);
         assert!(!cabin.harness.access_full, "Always must not grant Full");
+        cabin.harness.full_card_on = true;
         let soft = ask("grokhub-desktop__click", "click 1,2");
         assert_eq!(cabin.harness_precheck(soft.clone()), Some(soft));
         assert!(cabin.harness.full_card.is_some(), "first desktop act offers the inline card");
@@ -838,6 +953,7 @@ mod tests {
         let (_pin, root) = pinned("harness-halt");
         let mut cabin = Cabin::quiet_for_test();
         cabin.cfg.desktop_control = true;
+        cabin.harness.full_card_on = true;
         let _ = cabin.harness_precheck(ask("send_email", "to someone"));
         let _ = cabin.harness_precheck(ask("bash", "rm -rf ~/old"));
         cabin.offer_full();
@@ -958,5 +1074,263 @@ mod tests {
         assert_eq!(click_point(&done), Some((960.0, 600.0)));
         let pending = card("k2", "pending", r#"{"tool":"grokhub-desktop__click","x":1,"y":2}"#);
         assert_eq!(click_point(&pending), None);
+    }
+
+    #[test]
+    fn card_style_splits_hard_from_grant_full() {
+        let hard = card_style(true);
+        assert_eq!(hard.primary, PillKind::Danger);
+        assert_eq!(hard.stroke_w, 2.0);
+        assert_eq!(hard.stroke_color, crate::theme::fg());
+        let soft = card_style(false);
+        assert_eq!(soft.primary, PillKind::Solid);
+        assert_eq!(soft.stroke_w, 1.0);
+        assert_eq!(soft.stroke_color, crate::theme::border());
+    }
+
+    #[test]
+    fn approval_card_width_clamps_at_520() {
+        assert_eq!(approval_card_width(900.0), 520.0);
+        assert_eq!(approval_card_width(300.0), 300.0);
+        assert_eq!(approval_card_width(520.0), 520.0);
+    }
+
+    #[test]
+    fn approval_copy_names_the_card_and_the_floor() {
+        assert_eq!(
+            HARD_NOTE,
+            "Always can't skip this. Approve runs it once. Esc denies."
+        );
+        assert!(HEADLESS_NOTE.ends_with(" Esc denies."));
+        assert_eq!(
+            HEADLESS_NOTE,
+            "Grok Build's deny rule stopped this. Approve re-runs this one step with Grok's own Allow. Esc denies."
+        );
+        assert_eq!(HARD_EYEBROW, "Hard action");
+        assert_eq!(FULL_EYEBROW, "Session access · Desktop control is on");
+        assert_eq!(
+            FULL_TITLE,
+            "Let Grok click and type without asking for this session?"
+        );
+        assert_eq!(FULL_NOTE, "Deletes, sends, money and credentials still ask.");
+        assert_eq!(
+            perm_card_eyebrow(&ask("grokhub-desktop__click", "click 1,2")),
+            "Desktop"
+        );
+        assert_eq!(perm_card_eyebrow(&ask("bash", "ls")), "Tool");
+        assert_eq!(
+            super::super::settings::DESKTOP_CONTROL_HINT,
+            "Grok can see the screen and use the mouse and keyboard through GrokHub. Ask still asks first. Deletes, sends, money and credentials always ask."
+        );
+        assert_eq!(
+            crate::motion::CURSOR_OUTLINE,
+            egui::Color32::from_rgb(0x0b, 0x0b, 0x0c)
+        );
+    }
+
+    #[test]
+    fn needs_attention_summary_is_only_on_the_stack() {
+        let chat = include_str!("chat_ui.rs");
+        let stack = chat
+            .split("fn paint_approval_stack(")
+            .nth(1)
+            .and_then(|s| s.split("fn paint_perm_ask(").next())
+            .expect("paint_approval_stack");
+        assert!(
+            stack.contains("needs_attention_summary"),
+            "the stack line is the one count: {stack}"
+        );
+        let perm = chat
+            .split("fn paint_perm_ask(")
+            .nth(1)
+            .and_then(|s| s.split("fn paint_elicit_ask(").next())
+            .expect("paint_perm_ask");
+        assert!(
+            !perm.contains("needs_attention_summary"),
+            "the permission card must not repeat the count: {perm}"
+        );
+        let here = include_str!("harness_ui.rs");
+        let card = here
+            .split("fn harness_card(")
+            .nth(1)
+            .and_then(|s| s.split("fn remember_work_frame(").next())
+            .expect("harness_card");
+        assert!(!card.contains("needs_attention_summary"));
+        assert!(
+            !card.contains("\"Always\""),
+            "the hard card has no Always pill: {card}"
+        );
+        let paint = here
+            .split("fn paint_harness_cards(")
+            .nth(1)
+            .and_then(|s| s.split("struct CardText").next())
+            .expect("paint_harness_cards");
+        assert!(!paint.contains("needs_attention_summary"));
+        assert!(paint.contains("primary: \"Approve\"") && paint.contains("secondary: \"Deny\""));
+    }
+
+    #[test]
+    fn three_cards_count_as_three_decisions_once() {
+        let (_pin, root) = pinned("decisions-waiting");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.desktop_control = true;
+        cabin.harness.full_card_on = true;
+        let _ = cabin.harness_precheck(ask("Run command", "rm -f draft.md"));
+        cabin.perm_ask = Some(ask("grokhub-desktop__click", "click 4,5"));
+        cabin.offer_full();
+        assert!(cabin.harness.park.is_some());
+        assert!(cabin.harness.full_card.is_some());
+        assert!(cabin.perm_ask.is_some());
+        assert_eq!(cabin.decisions_waiting(), 3);
+        assert_eq!(
+            crate::motion::needs_attention_summary(cabin.decisions_waiting()),
+            "3 things need a decision"
+        );
+        let (texts, _) = paint_stack(&mut cabin, Vec::new(), 1400.0);
+        let counts = texts.iter().filter(|t| t.contains("need a decision")).count();
+        assert_eq!(counts, 1, "one count line, got {texts:?}");
+        assert!(texts.iter().any(|t| t == "3 things need a decision"));
+        assert!(texts.iter().any(|t| t == "Hard action"));
+        assert!(texts.iter().any(|t| t == "Delete"));
+        assert!(texts.iter().any(|t| t == "Desktop"));
+        assert!(texts.iter().any(|t| t == "Grok wants permission"));
+        assert!(texts.iter().any(|t| t == "Session access · Desktop control is on"));
+        assert!(texts
+            .iter()
+            .any(|t| t == "Let Grok click and type without asking for this session?"));
+        assert!(texts
+            .iter()
+            .any(|t| t == "Deletes, sends, money and credentials still ask."));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hard_and_perm_cards_share_one_width() {
+        let (_pin, root) = pinned("card-width");
+        let mut cabin = Cabin::quiet_for_test();
+        let _ = cabin.harness_precheck(ask("Run command", "rm -f draft.md"));
+        cabin.perm_ask = Some(ask("bash", "ls"));
+        let (_, rects) = paint_stack(&mut cabin, Vec::new(), 1400.0);
+        let hard = rects
+            .iter()
+            .find(|(r, s)| (s.width - 2.0).abs() < 0.01 && r.width() > 400.0)
+            .map(|(r, _)| r.width());
+        let perm = rects
+            .iter()
+            .find(|(r, s)| (s.width - 1.0).abs() < 0.01 && r.width() > 400.0 && r.height() > 40.0)
+            .map(|(r, _)| r.width());
+        let hard = hard.expect("hard frame");
+        let perm = perm.expect("perm frame");
+        assert_eq!(hard, perm);
+        assert_eq!(hard, 520.0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hard_card_buttons_are_approve_and_deny() {
+        let (_pin, root) = pinned("hard-buttons");
+        let mut cabin = Cabin::quiet_for_test();
+        let _ = cabin.harness_precheck(ask("Run command", "rm -f draft.md"));
+        let (texts, _) = paint_stack(&mut cabin, Vec::new(), 900.0);
+        let buttons: Vec<_> = texts
+            .iter()
+            .filter(|t| *t == "Approve" || *t == "Deny" || *t == "Always" || *t == "Allow")
+            .cloned()
+            .collect();
+        assert_eq!(buttons, vec!["Approve".to_string(), "Deny".to_string()]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn enter_leaves_a_hard_park_and_esc_denies_it() {
+        let (_pin, root) = pinned("hard-keys");
+        let mut cabin = Cabin::quiet_for_test();
+        let _ = cabin.harness_precheck(ask("Run command", "rm -f draft.md"));
+        assert!(cabin.harness.park.is_some());
+        let before = hx::read_spans(&root, "session").unwrap();
+        let enter = egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let _ = paint_stack(&mut cabin, vec![enter], 900.0);
+        assert!(cabin.harness.park.is_some(), "Enter must not approve a hard card");
+        let after_enter = hx::read_spans(&root, "session").unwrap();
+        assert_eq!(after_enter.len(), before.len(), "Enter writes no span");
+        assert_eq!(after_enter.last().unwrap().decision, "park");
+        let esc = egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let _ = paint_stack(&mut cabin, vec![esc], 900.0);
+        assert!(cabin.harness.park.is_none());
+        let spans = hx::read_spans(&root, "session").unwrap();
+        assert_eq!(spans.last().unwrap().decision, "deny");
+        assert_eq!(spans.last().unwrap().result, "Jeremy denied (Esc)");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn grant_full_stays_hidden_and_supervised_without_the_flag() {
+        let (_pin, root) = pinned("grant-full-off");
+        let mut cabin = Cabin::quiet_for_test();
+        assert!(!cabin.harness.full_card_on);
+        cabin.cfg.desktop_control = true;
+        let soft = ask("grokhub-desktop__click", "click 1,2");
+        assert_eq!(cabin.harness_precheck(soft.clone()), Some(soft));
+        assert!(cabin.harness.full_card.is_none());
+        assert_eq!(cabin.access_mode(), AccessMode::Supervised);
+        cabin.offer_full();
+        assert!(cabin.harness.full_card.is_none());
+        assert_eq!(cabin.access_mode(), AccessMode::Supervised);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn paint_stack(
+        cabin: &mut Cabin,
+        events: Vec<egui::Event>,
+        width: f32,
+    ) -> (Vec<String>, Vec<(egui::Rect, egui::Stroke)>) {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(width, 1600.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let out = crate::theme::test_pass(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| cabin.paint_approval_stack(ui));
+        });
+        let mut texts = Vec::new();
+        let mut rects = Vec::new();
+        for clipped in &out.shapes {
+            collect_paint(&clipped.shape, &mut texts, &mut rects);
+        }
+        (texts, rects)
+    }
+
+    fn collect_paint(
+        shape: &egui::Shape,
+        texts: &mut Vec<String>,
+        rects: &mut Vec<(egui::Rect, egui::Stroke)>,
+    ) {
+        match shape {
+            egui::Shape::Text(t) => texts.push(t.galley.text().to_string()),
+            egui::Shape::Rect(r) => rects.push((r.rect, r.stroke)),
+            egui::Shape::Vec(v) => {
+                for child in v {
+                    collect_paint(child, texts, rects);
+                }
+            }
+            _ => {}
+        }
     }
 }
