@@ -244,14 +244,25 @@ fn run_update_cli() {
     if let Some(note) = &plan.cabin_skipped {
         eprintln!("{note}");
     }
+    if let Some(note) = update::stray_beta_receipt_note() {
+        eprintln!("{note}");
+    }
     if grokhub_core::update_wipes_config(&plan.cmds) {
         eprintln!("refusing an update that would wipe config");
         std::process::exit(1);
     }
     match update::run_update_cmds(&plan.cmds) {
-        Ok(out) => print!("{out}"),
+        Ok(out) => {
+            update::log_update_attempt(channel, &plan.cmds, true, &out);
+            print!("{out}")
+        }
         Err(e) => {
+            update::log_update_attempt(channel, &plan.cmds, false, &e);
             eprintln!("{e}");
+            eprintln!(
+                "{}",
+                update::update_failure_status(&e, false, &update::update_log_path())
+            );
             std::process::exit(1);
         }
     }
