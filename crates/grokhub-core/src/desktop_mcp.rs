@@ -13,6 +13,15 @@ pub const DESKTOP_MCP_SERVER: &str = "grokhub-desktop";
 /// grok permission rule for every desktop tool.
 pub const DESKTOP_MCP_RULE: &str = "MCPTool(grokhub-desktop__*)";
 
+/// Spike-2a: the cabin's gate proxy in front of Cua Driver (`grokhub --mcp-cua`).
+pub const CUA_MCP_SERVER: &str = "grokhub-cua";
+
+/// grok permission rule for every Cua proxy tool. Denied wherever the desktop rule is.
+pub const CUA_MCP_RULE: &str = "MCPTool(grokhub-cua__*)";
+
+/// The cabin's own computer-use MCP servers. Both gate every call in the cabin.
+pub const CABIN_CU_SERVERS: &[&str] = &[DESKTOP_MCP_SERVER, CUA_MCP_SERVER];
+
 const PREFERRED_PROTOCOL: &str = "2025-06-18";
 const PROTOCOLS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 

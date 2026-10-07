@@ -376,6 +376,13 @@ pub struct AppConfig {
     /// Settings → Let Grok control the desktop. Off until the user turns it on.
     #[serde(default)]
     pub desktop_control: bool,
+    /// Spike-2a flag: Cua Driver as a second pair of hands on Linux
+    /// (`grokhub --mcp-cua`). Omitted from `app.json` while false. No Settings control.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cua_driver: bool,
+    /// Where `cua-driver` is when it is not on PATH. Omitted while empty.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cua_driver_path: String,
     #[serde(default = "default_theme")]
     pub theme: String,
     #[serde(default)]
@@ -420,6 +427,10 @@ pub struct AppConfig {
 
 fn default_yolo() -> bool {
     false
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 fn default_host_on() -> bool {
@@ -522,6 +533,8 @@ impl Default for AppConfig {
             imagine_wall: default_imagine_wall(),
             composer_glow: false,
             desktop_control: false,
+            cua_driver: false,
+            cua_driver_path: String::new(),
             theme: default_theme(),
             window: crate::window::WindowGeom::default(),
             get_started_done: false,
@@ -921,6 +934,21 @@ mod tests {
         let on: AppConfig =
             serde_json::from_str(r#"{"deviceName":"cabin","desktopControl":true}"#).unwrap();
         assert!(on.desktop_control);
+    }
+
+    #[test]
+    fn cua_driver_flag_defaults_off_and_is_omitted_while_off() {
+        let json = serde_json::to_string(&AppConfig::default()).unwrap();
+        assert!(!json.contains("cuaDriver"), "a default save must not grow cuaDriver: {json}");
+        let absent: AppConfig = serde_json::from_str(r#"{"deviceName":"cabin"}"#).unwrap();
+        assert!(!absent.cua_driver);
+        assert_eq!(absent.cua_driver_path, "");
+        let on: AppConfig =
+            serde_json::from_str(r#"{"deviceName":"cabin","cuaDriver":true,"cuaDriverPath":"/opt/cua/cua-driver"}"#).unwrap();
+        assert!(on.cua_driver);
+        assert_eq!(on.cua_driver_path, "/opt/cua/cua-driver");
+        let saved = serde_json::to_string(&on).unwrap();
+        assert!(saved.contains(r#""cuaDriver":true,"cuaDriverPath":"/opt/cua/cua-driver""#), "{saved}");
     }
 
     #[test]

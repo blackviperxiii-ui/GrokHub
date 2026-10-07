@@ -7,7 +7,6 @@
 //! wait (TTL / halt ⇒ Deny). Runs under Always too.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use grokhub_agent::harness::{self as hx, GateOutcome};
@@ -226,13 +225,7 @@ pub(crate) fn reply_result(reply: &str) -> (bool, String) {
 }
 
 pub(crate) fn access_now(config_dir: &Path, enabled: bool) -> AccessMode {
-    if !enabled {
-        return AccessMode::Readonly;
-    }
-    match AccessMode::parse(&hx::read_turn_context(config_dir).access) {
-        Some(AccessMode::Full) => AccessMode::Full,
-        _ => AccessMode::Supervised,
-    }
+    hx::desk_access(config_dir, enabled)
 }
 
 /// Post a park for the cabin and wait. True only on Jeremy's Approve.
@@ -242,46 +235,7 @@ pub(crate) fn park_and_wait(
     class: &str,
     halted: &mut dyn FnMut() -> bool,
 ) -> bool {
-    static N: AtomicU64 = AtomicU64::new(0);
-    let id = format!("{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed));
-    // A credential field's value never reaches the park file, the card, or a span.
-    let action = match call.tool.as_str() {
-        _ if class == hx::HardClass::Credentials.as_str() => hx::credential_action(&call.args),
-        "type" => call.args["text"].as_str().unwrap_or("").to_string(),
-        // The file manager does not say which files are selected.
-        "key" if class == hx::HardClass::Delete.as_str() => format!(
-            "press {} on the files selected in {} (the cabin can't see which)",
-            call.args["keys"].as_str().unwrap_or(""),
-            call.args["window"].as_str().unwrap_or("a file manager")
-        ),
-        "key" => call.args["keys"].as_str().unwrap_or("").to_string(),
-        "delete_files" => hx::delete_files_action(&call.args),
-        _ => hx::desk_args(&call.tool, &call.args),
-    };
-    let req = hx::ParkRequest {
-        id: id.clone(),
-        path: "A".into(),
-        tool: call.tool.clone(),
-        action: hx::redact_args(&action),
-        class: class.into(),
-        ts_ms: grokhub_core::now_ms(),
-    };
-    if hx::post_park(config_dir, &req).is_err() {
-        return false;
-    }
-    let ctx = hx::read_turn_context(config_dir);
-    let park_span = hx::Span::hard_park(
-        if ctx.chat_id.is_empty() { hx::CU_TRACE } else { &ctx.chat_id },
-        &call.tool,
-        &hx::desk_args(&call.tool, &call.args),
-        hx::HardClass::parse(class).unwrap_or(hx::HardClass::IrreversibleOs),
-    )
-    .on_path("A")
-    .in_turn(&ctx.chat_id, ctx.turn);
-    let mut park_span = park_span;
-    park_span.access = ctx.access.clone();
-    let _ = hx::append_span(config_dir, &park_span);
-    hx::wait_park(config_dir, &id, hx::APPROVAL_TTL, Duration::from_millis(200), halted)
+    hx::park_desk_call(config_dir, &call.tool, &call.args, class, hx::ComputerUseBackend::GrokBuild, halted)
 }
 
 /// Span for a call the pre-check or the server answered.
