@@ -590,8 +590,10 @@ fn harness_card(
     ui.scope_builder(egui::UiBuilder::new().max_rect(slot), |ui| {
         ui.set_min_width(avail.width());
         ui.multiply_opacity(enter_t.clamp(0.0, 1.0));
+        // Same transparent rest fill as the permission card, so muted text keeps its contrast;
+        // the white 1.5px stroke is what marks a hard card.
         let framed = egui::Frame::NONE
-            .fill(crate::theme::surface())
+            .fill(egui::Color32::TRANSPARENT)
             .corner_radius(crate::theme::CHROME_RADIUS)
             .stroke(egui::Stroke::new(1.5_f32, crate::theme::fg()))
             .inner_margin(egui::Margin::same(12))
@@ -685,7 +687,7 @@ pub(super) fn marker_sample(
 }
 
 /// Agent cursor marker on the latest Work-tree frame at the last approved click.
-pub(super) fn paint_click_marker(ui: &egui::Ui, cards: &[ToolCard]) {
+pub(super) fn paint_click_marker(ui: &egui::Ui, cards: &[&ToolCard]) {
     let Some(frame_card) = cards.iter().rev().find(|c| c.image_data_url.is_some()) else {
         return;
     };

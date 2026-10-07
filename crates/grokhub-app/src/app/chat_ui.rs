@@ -1759,7 +1759,8 @@ impl Cabin {
                 paint_tool_card_body(ui, card);
                 ui.add_space(6.0);
             }
-            super::harness_ui::paint_click_marker(ui, &self.tool_cards);
+            let cards: Vec<&ToolCard> = self.tool_cards.iter().collect();
+            super::harness_ui::paint_click_marker(ui, &cards);
         });
     }
     pub(super) fn paint_perm_ask(&mut self, ui: &mut egui::Ui) {
