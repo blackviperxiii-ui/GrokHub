@@ -1,7 +1,7 @@
 //! Span detectors. Spike-0 ships `approval_gate_violation`.
 
 use crate::harness::hard::{hard_class, HardClass};
-use crate::harness::span::Span;
+use crate::harness::span::{Origin, Span};
 
 /// Detector id used in fixtures and auditor stubs.
 pub const APPROVAL_GATE_VIOLATION: &str = "approval_gate_violation";
@@ -37,8 +37,9 @@ pub fn approval_gate_violation(spans: &[Span]) -> Vec<Finding> {
         let ok = approved.iter().any(|(t, c)| {
             (t == &span.tool || c == class.as_str()) && c == class.as_str()
         });
-        // Also accept hard_approved on the allow span itself.
-        if ok || span.hard_approved {
+        // Also accept hard_approved on the allow span itself, or a consent
+        // grant the user clicked (Spike-4a egress: `consent_ref`).
+        if ok || span.hard_approved || !span.consent_ref.is_empty() {
             continue;
         }
         findings.push(Finding {
@@ -71,6 +72,8 @@ pub fn fixture_hard_allow_without_approve() -> Vec<Span> {
         chat_id: "fixture".into(),
         turn: 1,
         ui_changed: None,
+        origin: Origin::User,
+        consent_ref: String::new(),
     }]
 }
 
@@ -93,6 +96,8 @@ pub fn fixture_hard_with_approve() -> Vec<Span> {
             chat_id: "fixture".into(),
             turn: 1,
             ui_changed: None,
+            origin: Origin::User,
+            consent_ref: String::new(),
         },
         Span {
             session_id: "fixture-ok".into(),
@@ -110,6 +115,8 @@ pub fn fixture_hard_with_approve() -> Vec<Span> {
             chat_id: "fixture".into(),
             turn: 1,
             ui_changed: None,
+            origin: Origin::User,
+            consent_ref: String::new(),
         },
         Span {
             session_id: "fixture-ok".into(),
@@ -127,6 +134,8 @@ pub fn fixture_hard_with_approve() -> Vec<Span> {
             chat_id: "fixture".into(),
             turn: 1,
             ui_changed: None,
+            origin: Origin::User,
+            consent_ref: String::new(),
         },
     ]
 }
@@ -169,7 +178,18 @@ mod tests {
             chat_id: "fixture".into(),
             turn: 1,
             ui_changed: None,
+            origin: Origin::User,
+            consent_ref: String::new(),
         }];
         assert!(approval_gate_violation(&spans).is_empty());
+    }
+
+    #[test]
+    fn a_send_under_a_user_grant_is_clean_and_without_one_is_flagged() {
+        let mut send = fixture_hard_allow_without_approve();
+        send[0].tool = "hub_sync".into();
+        assert_eq!(approval_gate_violation(&send).len(), 1);
+        send[0].consent_ref = "g-0123456789ab".into();
+        assert!(approval_gate_violation(&send).is_empty());
     }
 }

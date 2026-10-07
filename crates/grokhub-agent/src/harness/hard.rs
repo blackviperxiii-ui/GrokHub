@@ -185,21 +185,44 @@ pub const HEADLESS_DENY_RULES: &[&str] = &[
     "Bash(gpg --export-secret*)",
     "MCPTool(*password*)",
     "MCPTool(*credential*)",
+    // Hard floor: the consent ledger changes only by the user's click (Spike-4a)
+    "Bash(*consent.jsonl*)",
 ];
 
 /// Floor for shell commands: host_safety paths, rm -rf /, fork bomb, mkfs, dd to a disk,
 /// curl|sh as root.
 pub fn hard_floor(name: &str, arguments: &str) -> Option<HardFloor> {
     if !SHELL_TOOLS.contains(&name) {
-        return None;
+        return ledger_write(name, arguments).then(|| HardFloor { reason: LEDGER_FLOOR.into() });
     }
     let cmd = command_arg(arguments)?;
     command_floor(&cmd).map(|reason| HardFloor { reason })
 }
 
+/// The agent never widens its own permissions (harness design §12.0 rule 4).
+const LEDGER_FLOOR: &str = "hard floor: consent ledger (only your click changes it)";
+
+/// A non-read-only tool whose path argument is the consent ledger.
+fn ledger_write(name: &str, arguments: &str) -> bool {
+    if crate::gate::is_readonly(name) {
+        return false;
+    }
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(arguments) else {
+        return false;
+    };
+    ["path", "file_path", "target", "destination"].iter().any(|k| {
+        v.get(*k)
+            .and_then(|p| p.as_str())
+            .is_some_and(|p| p.replace('\\', "/").to_ascii_lowercase().ends_with("consent.jsonl"))
+    })
+}
+
 fn command_floor(cmd: &str) -> Option<String> {
     if let Some(why) = host_safety::forbidden_reason(cmd) {
         return Some(why.to_string());
+    }
+    if cmd.to_ascii_lowercase().contains("consent.jsonl") {
+        return Some(LEDGER_FLOOR.into());
     }
     let c = cmd.to_ascii_lowercase().replace('\\', "/");
     let squashed: String = c.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -343,7 +366,8 @@ mod tests {
 
     #[test]
     fn headless_deny_rules_cover_the_floor_and_stubs() {
-        assert_eq!(HEADLESS_DENY_RULES.len(), 46);
+        assert_eq!(HEADLESS_DENY_RULES.len(), 47);
+        assert_eq!(HEADLESS_DENY_RULES[46], "Bash(*consent.jsonl*)");
         assert_eq!(HEADLESS_DENY_RULES[0], "Bash(rm -rf /)");
         assert!(HEADLESS_DENY_RULES.contains(&"Bash(rm *)"));
         assert!(HEADLESS_DENY_RULES.contains(&"MCPTool(*hard_send_stub*)"));
@@ -386,6 +410,25 @@ mod tests {
         );
         assert_eq!(hard_floor("run_terminal_command", &sh("rm -rf ./build")), None);
         assert_eq!(hard_floor("read_file", r#"{"path":".ssh/config"}"#), None);
+    }
+
+    #[test]
+    fn floor_keeps_the_agent_out_of_the_consent_ledger() {
+        let ledger = Some(HardFloor { reason: "hard floor: consent ledger (only your click changes it)".into() });
+        assert_eq!(
+            hard_floor("run_terminal_command", &sh("echo '{}' >> ~/.config/GrokHub/consent.jsonl")),
+            ledger
+        );
+        assert_eq!(
+            hard_floor("write", r#"{"path":"/home/me/.config/GrokHub/consent.jsonl","content":"x"}"#),
+            ledger
+        );
+        assert_eq!(
+            classify_ask("Edit file", "C:\\Users\\me\\AppData\\Roaming\\GrokHub\\consent.jsonl"),
+            HardHit::Floor(HardFloor { reason: "hard floor: consent ledger (only your click changes it)".into() })
+        );
+        assert_eq!(hard_floor("read_file", r#"{"path":"/home/me/.config/GrokHub/consent.jsonl"}"#), None);
+        assert_eq!(hard_floor("search_replace", r#"{"file_path":"notes/consent.md"}"#), None);
     }
 
     #[test]

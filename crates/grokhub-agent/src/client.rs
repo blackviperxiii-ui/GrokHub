@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
+use crate::harness::{guard_egress, DataClass, EgressReq, GateOutcome};
 use crate::retry::{decide_retry, DEFAULT_MAX_RETRIES};
 use crate::sse::{SseEvent, SseParser};
 
@@ -401,6 +402,13 @@ impl XaiClient {
     ) -> Result<TurnOutput, ClientError> {
         if cancel.is_cancelled() {
             return Err(ClientError::Cancelled);
+        }
+        // EgressGuard (Spike-4a): api.x.ai is a default model host, so this
+        // logs one `egress.jsonl` line and goes. Loopback test servers are local.
+        let data = [DataClass::Chat, DataClass::Personal];
+        let egress = guard_egress(&crate::perm::config_dir(), &EgressReq::new(&self.url, &data));
+        if let GateOutcome::Park { reason, .. } | GateOutcome::Refuse { reason } = egress {
+            return Err(ClientError::Protocol(reason));
         }
         let body = responses_body(req);
         let mut call = self

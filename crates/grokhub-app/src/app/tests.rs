@@ -11031,6 +11031,15 @@ fn sync_writes_a_local_hub_snapshot() {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     std::env::set_var("GROKHUB_CONFIG", &root);
+    // Spike-4a: /sync publishes chats and memory, so it needs the hub grant
+    // (the Settings → Permissions Allow click) or a hard-card click.
+    let grant = grokhub_agent::harness::grant_destination(
+        &root,
+        grokhub_agent::harness::HUB_DEST,
+        grokhub_agent::harness::HUB_SYNC_DATA,
+        grokhub_agent::harness::UserClick::from_click(),
+    )
+    .unwrap();
     let mut cabin = Cabin::quiet_for_test();
     cabin.cfg.device_name = "harbor".into();
     cabin.run_slash_line("/sync");
@@ -11055,7 +11064,153 @@ fn sync_writes_a_local_hub_snapshot() {
     );
     assert_eq!(cabin.status, "Merged hub snapshot from harbor");
     assert!(cabin.sync_rx.is_none());
+    let log = grokhub_agent::harness::read_egress(&root);
+    assert_eq!(log.len(), 1, "{log:?}");
+    assert_eq!(log[0].dest, "hub");
+    assert_eq!(log[0].grant_id, grant.id);
+    assert_eq!(log[0].basis, "grant");
+    let spans = harness_spans(&root);
+    let sent = spans.iter().find(|s| s.tool == "hub_sync").expect("hub_sync span");
+    assert_eq!(sent.decision, "allow");
+    assert_eq!(sent.consent_ref, grant.id);
+    assert_eq!(sent.path, "egress");
+    assert_eq!(log[0].span_id, sent.span_ref());
     std::env::remove_var("GROKHUB_CONFIG");
+}
+
+/// Every span line under `{root}/spans/`, any session.
+fn harness_spans(root: &std::path::Path) -> Vec<grokhub_agent::harness::Span> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(root.join("spans")).into_iter().flatten().flatten() {
+        let text = std::fs::read_to_string(entry.path()).unwrap_or_default();
+        for line in text.lines().filter(|l| !l.trim().is_empty()) {
+            out.push(serde_json::from_str(line).expect("span line"));
+        }
+    }
+    out.sort_by_key(|s: &grokhub_agent::harness::Span| s.ts_ms);
+    out
+}
+
+fn wait_sync(cabin: &mut Cabin) {
+    let start = std::time::Instant::now();
+    while cabin.sync_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(8) {
+        cabin.poll_sync();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+// Spike-4a: chats and memory to a not-yet-granted destination are hard Send.
+#[test]
+fn sync_without_a_hub_grant_parks_a_hard_send_card_and_approve_sends_once() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("sync-park");
+    std::fs::create_dir_all(&root).unwrap();
+    cabin.run_slash_line("/sync");
+    assert!(cabin.sync_rx.is_none(), "nothing leaves without a grant");
+    let park = cabin.harness.park.clone().expect("hard card");
+    assert_eq!(park.source, super::harness_ui::ParkSource::Egress("hub".into()));
+    assert_eq!(park.class, grokhub_agent::HardClass::Send);
+    assert_eq!(park.path, "egress");
+    assert_eq!(park.tool, "hub_sync");
+    assert_eq!(park.action, "/sync → paired computers (chat, personal)");
+    assert_eq!(cabin.hard_waiting(), 1);
+    assert!(cabin.hub.lock().unwrap().snapshot.is_none());
+    assert!(hx::read_egress(&root).is_empty());
+    // The same hard card: Enter never approves, Esc denies.
+    assert_eq!(hx::hard_card_key(true, false, false), None);
+    assert_eq!(hx::hard_card_key(false, true, false), Some(hx::HardAnswer::Deny));
+
+    cabin.resolve_hard_park(false, "Jeremy denied (Esc)");
+    assert!(cabin.sync_rx.is_none());
+    assert!(cabin.harness.park.is_none());
+    assert_eq!(cabin.status, "Denied · Send");
+    assert!(hx::read_egress(&root).is_empty());
+
+    cabin.run_slash_line("/sync");
+    assert!(cabin.harness.park.is_some());
+    cabin.resolve_hard_park(true, "");
+    assert!(cabin.sync_rx.is_some(), "Approve sends once");
+    wait_sync(&mut cabin);
+    assert!(matches!(cabin.nav, Nav::Devices), "status={:?}", cabin.status);
+    assert!(cabin.hub.lock().unwrap().snapshot.is_some());
+    let log = hx::read_egress(&root);
+    assert_eq!(log.len(), 1, "{log:?}");
+    assert_eq!(log[0].dest, "hub");
+    assert_eq!(log[0].grant_id, "approved-once");
+    assert_eq!(log[0].basis, "approved_once");
+    assert_eq!(
+        hx::ConsentLedger::load(&root),
+        hx::ConsentLedger::empty(),
+        "a hard card never writes a standing grant"
+    );
+    let spans = harness_spans(&root);
+    let decisions: Vec<&str> = spans.iter().map(|s| s.decision.as_str()).collect();
+    assert_eq!(decisions, vec!["park", "deny", "park", "approve", "allow"]);
+    assert!(spans.iter().all(|s| s.tool == "hub_sync" && s.path == "egress"));
+    assert_eq!(spans[4].consent_ref, "approved-once");
+    assert_eq!(log[0].span_id, spans[4].span_ref());
+    assert!(hx::approval_gate_violation(&spans).is_empty());
+
+    // Still no grant: the next /sync asks again.
+    cabin.run_slash_line("/sync");
+    assert!(cabin.sync_rx.is_none());
+    assert!(cabin.harness.park.is_some());
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn revoking_the_hub_grant_blocks_the_next_sync_and_drops_the_share() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("sync-revoke");
+    std::fs::create_dir_all(&root).unwrap();
+    let g = hx::grant_destination(&root, hx::HUB_DEST, hx::HUB_SYNC_DATA, hx::UserClick::from_click()).unwrap();
+    cabin.harness.consent = None;
+    assert!(cabin.consent().destination_grant("hub", hx::HUB_SYNC_DATA).is_some());
+    cabin.hub.lock().unwrap().snapshot = Some(std::sync::Arc::new(serde_json::json!({"kind": "grokhub-hub-v1"})));
+    cabin.revoke_hub_grant(&g.id);
+    assert_eq!(cabin.status, "Sync to paired computers revoked. /sync asks again.");
+    assert!(cabin.hub.lock().unwrap().snapshot.is_none(), "revoke stops serving the old share");
+    assert_eq!(cabin.consent().active().count(), 0);
+    cabin.run_slash_line("/sync");
+    assert!(cabin.sync_rx.is_none());
+    assert_eq!(
+        cabin.harness.park.as_ref().map(|p| p.source.clone()),
+        Some(super::harness_ui::ParkSource::Egress("hub".into()))
+    );
+    assert!(hx::read_egress(&root).is_empty());
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn privacy_slash_lists_grants_scopes_and_egress_without_content() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("privacy-slash");
+    std::fs::create_dir_all(&root).unwrap();
+    let before = cabin.messages.len();
+    assert_eq!(
+        hx::guard_egress(&root, &hx::EgressReq::new("https://api.x.ai/v1/responses", &[hx::DataClass::Chat])),
+        hx::GateOutcome::Allow
+    );
+    cabin.run_slash_line("/privacy");
+    assert!(!cabin.running, "/privacy never reaches the model");
+    let start = std::time::Instant::now();
+    while cabin.harness.privacy_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(4) {
+        cabin.poll_privacy();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(cabin.messages.len(), before + 1);
+    let (role, body) = cabin.messages.last().cloned().unwrap();
+    assert_eq!(role, "assistant");
+    assert!(grokhub_core::is_cabin_slash_turn(&role, &body), "stays out of the next model kick");
+    let text = grokhub_core::strip_slash_result(&body);
+    assert!(text.starts_with("/privacy — what leaves this computer\n"), "{text}");
+    assert!(text.contains("- Sync to paired computers: off. /sync asks each time."), "{text}");
+    assert!(text.contains("Learning scopes: all off. Nothing reads them yet."), "{text}");
+    assert!(text.contains("- api.x.ai · 1 time · chat · default · last just now"), "{text}");
+    release_isolated(&root, cabin);
 }
 
 // Landed from PR #124.
