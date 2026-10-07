@@ -397,44 +397,77 @@ impl Cabin {
                     let kind = self.projects[idx].kind;
                     let open = self.projects[idx].open;
                     if self.proj_rename.as_deref() == Some(self.projects[idx].id.as_str()) {
-                        ui.horizontal(|ui| {
-                            crate::icons::paint_tree_gutter(ui, depth);
-                            // Leave room for Cancel on the narrow rail. Name stays editable.
-                            let cancel_w = 78.0;
-                            let gap = ui.spacing().item_spacing.x;
-                            let edit_w = (ui.available_width() - cancel_w - gap).max(48.0);
-                            let edit = ui.add(
-                                egui::TextEdit::singleline(&mut self.proj_rename_buf)
-                                    .desired_width(edit_w)
-                                    .hint_text(crate::theme::hint("Name"))
-                                    .font(egui::FontId::proportional(13.0)),
-                            );
-                            if self.proj_rename_focus {
-                                edit.request_focus();
-                                if edit.has_focus() {
-                                    self.proj_rename_focus = false;
+                        // Center the row so Name and Cancel share a top, bottom, and baseline.
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ui.available_width(), 30.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                crate::icons::paint_tree_gutter(ui, depth);
+                                // Leave room for Cancel on the narrow rail. Name stays editable.
+                                let cancel_w = 78.0;
+                                let gap = ui.spacing().item_spacing.x;
+                                let edit_w = (ui.available_width() - cancel_w - gap).max(48.0);
+                                // egui replaces hint color with weak_text_color. Pin that to muted.
+                                {
+                                    let visuals = ui.visuals_mut();
+                                    visuals.weak_text_color = Some(crate::theme::muted());
+                                    visuals.text_cursor.stroke =
+                                        egui::Stroke::new(2.0_f32, crate::theme::fg());
                                 }
-                            }
-                            if let Some(lock) = self.proj_rename_lock.clone() {
-                                if self.proj_rename_buf == lock {
-                                    select_all_edit(ui, edit.id, &self.proj_rename_buf);
-                                } else {
-                                    self.proj_rename_lock = None;
+                                let edit = ui.add(
+                                    egui::TextEdit::singleline(&mut self.proj_rename_buf)
+                                        .desired_width(edit_w)
+                                        .min_size(egui::vec2(edit_w, 30.0))
+                                        .frame(
+                                            egui::Frame::NONE
+                                                .fill(crate::theme::elevated())
+                                                .corner_radius(15.0)
+                                                .stroke(egui::Stroke::new(
+                                                    2.0_f32,
+                                                    crate::theme::fg(),
+                                                ))
+                                                .inner_margin(egui::Margin::symmetric(10, 6)),
+                                        )
+                                        .hint_text(crate::theme::hint("Name"))
+                                        .font(egui::FontId::proportional(13.0))
+                                        .vertical_align(egui::Align::Center),
+                                );
+                                if self.proj_rename_focus {
+                                    edit.request_focus();
+                                    if edit.has_focus() {
+                                        self.proj_rename_focus = false;
+                                    }
                                 }
-                            }
-                            // Click wins over lost-focus commit: Cancel must not save the folder.
-                            if crate::cards::ghost_pill(ui, "Cancel") {
-                                self.cancel_proj_rename();
-                            } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                                drop_key(ui, egui::Key::Escape);
-                                self.cancel_proj_rename();
-                            } else if ui.input(|i| i.key_pressed(egui::Key::Enter))
-                                || (edit.lost_focus() && !self.proj_rename_focus)
-                            {
-                                drop_key(ui, egui::Key::Enter);
-                                self.finish_proj_rename();
-                            }
-                        });
+                                if let Some(lock) = self.proj_rename_lock.clone() {
+                                    if self.proj_rename_buf == lock {
+                                        select_all_edit(ui, edit.id, &self.proj_rename_buf);
+                                    } else {
+                                        self.proj_rename_lock = None;
+                                    }
+                                }
+                                // The pill is narrower than cancel_w. Pin it to the slot's right
+                                // edge so it meets the same inset as the Projects "+".
+                                let cancel_clicked = ui
+                                    .allocate_ui_with_layout(
+                                        egui::vec2(cancel_w, 30.0),
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| crate::cards::ghost_pill(ui, "Cancel"),
+                                    )
+                                    .inner;
+                                // Click wins over lost-focus commit: Cancel must not save the folder.
+                                if cancel_clicked {
+                                    self.cancel_proj_rename();
+                                } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                    drop_key(ui, egui::Key::Escape);
+                                    self.cancel_proj_rename();
+                                } else if ui.input(|i| i.key_pressed(egui::Key::Enter))
+                                    || (edit.lost_focus() && !self.proj_rename_focus)
+                                {
+                                    drop_key(ui, egui::Key::Enter);
+                                    self.finish_proj_rename();
+                                }
+                            },
+                        );
                         continue;
                     }
                     let show_chats = match kind {

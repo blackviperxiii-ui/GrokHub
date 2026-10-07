@@ -17,6 +17,8 @@ Where the checks run:
 
 Every step writes a cabin-local span to `spans/<chat>.jsonl` (`path`, `chat_id`, `turn`, `ui_changed`, redacted args). The `approval_gate_violation` check flags a hard action with no approve span. The last approved click shows as the agent cursor marker on the Work-tree frame, and the parked count joins the needs-attention line. The grok-build-gui spec now says selected Always is white, not amber. No version bump.
 
+The Projects Name field lines up with Cancel: same height, centered on the row, filled like Filter chats, with a muted hint and a white focus ring while it is staged. Cancel's right edge meets the same rail inset as the “+”. If Grok Build never answers and the list is empty, Skills and Connectors say "Grok Build didn't answer. Refresh to try again." If a timeout keeps the previous list, a muted line above those tiles says "Showing the last list — Grok Build timed out." No version bump.
+
 Projects “+” asks for a folder name and shows Cancel beside the Name field. Cancel drops the staged folder the same way Esc does. Skills and Connectors no longer stay on Loading… when the Grok Build catalog is slow: the three catalog commands run together, and if nothing has arrived after 18 seconds the page settles (last list kept, or empty) with a timeout instead of spinning. Refresh tries again. No version bump.
 
 Settings → Account picks up a Grok sign-in written by `grokhub --oauth` (or another process) while the cabin is already open, so About/doctor saying xAI auth present no longer leaves Account on Sign in with Grok with a blank identity. When OAuth is present, Account shows Connected with the Grok name and/or email and Sign out; the device-code path stays for a true sign-out. No version bump.
