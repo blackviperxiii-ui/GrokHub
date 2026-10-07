@@ -1643,7 +1643,7 @@ impl Cabin {
         self.chat_tail_frames = CHAT_TAIL_FRAMES;
     }
 
-    /// Sending from the composer follows your own message down. A night job or a phone
+    /// Sending from the composer follows your own message down. A night job or a `/send`
     /// task calls `send_scheduled_chat` directly, so it cannot yank the pane out of your reading.
     /// Only the user's own typing comes through here, so this is also where a typed
     /// `/skills undo` is marked as theirs (`typed_send`).

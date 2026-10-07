@@ -1,4 +1,4 @@
-//! Official Grok dark tokens (grok.com / iOS / Android, 2026-09).
+//! Official Grok dark tokens (grok.com, 2026-09).
 //! Recreated in egui — no grok.com JS, no webview.
 //! Dark-first: OLED canvas, quiet chrome. Composer stays a Grok column; chat text is fluid.
 
