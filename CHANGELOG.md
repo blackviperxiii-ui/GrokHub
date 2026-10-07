@@ -24,6 +24,8 @@ Safety loop (Spike-1a). The harness now catches a click that changed nothing, a 
 
 Decision inbox and real desktop actions (Spike-1b). "N things need a decision. Everything else is on track." now opens into one row per waiting decision on Home and the Workboard, each with what Grok wants, the chat it is from, and Approve/Deny (hard rows need a mouse click, Esc denies, Halt denies them all); Grok can open an app, focus a window and type with `ui_changed` checked, and any delete (rm, del, Remove-Item, trash, the Recycle Bin, or Delete in a file manager) parks a hard card naming the exact paths.
 
+Grok Build's own computer use is checked too (Spike-1c, path D). On Auto or Always, and whenever desktop control is off, every Grok Build run denies its own screen, mouse and keyboard tools so desktop work goes through the cabin's gated desktop tools; a computer-use step that still runs without an ask is logged, a hard one (send, pay, delete, credentials) stops the turn and shows "Grok tried to … without asking" with Approve / Deny, and with desktop control off it just stops the turn.
+
 Release bump list: the version strings that were in the old README (headline, both Latest rows, `--version` examples) now live in `docs/REFERENCE.md`, so `CLAUDE.md`, `.cursor/rules/repo-gates.mdc` and the versions compass list that file instead. `README.md` has no version strings. Docs only, no version bump.
 
 ## 2.10.94 — 2026-10-07

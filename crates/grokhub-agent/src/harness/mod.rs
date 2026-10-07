@@ -10,7 +10,9 @@
 //! No Cua, no new cabin-native CU.
 //!
 //! Paths: A `grokhub-desktop` dispatch, B ACP ask, C headless `--deny` rules,
-//! E native Lab engine (`gate.rs`). Every path writes the same span.
+//! D Grok Build's own computer use (`path_d`: `--deny` rules plus a watchdog
+//! on frames nobody asked about), E native Lab engine (`gate.rs`). Every path
+//! writes the same span.
 //!
 //! Spike-4a trust floor: `consent` (ConsentLedger, scopes all off) and
 //! `egress` (EgressGuard + `egress.jsonl`) answer through the same `decide`
@@ -60,6 +62,7 @@ mod hard;
 mod ladder;
 mod mindcheck;
 mod park;
+mod path_d;
 mod proactive;
 mod self_manage;
 mod span;
@@ -113,8 +116,9 @@ pub use detect::{
 pub use hard::{
     classify, classify_ask, credential_action, credential_field, credential_hint, delete_files_action, delete_targets,
     desk_classify, hard_class, hard_floor,
-    HardClass, HardFloor, HardHit, GB_DENY_GAPS, HEADLESS_DENY_RULES,
+    HardClass, HardFloor, HardHit, BUILTIN_CU_DENY, GB_DENY_GAPS, HEADLESS_DENY_RULES,
 };
+pub use path_d::{builtin_cu, cu_look_only, decide_unasked, unasked_action, unasked_title};
 pub use ladder::{hard_target, ladder_span, Ladder, LadderStep, Rung, RECOVERY_TOOL};
 pub use mindcheck::{
     agent_forget, learn, mind_key, note_prior, signals_from_cards, signals_from_changes, signals_from_spans, Candidate,
