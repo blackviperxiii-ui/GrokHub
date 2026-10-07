@@ -79,6 +79,71 @@ pub fn run_stdio() -> i32 {
     0
 }
 
+/// Spike-2a: `grokhub --mcp-cua`. The cabin's gate proxy in front of a
+/// `cua-driver mcp` child (Linux only, `cuaDriver` flag). Every call goes
+/// through `harness::decide` before it is forwarded; the child starts on the
+/// first call that may use it, so with the flag or the switch off none starts.
+pub fn run_cua_stdio() -> i32 {
+    use grokhub_agent::harness as hx;
+    let started = process_started_ms();
+    let dir = crate::config::config_dir();
+    let child_dir = dir.clone();
+    let mut proxy: hx::CuaProxy<hx::StdioChild> = hx::CuaProxy::new(Box::new(move || start_cua_child(&child_dir)));
+    let stdin = std::io::stdin();
+    let mut reader = stdin.lock();
+    loop {
+        let line = match read_line_capped(&mut reader, LINE_CAP) {
+            Ok(None) => break,
+            Ok(Some(line)) => line,
+            Err(msg) => {
+                eprintln!("cua-mcp: {msg}");
+                emit(&grokhub_core::desktop_mcp::rpc_parse_error());
+                continue;
+            }
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let cfg = crate::config::load();
+        let mut halted = || read_halt_stamp().is_some_and(|ms| stamp_halts(ms, started));
+        let gate = hx::CuaGate { enabled: cfg.desktop_control, flag: cfg.cua_driver, halted: halted() };
+        if let Some(reply) = proxy.handle_line(&line, gate, &dir, &mut halted) {
+            emit(&reply);
+        }
+    }
+    0
+}
+
+/// Linux only, the pinned release only, from `cuaDriverPath` or PATH.
+fn start_cua_child(dir: &std::path::Path) -> Result<grokhub_agent::harness::StdioChild, String> {
+    use grokhub_agent::harness as hx;
+    if !cfg!(target_os = "linux") {
+        return Err(hx::CUA_LINUX_ONLY_MSG.into());
+    }
+    let bin = hx::find_cua_driver(&crate::config::load().cua_driver_path).ok_or_else(|| hx::CUA_MISSING_MSG.to_string())?;
+    hx::verify_cua_driver(&bin)?;
+    hx::spawn_cua_child(&bin, dir)
+}
+
+/// The Cua proxy is registered only while desktop control and the `cuaDriver`
+/// flag are both on (and only on Linux).
+pub(crate) fn cua_wanted(desktop_control: bool, cua_flag: bool) -> bool {
+    grokhub_agent::harness::ComputerUseBackend::selected(cua_flag, desktop_control)
+        == grokhub_agent::harness::ComputerUseBackend::CuaDriver
+}
+
+/// Add or remove `grokhub-cua` in the cabin `GROK_HOME` to match `want`.
+fn sync_cua(bin: &std::path::Path, cwd: &std::path::Path, want: bool) -> Result<(), String> {
+    if want {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        grokhub_acp::register_cua_mcp(bin, cwd, &exe).map(|_| ())
+    } else if cabin_server_registered(grokhub_core::CUA_MCP_SERVER, false) {
+        grokhub_acp::unregister_cua_mcp(bin, cwd).map(|_| ())
+    } else {
+        Ok(())
+    }
+}
+
 fn emit(line: &str) {
     let mut out = std::io::stdout().lock();
     let _ = writeln!(out, "{line}");
@@ -192,10 +257,21 @@ pub(crate) fn spawn_register(on: bool) {
 
 #[cfg(not(test))]
 pub(crate) fn maybe_register_on_start(enabled: bool) {
-    if !enabled || cabin_desktop_registered() {
+    if enabled && !cabin_server_registered(grokhub_core::DESKTOP_MCP_SERVER, true) {
+        // `run_register` brings the Cua proxy in line too.
+        start_register(true, false);
         return;
     }
-    start_register(true, false);
+    let want_cua = cua_wanted(enabled, crate::config::load().cua_driver);
+    if want_cua != cabin_server_registered(grokhub_core::CUA_MCP_SERVER, true) {
+        std::thread::spawn(move || {
+            if let Some(bin) = grokhub_acp::find_grok() {
+                if let Err(e) = sync_cua(&bin, &crate::config::config_dir(), want_cua) {
+                    eprintln!("cua-mcp: {e}");
+                }
+            }
+        });
+    }
 }
 
 static PROCESS_STARTED_MS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
@@ -393,6 +469,10 @@ fn run_register(on: bool) -> String {
     } else {
         grokhub_acp::unregister_desktop_mcp(&bin, &cwd)
     };
+    let want_cua = cua_wanted(on, crate::config::load().cua_driver);
+    if let Err(e) = sync_cua(&bin, &cwd, want_cua) {
+        return format!("Could not register Cua Driver tools: {e}");
+    }
     match result {
         Ok(text) => {
             let trimmed = text.trim();
@@ -410,11 +490,21 @@ fn run_register(on: bool) -> String {
     }
 }
 
-#[cfg(not(test))]
-fn cabin_desktop_registered() -> bool {
+/// `server` is in the cabin `config.toml`; with `this_exe`, only when it
+/// points at this exact binary.
+fn cabin_server_registered(server: &str, this_exe: bool) -> bool {
     let Some(home) = grokhub_acp::cabin_grok_home() else {
         return false;
     };
+    let Ok(text) = std::fs::read_to_string(home.join("config.toml")) else {
+        return false;
+    };
+    if !text.contains(server) {
+        return false;
+    }
+    if !this_exe {
+        return true;
+    }
     // An update can move the exe. Re-register unless this exact binary is listed.
     let Ok(exe) = std::env::current_exe() else {
         return false;
@@ -422,12 +512,7 @@ fn cabin_desktop_registered() -> bool {
     let raw = exe.display().to_string();
     // TOML basic strings double the backslashes in a Windows path; literal strings do not.
     let escaped = raw.replace('\\', "\\\\");
-    std::fs::read_to_string(home.join("config.toml"))
-        .ok()
-        .is_some_and(|text| {
-            text.contains(grokhub_core::DESKTOP_MCP_SERVER)
-                && (text.contains(&raw) || text.contains(&escaped))
-        })
+    text.contains(&raw) || text.contains(&escaped)
 }
 
 struct LiveBackend {
@@ -643,6 +728,16 @@ fn connect_backend() -> Result<Box<dyn DesktopBackend>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cua_proxy_is_wanted_only_with_the_flag_and_the_switch_on_linux() {
+        assert!(!cua_wanted(true, false), "flag off (the default): Grok Build only");
+        assert!(!cua_wanted(false, true), "switch off: not registered");
+        assert!(!cua_wanted(false, false));
+        assert_eq!(cua_wanted(true, true), cfg!(target_os = "linux"));
+        let cfg = crate::config::AppConfig::default();
+        assert!(!cua_wanted(true, cfg.cua_driver));
+    }
 
     #[test]
     fn desktop_mcp_png_encode_and_jpeg_api() {

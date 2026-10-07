@@ -1091,7 +1091,7 @@ fn mcp_line(name: &str, spec: &Value) -> String {
 }
 
 fn is_desktop_name(name: &str) -> bool {
-    name.trim().to_ascii_lowercase().replace('_', "-") == grokhub_core::DESKTOP_MCP_SERVER
+    grokhub_core::CABIN_CU_SERVERS.contains(&name.trim().to_ascii_lowercase().replace('_', "-").as_str())
 }
 
 fn read_manifest(root: &Path) -> Result<Manifest, String> {
