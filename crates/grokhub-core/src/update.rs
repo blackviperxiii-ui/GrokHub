@@ -317,7 +317,7 @@ pub fn update_cmds_in(source: &Path, channel: Channel) -> Result<Vec<String>, St
 /// still assert the Linux `install.sh` plan.
 fn update_cmds_on(source: &Path, windows: bool, channel: Channel) -> Result<Vec<String>, String> {
     if !is_grokhub_source(source) {
-        return Err("not a GrokHub source tree — set Settings → source or GROKHUB_SRC".into());
+        return Err("GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).".into());
     }
     let want = channel.branch();
     let branch = git_head_branch(source)?;
@@ -387,7 +387,7 @@ pub fn update_cmds_for_host_in(
             Err(e) => Err(e),
         },
         None if zip_ok => Ok(windows_release_update_cmds()),
-        None => Err("not a GrokHub source tree — set Settings → source or GROKHUB_SRC".into()),
+        None => Err("GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source).".into()),
     }
 }
 
@@ -1208,7 +1208,7 @@ mod tests {
         );
         assert_eq!(
             update_cmds_for_host_in(None, true, Channel::Beta).unwrap_err(),
-            "not a GrokHub source tree — set Settings → source or GROKHUB_SRC"
+            "GrokHub can't find its source folder (~/GrokHub or ~/.config/GrokHub/source)."
         );
         assert_eq!(
             update_cmds_for_host_in(None, true, Channel::Stable).unwrap(),

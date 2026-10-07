@@ -85,7 +85,7 @@ pub fn channel_for_host(receipt: Channel, windows: bool) -> Channel {
     }
 }
 
-pub const BETA_LINUX_ONLY_NOTE: &str = "Beta is Linux-only for now (built from source)";
+pub const BETA_LINUX_ONLY_NOTE: &str = "Beta is Linux-only for now, so GrokHub updated to stable.";
 
 /// Update note for a stray beta receipt on Windows (Update runs as stable).
 pub fn beta_linux_only_note(receipt: Channel, windows: bool) -> Option<&'static str> {
@@ -191,7 +191,7 @@ pub fn try_auto_off_beta_channel(source: Option<&std::path::Path>) -> Option<Str
             hint => hint.to_string(),
         };
         return Some(format!(
-            "Beta caught up to main, but the clone stayed on beta: {why}"
+            "Beta caught up to main, but GrokHub couldn't switch back to stable: {why}"
         ));
     }
     write_installed_channel(Channel::Stable).ok()?;
@@ -298,7 +298,7 @@ pub fn update_failure_status(output: &str, channel_switch: bool, log: &std::path
         update_fail_hint(output)
     };
     let sep = if hint.ends_with('.') { " " } else { ". " };
-    format!("{hint}{sep}Log: {}", log.display())
+    format!("{hint}{sep}Details: {}", log.display())
 }
 
 pub fn host_receipt_failed(receipt: &str) -> bool {
@@ -1120,7 +1120,7 @@ mod tests {
         } else {
             assert_eq!(
                 msg.as_deref(),
-                Some("Beta caught up to main, but the clone stayed on beta: Uncommitted changes in the clone — commit or stash them, then try again.")
+                Some("Beta caught up to main, but GrokHub couldn't switch back to stable: Your GrokHub source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again.")
             );
         }
         assert_eq!(receipt_channel(), Channel::Beta);
@@ -1144,7 +1144,7 @@ mod tests {
         assert_eq!(channel_for_host(Channel::Beta, false), Channel::Beta);
         assert_eq!(
             beta_linux_only_note(Channel::Beta, true),
-            Some("Beta is Linux-only for now (built from source)")
+            Some("Beta is Linux-only for now, so GrokHub updated to stable.")
         );
         assert_eq!(beta_linux_only_note(Channel::Stable, true), None);
         assert_eq!(beta_linux_only_note(Channel::Beta, false), None);
@@ -1189,22 +1189,22 @@ mod tests {
         let dirty = "$ bash install.sh --user --channel stable\nexit 1 · 9ms\nerror: /src has uncommitted changes; commit or stash them before --channel stable";
         assert_eq!(
             update_failure_status(dirty, true, log),
-            "Uncommitted changes in the clone — commit or stash them, then try again. Log: /home/u/.config/GrokHub/update.log"
+            "Your GrokHub source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again. Details: /home/u/.config/GrokHub/update.log"
         );
         let rustc = "exit 101 · 3s\nerror: package `eframe v0.36.2` cannot be built because it requires rustc 1.88 or newer";
         assert_eq!(
             update_failure_status(rustc, false, log),
-            "This build needs a newer Rust — run rustup update, then try again. Log: /home/u/.config/GrokHub/update.log"
+            "GrokHub needs a newer Rust to build. Run rustup update, then try again. Details: /home/u/.config/GrokHub/update.log"
         );
         let on_main = "error: /src is on main but the beta channel builds beta; run with --channel stable to switch, or git checkout beta";
-        assert!(update_failure_status(on_main, false, log).starts_with("The clone is on main but this install is beta"));
+        assert!(update_failure_status(on_main, false, log).starts_with("Your GrokHub source folder is on stable, but Labs Beta is on."));
         assert_eq!(
             update_failure_status("exit 1 · 5ms\nfatal: unable to access", false, log),
-            "Update failed. Log: /home/u/.config/GrokHub/update.log"
+            "Update failed. Details: /home/u/.config/GrokHub/update.log"
         );
         assert_eq!(
             update_failure_status("exit 1 · 5ms\nfatal: unable to access", true, log),
-            "Channel switch failed — previous install kept. Log: /home/u/.config/GrokHub/update.log"
+            "Channel switch failed — previous install kept. Details: /home/u/.config/GrokHub/update.log"
         );
         // The handler feeds the real host output, not the fixed "Update failed".
         let jobs = include_str!("app/jobs.rs");
