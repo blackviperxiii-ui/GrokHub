@@ -139,7 +139,9 @@ fn add_inner(args: &Value) -> Result<String, String> {
             let config = crate::perm::config_dir();
             let ledger = hx::ConsentLedger::load(&config);
             let dest = hx::egress_dest(&url);
-            let data = [hx::DataClass::Chat];
+            // A standing connection can carry memory in its tool calls, not
+            // just chat text (chat alone passes with no grant since Spike-4c).
+            let data = [hx::DataClass::Chat, hx::DataClass::Personal];
             if !hx::decide(hx::Step::Egress { dest: &dest, data: &data, ledger: &ledger }).is_allow() {
                 return Err(format!(
                     "{dest} is a new host for GrokHub. Grant it in Settings, Privacy before a connection can reach it. Nothing was added."

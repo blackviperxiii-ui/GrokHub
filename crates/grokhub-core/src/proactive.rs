@@ -61,7 +61,7 @@ pub enum CandidateSource {
 
 impl CandidateSource {
     /// The consent scope key that must be granted before this source is read.
-    pub fn grant_scope(self) -> Option<&'static str> {
+    pub fn consent_scope(self) -> Option<&'static str> {
         match self {
             Self::Calendar => Some("calendar"),
             Self::Mail => Some("mail"),
@@ -135,7 +135,7 @@ impl Candidate {
             topic: topic.to_string(),
             class: CandidateClass::Soft,
             reversible: Reversibility::ByHand,
-            scope: source.grant_scope().map(str::to_string),
+            scope: source.consent_scope().map(str::to_string),
             value,
             confidence,
             why: why.to_string(),
@@ -427,7 +427,7 @@ impl ProactiveEngine {
         }
         for src in sources {
             let source = src.source();
-            let allowed = match source.grant_scope() {
+            let allowed = match source.consent_scope() {
                 Some(scope) => granted.contains(&scope),
                 None => true,
             };
@@ -436,7 +436,7 @@ impl ProactiveEngine {
             }
             out.extend(src.read().into_iter().map(|mut c| {
                 c.source = source;
-                c.scope = source.grant_scope().map(str::to_string);
+                c.scope = source.consent_scope().map(str::to_string);
                 c
             }));
         }
