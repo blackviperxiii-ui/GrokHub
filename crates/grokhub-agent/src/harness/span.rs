@@ -196,11 +196,31 @@ impl Span {
         self
     }
 
+    /// What the reply told the user at the end of a turn (Spike-1a), so the
+    /// detectors can check a claim against the steps. Secret-shaped strings and
+    /// `held` values (secrets the user typed this session) are redacted, and
+    /// only the first [`CLAIM_CAP`] chars are kept.
+    pub fn reply(session_id: &str, text: &str, held: &[String]) -> Self {
+        let clean = grokhub_core::redact_held_secrets(&grokhub_core::redact_secrets(text), held);
+        let claim: String = clean.trim().chars().take(CLAIM_CAP).collect();
+        let mut s = Self::deny(session_id, REPLY_TOOL, "{}", "", "soft");
+        s.claim = claim;
+        s.decision = "say".into();
+        s
+    }
+
     /// `{session}:{ts_ms}`, how `egress.jsonl` points at a span.
     pub fn span_ref(&self) -> String {
         format!("{}:{}", self.session_id, self.ts_ms)
     }
 }
+
+/// Span tool for a reply's claim (decision `say`).
+pub const REPLY_TOOL: &str = "reply";
+/// Span tool for a verify script run (`result` is `pass` or `fail`).
+pub const VERIFY_TOOL: &str = "verify_script";
+/// How much of a reply a `say` span keeps.
+pub const CLAIM_CAP: usize = 400;
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -215,6 +235,8 @@ pub fn redact_args(raw: &str) -> String {
     for key in [
         "password",
         "passwd",
+        "passcode",
+        "verification_code",
         "api_key",
         "apikey",
         "secret",
@@ -349,6 +371,21 @@ mod tests {
         let r = redact_args(raw);
         assert!(r.contains("%redacted%"), "{r}");
         assert!(!r.contains("s3cret"), "{r}");
+    }
+
+    #[test]
+    fn reply_span_redacts_shaped_and_held_secrets_and_caps_the_claim() {
+        let s = Span::reply(
+            "chat-r",
+            "Logged in with hunter2222 and key sk-abcdefghijklmnopqrstuv, then done.",
+            &["hunter2222".into()],
+        );
+        assert_eq!(s.claim, "Logged in with [redacted] and key [redacted], then done.");
+        assert_eq!((s.tool.as_str(), s.decision.as_str(), s.args_redacted.as_str()), (REPLY_TOOL, "say", "{}"));
+        let long = Span::reply("chat-r", &"a".repeat(CLAIM_CAP + 50), &[]);
+        assert_eq!(long.claim.chars().count(), CLAIM_CAP);
+        let r = redact_args(r#"{"passcode":"9911","verification_code":"424242"}"#);
+        assert!(!r.contains("9911") && !r.contains("424242"), "{r}");
     }
 
     #[test]
