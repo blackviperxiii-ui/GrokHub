@@ -17,7 +17,7 @@
 - Renaming or changing a signature: the header is not generated (no cbindgen), so C callers break silently. Edit both files together.
 - Changing core answers it forwards: `DEFAULT_PORT` (18766), `HUB_KIND`, pair code shape (7 chars with a dash, `CODE_ALPH`), `dedicated_imagine_model`, `dedicated_voice_model`, or a `slash_kind` string.
 ## What depends on it
-- Android and Windows native callers (`README.md`: link `libgrokhub_ffi`, include the header). Nothing in this workspace links it.
+- Android and Windows native callers (`docs/REFERENCE.md`: link `libgrokhub_ffi`, include the header). Nothing in this workspace links it.
 ## Non-obvious
 - Null input: `grokhub_normalize_code` and `grokhub_slash_kind` return null; the model fns treat null as "no user pick"; `grokhub_forbidden` returns 0.
 - `cstr` maps a string with an interior NUL to an empty string instead of panicking across the ABI.
