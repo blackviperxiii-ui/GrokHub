@@ -33,11 +33,16 @@
 //! it). No sealer, or a locked one, means [`AmrError::Paused`] and no write.
 //! This crate stays free of crypto: it only calls the trait.
 
+mod dream;
 mod import;
 mod schema;
 mod store;
 mod write;
 
+pub use dream::{
+    dream_report_path, latest_dream, DreamMerge, DreamOpts, DreamReport, DreamRetire, DREAM_DUP_JACCARD,
+    DREAM_PROPOSE_CONFIDENCE, DREAM_RECENT_DAYS, DREAM_STALE_BELOW, DREAM_TAG_JACCARD, DREAM_TTL_DAYS,
+};
 pub use import::{durable_chip_prefs, import_legacy, write_import_report, ImportReport, ImportTally};
 pub use schema::{Edge, EdgeRel, Node, NodeDraft, NodeHit, NodeId, NodeType, Sensitivity, AMR_SCHEMA};
 pub use store::{AmrStore, ForgetReport, RecallReport};
