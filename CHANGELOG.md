@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+Heartbeat throttle. The pulse still wakes every 15 seconds, but the things it starts on its own (anticipating a need, the automatic ideas ask, the nightly review) now share a budget, so it can't burn tokens or keep nudging you. Approval rules and hard cards are unchanged.
+
+- **A budget for proactive acts.** At most one every 15 minutes, 3 an hour and 8 a day by default. Settings → Behavior → Proactive pace offers Normal, Calm (once an hour at most, 4 a day) and Off. Exact values go under `"heartbeat"` in `app.json` (`minIntervalMin`, `maxPerHour`, `maxPerDay`, `backoffAfter`, `backoffMaxMin`, `haltHoldMin`). A file without that key keeps the defaults and doesn't grow one.
+- **Backs off when it isn't helping.** After 3 acts in a row that came back empty (no new ideas, an empty review, an anticipate turn nobody answered within 15 minutes) or that you dismissed (Stop on its turn, Dismiss or Not this on a Pulse card), the gap doubles each time, up to 4 hours. One useful act brings the normal pace back.
+- **Waits for you.** Nothing proactive starts during a reply, with text in the composer, or while a card is waiting on you. Idle reflect waits too.
+- **Halt stops it at once.** Tray Halt and the halt hotkeys hold the pulse for 15 minutes or until you send a message. Only local upkeep runs in that time: no anticipate, ideas, review, digest lookup, living wall, phone inbox or scheduled job starts, and an ideas or review reply already on its way is dropped.
+- **Scheduled jobs are unchanged.** Automations and loops keep their own clock and daily cap, outside this budget, and still run as background runs that never take the composer.
+- **Traced without content.** Each decision goes to `spans/heartbeat.jsonl` as allow or hold with a reason (`busy`, `min_interval`, `hour_cap`, `day_cap`, `backoff`, `halted`, `off`). It never includes prompts, replies or chat ids. A repeated hold is written once.
+
+No version bump.
+
 Spike-4b trust floor (privacy and consent, second slice). The consent rules are unchanged: grants still come only from a click in Settings, and a hard card still has no Always, Enter does not approve it, and Esc or the timeout denies it.
 
 - **Private data is encrypted on disk.** `consent.jsonl`, `egress.jsonl` (and its rolled `egress.1.jsonl`) and private AMR notes (`amr/nodes/<id>.sealed`) are sealed with ChaCha20-Poly1305. The key is made on the first private write and lives in your OS keyring (Secret Service on Linux, Credential Manager on Windows, Keychain on macOS); only a short hash of it is stored next to the data. Your existing plain-text ledger and send log keep working and are sealed in place, line by line, on the next write. Nothing is dropped.

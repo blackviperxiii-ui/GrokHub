@@ -562,6 +562,7 @@ impl Cabin {
                                                                     self.status = "Saved".into();
                                                                 }
                                                             }
+                                                            self.ui_heartbeat_pace(ui);
                                                             let budgets = grokhub_core::TOKEN_BUDGETS;
                                                             let budget_labels: Vec<String> = budgets
                                                                 .iter()

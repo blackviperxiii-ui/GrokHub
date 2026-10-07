@@ -1406,6 +1406,7 @@ impl Cabin {
         };
         self.pulse_note(&card.title, LedgerReason::Dismiss, day);
         self.pulse_remove(&card);
+        self.heartbeat_card_dismissed();
     }
 
     /// Not this: a dislike line in the ledger, then the card goes. Cards on the
@@ -1416,6 +1417,7 @@ impl Cabin {
         };
         self.pulse_note(&card.title, LedgerReason::NotThis, day);
         self.pulse_remove(&card);
+        self.heartbeat_card_dismissed();
         self.status = "Got it. Less like this.".into();
     }
 

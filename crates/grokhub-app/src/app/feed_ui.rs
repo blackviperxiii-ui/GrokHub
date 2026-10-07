@@ -970,6 +970,9 @@ impl Cabin {
             {
                 return;
             }
+            if !self.heartbeat_may(grokhub_core::ProactiveAct::Ideas, now) {
+                return;
+            }
         }
         let (prompt, inputs) = self.idea_request();
         self.cfg.feed_pulse.last_ideas_ms = now;
@@ -1129,6 +1132,14 @@ impl Cabin {
                     self.persist_updates();
                     self.persist_cfg();
                 }
+                self.heartbeat_outcome(
+                    grokhub_core::ProactiveAct::Ideas,
+                    if n > 0 {
+                        grokhub_core::ActOutcome::Useful
+                    } else {
+                        grokhub_core::ActOutcome::Empty
+                    },
+                );
                 if self.nav == Nav::Pulse {
                     self.status = match n {
                         0 => "No new ideas this time".into(),
