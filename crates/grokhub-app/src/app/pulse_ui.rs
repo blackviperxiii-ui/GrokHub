@@ -529,6 +529,96 @@ pub(super) fn paint_pulse_row(
     (act, resp.rect, title_hover)
 }
 
+/// "source · age" for the line above a post's title.
+pub(super) fn post_age_line(card: &UpdateCard, now: u64) -> String {
+    format!(
+        "{} · {}",
+        post_source(card),
+        pc::ago_label(card.created_at, now)
+    )
+}
+
+/// Star, list, or the card's type glyph. The deck and the feed use the same one.
+pub(super) fn paint_feed_icon(ui: &mut egui::Ui, card: &UpdateCard) {
+    icon(ui, feed_glyph(card), category_tint(pc::card_category(card)));
+}
+
+pub(super) enum FeedPostAct {
+    Like,
+    Discuss,
+    Link(String),
+}
+
+/// Title, short takeaway, Read at, images, then Like / Discuss.
+/// `thumbs` is empty when the post has no image yet.
+pub(super) fn paint_post_body(
+    ui: &mut egui::Ui,
+    card: &UpdateCard,
+    thumbs: &[Thumb],
+) -> Option<FeedPostAct> {
+    let mut act = None;
+    ui.add(
+        egui::Label::new(
+            RichText::new(&card.title)
+                .size(crate::theme::FONT_UI)
+                .strong()
+                .color(crate::theme::fg()),
+        )
+        .wrap()
+        .selectable(false),
+    );
+    let takeaway = grokhub_core::short_takeaway(card);
+    if !takeaway.is_empty() {
+        clamp_label(
+            ui,
+            &takeaway,
+            crate::theme::FONT_BODY,
+            crate::theme::muted(),
+            3,
+        );
+    }
+    if let Some(url) = card.citations.first() {
+        let host = pc::source_host(url).unwrap_or_else(|| url.clone());
+        let link = ui.add(
+            egui::Label::new(
+                RichText::new(format!("Read at {host}"))
+                    .size(crate::theme::FONT_TIP)
+                    .color(crate::theme::link()),
+            )
+            .sense(egui::Sense::click())
+            .selectable(false),
+        );
+        if link.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if link.clicked() {
+            act = Some(FeedPostAct::Link(url.clone()));
+        }
+    }
+    if !thumbs.is_empty() {
+        ui.add_space(2.0);
+        paint_thumbs(ui, thumbs);
+    }
+    ui.add_space(2.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 14.0;
+        if paint_heart_button(ui, card.reaction == Some(CardReaction::Up)) {
+            act = Some(FeedPostAct::Like);
+        }
+        if matches!(card.kind, UpdateKind::Digest | UpdateKind::Suggestion) {
+            let talk = ui.add(
+                egui::Button::new(RichText::new("Discuss").size(crate::theme::FONT_TIP))
+                    .frame(false)
+                    .min_size(egui::vec2(0.0, 24.0)),
+            );
+            if talk.clicked() {
+                act = Some(FeedPostAct::Discuss);
+            }
+        }
+    });
+    act
+}
+
 /// Where a post came from, for the line under its headline.
 pub(super) fn post_source(card: &UpdateCard) -> String {
     if let Some(name) = card
@@ -949,8 +1039,8 @@ impl Cabin {
         }
     }
 
-    /// One post: "source · age" with ··· on top, the headline, the summary,
-    /// the source link, its images, then Like / Discuss.
+    /// One post: "source · age" with ··· on top, the headline, the short
+    /// takeaway, the source link, its images, then Like / Discuss.
     fn paint_pulse_post(
         &mut self,
         ui: &mut egui::Ui,
@@ -959,7 +1049,6 @@ impl Cabin {
     ) -> Option<PulseAct> {
         let mut act = None;
         let kind = pc::pulse_type(card);
-        let cat = pc::card_category(card);
         let thumbs: Vec<Thumb> = card
             .pulse
             .image_urls
@@ -968,86 +1057,28 @@ impl Cabin {
             .filter_map(|url| self.pulse_thumb(ui.ctx(), url))
             .collect();
         ui.horizontal_top(|ui| {
-            icon(ui, feed_glyph(card), category_tint(cat));
+            paint_feed_icon(ui, card);
             ui.add_space(10.0);
             ui.vertical(|ui| {
                 ui.set_width(ui.available_width());
                 ui.spacing_mut().item_spacing.y = 4.0;
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(format!(
-                            "{} · {}",
-                            post_source(card),
-                            pc::ago_label(card.created_at, now)
-                        ))
-                        .size(crate::theme::FONT_TIP)
-                        .color(crate::theme::subtle()),
+                        RichText::new(post_age_line(card, now))
+                            .size(crate::theme::FONT_TIP)
+                            .color(crate::theme::subtle()),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         dots_menu(ui, false, |ui| pulse_menu(ui, card, kind, true, &mut act));
                     });
                 });
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(&card.title)
-                            .size(crate::theme::FONT_UI)
-                            .strong()
-                            .color(crate::theme::fg()),
-                    )
-                    .wrap()
-                    .selectable(false),
-                );
-                let summary = card.body.as_deref().unwrap_or("").trim();
-                if !summary.is_empty() {
-                    clamp_label(
-                        ui,
-                        summary,
-                        crate::theme::FONT_BODY,
-                        crate::theme::muted(),
-                        5,
-                    );
+                if let Some(did) = paint_post_body(ui, card, &thumbs) {
+                    act = Some(match did {
+                        FeedPostAct::Like => PulseAct::Like(card.id.clone()),
+                        FeedPostAct::Discuss => PulseAct::Discuss(card.id.clone()),
+                        FeedPostAct::Link(url) => PulseAct::Link(url),
+                    });
                 }
-                if let Some(url) = card.citations.first() {
-                    let host = pc::source_host(url).unwrap_or_else(|| url.clone());
-                    let link = ui.add(
-                        egui::Label::new(
-                            RichText::new(format!("Read at {host}"))
-                                .size(crate::theme::FONT_TIP)
-                                .color(crate::theme::link()),
-                        )
-                        .sense(egui::Sense::click())
-                        .selectable(false),
-                    );
-                    if link.hovered() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                    }
-                    if link.clicked() {
-                        act = Some(PulseAct::Link(url.clone()));
-                    }
-                }
-                if !thumbs.is_empty() {
-                    ui.add_space(2.0);
-                    paint_thumbs(ui, &thumbs);
-                }
-                ui.add_space(2.0);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 14.0;
-                    if paint_heart_button(ui, card.reaction == Some(CardReaction::Up)) {
-                        act = Some(PulseAct::Like(card.id.clone()));
-                    }
-                    if matches!(card.kind, UpdateKind::Digest | UpdateKind::Suggestion) {
-                        let talk = ui.add(
-                            egui::Button::new(
-                                RichText::new("Discuss").size(crate::theme::FONT_TIP),
-                            )
-                            .frame(false)
-                            .min_size(egui::vec2(0.0, 24.0)),
-                        );
-                        if talk.clicked() {
-                            act = Some(PulseAct::Discuss(card.id.clone()));
-                        }
-                    }
-                });
             });
         });
         act
@@ -1055,7 +1086,7 @@ impl Cabin {
 
     /// A post's image slot: drawn, still on its way, or gone (`None`) when the
     /// download or decode failed, so a broken image never sits as a placeholder.
-    fn pulse_thumb(&mut self, ctx: &egui::Context, url: &str) -> Option<Thumb> {
+    pub(super) fn pulse_thumb(&mut self, ctx: &egui::Context, url: &str) -> Option<Thumb> {
         let name = pc::image_cache_name(url);
         if self.pulse_view.image_failed.contains(&name) {
             return None;
@@ -1116,7 +1147,7 @@ impl Cabin {
 
     /// One post at a time, off the UI thread: the source page's own preview
     /// image, cached under the config dir. Unit tests never fetch.
-    fn kick_pulse_images(&mut self, posts: &[UpdateCard]) {
+    pub(super) fn kick_pulse_images(&mut self, posts: &[UpdateCard]) {
         if cfg!(test) || self.pulse_view.image_rx.is_some() {
             return;
         }
@@ -1646,7 +1677,7 @@ impl Cabin {
 }
 
 /// One image slot on a post.
-enum Thumb {
+pub(super) enum Thumb {
     Ready(egui::TextureHandle),
     /// Still downloading: a plain block, no icon.
     Loading,
