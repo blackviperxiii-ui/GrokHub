@@ -27683,6 +27683,8 @@ fn spike3a_adds_no_nav_page() {
     cabin.open_history_hit(&format!("step:1:{id}"));
     assert!(matches!(cabin.nav, Nav::Chat), "a step hit opens the chat, not a page of its own");
     std::env::remove_var("GROKHUB_CONFIG");
+}
+
 // ---- Spike-8a local indexers: the in-context ask card and "Forget these" ----
 
 fn paint_work_cards(ctx: &egui::Context, cabin: &mut Cabin, events: Vec<egui::Event>) -> ScopePaint {
