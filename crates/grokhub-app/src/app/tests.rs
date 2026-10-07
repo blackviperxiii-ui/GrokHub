@@ -21316,6 +21316,64 @@ fn has_key_false_when_idle() {
     assert!(!cabin.has_key());
 }
 
+#[test]
+fn account_settings_pulls_disk_oauth_and_shows_connected_chrome() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("acct-oauth-ui");
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_cabin(Vec::new(), 0);
+    assert!(
+        cabin.secrets.oauth.is_none(),
+        "quiet cabin starts without oauth in memory"
+    );
+    // Simulate grokhub --oauth writing secrets while the cabin is already open.
+    let tokens = grokhub_core::XaiOAuthTokens {
+        access_token: "qa-access".into(),
+        name: Some("GrokHub QA".into()),
+        email: Some("grokhub-qa@agentmail.to".into()),
+        connected_at: 1,
+        ..Default::default()
+    };
+    crate::secrets::save(&crate::secrets::Secrets {
+        oauth: Some(tokens),
+        ..Default::default()
+    })
+    .expect("save secrets");
+    assert!(
+        cabin.secrets.oauth.is_none(),
+        "in-memory oauth stays empty until Account pulls disk"
+    );
+    cabin.pull_account_oauth_from_disk();
+    assert!(cabin.account_oauth_present(), "disk oauth must load into Account");
+    let chrome = account_connect_chrome(cabin.secrets.oauth.as_ref());
+    assert!(chrome.connected);
+    assert_eq!(chrome.action, "Sign out");
+    assert_eq!(chrome.title, "Connected");
+    assert_eq!(chrome.hint, "GrokHub QA · grokhub-qa@agentmail.to");
+    // Signed-out chrome stays for the empty case.
+    let signed_out = account_connect_chrome(None);
+    assert_eq!(signed_out.action, "Sign in with Grok");
+    let settings = include_str!("settings.rs");
+    let account = settings
+        .split("SettingsSec::Account => {")
+        .nth(1)
+        .and_then(|s| s.split("SettingsSec::Appearance => {").next())
+        .expect("Account");
+    assert!(
+        account.contains("account_auth.title")
+            && account.contains("account_auth.hint")
+            && account.contains("account_auth.action")
+            && account.contains("account_auth.connected"),
+        "Account must paint Connect Grok from account_connect_chrome: {account}"
+    );
+    assert!(
+        settings.contains("pull_account_oauth_from_disk"),
+        "Settings must pull secrets.json oauth before painting Account"
+    );
+}
+
+
 // Folded from PR #354.
 #[test]
 fn update_pending_now_none_when_idle() {
@@ -21584,8 +21642,15 @@ fn native_auto_keeps_the_permission_card() {
 #[test]
 fn signin_button_and_keychain_move() {
     let settings = include_str!("settings.rs");
-    assert!(settings.contains("Sign in with Grok"));
-    assert!(settings.contains("Connect Grok"));
+    let oauth = include_str!("oauth.rs");
+    assert!(
+        settings.contains("account_connect_chrome")
+            && settings.contains("pull_account_oauth_from_disk")
+            && oauth.contains("Sign in with Grok")
+            && oauth.contains("Sign out"),
+        "Account Connect Grok chrome must pull disk oauth and paint Sign in / Sign out"
+    );
+    assert!(settings.contains("Connect Grok") || oauth.contains("Connect Grok"));
 
     struct Mem {
         current: std::sync::Mutex<Option<grokhub_core::ImagineTokens>>,

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Settings → Account picks up a Grok sign-in written by `grokhub --oauth` (or another process) while the cabin is already open, so About/doctor saying xAI auth present no longer leaves Account on Sign in with Grok with a blank identity. When OAuth is present, Account shows Connected with the Grok name and/or email and Sign out; the device-code path stays for a true sign-out. No version bump.
+
 Card deck polish: after × the new front card eases in briefly instead of jump-cutting; each open peek strip shows that card's own title; fly-in snaps under reduced motion and the mid-flight offset reads more clearly; the New here chip tip says "Suggested because you're new here". No version bump.
 
 On Automations, Run is a ghost pill and a failed job's Retry stays filled, each job has an Enabled switch, next runs read as a local time such as today 7:30 AM or Tue 9:00 AM, the intro is plain, Suggested says the ideas come from your recent work, and Discuss says you opened the post from your feed.
