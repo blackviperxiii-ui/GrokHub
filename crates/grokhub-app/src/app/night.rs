@@ -41,8 +41,8 @@ fn run_needles(a: &Automation) -> Vec<String> {
     out
 }
 
-/// Trailing actions on a job row. The primary pill stays filled. Remove lives
-/// in ··· and only asks; the caller confirms before anything is deleted.
+/// Trailing actions on a job row. Run is a ghost pill. Retry stays filled.
+/// Remove lives in ··· and only asks; the caller confirms before anything is deleted.
 fn job_row_menu(ui: &mut egui::Ui, primary: &str) -> (bool, bool) {
     let mut ran = false;
     let mut remove = false;
@@ -53,11 +53,21 @@ fn job_row_menu(ui: &mut egui::Ui, primary: &str) -> (bool, bool) {
                 ui.close();
             }
         });
-        if crate::cards::white_pill(ui, primary) {
+        if job_primary_pill(ui, primary) {
             ran = true;
         }
     });
     (ran, remove)
+}
+
+/// Healthy Run is a ghost. A failed scheduled Retry stays filled white.
+/// Loops always pass "Run", so both lists share this choice.
+fn job_primary_pill(ui: &mut egui::Ui, label: &str) -> bool {
+    if label == "Retry" {
+        crate::cards::white_pill(ui, label)
+    } else {
+        crate::cards::ghost_pill(ui, label)
+    }
 }
 
 impl Cabin {
@@ -138,7 +148,7 @@ impl Cabin {
                 self.auto_compose = true;
             }
             egui::ScrollArea::vertical().show(ui, |ui| {
-            crate::cards::help_text(ui, "Interval prompts run as Grok Build `/loop`. A clock time — `every weekday at 9` — runs as a cabin automation on the 15s pulse. Stop a job when the work is done.");
+            crate::cards::help_text(ui, "Loops repeat on an interval. Scheduled jobs run at a clock time. Stop a job when its work is done.");
             ui.add_space(12.0);
             if self.auto_compose {
                 ui.add_space(12.0);
@@ -206,7 +216,8 @@ impl Cabin {
                         .inner_margin(egui::Margin::same(12))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
-                                if ui.checkbox(&mut self.grok_loops[i].enabled, "").changed() {
+                                if crate::cards::enabled_switch(ui, self.grok_loops[i].enabled) {
+                                    self.grok_loops[i].enabled = !self.grok_loops[i].enabled;
                                     self.persist_loops();
                                 }
                                 ui.vertical(|ui| {
@@ -244,12 +255,9 @@ impl Cabin {
             }
             crate::cards::section_label(ui, "Suggested");
             ui.label(
-                RichText::new(review_status_line(
-                    self.suggestions.last_review_day.as_deref(),
-                    &Self::local_day(),
-                ))
-                .size(12.0)
-                .color(crate::theme::muted()),
+                RichText::new("Suggested from your recent work")
+                    .size(12.0)
+                    .color(crate::theme::muted()),
             );
             ui.add_space(8.0);
             let mut active_names: Vec<String> = self
@@ -304,7 +312,7 @@ impl Cabin {
         let mut toggled = false;
         for i in 0..self.automations.len() {
             let title = automation_row_title(&self.automations[i]);
-            let body = automation_summary_line(&self.automations[i], now);
+            let body = automation_summary_line(&self.automations[i], clock);
             let health = automation_health_line(&self.automations[i]);
             let ring = if health.is_some() {
                 crate::theme::offline().gamma_multiply(0.6)
@@ -318,7 +326,8 @@ impl Cabin {
                 .inner_margin(egui::Margin::same(12))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        if ui.checkbox(&mut self.automations[i].enabled, "").changed() {
+                        if crate::cards::enabled_switch(ui, self.automations[i].enabled) {
+                            self.automations[i].enabled = !self.automations[i].enabled;
                             toggled = true;
                         }
                         ui.vertical(|ui| {

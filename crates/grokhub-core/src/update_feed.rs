@@ -1143,7 +1143,7 @@ pub fn discuss_context(card: &UpdateCard) -> String {
             out.push_str(why);
         }
     }
-    out.push_str("\n\nThe person opened this from their feed and wants to act on it.");
+    out.push_str("\n\nYou opened this from your feed and want to act on it.");
     out
 }
 
@@ -3051,7 +3051,11 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         assert!(seed.contains("It changes the cancel button you use."), "{seed}");
         assert!(!seed.contains("ZEPHYRTAIL"), "{seed}");
         assert!(!seed.contains("evil.example"), "{seed}");
-        assert!(seed.contains("wants to act on it"), "{seed}");
+        assert!(
+            seed.contains("You opened this from your feed and want to act on it."),
+            "{seed}"
+        );
+        assert!(!seed.contains("The person opened"), "{seed}");
     }
 
     #[test]

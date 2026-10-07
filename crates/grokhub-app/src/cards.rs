@@ -1467,24 +1467,40 @@ pub fn settings_toggle(ui: &mut egui::Ui, title: &str, hint: &str, on: &mut bool
 }
 
 pub fn settings_switch(ui: &mut egui::Ui, on: bool) -> bool {
-    let (_rect, resp) = ui.allocate_exact_size(egui::vec2(40.0, 24.0), Sense::click());
+    finish_switch(paint_switch(ui, on, egui::vec2(40.0, 24.0)), on)
+}
+
+/// Compact on/off for an Automations job row. About 28×16, tooltip "Enabled".
+pub fn enabled_switch(ui: &mut egui::Ui, on: bool) -> bool {
+    let resp = paint_switch(ui, on, egui::vec2(28.0, 16.0)).on_hover_text("Enabled");
+    finish_switch(resp, on)
+}
+
+/// Same track and knob as the Settings switch, scaled from its 24px height.
+fn paint_switch(ui: &mut egui::Ui, on: bool, size: egui::Vec2) -> egui::Response {
+    let (_rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let on_t = crate::theme::animate_selection(ui, resp.id.with("sw-on"), on);
     let base_fill = crate::theme::blend_color(crate::theme::panel(), crate::theme::fg(), on_t);
     let (resp, rect, fill) = crate::theme::feel_button(ui, resp, base_fill);
-    ui.painter().rect_filled(rect, 8.0, fill);
+    let scale = size.y / 24.0;
+    ui.painter().rect_filled(rect, 8.0 * scale, fill);
     if on_t < 0.98 {
-        ui.painter()
-            .rect_stroke(
-                rect,
-                rect.height() * 0.5,
-                Stroke::new(1.0_f32, crate::theme::border_strong()),
-                egui::StrokeKind::Middle,
-            );
+        ui.painter().rect_stroke(
+            rect,
+            rect.height() * 0.5,
+            Stroke::new(1.0_f32, crate::theme::border_strong()),
+            egui::StrokeKind::Middle,
+        );
     }
-    let knob_x = grokhub_core::lerp_f32(rect.left() + 12.0, rect.right() - 12.0, on_t);
+    let inset = 12.0 * scale;
+    let knob_x = grokhub_core::lerp_f32(rect.left() + inset, rect.right() - inset, on_t);
     let knob = crate::theme::blend_color(crate::theme::muted(), crate::theme::bg(), on_t);
     ui.painter()
-        .circle_filled(egui::pos2(knob_x, rect.center().y), 8.0, knob);
+        .circle_filled(egui::pos2(knob_x, rect.center().y), 8.0 * scale, knob);
+    resp
+}
+
+fn finish_switch(resp: egui::Response, on: bool) -> bool {
     let enabled = resp.enabled();
     let name = switch_access_name(on);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, name));
