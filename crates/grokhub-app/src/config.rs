@@ -360,7 +360,7 @@ pub struct AppConfig {
     /// Over budget, night jobs, loops, and anticipate wait for tomorrow.
     #[serde(default = "default_budget_pause")]
     pub budget_pauses_scheduled: bool,
-    /// Settings → Behavior → Proactive pace. How often the heartbeat may start a
+    /// `app.json` only (no Settings control). How often the heartbeat may start a
     /// proactive act (anticipate, ideas, nightly review), plus backoff and the Halt
     /// hold. Omitted from `app.json` while it stays default.
     #[serde(default, skip_serializing_if = "HeartbeatPace::is_default")]

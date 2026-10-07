@@ -8,8 +8,8 @@
 - `cargo test -p grokhub-app heartbeat -- --test-threads=1` (cabin wiring; isolate `GROKHUB_CONFIG`)
 ## Key files
 - `crates/grokhub-core/src/heartbeat.rs`: `HeartbeatAct`, `runs_while_halted`, the pulse timing.
-- `crates/grokhub-core/src/heartbeat_throttle.rs`: `HeartbeatPace` (`app.json` key `heartbeat`), `HeartbeatThrottle::gate`, `PaceHold` reasons, `PACE_PRESETS`.
-- `crates/grokhub-app/src/app/heartbeat_gate.rs`: `heartbeat_busy`, `heartbeat_may`, `heartbeat_halt`, the pace spans, `ui_heartbeat_pace`.
+- `crates/grokhub-core/src/heartbeat_throttle.rs`: `HeartbeatPace` (`app.json` key `heartbeat`), `HeartbeatThrottle::gate`, `PaceHold` reasons, `PACE_NORMAL` (the defaults; config only, no Settings control).
+- `crates/grokhub-app/src/app/heartbeat_gate.rs`: `heartbeat_busy`, `heartbeat_may`, `heartbeat_halt`, `heartbeat_outcome`, and the pace spans.
 - `crates/grokhub-app/src/app/mod.rs` (`tick_heartbeat`, `tick_anticipate`) and `crates/grokhub-app/src/app/night.rs` (`tick_night`, `tick_loops`, `tick_review`, `start_scheduled_run`).
 ## Change recipe
 - New proactive act: add a `ProactiveAct` variant, call `heartbeat_may` right before the work starts (after its own due checks), and report `heartbeat_outcome` when the result lands.

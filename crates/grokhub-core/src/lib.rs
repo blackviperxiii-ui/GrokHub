@@ -251,8 +251,7 @@ pub use heartbeat::{
     HEARTBEAT_MS,
 };
 pub use heartbeat_throttle::{
-    pace_label, with_pace_preset, ActOutcome, HeartbeatPace, HeartbeatThrottle, PaceGate,
-    PaceHold, ProactiveAct, PACE_CALM, PACE_CUSTOM_LABEL, PACE_NORMAL, PACE_OFF, PACE_PRESETS,
+    ActOutcome, HeartbeatPace, HeartbeatThrottle, PaceGate, PaceHold, ProactiveAct, PACE_NORMAL,
 };
 pub use history::{
     dedupe_hits, palette_file_shown, palette_forget_stale_walk, palette_row_action,
