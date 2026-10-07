@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Card deck polish: after × the new front card eases in briefly instead of jump-cutting; each open peek strip shows that card's own title; fly-in snaps under reduced motion and the mid-flight offset reads more clearly; the New here chip tip says "Suggested because you're new here". No version bump.
+
 On Automations, Run is a ghost pill and a failed job's Retry stays filled, each job has an Enabled switch, next runs read as a local time such as today 7:30 AM or Tue 9:00 AM, the intro is plain, Suggested says the ideas come from your recent work, and Discuss says you opened the post from your feed.
 
 Failed Automations jobs show Retry and a View last run link, and Remove sits behind a ··· menu that asks Remove '…'? before deleting the job.

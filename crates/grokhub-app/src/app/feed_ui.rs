@@ -49,7 +49,7 @@ pub(super) const STACK_REST_SCALE_1: f32 = 0.95;
 pub(super) const STACK_REST_DY_2: f32 = 16.0;
 pub(super) const STACK_REST_SCALE_2: f32 = 0.90;
 /// Open deck: each card behind the front shows this much, enough for its title row.
-pub(super) const PEEK_H: f32 = 30.0;
+pub(super) const PEEK_H: f32 = 34.0;
 /// The card under the pointer rises this far above the card in front, so it reads in full.
 pub(super) const LIFT_STEP: f32 = FEED_CARD_H + FEED_GAP;
 /// Open Pulse card on the deck, before a source image. Grows up from the strip.
@@ -60,8 +60,12 @@ const FULL_FEED_IMAGE_H: f32 = 174.0;
 const SLIDE_SECS: f32 = 0.22;
 /// A card joining the deck after one leaves slides in from below and to the right.
 const FLY_SECS: f32 = 0.45;
-const FLY_DX: f32 = 48.0;
-const FLY_DY: f32 = 36.0;
+/// Clearer mid-flight offset for stills / video (CD-04).
+const FLY_DX: f32 = 56.0;
+const FLY_DY: f32 = 42.0;
+/// After ×, the card that was already on the deck eases into the front (CD-01).
+pub(super) const SETTLE_SECS: f32 = 0.15;
+pub(super) const SETTLE_DY: f32 = 2.0;
 
 #[cfg(test)]
 pub(super) fn stacked_feed_h(n: usize) -> f32 {
@@ -793,6 +797,7 @@ impl Cabin {
             self.persist_cfg();
         }
         fly_in_newcomers(ui.ctx(), cards);
+        arm_front_settle(ui.ctx(), cards);
         let hints = deck_hints(cards, &self.card_prefs, now, deck.rank.novelty_id.as_deref());
         let front = deferred.stack.left_top();
         let lifted = lifted_index(cards, &deferred.view);
@@ -1439,6 +1444,29 @@ fn fly_id(card_id: &str) -> egui::Id {
     egui::Id::new(("home-feed-fly", card_id))
 }
 
+fn settle_id(card_id: &str) -> egui::Id {
+    egui::Id::new(("home-feed-settle", card_id))
+}
+
+/// When the front card id changes (× promote), arm a short settle so the new
+/// front eases in instead of jump-cutting. Newcomers joining the back do not
+/// change the front id, so they keep the fly-in only.
+fn arm_front_settle(ctx: &egui::Context, cards: &[UpdateCard]) {
+    let key = egui::Id::new("home-deck-front");
+    let prev: Option<String> = ctx.data(|d| d.get_temp(key));
+    let Some(front) = cards.first() else {
+        return;
+    };
+    if prev.as_deref() != Some(front.id.as_str()) {
+        // Under reduced motion, skip the 0-reset so the same-frame snap to 1.0
+        // is not fighting a forced restart (CD-01 / CD-04).
+        if !crate::motion::reduced_motion_ctx(ctx) {
+            ctx.animate_value_with_time(settle_id(&front.id), 0.0, 0.0);
+        }
+        ctx.data_mut(|d| d.insert_temp(key, front.id.clone()));
+    }
+}
+
 /// A card that was not on the deck last frame flies in. The first deck painted
 /// after launch just appears.
 fn fly_in_newcomers(ctx: &egui::Context, cards: &[UpdateCard]) {
@@ -1479,9 +1507,13 @@ fn paint_card_at(
     rect: egui::Rect,
     hint: Option<&str>,
     opacity: f32,
+    clip: Option<egui::Rect>,
 ) -> Option<FeedAct> {
     let mut act = None;
     ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+        if let Some(clip) = clip {
+            ui.set_clip_rect(clip);
+        }
         ui.multiply_opacity(opacity);
         ui.set_min_size(rect.size());
         ui.set_width(rect.width());
@@ -1534,13 +1566,14 @@ fn paint_slide_deck(
     let motion = !crate::motion::reduced_motion_ctx(&ctx);
     let slide_secs = if motion { SLIDE_SECS } else { 0.0 };
     let fly_secs = if motion { FLY_SECS } else { 0.0 };
+    let settle_secs = if motion { SETTLE_SECS } else { 0.0 };
     let lift = chrome_lift(cards, expanded, lifted, room);
-    let placed: Vec<(egui::Rect, SlidePose, f32, bool)> = cards
+    let placed: Vec<(egui::Rect, SlidePose, f32, f32, bool)> = cards
         .iter()
         .zip(poses)
         .enumerate()
         .map(|(index, (card, pose))| {
-            let dy = ctx.animate_value_with_time(
+            let mut dy = ctx.animate_value_with_time(
                 egui::Id::new(("home-feed-dy", card.id.as_str())),
                 card_dy(index, pose.dy, &lift, room),
                 slide_secs,
@@ -1551,6 +1584,16 @@ fn paint_slide_deck(
                 slide_secs,
             );
             let fly = ctx.animate_value_with_time(fly_id(&card.id), 1.0, fly_secs);
+            let settle = ctx.animate_value_with_time(settle_id(&card.id), 1.0, settle_secs);
+            let settle_t = if motion {
+                egui::emath::easing::quadratic_out(settle.clamp(0.0, 1.0))
+            } else {
+                1.0
+            };
+            if index == 0 && motion {
+                // Promoted front: ease up the last couple of pixels (CD-01).
+                dy += SETTLE_DY * (1.0 - settle_t);
+            }
             let away = 1.0 - egui::emath::easing::quadratic_out(fly);
             let now = SlidePose { dy, scale };
             let mut rect =
@@ -1559,14 +1602,19 @@ fn paint_slide_deck(
             if full {
                 rect = full_card_rect(rect, FEED_CARD_H + lift.extra);
             }
-            (rect, now, fly, full)
+            let opacity = if motion {
+                fly * (0.72 + 0.28 * settle_t)
+            } else {
+                fly
+            };
+            (rect, now, opacity, settle_t, full)
         })
         .collect();
-    let &(cover, _, _, _) = placed.first()?;
+    let &(cover, _, _, _, _) = placed.first()?;
     let mut act = None;
     let mut popped_full = None;
     for index in (0..placed.len()).rev() {
-        let (rect, pose, fly, full) = placed[index];
+        let (rect, pose, opacity, _, full) = placed[index];
         if full && lifted == Some(index) {
             popped_full = Some(index);
             continue;
@@ -1575,17 +1623,29 @@ fn paint_slide_deck(
             paint_stack_shadow(ui.painter(), rect);
         }
         let card_act = if index > 0 && pose.dy > -PEEK_H * 0.5 {
-            paint_tucked_edge(ui, rect, cover, fly);
+            paint_tucked_edge(ui, rect, cover, opacity);
             None
         } else if full {
-            self.paint_full_feed_card(ui, &cards[index], rect, now_at, fly)
+            self.paint_full_feed_card(ui, &cards[index], rect, now_at, opacity)
         } else {
+            // CD-02: clip each open peek to the strip above the card in front so
+            // that card's own title row is what shows in PEEK_H.
+            let clip = if index > 0 {
+                let front_of = placed[index - 1].0.top();
+                Some(egui::Rect::from_min_max(
+                    egui::pos2(rect.left(), rect.top()),
+                    egui::pos2(rect.right(), front_of.max(rect.top())),
+                ))
+            } else {
+                None
+            };
             paint_card_at(
                 ui,
                 &cards[index],
                 rect,
                 hints.get(index).and_then(|hint| hint.as_deref()),
-                fly,
+                opacity,
+                clip,
             )
         };
         if card_act.is_some() {
@@ -1593,11 +1653,11 @@ fn paint_slide_deck(
         }
     }
     if let Some(index) = popped_full {
-        let (rect, pose, fly, _) = placed[index];
+        let (rect, pose, opacity, _, _) = placed[index];
         if pose.dy < -1.0 {
             paint_stack_shadow(ui.painter(), rect);
         }
-        let card_act = self.paint_full_feed_card(ui, &cards[index], rect, now_at, fly);
+        let card_act = self.paint_full_feed_card(ui, &cards[index], rect, now_at, opacity);
         if card_act.is_some() {
             act = card_act;
         }
@@ -1870,21 +1930,21 @@ mod stack_tests {
 
     #[test]
     fn open_deck_peeks_titles_and_lifts_only_the_hovered_card() {
-        assert_eq!(PEEK_H, 30.0);
+        assert_eq!(PEEK_H, 34.0);
         assert_eq!(LIFT_STEP, 102.0);
         let rest = deck_poses(3, false, None, 500.0);
         assert_eq!(rest[1], SlidePose { dy: STACK_REST_DY_1, scale: STACK_REST_SCALE_1 });
         assert_eq!(rest[2], SlidePose { dy: STACK_REST_DY_2, scale: STACK_REST_SCALE_2 });
         assert_eq!(rest_slide(7), rest[2]);
 
-        assert_eq!(dys(&deck_poses(3, true, None, 500.0)), vec![0.0, -30.0, -60.0]);
+        assert_eq!(dys(&deck_poses(3, true, None, 500.0)), vec![0.0, -PEEK_H, -2.0 * PEEK_H]);
         assert!(deck_poses(3, true, None, 500.0).iter().all(|pose| pose.scale == 1.0));
-        assert_eq!(dys(&deck_poses(3, true, Some(1), 500.0)), vec![0.0, -102.0, -132.0]);
-        assert_eq!(dys(&deck_poses(3, true, Some(2), 500.0)), vec![0.0, -30.0, -132.0]);
+        assert_eq!(dys(&deck_poses(3, true, Some(1), 500.0)), vec![0.0, -LIFT_STEP, -LIFT_STEP - PEEK_H]);
+        assert_eq!(dys(&deck_poses(3, true, Some(2), 500.0)), vec![0.0, -PEEK_H, -LIFT_STEP - PEEK_H]);
         // The front card never lifts.
-        assert_eq!(dys(&deck_poses(3, true, Some(0), 500.0)), vec![0.0, -30.0, -60.0]);
+        assert_eq!(dys(&deck_poses(3, true, Some(0), 500.0)), vec![0.0, -PEEK_H, -2.0 * PEEK_H]);
         // Near the top of the window nothing goes above the room left.
-        assert_eq!(dys(&deck_poses(3, true, Some(2), 50.0)), vec![0.0, -30.0, -50.0]);
+        assert_eq!(dys(&deck_poses(3, true, Some(2), 50.0)), vec![0.0, -PEEK_H, -50.0]);
         assert_eq!(dys(&deck_poses(2, true, None, -10.0)), vec![0.0, 0.0]);
     }
 
@@ -2103,7 +2163,7 @@ mod deck_hover_tests {
         let (root, mut cabin) = run_cards(5);
         let ctx = egui::Context::default();
         let on_pile = egui::pos2(500.0, 620.0);
-        let before = play(&ctx, 0, &mut cabin, &vec![on_pile; 40]);
+        let before = play(&ctx, 0, &mut cabin, &[on_pile; 40]);
         let shown = before.order[39].clone();
         assert_eq!(shown.len(), 3, "the deck holds three");
         let deck = home_deck(&cabin.updates, &cabin.cfg.feed_pulse, &cabin.card_prefs, now_ms());
@@ -2330,13 +2390,120 @@ Streams are retried instead of partial output. ZEPHYRTAIL";
         let front = snap.front_top[0];
         assert!((front - STACK_TOP).abs() < 1.0, "front stays put at {front}");
         let tops: Vec<f32> = snap.rects[0].iter().map(|rect| rect.top() - front).collect();
-        assert_eq!(tops, vec![0.0, -PEEK_H, -2.0 * PEEK_H]);
+        let want = [0.0, -PEEK_H, -2.0 * PEEK_H];
+        assert_eq!(tops.len(), want.len());
+        for (got, exp) in tops.iter().zip(want) {
+            assert!(
+                (got - exp).abs() < 1.0,
+                "reduced motion peek tops {tops:?} want {want:?}"
+            );
+        }
         // Settled hits are the target. The painted card is what has to snap.
         let second = &snap.order[0][1];
         let painted_second = painted(&ctx, second).expect("second card painted");
         assert!(
             (painted_second.top() - (front - PEEK_H)).abs() < 1.0,
             "reduced motion snaps the slide, got {painted_second:?} front {front}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// CD-02: each open peek strip shows that card's own title, front → back.
+    #[test]
+    fn open_peek_strips_show_each_cards_title_front_to_back() {
+        let _g = crate::config::hold_test_config();
+        let (root, mut cabin) = run_cards(3);
+        let ctx = egui::Context::default();
+        let on_pile = egui::pos2(500.0, 620.0);
+        let _ = play(&ctx, 0, &mut cabin, &[on_pile; 40]);
+        let texts = last_texts(&ctx, 40, &mut cabin, &[on_pile; 20]);
+        let titles: Vec<&str> = texts
+            .iter()
+            .filter(|line| line.contains("Backup run"))
+            .map(|line| line.as_str())
+            .collect();
+        assert!(
+            titles.iter().any(|t| t.contains("Backup run 0")),
+            "front title missing in {titles:?} from {texts:?}"
+        );
+        assert!(
+            titles.iter().any(|t| t.contains("Backup run 1")),
+            "middle peek title missing in {titles:?} from {texts:?}"
+        );
+        assert!(
+            titles.iter().any(|t| t.contains("Backup run 2")),
+            "back peek title missing in {titles:?} from {texts:?}"
+        );
+        // Painted back→front, so titles appear back→front in the shape list.
+        let i0 = titles.iter().position(|t| t.contains("Backup run 0")).unwrap();
+        let i1 = titles.iter().position(|t| t.contains("Backup run 1")).unwrap();
+        let i2 = titles.iter().position(|t| t.contains("Backup run 2")).unwrap();
+        assert!(
+            i2 < i1 && i1 < i0,
+            "expected back→front paint order of titles, got idxs {i0},{i1},{i2} in {titles:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// CD-01: promoted front is wired to settle, and lands after dismiss.
+    #[test]
+    fn promoted_front_settles_after_dismiss() {
+        assert!((SETTLE_SECS - 0.15).abs() < 0.001);
+        assert!((SETTLE_DY - 2.0).abs() < 0.001);
+        // Wiring: settle helpers exist in this module (compile-time names).
+        let _ = (arm_front_settle as fn(&egui::Context, &[UpdateCard]), settle_id as fn(&str) -> egui::Id);
+        let _g = crate::config::hold_test_config();
+        let (root, mut cabin) = run_cards(4);
+        let ctx = egui::Context::default();
+        let on_pile = egui::pos2(500.0, 620.0);
+        let before = play(&ctx, 0, &mut cabin, &[on_pile; 40]);
+        let shown = before.order[39].clone();
+        assert_eq!(shown.len(), 3);
+        let gone = shown[0].clone();
+        let promoted = shown[1].clone();
+        cabin.close_home_card(&gone);
+        // Enough frames for slide + settle to finish.
+        let after = play(&ctx, 40, &mut cabin, &[on_pile; 40]);
+        assert_eq!(after.order[39][0], promoted, "promoted card becomes front");
+        let slot = after.rects[39][0];
+        let landed = painted(&ctx, &promoted).expect("promoted painted");
+        assert!(
+            (landed.top() - slot.top()).abs() < 1.0,
+            "settle should land, got {landed:?} vs {slot:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// CD-04: reduced motion snaps the newcomer fly to the settled slot.
+    #[test]
+    fn reduced_motion_snaps_newcomer_fly_in() {
+        let _g = crate::config::hold_test_config();
+        let (root, mut cabin) = run_cards(5);
+        let ctx = egui::Context::default();
+        let on_pile = egui::pos2(500.0, 620.0);
+        let before = play(&ctx, 0, &mut cabin, &[on_pile; 40]);
+        let shown = before.order[39].clone();
+        let gone = shown[0].clone();
+        cabin.close_home_card(&gone);
+        ctx.all_styles_mut(|style| style.animation_time = 0.0);
+        let first = play(&ctx, 40, &mut cabin, &[on_pile]);
+        let now_shown = first.order[0].clone();
+        let joined: Vec<String> = now_shown
+            .iter()
+            .filter(|id| !shown.contains(id))
+            .cloned()
+            .collect();
+        assert_eq!(joined.len(), 1, "one waiting card joins: {now_shown:?}");
+        let at = now_shown.iter().position(|id| *id == joined[0]).unwrap();
+        let slot = first.rects[0][at];
+        let flying = painted(&ctx, &joined[0]).expect("newcomer painted");
+        assert!(
+            (flying.left() - slot.left()).abs() < 0.5,
+            "reduced motion must snap fly x, {flying:?} vs {slot:?}"
+        );
+        assert!(
+            (flying.top() - slot.top()).abs() < 0.5,
+            "reduced motion must snap fly y, {flying:?} vs {slot:?}"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
