@@ -5,9 +5,11 @@
 //!   are allowed by default for chat and personal data, as before this guard.
 //! - A call with no user data (a public read) is allowed.
 //! - Loopback is local, not egress, and is not logged.
-//! - Chat, personal, or sensitive data to any other destination needs an
-//!   active destination grant in the [`ConsentLedger`]; without one it is hard
-//!   class `send` (a hard card: no Always, Enter does not approve, Esc / TTL deny).
+//! - Chat text on its own (a model-picked URL, a tool's arguments) goes to any
+//!   destination and is logged with basis `chat`: one line naming the host.
+//! - Personal or sensitive data to any other destination needs an active
+//!   destination grant in the [`ConsentLedger`]; without one it is hard class
+//!   `send` (a hard card: no Always, Enter does not approve, Esc / TTL deny).
 //!
 //! D1: Grok Build's own traffic (its model calls, its connectors, its web
 //! tools) is outside the cabin. This guard never sees it and does not claim to.
@@ -85,6 +87,8 @@ pub enum EgressBasis {
     Local,
     Public,
     ModelHost,
+    /// Chat text only (a model-picked URL, tool args): it goes, logged.
+    ChatOnly,
     Grant,
     NotGranted,
 }
@@ -95,6 +99,7 @@ impl EgressBasis {
             Self::Local => "local",
             Self::Public => "public",
             Self::ModelHost => "model_host",
+            Self::ChatOnly => "chat",
             Self::Grant => "grant",
             Self::NotGranted => "not_granted",
         }
@@ -145,6 +150,9 @@ pub(crate) fn check(dest: &str, data: &[DataClass], ledger: &ConsentLedger) -> (
     }
     if is_model_host(dest) && !data.contains(&DataClass::Sensitive) {
         return (GateOutcome::Allow, EgressBasis::ModelHost, String::new());
+    }
+    if data.iter().all(|c| *c == DataClass::Chat) {
+        return (GateOutcome::Allow, EgressBasis::ChatOnly, String::new());
     }
     if let Some(g) = ledger.destination_grant(dest, data) {
         return (GateOutcome::Allow, EgressBasis::Grant, g.id.clone());

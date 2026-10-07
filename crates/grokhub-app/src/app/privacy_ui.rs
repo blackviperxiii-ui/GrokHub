@@ -170,7 +170,7 @@ pub(super) fn privacy_report(
         PRIVACY_HEAD.to_string(),
         String::new(),
         format!(
-            "Allowed by default: {} ({HUB_SCOPE_PROSE} in model prompts). Sending {HUB_SCOPE_PROSE} anywhere else waits for your OK: a hard card, or a grant in Settings → Permissions.",
+            "Allowed by default: {} ({HUB_SCOPE_PROSE} in model prompts), and chat text elsewhere, logged below. Sending your memory anywhere else waits for your OK: a hard card, or a grant in Settings → Permissions.",
             grokhub_core::DEFAULT_CONNECTOR_HOSTS.join(", ")
         ),
         String::new(),
@@ -718,7 +718,7 @@ mod tests {
             [
                 "/privacy — what leaves this computer",
                 "",
-                "Allowed by default: grok.com, x.ai, api.x.ai (chats and memory in model prompts). Sending chats and memory anywhere else waits for your OK: a hard card, or a grant in Settings → Permissions.",
+                "Allowed by default: grok.com, x.ai, api.x.ai (chats and memory in model prompts), and chat text elsewhere, logged below. Sending your memory anywhere else waits for your OK: a hard card, or a grant in Settings → Permissions.",
                 "",
                 "Grants",
                 "- Off: Sync to paired computers (/sync asks each time) · Files in a folder · Installed apps · Browser history · Calendar · Mail · System state",
@@ -818,7 +818,7 @@ mod tests {
         let intro = got.lines().nth(2).unwrap_or_default();
         assert_eq!(
             intro,
-            "Allowed by default: grok.com, x.ai, api.x.ai (chats and memory in model prompts). Sending chats and memory anywhere else waits for your OK: a hard card, or a grant in Settings → Permissions."
+            "Allowed by default: grok.com, x.ai, api.x.ai (chats and memory in model prompts), and chat text elsewhere, logged below. Sending your memory anywhere else waits for your OK: a hard card, or a grant in Settings → Permissions."
         );
         assert!(got.contains("- Sync to paired computers: on since 1m ago · chats, memory\n"), "{got}");
         assert!(got.contains("- paired computers · 1 time · chats, memory · your grant"), "{got}");
