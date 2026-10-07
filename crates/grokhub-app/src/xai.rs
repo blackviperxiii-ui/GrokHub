@@ -1,15 +1,15 @@
 use grokhub_core::{
-    chat_request_body_vision, chat_timeout_secs, client_secrets_body, client_secrets_url,
+    chat_request_body_vision, chat_timeout_secs,
     dedicated_imagine_model, frame_bytes, imagine_edit_body,
     imagine_edit_mask_fallback, imagine_empty_reply_hint, imagine_generation_body,
     imagine_image_fallback_model, imagine_image_shaped, imagine_is_network_stall,
     imagine_mask_rejected, imagine_moderation_blocked, imagine_network_hint,
     imagine_should_retry_model, imagine_slug, imagine_video_body,
-    media_ext_from_bytes, merge_thinking, parse_client_secret, parse_imagine_url,
+    media_ext_from_bytes, merge_thinking, parse_imagine_url,
     parse_imagine_urls, parse_model_reasoning, parse_model_text, parse_stt_text,
-    parse_video_job_status, parse_video_request_id, parse_video_url, realtime_can_connect,
+    parse_video_job_status, parse_video_request_id, parse_video_url,
     responses_request_body, responses_url, stt_multipart, stt_url, tts_request_body, tts_url,
-    video_failure_detail, video_moderation_blocked, voice_client_secret_denied,
+    video_failure_detail, video_moderation_blocked,
     ImagineVideoOp, PresenceFrame, VideoBodyReq, VideoJobStatus, MEDIA_FILE_CAP, TEXT_FILE_CAP,
     XAI_BASE,
 };
@@ -497,31 +497,6 @@ pub fn grok_tts(api_key: &str, text: &str) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
-pub fn grok_realtime_secret(api_key: &str) -> Result<serde_json::Value, String> {
-    if !realtime_can_connect(api_key) {
-        return Err(voice_client_secret_denied(false)
-            .unwrap_or("Duplex Voice needs a console API key.")
-            .into());
-    }
-    let resp = xai_agent(20)
-        .post(&client_secrets_url())
-        .set("authorization", &format!("Bearer {}", api_key.trim()))
-        .set("content-type", "application/json")
-        .send_json(client_secrets_body())
-        .map_err(http_err)?;
-    let v = read_json_capped(resp)?;
-    if let Some(err) = v
-        .get("error")
-        .and_then(|e| e.get("message").and_then(|m| m.as_str()).or(e.as_str()))
-    {
-        return Err(err.to_string());
-    }
-    if parse_client_secret(&v).is_none() {
-        return Err("empty client secret".into());
-    }
-    Ok(v)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -566,7 +541,7 @@ mod tests {
         let tts = src
             .split("pub fn grok_tts(")
             .nth(1)
-            .and_then(|s| s.split("pub fn grok_realtime_secret").next())
+            .and_then(|s| s.split("#[cfg(test)]").next())
             .expect("grok_tts");
         let tts_take = tts.find(".take(").expect("capped tts");
         let tts_read = tts.find("read_to_end").expect("tts read");
@@ -616,16 +591,6 @@ mod tests {
         assert!(
             src.contains("video_moderation_blocked"),
             "an empty video url after moderation must not look like a parse bug"
-        );
-    }
-
-    #[test]
-    fn realtime_secret_needs_console_key() {
-        let err = grok_realtime_secret("").expect_err("oauth cannot mint");
-        assert!(
-            err.to_ascii_lowercase().contains("console")
-                || err.to_ascii_lowercase().contains("api key"),
-            "{err}"
         );
     }
 }

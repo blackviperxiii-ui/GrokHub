@@ -675,7 +675,7 @@ impl Cabin {
         self.settle_turn_card(&text);
         let origin = self.chat_job_thread.take();
         // Grok may hand separate long work to background runs. Unwatched runs
-        // (night, loops, phone) and hidden background chats do not fan out.
+        // (night, loops, /send) and hidden background chats do not fan out.
         if let Some(id) = origin.as_deref() {
             if !self.scheduled_perm && !self.threads.iter().any(|t| t.id == id && t.background) {
                 self.start_agent_bg_tasks(&strip_thinking(&text), id);

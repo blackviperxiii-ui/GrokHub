@@ -5,7 +5,7 @@
     {
       "name": "grokhub-hub",
       "command": "GROKHUB_HUB_PORT=18766 cargo run -p grokhub-hub",
-      "description": "Standalone LAN /v1 hub on port 18766 (GET /v1/health, POST /v1/pair, POST /v1/task)."
+      "description": "Standalone LAN /v1 hub on port 18766 (GET /v1/health, POST /v1/pair, GET/PUT /v1/snapshot)."
     }
   ],
   "ports": [

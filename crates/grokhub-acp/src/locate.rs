@@ -903,7 +903,7 @@ pub fn single_turn_args_full(
     }
     // btw (saved as ask) stays look-only: do not remap to --always-approve.
     // Composer Ask leftover flags match scheduled Ask (no yolo).
-    // Night / loop / phone inherit the pill via PermissionMode::scheduled_flags.
+    // Night / loop / /send inherit the pill via PermissionMode::scheduled_flags.
     if let Some(m) = model.map(str::trim).filter(|s| !s.is_empty()) {
         a.push("--model".into());
         a.push(m.to_string());
