@@ -43,7 +43,7 @@ const DIGEST_BODY_CHARS: usize = 900;
 const DIGEST_EDITION_CHARS: usize = 680;
 /// What the feed paints under a title. A stored body can be a long dump.
 /// Two short sentences, cut on a sentence or a word, never mid-word.
-pub const TAKEAWAY_MAX: usize = 200;
+pub const TAKEAWAY_MAX: usize = 220;
 /// A paused run has to sit this long before the situation card offers to resume it.
 pub const PAUSE_OFFER_MS: u64 = 30 * 60 * 1000;
 /// Workboard detail written by `abandon_inflight_card` when a run is parked.
@@ -1163,32 +1163,66 @@ pub fn idea_open_line(card: &UpdateCard) -> String {
 
 /// Short context under a feed title: what is going on, then why it matters
 /// when that line is short enough to fit. URLs and a repeated title stay out.
-/// A long stored body still comes back inside `TAKEAWAY_MAX`.
+/// A digest's opening "I'll look up …" line is the model talking, not the news,
+/// so it is skipped. A long stored body still comes back inside `TAKEAWAY_MAX`.
 pub fn short_takeaway(card: &UpdateCard) -> String {
     takeaway_text(
         card.title.trim(),
         card.body.as_deref().unwrap_or(""),
         card.why.as_deref().unwrap_or(""),
+        card.kind == UpdateKind::Digest,
     )
 }
 
-fn takeaway_text(title: &str, body: &str, why: &str) -> String {
+fn takeaway_text(title: &str, body: &str, why: &str, digest: bool) -> String {
     let prose = strip_title_prefix(&strip_http_urls(body), title);
     let mut sentences: Vec<String> = split_sentences(&prose)
         .into_iter()
         .filter(|sentence| !is_steer(sentence) && !same_line(sentence, title))
         .collect();
+    if digest {
+        sentences = skip_lead_ins(sentences);
+    }
     let why = why.trim();
-    if !why.is_empty() && !is_steer(why) && !same_line(why, title) {
+    if !why.is_empty() && !is_steer(why) && !same_line(why, title) && why.chars().count() <= 140 {
         let already = sentences
             .iter()
             .any(|sentence| sentence.to_ascii_lowercase().contains(&why.to_ascii_lowercase()));
-        if sentences.is_empty() || (!already && sentences.len() < 2 && why.chars().count() <= 140)
-        {
-            sentences.push(as_sentence(why));
+        if !already {
+            // What is going on, then why it matters.
+            let at = sentences.len().min(1);
+            sentences.insert(at, as_sentence(why));
         }
     }
     fit_sentences(&sentences, TAKEAWAY_MAX)
+}
+
+/// The model announcing itself ("I'll look up …", "Here are …").
+fn is_lead_in(sentence: &str) -> bool {
+    const LEADS: &[&str] = &[
+        "i'll ",
+        "i will ",
+        "i'm going to ",
+        "let me ",
+        "here's ",
+        "here is ",
+        "here are ",
+        "i looked up ",
+        "i searched ",
+        "below are ",
+        "below is ",
+    ];
+    let lower = sentence.trim_start().to_ascii_lowercase().replace('\u{2019}', "'");
+    LEADS.iter().any(|lead| lower.starts_with(lead))
+}
+
+/// Drop opening lead-in sentences. Kept when nothing else is left.
+fn skip_lead_ins(sentences: Vec<String>) -> Vec<String> {
+    let n = sentences.iter().take_while(|s| is_lead_in(s)).count();
+    if n == 0 || n == sentences.len() {
+        return sentences;
+    }
+    sentences.into_iter().skip(n).collect()
 }
 
 /// Editable note for the idea talk. The person can change it before it is sent.
@@ -2094,7 +2128,7 @@ fn fit_sentences(sentences: &[String], max: usize) -> String {
 fn edition_prose(raw: &str) -> String {
     let prose = strip_http_urls(raw);
     let max = TAKEAWAY_MAX.min(DIGEST_EDITION_CHARS);
-    let fitted = fit_sentences(&split_sentences(&prose), max);
+    let fitted = fit_sentences(&skip_lead_ins(split_sentences(&prose)), max);
     if fitted.is_empty() {
         clip_words(&prose, max.saturating_sub(1))
     } else {
@@ -2925,15 +2959,31 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             "takeaway over budget: {} {take}",
             take.chars().count()
         );
-        assert!(take.contains("two real pieces"));
-        assert!(take.contains("1.0.50"));
-        assert!(take.contains("cancel hits a live turn"));
+        // The model's own lead-in is not the news.
+        assert!(!take.contains("two real pieces"), "{take}");
+        assert_eq!(
+            take,
+            "Grok Build alpha 1.0.50 changes how a cancel hits a live turn. It changes the cancel button you use."
+        );
         assert!(!take.contains("https://"));
         assert!(!take.contains("ZEPHYRTAIL"));
         assert!(!take.contains("Streams are retried"));
-        assert!(take.ends_with('.'));
-        // Two sentences already fill the line, so why stays out of the paint.
-        assert!(!take.contains("cancel button"));
+
+        // Jeremy's X Stack card: a long first news sentence still keeps the why.
+        let xstack = "I'll look up what changed in the tools you use every day. Grok Build alpha 1.0.50 changes how a cancel hits a live turn: tool calls that were already running now finish and report instead of being cut off, and the session keeps its place. It also retries dropped streams instead of showing partial output, and sessions no longer drop when the conversation passes 4,000 lines.";
+        let mut x = digest_card("xstack", "For you", xstack, 1);
+        x.why = Some("You run Grok Build agents overnight.".into());
+        let xt = short_takeaway(&x);
+        assert!(xt.starts_with("Grok Build alpha 1.0.50 changes how a cancel hits a live turn"), "{xt}");
+        assert!(xt.ends_with("You run Grok Build agents overnight."), "{xt}");
+        assert!(xt.chars().count() <= TAKEAWAY_MAX, "{} {xt}", xt.chars().count());
+
+        // Only a lead-in: keep it rather than show nothing.
+        let alone = digest_card("d", "Digest 3", "I looked and did not find a source worth your time.", 1);
+        assert_eq!(short_takeaway(&alone), "I looked and did not find a source worth your time.");
+        // A suggestion in the cabin's voice keeps its "I'll" line.
+        let sugg = suggestion_card("s", "Standup", "I'll draft it at 8:45 so you only edit.", 1);
+        assert_eq!(short_takeaway(&sugg), "I'll draft it at 8:45 so you only edit.");
 
         let mut short = digest_card(
             "rust",
@@ -2995,7 +3045,8 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         card.why = Some("It changes the cancel button you use.".into());
         let seed = discuss_context(&card);
         assert!(seed.contains("For you"), "{seed}");
-        assert!(seed.contains("two real pieces"), "{seed}");
+        assert!(!seed.contains("two real pieces"), "{seed}");
+        assert!(seed.contains("cancel hits a live turn"), "{seed}");
         assert!(seed.contains("https://xstack.grok.me/post"), "{seed}");
         assert!(seed.contains("It changes the cancel button you use."), "{seed}");
         assert!(!seed.contains("ZEPHYRTAIL"), "{seed}");

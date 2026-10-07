@@ -2224,8 +2224,8 @@ Streams are retried instead of partial output. ZEPHYRTAIL";
         for want in [
             "For you",
             "xstack.grok.me · 38m ago",
-            "two real pieces",
-            "1.0.50",
+            "cancel hits a live turn",
+            "It changes the cancel button you use.",
             "Read at xstack.grok.me",
             "Liked",
             "Discuss",
@@ -2235,6 +2235,7 @@ Streams are retried instead of partial output. ZEPHYRTAIL";
             assert!(blob.contains(want), "missing {want:?} in {blob}");
         }
         assert!(!blob.contains("ZEPHYRTAIL"), "dump leaked into the deck: {blob}");
+        assert!(!blob.contains("two real pieces"), "lead-in leaked into the deck: {blob}");
         assert!(
             !blob.contains("Streams are retried"),
             "third sentence leaked: {blob}"
@@ -2373,7 +2374,8 @@ ZEPHYRTAIL is the rest of the dump https://evil.example/nope";
             .map(|m| m.1.as_str())
             .unwrap_or("");
         assert!(body.contains("Feed post: For you"), "{body}");
-        assert!(body.contains("two real pieces"), "{body}");
+        assert!(!body.contains("two real pieces"), "{body}");
+        assert!(body.contains("cancel hits a live turn"), "{body}");
         assert!(body.contains("https://xstack.grok.me/post"), "{body}");
         assert!(body.contains("It changes the cancel button you use."), "{body}");
         assert!(body.contains("wants to act on it"), "{body}");
