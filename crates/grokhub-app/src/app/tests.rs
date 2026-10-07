@@ -21747,8 +21747,14 @@ fn pulse_paints_only_on_an_empty_signed_in_chat() {
 fn feed_deck_hover_lifts_the_card_behind() {
     let open = super::feed_ui::deck_poses(3, true, Some(1), 1_000.0);
     assert_eq!(open[0], super::SlidePose { dy: 0.0, scale: 1.0 });
-    assert_eq!(open[1], super::SlidePose { dy: -102.0, scale: 1.0 });
-    assert_eq!(open[2], super::SlidePose { dy: -132.0, scale: 1.0 });
+    assert_eq!(open[1], super::SlidePose { dy: -super::feed_ui::LIFT_STEP, scale: 1.0 });
+    assert_eq!(
+        open[2],
+        super::SlidePose {
+            dy: -(super::feed_ui::LIFT_STEP + super::feed_ui::PEEK_H),
+            scale: 1.0
+        }
+    );
     let rest = super::feed_ui::deck_poses(3, false, Some(1), 1_000.0);
     assert_eq!(rest[1], super::rest_slide(1));
     assert!(rest[1].dy > 0.0 && rest[1].scale < 1.0);
@@ -21778,7 +21784,8 @@ fn feed_deck_shift_keeps_the_top_card_on_screen() {
         .iter()
         .map(|pose| pose.dy)
         .collect();
-    assert_eq!(tops, vec![0.0, -30.0, -40.0]);
+    // room=40 caps the lifted back card; open peek uses PEEK_H.
+    assert_eq!(tops, vec![0.0, -super::feed_ui::PEEK_H, -40.0]);
     let none: Vec<f32> = super::feed_ui::deck_poses(3, true, None, 0.0)
         .iter()
         .map(|pose| pose.dy)
