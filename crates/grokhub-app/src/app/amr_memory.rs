@@ -9,6 +9,8 @@
 //! - `/forget <topic>` tombstones the matching nodes.
 //! - The first AMR read or write imports LearningState insights and the
 //!   durable chip fields once (deterministic ids, so a rerun adds nothing).
+//! - M3: once a night, after the review, the dream tidies the store
+//!   (`AmrStore::dream_once`). `/memory dream` shows the latest report.
 
 use super::*;
 
@@ -84,6 +86,15 @@ pub(super) fn dual_read_hits(amr: Vec<String>, legacy: Vec<String>) -> Vec<Strin
         }
     }
     out
+}
+
+/// `/memory dream`: the newest `amr/dreams/<date>.md`, or "No dream yet".
+/// Reads only, so legacy never creates `amr/`.
+pub(super) fn memory_dream_text(config_dir: &std::path::Path) -> String {
+    match grokhub_core::amr::latest_dream(&config_dir.join("amr")) {
+        Some((_, text)) => text,
+        None => "No dream yet. GrokHub dreams once a night after the review, in memory repo mode.".into(),
+    }
 }
 
 impl Cabin {
@@ -279,6 +290,50 @@ impl Cabin {
             }
             Err(err) => format!("Memory repo: {err}"),
         }
+    }
+
+    /// AMR M3 on the review slot: once a night after the review. No tokens, so
+    /// no `heartbeat_may` slot.
+    pub(super) fn tick_dream(&mut self) {
+        let _ = self.dream_tonight(&Self::local_day(), Self::local_clock().hour, now_ms());
+    }
+
+    /// Start tonight's dream off the UI thread when it is due: memory repo
+    /// mode, past the review hour, the review not in flight, and no turn or
+    /// card waiting on the user. Halt skips the night. A report already on
+    /// disk for `today` (an earlier session) counts as done.
+    pub(super) fn dream_tonight(
+        &mut self,
+        today: &str,
+        hour: u32,
+        now: u64,
+    ) -> Option<std::thread::JoinHandle<()>> {
+        if !self.amr_on()
+            || hour < REVIEW_NIGHT_HOUR
+            || self.dream_day.as_deref() == Some(today)
+            || self.review_busy
+            || self.heartbeat_busy()
+        {
+            return None;
+        }
+        self.dream_day = Some(today.to_string());
+        if self.heartbeat_halted(now) {
+            return None;
+        }
+        let dir = config::config_dir();
+        if grokhub_core::amr::dream_report_path(&amr_store_at(&dir), today).is_file() {
+            return None;
+        }
+        let store = self.amr_store(false);
+        let today = today.to_string();
+        Some(std::thread::spawn(move || {
+            let opts = grokhub_core::amr::DreamOpts {
+                date: Some(today),
+                user_md: Some(config::read_memory("USER.md")),
+                ..Default::default()
+            };
+            let _ = store.dream_once(now, &opts);
+        }))
     }
 }
 

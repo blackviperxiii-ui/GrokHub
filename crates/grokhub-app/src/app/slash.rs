@@ -86,6 +86,13 @@ impl Cabin {
                 self.nav = Nav::Memory;
                 self.status = "Memory".into();
             }
+            Slash::MemoryDream => {
+                let text = amr_memory::memory_dream_text(&config::config_dir());
+                self.live_mut().push(("assistant".into(), mark_slash_result(&text)));
+                self.stamp_current_access();
+                self.persist();
+                self.status = "Memory dream".into();
+            }
             Slash::MemoryNote(note) => {
                 if self.scratch() {
                     self.status = "Scratch — no memory writes".into();
