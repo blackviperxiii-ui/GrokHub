@@ -147,8 +147,19 @@ pub(super) struct HarnessState {
     pub turn_ctx: Option<hx::TurnContext>,
     /// The consent ledger as last read. `None` means read it again.
     pub consent: Option<hx::ConsentLedger>,
+    /// When `consent` was read. A locked ledger is read again at most once
+    /// per `LOCK_RECHECK`, not on every painted frame.
+    pub consent_at: Option<Instant>,
+    /// The last lock answer Settings painted, and when it was asked.
+    pub lock_seen: Option<(Instant, Option<hx::Locked>)>,
     /// `/privacy` output on its way from the reader thread.
     pub privacy_rx: Option<mpsc::Receiver<String>>,
+    /// Settings → Permissions: the folder typed for a new files scope.
+    pub scope_folder: String,
+    /// Settings → Permissions: the browser picked for a history scope.
+    pub scope_browser: usize,
+    /// Why the last scope Allow was refused, shown under the heading.
+    pub scope_note: Option<String>,
 }
 
 /// Readonly until the desktop switch is on; Full only after Grant full.

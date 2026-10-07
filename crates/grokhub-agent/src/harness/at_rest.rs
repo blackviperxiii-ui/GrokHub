@@ -280,7 +280,7 @@ pub fn open_with(key: &LearnedKey, aad: &str, line: &str) -> Option<Zeroizing<Ve
     let (nonce, ct) = raw.split_at(NONCE_LEN);
     let nonce = Nonce::try_assume_unique_for_key(nonce).ok()?;
     let mut buf = Zeroizing::new(ct.to_vec());
-    let plain_len = key.key.open_in_place(nonce, Aad::from(aad.as_bytes()), &mut *buf).ok()?.len();
+    let plain_len = key.key.open_in_place(nonce, Aad::from(aad.as_bytes()), &mut buf).ok()?.len();
     buf.truncate(plain_len);
     Some(buf)
 }
@@ -372,8 +372,11 @@ fn default_slot() -> &'static RwLock<Arc<Keys>> {
     SLOT.get_or_init(|| RwLock::new(Keys::new(Arc::new(NoStore))))
 }
 
-fn overrides() -> &'static Mutex<Vec<(PathBuf, Arc<Keys>)>> {
-    static O: OnceLock<Mutex<Vec<(PathBuf, Arc<Keys>)>>> = OnceLock::new();
+/// Per-config-dir key stores (tests).
+type Overrides = Mutex<Vec<(PathBuf, Arc<Keys>)>>;
+
+fn overrides() -> &'static Overrides {
+    static O: OnceLock<Overrides> = OnceLock::new();
     O.get_or_init(|| Mutex::new(Vec::new()))
 }
 

@@ -2957,6 +2957,55 @@ mod tests {
         assert!((head_h - plain_h).abs() < 0.01, "the heading size stays: {plain_h} vs {head_h}");
     }
 
+    /// Spike-4b: a focused Allow answers Enter/Space as a plain pill would, but
+    /// the grant pill only counts a pointer click.
+    #[test]
+    fn grant_pill_ignores_the_keyboard_and_takes_a_pointer_click() {
+        let run = |grant: bool| {
+            let ctx = egui::Context::default();
+            crate::theme::install_fonts_on(&ctx);
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0));
+            let pass = |events: Vec<egui::Event>| {
+                let mut hit = false;
+                let mut at = egui::Pos2::ZERO;
+                let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+                let out = crate::theme::test_pass(&ctx, input, |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        hit = if grant { grant_pill(ui, "Allow") } else { white_pill(ui, "Allow") };
+                    });
+                });
+                for clipped in &out.shapes {
+                    if let egui::Shape::Text(t) = &clipped.shape {
+                        at = t.pos + t.galley.rect.center().to_vec2();
+                    }
+                }
+                (hit, at)
+            };
+            let key = |key| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let (_, at) = pass(vec![]);
+            pass(vec![key(egui::Key::Tab)]);
+            let by_keys = pass(vec![key(egui::Key::Enter)]).0 | pass(vec![key(egui::Key::Space)]).0;
+            let press = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            pass(vec![egui::Event::PointerMoved(at)]);
+            pass(vec![press(true)]);
+            let by_click = pass(vec![press(false)]).0;
+            (by_keys, by_click)
+        };
+        assert_eq!(run(false), (true, true), "the plain pill takes keys: the test reaches the button");
+        assert_eq!(run(true), (false, true), "the grant pill takes the click only");
+    }
+
     #[test]
     fn settings_toggle_hint_wraps_before_the_switch() {
         assert_eq!(settings_toggle_text_width(600.0), 544.0);

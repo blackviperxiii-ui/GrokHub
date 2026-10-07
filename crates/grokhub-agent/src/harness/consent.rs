@@ -161,7 +161,9 @@ pub fn scope_refusal(scope: &Scope, home: Option<&Path>) -> Option<String> {
     }
     if let Some(home) = home {
         let h = home.display().to_string().replace('\\', "/");
-        if d == h.trim_end_matches('/') {
+        let h = h.trim_end_matches('/');
+        // The home folder itself, or any folder that holds it (`/home`).
+        if d == h || h.starts_with(&format!("{d}/")) {
             return Some("files: one folder at a time, never all of your home folder".into());
         }
     }
@@ -456,6 +458,12 @@ mod tests {
             grant_scope(&d, &all_home, Some(home), UserClick::from_click()).unwrap_err(),
             "files: one folder at a time, never all of your home folder"
         );
+        assert_eq!(
+            scope_refusal(&Scope::Files("/home".into()), Some(home)).as_deref(),
+            Some("files: one folder at a time, never all of your home folder"),
+            "a folder that holds the home folder is the home folder too"
+        );
+        assert_eq!(scope_refusal(&Scope::Files("/home/meadow".into()), Some(home)), None);
         assert_eq!(
             scope_refusal(&Scope::Files("/home/me/.ssh".into()), Some(home)).as_deref(),
             Some("files: that folder is always excluded")

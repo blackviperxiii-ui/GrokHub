@@ -1,5 +1,7 @@
 //! Spike-4a trust floor in the cabin: `/privacy`, the `/sync` egress gate, and
-//! the one grant row under Settings → Permissions.
+//! the hub grant row under Settings → Permissions. The per-scope rows live in
+//! `scope_ui.rs` (Spike-4b). The ledger and the send log are sealed at rest;
+//! when the keyring can't open them, no grant applies and `/privacy` says so.
 //!
 //! A grant is written only here, from a Settings click (`UserClick::from_click`).
 //! `/privacy` only reads. `/sync` asks `harness::decide` (`Step::Egress`) first:
@@ -91,7 +93,7 @@ pub(super) fn grant_label(g: &hx::Grant) -> String {
     } else if !g.destination.is_empty() {
         format!("Send to {}", g.destination)
     } else {
-        format!("Read {}", g.source)
+        super::scope_ui::scope_label(&g.source)
     }
 }
 
@@ -105,13 +107,16 @@ pub(super) fn sync_result_line(peers: usize) -> String {
 }
 
 /// `/privacy` text: grants, scopes (all off), and recent egress by destination.
-/// No content, no secrets: the ledger and the log hold neither.
+/// No content, no secrets: the ledger and the log hold neither. `lock` is why
+/// private data can't be opened or saved right now, if it can't (Spike-4b).
 pub(super) fn privacy_report(
     ledger: &hx::ConsentLedger,
-    egress: &[hx::EgressLine],
+    log: &hx::EgressRead,
+    lock: Option<&hx::Locked>,
     desktop_control: bool,
     now_ms: u64,
 ) -> String {
+    let egress = &log.lines;
     let ago = |at: u64| grokhub_core::pulse::ago_label(at, now_ms);
     let mut out = vec![
         PRIVACY_HEAD.to_string(),
@@ -121,14 +126,18 @@ pub(super) fn privacy_report(
             grokhub_core::DEFAULT_CONNECTOR_HOSTS.join(", ")
         ),
         String::new(),
-        "Grants".to_string(),
     ];
+    if let Some(why) = ledger.locked().or(lock) {
+        out.push(why.message());
+        out.push(String::new());
+    }
+    out.push("Grants".to_string());
     // The "off" line already says there is no hub grant (SY-07), and the
     // grant id stays out of the text (SY-08).
     if ledger.destination_grant(hx::HUB_DEST, hx::HUB_SYNC_DATA).is_none() {
         out.push(format!("- {HUB_ROW}: off. /sync asks each time."));
     }
-    for g in ledger.active() {
+    for g in ledger.active().filter(|g| !g.destination.is_empty()) {
         out.push(format!(
             "- {}: on since {} · {}",
             grant_label(g),
@@ -136,16 +145,27 @@ pub(super) fn privacy_report(
             classes(&g.data_classes)
         ));
     }
+    if ledger.unreadable() > 0 {
+        out.push(format!("- {} ledger lines didn't open (damaged or edited) and count for nothing.", ledger.unreadable()));
+    }
     out.push(String::new());
-    out.push("Learning scopes: all off. Nothing reads them yet.".into());
+    let read: Vec<&hx::Grant> = ledger.active().filter(|g| g.destination.is_empty()).collect();
+    out.push(if read.is_empty() {
+        format!("{}: all off. Nothing reads these yet.", super::scope_ui::SCOPES_HEAD)
+    } else {
+        format!("{}: nothing reads these yet.", super::scope_ui::SCOPES_HEAD)
+    });
     let scopes: Vec<String> = hx::SCOPE_KINDS
         .iter()
         .map(|(kind, label)| {
-            let on = ledger.active().any(|g| g.source == *kind || g.source.starts_with(&format!("{kind}:")));
+            let on = read.iter().any(|g| g.source == *kind || g.source.starts_with(&format!("{kind}:")));
             format!("{label} {}", if on { "on" } else { "off" })
         })
         .collect();
     out.push(format!("- {}", scopes.join(" · ")));
+    for g in &read {
+        out.push(format!("- {}: on since {}", grant_label(g), ago(g.granted_at)));
+    }
     out.push(format!(
         "- Screen: Settings → Let Grok control the desktop ({})",
         if desktop_control { "on" } else { "off" }
@@ -181,8 +201,13 @@ pub(super) fn privacy_report(
             }),
         }
     }
-    if rows.is_empty() {
+    if let Some(why) = &log.locked {
+        out.push(format!("- The send log is locked ({}). Nothing new is logged, and grant sends wait, until it opens.", why.short()));
+    } else if rows.is_empty() {
         out.push("- Nothing logged yet.".into());
+    }
+    if log.unreadable > 0 {
+        out.push(format!("- {} log lines didn't open (damaged or edited) and were skipped.", log.unreadable));
     }
     rows.sort_by_key(|r| std::cmp::Reverse(r.last));
     for r in rows {
@@ -195,13 +220,55 @@ pub(super) fn privacy_report(
     out.join("\n")
 }
 
+/// How long Settings reuses a lock answer before asking again.
+const LOCK_RECHECK: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Why private data can't be opened or saved here, if it can't: the ledger's
+/// own lock, else the keyring's answer (a fresh config with no keyring can't
+/// save a grant either). `wait = false` never blocks (UI thread).
+pub(super) fn private_lock(dir: &std::path::Path, ledger: &hx::ConsentLedger, wait: bool) -> Option<hx::Locked> {
+    ledger.locked().cloned().or_else(|| match hx::read_key(dir, wait) {
+        Some(Err(why)) => Some(why),
+        _ => None,
+    })
+}
+
 impl Cabin {
     /// The consent ledger, read once and kept current by the clicks below.
+    /// Never waits on the keyring (UI thread): while it hasn't answered, or
+    /// while private data is locked, it is read again on the next call.
     pub(super) fn consent(&mut self) -> &hx::ConsentLedger {
-        if self.harness.consent.is_none() {
-            self.harness.consent = Some(hx::ConsentLedger::load(&crate::config::config_dir()));
+        let now = std::time::Instant::now();
+        let stale = match self.harness.consent.as_ref() {
+            None => true,
+            Some(c) if c.pending() => true,
+            Some(c) => {
+                c.locked().is_some()
+                    && self.harness.consent_at.is_none_or(|at| now.duration_since(at) >= LOCK_RECHECK)
+            }
+        };
+        if stale {
+            self.harness.consent = Some(hx::ConsentLedger::load_now(&crate::config::config_dir()));
+            self.harness.consent_at = Some(now);
         }
         self.harness.consent.get_or_insert_with(hx::ConsentLedger::empty)
+    }
+
+    /// [`private_lock`] for painting Settings: never waits, and asks the
+    /// keyring (and scans for sealed files) at most once per `LOCK_RECHECK`.
+    pub(super) fn private_lock_for_paint(&mut self) -> Option<hx::Locked> {
+        if let Some(why) = self.consent().locked() {
+            return Some(why.clone());
+        }
+        if let Some((at, why)) = &self.harness.lock_seen {
+            if at.elapsed() < LOCK_RECHECK {
+                return why.clone();
+            }
+        }
+        let ledger = self.consent().clone();
+        let why = private_lock(&crate::config::config_dir(), &ledger, false);
+        self.harness.lock_seen = Some((std::time::Instant::now(), why.clone()));
+        why
     }
 
     /// Paired computers the hub would serve a share to.
@@ -227,6 +294,16 @@ impl Cabin {
             return;
         }
         let ledger = self.consent().clone();
+        // Spike-4b: a send that can't be logged doesn't go, so a locked or
+        // still-opening ledger stops here with one plain line.
+        if ledger.pending() {
+            self.status = "Sync waits for your keyring. Try /sync again in a moment.".into();
+            return;
+        }
+        if let Some(why) = private_lock(&crate::config::config_dir(), &ledger, false) {
+            self.post_sync_result(&format!("Not synced. {}", why.message()));
+            return;
+        }
         let step = Step::Egress { dest: hx::HUB_DEST, data: hx::HUB_SYNC_DATA, ledger: &ledger };
         match hx::decide(step) {
             GateOutcome::Allow => {
@@ -254,8 +331,9 @@ impl Cabin {
         self.harness.privacy_rx = Some(rx);
         std::thread::spawn(move || {
             let ledger = hx::ConsentLedger::load(&dir);
-            let egress = hx::read_egress(&dir);
-            let _ = tx.send(privacy_report(&ledger, &egress, desktop, now_ms()));
+            let egress = hx::read_egress_report(&dir);
+            let lock = private_lock(&dir, &ledger, true);
+            let _ = tx.send(privacy_report(&ledger, &egress, lock.as_ref(), desktop, now_ms()));
         });
     }
 
@@ -280,6 +358,15 @@ impl Cabin {
     pub(super) fn ui_privacy_rows(&mut self, ui: &mut egui::Ui) {
         crate::cards::section_heading(ui, LEAVING_HEAD);
         crate::cards::settings_note(ui, PRIVACY_NOTE);
+        // Spike-4b: said once, at the top, because it holds every row below.
+        let ledger = self.consent().clone();
+        if ledger.pending() {
+            crate::cards::settings_note(ui, "Checking your keyring…");
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(150));
+        } else if let Some(why) = self.private_lock_for_paint() {
+            ui.label(RichText::new(why.message()).size(13.0).color(crate::theme::fg()));
+            ui.add_space(8.0);
+        }
         let granted = self
             .consent()
             .destination_grant(hx::HUB_DEST, hx::HUB_SYNC_DATA)
@@ -287,7 +374,7 @@ impl Cabin {
         let dir = crate::config::config_dir();
         match granted {
             None => {
-                if crate::cards::settings_action(ui, HUB_ROW, HUB_OFF, "Allow") {
+                if crate::cards::settings_grant(ui, HUB_ROW, HUB_OFF, "Allow", |_| {}) {
                     match hx::grant_destination(&dir, hx::HUB_DEST, hx::HUB_SYNC_DATA, hx::UserClick::from_click()) {
                         Ok(_) => self.status = "Sync to paired computers allowed. Revoke it here any time.".into(),
                         Err(e) => self.status = format!("Could not save the grant: {e}"),
@@ -325,13 +412,7 @@ impl Cabin {
             .map(|g| g.destination == hx::HUB_DEST);
         match hub {
             Some(true) => self.revoke_hub_grant(id),
-            Some(false) => {
-                self.status = match hx::revoke_grant(&crate::config::config_dir(), id) {
-                    Ok(_) => "Revoked. It asks again next time.".into(),
-                    Err(e) => format!("Could not revoke: {e}"),
-                };
-                self.harness.consent = None;
-            }
+            Some(false) => self.revoke_other_grant(id),
             None => return,
         }
         let line = self.status.clone();
@@ -393,6 +474,12 @@ pub(super) fn newest_privacy_row(views: &[grokhub_core::ChatView]) -> Option<usi
 mod tests {
     use super::*;
 
+    /// The report for a plain list of log lines and no lock.
+    fn report(ledger: &hx::ConsentLedger, lines: &[hx::EgressLine], desktop: bool, now: u64) -> String {
+        let log = hx::EgressRead { lines: lines.to_vec(), ..hx::EgressRead::default() };
+        privacy_report(ledger, &log, None, desktop, now)
+    }
+
     fn line(dest: &str, basis: &str, at: u64, data: &[hx::DataClass]) -> hx::EgressLine {
         hx::EgressLine {
             ts_ms: at,
@@ -408,7 +495,8 @@ mod tests {
     }
 
     /// Rule 4: the agent never widens its own permissions. Outside tests, a
-    /// grant is built only from the Settings click in this file.
+    /// grant is built only from a Settings click: the hub row in this file and
+    /// the scope rows in `scope_ui.rs`.
     #[test]
     fn only_a_settings_click_writes_a_grant() {
         let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -449,6 +537,8 @@ mod tests {
                 "grokhub-agent/src/harness/consent.rs: grant_scope(",
                 "grokhub-app/src/app/privacy_ui.rs: UserClick::from_click(",
                 "grokhub-app/src/app/privacy_ui.rs: grant_destination(",
+                "grokhub-app/src/app/scope_ui.rs: UserClick::from_click(",
+                "grokhub-app/src/app/scope_ui.rs: grant_scope(",
             ]
         );
     }
@@ -456,7 +546,7 @@ mod tests {
     #[test]
     fn privacy_report_on_a_fresh_config() {
         let now = 1_000 * 86_400_000;
-        let got = privacy_report(&hx::ConsentLedger::empty(), &[], false, now);
+        let got = report(&hx::ConsentLedger::empty(), &[], false, now);
         assert_eq!(
             got,
             [
@@ -467,7 +557,7 @@ mod tests {
                 "Grants",
                 "- Sync to paired computers: off. /sync asks each time.",
                 "",
-                "Learning scopes: all off. Nothing reads them yet.",
+                "What GrokHub can read: all off. Nothing reads these yet.",
                 "- Files in one folder off · Installed apps off · Browser history off · Calendar off · Mail off · System state off",
                 "- Screen: Settings → Let Grok control the desktop (off)",
                 "",
@@ -490,7 +580,7 @@ mod tests {
             line("hub", "approved_once", now - 7_200_000, &chat),
             line("api.x.ai", "model_host", now - 8 * 86_400_000, &chat),
         ];
-        let got = privacy_report(&hx::ConsentLedger::empty(), &log, true, now);
+        let got = report(&hx::ConsentLedger::empty(), &log, true, now);
         assert!(got.contains("- api.x.ai · 2 times · chats, memory · default · last 2m ago\n- paired computers · 1 time · chats, memory · approved once · last 2h ago\n"), "{got}");
         assert!(!got.contains("hub ·"), "the hub is named plainly: {got}");
         assert!(got.contains("- Screen: Settings → Let Grok control the desktop (on)"), "{got}");
@@ -548,7 +638,7 @@ mod tests {
         let g = hx::grant_destination(&dir, hx::HUB_DEST, hx::HUB_SYNC_DATA, hx::UserClick::from_click()).unwrap();
         let ledger = hx::ConsentLedger::load(&dir);
         let log = vec![line("hub", "grant", g.granted_at, &[hx::DataClass::Chat, hx::DataClass::Personal])];
-        let got = privacy_report(&ledger, &log, false, g.granted_at + 60_000);
+        let got = report(&ledger, &log, false, g.granted_at + 60_000);
         let intro = got.lines().nth(2).unwrap_or_default();
         assert_eq!(
             intro,
@@ -569,7 +659,7 @@ mod tests {
         let g = hx::grant_destination(&dir, hx::HUB_DEST, hx::HUB_SYNC_DATA, hx::UserClick::from_click()).unwrap();
         let ledger = hx::ConsentLedger::load(&dir);
         let now = g.granted_at + 60_000;
-        let got = privacy_report(&ledger, &[], false, now);
+        let got = report(&ledger, &[], false, now);
         assert!(!got.contains(&g.id), "{got}");
         assert!(got.contains("- Sync to paired computers: on since 1m ago · chats, memory\n"), "{got}");
         assert!(!got.contains("No grants yet"), "{got}");

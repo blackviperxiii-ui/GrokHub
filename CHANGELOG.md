@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+Spike-4b trust floor (privacy and consent, second slice). The consent rules are unchanged: grants still come only from a click in Settings, and a hard card still has no Always, Enter does not approve it, and Esc or the timeout denies it.
+
+- **Private data is encrypted on disk.** `consent.jsonl`, `egress.jsonl` (and its rolled `egress.1.jsonl`) and private AMR notes (`amr/nodes/<id>.sealed`) are sealed with ChaCha20-Poly1305. The key is made on the first private write and lives in your OS keyring (Secret Service on Linux, Credential Manager on Windows, Keychain on macOS); only a short hash of it is stored next to the data. Your existing plain-text ledger and send log keep working and are sealed in place, line by line, on the next write. Nothing is dropped.
+- **Fails closed.** If the keyring can't be reached, or the key is missing or doesn't match, GrokHub says so in Settings → Permissions, `/privacy` and `/recall`, no grant applies, nothing new is saved, and nothing is ever written as plain text. `/sync` doesn't send, because it couldn't be logged. Chats with Grok still work; their send-log lines are skipped until the keyring is back.
+- **Recall packs are masked.** Memory recalled into a native-engine prompt has emails, phone numbers, card numbers, SSN-shaped numbers and street addresses replaced with `[email]`, `[phone]`, `[card]`, `[ssn]` and `[address]`, on top of the existing secret redaction. Code, versions, hashes and `git@` remotes are left alone. Your own `/recall` view is not masked.
+- **Settings → Permissions → What GrokHub can read.** One row per scope (files in one folder, installed apps, browser history, calendar, mail, system state), all off. Allow (filled) takes a mouse click only, so Enter or Space on a focused button never grants; Revoke is a ghost. `/privacy` lists them by name, and its Revoke works for them too. Nothing reads a scope yet. Allow on Sync to paired computers is now mouse-click only as well. A files grant also refuses any folder that holds your home folder, like `/home`.
+
+No new crates (ring, zeroize and keyring were already in `Cargo.lock`). No version bump.
+
 Slash results get their own style, plus two small fixes (Critiquito GL-05, SY-09, SY-10). The consent rules are unchanged.
 
 - **Slash and system results keep their look (GL-05).** Older results, like the `/sync` line and the `/privacy` report, used to collapse under an italic "Thought process" header once something newer arrived, so app output looked like model thinking. They now stay in the normal reply bubble at every age and never get the thought label or its Collapse control. The pane tells them apart by the tag the cabin adds when it writes them, not by their text. Model reasoning still collapses exactly as before, and collapsing it no longer folds a result away with it. The ghost Revoke still sits under the newest `/privacy` report.

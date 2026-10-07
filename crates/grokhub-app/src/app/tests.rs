@@ -10999,6 +10999,57 @@ fn recall_amr_returns_seeded_node_not_legacy_memory() {
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
+// Spike-4b: a private AMR note is sealed on disk, /recall opens it with the
+// keyring key, and a locked keyring leaves one plain line instead.
+#[test]
+fn recall_opens_private_notes_and_says_when_they_are_locked() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("recall-sealed");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let store_keys = std::sync::Arc::new(hx::MemoryKeyStore::new());
+    hx::use_key_store_for(&root, store_keys.clone());
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+    let store = grokhub_core::amr::AmrStore::at(root.join("amr"))
+        .with_sealer(std::sync::Arc::new(hx::LearnedVault::new(&root)));
+    store.init().unwrap();
+    store
+        .remember(&grokhub_core::amr::NodeDraft {
+            id: "fact-home".into(),
+            node_type: grokhub_core::amr::NodeType::Fact,
+            created: "2026-10-07T00:00:00Z".into(),
+            updated: "2026-10-07T00:00:00Z".into(),
+            source: "user".into(),
+            confidence: 0.8,
+            tags: vec![],
+            body: "pier nine is home\n".into(),
+            sensitivity: grokhub_core::amr::Sensitivity::Personal,
+        })
+        .unwrap();
+    let raw = std::fs::read_to_string(root.join("amr/nodes/fact-home.sealed")).unwrap();
+    assert!(!raw.contains("pier"), "{raw}");
+    cabin.run_slash_line("/recall pier");
+    assert_eq!(wait_recall(&mut cabin), "SLASH_RESULT:\namr:fact-home: pier nine is home");
+
+    store_keys.set_available(false);
+    hx::use_key_store_for(&root, store_keys.clone());
+    cabin.run_slash_line("/recall pier");
+    let body = wait_recall(&mut cabin);
+    assert_eq!(
+        body,
+        format!("SLASH_RESULT:\n1 private note not searched. {}", hx::Locked::Unavailable.message())
+    );
+    assert_eq!(super::slash::locked_recall_line(0, None), None);
+    assert_eq!(
+        super::slash::locked_recall_line(2, None).as_deref(),
+        Some("2 private notes not searched. Private memory is locked.")
+    );
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
 // Landed from PR #122.
 #[test]
 fn skills_connectors_and_sessions_without_grok() {
@@ -11230,7 +11281,7 @@ fn privacy_slash_lists_grants_scopes_and_egress_without_content() {
     let text = grokhub_core::strip_slash_result(&body);
     assert!(text.starts_with("/privacy — what leaves this computer\n"), "{text}");
     assert!(text.contains("- Sync to paired computers: off. /sync asks each time."), "{text}");
-    assert!(text.contains("Learning scopes: all off. Nothing reads them yet."), "{text}");
+    assert!(text.contains("What GrokHub can read: all off. Nothing reads these yet."), "{text}");
     assert!(text.contains("- api.x.ai · 1 time · chats · default · last just now"), "{text}");
     release_isolated(&root, cabin);
 }
@@ -11414,7 +11465,8 @@ fn aged_slash_results_never_render_in_the_thought_frame() {
     std::fs::create_dir_all(&root).unwrap();
     let report = super::privacy_ui::privacy_report(
         &grokhub_agent::harness::ConsentLedger::empty(),
-        &[],
+        &grokhub_agent::harness::EgressRead::default(),
+        None,
         false,
         1_000 * 86_400_000,
     );
@@ -11624,6 +11676,233 @@ fn revoke_from_privacy_clears_the_grant_on_a_click_only() {
     // An unknown or already revoked id is a no-op.
     cabin.revoke_from_privacy(&g.id);
     assert_eq!(cabin.messages.len(), before + 1);
+    release_isolated(&root, cabin);
+}
+
+// Spike-4b: Settings → Permissions paints the scope rows under "What GrokHub
+// can read". Texts with their centers, and which rects are filled.
+struct ScopePaint {
+    texts: Vec<(String, egui::Pos2)>,
+    filled: Vec<egui::Rect>,
+}
+
+impl ScopePaint {
+    fn has(&self, want: &str) -> bool {
+        self.texts.iter().any(|t| t.0 == want)
+    }
+    fn at(&self, want: &str) -> egui::Pos2 {
+        self.texts
+            .iter()
+            .find(|t| t.0 == want)
+            .unwrap_or_else(|| panic!("{want} not painted: {:?}", self.texts.iter().map(|t| &t.0).collect::<Vec<_>>()))
+            .1
+    }
+    /// The pill (`Allow` / `Revoke`) on the same row as `title`.
+    fn pill_by(&self, title: &str, pill: &str) -> egui::Pos2 {
+        let y = self.at(title).y;
+        self.texts
+            .iter()
+            .filter(|t| t.0 == pill)
+            .min_by(|a, b| (a.1.y - y).abs().total_cmp(&(b.1.y - y).abs()))
+            .map(|t| t.1)
+            .unwrap_or_else(|| panic!("no {pill} by {title}"))
+    }
+}
+
+fn paint_permissions(ctx: &egui::Context, cabin: &mut Cabin, events: Vec<egui::Event>) -> ScopePaint {
+    fn walk(shape: &egui::Shape, p: &mut ScopePaint) {
+        match shape {
+            egui::Shape::Text(t) => p.texts.push((t.galley.text().to_string(), t.pos + t.galley.rect.center().to_vec2())),
+            egui::Shape::Rect(r) if r.fill == crate::theme::fg() => p.filled.push(r.rect),
+            egui::Shape::Vec(v) => v.iter().for_each(|c| walk(c, p)),
+            _ => {}
+        }
+    }
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 2400.0))),
+        events,
+        ..Default::default()
+    };
+    let out = crate::theme::test_pass(ctx, input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| cabin.ui_permission_editor(ui));
+    });
+    let mut p = ScopePaint { texts: Vec::new(), filled: Vec::new() };
+    for clipped in &out.shapes {
+        walk(&clipped.shape, &mut p);
+    }
+    p
+}
+
+fn click_at(ctx: &egui::Context, cabin: &mut Cabin, at: egui::Pos2) {
+    let press = |pressed| egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let _ = paint_permissions(ctx, cabin, vec![egui::Event::PointerMoved(at)]);
+    let _ = paint_permissions(ctx, cabin, vec![press(true)]);
+    let _ = paint_permissions(ctx, cabin, vec![press(false)]);
+}
+
+fn key(key: egui::Key) -> egui::Event {
+    egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }
+}
+
+#[test]
+fn scope_rows_are_all_off_under_what_grokhub_can_read() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("scope-rows");
+    std::fs::create_dir_all(&root).unwrap();
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    let ys: Vec<f32> = [
+        "Leaving this computer",
+        "Sync to paired computers",
+        "What GrokHub can read",
+        super::scope_ui::SCOPES_NOTE,
+        "Files in one folder",
+        "Installed apps",
+        "Browser history",
+        "Calendar",
+        "Mail",
+        "System state",
+        "Command rules",
+    ]
+    .iter()
+    .map(|w| p.at(w).y)
+    .collect();
+    assert!(ys.windows(2).all(|w| w[0] < w[1]), "rows in order: {ys:?}");
+    for (kind, label) in grokhub_agent::harness::SCOPE_KINDS {
+        let allow = p.pill_by(label, "Allow");
+        assert!((allow.y - p.at(label).y).abs() < 24.0, "{kind}: Allow sits on its row");
+        assert!(p.filled.iter().any(|r| r.contains(allow)), "{kind}: Allow is filled");
+    }
+    assert!(!p.has("Revoke"), "nothing granted, nothing to revoke");
+    assert!(p.has("Off. Your calendar events."), "plain hints");
+    assert!(!root.join("consent.jsonl").exists(), "painting writes nothing");
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn a_scope_is_granted_by_a_pointer_click_only_and_revoked_from_settings_or_privacy() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("scope-grant");
+    std::fs::create_dir_all(&root).unwrap();
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let _ = paint_permissions(&ctx, &mut cabin, vec![]);
+
+    // Keys never grant: walk focus over every widget and press Enter and Space.
+    for _ in 0..40 {
+        let _ = paint_permissions(&ctx, &mut cabin, vec![key(egui::Key::Tab)]);
+        let _ = paint_permissions(&ctx, &mut cabin, vec![key(egui::Key::Enter)]);
+        let _ = paint_permissions(&ctx, &mut cabin, vec![key(egui::Key::Space)]);
+    }
+    assert_eq!(hx::ConsentLedger::load(&root).active().count(), 0, "keyboard never grants");
+    // Neither does slash text.
+    cabin.run_slash_line("/privacy allow apps");
+    assert_eq!(hx::ConsentLedger::load(&root).active().count(), 0);
+
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    click_at(&ctx, &mut cabin, p.pill_by("Installed apps", "Allow"));
+    assert_eq!(cabin.status, "Installed apps allowed. Nothing reads it yet. Revoke it here any time.");
+    let ledger = hx::ConsentLedger::load(&root);
+    let g = ledger.scope_grant(&hx::Scope::Apps).cloned().expect("apps granted");
+    assert_eq!(ledger.active().count(), 1, "one click, one scope");
+    let raw = std::fs::read_to_string(root.join("consent.jsonl")).unwrap();
+    assert!(!raw.contains("apps") && !raw.contains(&g.id), "the ledger is sealed: {raw}");
+
+    // The row turns into a ghost Revoke; the others stay off.
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    let revoke = p.pill_by("Installed apps", "Revoke");
+    assert!(!p.filled.iter().any(|r| r.contains(revoke)), "Revoke is a ghost");
+    assert!(p.texts.iter().any(|t| t.0.starts_with("On since ") && t.0.ends_with("how often you open them.")));
+    assert!(p.has("Off. Your mail."));
+
+    // A folder: typed, then clicked. Home itself is refused even with a click.
+    let home = std::env::var("HOME").unwrap_or_default();
+    if !home.is_empty() {
+        cabin.harness.scope_folder = home.clone();
+        let p = paint_permissions(&ctx, &mut cabin, vec![]);
+        click_at(&ctx, &mut cabin, p.pill_by("Files in one folder", "Allow"));
+        assert_eq!(cabin.status, "Not allowed: files: one folder at a time, never all of your home folder");
+        let p = paint_permissions(&ctx, &mut cabin, vec![]);
+        assert!(p.has(&cabin.status), "the refusal shows in Settings, not only on the hidden status line");
+        assert!(p.at(&cabin.status).y > p.at("What GrokHub can read").y);
+    }
+    cabin.harness.scope_folder = "/srv/notes/".into();
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    click_at(&ctx, &mut cabin, p.pill_by("Files in one folder", "Allow"));
+    assert_eq!(cabin.status, "Files in /srv/notes allowed. Nothing reads it yet. Revoke it here any time.");
+    assert!(cabin.harness.scope_folder.is_empty());
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    assert!(p.has("Files in /srv/notes") && p.has("Add another folder."));
+
+    // /privacy lists both by plain name, and its ghost Revoke works for scopes.
+    cabin.harness.consent = None;
+    let rows = cabin.privacy_revoke_rows();
+    let names: Vec<&str> = rows.iter().map(|r| r.1.as_str()).collect();
+    assert_eq!(names, vec!["Installed apps", "Files in /srv/notes"]);
+    let report = super::privacy_ui::privacy_report(&hx::ConsentLedger::load(&root), &hx::EgressRead::default(), None, false, g.granted_at + 60_000);
+    assert!(report.contains("What GrokHub can read: nothing reads these yet.\n- Files in one folder on · Installed apps on · Browser history off"), "{report}");
+    assert!(report.contains("\n- Installed apps: on since 1m ago\n"), "{report}");
+    assert!(!report.contains("Read apps") && !report.contains(&g.id), "{report}");
+    let files_id = rows[1].0.clone();
+    let before = cabin.messages.len();
+    cabin.revoke_from_privacy(&files_id);
+    assert_eq!(cabin.status, "Files in /srv/notes revoked. It's off until you allow it again.");
+    assert_eq!(cabin.messages.len(), before + 1);
+
+    // Settings Revoke.
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    click_at(&ctx, &mut cabin, p.pill_by("Installed apps", "Revoke"));
+    assert_eq!(cabin.status, "Installed apps revoked. It's off until you allow it again.");
+    assert_eq!(hx::ConsentLedger::load(&root).active().count(), 0);
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    assert!(!p.has("Revoke"), "all off again");
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn locked_private_data_shows_one_message_and_grants_or_syncs_nothing() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("scope-locked");
+    std::fs::create_dir_all(&root).unwrap();
+    hx::use_key_store_for(&root, std::sync::Arc::new(hx::MemoryKeyStore::unavailable()));
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    let msg = hx::Locked::Unavailable.message();
+    assert!(msg.starts_with("Private data is locked: GrokHub can't reach your "), "{msg}");
+    assert!(p.has(&msg), "{:?}", p.texts.iter().map(|t| &t.0).collect::<Vec<_>>());
+    assert_eq!(p.texts.iter().filter(|t| t.0 == msg).count(), 1, "said once");
+    assert!(p.at(&msg).y < p.at("Sync to paired computers").y, "said at the top, above every row it holds");
+    click_at(&ctx, &mut cabin, p.pill_by("Calendar", "Allow"));
+    assert_eq!(cabin.status, format!("Not allowed: {msg}"));
+    click_at(&ctx, &mut cabin, p.pill_by("Sync to paired computers", "Allow"));
+    assert_eq!(cabin.status, format!("Could not save the grant: {msg}"));
+    assert!(!root.join("consent.jsonl").exists(), "no plaintext fallback");
+    assert!(!root.join(hx::KEY_ID_FILE).exists());
+
+    pair_test_peer(&cabin, "p1");
+    cabin.run_slash_line("/sync");
+    assert!(cabin.harness.park.is_none() && cabin.sync_rx.is_none(), "nothing is sent");
+    assert_eq!(cabin.status, format!("Not synced. {msg}"));
+    let ledger = hx::ConsentLedger::load(&root);
+    let lock = super::privacy_ui::private_lock(&root, &ledger, true);
+    let report = super::privacy_ui::privacy_report(
+        &ledger,
+        &hx::read_egress_report(&root),
+        lock.as_ref(),
+        false,
+        1_000,
+    );
+    assert!(report.contains(&format!("\n\n{msg}\n\nGrants\n")), "{report}");
+    assert!(!root.join("egress.jsonl").exists());
     release_isolated(&root, cabin);
 }
 
