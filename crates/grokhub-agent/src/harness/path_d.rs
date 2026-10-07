@@ -28,7 +28,7 @@ fn name_words(name: &str) -> Vec<String> {
 }
 
 /// A Grok Build computer-use tool that drives the screen, mouse, or keyboard
-/// and is not the cabin's own `grokhub-desktop` (path A gates those). `name`
+/// and is not the cabin's own `grokhub-desktop` or `grokhub-cua` (path A gates those). `name`
 /// must be a bare tool name (`computer_click`, `computer-use__type`); a card
 /// title like ``Read `click.rs` `` is a file tool, not computer use. Browser
 /// tools (`browser_tab`, …) drive a page, not the desktop, and stay untouched.
@@ -38,7 +38,7 @@ pub fn builtin_cu(name: &str) -> bool {
         return false;
     }
     let lower = name.to_ascii_lowercase();
-    if lower.contains(grokhub_core::DESKTOP_MCP_SERVER) {
+    if grokhub_core::CABIN_CU_SERVERS.iter().any(|s| lower.contains(s)) {
         return false;
     }
     let words = name_words(&lower);

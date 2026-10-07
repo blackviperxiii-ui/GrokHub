@@ -16,6 +16,8 @@ Grok Build's own computer use is checked too (Spike-1c, path D). On Auto or Alwa
 
 Windows gate fixes (Spike-1W, code review only; the live Surface run is still to do). Ctrl+Alt+Delete and the other session-ending keys park in any modifier order or spelling (`Alt+Ctrl+Del`), a PowerShell delete behind `-ExecutionPolicy Bypass` parks, and `Stop-Computer`, `Restart-Computer`, `Format-Volume`, `Clear-Disk`, `format` and `Clear-RecycleBin` park as hard actions on every path, unattended runs included. No UI changes.
 
+Cua Driver as an optional second pair of hands on Linux (Spike-2a). Behind a `cuaDriver` flag in `app.json` that is off by default (no Settings control), `grokhub --mcp-cua` starts the pinned MIT cua-driver-rs 0.34.0 in bounded mode with a cabin manifest and puts every Cua call through the same approval gate as the desktop tools: hard actions park the same card, Halt kills the driver, and spans say `driver:"cua"`. The agent cursor marker on the Work-tree frame now travels by one of Cua's six motion styles (signature arc, the default, which keeps today's look), and reduced motion snaps on the first frame.
+
 Release bump list: the version strings that were in the old README (headline, both Latest rows, `--version` examples) now live in `docs/REFERENCE.md`, so `CLAUDE.md`, `.cursor/rules/repo-gates.mdc` and the versions compass list that file instead. `README.md` has no version strings. Docs only, no version bump.
 
 ## 2.10.94 — 2026-10-07
