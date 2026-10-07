@@ -102,7 +102,7 @@ impl PermissionMode {
         }
     }
 
-    /// Scheduled / night / phone `/v1/task` inherit the composer PermissionMode pill.
+    /// Scheduled / night / `/send` tasks inherit the composer PermissionMode pill.
     /// Ask is fail-closed (no silent `--always-approve`). Interactive Ask uses ACP.
     pub fn scheduled_flags(self) -> (bool, bool) {
         match self {

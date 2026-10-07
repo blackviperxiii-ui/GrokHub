@@ -586,7 +586,7 @@ impl Cabin {
                 let body = if sharing {
                     format!("Sharing on port {}", self.hub_port)
                 } else {
-                    "Not sharing. Start share to pair a phone or another computer.".into()
+                    "Not sharing. Start share to pair another computer.".into()
                 };
                 crate::cards::grok_tile(
                     ui,
@@ -604,7 +604,7 @@ impl Cabin {
                         crate::icons::TileIcon::Connect,
                         &code,
                         &format!(
-                            "Open {} on the other device.",
+                            "Open {} on the other computer.",
                             discover_hub_pair_url(self.hub_port)
                         ),
                         None,
@@ -612,7 +612,7 @@ impl Cabin {
                     );
                 } else if sharing {
                     ui.label(
-                        RichText::new("Paired. Make a new code after another device joins.")
+                        RichText::new("Paired. Make a new code after another computer joins.")
                             .size(13.0)
                             .color(crate::theme::muted()),
                     );
@@ -627,7 +627,7 @@ impl Cabin {
                     ui,
                     crate::icons::TileIcon::Connect,
                     "No pair code",
-                    "Start share to mint a code for another device.",
+                    "Start share to mint a code for another computer.",
                 ) {
                     self.start_hub();
                 }
