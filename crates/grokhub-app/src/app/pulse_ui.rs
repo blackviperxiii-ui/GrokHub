@@ -513,7 +513,9 @@ pub(super) fn paint_pulse_row(
                     });
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                    dots_menu(ui, active, |ui| pulse_menu(ui, card, kind, false, &mut act));
+                    crate::cards::dots_menu(ui, active, |ui| {
+                        pulse_menu(ui, card, kind, false, &mut act)
+                    });
                 });
             });
         })
@@ -1069,7 +1071,9 @@ impl Cabin {
                             .color(crate::theme::subtle()),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        dots_menu(ui, false, |ui| pulse_menu(ui, card, kind, true, &mut act));
+                        crate::cards::dots_menu(ui, false, |ui| {
+                            pulse_menu(ui, card, kind, true, &mut act)
+                        });
                     });
                 });
                 if let Some(did) = paint_post_body(ui, card, &thumbs) {
@@ -1762,23 +1766,6 @@ fn paint_thumbs(ui: &mut egui::Ui, thumbs: &[Thumb]) {
                 }
             }
         }
-    });
-}
-
-/// "···" with no frame until hovered, like the rest of the page's quiet chrome.
-/// The dots brighten while their row is hovered or focused, and the frame
-/// stays while the menu is open.
-fn dots_menu(ui: &mut egui::Ui, bright: bool, add: impl FnOnce(&mut egui::Ui)) {
-    ui.scope(|ui| {
-        let w = &mut ui.style_mut().visuals.widgets;
-        w.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
-        w.inactive.bg_stroke = egui::Stroke::NONE;
-        let color = if bright {
-            crate::theme::fg()
-        } else {
-            crate::theme::muted()
-        };
-        ui.menu_button(RichText::new("···").size(16.0).strong().color(color), add);
     });
 }
 

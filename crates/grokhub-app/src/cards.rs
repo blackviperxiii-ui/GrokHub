@@ -363,6 +363,23 @@ pub fn danger_pill(ui: &mut egui::Ui, label: &str) -> bool {
     felt_pill(ui, label, PillStyle::Danger)
 }
 
+/// "···" with no frame until hovered, like the rest of the quiet chrome.
+/// The dots brighten while their row is hovered or focused, and the frame
+/// stays while the menu is open. The UI font has no "⋯" glyph.
+pub fn dots_menu(ui: &mut egui::Ui, bright: bool, add: impl FnOnce(&mut egui::Ui)) {
+    ui.scope(|ui| {
+        let w = &mut ui.style_mut().visuals.widgets;
+        w.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+        w.inactive.bg_stroke = egui::Stroke::NONE;
+        let color = if bright {
+            crate::theme::fg()
+        } else {
+            crate::theme::muted()
+        };
+        ui.menu_button(RichText::new("···").size(16.0).strong().color(color), add);
+    });
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PillStyle {
     Solid,

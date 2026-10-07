@@ -6,6 +6,60 @@ use grokhub_core::{
     mark_automation_ok, mark_automation_stopped, BgEnd, BgOrigin,
 };
 
+/// Primary pill on a scheduled row. A failing job retries; a healthy one runs.
+pub(super) fn scheduled_primary_label(failing: bool) -> &'static str {
+    if failing {
+        "Retry"
+    } else {
+        "Run"
+    }
+}
+
+/// The row's name. A blank name falls back to the instructions (or the loop prompt).
+pub(super) fn automation_row_title(a: &Automation) -> String {
+    match a.name.trim() {
+        "" => a.instructions.clone(),
+        name => name.to_string(),
+    }
+}
+
+/// Words that mark this job's post on the shared Background history thread.
+fn run_needles(a: &Automation) -> Vec<String> {
+    let mut out = Vec::new();
+    let task = grokhub_core::bg_task_title(&a.instructions);
+    if !task.is_empty() {
+        out.push(task);
+    }
+    let name = a.name.trim();
+    if !name.is_empty() {
+        out.push(name.to_string());
+    }
+    let err = a.health.error.trim();
+    if err.len() >= 12 {
+        out.push(err.to_string());
+    }
+    out
+}
+
+/// Trailing actions on a job row. The primary pill stays filled. Remove lives
+/// in ··· and only asks; the caller confirms before anything is deleted.
+fn job_row_menu(ui: &mut egui::Ui, primary: &str) -> (bool, bool) {
+    let mut ran = false;
+    let mut remove = false;
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        crate::cards::dots_menu(ui, false, |ui| {
+            if ui.button("Remove").clicked() {
+                remove = true;
+                ui.close();
+            }
+        });
+        if crate::cards::white_pill(ui, primary) {
+            ran = true;
+        }
+    });
+    (ran, remove)
+}
+
 impl Cabin {
 
     pub(super) fn add_automation_seed(&mut self, seed: &str) {
@@ -124,7 +178,8 @@ impl Cabin {
                 crate::cards::status_chip(ui, &self.status, crate::cards::ChipTone::Live);
                 ui.add_space(8.0);
             }
-            let mut drop: Option<usize> = None;
+            let mut remove_loop: Option<usize> = None;
+            let mut run_loop: Option<usize> = None;
             let mut unhide_loop: Option<String> = None;
             if self.grok_loops.is_empty() {
                 if crate::cards::empty_prompt_tile(
@@ -174,17 +229,13 @@ impl Cabin {
                                         unhide_loop = Some(self.grok_loops[i].id.clone());
                                     }
                                 });
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        if crate::cards::ghost_pill(ui, "Remove") {
-                                            drop = Some(i);
-                                        }
-                                        if crate::cards::white_pill(ui, "Run") {
-                                            drop = Some(usize::MAX - i);
-                                        }
-                                    },
-                                );
+                                let (ran, remove_hit) = job_row_menu(ui, "Run");
+                                if remove_hit {
+                                    remove_loop = Some(i);
+                                }
+                                if ran {
+                                    run_loop = Some(i);
+                                }
                             });
                         });
                     ui.add_space(8.0);
@@ -218,15 +269,15 @@ impl Cabin {
                     self.add_automation_seed(seed);
                 }
             });
-            if let Some(i) = drop {
-                if i < self.grok_loops.len() {
-                    self.grok_loops.remove(i);
-                    self.persist_loops();
-                } else {
-                    let idx = usize::MAX - i;
-                    if let Some(row) = self.grok_loops.get(idx).cloned() {
-                        self.fire_loop(row);
-                    }
+            if let Some(i) = remove_loop {
+                if let Some(row) = self.grok_loops.get(i) {
+                    let id = row.id.clone();
+                    let title = row.prompt.clone();
+                    self.arm_remove_job(RemoveJobKind::Loop, id, title);
+                }
+            } else if let Some(i) = run_loop {
+                if let Some(row) = self.grok_loops.get(i).cloned() {
+                    self.fire_loop(row);
                 }
             }
             if let Some(id) = unhide_loop {
@@ -248,13 +299,11 @@ impl Cabin {
         let clock = Self::local_clock();
         let mut remove: Option<usize> = None;
         let mut run: Option<usize> = None;
+        let mut view: Option<usize> = None;
         let mut unhide: Option<String> = None;
         let mut toggled = false;
         for i in 0..self.automations.len() {
-            let title = match self.automations[i].name.trim() {
-                "" => self.automations[i].instructions.clone(),
-                name => name.to_string(),
-            };
+            let title = automation_row_title(&self.automations[i]);
             let body = automation_summary_line(&self.automations[i], now);
             let health = automation_health_line(&self.automations[i]);
             let ring = if health.is_some() {
@@ -289,6 +338,23 @@ impl Cabin {
                                     )
                                     .wrap(),
                                 );
+                                // After the error: open the last run's output.
+                                let link = ui.add(
+                                    egui::Label::new(
+                                        RichText::new("View last run")
+                                            .size(12.0)
+                                            .underline()
+                                            .color(crate::theme::link()),
+                                    )
+                                    .sense(egui::Sense::click())
+                                    .selectable(false),
+                                );
+                                if link.hovered() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                }
+                                if link.clicked() {
+                                    view = Some(i);
+                                }
                             }
                             if grokhub_core::source_hidden(&self.cfg.feed_pulse, &self.automations[i].id)
                                 && crate::cards::ghost_pill(ui, grokhub_core::HOME_HIDDEN_NOTE)
@@ -296,14 +362,14 @@ impl Cabin {
                                 unhide = Some(self.automations[i].id.clone());
                             }
                         });
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if crate::cards::ghost_pill(ui, "Remove") {
-                                remove = Some(i);
-                            }
-                            if crate::cards::white_pill(ui, "Run") {
-                                run = Some(i);
-                            }
-                        });
+                        let primary = scheduled_primary_label(health.is_some());
+                        let (ran, remove_hit) = job_row_menu(ui, primary);
+                        if remove_hit {
+                            remove = Some(i);
+                        }
+                        if ran {
+                            run = Some(i);
+                        }
                     });
                 });
             ui.add_space(8.0);
@@ -316,11 +382,13 @@ impl Cabin {
                 .collect();
             self.persist_automations();
         }
-        if let Some(i) = remove {
-            if i < self.automations.len() {
-                self.automations.remove(i);
-                self.persist_automations();
-                self.status = "Automation removed".into();
+        if let Some(i) = view {
+            self.open_last_scheduled_run(i);
+        } else if let Some(i) = remove {
+            if let Some(a) = self.automations.get(i) {
+                let id = a.id.clone();
+                let title = automation_row_title(a);
+                self.arm_remove_job(RemoveJobKind::Scheduled, id, title);
             }
         } else if let Some(i) = run {
             if let Some(a) = self.automations.get(i).cloned() {
@@ -331,6 +399,80 @@ impl Cabin {
             self.undo_hide_automation_from_home(&id);
         }
         ui.add_space(12.0);
+    }
+
+    /// "View last run" on a failing scheduled job. A Follow up card for this
+    /// automation opens on the workboard. Otherwise the Background history chat,
+    /// when it holds this run. Otherwise a short sheet with the stored error.
+    pub(super) fn open_last_scheduled_run(&mut self, idx: usize) {
+        let Some(a) = self.automations.get(idx).cloned() else {
+            return;
+        };
+        let title = automation_row_title(&a);
+        if let Some(card_id) = self.follow_up_for(&a.id) {
+            self.nav = Nav::Workboard;
+            self.board_view.open = Some(card_id);
+            self.status = format!("Last run · {title}");
+            return;
+        }
+        if self.open_background_run(&a, &title) {
+            return;
+        }
+        let body = last_run_sheet_body(&a.health.error, "");
+        self.confirm = Some(ConfirmKind::LastRun { title: title.clone(), body });
+        self.status = format!("Last run · {title}");
+    }
+
+    /// Newest workboard card filed for this automation. A dismissed card is gone.
+    fn follow_up_for(&self, automation_id: &str) -> Option<String> {
+        self.board
+            .iter()
+            .filter(|c| {
+                c.automation.as_deref() == Some(automation_id) && c.status != BoardStatus::Dismissed
+            })
+            .max_by_key(|c| c.updated_ms)
+            .map(|c| c.id.clone())
+    }
+
+    /// Open Chat on the hidden Background thread when a post there is this run.
+    fn open_background_run(&mut self, a: &Automation, title: &str) -> bool {
+        let Some(idx) = self.threads.iter().position(|t| {
+            t.background && t.title == threads::BACKGROUND_THREAD_TITLE
+        }) else {
+            return false;
+        };
+        let needles = run_needles(a);
+        if needles.is_empty() {
+            return false;
+        }
+        let bodies = self.bodies_of(idx);
+        let found = bodies.iter().rev().any(|body| {
+            needles.iter().any(|n| body.contains(n.as_str()))
+        });
+        if !found {
+            return false;
+        }
+        if idx != self.thread_idx {
+            self.switch_thread(idx);
+        } else if self.messages.is_empty() {
+            if let Some(t) = self.threads.get(idx) {
+                self.messages = t.messages.clone();
+            }
+        }
+        self.nav = Nav::Chat;
+        self.pin_chat_tail();
+        self.status = format!("Last run · {title}");
+        true
+    }
+
+    fn bodies_of(&self, idx: usize) -> Vec<String> {
+        if idx == self.thread_idx && !self.messages.is_empty() {
+            return self.messages.iter().map(|(_, b)| b.clone()).collect();
+        }
+        self.threads
+            .get(idx)
+            .map(|t| t.messages.iter().map(|(_, b)| b.clone()).collect())
+            .unwrap_or_default()
     }
 
     pub(super) fn tick_night(&mut self) -> bool {
