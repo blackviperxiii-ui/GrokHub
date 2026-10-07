@@ -13,7 +13,7 @@
 - `crates/grokhub-agent/src/harness/park.rs` and `crates/grokhub-agent/src/harness/span.rs`: park files and span JSONL. `crates/grokhub-agent/src/harness/detect.rs`, `crates/grokhub-agent/src/harness/audit.rs`, `crates/grokhub-agent/src/harness/ladder.rs`: Spike-1a detectors, audit, and recovery ladder.
 - `crates/grokhub-app/src/app/harness_ui.rs` (cards, paths B/C/E) and `crates/grokhub-app/src/desktop_mcp/harness_gate.rs` (path A).
 ## Change recipe
-- New hard pattern: classify it in `hard.rs` (add a head or name word to its const list), add the matching `Bash(...)` / `MCPTool(...)` rules to `HEADLESS_DENY_RULES` (five forms per shell head: bare, `sudo`, after `; `, `&& `, `| `) or a `GB_DENY_GAPS` entry if GB rules can't express it, then bump the literal count in `headless_deny_rules_cover_the_floor_and_stubs` (154 today). `gb_deny_rules_cover_every_hard_name_and_command` fails on a missing rule.
+- New hard pattern: classify it in `hard.rs` (add a head or name word to its const list), add the matching `Bash(...)` / `MCPTool(...)` rules to `HEADLESS_DENY_RULES` (five forms per shell head: bare, `sudo`, after `; `, `&& `, `| `) or a `GB_DENY_GAPS` entry if GB rules can't express it, then bump the literal count in `headless_deny_rules_cover_the_floor_and_stubs` (157 today). `gb_deny_rules_cover_every_hard_name_and_command` fails on a missing rule.
 - New caller: build a `Step` and call `decide`; never add a side path around it. New outbound call: wrap it in `guard_egress` with honest `DataClass` values.
 ## What breaks it
 - Anything that loosens Grok Build: an allow rule, a looser `--permission-mode`, or a `~/.grok` edit. The cabin may only tighten (`docs/superpowers/specs/2026-08-19-grok-build-gui.md`, Spike-0 addendum).

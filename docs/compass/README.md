@@ -17,6 +17,7 @@ The format follows Meta's "compass, not encyclopedia" write-up (Engineering at M
 | [app-config](app-config.md) | `crates/grokhub-app/src/config.rs`: `app.json` and safe disk stores |
 | [heartbeat](heartbeat.md) | the 15 s pulse, the proactive-act throttle, scheduled jobs and Halt |
 | [desktop-mcp](desktop-mcp.md) | `crates/grokhub-app/src/desktop_mcp/` and `crates/grokhub-core/src/desktop_mcp.rs` |
+| [self-manage](self-manage.md) | `crates/grokhub-agent/src/self_manage/` and `crates/grokhub-app/src/self_mcp.rs`: Grok's own skill, connection, and automation tools |
 | [grokhub-hub](grokhub-hub.md) | `crates/grokhub-hub/`: LAN `/v1` hub and pairing |
 | [grokhub-ffi](grokhub-ffi.md) | `crates/grokhub-ffi/`: C ABI for Android and Windows |
 | [install-scripts](install-scripts.md) | `scripts/install.sh` and friends, plus the tests that pin their text |

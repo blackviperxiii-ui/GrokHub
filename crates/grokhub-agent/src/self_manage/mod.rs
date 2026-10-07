@@ -13,6 +13,7 @@
 //! skills, connections, automations, and nothing else.
 
 mod ops;
+pub mod secrets;
 
 use serde_json::{json, Value};
 
@@ -89,6 +90,34 @@ pub fn self_tool(name: &str) -> Option<&'static str> {
         None => name,
     };
     SELF_TOOLS.iter().find(|(n, _)| *n == leaf).map(|(n, _)| *n)
+}
+
+/// Path E: run one call on the native engine. A credentials call asks for
+/// each secret on the same masked card an MCP server's elicitation uses.
+pub(crate) fn run_native(name: &str, args: &Value) -> crate::tools::ToolOutput {
+    let dir = crate::perm::config_dir();
+    let mut ctx = SelfCtx::new(&dir);
+    if self_class(name, args) == Some(SelfClass::Credentials) {
+        let conn = args.get("name").and_then(|n| n.as_str()).unwrap_or("");
+        for var in secret_names(args) {
+            let msg = secret_prompt(conn, &var);
+            match crate::mcp::ask_secret(SELF_MCP_SERVER, &var, &msg) {
+                Some(v) => ctx.secrets.push((var, v)),
+                None => return crate::tools::ToolOutput::err(secret_missing(&var)),
+            }
+        }
+    }
+    run(&ctx, name, args)
+}
+
+/// What the masked card says.
+pub fn secret_prompt(conn: &str, var: &str) -> String {
+    format!("Grok is adding the connection {conn}. Paste {var} here; Grok never sees it.")
+}
+
+/// What the model reads when no secret came back.
+pub fn secret_missing(var: &str) -> String {
+    format!("The secret for {var} was not given. Nothing changed.")
 }
 
 /// A list tool: runs like the read-only tools.

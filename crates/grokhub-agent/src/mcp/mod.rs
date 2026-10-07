@@ -17,7 +17,7 @@ pub use elicit::{
 };
 pub(crate) use elicit::{wait_elicit, ElicitAnswer};
 
-pub(crate) use elicit::with_elicit;
+pub(crate) use elicit::{ask_secret, with_elicit};
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

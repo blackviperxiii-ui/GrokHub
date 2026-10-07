@@ -195,6 +195,29 @@ pub(crate) fn answer_elicitation(server: &str, msg: &Value) -> Option<Value> {
     }))
 }
 
+/// Path E credentials: one masked card for `var`, shown the same way an MCP
+/// server's elicitation is. `None` on decline, cancel, or an unattended run.
+pub(crate) fn ask_secret(server: &str, var: &str, message: &str) -> Option<String> {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let id = json!(format!("self-secret-{}", N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    let params = json!({
+        "message": message,
+        "requestedSchema": {
+            "type": "object",
+            "properties": { var: { "type": "string", "title": var, "format": "password", "writeOnly": true } },
+            "required": [var],
+        },
+    });
+    match ask(server, &id, &params) {
+        ElicitAnswer::Accept(content) => content
+            .get(var)
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_string),
+        ElicitAnswer::Decline | ElicitAnswer::Cancel => None,
+    }
+}
+
 fn ask(server: &str, id: &Value, params: &Value) -> ElicitAnswer {
     let attended = HOOK.with(|slot| {
         let ptr = slot.get();
