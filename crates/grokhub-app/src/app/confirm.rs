@@ -21,7 +21,7 @@ use super::*;
 /// Ask-card Always second beat. Named so tests can lock the inherit line.
 pub(super) const ALWAYS_CONFIRM_LINE1: &str = "Skip every tool prompt this launch.";
 pub(super) const ALWAYS_CONFIRM_LINE2: &str =
-    "Night, loops, and phone inherit --always-approve until quit.";
+    "Night, loops, and /send inherit --always-approve until quit.";
 
 pub(super) const ALWAYS_SESSION_TITLE: &str = "Always this launch";
 pub(super) const HOST_CONFIRM_TITLE: &str = "Destructive host";
@@ -356,7 +356,7 @@ mod tests {
         );
         assert!(ALWAYS_CONFIRM_LINE2.contains("Night"));
         assert!(ALWAYS_CONFIRM_LINE2.contains("loop"));
-        assert!(ALWAYS_CONFIRM_LINE2.contains("phone"));
+        assert!(ALWAYS_CONFIRM_LINE2.contains("/send"));
         let a = serde_json::json!(1);
         let b = serde_json::json!(2);
         assert!(always_confirm_matches_rpc(Some(&a), &a));

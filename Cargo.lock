@@ -2014,13 +2014,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "grokhub-ffi"
-version = "2.10.94"
-dependencies = [
- "grokhub-core",
-]
-
-[[package]]
 name = "grokhub-hub"
 version = "2.10.94"
 dependencies = [

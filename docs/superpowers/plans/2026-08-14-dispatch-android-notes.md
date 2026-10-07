@@ -1,3 +1,5 @@
+> Android/phone scrapped (2026-10-07). These routes are gone from the hub; kept for history only.
+
 # Android dispatch consume API (Linux hub)
 
 The Android app is a sibling repo. This is the live HTTP contract on GrokHub 2.0 (`crates/grokhub-hub`). No Android code lives here.
