@@ -43,7 +43,7 @@ const WRAPPED: &[(&str, usize, &str)] = &[
     ("grokhub-app/src/imagine_auth.rs", 2, "post_form / imagine_discovery: egress_ok (no user data)"),
     ("grokhub-app/src/oauth.rs", 4, "discovery / post_form / userinfo / photo: egress_ok (no user data)"),
     ("grokhub-app/src/update.rs", 2, "latest tag / CLI version: egress_ok (no user data)"),
-    ("grokhub-app/src/xai.rs", 2, "url_answers (chat); xai_agent callers: grok_json, STT, TTS, polls, downloads, voice-secret mint"),
+    ("grokhub-app/src/xai.rs", 2, "url_answers (chat); xai_agent callers: grok_json, STT, TTS, polls, downloads"),
 ];
 
 /// The part of a source file that ships: CRLF normalized, `#[cfg(test)] mod …` cut off.
