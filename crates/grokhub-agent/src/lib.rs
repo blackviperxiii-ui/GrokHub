@@ -50,8 +50,9 @@ pub use mcp::{
     ElicitView,
 };
 pub use memory::{
-    dream, first_turn_injection, flush_pending, is_dream_command, is_flush_command,
-    queue_memory_status, remember, take_memory_status, INJECT_BYTE_CAP, INJECT_TOKEN_CAP,
+    amr_enabled, amr_store, dream, first_turn_injection, flush_pending, is_dream_command,
+    is_flush_command, queue_memory_status, remember, remember_note_text, take_memory_status,
+    INJECT_BYTE_CAP, INJECT_TOKEN_CAP,
 };
 pub use models::{
     context_length_for, parse_listed_models, parse_xai_models, pick_model, ListedModel,
