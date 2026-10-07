@@ -179,13 +179,12 @@ impl ChangeLedger {
             .find(|c| c.op != ChangeOp::Undo && !self.was_undone(c.seq))
     }
 
-    /// The change whose `before` a restore brings back: the newest one on
-    /// this skill that left it gone.
+    /// The change whose `before` a restore brings back: the newest line on
+    /// this skill, when that line left it gone.
     pub fn restore_source(&self, name: &str) -> Option<&Change> {
         self.for_skill(name)
-            .rev()
-            .find(|c| c.after_hash.is_empty())
-            .filter(|c| !c.before_hash.is_empty())
+            .next_back()
+            .filter(|c| c.after_hash.is_empty() && !c.before_hash.is_empty())
     }
 
     /// The user undid a change that produced exactly these bytes. The nightly
@@ -644,8 +643,12 @@ mod tests {
             fs::remove_dir_all(skills.join("old-habit")).map_err(|e| e.to_string())
         })
         .unwrap();
+        assert!(ChangeLedger::load(&root).restore_source("old-habit").is_some());
         undo_skill_change(&root, &skills, "old-habit", UndoAsk::from_click()).unwrap();
         assert_eq!(md(&skills, "old-habit").as_deref(), Some(V2));
+        let ledger = ChangeLedger::load(&root);
+        assert_eq!(ledger.restore_source("old-habit"), None, "it is back, so nothing to restore");
+        assert_eq!(ledger.undo_target("old-habit"), None);
     }
 
     #[test]
