@@ -539,12 +539,13 @@ pub fn automation_schedule_label(a: &Automation) -> String {
 }
 
 /// The line under an automation on the Automations page.
-pub fn automation_summary_line(a: &Automation, now_ms: u64) -> String {
+/// Next run is a local wall time: "today 7:30 AM" or "Tue 9:00 AM".
+pub fn automation_summary_line(a: &Automation, clock: LocalClock) -> String {
     let mut bits = vec![automation_schedule_label(a)];
     if !a.enabled {
         bits.push("paused".into());
     } else if let Some(next) = a.next_run {
-        bits.push(format!("next {}", relative_when(next, now_ms)));
+        bits.push(format!("next {}", relative_when(next, clock)));
     }
     if a.run_count > 0 {
         let plural = if a.run_count == 1 { "" } else { "s" };
@@ -565,33 +566,46 @@ fn minutes_label(mins: u32) -> String {
     format!("{mins}m")
 }
 
-fn relative_when(then_ms: u64, now_ms: u64) -> String {
-    if then_ms <= now_ms {
+/// `date +%w`: 0 = Sunday.
+const WEEKDAY_ABBREV: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/// Local wall time of a future run. Same day is "today 7:30 AM".
+/// A later day is "Tue 9:00 AM". Due or past is "now".
+///
+/// The minute is the unix minute `then_ms` falls in, labeled from `clock`
+/// (which names the unix minute of `clock.now_ms`). That stays on the clock
+/// time even when the timestamp still carries leftover seconds.
+fn relative_when(then_ms: u64, clock: LocalClock) -> String {
+    if then_ms <= clock.now_ms {
         return "now".into();
     }
-    let mins = (then_ms - now_ms) / 60_000;
-    match mins {
-        0 => "in under a minute".into(),
-        1 => "in 1 min".into(),
-        2..=59 => format!("in {mins} min"),
-        60..=1439 => {
-            let h = mins / 60;
-            let m = mins % 60;
-            if m == 0 {
-                format!("in {h}h")
-            } else {
-                format!("in {h}h {m}m")
-            }
-        }
-        _ => {
-            let days = mins / 1440;
-            if days == 1 {
-                "in 1 day".into()
-            } else {
-                format!("in {days} days")
-            }
-        }
+    let ahead = (then_ms / 60_000).saturating_sub(clock.now_ms / 60_000);
+    let now_tod = u64::from(clock.hour) * 60 + u64::from(clock.minute);
+    let total = now_tod + ahead;
+    let days = total / (24 * 60);
+    let hm = format_ampm((total % (24 * 60)) as u32);
+    if days == 0 {
+        format!("today {hm}")
+    } else {
+        let wd = (u64::from(clock.weekday) + days) % 7;
+        format!("{} {hm}", WEEKDAY_ABBREV[wd as usize])
     }
+}
+
+/// 12-hour clock: "7:30 AM", "12:00 PM". Minutes stay two digits.
+fn format_ampm(tod_min: u32) -> String {
+    let h24 = tod_min / 60;
+    let m = tod_min % 60;
+    let (h12, half) = if h24 == 0 {
+        (12, "AM")
+    } else if h24 < 12 {
+        (h24, "AM")
+    } else if h24 == 12 {
+        (12, "PM")
+    } else {
+        (h24 - 12, "PM")
+    };
+    format!("{h12}:{m:02} {half}")
 }
 
 /// `9`, `9:30`, `9pm`, `9:30 pm`, `21:00` — the hour a night job is asked for.
@@ -767,17 +781,24 @@ mod tests {
     #[test]
     fn summary_line_reads_like_a_schedule() {
         let mut a = parse_nl_automation("every weekday at 9, summarize the board").expect("job");
+        // Wednesday 6:00 AM, ninety minutes later — today 7:30 AM, not "in 1h 30m".
+        let morning = LocalClock {
+            now_ms: 0,
+            weekday: 3,
+            hour: 6,
+            minute: 0,
+        };
         a.next_run = Some(90 * 60_000);
         assert_eq!(
-            automation_summary_line(&a, 0),
-            "weekdays at 09:00 · next in 1h 30m"
+            automation_summary_line(&a, morning),
+            "weekdays at 09:00 · next today 7:30 AM"
         );
         a.run_count = 1;
-        assert!(automation_summary_line(&a, 0).ends_with("· 1 run"));
+        assert!(automation_summary_line(&a, morning).ends_with("· 1 run"));
         a.run_count = 4;
-        assert!(automation_summary_line(&a, 0).ends_with("· 4 runs"));
+        assert!(automation_summary_line(&a, morning).ends_with("· 4 runs"));
         a.enabled = false;
-        let paused = automation_summary_line(&a, 0);
+        let paused = automation_summary_line(&a, morning);
         assert!(
             paused.contains("paused") && !paused.contains("next"),
             "a paused job must not advertise a next run: {paused}"
@@ -789,7 +810,122 @@ mod tests {
         let mut due = a.clone();
         due.enabled = true;
         due.next_run = Some(0);
-        assert!(automation_summary_line(&due, 10).contains("next now"));
+        let later = LocalClock {
+            now_ms: 10,
+            weekday: 3,
+            hour: 6,
+            minute: 0,
+        };
+        assert!(automation_summary_line(&due, later).contains("next now"));
+    }
+
+    #[test]
+    fn automation_summary_line_uses_absolute_local_time() {
+        let mut a = parse_nl_automation("every day at 9, summarize the board").expect("job");
+        let morning = LocalClock {
+            now_ms: 60_000,
+            weekday: 3,
+            hour: 6,
+            minute: 0,
+        };
+        a.next_run = Some(morning.now_ms + 90 * 60_000);
+        let today = automation_summary_line(&a, morning);
+        assert_eq!(today, "daily at 09:00 · next today 7:30 AM");
+        assert!(!today.contains("next in"), "{today}");
+
+        // Monday 8:00 PM, thirteen hours later is Tuesday 9:00 AM.
+        let monday = LocalClock {
+            now_ms: 60_000,
+            weekday: 1,
+            hour: 20,
+            minute: 0,
+        };
+        a.next_run = Some(monday.now_ms + 13 * 60 * 60_000);
+        assert_eq!(
+            automation_summary_line(&a, monday),
+            "daily at 09:00 · next Tue 9:00 AM"
+        );
+    }
+
+    #[test]
+    fn relative_when_says_today_weekday_or_now() {
+        let morning = LocalClock {
+            now_ms: 0,
+            weekday: 3,
+            hour: 6,
+            minute: 0,
+        };
+        assert_eq!(relative_when(90 * 60_000, morning), "today 7:30 AM");
+        let monday = LocalClock {
+            now_ms: 60_000,
+            weekday: 1,
+            hour: 20,
+            minute: 0,
+        };
+        assert_eq!(
+            relative_when(monday.now_ms + 13 * 60 * 60_000, monday),
+            "Tue 9:00 AM"
+        );
+        let due = LocalClock {
+            now_ms: 10,
+            weekday: 3,
+            hour: 6,
+            minute: 0,
+        };
+        assert_eq!(relative_when(0, due), "now");
+        assert_eq!(relative_when(10, due), "now");
+        // Leftover seconds must not bump the displayed minute.
+        let base = 1_000 * 60_000;
+        let mid = LocalClock {
+            now_ms: base + 50_000,
+            weekday: 3,
+            hour: 8,
+            minute: 30,
+        };
+        let nine = (base / 60_000 + 30) * 60_000;
+        assert_eq!(relative_when(nine, mid), "today 9:00 AM");
+    }
+
+    #[test]
+    fn next_today_weekday_and_now() {
+        let noon = LocalClock {
+            now_ms: 0,
+            weekday: 0,
+            hour: 11,
+            minute: 0,
+        };
+        assert_eq!(relative_when(60 * 60_000, noon), "today 12:00 PM");
+        let late = LocalClock {
+            now_ms: 0,
+            weekday: 5,
+            hour: 23,
+            minute: 30,
+        };
+        assert_eq!(relative_when(60 * 60_000, late), "Sat 12:30 AM");
+        let evening = LocalClock {
+            now_ms: 0,
+            weekday: 4,
+            hour: 18,
+            minute: 0,
+        };
+        assert_eq!(relative_when(3 * 60 * 60_000, evening), "today 9:00 PM");
+        let midnight = LocalClock {
+            now_ms: 0,
+            weekday: 2,
+            hour: 0,
+            minute: 0,
+        };
+        assert_eq!(relative_when(1, midnight), "today 12:00 AM");
+        // What used to read "in 1 day" is the weekday and the clock time.
+        let monday = LocalClock {
+            now_ms: 0,
+            weekday: 1,
+            hour: 20,
+            minute: 0,
+        };
+        let line = relative_when(26 * 60 * 60_000, monday);
+        assert_eq!(line, "Tue 10:00 PM");
+        assert!(!line.contains("in 1 day") && !line.contains("in 1h"), "{line}");
     }
 
     #[test]

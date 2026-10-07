@@ -6941,8 +6941,12 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "Loops Suggested uses learned tiles first: {night}"
         );
         assert!(
-            night.contains("review_status_line"),
-            "Suggested header shows Reviewed today / due tonight: {night}"
+            night.contains("Suggested from your recent work"),
+            "Suggested says these tiles come from recent work: {night}"
+        );
+        assert!(
+            !night.contains("review_status_line"),
+            "night review status stays off the Automations Suggested line: {night}"
         );
         assert!(
             night.contains("/loop") && night.contains("New job") && night.contains("grok_loops"),
@@ -6977,12 +6981,12 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "re-enabling a paused job has to find its next slot: {sched}"
         );
         let enable = night
-            .split("checkbox")
+            .split("enabled_switch")
             .nth(1)
             .and_then(|s| s.split("ui.vertical").next())
             .expect("loop enable");
         assert!(
-            enable.contains(".changed()") && enable.contains("persist_loops"),
+            enable.contains("persist_loops"),
             "toggling a loop must persist enabled before restart: {enable}"
         );
         assert!(
@@ -16803,10 +16807,11 @@ fn automations_rows_keep_Remove_behind_the_dots_menu() {
         .and_then(|s| s.split("\nimpl ").next())
         .expect("job_row_menu");
     assert!(
-        menu.contains("dots_menu") && menu.contains("\"Remove\"") && menu.contains("white_pill"),
+        menu.contains("dots_menu")
+            && menu.contains("\"Remove\"")
+            && menu.contains("job_primary_pill"),
         "{menu}"
     );
-    assert!(!menu.contains("ghost_pill"), "{menu}");
     let sched = src
         .split("fn ui_scheduled_automations(")
         .nth(1)
@@ -16853,6 +16858,179 @@ fn automations_rows_keep_Remove_behind_the_dots_menu() {
     }
     assert_eq!(cabin.automations.len(), 1, "the menu only asks");
     assert_eq!(cabin.grok_loops.len(), 1);
+    let _ = std::fs::remove_dir_all(&root);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn healthy_Run_uses_ghost_pill_and_Retry_stays_white() {
+    let src = include_str!("night.rs");
+    let pill = src
+        .split("fn job_primary_pill(")
+        .nth(1)
+        .and_then(|s| s.split("\nimpl ").next())
+        .expect("job_primary_pill");
+    let retry = pill.find("\"Retry\"").expect("Retry branch");
+    let white = pill.find("white_pill").expect("filled Retry");
+    let ghost = pill.find("ghost_pill").expect("ghost Run");
+    assert!(
+        retry < white && white < ghost,
+        "Retry is filled white; Run falls through to ghost: {pill}"
+    );
+    let menu = src
+        .split("fn job_row_menu(")
+        .nth(1)
+        .and_then(|s| s.split("fn job_primary_pill(").next())
+        .expect("job_row_menu");
+    assert!(
+        menu.contains("job_primary_pill(ui, primary)"),
+        "both lists share the pill helper: {menu}"
+    );
+    assert!(!menu.contains("white_pill") && !menu.contains("ghost_pill"), "{menu}");
+    let loops = src
+        .split("fn ui_night(")
+        .nth(1)
+        .and_then(|s| s.split("pub(super) fn ui_scheduled_automations(").next())
+        .expect("ui_night");
+    assert!(
+        loops.contains("job_row_menu(ui, \"Run\")"),
+        "loops always Run, and the helper makes that a ghost: {loops}"
+    );
+    let sched = src
+        .split("fn ui_scheduled_automations(")
+        .nth(1)
+        .and_then(|s| s.split("pub(super) fn open_last_scheduled_run(").next())
+        .expect("scheduled");
+    assert!(
+        sched.contains("scheduled_primary_label(health.is_some())")
+            && sched.contains("job_row_menu(ui, primary)"),
+        "scheduled Retry/Run goes through the same helper: {sched}"
+    );
+}
+
+#[test]
+fn automations_intro_says_loops_repeat_on_an_interval() {
+    let src = include_str!("night.rs");
+    let page = src
+        .split("fn ui_night(")
+        .nth(1)
+        .and_then(|s| s.split("pub(super) fn ui_scheduled_automations(").next())
+        .expect("ui_night");
+    let line = "Loops repeat on an interval. Scheduled jobs run at a clock time. Stop a job when its work is done.";
+    assert!(page.contains(line), "{page}");
+    assert!(
+        !page.contains("Interval prompts run as Grok Build"),
+        "the intro dropped the jargon: {page}"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn automations_Suggested_line_is_from_your_recent_work() {
+    let src = include_str!("night.rs");
+    let page = src
+        .split("fn ui_night(")
+        .nth(1)
+        .and_then(|s| s.split("pub(super) fn ui_scheduled_automations(").next())
+        .expect("ui_night");
+    let suggested = page
+        .split("section_label(ui, \"Suggested\")")
+        .nth(1)
+        .expect("Suggested");
+    assert!(
+        suggested.contains("Suggested from your recent work"),
+        "{suggested}"
+    );
+    assert!(
+        !page.contains("review_status_line")
+            && !page.contains("Review due tonight")
+            && !page.contains("Reviewed today"),
+        "Suggested no longer uses the nightly review status: {page}"
+    );
+    let review = include_str!("../../../grokhub-core/src/review.rs");
+    assert!(
+        review.contains("pub fn review_status_line(")
+            && review.contains("\"Review due tonight\"")
+            && review.contains("\"Reviewed today\""),
+        "night review still has its own status line"
+    );
+}
+
+#[test]
+fn automations_job_rows_use_enabled_switch_not_a_checkbox() {
+    let src = include_str!("night.rs");
+    let loops = src
+        .split("fn ui_night(")
+        .nth(1)
+        .and_then(|s| s.split("pub(super) fn ui_scheduled_automations(").next())
+        .expect("ui_night");
+    let sched = src
+        .split("fn ui_scheduled_automations(")
+        .nth(1)
+        .and_then(|s| s.split("pub(super) fn open_last_scheduled_run(").next())
+        .expect("scheduled");
+    for (name, body) in [("loops", loops), ("scheduled", sched)] {
+        assert!(
+            !body.contains("checkbox"),
+            "{name} still paints a checkbox: {body}"
+        );
+        assert!(
+            body.contains("enabled_switch"),
+            "{name} should use the compact switch: {body}"
+        );
+    }
+    assert!(
+        loops.contains("persist_loops"),
+        "toggling a loop still persists: {loops}"
+    );
+    assert!(
+        sched.contains("toggled = true") && sched.contains("persist_automations"),
+        "toggling a scheduled job still refreshes its next slot: {sched}"
+    );
+    let cards = include_str!("../cards.rs");
+    let sw = cards
+        .split("pub fn enabled_switch(")
+        .nth(1)
+        .and_then(|s| s.split("fn paint_switch(").next())
+        .expect("enabled_switch");
+    assert!(
+        sw.contains("28.0")
+            && sw.contains("16.0")
+            && sw.contains("on_hover_text(\"Enabled\")")
+            && sw.contains("finish_switch"),
+        "{sw}"
+    );
+    let finish = cards
+        .split("fn finish_switch(")
+        .nth(1)
+        .and_then(|s| s.split("pub fn switch_access_name(").next())
+        .expect("finish_switch");
+    assert!(
+        finish.contains("switch_access_name") && finish.contains("WidgetType::Checkbox"),
+        "the switch keeps an On/Off name: {finish}"
+    );
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn automations_page_paints_plain_intro_and_Suggested_from_recent_work() {
+    let _hold = crate::config::hold_test_config();
+    let _paint = crate::theme::hold_paint_test();
+    let (_pin, root) = pin_auto_config("auto-copy");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.automations = vec![healthy_morning_job()];
+    cabin.grok_loops.clear();
+    let mut page = AutoPage::new();
+    let texts = page.settle(&mut cabin);
+    let blob: String = texts.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>().join("\n");
+    assert!(
+        blob.contains("Loops repeat on an interval. Scheduled jobs run at a clock time. Stop a job when its work is done."),
+        "{blob}"
+    );
+    assert!(blob.contains("Suggested from your recent work"), "{blob}");
+    assert!(!blob.contains("Review due tonight") && !blob.contains("Reviewed today"), "{blob}");
+    assert!(!blob.contains("15s pulse") && !blob.contains("Interval prompts"), "{blob}");
     let _ = std::fs::remove_dir_all(&root);
     std::env::remove_var("GROKHUB_CONFIG");
 }
