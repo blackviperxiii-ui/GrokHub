@@ -53,9 +53,10 @@ pub(super) const PEEK_H: f32 = 30.0;
 /// The card under the pointer rises this far above the card in front, so it reads in full.
 pub(super) const LIFT_STEP: f32 = FEED_CARD_H + FEED_GAP;
 /// Open Pulse card on the deck, before a source image. Grows up from the strip.
-const FULL_FEED_H: f32 = 248.0;
-/// Extra height when that card has a source image.
-const FULL_FEED_IMAGE_H: f32 = 180.0;
+/// Fits source · age, a two-line title, three takeaway rows, Read at, and Like/Discuss.
+const FULL_FEED_H: f32 = 168.0;
+/// Extra height when that card has a source image: one thumb (at most 168) plus spacing.
+const FULL_FEED_IMAGE_H: f32 = 174.0;
 const SLIDE_SECS: f32 = 0.22;
 /// A card joining the deck after one leaves slides in from below and to the right.
 const FLY_SECS: f32 = 0.45;
