@@ -41,6 +41,9 @@ const DIGEST_BODY_CHARS: usize = 900;
 /// The written edition's share of a digest body, leaving room for the taste
 /// and steer lines `compose_digest` adds after it.
 const DIGEST_EDITION_CHARS: usize = 680;
+/// What the feed paints under a title. A stored body can be a long dump.
+/// Two short sentences, cut on a sentence or a word, never mid-word.
+pub const TAKEAWAY_MAX: usize = 200;
 /// A paused run has to sit this long before the situation card offers to resume it.
 pub const PAUSE_OFFER_MS: u64 = 30 * 60 * 1000;
 /// Workboard detail written by `abandon_inflight_card` when a run is parked.
@@ -1093,7 +1096,8 @@ pub fn card_matches(card: &UpdateCard, query: &str) -> bool {
             .contains(&q)
 }
 
-pub fn discuss_context(card: &UpdateCard) -> String {
+/// What the person said on the card, in full. Idea drafts keep this.
+fn posted_text(card: &UpdateCard) -> String {
     let mut out = format!("Post: {}", card.title);
     if let Some(body) = card.body.as_deref() {
         if !body.is_empty() {
@@ -1110,18 +1114,81 @@ pub fn discuss_context(card: &UpdateCard) -> String {
     out
 }
 
+/// Seed for Discuss on a digest or suggestion. Main chat gets the title, the
+/// short takeaway, the source URL, and why it matters.
+pub fn discuss_context(card: &UpdateCard) -> String {
+    let takeaway = short_takeaway(card);
+    let mut out = format!("Feed post: {}", card.title.trim());
+    if !takeaway.is_empty() {
+        out.push('\n');
+        out.push_str(&takeaway);
+    }
+    if let Some(url) = card
+        .citations
+        .first()
+        .map(|url| url.trim())
+        .filter(|url| !url.is_empty())
+    {
+        out.push_str("\nSource: ");
+        out.push_str(url);
+    }
+    if let Some(why) = card
+        .why
+        .as_deref()
+        .map(str::trim)
+        .filter(|why| !why.is_empty() && !is_steer(why))
+    {
+        if !out.to_ascii_lowercase().contains(&why.to_ascii_lowercase()) {
+            out.push_str("\nWhy it matters: ");
+            out.push_str(why);
+        }
+    }
+    out.push_str("\n\nThe person opened this from their feed and wants to act on it.");
+    out
+}
+
 /// Opening line for the idea talk. The note under it is the editable draft.
 pub fn idea_open_line(card: &UpdateCard) -> String {
     if card.prompt.is_some() {
         return format!(
             "{}\n\nThe draft below does it. Send it as is, or change it first.",
-            discuss_context(card)
+            posted_text(card)
         );
     }
     format!(
         "{}\n\nThis draft is what would help next time: why it came up, a quick chip, a skill, and an automation. Change the note if that is wrong. Do not copy the earlier chat back.",
-        discuss_context(card)
+        posted_text(card)
     )
+}
+
+/// Short context under a feed title: what is going on, then why it matters
+/// when that line is short enough to fit. URLs and a repeated title stay out.
+/// A long stored body still comes back inside `TAKEAWAY_MAX`.
+pub fn short_takeaway(card: &UpdateCard) -> String {
+    takeaway_text(
+        card.title.trim(),
+        card.body.as_deref().unwrap_or(""),
+        card.why.as_deref().unwrap_or(""),
+    )
+}
+
+fn takeaway_text(title: &str, body: &str, why: &str) -> String {
+    let prose = strip_title_prefix(&strip_http_urls(body), title);
+    let mut sentences: Vec<String> = split_sentences(&prose)
+        .into_iter()
+        .filter(|sentence| !is_steer(sentence) && !same_line(sentence, title))
+        .collect();
+    let why = why.trim();
+    if !why.is_empty() && !is_steer(why) && !same_line(why, title) {
+        let already = sentences
+            .iter()
+            .any(|sentence| sentence.to_ascii_lowercase().contains(&why.to_ascii_lowercase()));
+        if sentences.is_empty() || (!already && sentences.len() < 2 && why.chars().count() <= 140)
+        {
+            sentences.push(as_sentence(why));
+        }
+    }
+    fit_sentences(&sentences, TAKEAWAY_MAX)
 }
 
 /// Editable note for the idea talk. The person can change it before it is sent.
@@ -1806,6 +1873,10 @@ fn compose_digest(
     }
     let mut card = digest_card("edition", &title, &body, now);
     card.citations = urls;
+    // The painted line is short. Keep the written edition when it was longer.
+    if written.chars().count() > TAKEAWAY_MAX {
+        card.details = Some(written.to_string());
+    }
     Some(card)
 }
 
@@ -1874,6 +1945,160 @@ fn http_url_in(token: &str) -> Option<String> {
         Some(url.to_string())
     } else {
         None
+    }
+}
+
+fn is_steer(text: &str) -> bool {
+    text.to_ascii_lowercase()
+        .contains("the brief steers the next edition")
+}
+
+fn same_line(a: &str, b: &str) -> bool {
+    fn norm(text: &str) -> String {
+        text.trim()
+            .trim_end_matches(['.', '!', '?', ' '])
+            .to_ascii_lowercase()
+    }
+    let a = norm(a);
+    !a.is_empty() && a == norm(b)
+}
+
+fn as_sentence(text: &str) -> String {
+    let text = text.trim();
+    if text.ends_with(['.', '!', '?']) {
+        text.to_string()
+    } else {
+        format!("{text}.")
+    }
+}
+
+fn strip_http_urls(text: &str) -> String {
+    let mut kept = Vec::new();
+    for token in text.split_whitespace() {
+        if http_url_in(token).is_some() {
+            let cleaned = strip_url_token(token);
+            if !cleaned.is_empty() {
+                kept.push(cleaned);
+            }
+        } else {
+            kept.push(token.to_string());
+        }
+    }
+    kept.join(" ")
+}
+
+fn strip_url_token(token: &str) -> String {
+    let Some(url) = http_url_in(token) else {
+        return token.to_string();
+    };
+    let rest = token.replace(&url, "");
+    let rest = rest.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'');
+    if rest.chars().any(|c| c.is_alphanumeric()) {
+        rest.to_string()
+    } else {
+        String::new()
+    }
+}
+
+fn strip_title_prefix(text: &str, title: &str) -> String {
+    let title = title.trim();
+    let text = text.trim();
+    if title.is_empty() {
+        return text.to_string();
+    }
+    let n = title.chars().count();
+    let head: String = text.chars().take(n).collect();
+    if !head.eq_ignore_ascii_case(title) {
+        return text.to_string();
+    }
+    let rest: String = text.chars().skip(n).collect();
+    rest.trim_start_matches(|c: char| {
+        c.is_whitespace() || matches!(c, ':' | '-' | '—' | '|' | ',' | '.' | ';')
+    })
+    .trim()
+    .to_string()
+}
+
+/// End a sentence on `.` `!` `?` when the next letter is uppercase, or at the end.
+/// `1.0.50` stays one token. A missing space (`tips.Grok`) still splits.
+fn split_sentences(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '.' || c == '!' || c == '?' {
+            let prev_digit = i > 0 && chars[i - 1].is_ascii_digit();
+            let next_digit = chars.get(i + 1).is_some_and(|n| n.is_ascii_digit());
+            if c == '.' && prev_digit && next_digit {
+                i += 1;
+                continue;
+            }
+            let end = i + 1;
+            let mut j = end;
+            while j < chars.len() && chars[j].is_whitespace() {
+                j += 1;
+            }
+            let boundary =
+                j >= chars.len() || c == '!' || c == '?' || chars[j].is_uppercase();
+            if boundary {
+                let sentence: String = chars[start..end].iter().collect();
+                let sentence = sentence.trim().to_string();
+                if !sentence.is_empty() {
+                    out.push(sentence);
+                }
+                start = j;
+                i = j;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    if start < chars.len() {
+        let rest: String = chars[start..].iter().collect();
+        let rest = rest.trim().to_string();
+        if !rest.is_empty() {
+            out.push(rest);
+        }
+    }
+    out
+}
+
+fn fit_sentences(sentences: &[String], max: usize) -> String {
+    let mut out = String::new();
+    for sentence in sentences.iter().take(2) {
+        let sentence = sentence.trim();
+        if sentence.is_empty() {
+            continue;
+        }
+        let next = if out.is_empty() {
+            sentence.to_string()
+        } else {
+            format!("{out} {sentence}")
+        };
+        if next.chars().count() <= max {
+            out = next;
+            continue;
+        }
+        if out.is_empty() {
+            return clip_words(sentence, max.saturating_sub(1));
+        }
+        break;
+    }
+    out
+}
+
+/// Prose stored from a lookup: no URLs, at most two sentences, and never
+/// longer than the old edition cap.
+fn edition_prose(raw: &str) -> String {
+    let prose = strip_http_urls(raw);
+    let max = TAKEAWAY_MAX.min(DIGEST_EDITION_CHARS);
+    let fitted = fit_sentences(&split_sentences(&prose), max);
+    if fitted.is_empty() {
+        clip_words(&prose, max.saturating_sub(1))
+    } else {
+        fitted
     }
 }
 
@@ -2470,7 +2695,7 @@ pub fn parse_lookup(raw: &str) -> ParsedLookup {
         .unwrap_or_else(|| "For you".into());
     ParsedLookup {
         title,
-        body: clip_words(raw, DIGEST_EDITION_CHARS),
+        body: edition_prose(raw),
         found: true,
         refused: false,
         links,
@@ -2675,8 +2900,128 @@ mod tests {
         assert_eq!(parsed.links[0].url, "https://example.com/a-real-story");
         assert!(!parsed.body.contains("https://example.com/a-real"), "{}", parsed.body);
         assert!(parsed.body.chars().count() <= DIGEST_EDITION_CHARS + 1);
+        assert!(
+            parsed.body.chars().count() <= TAKEAWAY_MAX + 1,
+            "a new edition stores a short body, got {} chars",
+            parsed.body.chars().count()
+        );
         let cut = clip_words("see https://example.com/long-path here", 20);
         assert_eq!(cut, "see…");
+    }
+
+    #[test]
+    fn short_takeaway_stays_within_two_sentences_and_drops_urls() {
+        let long = "I'll look up two real pieces that fit your Linux work. \
+Grok Build alpha 1.0.50 changes how a cancel hits a live turn. \
+Streams are retried instead of partial output and then the dump continues. \
+https://xstack.grok.me/post ZEPHYRTAIL"
+            .to_string();
+        let mut card = digest_card("xstack", "For you", &long, 1);
+        card.citations = vec!["https://xstack.grok.me/post".into()];
+        card.why = Some("It changes the cancel button you use.".into());
+        let take = short_takeaway(&card);
+        assert!(
+            take.chars().count() <= TAKEAWAY_MAX,
+            "takeaway over budget: {} {take}",
+            take.chars().count()
+        );
+        assert!(take.contains("two real pieces"));
+        assert!(take.contains("1.0.50"));
+        assert!(take.contains("cancel hits a live turn"));
+        assert!(!take.contains("https://"));
+        assert!(!take.contains("ZEPHYRTAIL"));
+        assert!(!take.contains("Streams are retried"));
+        assert!(take.ends_with('.'));
+        // Two sentences already fill the line, so why stays out of the paint.
+        assert!(!take.contains("cancel button"));
+
+        let mut short = digest_card(
+            "rust",
+            "Rust 1.92 ships",
+            "Faster incremental builds and a new lint.",
+            2,
+        );
+        short.why = Some("Your morning build is the one that waits.".into());
+        let kept = short_takeaway(&short);
+        assert!(kept.contains("Faster incremental builds and a new lint."));
+        assert!(kept.contains("Your morning build is the one that waits."));
+        assert!(kept.chars().count() <= TAKEAWAY_MAX);
+
+        let mut echoed = digest_card(
+            "echo",
+            "For you",
+            "For you. No beginner tips.Grok Build changes how cancel works. ZEPHYRTAIL stays out of this third sentence.",
+            3,
+        );
+        echoed.citations = vec!["https://evil.example/secret".into()];
+        let echo = short_takeaway(&echoed);
+        assert!(echo.starts_with("No beginner tips."));
+        assert!(echo.contains("Grok Build changes how cancel works."));
+        assert!(!echo.contains("ZEPHYRTAIL"));
+        assert!(!echo.contains("https://"));
+
+        let wall = format!("{} ZEPHYRTAIL", "alpha ".repeat(80));
+        let wall_card = digest_card("wall", "Notes", &wall, 4);
+        let clipped = short_takeaway(&wall_card);
+        assert!(clipped.ends_with('…'), "{clipped}");
+        assert!(!clipped.contains("ZEPHYRTAIL"));
+        assert!(clipped.chars().count() <= TAKEAWAY_MAX, "{clipped}");
+        let head = clipped.trim_end_matches('…').trim();
+        assert!(
+            head.split_whitespace().all(|word| word == "alpha"),
+            "cut a word in half: {clipped}"
+        );
+
+        let steered = digest_card(
+            "steer",
+            "A bank",
+            "A story about a bank and the weather. The brief steers the next edition.",
+            5,
+        );
+        let bank = short_takeaway(&steered);
+        assert!(bank.contains("bank"));
+        assert!(!bank.contains("brief steers"));
+    }
+
+    #[test]
+    fn discuss_context_seeds_title_takeaway_url_and_why() {
+        let mut card = digest_card(
+            "xstack",
+            "For you",
+            "I'll look up two real pieces that fit your Linux work. Grok Build changes how a cancel hits a live turn. ZEPHYRTAIL is the rest of the dump https://evil.example/nope",
+            10,
+        );
+        card.citations = vec!["https://xstack.grok.me/post".into()];
+        card.why = Some("It changes the cancel button you use.".into());
+        let seed = discuss_context(&card);
+        assert!(seed.contains("For you"), "{seed}");
+        assert!(seed.contains("two real pieces"), "{seed}");
+        assert!(seed.contains("https://xstack.grok.me/post"), "{seed}");
+        assert!(seed.contains("It changes the cancel button you use."), "{seed}");
+        assert!(!seed.contains("ZEPHYRTAIL"), "{seed}");
+        assert!(!seed.contains("evil.example"), "{seed}");
+        assert!(seed.contains("wants to act on it"), "{seed}");
+    }
+
+    #[test]
+    fn parse_lookup_stores_a_short_body_without_the_url() {
+        let raw = format!(
+            "Headline\n{} https://example.com/long-story ZEPHYRTAIL",
+            "word ".repeat(80)
+        );
+        let parsed = parse_lookup(&raw);
+        assert!(parsed.found, "{parsed:?}");
+        assert_eq!(parsed.title, "Headline");
+        assert_eq!(parsed.links[0].url, "https://example.com/long-story");
+        assert!(!parsed.body.contains("https://"), "{}", parsed.body);
+        assert!(!parsed.body.contains("ZEPHYRTAIL"), "{}", parsed.body);
+        assert!(parsed.body.chars().count() <= TAKEAWAY_MAX);
+        let head = parsed.body.trim_end_matches('…').trim();
+        assert!(
+            head.split_whitespace().all(|word| word == "Headline" || word == "word"),
+            "stored body cut a word: {}",
+            parsed.body
+        );
     }
 
     #[test]
