@@ -1338,7 +1338,10 @@ impl Cabin {
             secret_hold: Vec::new(),
             session_mode: boot_session,
             permission_mode: boot_perm,
-            harness: Default::default(),
+            harness: harness_ui::HarnessState {
+                full_card_on: harness_ui::grant_full_card_on(),
+                ..Default::default()
+            },
             scheduled_perm: false,
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
@@ -5339,6 +5342,7 @@ fn paint_tool_card_body(ui: &mut egui::Ui, card: &ToolCard) {
                 && !card.detail.is_empty()
                 && !card.detail.trim().starts_with('{')
                 && !card.detail.trim().starts_with('[')
+                && !grokhub_core::tool_detail_is_status(&card.detail)
             {
                 ui.add_space(4.0);
                 ui.label(
