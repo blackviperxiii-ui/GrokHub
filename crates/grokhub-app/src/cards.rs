@@ -1642,6 +1642,21 @@ pub fn get_started_panel(
 }
 
 pub fn settings_action(ui: &mut egui::Ui, title: &str, hint: &str, action: &str) -> bool {
+    settings_action_styled(ui, title, hint, action, PillStyle::Solid)
+}
+
+/// A settings row whose action only takes something away (Revoke): ghost, not filled.
+pub fn settings_action_ghost(ui: &mut egui::Ui, title: &str, hint: &str, action: &str) -> bool {
+    settings_action_styled(ui, title, hint, action, PillStyle::Ghost)
+}
+
+fn settings_action_styled(
+    ui: &mut egui::Ui,
+    title: &str,
+    hint: &str,
+    action: &str,
+    style: PillStyle,
+) -> bool {
     let mut hit = false;
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
@@ -1652,7 +1667,7 @@ pub fn settings_action(ui: &mut egui::Ui, title: &str, hint: &str, action: &str)
             }
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            hit = white_pill(ui, action);
+            hit = felt_pill(ui, action, style);
         });
     });
     ui.add_space(10.0);

@@ -1337,6 +1337,91 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// SY-01: on the empty chat the composer column is centered and justified.
+    /// The /sync hard card must still be the #520 chat-column card: left edge on
+    /// the column, min(column, 520) wide, every line left-aligned and ragged
+    /// right, and the buttons on the left.
+    #[test]
+    fn sync_card_is_the_left_aligned_chat_column_card_on_the_empty_chat() {
+        let (_pin, root) = pinned("sync-card-left");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.park_egress(hx::HUB_DEST, HardClass::Send);
+        assert_eq!(cabin.hard_waiting(), 1);
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 1200.0))),
+            ..Default::default()
+        };
+        let column = egui::Rect::from_min_size(egui::pos2(300.0, 100.0), egui::vec2(700.0, 900.0));
+        let out = crate::theme::test_pass(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                // The same nesting as the empty chat's composer column.
+                ui.scope_builder(egui::UiBuilder::new().max_rect(column), |ui| {
+                    ui.with_layout(egui::Layout::top_down_justified(egui::Align::Center), |ui| {
+                        ui.set_width(column.width());
+                        cabin.paint_approval_stack(ui);
+                    });
+                });
+            });
+        });
+        let mut texts: Vec<(String, f32, bool, egui::Align)> = Vec::new();
+        let mut frames = Vec::new();
+        fn walk(
+            shape: &egui::Shape,
+            texts: &mut Vec<(String, f32, bool, egui::Align)>,
+            frames: &mut Vec<(egui::Rect, egui::Stroke)>,
+        ) {
+            match shape {
+                egui::Shape::Text(t) => texts.push((
+                    t.galley.text().to_string(),
+                    t.pos.x + t.galley.rect.min.x,
+                    t.galley.job.justify,
+                    t.galley.job.halign,
+                )),
+                egui::Shape::Rect(r) => frames.push((r.rect, r.stroke)),
+                egui::Shape::Vec(v) => v.iter().for_each(|c| walk(c, texts, frames)),
+                _ => {}
+            }
+        }
+        for clipped in &out.shapes {
+            walk(&clipped.shape, &mut texts, &mut frames);
+        }
+        let frame = frames
+            .iter()
+            .find(|(r, s)| (s.width - 2.0).abs() < 0.01 && r.width() > 400.0)
+            .map(|(r, _)| *r)
+            .expect("hard frame");
+        assert_eq!(frame.width(), approval_card_width(column.width()));
+        assert!((frame.left() - column.left()).abs() < 1.0, "card sits on the column's left edge: {frame:?}");
+        let x_of = |want: &str| {
+            texts
+                .iter()
+                .find(|t| t.0 == want)
+                .unwrap_or_else(|| panic!("{want} not painted: {texts:?}"))
+                .clone()
+        };
+        let lines = [
+            HARD_EYEBROW,
+            "Send",
+            super::super::privacy_ui::HUB_CARD_ACTION,
+            super::super::privacy_ui::HUB_CARD_NOTE,
+        ];
+        let left = frame.left() + 2.0 + APPROVAL_CARD_MARGIN;
+        for want in lines {
+            let (_, x, justify, halign) = x_of(want);
+            assert!((x - left).abs() < 1.0, "{want} starts at the card's left inset ({left}), got {x}");
+            assert!(!justify, "{want} is ragged right, not justified");
+            assert_eq!(halign, egui::Align::LEFT, "{want}");
+        }
+        let (_, approve_x, _, _) = x_of("Approve");
+        let (_, deny_x, _, _) = x_of("Deny");
+        assert!(approve_x < left + 40.0 && approve_x < deny_x, "buttons start on the left: {approve_x} {deny_x}");
+        let (_, count_x, _, _) = x_of("1 thing needs a decision");
+        assert!((count_x - column.left()).abs() < 1.0, "the count line is left-aligned too: {count_x}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn paint_stack(
         cabin: &mut Cabin,
         events: Vec<egui::Event>,
