@@ -215,7 +215,7 @@ pub fn chat_export_html<'a>(
                 "<div class=\"msg user\"><div class=\"b\">{}</div></div>\n",
                 html_escape(&view.body)
             )),
-            ChatKind::Assistant => body.push_str(&format!(
+            ChatKind::Assistant | ChatKind::Result => body.push_str(&format!(
                 "<div class=\"msg assistant\"><div class=\"b\">{}</div></div>\n",
                 md_to_html(&view.body)
             )),

@@ -11351,6 +11351,198 @@ fn permissions_page_groups_trust_rows_and_rules_with_a_ghost_revoke() {
     release_isolated(&root, cabin);
 }
 
+// SY-10: both Permissions headings open their group with SECTION_HEAD_GAP of
+// room above (same heading size), so "Command rules" no longer sits as close
+// to the Sync row as rows sit to each other.
+#[test]
+fn permissions_headings_get_room_above_them() {
+    let rows = include_str!("privacy_ui.rs")
+        .split("fn ui_privacy_rows(")
+        .nth(1)
+        .and_then(|s| s.split("fn privacy_revoke_rows(").next())
+        .expect("ui_privacy_rows");
+    assert!(rows.contains("section_heading(ui, LEAVING_HEAD)"), "{rows}");
+    let src = cabin_src();
+    let editor = fn_src(&src, "ui_permission_editor");
+    assert!(editor.contains("section_heading(ui, super::privacy_ui::RULES_HEAD)"), "{editor}");
+    assert!(!editor.contains("section_label(ui, super::privacy_ui::RULES_HEAD)"), "{editor}");
+    assert!((8.0..=12.0).contains(&crate::cards::SECTION_HEAD_GAP));
+
+    // Painted: the gap from the Sync row to "Command rules" beats the
+    // row-to-row gap by at least SECTION_HEAD_GAP (before: 21px vs 15px).
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("perm-head-gap");
+    std::fs::create_dir_all(&root).unwrap();
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 2400.0))),
+        ..Default::default()
+    };
+    let out = crate::theme::test_pass(&ctx, input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| cabin.ui_permission_editor(ui));
+    });
+    let mut tops: Vec<(String, f32, f32)> = Vec::new();
+    for clipped in &out.shapes {
+        if let egui::Shape::Text(t) = &clipped.shape {
+            tops.push((t.galley.text().to_string(), t.pos.y + t.galley.rect.top(), t.pos.y + t.galley.rect.bottom()));
+        }
+    }
+    let find = |want: &str| tops.iter().find(|t| t.0 == want).cloned().unwrap_or_else(|| panic!("{want}: {tops:?}"));
+    let hub_hint = tops.iter().find(|t| t.0.starts_with("Off. /sync asks")).cloned().expect("hub hint");
+    let rules = find("Command rules");
+    let gap = rules.1 - hub_hint.2;
+    // Row rhythm: a help line to the next row title in the same group.
+    let note = tops.iter().find(|t| t.0.starts_with("Deny wins over ask")).cloned().expect("rules note");
+    let row_gap = find("Rule").1 - note.2;
+    assert!(
+        gap - row_gap >= crate::cards::SECTION_HEAD_GAP - 0.5,
+        "Command rules sits {gap}px under the Sync row; rows sit {row_gap}px apart"
+    );
+    release_isolated(&root, cabin);
+}
+
+// GL-05: aged slash and system results keep the result bubble. They never
+// paint in the thought frame and never carry the "Thought process" label or
+// its fold control, even with the session's thoughts collapsed.
+#[test]
+fn aged_slash_results_never_render_in_the_thought_frame() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("gl05-result-style");
+    std::fs::create_dir_all(&root).unwrap();
+    let report = super::privacy_ui::privacy_report(
+        &grokhub_agent::harness::ConsentLedger::empty(),
+        &[],
+        false,
+        1_000 * 86_400_000,
+    );
+    cabin.live_mut().push(("user".into(), "hello".into()));
+    cabin.live_mut().push(("assistant".into(), "Hi.".into()));
+    cabin.live_mut().push(("assistant".into(), mark_slash_result("Synced chats and memory to 1 computer.")));
+    cabin.live_mut().push(("assistant".into(), mark_slash_result(&report)));
+    cabin.live_mut().push(("assistant".into(), mark_slash_result("Sync to paired computers revoked. /sync asks again.")));
+    let views = cabin.cached_chat_views().to_vec();
+    let kinds: Vec<ChatKind> = views.iter().map(|v| v.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![ChatKind::User, ChatKind::Assistant, ChatKind::Result, ChatKind::Result, ChatKind::Result]
+    );
+    // The aged /privacy report is still the one the ghost Revoke goes under.
+    assert_eq!(super::privacy_ui::newest_privacy_row(&views), Some(3));
+
+    let paint = |view: &ChatView, fold: ThoughtFold| {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 1400.0))),
+            ..Default::default()
+        };
+        let mut drawn = false;
+        let out = crate::theme::test_pass(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                drawn = super::chat_ui::paint_chat_block_with(ui, view, true, true, fold, true).drawn;
+            });
+        });
+        let mut texts: Vec<(String, bool)> = Vec::new();
+        fn walk(shape: &egui::Shape, out: &mut Vec<(String, bool)>) {
+            match shape {
+                egui::Shape::Text(t) => {
+                    let italic = t.galley.job.sections.iter().any(|s| s.format.italics);
+                    out.push((t.galley.text().to_string(), italic));
+                }
+                egui::Shape::Vec(v) => v.iter().for_each(|c| walk(c, out)),
+                _ => {}
+            }
+        }
+        for clipped in &out.shapes {
+            walk(&clipped.shape, &mut texts);
+        }
+        (drawn, texts)
+    };
+    for view in views.iter().filter(|v| v.kind == ChatKind::Result) {
+        // Expanded is what the pane passes; Minimized and Hidden are what an aged,
+        // collapsed thought would get. A result ignores all three.
+        for fold in [ThoughtFold::Expanded, ThoughtFold::Minimized, ThoughtFold::Hidden] {
+            let (drawn, texts) = paint(view, fold);
+            assert!(drawn, "a result is never folded away");
+            for (t, italic) in &texts {
+                assert!(!t.contains("Thought process"), "{t}");
+                assert_ne!(t, grokhub_core::THOUGHT_ROW_LABEL, "no thought row: {texts:?}");
+                assert_ne!(t, "Collapse", "no thought fold control: {texts:?}");
+                assert_ne!(t, "Expand", "no thought fold control: {texts:?}");
+                assert!(!italic, "a result is upright, not thought italics: {t}");
+            }
+            let first = view.body.lines().next().unwrap_or_default();
+            assert!(texts.iter().any(|(t, _)| t.contains(first)), "{first} painted: {texts:?}");
+        }
+    }
+    // The pane paints a result with the result bubble, not the thought bubble.
+    let src = include_str!("chat_ui.rs");
+    let arm = src
+        .split("ChatKind::Result => {")
+        .nth(1)
+        .and_then(|s| s.split("ChatKind::Thought => {").next())
+        .expect("Result arm");
+    assert!(arm.contains("paint_result_bubble"), "{arm}");
+    assert!(!arm.contains("paint_thought_bubble") && !arm.contains("Thought process") && !arm.contains("italics"), "{arm}");
+    release_isolated(&root, cabin);
+}
+
+// GL-05 guard: aged model reasoning still collapses exactly as before: the
+// "Thought process" label and Collapse while expanded, the "Thought" row and
+// Expand when minimized, nothing when hidden.
+#[test]
+fn aged_model_reasoning_still_collapses() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("gl05-thought");
+    std::fs::create_dir_all(&root).unwrap();
+    cabin.live_mut().push(("user".into(), "fix it".into()));
+    cabin.live_mut().push(("assistant".into(), grokhub_core::merge_thinking("Plan: read the file first.", "Looking now.")));
+    cabin.live_mut().push(("assistant".into(), "Fixed the typo in main.rs.".into()));
+    cabin.live_mut().push(("assistant".into(), mark_slash_result("Synced chats and memory to 1 computer.")));
+    let views = cabin.cached_chat_views().to_vec();
+    let kinds: Vec<ChatKind> = views.iter().map(|v| v.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![ChatKind::User, ChatKind::Thought, ChatKind::Thought, ChatKind::Assistant, ChatKind::Result]
+    );
+    let thought = &views[1];
+    let paint = |fold: ThoughtFold| {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts_on(&ctx);
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 1400.0))),
+            ..Default::default()
+        };
+        let mut painted = None;
+        let out = crate::theme::test_pass(&ctx, input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                painted = Some(super::chat_ui::paint_chat_block_with(ui, thought, true, true, fold, true));
+            });
+        });
+        let mut texts = Vec::new();
+        for clipped in &out.shapes {
+            if let egui::Shape::Text(t) = &clipped.shape {
+                texts.push(t.galley.text().to_string());
+            }
+        }
+        (painted.expect("painted").drawn, texts)
+    };
+    let (drawn, texts) = paint(ThoughtFold::Expanded);
+    assert!(drawn);
+    assert!(texts.iter().any(|t| t == "Thought process"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "Collapse"), "{texts:?}");
+    assert!(texts.iter().any(|t| t.contains("Plan: read the file first.")), "{texts:?}");
+    let (drawn, texts) = paint(ThoughtFold::Minimized);
+    assert!(drawn);
+    assert!(texts.iter().any(|t| t == grokhub_core::THOUGHT_ROW_LABEL), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "Expand"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t.contains("Plan: read the file first.")), "{texts:?}");
+    let (drawn, _) = paint(ThoughtFold::Hidden);
+    assert!(!drawn, "a hidden thought still paints nothing");
+    release_isolated(&root, cabin);
+}
+
 // SY-04: the ghost Revoke under /privacy clears the grant and drops the share.
 // Only a pointer click answers it; Enter and typed text never do.
 #[test]
