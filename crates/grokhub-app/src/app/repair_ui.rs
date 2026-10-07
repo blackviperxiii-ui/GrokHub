@@ -494,10 +494,11 @@ mod tests {
         hx::read_spans(root, "session").unwrap().into_iter().map(|s| (s.tool, s.decision)).collect()
     }
 
-    /// Windows always plans a System Restore checkpoint first. With no Grok
-    /// Build it can't run, so the fix goes on with the file backup alone.
+    /// A snapshot step comes first wherever this computer has one (System
+    /// Restore on Windows, a btrfs or snapper binary on a Linux runner). With
+    /// no Grok Build it can't run, so the fix goes on with the file backup alone.
     fn snapshot_spans() -> Vec<(String, String)> {
-        if cfg!(windows) {
+        if !repair::detect_backends(repair::Os::current(), &repair::on_path).is_empty() {
             vec![(repair::REPAIR_TOOL.into(), "allow".into()), (repair::RESTORE_TOOL.into(), "deny".into())]
         } else {
             vec![]
