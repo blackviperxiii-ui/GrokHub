@@ -4,6 +4,8 @@
 
 Safety loop (Spike-1a). The harness now catches a click that changed nothing, a step repeated with no effect, "done" with no check, and a claim no step backs; it retries once, backtracks, then pauses for you (hard actions never retry), and typing into a password, PIN, OTP, 2FA or verification-code field is a hard credentials action whose value never reaches spans or logs. No UI changes.
 
+Release bump list: the version strings that were in the old README (headline, both Latest rows, `--version` examples) now live in `docs/REFERENCE.md`, so `CLAUDE.md`, `.cursor/rules/repo-gates.mdc` and the versions compass list that file instead. `README.md` has no version strings. Docs only, no version bump.
+
 ## 2.10.94 — 2026-10-07
 
 Channel fixes: Labs Beta auto-off works after a promote and really switches back, Update and channel-switch errors say what went wrong, and Windows no longer trips over a beta receipt.
