@@ -14,7 +14,16 @@ pub enum HeartbeatAct {
     Anticipate,
 }
 
-/// Every organ runs. The cabin does not throttle the pulse.
+impl HeartbeatAct {
+    /// After Halt, only local upkeep with no model call and nothing new started:
+    /// Housekeep (persist, expiry; its ideas ask meets the throttle) and MidThought.
+    pub fn runs_while_halted(self) -> bool {
+        matches!(self, Self::Housekeep | Self::MidThought)
+    }
+}
+
+/// Every organ wakes each pulse. The proactive ones (anticipate, the ideas ask,
+/// the nightly review) spend from `crate::heartbeat_throttle` before they act.
 pub fn heartbeat_acts() -> Vec<HeartbeatAct> {
     vec![
         HeartbeatAct::Housekeep,
@@ -78,6 +87,15 @@ mod tests {
                 HeartbeatAct::Anticipate,
             ]
         );
+    }
+
+    #[test]
+    fn halt_keeps_only_local_upkeep() {
+        let kept: Vec<HeartbeatAct> = heartbeat_acts()
+            .into_iter()
+            .filter(|a| a.runs_while_halted())
+            .collect();
+        assert_eq!(kept, vec![HeartbeatAct::Housekeep, HeartbeatAct::MidThought]);
     }
 
     #[test]
