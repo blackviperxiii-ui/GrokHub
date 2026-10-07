@@ -16,6 +16,8 @@ Decision inbox and real desktop actions (Spike-1b). "N things need a decision. E
 
 Grok Build's own computer use is checked too (Spike-1c, path D). On Auto or Always, and whenever desktop control is off, every Grok Build run denies its own screen, mouse and keyboard tools so desktop work goes through the cabin's gated desktop tools; a computer-use step that still runs without an ask is logged, a hard one (send, pay, delete, credentials) stops the turn and shows "Grok tried to … without asking" with Approve / Deny, and with desktop control off it just stops the turn.
 
+Cua Driver as an optional second pair of hands on Linux (Spike-2a). Behind a `cuaDriver` flag in `app.json` that is off by default (no Settings control), `grokhub --mcp-cua` starts the pinned MIT cua-driver-rs 0.34.0 in bounded mode with a cabin manifest and puts every Cua call through the same approval gate as the desktop tools: hard actions park the same card, Halt kills the driver, and spans say `driver:"cua"`. The agent cursor marker on the Work-tree frame now travels by one of Cua's six motion styles (signature arc, the default, which keeps today's look), and reduced motion snaps on the first frame.
+
 Release bump list: the version strings that were in the old README (headline, both Latest rows, `--version` examples) now live in `docs/REFERENCE.md`, so `CLAUDE.md`, `.cursor/rules/repo-gates.mdc` and the versions compass list that file instead. `README.md` has no version strings. Docs only, no version bump.
 
 ## 2.10.94 — 2026-10-07
