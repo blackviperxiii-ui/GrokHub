@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Safety loop (Spike-1a). The harness now catches a click that changed nothing, a step repeated with no effect, "done" with no check, and a claim no step backs; it retries once, backtracks, then pauses for you (hard actions never retry), and typing into a password, PIN, OTP, 2FA or verification-code field is a hard credentials action whose value never reaches spans or logs. No UI changes.
+
 Heartbeat throttle. The pulse still wakes every 15 seconds, but the things it starts on its own (anticipating a need, the automatic ideas ask, the nightly review) now share a budget, so it can't burn tokens or keep nudging you. Approval rules and hard cards are unchanged.
 
 - **A budget for proactive acts.** At most one every 15 minutes, 3 an hour and 8 a day by default. To change them, edit `"heartbeat"` in `app.json` (`minIntervalMin`, `maxPerHour`, `maxPerDay`, `backoffAfter`, `backoffMaxMin`, `haltHoldMin`); `maxPerDay: 0` turns proactive acts off. There is no Settings control. A file without that key keeps the defaults and doesn't grow one.
