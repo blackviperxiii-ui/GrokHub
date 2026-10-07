@@ -5229,6 +5229,7 @@ fn paint_one_tool_card(ui: &mut egui::Ui, card: &ToolCard) {
     .default_open(false)
     .show(ui, |ui| {
         paint_tool_card_body(ui, card);
+        harness_ui::paint_click_marker(ui, &[card]);
     });
 }
 
@@ -5260,6 +5261,8 @@ fn paint_tool_group(ui: &mut egui::Ui, cards: &[std::borrow::Cow<'_, ToolCard>])
             paint_tool_card_body(ui, card);
             ui.add_space(4.0);
         }
+        let refs: Vec<&ToolCard> = cards.iter().map(|c| c.as_ref()).collect();
+        harness_ui::paint_click_marker(ui, &refs);
     });
 }
 
