@@ -2119,6 +2119,7 @@ impl Cabin {
         crate::desktop_mcp::write_halt_stamp();
         crate::desktop_mcp::note_halt();
         self.host_halt.store(true, Ordering::SeqCst);
+        self.harness_watch_end();
         self.halt_hard_parks();
         self.withdraw_perm_asks();
         if self.cfg.native_engine {
