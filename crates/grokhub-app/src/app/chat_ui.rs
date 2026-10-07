@@ -1586,6 +1586,7 @@ impl Cabin {
     /// task calls `send_scheduled_chat` directly, so it cannot yank the pane out of your reading.
     pub(super) fn send_from_composer(&mut self, text: String) {
         self.pin_chat_tail();
+        self.heartbeat_user_sent();
         self.send_chat(text);
     }
 

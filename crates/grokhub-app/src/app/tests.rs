@@ -15998,6 +15998,8 @@ fn quiet_cabin() -> Cabin {
         last_night_tick: std::time::Instant::now(),
         last_auto_tick: std::time::Instant::now(),
         last_heartbeat: std::time::Instant::now(),
+        pace: Default::default(),
+        pace_traced: Vec::new(),
         night_check_rx: None,
         learning: grokhub_core::LearningState::default(),
         suggestions: grokhub_core::SuggestionStore::default(),
@@ -26515,3 +26517,166 @@ fn labs_beta_channel_toggle_is_wired() {
 }
 
 
+
+fn pace_spans() -> Vec<grokhub_agent::harness::Span> {
+    grokhub_agent::harness::read_spans(
+        &crate::config::config_dir(),
+        super::heartbeat_gate::HEARTBEAT_TRACE,
+    )
+    .expect("heartbeat spans")
+}
+
+#[test]
+fn heartbeat_pace_holds_while_busy_and_traces_reasons_without_content() {
+    use grokhub_core::{ProactiveAct, PACE_CALM};
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("heartbeat-pace-busy");
+    let _ = std::fs::remove_file(grokhub_agent::harness::span_path(
+        &crate::config::config_dir(),
+        "heartbeat",
+    ));
+    const T0: u64 = 1_800_000_000_000;
+    const MIN: u64 = 60_000;
+    cabin.running = false;
+    cabin.composer = "half a thought about the standup".into();
+    assert!(cabin.heartbeat_busy());
+    assert!(!cabin.heartbeat_may(ProactiveAct::Anticipate, T0));
+    assert!(!cabin.heartbeat_may(ProactiveAct::Anticipate, T0 + 15_000));
+    cabin.composer.clear();
+    cabin.running = true;
+    assert!(!cabin.heartbeat_may(ProactiveAct::Anticipate, T0 + 30_000), "mid-turn");
+    cabin.running = false;
+    assert!(!cabin.heartbeat_busy());
+    assert!(cabin.heartbeat_may(ProactiveAct::Anticipate, T0 + 45_000));
+    assert!(!cabin.heartbeat_may(ProactiveAct::Ideas, T0 + 46_000));
+    let spans = pace_spans();
+    let lines: Vec<(&str, &str, &str)> = spans
+        .iter()
+        .map(|s| (s.tool.as_str(), s.decision.as_str(), s.result.as_str()))
+        .collect();
+    assert_eq!(
+        lines,
+        vec![
+            ("heartbeat.anticipate", "hold", "busy"),
+            ("heartbeat.anticipate", "allow", "under_budget"),
+            ("heartbeat.ideas", "hold", "min_interval"),
+        ],
+        "a repeated hold is traced once; each act and change is traced"
+    );
+    for s in &spans {
+        assert_eq!(s.session_id, "heartbeat");
+        assert_eq!(s.args_redacted, "", "no content in a pace span");
+        assert_eq!(s.claim, "pace");
+        assert_eq!(s.chat_id, "");
+        assert_eq!(s.path, "heartbeat");
+        assert_eq!(s.origin, grokhub_agent::harness::Origin::Proactive);
+    }
+    let raw = std::fs::read_to_string(grokhub_agent::harness::span_path(
+        &crate::config::config_dir(),
+        "heartbeat",
+    ))
+    .expect("raw spans");
+    assert!(!raw.contains("standup"), "the draft never reaches the trace: {raw}");
+
+    // Config override: Calm needs an hour between acts, Normal 15 min.
+    assert!(cabin.heartbeat_may(ProactiveAct::Ideas, T0 + 45_000 + 15 * MIN));
+    cabin.cfg.heartbeat = PACE_CALM;
+    cabin.heartbeat_outcome(ProactiveAct::Ideas, grokhub_core::ActOutcome::Useful);
+    assert!(!cabin.heartbeat_may(ProactiveAct::Review, T0 + 45_000 + 45 * MIN));
+    assert_eq!(pace_spans().last().map(|s| s.result.clone()).as_deref(), Some("hour_cap"));
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn halt_stops_the_heartbeat_at_once_and_your_send_resumes_it() {
+    use grokhub_core::ProactiveAct;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("heartbeat-pace-halt");
+    let _ = std::fs::remove_file(grokhub_agent::harness::span_path(
+        &crate::config::config_dir(),
+        "heartbeat",
+    ));
+    let now = grokhub_core::now_ms();
+    cabin.running = false;
+    cabin.composer.clear();
+    let (_tx, rx) = std::sync::mpsc::channel();
+    cabin.ideas_rx = Some((rx, Default::default()));
+    let (_rtx, rrx) = std::sync::mpsc::channel();
+    cabin.review_rx = Some(rrx);
+    cabin.review_busy = true;
+    cabin.halt_everything("Stopped");
+    assert!(cabin.ideas_rx.is_none(), "an ideas ask already out lands nowhere");
+    assert!(cabin.review_rx.is_none() && !cabin.review_busy);
+    assert!(cabin.heartbeat_halted(now));
+    assert!(!cabin.heartbeat_may(ProactiveAct::Anticipate, now));
+    assert!(!cabin.heartbeat_may(ProactiveAct::Review, now + 14 * 60_000));
+    let tail: Vec<(String, String)> = pace_spans()
+        .iter()
+        .map(|s| (s.tool.clone(), s.result.clone()))
+        .collect();
+    assert_eq!(
+        tail,
+        vec![
+            ("heartbeat.halt".to_string(), "halted".to_string()),
+            ("heartbeat.anticipate".to_string(), "halted".to_string()),
+            ("heartbeat.review".to_string(), "halted".to_string()),
+        ]
+    );
+    cabin.heartbeat_user_sent();
+    assert!(!cabin.heartbeat_halted(now));
+    assert!(cabin.heartbeat_may(ProactiveAct::Anticipate, now));
+    // Stop on that live anticipate turn counts as a dismissal.
+    cabin.running = true;
+    cabin.heartbeat_turn_stopped();
+    assert_eq!(cabin.pace.quiet_streak(), 1);
+    assert_eq!(cabin.pace.pending(), None);
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn heartbeat_halt_skips_every_organ_that_starts_work() {
+    let src = cabin_src();
+    let beat = src
+        .split("fn tick_heartbeat")
+        .nth(1)
+        .and_then(|s| s.split("fn tick_anticipate").next())
+        .expect("tick_heartbeat");
+    assert!(
+        beat.contains("heartbeat_halted(") && beat.contains("runs_while_halted()"),
+        "Halt must hold the pulse before any organ runs: {beat}"
+    );
+    assert!(
+        beat.contains("if !halted {\n                        self.follow_feed_lookup();"),
+        "the digest lookup is a model call and waits out a Halt: {beat}"
+    );
+    let anticipate = fn_src(&src, "tick_anticipate");
+    let gate = anticipate.find("heartbeat_may(").expect("anticipate meets the pace gate");
+    let fire = anticipate.find("send_scheduled_chat(").expect("anticipate send");
+    assert!(gate < fire, "the gate comes before the turn: {anticipate}");
+    let review = src
+        .split("fn tick_review(")
+        .nth(1)
+        .and_then(|s| s.split("fn review_chat_digest(").next())
+        .expect("tick_review");
+    let gate = review.find("ProactiveAct::Review").expect("review meets the pace gate");
+    assert!(gate < review.find("spawn_review()").expect("spawn"), "{review}");
+    let ideas = include_str!("feed_ui.rs")
+        .split("fn maybe_suggest_ideas(")
+        .nth(1)
+        .and_then(|s| s.split("fn idea_request(").next())
+        .expect("maybe_suggest_ideas");
+    let gate = ideas.find("ProactiveAct::Ideas").expect("ideas meet the pace gate");
+    assert!(gate < ideas.find("cabin_fast_llm").expect("ask"), "{ideas}");
+    // Scheduled jobs are not budgeted and never take the composer.
+    let night = src
+        .split("fn tick_night(")
+        .nth(1)
+        .and_then(|s| s.split("fn poll_night_check(").next())
+        .expect("tick_night");
+    assert!(!night.contains("heartbeat_may") && !night.contains("send_scheduled_chat"), "{night}");
+    let halt = fn_src(&src, "halt_everything");
+    assert!(
+        halt.find("heartbeat_halt(").expect("halt") < halt.find("halt_work(").expect("work"),
+        "Halt holds the pulse before anything else: {halt}"
+    );
+}

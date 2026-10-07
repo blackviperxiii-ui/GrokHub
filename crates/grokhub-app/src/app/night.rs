@@ -914,6 +914,9 @@ impl Cabin {
         ) {
             return;
         }
+        if !self.heartbeat_may(grokhub_core::ProactiveAct::Review, now_ms()) {
+            return;
+        }
         self.learning.reviewed_turns = self.learning.total_turns;
         self.spawn_review();
     }
@@ -1133,6 +1136,14 @@ impl Cabin {
                     &live_tools,
                 );
                 self.keep_reasoned_suggestions(&mut items);
+                self.heartbeat_outcome(
+                    grokhub_core::ProactiveAct::Review,
+                    if items.is_empty() {
+                        grokhub_core::ActOutcome::Empty
+                    } else {
+                        grokhub_core::ActOutcome::Useful
+                    },
+                );
                 let day = Some(Self::local_day());
                 let ms = now_ms();
                 if items.is_empty() {
@@ -1152,6 +1163,10 @@ impl Cabin {
                 });
             }
             Err(e) => {
+                self.heartbeat_outcome(
+                    grokhub_core::ProactiveAct::Review,
+                    grokhub_core::ActOutcome::Empty,
+                );
                 self.status = format!("Nightly review held — {e}");
                 self.suggestions.last_review_day = Some(Self::local_day());
                 self.suggestions.last_review_ms = now_ms();
