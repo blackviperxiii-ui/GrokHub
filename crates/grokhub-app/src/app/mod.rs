@@ -178,6 +178,7 @@ mod harness_ui;
 mod inbox_ui;
 mod privacy_ui;
 mod scope_ui;
+mod indexer_ui;
 mod skill_undo;
 mod change_undo;
 mod proactive_auto;
@@ -3440,6 +3441,9 @@ impl Cabin {
                         self.follow_feed_lookup();
                     }
                     self.release_situation_ping();
+                    if !halted {
+                        self.tick_indexers();
+                    }
                     if self.last_persist.elapsed() > Duration::from_secs(2) {
                         self.persist_bg();
                     }

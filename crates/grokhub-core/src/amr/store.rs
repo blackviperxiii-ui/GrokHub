@@ -251,6 +251,15 @@ impl AmrStore {
         }
     }
 
+    /// Every live node whose `source` starts with `prefix` (Spike-8a: the
+    /// `scope:` nodes the local indexers write), sorted by file name, plus how
+    /// many sealed nodes stayed shut. Opens sealed nodes in memory only.
+    pub fn live_from_source(&self, prefix: &str) -> (Vec<Node>, usize) {
+        let loaded = self.load_live();
+        let nodes = loaded.nodes.into_iter().filter(|n| n.source.starts_with(prefix)).collect();
+        (nodes, loaded.locked)
+    }
+
     /// Node files on disk (`.md` and `.sealed`), tombstoned ones included.
     pub fn node_file_count(&self) -> usize {
         let Ok(read) = fs::read_dir(self.root.join("nodes")) else {
