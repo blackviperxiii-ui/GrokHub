@@ -171,6 +171,7 @@ mod ideas_ui;
 mod pulse_ui;
 mod board_ui;
 mod confirm;
+mod harness_ui;
 mod glance;
 mod sidebar;
 mod pages;
@@ -767,6 +768,8 @@ pub struct Cabin {
     secret_hold: Vec<String>,
     session_mode: SessionMode,
     permission_mode: PermissionMode,
+    /// Spike-0 harness: Full grant, parked hard-class cards, path C hits.
+    harness: harness_ui::HarnessState,
     /// Night / loop / phone `/v1/task` inherit the composer PermissionMode pill.
     scheduled_perm: bool,
     grok_sessions: Vec<grokhub_acp::GrokSession>,
@@ -1332,6 +1335,7 @@ impl Cabin {
             secret_hold: Vec::new(),
             session_mode: boot_session,
             permission_mode: boot_perm,
+            harness: Default::default(),
             scheduled_perm: false,
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
@@ -1759,6 +1763,7 @@ impl Cabin {
             secret_hold: Vec::new(),
             session_mode: SessionMode::Chat,
             permission_mode: PermissionMode::Ask,
+            harness: Default::default(),
             scheduled_perm: false,
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
@@ -2057,6 +2062,7 @@ impl Cabin {
         crate::desktop_mcp::write_halt_stamp();
         crate::desktop_mcp::note_halt();
         self.host_halt.store(true, Ordering::SeqCst);
+        self.halt_hard_parks();
         self.withdraw_perm_asks();
         if self.cfg.native_engine {
             grokhub_agent::halt_all_sessions();
@@ -5336,7 +5342,8 @@ fn paint_tool_card_body(ui: &mut egui::Ui, card: &ToolCard) {
             if let Some(url) = card.image_data_url.as_deref() {
                 if let Some((tex, size)) = eyes_frame_tex(ui.ctx(), url) {
                     let max_w = ui.available_width().min(360.0);
-                    crate::cards::framed_preview(ui, &tex, size, max_w);
+                    let shown = crate::cards::framed_preview(ui, &tex, size, max_w);
+                    harness_ui::remember_work_frame(ui, &card.id, shown, size);
                 }
             }
         });

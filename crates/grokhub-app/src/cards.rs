@@ -690,7 +690,13 @@ pub fn titlebar_update_chip(ui: &mut egui::Ui, label: &str) -> bool {
     crate::theme::pointing(resp).clicked()
 }
 
-pub fn framed_preview(ui: &mut egui::Ui, tex: &TextureHandle, size: [usize; 2], max_w: f32) {
+/// Returns the image rect so a marker can sit on the frame.
+pub fn framed_preview(
+    ui: &mut egui::Ui,
+    tex: &TextureHandle,
+    size: [usize; 2],
+    max_w: f32,
+) -> egui::Rect {
     let scale = max_w / size[0].max(1) as f32;
     let h = size[1] as f32 * scale;
     egui::Frame::NONE
@@ -700,8 +706,10 @@ pub fn framed_preview(ui: &mut egui::Ui, tex: &TextureHandle, size: [usize; 2], 
         .show(ui, |ui| {
             ui.add(
                 egui::Image::new((tex.id(), egui::vec2(max_w, h))).corner_radius(10.0),
-            );
-        });
+            )
+            .rect
+        })
+        .inner
 }
 
 pub fn composer_modes() -> &'static [(&'static str, &'static str)] {
