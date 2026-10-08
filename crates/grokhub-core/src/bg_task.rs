@@ -9,6 +9,7 @@
 //! the next turn with the new message plus a short note of that progress.
 
 use crate::chat_view::assistant_prose;
+use crate::turn_timeline::clip_chars;
 
 /// Live background runs at once. More would fight over the same tree and CPU.
 pub const BG_TASK_MAX: usize = 3;
@@ -209,15 +210,6 @@ pub fn steer_follow_block(prev_ask: &str, partial: &str, tools: &[String]) -> St
         out.push_str("\nYou had said so far: ");
         out.push_str(&said);
     }
-    out
-}
-
-fn clip_chars(s: &str, cap: usize) -> String {
-    if s.chars().count() <= cap {
-        return s.to_string();
-    }
-    let mut out: String = s.chars().take(cap.saturating_sub(1)).collect();
-    out.push('…');
     out
 }
 
