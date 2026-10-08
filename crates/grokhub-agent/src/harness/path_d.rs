@@ -199,6 +199,17 @@ mod tests {
         assert_eq!(decide_unasked("computer_send_message", &json!({}), full), park(HardClass::Send));
         assert_eq!(decide_unasked("computer_checkout", &json!({}), full), park(HardClass::Money));
         assert_eq!(decide_unasked("computer_open", &json!({ "app": "shutdown" }), full), park(HardClass::IrreversibleOs));
+        // A chord sent as `key`, and a credential field named only by `id` or a nested `field`.
+        assert_eq!(decide_unasked("keyboard_press", &json!({ "key": "ctrl+alt+delete" }), full), park(HardClass::IrreversibleOs));
+        assert_eq!(
+            decide_unasked("keyboard_press", &json!({ "key": "Delete", "window": "Dolphin" }), full),
+            park(HardClass::Delete)
+        );
+        assert_eq!(decide_unasked("keyboard_type", &json!({ "id": "login-password" }), full), park(HardClass::Credentials));
+        assert_eq!(
+            decide_unasked("computer_type", &json!({ "field": { "role": "AXSecureTextField" } }), full),
+            park(HardClass::Credentials)
+        );
     }
 
     #[test]

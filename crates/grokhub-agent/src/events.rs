@@ -40,6 +40,8 @@ pub struct NativeEngine {
     reopen_tasks: bool,
     /// Imagine and web_fetch bearer. Empty means those tools do not dial.
     imagine_bearer: String,
+    /// Who started the next prompt (Spike-4c): egress lines carry it.
+    origin: crate::harness::Origin,
     /// Spike-3b: the cabin's open desktop episode for the next prompt.
     episode_seed: Option<EpisodeSeed>,
     /// The episode this engine is driving, and its view.
@@ -101,6 +103,7 @@ impl NativeEngine {
             context_length,
             reopen_tasks: true,
             imagine_bearer: String::new(),
+            origin: crate::harness::current_origin(),
             episode_seed: None,
             episode: None,
         }
@@ -126,6 +129,11 @@ impl NativeEngine {
 
     pub fn steer(&self) -> SteerQueue {
         self.steer.clone()
+    }
+
+    /// Who starts the next prompt: the user, a heartbeat act, or a scheduled job.
+    pub fn set_origin(&mut self, origin: crate::harness::Origin) {
+        self.origin = origin;
     }
 
     /// Credential for `web_fetch` and Imagine. Empty refuses those tools without a dial.
@@ -233,6 +241,7 @@ impl Engine for NativeEngine {
         let before_len = self.history.len();
         let before_usage = self.usage.clone();
         let _network = crate::tools::install_network(&self.imagine_bearer, &self.conversation_id);
+        let _origin = crate::harness::OriginScope::enter(self.origin);
         let mut meter_used = crate::compact::estimate_input_tokens(&self.history);
         let mut meter_limit = self.context_length;
         let out = run_loop(&input, &mut self.history, text, image, &mut |ev| match ev {
@@ -301,10 +310,17 @@ impl NativeEngine {
     /// episode. Each step starts the worker fresh from the episode view; the
     /// episode outlives the prompt (Steers, new messages, pauses).
     fn prompt_episode(&mut self, text: &str, seed: &EpisodeSeed, emit: &mut dyn FnMut(AcpEvent)) -> Result<(), String> {
-        use crate::episode::{Continue, Episode, EpisodeEnd, EpisodeStop, EpisodeView, FileParks, KernelIn};
+        use crate::episode::{Continue, Episode, EpisodeEnd, EpisodeStop, EpisodeView, FileParks, KernelIn, Parks};
         let now = grokhub_core::now_ms();
         let open = matches!(&self.episode, Some((ep, _)) if ep.id == seed.id && ep.ended.is_none());
         if !open {
+            // A replaced episode's parks can't run any more: take their files
+            // back so a late Approve answers nothing.
+            if let Some((old, _)) = self.episode.take() {
+                for park in &old.parks {
+                    FileParks(&seed.config_dir).withdraw(&park.id);
+                }
+            }
             let ep = Episode::begin(&seed.id, &seed.chat_id, text, now, &seed.held);
             self.episode = Some((ep, EpisodeView::default()));
         }
@@ -321,6 +337,12 @@ impl NativeEngine {
         let Some(desktop) = self.desktop.as_deref() else {
             return Ok(());
         };
+        // The same guards as `prompt`: the episode's tools need the network
+        // ports and the turn's origin, and its gate the workspace policy.
+        let policy = crate::perm::Policy::load(&self.workspace);
+        crate::mcp::set_workspace(&self.workspace);
+        let _network = crate::tools::install_network(&self.imagine_bearer, &self.conversation_id);
+        let _origin = crate::harness::OriginScope::enter(self.origin);
         let parks = FileParks(&seed.config_dir);
         let clock = grokhub_core::now_ms;
         let k = KernelIn {
@@ -341,6 +363,7 @@ impl NativeEngine {
             steer: &self.steer,
             clock: &clock,
             held: &seed.held,
+            perms: Some(&policy),
         };
         let (kind, session, base) = (self.auth_kind, self.conversation_id.clone(), self.usage.clone());
         let limit = self.context_length;

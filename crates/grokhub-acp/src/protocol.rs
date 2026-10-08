@@ -523,10 +523,29 @@ pub fn parse_tool_card(update: &Value) -> ToolCard {
 /// chords, the app and window, and field descriptors and secret flags (the
 /// same keys `harness::credential_field` reads).
 const CU_RAW_KEYS: &[&str] = &[
-    "keys", "key", "app", "window", "role", "ax_role", "label", "ax_label", "aria_label", "field_name", "placeholder",
-    "target", "element", "autocomplete", "input_type", "selector", "secret", "sensitive", "is_secret", "is_password",
-    "password_field", "masked",
+    "keys", "key", "app", "window", "role", "ax_role", "label", "ax_label", "aria_label", "field", "field_name",
+    "placeholder", "target", "element", "autocomplete", "input_type", "id", "selector", "secret", "sensitive",
+    "is_secret", "is_password", "password_field", "masked",
 ];
+
+/// One kept computer-use value: a string capped at 80 chars, a bool or
+/// number, or a nested field object (`{"field":{"role":…}}`) holding only
+/// these keys plus `name`. Typed `text` and `value` are never kept.
+fn cu_keep(v: &Value, depth: u8) -> Option<Value> {
+    match v {
+        Value::String(s) => Some(Value::from(s.chars().take(80).collect::<String>())),
+        Value::Bool(_) | Value::Number(_) => Some(v.clone()),
+        Value::Object(o) if depth < 2 => {
+            let kept: serde_json::Map<String, Value> = o
+                .iter()
+                .filter(|(k, _)| k.as_str() == "name" || CU_RAW_KEYS.contains(&k.as_str()))
+                .filter_map(|(k, v)| cu_keep(v, depth + 1).map(|v| (k.clone(), v)))
+                .collect();
+            (!kept.is_empty()).then_some(Value::Object(kept))
+        }
+        _ => None,
+    }
+}
 
 /// See [`ToolCard::raw_input`].
 pub fn raw_summary(update: &Value) -> String {
@@ -544,12 +563,7 @@ pub fn raw_summary(update: &Value) -> String {
     // frame. Key chords, the app and window, and words that describe the
     // target field. Never the typed `text` or `value`.
     for k in CU_RAW_KEYS {
-        if let Some(v) = raw.get(*k) {
-            let keep = match v {
-                Value::String(s) => Value::from(s.chars().take(80).collect::<String>()),
-                Value::Bool(_) | Value::Number(_) => v.clone(),
-                _ => continue,
-            };
+        if let Some(keep) = raw.get(*k).and_then(|v| cu_keep(v, 0)) {
             m.insert((*k).into(), keep);
         }
     }
@@ -1445,6 +1459,27 @@ mod tests {
         let raw: Value = serde_json::from_str(&card.raw_input).unwrap();
         assert_eq!(raw, json!({ "label": "Password", "secret": true, "keys": "ctrl+v" }));
         assert!(!card.raw_input.contains("hunter22"), "{}", card.raw_input);
+    }
+
+    #[test]
+    fn computer_use_raw_keeps_field_id_and_nested_field_objects_never_their_text() {
+        let u = json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": "t10",
+            "title": "Tool",
+            "toolName": "keyboard_type",
+            "status": "pending",
+            "rawInput": {
+                "text": "hunter22",
+                "id": "login-pass",
+                "field": { "role": "AXSecureTextField", "name": "pw", "value": "hunter22", "deep": { "label": "x" } }
+            }
+        });
+        let raw: Value = serde_json::from_str(&parse_tool_card(&u).raw_input).unwrap();
+        assert_eq!(
+            raw,
+            json!({ "tool": "keyboard_type", "id": "login-pass", "field": { "role": "AXSecureTextField", "name": "pw" } })
+        );
     }
 
     #[test]

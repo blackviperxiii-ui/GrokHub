@@ -319,6 +319,9 @@ fn day_of(stamp: &str) -> &str {
     stamp.get(..10).unwrap_or(stamp)
 }
 
+/// `trail_id` ids: `trail-<12 hex>`.
+const TRAIL_ID_PREFIX: &str = "trail-";
+
 /// How each live node is linked.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Linked {
@@ -349,9 +352,25 @@ impl AmrStore {
 
         let loaded = self.load_live();
         let mut nodes = loaded.nodes;
+        // Spike-8a: indexer facts belong to their scope ("Forget these"), not the dream.
+        nodes.retain(|n| !n.source.starts_with(super::SCOPE_SOURCE_PREFIX));
         nodes.sort_by(rank);
         let mut links: BTreeMap<String, Linked> = BTreeMap::new();
         for edge in self.edges()? {
+            // Spike-3a trail links say where a note came up, not what it
+            // means: they keep the trail out of the dream, never the note.
+            let trail = |id: &str| id.starts_with(TRAIL_ID_PREFIX);
+            match edge.rel {
+                EdgeRel::References if trail(&edge.from) => {
+                    links.insert(edge.from.clone(), Linked::Other);
+                    continue;
+                }
+                EdgeRel::LearnedFromSpan if trail(&edge.to) => {
+                    links.insert(edge.to.clone(), Linked::Other);
+                    continue;
+                }
+                _ => {}
+            }
             let from = links.entry(edge.from.clone()).or_insert(Linked::None);
             *from = match (*from, edge.rel) {
                 (Linked::None | Linked::WinnerOnly, EdgeRel::Supersedes) => Linked::WinnerOnly,
@@ -582,6 +601,7 @@ mod tests {
             tags: tags.iter().map(|t| t.to_string()).collect(),
             body: format!("{body}\n"),
             sensitivity: Sensitivity::Plain,
+            consent_ref: String::new(),
         }
     }
 
@@ -682,6 +702,54 @@ mod tests {
             .collect();
         out.sort();
         out
+    }
+
+    /// Spike-8a: two near-identical indexer facts (same scope tag, most words
+    /// the same) and a stale low-confidence one are left alone: their scope's
+    /// "Forget these" owns them, not the dream.
+    #[test]
+    fn dream_leaves_indexer_scope_nodes_alone() {
+        let tmp = Tmp::new("scope");
+        let store = AmrStore::at(&tmp.0);
+        store.init().unwrap();
+        let mut a = node("scope-aaaaaaaaaaaa", "Visited github.com 42 times in Firefox", 0.9, RECENT, &["scope:browser_history:firefox"]);
+        a.source = "scope:browser_history:firefox".into();
+        let mut b = node("scope-bbbbbbbbbbbb", "Visited github.com 41 times in Firefox", 0.9, RECENT, &["scope:browser_history:firefox"]);
+        b.source = "scope:browser_history:firefox".into();
+        let mut c = node("scope-cccccccccccc", "System: disk / is 63% used", 0.1, OLD, &["scope:system_state"]);
+        c.source = "scope:system_state".into();
+        for d in [&a, &b, &c] {
+            store.remember(d).unwrap();
+        }
+        let report = store.dream_once(NOW, &DreamOpts::default()).unwrap();
+        assert_eq!(report.looked_at, 0);
+        assert_eq!(report.tombstoned(), 0);
+        for id in ["scope-aaaaaaaaaaaa", "scope-bbbbbbbbbbbb", "scope-cccccccccccc"] {
+            assert!(!store.is_forgotten(id), "{id}");
+        }
+        assert_eq!(store.live_from_source("scope:").0.len(), 3);
+        assert_eq!(store.live_from_source("scope:system_state").0.len(), 1);
+    }
+
+    /// A trail that mentions a note (and a fact learned from that turn) does
+    /// not keep the note from being retired; the trail itself stays.
+    #[test]
+    fn trail_links_do_not_freeze_the_notes_they_mention() {
+        let tmp = Tmp::new("trail-links");
+        let store = AmrStore::at(&tmp.0);
+        store.init().unwrap();
+        let trail_id = crate::amr::trail_id("chat-1", 3);
+        let mut trail = node(&trail_id, "Turn 3: 2 clicks, 1 type", 1.0, OLD, &["trail"]);
+        trail.node_type = NodeType::Trail;
+        store.remember(&trail).unwrap();
+        store.remember(&node("old-guess", "Unsure which harbor the keeper means", 0.2, OLD, &["guess"])).unwrap();
+        store.remember(&node("learned", "Keeps the harbor map pinned", 0.2, OLD, &["map"])).unwrap();
+        store.link(&trail_id, "old-guess", EdgeRel::References).unwrap();
+        store.link("learned", &trail_id, EdgeRel::LearnedFromSpan).unwrap();
+        store.dream_once(NOW, &DreamOpts::default()).unwrap();
+        assert!(store.is_forgotten("old-guess"), "a stale note a trail mentions is still retired");
+        assert!(store.is_forgotten("learned"), "a stale fact learned in the turn is still retired");
+        assert!(!store.is_forgotten(&trail_id), "the trail stays");
     }
 
     #[test]
@@ -907,6 +975,8 @@ mod tests {
             confidence: 0.1,
             tags: vec![],
             body: "dock key sk-abcdefghijklmnopqrstuv\n".into(),
+            consent_ref: String::new(),
+            sensitivity: Sensitivity::Plain,
         };
         fs::write(tmp.0.join("nodes/raw-key.md"), raw.to_markdown()).unwrap();
         let pref = NodeDraft {

@@ -4,6 +4,8 @@
 //! The only provider today is xAI over [`crate::XaiClient`] (or a test
 //! [`ModelClient`]); this adds no effort UI and reads no `reasoning_effort`.
 
+pub mod cabin;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

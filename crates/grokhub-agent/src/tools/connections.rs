@@ -18,7 +18,7 @@ use super::ToolOutput;
 use crate::harness::{self as hx, ChangeTarget, McpFile, Origin};
 
 /// What the user sees on the token card.
-const TOKEN_TITLE: &str = "Token";
+pub(crate) const TOKEN_TITLE: &str = "Token";
 
 pub fn add_schema() -> Value {
     json!({
@@ -116,13 +116,77 @@ fn current(name: &str) -> Result<Option<Map<String, Value>>, String> {
 }
 
 pub fn add(args: &Value) -> ToolOutput {
-    match add_inner(args) {
+    add_with(args, &mut native_token)
+}
+
+/// The native engine's token card (path E): the cabin's masked elicit card.
+fn native_token(message: &str) -> Option<String> {
+    crate::mcp::ask_secret("GrokHub", message, TOKEN_TITLE)
+}
+
+/// [`add`] with the token asked through `ask` (the card's message in, the
+/// typed value out). `grokhub --mcp-self` asks through MCP elicitation.
+pub(crate) fn add_with(args: &Value, ask: &mut dyn FnMut(&str) -> Option<String>) -> ToolOutput {
+    match add_inner(args, false, ask) {
         Ok(text) => ToolOutput::ok(text),
         Err(err) => ToolOutput::err(err),
     }
 }
 
-fn add_inner(args: &Value) -> Result<String, String> {
+/// Change an existing connection. Fields left out keep their value, and a
+/// sealed token stays unless `needs_token` asks for a new one.
+pub(crate) fn modify_with(args: &Value, ask: &mut dyn FnMut(&str) -> Option<String>) -> ToolOutput {
+    let mut run = || -> Result<String, String> {
+        let name = name_of(args)?;
+        let cur = current(&name)?.ok_or_else(|| format!("no connection named {name}"))?;
+        let mut merged = args.as_object().cloned().unwrap_or_default();
+        let has = |m: &Map<String, Value>, k: &str| m.get(k).is_some_and(|v| !v.is_null() && v.as_str() != Some(""));
+        if !has(&merged, "url") && !has(&merged, "command") {
+            for k in ["url", "command"] {
+                if let Some(v) = cur.get(k) {
+                    merged.insert(k.into(), v.clone());
+                }
+            }
+            if !merged.contains_key("args") {
+                if let Some(v) = cur.get("args") {
+                    merged.insert("args".into(), v.clone());
+                }
+            }
+        }
+        let keep_token = cur.contains_key("tokenRef") && !has(&merged, "needs_token");
+        add_inner(&Value::Object(merged), keep_token, ask)
+    };
+    match run() {
+        Ok(text) => ToolOutput::ok(text),
+        Err(err) => ToolOutput::err(err),
+    }
+}
+
+/// The connections in the cabin's MCP config, one line each. A sealed token
+/// shows as `%secret%`.
+pub(crate) fn list() -> ToolOutput {
+    let path = crate::mcp::config_file();
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let servers = serde_json::from_str::<Value>(&text)
+        .ok()
+        .and_then(|v| v.get("mcpServers").or_else(|| v.get("mcp_servers")).and_then(|m| m.as_object()).cloned())
+        .unwrap_or_default();
+    if servers.is_empty() {
+        return ToolOutput::ok("no connections");
+    }
+    let rows: Vec<String> = servers
+        .iter()
+        .map(|(name, e)| {
+            let target = e.get("url").or_else(|| e.get("command")).and_then(|v| v.as_str()).unwrap_or("?");
+            let off = if e.get("enabled").and_then(|v| v.as_bool()) == Some(false) { " (off)" } else { "" };
+            let token = if e.get("tokenRef").is_some() { " token=%secret%" } else { "" };
+            format!("{name}: {target}{off}{token}")
+        })
+        .collect();
+    ToolOutput::ok(grokhub_core::redact_secrets(&rows.join("\n")))
+}
+
+fn add_inner(args: &Value, keep_token: bool, ask: &mut dyn FnMut(&str) -> Option<String>) -> Result<String, String> {
     if carries_secret(args) {
         return Err("Never pass a token or header. Set needs_token and the user types it in. Nothing was added.".into());
     }
@@ -139,7 +203,10 @@ fn add_inner(args: &Value) -> Result<String, String> {
             let config = crate::perm::config_dir();
             let ledger = hx::ConsentLedger::load(&config);
             let dest = hx::egress_dest(&url);
-            let data = [hx::DataClass::Chat];
+            // A standing connection is not a one-off chat fetch. Chat-only calls are
+            // allowed without a grant; this still needs one unless the host is local
+            // or a model host.
+            let data = [hx::DataClass::Personal];
             if !hx::decide(hx::Step::Egress { dest: &dest, data: &data, ledger: &ledger }).is_allow() {
                 return Err(format!(
                     "{dest} is a new host for GrokHub. Grant it in Settings, Privacy before a connection can reach it. Nothing was added."
@@ -168,9 +235,10 @@ fn add_inner(args: &Value) -> Result<String, String> {
             return Err("only an HTTP connection takes a token".into());
         }
         let message = format!("Token for the {name} connection. It is sealed with your keychain key and never shown to Grok.");
-        let token = crate::mcp::ask_secret("GrokHub", &message, TOKEN_TITLE)
-            .ok_or("No token was given, so the connection was not added.")?;
+        let token = ask(&message).ok_or("No token was given, so the connection was not added.")?;
         hx::seal_connection_token(&config, &name, &token)?;
+        entry.insert("tokenRef".into(), json!(name));
+    } else if keep_token {
         entry.insert("tokenRef".into(), json!(name));
     }
     match record(&name, &reason, Some(Value::Object(entry))) {

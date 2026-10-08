@@ -246,6 +246,23 @@ pub(super) enum FeedAct {
     Discuss(String),
     Like(String),
     Link(String),
+    /// Undo on a Done-for-you card. Pointer click only.
+    Undo(String),
+    /// "Don't do this again" on a Done-for-you card. Pointer click only.
+    NeverAgain(String),
+}
+
+/// Done-for-you cards carry a white rule down the left edge, the cabin's
+/// one accent (same family as the hard card).
+fn paint_done_accent(painter: &egui::Painter, card: &UpdateCard, rect: egui::Rect) {
+    if card.kind != UpdateKind::DoneForYou {
+        return;
+    }
+    let x = rect.left() + 1.5;
+    painter.line_segment(
+        [egui::pos2(x, rect.top() + 8.0), egui::pos2(x, rect.bottom() - 8.0)],
+        egui::Stroke::new(2.0_f32, crate::theme::fg()),
+    );
 }
 
 /// Digest, suggestion, or a post that already has a source image.
@@ -844,6 +861,8 @@ impl Cabin {
             Some(FeedAct::Open(id)) => self.open_feed_card(&id),
             Some(FeedAct::Discuss(id)) => self.discuss_card(&id),
             Some(FeedAct::Like(id)) => self.pulse_like(&id, &Self::local_day()),
+            Some(FeedAct::Undo(id)) => self.done_for_you_undo(&id),
+            Some(FeedAct::NeverAgain(id)) => self.done_for_you_never(&id),
             Some(FeedAct::Link(url)) => {
                 self.follow_update_action(Some(UpdateAction::DeepLink { href: url }));
             }
@@ -985,6 +1004,7 @@ impl Cabin {
         }
         let key = self.bearer();
         std::thread::spawn(move || {
+            let _origin = grokhub_agent::harness::OriginScope::enter(grokhub_agent::harness::Origin::Proactive);
             let _ = tx.send(cabin_fast_llm(key, prompt));
         });
     }
@@ -1718,6 +1738,7 @@ fn paint_full_feed_card(
             egui::Stroke::new(1.0_f32, crate::theme::border()),
             egui::StrokeKind::Middle,
         );
+        paint_done_accent(ui.painter(), card, rect);
         let x_rect = egui::Rect::from_min_size(
             egui::pos2(rect.right() - 32.0, rect.top() + 8.0),
             egui::vec2(24.0, 24.0),
@@ -1747,6 +1768,8 @@ fn paint_full_feed_card(
                                 FeedAct::Discuss(card.id.clone())
                             }
                             super::pulse_ui::FeedPostAct::Link(url) => FeedAct::Link(url),
+                            super::pulse_ui::FeedPostAct::Undo => FeedAct::Undo(card.id.clone()),
+                            super::pulse_ui::FeedPostAct::NeverAgain => FeedAct::NeverAgain(card.id.clone()),
                         });
                     }
                 });
@@ -1781,6 +1804,7 @@ fn paint_feed_card(
         egui::Stroke::new(1.0_f32, crate::theme::border()),
         egui::StrokeKind::Middle,
     );
+    paint_done_accent(ui.painter(), card, rect);
     let x_rect = egui::Rect::from_min_size(
         egui::pos2(rect.right() - 32.0, rect.top() + 6.0),
         egui::vec2(24.0, 24.0),
@@ -1902,7 +1926,8 @@ fn paint_feed_card(
             UpdateKind::AutomateOffer
             | UpdateKind::AutomationDone
             | UpdateKind::ScheduleCreated
-            | UpdateKind::SelfChange => FeedAct::Open(card.id.clone()),
+            | UpdateKind::SelfChange
+            | UpdateKind::DoneForYou => FeedAct::Open(card.id.clone()),
         }
     })
 }

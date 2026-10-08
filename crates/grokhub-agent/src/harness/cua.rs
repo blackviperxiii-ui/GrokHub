@@ -344,11 +344,14 @@ pub struct CuaProxy<C: CuaChild> {
     start_err: Option<String>,
     halted: bool,
     observe_n: u64,
+    /// The proxy answered `initialize` itself (flag or switch off then), so a
+    /// child started later never saw Grok Build's handshake.
+    answered_init: bool,
 }
 
 impl<C: CuaChild> CuaProxy<C> {
     pub fn new(start: Box<dyn FnMut() -> Result<C, String>>) -> Self {
-        Self { child: None, start, start_err: None, halted: false, observe_n: 0 }
+        Self { child: None, start, start_err: None, halted: false, observe_n: 0, answered_init: false }
     }
 
     /// Halt: kill the child. It is not started again in this process.
@@ -365,7 +368,23 @@ impl<C: CuaChild> CuaProxy<C> {
                 return Err(e.clone());
             }
             match (self.start)() {
-                Ok(c) => self.child = Some(c),
+                Ok(mut c) => {
+                    if self.answered_init {
+                        // Turned on mid-session: give the child the handshake
+                        // an MCP server expects before its first request.
+                        let id = json!("grokhub-cua-init");
+                        let init = json!({"jsonrpc":"2.0","id":id,"method":"initialize","params":{
+                            "protocolVersion":"2025-06-18",
+                            "capabilities":{},
+                            "clientInfo":{"name":grokhub_core::CUA_MCP_SERVER,"version":CUA_DRIVER_VERSION}}});
+                        if let Err(e) = c.request(&init.to_string(), &id) {
+                            c.kill();
+                            return Err(e);
+                        }
+                        c.notify(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#);
+                    }
+                    self.child = Some(c);
+                }
                 Err(e) => {
                     self.start_err = Some(e.clone());
                     return Err(e);
@@ -392,13 +411,14 @@ impl<C: CuaChild> CuaProxy<C> {
         };
         let live = gate.enabled && gate.flag && !self.halted;
         match method {
-            "initialize" if !live => Some(
+            "initialize" if !live => Some({
+                self.answered_init = true;
                 json!({"jsonrpc":"2.0","id":id,"result":{
                     "protocolVersion":"2025-06-18",
                     "capabilities":{"tools":{}},
                     "serverInfo":{"name":grokhub_core::CUA_MCP_SERVER,"version":CUA_DRIVER_VERSION}}})
-                .to_string(),
-            ),
+                .to_string()
+            }),
             "tools/list" if !live => Some(json!({"jsonrpc":"2.0","id":id,"result":{"tools":[]}}).to_string()),
             "tools/list" => Some(match self.child().and_then(|c| c.request(line.trim(), &id)) {
                 Ok(reply) => manifest_tools_only(&reply),
@@ -672,7 +692,7 @@ mod tests {
     }
 
     fn turn(dir: &Path) {
-        write_turn_context(dir, &TurnContext { chat_id: "chat-c".into(), turn: 2, access: "supervised".into(), episode: String::new() }).unwrap();
+        write_turn_context(dir, &TurnContext { chat_id: "chat-c".into(), turn: 2, access: "supervised".into(), ..Default::default() }).unwrap();
     }
 
     fn text_of(reply: &str) -> String {
@@ -720,6 +740,26 @@ mod tests {
         assert_eq!(got, vec![("deny", "cua", "supervised"), ("deny", "cua", "readonly")]);
         assert_eq!(ComputerUseBackend::selected(false, true), ComputerUseBackend::GrokBuild);
         assert_eq!(ComputerUseBackend::selected(true, false), ComputerUseBackend::GrokBuild);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_child_started_after_the_switch_turns_on_gets_the_handshake_first() {
+        let dir = test_dir("cua-late-init");
+        turn(&dir);
+        let fake = Fake::default();
+        let starts = Rc::new(RefCell::new(0));
+        let mut p = proxy(&fake, starts.clone());
+        let off = CuaGate { enabled: false, flag: true, halted: false };
+        let init = r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}"#;
+        assert!(p.handle_line(init, off, &dir, &mut || false).is_some());
+        assert_eq!(*starts.borrow(), 0);
+        // The switch goes on; the first call starts the child.
+        let out = p.handle_line(&call("click", json!({"pid":42,"window_id":7,"x":10,"y":20})), ON, &dir, &mut || false).unwrap();
+        assert_eq!(text_of(&out), "click done");
+        let methods: Vec<String> = fake.got.borrow().iter().map(|m| m["method"].as_str().unwrap_or("").to_string()).collect();
+        assert_eq!(&methods[..3], &["initialize", "notifications/initialized", "tools/call"]);
+        assert_eq!(*starts.borrow(), 1);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -836,7 +876,7 @@ mod tests {
     #[test]
     fn hermes_clicks_park_by_their_ax_label_before_the_click_is_sent() {
         let dir = test_dir("cua-hermes");
-        write_turn_context(&dir, &TurnContext { chat_id: "chat-h".into(), turn: 1, access: "full".into(), episode: String::new() }).unwrap();
+        write_turn_context(&dir, &TurnContext { chat_id: "chat-h".into(), turn: 1, access: "full".into(), ..Default::default() }).unwrap();
         let fake = Fake::default();
         *fake.tree.borrow_mut() = [
             "Window: Checkout — Shop",

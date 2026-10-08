@@ -30,6 +30,85 @@ const WORK_ROW_MS: u64 = 24 * 60 * 60 * 1000;
 const REASON_SHOWN: usize = 72;
 /// Height of one row: the pill's own height.
 const ROW_H: f32 = 28.0;
+/// How often the cabin looks at the ledger files for lines another process
+/// (`grokhub --mcp-self`) wrote.
+const LEDGER_LOOK_MS: u64 = 1_000;
+/// Self-made lines remembered as already shown.
+const POSTED_KEPT: usize = 64;
+
+/// What the cabin already knows of the ledger files. `grokhub --mcp-self`
+/// runs in its own process, so its lines never reach `take_self_changes`;
+/// the cabin reads them from disk instead.
+#[derive(Debug, Default)]
+pub(crate) struct LedgerWatch {
+    /// Ledger lines up to this seq (per `ChangeKind::ALL`) were on disk when
+    /// the cabin first looked, or have been read since.
+    seen: [u64; 3],
+    /// File length per kind at the last look.
+    lens: [u64; 3],
+    /// Self-made lines already shown, from either path.
+    posted: Vec<(ChangeKind, u64)>,
+    /// The next look, in ms.
+    pub(crate) next_ms: u64,
+}
+
+fn kind_slot(kind: ChangeKind) -> usize {
+    ChangeKind::ALL.iter().position(|k| *k == kind).unwrap_or(0)
+}
+
+fn ledger_len(dir: &std::path::Path, kind: ChangeKind) -> u64 {
+    std::fs::metadata(hx::ledger_path(dir, kind)).map(|m| m.len()).unwrap_or(0)
+}
+
+impl LedgerWatch {
+    /// Everything on disk now counts as seen.
+    fn baseline(&mut self, dir: &std::path::Path) {
+        for kind in ChangeKind::ALL {
+            let i = kind_slot(kind);
+            self.lens[i] = ledger_len(dir, kind);
+            self.seen[i] = hx::ChangeLedger::load_kind(dir, kind).all().iter().map(|c| c.seq).max().unwrap_or(0);
+        }
+    }
+
+    /// True the first time a line is shown.
+    fn first_post(&mut self, kind: ChangeKind, seq: u64) -> bool {
+        if self.posted.contains(&(kind, seq)) {
+            return false;
+        }
+        self.posted.push((kind, seq));
+        if self.posted.len() > POSTED_KEPT {
+            self.posted.remove(0);
+        }
+        true
+    }
+
+    /// Self-made lines written to disk since the last look and not shown yet.
+    fn read_new(&mut self, dir: &std::path::Path, now_ms: u64) -> Vec<(ChangeKind, hx::Change)> {
+        if now_ms < self.next_ms {
+            return Vec::new();
+        }
+        self.next_ms = now_ms + LEDGER_LOOK_MS;
+        let mut out = Vec::new();
+        for kind in ChangeKind::ALL {
+            let i = kind_slot(kind);
+            let len = ledger_len(dir, kind);
+            if len == self.lens[i] {
+                continue;
+            }
+            self.lens[i] = len;
+            let ledger = hx::ChangeLedger::load_kind(dir, kind);
+            let seen = self.seen[i];
+            for c in ledger.all().iter().filter(|c| c.seq > seen) {
+                let made = matches!(c.op, ChangeOp::Create | ChangeOp::Modify | ChangeOp::Delete);
+                if made && c.origin == Origin::SelfManage && self.first_post(kind, c.seq) {
+                    out.push((kind, c.clone()));
+                }
+            }
+            self.seen[i] = ledger.all().iter().map(|c| c.seq).max().unwrap_or(0).max(self.seen[i]);
+        }
+        out
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ChangeAct {
@@ -164,7 +243,12 @@ pub(super) fn work_row(kind: ChangeKind, c: &hx::Change) -> ChangeRow {
 
 /// Work-tree rows after a restart: self-made changes from the last day that
 /// are still in effect and not kept, newest first.
-pub(super) fn work_rows_from_disk(config_dir: &std::path::Path, now_ms: u64) -> Vec<ChangeRow> {
+/// `skip` drops lines that already have their own Undo (a Done-for-you card).
+pub(super) fn work_rows_from_disk(
+    config_dir: &std::path::Path,
+    now_ms: u64,
+    skip: &dyn Fn(ChangeKind, u64) -> bool,
+) -> Vec<ChangeRow> {
     let mut found: Vec<(u64, ChangeRow)> = Vec::new();
     for kind in ChangeKind::ALL {
         let ledger = hx::ChangeLedger::load_kind(config_dir, kind);
@@ -175,7 +259,7 @@ pub(super) fn work_rows_from_disk(config_dir: &std::path::Path, now_ms: u64) -> 
             }
             seen.push(&c.id);
             if let Some(open) = ledger.open_self_change(&c.id) {
-                if now_ms.saturating_sub(open.at) < WORK_ROW_MS {
+                if now_ms.saturating_sub(open.at) < WORK_ROW_MS && !skip(kind, open.seq) {
                     found.push((open.at, work_row(kind, open)));
                 }
             }
@@ -253,14 +337,29 @@ impl Cabin {
         let dir = config::config_dir();
         if !self.harness.work_rows_loaded {
             self.harness.work_rows_loaded = true;
-            self.harness.work_rows = work_rows_from_disk(&dir, now_ms());
+            let auto = self.auto_lines();
+            self.harness.work_rows = work_rows_from_disk(&dir, now_ms(), &|kind, seq| auto.contains(&(kind, seq)));
+            self.harness.ledger_watch.baseline(&dir);
         }
-        let fresh = hx::take_self_changes(&dir);
+        let watch = &mut self.harness.ledger_watch;
+        let mut fresh: Vec<(ChangeKind, hx::Change)> =
+            hx::take_self_changes(&dir).into_iter().filter(|(kind, c)| watch.first_post(*kind, c.seq)).collect();
+        let elsewhere = watch.read_new(&dir, now_ms());
+        if elsewhere.iter().any(|(kind, _)| *kind == ChangeKind::Automation) {
+            // Another process wrote the file; the cabin's list must match it,
+            // or its next save drops that automation.
+            self.automations = crate::night::load();
+        }
+        fresh.extend(elsewhere);
         if fresh.is_empty() {
             return;
         }
         self.harness.change_rows = None;
         for (kind, c) in fresh {
+            // An auto-act's Done-for-you card already carries its Undo.
+            if self.auto_lines().contains(&(kind, c.seq)) {
+                continue;
+            }
             if kind == ChangeKind::Skill {
                 self.harness.skill_rows = None;
             }
@@ -273,9 +372,10 @@ impl Cabin {
         }
     }
 
-    /// Undo or Keep clicked on a Work-tree row or under a report bubble.
-    /// Only the row painters return a row, and only for a pointer click.
-    pub(super) fn change_row_clicked(&mut self, row: &ChangeRow, act: ChangeAct) {
+    /// Undo or Keep clicked on a Work-tree row, under a report bubble, or on
+    /// a Done-for-you card. Only those painters return a row, and only for a
+    /// pointer click. True when it worked.
+    pub(super) fn change_row_clicked(&mut self, row: &ChangeRow, act: ChangeAct) -> bool {
         let dir = config::config_dir();
         let ask = hx::UndoAsk::from_click();
         let done: Result<Option<Vec<u8>>, String> = match (act, row.kind) {
@@ -307,6 +407,7 @@ impl Cabin {
         self.harness.change_rows = None;
         self.harness.skill_rows = None;
         self.status = done_line(row, act, &done);
+        done.is_ok()
     }
 
     /// Work-tree rows under the approval cards. Click only.
@@ -323,7 +424,7 @@ impl Cabin {
 }
 
 /// A ghost pill that answers a pointer click only.
-fn click_pill(ui: &mut egui::Ui, label: &str) -> bool {
+pub(super) fn click_pill(ui: &mut egui::Ui, label: &str) -> bool {
     let resp = crate::theme::felt_label_button(
         ui,
         label,
@@ -461,16 +562,16 @@ mod tests {
         let root = fixture("change-work-rows");
         let ledger = hx::ChangeLedger::load_kind(&root, ChangeKind::Automation);
         let now = ledger.all().last().unwrap().at + 60_000;
-        let rows = work_rows_from_disk(&root, now);
+        let rows = work_rows_from_disk(&root, now, &|_, _| false);
         assert_eq!(
             rows.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(),
             ["Grok added automation inbox sweep", "Grok changed automation board digest"]
         );
         hx::accept_change(&root, ChangeKind::Automation, "auto-b", hx::UndoAsk::from_click()).unwrap();
-        let rows = work_rows_from_disk(&root, now);
+        let rows = work_rows_from_disk(&root, now, &|_, _| false);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "auto-a");
-        assert!(work_rows_from_disk(&root, now + WORK_ROW_MS).is_empty(), "a day later the row is gone");
+        assert!(work_rows_from_disk(&root, now + WORK_ROW_MS, &|_, _| false).is_empty(), "a day later the row is gone");
         let _ = std::fs::remove_dir_all(&root);
     }
 

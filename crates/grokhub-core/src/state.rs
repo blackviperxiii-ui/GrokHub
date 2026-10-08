@@ -136,6 +136,20 @@ impl HubState {
         Ok(peer)
     }
 
+    /// Phone pairing is gone (#533), so a phone peer from an older
+    /// `hub-state.json` loses its token: it could still read and write the
+    /// snapshot, read the frame and claim inhabit bundles. Its queued tasks
+    /// go too; nobody is left to read their results. Same name test the old
+    /// inhabit guard used.
+    pub fn drop_phone_peers(&mut self) {
+        let phones: Vec<String> = self.peers.iter().filter(|p| is_phone_name(&p.name)).map(|p| p.id.clone()).collect();
+        if phones.is_empty() {
+            return;
+        }
+        self.peers.retain(|p| !phones.contains(&p.id));
+        self.inbox.retain(|t| t.status != "queued" || !phones.contains(&t.from_id));
+    }
+
     pub fn peer_for_token(&self, token: &str) -> Option<&Peer> {
         if token.is_empty() {
             return None;
@@ -393,6 +407,7 @@ pub fn load_hub_state(path: &std::path::Path) -> Option<HubState> {
     match serde_json::from_str::<HubState>(&raw) {
         Ok(mut st) => {
             st.last_frame = None;
+            st.drop_phone_peers();
             Some(st)
         }
         Err(_) if raw.trim().is_empty() => None,
@@ -401,6 +416,11 @@ pub fn load_hub_state(path: &std::path::Path) -> Option<HubState> {
             None
         }
     }
+}
+
+fn is_phone_name(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n.split(|c: char| !c.is_ascii_alphanumeric()).any(|part| matches!(part, "phone" | "android" | "iphone"))
 }
 
 fn quarantine_hub_state(path: &std::path::Path) {
@@ -709,7 +729,8 @@ mod tests {
   "port": 18766,
   "pair": null,
   "peers": [
-    { "id": "d-phone", "name": "Pixel phone", "token": "tok-phone", "lastSeen": 5 }
+    { "id": "d-phone", "name": "Pixel phone", "token": "tok-phone", "lastSeen": 5 },
+    { "id": "d-laptop", "name": "Jeremy's laptop", "token": "tok-laptop", "lastSeen": 6 }
   ],
   "inbox": [
     {
@@ -724,6 +745,16 @@ mod tests {
       "result": "flashed",
       "receipts": [{ "cmd": "dd if=pi.img", "code": 0 }],
       "resultClaimed": true
+    },
+    {
+      "id": "task-2",
+      "fromId": "d-phone",
+      "fromName": "Pixel phone",
+      "targetDeviceId": "d-hub",
+      "title": "Reboot",
+      "prompt": "reboot the pi",
+      "status": "queued",
+      "createdAt": 2
     }
   ],
   "snapshot": null,
@@ -735,9 +766,13 @@ mod tests {
         std::fs::write(&path, old).unwrap();
         let st = load_hub_state(&path).expect("old hub-state.json must load");
         assert_eq!(st.device_id, "d-hub");
+        // The phone row and its queued task go; its token no longer opens anything.
         assert_eq!(st.peers.len(), 1);
-        assert_eq!(st.peers[0].name, "Pixel phone");
+        assert_eq!(st.peers[0].name, "Jeremy's laptop");
+        assert!(st.peer_for_token("tok-phone").is_none());
+        assert_eq!(st.peer_for_token("tok-laptop").map(|p| p.id.as_str()), Some("d-laptop"));
         assert_eq!(st.inbox.len(), 1);
+        assert_eq!(st.inbox[0].id, "task-1");
         assert_eq!(st.inbox[0].status, "done");
         assert_eq!(st.inbox[0].receipts[0].cmd, "dd if=pi.img");
         assert!(path.exists(), "a loadable state must not be quarantined");

@@ -52,10 +52,12 @@ pub mod organs;
 pub mod outcome;
 pub mod pair;
 pub mod paths;
+pub mod proactive;
 pub mod project;
 pub mod pulse;
 pub mod recipe;
 pub mod pii;
+pub mod proactive_auto;
 pub mod redact;
 pub mod reflect;
 pub mod review;
@@ -208,7 +210,7 @@ pub use context::{
 pub use desktop_entry::{desktop_bin_path, desktop_entry_uses_prefix_bin, rewrite_desktop_entry};
 pub use desktop_mcp::{
     apply_desktop_mcp_args, desktop_mcp_args, stamp_halts, DesktopPermMode, CABIN_CU_SERVERS, CUA_MCP_RULE,
-    CUA_MCP_SERVER, DESKTOP_MCP_RULE, DESKTOP_MCP_SERVER,
+    CUA_MCP_SERVER, DESKTOP_MCP_RULE, DESKTOP_MCP_SERVER, SELF_MCP_SERVER,
 };
 pub use diagnostics::diagnostics_bundle;
 pub use doctor::{
@@ -255,6 +257,10 @@ pub use heartbeat::{
 };
 pub use heartbeat_throttle::{
     ActOutcome, HeartbeatPace, HeartbeatThrottle, PaceGate, PaceHold, ProactiveAct, PACE_NORMAL,
+};
+pub use proactive_auto::{
+    ceiling_allows, AccessTier, AutoAct, AutoBudget, AutoCandidate, CeilingCtx, CeilingMiss, PillMode,
+    AUTO_CONFIDENCE_MIN, AUTO_PER_DAY, AUTO_P_MIND_MAX, AUTO_REVERSIBILITY,
 };
 pub use history::{
     dedupe_hits, palette_file_shown, palette_forget_stale_walk, palette_row_action,
@@ -527,7 +533,7 @@ pub use update_feed::{
     automation_home_note, clear_less_mute, hide_home_source, home_event_cards, mute_less_like,
     record_home_floors, refresh_event_why, runs_latest_line, source_hidden, surfaces_on_home,
     unhide_home_source, HOME_HIDDEN_NOTE, LESS_MUTE_MS,
-    post_update, release_quiet_hold, resume_needs_fresh_chat, schedule_created_card, self_change_card,
+    post_update, release_quiet_hold, resume_needs_fresh_chat, schedule_created_card, self_change_card, done_for_you_card, DoneForYou,
     suggestion_card, tick_feed_pulse, visible_digests, visible_ideas, visible_updates,
     digest_lookup_prompt, digest_steer, drop_dead_links, parse_lookup, public_http_url, post_help, remember_dismissed_source,
     remember_turned_down, turned_down_titles, turned_down_topic,

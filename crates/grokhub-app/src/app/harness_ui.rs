@@ -100,7 +100,8 @@ pub(super) fn grant_full_card_on() -> bool {
 pub(super) enum ParkSource {
     /// Path B / E: a Grok Build permission ask waiting on its RPC.
     Ask(grokhub_acp::PermissionAsk),
-    /// Path A: the `--mcp-desktop` process is blocked on this park id.
+    /// Path A: the `--mcp-desktop` process is blocked on this park id. Path E:
+    /// a cabin-owned send (Spike-4c `guard_or_park`) waits on it the same way.
     Desk(String),
     /// Path C: GB's `--deny` rule already stopped it. Nothing is waiting.
     Headless,
@@ -110,6 +111,12 @@ pub(super) enum ParkSource {
     /// A path A / B park whose turn was steered (Spike-1a). Its call was
     /// denied with the old turn; Approve re-runs the step once, like path C.
     Held,
+    /// Spike-6a: the final step of a proactive card (this card id). Nothing
+    /// ran; Approve runs the step once on its normal path.
+    Proactive(String),
+    /// A hard-class step GrokHub prepared on its own (Spike-6b), with its
+    /// arguments. Nothing is waiting; Approve runs it once on path E.
+    AutoPrepared(String),
     /// Path D (Spike-1c): Grok Build's own computer use tried a hard step
     /// with no ask, and the cabin stopped the turn. Nothing is waiting;
     /// Approve re-runs the step once, like path C.
@@ -165,6 +172,9 @@ pub(super) struct HeadlessHit {
 #[derive(Debug, Clone)]
 pub(super) struct OneShot {
     pub action: Option<String>,
+    /// A path D card's tool and class. Its re-run comes back as a path B ask
+    /// whose action is Grok's own words, so the ask matches by tool name.
+    pub step: Option<(String, HardClass)>,
     pub restore: PermissionMode,
     pub started: bool,
 }
@@ -207,6 +217,12 @@ pub(super) struct HarnessState {
     pub lock_seen: Option<(Instant, Option<hx::Locked>)>,
     /// `/privacy` output on its way from the reader thread.
     pub privacy_rx: Option<mpsc::Receiver<String>>,
+    /// `/diagnose` or a "check my computer" answer on its way (Spike-8b).
+    pub diagnose_rx: Option<mpsc::Receiver<(String, bool)>>,
+    /// The running diagnose came from `/diagnose`, so it posts as a slash result.
+    pub diagnose_slash: bool,
+    /// The chat that asked for the running diagnose; its answer goes there.
+    pub diagnose_chat: String,
     /// Settings → Permissions: the folder typed for a new files scope.
     pub scope_folder: String,
     /// Settings → Permissions: the browser picked for a history scope.
@@ -229,6 +245,8 @@ pub(super) struct HarnessState {
     pub work_rows: Vec<super::change_undo::ChangeRow>,
     /// The rows of the last day were read back from disk.
     pub work_rows_loaded: bool,
+    /// Ledger lines another process wrote (`grokhub --mcp-self`, Spike-5c).
+    pub ledger_watch: super::change_undo::LedgerWatch,
     /// True only while `send_from_composer` hands the user's own typed line
     /// to `send_chat`. `/skills undo` and `/skills restore` act on it; from
     /// anywhere else they only show the Undo rows.
@@ -245,6 +263,13 @@ pub(super) struct HarnessState {
     /// The last finished reply's prose, for the turn-end audit. `None` when
     /// that turn was not on the visible chat.
     pub last_reply: Option<String>,
+    /// Who started the chat turn on screen (Spike-4c). Spans and `turn.json`
+    /// carry it; `send_chat` sets it from `next_origin`, else `user`.
+    pub turn_origin: hx::Origin,
+    /// Set by a heartbeat act right before it sends its chat turn.
+    pub next_origin: Option<hx::Origin>,
+    /// Spike-8a local indexers: the scheduler, the in-memory index, the asks.
+    pub indexer: super::indexer_ui::IndexerUi,
     /// The decision inbox rows are open under the needs-attention line.
     pub inbox_open: bool,
     /// The card an inbox row asked to scroll into view, painted once.
@@ -274,10 +299,12 @@ pub(super) fn perm_card_eyebrow(p: &grokhub_acp::PermissionAsk) -> &'static str 
     if is_desktop_ask(p) { "Desktop" } else { "Tool" }
 }
 
-/// Typed text never lands in a span: a desktop `type` logs its length only.
+/// Typed text never lands in a span: a desktop `type` (or Cua's `type_text`
+/// and `set_value`) logs its length only.
 pub(super) fn span_args(tool: &str, action: &str) -> String {
     let t = tool.to_ascii_lowercase();
-    if t == "type" || t.ends_with("__type") {
+    let leaf = t.rsplit("__").next().unwrap_or(&t);
+    if matches!(leaf, "type" | "type_text" | "set_value") {
         format!(r#"{{"chars":{}}}"#, action.chars().count())
     } else {
         action.to_string()
@@ -304,9 +331,10 @@ fn cu_name(card: &ToolCard, raw: &serde_json::Value) -> String {
 }
 
 /// Grok Build's own computer use (path D): not `grokhub-desktop`, not a
-/// browser tool, and named like a screen, mouse, or keyboard tool.
+/// browser tool, and named like a screen, mouse, or keyboard tool. The name
+/// is the stream's `toolName` when sent, so a generic title still counts.
 pub(super) fn is_builtin_cu_card(card: &ToolCard) -> bool {
-    card.is_computer_use() && !is_desktop_card(card) && hx::builtin_cu(&cu_name(card, &raw_of(card)))
+    !is_desktop_card(card) && hx::builtin_cu(&cu_name(card, &raw_of(card)))
 }
 
 /// What a path D check reads: the frame's kept keys without the tool name.
@@ -379,6 +407,7 @@ impl Cabin {
             + usize::from(self.perm_ask.is_some())
             + self.perm_queue.len()
             + usize::from(self.elicit_ask.is_some())
+            + self.harness.indexer.asks.len()
     }
 
     pub(super) fn trace_id(&self) -> String {
@@ -419,6 +448,12 @@ impl Cabin {
         self.park_hard(ParkSource::Egress(dest.into()), class, "egress", HUB_SYNC_TOOL.into(), action);
     }
 
+    /// A chat turn starts (Spike-4c): a heartbeat act set `next_origin` right
+    /// before it sent; anything else is the user's.
+    pub(super) fn begin_turn_origin(&mut self) {
+        self.harness.turn_origin = self.harness.next_origin.take().unwrap_or_default();
+    }
+
     pub(super) fn write_span(&self, span: hx::Span, path: &str) {
         self.write_span_at(span, path, self.turn_no());
     }
@@ -426,6 +461,10 @@ impl Cabin {
     fn write_span_at(&self, span: hx::Span, path: &str, turn: u32) {
         let trace = self.trace_id();
         let mut span = span.on_path(path).in_turn(&trace, turn);
+        // A step keeps a set origin (repair, self-manage); the rest take the turn's.
+        if span.origin == hx::Origin::User {
+            span.origin = self.harness.turn_origin;
+        }
         if span.episode.is_empty() {
             span.episode = self.episode_span_id();
         }
@@ -464,8 +503,8 @@ impl Cabin {
                 None
             }
             GateOutcome::Park { hard: Some(class), .. } => {
-                if self.take_oneshot(&p.action) {
-                    // Approved once on the path C card: Grok's own Allow card decides.
+                if self.take_oneshot(&p.action) || self.take_oneshot_step(&p.title, &p.action, class) {
+                    // Approved once on a path C or D card: Grok's own Allow card decides.
                     return Some(p);
                 }
                 // A credential field's typed value never reaches a span or the card.
@@ -508,11 +547,30 @@ impl Cabin {
             .is_some_and(|a| a.trim() == action.trim() || action.contains(a.trim()));
         if hit {
             shot.action = None;
+            shot.step = None;
         }
         hit
     }
 
-    fn park_hard(
+    /// The path B ask for a path D re-run: same hard class, and its title or
+    /// action names the tool the card was for.
+    fn take_oneshot_step(&mut self, title: &str, action: &str, class: HardClass) -> bool {
+        let Some(shot) = self.harness.oneshot.as_mut() else {
+            return false;
+        };
+        let hit = shot.step.as_ref().is_some_and(|(tool, c)| {
+            let tool = tool.to_ascii_lowercase();
+            *c == class
+                && (title.to_ascii_lowercase().contains(&tool) || action.to_ascii_lowercase().contains(&tool))
+        });
+        if hit {
+            shot.action = None;
+            shot.step = None;
+        }
+        hit
+    }
+
+    pub(super) fn park_hard(
         &mut self,
         source: ParkSource,
         class: HardClass,
@@ -539,13 +597,34 @@ impl Cabin {
         }
     }
 
+    /// A hard card past `APPROVAL_TTL` is denied with a span. Painting and the
+    /// unattended heartbeat both check, so no one watching still means Deny.
+    pub(super) fn expire_hard_park(&mut self) {
+        if self
+            .harness
+            .park
+            .as_ref()
+            .is_some_and(|p| p.parked_at.elapsed() >= hx::APPROVAL_TTL)
+        {
+            self.resolve_hard_park(false, "timed out — fail-closed Deny");
+        }
+    }
+
+    /// A hard step GrokHub prepared on its own waits on the white card.
+    pub(super) fn park_proactive(&mut self, class: HardClass, tool: String, arguments: String, prepared: String) {
+        self.park_hard(ParkSource::AutoPrepared(arguments), class, "E", tool, prepared);
+    }
+
     /// Approve answers once (never Always). Deny, Esc, TTL, and halt reject.
     pub(super) fn resolve_hard_park(&mut self, approve: bool, why: &str) {
         let Some(park) = self.harness.park.take() else {
             return;
         };
         let mut sync_once = false;
-        let trace = self.trace_id();
+        let trace = match park.source {
+            ParkSource::AutoPrepared(_) => hx::PROACTIVE_TRACE.to_string(),
+            _ => self.trace_id(),
+        };
         let span = if approve {
             hx::Span::hard_approve(&trace, &park.tool, &span_args(&park.tool, &park.action), park.class)
         } else {
@@ -554,7 +633,11 @@ impl Cabin {
         // An episode park's outcome span is the kernel's (Spike-3b).
         let kernel_park =
             matches!(&park.source, ParkSource::Desk(id) if id.starts_with(grokhub_agent::episode::PARK_PREFIX));
-        if !kernel_park {
+        if let ParkSource::AutoPrepared(_) = park.source {
+            let mut span = span.on_path(park.path).from_origin(hx::Origin::Proactive);
+            span.access = self.access_mode().as_str().into();
+            hx::note_proactive(&crate::config::config_dir(), &span);
+        } else if !kernel_park {
             self.write_span(span, park.path);
         }
         match &park.source {
@@ -570,16 +653,40 @@ impl Cabin {
             ParkSource::Desk(id) => {
                 let _ = hx::answer_park(&crate::config::config_dir(), id, approve);
             }
-            ParkSource::Headless | ParkSource::Held | ParkSource::Unasked => {
+            ParkSource::Headless | ParkSource::Held => {
                 if approve {
-                    self.start_oneshot(&park.action);
+                    self.start_oneshot(&park.action, None);
+                }
+            }
+            ParkSource::Unasked => {
+                if approve {
+                    self.start_oneshot(&park.action, Some((park.tool.clone(), park.class)));
+                }
+            }
+            ParkSource::Proactive(_) => {
+                if approve {
+                    self.harness.next_origin = Some(hx::Origin::Proactive);
+                    self.start_oneshot(&park.action, None);
                 }
             }
             ParkSource::Egress(dest) => {
                 sync_once = approve && dest == hx::HUB_DEST;
             }
+            ParkSource::AutoPrepared(args) => {
+                if approve {
+                    let (text, failed) = hx::run_approved_once(&self.native_workspace(), &park.tool, args);
+                    if failed {
+                        self.status = grokhub_core::redact_secrets(&text);
+                        self.harness.park = self.harness.queue.pop_front();
+                        return;
+                    }
+                }
+            }
         }
-        self.status = if approve {
+        self.status = if approve && kernel_park && !self.running {
+            // The kernel runs the step at its next loop, which a message starts.
+            format!("Approved once · {} · send a message to let the session go on", park.class.label())
+        } else if approve {
             format!("Approved once · {}", park.class.label())
         } else {
             format!("Denied · {}", park.class.label())
@@ -673,7 +780,12 @@ impl Cabin {
         while let Some(park) = self.harness.park.clone() {
             if matches!(
                 park.source,
-                ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held | ParkSource::Unasked
+                ParkSource::Headless
+                    | ParkSource::Egress(_)
+                    | ParkSource::Held
+                    | ParkSource::Proactive(_)
+                    | ParkSource::AutoPrepared(_)
+                    | ParkSource::Unasked
             ) {
                 keep.push_back(park);
                 self.harness.park = self.harness.queue.pop_front();
@@ -711,7 +823,12 @@ impl Cabin {
                 ParkSource::Desk(id) => {
                     let _ = hx::answer_park(&dir, id, false);
                 }
-                ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held | ParkSource::Unasked => continue,
+                ParkSource::Headless
+                | ParkSource::Egress(_)
+                | ParkSource::Held
+                | ParkSource::Proactive(_)
+                | ParkSource::AutoPrepared(_)
+                | ParkSource::Unasked => continue,
             }
             let args = span_args(&park.tool, &park.action);
             self.write_span(hx::Span::deny(&trace, &park.tool, &args, why, park.class.as_str()), park.path);
@@ -1077,9 +1194,10 @@ impl Cabin {
 
     /// Approve on a path C card: one ACP Ask turn for that step, then the pill
     /// goes back. Flags are never loosened; Grok's own Allow card decides.
-    fn start_oneshot(&mut self, action: &str) {
+    fn start_oneshot(&mut self, action: &str, step: Option<(String, HardClass)>) {
         self.harness.oneshot = Some(OneShot {
             action: Some(action.to_string()),
+            step,
             restore: self.permission_mode,
             started: false,
         });
@@ -1140,6 +1258,7 @@ impl Cabin {
             chat_id: self.trace_id(),
             turn: self.turn_no(),
             access: self.access_mode().as_str().into(),
+            origin: self.harness.turn_origin,
             episode: self.episode_span_id(),
         };
         self.poll_episode();
@@ -1158,7 +1277,9 @@ impl Cabin {
                 continue;
             }
             let class = HardClass::parse(&req.class).unwrap_or(HardClass::IrreversibleOs);
-            self.park_hard(ParkSource::Desk(req.id), class, "A", req.tool, req.action);
+            // Path E: a cabin-owned send (web_fetch, MCP, Imagine) the EgressGuard parked.
+            let path = if req.path == "E" { "E" } else { "A" };
+            self.park_hard(ParkSource::Desk(req.id), class, path, req.tool, req.action);
         }
     }
 
@@ -1180,14 +1301,7 @@ impl Cabin {
                 self.harness.oneshot = None;
             }
         }
-        if self
-            .harness
-            .park
-            .as_ref()
-            .is_some_and(|p| p.parked_at.elapsed() >= hx::APPROVAL_TTL)
-        {
-            self.resolve_hard_park(false, "timed out — fail-closed Deny");
-        }
+        self.expire_hard_park();
         if self
             .harness
             .full_card
@@ -1277,6 +1391,8 @@ impl Cabin {
                 self.resolve_grant_full(grant, "Jeremy kept Supervised");
             }
         }
+        // Spike-8a: in-context scope asks, same card shape, click only.
+        self.paint_scope_asks(ui);
         self.paint_work_rows(ui);
     }
 
@@ -1296,19 +1412,19 @@ impl Cabin {
 /// White accents on the dark cabin: #E7E9EA ring and title on the surface
 /// fill, the approval enter motion, the thinking rim while a reply runs. No
 /// Thinking label, no pulse at rest.
-struct CardText<'a> {
-    eyebrow: &'a str,
-    title: &'a str,
-    action: &'a str,
-    note: &'a str,
-    primary: &'a str,
-    secondary: &'a str,
+pub(super) struct CardText<'a> {
+    pub(super) eyebrow: &'a str,
+    pub(super) title: &'a str,
+    pub(super) action: &'a str,
+    pub(super) note: &'a str,
+    pub(super) primary: &'a str,
+    pub(super) secondary: &'a str,
     /// Hard: danger Approve, 2px stroke, monospace command. Soft: white primary, proportional.
-    hard: bool,
+    pub(super) hard: bool,
 }
 
 /// Some(true) primary, Some(false) secondary. Click only: no Enter.
-fn harness_card(
+pub(super) fn harness_card(
     ui: &mut egui::Ui,
     id: (&str, String),
     text: CardText<'_>,
@@ -1693,6 +1809,9 @@ mod tests {
         assert_eq!(logged, vec![("approve", r#"{"chars":20}"#)], "typed text stays out of spans");
         assert_eq!(span_args("grokhub-desktop__type", "hunter2"), r#"{"chars":7}"#);
         assert_eq!(span_args("run_terminal_command", "rm -f x"), "rm -f x");
+        assert_eq!(span_args("grokhub-cua__type_text", "hunter2"), r#"{"chars":7}"#);
+        assert_eq!(span_args("mcp__grokhub-cua__set_value", "s3cret"), r#"{"chars":6}"#);
+        assert_eq!(span_args("grokhub-cua__press_key", "Return"), "Return");
         let turn = hx::read_turn_context(&root);
         assert_eq!(turn.chat_id, "session");
         assert_eq!(turn.access, "readonly");
@@ -2292,6 +2411,34 @@ mod tests {
     }
 
     #[test]
+    fn a_generic_titled_keyboard_step_is_watched_and_its_approve_matches_the_rerun_ask() {
+        let (_pin, root) = pinned("path-d-rerun");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.desktop_control = true;
+        cabin.permission_mode = PermissionMode::AlwaysApprove;
+        cabin.running = true;
+        // The title says nothing; the stream's toolName says keyboard.
+        let card = card("tool-1", "completed", r#"{"tool":"keyboard_type","id":"login-password"}"#);
+        assert!(cabin.harness_watch_cu(&card, false), "a keyboard step is path D computer use");
+        let park = cabin.harness.park.clone().expect("hard card");
+        assert_eq!((park.source.clone(), park.class), (ParkSource::Unasked, HardClass::Credentials));
+
+        cabin.resolve_hard_park(true, "");
+        assert_eq!(cabin.permission_mode, PermissionMode::Ask);
+        // The re-run comes back as Grok's own path B ask, in its own words.
+        let rerun = ask("keyboard_type", "type into the password field");
+        assert!(matches!(
+            hx::decide(Step::Ask { title: &rerun.title, action: &rerun.action }),
+            GateOutcome::Park { hard: Some(HardClass::Credentials), .. }
+        ));
+        assert!(cabin.harness_precheck(rerun.clone()).is_some(), "the approved step reaches Grok's Allow once");
+        assert!(cabin.harness.park.is_none());
+        assert!(cabin.harness_precheck(rerun).is_none(), "a second ask parks again");
+        assert_eq!(cabin.harness.park.as_ref().map(|p| p.class), Some(HardClass::Credentials));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn unasked_computer_use_under_readonly_stops_with_a_deny_and_no_card() {
         let (_pin, root) = pinned("path-d-readonly");
         let mut cabin = Cabin::quiet_for_test();
@@ -2382,6 +2529,36 @@ mod tests {
         let spans = hx::read_spans(&root, "session").unwrap();
         assert_eq!(spans.last().unwrap().decision, "deny");
         assert_eq!(spans.last().unwrap().result, "Jeremy denied (Esc)");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Spike-5a: a forget the agent starts is a hard Delete card, even under
+    /// Always: Approve and Deny only, and Enter leaves it parked.
+    #[test]
+    fn agent_forget_parks_a_hard_delete_card_enter_cannot_approve() {
+        let (_pin, root) = pinned("agent-forget");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.permission_mode = PermissionMode::AlwaysApprove;
+        assert_eq!(cabin.harness_precheck(ask(hx::AGENT_FORGET_TOOL, "forget 3 learned notes")), None);
+        assert!(cabin.harness.park.is_some());
+        let (texts, _) = paint_stack(&mut cabin, Vec::new(), 900.0);
+        assert!(texts.iter().any(|t| t == "Delete"), "{texts:?}");
+        let buttons: Vec<_> = texts
+            .iter()
+            .filter(|t| *t == "Approve" || *t == "Deny" || *t == "Always" || *t == "Allow")
+            .cloned()
+            .collect();
+        assert_eq!(buttons, vec!["Approve".to_string(), "Deny".to_string()]);
+        let enter = egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let _ = paint_stack(&mut cabin, vec![enter], 900.0);
+        assert!(cabin.harness.park.is_some(), "Enter must not approve an agent forget");
+        assert_eq!(hx::read_spans(&root, "session").unwrap().last().unwrap().decision, "park");
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2527,5 +2704,91 @@ mod tests {
             }
             _ => {}
         }
+    }
+
+    fn key(key: egui::Key) -> egui::Event {
+        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }
+    }
+
+    /// Spike-4c path E: a cabin-owned send the EgressGuard parked (web_fetch,
+    /// MCP, Imagine) shows as the same hard card. Enter leaves it; Esc denies
+    /// it and the waiting call reads Deny. The spans carry the turn's origin.
+    #[test]
+    fn egress_parks_from_path_e_are_hard_cards_enter_waits_esc_denies() {
+        let (_pin, root) = pinned("harness-egress-e");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.harness.next_origin = Some(hx::Origin::Proactive);
+        cabin.begin_turn_origin();
+        let req = hx::ParkRequest {
+            id: "egress-7".into(),
+            path: "E".into(),
+            tool: "web_fetch".into(),
+            action: "web_fetch → example.org (chats, memory)".into(),
+            class: "send".into(),
+            ts_ms: 1,
+        };
+        hx::post_park(&root, &req).unwrap();
+        cabin.poll_harness();
+        let park = cabin.harness.park.clone().expect("egress park shown");
+        assert_eq!(park.source, ParkSource::Desk("egress-7".into()));
+        assert_eq!((park.path, park.class), ("E", HardClass::Send));
+        let (texts, _) = paint_stack(&mut cabin, vec![key(egui::Key::Enter)], 900.0);
+        assert!(texts.iter().any(|t| t == "web_fetch → example.org (chats, memory)"), "{texts:?}");
+        assert!(!texts.iter().any(|t| t == "Always"), "no Always on a hard card: {texts:?}");
+        assert!(cabin.harness.park.is_some(), "Enter must not approve");
+        assert_eq!(hx::take_answer(&root, "egress-7"), None, "nothing answered yet");
+        let _ = paint_stack(&mut cabin, vec![key(egui::Key::Escape)], 900.0);
+        assert!(cabin.harness.park.is_none());
+        assert_eq!(hx::take_answer(&root, "egress-7"), Some(false), "Esc denies the waiting send");
+        let spans = hx::read_spans(&root, "session").unwrap();
+        let last = spans.last().unwrap();
+        assert_eq!((last.decision.as_str(), last.path.as_str(), last.origin), ("deny", "E", hx::Origin::Proactive));
+        assert_eq!(hx::read_turn_context(&root).origin, hx::Origin::Proactive, "turn.json carries it");
+        // The next typed message is the user's again.
+        cabin.begin_turn_origin();
+        cabin.harness.last_poll = None;
+        cabin.poll_harness();
+        assert_eq!(hx::read_turn_context(&root).origin, hx::Origin::User);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Spike-4c rule 1: a heartbeat act's steps say `proactive`, a scheduled
+    /// job's say `automation`, a typed message's say `user`. Repair keeps its own.
+    #[test]
+    fn spans_say_who_started_the_step() {
+        let (_pin, root) = pinned("harness-origin");
+        let mut cabin = Cabin::quiet_for_test();
+        let step = |cabin: &mut Cabin| {
+            let _ = cabin.harness_precheck(ask("send_email", "to someone"));
+            cabin.resolve_hard_park(false, "Jeremy denied");
+        };
+        cabin.harness.next_origin = Some(hx::Origin::Proactive);
+        cabin.begin_turn_origin();
+        step(&mut cabin);
+        cabin.begin_turn_origin();
+        step(&mut cabin);
+        let mut repair = hx::Span::deny("session", hx::RECOVERY_TOOL, "{}", "skip", "soft").from_origin(hx::Origin::Repair);
+        repair.decision = "skip".into();
+        cabin.write_span(repair, "audit");
+        cabin.automation_span("Background", "auto-9");
+        let spans = hx::read_spans(&root, "session").unwrap();
+        let seen: Vec<(&str, hx::Origin)> = spans.iter().map(|s| (s.decision.as_str(), s.origin)).collect();
+        assert_eq!(
+            seen,
+            vec![
+                ("park", hx::Origin::Proactive),
+                ("deny", hx::Origin::Proactive),
+                ("park", hx::Origin::User),
+                ("deny", hx::Origin::User),
+                ("skip", hx::Origin::Repair),
+            ]
+        );
+        let run = hx::read_spans(&root, "Background").unwrap();
+        assert_eq!(run.len(), 1);
+        assert_eq!((run[0].tool.as_str(), run[0].origin, run[0].path.as_str()), ("automation.run", hx::Origin::Automation, "automation"));
+        assert_eq!(run[0].args_redacted, r#"{"job":"auto-9"}"#);
+        assert_eq!(super::super::background::bg_span_origin(grokhub_core::BgOrigin::Scheduled), hx::Origin::Automation);
+        assert_eq!(super::super::background::bg_span_origin(grokhub_core::BgOrigin::User), hx::Origin::User);
+        let _ = std::fs::remove_dir_all(root);
     }
 }
