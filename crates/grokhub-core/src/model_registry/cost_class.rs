@@ -11,7 +11,8 @@
 //! - `premium`: `service_tier: "priority"`, the US regional endpoint, 16-agent
 //!   `xhigh`, or a model over the $/M ceiling. Only after the user's one-time click.
 //! - `extra_spend`: credits, top-ups and new plans. Never: GrokHub has no path to it.
-//! - `new_provider`: anything not xAI (R3).
+//! - `new_provider`: a provider you added with your own key (R3b: OpenAI-compatible
+//!   or Anthropic). Only under that key and a destination grant, never to save money.
 //!
 //! The onboarding probe and the R2a evals only run on [`probe_class`]
 //! `included` routes: the plan pool, never a key, a Fast variant or a premium route.
@@ -130,6 +131,10 @@ pub fn classify(reg: &Registry, id: &str, cred: Credential, grok_build: bool, op
     };
     if !opts.plain() {
         return CostClass::Premium;
+    }
+    if !rec.sources.is_empty() && rec.sources.iter().all(|s| s.is_new_provider()) {
+        // A provider you added (R3b): only under your key and destination grant, never the plan pool.
+        return if grok_build { CostClass::Unknown } else { CostClass::NewProvider };
     }
     if rec.sources == [SourceKind::Local] {
         // An on-device model costs nothing and needs no sign-in.
@@ -260,5 +265,23 @@ mod tests {
         assert_eq!(probe_class(&r, Credential::ApiKey, "grok-4.7"), CostClass::Unknown);
         assert_eq!(probe_class(&r, Credential::Plan, "grok-4.7-fast"), CostClass::AutonomousPremium);
         assert_eq!(probe_class(&r, Credential::None, "grok-4.7"), CostClass::Unknown);
+    }
+
+    #[test]
+    fn a_provider_you_added_is_new_provider_on_any_credential_and_never_probed() {
+        let r = reg(vec![
+            row("openrouter/vendor/model-a", Some(30_000), &[SourceKind::OpenAiCompatible]),
+            row("anthropic/model-b", None, &[SourceKind::Anthropic]),
+            row("grok-4.7", Some(150_000), BOTH),
+        ]);
+        for cred in [Credential::Plan, Credential::ApiKey, Credential::None] {
+            for id in ["openrouter/vendor/model-a", "anthropic/model-b"] {
+                assert_eq!(classify(&r, id, cred, false, RouteOpts::default(), 15.0), CostClass::NewProvider, "{id} {cred:?}");
+                assert_eq!(classify(&r, id, cred, true, RouteOpts::default(), 15.0), CostClass::Unknown, "Grok Build never sends there");
+            }
+        }
+        // A cheap price never makes it included: it stays out of the plan pool and the evals.
+        assert_eq!(probe_class(&r, Credential::Plan, "openrouter/vendor/model-a"), CostClass::NewProvider);
+        assert_eq!(CostClass::NewProvider.as_str(), "new_provider");
     }
 }

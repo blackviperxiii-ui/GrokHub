@@ -139,6 +139,11 @@ pub enum Step<'a> {
     /// hard class: allowed only under your grant for exactly this route key,
     /// else a hard money card, even under Always, YOLO or Full.
     Premium { route_key: &'a str, ledger: &'a ConsentLedger },
+    /// A call to a provider you added with your own key (Router R3b): its
+    /// destination key and the data the call carries. Unlike [`Step::Egress`]
+    /// chat alone is not enough: it goes only under your destination grant
+    /// that covers every class, else it is hard class send, even under Always.
+    Provider { dest: &'a str, data: &'a [DataClass], ledger: &'a ConsentLedger },
 }
 
 /// The single entry for the hard floor and the hard class. Every caller asks
@@ -155,6 +160,23 @@ pub fn decide(step: Step<'_>) -> GateOutcome {
                 return GateOutcome::Allow;
             }
             HardHit::Class(HardClass::Money)
+        }
+        Step::Provider { dest, data, ledger } => {
+            if ledger.locked().is_none() && ledger.destination_grant(dest, data).is_some() {
+                return GateOutcome::Allow;
+            }
+            let classes: Vec<&str> = data.iter().map(|c| c.as_str()).collect();
+            let class = HardClass::Send;
+            return GateOutcome::Park {
+                reason: format!(
+                    "hard-class {}: {} to {dest} ({}) with no grant — Always cannot skip",
+                    class.as_str(),
+                    class.label(),
+                    if classes.is_empty() { "model list".to_string() } else { classes.join(", ") }
+                ),
+                hard: Some(class),
+                needs_jeremy: true,
+            };
         }
         Step::Scope { scope, ledger } => {
             return match ledger.scope_grant(scope) {

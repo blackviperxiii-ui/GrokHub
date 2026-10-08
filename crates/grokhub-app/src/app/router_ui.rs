@@ -75,6 +75,8 @@ pub(super) struct RouterUi {
     pub paused: Vec<String>,
     /// Router R2b: spend settings, premium asks, budget cards.
     pub budget: super::budget_ui::BudgetUi,
+    /// Router R3b: the "Add a provider" fields and the provider pick the router last heard.
+    pub providers: super::provider_ui::ProviderUi,
 }
 
 impl Cabin {
@@ -209,6 +211,11 @@ impl Cabin {
             }
             // Lists nothing while `localModel` is off (the default).
             sources.push(&LocalSource);
+            // R3b: each provider you added lists only with its key and your grant.
+            let added = grokhub_agent::route::providers::sources(&dir);
+            for p in &added {
+                sources.push(p);
+            }
             let job = RefreshJob { config_dir: dir.clone(), sources, credential, named, default_model, now_ms: now };
             let done = run_refresh(&job);
             let plan = bearer.as_deref().filter(|_| credential == Credential::Plan);
@@ -309,6 +316,7 @@ impl Cabin {
     /// The live router keeps a pin while it answers; Auto is an empty pin.
     fn sync_router_pin(&mut self) {
         grokhub_agent::route::local::set_enabled(self.cfg.local_model);
+        self.sync_provider_pick();
         let pin = self.cfg.model.trim();
         if self.harness.router.pin.as_deref() != Some(pin) {
             grokhub_agent::route::live::set_pin(pin);

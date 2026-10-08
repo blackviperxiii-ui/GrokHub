@@ -719,6 +719,7 @@ impl Cabin {
                                                             ) {
                                                                 self.refresh_models_now();
                                                             }
+                                                            self.ui_provider_rows(ui);
                                                             crate::cards::settings_note(ui, &self.how_auto_picks_lines());
                                                             self.ui_spend_rows(ui);
                                                             let perms = cabin_default_permissions();
@@ -1033,6 +1034,7 @@ impl Cabin {
         self.ui_scope_rows(ui);
         let locked = self.private_lock_for_paint().map(|why| super::privacy_ui::lock_hover(&why));
         self.ui_premium_rows(ui, locked);
+        self.ui_provider_grant_rows(ui, locked);
         let workspace = self.grok_cwd();
         let dir = grokhub_agent::perm::config_dir();
         crate::cards::section_heading(ui, super::privacy_ui::RULES_HEAD);

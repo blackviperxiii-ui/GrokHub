@@ -386,7 +386,49 @@ pub(crate) fn guard_or_park_within(
     ttl: Duration,
     halted: &mut dyn FnMut() -> bool,
 ) -> Result<(), String> {
-    let (reason, class) = match guard_egress(config_dir, req) {
+    park_unless_allowed(config_dir, req, tool, ttl, halted, guard_egress(config_dir, req))
+}
+
+/// The guard for a call to a provider you added (Router R3b). It goes only
+/// under your destination grant covering every class it carries: chat alone
+/// is not enough, unlike [`guard_egress`]. Allowed ⇒ one `egress.jsonl` line
+/// with the grant id (a line that can't be written means it doesn't go).
+/// Otherwise hard class `send`, even under Always.
+pub fn guard_provider(config_dir: &Path, req: &EgressReq<'_>) -> GateOutcome {
+    let ledger = ConsentLedger::load(config_dir);
+    let dest = egress_dest(req.target);
+    let outcome = decide(Step::Provider { dest: &dest, data: req.data, ledger: &ledger });
+    if outcome.is_allow() {
+        let grant_id = ledger.destination_grant(&dest, req.data).map(|g| g.id.clone()).unwrap_or_default();
+        if let Err(why) = append_egress(config_dir, &line_for(req, &dest, EgressBasis::Grant.as_str(), &grant_id)) {
+            return GateOutcome::Refuse { reason: format!("not sent: {why}") };
+        }
+    }
+    outcome
+}
+
+/// [`guard_provider`] for a call that can wait on you: with no grant it posts
+/// a hard send card and waits. Approve logs one `approved_once` line; Deny,
+/// Esc, halt or the timeout send nothing.
+pub fn provider_or_park(
+    config_dir: &Path,
+    req: &EgressReq<'_>,
+    tool: &str,
+    ttl: Duration,
+    halted: &mut dyn FnMut() -> bool,
+) -> Result<(), String> {
+    park_unless_allowed(config_dir, req, tool, ttl, halted, guard_provider(config_dir, req))
+}
+
+fn park_unless_allowed(
+    config_dir: &Path,
+    req: &EgressReq<'_>,
+    tool: &str,
+    ttl: Duration,
+    halted: &mut dyn FnMut() -> bool,
+    outcome: GateOutcome,
+) -> Result<(), String> {
+    let (reason, class) = match outcome {
         GateOutcome::Allow => return Ok(()),
         GateOutcome::Refuse { reason } => return Err(reason),
         GateOutcome::Park { reason, hard, .. } => (reason, hard.unwrap_or(HardClass::Send)),

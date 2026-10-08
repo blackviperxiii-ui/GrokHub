@@ -21,7 +21,7 @@ use super::guard::load_overrides;
 use super::ladder::{rung, Band, Routine, ROUTINE_WINDOW_MS};
 use super::local::is_local;
 use super::log::{RouteRecord, ROUTE_TRACE};
-use super::policy::{approved, class_row, expected_cost_usd, fits_any_cost, Fit, CLASS_TABLE};
+use super::policy::{approved, class_row, expected_cost_usd, fits_any_cost, is_new_provider, Fit, CLASS_TABLE};
 use super::signals::{OutcomeSource, VerifySource};
 use super::spend::{premium_grants, spend_settings, Spend};
 use super::table::{load_table, profiles_hash};
@@ -279,7 +279,8 @@ pub struct RegistryFilters<'a> {
 impl Filters for RegistryFilters<'_> {
     fn allowed(&self, class: &str, model: &str) -> bool {
         let fit = Fit { needs_tools: !class.starts_with("background:"), ..Fit::default() };
-        !is_local(model) && fits_any_cost(self.reg, self.profiles, model, fit, self.now_ms) && approved(self.reg, model, false, &self.spend)
+        // R3b: a provider you added is never promoted for cost or speed.
+        !is_local(model) && !is_new_provider(self.reg, model) && fits_any_cost(self.reg, self.profiles, model, fit, self.now_ms) && approved(self.reg, model, false, &self.spend)
     }
 
     fn expected_cost(&self, class: &str, model: &str) -> Option<f64> {

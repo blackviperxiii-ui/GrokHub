@@ -179,6 +179,7 @@ mod episode_ui;
 mod privacy_ui;
 mod router_ui;
 mod budget_ui;
+mod provider_ui;
 mod repair_ui;
 mod scope_ui;
 mod indexer_ui;
