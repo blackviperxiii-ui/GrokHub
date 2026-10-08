@@ -314,6 +314,7 @@ fn forget_key_cache(config_dir: &Path, id: &str) {
 }
 
 fn key(config_dir: &Path, id: &str) -> Option<Zeroizing<String>> {
+    let _lap = crate::timing::lap("route:provider_key_read");
     vault_for(config_dir)?.get(id).ok().flatten().filter(|k| !k.trim().is_empty())
 }
 
@@ -343,6 +344,7 @@ pub fn call_data(sensitive: bool) -> &'static [DataClass] {
 /// keyring **and** an active destination grant covering every class in
 /// `data`. A locked ledger allows none.
 pub fn usable(config_dir: &Path, data: &[DataClass]) -> Vec<String> {
+    let _lap = crate::timing::lap("route:providers_usable");
     let all = load_providers(config_dir);
     if all.is_empty() {
         return Vec::new();

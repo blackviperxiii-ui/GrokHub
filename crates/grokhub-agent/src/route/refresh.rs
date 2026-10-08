@@ -178,6 +178,7 @@ pub fn probe_next(
 
 /// One refresh. No source answering changes nothing (the registry keeps its last list).
 pub fn run_refresh(job: &RefreshJob<'_>) -> RefreshDone {
+    let _lap = crate::timing::lap("route:registry_refresh");
     let _origin = OriginScope::enter(Origin::SelfManage);
     let dir = &job.config_dir;
     let mut listings = Vec::new();

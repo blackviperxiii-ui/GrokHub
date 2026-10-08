@@ -1,6 +1,7 @@
 //! The `route` record on each model-call span, and `/why`.
 //! Records hold ids, counts and one plain sentence. Never prompt text, never secrets.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -113,6 +114,9 @@ pub struct RouteRecord {
     /// `shadow:<candidate>` when one was computed next to it (`!` when it broke a filter).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tune: Option<String>,
+    /// How long the router's decision took, per step (µs). Speed only.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub timing_us: BTreeMap<String, u32>,
 }
 
 // `d` and `cost_usd` are finite (rounded rules and token math), so equality is total.

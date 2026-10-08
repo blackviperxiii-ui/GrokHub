@@ -14,6 +14,8 @@ impl Cabin {
         if text.is_empty() {
             return;
         }
+        grokhub_agent::timing::note_enter();
+        let _lap = grokhub_agent::timing::lap("ui:send_chat");
         if self.running && self.job_is_idea_talk() {
             self.status = "The idea talk is still going".into();
             return;
