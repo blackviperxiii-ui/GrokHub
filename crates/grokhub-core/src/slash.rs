@@ -117,7 +117,6 @@ pub enum Slash {
     Model(String),
     ImagineVideo(String),
     Goal(String),
-    Fork,
     Workflow(String),
     /// `/workflow pause|resume|stop <name-or-run-id>`.
     WorkflowCtl { verb: WorkflowVerb, target: String },
@@ -198,7 +197,6 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/imagine" => Some(Slash::Imagine(rest.to_string())),
         "/imagine-video" => Some(Slash::ImagineVideo(rest.to_string())),
         "/loop" => Some(Slash::Loop(rest.to_string())),
-        "/fork" => Some(Slash::Fork),
         "/btw" => Some(Slash::Btw),
         "/bg" | "/background" => Some(Slash::Background(rest.to_string())),
         "/queue" if !rest.is_empty() => Some(Slash::Queue(rest.to_string())),
@@ -483,7 +481,6 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Model(_) => "model",
         Slash::ImagineVideo(_) => "imagine_video",
         Slash::Goal(_) => "goal",
-        Slash::Fork => "fork",
         Slash::Workflow(_) => "workflow",
         Slash::WorkflowCtl { .. } => "workflow_ctl",
         Slash::WorkflowUsage => "workflow_usage",
@@ -548,7 +545,6 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/send", hint: "Send a task to another computer", insert: "/send ", run_on_pick: false },
     SlashDef { cmd: "/rewind", hint: "Rewind Grok conversation", insert: "/rewind", run_on_pick: true },
     SlashDef { cmd: "/rewind --files", hint: "Restore last project snapshot", insert: "/rewind --files", run_on_pick: true },
-    SlashDef { cmd: "/fork", hint: "Fork this Grok session", insert: "/fork", run_on_pick: true },
     SlashDef { cmd: "/btw", hint: "Side ask — does not stop a live run", insert: "/btw", run_on_pick: true },
     SlashDef { cmd: "/bg", hint: "Run a task in the background…", insert: "/bg ", run_on_pick: false },
     SlashDef { cmd: "/queue", hint: "Send after the live reply…", insert: "/queue ", run_on_pick: false },
@@ -761,7 +757,6 @@ pub fn slash_help() -> String {
         "/hub — devices / pair",
         "/inhabit <peer> — hand this Grok to another paired computer",
         "/rewind — rewind Grok conversation; /rewind --files restores the last project snapshot",
-        "/fork — fork the Grok session into a new chat tab",
         "/btw — side ask. A live run keeps going; the question waits, then sends look-safe. Saved as ask.",
         "/bg <task> — run a task in the background beside this chat (up to 3 at once); its reply posts here when it ends. Bare /bg moves the live reply to the background and frees the composer. /bg stop stops every background run.",
         "/queue <message> — hold a message until the live reply ends instead of steering it (Alt+Enter does the same).",
@@ -789,7 +784,7 @@ pub fn slash_help() -> String {
         "/models — Grok catalog",
         "/palette — command palette. Search walks nested files in the bound project (or ~/GrokHub-Work), not only the top of that folder.",
         "Enter sends; Ctrl+Enter newline. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The transcript Running row has no Stop. The changing status text above the composer is gone. The context usage bar stays. No live dot or Thinking label sits on the turn; the composer glow shows a running reply, and Stop's hover names the current action.",
-        "The Ask card names the command, path, or site. Always on that card confirms skip every tool prompt this launch; night / loop / /send inherit --always-approve until quit. Composer Always and a destructive host command reuse that confirm sheet (title, consequence, Confirm or Run, Cancel). Enter / Esc stay Allow / Deny on the Ask card; overlay confirm uses them only when the composer is empty. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out. History is the cabin's own chats (headless grok -p on the thread). Background jobs such as workboard summarize stay off that list. Same on Linux and Windows. History offers Last you and fork branch points when those markers exist.",
+        "The Ask card names the command, path, or site. Always on that card confirms skip every tool prompt this launch; night / loop / /send inherit --always-approve until quit. Composer Always and a destructive host command reuse that confirm sheet (title, consequence, Confirm or Run, Cancel). Enter / Esc stay Allow / Deny on the Ask card; overlay confirm uses them only when the composer is empty. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out. History is the cabin's own chats (headless grok -p on the thread). Background jobs such as workboard summarize stay off that list. Same on Linux and Windows. History offers a Last you point when that marker exists.",
         "Mode pill: Chat / Plan / btw. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort: None / Low / Medium / High / Extra High. A saved Max loads as Extra High, a saved Minimal as Low. Default model is grok-4.7. Hover a composer pill for what it does. Grok Build runs the agent.",
         "Settings → Behavior: close to tray, living wall, and a quiet hours dropdown. Picking a window saves it. A Quiet until chip shows on the titlebar only while that window is active. Signed-in empty home shows an update feed in the gap under the composer when a card is undismissed, and hides that slot when the feed is empty. A finished /loop posts automation_done from poll_grok_loop. Saving a schedule posts schedule_created. Cards stay until opened or dismissed. A device glance appears only when hub share or a last frame is bound; click opens Devices.",
         "History search drops stale hits when the box changes. Re-opening the memory file already in the editor keeps unsaved typing.",
@@ -839,7 +834,7 @@ mod tests {
         assert_eq!(parse_slash("/board"), Some(Slash::Board));
         assert_eq!(parse_slash("/imagine a cabin"), Some(Slash::Imagine("a cabin".into())));
         assert_eq!(parse_slash("/compact"), Some(Slash::Compact));
-        assert_eq!(parse_slash("/fork"), Some(Slash::Fork));
+        assert_eq!(parse_slash("/fork"), None, "fork is removed");
         assert_eq!(parse_slash("/btw"), Some(Slash::Btw));
         assert_eq!(parse_slash("/bg"), Some(Slash::Background(String::new())));
         assert_eq!(
@@ -1041,7 +1036,7 @@ mod tests {
         assert!(slash_help().contains("The Ask card names the command, path, or site"));
         assert!(slash_help().contains("skip every tool prompt this launch"));
         assert!(slash_help().contains("reuse that confirm sheet"));
-        assert!(slash_help().contains("Last you and fork branch points"));
+        assert!(slash_help().contains("History offers a Last you point when that marker exists"));
         assert!(slash_help().contains("Quiet until chip"));
         assert!(slash_help().contains("update feed"));
         assert!(slash_help().contains("poll_grok_loop"));
