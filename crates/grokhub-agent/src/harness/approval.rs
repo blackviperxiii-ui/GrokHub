@@ -151,6 +151,7 @@ pub enum Step<'a> {
 /// Refuse = floor, Park = hard class (Always cannot skip), Allow = soft, left
 /// to Grok Build's own Ask / Auto / Always.
 pub fn decide(step: Step<'_>) -> GateOutcome {
+    let _lap = crate::timing::lap("harness:decide");
     let hit = match step {
         Step::Egress { dest, data, ledger } => {
             return crate::harness::egress::check(dest, data, ledger).0;
@@ -214,6 +215,7 @@ pub fn decide_harness(
     desk: Option<DeskFlags>,
     access: AccessMode,
 ) -> GateOutcome {
+    let _lap = crate::timing::lap("harness:decide_harness");
     let hard = decide(Step::Tool { name, arguments });
     if !hard.is_allow() {
         return hard;

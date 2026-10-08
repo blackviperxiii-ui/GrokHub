@@ -331,6 +331,7 @@ pub fn model_text_classes(text: &str) -> &'static [DataClass] {
 ///
 /// [`decide`]: crate::harness::decide
 pub fn guard_egress(config_dir: &Path, req: &EgressReq<'_>) -> GateOutcome {
+    let _lap = crate::timing::lap("harness:egress_guard");
     let ledger = ConsentLedger::load(config_dir);
     let dest = egress_dest(req.target);
     let outcome = decide(Step::Egress { dest: &dest, data: req.data, ledger: &ledger });
@@ -395,6 +396,7 @@ pub(crate) fn guard_or_park_within(
 /// with the grant id (a line that can't be written means it doesn't go).
 /// Otherwise hard class `send`, even under Always.
 pub fn guard_provider(config_dir: &Path, req: &EgressReq<'_>) -> GateOutcome {
+    let _lap = crate::timing::lap("harness:provider_guard");
     let ledger = ConsentLedger::load(config_dir);
     let dest = egress_dest(req.target);
     let outcome = decide(Step::Provider { dest: &dest, data: req.data, ledger: &ledger });
@@ -487,6 +489,7 @@ pub fn egress_path(config_dir: &Path) -> PathBuf {
 /// Append one sealed line (secrets redacted again on the way out). Rolls the
 /// file past [`EGRESS_ROLL`]. Locked ⇒ nothing is written.
 pub fn append_egress(config_dir: &Path, line: &EgressLine) -> Result<(), String> {
+    let _lap = crate::timing::lap("harness:egress_append");
     fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
     let path = egress_path(config_dir);
     let rolled = config_dir.join(EGRESS_ROLLED);

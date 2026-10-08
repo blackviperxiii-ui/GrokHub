@@ -41,6 +41,7 @@ use super::table::{load_table, table_path, RoutingTable};
 use super::signals::{SpanVerifySource, VerifySignal, VerifySource};
 use super::{Route, RouteInput, Router};
 use crate::client::{ClientError, ContentPart, InputItem, ModelClient, ResponsesRequest, StreamEvent, TurnOutput, Usage};
+use crate::timing::{self, Breakdown};
 use crate::CancelToken;
 use crate::harness::{append_span, current_origin, AccessMode, ModelUsage, Origin, Span};
 
@@ -340,6 +341,8 @@ pub struct Decision {
     pub budget_pause: Option<&'static str>,
     /// R3a: the self-tuning mark for the route record (`canary:<id>`, `shadow:<id>`).
     pub tune: Option<String>,
+    /// How long each step of this decision took (µs), for the route record.
+    pub timing: BTreeMap<String, u32>,
 }
 
 impl Decision {
@@ -407,23 +410,30 @@ fn verify_counts(config_dir: &Path, call: &RouteCall<'_>) -> (Option<u32>, bool)
 
 /// Pick the provider, model and effort for one call and advance its episode's ladder.
 pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision {
+    let mut laps = Breakdown::start();
     let (reg, profiles) = snapshot(config_dir);
+    laps.mark("route:snapshot");
     let settings = spend::spend_settings();
     let b = week_budget(config_dir, &reg, settings.weekly_cap_usd, now_ms);
+    laps.mark("route:week_budget");
     let rt = super::local::runtime();
     let d = estimate(&DifficultyInput { text: call.text, planned_tools: call.planned_tools, plan_mode: call.plan_mode, ctx_tokens: call.ctx_tokens }, rt.as_deref());
     let steer = Steer::from_text(call.text);
+    laps.mark("route:difficulty");
     let row = class_row(call.class);
     let bump = row.and_then(|r| load_overrides(config_dir).get(r.class).map(|o| o.steps)).unwrap_or(0);
+    laps.mark("route:overrides");
     let key = episode_key(call);
     let holdout = holdout_eligible(call.class) && in_holdout(key);
     let facing = row.is_some_and(|r| user_facing(r.class));
     let (rejects, verify_ok) = if facing && !key.is_empty() { verify_counts(config_dir, call) } else { (None, false) };
+    laps.mark("route:verify_counts");
     let pin = pinned_model();
     let pinned = call.pinned || (!pin.is_empty() && pin == call.model.trim() && user_facing(call.class));
     let tuned = learn::live_tune(config_dir);
     let risk = StepRisk { class: call.class, holdout, under_reject: rejects.unwrap_or(0) > 0 && !verify_ok, pinned, hard_tool: call.hard_tool };
     let st = learn::step_tune(&tuned, call.class, key, &risk);
+    laps.mark("route:tune");
     let turn = turn_hash(call.text);
     let mut routine = None;
     let pick = match row {
@@ -449,6 +459,7 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         }
         _ => None,
     };
+    laps.mark("route:ladder");
     let recover = pick.as_ref().is_some_and(|p| p.recover);
     let class_key = format!("{key}\u{1f}{}", row.map(|r| r.class).unwrap_or(call.class));
     let sticky = if key.is_empty() { None } else { episode_model(&class_key, turn) };
@@ -463,16 +474,21 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
             Arc::new(t)
         }
     };
+    laps.mark("route:table");
     let origin = call.origin.unwrap_or_else(current_origin);
     let steps = if key.is_empty() { 1 } else { note_step(&class_key, turn) };
+    let grants = spend::premium_grants(config_dir);
+    laps.mark("route:premium_grants");
+    // R3b: a provider you added only with its key and a grant covering this call's data.
+    let providers = if call.providers { super::providers::usable(config_dir, super::providers::call_data(call.sensitive)) } else { Vec::new() };
+    laps.mark("route:providers");
     let spend = Spend {
         settings,
         latency: Latency::of(origin, facing, steps, call.deadline_ms, now_ms),
         background: !facing || spend::background_origin(origin),
         budget_tight: b.tight(),
-        grants: spend::premium_grants(config_dir),
-        // R3b: a provider you added only with its key and a grant covering this call's data.
-        providers: if call.providers { super::providers::usable(config_dir, super::providers::call_data(call.sensitive)) } else { Vec::new() },
+        grants,
+        providers,
     };
     let picked = provider_pick();
     let input = RouteInput {
@@ -497,10 +513,12 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         prefer: (call.providers && facing && !holdout && !picked.is_empty()).then_some(picked.as_str()),
     };
     let route = Router::choose(&input, &reg, &profiles, &table, now_ms);
+    laps.mark("route:choose");
     let mut tune_mark = st.mark.clone();
     if let (Some(c), Some(r)) = (&st.shadow, row) {
         tune_mark = Some(shadow_mark(c, r, &input, &reg, &profiles, &table, now_ms));
     }
+    laps.mark("route:shadow");
     let live = POLICY_LIVE && row.is_some();
     let budget_pause = if !live || route.no_route || call.provider == PROVIDER_GROK_BUILD {
         None
@@ -524,7 +542,9 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         let failed = reg.get(call.model).map(|r| r.reason.clone()).unwrap_or_else(|| "It isn't in your model list.".into());
         *NO_ROUTE.lock().unwrap_or_else(|e| e.into_inner()) = Some((call.class.to_string(), call.model.trim().to_string(), failed));
     }
-    Decision { route, d: (d * 100.0).round() as u32, holdout, recover, live, budget_pct: b.pct, budget_pause, tune: tune_mark }
+    laps.mark("route:budget_check");
+    let timing = laps.finish("route:decide");
+    Decision { route, d: (d * 100.0).round() as u32, holdout, recover, live, budget_pct: b.pct, budget_pause, tune: tune_mark, timing }
 }
 
 /// A shadow candidate computed next to the live pick, logged only:
@@ -605,6 +625,7 @@ pub fn route_record(config_dir: &Path, call: &RouteCall<'_>, decision: &Decision
         settings: route.settings.clone(),
         cost_class: route.cost_class.as_str().to_string(),
         tune: decision.tune.clone(),
+        timing_us: decision.timing.clone(),
     }
 }
 
@@ -652,8 +673,9 @@ pub fn observation(call: &RouteCall<'_>, done: &RouteDone, now_ms: u64) -> Optio
 /// Write the route span and the health line for one call. Never fails the call.
 /// `call.effort` is what was sent.
 pub fn route_log(config_dir: &Path, call: &RouteCall<'_>, decision: &Decision, done: &RouteDone) -> RouteRecord {
+    let _total = timing::lap("route:log");
     let now = grokhub_core::now_ms();
-    let mut rec = route_record(config_dir, call, decision, done);
+    let mut rec = timing::time("route:log_record", || route_record(config_dir, call, decision, done));
     let key = episode_key(call);
     if !key.is_empty() {
         ladder::finish(key, class_row(call.class).map(|r| r.class).unwrap_or(call.class), done.ok);
@@ -693,9 +715,9 @@ pub fn route_log(config_dir: &Path, call: &RouteCall<'_>, decision: &Decision, d
     }
     rec.span_id = span.span_ref();
     span.route = Some(Box::new(rec.clone()));
-    let _ = append_span(config_dir, &span);
+    let _ = timing::time("route:log_span", || append_span(config_dir, &span));
     if let Some(obs) = observation(call, done, now) {
-        let _ = append_observation(config_dir, &obs);
+        let _ = timing::time("route:log_health", || append_observation(config_dir, &obs));
     }
     rec
 }
@@ -759,6 +781,7 @@ pub fn stream_routed(
     sink: &mut dyn FnMut(StreamEvent),
     class: &str,
 ) -> Result<TurnOutput, ClientError> {
+    let entered = std::time::Instant::now();
     let dir = crate::perm::config_dir();
     let (text, needs_image) = last_user_text(&req.input);
     let mut call = RouteCall {
@@ -786,6 +809,22 @@ pub fn stream_routed(
     sent.effort = effort.clone();
     sent.model = model.clone();
     let started = std::time::Instant::now();
+    timing::record("send:pre_request", started.duration_since(entered));
+    let enter = timing::take_enter();
+    if let Some(t) = enter {
+        timing::record("send:enter_to_request", started.duration_since(t));
+    }
+    let mut first = false;
+    let sink = &mut |ev: StreamEvent| {
+        if !first {
+            first = true;
+            timing::record("send:first_token", entered.elapsed());
+            if let Some(t) = enter {
+                timing::record("send:enter_to_first_token", t.elapsed());
+            }
+        }
+        sink(ev)
+    };
     let on_device = decision.on_device();
     let out = if on_device {
         super::local::serve(class, &text)
@@ -802,6 +841,7 @@ pub fn stream_routed(
     } else {
         client.stream(&sent, cancel, sink)
     };
+    timing::record("send:model_call", started.elapsed());
     if on_device {
         call.provider = super::local::PROVIDER_LOCAL;
     } else if decision.on_provider() {
@@ -826,6 +866,10 @@ pub const PROVIDER_GROK_BUILD: &str = "grok_build";
 /// while it is listed). A running session keeps the model it spawned with.
 /// `origin` is who started the turn: only your own typed turn waits live (R2b).
 pub fn route_gb_turn(config_dir: &Path, model: &str, pinned: bool, sent: Option<Option<&str>>, session: &str, text: &str, origin: Origin) -> (String, Option<String>) {
+    let _lap = timing::lap("route:gb_turn");
+    if let Some(t) = timing::take_enter() {
+        timing::record("send:enter_to_gb_route", t.elapsed());
+    }
     let mut call = RouteCall {
         provider: PROVIDER_GROK_BUILD,
         class: DEFAULT_CLASS,
