@@ -293,6 +293,7 @@ fn write_facts(env: &TickEnv<'_>, scope: &Scope, facts: &[Fact], tables: Vec<Str
             stopped = true;
             break;
         }
+        let consent_ref = ConsentLedger::load(env.config_dir).scope_grant(scope).map(|g| g.id.clone()).unwrap_or_default();
         for f in batch {
             if written >= NODE_CAP_PER_TICK {
                 break 'batches;
@@ -311,6 +312,7 @@ fn write_facts(env: &TickEnv<'_>, scope: &Scope, facts: &[Fact], tables: Vec<Str
                     Sensitivity::Plain => Sensitivity::Personal,
                     s => s,
                 },
+                consent_ref: consent_ref.clone(),
             };
             match store.remember(&draft) {
                 Ok(_) => written += 1,

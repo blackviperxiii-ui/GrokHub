@@ -188,6 +188,7 @@ pub fn import_legacy(
             tags: vec!["imported".into()],
             body: format!("{text}\n"),
             sensitivity: sensitivity_for(text),
+            consent_ref: String::new(),
         };
         tally_write(&mut report.learning_state, store.remember(&draft));
     }
@@ -206,6 +207,7 @@ pub fn import_legacy(
             tags: vec!["imported".into(), "chips".into()],
             body: format!("{text}\n"),
             sensitivity: sensitivity_for(&text),
+            consent_ref: String::new(),
         };
         tally_write(&mut report.chips, store.remember(&draft));
     }

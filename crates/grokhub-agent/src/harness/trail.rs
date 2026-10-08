@@ -173,6 +173,7 @@ pub fn trail_draft(spans: &[Span], chat_id: &str, turn: u32, held: &[String], no
         tags: vec!["trail".into(), format!("turn-{turn}")],
         body,
         sensitivity: if hard { Sensitivity::Personal } else { Sensitivity::Plain },
+        consent_ref: String::new(),
     })
 }
 
@@ -405,6 +406,7 @@ mod tests {
             tags: vec!["insight".into()],
             body: format!("{id} body\n"),
             sensitivity: Sensitivity::Plain,
+            consent_ref: String::new(),
         };
         store.remember(&old("fact-before", "2026-10-06T00:00:00Z")).unwrap();
         store.remember(&old("fact-during", "2026-10-07T00:00:00Z")).unwrap();
