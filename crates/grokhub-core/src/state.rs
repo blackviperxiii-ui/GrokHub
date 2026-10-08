@@ -111,6 +111,11 @@ impl HubState {
         if id == self.device_id {
             return Err(PairError::ReservedId);
         }
+        // Phone pairing is gone (#533). Checked live too, not only when hub-state.json
+        // loads: a phone paired since the last restart could claim inhabit bundles.
+        if is_phone_name(device_name) {
+            return Err(PairError::Phone);
+        }
         let name: String = {
             let n = device_name.trim();
             let n = if n.is_empty() { "Computer" } else { n };
@@ -230,15 +235,15 @@ impl HubState {
         self.inhabit = Some(bundle);
     }
 
+    /// The staged bundle, for the peer it names by id only. A name is chosen by the
+    /// peer itself, so a second peer paired under the target's name must not match,
+    /// and a bundle with no destination goes to nobody.
     pub fn claim_inhabit(&mut self, peer: &Peer) -> Option<InhabitBundle> {
+        if is_phone_name(&peer.name) {
+            return None;
+        }
         let hit = self.inhabit.as_ref()?;
-        let dest_ok = match (&hit.to_id, &hit.to_name) {
-            (None, None) => true,
-            (Some(id), _) if id == &peer.id => true,
-            (_, Some(name)) if name.eq_ignore_ascii_case(&peer.name) => true,
-            _ => false,
-        };
-        if dest_ok {
+        if hit.to_id.as_deref().is_some_and(|id| !id.is_empty() && id == peer.id) {
             self.inhabit.take()
         } else {
             None
@@ -270,6 +275,8 @@ pub enum PairError {
     Mismatch,
     /// The request asked to be paired under an id the hub reserves for itself.
     ReservedId,
+    /// A phone, Android or iPhone name: phone pairing is gone (#533).
+    Phone,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -418,7 +425,8 @@ pub fn load_hub_state(path: &std::path::Path) -> Option<HubState> {
     }
 }
 
-fn is_phone_name(name: &str) -> bool {
+/// A peer name that says phone, Android or iPhone as a whole word.
+pub fn is_phone_name(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
     n.split(|c: char| !c.is_ascii_alphanumeric()).any(|part| matches!(part, "phone" | "android" | "iphone"))
 }

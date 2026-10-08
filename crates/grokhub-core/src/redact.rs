@@ -7,6 +7,7 @@ const PATTERNS: &[(&str, &str)] = &[
     ("ghu_", "[redacted]"),
     ("ghs_", "[redacted]"),
     ("Bearer ", "Bearer [redacted]"),
+    ("bearer ", "bearer [redacted]"),
 ];
 
 /// Drop values the user just typed into a secret elicit. Short strings stay,
@@ -26,6 +27,17 @@ pub fn redact_held_secrets(input: &str, secrets: &[String]) -> String {
 }
 
 pub fn redact_secrets(input: &str) -> String {
+    redact_patterns(input, false)
+}
+
+/// [`redact_secrets`] for text that names files and windows: a key prefix
+/// counts only at the start of a word, so `/tmp/grokhub-desk-notes` and
+/// `task-runner` stay readable on a card.
+pub fn redact_secret_words(input: &str) -> String {
+    redact_patterns(input, true)
+}
+
+fn redact_patterns(input: &str, word_start: bool) -> String {
     let mut s = input.to_string();
     for (needle, _) in PATTERNS {
         let mut out = String::new();
@@ -37,6 +49,11 @@ pub fn redact_secrets(input: &str) -> String {
             };
             out.push_str(&rest[..idx]);
             let after = &rest[idx + needle.len()..];
+            if word_start && out.chars().next_back().is_some_and(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.')) {
+                out.push_str(needle);
+                rest = after;
+                continue;
+            }
             let n = after
                 .chars()
                 .take_while(|c| c.is_ascii_alphanumeric() || matches!(*c, '-' | '_' | '.' | '~' | '+' | '/' | '='))
@@ -167,6 +184,12 @@ mod tests {
         assert!(!pat.contains("github_pat_"), "{pat}");
         let bearer = redact_secrets("Authorization: Bearer abcdefghijklmnop");
         assert!(!bearer.contains("abcdefghijklmnop"), "{bearer}");
+        assert_eq!(redact_secrets("authorization: bearer abcdefghijklmnop"), "authorization: [redacted]");
+        assert_eq!(
+            redact_secret_words("rm /tmp/grokhub-desk-delete-deny-0/a.txt; echo sk-abcdefghijklmnopqrstuv"),
+            "rm /tmp/grokhub-desk-delete-deny-0/a.txt; echo [redacted]"
+        );
+        assert_eq!(redact_secret_words("KEY=sk-abcdefghijklmnopqrstuv \"ghp_abcdefghijklmnopqrstuvwx\""), "KEY=[redacted] \"[redacted]\"");
         assert!(
             is_plain_text("sk-short"),
             "short tokens stay visible so ordinary words are not eaten"

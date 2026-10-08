@@ -387,7 +387,7 @@ pub use recipe::{
     RecipeDoc, ReplayOp, ScreenSize, TabAction,
 };
 pub use pii::{redact_pii, redact_recall};
-pub use redact::{forget_topic, is_plain_text, redact_held_secrets, redact_secrets};
+pub use redact::{forget_topic, is_plain_text, redact_held_secrets, redact_secret_words, redact_secrets};
 pub use reflect::{
     fact_candidates, fact_candidates_from, restore_memory_prev, should_idle_reflect,
     surgical_memory_edit, MemoryEdit, IDLE_REFLECT_MS,
@@ -425,7 +425,7 @@ pub use slash::{
 };
 pub use state::{
     clear_pending_after_complete, inbox_claim_ready, load_hub_state, merge_put_snapshot,
-    save_hub_state, state_for_disk, CompleteError, HubState, PairError,
+    is_phone_name, save_hub_state, state_for_disk, CompleteError, HubState, PairError,
     DEFAULT_PORT, HUB_KIND,
 };
 pub use stream::{
