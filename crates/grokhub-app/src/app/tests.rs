@@ -6246,11 +6246,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             !tools.contains("Copy session") && !tools.contains("\"Export\""),
             "Copy session and Export leave the composer: {tools}"
         );
+        assert!(src.contains("View plan"), "view plan stays on the thread");
         assert!(
-            src.contains("View plan")
-                && src.contains("How fork works")
-                && src.contains("fork_offer_why"),
-            "view plan and fork stay on the thread"
+            !src.contains("How fork works") && !src.contains("fork_offer_why"),
+            "the fork offer is gone from the thread"
         );
         let menu = src
             .split("fn paint_session_actions_menu")
@@ -7424,7 +7423,6 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .expect("history");
         assert!(
             hist.contains("session_markers")
-                && hist.contains("LastYou")
                 && hist.contains("jump_last_you")
                 && hist.contains("apply_switch_thread")
                 && !hist.contains("self.thread_idx = i"),
@@ -8265,7 +8263,6 @@ fn transcript_caches_hold_while_the_turn_streams_and_catch_up_after() {
     cabin.thread_idx = 0;
     cabin.messages = cabin.threads[0].messages.clone();
     let _ = cabin.cached_chat_views();
-    let _ = cabin.session_size();
 
     // A turn streams here. The first delta unshares the transcript from its thread,
     // so the views rebuild once.
@@ -8276,9 +8273,8 @@ fn transcript_caches_hold_while_the_turn_streams_and_catch_up_after() {
         last.1.push_str(", the rail");
     }
     let streaming = cabin.cached_chat_views().to_vec();
-    let size = cabin.session_size();
     // Later deltas only grow the last message, and the pane paints it from live
-    // blocks: neither cache rebuilds on them.
+    // blocks: the views do not rebuild on them.
     if let Some(last) = cabin.live_tail_mut().last_mut() {
         last.1
             .push_str(" now keeps its footer and the dock stops wrapping.");
@@ -8288,11 +8284,6 @@ fn transcript_caches_hold_while_the_turn_streams_and_catch_up_after() {
         &streaming[..],
         "stream deltas skip the view rebuild"
     );
-    assert_eq!(
-        cabin.session_size(),
-        size,
-        "stream deltas skip the estimate"
-    );
 
     // An edit before the last message is not a stream delta: rebuild even mid-turn.
     cabin.live_mut()[1].1 = "THINKING:\nThe dock wraps late.\n\nFixed it.".into();
@@ -8300,11 +8291,6 @@ fn transcript_caches_hold_while_the_turn_streams_and_catch_up_after() {
     assert!(
         mid.iter().any(|v| v.body.contains("wraps late")),
         "an earlier edit must rebuild the views while a turn streams: {mid:?}"
-    );
-    assert_ne!(
-        cabin.session_size(),
-        size,
-        "an earlier edit refreshes the estimate"
     );
 
     // The turn ends: the tail catches up once.
@@ -8320,11 +8306,6 @@ fn transcript_caches_hold_while_the_turn_streams_and_catch_up_after() {
     assert!(
         after.iter().any(|v| v.body.contains("wraps late")),
         "the earlier edit survives the tail refresh: {after:?}"
-    );
-    assert_eq!(
-        cabin.session_size(),
-        (2, estimate_messages(&cabin.messages)),
-        "the estimate catches up when the turn ends"
     );
     release_isolated(&root, cabin);
 }
@@ -8390,10 +8371,6 @@ fn chat_view_fold_keys_follow_the_views_as_the_chat_changes() {
         "the dock chat has thoughts: {first:?}"
     );
     assert_eq!(cabin.chat_view_keys, first, "keys are built with the views");
-    assert_eq!(
-        cabin.session_size(),
-        (1, estimate_messages(&cabin.messages))
-    );
 
     // A stream delta grows the last message: only the trailing stretch rekeys.
     if let Some(last) = cabin.live_mut().last_mut() {
@@ -8402,10 +8379,6 @@ fn chat_view_fold_keys_follow_the_views_as_the_chat_changes() {
     let grown = expect(&mut cabin);
     assert_ne!(grown, first, "the grown thought has a new key");
     assert_eq!(cabin.chat_view_keys, grown, "a grown thought rekeys");
-    assert_eq!(
-        cabin.session_size(),
-        (1, estimate_messages(&cabin.messages))
-    );
 
     cabin
         .live_mut()
@@ -8416,10 +8389,6 @@ fn chat_view_fold_keys_follow_the_views_as_the_chat_changes() {
     ));
     let turn = expect(&mut cabin);
     assert_eq!(cabin.chat_view_keys, turn, "a new turn keys its views");
-    assert_eq!(
-        cabin.session_size(),
-        (2, estimate_messages(&cabin.messages))
-    );
 
     cabin.apply_switch_thread(1);
     let switched = expect(&mut cabin);
@@ -8427,15 +8396,11 @@ fn chat_view_fold_keys_follow_the_views_as_the_chat_changes() {
         cabin.chat_view_keys, switched,
         "another chat rebuilds its keys"
     );
-    assert_eq!(
-        cabin.session_size(),
-        (1, estimate_messages(&cabin.messages))
-    );
     release_isolated(&root, cabin);
 }
 
 #[test]
-fn in_place_edit_refreshes_session_size_and_chat_views() {
+fn in_place_edit_refreshes_chat_views() {
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("view-rev");
     let last = "THINKING:\nNow patch it.\n\nDone.";
@@ -8468,15 +8433,7 @@ fn in_place_edit_refreshes_session_size_and_chat_views() {
 
     let _ = cabin.cached_chat_views();
     let before_keys = cabin.chat_view_keys.clone();
-    let before_size = cabin.session_size();
     let before_rev = cabin.messages_rev;
-    assert_eq!(
-        before_size,
-        (
-            visible_turn_count(&cabin.messages),
-            estimate_messages(&cabin.messages),
-        )
-    );
     assert!(
         before_keys.iter().any(|&k| k != 0),
         "the first turn has a thought: {before_keys:?}"
@@ -8506,14 +8463,6 @@ fn in_place_edit_refreshes_session_size_and_chat_views() {
     assert_eq!(cabin.cached_chat_views(), fresh.as_slice());
     assert_eq!(cabin.chat_view_keys, fresh_keys);
     assert_eq!(cabin.chat_view_rev, cabin.messages_rev);
-    assert_ne!(estimate_messages(&cabin.messages), before_size.1);
-    assert_eq!(
-        cabin.session_size(),
-        (
-            visible_turn_count(&cabin.messages),
-            estimate_messages(&cabin.messages),
-        )
-    );
     release_isolated(&root, cabin);
 }
 
@@ -8534,22 +8483,16 @@ fn idle_chat_caches_keep_the_message_revision() {
     cabin.messages = cabin.threads[0].messages.clone();
 
     let _ = cabin.cached_chat_views();
-    let _ = cabin.session_size();
     let rev = cabin.messages_rev;
     let view_rev = cabin.chat_view_rev;
     let keys = cabin.chat_view_keys.clone();
     let views = cabin.chat_views.clone();
-    let cached_key = cabin.session_size.0.clone();
-    let cached_val = cabin.session_size.1;
     let views_ptr = cabin.chat_views.as_ptr();
-    assert_eq!(cabin.session_size(), cached_val);
     assert_eq!(cabin.cached_chat_views().as_ptr(), views_ptr);
     assert_eq!(cabin.messages_rev, rev);
     assert_eq!(cabin.chat_view_rev, view_rev);
     assert_eq!(cabin.chat_view_keys, keys);
     assert_eq!(cabin.chat_views, views);
-    assert_eq!(cabin.session_size.0, cached_key);
-    assert_eq!(cabin.session_size.1, cached_val);
     release_isolated(&root, cabin);
 }
 
@@ -10765,7 +10708,7 @@ fn voice_without_login_stays_off_and_profile_clears() {
 
 // Landed from PR #119.
 #[test]
-fn scratch_btw_worktree_plan_and_fork() {
+fn scratch_btw_worktree_and_plan() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("scratch-btw");
     std::env::set_var("GROKHUB_CONFIG", &root);
@@ -10789,17 +10732,12 @@ fn scratch_btw_worktree_plan_and_fork() {
     assert_eq!(cabin.status, "Worktree off");
     assert!(!cabin.threads[cabin.thread_idx].grok_worktree);
     cabin.threads[cabin.thread_idx].grok_session = Some("sess-harbor".into());
+    let (count, idx) = (cabin.threads.len(), cabin.thread_idx);
     cabin.run_slash_line("/fork");
-    assert_eq!(
-        cabin.status,
-        "Forked — next send starts a new Grok session from this history"
-    );
-    assert_eq!(cabin.threads[cabin.thread_idx].title, "Fork");
-    assert!(cabin.threads[cabin.thread_idx].grok_fork);
-    assert_eq!(
-        cabin.threads[cabin.thread_idx].grok_session.as_deref(),
-        Some("sess-harbor")
-    );
+    assert_eq!(cabin.threads.len(), count, "/fork no longer opens a chat");
+    assert_eq!(cabin.thread_idx, idx);
+    assert!(!cabin.threads[idx].grok_fork);
+    assert_eq!(cabin.status, "Worktree off", "/fork leaves the status alone");
     cabin.threads[cabin.thread_idx].plan_body = "harbor steps".into();
     cabin.run_slash_line("/view-plan");
     assert!(cabin.plan_open);
@@ -14707,9 +14645,9 @@ fn housekeep_keeps_ideas_until_newer_ones_push_them_out() {
 
 // Landed from PR #160.
 #[test]
-fn fork_and_worktree_stay_off_a_send() {
+fn worktree_stays_off_a_send() {
     let _hold = crate::config::hold_test_config();
-    let root = crate::config::test_config_root("fork-worktree");
+    let root = crate::config::test_config_root("worktree-send");
     let _ = std::fs::create_dir_all(&root);
     std::env::set_var("GROKHUB_CONFIG", &root);
 
@@ -14718,27 +14656,8 @@ fn fork_and_worktree_stay_off_a_send() {
     let seeded = cabin
         .threads
         .get_mut(cabin.thread_idx)
-        .expect("quiet cabin needs one thread before fork");
+        .expect("quiet cabin needs one thread before worktree");
     seeded.grok_session = Some("sess".into());
-
-    let before = cabin.threads.len();
-    cabin.run_slash(super::Slash::Fork);
-
-    assert!(cabin.threads.len() > before);
-    let fork = cabin
-        .threads
-        .get(cabin.thread_idx)
-        .expect("fork chat");
-    assert_eq!(fork.title, "Fork");
-    assert_eq!(fork.grok_session.as_deref(), Some("sess"));
-    assert!(fork.grok_fork);
-    assert!(cabin.acp.is_none());
-    assert_eq!(
-        cabin.status,
-        "Forked — next send starts a new Grok session from this history"
-    );
-    assert!(!cabin.running);
-    assert!(matches!(cabin.nav, super::Nav::Chat));
 
     cabin.run_slash(super::Slash::Worktree);
     let worked = cabin
@@ -16654,7 +16573,6 @@ fn quiet_cabin() -> Cabin {
         thought_buf: String::new(),
         chat_views: Vec::new(),
         chat_view_keys: Vec::new(),
-        session_size: ((String::new(), usize::MAX, usize::MAX, u64::MAX, (0, 0)), (0, 0)),
         chat_view_tid: String::new(),
         chat_view_n: 0,
         chat_view_last: 0,
@@ -16825,7 +16743,6 @@ fn quiet_cabin() -> Cabin {
         bg: super::background::BgWork::default(),
         side_ask_kick: false,
         plan_open: false,
-        fork_explainer_seen: false,
         tool_cards: Vec::new(),
         live_blocks: Vec::new(),
         live_keys: Vec::new(),
@@ -22722,23 +22639,6 @@ fn chip_chat_pairs_empty_when_idle() {
 
 // ---- Cursor fold: Secrets, skills and memory ----
 
-// Folded from PR #253.
-#[test]
-fn dismiss_fork_explainer_stays_off_a_run() {
-    let _g = crate::config::hold_test_config();
-    let (root, mut app) = isolated_cabin("fork-explainer-dismiss");
-    std::fs::create_dir_all(crate::config::config_dir()).expect("config dir");
-    app.fork_explainer_seen = false;
-    app.dismiss_fork_explainer();
-    assert!(app.fork_explainer_seen);
-    let body = std::fs::read_to_string(crate::config::config_dir().join("fork_explainer_seen"))
-        .expect("seen file");
-    assert_eq!(body, "1");
-    assert!(!app.running);
-    assert!(app.chat_job_thread.is_none());
-    release_isolated(&root, app);
-}
-
 // Folded from PR #358.
 #[test]
 fn hold_secret_skips_short_and_keeps_one() {
@@ -22848,21 +22748,6 @@ fn mem_file_idx_maps_soul_user_memory() {
     assert_eq!(Cabin::mem_file_idx("MEMORY.md"), Some(2));
     assert_eq!(Cabin::mem_file_idx("NOTES.md"), None);
     assert_eq!(Cabin::mem_file_idx(""), None);
-}
-
-// Folded from PR #385.
-#[test]
-fn fork_explainer_seen_on_disk_false_when_missing() {
-    let _lock = crate::config::hold_test_config();
-    let root = crate::config::test_config_root("fork-seen-missing");
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).expect("temp config");
-    let _cfg = RestoreEnv::set("GROKHUB_CONFIG", &root);
-    let _ = std::fs::remove_file(root.join("fork_explainer_seen"));
-    assert!(
-        !super::fork_explainer_seen_on_disk(),
-        "a missing fork_explainer_seen marker must read as unseen"
-    );
 }
 
 // Folded from PR #386.

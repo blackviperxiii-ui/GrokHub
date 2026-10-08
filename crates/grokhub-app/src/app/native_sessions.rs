@@ -22,7 +22,6 @@ struct RenameDraft {
 enum NativeHistAct {
     Open(grokhub_agent::HistoryRow),
     Delete(String),
-    Fork(String),
     Export(String),
     SaveRename(String, String),
 }
@@ -148,9 +147,6 @@ impl Cabin {
                 } else {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
-                        if crate::cards::ghost_pill(ui, "Fork") {
-                            act = Some(NativeHistAct::Fork(row.id.clone()));
-                        }
                         if crate::cards::ghost_pill(ui, "Export") {
                             act = Some(NativeHistAct::Export(row.id.clone()));
                         }
@@ -184,7 +180,6 @@ impl Cabin {
                 }
             }
             NativeHistAct::Delete(id) => self.delete_native_history(&id),
-            NativeHistAct::Fork(id) => self.fork_native_history(&id),
             NativeHistAct::Export(id) => self.export_native_history(&id),
             NativeHistAct::SaveRename(id, title) => self.rename_native_history(&id, &title),
         }
@@ -370,17 +365,6 @@ impl Cabin {
         match grokhub_agent::delete_session(id) {
             Ok(()) => self.status = "Deleted session".into(),
             Err(err) => self.status = format!("Delete failed: {err}"),
-        }
-    }
-
-    fn fork_native_history(&mut self, id: &str) {
-        match grokhub_agent::fork_session(id) {
-            Ok(info) => {
-                let title = info.title.clone();
-                self.open_native_info(&info);
-                self.status = format!("Forked {title}");
-            }
-            Err(err) => self.status = format!("Fork failed: {err}"),
         }
     }
 
