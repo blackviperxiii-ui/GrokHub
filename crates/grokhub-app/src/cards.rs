@@ -1509,7 +1509,7 @@ pub fn settings_field(
     title: &str,
     hint: &str,
     value: &mut String,
-    password: bool,
+    masked: bool,
 ) {
     ui.add_space(4.0);
     ui.label(RichText::new(title).size(15.0).color(crate::theme::fg()));
@@ -1526,7 +1526,7 @@ pub fn settings_field(
             let mut edit = egui::TextEdit::singleline(value)
                 .desired_width(f32::INFINITY)
                 .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2)));
-            if password {
+            if masked {
                 edit = edit.password(true);
             }
             ui.add(edit);
