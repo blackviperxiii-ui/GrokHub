@@ -569,7 +569,11 @@ impl Cabin {
                     Err(self.status.clone())
                 }
             }
-            ("Automation", _) => match self.save_schedule(&action) {
+            ("Automation", _) => match self.save_schedule_as(
+                &action,
+                grokhub_agent::harness::Origin::SelfManage,
+                &format!("from the idea {}", card.title),
+            ) {
                 Some(msg) if msg.starts_with("Maximum") => Err(msg),
                 Some(msg) => Ok(msg),
                 None => self.run_idea_in_chat(&format!(

@@ -1,6 +1,7 @@
 //! Automations, loops, and night review.
 
 use super::*;
+use grokhub_agent::harness::Origin;
 use grokhub_core::{
     automation_failed_card, automation_health_line, hold_if_quiet, mark_automation_failed,
     mark_automation_ok, mark_automation_stopped, BgEnd, BgOrigin,
@@ -109,10 +110,20 @@ impl Cabin {
     /// One door for both schedulers. A clock time ("every weekday at 9") is a cabin
     /// automation in `automations.json`; an interval stays a Grok Build `/loop` row.
     pub(super) fn save_schedule(&mut self, seed: &str) -> Option<String> {
-        Some(self.commit_schedule(route_schedule(seed)?))
+        Some(self.commit_schedule(route_schedule(seed)?, Origin::User, ""))
     }
 
-    pub(super) fn commit_schedule(&mut self, route: ScheduleRoute) -> String {
+    /// [`Self::save_schedule`] for job text the model wrote (an Ideas Add).
+    pub(super) fn save_schedule_as(&mut self, seed: &str, origin: Origin, reason: &str) -> Option<String> {
+        Some(self.commit_schedule(route_schedule(seed)?, origin, reason))
+    }
+
+    /// Save a schedule. With `Origin::SelfManage` (the job text came from the
+    /// model: an Ideas Add or an Automate offer) a clock job is saved through
+    /// the ChangeLedger, so it keeps a version, gets a Work-tree row with
+    /// Undo, and shows in the next Home update. Interval loops are Grok Build
+    /// rows and stay outside the ledger.
+    pub(super) fn commit_schedule(&mut self, route: ScheduleRoute, origin: Origin, reason: &str) -> String {
         match route {
             ScheduleRoute::Clock(a) => {
                 if self.automations.len() >= LOOP_MAX {
@@ -125,7 +136,19 @@ impl Cabin {
                 let id = a.id.clone();
                 let name = a.name.clone();
                 self.automations.push(a);
-                self.persist_automations();
+                if origin == Origin::SelfManage {
+                    let (path, list) = (crate::night::path(), self.automations.clone());
+                    let target = grokhub_agent::harness::AutomationsFile { path: &path, id: &id };
+                    let saved = grokhub_agent::harness::record_change(&config::config_dir(), &target, origin, reason, || {
+                        crate::night::save(&list)
+                    });
+                    if let Err(why) = saved {
+                        self.automations.retain(|a| a.id != id);
+                        return why;
+                    }
+                } else {
+                    self.persist_automations();
+                }
                 self.note_schedule_created(&id, &name, &label);
                 format!("Automation added · {label}")
             }

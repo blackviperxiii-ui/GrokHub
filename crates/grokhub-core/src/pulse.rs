@@ -349,9 +349,10 @@ impl PulseType {
 /// The type a card is before scoring. Quiet only comes from the score.
 pub fn pulse_type(card: &UpdateCard) -> PulseType {
     match card.kind {
-        UpdateKind::AutomationDone | UpdateKind::ScheduleCreated | UpdateKind::Digest => {
-            PulseType::Watch
-        }
+        UpdateKind::AutomationDone
+        | UpdateKind::ScheduleCreated
+        | UpdateKind::Digest
+        | UpdateKind::SelfChange => PulseType::Watch,
         UpdateKind::AutomateOffer => PulseType::Automate,
         // The quiet-hours digest only reports what happened.
         UpdateKind::Suggestion if card.source_id == QUIET_DIGEST_SOURCE => PulseType::Watch,

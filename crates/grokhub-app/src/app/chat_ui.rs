@@ -1194,6 +1194,7 @@ impl Cabin {
                         let mut collapse_session = false;
                         let mut privacy_revoke: Option<String> = None;
                         let mut skill_hit: Option<super::skill_undo::SkillRow> = None;
+                        let mut change_hit: Option<(super::change_undo::ChangeRow, super::change_undo::ChangeAct)> = None;
                         {
                             let thread_id = fold_thread.clone();
                             let row_h_id = chat_row_height_id(&thread_id, pane);
@@ -1215,6 +1216,13 @@ impl Cabin {
                             let skill_at = super::skill_undo::newest_skill_changes_row(&self.chat_views);
                             let skill_rows =
                                 if skill_at.is_some() { self.skill_rows_now() } else { Vec::new() };
+                            // Same for /connections changes and /automations changes.
+                            let change_at = super::change_undo::newest_change_report(&self.chat_views);
+                            let change_rows = match change_at {
+                                Some((_, kind)) => self.change_rows_now(kind),
+                                None => Vec::new(),
+                            };
+                            let change_at = change_at.map(|(i, _)| i);
                             let (views, keys) = (&self.chat_views, &self.chat_view_keys);
                             let shown = if live {
                                 views_up_to_last_user(views)
@@ -1290,7 +1298,8 @@ impl Cabin {
                                         .take_while(|v| v.kind != ChatKind::User)
                                         .any(|v| v.kind == ChatKind::Assistant);
                                 let privacy_here = (privacy_at == Some(i) && !privacy_grants.is_empty())
-                                    || (skill_at == Some(i) && !skill_rows.is_empty());
+                                    || (skill_at == Some(i) && !skill_rows.is_empty())
+                                    || (change_at == Some(i) && !change_rows.is_empty());
                                 let painted = ui
                                     .push_id(chat_row_id_salt(&thread_id, i), |ui| {
                                         let mut p = paint_chat_block_with(
@@ -1305,6 +1314,13 @@ impl Cabin {
                                             if skill_at == Some(i) {
                                                 skill_hit =
                                                     super::skill_undo::paint_skill_undo_rows(ui, &skill_rows);
+                                            } else if change_at == Some(i) {
+                                                change_hit = super::change_undo::paint_change_rows(
+                                                    ui,
+                                                    "change-report",
+                                                    &change_rows,
+                                                    true,
+                                                );
                                             } else {
                                                 privacy_revoke = super::privacy_ui::paint_privacy_revokes(
                                                     ui,
@@ -1367,6 +1383,9 @@ impl Cabin {
                         }
                         if let Some(row) = skill_hit {
                             self.skill_row_clicked(&row);
+                        }
+                        if let Some((row, act)) = change_hit {
+                            self.change_row_clicked(&row, act);
                         }
                         if jumped_you || no_turn_row {
                             self.jump_last_you = false;

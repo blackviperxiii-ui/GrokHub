@@ -454,6 +454,7 @@ mod tests {
             before_hash: String::new(),
             after_hash: String::new(),
             undoes: Some(3),
+            label: String::new(),
         };
         let modify = Change { op: ChangeOp::Modify, undoes: None, ..undo.clone() };
         let signals = signals_from_changes(&[modify, undo]);
