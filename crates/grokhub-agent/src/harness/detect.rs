@@ -371,6 +371,10 @@ pub fn fixture_hard_allow_without_approve() -> Vec<Span> {
         usage: None,
         target: String::new(),
         target_rule: String::new(),
+        usage: None,
+        episode: String::new(),
+        goal_step: String::new(),
+        tokens: None,
     }]
 }
 
@@ -398,6 +402,10 @@ pub fn fixture_hard_with_approve() -> Vec<Span> {
             usage: None,
             target: String::new(),
             target_rule: String::new(),
+            usage: None,
+            episode: String::new(),
+            goal_step: String::new(),
+            tokens: None,
         },
         Span {
             session_id: "fixture-ok".into(),
@@ -420,6 +428,10 @@ pub fn fixture_hard_with_approve() -> Vec<Span> {
             usage: None,
             target: String::new(),
             target_rule: String::new(),
+            usage: None,
+            episode: String::new(),
+            goal_step: String::new(),
+            tokens: None,
         },
         Span {
             session_id: "fixture-ok".into(),
@@ -442,6 +454,10 @@ pub fn fixture_hard_with_approve() -> Vec<Span> {
             usage: None,
             target: String::new(),
             target_rule: String::new(),
+            usage: None,
+            episode: String::new(),
+            goal_step: String::new(),
+            tokens: None,
         },
     ]
 }
@@ -670,6 +686,10 @@ mod tests {
             usage: None,
             target: String::new(),
             target_rule: String::new(),
+            usage: None,
+            episode: String::new(),
+            goal_step: String::new(),
+            tokens: None,
         }];
         assert!(approval_gate_violation(&spans).is_empty());
     }

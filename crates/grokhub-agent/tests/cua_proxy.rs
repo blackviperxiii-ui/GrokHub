@@ -14,6 +14,7 @@ fn scratch(label: &str) -> PathBuf {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     hx::write_turn_context(&dir, &hx::TurnContext { chat_id: "chat-p".into(), turn: 1, access: "supervised".into(), origin: Default::default() }).unwrap();
+    hx::write_turn_context(&dir, &hx::TurnContext { chat_id: "chat-p".into(), turn: 1, access: "supervised".into(), ..Default::default() }).unwrap();
     dir
 }
 
