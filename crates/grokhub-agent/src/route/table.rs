@@ -27,6 +27,7 @@ use sha2::{Digest, Sha256};
 use grokhub_core::model_registry::probe::{ProbeCall, ProbeKind, ProbeReply, ProbeTransport, DAY_MS};
 use grokhub_core::model_registry::profile::ModelProfile;
 use grokhub_core::model_registry::store::{models_dir, read_json};
+use grokhub_core::model_registry::cost_class::{probe_class, CostClass};
 use grokhub_core::model_registry::{ModelState, Registry};
 
 use super::ladder::{self, Band, Move};
@@ -455,7 +456,7 @@ fn row_effort(class: &str, profile: Option<&ModelProfile>, reg: &Registry, model
     Some(Some(grokhub_core::parse_reasoning_effort(&picked).map(str::to_string).unwrap_or(picked)))
 }
 
-/// The models a class may rank: usable profile, live or degraded, included, and it fits.
+/// The models a class may rank: usable profile, live or degraded, in the plan pool (`included`), and it fits.
 fn table_candidates<'a>(inp: &'a TableInputs<'_>, class: &str) -> Vec<&'a String> {
     inp.reg
         .models
@@ -463,7 +464,9 @@ fn table_candidates<'a>(inp: &'a TableInputs<'_>, class: &str) -> Vec<&'a String
         .filter(|(id, r)| {
             matches!(r.state, ModelState::Live | ModelState::Degraded)
                 && inp.profiles.get(*id).is_some_and(|p| p.usable)
-                && policy::fits(inp.reg, inp.profiles, id, class_fit(class), u64::MAX / 2)
+                && policy::fits_any_cost(inp.reg, inp.profiles, id, class_fit(class), u64::MAX / 2)
+                // Evals spend only the plan pool: never a key, a Fast variant or a premium route.
+                && probe_class(inp.reg, inp.reg.entitlement.credential, id) == CostClass::Included
                 && (class != "desktop:soft" || inp.profiles.get(*id).is_some_and(|p| p.probe.caching == Some(true)))
         })
         .map(|(id, _)| id)

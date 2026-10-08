@@ -381,6 +381,15 @@ pub struct AppConfig {
     /// hold. Omitted from `app.json` while it stays default.
     #[serde(default, skip_serializing_if = "HeartbeatPace::is_default")]
     pub heartbeat: HeartbeatPace,
+    /// Router R2b: Settings → "Use Grok 4.7 Fast when you're waiting". On by default.
+    #[serde(default = "default_fast_when_waiting")]
+    pub fast_when_waiting: bool,
+    /// Router R2b: weekly spend cap in USD for an API key. 0 is no cap.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub weekly_spend_cap_usd: u32,
+    /// Router R2b: a key route over this $/M output price is premium (one click to allow).
+    #[serde(default = "default_price_ceiling")]
+    pub price_ceiling_usd_per_m: u32,
     /// Spike-6a: an OS notification for a proactive card due in under an hour.
     /// Off unless you opt in (`app.json` only).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -485,6 +494,18 @@ fn default_budget_pause() -> bool {
     true
 }
 
+fn default_fast_when_waiting() -> bool {
+    true
+}
+
+fn default_price_ceiling() -> u32 {
+    grokhub_core::model_registry::cost_class::DEFAULT_CEILING_USD_PER_M as u32
+}
+
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
+}
+
 fn is_zero_u64(n: &u64) -> bool {
     *n == 0
 }
@@ -545,6 +566,9 @@ impl Default for AppConfig {
             daily_token_budget: 0,
             budget_pauses_scheduled: default_budget_pause(),
             heartbeat: HeartbeatPace::default(),
+            fast_when_waiting: default_fast_when_waiting(),
+            weekly_spend_cap_usd: 0,
+            price_ceiling_usd_per_m: default_price_ceiling(),
             proactive_reminders: false,
             goal_pin: String::new(),
             imagine_wall: default_imagine_wall(),

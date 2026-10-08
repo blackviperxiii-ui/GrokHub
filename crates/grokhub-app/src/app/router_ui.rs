@@ -68,6 +68,8 @@ pub(super) struct RouterUi {
     pub rows: Vec<(String, String)>,
     /// Pauses already shown this launch (a model that answers again clears them).
     pub paused: Vec<String>,
+    /// Router R2b: spend settings, premium asks, budget cards.
+    pub budget: super::budget_ui::BudgetUi,
 }
 
 impl Cabin {
@@ -124,6 +126,8 @@ impl Cabin {
         }
         self.poll_guard();
         self.sync_router_pin();
+        self.sync_spend();
+        self.poll_route_asks();
         if let Some((_, model, why)) = grokhub_agent::route::live::take_no_route() {
             self.deliver_heal(HealOut { msgs: vec![pause_msg(&model, &why, &[])], cleared: Vec::new() });
         }
@@ -131,6 +135,7 @@ impl Cabin {
             return;
         }
         let now = now_ms();
+        self.tick_budget(now);
         if self.harness.router.last_guard.is_none_or(|t| t.elapsed() >= GUARD_EVERY) && self.harness.router.guard_rx.is_none() {
             self.harness.router.last_guard = Some(Instant::now());
             let dir = crate::config::config_dir();
