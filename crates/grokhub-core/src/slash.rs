@@ -100,6 +100,11 @@ pub enum Slash {
     SkillUndo(String),
     /// `/skills restore <name>`: bring back a skill that was removed.
     SkillRestore(String),
+    /// `/connections changes`: connections GrokHub added, changed, or turned
+    /// off on its own, each with an Undo click.
+    ConnectionChanges,
+    /// `/automations changes`: automations GrokHub made or changed on its own.
+    AutomationChanges,
     GrokConnectors,
     /// `/hooks` — Connectors tab, Hooks section.
     GrokHooks,
@@ -198,6 +203,8 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/workflow" => Some(parse_workflow_arg(rest)),
         "/worktree" => Some(Slash::Worktree),
         "/skills" => Some(parse_skills_arg(rest)),
+        "/connections" if is_changes_arg(rest) => Some(Slash::ConnectionChanges),
+        "/automations" if is_changes_arg(rest) => Some(Slash::AutomationChanges),
         "/workflows" => Some(Slash::GrokWorkflows),
         "/plugins" | "/marketplace" | "/mcps" | "/connectors" => Some(Slash::GrokConnectors),
         "/hooks" => Some(Slash::GrokHooks),
@@ -323,6 +330,11 @@ fn parse_skills_arg(rest: &str) -> Slash {
         "restore" => Slash::SkillChanges,
         _ => Slash::GrokSkills,
     }
+}
+
+/// `changes`, `history`, `undo`, or nothing after `/connections` or `/automations`.
+fn is_changes_arg(rest: &str) -> bool {
+    matches!(rest.to_ascii_lowercase().as_str(), "" | "changes" | "history" | "undo")
 }
 
 /// `/workflow pause|resume|stop <target>`, or a launch name when the first word is not a verb.
@@ -456,6 +468,8 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::SkillChanges => "skill_changes",
         Slash::SkillUndo(_) => "skill_undo",
         Slash::SkillRestore(_) => "skill_restore",
+        Slash::ConnectionChanges => "connection_changes",
+        Slash::AutomationChanges => "automation_changes",
         Slash::GrokConnectors => "grok_connectors",
         Slash::GrokHooks => "grok_hooks",
         Slash::GrokWorkflows => "grok_workflows",
@@ -555,6 +569,8 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/skills changes", hint: "What GrokHub changed in your skills", insert: "/skills changes", run_on_pick: true },
     SlashDef { cmd: "/skills undo", hint: "Undo the newest change to a skill…", insert: "/skills undo ", run_on_pick: false },
     SlashDef { cmd: "/skills restore", hint: "Bring back a removed skill…", insert: "/skills restore ", run_on_pick: false },
+    SlashDef { cmd: "/connections changes", hint: "What GrokHub changed in your connections", insert: "/connections changes", run_on_pick: true },
+    SlashDef { cmd: "/automations changes", hint: "What GrokHub changed in your automations", insert: "/automations changes", run_on_pick: true },
     SlashDef { cmd: "/plugins", hint: "Grok Build plugins and marketplace", insert: "/plugins", run_on_pick: true },
     SlashDef { cmd: "/mcps", hint: "Grok Build MCP servers", insert: "/mcps", run_on_pick: true },
     SlashDef { cmd: "/hooks", hint: "Grok Build hooks", insert: "/hooks", run_on_pick: true },
@@ -702,6 +718,8 @@ pub fn slash_help() -> String {
         "/skills changes — what GrokHub changed in your skills on its own, each with Undo",
         "/skills undo <name> — put back the version before the newest change (typed by you or clicked; a removed skill comes back)",
         "/skills restore <name> — bring back a skill that was removed, from its kept copy",
+        "/connections changes — connections GrokHub added, changed, or turned off on its own, each with Undo",
+        "/automations changes — automations GrokHub made or changed on its own, each with Undo",
         "/plugins /marketplace /mcps — connectors",
         "/hooks — open Connectors with the Hooks section in view",
         "/model <id> — grok -p --model",
@@ -874,6 +892,12 @@ mod tests {
         assert_eq!(parse_slash("/skills changes"), Some(Slash::SkillChanges));
         assert_eq!(parse_slash("/skills undo"), Some(Slash::SkillChanges));
         assert_eq!(parse_slash("/skills restore"), Some(Slash::SkillChanges));
+        assert_eq!(parse_slash("/connections changes"), Some(Slash::ConnectionChanges));
+        assert_eq!(parse_slash("/connections"), Some(Slash::ConnectionChanges));
+        assert_eq!(parse_slash("/automations changes"), Some(Slash::AutomationChanges));
+        assert_eq!(parse_slash("/automations History"), Some(Slash::AutomationChanges));
+        assert_eq!(parse_slash("/automations weekly"), None);
+        assert_eq!(slash_kind(&Slash::ConnectionChanges), "connection_changes");
         assert_eq!(
             parse_slash("/skills UNDO weekly-report"),
             Some(Slash::SkillUndo("weekly-report".into()))
