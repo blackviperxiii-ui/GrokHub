@@ -154,7 +154,9 @@ pub fn grok_chat(
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
     }
-    let call = route::cabin::ModelCall::new(route::cabin::Provider::Xai, model, effort);
+    // Background helpers pass the background effort; the rest is a quick user ask.
+    let class = if effort == Some(grokhub_core::BACKGROUND_EFFORT) { "background:summarize" } else { "chat:quick" };
+    let call = route::cabin::ModelCall::new(route::cabin::Provider::Xai, model, effort, class);
     route::cabin::call_model(&crate::config::config_dir(), &call, |call| {
         grok_chat_once(key, call, messages, image_data_url)
     })

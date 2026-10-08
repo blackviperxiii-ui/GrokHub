@@ -348,8 +348,10 @@ pub struct AppConfig {
     pub close_to_tray_tip_seen: bool,
     #[serde(default)]
     pub mode: String,
-    #[serde(default)]
-    pub reasoning_effort: String,
+    /// Pre-R1 saved effort. Effort is automatic now: [`load`] drops it and logs
+    /// that once, and it is never written back.
+    #[serde(default, rename = "reasoningEffort", skip_serializing)]
+    pub legacy_reasoning_effort: Option<String>,
     /// Composer session pill — chat / plan / ask.
     #[serde(default = "default_session_mode")]
     pub session_mode: String,
@@ -491,10 +493,6 @@ fn default_theme() -> String {
     "dark".into()
 }
 
-fn default_reasoning_effort() -> String {
-    "high".into()
-}
-
 fn default_session_mode() -> String {
     "chat".into()
 }
@@ -536,7 +534,7 @@ impl Default for AppConfig {
             close_to_tray: default_close_to_tray(),
             close_to_tray_tip_seen: false,
             mode: String::new(),
-            reasoning_effort: default_reasoning_effort(),
+            legacy_reasoning_effort: None,
             session_mode: default_session_mode(),
             permission_mode: default_permission_mode(),
             always_collapse_thoughts: false,
@@ -668,6 +666,15 @@ fn hostname_cmd() -> Option<String> {
     }
 }
 
+/// Router R1: there is no effort setting any more. A saved one still loads,
+/// is dropped here, and is logged once (`models/router_notes.jsonl`).
+pub fn drop_saved_effort(cfg: &mut AppConfig, dir: &std::path::Path) {
+    if let Some(old) = cfg.legacy_reasoning_effort.take() {
+        let text = format!("Dropped the saved reasoning effort ({}): effort is automatic now.", old.trim());
+        grokhub_agent::route::guard::note_once(dir, "migrate:reasoning_effort", &text, grokhub_core::now_ms());
+    }
+}
+
 pub fn load() -> AppConfig {
     let path = config_dir().join("app.json");
     let mut cfg: AppConfig = load_json(&path, JSON_STORE_CAP);
@@ -677,13 +684,7 @@ pub fn load() -> AppConfig {
     if cfg.device_name.trim().is_empty() {
         cfg.device_name = default_device_name();
     }
-    if cfg.reasoning_effort.trim().is_empty() {
-        cfg.reasoning_effort = grokhub_core::agent_reasoning_effort_for_mode(&cfg.mode)
-            .unwrap_or("high")
-            .to_string();
-    } else if let Some(effort) = grokhub_core::parse_reasoning_effort(&cfg.reasoning_effort) {
-        cfg.reasoning_effort = effort.to_string();
-    }
+    drop_saved_effort(&mut cfg, &config_dir());
     cfg.session_mode = grokhub_acp::SessionMode::parse(&cfg.session_mode)
         .unwrap_or(grokhub_acp::SessionMode::Chat)
         .as_str()
@@ -1020,7 +1021,7 @@ mod tests {
         );
         assert_eq!(loaded.device_name, "cabin");
         assert_eq!(loaded.source_dir, "/tmp/Grok-Hub");
-        assert_eq!(loaded.reasoning_effort, "high");
+        assert_eq!(loaded.legacy_reasoning_effort, None);
         let body = fs::read_to_string(config_dir().join("app.json")).expect("app.json");
         assert!(
             !body.contains("xai-test") && !body.to_ascii_lowercase().contains("apikey"),
@@ -1145,9 +1146,6 @@ mod tests {
         assert!(!cfg.always_collapse_thoughts);
         assert!(!cfg.close_to_tray_tip_seen);
         cfg.model = grokhub_core::sanitize_chat_model("grok-4.6").into();
-        cfg.reasoning_effort = grokhub_core::parse_reasoning_effort("xhigh")
-            .unwrap()
-            .into();
         cfg.permission_mode = persistable_permission_mode("auto");
         cfg.session_mode = "plan".into();
         cfg.always_collapse_thoughts = true;
@@ -1155,19 +1153,16 @@ mod tests {
         save(&cfg).expect("save");
         let loaded = load();
         assert_eq!(loaded.model, "grok-4.6");
-        assert_eq!(loaded.reasoning_effort, "xhigh");
         assert_eq!(loaded.permission_mode, "auto");
         assert_eq!(loaded.session_mode, "plan");
         assert!(loaded.always_collapse_thoughts);
         assert!(loaded.close_to_tray_tip_seen);
         cfg.model.clear();
-        cfg.reasoning_effort = grokhub_core::parse_reasoning_effort("max").unwrap().into();
         cfg.permission_mode = persistable_permission_mode("always-approve");
         cfg.session_mode = "ask".into();
         cfg.always_collapse_thoughts = false;
         cfg.close_to_tray_tip_seen = false;
         assert_eq!(cfg.permission_mode, "ask");
-        assert_eq!(cfg.reasoning_effort, "xhigh");
         save(&cfg).expect("save always collapsed to ask");
         let body = fs::read_to_string(config_dir().join("app.json")).expect("app.json");
         assert!(
@@ -1188,7 +1183,6 @@ mod tests {
         );
         let loaded = load();
         assert_eq!(loaded.model, "");
-        assert_eq!(loaded.reasoning_effort, "xhigh");
         assert_eq!(loaded.permission_mode, "ask");
         assert_eq!(loaded.session_mode, "ask");
         assert!(!loaded.always_collapse_thoughts);
@@ -1213,8 +1207,8 @@ mod tests {
         assert_eq!(loaded.permission_mode, "ask");
         assert_eq!(loaded.model, "grok-4.7");
         assert_eq!(
-            loaded.reasoning_effort, "low",
-            "2.10.87: Minimal is gone; a saved minimal loads as Low"
+            loaded.legacy_reasoning_effort, None,
+            "R1: a saved effort is dropped on load"
         );
         assert_eq!(loaded.session_mode, "chat");
         assert!(loaded.always_collapse_thoughts);
@@ -1228,22 +1222,23 @@ mod tests {
     }
 
     #[test]
-    fn reasoning_effort_migrates_from_legacy_mode() {
+    fn saved_reasoning_effort_loads_is_dropped_and_logged_once() {
         let _g = hold_test_config();
         let root = test_config_root("effort");
         let _ = fs::remove_dir_all(&root);
         std::env::set_var("GROKHUB_CONFIG", &root);
         fs::create_dir_all(&root).expect("dir");
-        fs::write(root.join("app.json"), r#"{"mode":"max"}"#).expect("write");
+        fs::write(root.join("app.json"), r#"{"mode":"max","reasoningEffort":"xhigh","deviceName":"cabin"}"#).expect("write");
         let loaded = load();
-        assert_eq!(loaded.reasoning_effort, "xhigh");
-        fs::write(root.join("app.json"), r#"{"reasoningEffort":"max"}"#).expect("write");
-        let saved_max = load();
-        assert_eq!(
-            saved_max.reasoning_effort, "xhigh",
-            "a saved Max effort must load as Extra High and must not be sent"
-        );
-        assert_ne!(saved_max.reasoning_effort, "max");
+        assert_eq!(loaded.device_name, "cabin", "an old config still loads");
+        assert_eq!(loaded.legacy_reasoning_effort, None);
+        let _ = load();
+        let notes = fs::read_to_string(grokhub_agent::route::guard::notes_path(&root)).expect("notes");
+        assert_eq!(notes.lines().count(), 1, "{notes}");
+        assert!(notes.contains("Dropped the saved reasoning effort (xhigh): effort is automatic now."), "{notes}");
+        save(&loaded).expect("save");
+        let body = fs::read_to_string(root.join("app.json")).expect("app.json");
+        assert!(!body.contains("reasoningEffort"), "the effort setting is never written back: {body}");
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
     }

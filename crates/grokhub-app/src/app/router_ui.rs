@@ -5,6 +5,7 @@
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use grokhub_agent::route::guard::{run_guard, GuardRun};
 use grokhub_agent::route::refresh::{fold_health, probe_next, run_refresh, RefreshDone, RefreshJob};
 use grokhub_agent::route::sources::{probe_model, GrokBuildSource, XaiApiSource};
 use grokhub_agent::AuthKind;
@@ -16,6 +17,8 @@ use super::*;
 
 /// Passive health is folded into the registry this often.
 pub(super) const HEALTH_FOLD_EVERY: Duration = Duration::from_secs(60);
+/// The R1 accuracy guard reads route records and outcomes this often.
+pub(super) const GUARD_EVERY: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Debug, Default)]
 pub(super) struct RouterUi {
@@ -24,6 +27,8 @@ pub(super) struct RouterUi {
     pub fold_rx: Option<mpsc::Receiver<bool>>,
     pub last_fold: Option<Instant>,
     pub why_rx: Option<mpsc::Receiver<String>>,
+    pub guard_rx: Option<mpsc::Receiver<GuardRun>>,
+    pub last_guard: Option<Instant>,
 }
 
 impl Cabin {
@@ -76,10 +81,20 @@ impl Cabin {
                 Err(mpsc::TryRecvError::Disconnected) => {}
             }
         }
+        self.poll_guard();
         if halted || self.scratch() {
             return;
         }
         let now = now_ms();
+        if self.harness.router.last_guard.is_none_or(|t| t.elapsed() >= GUARD_EVERY) && self.harness.router.guard_rx.is_none() {
+            self.harness.router.last_guard = Some(Instant::now());
+            let dir = crate::config::config_dir();
+            let (tx, rx) = mpsc::channel();
+            self.harness.router.guard_rx = Some(rx);
+            std::thread::spawn(move || {
+                let _ = tx.send(run_guard(&dir, now));
+            });
+        }
         let stamp = self.router_auth_stamp();
         let idle = !self.running && !self.heartbeat_busy();
         let gb_version = self.cli_installed.clone();
@@ -129,6 +144,40 @@ impl Cabin {
             }
             let _ = tx.send(done);
         });
+    }
+
+    /// A class the accuracy guard reverted gets one Pulse Suggestion saying why.
+    fn poll_guard(&mut self) {
+        let Some(rx) = self.harness.router.guard_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(run) => {
+                if run.reverted.is_empty() {
+                    return;
+                }
+                let now = now_ms();
+                for (class, text) in run.reverted {
+                    let card = grokhub_core::suggestion_card(&format!("router-guard:{class}"), "Auto now thinks harder here", &text, now);
+                    grokhub_core::post_update(&mut self.updates, card);
+                }
+                self.persist_updates();
+            }
+            Err(mpsc::TryRecvError::Empty) => self.harness.router.guard_rx = Some(rx),
+            Err(mpsc::TryRecvError::Disconnected) => {}
+        }
+    }
+
+    /// The Auto chip: the current rung's label and the router's last plain reason.
+    pub(super) fn auto_chip(&self) -> (String, String) {
+        match grokhub_agent::route::live::last_user_pick() {
+            Some((effort, reason)) => (grokhub_agent::route::effort_word(effort.as_deref()).to_string(), reason),
+            None => {
+                let start = grokhub_agent::route::live::start_effort(grokhub_agent::route::live::DEFAULT_CLASS);
+                let word = grokhub_agent::route::effort_word(start.as_deref());
+                (word.to_string(), format!("{word}: everyday chat starts here. GrokHub picks how hard to think on each step. Click for /why."))
+            }
+        }
     }
 
     /// `/why` (last 10 route reasons) or `/why models` (one line per model; also

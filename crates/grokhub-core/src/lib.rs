@@ -420,7 +420,7 @@ pub use situation::{echoes_source, learn_from_turns, LearnedMove, MoveKind};
 pub use slash::{
     filter_slash_commands, filter_slash_hits, grok_command_hits, is_cabin_slash_turn,
     mark_slash_result, parse_slash, resolve_mode_arg, slash_help, slash_kind, strip_slash_result,
-    unknown_cabin_slash, Slash, SlashDef, SlashHit, WorkflowVerb, SLASH_COMMANDS,
+    unknown_cabin_slash, Slash, SlashDef, SlashHit, WorkflowVerb, EFFORT_AUTO_MSG, SLASH_COMMANDS,
     SLASH_RESULT_PREFIX,
 };
 pub use state::{
