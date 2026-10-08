@@ -150,7 +150,7 @@ fn emit(line: &str) {
     let _ = out.flush();
 }
 
-fn read_line_capped(reader: &mut impl BufRead, cap: usize) -> Result<Option<String>, String> {
+pub(crate) fn read_line_capped(reader: &mut impl BufRead, cap: usize) -> Result<Option<String>, String> {
     let mut buf = Vec::new();
     let mut byte = [0u8; 1];
     loop {
