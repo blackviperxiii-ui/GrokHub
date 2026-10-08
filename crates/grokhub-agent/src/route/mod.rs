@@ -583,6 +583,9 @@ mod r2b_tests;
 mod r3b_tests;
 
 #[cfg(test)]
+mod speed_bench;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::client::{ContentPart, StreamEvent};

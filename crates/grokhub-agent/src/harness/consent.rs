@@ -207,6 +207,7 @@ impl ConsentLedger {
     }
 
     fn load_with(config_dir: &Path, wait: bool) -> Self {
+        let _lap = crate::timing::lap("harness:consent_load");
         let path = consent_path(config_dir);
         let Ok(f) = fs::File::open(&path) else {
             return Self::empty();
