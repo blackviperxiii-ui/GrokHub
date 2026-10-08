@@ -76,6 +76,7 @@ mod self_improve;
 mod self_manage;
 mod span;
 mod span_search;
+mod span_tail;
 mod trail;
 
 pub use access::{always_does_not_imply_full, AccessMode};
@@ -158,6 +159,7 @@ pub use span::{
     append_span, read_spans, read_spans_tail, read_turn_context, redact_args, span_path, turn_context_path,
     write_turn_context, ModelUsage, Origin, Span, TurnContext, CLAIM_CAP, REPLY_TOOL, SPAN_TAIL_BYTES, VERIFY_TOOL,
 };
+pub use span_tail::SpanTail;
 pub use span_search::{search_spans, SpanHit, SpanSearch, SPAN_SEARCH_FILES, SPAN_SEARCH_HITS, SPAN_SEARCH_LINES};
 pub use trail::{link_learned, trail_body, trail_draft, write_trail, TrailWrite, TRAIL_BODY_CAP};
 
