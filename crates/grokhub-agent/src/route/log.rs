@@ -78,7 +78,7 @@ pub struct RouteRecord {
     pub signals: RouteSignals,
     #[serde(default)]
     pub candidates_n: u32,
-    /// What the router picked. Its effort is sent for listed classes; its model is logged only until R2.
+    /// What the router picked. Its model and effort are sent for listed classes.
     #[serde(default)]
     pub chosen: Chosen,
     /// The previous route's pick in the same episode, if any.
@@ -108,23 +108,51 @@ pub struct RouteRecord {
 // `d` and `cost_usd` are finite (rounded rules and token math), so equality is total.
 impl Eq for RouteRecord {}
 
+/// A multi-turn task should get at least this share of its prompt from the cache.
+pub const CACHE_FLOOR_PCT: u64 = 80;
+
+/// Every route record in the scanned tail, oldest first.
+fn scanned_routes(config_dir: &Path) -> Vec<(u64, RouteRecord)> {
+    let (spans, _) = read_spans_tail(config_dir, ROUTE_TRACE, WHY_SCAN_LINES);
+    spans.into_iter().filter_map(|s: Span| s.route.map(|r| (s.ts_ms, *r))).collect()
+}
+
 /// The last [`WHY_LINES`] route records, oldest first.
 pub fn last_routes(config_dir: &Path) -> Vec<(u64, RouteRecord)> {
-    let (spans, _) = read_spans_tail(config_dir, ROUTE_TRACE, WHY_SCAN_LINES);
-    let mut out: Vec<(u64, RouteRecord)> =
-        spans.into_iter().filter_map(|s: Span| s.route.map(|r| (s.ts_ms, *r))).collect();
+    let mut out = scanned_routes(config_dir);
     let skip = out.len().saturating_sub(WHY_LINES);
     out.drain(..skip);
     out
 }
 
-/// `/why`: one line per recent route, at most [`WHY_LINES`].
+/// `cached_tokens / prompt_tokens` of the newest multi-turn episode, after
+/// its first call (which never has a cache), as a percent.
+pub fn episode_cache_pct(routes: &[(u64, RouteRecord)]) -> Option<(String, u64)> {
+    let newest = routes.iter().rev().filter(|(_, r)| !r.episode.is_empty() && r.outcome.is_some()).find_map(|(_, r)| {
+        let calls: Vec<&RouteRecord> = routes.iter().map(|(_, x)| x).filter(|x| x.episode == r.episode && x.outcome.is_some()).collect();
+        (calls.len() >= 2).then_some((r.episode.clone(), calls))
+    })?;
+    let (episode, calls) = newest;
+    let (cached, input) = calls[1..].iter().filter_map(|r| r.outcome.as_ref()).fold((0, 0), |(c, i), o| (c + o.tokens.cached, i + o.tokens.input));
+    (input > 0).then(|| (episode, cached * 100 / input))
+}
+
+/// `/why`: one line per recent route, at most [`WHY_LINES`]. When the newest
+/// multi-turn task got less than [`CACHE_FLOOR_PCT`] of its prompt from the
+/// cache, the oldest line makes room for that flag.
 pub fn why_text(config_dir: &Path) -> String {
-    let routes = last_routes(config_dir);
+    let scanned = scanned_routes(config_dir);
+    let mut routes = last_routes(config_dir);
     if routes.is_empty() {
         return "No routed model calls yet. Effort is automatic: each step's reason shows here once it runs.".into();
     }
-    let lines: Vec<String> = routes
+    let flag = episode_cache_pct(&scanned).filter(|(_, pct)| *pct < CACHE_FLOOR_PCT).map(|(_, pct)| {
+        format!("Cache: the last multi-turn task got {pct}% of its prompt from the cache (under {CACHE_FLOOR_PCT}%), so it paid for more of it.")
+    });
+    if flag.is_some() && routes.len() >= WHY_LINES {
+        routes.remove(0);
+    }
+    let mut lines: Vec<String> = routes
         .iter()
         .map(|(_, r)| {
             let same = r.used.effort == r.chosen.effort;
@@ -136,6 +164,7 @@ pub fn why_text(config_dir: &Path) -> String {
             format!("{} · {} · {}{}", r.class, r.used.model, r.reason, used)
         })
         .collect();
+    lines.extend(flag);
     lines.join("\n")
 }
 

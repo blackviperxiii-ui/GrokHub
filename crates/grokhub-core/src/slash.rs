@@ -70,6 +70,8 @@ pub enum Slash {
     Why,
     /// `/why models`: one line per model with its state, usable, and reason.
     WhyModels,
+    /// `/why table`: the routing table Auto picks models from (Router R2a).
+    WhyTable,
     Hub,
     Inhabit(String),
     Rewind,
@@ -313,6 +315,7 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/diagnose" => Some(Slash::Diagnose),
         "/why" if rest.is_empty() => Some(Slash::Why),
         "/why" if rest.eq_ignore_ascii_case("models") => Some(Slash::WhyModels),
+        "/why" if rest.eq_ignore_ascii_case("table") => Some(Slash::WhyTable),
         "/hub" => Some(Slash::Hub),
         "/inhabit" if !rest.is_empty() => Some(Slash::Inhabit(rest.to_string())),
         "/rewind" if rest == "--files" || rest == "--code" || rest == "files" => {
@@ -445,7 +448,7 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Sync => "sync",
         Slash::Privacy => "privacy",
         Slash::Diagnose => "diagnose",
-        Slash::Why | Slash::WhyModels => "why",
+        Slash::Why | Slash::WhyModels | Slash::WhyTable => "why",
         Slash::Hub => "hub",
         Slash::Inhabit(_) => "inhabit",
         Slash::Rewind => "rewind",
@@ -757,7 +760,7 @@ pub fn slash_help() -> String {
         "/send <task> — task this box",
         "/sync — merge chats and memory with paired computers (asks first unless Settings → Permissions allows it)",
         "/privacy — your grants, learning scopes (all off), and what left this computer",
-        "/why — the last 10 reasons the router gave for a model and effort (effort is automatic; the model stays yours until R2); /why models lists each model's state",
+        "/why — the last 10 reasons the router gave for a model and effort (Auto picks both; a model you pin stays yours); /why models lists each model's state; /why table shows how Auto picks",
         "/diagnose — check disk, memory, services, logs, network and updates, read only, and say what's wrong in plain words (needs System state in Settings → Permissions)",
         "/hub — devices / pair",
         "/inhabit <peer> — hand this Grok to another paired computer",
@@ -1218,6 +1221,7 @@ mod tests {
     fn why_slash_is_a_cabin_view_with_a_help_line() {
         assert_eq!(parse_slash("/why"), Some(Slash::Why));
         assert_eq!(parse_slash("/WHY models"), Some(Slash::WhyModels));
+        assert_eq!(parse_slash("/why table"), Some(Slash::WhyTable));
         assert_eq!(parse_slash("/why not"), None);
         assert_eq!(parse_slash("/why").as_ref().map(slash_kind), Some("why"));
         assert!(slash_help().contains("\n/why — the last 10 reasons the router gave for a model and effort"));

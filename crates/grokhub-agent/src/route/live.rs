@@ -1,8 +1,15 @@
-//! Router R1 live routing: every model call site asks [`decide`] before it
-//! sends, sends the effort the router picked (for a class the table lists), then
-//! calls [`route_log`], which writes the `route` record on a `model-calls` span
-//! and the call's status for passive health (`models/health.jsonl`). The model
-//! stays the call's own until R2 ([`super::policy::MODEL_LIVE`]).
+//! Router live routing: every model call site asks [`decide`] before it
+//! sends, sends the model and effort the router picked (for a class the table
+//! lists), then calls [`route_log`], which writes the `route` record on a
+//! `model-calls` span and the call's status for passive health
+//! (`models/health.jsonl`).
+//!
+//! R2a: one model per episode. The model is picked at an episode boundary (a
+//! new user message), on a second VerifyGate reject at the ceiling (E2), or
+//! when the episode's model goes unhealthy; otherwise every step of the
+//! episode keeps it, so the prompt cache stays warm. A pin is kept while it
+//! answers and stood in for (same family first) when it doesn't. With no
+//! healthy, included model the call pauses instead of sending.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -21,7 +28,8 @@ use super::difficulty::{difficulty, DifficultyInput};
 use super::guard::{holdout_eligible, in_holdout, load_overrides, HOLDOUT_EFFORT};
 use super::ladder::{self, rung, start_rung, take_tool_errors, turn_hash, user_facing, Band, Obs, Pick, Steer};
 use super::log::{Chosen, RouteOutcome, RouteRecord, RouteSignals, RouteTokens};
-use super::policy::{class_row, POLICY_LIVE};
+use super::policy::{class_row, MODEL_LIVE, POLICY_LIVE};
+use super::table::{load_table, table_path, RoutingTable};
 use super::signals::{SpanVerifySource, VerifySignal, VerifySource};
 use super::{Route, RouteInput, Router};
 use crate::client::{ClientError, ContentPart, InputItem, ModelClient, ResponsesRequest, StreamEvent, TurnOutput, Usage};
@@ -49,6 +57,8 @@ pub struct RouteCall<'a> {
     pub planned_tools: u32,
     pub plan_mode: bool,
     pub needs_image: bool,
+    /// The step offers tools.
+    pub needs_tools: bool,
 }
 
 /// How the call went. Counts and ids only.
@@ -134,10 +144,39 @@ type Stamp = (PathBuf, Option<SystemTime>);
 struct Cache {
     reg: Option<(Stamp, Arc<Registry>)>,
     profiles: Option<(Stamp, Arc<BTreeMap<String, ModelProfile>>)>,
+    table: Option<(Stamp, Arc<RoutingTable>)>,
     prev: BTreeMap<String, Chosen>,
+    /// The model each episode (and class) runs on, with the turn it was picked for.
+    episodes: BTreeMap<String, (u64, String)>,
 }
 
-static CACHE: Mutex<Cache> = Mutex::new(Cache { reg: None, profiles: None, prev: BTreeMap::new() });
+static CACHE: Mutex<Cache> = Mutex::new(Cache { reg: None, profiles: None, table: None, prev: BTreeMap::new(), episodes: BTreeMap::new() });
+
+/// Episodes remembered at once; a long-running cabin stays small.
+const EPISODES_CAP: usize = 256;
+
+/// The user's pinned chat model (`cfg.model`), set by the cabin. Empty is Auto.
+static PIN: Mutex<String> = Mutex::new(String::new());
+
+/// The cabin sets the pin on start and whenever the model setting changes.
+pub fn set_pin(model: &str) {
+    *PIN.lock().unwrap_or_else(|e| e.into_inner()) = model.trim().to_string();
+}
+
+fn pinned_model() -> String {
+    PIN.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// The text a call that paused returns: no healthy, included model could take it.
+pub const NO_ROUTE_MSG: &str = "No model in your plan is answering right now, so GrokHub paused this step. Home has what failed and your options.";
+
+/// A pause the cabin hasn't shown yet: (class, model, what failed).
+static NO_ROUTE: Mutex<Option<(String, String, String)>> = Mutex::new(None);
+
+/// Take the newest pause, for the cabin's needs-attention line and card.
+pub fn take_no_route() -> Option<(String, String, String)> {
+    NO_ROUTE.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
 
 fn mtime(p: &Path) -> Option<SystemTime> {
     std::fs::metadata(p).and_then(|m| m.modified()).ok()
@@ -167,6 +206,47 @@ pub fn snapshot(config_dir: &Path) -> (Arc<Registry>, Arc<BTreeMap<String, Model
     (reg, profiles)
 }
 
+/// The saved routing table, re-read only when its file changes.
+pub fn table_snapshot(config_dir: &Path) -> Arc<RoutingTable> {
+    let stamp = (config_dir.to_path_buf(), mtime(&table_path(config_dir)));
+    let mut c = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    match &c.table {
+        Some((s, t)) if *s == stamp => t.clone(),
+        _ => {
+            let t = Arc::new(load_table(config_dir));
+            c.table = Some((stamp, t.clone()));
+            t
+        }
+    }
+}
+
+/// The model this episode already runs on, unless `turn` is a new user message.
+fn episode_model(key: &str, turn: u64) -> Option<String> {
+    let c = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    c.episodes.get(key).filter(|(t, _)| *t == turn).map(|(_, m)| m.clone())
+}
+
+fn keep_episode_model(key: String, turn: u64, model: &str) {
+    let mut c = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if c.episodes.len() >= EPISODES_CAP && !c.episodes.contains_key(&key) {
+        c.episodes.clear();
+    }
+    c.episodes.insert(key, (turn, model.to_string()));
+}
+
+/// The request crosses the model's long-context threshold (xAI bills the
+/// whole request at about twice the price there), so it should be compacted
+/// first. Nothing tells yet whether a task needs its whole context, so this
+/// always asks for the compact.
+pub fn crosses_long_context(config_dir: &Path, model: &str, ctx_tokens: u64) -> bool {
+    let (reg, profiles) = snapshot(config_dir);
+    let threshold = profiles
+        .get(model.trim())
+        .and_then(|p| p.metadata.prices.long_context_threshold)
+        .or_else(|| reg.get(model).and_then(|r| r.meta.prices.long_context_threshold));
+    threshold.is_some_and(|t| t > 0 && ctx_tokens >= t)
+}
+
 /// What the router decided for one call, before it is sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Decision {
@@ -182,6 +262,20 @@ pub struct Decision {
 }
 
 impl Decision {
+    /// The model to send: the router's for a listed class, the call's own otherwise.
+    pub fn send_model(&self, call_model: &str) -> String {
+        if self.live && MODEL_LIVE {
+            self.route.model.clone()
+        } else {
+            call_model.to_string()
+        }
+    }
+
+    /// The router found no healthy, included model: pause instead of sending.
+    pub fn paused(&self) -> bool {
+        self.live && MODEL_LIVE && self.route.no_route
+    }
+
     /// The effort to send: the router's for a listed class, the call's own otherwise.
     pub fn send_effort(&self, call_effort: Option<&str>) -> Option<String> {
         if self.live {
@@ -244,21 +338,37 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         _ => None,
     };
     let recover = pick.as_ref().is_some_and(|p| p.recover);
+    let class_key = format!("{key}\u{1f}{}", row.map(|r| r.class).unwrap_or(call.class));
+    let turn = turn_hash(call.text);
+    let sticky = if key.is_empty() { None } else { episode_model(&class_key, turn) };
+    let pin = pinned_model();
+    let pinned = call.pinned || (!pin.is_empty() && pin == call.model.trim() && user_facing(call.class));
+    let table = table_snapshot(config_dir);
     let input = RouteInput {
         provider: call.provider,
         class: call.class,
         current_model: call.model,
         current_effort: call.effort,
-        pinned: call.pinned,
+        pinned,
         d,
         ctx_tokens: call.ctx_tokens,
         needs_image: call.needs_image,
+        needs_tools: call.needs_tools,
         steer,
         bump,
         pick,
+        episode_model: sticky.as_deref(),
     };
-    let route = Router::choose(&input, &reg, &profiles, now_ms);
-    Decision { route, d: (d * 100.0).round() as u32, holdout, recover, live: POLICY_LIVE && row.is_some() }
+    let route = Router::choose(&input, &reg, &profiles, &table, now_ms);
+    let live = POLICY_LIVE && row.is_some();
+    if live && !route.no_route && !key.is_empty() {
+        keep_episode_model(class_key, turn, &route.model);
+    }
+    if live && route.no_route {
+        let failed = reg.get(call.model).map(|r| r.reason.clone()).unwrap_or_else(|| "It isn't in your model list.".into());
+        *NO_ROUTE.lock().unwrap_or_else(|e| e.into_inner()) = Some((call.class.to_string(), call.model.trim().to_string(), failed));
+    }
+    Decision { route, d: (d * 100.0).round() as u32, holdout, recover, live }
 }
 
 /// The route record for one call. `call.effort` is what was actually sent.
@@ -352,6 +462,7 @@ pub fn observation(call: &RouteCall<'_>, done: &RouteDone, now_ms: u64) -> Optio
         endpoint_ok: true,
         reasoning_tokens: done.usage.reasoning_tokens,
         cost_ticks: done.usage.cost_in_usd_ticks,
+        http: done.http,
     })
 }
 
@@ -476,15 +587,23 @@ pub fn stream_routed(
         ctx_tokens: crate::compact::estimate_input_tokens(&req.input),
         text: &text,
         needs_image,
+        needs_tools: !req.tools.is_empty() || req.hosted_search,
         ..RouteCall::default()
     };
     let decision = decide(&dir, &call, grokhub_core::now_ms());
+    if decision.paused() {
+        route_log(&dir, &call, &decision, &RouteDone::unseen());
+        return Err(ClientError::Protocol(NO_ROUTE_MSG.into()));
+    }
     let effort = decision.send_effort(req.effort.as_deref());
+    let model = decision.send_model(&req.model);
     let mut sent = req.clone();
     sent.effort = effort.clone();
+    sent.model = model.clone();
     let started = std::time::Instant::now();
     let out = client.stream(&sent, cancel, sink);
     call.effort = effort.as_deref();
+    call.model = &model;
     route_log(&dir, &call, &decision, &RouteDone::of(&out, started.elapsed()));
     out
 }
@@ -497,22 +616,27 @@ pub const PROVIDER_GROK_BUILD: &str = "grok_build";
 /// only. `sent` is the effort the turn really runs at: GB takes effort per
 /// episode at spawn (R0 Step-0: live `set_config_option` is not verified), so a
 /// session already running keeps its spawn effort. `None` means this turn spawns
-/// fresh and runs at the router's pick, which is returned.
-pub fn route_gb_turn(config_dir: &Path, model: &str, sent: Option<Option<&str>>, session: &str, text: &str) -> Option<String> {
+/// fresh and runs at the router's pick, which is returned with the model it
+/// spawns with (R2a: Auto's pick from Grok Build's own plan list; a pin is kept
+/// while it is listed). A running session keeps the model it spawned with.
+pub fn route_gb_turn(config_dir: &Path, model: &str, pinned: bool, sent: Option<Option<&str>>, session: &str, text: &str) -> (String, Option<String>) {
     let mut call = RouteCall {
         provider: PROVIDER_GROK_BUILD,
         class: DEFAULT_CLASS,
         model,
         session,
         text,
+        pinned,
         ..RouteCall::default()
     };
     let decision = decide(config_dir, &call, grokhub_core::now_ms());
-    let effort = match sent {
-        Some(e) => e.map(str::to_string),
-        None => decision.route.effort.clone(),
+    let (spawn_model, effort) = match sent {
+        Some(e) => (model.to_string(), e.map(str::to_string)),
+        None if decision.route.no_route => (model.to_string(), decision.route.effort.clone()),
+        None => (decision.send_model(model), decision.route.effort.clone()),
     };
     call.effort = effort.as_deref();
+    call.model = &spawn_model;
     route_log(config_dir, &call, &decision, &RouteDone::unseen());
-    effort
+    (spawn_model, effort)
 }

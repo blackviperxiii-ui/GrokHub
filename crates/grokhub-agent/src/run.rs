@@ -240,7 +240,10 @@ pub fn run_loop(
                 emit_usage(on_event, &usage, history, input.context_length);
             }
         }
-        if !did_compact && crate::compact::needs_auto_compact(history, input.context_length) {
+        // Compact before the context fills, or before a request would cross the
+        // model's long-context threshold (billed at about twice the price there).
+        let long = crate::route::live::crosses_long_context(&crate::perm::config_dir(), input.model, crate::compact::estimate_input_tokens(history));
+        if !did_compact && (crate::compact::needs_auto_compact(history, input.context_length) || long) {
             on_event(LoopEvent::Compact {
                 started: true,
                 usage: usage.clone(),

@@ -43,9 +43,9 @@ const POSTED_KEPT: usize = 64;
 pub(crate) struct LedgerWatch {
     /// Ledger lines up to this seq (per `ChangeKind::ALL`) were on disk when
     /// the cabin first looked, or have been read since.
-    seen: [u64; 3],
+    seen: [u64; ChangeKind::ALL.len()],
     /// File length per kind at the last look.
-    lens: [u64; 3],
+    lens: [u64; ChangeKind::ALL.len()],
     /// Self-made lines already shown, from either path.
     posted: Vec<(ChangeKind, u64)>,
     /// The next look, in ms.
@@ -400,6 +400,11 @@ impl Cabin {
                 }
                 res.map(|d| d.now)
             }
+            (ChangeAct::Undo, ChangeKind::Model) => {
+                // The routing table: the previous version comes back byte-identical.
+                let path = grokhub_agent::route::table::table_path(&dir);
+                hx::undo_change(&dir, &grokhub_agent::route::table::TableFile { path: &path }, ask).map(|d| d.now)
+            }
         };
         if done.is_ok() {
             self.harness.work_rows.retain(|r| !(r.kind == row.kind && r.id == row.id));
@@ -412,10 +417,14 @@ impl Cabin {
 
     /// Work-tree rows under the approval cards. Click only.
     pub(super) fn paint_work_rows(&mut self, ui: &mut egui::Ui) {
-        if self.harness.work_rows.is_empty() {
+        if self.harness.work_rows.is_empty() && self.harness.router.rows.is_empty() {
             return;
         }
         ui.add_space(8.0);
+        // The router's quiet lines (a pinned model resting): tell-only, no buttons.
+        for (_, text) in &self.harness.router.rows {
+            ui.label(egui::RichText::new(text).size(12.0).color(crate::theme::muted()));
+        }
         let rows = self.harness.work_rows.clone();
         if let Some((row, act)) = paint_change_rows(ui, "work-row", &rows, false) {
             self.change_row_clicked(&row, act);

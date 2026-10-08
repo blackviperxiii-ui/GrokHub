@@ -1,5 +1,5 @@
 //! ChangeLedger (harness design §11 Spike-5, §12 P3): skills, connections,
-//! and automations.
+//! automations, and the router's own model files (R2a: the routing table).
 //!
 //! Every write GrokHub makes on its own to a cabin skill, a connection (an
 //! MCP server in the native config), or an automation keeps the version it
@@ -43,6 +43,8 @@ pub const SKILL_LEDGER_FILE: &str = "skills.jsonl";
 pub const CONNECTION_LEDGER_FILE: &str = "connections.jsonl";
 /// The automations ledger inside [`CHANGES_DIR`].
 pub const AUTOMATION_LEDGER_FILE: &str = "automations.jsonl";
+/// The router's model-file ledger inside [`CHANGES_DIR`] (routing table versions).
+pub const MODEL_LEDGER_FILE: &str = "models.jsonl";
 /// Scope-guard findings inside [`CHANGES_DIR`].
 pub const FINDINGS_FILE: &str = "findings.jsonl";
 /// Detector name on a scope-guard finding.
@@ -74,16 +76,19 @@ pub enum ChangeKind {
     Connection,
     /// One job in `automations.json`.
     Automation,
+    /// A file the router keeps under `{config}/models/` (the routing table).
+    Model,
 }
 
 impl ChangeKind {
-    pub const ALL: [ChangeKind; 3] = [Self::Skill, Self::Connection, Self::Automation];
+    pub const ALL: [ChangeKind; 4] = [Self::Skill, Self::Connection, Self::Automation, Self::Model];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Skill => "skill",
             Self::Connection => "connection",
             Self::Automation => "automation",
+            Self::Model => "model",
         }
     }
 
@@ -96,6 +101,7 @@ impl ChangeKind {
             Self::Skill => SKILL_LEDGER_FILE,
             Self::Connection => CONNECTION_LEDGER_FILE,
             Self::Automation => AUTOMATION_LEDGER_FILE,
+            Self::Model => MODEL_LEDGER_FILE,
         }
     }
 
@@ -104,6 +110,7 @@ impl ChangeKind {
             Self::Skill => "skills",
             Self::Connection => "connections",
             Self::Automation => "automations",
+            Self::Model => "models",
         }
     }
 
