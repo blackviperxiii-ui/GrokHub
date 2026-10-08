@@ -17,6 +17,7 @@ The format follows Meta's "compass, not encyclopedia" write-up (Engineering at M
 | [grokhub-app](grokhub-app.md) | `crates/grokhub-app/`: the `grokhub` binary and its launch modes |
 | [app-module](app-module.md) | `crates/grokhub-app/src/app/`: the `Cabin` UI and its tests |
 | [app-config](app-config.md) | `crates/grokhub-app/src/config.rs`: `app.json` and safe disk stores |
+| [router](router.md) | Router R0–R1: model registry, passive health, model profiles, automatic effort (ladder, holdout guard), `/why` |
 | [self-improve](self-improve.md) | Spike-7: task outcomes, the weekly self-review, skill drafts, the replay gate, revert offers |
 | [heartbeat](heartbeat.md) | the 15 s pulse, the proactive-act throttle, scheduled jobs and Halt |
 | [desktop-mcp](desktop-mcp.md) | `crates/grokhub-app/src/desktop_mcp/` and `crates/grokhub-core/src/desktop_mcp.rs` |

@@ -224,7 +224,8 @@ impl Cabin {
         let (bearer, auth_kind) = self.native_cred()?;
         let workspace = self.native_workspace();
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
-        let effort = grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort).map(str::to_string);
+        // The router picks each call's effort; this is only the fallback for an unlisted class.
+        let effort = grokhub_agent::route::live::start_effort(grokhub_agent::route::live::DEFAULT_CLASS);
         let rules = grokhub_acp::cabin_rules_for(
             &grokhub_core::brief_for(&self.learning, "chat"),
             self.cfg.desktop_control,

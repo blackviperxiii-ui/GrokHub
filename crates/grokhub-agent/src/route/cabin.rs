@@ -28,46 +28,70 @@ impl Provider {
     }
 }
 
-/// One model call: where it goes and how hard it thinks.
+/// One model call: where it goes, what it is for, and how hard it thinks.
 #[derive(Debug, Clone, Copy)]
 pub struct ModelCall<'a> {
     pub provider: Provider,
     pub model: &'a str,
+    /// The router's pick once [`call_model`] has routed it (a listed class), else the caller's.
     pub effort: Option<&'a str>,
+    /// The route class (`background:summarize`, `chat:quick`).
+    pub class: &'a str,
     pub origin: Origin,
 }
 
 impl<'a> ModelCall<'a> {
     /// The origin is this thread's [`OriginScope`](crate::harness::OriginScope).
-    pub fn new(provider: Provider, model: &'a str, effort: Option<&'a str>) -> Self {
-        Self { provider, model, effort, origin: current_origin() }
+    pub fn new(provider: Provider, model: &'a str, effort: Option<&'a str>, class: &'a str) -> Self {
+        Self { provider, model, effort, class, origin: current_origin() }
     }
 }
 
-/// Run `send` for `call` and write its span. `send` returns the result plus
-/// the provider's usage report; a failed call is logged with no usage.
+/// Route `call` (the router picks the effort for a listed class), run `send`
+/// with it, and write its span. `send` returns the result plus the provider's
+/// usage report; a failed call is logged with no usage.
 pub fn call_model<T>(
     config_dir: &Path,
     call: &ModelCall<'_>,
     send: impl FnOnce(&ModelCall<'_>) -> Result<(T, ModelUsage), String>,
 ) -> Result<T, String> {
-    let out = send(call);
+    let mut rc = super::RouteCall { provider: call.provider.as_str(), class: call.class, model: call.model, effort: call.effort, ..Default::default() };
+    let decision = super::live::decide(config_dir, &rc, grokhub_core::now_ms());
+    if decision.paused() {
+        return Err(decision.pause_msg().into());
+    }
+    let effort = decision.send_effort(call.effort);
+    let model = decision.send_model(call.model);
+    let routed = ModelCall { effort: effort.as_deref(), model: &model, ..*call };
+    let started = std::time::Instant::now();
+    let out = send(&routed);
+    let elapsed = started.elapsed();
     let args = serde_json::json!({
-        "provider": call.provider.as_str(),
-        "model": call.model,
-        "effort": call.effort.unwrap_or(""),
+        "provider": routed.provider.as_str(),
+        "model": routed.model,
+        "effort": routed.effort.unwrap_or(""),
     })
     .to_string();
     let (result, usage) = match &out {
         Ok((_, usage)) => ("ok", Some(*usage)),
         Err(_) => ("error", None),
     };
-    let mut span = Span::soft_allow(MODEL_TRACE, MODEL_TOOL, &args, result, "", AccessMode::Supervised, call.provider.as_str())
-        .from_origin(call.origin)
+    let mut span = Span::soft_allow(MODEL_TRACE, MODEL_TOOL, &args, result, "", AccessMode::Supervised, routed.provider.as_str())
+        .from_origin(routed.origin)
         .on_path("model");
     span.access = String::new();
     span.usage = usage;
+    rc.effort = routed.effort;
+    rc.model = routed.model;
+    let error = out.as_ref().err().cloned().unwrap_or_default();
+    let done = super::RouteDone::cabin(out.is_ok(), usage.as_ref(), &error, elapsed, None);
+    let mut route = super::live::route_record(config_dir, &rc, &decision, &done);
+    route.span_id = span.span_ref();
+    span.route = Some(Box::new(route));
     let _ = append_span(config_dir, &span);
+    if let Some(obs) = super::live::observation(&rc, &done, span.ts_ms) {
+        let _ = grokhub_core::model_registry::store::append_observation(config_dir, &obs);
+    }
     out.map(|(value, _)| value)
 }
 
@@ -105,14 +129,15 @@ mod tests {
         });
         let got = {
             let _o = OriginScope::enter(Origin::Proactive);
-            let call = ModelCall::new(Provider::Xai, "grok-4-fast", Some("low"));
+            let call = ModelCall::new(Provider::Xai, "grok-4-fast", Some("high"), "background:summarize");
             call_model(&dir, &call, |c| {
+                // background:summarize runs at its class start (low), whatever the caller passed.
                 assert_eq!((c.model, c.effort), ("grok-4-fast", Some("low")));
                 Ok(("the reply", xai_usage(&reply)))
             })
         };
         assert_eq!(got, Ok("the reply"));
-        let failed = call_model(&dir, &ModelCall::new(Provider::Xai, "grok-4", None), |_| Err::<((), ModelUsage), _>("HTTP 500".into()));
+        let failed = call_model(&dir, &ModelCall::new(Provider::Xai, "grok-4", None, "chat:quick"), |_| Err::<((), ModelUsage), _>("HTTP 500".into()));
         assert_eq!(failed, Err("HTTP 500".to_string()));
         let spans = read_spans(&dir, MODEL_TRACE).unwrap();
         assert_eq!(spans.len(), 2);

@@ -69,6 +69,10 @@ pub struct Span {
     /// Spike-3b: tokens and cost of the model call this step made.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<crate::route::CallTokens>,
+    /// Router R0: what the router would have picked for this model call, and
+    /// why (shadow; the call itself used today's settings). No content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<Box<crate::route::log::RouteRecord>>,
 }
 
 /// What one model call used, as the provider reported it. Counts only.
@@ -145,6 +149,7 @@ impl Span {
             episode: String::new(),
             goal_step: String::new(),
             tokens: None,
+            route: None,
         }
     }
 
@@ -174,6 +179,7 @@ impl Span {
             episode: String::new(),
             goal_step: String::new(),
             tokens: None,
+            route: None,
         }
     }
 
@@ -203,6 +209,7 @@ impl Span {
             episode: String::new(),
             goal_step: String::new(),
             tokens: None,
+            route: None,
         }
     }
 
@@ -232,6 +239,7 @@ impl Span {
             episode: String::new(),
             goal_step: String::new(),
             tokens: None,
+            route: None,
         }
     }
 

@@ -177,6 +177,9 @@ mod harness_ui;
 mod inbox_ui;
 mod episode_ui;
 mod privacy_ui;
+mod router_ui;
+mod budget_ui;
+mod provider_ui;
 mod repair_ui;
 mod scope_ui;
 mod indexer_ui;
@@ -3428,6 +3431,7 @@ impl Cabin {
                     if !halted {
                         self.tick_indexers();
                     }
+                    self.tick_model_registry(halted);
                     if self.last_persist.elapsed() > Duration::from_secs(2) {
                         self.persist_bg();
                     }
@@ -5018,6 +5022,7 @@ impl eframe::App for Cabin {
         self.poll_mem_file();
         self.poll_recall();
         self.poll_privacy();
+        self.poll_why();
         self.poll_diagnose();
         self.poll_native_memory();
         self.drain_native_unattended_usage();

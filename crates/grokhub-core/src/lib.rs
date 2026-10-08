@@ -45,6 +45,7 @@ pub mod imagine_auth;
 pub mod inhabit;
 pub mod learning;
 pub mod md;
+pub mod model_registry;
 pub mod models;
 pub mod oauth;
 pub mod openclaw;
@@ -419,7 +420,7 @@ pub use situation::{echoes_source, learn_from_turns, LearnedMove, MoveKind};
 pub use slash::{
     filter_slash_commands, filter_slash_hits, grok_command_hits, is_cabin_slash_turn,
     mark_slash_result, parse_slash, resolve_mode_arg, slash_help, slash_kind, strip_slash_result,
-    unknown_cabin_slash, Slash, SlashDef, SlashHit, WorkflowVerb, SLASH_COMMANDS,
+    unknown_cabin_slash, Slash, SlashDef, SlashHit, WorkflowVerb, EFFORT_AUTO_MSG, SLASH_COMMANDS,
     SLASH_RESULT_PREFIX,
 };
 pub use state::{
@@ -530,7 +531,7 @@ pub use update_feed::{
     automation_home_note, clear_less_mute, hide_home_source, home_event_cards, mute_less_like,
     record_home_floors, refresh_event_why, runs_latest_line, source_hidden, surfaces_on_home,
     unhide_home_source, HOME_HIDDEN_NOTE, LESS_MUTE_MS,
-    post_update, release_quiet_hold, resume_needs_fresh_chat, schedule_created_card, self_change_card, done_for_you_card, DoneForYou,
+    post_update, release_quiet_hold, resume_needs_fresh_chat, schedule_created_card, self_change_card, router_update_card, done_for_you_card, DoneForYou,
     suggestion_card, tick_feed_pulse, visible_digests, visible_ideas, visible_updates,
     digest_lookup_prompt, digest_steer, drop_dead_links, parse_lookup, public_http_url, post_help, remember_dismissed_source,
     remember_turned_down, turned_down_titles, turned_down_topic,

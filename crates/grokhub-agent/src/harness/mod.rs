@@ -103,8 +103,9 @@ pub use changes::{
     record_change, record_skill_change, restore_change, restore_skill, scope_guard, skill_history_dir,
     skill_ledger_path, take_self_changes, undo_change, undo_skill_change, Change, ChangeKind, ChangeLedger,
     ChangeOp, ChangeTarget, Reverted, ScopeFinding, SkillTarget, UndoAsk, AUTOMATION_LEDGER_FILE, CHANGES_DIR,
-    CONNECTION_LEDGER_FILE, FINDINGS_FILE, HISTORY_CAP, LEDGER_LINE_CAP, LEDGER_SCOPE_VIOLATION, SKILL_LEDGER_FILE,
+    CONNECTION_LEDGER_FILE, FINDINGS_FILE, HISTORY_CAP, LEDGER_LINE_CAP, LEDGER_SCOPE_VIOLATION, MODEL_LEDGER_FILE, SKILL_LEDGER_FILE,
 };
+pub(crate) use changes::private_write;
 pub use self_improve::{
     last_recorded_run, outcome_from_spans, patch_marks, reject_live_replay, replay_gate, replay_patch, run_weekly,
     spans_for, ReplayOpts, WeeklyPass, REPLAY_LIVE_REFUSED, REPLAY_TOOL, SELF_REVIEW_SESSION, SELF_REVIEW_TOOL,
@@ -115,12 +116,12 @@ pub use self_manage::{
 };
 pub(crate) use self_manage::{forget_connection_token, seal_connection_token};
 pub use consent::{
-    consent_path, grant_destination, grant_scope, revoke_grant, scope_excluded, scope_refusal,
+    consent_path, grant_destination, grant_premium, grant_scope, revoke_grant, scope_excluded, scope_refusal,
     ConsentLedger, Grant, Scope, UserClick, CONSENT_FILE, SCOPE_HARD_EXCLUDES, SCOPE_KINDS,
 };
 pub use egress::{
-    append_egress, current_origin, egress_dest, egress_path, guard_egress, guard_or_park, guard_quiet,
-    is_local_dest, is_model_host, model_text_classes, read_egress, read_egress_report, record_approved_once,
+    append_egress, current_origin, egress_dest, egress_path, guard_egress, guard_or_park, guard_provider, guard_quiet,
+    is_local_dest, is_model_host, model_text_classes, provider_or_park, read_egress, read_egress_report, record_approved_once,
     DataClass, EgressBasis, EgressLine, EgressRead, EgressReq, OriginScope, RecallScope, EGRESS_FILE,
     HUB_DEST, HUB_SYNC_DATA,
 };
