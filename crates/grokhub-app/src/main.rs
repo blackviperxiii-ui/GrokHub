@@ -34,6 +34,7 @@ mod store;
 mod oauth;
 mod imagine_auth;
 mod secrets;
+mod self_mcp;
 mod skills;
 mod threads;
 mod tray;
@@ -64,7 +65,7 @@ fn main() {
     ensure_windows_home();
     let launch = parse_args(&env::args().collect::<Vec<_>>());
     match launch {
-        Launch::Cabin | Launch::Agent | Launch::McpDesktop | Launch::McpCua => {}
+        Launch::Cabin | Launch::Agent | Launch::McpDesktop | Launch::McpCua | Launch::McpSelf => {}
         Launch::Hub => attach_cli_console(true),
         Launch::Version | Launch::Help | Launch::Doctor | Launch::Update | Launch::Oauth => {
             attach_cli_console(false)
@@ -77,12 +78,12 @@ fn main() {
         Launch::Help => {
             #[cfg(windows)]
             eprint!(
-                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --mcp-desktop  desktop tools on stdin (no window)\n  grokhub --mcp-cua      Cua Driver gate on stdin (Linux, spike flag)\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  only what is newer: grok update --alpha, then GitHub zip or source overlay\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
+                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --mcp-desktop  desktop tools on stdin (no window)\n  grokhub --mcp-cua      Cua Driver gate on stdin (Linux, spike flag)\n  grokhub --mcp-self  Grok's skill, connection, and automation tools on stdin (no window)\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  only what is newer: grok update --alpha, then GitHub zip or source overlay\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
                 env!("CARGO_PKG_VERSION")
             );
             #[cfg(not(windows))]
             eprint!(
-                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --mcp-desktop  desktop tools on stdin (no window)\n  grokhub --mcp-cua      Cua Driver gate on stdin (Linux, spike flag)\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  only what is newer: grok update --alpha, then git pull + install.sh --user\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
+                "grokhub {} — native cabin\n\n  grokhub           cabin (close stays in the tray)\n  grokhub --agent   cabin in the tray, window hidden\n  grokhub --hub     LAN hub only\n  grokhub --mcp-desktop  desktop tools on stdin (no window)\n  grokhub --mcp-cua      Cua Driver gate on stdin (Linux, spike flag)\n  grokhub --mcp-self  Grok's skill, connection, and automation tools on stdin (no window)\n  grokhub --oauth   xAI device-code (Grok)\n  grokhub --update  only what is newer: grok update --alpha, then git pull + install.sh --user\n  grokhub --doctor  auth / memory / hub kind\n  grokhub --version\n",
                 env!("CARGO_PKG_VERSION")
             );
         }
@@ -96,6 +97,10 @@ fn main() {
         }
         Launch::McpCua => {
             let code = desktop_mcp::run_cua_stdio();
+            std::process::exit(code);
+        }
+        Launch::McpSelf => {
+            let code = self_mcp::run_stdio();
             std::process::exit(code);
         }
         Launch::Agent => {

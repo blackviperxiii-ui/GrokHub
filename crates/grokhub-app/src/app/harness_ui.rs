@@ -217,6 +217,12 @@ pub(super) struct HarnessState {
     pub lock_seen: Option<(Instant, Option<hx::Locked>)>,
     /// `/privacy` output on its way from the reader thread.
     pub privacy_rx: Option<mpsc::Receiver<String>>,
+    /// `/diagnose` or a "check my computer" answer on its way (Spike-8b).
+    pub diagnose_rx: Option<mpsc::Receiver<(String, bool)>>,
+    /// The running diagnose came from `/diagnose`, so it posts as a slash result.
+    pub diagnose_slash: bool,
+    /// The chat that asked for the running diagnose; its answer goes there.
+    pub diagnose_chat: String,
     /// Settings → Permissions: the folder typed for a new files scope.
     pub scope_folder: String,
     /// Settings → Permissions: the browser picked for a history scope.
@@ -239,6 +245,8 @@ pub(super) struct HarnessState {
     pub work_rows: Vec<super::change_undo::ChangeRow>,
     /// The rows of the last day were read back from disk.
     pub work_rows_loaded: bool,
+    /// Ledger lines another process wrote (`grokhub --mcp-self`, Spike-5c).
+    pub ledger_watch: super::change_undo::LedgerWatch,
     /// True only while `send_from_composer` hands the user's own typed line
     /// to `send_chat`. `/skills undo` and `/skills restore` act on it; from
     /// anywhere else they only show the Undo rows.
@@ -289,10 +297,12 @@ pub(super) fn perm_card_eyebrow(p: &grokhub_acp::PermissionAsk) -> &'static str 
     if is_desktop_ask(p) { "Desktop" } else { "Tool" }
 }
 
-/// Typed text never lands in a span: a desktop `type` logs its length only.
+/// Typed text never lands in a span: a desktop `type` (or Cua's `type_text`
+/// and `set_value`) logs its length only.
 pub(super) fn span_args(tool: &str, action: &str) -> String {
     let t = tool.to_ascii_lowercase();
-    if t == "type" || t.ends_with("__type") {
+    let leaf = t.rsplit("__").next().unwrap_or(&t);
+    if matches!(leaf, "type" | "type_text" | "set_value") {
         format!(r#"{{"chars":{}}}"#, action.chars().count())
     } else {
         action.to_string()
@@ -618,15 +628,14 @@ impl Cabin {
         } else {
             hx::Span::deny(&trace, &park.tool, &span_args(&park.tool, &park.action), why, park.class.as_str())
         };
+        // An episode park's outcome span is the kernel's (Spike-3b).
+        let kernel_park =
+            matches!(&park.source, ParkSource::Desk(id) if id.starts_with(grokhub_agent::episode::PARK_PREFIX));
         if let ParkSource::AutoPrepared(_) = park.source {
             let mut span = span.on_path(park.path).from_origin(hx::Origin::Proactive);
             span.access = self.access_mode().as_str().into();
             hx::note_proactive(&crate::config::config_dir(), &span);
-        } else {
-        // An episode park's outcome span is the kernel's (Spike-3b).
-        let kernel_park =
-            matches!(&park.source, ParkSource::Desk(id) if id.starts_with(grokhub_agent::episode::PARK_PREFIX));
-        if !kernel_park {
+        } else if !kernel_park {
             self.write_span(span, park.path);
         }
         match &park.source {
@@ -672,7 +681,10 @@ impl Cabin {
                 }
             }
         }
-        self.status = if approve {
+        self.status = if approve && kernel_park && !self.running {
+            // The kernel runs the step at its next loop, which a message starts.
+            format!("Approved once · {} · send a message to let the session go on", park.class.label())
+        } else if approve {
             format!("Approved once · {}", park.class.label())
         } else {
             format!("Denied · {}", park.class.label())
@@ -1371,9 +1383,9 @@ impl Cabin {
                 self.resolve_grant_full(grant, "Jeremy kept Supervised");
             }
         }
-        self.paint_work_rows(ui);
         // Spike-8a: in-context scope asks, same card shape, click only.
         self.paint_scope_asks(ui);
+        self.paint_work_rows(ui);
     }
 
     /// An inbox row asked for this card: bring what was just painted (from
@@ -1789,6 +1801,9 @@ mod tests {
         assert_eq!(logged, vec![("approve", r#"{"chars":20}"#)], "typed text stays out of spans");
         assert_eq!(span_args("grokhub-desktop__type", "hunter2"), r#"{"chars":7}"#);
         assert_eq!(span_args("run_terminal_command", "rm -f x"), "rm -f x");
+        assert_eq!(span_args("grokhub-cua__type_text", "hunter2"), r#"{"chars":7}"#);
+        assert_eq!(span_args("mcp__grokhub-cua__set_value", "s3cret"), r#"{"chars":6}"#);
+        assert_eq!(span_args("grokhub-cua__press_key", "Return"), "Return");
         let turn = hx::read_turn_context(&root);
         assert_eq!(turn.chat_id, "session");
         assert_eq!(turn.access, "readonly");

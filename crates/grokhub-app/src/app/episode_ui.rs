@@ -35,6 +35,9 @@ pub(super) struct EpisodeUi {
     /// The next native prompt carries the user's Continue.
     pub resume: bool,
     pub counted_ms: u64,
+    /// How far into the chat's span file `steps` has counted, so each count
+    /// reads only the lines written since (the file grows every step).
+    pub counted_bytes: u64,
 }
 
 impl EpisodeUi {
@@ -50,6 +53,7 @@ impl EpisodeUi {
             paused: false,
             resume: false,
             counted_ms: 0,
+            counted_bytes: 0,
         }
     }
 
@@ -65,6 +69,30 @@ impl EpisodeUi {
         let ran = now.saturating_sub(self.started_ms);
         (ran >= self.wall_cap_ms).then_some(ep::CapHit::Wall(ran / 60_000))
     }
+}
+
+/// Steps of episode `id` in the span file past byte `from`, and the byte the
+/// count reached (the end of the last whole line). A file shorter than `from`
+/// is counted from the start. Runs on the UI thread, so it never re-reads
+/// what it already counted.
+fn count_new_steps(path: &std::path::Path, from: u64, id: &str) -> (u32, u64) {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return (0, 0);
+    };
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let start = if len < from { 0 } else { from };
+    let mut buf = Vec::new();
+    if file.seek(SeekFrom::Start(start)).is_err() || file.read_to_end(&mut buf).is_err() {
+        return (0, start);
+    }
+    let whole = buf.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
+    let steps = String::from_utf8_lossy(&buf[..whole])
+        .lines()
+        .filter_map(|l| serde_json::from_str::<hx::Span>(l.trim()).ok())
+        .filter(|s| is_episode_step(s, id))
+        .count() as u32;
+    (steps, start + whole as u64)
 }
 
 /// A step of an episode, as the header counts it: a tool call the gate
@@ -151,9 +179,36 @@ impl Cabin {
             span.claim = e.header(now_ms());
             let span = span.in_episode(&e.id).on_path("E").in_turn(&e.chat_id, self.turn_no());
             let _ = hx::append_span(&crate::config::config_dir(), &span);
+            self.deny_episode_parks(&e);
         }
         self.harness.soft_parks.retain(|p| p.detector != EPISODE_CAP_DETECTOR);
         self.harness.episode = None;
+    }
+
+    /// An episode ended with no kernel turn to read its parks: their cards go
+    /// and each is denied with a span, so a later Approve can't land nowhere.
+    fn deny_episode_parks(&mut self, e: &EpisodeUi) {
+        let prefix = format!("{}{}-", ep::PARK_PREFIX, e.id);
+        let mine = |p: &super::harness_ui::HardParkUi| matches!(&p.source, super::harness_ui::ParkSource::Desk(id) if id.starts_with(&prefix));
+        let mut gone: Vec<super::harness_ui::HardParkUi> = Vec::new();
+        if self.harness.park.as_ref().is_some_and(mine) {
+            gone.extend(self.harness.park.take());
+        }
+        let (drop, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut self.harness.queue).into_iter().partition(|p| mine(p));
+        self.harness.queue = keep.into();
+        gone.extend(drop);
+        if self.harness.park.is_none() {
+            self.harness.park = self.harness.queue.pop_front();
+        }
+        let dir = crate::config::config_dir();
+        for park in gone {
+            if let super::harness_ui::ParkSource::Desk(id) = &park.source {
+                hx::clear_park(&dir, id);
+            }
+            let args = super::harness_ui::span_args(&park.tool, &park.action);
+            let span = hx::Span::deny(&e.chat_id, &park.tool, &args, "episode ended — fail-closed Deny", park.class.as_str());
+            let _ = hx::append_span(&dir, &span.in_episode(&e.id).on_path("E"));
+        }
     }
 
     fn write_episode_marker(&self, decision: &str, result: &str, claim: &str) {
@@ -184,16 +239,19 @@ impl Cabin {
         if now.saturating_sub(e.counted_ms) < STEP_COUNT_EVERY_MS {
             return;
         }
-        let (id, chat) = (e.id.clone(), e.chat_id.clone());
-        let steps = hx::read_spans(&crate::config::config_dir(), &chat)
-            .map(|spans| spans.iter().filter(|s| is_episode_step(s, &id)).count() as u32)
-            .unwrap_or(0);
+        let (id, chat, from) = (e.id.clone(), e.chat_id.clone(), e.counted_bytes);
+        let (new_steps, upto) = count_new_steps(&hx::span_path(&crate::config::config_dir(), &chat), from, &id);
         let native = self.native_engine_for_current();
         let Some(e) = self.harness.episode.as_mut() else {
             return;
         };
         e.counted_ms = now;
-        e.steps = steps;
+        if upto < from {
+            // The file was cut or replaced: count it again from the start.
+            e.steps = 0;
+        }
+        e.steps = e.steps.saturating_add(new_steps);
+        e.counted_bytes = upto;
         if native || e.paused || !self.running {
             return;
         }
@@ -376,6 +434,30 @@ mod tests {
     }
 
     #[test]
+    fn the_step_count_reads_only_new_lines_and_never_counts_twice() {
+        let (_pin, root) = pinned("episode-count");
+        let mut cabin = desk_cabin();
+        cabin.harness_user_sent();
+        for x in 0..3 {
+            step(&cabin, x);
+        }
+        cabin.poll_episode();
+        let seen = cabin.episode_here().unwrap().counted_bytes;
+        assert_eq!(cabin.episode_here().unwrap().steps, 3);
+        let path = hx::span_path(&root, &cabin.episode_here().unwrap().chat_id);
+        assert_eq!(seen, std::fs::metadata(&path).unwrap().len());
+        for x in 3..5 {
+            step(&cabin, x);
+        }
+        cabin.harness.episode.as_mut().unwrap().counted_ms = 0;
+        cabin.poll_episode();
+        assert_eq!(cabin.episode_here().unwrap().steps, 5);
+        cabin.harness.episode.as_mut().unwrap().counted_ms = 0;
+        cabin.poll_episode();
+        assert_eq!(cabin.episode_here().unwrap().steps, 5, "nothing new, nothing added");
+    }
+
+    #[test]
     fn the_step_cap_pause_is_counted_and_only_the_user_continues() {
         let (_pin, root) = pinned("episode-cap");
         let mut cabin = desk_cabin();
@@ -448,6 +530,28 @@ mod tests {
         cabin.resolve_hard_park(false, "Denied");
         assert_eq!(hx::take_answer(&root, &id), Some(false), "the kernel reads the answer");
         assert!(spans(&root).is_empty(), "the kernel writes the deny span, not the cabin");
+    }
+
+    #[test]
+    fn an_episode_that_ends_idle_denies_its_open_parks() {
+        let (_pin, root) = pinned("episode-park-idle");
+        let mut cabin = desk_cabin();
+        cabin.episode_user_sent(false);
+        let eid = cabin.harness.episode.as_ref().unwrap().id.clone();
+        let id = format!("{}{eid}-3", ep::PARK_PREFIX);
+        hx::post_park(
+            &root,
+            &hx::ParkRequest { id: id.clone(), path: "E".into(), tool: "click".into(), action: "click".into(), class: "send".into(), ts_ms: 1 },
+        )
+        .unwrap();
+        cabin.poll_harness();
+        assert_eq!(cabin.harness.park.as_ref().map(|p| p.source.clone()), Some(ParkSource::Desk(id.clone())));
+        cabin.end_episode(ep::EpisodeEnd::Idle);
+        assert!(cabin.harness.park.is_none(), "the card goes with the episode");
+        assert_eq!(hx::take_answer(&root, &id), None, "no answer is left for anyone to act on");
+        let deny = spans(&root).into_iter().find(|s| s.tool == "click").expect("a deny span");
+        assert_eq!((deny.decision.as_str(), deny.result.as_str()), ("deny", "episode ended — fail-closed Deny"));
+        assert_eq!(deny.episode, eid);
     }
 
     #[test]

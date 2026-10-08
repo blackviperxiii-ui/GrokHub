@@ -30,6 +30,85 @@ const WORK_ROW_MS: u64 = 24 * 60 * 60 * 1000;
 const REASON_SHOWN: usize = 72;
 /// Height of one row: the pill's own height.
 const ROW_H: f32 = 28.0;
+/// How often the cabin looks at the ledger files for lines another process
+/// (`grokhub --mcp-self`) wrote.
+const LEDGER_LOOK_MS: u64 = 1_000;
+/// Self-made lines remembered as already shown.
+const POSTED_KEPT: usize = 64;
+
+/// What the cabin already knows of the ledger files. `grokhub --mcp-self`
+/// runs in its own process, so its lines never reach `take_self_changes`;
+/// the cabin reads them from disk instead.
+#[derive(Debug, Default)]
+pub(crate) struct LedgerWatch {
+    /// Ledger lines up to this seq (per `ChangeKind::ALL`) were on disk when
+    /// the cabin first looked, or have been read since.
+    seen: [u64; 3],
+    /// File length per kind at the last look.
+    lens: [u64; 3],
+    /// Self-made lines already shown, from either path.
+    posted: Vec<(ChangeKind, u64)>,
+    /// The next look, in ms.
+    pub(crate) next_ms: u64,
+}
+
+fn kind_slot(kind: ChangeKind) -> usize {
+    ChangeKind::ALL.iter().position(|k| *k == kind).unwrap_or(0)
+}
+
+fn ledger_len(dir: &std::path::Path, kind: ChangeKind) -> u64 {
+    std::fs::metadata(hx::ledger_path(dir, kind)).map(|m| m.len()).unwrap_or(0)
+}
+
+impl LedgerWatch {
+    /// Everything on disk now counts as seen.
+    fn baseline(&mut self, dir: &std::path::Path) {
+        for kind in ChangeKind::ALL {
+            let i = kind_slot(kind);
+            self.lens[i] = ledger_len(dir, kind);
+            self.seen[i] = hx::ChangeLedger::load_kind(dir, kind).all().iter().map(|c| c.seq).max().unwrap_or(0);
+        }
+    }
+
+    /// True the first time a line is shown.
+    fn first_post(&mut self, kind: ChangeKind, seq: u64) -> bool {
+        if self.posted.contains(&(kind, seq)) {
+            return false;
+        }
+        self.posted.push((kind, seq));
+        if self.posted.len() > POSTED_KEPT {
+            self.posted.remove(0);
+        }
+        true
+    }
+
+    /// Self-made lines written to disk since the last look and not shown yet.
+    fn read_new(&mut self, dir: &std::path::Path, now_ms: u64) -> Vec<(ChangeKind, hx::Change)> {
+        if now_ms < self.next_ms {
+            return Vec::new();
+        }
+        self.next_ms = now_ms + LEDGER_LOOK_MS;
+        let mut out = Vec::new();
+        for kind in ChangeKind::ALL {
+            let i = kind_slot(kind);
+            let len = ledger_len(dir, kind);
+            if len == self.lens[i] {
+                continue;
+            }
+            self.lens[i] = len;
+            let ledger = hx::ChangeLedger::load_kind(dir, kind);
+            let seen = self.seen[i];
+            for c in ledger.all().iter().filter(|c| c.seq > seen) {
+                let made = matches!(c.op, ChangeOp::Create | ChangeOp::Modify | ChangeOp::Delete);
+                if made && c.origin == Origin::SelfManage && self.first_post(kind, c.seq) {
+                    out.push((kind, c.clone()));
+                }
+            }
+            self.seen[i] = ledger.all().iter().map(|c| c.seq).max().unwrap_or(0).max(self.seen[i]);
+        }
+        out
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ChangeAct {
@@ -260,8 +339,18 @@ impl Cabin {
             self.harness.work_rows_loaded = true;
             let auto = self.auto_lines();
             self.harness.work_rows = work_rows_from_disk(&dir, now_ms(), &|kind, seq| auto.contains(&(kind, seq)));
+            self.harness.ledger_watch.baseline(&dir);
         }
-        let fresh = hx::take_self_changes(&dir);
+        let watch = &mut self.harness.ledger_watch;
+        let mut fresh: Vec<(ChangeKind, hx::Change)> =
+            hx::take_self_changes(&dir).into_iter().filter(|(kind, c)| watch.first_post(*kind, c.seq)).collect();
+        let elsewhere = watch.read_new(&dir, now_ms());
+        if elsewhere.iter().any(|(kind, _)| *kind == ChangeKind::Automation) {
+            // Another process wrote the file; the cabin's list must match it,
+            // or its next save drops that automation.
+            self.automations = crate::night::load();
+        }
+        fresh.extend(elsewhere);
         if fresh.is_empty() {
             return;
         }

@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use super::verify::{verify_gate, Observation, Verdict};
 use super::view::{zoom_schema, EpisodeView, Folder, ZOOM_TOOL};
-use super::{CapHit, Episode, EpisodeEnd, OpenPark, StepShape, FANOUT_CAP, PARK_PREFIX};
+use super::{CapHit, Episode, EpisodeEnd, OpenPark, StepShape, FANOUT_CAP, GOAL_CAP, PARK_PREFIX};
 use crate::client::{ContentPart, FunctionCall, InputItem, ModelClient, Usage};
 use crate::gate::{self, Decision, Gate, PermAnswer, PermitWait, Waited};
 use crate::harness::{
@@ -89,6 +89,8 @@ pub struct KernelIn<'a> {
     pub clock: &'a dyn Fn() -> u64,
     /// Secrets the user typed this session.
     pub held: &'a [String],
+    /// The workspace's permission rules (`.grok` deny / ask), as in `prompt`.
+    pub perms: Option<&'a crate::perm::Policy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,7 +185,7 @@ pub fn run_episode(
 ) -> EpisodeOut {
     let mut run = Run { k, ep, view, usage: Usage::default(), tokens: None, obs: None };
     if run.ep.trail.is_empty() {
-        let goal = format!("goal: {}", run.ep.goal);
+        let goal = format!("goal: {}", run.ep.goal.chars().take(GOAL_CAP).collect::<String>());
         run.write(run.ep.marker("begin", "open", &goal));
     }
     if let Some(end) = run.ep.ended {
@@ -210,6 +212,9 @@ pub fn run_episode(
         }
         let turn = match run.ask_worker() {
             Ok(turn) => turn,
+            // Stop or Halt mid-call: the top of the loop ends the episode
+            // and denies its parks.
+            Err(_) if k.halt.halted() || k.cancel.is_cancelled() => continue,
             Err(err) => return run.out(EpisodeStop::Error(err), String::new()),
         };
         on_event(LoopEvent::Usage(run.usage.clone()));
@@ -247,6 +252,7 @@ impl Run<'_, '_> {
 
     fn write(&mut self, span: Span) {
         let mut span = span.on_path("E").in_turn(&self.ep.chat_id, self.ep.turn).in_episode(&self.ep.id);
+        span.goal_step = span.goal_step.chars().take(GOAL_CAP).collect();
         if span.access.is_empty() {
             span.access = self.k.access.as_str().into();
         }
@@ -294,7 +300,7 @@ impl Run<'_, '_> {
             return None;
         }
         let desk = tools::desk_flags("screenshot", &self.k.gate, Some(self.k.desktop));
-        match gate::decide_with(&self.k.gate, "screenshot", "{}", false, desk, self.k.workspace, None) {
+        match gate::decide_with(&self.k.gate, "screenshot", "{}", false, desk, self.k.workspace, self.k.perms) {
             Decision::Run => Some(Observation::from_output(&self.k.desktop.call("screenshot", &json!({})))),
             _ => None,
         }
@@ -526,7 +532,10 @@ impl Run<'_, '_> {
     /// One model turn's calls. Independent reads fan out; everything else
     /// runs in order. A parked or denied hard step stops the rest.
     fn batch(&mut self, calls: &[FunctionCall], on_event: &mut dyn FnMut(LoopEvent)) -> Option<EpisodeStop> {
-        let reads = calls.len() > 1 && calls.iter().all(|c| is_read(&c.name));
+        // Only reads every gate allows fan out; a denied or asked read takes
+        // the one-at-a-time path, which answers it.
+        let reads = calls.len() > 1
+            && calls.iter().all(|c| is_read(&c.name) && matches!(self.verdict(c), GateOutcome::Allow));
         if reads {
             return self.fan(calls, on_event);
         }
@@ -669,7 +678,7 @@ impl Run<'_, '_> {
             return GateOutcome::Allow;
         }
         let desk = tools::desk_flags(&call.name, &self.k.gate, Some(self.k.desktop));
-        match gate::decide_with(&self.k.gate, &call.name, &call.arguments, false, desk, self.k.workspace, None) {
+        match gate::decide_with(&self.k.gate, &call.name, &call.arguments, false, desk, self.k.workspace, self.k.perms) {
             Decision::Run => GateOutcome::Allow,
             Decision::Ask => GateOutcome::Park { reason: format!("permission ask for `{}`", call.name), hard: None, needs_jeremy: false },
             Decision::Refuse(reason) => GateOutcome::Refuse { reason },

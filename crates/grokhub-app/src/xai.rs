@@ -154,8 +154,6 @@ pub fn grok_chat(
     if key.is_empty() {
         return Err("Connect Grok in Settings".into());
     }
-    let call = route::ModelCall::new(route::Provider::Xai, model, effort);
-    route::call_model(&crate::config::config_dir(), &call, |call| {
     let call = route::cabin::ModelCall::new(route::cabin::Provider::Xai, model, effort);
     route::cabin::call_model(&crate::config::config_dir(), &call, |call| {
         grok_chat_once(key, call, messages, image_data_url)
@@ -165,7 +163,6 @@ pub fn grok_chat(
 /// One routed chat call: Responses first, then Chat Completions.
 fn grok_chat_once(
     key: &str,
-    call: &route::ModelCall<'_>,
     call: &route::cabin::ModelCall<'_>,
     messages: &[(String, String)],
     image_data_url: Option<&str>,
@@ -174,7 +171,6 @@ fn grok_chat_once(
     let responses = responses_request_body(call.model, messages, image_data_url, call.effort);
     if let Ok(v) = grok_json(&responses_url(), key, responses, timeout) {
         if let Some(text) = merge_reply(&v) {
-            return Ok((text, route::xai_usage(&v)));
             return Ok((text, route::cabin::xai_usage(&v)));
         }
     }
@@ -186,7 +182,6 @@ fn grok_chat_once(
         timeout,
     )?;
     let text = merge_reply(&v).ok_or_else(|| "empty Grok reply".to_string())?;
-    Ok((text, route::xai_usage(&v)))
     Ok((text, route::cabin::xai_usage(&v)))
 }
 

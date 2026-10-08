@@ -653,6 +653,12 @@ fn watch_lines(
                 );
                 pending.clear();
             }
+            // A stop that lands between the check above and the phase read
+            // kills the owned task first; report it as the cancel it was.
+            if stop.load(Ordering::SeqCst) || hub.is_halted() {
+                hub.push_notice(format!("Monitor {label} cancelled."));
+                break;
+            }
             let why = match phase {
                 Phase::Exited(code) => format!("exit {code}"),
                 Phase::Killed => "killed".into(),

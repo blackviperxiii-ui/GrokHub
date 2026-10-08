@@ -39,12 +39,7 @@
 //! and the native dispatch, only when a change-ledger target exists, and
 //! links the ledger line on its span (`undo_ref`).
 //!
-//! Spike-5a: `mindcheck` folds denies, undos, approves and Pulse dismisses
-//! into a prior per action class ("if unsure whether you'd be upset, ask").
-//! It is a soft-path input to `decide` (`Step::Proactive`), never a second
-//! gate, and never touches hard class. An agent-started memory forget is
-//! hard class Delete (`agent_forget`).
-//!
+
 //! Spike-1a safety loop: `detect` catches failed or looping actions and
 //! unbacked claims, `audit` runs them in two cheap passes, and `ladder`
 //! recovers (retry once, backtrack) or pauses for the user. Hard class is
@@ -58,9 +53,6 @@
 //! node at turn end, from already-redacted span fields only; `span_search`
 //! reads `spans/*.jsonl` for History and palette search. Both only read
 //! spans and never execute anything.
-//! Spike-2b: a click is classified by the control it lands on (`hard.rs`
-//! `click_target_class`): a Send, Pay, Delete or Reset button parks before
-//! the click runs, on every path, and spans keep only the matched rule.
 
 mod access;
 mod approval;

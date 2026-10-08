@@ -48,9 +48,6 @@ pub struct Span {
     /// and the "why" can find it (Spike-6b). Empty for every other step.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub undo_ref: String,
-    /// Tokens and cost of a model call (Spike-4c router). Absent on every other step.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage: Option<ModelUsage>,
     /// Spike-2b: where a click's target came from: the cabin's AX read (`ax`),
     /// the caller's args (`args`), or nothing found (`unknown`). Empty otherwise.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -72,21 +69,6 @@ pub struct Span {
     /// Spike-3b: tokens and cost of the model call this step made.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<crate::route::CallTokens>,
-}
-
-/// What one model call used, as the provider reported it. Counts only.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ModelUsage {
-    #[serde(default)]
-    pub input_tokens: u64,
-    #[serde(default)]
-    pub cached_tokens: u64,
-    #[serde(default)]
-    pub output_tokens: u64,
-    #[serde(default)]
-    pub reasoning_tokens: u64,
-    #[serde(default)]
-    pub cost_in_usd_ticks: i64,
 }
 
 /// What one model call used, as the provider reported it. Counts only.
@@ -157,7 +139,6 @@ impl Span {
             origin: Origin::User,
             consent_ref: String::new(),
             undo_ref: String::new(),
-            usage: None,
             target: String::new(),
             target_rule: String::new(),
             usage: None,
@@ -187,7 +168,6 @@ impl Span {
             origin: Origin::User,
             consent_ref: String::new(),
             undo_ref: String::new(),
-            usage: None,
             target: String::new(),
             target_rule: String::new(),
             usage: None,
@@ -217,7 +197,6 @@ impl Span {
             origin: Origin::User,
             consent_ref: String::new(),
             undo_ref: String::new(),
-            usage: None,
             target: String::new(),
             target_rule: String::new(),
             usage: None,
@@ -247,7 +226,6 @@ impl Span {
             origin: Origin::User,
             consent_ref: String::new(),
             undo_ref: String::new(),
-            usage: None,
             target: String::new(),
             target_rule: String::new(),
             usage: None,

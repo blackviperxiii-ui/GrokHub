@@ -319,6 +319,9 @@ fn day_of(stamp: &str) -> &str {
     stamp.get(..10).unwrap_or(stamp)
 }
 
+/// `trail_id` ids: `trail-<12 hex>`.
+const TRAIL_ID_PREFIX: &str = "trail-";
+
 /// How each live node is linked.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Linked {
@@ -354,6 +357,20 @@ impl AmrStore {
         nodes.sort_by(rank);
         let mut links: BTreeMap<String, Linked> = BTreeMap::new();
         for edge in self.edges()? {
+            // Spike-3a trail links say where a note came up, not what it
+            // means: they keep the trail out of the dream, never the note.
+            let trail = |id: &str| id.starts_with(TRAIL_ID_PREFIX);
+            match edge.rel {
+                EdgeRel::References if trail(&edge.from) => {
+                    links.insert(edge.from.clone(), Linked::Other);
+                    continue;
+                }
+                EdgeRel::LearnedFromSpan if trail(&edge.to) => {
+                    links.insert(edge.to.clone(), Linked::Other);
+                    continue;
+                }
+                _ => {}
+            }
             let from = links.entry(edge.from.clone()).or_insert(Linked::None);
             *from = match (*from, edge.rel) {
                 (Linked::None | Linked::WinnerOnly, EdgeRel::Supersedes) => Linked::WinnerOnly,
@@ -712,6 +729,27 @@ mod tests {
         }
         assert_eq!(store.live_from_source("scope:").0.len(), 3);
         assert_eq!(store.live_from_source("scope:system_state").0.len(), 1);
+    }
+
+    /// A trail that mentions a note (and a fact learned from that turn) does
+    /// not keep the note from being retired; the trail itself stays.
+    #[test]
+    fn trail_links_do_not_freeze_the_notes_they_mention() {
+        let tmp = Tmp::new("trail-links");
+        let store = AmrStore::at(&tmp.0);
+        store.init().unwrap();
+        let trail_id = crate::amr::trail_id("chat-1", 3);
+        let mut trail = node(&trail_id, "Turn 3: 2 clicks, 1 type", 1.0, OLD, &["trail"]);
+        trail.node_type = NodeType::Trail;
+        store.remember(&trail).unwrap();
+        store.remember(&node("old-guess", "Unsure which harbor the keeper means", 0.2, OLD, &["guess"])).unwrap();
+        store.remember(&node("learned", "Keeps the harbor map pinned", 0.2, OLD, &["map"])).unwrap();
+        store.link(&trail_id, "old-guess", EdgeRel::References).unwrap();
+        store.link("learned", &trail_id, EdgeRel::LearnedFromSpan).unwrap();
+        store.dream_once(NOW, &DreamOpts::default()).unwrap();
+        assert!(store.is_forgotten("old-guess"), "a stale note a trail mentions is still retired");
+        assert!(store.is_forgotten("learned"), "a stale fact learned in the turn is still retired");
+        assert!(!store.is_forgotten(&trail_id), "the trail stays");
     }
 
     #[test]

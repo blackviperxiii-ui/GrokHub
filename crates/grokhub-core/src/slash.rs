@@ -61,6 +61,8 @@ pub enum Slash {
     Sync,
     /// `/privacy`: grants, learning scopes, and what left this computer (Spike-4a). Read only.
     Privacy,
+    /// `/diagnose`: read-only checks of disk, memory, services, logs, network and updates (Spike-8b).
+    Diagnose,
     Hub,
     Inhabit(String),
     Rewind,
@@ -301,6 +303,7 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/send" if !rest.is_empty() => Some(Slash::Send(rest.to_string())),
         "/sync" => Some(Slash::Sync),
         "/privacy" => Some(Slash::Privacy),
+        "/diagnose" => Some(Slash::Diagnose),
         "/hub" => Some(Slash::Hub),
         "/inhabit" if !rest.is_empty() => Some(Slash::Inhabit(rest.to_string())),
         "/rewind" if rest == "--files" || rest == "--code" || rest == "files" => {
@@ -432,6 +435,7 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Send(_) => "send",
         Slash::Sync => "sync",
         Slash::Privacy => "privacy",
+        Slash::Diagnose => "diagnose",
         Slash::Hub => "hub",
         Slash::Inhabit(_) => "inhabit",
         Slash::Rewind => "rewind",
@@ -532,6 +536,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/hub", hint: "Device hub status", insert: "/hub", run_on_pick: true },
     SlashDef { cmd: "/sync", hint: "Sync chats & memory with paired computers", insert: "/sync", run_on_pick: true },
     SlashDef { cmd: "/privacy", hint: "What left this computer, and your grants", insert: "/privacy", run_on_pick: true },
+    SlashDef { cmd: "/diagnose", hint: "Check this computer (read only)", insert: "/diagnose", run_on_pick: true },
     SlashDef { cmd: "/send", hint: "Send a task to another computer", insert: "/send ", run_on_pick: false },
     SlashDef { cmd: "/rewind", hint: "Rewind Grok conversation", insert: "/rewind", run_on_pick: true },
     SlashDef { cmd: "/rewind --files", hint: "Restore last project snapshot", insert: "/rewind --files", run_on_pick: true },
@@ -743,6 +748,7 @@ pub fn slash_help() -> String {
         "/send <task> — task this box",
         "/sync — merge chats and memory with paired computers (asks first unless Settings → Permissions allows it)",
         "/privacy — your grants, learning scopes (all off), and what left this computer",
+        "/diagnose — check disk, memory, services, logs, network and updates, read only, and say what's wrong in plain words (needs System state in Settings → Permissions)",
         "/hub — devices / pair",
         "/inhabit <peer> — hand this Grok to another paired computer",
         "/rewind — rewind Grok conversation; /rewind --files restores the last project snapshot",
@@ -1197,6 +1203,16 @@ mod tests {
         assert_eq!(parse_slash("/connectors"), Some(Slash::GrokConnectors));
         assert!(slash_help().contains("/hooks — open Connectors with the Hooks section in view"));
         assert!(!unknown_cabin_slash("/hooks"));
+    }
+
+    #[test]
+    fn diagnose_slash_is_a_cabin_view() {
+        assert_eq!(parse_slash("/diagnose"), Some(Slash::Diagnose));
+        assert_eq!(parse_slash("/Diagnose"), Some(Slash::Diagnose));
+        assert_eq!(parse_slash("/diagnose").as_ref().map(slash_kind), Some("diagnose"));
+        assert!(slash_help().contains("\n/diagnose — check disk, memory, services, logs, network and updates, read only"));
+        assert!(SLASH_COMMANDS.iter().any(|d| d.cmd == "/diagnose" && d.run_on_pick));
+        assert!(!unknown_cabin_slash("/diagnose"));
     }
 
     #[test]
