@@ -1211,7 +1211,6 @@ impl Cabin {
         self.project_sel = upsert_bound(&mut self.projects, &p);
         self.touch_projects();
         self.status = "Saved".into();
-        self.sync_hub_voice();
         if tree_changed {
             if self.running {
                 self.halt_in_flight();

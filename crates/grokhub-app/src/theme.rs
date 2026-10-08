@@ -1,4 +1,4 @@
-//! Official Grok dark tokens (grok.com / iOS / Android, 2026-09).
+//! Official Grok dark tokens (grok.com, 2026-09).
 //! Recreated in egui — no grok.com JS, no webview.
 //! Dark-first: OLED canvas, quiet chrome. Composer stays a Grok column; chat text is fluid.
 
@@ -824,6 +824,23 @@ pub fn felt_label_button(
     stroke: Option<Stroke>,
     strong: bool,
 ) -> egui::Response {
+    felt_label_button_with(ui, None, label, base_fill, text_color, rounding, min_size, stroke, strong)
+}
+
+/// [`felt_label_button`] with a fixed id when `id` is set, so a key handler
+/// can tell whether this button has focus.
+#[allow(clippy::too_many_arguments)]
+pub fn felt_label_button_with(
+    ui: &mut egui::Ui,
+    id: Option<egui::Id>,
+    label: &str,
+    base_fill: Color32,
+    text_color: Color32,
+    rounding: f32,
+    min_size: egui::Vec2,
+    stroke: Option<Stroke>,
+    strong: bool,
+) -> egui::Response {
     let font = if strong {
         title_font(FONT_CHROME)
     } else {
@@ -835,7 +852,13 @@ pub fn felt_label_button(
         (galley.size().x + pad.x * 2.0).max(min_size.x),
         (galley.size().y + pad.y * 2.0).max(min_size.y),
     );
-    let (_rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    let resp = match id {
+        Some(id) => {
+            let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+            ui.interact(rect, id, egui::Sense::click())
+        }
+        None => ui.allocate_exact_size(size, egui::Sense::click()).1,
+    };
     let (resp, rect, fill) = feel_button(ui, resp, base_fill);
     ui.painter().rect_filled(rect, rounding, fill);
     if let Some(s) = stroke {

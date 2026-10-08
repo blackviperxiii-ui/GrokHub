@@ -283,6 +283,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         background: spec.background,
         shared_client: client,
         ports: crate::tools::ports::current(),
+        origin: crate::harness::current_origin(),
     };
     if spec.background {
         thread::spawn(move || run_job(job, None));
@@ -363,6 +364,8 @@ struct ChildJob {
     background: bool,
     shared_client: Arc<dyn ModelClient + Send + Sync>,
     ports: crate::tools::ports::Ports,
+    /// The parent's origin: a child of a scheduled run is still automation.
+    origin: crate::harness::Origin,
 }
 
 struct ChildDone {
@@ -387,6 +390,7 @@ impl HaltCheck for HubHalt {
 }
 
 fn run_job(job: ChildJob, tx: Option<Sender<ChildNote>>) {
+    let _origin = crate::harness::OriginScope::enter(job.origin);
     let done = run_child(&job, &tx);
     let cancelled = matches!(done.stop, StopReason::Cancelled | StopReason::Halted);
     if cancelled {
@@ -1557,6 +1561,7 @@ mod tests {
                         output_tokens: 1,
                         reasoning_tokens: 0,
                         cost_in_usd_ticks: 0,
+                        cached_tokens: 0,
                     },
                 ));
             }
@@ -1568,6 +1573,7 @@ mod tests {
                         output_tokens: 2,
                         reasoning_tokens: 1,
                         cost_in_usd_ticks: 9,
+                        cached_tokens: 0,
                     },
                 ));
             }
@@ -1608,6 +1614,7 @@ mod tests {
                         output_tokens: 0,
                         reasoning_tokens: 0,
                         cost_in_usd_ticks: 0,
+                        cached_tokens: 0,
                     },
                 ));
             }
@@ -1626,6 +1633,7 @@ mod tests {
                         output_tokens: 0,
                         reasoning_tokens: 0,
                         cost_in_usd_ticks: 0,
+                        cached_tokens: 0,
                     },
                 ));
             }

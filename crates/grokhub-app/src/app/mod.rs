@@ -67,7 +67,7 @@ use grokhub_core::{
     imagine_toolbox_dock, imagine_toolbox_shows_title, imagine_toolbox_top,
     imagine_video_dur_label, imagine_video_duration_secs, imagine_video_res_label,
     imagine_video_resolution, imagine_wall_bounds, import_memory_file, inbox_claim_ready,
-    inhabit_claim_allowed, inhabit_ready, insight_pin, is_cabin_first_run, is_hard_run,
+    inhabit_ready, insight_pin, is_cabin_first_run, is_hard_run,
     is_openclaw_workspace, is_plain_text, is_rewind_copy_cmd, is_rewind_copy_cmd_in,
     is_thinking_status, is_voice_error, is_workload_user, job_error_goes_to_chat, job_is_scratch,
     keep_last_rewinds,
@@ -129,7 +129,7 @@ use grokhub_core::{
     GreetingInput, GrokLoop, HeartbeatAct, HeyGrokAction, HeyGrokRoute, HostPlanStep, HostRisk,
     HubMemoryFile, HubSnapshot, HubState, ImagineKind, ImagineSpec, ImagineToolboxDock,
     ImagineWall, InhabitBundle, LearningState, LiveBlock, LiveKind, LocalClock, MemoryEdit,
-    MintRealtimeFn, PermKey, PlusAct, PlusTarget, Policy, PresenceFrame, ProjectKind,
+    PermKey, PlusAct, PlusTarget, Policy, PresenceFrame, ProjectKind,
     ProjectMenuAct, ProjectNode, PttLine, QuickChip, Recipe, ReplayOp, ReviewDigest, RewindRecord,
     ScheduleRoute, SkillMd, Slash, SlashHit, SuggestionStore, ThreadReuseView,
     ThreadTab, ThoughtFold, TranscribeRoute, UpdatePending, UsageDay, VerifyResult,
@@ -151,12 +151,15 @@ use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 mod persist;
+mod amr_memory;
 mod acp;
 mod native_engine;
 mod native_sessions;
 mod native_unattended;
 mod chat_kick;
 mod palette;
+mod step_search;
+use step_search::{parse_step_target, step_hits, turn_jump_row};
 mod settings;
 mod plus;
 mod projects;
@@ -172,9 +175,16 @@ mod pulse_ui;
 mod board_ui;
 mod confirm;
 mod harness_ui;
+mod inbox_ui;
+mod episode_ui;
 mod privacy_ui;
+mod repair_ui;
 mod scope_ui;
+mod indexer_ui;
 mod skill_undo;
+mod self_review_ui;
+mod change_undo;
+mod proactive_auto;
 mod glance;
 mod sidebar;
 mod pages;
@@ -184,10 +194,13 @@ mod voice;
 mod threads_nav;
 mod background;
 mod heartbeat_gate;
+mod proactive_ui;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod native_signin_tests;
+#[cfg(test)]
+mod self_review_tests;
 
 use acp::*;
 use chat_ui::*;
@@ -534,6 +547,10 @@ pub struct Cabin {
     palette_files_q: String,
     palette_files_root: String,
     palette_file_rx: Option<mpsc::Receiver<(String, String, Vec<String>)>>,
+    /// Spike-3a: tool-step rows for the palette query, `(step:<turn>:<chat>, line)`.
+    palette_steps: Vec<(String, String)>,
+    palette_steps_q: String,
+    palette_step_rx: Option<HistoryHitsRx>,
     shortcuts_open: bool,
     active_skill_follow: Option<String>,
     /// Changed notes from workboard cards linked to this chat, sent with this turn.
@@ -541,6 +558,9 @@ pub struct Cabin {
     /// Card whose notes are open for editing, and the text being typed.
     board_notes_edit: Option<(String, String)>,
     last_anticipate_ms: u64,
+    /// Spike-6a card budget (mutes, dismissal streak, quiet-hours queue).
+    proactive: grokhub_core::proactive::ProactiveBudget,
+    last_proactive_ms: u64,
     goal_step: u32,
     followup_step: u32,
     stream_buf: String,
@@ -769,6 +789,8 @@ pub struct Cabin {
     confirm: Option<ConfirmKind>,
     /// History "Last you" scroll once the thread is open.
     jump_last_you: bool,
+    /// Spike-3a: a step hit opened this chat; scroll to that turn's Work card.
+    jump_turn: Option<u32>,
     /// Ctrl+F in the open chat.
     find: ChatFind,
     elicit_ask: Option<grokhub_acp::ElicitAsk>,
@@ -779,7 +801,10 @@ pub struct Cabin {
     permission_mode: PermissionMode,
     /// Spike-0 harness: Full grant, parked hard-class cards, path C hits.
     harness: harness_ui::HarnessState,
-    /// Night / loop / phone `/v1/task` inherit the composer PermissionMode pill.
+    /// Spike-6b: candidates waiting for the ceiling, today's auto budget,
+    /// and the ledger lines auto-acts wrote.
+    auto_act: proactive_auto::AutoState,
+    /// Night / loop / `/send` tasks inherit the composer PermissionMode pill.
     scheduled_perm: bool,
     grok_sessions: Vec<grokhub_acp::GrokSession>,
     grok_sessions_loaded: bool,
@@ -798,6 +823,10 @@ pub struct Cabin {
     sync_rx: Option<mpsc::Receiver<(String, Vec<HubMemoryFile>)>>,
     inhabit_rx: Option<mpsc::Receiver<InhabitBundle>>,
     reflect_rx: Option<mpsc::Receiver<(MemoryEdit, Option<MemoryEdit>)>>,
+    /// The one-time AMR import ran this session (AMR mode only).
+    amr_imported: bool,
+    /// The local day the AMR dream ran or was skipped (Halt), this session.
+    dream_day: Option<String>,
     session_show_rx: Option<(String, mpsc::Receiver<String>)>,
     import_rx: Option<mpsc::Receiver<ImportOpenclawOut>>,
     inspect_text: String,
@@ -1148,11 +1177,16 @@ impl Cabin {
             palette_files_q: String::new(),
             palette_files_root: String::new(),
             palette_file_rx: None,
+            palette_steps: Vec::new(),
+            palette_steps_q: String::new(),
+            palette_step_rx: None,
             shortcuts_open: false,
             active_skill_follow: None,
             card_notes_follow: None,
             board_notes_edit: None,
             last_anticipate_ms: 0,
+            proactive: proactive_ui::load_budget(),
+            last_proactive_ms: 0,
             goal_step,
             followup_step: 0,
             stream_buf: String::new(),
@@ -1343,6 +1377,7 @@ impl Cabin {
             perm_always_confirm: None,
             confirm: None,
             jump_last_you: false,
+            jump_turn: None,
             find: ChatFind::default(),
             elicit_ask: None,
             elicit_draft: String::new(),
@@ -1353,6 +1388,7 @@ impl Cabin {
                 full_card_on: harness_ui::grant_full_card_on(),
                 ..Default::default()
             },
+            auto_act: Default::default(),
             scheduled_perm: false,
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
@@ -1371,6 +1407,8 @@ impl Cabin {
             sync_rx: None,
             inhabit_rx: None,
             reflect_rx: None,
+            amr_imported: false,
+            dream_day: None,
             session_show_rx: None,
             import_rx: None,
             inspect_text: String::new(),
@@ -1424,6 +1462,8 @@ impl Cabin {
             c.open_fresh_home();
             #[cfg(not(test))]
             crate::desktop_mcp::maybe_register_on_start(c.cfg.desktop_control);
+            #[cfg(not(test))]
+            crate::self_mcp::maybe_register_on_start();
             #[cfg(not(test))]
             crate::desktop_mcp::set_desktop_enabled(c.cfg.desktop_control);
         }
@@ -1583,11 +1623,16 @@ impl Cabin {
             palette_files_q: String::new(),
             palette_files_root: String::new(),
             palette_file_rx: None,
+            palette_steps: Vec::new(),
+            palette_steps_q: String::new(),
+            palette_step_rx: None,
             shortcuts_open: false,
             active_skill_follow: None,
             card_notes_follow: None,
             board_notes_edit: None,
             last_anticipate_ms: 0,
+            proactive: proactive_ui::load_budget(),
+            last_proactive_ms: 0,
             goal_step: 0,
             followup_step: 0,
             stream_buf: String::new(),
@@ -1778,6 +1823,7 @@ impl Cabin {
             perm_always_confirm: None,
             confirm: None,
             jump_last_you: false,
+            jump_turn: None,
             find: ChatFind::default(),
             elicit_ask: None,
             elicit_draft: String::new(),
@@ -1785,6 +1831,7 @@ impl Cabin {
             session_mode: SessionMode::Chat,
             permission_mode: PermissionMode::Ask,
             harness: Default::default(),
+            auto_act: Default::default(),
             scheduled_perm: false,
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
@@ -1803,6 +1850,8 @@ impl Cabin {
             sync_rx: None,
             inhabit_rx: None,
             reflect_rx: None,
+            amr_imported: false,
+            dream_day: None,
             session_show_rx: None,
             import_rx: None,
             inspect_text: String::new(),
@@ -2084,6 +2133,7 @@ impl Cabin {
         crate::desktop_mcp::write_halt_stamp();
         crate::desktop_mcp::note_halt();
         self.host_halt.store(true, Ordering::SeqCst);
+        self.harness_watch_end();
         self.halt_hard_parks();
         self.withdraw_perm_asks();
         if self.cfg.native_engine {
@@ -2216,7 +2266,12 @@ impl Cabin {
             return;
         }
         if !facts.is_empty() {
-            extract_insights(&mut self.learning, &facts);
+            if self.amr_on() {
+                // Single write: new facts are nodes; the part notes below stay engine state.
+                let _ = self.amr_remember_facts(&facts, "insight");
+            } else {
+                extract_insights(&mut self.learning, &facts);
+            }
             for fact in &facts {
                 let key = format!("pref:{}", grokhub_core::engine_slug(fact));
                 grokhub_core::note_part(&mut self.learning, "chat", &key, fact);
@@ -2680,6 +2735,11 @@ impl Cabin {
             if ledger.undone_by_user(&patched.name, &after) {
                 continue;
             }
+            let (old, new) = (grokhub_core::render_skill_md(&existing), grokhub_core::render_skill_md(&patched));
+            if let Err(note) = grokhub_agent::harness::replay_gate(&config::config_dir(), &patched.name, &old, &new, now_ms()) {
+                self.status = note;
+                continue;
+            }
             if let Some(s) = self.skill_list.iter_mut().find(|s| s.name == patched.name) {
                 *s = patched.clone();
             }
@@ -2746,10 +2806,6 @@ impl Cabin {
     }
 
     fn queue_inhabit(&mut self, peer: String) {
-        if !inhabit_claim_allowed(&peer) {
-            self.status = "will not inhabit onto the phone".into();
-            return;
-        }
         if self.inhabit_rx.is_some() {
             self.status = "Inhabiting…".into();
             return;
@@ -2764,10 +2820,6 @@ impl Cabin {
             self.status = format!("No paired peer named {peer}");
             return;
         };
-        if !inhabit_claim_allowed(&target.name) {
-            self.status = "will not inhabit onto the phone".into();
-            return;
-        }
         let peer_count = self.hub.lock().ok().map(|s| s.peers.len()).unwrap_or(0);
         if !inhabit_ready(peer_count, self.running) {
             self.status = "Inhabit needs a paired idle box".into();
@@ -3039,7 +3091,6 @@ impl Cabin {
         if snap.projects.is_some() {
             self.projects_dirty = false;
         }
-        self.sync_hub_voice();
         snap.secrets = Some(self.secrets.clone());
         self.last_persist = Instant::now();
         self.geom_dirty = false;
@@ -3402,6 +3453,9 @@ impl Cabin {
                         self.follow_feed_lookup();
                     }
                     self.release_situation_ping();
+                    if !halted {
+                        self.tick_indexers();
+                    }
                     if self.last_persist.elapsed() > Duration::from_secs(2) {
                         self.persist_bg();
                     }
@@ -3419,6 +3473,8 @@ impl Cabin {
                 HeartbeatAct::Review => {
                     if !night_fired && !self.running {
                         self.tick_review();
+                        self.tick_self_review();
+                        self.tick_dream();
                     }
                 }
                 HeartbeatAct::Wall => self.tick_wall(),
@@ -3445,8 +3501,14 @@ impl Cabin {
         if self.scratch() {
             return;
         }
+        self.tick_auto_act();
         let clock = Self::local_clock();
         let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
+        // Spike-6a cards: busy is should_anticipate's seat check plus a card
+        // waiting on you; quiet hours only queue.
+        let busy = !should_anticipate(self.running, self.review_busy, self.composer.trim().is_empty(), false)
+            || self.heartbeat_busy();
+        self.tick_proactive(now_ms(), quiet, busy);
         if !should_anticipate(
             self.running,
             self.review_busy,
@@ -3481,6 +3543,7 @@ impl Cabin {
         bump_usage(&mut self.usage, "automation");
         self.daily_auto_used = self.usage.automation;
         self.daily_auto_day = self.usage.day.clone();
+        self.harness.next_origin = Some(grokhub_agent::harness::Origin::Proactive);
         self.send_scheduled_chat(prompt);
     }
 
@@ -4239,7 +4302,7 @@ impl Cabin {
                     fact_candidates_from(self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())))
                 })
         };
-        if self.policy().learns() {
+        if self.policy().learns() && !self.amr_on() {
             extract_insights(&mut self.learning, &facts);
             let learning = self.learning.clone();
             let io = self.persist_io.clone();
@@ -4256,6 +4319,11 @@ impl Cabin {
                 let _ = config::write_memory(&name, &body);
             }
         });
+        if self.amr_on() {
+            // Single write: the facts become nodes, not insights or MEMORY.md lines.
+            self.run_reflect_amr(&facts);
+            return;
+        }
         let mem_name = self.mem_name.clone();
         let mem_body = self.mem_body.clone();
         let writes_user = self.policy().writes_user_md();
@@ -4306,7 +4374,11 @@ impl Cabin {
         match rx.try_recv() {
             Ok((edit, user_edit)) => {
                 let mut wrote = !edit.diff.is_empty();
-                if wrote {
+                // AMR reflect sends an empty `next`: the lines went to the memory repo.
+                let amr = wrote && edit.next.is_empty();
+                if amr {
+                    self.reflect_diff = edit.diff;
+                } else if wrote {
                     self.reflect_diff = edit.diff;
                     if let Some(i) = Self::mem_file_idx("MEMORY.md") {
                         self.mem_cache_at[i] = config::memory_updated_at("MEMORY.md");
@@ -4337,7 +4409,9 @@ impl Cabin {
                     }
                     wrote = true;
                 }
-                self.status = if wrote {
+                self.status = if amr {
+                    "Reflected into the memory repo".into()
+                } else if wrote {
                     "Reflected MEMORY.md".into()
                 } else {
                     "Reflect: nothing new".into()
@@ -4612,6 +4686,10 @@ impl Cabin {
 
     fn halt_work(&mut self, status: impl Into<String>) {
         let status = status.into();
+        // A redirect steers the turn; every other stop ends the desktop episode.
+        if status != "Redirected" {
+            self.end_episode(grokhub_agent::episode::EpisodeEnd::Stop);
+        }
         self.heartbeat_turn_stopped();
         self.halt_in_flight();
         self.finish_hub_dispatch(&status, false);
@@ -4623,6 +4701,8 @@ impl Cabin {
     /// Composer Stop and `/stop` leave background runs alone.
     fn halt_everything(&mut self, status: impl Into<String>) {
         self.heartbeat_halt(now_ms());
+        self.end_episode(grokhub_agent::episode::EpisodeEnd::Halt);
+        self.halt_inbox();
         self.stop_all_bg_runs();
         self.halt_work(status);
     }
@@ -4869,7 +4949,6 @@ impl Cabin {
                 st.rotate_pair();
             }
         }
-        self.sync_hub_voice();
         match self.bind_lan_hub() {
             Ok(p) => {
                 self.hub_port = p;
@@ -4938,6 +5017,7 @@ impl eframe::App for Cabin {
         self.poll_acp();
         self.poll_chips();
         self.poll_review();
+        self.poll_self_review();
         self.poll_digest_lookup();
         self.window_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
         self.poll_greeting();
@@ -4966,6 +5046,7 @@ impl eframe::App for Cabin {
         self.poll_mem_file();
         self.poll_recall();
         self.poll_privacy();
+        self.poll_diagnose();
         self.poll_native_memory();
         self.drain_native_unattended_usage();
         self.poll_sync();
@@ -4977,6 +5058,7 @@ impl eframe::App for Cabin {
         self.poll_single();
         self.poll_bg_runs();
         self.poll_native_automations();
+        self.poll_self_changes();
         self.poll_native_side_events();
         self.poll_pick();
         // While hidden, eframe hands `logic` the last shown frame's input every
@@ -5082,6 +5164,8 @@ impl eframe::App for Cabin {
                 || self.mem_file_rx.is_some()
                 || self.recall_rx.is_some()
                 || self.harness.privacy_rx.is_some()
+                || self.harness.diagnose_rx.is_some()
+                || self.harness.fixes.busy()
                 || self.sync_rx.is_some()
                 || self.inhabit_rx.is_some()
                 || self.reflect_rx.is_some()
@@ -5612,7 +5696,7 @@ fn hostname_i_now() -> String {
     if pick_lan_ipv4(&refs).is_some() {
         return out;
     }
-    // Windows and macOS have no `hostname -I`, so Devices showed a phone 127.0.0.1.
+    // Windows and macOS have no `hostname -I`, so Devices showed another computer 127.0.0.1.
     routed_ipv4().unwrap_or(out)
 }
 

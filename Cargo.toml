@@ -4,13 +4,12 @@ members = [
     "crates/grokhub-core",
     "crates/grokhub-hub",
     "crates/grokhub-app",
-    "crates/grokhub-ffi",
     "crates/grokhub-acp",
     "crates/grokhub-agent",
 ]
 
 [workspace.package]
-version = "2.10.94"
+version = "2.10.95"
 rust-version = "1.95"
 edition = "2021"
 license = "MIT"

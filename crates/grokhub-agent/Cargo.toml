@@ -20,7 +20,9 @@ ignore = "0.4"
 globset = "0.4"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 # FTS5 memory index. Bundled sqlite so Windows GNU does not need a system libsqlite.
-rusqlite = { version = "0.32", features = ["bundled"] }
+# `hooks` (no extra crates): the browser-history indexer's authorizer denies
+# every table but `moz_places` / `urls`.
+rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
 # Spike-4b learned tier at rest. All three are already in Cargo.lock and build
 # on Windows CI today: ring (ChaCha20-Poly1305) via rustls/ureq, zeroize via
 # rustls, keyring 4 via grokhub-app (Secret Service / Credential Manager / Keychain).
@@ -38,5 +40,6 @@ windows-sys = { version = "0.59", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_JobObjects",
     "Win32_System_Pipes",
+    "Win32_System_Power",
     "Win32_System_Threading",
 ] }

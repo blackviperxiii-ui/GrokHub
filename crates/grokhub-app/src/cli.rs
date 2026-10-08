@@ -9,6 +9,8 @@ pub enum Launch {
     Oauth,
     Help,
     McpDesktop,
+    McpCua,
+    McpSelf,
 }
 
 pub fn parse_args(args: &[String]) -> Launch {
@@ -22,6 +24,8 @@ pub fn parse_args(args: &[String]) -> Launch {
             "--update" => return Launch::Update,
             "--oauth" => return Launch::Oauth,
             "--mcp-desktop" => return Launch::McpDesktop,
+            "--mcp-cua" => return Launch::McpCua,
+            "--mcp-self" => return Launch::McpSelf,
             "-h" | "--help" => return Launch::Help,
             _ => {}
         }
@@ -90,8 +94,15 @@ mod tests {
     }
 
     #[test]
+    fn cua_gate_launch_flag() {
+        assert_eq!(parse_args(&args(&["grokhub", "--mcp-cua"])), Launch::McpCua);
+        assert_eq!(parse_args(&args(&["grokhub", "--hub", "--mcp-cua"])), Launch::McpCua);
+        assert_eq!(parse_args(&args(&["grokhub", "--version", "--mcp-cua"])), Launch::Version);
+    }
+
+    #[test]
     fn cabin_reports_version() {
-        assert_eq!(env!("CARGO_PKG_VERSION"), "2.10.94");
+        assert_eq!(env!("CARGO_PKG_VERSION"), "2.10.95");
     }
 
     #[test]

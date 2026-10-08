@@ -388,6 +388,12 @@ pub enum PillStyle {
 }
 
 pub fn felt_pill(ui: &mut egui::Ui, label: &str, style: PillStyle) -> bool {
+    felt_pill_at(ui, None, label, style).clicked()
+}
+
+/// A pill with an optional fixed id. The caller picks `clicked()` (keys
+/// too) or `clicked_by(Primary)` (a pointer click only, for hard actions).
+pub fn felt_pill_at(ui: &mut egui::Ui, id: Option<egui::Id>, label: &str, style: PillStyle) -> egui::Response {
     let (base_fill, text_color, rounding, min_size, stroke, strong) = match style {
         PillStyle::Solid => (
             crate::theme::fg(),
@@ -414,8 +420,9 @@ pub fn felt_pill(ui: &mut egui::Ui, label: &str, style: PillStyle) -> bool {
             true,
         ),
     };
-    let resp = crate::theme::felt_label_button(
+    let resp = crate::theme::felt_label_button_with(
         ui,
+        id,
         label,
         base_fill,
         text_color,
@@ -426,7 +433,7 @@ pub fn felt_pill(ui: &mut egui::Ui, label: &str, style: PillStyle) -> bool {
     );
     let enabled = resp.enabled();
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
-    resp.clicked()
+    resp
 }
 
 /// Horizontal inset so a long session label is not jammed on the pill edge.

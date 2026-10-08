@@ -898,6 +898,7 @@ fn parse_record(value: &Value) -> Option<Record> {
                 output_tokens: u64_field(value, "output_tokens"),
                 reasoning_tokens: u64_field(value, "reasoning_tokens"),
                 cost_in_usd_ticks: i64_field(value, "cost_in_usd_ticks"),
+                cached_tokens: 0,
             },
             meter: string_field(value, "meter"),
         }),
@@ -1086,6 +1087,7 @@ mod tests {
             output_tokens: 4,
             reasoning_tokens: 2,
             cost_in_usd_ticks: 84_000,
+            cached_tokens: 0,
         };
         let items = sample_items();
         record_turn(
@@ -1210,6 +1212,7 @@ mod tests {
             output_tokens: 1,
             reasoning_tokens: 0,
             cost_in_usd_ticks: 9,
+            cached_tokens: 0,
         };
         record_turn(
             id,
@@ -1327,6 +1330,7 @@ mod tests {
                 output_tokens: 1,
                 reasoning_tokens: 0,
                 cost_in_usd_ticks: 9,
+                cached_tokens: 0,
             },
             meter: "SuperGrok pool".into(),
             records: Vec::new(),
@@ -1362,6 +1366,7 @@ mod tests {
                 output_tokens: 4,
                 reasoning_tokens: 0,
                 cost_in_usd_ticks: 3,
+                cached_tokens: 0,
             },
             "SuperGrok pool",
             "OLD_TOPIC",
@@ -1379,6 +1384,7 @@ mod tests {
             output_tokens: 2,
             reasoning_tokens: 1,
             cost_in_usd_ticks: 8,
+            cached_tokens: 0,
         };
         record_compaction(
             id,
@@ -1399,6 +1405,7 @@ mod tests {
                 output_tokens: 1,
                 reasoning_tokens: 0,
                 cost_in_usd_ticks: 1,
+                cached_tokens: 0,
             },
             "SuperGrok pool",
             "",

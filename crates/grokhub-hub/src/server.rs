@@ -1,7 +1,5 @@
-use grokhub_core::frame::{get_jpeg, FrameGet};
 use grokhub_core::inhabit::InhabitBundle;
-use grokhub_core::task::Receipt;
-use grokhub_core::{CompleteError, HubState, HUB_KIND};
+use grokhub_core::{HubState, HUB_KIND};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::io::Read;
@@ -24,7 +22,7 @@ pub fn serve_background(state: Arc<Mutex<HubState>>, port: u16) -> Result<u16, S
     serve_bind(state, "127.0.0.1", port)
 }
 
-/// LAN bind for the native cabin. Android pairs against this.
+/// LAN bind for the native cabin. Other computers pair against this.
 pub fn serve_lan(state: Arc<Mutex<HubState>>, port: u16) -> Result<u16, String> {
     serve_bind(state, "0.0.0.0", port)
 }
@@ -84,7 +82,7 @@ impl Drop for InFlight {
 fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
     let method = req.method().clone();
     let url = req.url().to_string();
-    let (path, query) = split_url(&url);
+    let path = url_path(&url);
     if method == Method::Options {
         return send(req, 204, "text/plain", b"");
     }
@@ -133,14 +131,14 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
 
     let token = bearer(&req);
     let mut st = state.lock().map_err(|_| ())?;
-    let Some(peer_id) = st.peer_for_token(&token).map(|p| p.id.clone()) else {
+    if st.peer_for_token(&token).is_none() {
         drop(st);
         return send_json(
             req,
             401,
             json!({ "ok": false, "error": "Pair this computer first (Settings → Devices)." }),
         );
-    };
+    }
     if let Some(p) = st.peer_for_token_mut(&token) {
         p.last_seen = grokhub_core::now_ms();
     }
@@ -195,97 +193,6 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
         }
     }
 
-    if method == Method::Post && path == "/v1/task" {
-        drop(st);
-        let body = read_json(&mut req);
-        let prompt = body.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
-        let title = body.get("title").and_then(|v| v.as_str()).unwrap_or("");
-        let target = body.get("targetDeviceId").and_then(|v| v.as_str()).unwrap_or("");
-        let mut st = state.lock().map_err(|_| ())?;
-        let result = st.enqueue_task(&peer, target, title, prompt);
-        drop(st);
-        return match result {
-            Ok(t) => send_json(
-                req,
-                200,
-                json!({ "ok": true, "task": { "id": t.id, "targetDeviceId": t.target_device_id } }),
-            ),
-            Err(e) => send_json(req, 400, json!({ "ok": false, "error": e })),
-        };
-    }
-
-    if method == Method::Get && path == "/v1/inbox" {
-        let tasks = st.queued_for(&peer_id);
-        drop(st);
-        return send_json(req, 200, json!({ "ok": true, "tasks": tasks }));
-    }
-
-    if let Some(id) = strip_prefix_suffix(&path, "/v1/inbox/", "/ack") {
-        if method == Method::Post {
-            let result = st.ack_inbox(id, &peer_id);
-            drop(st);
-            return match result {
-                Ok(()) => send_json(req, 200, json!({ "ok": true })),
-                Err(CompleteError::NotFound) => send_json(
-                    req,
-                    404,
-                    json!({ "ok": false, "error": "task not found" }),
-                ),
-                Err(CompleteError::Forbidden) => send_json(
-                    req,
-                    403,
-                    json!({ "ok": false, "error": "not the task target" }),
-                ),
-            };
-        }
-    }
-
-    if let Some(id) = strip_prefix_suffix(&path, "/v1/task/", "/complete") {
-        if method == Method::Post {
-            drop(st);
-            let body = read_json(&mut req);
-            let result = body.get("result").and_then(|v| v.as_str()).unwrap_or("");
-            let status = body.get("status").and_then(|v| v.as_str());
-            let receipts: Vec<Receipt> = body
-                .get("receipts")
-                .and_then(|v| serde_json::from_value(v.clone()).ok())
-                .unwrap_or_default();
-            let mut st = state.lock().map_err(|_| ())?;
-            let done = st.complete_task(&peer_id, id, result, receipts, status);
-            drop(st);
-            return match done {
-                Ok(t) => send_json(req, 200, json!({ "ok": true, "task": t })),
-                Err(CompleteError::NotFound) => send_json(
-                    req,
-                    404,
-                    json!({ "ok": false, "error": "task not found" }),
-                ),
-                Err(CompleteError::Forbidden) => send_json(
-                    req,
-                    403,
-                    json!({ "ok": false, "error": "not the task target" }),
-                ),
-            };
-        }
-    }
-
-    if let Some(id) = path.strip_prefix("/v1/task/") {
-        if method == Method::Get && !id.contains('/') {
-            let task = st.get_task(id, &peer_id).cloned();
-            drop(st);
-            return match task {
-                Some(t) => send_json(req, 200, json!({ "ok": true, "task": t })),
-                None => send_json(req, 404, json!({ "ok": false, "error": "task not found" })),
-            };
-        }
-    }
-
-    if method == Method::Get && path == "/v1/results" {
-        let tasks = st.claim_results(&peer_id);
-        drop(st);
-        return send_json(req, 200, json!({ "ok": true, "tasks": tasks }));
-    }
-
     if method == Method::Post && path == "/v1/inhabit" {
         drop(st);
         let body = read_json(&mut req);
@@ -306,14 +213,6 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
         return send_json(req, 200, json!({ "ok": true }));
     }
     if method == Method::Get && path == "/v1/inhabit" {
-        if !grokhub_core::inhabit_claim_allowed(&peer.name) {
-            drop(st);
-            return send_json(
-                req,
-                403,
-                json!({ "ok": false, "error": "inhabit is not for the phone" }),
-            );
-        }
         let bundle = st.claim_inhabit(&peer);
         drop(st);
         return send_json(req, 200, json!({ "ok": true, "bundle": bundle }));
@@ -349,78 +248,19 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
             frame: frame.as_deref(),
         });
     }
-    if method == Method::Get && path == "/v1/frame.jpg" {
-        let since = query
-            .split('&')
-            .find_map(|p| p.strip_prefix("since="))
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-        let frame = st.last_frame.clone();
-        drop(st);
-        match get_jpeg(frame.as_deref(), since) {
-            FrameGet::Missing => {
-                return send_json(req, 404, json!({ "ok": false, "error": "no frame" }));
-            }
-            FrameGet::NotModified { at } => {
-                return send_raw(req, 304, "text/plain", b"", &[("x-grokhub-frame-at", &at.to_string())]);
-            }
-            FrameGet::Bytes { mime, buf, at } => {
-                return send_raw(req, 200, &mime, &buf, &[("x-grokhub-frame-at", &at.to_string())]);
-            }
-        }
-    }
-
-    if method == Method::Post && path == "/v1/voice/client-secret" {
-        if let Some(err) = grokhub_core::voice_client_secret_denied(grokhub_core::realtime_can_connect(
-            &st.console_api_key,
-        )) {
-            drop(st);
-            return send_json(req, 400, json!({ "ok": false, "error": err }));
-        }
-        let key = st.console_api_key.clone();
-        let mint = st.mint_realtime.clone();
-        drop(st);
-        let minted = match mint {
-            Some(f) => (f.0)(&key),
-            None => Err("Cabin mint not wired".into()),
-        };
-        return match minted {
-            Ok(v) => match grokhub_core::parse_client_secret(&v).filter(|s| !s.is_empty()) {
-                Some(secret) => send_json(
-                    req,
-                    200,
-                    json!({
-                        "ok": true,
-                        "value": secret,
-                        "wsProtocol": grokhub_core::client_secret_ws_protocol(&secret),
-                        "url": grokhub_core::voice_session_url(""),
-                        "clientSecret": v
-                    }),
-                ),
-                None => send_json(
-                    req,
-                    502,
-                    json!({ "ok": false, "error": "empty client secret" }),
-                ),
-            },
-            Err(e) => send_json(req, 502, json!({ "ok": false, "error": e })),
-        };
-    }
-
     drop(st);
     send_json(req, 404, json!({ "ok": false, "error": "unknown hub route" }))
 }
 
-fn split_url(url: &str) -> (String, String) {
+fn url_path(url: &str) -> String {
     let raw = url.split('#').next().unwrap_or(url);
-    let (p, q) = raw.split_once('?').unwrap_or((raw, ""));
+    let p = raw.split_once('?').map_or(raw, |(p, _)| p);
     let path = p.trim_end_matches('/').to_string();
-    let path = if path.is_empty() { "/".into() } else { path };
-    (path, q.to_string())
-}
-
-fn strip_prefix_suffix<'a>(path: &'a str, pre: &str, suf: &str) -> Option<&'a str> {
-    path.strip_prefix(pre)?.strip_suffix(suf).filter(|s| !s.is_empty() && !s.contains('/'))
+    if path.is_empty() {
+        "/".into()
+    } else {
+        path
+    }
 }
 
 fn bearer(req: &Request) -> String {
@@ -465,24 +305,9 @@ fn send_json(req: Request, status: u16, body: impl Serialize) -> Result<(), ()> 
 }
 
 fn send(req: Request, status: u16, ctype: &str, body: &[u8]) -> Result<(), ()> {
-    send_raw(req, status, ctype, body, &[])
-}
-
-fn send_raw(
-    req: Request,
-    status: u16,
-    ctype: &str,
-    body: &[u8],
-    extra: &[(&str, &str)],
-) -> Result<(), ()> {
     let mut headers = cors_headers();
     if let Ok(h) = Header::from_bytes(&b"content-type"[..], ctype.as_bytes()) {
         headers.push(h);
-    }
-    for (k, v) in extra {
-        if let Ok(h) = Header::from_bytes(k.as_bytes(), v.as_bytes()) {
-            headers.push(h);
-        }
     }
     let resp = Response::new(StatusCode(status), headers, body, Some(body.len()), None);
     req.respond(resp).map_err(|_| ())
@@ -516,11 +341,11 @@ mod tests {
     }
 
     #[test]
-    fn pair_task_frame_contract() {
+    fn pair_frame_contract() {
         let mut st = HubState::empty();
         let code = st.rotate_pair().code;
         let state = Arc::new(Mutex::new(st));
-        let port = serve_background(state, 0).expect("bind");
+        let port = serve_background(state.clone(), 0).expect("bind");
         std::thread::sleep(std::time::Duration::from_millis(40));
 
         let (st_h, _, body) = http(
@@ -531,7 +356,7 @@ mod tests {
         assert!(String::from_utf8_lossy(&body).contains(HUB_KIND));
 
         let pair_body = format!(
-            r#"{{"code":"{code}","deviceId":"d-test","deviceName":"Pixel"}}"#
+            r#"{{"code":"{code}","deviceId":"d-test","deviceName":"cabin-2"}}"#
         );
         let req = format!(
             "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{pair_body}",
@@ -543,80 +368,32 @@ mod tests {
         let token = v["token"].as_str().unwrap();
         let hub_id = v["hub"]["id"].as_str().unwrap();
 
-        let task_body = format!(r#"{{"targetDeviceId":"{hub_id}","prompt":"flash the pi"}}"#);
-        let req = format!(
-            "POST /v1/task HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{task_body}",
-            task_body.len()
-        );
-        let (st_t, _, body) = http(port, &req);
-        assert_eq!(st_t, 200, "{}", String::from_utf8_lossy(&body));
-        let task: Value = serde_json::from_slice(&body).unwrap();
-        let tid = task["task"]["id"].as_str().unwrap();
-
-        let (st_g, _, body) = http(
-            port,
-            &format!("GET /v1/task/{tid} HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\n\r\n"),
-        );
-        assert_eq!(st_g, 200);
-        assert!(String::from_utf8_lossy(&body).contains("flash the pi"));
-
-        let complete = r#"{"result":"nope","status":"done"}"#;
-        let req = format!(
-            "POST /v1/task/{tid}/complete HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{complete}",
-            complete.len()
-        );
-        let (st_c, _, body) = http(port, &req);
-        assert_eq!(
-            st_c, 403,
-            "sender must not complete a hub-targeted task: {}",
-            String::from_utf8_lossy(&body)
-        );
-
         let png = r#"{"dataUrl":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}"#;
         let req = format!(
             "POST /v1/frame HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{png}",
             png.len()
         );
         assert_eq!(http(port, &req).0, 200);
-        let (st_j, headers, _) = http(
+        let (st_f, _, body) = http(
             port,
-            &format!("GET /v1/frame.jpg HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\n\r\n"),
+            &format!("GET /v1/frame HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\n\r\n"),
         );
-        assert_eq!(st_j, 200);
-        assert!(headers.to_ascii_lowercase().contains("x-grokhub-frame-at"));
-
-        let req = format!(
-            "POST /v1/voice/client-secret HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Length: 0\r\n\r\n"
-        );
-        let (st_v, _, body) = http(port, &req);
-        assert_eq!(st_v, 400, "{}", String::from_utf8_lossy(&body));
-        let msg = String::from_utf8_lossy(&body).to_ascii_lowercase();
-        assert!(
-            msg.contains("console") || msg.contains("api key"),
-            "{}",
-            String::from_utf8_lossy(&body)
-        );
+        assert_eq!(st_f, 200, "{}", String::from_utf8_lossy(&body));
+        let frame: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(frame["ok"], true);
+        assert!(frame["frame"].is_object(), "{frame}");
+        assert_eq!(hub_id, state.lock().unwrap().device_id);
     }
 
+    /// The phone routes are gone. A paired caller gets the unknown-route 404 for each.
     #[test]
-    fn mints_ephemeral_without_hitting_xai() {
+    fn phone_routes_are_gone() {
         let mut st = HubState::empty();
         let code = st.rotate_pair().code;
-        st.console_api_key = "xai-test-key".into();
-        st.mint_realtime = Some(grokhub_core::MintRealtimeFn(std::sync::Arc::new(
-            |_key: &str| {
-                Ok(json!({
-                    "value": "ek_test_secret",
-                    "expires_at": 1
-                }))
-            },
-        )));
         let state = Arc::new(Mutex::new(st));
         let port = serve_background(state, 0).expect("bind");
         std::thread::sleep(std::time::Duration::from_millis(40));
-        let pair_body = format!(
-            r#"{{"code":"{code}","deviceId":"d-voice","deviceName":"Pixel"}}"#
-        );
+        let pair_body = format!(r#"{{"code":"{code}","deviceId":"d-cabin","deviceName":"cabin-2"}}"#);
         let req = format!(
             "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{pair_body}",
             pair_body.len()
@@ -624,101 +401,27 @@ mod tests {
         let (_, _, body) = http(port, &req);
         let v: Value = serde_json::from_slice(&body).unwrap();
         let token = v["token"].as_str().unwrap();
-        let req = format!(
-            "POST /v1/voice/client-secret HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Length: 0\r\n\r\n"
-        );
-        let (st_v, _, body) = http(port, &req);
-        assert_eq!(st_v, 200, "{}", String::from_utf8_lossy(&body));
-        let secret: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(secret["ok"], true);
-        assert_eq!(secret["value"], "ek_test_secret");
-        assert_eq!(secret["wsProtocol"], "xai-client-secret.ek_test_secret");
-        assert!(secret["url"].as_str().unwrap().contains("grok-voice-think-fast-2.0"));
-    }
-
-    #[test]
-    fn voice_mint_requires_pair_token() {
-        let state = Arc::new(Mutex::new(HubState::empty()));
-        let port = serve_background(state, 0).expect("bind");
-        std::thread::sleep(std::time::Duration::from_millis(40));
-        let (st_v, _, body) = http(
-            port,
-            "POST /v1/voice/client-secret HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\n\r\n",
-        );
-        assert_eq!(st_v, 401, "{}", String::from_utf8_lossy(&body));
-        assert!(
-            String::from_utf8_lossy(&body)
-                .to_ascii_lowercase()
-                .contains("pair"),
-            "{}",
-            String::from_utf8_lossy(&body)
-        );
-    }
-
-    #[test]
-    fn voice_mint_reports_upstream_failure() {
-        let mut st = HubState::empty();
-        let code = st.rotate_pair().code;
-        st.console_api_key = "xai-test-key".into();
-        st.mint_realtime = Some(grokhub_core::MintRealtimeFn(std::sync::Arc::new(|_key: &str| {
-            Err("xAI refused".into())
-        })));
-        let state = Arc::new(Mutex::new(st));
-        let port = serve_background(state, 0).expect("bind");
-        std::thread::sleep(std::time::Duration::from_millis(40));
-        let pair_body = format!(
-            r#"{{"code":"{code}","deviceId":"d-fail","deviceName":"Pixel"}}"#
-        );
-        let req = format!(
-            "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{pair_body}",
-            pair_body.len()
-        );
-        let (_, _, body) = http(port, &req);
-        let v: Value = serde_json::from_slice(&body).unwrap();
-        let token = v["token"].as_str().unwrap();
-        let req = format!(
-            "POST /v1/voice/client-secret HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Length: 0\r\n\r\n"
-        );
-        let (st_v, _, body) = http(port, &req);
-        assert_eq!(st_v, 502, "{}", String::from_utf8_lossy(&body));
-        assert!(
-            String::from_utf8_lossy(&body).contains("xAI refused"),
-            "{}",
-            String::from_utf8_lossy(&body)
-        );
-    }
-
-    #[test]
-    fn voice_mint_rejects_empty_secret() {
-        let mut st = HubState::empty();
-        let code = st.rotate_pair().code;
-        st.console_api_key = "xai-test-key".into();
-        st.mint_realtime = Some(grokhub_core::MintRealtimeFn(std::sync::Arc::new(|_key: &str| {
-            Ok(serde_json::json!({ "unexpected": true }))
-        })));
-        let state = Arc::new(Mutex::new(st));
-        let port = serve_background(state, 0).expect("bind");
-        std::thread::sleep(std::time::Duration::from_millis(40));
-        let pair_body = format!(
-            r#"{{"code":"{code}","deviceId":"d-empty","deviceName":"Pixel"}}"#
-        );
-        let req = format!(
-            "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{pair_body}",
-            pair_body.len()
-        );
-        let (_, _, body) = http(port, &req);
-        let v: Value = serde_json::from_slice(&body).unwrap();
-        let token = v["token"].as_str().unwrap();
-        let req = format!(
-            "POST /v1/voice/client-secret HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Length: 0\r\n\r\n"
-        );
-        let (st_v, _, body) = http(port, &req);
-        assert_eq!(st_v, 502, "{}", String::from_utf8_lossy(&body));
-        assert!(
-            String::from_utf8_lossy(&body).contains("empty client secret"),
-            "{}",
-            String::from_utf8_lossy(&body)
-        );
+        for (method, path) in [
+            ("POST", "/v1/task"),
+            ("GET", "/v1/task/task-1"),
+            ("POST", "/v1/task/task-1/complete"),
+            ("GET", "/v1/inbox"),
+            ("POST", "/v1/inbox/task-1/ack"),
+            ("GET", "/v1/results"),
+            ("GET", "/v1/frame.jpg"),
+            ("POST", "/v1/voice/client-secret"),
+        ] {
+            let req = format!(
+                "{method} {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\nContent-Length: 0\r\n\r\n"
+            );
+            let (status, _, body) = http(port, &req);
+            assert_eq!(status, 404, "{method} {path}: {}", String::from_utf8_lossy(&body));
+            assert_eq!(
+                String::from_utf8_lossy(&body),
+                r#"{"error":"unknown hub route","ok":false}"#,
+                "{method} {path}"
+            );
+        }
     }
 
     #[test]
@@ -728,7 +431,7 @@ mod tests {
         let state = Arc::new(Mutex::new(st));
         let port = serve_background(state, 0).expect("bind");
         std::thread::sleep(std::time::Duration::from_millis(40));
-        let pair_body = r#"{"code":"ZZZ-999","deviceId":"d-bad","deviceName":"Pixel"}"#;
+        let pair_body = r#"{"code":"ZZZ-999","deviceId":"d-bad","deviceName":"Laptop"}"#;
         let req = format!(
             "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{pair_body}",
             pair_body.len()
@@ -747,8 +450,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(40));
 
         // `/v1/pair` returns the hub id and `/v1/status` lists it, so a caller holding the
-        // code knows it. Claiming it would let them read tasks addressed to the hub and
-        // forge their completion.
+        // code knows it. Claiming it would let them pose as the hub to every other peer.
         let body = format!(r#"{{"code":"{code}","deviceId":"{hub_id}","deviceName":"Impostor"}}"#);
         let req = format!(
             "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
@@ -767,7 +469,7 @@ mod tests {
         );
 
         // The code is still good for an honest device.
-        let body = format!(r#"{{"code":"{code}","deviceId":"d-phone","deviceName":"Pixel"}}"#);
+        let body = format!(r#"{{"code":"{code}","deviceId":"d-cabin","deviceName":"cabin-2"}}"#);
         let req = format!(
             "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
             body.len()
@@ -776,36 +478,14 @@ mod tests {
     }
 
     #[test]
-    fn phone_cannot_claim_inhabit() {
+    fn paired_computer_claims_inhabit() {
         let mut st = HubState::empty();
         let code = st.rotate_pair().code;
         let state = Arc::new(Mutex::new(st));
-        let port = serve_background(state.clone(), 0).expect("bind");
+        let port = serve_background(state, 0).expect("bind");
         std::thread::sleep(std::time::Duration::from_millis(40));
         let pair_body = format!(
-            r#"{{"code":"{code}","deviceId":"d-phone","deviceName":"Pixel phone"}}"#
-        );
-        let req = format!(
-            "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{pair_body}",
-            pair_body.len()
-        );
-        let (_, _, body) = http(port, &req);
-        let v: Value = serde_json::from_slice(&body).unwrap();
-        let phone = v["token"].as_str().unwrap();
-        let inhabit = r#"{"bundle":{"soul":"stay kind"}}"#;
-        let req = format!(
-            "POST /v1/inhabit HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {phone}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{inhabit}",
-            inhabit.len()
-        );
-        assert_eq!(http(port, &req).0, 200);
-        let (st_g, _, body) = http(
-            port,
-            &format!("GET /v1/inhabit HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {phone}\r\n\r\n"),
-        );
-        assert_eq!(st_g, 403, "{}", String::from_utf8_lossy(&body));
-        let code2 = state.lock().unwrap().rotate_pair().code;
-        let pair_body = format!(
-            r#"{{"code":"{code2}","deviceId":"d-cabin","deviceName":"cabin-2"}}"#
+            r#"{{"code":"{code}","deviceId":"d-cabin","deviceName":"cabin-2"}}"#
         );
         let req = format!(
             "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{pair_body}",
@@ -814,12 +494,19 @@ mod tests {
         let (_, _, body) = http(port, &req);
         let v: Value = serde_json::from_slice(&body).unwrap();
         let cabin = v["token"].as_str().unwrap();
+        let inhabit = r#"{"bundle":{"soul":"stay kind"}}"#;
+        let req = format!(
+            "POST /v1/inhabit HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {cabin}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{inhabit}",
+            inhabit.len()
+        );
+        assert_eq!(http(port, &req).0, 200);
         let (st_ok, _, body) = http(
             port,
             &format!("GET /v1/inhabit HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {cabin}\r\n\r\n"),
         );
         assert_eq!(st_ok, 200, "{}", String::from_utf8_lossy(&body));
-        assert!(String::from_utf8_lossy(&body).contains("stay kind"));
+        let got: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(got["bundle"]["soul"], "stay kind");
     }
 
     #[test]
@@ -845,7 +532,7 @@ mod tests {
         let put_snap = src
             .split("Method::Put && path == \"/v1/snapshot\"")
             .nth(1)
-            .and_then(|s| s.split("Method::Post && path == \"/v1/task\"").next())
+            .and_then(|s| s.split("Method::Post && path == \"/v1/inhabit\"").next())
             .expect("PUT /v1/snapshot");
         let drop_at = put_snap.find("drop(st)").expect("PUT snapshot must drop before read_json");
         let read_at = put_snap.find("read_json").expect("PUT snapshot reads a body");
@@ -862,7 +549,7 @@ mod tests {
         let get_frame = src
             .split("Method::Get && path == \"/v1/frame\"")
             .nth(1)
-            .and_then(|s| s.split("Method::Get && path == \"/v1/frame.jpg\"").next())
+            .and_then(|s| s.split("unknown hub route").next())
             .expect("GET /v1/frame");
         assert!(
             get_frame.contains("drop(st)"),
@@ -871,15 +558,6 @@ mod tests {
         assert!(
             get_frame.contains("as_deref()"),
             "GET frame must serialize the Arc after drop, not clone a 400KB JPEG under hub.lock(): {get_frame}"
-        );
-        let get_jpg = src
-            .split("Method::Get && path == \"/v1/frame.jpg\"")
-            .nth(1)
-            .and_then(|s| s.split("Method::Post && path == \"/v1/voice/client-secret\"").next())
-            .expect("GET /v1/frame.jpg");
-        assert!(
-            get_jpg.contains("drop(st)"),
-            "GET frame.jpg must release the hub lock before send_raw: {get_jpg}"
         );
         let post_frame = src
             .split("Method::Post && path == \"/v1/frame\"")
@@ -898,28 +576,6 @@ mod tests {
             read_at < parse && parse < relock && post_frame.contains("install_frame"),
             "POST frame must not decode a 400KB JPEG under hub.lock(): {post_frame}"
         );
-        let post_task = src
-            .split("Method::Post && path == \"/v1/task\"")
-            .nth(1)
-            .and_then(|s| s.split("path == \"/v1/inbox\"").next())
-            .expect("POST /v1/task");
-        let drop_at = post_task.find("drop(st)").expect("POST task must drop before read_json");
-        let read_at = post_task.find("read_json").expect("POST task reads a body");
-        assert!(
-            drop_at < read_at,
-            "POST task must not read the body while holding the hub lock: {post_task}"
-        );
-        let complete = src
-            .split("/v1/task/")
-            .nth(1)
-            .and_then(|s| s.split("path.strip_prefix(\"/v1/task/\")").next())
-            .expect("POST complete");
-        let drop_at = complete.find("drop(st)").expect("complete must drop before read_json");
-        let read_at = complete.find("read_json").expect("complete reads a body");
-        assert!(
-            drop_at < read_at,
-            "task complete must not read receipts while holding the hub lock: {complete}"
-        );
         let inhabit = src
             .split("Method::Post && path == \"/v1/inhabit\"")
             .nth(1)
@@ -930,24 +586,6 @@ mod tests {
         assert!(
             drop_at < read_at,
             "POST inhabit must not read the bundle while holding the hub lock: {inhabit}"
-        );
-        let inbox = src
-            .split("path == \"/v1/inbox\"")
-            .nth(1)
-            .and_then(|s| s.split("/v1/inbox/").next())
-            .expect("GET /v1/inbox");
-        assert!(
-            inbox.contains("drop(st)"),
-            "GET inbox must release the hub lock before send_json: {inbox}"
-        );
-        let results = src
-            .split("path == \"/v1/results\"")
-            .nth(1)
-            .and_then(|s| s.split("path == \"/v1/inhabit\"").next())
-            .expect("GET /v1/results");
-        assert!(
-            results.contains("drop(st)"),
-            "GET results must release the hub lock before send_json: {results}"
         );
         let get_inhabit = src
             .split("Method::Get && path == \"/v1/inhabit\"")
@@ -978,43 +616,10 @@ mod tests {
             drop_at < send_at,
             "POST pair must not send while holding the hub lock: {pair}"
         );
-        let get_task = src
-            .split("path.strip_prefix(\"/v1/task/\")")
-            .nth(1)
-            .and_then(|s| s.split("path == \"/v1/results\"").next())
-            .expect("GET /v1/task");
-        assert!(
-            get_task.contains("drop(st)"),
-            "GET task must release the hub lock before send_json: {get_task}"
-        );
-        let ack = src
-            .split("/v1/inbox/")
-            .nth(1)
-            .and_then(|s| s.split("/v1/task/").next())
-            .expect("POST inbox ack");
-        let drop_at = ack.find("drop(st)").expect("ack must drop before send_json");
-        let send_at = ack.find("send_json").expect("ack sends");
-        assert!(
-            drop_at < send_at,
-            "inbox ack must not send while holding the hub lock: {ack}"
-        );
-        let voice_deny = src
-            .split("voice_client_secret_denied")
-            .nth(1)
-            .and_then(|s| s.split("let key = st.console_api_key").next())
-            .expect("voice deny");
-        let drop_at = voice_deny
-            .find("drop(st)")
-            .expect("voice 400 must drop before send_json");
-        let send_at = voice_deny.find("send_json").expect("voice 400 sends");
-        assert!(
-            drop_at < send_at,
-            "voice deny must not send while holding the hub lock: {voice_deny}"
-        );
         let unknown = src
-            .split("Err(e) => send_json(req, 502")
+            .split("frame: frame.as_deref(),")
             .nth(1)
-            .and_then(|s| s.split("fn split_url").next())
+            .and_then(|s| s.split("fn url_path").next())
             .expect("unknown hub route");
         let drop_at = unknown
             .find("drop(st)")
@@ -1033,7 +638,7 @@ mod tests {
         let handle_at = accept.find("handle(").expect("handle");
         assert!(
             spawn < handle_at,
-            "voice mint must not stall pair/inbox on the accept thread: {accept}"
+            "a slow request must not stall pair or sync on the accept thread: {accept}"
         );
         let serve = src
             .split("pub fn serve(")

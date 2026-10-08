@@ -168,15 +168,4 @@ impl Cabin {
         }
         resp.rect
     }
-
-    pub(super) fn sync_hub_voice(&self) {
-        if let Ok(mut st) = self.hub.lock() {
-            st.console_api_key = self.console_key().to_string();
-            if st.mint_realtime.is_none() {
-                st.mint_realtime = Some(MintRealtimeFn(Arc::new(|key| {
-                    crate::xai::grok_realtime_secret(key)
-                })));
-            }
-        }
-    }
 }

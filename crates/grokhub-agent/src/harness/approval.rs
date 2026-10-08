@@ -10,6 +10,7 @@ use crate::harness::access::AccessMode;
 use crate::harness::consent::{ConsentLedger, Scope};
 use crate::harness::egress::DataClass;
 use crate::harness::hard::{classify, classify_ask, desk_classify, HardClass, HardFloor, HardHit};
+use crate::harness::mindcheck::{proactive_outcome, MindCheck};
 
 /// How long a parked hard-class card may wait before fail-closed Deny.
 pub const APPROVAL_TTL: Duration = Duration::from_secs(300);
@@ -126,6 +127,13 @@ pub enum Step<'a> {
     Egress { dest: &'a str, data: &'a [DataClass], ledger: &'a ConsentLedger },
     /// A read of a learning scope (P5). Off unless the user granted it.
     Scope { scope: &'a Scope, ledger: &'a ConsentLedger },
+    /// A Spike-9 repair step (its command plus the files it touches): the
+    /// shell floor and hard class, then the repair floor and repair table.
+    Repair { command: &'a str },
+    /// A proactive candidate (Spike-5a): a tool call plus its MindCheck key.
+    /// Floor and hard class come first and ignore the prior; only a soft
+    /// call reads MindCheck, which parks a soft card unless it may auto.
+    Proactive { name: &'a str, arguments: &'a str, key: &'a str, mind: &'a MindCheck },
 }
 
 /// The single entry for the hard floor and the hard class. Every caller asks
@@ -148,6 +156,11 @@ pub fn decide(step: Step<'_>) -> GateOutcome {
         Step::Tool { name, arguments } => classify(name, arguments),
         Step::Desk { tool, args } => desk_classify(tool, args),
         Step::Ask { title, action } => classify_ask(title, action),
+        Step::Repair { command } => crate::repair::repair_hit(command),
+        Step::Proactive { name, arguments, key, mind } => match classify(name, arguments) {
+            HardHit::None => return proactive_outcome(name, key, mind),
+            hit => hit,
+        },
     };
     match hit {
         HardHit::Floor(HardFloor { reason }) => GateOutcome::Refuse { reason },

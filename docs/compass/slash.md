@@ -5,7 +5,7 @@
 ## Quick commands
 - `cargo test -p grokhub-core slash` (parser, picker, help)
 - `cargo test -p grokhub-agent slash_parity`
-- `cargo test -p grokhub-ffi` (C ABI `grokhub_slash_kind`)
+- `cargo test -p grokhub-app slash` (cabin dispatch)
 ## Key files
 - `crates/grokhub-core/src/slash.rs`: `Slash`, `parse_slash`, `slash_kind`, `SLASH_COMMANDS` (picker rows), `slash_help`, `unknown_cabin_slash`, `is_cabin_slash_turn`.
 - `crates/grokhub-app/src/app/slash.rs`: `run_slash` (one match arm per variant), `dispatch_native_slash`, `apply_unparsed_native_slash`.
@@ -16,11 +16,11 @@
 - Handle it in `run_slash` in `crates/grokhub-app/src/app/slash.rs`, with a core test in `cabin_slash` or a new one.
 - If it should count as a home habit, map its kind in `home_slash_cmd` (`crates/grokhub-core/src/chips.rs`).
 ## What breaks it
-- Renaming a `slash_kind` string: it is the C ABI answer Android gets (`grokhub_slash_kind`) and the input to `home_slash_cmd`.
+- Renaming a `slash_kind` string: it is the input to `home_slash_cmd`, so home habits stop counting.
 - Claiming a verb Grok Build owns: unknown slashes and CLI skills such as `/create-skill` must still reach `grok -p`. Only retired verbs (`/approve`, `/project binding`) are rejected locally.
 - Changing `/help` or `/models` text: `is_cabin_slash_turn` keeps those dumps out of the next model kick by matching their first lines (`/help — this list`, model ids).
 ## What depends on it
-- The composer picker (`filter_slash_hits` merges cabin rows with Grok extras from `grok_command_hits`), `/recall` and AMR, `/workflow` forwarding, and grokhub-ffi.
+- The composer picker (`filter_slash_hits` merges cabin rows with Grok extras from `grok_command_hits`), `/recall` and AMR, and `/workflow` forwarding.
 ## Non-obvious
 - `/learn` belongs to the cabin: a Grok extra with the same verb must not become an insert-only chip.
 - `/workflow pause|resume|stop` with no target is `WorkflowUsage` and is not forwarded; any other first word is a launch name.
@@ -30,4 +30,4 @@
 - `/privacy` is a cabin view (`run_privacy`) and shadows the Grok CLI pager builtin. Slash text never writes a grant; only a Settings click in `ui_privacy_rows` or `ui_scope_rows` does. Its ghost Revoke rows (`paint_privacy_revokes`) answer a pointer click only.
 - `run_slash` calls `dispatch_native_slash` first on every thread. It returns false off native (Lab) threads; on them Remember, Dream, Inspect, Fork, Rewind, Usage, Models and Workflow return true and skip the cabin match.
 ## See also
-- [amr](amr.md), [grokhub-ffi](grokhub-ffi.md), [app-module](app-module.md), [grokhub-agent](grokhub-agent.md)
+- [amr](amr.md), [app-module](app-module.md), [grokhub-agent](grokhub-agent.md)

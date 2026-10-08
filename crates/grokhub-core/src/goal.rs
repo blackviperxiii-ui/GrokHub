@@ -257,7 +257,7 @@ fn done_word(t: &str) -> bool {
         .any(|w| t.split(|c: char| !c.is_ascii_alphabetic()).any(|x| x == *w))
 }
 
-/// Phone GET /v1/results must not report `done` when the cabin is blocked.
+/// A queued `/send` task must not complete as `done` when the cabin is blocked.
 pub fn hub_dispatch_ok(text: &str) -> bool {
     parse_goal_outcome(text) != "blocked"
 }
@@ -612,7 +612,7 @@ mod tests {
         assert!(hub_dispatch_ok("All set. GOAL_COMPLETE"));
         assert!(
             !hub_dispatch_ok("GOAL_BLOCKED: need the serial cable"),
-            "a blocked phone task must not complete as done"
+            "a blocked /send task must not complete as done"
         );
         assert!(hub_dispatch_ok("Flashed the card."));
         let mut g = ThreadGoal {

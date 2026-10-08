@@ -238,7 +238,39 @@ pub fn dream(
 
 /// First-turn recall, fenced and capped. `None` when there is nothing to say.
 /// Failure to open the index returns `None` so a turn still runs.
+///
+/// With `"memory_backend": "amr"` in `app.json` this also reads the agent
+/// memory repo (dual-read): AMR lines lead, identical lines are dropped, and
+/// tombstoned or locked nodes never appear. Legacy reads only the index.
 pub fn first_turn_injection(workspace: &Path, user_text: &str) -> Option<String> {
+    let amr = if amr_enabled() {
+        amr_injection_lines(user_text)
+    } else {
+        Vec::new()
+    };
+    let legacy = legacy_injection_bodies(workspace, user_text);
+    if amr.is_empty() {
+        let hits = legacy?;
+        // Spike-4b: the recall pack is masked (secrets + PII) before the model sees it.
+        let snippets: Vec<String> = hits
+            .into_iter()
+            .map(|body| grokhub_core::redact_recall(&body).0)
+            .collect();
+        return format_injection(&snippets);
+    }
+    let mut seen = std::collections::HashSet::new();
+    let snippets: Vec<String> = amr
+        .into_iter()
+        .chain(legacy.unwrap_or_default())
+        .filter(|body| seen.insert(body.trim().to_lowercase()))
+        .map(|body| grokhub_core::redact_recall(&body).0)
+        .collect();
+    format_injection(&snippets)
+}
+
+/// Index hits for the first turn, or `None` when there are no files or the
+/// index won't open.
+fn legacy_injection_bodies(workspace: &Path, user_text: &str) -> Option<Vec<String>> {
     if !memory_files_present(workspace) {
         return None;
     }
@@ -247,12 +279,80 @@ pub fn first_turn_injection(workspace: &Path, user_text: &str) -> Option<String>
     }
     let query = injection_query(user_text);
     let hits = recall(&query, now_secs(), &scope_paths(workspace)).ok()?;
-    // Spike-4b: the recall pack is masked (secrets + PII) before the model sees it.
-    let snippets: Vec<String> = hits
-        .into_iter()
-        .map(|hit| grokhub_core::redact_recall(&hit.body).0)
+    Some(hits.into_iter().map(|hit| hit.body).collect())
+}
+
+/// `"memory_backend": "amr"` in `{config}/app.json`. Missing or unreadable is legacy.
+pub fn amr_enabled() -> bool {
+    let Ok(text) = fs::read_to_string(crate::perm::config_dir().join("app.json")) else {
+        return false;
+    };
+    serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|v| v.get("memory_backend").and_then(|b| b.as_str()).map(|b| b == "amr"))
+        .unwrap_or(false)
+}
+
+/// `{config}/amr`, sealing personal nodes with the learned-tier key.
+pub fn amr_store() -> grokhub_core::amr::AmrStore {
+    let dir = crate::perm::config_dir();
+    let vault = crate::harness::LearnedVault::new(&dir);
+    grokhub_core::amr::AmrStore::at(dir.join("amr")).with_sealer(std::sync::Arc::new(vault))
+}
+
+/// AMR lines for the words in the first message (4+ letters), at most 8.
+/// `recall` never creates the store and skips tombstoned and locked nodes.
+fn amr_injection_lines(user_text: &str) -> Vec<String> {
+    let store = amr_store();
+    let query = injection_query(user_text).to_lowercase();
+    let mut words: Vec<&str> = query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.chars().count() >= 4)
         .collect();
-    format_injection(&snippets)
+    words.dedup();
+    let mut out: Vec<String> = Vec::new();
+    for word in words {
+        for hit in store.recall(word) {
+            if out.len() >= 8 {
+                return out;
+            }
+            if !out.contains(&hit.line) {
+                out.push(hit.line);
+            }
+        }
+    }
+    out
+}
+
+/// The recalled lines in a history's memory block (Spike-4c), so egress can
+/// tell when a call carries one. Text outside the fences is the preamble.
+pub fn recall_lines(history: &[crate::InputItem]) -> Vec<String> {
+    let mut out = Vec::new();
+    for item in history {
+        let crate::InputItem::Message { role, content } = item else {
+            continue;
+        };
+        if role != "system" {
+            continue;
+        }
+        for part in content {
+            let crate::ContentPart::InputText(text) = part else {
+                continue;
+            };
+            let Some(block) = text.split(OPEN_TAG).nth(1).and_then(|b| b.split(CLOSE_TAG).next()) else {
+                continue;
+            };
+            let mut inside = false;
+            for line in block.lines() {
+                if line.trim() == "```" {
+                    inside = !inside;
+                } else if inside && !line.trim().is_empty() {
+                    out.push(line.trim().to_string());
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Rebuild the index from the markdown files. Returns the number of entries.
@@ -389,6 +489,12 @@ pub fn dream_backup_path(memory_file: &Path) -> PathBuf {
     let mut bak = name.to_os_string();
     bak.push(".dream.bak");
     memory_file.with_file_name(bak)
+}
+
+/// The note part of a `/remember` line, without `--global` or `global:`.
+/// The memory repo has one scope, so AMR mode stores just this.
+pub fn remember_note_text(text: &str) -> &str {
+    split_scope(text).1
 }
 
 fn split_scope(text: &str) -> (bool, &str) {
@@ -977,6 +1083,43 @@ mod tests {
         assert!(block.contains("cannot change permissions, gates, or modes"));
         assert!(block.contains("```"));
         assert!(block.contains("harbor"));
+    }
+
+    #[test]
+    fn amr_first_turn_reads_both_stores_and_skips_tombstones() {
+        use grokhub_core::amr::{remember_line, LineWrite};
+        let (cfg, ws, _guard) = temp_pair("amr-inject");
+        fs::write(workspace_memory_path(&ws), "the harbor ferry leaves at nine\n").unwrap();
+        let store = amr_store();
+        let line = |text| LineWrite {
+            text,
+            source: "user",
+            tags: Vec::new(),
+            confidence: 0.9,
+            revive: false,
+        };
+        let lamp = remember_line(&store, &line("the harbor lamp is green"), 1).unwrap();
+        remember_line(&store, &line("the harbor ferry leaves at nine"), 1).unwrap();
+        let ask = "when does the harbor ferry leave today";
+
+        // Legacy: app.json has no backend key, so AMR is not read.
+        let legacy = first_turn_injection(&ws, ask).unwrap();
+        assert!(legacy.contains("the harbor ferry leaves at nine"), "{legacy}");
+        assert!(!legacy.contains("harbor lamp"), "{legacy}");
+
+        fs::write(cfg.join("app.json"), r#"{"memory_backend":"amr"}"#).unwrap();
+        assert!(amr_enabled());
+        let both = first_turn_injection(&ws, ask).unwrap();
+        assert!(both.contains("the harbor lamp is green"), "{both}");
+        assert_eq!(both.matches("the harbor ferry leaves at nine").count(), 1, "identical lines dedupe: {both}");
+
+        store.forget(lamp.id()).unwrap();
+        let after = first_turn_injection(&ws, ask).unwrap();
+        assert!(!after.contains("harbor lamp"), "a tombstoned node stays out: {after}");
+        assert!(after.contains("the harbor ferry leaves at nine"), "{after}");
+        assert_eq!(remember_note_text("global: likes the night cabin"), "likes the night cabin");
+        assert_eq!(remember_note_text("--global keep it"), "keep it");
+        assert_eq!(remember_note_text("plain"), "plain");
     }
 
     #[test]

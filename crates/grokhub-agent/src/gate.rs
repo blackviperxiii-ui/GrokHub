@@ -26,6 +26,7 @@ const READONLY: &[&str] = &[
     "ask_user_question",
     "enter_plan_mode",
     "exit_plan_mode",
+    "diagnose",
 ];
 const EDIT: &[&str] = &["write", "search_replace"];
 const SHELL: &[&str] = &["run_terminal_command"];
@@ -34,6 +35,9 @@ const CONTROL: &[&str] = &[
     "monitor",
     "scheduler_create",
     "scheduler_delete",
+    "connection_add",
+    "connection_disable",
+    "connection_delete",
     "spawn_subagent",
     "send_subagent_message",
 ];
@@ -191,6 +195,7 @@ pub fn is_known(name: &str) -> bool {
         || is_desktop(name)
         || name == WEB_FETCH
         || is_media(name)
+        || crate::self_manage::self_tool(name).is_some()
 }
 
 pub fn readonly_refusal(name: &str) -> String {
@@ -229,8 +234,11 @@ pub fn user_cancelled(name: &str) -> String {
     format!("User cancelled the execution for tool `{name}`")
 }
 
+/// Spike-2b: what the steps after a denied hard step in the same batch return.
+pub const NOT_EXECUTED: &str = "Not executed: earlier action failed";
+
 pub fn decide(gate: &Gate, name: &str, latched_always: bool, desk: Option<DeskFlags>) -> Decision {
-    if is_readonly(name) {
+    if is_readonly(name) || crate::self_manage::is_read(name) {
         return Decision::Run;
     }
     if gate.readonly_session {
@@ -464,7 +472,7 @@ mod tests {
             Decision::Ask
         );
         assert_eq!(
-            decide_with(&always, "hard_delete_stub", "{}", true, None, Path::new("."), None),
+            decide_with(&always, "drive__delete_file", "{}", true, None, Path::new("."), None),
             Decision::Ask
         );
         let away = gate(PermMode::Always, false, false, true);
