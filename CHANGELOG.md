@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Chat on the native engine works again: GrokHub sent `connection_add` and `connection_disable` to the model twice (once from Spike-5b's connection tools, once from Spike-5c's self-manage tools), and the API refused every turn with "Duplicate function definition provided". The self-manage table is now the only source, and a native engine error no longer reads as "ACP session/new failed". When Update stops because new files in your GrokHub folder are in the way, it now says so instead of asking you to commit or stash.
+
 Fork is removed. The "Long thread" and "Context is half full" offer under the chat, its Fork button and the "How fork works" card are gone, along with `/fork`, the Fork button on native History rows and the Branch markers on the History page. The context usage bar stays, and `/bg` still runs on its own copy of the chat's session.
 
 Fix it (Spike-9). After a diagnose finds something, GrokHub shows one card per fix with what's wrong, what it will do, why, how to undo it and the risk. Fix it (a click, never Enter) backs up every settings file the fix touches, takes a system snapshot when snapper, Timeshift, btrfs or System Restore is there, then hands each step to Grok Build one at a time; deleting files, removing apps or drivers, boot and partition changes park a hard card, and wiping a disk is never done in the app. Your computer's own password prompt is yours to answer. GrokHub checks again and only says fixed when the problem is gone; Undo fix puts the files back exactly. Fixing never runs unattended.
