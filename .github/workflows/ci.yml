@@ -30,7 +30,7 @@ jobs:
       # Carcass: deny dead_code workspace-wide. Retired direct-xAI helpers
       # must be deleted, not allowed.
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo build -p grokhub-app -p grokhub-hub -p grokhub-ffi
+      - run: cargo build -p grokhub-app -p grokhub-hub
       - name: Cabin binary exists
         run: test -x target/debug/grokhub && test -x target/debug/grokhub-hub
       - name: No Electron leftover

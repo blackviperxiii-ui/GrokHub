@@ -9,13 +9,13 @@ mod rpc;
 mod stdio;
 
 pub use config::{
-    config_file, import_documents, import_paths, load_servers, load_servers_for, read_mcp_text,
+    config_file, import_documents, import_paths, is_desktop_server, load_servers, load_servers_for, read_mcp_text,
     target_label, ImportReport, ServerDef,
 };
 pub use elicit::{
     alias_elicit, attach_elicit, detach_elicit, unalias_elicit, ElicitInbox, ElicitNote, ElicitView,
 };
-pub(crate) use elicit::{wait_elicit, ElicitAnswer};
+pub(crate) use elicit::{ask_secret, wait_elicit, ElicitAnswer};
 
 pub(crate) use elicit::with_elicit;
 
@@ -34,7 +34,9 @@ use crate::tools::ToolOutput;
 use config::TransportDef;
 use rpc::RawTool;
 
-/// Individual tool schemas at this count. Above it, `search_tool` and `use_tool`.
+/// Individual tool schemas at this count. Above it, `search_tool` and
+/// `use_tool`. Spike-2b: counts the native desktop tools and every MCP tool
+/// (Cua included) together.
 const DEFER_AFTER: usize = 40;
 
 static GEN: AtomicU64 = AtomicU64::new(0);
@@ -97,10 +99,11 @@ impl Conn {
         name: &str,
         args: &Value,
         timeout: std::time::Duration,
+        stop: &dyn Fn() -> bool,
     ) -> Result<(String, bool), String> {
         match self {
             Conn::Stdio(conn) => conn.call(name, args, timeout),
-            Conn::Http(conn) => conn.call(name, args, timeout),
+            Conn::Http(conn) => conn.call(name, args, timeout, stop),
         }
     }
 
@@ -254,15 +257,20 @@ pub fn restart(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn schema_tools() -> Vec<Value> {
+/// MCP schemas for the native engine. `native` is how many desktop tools
+/// it registers beside them; past [`DEFER_AFTER`] in all, MCP tools hide
+/// behind `search_tool` and `use_tool`.
+pub(crate) fn schema_tools(native: usize) -> Vec<Value> {
     let tools = current_tools();
-    if tools.len() > DEFER_AFTER {
+    if tools.len() + native > DEFER_AFTER {
         return vec![search_schema(), use_schema()];
     }
     tools.iter().map(one_schema).collect()
 }
 
-pub(crate) fn try_dispatch(name: &str, args: &Value) -> Option<ToolOutput> {
+/// `stop` is the run's Stop / Halt: an egress park waiting on a card gives up
+/// when it turns true.
+pub(crate) fn try_dispatch(name: &str, args: &Value, stop: &dyn Fn() -> bool) -> Option<ToolOutput> {
     if name == "search_tool" {
         return Some(search_output(args));
     }
@@ -271,17 +279,14 @@ pub(crate) fn try_dispatch(name: &str, args: &Value) -> Option<ToolOutput> {
     }
     let tools = current_tools();
     if name == "use_tool" {
-        if tools.len() <= DEFER_AFTER {
-            return None;
-        }
-        return Some(use_output(&tools, args));
+        return Some(use_output(&tools, args, stop));
     }
     let rec = tools.into_iter().find(|tool| tool.qualified == name)?;
     #[cfg(test)]
     if test_snapshot().is_some() {
         return Some(ToolOutput::ok(format!("test-call {}", rec.qualified)));
     }
-    Some(call_qualified(&rec, args))
+    Some(call_qualified(&rec, args, stop))
 }
 
 pub(crate) fn search_output(args: &Value) -> ToolOutput {
@@ -380,9 +385,6 @@ fn resolve(name: &str, arguments: &str) -> Option<Resolved> {
     }
     let tools = current_tools();
     if name == "use_tool" {
-        if tools.len() <= DEFER_AFTER {
-            return None;
-        }
         let target = arg_name(arguments);
         if target.is_empty() {
             return Some(Resolved::Missing("use_tool".into()));
@@ -411,7 +413,7 @@ fn arg_name(arguments: &str) -> String {
         .unwrap_or_default()
 }
 
-fn use_output(tools: &[ToolRec], args: &Value) -> ToolOutput {
+fn use_output(tools: &[ToolRec], args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
     let name = args
         .get("name")
         .and_then(|v| v.as_str())
@@ -428,7 +430,7 @@ fn use_output(tools: &[ToolRec], args: &Value) -> ToolOutput {
     if test_snapshot().is_some() {
         return ToolOutput::ok(format!("test-call {}", rec.qualified));
     }
-    call_qualified(rec, &call_args)
+    call_qualified(rec, &call_args, stop)
 }
 
 fn normalize_args(value: Option<&Value>) -> Value {
@@ -445,7 +447,7 @@ fn normalize_args(value: Option<&Value>) -> Value {
     }
 }
 
-fn call_qualified(rec: &ToolRec, args: &Value) -> ToolOutput {
+fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
     let slots = slots_now();
     let Some(slot) = slots.get(&rec.server).cloned() else {
         return ToolOutput::err(format!("MCP server `{}` stopped", rec.server));
@@ -459,7 +461,7 @@ fn call_qualified(rec: &ToolRec, args: &Value) -> ToolOutput {
             .unwrap_or_else(|| format!("MCP server `{}` stopped", rec.server));
         return ToolOutput::err(err);
     };
-    match conn.call(&rec.raw, args, timeout) {
+    match conn.call(&rec.raw, args, timeout, stop) {
         Ok((text, true)) => ToolOutput::err(text),
         Ok((text, false)) => ToolOutput::ok(text),
         Err(err) => {
@@ -626,11 +628,17 @@ fn open_def(name: &str, def: &ServerDef, workspace: &Path) -> Result<(Conn, Vec<
             Ok((Conn::Stdio(conn), tools))
         }
         TransportDef::Http { url, sse } => {
+            let mut headers = def.headers.clone();
+            if let Some(token_name) = &def.token_ref {
+                let token = crate::harness::open_connection_token(&perm::config_dir(), token_name)
+                    .ok_or("its token is missing or locked: add the connection again")?;
+                headers.entry("Authorization".into()).or_insert_with(|| format!("Bearer {token}"));
+            }
             let (conn, tools) = http::connect(
                 name,
                 url,
                 *sse,
-                &def.headers,
+                &headers,
                 def.startup_timeout,
                 def.tool_timeout,
             )?;
@@ -1027,7 +1035,7 @@ mod tests {
             ),
             Decision::Run
         );
-        let schemas = schema_tools();
+        let schemas = schema_tools(0);
         let hint = schemas
             .iter()
             .find(|tool| tool["name"] == "box__peek")
@@ -1057,7 +1065,7 @@ mod tests {
             .collect();
         {
             let _guard = install_test_tools(&leaked);
-            let schemas = schema_tools();
+            let schemas = schema_tools(0);
             assert!(schemas.iter().any(|tool| tool["name"] == "box__t0"));
             assert!(schemas
                 .iter()
@@ -1071,7 +1079,7 @@ mod tests {
         let extra = "t40".to_string();
         more.push(("box", extra.as_str(), "widget beta", false));
         let _guard = install_test_tools(&more);
-        let schemas = schema_tools();
+        let schemas = schema_tools(0);
         assert_eq!(schemas.len(), 2);
         assert!(schemas.iter().any(|tool| tool["name"] == "search_tool"));
         assert!(schemas.iter().any(|tool| tool["name"] == "use_tool"));
@@ -1107,6 +1115,7 @@ mod tests {
         let called = try_dispatch(
             "use_tool",
             &json!({"name": "box__t0", "arguments": {"q": "1"}}),
+            &|| false,
         )
         .unwrap();
         assert_eq!(called.text, "test-call box__t0");
@@ -1120,6 +1129,45 @@ mod tests {
             None,
         );
         assert!(matches!(denied, Decision::Refuse(ref msg) if msg.contains("deny rule on mcp")));
+    }
+
+    /// Spike-2b: the 40 counts the native desktop tools and MCP tools together,
+    /// and a deferred hard tool still parks through `harness::decide`.
+    #[test]
+    fn native_desktop_and_mcp_tools_pass_forty_together_and_hard_use_tool_parks() {
+        let desk_on = Gate { desktop: true, ..gate(PermMode::Always, false, true) };
+        let desk_off = gate(PermMode::Always, false, true);
+        let native = {
+            let _none = install_test_tools(&[]);
+            crate::tools::schemas_for(&desk_on).len() - crate::tools::schemas_for(&desk_off).len()
+        };
+        assert_eq!(native, 7, "desktop tools the native engine registers");
+        let names: Vec<String> = (0..41 - native).map(|n| format!("t{n}")).collect();
+        let mut rows: Vec<(&str, &str, &str, bool)> = names.iter().map(|n| ("box", n.as_str(), "other", false)).collect();
+        rows[0] = ("mail", "send_message", "Send an email", false);
+        let _guard = install_test_tools(&rows);
+        assert_eq!(rows.len() + native, 41);
+        let on = crate::tools::schemas_for(&desk_on);
+        assert!(on.iter().any(|t| t["name"] == "search_tool") && on.iter().any(|t| t["name"] == "use_tool"));
+        assert!(on.iter().all(|t| t["name"] != "box__t1"));
+        assert!(on.iter().any(|t| t["name"] == "click"), "desktop tools stay listed");
+        // 34 MCP tools alone stay listed one by one.
+        let off = crate::tools::schemas_for(&desk_off);
+        assert!(off.iter().any(|t| t["name"] == "box__t1"));
+        assert!(off.iter().all(|t| t["name"] != "search_tool"));
+        let ws = Path::new(".");
+        let send = r#"{"name":"mail__send_message","arguments":{"to":"a@example.com"}}"#;
+        // Always cannot skip a hard tool behind use_tool: attended parks, unattended refuses.
+        assert_eq!(decide_with(&desk_on, "use_tool", send, true, None, ws, None), Decision::Ask);
+        let away = Gate { attended: false, ..desk_on };
+        assert!(matches!(
+            decide_with(&away, "use_tool", send, true, None, ws, None),
+            Decision::Refuse(ref msg) if msg.contains("hard-class send")
+        ));
+        assert_eq!(
+            decide_with(&desk_on, "use_tool", r#"{"name":"box__t1","arguments":{}}"#, false, None, ws, None),
+            Decision::Run
+        );
     }
 
     #[test]

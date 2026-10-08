@@ -21,6 +21,9 @@ pub struct ServerDef {
     pub startup_timeout: Duration,
     pub tool_timeout: Duration,
     pub headers: BTreeMap<String, String>,
+    /// A token sealed in the cabin (`tokenRef`), added as a bearer header
+    /// when the server connects. The entry never holds the value.
+    pub token_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -199,6 +202,9 @@ fn server_to_json(def: &ServerDef) -> Option<Value> {
             }
         }
     }
+    if let Some(name) = &def.token_ref {
+        spec.insert("tokenRef".into(), json!(name));
+    }
     if !def.enabled {
         spec.insert("enabled".into(), json!(false));
     }
@@ -270,12 +276,19 @@ fn parse_server(spec: &Value) -> Option<ServerDef> {
                 .map(PathBuf::from),
         }
     };
+    let token_ref = kept
+        .get("tokenRef")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
     Some(ServerDef {
         transport,
         enabled,
         startup_timeout,
         tool_timeout,
         headers,
+        token_ref,
     })
 }
 
@@ -296,6 +309,7 @@ fn keep_server_fields(spec: &Map<String, Value>) -> Map<String, Value> {
         "toolTimeoutSec",
         "bearerToken",
         "bearer_token",
+        "tokenRef",
     ];
     let mut out = Map::new();
     for key in KEYS {
@@ -337,11 +351,11 @@ fn string_map(value: Option<&Value>) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// The cabin's own desktop MCP server. Native chats drive the desktop in-process,
+/// The cabin's own computer-use MCP servers (`grokhub-desktop`, Spike-2a `grokhub-cua`). Native chats drive the desktop in-process,
 /// behind the desktop switch, Ask, Halt and the lock screen, so this server is never
 /// imported or started as an MCP server (that would route around those gates).
 pub fn is_desktop_server(name: &str) -> bool {
-    name.trim().to_ascii_lowercase().replace('_', "-") == grokhub_core::DESKTOP_MCP_SERVER
+    grokhub_core::CABIN_CU_SERVERS.contains(&name.trim().to_ascii_lowercase().replace('_', "-").as_str())
 }
 
 pub fn read_mcp_text(path: &Path) -> Result<String, String> {

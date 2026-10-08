@@ -417,6 +417,7 @@ impl Cabin {
                         self.store_hub_frame(url);
                     }
                     self.ingest_tool_card(&card);
+                    let watched = card.clone();
                     if self.stream_here() {
                         self.scrub_live_blocks();
                         if let Some(url) = &card.image_data_url {
@@ -428,6 +429,8 @@ impl Cabin {
                             self.tool_cards.push(card);
                         }
                     }
+                    // Path D: a stopped turn's later events find `running` off.
+                    self.harness_watch_cu(&watched, true);
                 }
                 AcpEvent::Plan(t) => {
                     // Plan text only. No approve / request-changes / comment RPC on this tip:
@@ -507,6 +510,7 @@ impl Cabin {
                 }
                 AcpEvent::Done { stop_reason } => {
                     self.sync_native_title_from_store();
+                    self.episode_turn_done(&stop_reason);
                     if stop_reason.eq_ignore_ascii_case("cancelled") || !self.running {
                         continue;
                     }
@@ -521,7 +525,10 @@ impl Cabin {
                             IMAGE_FILE_CAP as usize,
                         )
                     };
+                    let turn = self.turn_no();
+                    self.harness_watch_end();
                     self.finish_acp_turn(text);
+                    self.harness_turn_end_last_reply(turn);
                     self.drain_followup_queue();
                 }
                 AcpEvent::Err(e) => {
@@ -650,6 +657,8 @@ impl Cabin {
             Some(say) => grokhub_core::assistant_prose(say),
             None => grokhub_core::assistant_prose(&text),
         };
+        // The audit reads the visible chat's spans, so only a reply on it is kept.
+        self.harness.last_reply = here.then(|| prose.clone());
         if here {
             if !prose.is_empty() {
                 match self.live_blocks.last_mut() {
@@ -671,7 +680,7 @@ impl Cabin {
         self.settle_turn_card(&text);
         let origin = self.chat_job_thread.take();
         // Grok may hand separate long work to background runs. Unwatched runs
-        // (night, loops, phone) and hidden background chats do not fan out.
+        // (night, loops, /send) and hidden background chats do not fan out.
         if let Some(id) = origin.as_deref() {
             if !self.scheduled_perm && !self.threads.iter().any(|t| t.id == id && t.background) {
                 self.start_agent_bg_tasks(&strip_thinking(&text), id);
@@ -751,6 +760,7 @@ impl Cabin {
                 }
                 self.harness_note_headless(&card);
                 self.ingest_tool_card(&card);
+                let watched = card.clone();
                 if self.stream_here() {
                     self.scrub_live_blocks();
                     if let Some(url) = &card.image_data_url {
@@ -762,7 +772,10 @@ impl Cabin {
                         self.tool_cards.push(card);
                     }
                 }
-                self.grok_p_rx = Some(rx);
+                // Path D: a stopped turn keeps no stream to read.
+                if !self.harness_watch_cu(&watched, false) {
+                    self.grok_p_rx = Some(rx);
+                }
             }
             Ok(GrokPEvent::Usage(u)) => {
                 self.merge_grok_usage(&u);
@@ -803,8 +816,12 @@ impl Cabin {
             }
             Ok(GrokPEvent::End(turn)) => {
                 self.grok_p_pid = None;
+                let turn_no = self.turn_no();
                 self.apply_single_turn(turn);
+                self.harness_watch_end();
                 self.harness_headless_end();
+                self.harness_turn_end_last_reply(turn_no);
+                self.drain_followup_queue();
             }
             Ok(GrokPEvent::Err(e)) => {
                 self.grok_p_pid = None;
@@ -1184,9 +1201,11 @@ impl Cabin {
             return;
         }
         let Some(next) = self.followup_queue.first().cloned() else {
+            self.kick_repair();
             return;
         };
         self.followup_queue.remove(0);
+        self.harness_user_queued();
         self.send_chat(next);
     }
 

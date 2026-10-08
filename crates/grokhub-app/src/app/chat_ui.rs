@@ -1165,6 +1165,10 @@ impl Cabin {
                         self.chat_tail_frames = 0;
                     }
                 }
+                if self.jump_turn.is_some() {
+                    // A step search jump wins over pinning the tail, like find.
+                    self.chat_tail_frames = 0;
+                }
                 let find_hits = self.find.hits().to_vec();
                 let find_row = self.find.current_row();
                 let find_jump = self.find.jump;
@@ -1181,6 +1185,7 @@ impl Cabin {
                         let mut act = ChatBlockAct::None;
                         let jump_you = self.jump_last_you;
                         let mut jumped_you = false;
+                        let no_turn_row;
                         let fold_thread = self.visible_thread_id();
                         let start_collapsed = grokhub_core::session_thoughts_start_collapsed(
                             self.cfg.always_collapse_thoughts,
@@ -1189,6 +1194,7 @@ impl Cabin {
                         let mut collapse_session = false;
                         let mut privacy_revoke: Option<String> = None;
                         let mut skill_hit: Option<super::skill_undo::SkillRow> = None;
+                        let mut change_hit: Option<(super::change_undo::ChangeRow, super::change_undo::ChangeAct)> = None;
                         {
                             let thread_id = fold_thread.clone();
                             let row_h_id = chat_row_height_id(&thread_id, pane);
@@ -1210,6 +1216,13 @@ impl Cabin {
                             let skill_at = super::skill_undo::newest_skill_changes_row(&self.chat_views);
                             let skill_rows =
                                 if skill_at.is_some() { self.skill_rows_now() } else { Vec::new() };
+                            // Same for /connections changes and /automations changes.
+                            let change_at = super::change_undo::newest_change_report(&self.chat_views);
+                            let change_rows = match change_at {
+                                Some((_, kind)) => self.change_rows_now(kind),
+                                None => Vec::new(),
+                            };
+                            let change_at = change_at.map(|(i, _)| i);
                             let (views, keys) = (&self.chat_views, &self.chat_view_keys);
                             let shown = if live {
                                 views_up_to_last_user(views)
@@ -1226,6 +1239,10 @@ impl Cabin {
                                 )
                             };
                             let last_you_i = shown.iter().rposition(|v| v.kind == ChatKind::User);
+                            // "Last you", or the turn a step search hit opened.
+                            let turn_i = self.jump_turn.and_then(|t| turn_jump_row(shown, t));
+                            no_turn_row = self.jump_turn.is_some() && turn_i.is_none();
+                            let turn_i = if jump_you { None } else { turn_i };
                             let prev_heights: Vec<f32> =
                                 ui.ctx().data(|d| d.get_temp(row_h_id)).unwrap_or_default();
                             let mut next_heights = Vec::with_capacity(shown.len());
@@ -1239,7 +1256,7 @@ impl Cabin {
                                     // burn that same slot or the next painted row renumbers.
                                     ui.skip_ahead_auto_ids(1);
                                     next_heights.push(cached_h);
-                                    if jump_you && last_you_i == Some(i) {
+                                    if (jump_you && last_you_i == Some(i)) || turn_i == Some(i) {
                                         let slot = egui::Rect::from_min_size(
                                             origin,
                                             egui::vec2(row_w, cached_h),
@@ -1281,7 +1298,8 @@ impl Cabin {
                                         .take_while(|v| v.kind != ChatKind::User)
                                         .any(|v| v.kind == ChatKind::Assistant);
                                 let privacy_here = (privacy_at == Some(i) && !privacy_grants.is_empty())
-                                    || (skill_at == Some(i) && !skill_rows.is_empty());
+                                    || (skill_at == Some(i) && !skill_rows.is_empty())
+                                    || (change_at == Some(i) && !change_rows.is_empty());
                                 let painted = ui
                                     .push_id(chat_row_id_salt(&thread_id, i), |ui| {
                                         let mut p = paint_chat_block_with(
@@ -1296,6 +1314,13 @@ impl Cabin {
                                             if skill_at == Some(i) {
                                                 skill_hit =
                                                     super::skill_undo::paint_skill_undo_rows(ui, &skill_rows);
+                                            } else if change_at == Some(i) {
+                                                change_hit = super::change_undo::paint_change_rows(
+                                                    ui,
+                                                    "change-report",
+                                                    &change_rows,
+                                                    true,
+                                                );
                                             } else {
                                                 privacy_revoke = super::privacy_ui::paint_privacy_revokes(
                                                     ui,
@@ -1313,7 +1338,7 @@ impl Cabin {
                                         }
                                         p
                                     });
-                                if jump_you && last_you_i == Some(i) {
+                                if (jump_you && last_you_i == Some(i)) || turn_i == Some(i) {
                                     ui.scroll_to_rect(painted.response.rect, Some(egui::Align::Center));
                                     jumped_you = true;
                                 }
@@ -1359,8 +1384,12 @@ impl Cabin {
                         if let Some(row) = skill_hit {
                             self.skill_row_clicked(&row);
                         }
-                        if jumped_you {
+                        if let Some((row, act)) = change_hit {
+                            self.change_row_clicked(&row, act);
+                        }
+                        if jumped_you || no_turn_row {
                             self.jump_last_you = false;
+                            self.jump_turn = None;
                         }
                         if find_jumped {
                             self.find.jump = false;
@@ -1421,6 +1450,9 @@ impl Cabin {
                         }
                         if self.chrome_here() {
                             self.paint_approval_stack(ui);
+                        } else {
+                            // Another chat's turn: its cards stay there, its rows show here.
+                            self.paint_inbox_only(ui);
                         }
                         self.paint_try_again(ui);
                         if pin_tail {
@@ -1624,13 +1656,17 @@ impl Cabin {
         self.chat_tail_frames = CHAT_TAIL_FRAMES;
     }
 
-    /// Sending from the composer follows your own message down. A night job or a phone
+    /// Sending from the composer follows your own message down. A night job or a `/send`
     /// task calls `send_scheduled_chat` directly, so it cannot yank the pane out of your reading.
     /// Only the user's own typing comes through here, so this is also where a typed
     /// `/skills undo` is marked as theirs (`typed_send`).
     pub(super) fn send_from_composer(&mut self, text: String) {
         self.pin_chat_tail();
         self.heartbeat_user_sent();
+        if !self.running {
+            self.outcome_user_said(&text);
+            self.harness_user_sent();
+        }
         self.harness.typed_send = true;
         self.send_chat(text);
         self.harness.typed_send = false;
@@ -1848,6 +1884,7 @@ impl Cabin {
         .id_salt("chat-work-tree")
         .default_open(false)
         .show(ui, |ui| {
+            self.paint_episode_header(ui);
             for card in &self.tool_cards {
                 paint_tool_card_body(ui, card);
                 ui.add_space(6.0);
@@ -1859,20 +1896,65 @@ impl Cabin {
     /// One needs-attention line, then the hard card, Grant full, the permission ask, and elicit.
     /// Always the left-aligned chat-column stack: the empty chat lays the composer out
     /// centered and justified, and cards must not inherit that (SY-01).
+    /// The inbox rows without the cards, left-aligned like the stack.
+    fn paint_inbox_only(&mut self, ui: &mut egui::Ui) {
+        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| self.paint_inbox(ui));
+    }
+
     pub(super) fn paint_approval_stack(&mut self, ui: &mut egui::Ui) {
         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-            let n = self.decisions_waiting();
-            if n > 0 {
-                let line = crate::motion::needs_attention_summary(n);
-                ui.add(
-                    egui::Label::new(RichText::new(line).size(12.0).color(crate::theme::muted()))
-                        .wrap(),
-                );
-            }
+            self.paint_inbox(ui);
             self.paint_harness_cards(ui);
+            self.paint_fix_cards(ui);
+            let top = ui.cursor().min.y;
             self.paint_perm_ask(ui);
+            self.scroll_if_jumped(ui, "ask", top);
+            let top = ui.cursor().min.y;
             self.paint_elicit_ask(ui);
+            self.scroll_if_jumped(ui, "elicit", top);
         });
+    }
+
+    /// Answer the `i`th Grok Build ask (0 is the card on screen, then the
+    /// queue), from its card or the inbox. Desktop asks write a path B span;
+    /// a plain coding ask writes none, as before, so a coding chat is not
+    /// audited as a harness turn.
+    pub(super) fn answer_perm_at(&mut self, i: usize, allow: bool, why: &str) {
+        let p = if i == 0 { self.perm_ask.take() } else { self.perm_queue.remove(i - 1) };
+        let Some(p) = p else {
+            return;
+        };
+        if let Some(h) = &self.acp {
+            if allow {
+                let _ = h.answer_permission(p.rpc_id.clone(), true);
+            } else {
+                let _ = h.reject_permission(&p);
+            }
+        }
+        if super::harness_ui::is_desktop_ask(&p) {
+            let trace = self.trace_id();
+            let args = super::harness_ui::span_args(&p.title, &p.action);
+            let span = if allow {
+                let mut s = grokhub_agent::harness::Span::soft_allow(
+                    &trace,
+                    &p.title,
+                    &args,
+                    "allowed once",
+                    "Jeremy allowed it once",
+                    self.access_mode(),
+                    "none",
+                );
+                // `approve`, not `allow`: the step runs on path A and logs its own span.
+                s.decision = "approve".into();
+                s
+            } else {
+                grokhub_agent::harness::Span::deny(&trace, &p.title, &args, why, "soft")
+            };
+            self.write_span(span, "B");
+        }
+        if i == 0 {
+            self.next_perm_ask();
+        }
     }
 
     pub(super) fn paint_perm_ask(&mut self, ui: &mut egui::Ui) {
@@ -1983,29 +2065,24 @@ impl Cabin {
                     }
                     None => false,
                 };
-                let mut answered = false;
+                let mut answered = None;
                 ui.horizontal(|ui| {
                     if crate::cards::white_pill(ui, "Allow") || key == Some(PermKey::Allow) {
-                        if let Some(h) = &self.acp {
-                            let _ = h.answer_permission(p.rpc_id.clone(), true);
-                        }
-                        answered = true;
+                        answered = Some(true);
                     } else if crate::cards::ghost_pill(ui, "Deny") || key == Some(PermKey::Deny) {
                         // Grok's own reject option: "denied", not "User cancelled".
-                        if let Some(h) = &self.acp {
-                            let _ = h.reject_permission(&p);
-                        }
-                        answered = true;
+                        answered = Some(false);
                     }
-                    if !answered
+                    if answered.is_none()
                         && self.perm_always_confirm.is_none()
                         && crate::cards::ghost_pill(ui, "Always")
                     {
                         self.perm_always_confirm = Some(p.rpc_id.clone());
                     }
                 });
-                if answered {
-                    self.next_perm_ask();
+                // The same answer the inbox row gives.
+                if let Some(allow) = answered {
+                    self.answer_perm_at(0, allow, super::harness_ui::SOFT_DENY);
                     return;
                 }
                 if always_confirm_matches_rpc(self.perm_always_confirm.as_ref(), &p.rpc_id) {
@@ -2227,6 +2304,8 @@ impl Cabin {
                     self.ui_composer_stack(ui);
                     if self.chrome_here() {
                         self.paint_approval_stack(ui);
+                    } else {
+                        self.paint_inbox_only(ui);
                     }
                     self.paint_try_again(ui);
                     if pulse_on && (feed_n > 0 || device_on) {
