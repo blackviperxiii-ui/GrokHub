@@ -2581,8 +2581,8 @@ impl Cabin {
             ui.set_max_width(cap);
             let session_now = self.session_mode.as_str().to_string();
             let perm_now = self.permission_mode.as_str().to_string();
-            let effort_now = self.cfg.reasoning_effort.clone();
-            let row = crate::cards::session_row(ui, &session_now, &perm_now, &effort_now);
+            let (rung, why) = self.auto_chip();
+            let row = crate::cards::session_row(ui, &session_now, &perm_now, (&rung, &why));
             if let Some(mode) = row.mode {
                 if let Some(m) = SessionMode::parse(&mode) {
                     if m == SessionMode::Plan {
@@ -2632,22 +2632,8 @@ impl Cabin {
                     }
                 }
             }
-            if let Some(effort) = row.effort {
-                if let Some(e) = grokhub_core::parse_reasoning_effort(&effort) {
-                    self.confirm = None;
-                    if self.running {
-                        self.halt_in_flight();
-                    }
-                    self.cfg.reasoning_effort = e.to_string();
-                    self.acp = None;
-                    self.acp_spawn_rx = None;
-                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                        t.grok_session = None;
-                    }
-                    self.persist_cfg();
-                    self.persist_idle_key = self.persist_idle_now();
-                    self.status = format!("Effort {}", grokhub_core::effort_label(e));
-                }
+            if row.why {
+                self.run_why(false);
             }
             let composer_id = egui::Id::new("chat-composer");
             let focused = ui.memory(|m| m.has_focus(composer_id));

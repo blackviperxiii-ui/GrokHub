@@ -27,6 +27,9 @@ impl WorkflowVerb {
     }
 }
 
+/// What `/effort` says now. It changes nothing.
+pub const EFFORT_AUTO_MSG: &str = "Effort is automatic now, see /why";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Slash {
     Forget(Option<String>),
@@ -92,7 +95,8 @@ pub enum Slash {
     Plan,
     AlwaysApprove,
     AutoPerm,
-    Effort(String),
+    /// Effort is automatic since Router R1; this only says so.
+    Effort,
     Sessions,
     Inspect,
     Loop(String),
@@ -252,7 +256,8 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/plan" => Some(Slash::Plan),
         "/always-approve" | "/yolo" => Some(Slash::AlwaysApprove),
         "/auto" => Some(Slash::AutoPerm),
-        "/effort" if !rest.is_empty() => Some(Slash::Effort(rest.to_string())),
+        // R1: effort is automatic. `/effort <anything>` only says so.
+        "/effort" => Some(Slash::Effort),
         "/sessions" | "/resume" => Some(Slash::Sessions),
         "/inspect" => Some(Slash::Inspect),
         "/project" => {
@@ -465,7 +470,7 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Plan => "plan",
         Slash::AlwaysApprove => "always_approve",
         Slash::AutoPerm => "auto_perm",
-        Slash::Effort(_) => "effort",
+        Slash::Effort => "effort",
         Slash::Sessions => "sessions",
         Slash::Inspect => "inspect",
         Slash::Loop(_) => "loop",
@@ -712,7 +717,7 @@ pub fn slash_help() -> String {
         "/plan — plan mode (Grok Build)",
         "/always-approve — skip tool permission prompts",
         "/auto — auto-approve safe tools",
-        "/effort <none|low|medium|high|xhigh> — reasoning effort (composer dropdown too)",
+        "/effort — effort is automatic now (the Auto chip shows the current level); see /why",
         "/sessions — Grok Build sessions",
         "/resume — same as /sessions (Grok /resume)",
         "/inspect — grok inspect --json against ~/.grok",
@@ -752,7 +757,7 @@ pub fn slash_help() -> String {
         "/send <task> — task this box",
         "/sync — merge chats and memory with paired computers (asks first unless Settings → Permissions allows it)",
         "/privacy — your grants, learning scopes (all off), and what left this computer",
-        "/why — the last 10 reasons the router gave for a model and effort (watch only for now: calls still use your settings); /why models lists each model's state",
+        "/why — the last 10 reasons the router gave for a model and effort (effort is automatic; the model stays yours until R2); /why models lists each model's state",
         "/diagnose — check disk, memory, services, logs, network and updates, read only, and say what's wrong in plain words (needs System state in Settings → Permissions)",
         "/hub — devices / pair",
         "/inhabit <peer> — hand this Grok to another paired computer",
@@ -775,7 +780,7 @@ pub fn slash_help() -> String {
         "/health — doctor",
         "/fix — halt + doctor",
         "/remember <fact> — write MEMORY.md",
-        "/mode auto|fast|balance|think|max — legacy composer ladder (use Effort dropdown / /effort)",
+        "/mode auto|fast|balance|think|max — legacy composer ladder (effort is automatic now)",
         "/dream — Imagine last night",
         "/tools — same as /host",
         "/import — OpenClaw workspace",
@@ -785,7 +790,7 @@ pub fn slash_help() -> String {
         "/palette — command palette. Search walks nested files in the bound project (or ~/GrokHub-Work), not only the top of that folder.",
         "Enter sends; Ctrl+Enter newline. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The transcript Running row has no Stop. The changing status text above the composer is gone. The context usage bar stays. No live dot or Thinking label sits on the turn; the composer glow shows a running reply, and Stop's hover names the current action.",
         "The Ask card names the command, path, or site. Always on that card confirms skip every tool prompt this launch; night / loop / /send inherit --always-approve until quit. Composer Always and a destructive host command reuse that confirm sheet (title, consequence, Confirm or Run, Cancel). Enter / Esc stay Allow / Deny on the Ask card; overlay confirm uses them only when the composer is empty. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out. History is the cabin's own chats (headless grok -p on the thread). Background jobs such as workboard summarize stay off that list. Same on Linux and Windows. History offers a Last you point when that marker exists.",
-        "Mode pill: Chat / Plan / btw. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort: None / Low / Medium / High / Extra High. A saved Max loads as Extra High, a saved Minimal as Low. Default model is grok-4.7. Hover a composer pill for what it does. Grok Build runs the agent.",
+        "Mode pill: Chat / Plan / btw. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort is automatic: GrokHub picks how hard to think on each step, and the Auto chip shows the level. Say \"think hard\" or \"keep it quick\" to steer one task; /why shows the reasons. Default model is grok-4.7. Hover a composer pill for what it does. Grok Build runs the agent.",
         "Settings → Behavior: close to tray, living wall, and a quiet hours dropdown. Picking a window saves it. A Quiet until chip shows on the titlebar only while that window is active. Signed-in empty home shows an update feed in the gap under the composer when a card is undismissed, and hides that slot when the feed is empty. A finished /loop posts automation_done from poll_grok_loop. Saving a schedule posts schedule_created. Cards stay until opened or dismissed. A device glance appears only when hub share or a last frame is bound; click opens Devices.",
         "History search drops stale hits when the box changes. Re-opening the memory file already in the editor keeps unsaved typing.",
         "Appearance: Dark, Light, System. Ask permission is grok agent stdio (ACP) so Allow / Deny can show; if ACP is down the turn is denied. Auto and Always stay on grok -p and inherit the PermissionMode pill. `/workflow` `/compact` `/rewind` honor that same pill — Ask fail-closed if ACP is down, Auto/Always keep session mode. btw (saved as ask) is a side ask: a live run keeps going and the question waits, then sends look-safe on grok -p (`--permission-mode default`, no desktop-do-the-work). Idle btw sends that same look-safe ask. Night/inbox/anticipate inherit scheduled_args like loops — Ask is fail-closed, no ACP. Halt is session/cancel.",
@@ -999,7 +1004,7 @@ mod tests {
             slash_help()
         );
         assert!(slash_help().contains(
-            "Effort: None / Low / Medium / High / Extra High. A saved Max loads as Extra High, a saved Minimal as Low."
+            "Effort is automatic: GrokHub picks how hard to think on each step, and the Auto chip shows the level. Say \"think hard\" or \"keep it quick\" to steer one task; /why shows the reasons."
         ));
         assert!(slash_help().contains("Default model is grok-4.7"));
         assert!(slash_help().contains("Hover a composer pill for what it does"));

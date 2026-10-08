@@ -1,4 +1,4 @@
-//! The shadow `route` record on each model-call span, and `/why`.
+//! The `route` record on each model-call span, and `/why`.
 //! Records hold ids, counts and one plain sentence. Never prompt text, never secrets.
 
 use std::path::Path;
@@ -78,7 +78,7 @@ pub struct RouteRecord {
     pub signals: RouteSignals,
     #[serde(default)]
     pub candidates_n: u32,
-    /// What the router would pick (shadow in R0).
+    /// What the router picked. Its effort is sent for listed classes; its model is logged only until R2.
     #[serde(default)]
     pub chosen: Chosen,
     /// The previous route's pick in the same episode, if any.
@@ -92,11 +92,15 @@ pub struct RouteRecord {
     pub pinned: bool,
     #[serde(default)]
     pub outcome: Option<RouteOutcome>,
-    /// What the call actually sent (today's settings in R0).
+    /// What the call actually sent.
     #[serde(default)]
     pub used: Chosen,
+    /// The pick was logged only (an unlisted class, or an R0 record).
     #[serde(default)]
     pub shadow: bool,
+    /// The episode is in the accuracy guard's internal control arm. Never shown.
+    #[serde(default)]
+    pub holdout: bool,
     #[serde(default)]
     pub settings: Option<RuntimeSettings>,
 }
@@ -114,29 +118,22 @@ pub fn last_routes(config_dir: &Path) -> Vec<(u64, RouteRecord)> {
     out
 }
 
-fn effort_word(e: Option<&str>) -> String {
-    match e {
-        None | Some("") => "no effort".into(),
-        Some(e) => e.to_string(),
-    }
-}
-
 /// `/why`: one line per recent route, at most [`WHY_LINES`].
 pub fn why_text(config_dir: &Path) -> String {
     let routes = last_routes(config_dir);
     if routes.is_empty() {
-        return "No routed model calls yet. Auto is watching only (shadow): calls still use your model and effort.".into();
+        return "No routed model calls yet. Effort is automatic: each step's reason shows here once it runs.".into();
     }
     let lines: Vec<String> = routes
         .iter()
         .map(|(_, r)| {
-            let same = r.used == r.chosen;
+            let same = r.used.effort == r.chosen.effort;
             let used = if same {
                 String::new()
             } else {
-                format!(" (sent {} at {})", r.used.model, effort_word(r.used.effort.as_deref()))
+                format!(" (this session sent {})", super::effort_word(r.used.effort.as_deref()))
             };
-            format!("{} · {}{}", r.class, r.reason, used)
+            format!("{} · {} · {}{}", r.class, r.used.model, r.reason, used)
         })
         .collect();
     lines.join("\n")

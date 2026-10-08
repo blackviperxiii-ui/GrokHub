@@ -1,9 +1,12 @@
-//! The §14.3 class table, as data. R0 only reads it to say what the router
-//! *would* pick (shadow); R1 turns it on. Effort rungs are names on
-//! [`grokhub_core::model_registry::EFFORT_LADDER`].
+//! The §14.3 class table, as data. Router R1 turns it on for effort: every
+//! listed class's calls send the effort the router picks. Effort rungs are
+//! names on [`grokhub_core::model_registry::EFFORT_LADDER`].
 
-/// R0: the table shapes the shadow route only. No live call reads it.
-pub const POLICY_LIVE: bool = false;
+/// R1: listed classes send the router's effort.
+pub const POLICY_LIVE: bool = true;
+/// Model routing is R2's. Until then Auto keeps today's default model, and the
+/// router's model pick is only logged.
+pub const MODEL_LIVE: bool = false;
 
 /// One class: where effort starts, and the band it may move in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +79,6 @@ mod tests {
         assert_eq!((hard.start, hard.floor, hard.ceiling), ("high", "high", "xhigh"));
         assert_eq!(class_row("episode:step").unwrap().class, "desktop:soft");
         assert_eq!(class_row("eval:item"), None);
-        const { assert!(!POLICY_LIVE) };
+        const { assert!(POLICY_LIVE && !MODEL_LIVE) };
     }
 }

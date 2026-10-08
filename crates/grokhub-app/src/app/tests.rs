@@ -1879,7 +1879,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let auto = src
             .split("Slash::AutoPerm =>")
             .nth(1)
-            .and_then(|s| s.split("Slash::Effort(").next())
+            .and_then(|s| s.split("Slash::Effort =>").next())
             .expect("AutoPerm");
         assert!(
             auto.contains("acp_spawn_rx = None"),
@@ -1903,19 +1903,6 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && !mode.contains("self.persist()")
                 && !mode.contains("persist_snap"),
             "/mode must not clone every thread just to write app.json: {mode}"
-        );
-        let effort = src
-            .split("Slash::Effort(level)")
-            .nth(1)
-            .and_then(|s| s.split("Slash::Sessions").next())
-            .expect("Effort");
-        assert!(
-            effort.contains("cfg.reasoning_effort") && effort.contains("parse_reasoning_effort"),
-            "/effort must set reasoning_effort directly: {effort}"
-        );
-        assert!(
-            !effort.contains("cfg.mode"),
-            "/effort must not rewrite legacy cfg.mode: {effort}"
         );
         let appearance = src
             .split("SettingsSec::Appearance => {")
@@ -2023,18 +2010,18 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .expect("session_row");
         assert_eq!(
             row.matches("acp_spawn_rx = None").count(),
-            3,
-            "session/permission/effort row must drop an in-flight handshake: {row}"
+            2,
+            "session/permission row must drop an in-flight handshake: {row}"
         );
         assert_eq!(
             row.matches("grok_session = None").count(),
-            3,
-            "session/permission/effort row must session/new so mode takes: {row}"
+            2,
+            "session/permission row must session/new so mode takes: {row}"
         );
         assert_eq!(
             row.matches("persist_idle_key").count(),
-            3,
-            "session/permission/effort row must not clone every thread — bump the idle key so persist_bg skips: {row}"
+            2,
+            "session/permission row must not clone every thread — bump the idle key so persist_bg skips: {row}"
         );
         assert!(
             row.contains("select_plan_without_rename") && !row.contains("t.title ="),
@@ -2486,8 +2473,9 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "ACP auth is grok login; XAI_API_KEY is the secrets console key: {ensure}"
         );
         assert!(
-            ensure.contains("parse_reasoning_effort") && ensure.contains("cfg.reasoning_effort"),
-            "ACP spawn must pass composer reasoning effort to grok agent: {ensure}"
+            ensure.contains("start_effort(grokhub_agent::route::live::DEFAULT_CLASS)")
+                && !ensure.contains("reasoning_effort("),
+            "ACP spawn starts at the router's class start, not a saved effort: {ensure}"
         );
         assert!(
             !ensure.contains("agent_reasoning_effort_for_mode(&self.cfg.mode)"),
@@ -3487,8 +3475,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "scheduled work stays on grok -p when no ACP session is live: {kick}"
         );
         assert!(
-            kick.contains("parse_reasoning_effort") && kick.contains("cfg.reasoning_effort"),
-            "grok -p must use the Effort dropdown, not the leftover mode ladder: {kick}"
+            kick.contains("route_gb_turn(") && !kick.contains("reasoning_effort_for_mode"),
+            "grok -p takes the router's effort, not the leftover mode ladder: {kick}"
         );
         assert!(
             kick.contains("cabin_has_session"),
@@ -7454,7 +7442,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let auto = src
             .split("Slash::AutoPerm =>")
             .nth(1)
-            .and_then(|s| s.split("Slash::Effort(").next())
+            .and_then(|s| s.split("Slash::Effort =>").next())
             .expect("AutoPerm");
         assert!(
             auto.contains("self.confirm = None"),
@@ -7468,7 +7456,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let perm = row
             .split("if let Some(perm) = row.perm")
             .nth(1)
-            .and_then(|s| s.split("if let Some(effort) = row.effort").next())
+            .and_then(|s| s.split("if row.why").next())
             .expect("perm pills");
         let ask_auto = perm
             .split("self.arm_session_always();")
@@ -7547,18 +7535,12 @@ fn settings_cabin_defaults_section() {
         .nth(1)
         .and_then(|s| s.split("if let Some(s) = next_sec").next())
         .expect("defaults arm");
-    for label in [
-        "Default model",
-        "Reasoning effort",
-        "Permission",
-        "Session mode",
-        "Always collapse",
-    ] {
+    for label in ["ROW_MODEL", "ROW_PERMISSION", "ROW_SESSION", "ROW_COLLAPSE"] {
         assert!(defaults.contains(label), "missing {label}: {defaults}");
     }
-    assert_eq!(defaults.matches("settings_dropdown").count(), 4);
+    assert_eq!(defaults.matches("settings_dropdown").count(), 3);
     assert!(defaults.contains("settings_toggle"));
-    assert!(defaults.contains("parse_reasoning_effort"));
+    assert!(!defaults.contains("effort"), "R1: no effort row: {defaults}");
     assert!(defaults.contains("cabin_default_model_id"));
     assert!(defaults.contains("set_permission_mode"));
     assert!(defaults.contains("set_session_mode"));
@@ -7593,7 +7575,8 @@ fn settings_permissions_editor_lists_rules_and_grants() {
         .nth(1)
         .and_then(|slice| slice.split("if let Some(s) = next_sec").next())
         .expect("defaults arm");
-    assert_eq!(defaults.matches("settings_dropdown").count(), 4);
+    // Model, Permission and Session mode. R1 removed the effort dropdown.
+    assert_eq!(defaults.matches("settings_dropdown").count(), 3);
 }
 
 #[test]
@@ -8850,7 +8833,8 @@ fn fake_child_still_up(pid: u32, fake: &std::path::Path) -> bool {
 fn kick_with_fake_grok_runs_the_prompt() {
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("kick-fake-grok");
-    let prompt = "proof-fake-grok-harbor";
+    // "think hard" steers this one episode to the class ceiling (Extra High).
+    let prompt = "proof-fake-grok-harbor think hard";
     let bin_dir = root.join("bin");
     let argv_path = root.join("argv.txt");
     std::fs::create_dir_all(&bin_dir).unwrap();
@@ -8897,7 +8881,11 @@ fn kick_with_fake_grok_runs_the_prompt() {
     cabin.thread_idx = 0;
     cabin.messages = std::sync::Arc::new(vec![("user".into(), prompt.into())]);
     cabin.threads[0].messages = cabin.messages.clone();
-    cabin.cfg.reasoning_effort = "high".into();
+    // A thread outside the router's 10% control arm, so Auto's pick is what runs.
+    cabin.threads[0].id = (0..)
+        .map(|i| format!("fake-grok-{i}"))
+        .find(|id| !grokhub_agent::route::guard::in_holdout(id))
+        .unwrap();
 
     cabin.kick_model(false);
     assert!(
@@ -8940,8 +8928,8 @@ fn kick_with_fake_grok_runs_the_prompt() {
     );
     eprintln!("FAKE_GROK_ARGV_BEGIN\n{argv}FAKE_GROK_ARGV_END");
     assert!(
-        argv.contains("--reasoning-effort\nhigh\n"),
-        "a chat you type keeps the composer effort: {argv:?}"
+        argv.contains("--reasoning-effort\nxhigh\n"),
+        "a chat you type runs at the router's pick (think hard: Extra High): {argv:?}"
     );
 
     // A scheduled run (automation, loop, /send task) is background work: low effort.
@@ -8963,7 +8951,7 @@ fn kick_with_fake_grok_runs_the_prompt() {
     }
     let argv = std::fs::read_to_string(&argv_path).unwrap_or_default();
     assert!(
-        argv.contains("--reasoning-effort\nlow\n") && !argv.contains("\nhigh\n"),
+        argv.contains("--reasoning-effort\nlow\n") && !argv.contains("\nxhigh\n"),
         "background work runs at low effort: {argv:?}"
     );
     drop(restore);
@@ -10380,36 +10368,42 @@ fn save_settings_stores_quiet_hours_and_clears_the_key() {
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
-// Landed from PR #105.
+/// Router R1: `/effort <level>` changes nothing and says effort is automatic.
 #[test]
-fn effort_slash_sets_extra_high_and_rejects_a_bad_level() {
+fn effort_slash_leaves_the_config_byte_identical_and_says_effort_is_automatic() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("effort-slash");
+    let _ = std::fs::remove_dir_all(&root);
     std::env::set_var("GROKHUB_CONFIG", &root);
     let mut cabin = Cabin::quiet_for_test();
-    cabin.run_slash_line("/effort xhigh");
-    assert_eq!(cabin.cfg.reasoning_effort, "xhigh");
-    assert_eq!(cabin.status, "Effort Extra High");
-    cabin.run_slash_line("/effort banana");
-    assert_eq!(cabin.status, "Effort: none | low | medium | high | xhigh");
-    assert_eq!(cabin.cfg.reasoning_effort, "xhigh");
+    crate::config::save(&cabin.cfg).expect("save");
+    let app_json = crate::config::config_dir().join("app.json");
+    let before = std::fs::read(&app_json).expect("app.json");
+    for line in ["/effort high", "/effort xhigh", "/effort banana", "/effort"] {
+        cabin.status.clear();
+        cabin.run_slash_line(line);
+        assert_eq!(cabin.status, "Effort is automatic now, see /why", "{line}");
+        assert_eq!(std::fs::read(&app_json).expect("app.json"), before, "{line} must not touch app.json");
+    }
+    let _ = std::fs::remove_dir_all(&root);
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
-/// 2.10.87: Minimal is gone. `/effort minimal` still works and picks Low.
+/// Router R1: there is no effort control in the composer, Settings or the slash list.
 #[test]
-fn effort_slash_minimal_falls_back_to_low() {
-    let _g = crate::config::hold_test_config();
-    let root = crate::config::test_config_root("effort-minimal");
-    std::env::set_var("GROKHUB_CONFIG", &root);
-    let mut cabin = Cabin::quiet_for_test();
-    cabin.run_slash_line("/effort minimal");
-    assert_eq!(cabin.cfg.reasoning_effort, "low");
-    assert_eq!(cabin.status, "Effort Low");
-    cabin.run_slash_line("/effort none");
-    assert_eq!(cabin.cfg.reasoning_effort, "none");
-    assert_eq!(cabin.status, "Effort None");
-    std::env::remove_var("GROKHUB_CONFIG");
+fn no_effort_selector_anywhere() {
+    // The composer row returns a mode, a permission, and the Auto chip's /why click. Nothing else.
+    let crate::cards::SessionRowOut { mode: _, perm: _, why: _ } = crate::cards::SessionRowOut { mode: None, perm: None, why: false };
+    for (id, label) in crate::cards::composer_modes().iter().chain(crate::cards::permission_modes()) {
+        assert!(!id.contains("effort") && !grokhub_core::REASONING_EFFORTS.iter().any(|(_, l)| l == label), "{id}");
+    }
+    assert!(super::settings::DEFAULTS_ROWS.iter().all(|r| !r.to_ascii_lowercase().contains("effort")));
+    assert!(grokhub_core::SLASH_COMMANDS.iter().all(|d| d.cmd != "/effort"));
+    let help = grokhub_core::slash_help();
+    assert!(help.contains("/effort — effort is automatic now"), "{help}");
+    assert!(!help.contains("/effort <"), "{help}");
+    let job = crate::cards::auto_chip_job("Medium");
+    assert_eq!(job.text, "Auto · Medium");
 }
 
 // Landed from PR #106.
@@ -23712,21 +23706,6 @@ fn signin_button_and_keychain_move() {
     assert!(store.current.lock().unwrap().is_some());
 }
 
-// Folded from PR #422.
-#[test]
-fn cabin_default_efforts_lists_known_ids() {
-    // Real fn: non-empty effort ladder with known ids. No spawn/network.
-    let efforts = cabin_default_efforts();
-    assert!(!efforts.is_empty());
-    let ids: Vec<&str> = efforts.iter().map(|(id, _)| *id).collect();
-    for want in ["none", "low", "medium", "high", "xhigh"] {
-        assert!(ids.contains(&want), "missing effort id {want}: {ids:?}");
-    }
-    // 2.10.87: Minimal is not a real level; Settings must not offer it.
-    assert!(!ids.contains(&"minimal"), "{ids:?}");
-    assert_eq!(ids, vec!["none", "low", "medium", "high", "xhigh"]);
-}
-
 // Folded from PR #426.
 #[test]
 fn destructive_host_spec_title_primary_is_danger() {
@@ -24872,12 +24851,12 @@ fn halt_stops_a_scheduled_run_and_your_stop_does_not() {
 
 /// 2.10.89 review of #485: scheduled runs stay at low effort, like every unattended run.
 #[test]
-fn a_scheduled_run_uses_low_effort_and_your_bg_keeps_yours() {
-    let mut cabin = Cabin::quiet_for_test();
-    cabin.cfg.reasoning_effort = "xhigh".into();
-    assert_eq!(cabin.bg_effort(grokhub_core::BgOrigin::Scheduled), Some("low"));
-    assert_eq!(cabin.bg_effort(grokhub_core::BgOrigin::Agent), Some("xhigh"));
-    assert_eq!(cabin.bg_effort(grokhub_core::BgOrigin::Detached), Some("xhigh"));
+fn a_scheduled_run_uses_low_effort_and_your_bg_starts_at_the_chat_start() {
+    let cabin = Cabin::quiet_for_test();
+    assert_eq!(cabin.bg_effort(grokhub_core::BgOrigin::Scheduled).as_deref(), Some("low"));
+    // R1: your own /bg work starts at everyday chat's start; the router moves it per step.
+    assert_eq!(cabin.bg_effort(grokhub_core::BgOrigin::Agent).as_deref(), Some("medium"));
+    assert_eq!(cabin.bg_effort(grokhub_core::BgOrigin::Detached).as_deref(), Some("medium"));
     let src = include_str!("background.rs");
     let cli = fn_src(src, "start_bg_task");
     assert!(cli.contains("self.bg_effort(origin)"), "{cli}");

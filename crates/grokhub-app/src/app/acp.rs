@@ -228,8 +228,10 @@ impl Cabin {
         };
         let perm = self.permission_mode;
         let mode = self.session_mode;
+        // Grok Build takes effort per episode at spawn (R0 Step-0: live set is not
+        // verified), so a session starts at everyday chat's start.
         let reasoning_effort =
-            grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort).map(|s| s.to_string());
+            grokhub_agent::route::live::start_effort(grokhub_agent::route::live::DEFAULT_CLASS);
         let foreign = self
             .threads
             .get(idx)
