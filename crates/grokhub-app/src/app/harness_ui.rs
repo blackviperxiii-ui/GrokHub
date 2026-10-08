@@ -11,7 +11,10 @@
 //! them (path A lives in `desktop_mcp::run_stdio`).
 //!
 //! Paths handled here: B (ACP ask), E (native side ask), the cabin half of A
-//! (cards for parks the desktop MCP posts), and C (headless denials). Spike-4a
+//! (cards for parks the desktop MCP posts), C (headless denials), and D
+//! (Spike-1c: a watchdog on Grok Build's own computer-use frames that no ask
+//! covered; the `--deny` rules on every spawn are the lock, this is the
+//! belt). Spike-4a
 //! adds the `egress` path: a cabin-owned send the EgressGuard parked as hard
 //! Send (today only `/sync`; see `privacy_ui.rs`).
 
@@ -25,7 +28,15 @@ const POLL: Duration = Duration::from_millis(250);
 const HARD_NOTE: &str = "Always can't skip this. Approve runs it once. Esc denies.";
 const HEADLESS_NOTE: &str =
     "Grok Build's deny rule stopped this. Approve re-runs this one step with Grok's own Allow. Esc denies.";
+/// Path D: Grok Build's own computer use ran a hard step with no ask.
+const UNASKED_NOTE: &str =
+    "Grok Build did this without asking, so the turn was stopped. Approve re-runs this one step with Grok's own Allow. Esc denies.";
 const HARD_EYEBROW: &str = "Hard action";
+/// Why a ladder pause or an ask was denied from a card or the inbox.
+pub(super) const SOFT_DENY: &str = "Jeremy denied";
+pub(super) const HALT_DENY: &str = "halted — fail-closed Deny";
+const SOFT_EYEBROW: &str = "Paused";
+const SOFT_NOTE: &str = "Grok stopped after a step didn't work. Approve lets it try again; Deny stops it.";
 /// What a path B credential card and its spans say instead of GB's action line.
 const CREDENTIAL_ACTION: &str = "type into a credential field (value hidden)";
 /// The span tool and args for a `/sync` publish (no content).
@@ -97,6 +108,20 @@ pub(super) enum ParkSource {
     /// A path A / B park whose turn was steered (Spike-1a). Its call was
     /// denied with the old turn; Approve re-runs the step once, like path C.
     Held,
+    /// Path D (Spike-1c): Grok Build's own computer use tried a hard step
+    /// with no ask, and the cabin stopped the turn. Nothing is waiting;
+    /// Approve re-runs the step once, like path C.
+    Unasked,
+}
+
+/// A path D frame the watchdog already checked (Spike-1c).
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum Watched {
+    /// A pending frame on a live ACP session: Grok Build may still ask.
+    Waiting { tool: String, args: serde_json::Value },
+    /// Allowed; its span is written once the step finishes (or at turn end).
+    Allowed { tool: String, args: String },
+    Done,
 }
 
 /// A recovery-ladder pause waiting on the user (Spike-1a). Counts in the
@@ -107,6 +132,8 @@ pub(super) struct SoftPark {
     pub detector: String,
     pub reason: String,
     pub evidence: Vec<String>,
+    /// The chat whose turn paused (Spike-1b inbox).
+    pub chat_id: String,
 }
 
 /// One hard-class action on the white card.
@@ -118,6 +145,8 @@ pub(super) struct HardParkUi {
     pub tool: String,
     pub action: String,
     pub parked_at: Instant,
+    /// The chat that was visible when it parked (Spike-1b inbox).
+    pub chat_id: String,
 }
 
 /// Path C: a hard-classified call seen in a headless stream.
@@ -134,6 +163,9 @@ pub(super) struct HeadlessHit {
 #[derive(Debug, Clone)]
 pub(super) struct OneShot {
     pub action: Option<String>,
+    /// A path D card's tool and class. Its re-run comes back as a path B ask
+    /// whose action is Grok's own words, so the ask matches by tool name.
+    pub step: Option<(String, HardClass)>,
     pub restore: PermissionMode,
     pub started: bool,
 }
@@ -157,6 +189,13 @@ pub(super) struct HarnessState {
     pub park: Option<HardParkUi>,
     pub queue: VecDeque<HardParkUi>,
     pub headless: Vec<HeadlessHit>,
+    /// Tool call ids a path B / E ask covered this turn: the cabin decided
+    /// those, so the path D watchdog leaves their frames alone (Spike-1c).
+    pub asked: HashSet<String>,
+    /// Path D: Grok Build computer-use frames already checked this turn.
+    pub watched: HashMap<String, Watched>,
+    /// Hash of the last computer-use frame image, for `ui_changed`.
+    pub last_cu_frame: Option<u64>,
     pub oneshot: Option<OneShot>,
     pub last_poll: Option<Instant>,
     pub turn_ctx: Option<hx::TurnContext>,
@@ -198,6 +237,12 @@ pub(super) struct HarnessState {
     /// The last finished reply's prose, for the turn-end audit. `None` when
     /// that turn was not on the visible chat.
     pub last_reply: Option<String>,
+    /// Spike-8a local indexers: the scheduler, the in-memory index, the asks.
+    pub indexer: super::indexer_ui::IndexerUi,
+    /// The decision inbox rows are open under the needs-attention line.
+    pub inbox_open: bool,
+    /// The card an inbox row asked to scroll into view, painted once.
+    pub jump: Option<&'static str>,
 }
 
 /// Readonly until the desktop switch is on; Full only after Grant full.
@@ -209,10 +254,11 @@ pub(super) fn access_for(desktop_control: bool, full: bool) -> AccessMode {
     }
 }
 
-/// Grok Build computer use reaches the cabin as the `grokhub-desktop` MCP.
+/// Grok Build computer use reaches the cabin as the `grokhub-desktop` MCP
+/// (or the Spike-2a `grokhub-cua` proxy).
 pub(super) fn is_desktop_ask(p: &grokhub_acp::PermissionAsk) -> bool {
     let hay = format!("{} {}", p.title, p.action).to_ascii_lowercase();
-    hay.contains(grokhub_core::DESKTOP_MCP_SERVER)
+    grokhub_core::CABIN_CU_SERVERS.iter().any(|s| hay.contains(s))
 }
 
 /// Permission-card eyebrow: the kind of ask, not the decision count.
@@ -236,7 +282,51 @@ fn raw_of(card: &ToolCard) -> serde_json::Value {
 
 fn is_desktop_card(card: &ToolCard) -> bool {
     let hay = format!("{} {}", card.title, card.raw_input).to_ascii_lowercase();
-    hay.contains(grokhub_core::DESKTOP_MCP_SERVER)
+    grokhub_core::CABIN_CU_SERVERS.iter().any(|s| hay.contains(s))
+}
+
+/// The tool name of a computer-use frame: the stream's `toolName` when it
+/// sent one, else the frame title.
+fn cu_name(card: &ToolCard, raw: &serde_json::Value) -> String {
+    raw.get("tool")
+        .and_then(|v| v.as_str())
+        .unwrap_or(card.title.as_str())
+        .trim()
+        .to_string()
+}
+
+/// Grok Build's own computer use (path D): not `grokhub-desktop`, not a
+/// browser tool, and named like a screen, mouse, or keyboard tool. The name
+/// is the stream's `toolName` when sent, so a generic title still counts.
+pub(super) fn is_builtin_cu_card(card: &ToolCard) -> bool {
+    !is_desktop_card(card) && hx::builtin_cu(&cu_name(card, &raw_of(card)))
+}
+
+/// What a path D check reads: the frame's kept keys without the tool name.
+fn cu_args(raw: &serde_json::Value) -> serde_json::Value {
+    let mut args = match raw {
+        serde_json::Value::Object(m) => serde_json::Value::Object(m.clone()),
+        _ => serde_json::json!({}),
+    };
+    if let Some(m) = args.as_object_mut() {
+        m.remove("tool");
+    }
+    args
+}
+
+fn frame_hash(url: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    url.hash(&mut h);
+    h.finish()
+}
+
+fn pending(status: &str) -> bool {
+    matches!(status.trim().to_ascii_lowercase().as_str(), "" | "pending")
+}
+
+fn failed(status: &str) -> bool {
+    matches!(status.to_ascii_lowercase().as_str(), "failed" | "error" | "cancelled")
 }
 
 /// Path C classifier for one headless tool card: the shell command when there
@@ -282,9 +372,10 @@ impl Cabin {
             + usize::from(self.perm_ask.is_some())
             + self.perm_queue.len()
             + usize::from(self.elicit_ask.is_some())
+            + self.harness.indexer.asks.len()
     }
 
-    fn trace_id(&self) -> String {
+    pub(super) fn trace_id(&self) -> String {
         self.threads
             .get(self.thread_idx)
             .map(|t| t.id.clone())
@@ -322,7 +413,7 @@ impl Cabin {
         self.park_hard(ParkSource::Egress(dest.into()), class, "egress", HUB_SYNC_TOOL.into(), action);
     }
 
-    fn write_span(&self, span: hx::Span, path: &str) {
+    pub(super) fn write_span(&self, span: hx::Span, path: &str) {
         self.write_span_at(span, path, self.turn_no());
     }
 
@@ -350,6 +441,9 @@ impl Cabin {
         path: &'static str,
     ) -> Option<grokhub_acp::PermissionAsk> {
         let trace = self.trace_id();
+        if !p.tool_call_id.is_empty() {
+            self.harness.asked.insert(p.tool_call_id.clone());
+        }
         match hx::decide(Step::Ask { title: &p.title, action: &p.action }) {
             GateOutcome::Refuse { reason } => {
                 self.write_span(hx::Span::deny(&trace, &p.title, &span_args(&p.title, &p.action), &reason, "floor"), path);
@@ -360,8 +454,8 @@ impl Cabin {
                 None
             }
             GateOutcome::Park { hard: Some(class), .. } => {
-                if self.take_oneshot(&p.action) {
-                    // Approved once on the path C card: Grok's own Allow card decides.
+                if self.take_oneshot(&p.action) || self.take_oneshot_step(&p.title, &p.action, class) {
+                    // Approved once on a path C or D card: Grok's own Allow card decides.
                     return Some(p);
                 }
                 // A credential field's typed value never reaches a span or the card.
@@ -403,6 +497,25 @@ impl Cabin {
             .is_some_and(|a| a.trim() == action.trim() || action.contains(a.trim()));
         if hit {
             shot.action = None;
+            shot.step = None;
+        }
+        hit
+    }
+
+    /// The path B ask for a path D re-run: same hard class, and its title or
+    /// action names the tool the card was for.
+    fn take_oneshot_step(&mut self, title: &str, action: &str, class: HardClass) -> bool {
+        let Some(shot) = self.harness.oneshot.as_mut() else {
+            return false;
+        };
+        let hit = shot.step.as_ref().is_some_and(|(tool, c)| {
+            let tool = tool.to_ascii_lowercase();
+            *c == class
+                && (title.to_ascii_lowercase().contains(&tool) || action.to_ascii_lowercase().contains(&tool))
+        });
+        if hit {
+            shot.action = None;
+            shot.step = None;
         }
         hit
     }
@@ -422,6 +535,7 @@ impl Cabin {
             tool,
             action,
             parked_at: Instant::now(),
+            chat_id: self.trace_id(),
         };
         if self.harness.park.is_some() {
             self.harness.queue.push_back(park);
@@ -461,7 +575,12 @@ impl Cabin {
             }
             ParkSource::Headless | ParkSource::Held => {
                 if approve {
-                    self.start_oneshot(&park.action);
+                    self.start_oneshot(&park.action, None);
+                }
+            }
+            ParkSource::Unasked => {
+                if approve {
+                    self.start_oneshot(&park.action, Some((park.tool.clone(), park.class)));
                 }
             }
             ParkSource::Egress(dest) => {
@@ -479,12 +598,82 @@ impl Cabin {
         }
     }
 
+    /// Put the `i`th hard park (0 is the card on screen, then the queue) on the
+    /// card. The one it replaces goes back to the front of the queue.
+    pub(super) fn promote_hard_park(&mut self, i: usize) {
+        if i == 0 {
+            return;
+        }
+        if let Some(p) = self.harness.queue.remove(i - 1) {
+            if let Some(head) = self.harness.park.take() {
+                self.harness.queue.push_front(head);
+            }
+            self.harness.park = Some(p);
+        }
+    }
+
+    /// Answer the `i`th hard park: the same span and effect as its card.
+    pub(super) fn resolve_hard_park_at(&mut self, i: usize, approve: bool, why: &str) {
+        self.promote_hard_park(i);
+        self.resolve_hard_park(approve, why);
+    }
+
+    /// A ladder pause answered from its card or the inbox. Approve writes the
+    /// same `resume` span as the user's next message; Deny drops the pause
+    /// and the pending repair turn. Either way the ladder starts over.
+    pub(super) fn answer_soft_park(&mut self, i: usize, approve: bool, why: &str) {
+        if i >= self.harness.soft_parks.len() {
+            return;
+        }
+        let park = self.harness.soft_parks.remove(i);
+        let trace = self.trace_id();
+        let args = serde_json::json!({ "detector": park.detector, "evidence": park.evidence }).to_string();
+        let mut span = if approve {
+            let mut s = hx::Span::soft_allow(
+                &trace,
+                hx::RECOVERY_TOOL,
+                &args,
+                "resume",
+                &format!("you answered the pause ({})", park.reason),
+                self.access_mode(),
+                "none",
+            );
+            s.decision = "resume".into();
+            s
+        } else {
+            hx::Span::deny(&trace, hx::RECOVERY_TOOL, &args, why, "soft")
+        };
+        span.origin = hx::Origin::Repair;
+        self.write_span(span, "audit");
+        self.harness.repair = None;
+        self.harness.ladder.reset();
+        self.status = if approve { "Resumed".into() } else { "Stopped that step".into() };
+    }
+
+    /// Tray Halt and the halt hotkeys: every inbox row is denied with a span,
+    /// not only the hard cards. A Steer does not come here.
+    pub(super) fn halt_inbox(&mut self) {
+        self.halt_hard_parks();
+        while self.perm_ask.is_some() || !self.perm_queue.is_empty() {
+            if self.perm_ask.is_none() {
+                self.next_perm_ask();
+            }
+            self.answer_perm_at(0, false, HALT_DENY);
+        }
+        while !self.harness.soft_parks.is_empty() {
+            self.answer_soft_park(0, false, HALT_DENY);
+        }
+    }
+
     /// A turn is stopping: parks that hold a GB ask or a desktop call fail closed.
     /// Path C and egress cards hold nothing and stay until clicked, TTL, or halt.
     pub(super) fn withdraw_hard_parks(&mut self) {
         let mut keep = VecDeque::new();
         while let Some(park) = self.harness.park.clone() {
-            if matches!(park.source, ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held) {
+            if matches!(
+                park.source,
+                ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held | ParkSource::Unasked
+            ) {
                 keep.push_back(park);
                 self.harness.park = self.harness.queue.pop_front();
             } else {
@@ -502,6 +691,11 @@ impl Cabin {
     /// egress cards hold nothing and keep as they are. Ladder pauses are not
     /// touched by a halt.
     pub(super) fn take_parks_for_steer(&mut self) -> VecDeque<HardParkUi> {
+        self.take_parks_for_stop("turn steered — the call is gone, the card stays for a fresh approval")
+    }
+
+    /// [`Self::take_parks_for_steer`] with the reason the deny spans give.
+    fn take_parks_for_stop(&mut self, why: &str) -> VecDeque<HardParkUi> {
         let dir = crate::config::config_dir();
         let trace = self.trace_id();
         let mut kept: VecDeque<HardParkUi> = self.harness.park.take().into_iter().collect();
@@ -516,10 +710,9 @@ impl Cabin {
                 ParkSource::Desk(id) => {
                     let _ = hx::answer_park(&dir, id, false);
                 }
-                ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held => continue,
+                ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held | ParkSource::Unasked => continue,
             }
             let args = span_args(&park.tool, &park.action);
-            let why = "turn steered — the call is gone, the card stays for a fresh approval";
             self.write_span(hx::Span::deny(&trace, &park.tool, &args, why, park.class.as_str()), park.path);
             self.write_span(hx::Span::hard_park(&trace, &park.tool, &args, park.class), park.path);
             park.source = ParkSource::Held;
@@ -569,6 +762,7 @@ impl Cabin {
                     detector: step.detector,
                     reason: step.reason,
                     evidence: step.evidence,
+                    chat_id: trace.clone(),
                 });
                 if self.chrome_here() {
                     self.status = crate::motion::needs_attention_summary(self.decisions_waiting());
@@ -665,6 +859,10 @@ impl Cabin {
         if is_desktop_card(card) {
             self.offer_full();
         }
+        // Grok Build's own computer use is path D's (`harness_watch_cu`).
+        if is_builtin_cu_card(card) {
+            return;
+        }
         if let Some(h) = self.harness.headless.iter_mut().find(|h| h.card_id == card.id) {
             if !card.status.is_empty() {
                 h.status = card.status.clone();
@@ -719,11 +917,153 @@ impl Cabin {
         }
     }
 
+    /// Path D (Spike-1c): a Grok Build computer-use frame the cabin made no
+    /// decision for (no path B ask). This is the belt; the `--deny` rules on
+    /// every spawn (`BUILTIN_CU_DENY`) are the lock. A fast step can finish
+    /// before its first frame arrives, so this can stop the turn only after
+    /// that step. On a live ACP session (`from_acp`) a pending frame waits:
+    /// Grok Build sends its ask after the first frame. Returns true when it
+    /// stopped the turn.
+    pub(super) fn harness_watch_cu(&mut self, card: &ToolCard, from_acp: bool) -> bool {
+        // An update frame may carry no title or args: use what the first one had.
+        let (name, args) = match self.harness.watched.get(&card.id).cloned() {
+            Some(Watched::Done) => return false,
+            Some(Watched::Allowed { tool, args }) => {
+                if ran(&card.status) || failed(&card.status) {
+                    self.write_cu_allow(card, &tool, &args);
+                }
+                return false;
+            }
+            Some(Watched::Waiting { tool, args }) => (tool, args),
+            None => {
+                if !is_builtin_cu_card(card) {
+                    return false;
+                }
+                let raw = raw_of(card);
+                (cu_name(card, &raw), cu_args(&raw))
+            }
+        };
+        if self.harness.asked.contains(&card.id) {
+            // Path B decided this one.
+            self.harness.watched.insert(card.id.clone(), Watched::Done);
+            return false;
+        }
+        if !self.running {
+            return false;
+        }
+        if from_acp && pending(&card.status) {
+            self.harness.watched.insert(card.id.clone(), Watched::Waiting { tool: name, args });
+            return false;
+        }
+        match hx::decide_unasked(&name, &args, self.access_mode()) {
+            GateOutcome::Allow => {
+                let kept = hx::redact_args(&args.to_string());
+                if ran(&card.status) || failed(&card.status) {
+                    self.write_cu_allow(card, &name, &kept);
+                } else {
+                    self.harness.watched.insert(card.id.clone(), Watched::Allowed { tool: name, args: kept });
+                }
+                false
+            }
+            GateOutcome::Park { hard: Some(class), .. } => self.stop_unasked_hard(card, &name, &args, class),
+            GateOutcome::Refuse { reason } | GateOutcome::Park { reason, hard: None, .. } => {
+                // Readonly or the floor: stop the turn, no card, no bypass.
+                self.harness.watched.insert(card.id.clone(), Watched::Done);
+                let trace = self.trace_id();
+                let class = if self.access_mode().allows_computer() { "floor" } else { "soft" };
+                let span = hx::Span::deny(&trace, &name, &hx::redact_args(&args.to_string()), &reason, class);
+                self.write_span(span, "D");
+                self.stop_turn_unasked();
+                self.status = format!("Stopped: {reason}");
+                true
+            }
+        }
+    }
+
+    /// A soft path D step finished: its allow span, with `ui_changed` when the
+    /// frame carries an image. Looks (screenshots, snapshots) write no span,
+    /// like path A.
+    fn write_cu_allow(&mut self, card: &ToolCard, name: &str, kept: &str) {
+        self.harness.watched.insert(card.id.clone(), Watched::Done);
+        let changed = card.image_data_url.as_deref().map(frame_hash).and_then(|h| {
+            let was = self.harness.last_cu_frame.replace(h);
+            was.map(|w| w != h)
+        });
+        if hx::cu_look_only(name) {
+            return;
+        }
+        let trace = self.trace_id();
+        let span = if failed(&card.status) {
+            hx::Span::deny(&trace, name, kept, &card.status, "soft")
+        } else {
+            hx::Span::soft_allow(&trace, name, kept, "ran", "Grok Build computer use, no ask", self.access_mode(), "grok_build")
+        };
+        self.write_span(span.with_ui_changed(changed), "D");
+    }
+
+    /// A hard path D step: the turn stops at once, the raw step is logged as
+    /// an allow with no approve when it already ran (`approval_gate_violation`
+    /// flags it), then a deny span and a hard card. Approve re-runs that one
+    /// step once through a one-shot ACP Ask, like a path C card.
+    fn stop_unasked_hard(&mut self, card: &ToolCard, name: &str, args: &serde_json::Value, class: HardClass) -> bool {
+        self.harness.watched.insert(card.id.clone(), Watched::Done);
+        let trace = self.trace_id();
+        let kept = hx::redact_args(&args.to_string());
+        let action = hx::unasked_action(name, args, class);
+        if self.take_oneshot(&action) {
+            // The one step the user approved on this card, re-run once.
+            let mut s = hx::Span::soft_allow(&trace, name, &kept, "ran", "approved once on the card", self.access_mode(), "grok_build");
+            s.approval_class = class.as_str().into();
+            s.hard_approved = true;
+            self.write_span(s, "D");
+            return false;
+        }
+        if ran(&card.status) {
+            let mut s = hx::Span::soft_allow(&trace, name, &kept, "ran", "Grok Build ran a hard step with no ask", self.access_mode(), "grok_build");
+            s.approval_class = class.as_str().into();
+            self.write_span(s, "D");
+        }
+        let why = "stopped: Grok Build tried a hard step without asking";
+        self.write_span(hx::Span::deny(&trace, name, &kept, why, class.as_str()), "D");
+        self.stop_turn_unasked();
+        self.write_span(hx::Span::hard_park(&trace, name, &kept, class), "D");
+        self.park_hard(ParkSource::Unasked, class, "D", name.to_string(), action);
+        self.status = hx::unasked_title(class);
+        true
+    }
+
+    /// Stop the turn with the existing stop path. Parked cards stay, like a
+    /// Steer: a path A / B park is denied with a span and kept as held.
+    fn stop_turn_unasked(&mut self) {
+        let parks = self.take_parks_for_stop("turn stopped by the path D check — the card stays for a fresh approval");
+        self.halt_in_flight();
+        self.restore_parks_after_steer(parks);
+    }
+
+    /// Turn end (or a stop): allowed path D steps that never sent a finished
+    /// frame still get their span; the turn's asks and checks start over.
+    pub(super) fn harness_watch_end(&mut self) {
+        let trace = self.trace_id();
+        let mut left: Vec<(String, Watched)> = self.harness.watched.drain().collect();
+        left.sort_by(|a, b| a.0.cmp(&b.0));
+        for (_, w) in left {
+            if let Watched::Allowed { tool, args } = w {
+                if hx::cu_look_only(&tool) {
+                    continue;
+                }
+                let span = hx::Span::soft_allow(&trace, &tool, &args, "ran", "Grok Build computer use, no ask", self.access_mode(), "grok_build");
+                self.write_span(span, "D");
+            }
+        }
+        self.harness.asked.clear();
+    }
+
     /// Approve on a path C card: one ACP Ask turn for that step, then the pill
     /// goes back. Flags are never loosened; Grok's own Allow card decides.
-    fn start_oneshot(&mut self, action: &str) {
+    fn start_oneshot(&mut self, action: &str, step: Option<(String, HardClass)>) {
         self.harness.oneshot = Some(OneShot {
             action: Some(action.to_string()),
+            step,
             restore: self.permission_mode,
             started: false,
         });
@@ -839,7 +1179,10 @@ impl Cabin {
         }
         let running = self.running;
         if let Some(park) = self.harness.park.clone() {
-            let title = park.class.label();
+            let title = match park.source {
+                ParkSource::Unasked => hx::unasked_title(park.class),
+                _ => park.class.label().to_string(),
+            };
             let action = if park.action.trim().is_empty() {
                 park.tool.clone()
             } else {
@@ -847,6 +1190,7 @@ impl Cabin {
             };
             let note = match park.source {
                 ParkSource::Headless => HEADLESS_NOTE,
+                ParkSource::Unasked => UNASKED_NOTE,
                 ParkSource::Egress(_) => super::privacy_ui::HUB_CARD_NOTE,
                 _ => HARD_NOTE,
             };
@@ -859,7 +1203,7 @@ impl Cabin {
             let id = ("hard-park", format!("{}:{}", park.path, park.action));
             let text = CardText {
                 eyebrow: HARD_EYEBROW,
-                title,
+                title: &title,
                 action: &action,
                 note,
                 primary: "Approve",
@@ -870,11 +1214,31 @@ impl Cabin {
                 ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
                 self.resolve_hard_park(false, "Jeremy denied (Esc)");
             } else {
-                match harness_card(ui, id, text, running) {
+                let top = ui.cursor().min.y;
+                let hit = harness_card(ui, id, text, running);
+                self.scroll_if_jumped(ui, "hard", top);
+                match hit {
                     Some(true) => self.resolve_hard_park(true, ""),
-                    Some(false) => self.resolve_hard_park(false, "Jeremy denied"),
+                    Some(false) => self.resolve_hard_park(false, SOFT_DENY),
                     None => {}
                 }
+            }
+        }
+        if let Some(park) = self.harness.soft_parks.first() {
+            let text = CardText {
+                eyebrow: SOFT_EYEBROW,
+                title: &park.reason.clone(),
+                action: "",
+                note: SOFT_NOTE,
+                primary: "Approve",
+                secondary: "Deny",
+                hard: false,
+            };
+            let top = ui.cursor().min.y;
+            let hit = harness_card(ui, ("soft-park", park.detector.clone()), text, running);
+            self.scroll_if_jumped(ui, "soft", top);
+            if let Some(approve) = hit {
+                self.answer_soft_park(0, approve, SOFT_DENY);
             }
         }
         if self.harness.full_card.is_some() {
@@ -887,29 +1251,46 @@ impl Cabin {
                 secondary: "Not now",
                 hard: false,
             };
-            if let Some(grant) = harness_card(ui, ("grant-full", String::new()), text, running) {
+            let top = ui.cursor().min.y;
+            let hit = harness_card(ui, ("grant-full", String::new()), text, running);
+            self.scroll_if_jumped(ui, "full", top);
+            if let Some(grant) = hit {
                 self.resolve_grant_full(grant, "Jeremy kept Supervised");
             }
         }
+        // Spike-8a: in-context scope asks, same card shape, click only.
+        self.paint_scope_asks(ui);
+    }
+
+    /// An inbox row asked for this card: bring what was just painted (from
+    /// `top` to the cursor) into view once.
+    pub(super) fn scroll_if_jumped(&mut self, ui: &egui::Ui, card: &str, top: f32) {
+        if self.harness.jump != Some(card) {
+            return;
+        }
+        self.harness.jump = None;
+        let bottom = ui.cursor().min.y.max(top + 1.0);
+        let rect = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=bottom);
+        ui.scroll_to_rect(rect, Some(egui::Align::Center));
     }
 }
 
 /// White accents on the dark cabin: #E7E9EA ring and title on the surface
 /// fill, the approval enter motion, the thinking rim while a reply runs. No
 /// Thinking label, no pulse at rest.
-struct CardText<'a> {
-    eyebrow: &'a str,
-    title: &'a str,
-    action: &'a str,
-    note: &'a str,
-    primary: &'a str,
-    secondary: &'a str,
+pub(super) struct CardText<'a> {
+    pub(super) eyebrow: &'a str,
+    pub(super) title: &'a str,
+    pub(super) action: &'a str,
+    pub(super) note: &'a str,
+    pub(super) primary: &'a str,
+    pub(super) secondary: &'a str,
     /// Hard: danger Approve, 2px stroke, monospace command. Soft: white primary, proportional.
-    hard: bool,
+    pub(super) hard: bool,
 }
 
 /// Some(true) primary, Some(false) secondary. Click only: no Enter.
-fn harness_card(
+pub(super) fn harness_card(
     ui: &mut egui::Ui,
     id: (&str, String),
     text: CardText<'_>,
@@ -981,7 +1362,9 @@ fn harness_card(
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     let clicked = match style.primary {
-                        PillKind::Danger => crate::cards::danger_pill(ui, primary),
+                        // A hard Approve takes a pointer click: Enter or Space on a focused pill does nothing.
+                        PillKind::Danger => crate::cards::felt_pill_at(ui, None, primary, PillKind::Danger)
+                            .clicked_by(egui::PointerButton::Primary),
                         PillKind::Solid => crate::cards::white_pill(ui, primary),
                         PillKind::Ghost => crate::cards::ghost_pill(ui, primary),
                     };
@@ -1035,7 +1418,9 @@ pub(super) fn marker_sample(
     now: f64,
     reduced: bool,
 ) -> (egui::Pos2, f32, bool) {
-    use crate::motion::{AgentCursorAnim, AgentCursorPhase, CURSOR_CLICK_SECS, CURSOR_TRAVEL_SECS};
+    use crate::motion::{
+        AgentCursorAnim, AgentCursorPhase, AGENT_CURSOR_MOTION, CURSOR_CLICK_SECS, CURSOR_TRAVEL_SECS,
+    };
     const HOVER: f32 = 0.200;
     if reduced {
         return (to, 1.0, false);
@@ -1057,6 +1442,7 @@ pub(super) fn marker_sample(
         t0: start,
         duration: dur,
         phase,
+        motion: AGENT_CURSOR_MOTION,
     };
     let (pos, scale, _) = crate::motion::cursor_sample(&anim, now, false);
     (pos, scale, true)
@@ -1375,6 +1761,7 @@ mod tests {
             detector: "action_loop".into(),
             reason: "action_loop: `click` ran 3 times".into(),
             evidence: vec!["session:1".into()],
+            chat_id: "session".into(),
         });
         assert_eq!(cabin.decisions_waiting(), 4);
         let before = decisions(&root);
@@ -1629,8 +2016,8 @@ mod tests {
             .and_then(|s| s.split("fn paint_perm_ask(").next())
             .expect("paint_approval_stack");
         assert!(
-            stack.contains("needs_attention_summary"),
-            "the stack line is the one count: {stack}"
+            stack.contains("paint_inbox"),
+            "the stack line is the one count (Spike-1b: the inbox line): {stack}"
         );
         let perm = chat
             .split("fn paint_perm_ask(")
@@ -1681,7 +2068,7 @@ mod tests {
         let (texts, _) = paint_stack(&mut cabin, Vec::new(), 1400.0);
         let counts = texts.iter().filter(|t| t.contains("need a decision")).count();
         assert_eq!(counts, 1, "one count line, got {texts:?}");
-        assert!(texts.iter().any(|t| t == "3 things need a decision"));
+        assert!(texts.iter().any(|t| t == "3 things need a decision. Everything else is on track."));
         assert!(texts.iter().any(|t| t == "Hard action"));
         assert!(texts.iter().any(|t| t == "Delete"));
         assert!(texts.iter().any(|t| t == "Desktop"));
@@ -1730,6 +2117,247 @@ mod tests {
             .cloned()
             .collect();
         assert_eq!(buttons, vec!["Approve".to_string(), "Deny".to_string()]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// `grokhub-fake-acp`, built next to this test binary by
+    /// `cargo test --workspace` (grokhub-acp's integration tests need it).
+    fn fake_acp() -> std::path::PathBuf {
+        let file = format!("grokhub-fake-acp{}", std::env::consts::EXE_SUFFIX);
+        let exe = std::env::current_exe().expect("test exe");
+        exe.ancestors()
+            .take(4)
+            .map(|dir| dir.join(&file))
+            .find(|p| p.is_file())
+            .unwrap_or_else(|| panic!("{file} not built: run `cargo build -p grokhub-acp --bin grokhub-fake-acp` (cargo test --workspace builds it)"))
+    }
+
+    /// A live ACP session on the fake agent under Always, prompted once, with
+    /// the cabin mid-turn. The fake replays one tool frame per `env`.
+    fn fake_turn(cabin: &mut Cabin, env: &[(&str, &str)]) {
+        let opts = grokhub_acp::SpawnOpts {
+            program: fake_acp(),
+            args: vec![],
+            cwd: std::env::temp_dir(),
+            api_key: None,
+            xai_api_key: None,
+            always_approve: true,
+            auto: false,
+            session_mode: SessionMode::Chat,
+            reasoning_effort: None,
+            extra_env: env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            handshake_timeout: None,
+            resume: None,
+            skip_cabin_home: false,
+            worktree: false,
+        };
+        let h = grokhub_acp::connect(opts).expect("connect fake acp");
+        h.prompt("do it").expect("prompt");
+        cabin.acp = Some(h);
+        cabin.running = true;
+        cabin.permission_mode = PermissionMode::AlwaysApprove;
+    }
+
+    /// Poll the real ACP event loop until the fake's turn is over.
+    fn drive(cabin: &mut Cabin, until: impl Fn(&Cabin) -> bool) {
+        let t = Instant::now();
+        while !until(cabin) {
+            assert!(t.elapsed() < Duration::from_secs(20), "fake ACP turn did not finish");
+            cabin.poll_acp();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn path_d(root: &std::path::Path) -> Vec<hx::Span> {
+        hx::read_spans(root, "session").unwrap().into_iter().filter(|s| s.path == "D").collect()
+    }
+
+    #[test]
+    fn unasked_soft_computer_use_logs_a_path_d_allow_under_always() {
+        let (_pin, root) = pinned("path-d-soft");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.desktop_control = true;
+        cabin.harness.last_cu_frame = Some(frame_hash("data:image/jpeg;base64,AAAA"));
+        fake_turn(
+            &mut cabin,
+            &[("FAKE_ACP_TOOL", "computer_click"), ("FAKE_ACP_RAW_INPUT", r#"{"x":5,"y":6}"#), ("FAKE_ACP_IMAGE", "QQ==")],
+        );
+        drive(&mut cabin, |c| !c.running);
+        let spans = path_d(&root);
+        assert_eq!(spans.len(), 1, "{spans:?}");
+        let s = &spans[0];
+        assert_eq!((s.tool.as_str(), s.decision.as_str(), s.approval_class.as_str()), ("computer_click", "allow", "soft"));
+        assert_eq!(s.args_redacted, r#"{"x":5,"y":6}"#);
+        assert_eq!(s.access, "supervised");
+        assert_eq!(s.ui_changed, Some(true), "the frame differs from the last one");
+        assert!(cabin.harness.park.is_none());
+        assert!(!cabin.status.starts_with("Stopped"), "a soft step does not stop the turn: {}", cabin.status);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unasked_hard_computer_use_stops_the_turn_parks_and_approve_reruns_once() {
+        let (_pin, root) = pinned("path-d-hard");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.desktop_control = true;
+        fake_turn(
+            &mut cabin,
+            &[
+                ("FAKE_ACP_TOOL", "computer_type"),
+                ("FAKE_ACP_RAW_INPUT", r#"{"label":"Password","text":"hunter2222"}"#),
+            ],
+        );
+        drive(&mut cabin, |c| c.harness.park.is_some());
+        assert!(!cabin.running, "the turn stops at once");
+        let park = cabin.harness.park.clone().unwrap();
+        assert_eq!(park.source, ParkSource::Unasked);
+        assert_eq!(park.class, HardClass::Credentials);
+        assert_eq!(park.path, "D");
+        assert_eq!(park.action, "computer_type: type into a credential field (value hidden)");
+        assert_eq!(cabin.status, "Grok tried to type into a credential field without asking");
+        let spans = path_d(&root);
+        let rows: Vec<_> = spans.iter().map(|s| (s.decision.as_str(), s.approval_class.as_str())).collect();
+        assert_eq!(rows, vec![("allow", "credentials"), ("deny", "credentials"), ("park", "credentials")]);
+        assert_eq!(spans[1].result, "stopped: Grok Build tried a hard step without asking");
+        let flagged = hx::approval_gate_violation(&spans);
+        assert_eq!(flagged.len(), 1, "the raw step that ran with no approve is flagged");
+        assert_eq!(flagged[0].tool, "computer_type");
+        let all = std::fs::read_to_string(hx::span_path(&root, "session")).unwrap();
+        assert!(!all.contains("hunter2222"), "the typed value never reaches a span");
+
+        // The card: no Always, Enter leaves it.
+        let enter = egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let (texts, _) = paint_stack(&mut cabin, vec![enter], 900.0);
+        assert!(texts.iter().any(|t| t == "Grok tried to type into a credential field without asking"), "{texts:?}");
+        assert!(texts.iter().any(|t| t == UNASKED_NOTE), "{texts:?}");
+        assert!(texts.iter().any(|t| t == "Approve") && texts.iter().any(|t| t == "Deny"), "{texts:?}");
+        assert!(!texts.iter().any(|t| t.contains("Always")), "a hard card has no Always: {texts:?}");
+        assert!(cabin.harness.park.is_some(), "Enter must not approve");
+
+        // Approve re-runs that one step once through a one-shot ACP Ask.
+        cabin.resolve_hard_park(true, "");
+        let shot = cabin.harness.oneshot.clone().expect("one-shot");
+        assert_eq!(shot.action.as_deref(), Some(park.action.as_str()));
+        assert_eq!(shot.restore, PermissionMode::AlwaysApprove);
+        assert_eq!(cabin.permission_mode, PermissionMode::Ask);
+        let card = ToolCard {
+            id: "tool-2".into(),
+            title: "computer_type".into(),
+            kind: "other".into(),
+            status: "completed".into(),
+            detail: String::new(),
+            diff: String::new(),
+            image_data_url: None,
+            raw_input: r#"{"label":"Password"}"#.into(),
+        };
+        cabin.running = true;
+        assert!(!cabin.harness_watch_cu(&card, true), "the approved step runs once");
+        assert!(cabin.harness.park.is_none());
+        let again = ToolCard { id: "tool-3".into(), ..card };
+        assert!(cabin.harness_watch_cu(&again, true), "a second run parks again");
+        let spans = path_d(&root);
+        let approved: Vec<_> = spans.iter().filter(|s| s.hard_approved).map(|s| s.decision.as_str()).collect();
+        assert_eq!(approved, vec!["approve", "allow"]);
+        let raw_runs: Vec<_> = spans
+            .iter()
+            .filter(|s| s.decision == "allow" && !s.hard_approved)
+            .map(|s| s.claim.as_str())
+            .collect();
+        assert_eq!(raw_runs, vec!["Grok Build ran a hard step with no ask"; 2], "each unapproved run keeps its raw span");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_generic_titled_keyboard_step_is_watched_and_its_approve_matches_the_rerun_ask() {
+        let (_pin, root) = pinned("path-d-rerun");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.desktop_control = true;
+        cabin.permission_mode = PermissionMode::AlwaysApprove;
+        cabin.running = true;
+        // The title says nothing; the stream's toolName says keyboard.
+        let card = card("tool-1", "completed", r#"{"tool":"keyboard_type","id":"login-password"}"#);
+        assert!(cabin.harness_watch_cu(&card, false), "a keyboard step is path D computer use");
+        let park = cabin.harness.park.clone().expect("hard card");
+        assert_eq!((park.source.clone(), park.class), (ParkSource::Unasked, HardClass::Credentials));
+
+        cabin.resolve_hard_park(true, "");
+        assert_eq!(cabin.permission_mode, PermissionMode::Ask);
+        // The re-run comes back as Grok's own path B ask, in its own words.
+        let rerun = ask("keyboard_type", "type into the password field");
+        assert!(matches!(
+            hx::decide(Step::Ask { title: &rerun.title, action: &rerun.action }),
+            GateOutcome::Park { hard: Some(HardClass::Credentials), .. }
+        ));
+        assert!(cabin.harness_precheck(rerun.clone()).is_some(), "the approved step reaches Grok's Allow once");
+        assert!(cabin.harness.park.is_none());
+        assert!(cabin.harness_precheck(rerun).is_none(), "a second ask parks again");
+        assert_eq!(cabin.harness.park.as_ref().map(|p| p.class), Some(HardClass::Credentials));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unasked_computer_use_under_readonly_stops_with_a_deny_and_no_card() {
+        let (_pin, root) = pinned("path-d-readonly");
+        let mut cabin = Cabin::quiet_for_test();
+        assert_eq!(cabin.access_mode(), AccessMode::Readonly);
+        fake_turn(
+            &mut cabin,
+            &[("FAKE_ACP_TOOL", "computer_click"), ("FAKE_ACP_RAW_INPUT", r#"{"x":1,"y":2}"#), ("FAKE_ACP_BLOCK_UNTIL_CANCEL", "1")],
+        );
+        drive(&mut cabin, |c| !c.running);
+        assert!(cabin.harness.park.is_none(), "Readonly refuses with no card");
+        assert_eq!(cabin.hard_waiting(), 0);
+        let spans = path_d(&root);
+        assert_eq!(spans.len(), 1, "{spans:?}");
+        assert_eq!((spans[0].tool.as_str(), spans[0].decision.as_str()), ("computer_click", "deny"));
+        let reason = "Access is Readonly — Grok Build's own computer use ran with desktop control off";
+        assert_eq!(spans[0].result, reason);
+        assert_eq!(cabin.status, format!("Stopped: {reason}"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn path_b_asks_are_unchanged_and_their_frames_are_not_rechecked() {
+        let (_pin, root) = pinned("path-d-asked");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.cfg.desktop_control = true;
+        cabin.running = true;
+        // A soft built-in CU ask still goes to Grok Build's own card.
+        let soft = ask("computer_click", "click 4,5");
+        assert_eq!(cabin.harness_precheck(soft.clone()), Some(soft));
+        // A hard one still parks a hard card on path B.
+        assert_eq!(cabin.harness_precheck(ask("computer_type", "into the Password field")), None);
+        assert_eq!(cabin.harness.park.as_ref().map(|p| (p.class, p.path)), Some((HardClass::Credentials, "B")));
+        // Its frame (tool call `t`) was decided on path B: the watchdog leaves it.
+        let card = ToolCard {
+            id: "t".into(),
+            title: "computer_type".into(),
+            kind: "other".into(),
+            status: "completed".into(),
+            detail: String::new(),
+            diff: String::new(),
+            image_data_url: None,
+            raw_input: r#"{"label":"Password"}"#.into(),
+        };
+        assert!(!cabin.harness_watch_cu(&card, true));
+        assert!(cabin.running);
+        assert!(path_d(&root).is_empty());
+        // A pending ACP frame waits for the ask that may follow it.
+        let pending = ToolCard { id: "t2".into(), status: "pending".into(), ..card };
+        assert!(!cabin.harness_watch_cu(&pending, true));
+        assert!(path_d(&root).is_empty() && cabin.harness.park.as_ref().is_some_and(|p| p.path == "B"));
+        // Browser and path A frames are not path D's.
+        for title in ["browser_tab", "grokhub-desktop__click", "Read `src/click.rs`"] {
+            let other = ToolCard { id: title.into(), title: title.into(), status: "completed".into(), ..pending.clone() };
+            assert!(!cabin.harness_watch_cu(&other, false), "{title}");
+        }
+        assert!(path_d(&root).is_empty());
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1893,7 +2521,7 @@ mod tests {
         let (_, approve_x, _, _) = x_of("Approve");
         let (_, deny_x, _, _) = x_of("Deny");
         assert!(approve_x < left + 40.0 && approve_x < deny_x, "buttons start on the left: {approve_x} {deny_x}");
-        let (_, count_x, _, _) = x_of("1 thing needs a decision");
+        let (_, count_x, _, _) = x_of("1 thing needs a decision. Everything else is on track.");
         assert!((count_x - column.left()).abs() < 1.0, "the count line is left-aligned too: {count_x}");
         let _ = std::fs::remove_dir_all(root);
     }

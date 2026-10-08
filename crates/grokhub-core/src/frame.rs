@@ -9,12 +9,6 @@ pub struct PresenceFrame {
     pub at: u64,
 }
 
-pub enum FrameGet {
-    Missing,
-    NotModified { at: u64 },
-    Bytes { mime: String, buf: Vec<u8>, at: u64 },
-}
-
 pub fn store_frame(data_url: &str, at: u64) -> Option<PresenceFrame> {
     if data_url.len() > FRAME_CAP {
         return None;
@@ -40,8 +34,7 @@ pub fn frame_bytes(frame: &PresenceFrame) -> Option<(String, Vec<u8>)> {
     Some((mime.to_string(), buf))
 }
 
-/// The hub echoes this straight into a `content-type` response header, so a CR or LF here
-/// would let a paired device inject its own headers and body into the reply.
+/// A frame's mime must be plain `image/<subtype>`: no CR, LF, or parameters.
 fn is_image_mime(mime: &str) -> bool {
     let Some(sub) = mime.strip_prefix("image/") else {
         return false;
@@ -51,23 +44,6 @@ fn is_image_mime(mime: &str) -> bool {
     }
     sub.chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+'))
-}
-
-pub fn get_jpeg(frame: Option<&PresenceFrame>, since: u64) -> FrameGet {
-    let Some(frame) = frame else {
-        return FrameGet::Missing;
-    };
-    if since > 0 && frame.at <= since {
-        return FrameGet::NotModified { at: frame.at };
-    }
-    match frame_bytes(frame) {
-        Some((mime, buf)) => FrameGet::Bytes {
-            mime,
-            buf,
-            at: frame.at,
-        },
-        None => FrameGet::Missing,
-    }
 }
 
 fn decode_b64(s: &str) -> Option<Vec<u8>> {
@@ -146,23 +122,15 @@ mod tests {
     }
 
     #[test]
-    fn jpeg_304() {
+    fn frame_bytes_round_trip() {
         let f = store_frame(
             "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
             50,
         )
         .unwrap();
-        match get_jpeg(Some(&f), 50) {
-            FrameGet::NotModified { at } => assert_eq!(at, 50),
-            _ => panic!("expected 304"),
-        }
-        match get_jpeg(Some(&f), 0) {
-            FrameGet::Bytes { mime, buf, .. } => {
-                assert!(mime.starts_with("image/"));
-                assert_eq!(encode_b64(&buf).len() % 4, 0);
-            }
-            _ => panic!("expected bytes"),
-        }
+        let (mime, buf) = frame_bytes(&f).unwrap();
+        assert_eq!(mime, "image/png");
+        assert_eq!(encode_b64(&buf).len() % 4, 0);
         let url = jpeg_data_url(&[0xFF, 0xD8, 0xFF, 0xD9]);
         assert!(url.starts_with("data:image/jpeg;base64,"));
         let stored = store_frame(&url, 1).unwrap();
@@ -186,7 +154,7 @@ mod tests {
             let url = format!("data:{bad};base64,{body}");
             assert!(
                 store_frame(&url, 1).is_none(),
-                "must reject a mime the hub would echo into a header: {bad:?}"
+                "must reject a mime that is not plain image/<subtype>: {bad:?}"
             );
             let frame = PresenceFrame {
                 data_url: url,
@@ -194,9 +162,8 @@ mod tests {
             };
             assert!(
                 frame_bytes(&frame).is_none(),
-                "a frame already on disk must not serve {bad:?} either"
+                "a frame already on disk must not decode {bad:?} either"
             );
-            assert!(matches!(get_jpeg(Some(&frame), 0), FrameGet::Missing));
         }
 
         for good in ["image/jpeg", "image/png", "image/svg+xml", "image/x-icon"] {

@@ -68,6 +68,10 @@ pub use user_model::{
 };
 pub use write::{line_id, node_type_for, remember_line, sensitivity_for, trail_id, LineWrite, Remembered};
 
+/// `source` of a node a local indexer wrote (Spike-8a): `scope:<scope key>`.
+/// The dream leaves these alone; "Forget these" in Settings retires them.
+pub const SCOPE_SOURCE_PREFIX: &str = "scope:";
+
 /// Seals and opens personal and sensitive nodes. `aad` binds a node to its id.
 /// Errors are plain sentences for the user and never carry key material.
 pub trait Sealer: Send + Sync {

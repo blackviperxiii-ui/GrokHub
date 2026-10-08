@@ -67,7 +67,7 @@ use grokhub_core::{
     imagine_toolbox_dock, imagine_toolbox_shows_title, imagine_toolbox_top,
     imagine_video_dur_label, imagine_video_duration_secs, imagine_video_res_label,
     imagine_video_resolution, imagine_wall_bounds, import_memory_file, inbox_claim_ready,
-    inhabit_claim_allowed, inhabit_ready, insight_pin, is_cabin_first_run, is_hard_run,
+    inhabit_ready, insight_pin, is_cabin_first_run, is_hard_run,
     is_openclaw_workspace, is_plain_text, is_rewind_copy_cmd, is_rewind_copy_cmd_in,
     is_thinking_status, is_voice_error, is_workload_user, job_error_goes_to_chat, job_is_scratch,
     keep_last_rewinds,
@@ -129,7 +129,7 @@ use grokhub_core::{
     GreetingInput, GrokLoop, HeartbeatAct, HeyGrokAction, HeyGrokRoute, HostPlanStep, HostRisk,
     HubMemoryFile, HubSnapshot, HubState, ImagineKind, ImagineSpec, ImagineToolboxDock,
     ImagineWall, InhabitBundle, LearningState, LiveBlock, LiveKind, LocalClock, MemoryEdit,
-    MintRealtimeFn, PermKey, PlusAct, PlusTarget, Policy, PresenceFrame, ProjectKind,
+    PermKey, PlusAct, PlusTarget, Policy, PresenceFrame, ProjectKind,
     ProjectMenuAct, ProjectNode, PttLine, QuickChip, Recipe, ReplayOp, ReviewDigest, RewindRecord,
     ScheduleRoute, SkillMd, Slash, SlashHit, SuggestionStore, ThreadReuseView,
     ThreadTab, ThoughtFold, TranscribeRoute, UpdatePending, UsageDay, VerifyResult,
@@ -175,8 +175,10 @@ mod pulse_ui;
 mod board_ui;
 mod confirm;
 mod harness_ui;
+mod inbox_ui;
 mod privacy_ui;
 mod scope_ui;
+mod indexer_ui;
 mod skill_undo;
 mod glance;
 mod sidebar;
@@ -788,7 +790,7 @@ pub struct Cabin {
     permission_mode: PermissionMode,
     /// Spike-0 harness: Full grant, parked hard-class cards, path C hits.
     harness: harness_ui::HarnessState,
-    /// Night / loop / phone `/v1/task` inherit the composer PermissionMode pill.
+    /// Night / loop / `/send` tasks inherit the composer PermissionMode pill.
     scheduled_perm: bool,
     grok_sessions: Vec<grokhub_acp::GrokSession>,
     grok_sessions_loaded: bool,
@@ -2109,6 +2111,7 @@ impl Cabin {
         crate::desktop_mcp::write_halt_stamp();
         crate::desktop_mcp::note_halt();
         self.host_halt.store(true, Ordering::SeqCst);
+        self.harness_watch_end();
         self.halt_hard_parks();
         self.withdraw_perm_asks();
         if self.cfg.native_engine {
@@ -2776,10 +2779,6 @@ impl Cabin {
     }
 
     fn queue_inhabit(&mut self, peer: String) {
-        if !inhabit_claim_allowed(&peer) {
-            self.status = "will not inhabit onto the phone".into();
-            return;
-        }
         if self.inhabit_rx.is_some() {
             self.status = "Inhabiting…".into();
             return;
@@ -2794,10 +2793,6 @@ impl Cabin {
             self.status = format!("No paired peer named {peer}");
             return;
         };
-        if !inhabit_claim_allowed(&target.name) {
-            self.status = "will not inhabit onto the phone".into();
-            return;
-        }
         let peer_count = self.hub.lock().ok().map(|s| s.peers.len()).unwrap_or(0);
         if !inhabit_ready(peer_count, self.running) {
             self.status = "Inhabit needs a paired idle box".into();
@@ -3069,7 +3064,6 @@ impl Cabin {
         if snap.projects.is_some() {
             self.projects_dirty = false;
         }
-        self.sync_hub_voice();
         snap.secrets = Some(self.secrets.clone());
         self.last_persist = Instant::now();
         self.geom_dirty = false;
@@ -3432,6 +3426,9 @@ impl Cabin {
                         self.follow_feed_lookup();
                     }
                     self.release_situation_ping();
+                    if !halted {
+                        self.tick_indexers();
+                    }
                     if self.last_persist.elapsed() > Duration::from_secs(2) {
                         self.persist_bg();
                     }
@@ -4665,6 +4662,7 @@ impl Cabin {
     /// Composer Stop and `/stop` leave background runs alone.
     fn halt_everything(&mut self, status: impl Into<String>) {
         self.heartbeat_halt(now_ms());
+        self.halt_inbox();
         self.stop_all_bg_runs();
         self.halt_work(status);
     }
@@ -4911,7 +4909,6 @@ impl Cabin {
                 st.rotate_pair();
             }
         }
-        self.sync_hub_voice();
         match self.bind_lan_hub() {
             Ok(p) => {
                 self.hub_port = p;
@@ -5654,7 +5651,7 @@ fn hostname_i_now() -> String {
     if pick_lan_ipv4(&refs).is_some() {
         return out;
     }
-    // Windows and macOS have no `hostname -I`, so Devices showed a phone 127.0.0.1.
+    // Windows and macOS have no `hostname -I`, so Devices showed another computer 127.0.0.1.
     routed_ipv4().unwrap_or(out)
 }
 
