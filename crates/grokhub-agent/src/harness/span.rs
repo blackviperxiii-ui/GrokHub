@@ -44,6 +44,10 @@ pub struct Span {
     /// The consent grant that allowed this step (`g-…`, or `approved-once`). Empty when none applied.
     #[serde(default)]
     pub consent_ref: String,
+    /// The change-ledger line an auto-act wrote (`connection:12`), so Undo
+    /// and the "why" can find it (Spike-6b). Empty for every other step.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub undo_ref: String,
     /// Spike-2b: where a click's target came from: the cabin's AX read (`ax`),
     /// the caller's args (`args`), or nothing found (`unknown`). Empty otherwise.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -134,6 +138,7 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            undo_ref: String::new(),
             target: String::new(),
             target_rule: String::new(),
             usage: None,
@@ -162,6 +167,7 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            undo_ref: String::new(),
             target: String::new(),
             target_rule: String::new(),
             usage: None,
@@ -190,6 +196,7 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            undo_ref: String::new(),
             target: String::new(),
             target_rule: String::new(),
             usage: None,
@@ -218,6 +225,7 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            undo_ref: String::new(),
             target: String::new(),
             target_rule: String::new(),
             usage: None,
