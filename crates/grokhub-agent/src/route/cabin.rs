@@ -51,7 +51,9 @@ pub fn call_model<T>(
     call: &ModelCall<'_>,
     send: impl FnOnce(&ModelCall<'_>) -> Result<(T, ModelUsage), String>,
 ) -> Result<T, String> {
+    let started = std::time::Instant::now();
     let out = send(call);
+    let elapsed = started.elapsed();
     let args = serde_json::json!({
         "provider": call.provider.as_str(),
         "model": call.model,
@@ -67,7 +69,18 @@ pub fn call_model<T>(
         .on_path("model");
     span.access = String::new();
     span.usage = usage;
+    // Router R0 shadow: what the router would pick for this call. The call is unchanged.
+    let class = if call.origin == Origin::User { "chat:default" } else { "background:summarize" };
+    let shadow = super::ShadowCall { provider: call.provider.as_str(), class, model: call.model, effort: call.effort, ..Default::default() };
+    let error = out.as_ref().err().cloned().unwrap_or_default();
+    let done = super::ShadowDone::cabin(out.is_ok(), usage.as_ref(), &error, elapsed, None);
+    let mut route = super::shadow::route_record(config_dir, &shadow, &done, span.ts_ms);
+    route.span_id = span.span_ref();
+    span.route = Some(Box::new(route));
     let _ = append_span(config_dir, &span);
+    if let Some(obs) = super::shadow::observation(&shadow, &done, span.ts_ms) {
+        let _ = grokhub_core::model_registry::store::append_observation(config_dir, &obs);
+    }
     out.map(|(value, _)| value)
 }
 

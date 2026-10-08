@@ -100,6 +100,7 @@ impl SseParser {
                     }
                 }
             }
+            note_served_model(&v);
             out.push(SseEvent::Completed(parse_usage_value(&v)));
             return out;
         }
@@ -177,6 +178,27 @@ fn parse_call(item: &Value) -> Option<FunctionCall> {
         name,
         arguments,
     })
+}
+
+thread_local! {
+    static SERVED_MODEL: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Router R0 passive health: the `response.model` of the last completed stream
+/// on this thread, so the shadow log can spot a redirect. Ids only.
+fn note_served_model(v: &Value) {
+    let model = v
+        .get("response")
+        .and_then(|r| r.get("model"))
+        .and_then(|m| m.as_str())
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty());
+    SERVED_MODEL.with(|s| *s.borrow_mut() = model);
+}
+
+/// Take (and clear) the model the last completed stream on this thread said it was.
+pub fn take_served_model() -> Option<String> {
+    SERVED_MODEL.with(|s| s.borrow_mut().take())
 }
 
 pub(crate) fn parse_usage_value(v: &Value) -> Usage {

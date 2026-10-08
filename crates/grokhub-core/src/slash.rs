@@ -63,6 +63,10 @@ pub enum Slash {
     Privacy,
     /// `/diagnose`: read-only checks of disk, memory, services, logs, network and updates (Spike-8b).
     Diagnose,
+    /// `/why`: the last 10 route reasons (Router R0, shadow). Read only.
+    Why,
+    /// `/why models`: one line per model with its state, usable, and reason.
+    WhyModels,
     Hub,
     Inhabit(String),
     Rewind,
@@ -304,6 +308,8 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/sync" => Some(Slash::Sync),
         "/privacy" => Some(Slash::Privacy),
         "/diagnose" => Some(Slash::Diagnose),
+        "/why" if rest.is_empty() => Some(Slash::Why),
+        "/why" if rest.eq_ignore_ascii_case("models") => Some(Slash::WhyModels),
         "/hub" => Some(Slash::Hub),
         "/inhabit" if !rest.is_empty() => Some(Slash::Inhabit(rest.to_string())),
         "/rewind" if rest == "--files" || rest == "--code" || rest == "files" => {
@@ -436,6 +442,7 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Sync => "sync",
         Slash::Privacy => "privacy",
         Slash::Diagnose => "diagnose",
+        Slash::Why | Slash::WhyModels => "why",
         Slash::Hub => "hub",
         Slash::Inhabit(_) => "inhabit",
         Slash::Rewind => "rewind",
@@ -537,6 +544,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/sync", hint: "Sync chats & memory with paired computers", insert: "/sync", run_on_pick: true },
     SlashDef { cmd: "/privacy", hint: "What left this computer, and your grants", insert: "/privacy", run_on_pick: true },
     SlashDef { cmd: "/diagnose", hint: "Check this computer (read only)", insert: "/diagnose", run_on_pick: true },
+    SlashDef { cmd: "/why", hint: "Why Auto would pick each model and effort", insert: "/why", run_on_pick: true },
     SlashDef { cmd: "/send", hint: "Send a task to another computer", insert: "/send ", run_on_pick: false },
     SlashDef { cmd: "/rewind", hint: "Rewind Grok conversation", insert: "/rewind", run_on_pick: true },
     SlashDef { cmd: "/rewind --files", hint: "Restore last project snapshot", insert: "/rewind --files", run_on_pick: true },
@@ -748,6 +756,7 @@ pub fn slash_help() -> String {
         "/send <task> — task this box",
         "/sync — merge chats and memory with paired computers (asks first unless Settings → Permissions allows it)",
         "/privacy — your grants, learning scopes (all off), and what left this computer",
+        "/why — the last 10 reasons the router gave for a model and effort (watch only for now: calls still use your settings); /why models lists each model's state",
         "/diagnose — check disk, memory, services, logs, network and updates, read only, and say what's wrong in plain words (needs System state in Settings → Permissions)",
         "/hub — devices / pair",
         "/inhabit <peer> — hand this Grok to another paired computer",
@@ -1203,6 +1212,16 @@ mod tests {
         assert_eq!(parse_slash("/connectors"), Some(Slash::GrokConnectors));
         assert!(slash_help().contains("/hooks — open Connectors with the Hooks section in view"));
         assert!(!unknown_cabin_slash("/hooks"));
+    }
+
+    #[test]
+    fn why_slash_is_a_cabin_view_with_a_help_line() {
+        assert_eq!(parse_slash("/why"), Some(Slash::Why));
+        assert_eq!(parse_slash("/WHY models"), Some(Slash::WhyModels));
+        assert_eq!(parse_slash("/why not"), None);
+        assert_eq!(parse_slash("/why").as_ref().map(slash_kind), Some("why"));
+        assert!(slash_help().contains("\n/why — the last 10 reasons the router gave for a model and effort"));
+        assert!(SLASH_COMMANDS.iter().any(|d| d.cmd == "/why" && d.run_on_pick));
     }
 
     #[test]

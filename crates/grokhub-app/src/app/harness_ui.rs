@@ -270,6 +270,8 @@ pub(super) struct HarnessState {
     pub next_origin: Option<hx::Origin>,
     /// Spike-8a local indexers: the scheduler, the in-memory index, the asks.
     pub indexer: super::indexer_ui::IndexerUi,
+    /// Router R0: registry refresh, health fold, and `/why`.
+    pub router: super::router_ui::RouterUi,
     /// The decision inbox rows are open under the needs-attention line.
     pub inbox_open: bool,
     /// The card an inbox row asked to scroll into view, painted once.
