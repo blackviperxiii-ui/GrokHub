@@ -38,6 +38,9 @@ pub struct PulseMeta {
     /// Closed on the main window's deck. Pulse still shows it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub off_home: bool,
+    /// A Spike-6a proactive offer: its help score, route and topic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proactive: Option<crate::proactive::ProactiveMeta>,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -386,6 +389,15 @@ pub fn i_can_title(card: &UpdateCard) -> String {
     if lower.starts_with("i can ") && title.chars().count() <= I_CAN_MAX {
         return title.to_string();
     }
+    // A proactive ask card asks first ("Should I …?") in the same voice.
+    let asks = card
+        .pulse
+        .proactive
+        .as_ref()
+        .is_some_and(|p| p.route == crate::proactive::ProactiveRoute::Ask);
+    if asks && title.chars().count() <= I_CAN_MAX {
+        return title.to_string();
+    }
     let action = card.idea_action();
     let action = one_line(&action);
     let what = if action.is_empty() || action.starts_with('/') {
@@ -716,6 +728,11 @@ pub fn pulse_score(card: &UpdateCard, inputs: &PulseInputs) -> i64 {
             LedgerReason::Dismiss => 0,
             LedgerReason::Liked => 0,
         };
+    }
+    // 7. A proactive offer's help (value × confidence × reversibility, × 1000).
+    // Cards without candidate data add nothing, so their order is unchanged.
+    if let Some(p) = &card.pulse.proactive {
+        score += i64::from(p.help);
     }
     score
 }
@@ -1337,6 +1354,39 @@ mod tests {
             rank_pulse(&cards, &inputs),
             "same inputs, same order"
         );
+        // Spike-6a: a proactive offer adds its help x 1000 and slots in by
+        // score; the cards without candidate data keep their scores and order.
+        let mut c = crate::proactive::Candidate::soft(
+            crate::proactive::CandidateSource::Workboard,
+            "sum up the new report on \"Taxes\"",
+            "Taxes report",
+            0.6,
+            0.8,
+            "A run left a report.",
+        );
+        c.reversible = crate::proactive::Reversibility::ByHand;
+        let offer6 = crate::proactive::proactive_card(&c, crate::proactive::ProactiveRoute::ICan, 60);
+        assert_eq!(pulse_score(&offer6, &inputs), 150 + 240);
+        let mut with_offer = cards.clone();
+        with_offer.push(offer6.clone());
+        let order6: Vec<(String, i64)> = rank_pulse(&with_offer, &inputs)
+            .into_iter()
+            .map(|r| (r.id, r.score))
+            .collect();
+        assert_eq!(
+            order6,
+            vec![
+                ("bill".to_string(), 1650),
+                ("started".to_string(), 400),
+                (offer6.id.clone(), 390),
+                (offer.id.clone(), 260),
+                ("plain".to_string(), 150),
+                (watch.id.clone(), 110),
+            ]
+        );
+        let mut reversed = with_offer.clone();
+        reversed.reverse();
+        assert_eq!(rank_pulse(&with_offer, &inputs), rank_pulse(&reversed, &inputs), "input order never matters");
     }
 
     #[test]
