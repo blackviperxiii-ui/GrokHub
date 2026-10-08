@@ -2,7 +2,7 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.97** — Chat works again on models that don't take a thinking level (the HTTP 400 "reasoningEffort" error), Labs → Beta moves a main install to beta, KDE screenshots ask KWin only once, and the router tells you about its own model changes instead of asking. Pairing and approvals are safer too.
+**v2.10.97** — Chat works again on models that don't take a thinking level (the HTTP 400 "reasoningEffort" error), Labs → Beta moves a main install to beta, KDE screenshots ask KWin only once, and the router tells you about its own model changes instead of asking.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
