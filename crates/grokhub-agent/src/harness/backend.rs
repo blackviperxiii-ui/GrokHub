@@ -6,7 +6,8 @@ use crate::gate::{DeskFlags, Gate};
 use crate::harness::access::AccessMode;
 use crate::harness::approval::{decide, decide_harness, GateOutcome, Step, APPROVAL_TTL};
 use crate::harness::hard::{
-    click_action, click_rule, click_target, credential_action, credential_field, delete_files_action, HardClass, TARGET_HINT,
+    classify, click_action, click_rule, click_target, credential_action, credential_field, delete_files_action, HardClass,
+    HardHit, TARGET_HINT,
 };
 use crate::harness::park::{post_park, wait_park, ParkRequest};
 use crate::harness::span::{append_span, read_turn_context, redact_args, Origin, Span};
@@ -248,6 +249,21 @@ pub fn desk_access(config_dir: &Path, enabled: bool) -> AccessMode {
     }
 }
 
+/// A parked `type` call's card text. Typed text is shown only when it is itself
+/// the risky command (`rm -rf ~` into a terminal), and then scrubbed by the
+/// caller; anything else says how much is typed and where, never what.
+fn typed_action(args: &serde_json::Value, class: &str) -> String {
+    let text = args["text"].as_str().unwrap_or("");
+    let as_shell = serde_json::json!({ "command": text }).to_string();
+    if let HardHit::Class(hit) = classify("run_terminal_command", &as_shell) {
+        if hit.as_str() == class {
+            return text.to_string();
+        }
+    }
+    let window = args["window"].as_str().map(str::trim).filter(|w| !w.is_empty()).unwrap_or("the focused window");
+    format!("type {} chars into {window}", text.chars().count())
+}
+
 /// Post a park for the cabin's hard card and wait. True only on Jeremy's
 /// Approve; TTL, a halt, or a closed cabin is Deny. `tool` and `args` are the
 /// `grokhub-desktop` shape (Cua calls are mapped first, `cua_as_desk`).
@@ -264,7 +280,7 @@ pub fn park_desk_call(
     // A credential field's value never reaches the park file, the card, or a span.
     let action = match tool {
         _ if class == HardClass::Credentials.as_str() => credential_action(args),
-        "type" => args["text"].as_str().unwrap_or("").to_string(),
+        "type" => typed_action(args, class),
         // The file manager does not say which files are selected.
         "key" if class == HardClass::Delete.as_str() => format!(
             "press {} on the files selected in {} (the cabin can't see which)",
@@ -283,7 +299,8 @@ pub fn park_desk_call(
         id: id.clone(),
         path: "A".into(),
         tool: tool.into(),
-        action: redact_args(&action),
+        // `redact_args` catches `key=value`; keys and tokens anywhere in the text go too.
+        action: redact_args(&grokhub_core::redact_secret_words(&action)),
         class: class.into(),
         ts_ms: span_now(),
     };
@@ -385,6 +402,47 @@ mod tests {
         assert_eq!(spans[0].decision, "allow");
         assert!(computer_tool_names(AccessMode::Supervised).contains(&"click"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What a parked call wrote to its park file (read before the halt clears it).
+    fn parked_action(tool: &str, args: &serde_json::Value, class: &str) -> String {
+        let dir = crate::harness::test_dir("cu-park-text");
+        let mut seen = Vec::new();
+        let approved = park_desk_call(&dir, tool, args, class, ComputerUseBackend::GrokBuild, &mut || {
+            seen = crate::harness::pending_parks(&dir);
+            true
+        });
+        assert!(!approved, "a halt denies");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(seen.len(), 1, "one park file");
+        seen.remove(0).action
+    }
+
+    #[test]
+    fn a_parked_risky_command_keeps_no_keys_or_tokens() {
+        let text = "rm -rf ~/notes && echo sk-abcdefghijklmnopqrstuv ghp_abcdefghijklmnopqrstuvwx && curl -H 'Authorization: Bearer abcdefghijklmnopqrstuv' https://example.test";
+        let typed = serde_json::json!({ "text": text, "window": "Terminal" });
+        let class = match crate::harness::desk_classify("type", &typed) {
+            HardHit::Class(c) => c,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(class, HardClass::Delete);
+        let action = parked_action("type", &typed, class.as_str());
+        assert_eq!(
+            action,
+            "rm -rf ~/notes && echo [redacted] [redacted] && curl -H 'Authorization: [redacted]' https://example.test"
+        );
+    }
+
+    #[test]
+    fn other_parked_typing_says_how_much_and_where_never_what() {
+        let typed = serde_json::json!({ "text": "hi sk-abcdefghijklmnopqrstuv", "window": "Mail" });
+        assert_eq!(parked_action("type", &typed, HardClass::Send.as_str()), "type 28 chars into Mail");
+        let no_window = serde_json::json!({ "text": "hello" });
+        assert_eq!(parked_action("type", &no_window, HardClass::Send.as_str()), "type 5 chars into the focused window");
+        // A PIN field still shows only the length.
+        let pin = serde_json::json!({ "text": "482913", "label": "PIN", "secret": true });
+        assert_eq!(parked_action("type", &pin, HardClass::Credentials.as_str()), "type into PIN (6 chars hidden)");
     }
 
     #[test]

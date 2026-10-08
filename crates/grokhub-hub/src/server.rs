@@ -126,6 +126,11 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
                 403,
                 json!({ "ok": false, "error": "That device id is reserved by the hub." }),
             ),
+            Err(grokhub_core::state::PairError::Phone) => send_json(
+                req,
+                403,
+                json!({ "ok": false, "error": "Phones can't pair with a GrokHub hub." }),
+            ),
         };
     }
 
@@ -213,6 +218,10 @@ fn handle(state: &Arc<Mutex<HubState>>, mut req: Request) -> Result<(), ()> {
         return send_json(req, 200, json!({ "ok": true }));
     }
     if method == Method::Get && path == "/v1/inhabit" {
+        if grokhub_core::is_phone_name(&peer.name) {
+            drop(st);
+            return send_json(req, 403, json!({ "ok": false, "error": "Phones can't inhabit." }));
+        }
         let bundle = st.claim_inhabit(&peer);
         drop(st);
         return send_json(req, 200, json!({ "ok": true, "bundle": bundle }));
@@ -494,7 +503,7 @@ mod tests {
         let (_, _, body) = http(port, &req);
         let v: Value = serde_json::from_slice(&body).unwrap();
         let cabin = v["token"].as_str().unwrap();
-        let inhabit = r#"{"bundle":{"soul":"stay kind"}}"#;
+        let inhabit = r#"{"bundle":{"soul":"stay kind","toId":"d-cabin","toName":"cabin-2"}}"#;
         let req = format!(
             "POST /v1/inhabit HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {cabin}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{inhabit}",
             inhabit.len()
@@ -507,6 +516,103 @@ mod tests {
         assert_eq!(st_ok, 200, "{}", String::from_utf8_lossy(&body));
         let got: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(got["bundle"]["soul"], "stay kind");
+    }
+
+    /// Pair `name` under `id` on a fresh code; the status and the token, if any.
+    fn pair_as(state: &Arc<Mutex<HubState>>, port: u16, id: &str, name: &str) -> (u16, Option<String>) {
+        let code = state.lock().unwrap().rotate_pair().code;
+        let body = format!(r#"{{"code":"{code}","deviceId":"{id}","deviceName":"{name}"}}"#);
+        let req = format!(
+            "POST /v1/pair HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let (status, _, out) = http(port, &req);
+        let v: Value = serde_json::from_slice(&out).unwrap_or(Value::Null);
+        (status, v["token"].as_str().map(str::to_string))
+    }
+
+    fn claim(port: u16, token: &str) -> (u16, Value) {
+        let (status, _, body) = http(
+            port,
+            &format!("GET /v1/inhabit HTTP/1.0\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {token}\r\n\r\n"),
+        );
+        (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+    }
+
+    fn stage(state: &Arc<Mutex<HubState>>, to_id: Option<&str>, to_name: Option<&str>) {
+        state.lock().unwrap().inhabit = Some(InhabitBundle {
+            soul: "stay kind".into(),
+            to_id: to_id.map(str::to_string),
+            to_name: to_name.map(str::to_string),
+            ..Default::default()
+        });
+    }
+
+    fn hub() -> (Arc<Mutex<HubState>>, u16) {
+        let state = Arc::new(Mutex::new(HubState::empty()));
+        let port = serve_background(state.clone(), 0).expect("bind");
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        (state, port)
+    }
+
+    #[test]
+    fn a_phone_named_device_cannot_pair() {
+        let (state, port) = hub();
+        for name in ["Pixel phone", "my-android", "Jeremy's iPhone"] {
+            let (status, token) = pair_as(&state, port, "d-phone", name);
+            assert_eq!((status, token), (403, None), "{name}");
+        }
+        assert!(state.lock().unwrap().peers.is_empty(), "no phone may be registered");
+        // Not a whole word: still a computer.
+        assert_eq!(pair_as(&state, port, "d-mac", "Megaphone Mac").0, 200);
+    }
+
+    #[test]
+    fn a_phone_paired_before_the_fix_cannot_claim_inhabit() {
+        let (state, port) = hub();
+        // Paired live by an older build: `drop_phone_peers` only runs at load.
+        state.lock().unwrap().peers.push(grokhub_core::state::Peer {
+            id: "d-phone".into(),
+            name: "Pixel Phone".into(),
+            token: "phone-token-abcdefghijklmnop".into(),
+            last_seen: 0,
+        });
+        stage(&state, Some("d-phone"), Some("Pixel Phone"));
+        let (status, body) = claim(port, "phone-token-abcdefghijklmnop");
+        assert_eq!(status, 403, "{body}");
+        assert_eq!(body["bundle"], Value::Null);
+        assert!(state.lock().unwrap().inhabit.is_some(), "the bundle stays staged");
+    }
+
+    #[test]
+    fn a_peer_copying_the_target_name_gets_nothing() {
+        let (state, port) = hub();
+        let target = pair_as(&state, port, "d-target", "studio-pc").1.expect("target pairs");
+        let copycat = pair_as(&state, port, "d-copycat", "STUDIO-PC").1.expect("copycat pairs");
+        stage(&state, Some("d-target"), Some("studio-pc"));
+        assert_eq!(claim(port, &copycat), (200, json!({ "ok": true, "bundle": null })));
+        assert!(state.lock().unwrap().inhabit.is_some());
+        // A bundle naming only a name (an older sender) goes to nobody, the target included.
+        stage(&state, None, Some("studio-pc"));
+        assert_eq!(claim(port, &copycat).1["bundle"], Value::Null);
+        assert_eq!(claim(port, &target).1["bundle"], Value::Null);
+        stage(&state, Some("d-target"), Some("studio-pc"));
+        let (status, body) = claim(port, &target);
+        assert_eq!((status, body["bundle"]["soul"].as_str()), (200, Some("stay kind")));
+        assert!(state.lock().unwrap().inhabit.is_none(), "claimed once");
+    }
+
+    #[test]
+    fn a_bundle_with_no_destination_goes_to_nobody() {
+        let (state, port) = hub();
+        let a = pair_as(&state, port, "d-a", "cabin-a").1.expect("a pairs");
+        let b = pair_as(&state, port, "d-b", "cabin-b").1.expect("b pairs");
+        stage(&state, None, None);
+        assert_eq!(claim(port, &a), (200, json!({ "ok": true, "bundle": null })));
+        assert_eq!(claim(port, &b), (200, json!({ "ok": true, "bundle": null })));
+        stage(&state, Some(""), None);
+        assert_eq!(claim(port, &a).1["bundle"], Value::Null, "an empty id names nobody");
+        assert!(state.lock().unwrap().inhabit.is_some());
     }
 
     #[test]
