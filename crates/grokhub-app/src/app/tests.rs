@@ -27498,6 +27498,75 @@ fn heartbeat_halt_skips_every_organ_that_starts_work() {
     );
 }
 
+/// Spike-5c: a skill Grok made through `grokhub-self` under Always is one
+/// self_manage ledger line, and the user's Undo click removes it.
+#[test]
+fn self_made_skill_undo_click_removes_it() {
+    use crate::self_mcp::tests::{call, FakeIo};
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("self-made-undo");
+    let mut server = crate::self_mcp::SelfServer::new(&root);
+    let mut io = FakeIo::answering(false);
+    let (ok, text) = call(
+        &mut server,
+        &mut io,
+        "skill_create",
+        serde_json::json!({ "name": "inbox-zero", "instructions": "1. Archive read mail\n2. Star replies", "reason": "you do this every morning" }),
+    );
+    assert_eq!((ok, text.as_str()), (true, "created skill inbox-zero (change #1; the user can Undo it)"));
+    let folder = skills::skill_folder("inbox-zero");
+    assert!(folder.join("SKILL.md").exists());
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.skill_list = skills::list_skills();
+    let rows = cabin.skill_rows_now();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].label.starts_with("inbox-zero · added "), "{}", rows[0].label);
+    cabin.skill_row_clicked(&rows[0]);
+    assert!(!folder.exists(), "Undo removes the self-made skill");
+    let ledger = grokhub_agent::harness::ChangeLedger::load(&root);
+    let ops: Vec<(&str, &str)> = ledger.all().iter().map(|c| (c.op.as_str(), c.origin.as_str())).collect();
+    assert_eq!(ops, vec![("create", "self_manage"), ("undo", "user")]);
+    let _ = std::fs::remove_dir_all(&root);
+}
+/// Spike-5c: `grokhub --mcp-self` runs in its own process, so its ledger
+/// lines never reach the cabin's in-process queue. The cabin reads them from
+/// disk: a Work-tree row, a Home update, and an automations list that matches
+/// the file, each shown once.
+#[test]
+fn changes_from_the_self_server_process_show_as_work_rows() {
+    use crate::self_mcp::tests::{call, FakeIo};
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("self-elsewhere");
+    let _agent_pin = grokhub_agent::perm::ConfigGuard::set(&root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.poll_self_changes();
+    assert!(cabin.harness.work_rows.is_empty());
+    let mut server = crate::self_mcp::SelfServer::new(&root);
+    let mut io = FakeIo::answering(false);
+    assert!(call(&mut server, &mut io, "skill_create", serde_json::json!({ "name": "inbox-zero", "instructions": "archive read mail" })).0);
+    let (ok, made) = call(&mut server, &mut io, "automation_create", serde_json::json!({ "instructions": "sweep the inbox", "every": "1h" }));
+    assert!(ok, "{made}");
+    let id = made.lines().next().unwrap().trim_start_matches("created ").to_string();
+    // What the other process left behind: lines on disk only.
+    let _ = grokhub_agent::harness::take_self_changes(&root);
+    let _ = grokhub_agent::take_automation_changes();
+    assert!(cabin.automations.is_empty());
+    cabin.harness.ledger_watch.next_ms = 0;
+    cabin.poll_self_changes();
+    let labels: Vec<&str> = cabin.harness.work_rows.iter().map(|r| r.label.as_str()).collect();
+    assert_eq!(labels.len(), 2, "{labels:?}");
+    assert!(labels.contains(&"Grok added skill inbox-zero"), "{labels:?}");
+    let ids: Vec<&str> = cabin.automations.iter().map(|a| a.id.as_str()).collect();
+    assert_eq!(ids, vec![id.as_str()], "the cabin's list matches the file");
+    let cards = cabin.updates.iter().filter(|u| u.kind == grokhub_core::UpdateKind::SelfChange).count();
+    assert_eq!(cards, 2);
+    // Looked again: nothing new, nothing posted twice.
+    cabin.harness.ledger_watch.next_ms = 0;
+    cabin.poll_self_changes();
+    assert_eq!(cabin.harness.work_rows.len(), 2);
+    assert_eq!(cabin.updates.iter().filter(|u| u.kind == grokhub_core::UpdateKind::SelfChange).count(), 2);
+    let _ = std::fs::remove_dir_all(&root);
+}
 /// Spike-5b: an automation the model wrote (an Ideas Add, an Automate offer)
 /// is saved through the ChangeLedger. It shows as a Work-tree row and a Home
 /// update, and the row's Undo click removes it from the file and the

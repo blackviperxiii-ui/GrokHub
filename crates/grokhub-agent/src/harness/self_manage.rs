@@ -219,7 +219,7 @@ pub const SELF_MANAGE_TOOLS: &[&str] = &[
 /// (also as an MCP leaf name), else `User`.
 pub fn tool_origin(name: &str) -> Origin {
     let leaf = name.rsplit("__").next().unwrap_or(name);
-    if SELF_MANAGE_TOOLS.contains(&leaf) {
+    if SELF_MANAGE_TOOLS.contains(&leaf) || crate::self_manage::self_tool(name).is_some() {
         Origin::SelfManage
     } else {
         Origin::User

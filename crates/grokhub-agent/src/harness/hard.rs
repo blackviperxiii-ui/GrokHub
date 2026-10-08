@@ -919,6 +919,10 @@ pub const HEADLESS_DENY_RULES: &[&str] = &[
     "Bash(*consent.jsonl*)",
     "Edit(**/consent.jsonl)",
     "Write(**/consent.jsonl)",
+    // Spike-5c: Grok's own delete tools on `grokhub-self` (credentials ride in args, see GB_DENY_GAPS)
+    "MCPTool(grokhub-self__skill_delete)",
+    "MCPTool(grokhub-self__connection_remove)",
+    "MCPTool(grokhub-self__automation_delete)",
 ];
 
 /// Hard patterns no GB `--deny` rule can express, with a sample each. GB
@@ -946,11 +950,16 @@ pub const GB_DENY_GAPS: &[(&str, &str)] = &[
         "grokhub-desktop__click",
         "a click on a Send, Pay, Delete, or Reset control (the label under the click point, not the tool name)",
     ),
+    ("grokhub-self__connection_add", "a connection with needs_token (args, not the name); same for connection_modify"),
 ];
 
 /// Floor for shell commands: host_safety paths, rm -rf /, fork bomb, mkfs, dd to a disk,
 /// curl|sh as root.
 pub fn hard_floor(name: &str, arguments: &str) -> Option<HardFloor> {
+    if crate::self_manage::self_tool(name).is_some() {
+        let args = serde_json::from_str::<serde_json::Value>(arguments).unwrap_or_default();
+        return crate::self_manage::scope_guard(name, &args).map(|f| HardFloor { reason: f.detail });
+    }
     if !SHELL_TOOLS.contains(&name) {
         return ledger_write(name, arguments).then(|| HardFloor { reason: LEDGER_FLOOR.into() });
     }
@@ -1024,6 +1033,9 @@ pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
     if SHELL_TOOLS.contains(&name) {
         let cmd = command_arg(arguments).unwrap_or_default().to_ascii_lowercase();
         return command_class(&cmd);
+    }
+    if let Some(class) = crate::self_manage::self_class(name, &serde_json::from_str(arguments).unwrap_or_default()) {
+        return class.hard();
     }
     let lower = name.to_ascii_lowercase();
     let leaf = lower.rsplit("__").next().unwrap_or(&lower);
@@ -1166,9 +1178,12 @@ mod tests {
 
     #[test]
     fn headless_deny_rules_cover_the_floor_and_stubs() {
-        assert_eq!(HEADLESS_DENY_RULES.len(), 262);
+        assert_eq!(HEADLESS_DENY_RULES.len(), 265);
         assert_eq!(HEADLESS_DENY_RULES[259], "Bash(*consent.jsonl*)");
         assert_eq!(HEADLESS_DENY_RULES[261], "Write(**/consent.jsonl)");
+        assert_eq!(HEADLESS_DENY_RULES[262], "MCPTool(grokhub-self__skill_delete)");
+        assert_eq!(HEADLESS_DENY_RULES[263], "MCPTool(grokhub-self__connection_remove)");
+        assert_eq!(HEADLESS_DENY_RULES[264], "MCPTool(grokhub-self__automation_delete)");
         assert_eq!(HEADLESS_DENY_RULES[0], "Bash(rm -rf /)");
         assert!(HEADLESS_DENY_RULES.contains(&"Bash(rm *)"));
         assert!(HEADLESS_DENY_RULES.contains(&"MCPTool(*hard_send_stub*)"));
@@ -1275,6 +1290,11 @@ mod tests {
         for cmd in ["cargo test", "git push origin beta", "ls -la", "npm run format", "cat package.json"] {
             assert!(!gb_denies("Bash", cmd), "over-deny: {cmd}");
         }
+        for (tool, _) in crate::self_manage::SELF_TOOLS {
+            let mcp = format!("{}__{tool}", crate::self_manage::SELF_MCP_SERVER);
+            let hard = hard_class(&mcp, "{}");
+            assert_eq!(hard.is_some(), gb_denies("MCPTool", &mcp), "{mcp}: {hard:?}");
+        }
         for tool in ["srv__list_files", "grokhub-desktop__click", "gmail__search_threads"] {
             assert!(!gb_denies("MCPTool", tool), "over-deny: {tool}");
         }
@@ -1305,7 +1325,7 @@ mod tests {
 
     #[test]
     fn gb_deny_gaps_are_hard_but_no_rule_can_match_them() {
-        assert_eq!(GB_DENY_GAPS.len(), 9);
+        assert_eq!(GB_DENY_GAPS.len(), 10);
         for (sample, _) in &GB_DENY_GAPS[..5] {
             assert!(hard_shell(sample), "classifier: {sample}");
             assert!(!gb_denies("Bash", sample), "now covered, drop it from the gaps: {sample}");
@@ -1322,6 +1342,13 @@ mod tests {
         // Spike-2b: a click's class is the control under it, not the tool name.
         assert_eq!(GB_DENY_GAPS[8].0, "grokhub-desktop__click");
         assert!(!gb_denies("MCPTool", GB_DENY_GAPS[8].0));
+        // A connection that needs a token is credentials by its args; the name stays soft.
+        assert!(!gb_denies("MCPTool", GB_DENY_GAPS[9].0));
+        assert_eq!(
+            hard_class(GB_DENY_GAPS[9].0, r#"{"name":"crm","url":"http://127.0.0.1:9/mcp","needs_token":true}"#),
+            Some(HardClass::Credentials)
+        );
+        assert_eq!(hard_class(GB_DENY_GAPS[9].0, r#"{"name":"crm","url":"http://127.0.0.1:9/mcp"}"#), None);
         assert_eq!(
             desk_classify("type", &serde_json::json!({ "text": "hunter22", "label": "Password" })),
             HardHit::Class(HardClass::Credentials)

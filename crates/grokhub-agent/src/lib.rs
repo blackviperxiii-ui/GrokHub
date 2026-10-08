@@ -23,6 +23,7 @@ mod retry;
 pub mod route;
 mod run;
 mod scan;
+pub mod self_manage;
 mod session;
 mod session_tools;
 mod skills;

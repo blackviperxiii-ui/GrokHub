@@ -261,7 +261,7 @@ fn text_field(args: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn interval_minutes(raw: &str) -> Result<u32, String> {
+pub(crate) fn interval_minutes(raw: &str) -> Result<u32, String> {
     let raw = raw.trim();
     let split = raw
         .find(|c: char| !c.is_ascii_digit())
@@ -345,7 +345,7 @@ fn ledgered(path: &Path, id: &str, reason: &str, write: impl FnOnce() -> Result<
     Ok(change.map(|c| c.seq).unwrap_or(0))
 }
 
-fn write_automation(
+pub(crate) fn write_automation(
     prompt: &str,
     mins: u32,
     fire: bool,
@@ -417,7 +417,7 @@ fn write_automation(
     Ok(format!("created {id}\nevery {mins} min"))
 }
 
-fn delete_automation(id: &str) -> Result<String, String> {
+pub(crate) fn delete_automation(id: &str) -> Result<String, String> {
     let _guard = STORE.lock().unwrap_or_else(|err| err.into_inner());
     let path = store_path();
     let mut list = load_list(&path)?;
@@ -431,7 +431,32 @@ fn delete_automation(id: &str) -> Result<String, String> {
     Ok(format!("deleted {id}"))
 }
 
-fn list_automations() -> Result<String, String> {
+/// One automation by id, as stored.
+pub(crate) fn find_automation(id: &str) -> Result<Option<Automation>, String> {
+    let _guard = STORE.lock().unwrap_or_else(|err| err.into_inner());
+    Ok(load_list(&store_path())?.into_iter().find(|row| row.id == id))
+}
+
+/// Turn one automation off without removing it, through the ChangeLedger
+/// (Spike-5c `automation_disable`).
+pub(crate) fn disable_automation(id: &str, reason: &str) -> Result<String, String> {
+    let _guard = STORE.lock().unwrap_or_else(|err| err.into_inner());
+    let path = store_path();
+    let mut list = load_list(&path)?;
+    let Some(row) = list.iter_mut().find(|row| row.id == id) else {
+        return Err(format!("automation {id} not found"));
+    };
+    if !row.enabled {
+        return Ok(format!("{id} is already off"));
+    }
+    row.enabled = false;
+    let row = row.clone();
+    ledgered(&path, id, reason, || save_list(&path, &list))?;
+    note_change(AutomationChange::Upsert(Box::new(row)));
+    Ok(format!("turned off {id}"))
+}
+
+pub(crate) fn list_automations() -> Result<String, String> {
     let _guard = STORE.lock().unwrap_or_else(|err| err.into_inner());
     let list = load_list(&store_path())?;
     if list.is_empty() {
