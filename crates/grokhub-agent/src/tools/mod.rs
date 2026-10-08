@@ -95,10 +95,10 @@ pub fn schemas_for(gate: &Gate) -> Vec<Value> {
     tools.push(control::monitor_schema());
     tools.push(control::scheduler_create_schema());
     tools.push(control::scheduler_delete_schema());
-    if gate.desktop {
-        tools.extend(desktop::schemas());
-    }
-    tools.extend(crate::mcp::schema_tools());
+    let desk = if gate.desktop { desktop::schemas() } else { Vec::new() };
+    let native = desk.len();
+    tools.extend(desk);
+    tools.extend(crate::mcp::schema_tools(native));
     tools
 }
 

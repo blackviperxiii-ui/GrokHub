@@ -7,10 +7,14 @@
 //! D2: Readonly / Supervised is the Settings switch "Let Grok control the
 //! desktop"; Full is one inline Work-tree card. No new chrome.
 //! D3: Windows runs the same gate on the shipped `grokhub-desktop` tools.
-//! No Cua, no new cabin-native CU.
+//! No new cabin-native CU. Spike-2a: Cua Driver (MIT, `bounded`, pinned) is
+//! an optional second pair of hands on Linux behind `grokhub --mcp-cua`
+//! (`cua`), off by default; its calls go through the same `decide`.
 //!
 //! Paths: A `grokhub-desktop` dispatch, B ACP ask, C headless `--deny` rules,
-//! E native Lab engine (`gate.rs`). Every path writes the same span.
+//! D Grok Build's own computer use (`path_d`: `--deny` rules plus a watchdog
+//! on frames nobody asked about), E native Lab engine (`gate.rs`). Every path
+//! writes the same span.
 //!
 //! Spike-4a trust floor: `consent` (ConsentLedger, scopes all off) and
 //! `egress` (EgressGuard + `egress.jsonl`) answer through the same `decide`
@@ -23,10 +27,24 @@
 //! self-managed skill write replaces; undo and restore need a user's typing
 //! or click (`UndoAsk`).
 //!
+//! Spike-5a: `mindcheck` folds denies, undos, approves and Pulse dismisses
+//! into a prior per action class ("if unsure whether you'd be upset, ask").
+//! It is a soft-path input to `decide` (`Step::Proactive`), never a second
+//! gate, and never touches hard class. An agent-started memory forget is
+//! hard class Delete (`agent_forget`).
+//!
 //! Spike-1a safety loop: `detect` catches failed or looping actions and
 //! unbacked claims, `audit` runs them in two cheap passes, and `ladder`
 //! recovers (retry once, backtrack) or pauses for the user. Hard class is
 //! never retried. Typing into a credential field is hard class credentials.
+//!
+//! Spike-2b: a click is classified by the control it lands on (`hard.rs`
+//! `click_target_class`): a Send, Pay, Delete or Reset button parks before
+//! the click runs, on every path, and spans keep only the matched rule.
+//! Spike-3a (AMR M4): `trail` turns one turn's spans into one AMR `trail`
+//! node at turn end, from already-redacted span fields only; `span_search`
+//! reads `spans/*.jsonl` for History and palette search. Both only read
+//! spans and never execute anything.
 
 mod access;
 mod approval;
@@ -35,12 +53,17 @@ mod audit;
 mod backend;
 mod changes;
 mod consent;
+mod cua;
 mod detect;
 mod egress;
 mod hard;
 mod ladder;
+mod mindcheck;
 mod park;
+mod path_d;
 mod span;
+mod span_search;
+mod trail;
 
 pub use access::{always_does_not_imply_full, AccessMode};
 pub use approval::{
@@ -53,8 +76,14 @@ pub use at_rest::{
     SEALED_PREFIX,
 };
 pub use backend::{
-    computer_tool_names, desk_args, desk_decide, desk_span, grok_build_click, ClickOutcome,
+    computer_tool_names, desk_access, desk_args, desk_decide, desk_span, grok_build_click, park_desk_call, ClickOutcome,
     ClickRequest, ComputerUseBackend, DeskCall, CU_TRACE,
+};
+pub use cua::{
+    check_cua_version, cua_as_desk, cua_manifest, cua_manifest_path, cua_socket_path, cua_spawn_args, cua_spawn_env,
+    find_cua_driver, spawn_cua_child, verify_cua_driver, CuaChild, CuaGate, CuaProxy, StdioChild, CUA_DRIVER_LICENSE,
+    CUA_DRIVER_TAG, CUA_DRIVER_VERSION, CUA_ENV_REMOVE, CUA_LINUX_ASSET, CUA_LINUX_SHA256, CUA_LINUX_ONLY_MSG,
+    CUA_MISSING_MSG, CUA_OFF_MSG, CUA_PERMISSION_MODE, CUA_TOOLS,
 };
 pub use changes::{
     change_id, content_hash, record_skill_change, restore_skill, skill_history_dir, skill_ledger_path,
@@ -80,18 +109,28 @@ pub use detect::{
     UNSUPPORTED_ASSURANCE,
 };
 pub use hard::{
-    classify, classify_ask, credential_action, credential_field, credential_hint, desk_classify, hard_class, hard_floor,
-    HardClass, HardFloor, HardHit, GB_DENY_GAPS, HEADLESS_DENY_RULES,
+    classify, classify_ask, click_action, click_rule, click_target, click_target_class, click_target_in, credential_action,
+    credential_field, credential_hint, delete_files_action, delete_targets, desk_classify, hard_class, hard_floor,
+    ClickRule, ClickTarget, HardClass, HardFloor, HardHit, BUILTIN_CU_DENY, GB_DENY_GAPS, HEADLESS_DENY_RULES,
+    TARGET_HINT,
 };
+pub use path_d::{builtin_cu, cu_look_only, decide_unasked, unasked_action, unasked_title};
 pub use ladder::{hard_target, ladder_span, Ladder, LadderStep, Rung, RECOVERY_TOOL};
+pub use mindcheck::{
+    agent_forget, learn, mind_key, note_prior, signals_from_cards, signals_from_changes, signals_from_spans, Candidate,
+    Clock, MindCheck, MindEvent, MindRoute, MindSignal, Prior, SystemClock, AGENT_FORGET_TOOL, MIND_APPROVE_STEP,
+    MIND_ASK_AT, MIND_ASK_FIRST_MS, MIND_DENY, MIND_DISMISS_STEP, SKILL_CHANGE_KEY,
+};
 pub use park::{
     answer_park, clear_park, park_dir, pending_parks, post_park, take_answer, wait_park,
     ParkRequest,
 };
 pub use span::{
-    append_span, read_spans, read_turn_context, redact_args, span_path, turn_context_path,
-    write_turn_context, Origin, Span, TurnContext, CLAIM_CAP, REPLY_TOOL, VERIFY_TOOL,
+    append_span, read_spans, read_spans_tail, read_turn_context, redact_args, span_path, turn_context_path,
+    write_turn_context, Origin, Span, TurnContext, CLAIM_CAP, REPLY_TOOL, SPAN_TAIL_BYTES, VERIFY_TOOL,
 };
+pub use span_search::{search_spans, SpanHit, SpanSearch, SPAN_SEARCH_FILES, SPAN_SEARCH_HITS, SPAN_SEARCH_LINES};
+pub use trail::{link_learned, trail_body, trail_draft, write_trail, TrailWrite, TRAIL_BODY_CAP};
 
 /// Scratch dir for harness tests, under the workspace `target/` (not the
 /// shared system temp dir). It gets its own in-memory keyring, so no test

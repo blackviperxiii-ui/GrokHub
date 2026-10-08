@@ -293,6 +293,7 @@ fn write_facts(env: &TickEnv<'_>, scope: &Scope, facts: &[Fact], tables: Vec<Str
             stopped = true;
             break;
         }
+        let consent_ref = ConsentLedger::load(env.config_dir).scope_grant(scope).map(|g| g.id.clone()).unwrap_or_default();
         for f in batch {
             if written >= NODE_CAP_PER_TICK {
                 break 'batches;
@@ -311,6 +312,7 @@ fn write_facts(env: &TickEnv<'_>, scope: &Scope, facts: &[Fact], tables: Vec<Str
                     Sensitivity::Plain => Sensitivity::Personal,
                     s => s,
                 },
+                consent_ref: consent_ref.clone(),
             };
             match store.remember(&draft) {
                 Ok(_) => written += 1,
@@ -429,6 +431,19 @@ impl ScopeAsks {
 
     pub fn first(&self) -> Option<&ScopeAsk> {
         self.asks.first()
+    }
+
+    /// Every pending ask, oldest first.
+    pub fn all(&self) -> &[ScopeAsk] {
+        &self.asks
+    }
+
+    /// Put the `i`th ask on the card slot (the decision inbox jumped to it).
+    pub fn promote(&mut self, i: usize) {
+        if i < self.asks.len() {
+            let a = self.asks.remove(i);
+            self.asks.insert(0, a);
+        }
     }
 
     /// The card was answered (Allow or Not now).

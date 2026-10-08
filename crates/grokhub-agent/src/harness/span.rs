@@ -44,6 +44,14 @@ pub struct Span {
     /// The consent grant that allowed this step (`g-…`, or `approved-once`). Empty when none applied.
     #[serde(default)]
     pub consent_ref: String,
+    /// Spike-2b: where a click's target came from: the cabin's AX read (`ax`),
+    /// the caller's args (`args`), or nothing found (`unknown`). Empty otherwise.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub target: String,
+    /// Spike-2b: the click-target rule that matched (`send:Send`). Never the
+    /// on-screen label.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub target_rule: String,
 }
 
 /// Who started a step. Every origin goes through `harness::decide`; none skips it.
@@ -98,6 +106,8 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            target: String::new(),
+            target_rule: String::new(),
         }
     }
 
@@ -120,6 +130,8 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            target: String::new(),
+            target_rule: String::new(),
         }
     }
 
@@ -142,6 +154,8 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            target: String::new(),
+            target_rule: String::new(),
         }
     }
 
@@ -164,6 +178,8 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            target: String::new(),
+            target_rule: String::new(),
         }
     }
 
@@ -187,6 +203,13 @@ impl Span {
 
     pub fn from_origin(mut self, origin: Origin) -> Self {
         self.origin = origin;
+        self
+    }
+
+    /// Tag a click's target source and matched rule (Spike-2b).
+    pub fn with_target(mut self, target: &str, rule: &str) -> Self {
+        self.target = target.into();
+        self.target_rule = rule.into();
         self
     }
 
@@ -344,6 +367,52 @@ pub fn read_spans(config_dir: &Path, session_id: &str) -> Result<Vec<Span>, Stri
     Ok(out)
 }
 
+/// How much of one span file [`read_spans_tail`] reads from its end.
+pub const SPAN_TAIL_BYTES: u64 = 4 * 1024 * 1024;
+
+/// The newest `max_lines` spans of `spans/<session>.jsonl`, oldest first, and
+/// how many lines were read. Only the last [`SPAN_TAIL_BYTES`] of the file are
+/// read. Unlike [`read_spans`], a line that is not a span is skipped, so one
+/// bad line never hides a whole file from search.
+pub fn read_spans_tail(config_dir: &Path, session_id: &str, max_lines: usize) -> (Vec<Span>, usize) {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = fs::File::open(span_path(config_dir, session_id)) else {
+        return (Vec::new(), 0);
+    };
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let start = len.saturating_sub(SPAN_TAIL_BYTES);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return (Vec::new(), 0);
+    }
+    let mut bytes = Vec::new();
+    if file.read_to_end(&mut bytes).is_err() {
+        return (Vec::new(), 0);
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    let mut lines: Vec<&str> = text.lines().collect();
+    if start > 0 && !lines.is_empty() {
+        // The first line is cut mid-way by the seek.
+        lines.remove(0);
+    }
+    let mut out = Vec::new();
+    let mut read = 0usize;
+    for line in lines.iter().rev() {
+        if read == max_lines {
+            break;
+        }
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        read += 1;
+        if let Ok(span) = serde_json::from_str::<Span>(line) {
+            out.push(span);
+        }
+    }
+    out.reverse();
+    (out, read)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -461,6 +530,7 @@ mod tests {
         for s in &got {
             assert_eq!(s.origin, Origin::User);
             assert_eq!(s.consent_ref, "");
+            assert_eq!((s.target.as_str(), s.target_rule.as_str()), ("", ""));
         }
         assert_eq!(got[0].path, "A");
         assert_eq!(got[0].ui_changed, Some(true));
@@ -473,5 +543,10 @@ mod tests {
         let back: Span = serde_json::from_str(&line).unwrap();
         assert_eq!(back, tagged);
         assert_eq!(tagged.span_ref(), format!("chat-old:{}", tagged.ts_ms));
+        // Spike-2b: a click span adds its target and rule; nothing else changes.
+        let click = Span::soft_allow("chat-old", "click", "{}", "parked", "c", AccessMode::Full, "cua").with_target("ax", "send:Send");
+        let line = serde_json::to_string(&click).unwrap();
+        assert!(line.ends_with(r#","consent_ref":"","target":"ax","target_rule":"send:Send"}"#), "{line}");
+        assert_eq!(serde_json::from_str::<Span>(&line).unwrap(), click);
     }
 }

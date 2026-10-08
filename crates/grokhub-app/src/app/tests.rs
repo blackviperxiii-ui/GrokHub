@@ -10951,6 +10951,7 @@ fn recall_legacy_finds_memory_line_and_skips_amr() {
             tags: vec!["dock".into()],
             body: "harbor lamp from amr\n".into(),
             sensitivity: grokhub_core::amr::Sensitivity::Plain,
+            consent_ref: String::new(),
         })
         .unwrap();
     cabin.run_slash_line("/recall harbor");
@@ -11002,6 +11003,7 @@ fn recall_amr_returns_seeded_node_not_legacy_memory() {
             tags: vec!["dock".into()],
             body: "pier light stays on\n".into(),
             sensitivity: grokhub_core::amr::Sensitivity::Plain,
+            consent_ref: String::new(),
         })
         .unwrap();
     cabin.run_slash_line("/recall pier");
@@ -11043,6 +11045,7 @@ fn recall_opens_private_notes_and_says_when_they_are_locked() {
             tags: vec![],
             body: "pier nine is home\n".into(),
             sensitivity: grokhub_core::amr::Sensitivity::Personal,
+            consent_ref: String::new(),
         })
         .unwrap();
     let raw = std::fs::read_to_string(root.join("amr/nodes/fact-home.sealed")).unwrap();
@@ -11383,6 +11386,7 @@ fn amr_dream_runs_once_a_night_and_memory_dream_prints_it() {
                 tags: vec![],
                 body: format!("{body}\n"),
                 sensitivity: grokhub_core::amr::Sensitivity::Plain,
+                consent_ref: String::new(),
             })
             .unwrap();
     }
@@ -15399,6 +15403,14 @@ fn a_second_ask_waits_its_turn_instead_of_cancelling_the_first() {
         .nth(1)
         .and_then(|s| s.split("fn paint_elicit_ask(").next())
         .expect("paint_perm_ask");
+    // The card and the inbox answer through one function.
+    let answer = src
+        .split("fn answer_perm_at(")
+        .nth(1)
+        .and_then(|s| s.split("fn paint_perm_ask(").next())
+        .expect("answer_perm_at");
+    assert!(ask.contains("self.answer_perm_at(0, allow,"), "{ask}");
+    let ask = format!("{ask}{answer}");
     assert!(
         ask.contains("reject_permission(&p)")
             && !ask.contains("answer_permission(p.rpc_id.clone(), false)"),
@@ -16601,6 +16613,9 @@ fn quiet_cabin() -> Cabin {
         palette_files_q: String::new(),
         palette_files_root: String::new(),
         palette_file_rx: None,
+        palette_steps: Vec::new(),
+        palette_steps_q: String::new(),
+        palette_step_rx: None,
         shortcuts_open: false,
         active_skill_follow: None,
         card_notes_follow: None,
@@ -16796,6 +16811,7 @@ fn quiet_cabin() -> Cabin {
         perm_always_confirm: None,
         confirm: None,
         jump_last_you: false,
+        jump_turn: None,
         find: super::chat_ui::ChatFind::default(),
         elicit_ask: None,
         elicit_draft: String::new(),
@@ -25227,8 +25243,14 @@ fn bg_ask_spawn_passes_deny_args() {
     let sent = last_grok_argv(&argv);
     let desktop_deny = format!("--deny\n{}", grokhub_core::DESKTOP_MCP_RULE);
     let hard = grokhub_agent::harness::HEADLESS_DENY_RULES.len() + grokhub_acp::CLI_CREDENTIAL_DENY.len();
-    assert_eq!(sent.matches("--deny").count(), 1 + hard, "{sent}");
+    // Spike-1c: Grok Build's own computer-use tools are denied on Auto, with the switch off or on.
+    let cu = grokhub_acp::BUILTIN_CU_DENY.len();
+    let has_cu = |sent: &str| grokhub_acp::BUILTIN_CU_DENY.iter().all(|r| sent.contains(&format!("--deny\n{r}\n")));
+    // Spike-2a: the Cua proxy rule follows the desktop deny.
+    assert_eq!(sent.matches("--deny").count(), 2 + hard + cu, "{sent}");
+    assert!(has_cu(&sent), "{sent}");
     assert!(sent.contains(&desktop_deny), "{sent}");
+    assert!(sent.contains(&format!("--deny\n{}\n", grokhub_core::CUA_MCP_RULE)), "{sent}");
     assert!(sent.contains("--deny\nBash(rm -rf /)\n"), "{sent}");
     assert!(sent.contains("--deny\nRead(**/.grok/auth.json)\n"), "{sent}");
     assert!(!sent.contains("--deny\nBash\n"), "{sent}");
@@ -25241,7 +25263,8 @@ fn bg_ask_spawn_passes_deny_args() {
     assert!(started.is_ok(), "{started:?}");
     assert!(poll_until(&mut cabin, 5, |c| c.bg.runs.is_empty()), "auto desktop run ends");
     let sent = last_grok_argv(&argv);
-    assert_eq!(sent.matches("--deny").count(), hard, "{sent}");
+    assert_eq!(sent.matches("--deny").count(), hard + cu, "{sent}");
+    assert!(has_cu(&sent), "{sent}");
     assert!(!sent.contains(&desktop_deny), "{sent}");
     assert!(
         sent.contains(&format!("--allow\n{}", grokhub_core::DESKTOP_MCP_RULE)),
@@ -27473,6 +27496,199 @@ fn heartbeat_halt_skips_every_organ_that_starts_work() {
         "Halt holds the pulse before anything else: {halt}"
     );
 }
+
+// Spike-3a: tool steps join History and palette search (legacy mode too),
+// Enter goes back to that chat and turn, and a turn with harness spans leaves
+// one trail node in memory repo mode only.
+fn spike3a_click(chat: &str, turn: u32, ts: u64) -> grokhub_agent::harness::Span {
+    let mut s = grokhub_agent::harness::Span::soft_allow(
+        chat,
+        "click",
+        r#"{"x":40,"y":12}"#,
+        "clicked",
+        "click OK",
+        grokhub_agent::harness::AccessMode::Supervised,
+        "grok_build",
+    )
+    .on_path("A")
+    .in_turn(chat, turn);
+    s.ts_ms = ts;
+    s
+}
+
+fn spike3a_wait(done: &mut dyn FnMut() -> bool) {
+    let start = std::time::Instant::now();
+    while !done() && start.elapsed() < std::time::Duration::from_secs(5) {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn step_search_finds_click_ok_off_the_ui_thread_and_enter_jumps_to_the_turn() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("spike3a-search");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.cfg.memory_backend.is_legacy(), "search needs no memory repo");
+    cabin.threads.clear();
+    let harbor = crate::threads::ChatThread::new("Harbor", false);
+    let pier = crate::threads::ChatThread::new("Pier", false);
+    let mut hidden = crate::threads::ChatThread::new("Hidden", false);
+    hidden.scratch = true;
+    let (harbor_id, pier_id, hidden_id) = (harbor.id.clone(), pier.id.clone(), hidden.id.clone());
+    cabin.threads.push(harbor);
+    cabin.threads.push(pier);
+    cabin.threads.push(hidden);
+    cabin.thread_idx = 0;
+    grokhub_agent::harness::append_span(&root, &spike3a_click(&pier_id, 2, 1_000)).unwrap();
+    grokhub_agent::harness::append_span(&root, &spike3a_click(&hidden_id, 1, 2_000)).unwrap();
+
+    cabin.history_q = "click OK".into();
+    cabin.kick_history_search();
+    assert!(cabin.history_rx.is_some() && cabin.history_hits.is_empty(), "search runs off the UI thread");
+    spike3a_wait(&mut || {
+        cabin.poll_history_search();
+        cabin.history_rx.is_none()
+    });
+    let target = format!("step:2:{pier_id}");
+    assert_eq!(
+        cabin.history_hits,
+        vec![(target.clone(), "Pier · turn 2 · click · allow".to_string())],
+        "the scratch chat's step stays out"
+    );
+    cabin.open_history_hit(&target);
+    assert_eq!(cabin.threads[cabin.thread_idx].id, pier_id);
+    assert_eq!(cabin.jump_turn, Some(2));
+    assert!(matches!(cabin.nav, Nav::Chat));
+
+    // The palette: the same row after the commands, and Enter takes it.
+    cabin.jump_turn = None;
+    let harbor_idx = cabin.threads.iter().position(|t| t.id == harbor_id).unwrap();
+    cabin.switch_thread(harbor_idx);
+    cabin.open_palette();
+    cabin.palette_q = "click OK".into();
+    cabin.kick_palette_steps();
+    spike3a_wait(&mut || {
+        cabin.poll_palette_search();
+        cabin.palette_step_rx.is_none()
+    });
+    assert_eq!(cabin.palette_steps, vec![(target.clone(), "Pier · turn 2 · click · allow".to_string())]);
+    let cmds = grokhub_core::filter_palette(&cabin.palette_q);
+    let pick = super::palette::palette_pick(&cmds, &[], "", &cabin.palette_steps, cmds.len());
+    assert_eq!(pick.as_deref(), Some(target.as_str()));
+    cabin.run_palette(&egui::Context::default(), &target);
+    assert_eq!(cabin.threads[cabin.thread_idx].id, pier_id);
+    assert_eq!(cabin.jump_turn, Some(2));
+    cabin.open_history_hit("step:2:gone-chat");
+    assert_eq!(cabin.status, "That chat is gone");
+
+    // Legacy mode writes no trail.
+    assert!(cabin.write_turn_trail(&pier_id, 2).is_none());
+    cabin.harness_turn_end("Clicked OK.", 2);
+    assert!(!root.join("amr").exists());
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn memory_repo_turn_end_writes_one_trail_and_a_scratch_chat_writes_none() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("spike3a-trail");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    hx::use_key_store_for(&root, std::sync::Arc::new(hx::MemoryKeyStore::new()));
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+    cabin.threads.clear();
+    let dock = crate::threads::ChatThread::new("Dock", false);
+    let mut scratch = crate::threads::ChatThread::new("Scratch", false);
+    scratch.scratch = true;
+    let (dock_id, scratch_id) = (dock.id.clone(), scratch.id.clone());
+    cabin.threads.push(dock);
+    cabin.threads.push(scratch);
+    cabin.thread_idx = 0;
+    hx::append_span(&root, &spike3a_click(&dock_id, 1, 1_791_331_200_000)).unwrap();
+    cabin.harness_turn_end("Clicked OK.", 1);
+    let trail = root.join("amr").join("nodes").join(format!("{}.md", grokhub_core::amr::trail_id(&dock_id, 1)));
+    spike3a_wait(&mut || trail.is_file());
+    let md = std::fs::read_to_string(&trail).unwrap();
+    assert!(
+        md.ends_with(&format!(
+            "---\nTurn 1: 1 step.\nTools: click x1\nDecisions: allow 1\nScreen changed: not measured\nFindings: none\nVerify: none\nSpans: {dock_id}:1791331200000\n"
+        )),
+        "{md}"
+    );
+    assert!(md.contains(&format!("source: span:{dock_id}:1791331200000\n")), "{md}");
+    let trails = |root: &std::path::Path| {
+        std::fs::read_dir(root.join("amr").join("nodes"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("trail-"))
+            .count()
+    };
+    assert_eq!(trails(&root), 1);
+
+    // A scratch chat: same kind of turn, no trail.
+    cabin.thread_idx = 1;
+    hx::append_span(&root, &spike3a_click(&scratch_id, 1, 1_791_331_300_000)).unwrap();
+    assert!(cabin.write_turn_trail(&scratch_id, 1).is_none());
+    cabin.harness_turn_end("Clicked OK.", 1);
+    assert_eq!(trails(&root), 1);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn spike3a_adds_no_nav_page() {
+    // Exhaustive on purpose: a new page fails to compile here.
+    let pages = [
+        Nav::Chat,
+        Nav::Devices,
+        Nav::Memory,
+        Nav::Workboard,
+        Nav::Pulse,
+        Nav::Imagine,
+        Nav::Skills,
+        Nav::Night,
+        Nav::History,
+        Nav::Command,
+        Nav::Connectors,
+        Nav::Agents,
+        Nav::Settings,
+    ];
+    let named: Vec<&str> = pages
+        .iter()
+        .map(|nav| match nav {
+            Nav::Chat => "chat",
+            Nav::Devices => "devices",
+            Nav::Memory => "memory",
+            Nav::Workboard => "workboard",
+            Nav::Pulse => "pulse",
+            Nav::Imagine => "imagine",
+            Nav::Skills => "skills",
+            Nav::Night => "night",
+            Nav::History => "history",
+            Nav::Command => "command",
+            Nav::Connectors => "connectors",
+            Nav::Agents => "agents",
+            Nav::Settings => "settings",
+        })
+        .collect();
+    assert_eq!(named.len(), 13);
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("spike3a-nav");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads.clear();
+    cabin.threads.push(crate::threads::ChatThread::new("Pier", false));
+    let id = cabin.threads[0].id.clone();
+    cabin.open_history_hit(&format!("step:1:{id}"));
+    assert!(matches!(cabin.nav, Nav::Chat), "a step hit opens the chat, not a page of its own");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
 
 fn wait_diagnose(cabin: &mut Cabin) {
     let start = std::time::Instant::now();

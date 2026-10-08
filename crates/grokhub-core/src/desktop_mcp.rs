@@ -13,6 +13,15 @@ pub const DESKTOP_MCP_SERVER: &str = "grokhub-desktop";
 /// grok permission rule for every desktop tool.
 pub const DESKTOP_MCP_RULE: &str = "MCPTool(grokhub-desktop__*)";
 
+/// Spike-2a: the cabin's gate proxy in front of Cua Driver (`grokhub --mcp-cua`).
+pub const CUA_MCP_SERVER: &str = "grokhub-cua";
+
+/// grok permission rule for every Cua proxy tool. Denied wherever the desktop rule is.
+pub const CUA_MCP_RULE: &str = "MCPTool(grokhub-cua__*)";
+
+/// The cabin's own computer-use MCP servers. Both gate every call in the cabin.
+pub const CABIN_CU_SERVERS: &[&str] = &[DESKTOP_MCP_SERVER, CUA_MCP_SERVER];
+
 const PREFERRED_PROTOCOL: &str = "2025-06-18";
 const PROTOCOLS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
@@ -22,6 +31,13 @@ pub const HALT_MSG: &str =
 pub const LOCK_MSG: &str = "The lock screen is up. Unlock this computer, then try again.";
 
 const DRAG_STEPS: i32 = 8;
+
+/// What a backend says when it cannot open, focus, or list windows here.
+pub const APPS_MSG: &str = "Opening and focusing apps is not available on this desktop.";
+/// What a backend says when it has no trash or Recycle Bin route.
+pub const TRASH_MSG: &str = "Moving to the trash is not available on this desktop.";
+/// Most paths one `delete_files` call may name.
+pub const DELETE_FILES_CAP: usize = 100;
 
 const COORD_NOTE: &str = "Coordinates are pixels in the last screenshot of that monitor (or \"all\"), not physical screen pixels. With no screenshot yet, they are the monitor's native pixels.";
 
@@ -385,6 +401,65 @@ pub trait DesktopBackend {
     fn landed_at(&mut self) -> Option<(i32, i32)> {
         None
     }
+    /// Launch an app by the id [`app_id`] returns.
+    fn open_app(&mut self, app: &str) -> Result<(), String> {
+        let _ = app;
+        Err(APPS_MSG.into())
+    }
+    /// Bring the first window whose title contains `title` (any case) to the
+    /// front. Returns that window's title.
+    fn focus_window(&mut self, title: &str) -> Result<String, String> {
+        let _ = title;
+        Err(APPS_MSG.into())
+    }
+    fn list_windows(&mut self) -> Result<DesktopWindows, String> {
+        Err(APPS_MSG.into())
+    }
+    /// Move these paths to the trash (Linux) or the Recycle Bin (Windows).
+    fn trash(&mut self, paths: &[std::path::PathBuf]) -> Result<(), String> {
+        let _ = paths;
+        Err(TRASH_MSG.into())
+    }
+    /// Spike-2b: the accessible control at a screen point, read-only. `None`
+    /// means unknown (no reader, a timeout, or no control there). The
+    /// default (Windows, fakes) is unknown: no UIA reader (D3).
+    fn target_at(&mut self, x: i32, y: i32) -> Option<ClickTarget> {
+        let _ = (x, y);
+        None
+    }
+}
+
+/// The accessible label and role of the control under a click (Spike-2b).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ClickTarget {
+    pub label: String,
+    pub role: String,
+}
+
+/// Top-level windows and the focused one, for the before/after check of
+/// `open_app` and `focus_window`. `active` is the window class and title.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DesktopWindows {
+    pub titles: Vec<String>,
+    pub active: String,
+}
+
+/// An app id `open_app` takes: a Linux desktop id (`org.kde.dolphin`, with or
+/// without `.desktop`) or a Windows app name (`notepad`). Letters, digits,
+/// `.`, `_`, and `-` only, so it can never be read as a flag, a path, or a
+/// second command. Returns the id without `.desktop`.
+pub fn app_id(raw: &str) -> Result<String, String> {
+    let id = raw.trim();
+    let id = id.strip_suffix(".desktop").unwrap_or(id);
+    let ok = !id.is_empty()
+        && id.len() <= 128
+        && !id.starts_with(['-', '.'])
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    if ok {
+        Ok(id.to_string())
+    } else {
+        Err(format!("\"{}\" is not an app id. Use a desktop id like org.kde.dolphin or an app name like notepad.", raw.trim()))
+    }
 }
 
 /// Re-read on every `tools/call`. Halt also ends the process after the reply.
@@ -565,6 +640,9 @@ impl<B: DesktopBackend> DesktopServer<B> {
             "scroll" => self.tool_scroll(args),
             "type" => self.tool_type(args),
             "key" => self.tool_key(args),
+            "open_app" => self.tool_open_app(args),
+            "focus_window" => self.tool_focus_window(args),
+            "delete_files" => self.tool_delete_files(args),
             other => Err(format!("Unknown tool \"{other}\".")),
         }
     }
@@ -602,6 +680,16 @@ impl<B: DesktopBackend> DesktopServer<B> {
             "structuredContent": geom,
             "isError": false,
         }))
+    }
+
+    /// Spike-2b: the control a `click` with these args would land on, read
+    /// before it runs. `None` when the point or monitor is bad or the
+    /// backend can't tell.
+    pub fn click_target(&mut self, args: &Value) -> Option<ClickTarget> {
+        let (x, y) = require_xy(args, "x", "y").ok()?;
+        let geom = self.shot_for(&monitor_arg(args)).ok()?;
+        let (sx, sy) = map_screenshot_point(&geom, x, y);
+        self.backend.target_at(sx, sy)
     }
 
     fn tool_click(&mut self, args: &Value) -> Result<Value, String> {
@@ -692,6 +780,46 @@ impl<B: DesktopBackend> DesktopServer<B> {
         Ok(self.input_ok("keyed"))
     }
 
+    fn tool_open_app(&mut self, args: &Value) -> Result<Value, String> {
+        let raw = args
+            .get("app")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "open_app needs app.".to_string())?;
+        let id = app_id(raw)?;
+        self.backend.open_app(&id)?;
+        Ok(text_ok(&format!("opened {id}")))
+    }
+
+    fn tool_focus_window(&mut self, args: &Value) -> Result<Value, String> {
+        let title = args
+            .get("title")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .ok_or_else(|| "focus_window needs title.".to_string())?;
+        let got = self.backend.focus_window(title)?;
+        Ok(text_ok(&format!("focused {got}")))
+    }
+
+    /// The real delete behind a hard card (Spike-1b). Every path is checked
+    /// before anything is touched, so a bad path deletes nothing. Folders must
+    /// be empty: the card names each path, never what is inside one.
+    fn tool_delete_files(&mut self, args: &Value) -> Result<Value, String> {
+        let paths = delete_paths(args)?;
+        let n = paths.len();
+        let noun = if n == 1 { "path" } else { "paths" };
+        if args.get("to_trash").and_then(|v| v.as_bool()) == Some(true) {
+            self.backend.trash(&paths)?;
+            return Ok(text_ok(&format!("moved {n} {noun} to the trash")));
+        }
+        for p in &paths {
+            let meta = std::fs::symlink_metadata(p).map_err(|e| format!("{}: {e}", p.display()))?;
+            let gone = if meta.is_dir() { std::fs::remove_dir(p) } else { std::fs::remove_file(p) };
+            gone.map_err(|e| format!("{}: {e}", p.display()))?;
+        }
+        Ok(text_ok(&format!("deleted {n} {noun}")))
+    }
+
     fn input_ok(&mut self, verb: &str) -> Value {
         match self.backend.status_note() {
             Some(note) if !note.is_empty() => text_ok(&format!("{verb}. {note}")),
@@ -716,7 +844,36 @@ impl<B: DesktopBackend> DesktopServer<B> {
 }
 
 fn is_input_tool(name: &str) -> bool {
-    matches!(name, "click" | "move" | "drag" | "scroll" | "type" | "key")
+    matches!(name, "click" | "move" | "drag" | "scroll" | "type" | "key" | "open_app" | "focus_window")
+}
+
+/// `delete_files` paths: 1 to [`DELETE_FILES_CAP`], absolute, no repeats, each
+/// one there, and a folder only when empty.
+fn delete_paths(args: &Value) -> Result<Vec<std::path::PathBuf>, String> {
+    let list = args
+        .get("paths")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "delete_files needs paths.".to_string())?;
+    if list.is_empty() || list.len() > DELETE_FILES_CAP {
+        return Err(format!("delete_files takes 1 to {DELETE_FILES_CAP} paths."));
+    }
+    let mut out: Vec<std::path::PathBuf> = Vec::with_capacity(list.len());
+    for v in list {
+        let raw = v.as_str().ok_or_else(|| "paths must be strings.".to_string())?;
+        let p = std::path::PathBuf::from(raw);
+        if !p.is_absolute() {
+            return Err(format!("{raw}: use the full path."));
+        }
+        if out.contains(&p) {
+            return Err(format!("{raw} is listed twice."));
+        }
+        let meta = std::fs::symlink_metadata(&p).map_err(|e| format!("{raw}: {e}"))?;
+        if meta.is_dir() && std::fs::read_dir(&p).map_err(|e| format!("{raw}: {e}"))?.next().is_some() {
+            return Err(format!("{raw} is a folder with files in it. List the files to delete."));
+        }
+        out.push(p);
+    }
+    Ok(out)
 }
 
 fn monitor_arg(args: &Value) -> String {
@@ -908,6 +1065,27 @@ fn tool_schemas() -> Vec<Value> {
             "Press a key combo, for example Return, ctrl+shift+t, alt+F4, super, Page_Down, or an arrow.",
             json!({ "keys": { "type": "string" } }),
             &["keys"],
+        ),
+        tool(
+            "open_app",
+            "Open an app. On Linux pass its desktop id (org.kde.dolphin, firefox); on Windows its app name (notepad, msedge).",
+            json!({ "app": { "type": "string" } }),
+            &["app"],
+        ),
+        tool(
+            "focus_window",
+            "Bring the first window whose title contains this text to the front.",
+            json!({ "title": { "type": "string" } }),
+            &["title"],
+        ),
+        tool(
+            "delete_files",
+            "Delete files or empty folders by full path, or move them to the trash / Recycle Bin with to_trash. Always asks the user first, naming every path.",
+            json!({
+                "paths": { "type": "array", "items": { "type": "string" } },
+                "to_trash": { "type": "boolean", "description": "Move to the trash or Recycle Bin instead of deleting." },
+            }),
+            &["paths"],
         ),
     ]
 }
@@ -1711,6 +1889,18 @@ mod tests {
         fn pace(&mut self) {
             self.log.push("pace".into());
         }
+        fn open_app(&mut self, app: &str) -> Result<(), String> {
+            self.log.push(format!("open:{app}"));
+            Ok(())
+        }
+        fn focus_window(&mut self, title: &str) -> Result<String, String> {
+            self.log.push(format!("focus:{title}"));
+            Ok(format!("{title} — Editor"))
+        }
+        fn trash(&mut self, paths: &[std::path::PathBuf]) -> Result<(), String> {
+            self.log.push(format!("trash:{}", paths.len()));
+            Ok(())
+        }
     }
 
     fn server() -> DesktopServer<Fake> {
@@ -1787,6 +1977,9 @@ mod tests {
             "scroll",
             "type",
             "key",
+            "open_app",
+            "focus_window",
+            "delete_files",
         ];
         assert_eq!(tools.len(), names.len());
         for (tool, name) in tools.iter().zip(names) {
@@ -2588,5 +2781,94 @@ mod tests {
         assert!(shot.ok);
         assert_eq!(fake.lists, 1);
         assert_eq!(fake.released, 2);
+    }
+
+    fn call(s: &mut DesktopServer<Fake>, gate: CallGate, tool: &str, args: Value) -> Value {
+        let line = json!({
+            "jsonrpc": "2.0", "id": 21, "method": "tools/call",
+            "params": { "name": tool, "arguments": args },
+        })
+        .to_string();
+        reply_of(&s.handle_line(&line, gate))["result"].clone()
+    }
+
+    #[test]
+    fn open_and_focus_run_only_with_desktop_control_on() {
+        let mut s = server();
+        let opened = call(&mut s, on(), "open_app", json!({ "app": "org.kde.dolphin.desktop" }));
+        assert_eq!(opened["isError"], false);
+        assert_eq!(opened["content"][0]["text"], "opened org.kde.dolphin");
+        let focused = call(&mut s, on(), "focus_window", json!({ "title": "notes" }));
+        assert_eq!(focused["content"][0]["text"], "focused notes — Editor");
+        assert_eq!(s.backend_mut().log, vec!["open:org.kde.dolphin", "focus:notes"]);
+        let off = CallGate { enabled: false, halted: false };
+        let refused = call(&mut s, off, "open_app", json!({ "app": "firefox" }));
+        assert_eq!(refused["isError"], true);
+        assert_eq!(refused["content"][0]["text"], OFF_MSG);
+        assert_eq!(s.backend_mut().log.len(), 2, "nothing ran with the switch off");
+        s.backend_mut().locked = true;
+        let locked = call(&mut s, on(), "focus_window", json!({ "title": "notes" }));
+        assert_eq!(locked["content"][0]["text"], LOCK_MSG);
+    }
+
+    #[test]
+    fn app_ids_are_ids_not_commands() {
+        assert_eq!(app_id("firefox"), Ok("firefox".into()));
+        assert_eq!(app_id(" org.kde.dolphin.desktop "), Ok("org.kde.dolphin".into()));
+        assert_eq!(app_id("notepad"), Ok("notepad".into()));
+        for bad in ["", "-x", ".hidden", "rm -rf ~", "/usr/bin/xterm", "C:\\x.exe", "a;b", "$(id)", "calc&"] {
+            assert!(app_id(bad).is_err(), "{bad}");
+        }
+        assert_eq!(
+            app_id("a;b"),
+            Err("\"a;b\" is not an app id. Use a desktop id like org.kde.dolphin or an app name like notepad.".into())
+        );
+    }
+
+    fn scratch(label: &str) -> std::path::PathBuf {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("target")
+            .join("desktop-mcp-tests")
+            .join(format!("{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn delete_files_deletes_exactly_the_listed_paths_or_nothing() {
+        let dir = scratch("delete");
+        let a = dir.join("a.txt");
+        let b = dir.join("b.txt");
+        let keep = dir.join("keep.txt");
+        let empty = dir.join("empty");
+        let full = dir.join("full");
+        for f in [&a, &b, &keep] {
+            std::fs::write(f, b"fixture bytes").unwrap();
+        }
+        std::fs::create_dir(&empty).unwrap();
+        std::fs::create_dir(&full).unwrap();
+        std::fs::write(full.join("inner.txt"), b"x").unwrap();
+        let s_path = |p: &std::path::Path| p.to_string_lossy().into_owned();
+        let mut s = server();
+        // One bad path: nothing is touched.
+        let bad = call(&mut s, on(), "delete_files", json!({ "paths": [s_path(&a), s_path(&full)] }));
+        assert_eq!(bad["isError"], true);
+        assert!(a.exists() && full.join("inner.txt").exists());
+        let rel = call(&mut s, on(), "delete_files", json!({ "paths": ["a.txt"] }));
+        assert_eq!(rel["content"][0]["text"], "a.txt: use the full path.");
+        let twice = call(&mut s, on(), "delete_files", json!({ "paths": [s_path(&a), s_path(&a)] }));
+        assert_eq!(twice["isError"], true);
+        assert!(a.exists());
+        let ok = call(&mut s, on(), "delete_files", json!({ "paths": [s_path(&a), s_path(&b), s_path(&empty)] }));
+        assert_eq!(ok["content"][0]["text"], "deleted 3 paths");
+        assert!(!a.exists() && !b.exists() && !empty.exists());
+        assert_eq!(std::fs::read(&keep).unwrap(), b"fixture bytes", "an unlisted file is untouched");
+        let trash = call(&mut s, on(), "delete_files", json!({ "paths": [s_path(&keep)], "to_trash": true }));
+        assert_eq!(trash["content"][0]["text"], "moved 1 path to the trash");
+        assert_eq!(s.backend_mut().log.last().map(String::as_str), Some("trash:1"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
