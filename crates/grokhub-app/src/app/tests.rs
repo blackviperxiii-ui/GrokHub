@@ -16621,6 +16621,8 @@ fn quiet_cabin() -> Cabin {
         card_notes_follow: None,
         board_notes_edit: None,
         last_anticipate_ms: 0,
+        proactive: Default::default(),
+        last_proactive_ms: 0,
         goal_step: 0,
         followup_step: 0,
         stream_buf: String::new(),
