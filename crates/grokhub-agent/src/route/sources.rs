@@ -219,6 +219,36 @@ pub fn probe_model(config_dir: &Path, bearer: &str, meta: &ModelMeta, cost: Cost
     run_probe(meta, cost, ProbeEnv { transport: &mut transport, guard: &mut guard_fn, wait: &mut wait, on_call: &mut on_call })
 }
 
+/// Rebuild the routing table when the model list or a profile changed
+/// (`force`: the Refresh models button). With a plan sign-in, today's eval
+/// build runs on the real wire: guarded, spanned as `background:eval`
+/// (origin `self_manage`), only on `included` routes.
+pub fn rebuild_table(config_dir: &Path, plan_bearer: Option<&str>, force: bool, now_ms: u64) -> super::table::Rebuilt {
+    let _origin = OriginScope::enter(Origin::SelfManage);
+    let Some(bearer) = plan_bearer else {
+        return super::table::rebuild(config_dir, None, force, now_ms);
+    };
+    let mut transport = XaiProbeTransport { bearer: bearer.to_string() };
+    let mut guard_fn = || guard(config_dir, RESPONSES_URL).is_ok();
+    let mut on_call = |call: &ProbeCall, reply: &ProbeReply| {
+        let _ = append_span(config_dir, &eval_span(call, reply));
+    };
+    let env = super::table::EvalEnv { transport: &mut transport, guard: &mut guard_fn, on_call: &mut on_call };
+    super::table::rebuild(config_dir, Some(env), force, now_ms)
+}
+
+/// One eval call's span: like a probe's, with class `background:eval`.
+pub fn eval_span(call: &ProbeCall, reply: &ProbeReply) -> Span {
+    let mut span = probe_span(call, reply);
+    span.args_redacted = serde_json::json!({
+        "class": super::table::EVAL_CLASS,
+        "model": call.model,
+        "effort": call.effort.clone().unwrap_or_default(),
+    })
+    .to_string();
+    span
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

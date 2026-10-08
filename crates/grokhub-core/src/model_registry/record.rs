@@ -38,7 +38,7 @@ pub enum ModelState {
     Live,
     /// Over 20% errors in the last 10 calls, p95 over twice its 7-day baseline, or a 429/503 burst.
     Degraded,
-    /// Held out of routing (R2a's half-open breaker sets this; R0 never does).
+    /// Held out of routing by the breaker (3 hard failures in a row or a ghost strike) until its half-open probe passes.
     Quarantined,
     /// Not in your own fresh list, or a 403 "requires a Grok subscription". Never a ghost strike.
     NotInPlan,
@@ -70,6 +70,12 @@ impl ModelState {
     /// States a route may still pick (shadow `choose` filters on this).
     pub fn routable(self) -> bool {
         matches!(self, Self::Live | Self::Degraded | Self::Probing)
+    }
+
+    /// Retired or pruned: out of routing for good, kept as a tombstone for
+    /// [`super::PRUNE_AFTER_MS`], then deleted from `registry.json`.
+    pub fn tombstone(self) -> bool {
+        matches!(self, Self::Retired | Self::Pruned)
     }
 }
 
@@ -222,6 +228,23 @@ pub struct HealthWindow {
     pub latencies: VecDeque<(u64, u64)>,
 }
 
+/// The breaker on one model (R2a): hard failures in a row, how often it has
+/// opened, and when its open backoff runs out.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Breaker {
+    /// 5xx answers and timeouts in a row.
+    #[serde(default)]
+    pub fails: u32,
+    /// Opens since it last closed; picks the step on the backoff schedule.
+    #[serde(default)]
+    pub opens: u32,
+    #[serde(default)]
+    pub open_until_ms: u64,
+    /// Its one half-open check (a probe or a low-risk background call) is out.
+    #[serde(default)]
+    pub half_open: bool,
+}
+
 /// One model in `registry.json`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelRecord {
@@ -248,6 +271,11 @@ pub struct ModelRecord {
     /// When it last left every source (0 while listed).
     #[serde(default)]
     pub absent_since_ms: u64,
+    #[serde(default)]
+    pub breaker: Breaker,
+    /// When it became retired or pruned (0 otherwise).
+    #[serde(default)]
+    pub tombstone_ms: u64,
 }
 
 impl ModelRecord {
