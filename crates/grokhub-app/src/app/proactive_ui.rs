@@ -34,7 +34,7 @@ pub(super) fn proactive_key(topic: &str) -> String {
 }
 
 impl Cabin {
-    fn save_proactive(&self) {
+    pub(super) fn save_proactive(&self) {
         let dir = crate::config::config_dir();
         if let Ok(json) = serde_json::to_string(&self.proactive) {
             let _ = std::fs::create_dir_all(&dir);

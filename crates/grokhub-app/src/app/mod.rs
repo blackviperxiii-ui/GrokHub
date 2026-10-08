@@ -183,6 +183,7 @@ mod scope_ui;
 mod indexer_ui;
 mod skill_undo;
 mod change_undo;
+mod proactive_auto;
 mod glance;
 mod sidebar;
 mod pages;
@@ -797,6 +798,9 @@ pub struct Cabin {
     permission_mode: PermissionMode,
     /// Spike-0 harness: Full grant, parked hard-class cards, path C hits.
     harness: harness_ui::HarnessState,
+    /// Spike-6b: candidates waiting for the ceiling, today's auto budget,
+    /// and the ledger lines auto-acts wrote.
+    auto_act: proactive_auto::AutoState,
     /// Night / loop / `/send` tasks inherit the composer PermissionMode pill.
     scheduled_perm: bool,
     grok_sessions: Vec<grokhub_acp::GrokSession>,
@@ -1381,6 +1385,7 @@ impl Cabin {
                 full_card_on: harness_ui::grant_full_card_on(),
                 ..Default::default()
             },
+            auto_act: Default::default(),
             scheduled_perm: false,
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
@@ -1823,6 +1828,7 @@ impl Cabin {
             session_mode: SessionMode::Chat,
             permission_mode: PermissionMode::Ask,
             harness: Default::default(),
+            auto_act: Default::default(),
             scheduled_perm: false,
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
@@ -3486,6 +3492,7 @@ impl Cabin {
         if self.scratch() {
             return;
         }
+        self.tick_auto_act();
         let clock = Self::local_clock();
         let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
         // Spike-6a cards: busy is should_anticipate's seat check plus a card

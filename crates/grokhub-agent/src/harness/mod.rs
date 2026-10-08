@@ -34,12 +34,12 @@
 //! gate, and never touches hard class. An agent-started memory forget is
 //! hard class Delete (`agent_forget`).
 //!
-//! Spike-5a: `mindcheck` folds denies, undos, approves and Pulse dismisses
-//! into a prior per action class ("if unsure whether you'd be upset, ask").
-//! It is a soft-path input to `decide` (`Step::Proactive`), never a second
-//! gate, and never touches hard class. An agent-started memory forget is
-//! hard class Delete (`agent_forget`).
+//! Spike-6b: `proactive` runs one auto-act the autonomy ceiling
+//! (`grokhub_core::AutoAct`) admitted, through `decide` (`Step::Proactive`)
+//! and the native dispatch, only when a change-ledger target exists, and
+//! links the ledger line on its span (`undo_ref`).
 //!
+
 //! Spike-1a safety loop: `detect` catches failed or looping actions and
 //! unbacked claims, `audit` runs them in two cheap passes, and `ladder`
 //! recovers (retry once, backtrack) or pauses for the user. Hard class is
@@ -71,6 +71,7 @@ mod ladder;
 mod mindcheck;
 mod park;
 mod path_d;
+mod proactive;
 mod self_manage;
 mod span;
 mod span_search;
@@ -138,6 +139,10 @@ pub use mindcheck::{
     agent_forget, learn, mind_key, note_prior, signals_from_cards, signals_from_changes, signals_from_spans, Candidate,
     Clock, MindCheck, MindEvent, MindRoute, MindSignal, Prior, SystemClock, AGENT_FORGET_TOOL, MIND_APPROVE_STEP,
     MIND_ASK_AT, MIND_ASK_FIRST_MS, MIND_DENY, MIND_DISMISS_STEP, SKILL_CHANGE_KEY,
+};
+pub use proactive::{
+    answer_span, ledger_target, note_proactive, proactive_key, proactive_mind, proactive_span, run_approved_once, run_auto_act, step_class,
+    AutoRun, DECISION_ASK, DECISION_AUTO, DECISION_NEVER, DECISION_UNDO, PROACTIVE_TRACE,
 };
 pub use park::{
     answer_park, clear_park, park_dir, pending_parks, post_park, take_answer, wait_park,
