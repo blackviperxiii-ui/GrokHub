@@ -19,8 +19,6 @@ pub const HEALTH_FILE: &str = "health.jsonl";
 pub const PROFILES_DIR: &str = "model_profiles";
 pub const ONBOARDING_FILE: &str = "onboarding.json";
 pub const PROBE_LOG_FILE: &str = "probe_log.jsonl";
-/// `health.jsonl` is folded and cut at this size so it can't grow forever.
-pub const HEALTH_CAP_BYTES: u64 = 1024 * 1024;
 
 pub fn models_dir(config_dir: &Path) -> PathBuf {
     config_dir.join(MODELS_DIR)

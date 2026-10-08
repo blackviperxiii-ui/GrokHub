@@ -609,10 +609,6 @@ fn grok_usage_event(usage: &Usage, kind: AuthKind, used: u64, limit: u64) -> Acp
     AcpEvent::Usage(grok_usage(usage, kind, used, limit))
 }
 
-pub fn meter_for(kind: AuthKind) -> &'static str {
-    kind.meter()
-}
-
 /// Halt when a stamp written after `started_ms` is visible to `read`.
 pub struct StampHalt<F> {
     pub started_ms: u64,

@@ -682,11 +682,6 @@ pub fn imagine_wall_overlaps_toolbox(
     wall_top < toolbox_bottom && toolbox_top < wall_bottom
 }
 
-/// Result lives in the stage under the chat box, not as a wall takeover.
-pub fn imagine_shows_result_above(_has_result: bool, _dock: ImagineToolboxDock) -> bool {
-    false
-}
-
 /// Letterbox a still inside the wall so the full generated image sits above the chat box.
 pub fn imagine_result_fit(
     wall_x: f32,

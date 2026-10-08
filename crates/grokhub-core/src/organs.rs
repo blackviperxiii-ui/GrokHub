@@ -161,15 +161,9 @@ pub fn on_wheel_grab(running: bool) -> (bool, bool) {
 }
 
 pub const PRESENCE_RING_MS: u64 = 10 * 60 * 1000;
-pub const PRESENCE_WIPE_MS: u64 = 24 * 60 * 60 * 1000;
 
 pub fn presence_should_stream(job_running: bool, previewing: bool) -> bool {
     job_running || previewing
-}
-
-pub fn replay_frame_delay(speed: f32) -> u64 {
-    let s = if speed.is_finite() && speed > 0.0 { speed } else { 4.0 };
-    ((1000.0 / s).round() as u64).max(16)
 }
 
 pub fn should_keep_frame(ts: u64, now: u64, max_ms: u64) -> bool {
@@ -206,10 +200,6 @@ where
 
 pub fn last_user_text(messages: &[(String, String)]) -> Option<String> {
     last_user_scan(messages.iter().map(|(r, c)| (r.as_str(), c.as_str())))
-}
-
-pub fn clipboard_context_block(text: &str) -> String {
-    format!("Clipboard:\n```\n{}\n```", text.trim())
 }
 
 /// Local wall-clock fields as the OS reports them. `weekday` is 0 = Sunday, like `date +%w`.

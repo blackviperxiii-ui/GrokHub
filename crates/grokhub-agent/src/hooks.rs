@@ -297,10 +297,6 @@ pub fn on_session_start(session: &str, workspace: &Path, source: &str) {
     observe(session, workspace, "SessionStart", source, "", "", false);
 }
 
-pub fn on_session_end(session: &str, workspace: &Path, reason: &str) {
-    observe(session, workspace, "SessionEnd", reason, "", "", false);
-}
-
 pub fn on_subagent_start(session: &str, workspace: &Path, name: &str) {
     observe(session, workspace, "SubagentStart", name, "", "", false);
 }
