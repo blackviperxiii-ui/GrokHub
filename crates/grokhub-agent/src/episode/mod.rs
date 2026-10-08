@@ -47,6 +47,9 @@ pub const EPISODE_TOOL: &str = "episode";
 pub const PARK_PREFIX: &str = "epk-";
 /// How much of a goal or goal step a span keeps.
 pub const GOAL_CAP: usize = 200;
+/// How much of a goal or Steer the worker and the checker see. A 400-char
+/// instruction must not reach them cut mid-sentence.
+pub const GOAL_PROMPT_CAP: usize = 4_000;
 
 /// A fresh episode id: `ep-<ms hex>-<n>`.
 pub fn new_episode_id(now_ms: u64) -> String {
@@ -194,7 +197,7 @@ pub struct Episode {
 
 fn cap_text(text: &str, held: &[String]) -> String {
     let clean = grokhub_core::redact_held_secrets(&grokhub_core::redact_secrets(text), held);
-    clean.trim().chars().take(GOAL_CAP).collect()
+    clean.trim().chars().take(GOAL_PROMPT_CAP).collect()
 }
 
 impl Episode {

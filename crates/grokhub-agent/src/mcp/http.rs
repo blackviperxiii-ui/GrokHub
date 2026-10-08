@@ -97,13 +97,14 @@ impl HttpConn {
         name: &str,
         args: &Value,
         timeout: Duration,
+        stop: &dyn Fn() -> bool,
     ) -> Result<(String, bool), String> {
         // Tool args are chat, or personal when they carry a recall-pack line.
         // A hard Send waits on the cabin's card; Deny sends nothing.
         let data = crate::harness::model_text_classes(&args.to_string());
         let req = crate::harness::EgressReq::new(&self.post_url, data);
         let tool = format!("mcp:{}", self.server);
-        crate::harness::guard_or_park(&crate::perm::config_dir(), &req, &tool, &mut || false)?;
+        crate::harness::guard_or_park(&crate::perm::config_dir(), &req, &tool, &mut || stop())?;
         let result = self.roundtrip(
             "tools/call",
             json!({"name": name, "arguments": args}),
@@ -698,7 +699,7 @@ pub(crate) mod tests {
 
         let args = json!({"note": format!("remember: {MEMORY}")});
         let deny = hx::answer_next_park(dir.clone(), false);
-        let err = c.call("echo", &args, Duration::from_secs(5)).unwrap_err();
+        let err = c.call("echo", &args, Duration::from_secs(5), &|| false).unwrap_err();
         let card = deny.join().unwrap().expect("a hard card was posted");
         assert_eq!((card.path.as_str(), card.class.as_str()), ("E", "send"));
         assert_eq!(card.action, "mcp:box → mcp.example.test (chats, memory)");
@@ -708,7 +709,7 @@ pub(crate) mod tests {
         assert_eq!(hx::read_egress(&dir).len(), 1, "no line for a denied send");
 
         let approve = hx::answer_next_park(dir.clone(), true);
-        let (text, failed) = c.call("echo", &args, Duration::from_secs(5)).unwrap();
+        let (text, failed) = c.call("echo", &args, Duration::from_secs(5), &|| false).unwrap();
         assert!(approve.join().unwrap().is_some());
         assert_eq!((text.as_str(), failed), ("counted", false));
         assert_eq!(server.calls.load(Ordering::SeqCst), 1, "approve once sends exactly once");
@@ -723,13 +724,30 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn stop_while_an_mcp_send_waits_on_its_card_gives_up_and_sends_nothing() {
+        let dir = hx::test_dir("mcp-egress-stop");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let _recall = hx::RecallScope::enter(vec![MEMORY.to_string()]);
+        let server = Counting::start();
+        let mut c = conn(&server);
+        let args = json!({"note": format!("remember: {MEMORY}")});
+        // Nobody answers the card; Stop is already pressed.
+        let started = std::time::Instant::now();
+        let err = c.call("echo", &args, Duration::from_secs(5), &|| true).unwrap_err();
+        assert!(started.elapsed() < Duration::from_secs(10), "it did not wait out the card");
+        assert!(!err.is_empty());
+        assert_eq!(server.calls.load(Ordering::SeqCst), 0, "nothing was sent");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn mcp_chat_args_go_with_one_line_and_no_content() {
         let dir = hx::test_dir("mcp-chat");
         let _cfg = crate::perm::ConfigGuard::set(&dir);
         let server = Counting::start();
         let mut c = conn(&server);
         let args = json!({"q": "weather sk-abcdefghijklmnopqrstuv"});
-        let (text, _) = c.call("echo", &args, Duration::from_secs(5)).unwrap();
+        let (text, _) = c.call("echo", &args, Duration::from_secs(5), &|| false).unwrap();
         assert_eq!(text, "counted");
         assert_eq!(server.calls.load(Ordering::SeqCst), 1);
         let log = hx::read_egress(&dir);

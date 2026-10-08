@@ -224,13 +224,7 @@ pub fn forget_node(store: &AmrStore, id: &str, _ask: UserForget, now_ms: u64) ->
 /// Drop every line that repeats a forgotten node from the memory files that
 /// go into a hub snapshot. Bullets and case don't matter.
 pub fn strip_forgotten(store: &AmrStore, files: Vec<HubMemoryFile>) -> Vec<HubMemoryFile> {
-    let forgotten: Vec<String> = store
-        .load_forgotten()
-        .nodes
-        .iter()
-        .flat_map(|n| n.body.lines().map(norm_line).collect::<Vec<_>>())
-        .filter(|l| !l.is_empty())
-        .collect();
+    let forgotten = forgotten_lines(store);
     if forgotten.is_empty() {
         return files;
     }
@@ -245,6 +239,20 @@ pub fn strip_forgotten(store: &AmrStore, files: Vec<HubMemoryFile>) -> Vec<HubMe
             file.content = content;
             file
         })
+        .collect()
+}
+
+/// Lines of forgotten nodes that no live node still holds: a dream merge
+/// tombstones one copy of a line another node keeps, and that is not a forget.
+fn forgotten_lines(store: &AmrStore) -> Vec<String> {
+    let live: std::collections::BTreeSet<String> =
+        store.recallable().0.iter().flat_map(|n| n.body.lines().map(norm_line).collect::<Vec<_>>()).collect();
+    store
+        .load_forgotten()
+        .nodes
+        .iter()
+        .flat_map(|n| n.body.lines().map(norm_line).collect::<Vec<_>>())
+        .filter(|l| !l.is_empty() && !live.contains(l))
         .collect()
 }
 
@@ -288,15 +296,18 @@ pub fn reflect_diff(store: &AmrStore, user_md: &str) -> ReflectDiff {
         }
     }
     let superseded = store.superseded_ids();
-    let all = store.load_live().nodes;
-    let stale: Vec<String> = store
-        .load_forgotten()
-        .nodes
-        .into_iter()
-        .chain(all.into_iter().filter(|n| superseded.contains(&n.id)))
-        .flat_map(|n| n.body.lines().map(norm_line).collect::<Vec<_>>())
-        .filter(|l| !l.is_empty())
-        .collect();
+    let live: std::collections::BTreeSet<String> =
+        nodes.iter().flat_map(|n| n.body.lines().map(norm_line).collect::<Vec<_>>()).collect();
+    let mut stale = forgotten_lines(store);
+    stale.extend(
+        store
+            .load_live()
+            .nodes
+            .into_iter()
+            .filter(|n| superseded.contains(&n.id))
+            .flat_map(|n| n.body.lines().map(norm_line).collect::<Vec<_>>())
+            .filter(|l| !l.is_empty() && !live.contains(l)),
+    );
     for line in user_md.lines() {
         if stale.contains(&norm_line(line)) {
             diff.remove.push(line.trim().to_string());
