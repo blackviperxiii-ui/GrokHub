@@ -57,8 +57,12 @@ pub fn call_model<T>(
 ) -> Result<T, String> {
     let mut rc = super::RouteCall { provider: call.provider.as_str(), class: call.class, model: call.model, effort: call.effort, ..Default::default() };
     let decision = super::live::decide(config_dir, &rc, grokhub_core::now_ms());
+    if decision.paused() {
+        return Err(super::live::NO_ROUTE_MSG.into());
+    }
     let effort = decision.send_effort(call.effort);
-    let routed = ModelCall { effort: effort.as_deref(), ..*call };
+    let model = decision.send_model(call.model);
+    let routed = ModelCall { effort: effort.as_deref(), model: &model, ..*call };
     let started = std::time::Instant::now();
     let out = send(&routed);
     let elapsed = started.elapsed();
@@ -78,6 +82,7 @@ pub fn call_model<T>(
     span.access = String::new();
     span.usage = usage;
     rc.effort = routed.effort;
+    rc.model = routed.model;
     let error = out.as_ref().err().cloned().unwrap_or_default();
     let done = super::RouteDone::cabin(out.is_ok(), usage.as_ref(), &error, elapsed, None);
     let mut route = super::live::route_record(config_dir, &rc, &decision, &done);

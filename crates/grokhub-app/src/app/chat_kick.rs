@@ -356,7 +356,7 @@ impl Cabin {
                     // GB runs this turn at the effort the session spawned with (per episode at spawn).
                     let spawned = grokhub_agent::route::live::start_effort(grokhub_agent::route::live::DEFAULT_CLASS);
                     let thread = self.threads.get(self.thread_idx).map(|t| t.id.clone()).unwrap_or_default();
-                    grokhub_agent::route::live::route_gb_turn(&crate::config::config_dir(), self.cfg.model.trim(), Some(spawned.as_deref()), &thread, &last_user);
+                    grokhub_agent::route::live::route_gb_turn(&crate::config::config_dir(), self.cfg.model.trim(), !self.cfg.model.trim().is_empty(), Some(spawned.as_deref()), &thread, &last_user);
                     self.note_inflight_card(&raw_ask, &thread_label)
                 }
                 Some(Err(e)) => {
@@ -392,11 +392,13 @@ impl Cabin {
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
         // Automations, loops, and /send tasks run unwatched: always low effort.
         // A chat you type spawns at the router's pick for this turn (grok -p is one episode).
-        let effort: Option<String> = if self.scheduled_perm {
-            Some(grokhub_core::BACKGROUND_EFFORT.to_string())
+        // Auto spawns on the router's model pick; a pin is kept while it is listed.
+        let (model, effort): (String, Option<String>) = if self.scheduled_perm {
+            (model, Some(grokhub_core::BACKGROUND_EFFORT.to_string()))
         } else {
             let thread = self.threads.get(idx).map(|t| t.id.clone()).unwrap_or_default();
-            grokhub_agent::route::live::route_gb_turn(&crate::config::config_dir(), &model, None, &thread, &last_user)
+            let pinned = !self.cfg.model.trim().is_empty();
+            grokhub_agent::route::live::route_gb_turn(&crate::config::config_dir(), &model, pinned, None, &thread, &last_user)
         };
         let resume_in_cabin = resume
             .as_deref()

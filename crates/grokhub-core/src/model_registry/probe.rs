@@ -60,6 +60,8 @@ pub enum ProbeKind {
     Json,
     Cache,
     Speed,
+    /// One routing-table eval item (R2a): a fixed synthetic prompt the table builder scores.
+    Eval,
 }
 
 impl ProbeKind {
@@ -69,6 +71,7 @@ impl ProbeKind {
             Self::Json => "json",
             Self::Cache => "cache",
             Self::Speed => "speed",
+            Self::Eval => "eval",
         }
     }
 }
@@ -292,6 +295,7 @@ pub fn run_probe(meta: &ModelMeta, cost: CostClass, env: ProbeEnv<'_>) -> ProbeR
                 reply_ms: Some(reply.latency_ms),
                 tokens_per_sec: (reply.latency_ms > 0).then(|| reply.output_tokens * 1000 / reply.latency_ms),
             }),
+            ProbeKind::Eval => {}
         }
     }
     for e in &efforts {
@@ -396,6 +400,7 @@ mod tests {
                 r.cached_tokens = 768;
             }
             ProbeKind::Speed => r.text = "1 2 3 4 5 6 7 8 9 10".into(),
+            ProbeKind::Eval => unreachable!("a profile probe never sends an eval"),
         }
         r
     }
