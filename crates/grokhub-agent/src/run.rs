@@ -296,10 +296,11 @@ pub fn run_loop(
             hosted_search: true,
             call_timeout: None,
         };
-        let turn = match input.client.stream(&req, input.cancel, &mut |ev| match ev {
+        let class = crate::route::shadow::current_class();
+        let turn = match crate::route::shadow::stream_shadowed(input.client, &req, input.cancel, &mut |ev| match ev {
             StreamEvent::TextDelta(text) => on_event(LoopEvent::Text(text)),
             StreamEvent::ReasoningDelta(text) => on_event(LoopEvent::Thought(text)),
-        }) {
+        }, class) {
             Ok(turn) => turn,
             Err(ClientError::Cancelled) => {
                 return finish(input, StopReason::Cancelled, usage, did_compact, true);

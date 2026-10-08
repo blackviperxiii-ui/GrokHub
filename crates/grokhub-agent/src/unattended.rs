@@ -50,7 +50,13 @@ pub struct UnattendedDone {
 /// The gate's attended flag is forced off. Closed permits deny immediately,
 /// so a bug that still asks cannot wait. Permission and elicit events are counted
 /// and dropped. A halt or cancel also shuts MCP servers this process started.
+/// The route class unattended runs log (not in the §14.3 table yet, so the
+/// shadow route keeps today's effort for it).
+pub const UNATTENDED_CLASS: &str = "background:unattended";
+
 pub fn run_unattended(spec: UnattendedRun) -> UnattendedDone {
+    // Router R0: scheduled runs log their shadow routes under their own class.
+    let _class = crate::route::shadow::ClassScope::enter(UNATTENDED_CLASS);
     let session = spec.session_id.clone();
     let cancel = spec.cancel.clone();
     let hub = crate::tasks::hub_for(&session);

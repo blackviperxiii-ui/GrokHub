@@ -45,6 +45,7 @@ pub mod imagine_auth;
 pub mod inhabit;
 pub mod learning;
 pub mod md;
+pub mod model_registry;
 pub mod models;
 pub mod oauth;
 pub mod openclaw;

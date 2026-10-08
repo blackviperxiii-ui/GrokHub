@@ -375,6 +375,7 @@ pub fn fixture_hard_allow_without_approve() -> Vec<Span> {
         episode: String::new(),
         goal_step: String::new(),
         tokens: None,
+        route: None,
     }]
 }
 
@@ -406,6 +407,7 @@ pub fn fixture_hard_with_approve() -> Vec<Span> {
             episode: String::new(),
             goal_step: String::new(),
             tokens: None,
+            route: None,
         },
         Span {
             session_id: "fixture-ok".into(),
@@ -432,6 +434,7 @@ pub fn fixture_hard_with_approve() -> Vec<Span> {
             episode: String::new(),
             goal_step: String::new(),
             tokens: None,
+            route: None,
         },
         Span {
             session_id: "fixture-ok".into(),
@@ -458,6 +461,7 @@ pub fn fixture_hard_with_approve() -> Vec<Span> {
             episode: String::new(),
             goal_step: String::new(),
             tokens: None,
+            route: None,
         },
     ]
 }
@@ -690,6 +694,7 @@ mod tests {
             episode: String::new(),
             goal_step: String::new(),
             tokens: None,
+            route: None,
         }];
         assert!(approval_gate_violation(&spans).is_empty());
     }

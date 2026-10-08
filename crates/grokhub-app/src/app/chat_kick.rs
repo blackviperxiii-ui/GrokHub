@@ -352,7 +352,12 @@ impl Cabin {
                 .as_ref()
                 .map(|h| h.prompt_with_image(&last_user, image.as_deref()));
             match prompt_err {
-                Some(Ok(())) => self.note_inflight_card(&raw_ask, &thread_label),
+                Some(Ok(())) => {
+                    // Router R0 shadow: GB runs this turn at the effort it spawned with.
+                    let effort = grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort);
+                    grokhub_agent::route::shadow::shadow_gb_turn(&crate::config::config_dir(), self.cfg.model.trim(), effort, "", &last_user);
+                    self.note_inflight_card(&raw_ask, &thread_label)
+                }
                 Some(Err(e)) => {
                     self.acp = None;
                     self.fail_ask_without_acp(&e);
@@ -447,6 +452,7 @@ impl Cabin {
             worktree,
         ) {
             Ok((pid, rx)) => {
+                grokhub_agent::route::shadow::shadow_gb_turn(&crate::config::config_dir(), &model, effort, "", &last_user);
                 self.grok_p_pid = Some(pid);
                 self.grok_p_rx = Some(rx);
                 if let Some(t) = self.threads.get_mut(idx) {
