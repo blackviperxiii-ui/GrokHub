@@ -5137,6 +5137,7 @@ impl eframe::App for Cabin {
                 || self.recall_rx.is_some()
                 || self.harness.privacy_rx.is_some()
                 || self.harness.diagnose_rx.is_some()
+                || self.harness.fixes.busy()
                 || self.sync_rx.is_some()
                 || self.inhabit_rx.is_some()
                 || self.reflect_rx.is_some()
