@@ -511,12 +511,19 @@ pub fn revert_source(skill: &str) -> String {
     format!("{CARD_SOURCE_PREFIX}revert:{skill}")
 }
 
+/// A router tuning change that would cost more money (Router R3a).
+pub fn router_source(candidate: &str) -> String {
+    format!("{CARD_SOURCE_PREFIX}router:{candidate}")
+}
+
 /// What a self-review card's source id stands for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CardTarget {
     Patch(String),
     Draft(String),
     Revert(String),
+    /// A router candidate id: Accept applies it through the ChangeLedger.
+    Router(String),
 }
 
 pub fn card_target(source_id: &str) -> Option<CardTarget> {
@@ -527,6 +534,7 @@ pub fn card_target(source_id: &str) -> Option<CardTarget> {
         "patch" => Some(CardTarget::Patch(name)),
         "draft" => Some(CardTarget::Draft(name)),
         "revert" => Some(CardTarget::Revert(name)),
+        "router" => Some(CardTarget::Router(name)),
         _ => None,
     }
 }

@@ -407,6 +407,7 @@ impl XaiClient {
         if cancel.is_cancelled() {
             return Err(ClientError::Cancelled);
         }
+        let _ = crate::sse::take_served_model();
         // EgressGuard (Spike-4a): api.x.ai is a default model host, so this
         // logs one `egress.jsonl` line and goes. Loopback test servers are local.
         let data = [DataClass::Chat, DataClass::Personal];

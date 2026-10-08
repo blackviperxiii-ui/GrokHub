@@ -74,15 +74,8 @@ pub(super) fn quiet_until_chip(now_hm: &str, start: &str, end: &str) -> Option<S
     Some(format!("Quiet until {end}"))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SessionMarkKind {
-    LastYou,
-    Branch,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SessionMark {
-    pub kind: SessionMarkKind,
     pub label: String,
     pub thread_id: String,
 }
@@ -98,7 +91,7 @@ fn clip_map_label(s: &str) -> String {
     out
 }
 
-/// Compact History map. Empty when there is no last user turn and no fork markers.
+/// Compact History map. Empty when there is no last user turn.
 pub(super) fn session_markers(
     threads: &[ChatThread],
     current_idx: usize,
@@ -107,28 +100,9 @@ pub(super) fn session_markers(
     if let Some(cur) = threads.get(current_idx) {
         if let Some(text) = last_user_text(&cur.messages) {
             out.push(SessionMark {
-                kind: SessionMarkKind::LastYou,
                 label: format!("Last you · {}", clip_map_label(&text)),
                 thread_id: cur.id.clone(),
             });
-        }
-    }
-    for (i, t) in threads.iter().enumerate() {
-        if i == current_idx || t.scratch || !t.grok_fork {
-            continue;
-        }
-        let title = if t.title.trim().is_empty() {
-            "Fork"
-        } else {
-            t.title.trim()
-        };
-        out.push(SessionMark {
-            kind: SessionMarkKind::Branch,
-            label: format!("Branch · {}", clip_map_label(title)),
-            thread_id: t.id.clone(),
-        });
-        if out.len() >= 4 {
-            break;
         }
     }
     out
@@ -249,21 +223,22 @@ mod tests {
     }
 
     #[test]
-    fn session_map_names_last_you_and_fork() {
+    fn session_map_names_last_you_only() {
         let mut cur = ChatThread::new("Now", false);
         cur.id = "cur".into();
         cur.messages_mut()
             .push(("user".into(), "ship the pulse".into()));
-        let mut fork = ChatThread::new("Alt path", false);
-        fork.id = "fork".into();
-        fork.grok_fork = true;
-        let marks = session_markers(&[cur, fork], 0);
-        assert!(marks
-            .iter()
-            .any(|m| m.kind == SessionMarkKind::LastYou && m.label.contains("ship the pulse")));
-        assert!(marks
-            .iter()
-            .any(|m| m.kind == SessionMarkKind::Branch && m.label.contains("Alt path")));
+        let mut other = ChatThread::new("Alt path", false);
+        other.id = "other".into();
+        other.grok_fork = true;
+        let marks = session_markers(&[cur, other], 0);
+        assert_eq!(
+            marks,
+            vec![SessionMark {
+                label: "Last you · ship the pulse".into(),
+                thread_id: "cur".into(),
+            }]
+        );
     }
 
     #[test]

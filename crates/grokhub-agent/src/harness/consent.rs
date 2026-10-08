@@ -365,6 +365,35 @@ pub fn grant_scope(
     Ok(g)
 }
 
+/// Approve one premium route (Router R2b), the `premium:<model>` key from
+/// `cost_class::route_key`. Click only: the hard money card's Approve. It
+/// covers exactly this route and stays until revoked in Settings → Permissions.
+pub fn grant_premium(config_dir: &Path, route_key: &str, _click: UserClick) -> Result<Grant, String> {
+    let key = route_key.trim();
+    if !key.starts_with("premium:") || key.len() <= "premium:".len() {
+        return Err("a premium grant needs a premium route".into());
+    }
+    let g = Grant {
+        id: grant_id(key),
+        source: key.to_string(),
+        destination: String::new(),
+        scope: "spend".into(),
+        data_classes: Vec::new(),
+        granted_at: now_ms(),
+        by: "user".into(),
+        revoked_at: None,
+    };
+    append_line(config_dir, &g)?;
+    Ok(g)
+}
+
+impl ConsentLedger {
+    /// An active grant for exactly this premium route key.
+    pub fn premium_grant(&self, route_key: &str) -> Option<&Grant> {
+        self.active().find(|g| g.source == route_key.trim() && g.scope == "spend")
+    }
+}
+
 /// Revoke a grant. Returns false when no active grant has that id. Revoking
 /// only narrows, so it needs no click proof.
 pub fn revoke_grant(config_dir: &Path, id: &str) -> Result<bool, String> {

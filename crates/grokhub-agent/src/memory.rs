@@ -209,7 +209,7 @@ pub fn dream(
         hosted_search: false,
         call_timeout: Some(std::time::Duration::from_secs(60)),
     };
-    let turn = match client.stream(&req, cancel, &mut |_| {}) {
+    let turn = match crate::route::live::stream_routed(client, &req, cancel, &mut |_| {}, "background:dream") {
         Ok(turn) => turn,
         Err(ClientError::Cancelled) => return Err("Dream cancelled".into()),
         Err(err) => return Err(err.to_string()),
