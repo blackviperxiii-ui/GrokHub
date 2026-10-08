@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Security: a phone, or a computer paired under another computer's name, can no longer take over a session through Inhabit. Phones can't pair, a bundle goes only to the computer it names by id, and a bundle with no destination goes to nobody. Risky typed text on a hard card and in the inbox no longer shows API keys, GitHub tokens or bearer tokens; other typing shows as "type N chars into <window>".
+- Speed spans on the auto router, the harness guards and the send path, a speed bench (`speed_bench`) and `docs/audits/speed-2026-10-08.md`. Each route record now carries how long the router's decision took (`timing_us`). Nothing else changes.
+- Sending a message is faster: the router no longer re-reads up to 4 MB of the model-call log on every new message, every Grok Build turn or every desktop step. It follows the log and each chat's span file in memory and reads only what was added, and the week's spend is read without holding its lock. On the bench, Enter to request went from 28 ms to under 1 ms (p50), and a Grok Build send no longer stalls the window for about 30 ms. Approvals, guards and cost rules are unchanged.
 
 ## 2.10.96 — 2026-10-08
 

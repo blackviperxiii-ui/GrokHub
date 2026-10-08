@@ -26,8 +26,7 @@ use serde::{Deserialize, Serialize};
 use grokhub_core::model_registry::store::{read_json, write_json};
 use grokhub_core::model_registry::{Credential, Registry};
 
-use super::log::{RouteRecord, ROUTE_TRACE};
-use crate::harness::read_spans_tail;
+use super::log::{route_records, with_route_records, RouteRecord};
 
 pub const DAY_MS: u64 = 24 * 60 * 60 * 1000;
 pub const WEEK_MS: u64 = 7 * DAY_MS;
@@ -293,8 +292,7 @@ pub fn nudge_details(f: &NudgeFacts) -> String {
 
 /// Route records from the model-call log, `(ts_ms, record)`, oldest first.
 pub fn read_records(config_dir: &Path) -> Vec<(u64, RouteRecord)> {
-    let (spans, _) = read_spans_tail(config_dir, ROUTE_TRACE, BUDGET_SCAN_LINES);
-    spans.into_iter().filter_map(|s| s.route.map(|r| (s.ts_ms, *r))).collect()
+    route_records(config_dir, BUDGET_SCAN_LINES)
 }
 
 type WeekCache = Option<((PathBuf, u64), Week)>;
@@ -304,15 +302,15 @@ static WEEK: Mutex<WeekCache> = Mutex::new(None);
 pub fn load_week(config_dir: &Path, reg: &Registry, now_ms: u64) -> Week {
     let slot = now_ms / BUDGET_EVERY_MS;
     let key = (config_dir.to_path_buf(), slot);
-    let mut c = WEEK.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((k, w)) = c.as_ref() {
+    if let Some((k, w)) = WEEK.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
         if *k == key {
             return w.clone();
         }
     }
-    let calls: Vec<CallCost> = read_records(config_dir).iter().map(|(t, r)| call_cost(*t, r, reg)).collect();
+    // Read without the lock: a send never waits on the cabin's own budget tick.
+    let calls: Vec<CallCost> = with_route_records(config_dir, BUDGET_SCAN_LINES, |records| records.map(|(t, r)| call_cost(*t, r, reg)).collect());
     let w = tally(&calls, now_ms);
-    *c = Some((key, w.clone()));
+    *WEEK.lock().unwrap_or_else(|e| e.into_inner()) = Some((key, w.clone()));
     w
 }
 
