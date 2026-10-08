@@ -41,6 +41,9 @@ pub(crate) fn handle_desk_line<B: DesktopBackend>(
                 c.args["window"] = Value::String(w.active);
             }
         }
+        if live && c.tool == "click" {
+            c.args[hx::TARGET_HINT] = click_hint(server, &c.args);
+        }
         let access = access_now(dir, gate.enabled);
         let refused = match precheck(c, gate) {
             Precheck::Pass => None,
@@ -86,10 +89,25 @@ fn delete_key(args: &Value) -> bool {
     matches!(keys.as_str(), "delete" | "del" | "shift+delete" | "shift+del")
 }
 
+/// Spike-2b: what a click will land on, read before `decide` (AT-SPI on
+/// Linux, capped; unknown on Windows, D3), plus the focused window for the
+/// card. Only the matched rule id ever reaches a span.
+fn click_hint<B: DesktopBackend>(server: &mut DesktopServer<B>, args: &Value) -> Value {
+    let mut hint = match server.click_target(args) {
+        Some(t) => json!({ "label": t.label, "role": t.role }),
+        None => json!({ "unknown": true }),
+    };
+    if let Ok(w) = server.backend_mut().list_windows() {
+        hint["window"] = Value::String(w.active);
+    }
+    hint
+}
+
 fn strip_window(args: &Value) -> Value {
     let mut a = args.clone();
     if let Some(m) = a.as_object_mut() {
         m.remove("window");
+        m.remove(hx::TARGET_HINT);
     }
     a
 }
@@ -384,6 +402,11 @@ mod tests {
         frame: u8,
         windows: DesktopWindows,
         keys: usize,
+        /// Spike-2b: accessible controls `(x, y, w, h, label, role)` and how
+        /// many clicks landed. `slow` stands for an AT-SPI read past its cap.
+        controls: Vec<(i32, i32, i32, i32, &'static str, &'static str)>,
+        clicks: usize,
+        slow: bool,
     }
 
     impl DesktopBackend for Screen {
@@ -410,8 +433,24 @@ mod tests {
         fn move_abs(&mut self, _x: i32, _y: i32) -> Result<(), String> {
             Ok(())
         }
-        fn button(&mut self, _b: grokhub_core::desktop_mcp::MouseButton, _down: bool) -> Result<(), String> {
+        fn button(&mut self, _b: grokhub_core::desktop_mcp::MouseButton, down: bool) -> Result<(), String> {
+            if down {
+                self.clicks += 1;
+                self.frame = self.frame.wrapping_add(1);
+            }
             Ok(())
+        }
+        fn target_at(&mut self, x: i32, y: i32) -> Option<grokhub_core::desktop_mcp::ClickTarget> {
+            if self.slow {
+                return None;
+            }
+            self.controls
+                .iter()
+                .find(|(cx, cy, w, h, _, _)| x >= *cx && x < cx + w && y >= *cy && y < cy + h)
+                .map(|(_, _, _, _, label, role)| grokhub_core::desktop_mcp::ClickTarget {
+                    label: (*label).into(),
+                    role: (*role).into(),
+                })
         }
         fn scroll(&mut self, _dx: i32, _dy: i32) -> Result<(), String> {
             Ok(())
@@ -655,6 +694,111 @@ mod tests {
         );
         assert!(reply_text(&out).starts_with("Denied: hard-class delete"));
         assert_eq!(s.backend_mut().keys, 1, "the denied Delete was never pressed");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Hermes #3, #4, #8, #9 on path A under Full: the fake desktop names the
+    /// control at each point the way AT-SPI would.
+    fn shop() -> DesktopServer<Screen> {
+        let mut s = desk();
+        let b = s.backend_mut();
+        b.windows.active = "org.shop Checkout — Shop".into();
+        b.controls = vec![
+            (0, 0, 20, 10, "Pay now", "push button"),
+            (20, 0, 20, 10, "Send", "push button"),
+            (40, 0, 20, 10, "Dark mode", "toggle button"),
+            (60, 0, 20, 10, "Reset all settings", "push button"),
+            (0, 20, 20, 10, "Save", "push button"),
+            (20, 20, 20, 10, "Upload screenshot", "push button"),
+        ];
+        s
+    }
+
+    fn at(x: i32, y: i32) -> String {
+        rpc("click", json!({ "x": x, "y": y }))
+    }
+
+    #[test]
+    fn hermes_clicks_park_by_the_control_under_the_point_and_deny_never_clicks() {
+        let dir = crate::config::test_config_root("desk-hermes");
+        turn(&dir, "full");
+        let mut s = shop();
+        // #3: the typed fields are soft; Pay parks as money and Deny never clicks.
+        let out = handle_desk_line(&mut s, &rpc("type", json!({ "text": "Jeremy Example" })), ON, &dir, &mut || false);
+        assert_eq!(reply_text(&out), "typed");
+        let waiter = cabin_answers(&dir, false);
+        let out = handle_desk_line(&mut s, &at(5, 5), ON, &dir, &mut || false);
+        let req = waiter.join().unwrap().expect("pay park");
+        assert_eq!((req.class.as_str(), req.action.as_str()), ("money", "Grok wants to click Pay in org.shop Checkout — Shop"));
+        assert!(reply_text(&out).starts_with("Denied: hard-class money"), "{}", reply_text(&out));
+        // #4: Send parks as send.
+        let waiter = cabin_answers(&dir, false);
+        let _ = handle_desk_line(&mut s, &at(25, 5), ON, &dir, &mut || false);
+        let req = waiter.join().unwrap().expect("send park");
+        assert_eq!((req.class.as_str(), req.action.as_str()), ("send", "Grok wants to click Send in org.shop Checkout — Shop"));
+        assert_eq!(s.backend_mut().clicks, 0, "neither Pay nor Send was clicked");
+        // #8: the toggle is soft and verified by the screenshot hash; Reset parks and Halt denies.
+        let out = handle_desk_line(&mut s, &at(45, 5), ON, &dir, &mut || false);
+        assert_eq!(reply_text(&out), "clicked");
+        let out = handle_desk_line(&mut s, &at(65, 5), ON, &dir, &mut || true);
+        assert!(reply_text(&out).starts_with("Denied: hard-class irreversible_os"), "{}", reply_text(&out));
+        // #9: Save is soft; Upload parks as send.
+        let out = handle_desk_line(&mut s, &at(5, 25), ON, &dir, &mut || false);
+        assert_eq!(reply_text(&out), "clicked");
+        let waiter = cabin_answers(&dir, false);
+        let _ = handle_desk_line(&mut s, &at(25, 25), ON, &dir, &mut || false);
+        assert_eq!(waiter.join().unwrap().expect("upload park").class, "send");
+        assert_eq!(s.backend_mut().clicks, 2, "only the toggle and Save were clicked");
+        let got: Vec<_> = spans(&dir)
+            .iter()
+            .filter(|s| s.tool == "click")
+            .map(|s| (s.decision.clone(), s.target.clone(), s.target_rule.clone(), s.ui_changed))
+            .collect();
+        let row = |d: &str, rule: &str, ui: Option<bool>| (d.to_string(), "ax".to_string(), rule.to_string(), ui);
+        assert_eq!(
+            got,
+            vec![
+                row("park", "money:Pay", None),
+                row("deny", "money:Pay", None),
+                row("park", "send:Send", None),
+                row("deny", "send:Send", None),
+                row("allow", "", Some(true)),
+                row("park", "irreversible_os:Reset", None),
+                row("deny", "irreversible_os:Reset", None),
+                row("allow", "", Some(true)),
+                row("park", "send:Upload", None),
+                row("deny", "send:Upload", None),
+            ]
+        );
+        let trace = std::fs::read_to_string(hx::span_path(&dir, "chat-1")).unwrap();
+        for never in ["Pay now", "Upload screenshot", "Reset all settings", "Checkout", "Jeremy Example"] {
+            assert!(!trace.contains(never), "{never} reached a span: {trace}");
+        }
+        assert_eq!(hx::hard_card_key(true, false, false), None, "Enter never approves");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_atspi_timeout_is_an_unknown_soft_click() {
+        let dir = crate::config::test_config_root("desk-hit-timeout");
+        turn(&dir, "full");
+        let mut s = shop();
+        s.backend_mut().slow = true;
+        let out = handle_desk_line(&mut s, &at(5, 5), ON, &dir, &mut || false);
+        assert_eq!(reply_text(&out), "clicked");
+        let last = spans(&dir).pop().unwrap();
+        assert_eq!(
+            (last.decision.as_str(), last.approval_class.as_str(), last.target.as_str(), last.target_rule.as_str()),
+            ("allow", "soft", "unknown", "")
+        );
+        assert_eq!(last.args_redacted, r#"{"x":5,"y":5}"#, "the cabin's hints never reach the span");
+        assert!(hx::pending_parks(&dir).is_empty());
+        // Windows path A keeps the default reader: unknown, so soft (D3, no UIA).
+        if !cfg!(target_os = "linux") {
+            assert_eq!(super::super::LiveBackend::new().target_at(5, 5), None);
+        }
+        #[cfg(target_os = "linux")]
+        assert_eq!(crate::desktop::ATSPI_HIT_CAP, Duration::from_millis(300));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

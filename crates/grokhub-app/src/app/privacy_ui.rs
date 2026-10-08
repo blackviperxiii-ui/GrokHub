@@ -215,7 +215,7 @@ pub(super) fn privacy_report(
     if ledger.unreadable() > 0 {
         out.push(format!("- {} ledger lines didn't open (damaged or edited) and count for nothing.", ledger.unreadable()));
     }
-    out.push("Nothing reads the folder, app, browser, calendar, mail or system grants yet.".to_string());
+    out.push("Granted folders, apps, browser history and system state are read on this computer only, never on battery or in quiet hours; calendar and mail aren't read yet.".to_string());
     out.push(String::new());
     out.push(format!("Sent in the last {PRIVACY_DAYS} days (no content stored)"));
     let since = now_ms.saturating_sub(PRIVACY_DAYS * 86_400_000);
@@ -723,7 +723,7 @@ mod tests {
                 "Grants",
                 "- Off: Sync to paired computers (/sync asks each time) · Files in a folder · Installed apps · Browser history · Calendar · Mail · System state",
                 "- Screen: \"Let Grok control the desktop\" in Settings → Cabin defaults (off)",
-                "Nothing reads the folder, app, browser, calendar, mail or system grants yet.",
+                "Granted folders, apps, browser history and system state are read on this computer only, never on battery or in quiet hours; calendar and mail aren't read yet.",
                 "",
                 "Sent in the last 7 days (no content stored)",
                 "- Nothing logged yet.",

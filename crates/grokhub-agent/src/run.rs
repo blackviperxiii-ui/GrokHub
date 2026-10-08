@@ -354,12 +354,20 @@ pub fn run_loop(
                 arguments: call.arguments.clone(),
             });
         }
+        // Spike-2b: a denied hard step stops the rest of this batch.
+        let mut batch_failed = false;
         for call in &turn.calls {
             if input.cancel.is_cancelled() {
                 return finish(input, StopReason::Cancelled, usage, did_compact, true);
             }
             if stop_for_halt(input) {
                 return finish(input, StopReason::Halted, usage, did_compact, true);
+            }
+            if batch_failed {
+                let output = ToolOutput::err(gate::NOT_EXECUTED);
+                emit_tool(on_event, &tool_id(call), call, "failed", &output.text, None);
+                push_output(history, call, output);
+                continue;
             }
             let key = format!("{}\\n{}", call.name, call.arguments);
             let seen = repeats.entry(key).or_insert(0);
@@ -428,6 +436,7 @@ pub fn run_loop(
             let pre_context = constrained.context;
             let (output, extra_usage) = match constrained.decision {
                 Decision::Refuse(text) => {
+                    batch_failed = hard_step(call);
                     crate::hooks::on_permission_denied(
                         input.conversation_id,
                         input.workspace,
@@ -494,6 +503,7 @@ pub fn run_loop(
                             )
                         }
                         Waited::Answer(PermAnswer::Deny) => {
+                            batch_failed = hard_step(call);
                             crate::hooks::on_permission_denied(
                                 input.conversation_id,
                                 input.workspace,
@@ -550,6 +560,12 @@ pub fn run_loop(
         }
     }
     finish(input, StopReason::MaxTurns, usage, did_compact, true)
+}
+
+/// A hard-class step (money, send, delete, credentials, irreversible OS) or
+/// a floor refusal. When one is denied, the rest of its batch does not run.
+fn hard_step(call: &FunctionCall) -> bool {
+    !crate::harness::decide(crate::harness::Step::Tool { name: &call.name, arguments: &call.arguments }).is_allow()
 }
 
 fn emit_usage(
@@ -1407,6 +1423,55 @@ mod tests {
         assert_eq!(permits.asks.load(Ordering::SeqCst), 1);
         assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "a");
         assert_eq!(std::fs::read_to_string(dir.join("b.txt")).unwrap(), "b");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Spike-2b: a batch with a Pay in the middle. The step before it runs,
+    /// Pay parks even under Always, and Deny stops the rest.
+    #[test]
+    fn a_denied_pay_in_a_batch_stops_the_steps_after_it() {
+        let dir = workspace("batch-pay");
+        let script = Script {
+            turns: Mutex::new(vec![
+                ScriptTurn {
+                    text: String::new(),
+                    calls: vec![
+                        call("1", "click", r#"{"x":10,"y":20,"label":"Shipping address"}"#),
+                        call("2", "click", r#"{"x":30,"y":40,"label":"Pay now","role":"push button"}"#),
+                        call("3", "click", r#"{"x":50,"y":60,"label":"Done"}"#),
+                        call("4", "type", r#"{"text":"thanks"}"#),
+                    ],
+                    usage: Usage::default(),
+                },
+                ScriptTurn { text: "done".into(), calls: Vec::new(), usage: Usage::default() },
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let spy = Spy { calls: AtomicUsize::new(0), halted: false, locked: false };
+        let deny = Answer { answer: PermAnswer::Deny, asks: AtomicUsize::new(0) };
+        let (out, history, events) = once(&script, &dir, chat(gate::PermMode::Always, true, true), Some(&spy), &deny);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(spy.calls.load(Ordering::SeqCst), 1, "only the step before Pay ran");
+        assert_eq!(deny.asks.load(Ordering::SeqCst), 1, "Pay parked once under Always");
+        assert!(events.iter().any(|ev| matches!(ev, LoopEvent::Permission { name, .. } if name == "click")));
+        let outputs: Vec<(String, String)> = history
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::FunctionCallOutput { call_id, output } => Some((call_id.clone(), output.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            outputs,
+            vec![
+                ("1".to_string(), "ok".to_string()),
+                ("2".to_string(), gate::user_rejected("click")),
+                ("3".to_string(), "Not executed: earlier action failed".to_string()),
+                ("4".to_string(), "Not executed: earlier action failed".to_string()),
+            ]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

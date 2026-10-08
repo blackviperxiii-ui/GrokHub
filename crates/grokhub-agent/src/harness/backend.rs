@@ -5,7 +5,9 @@
 use crate::gate::{DeskFlags, Gate};
 use crate::harness::access::AccessMode;
 use crate::harness::approval::{decide, decide_harness, GateOutcome, Step, APPROVAL_TTL};
-use crate::harness::hard::{credential_action, credential_field, delete_files_action, HardClass};
+use crate::harness::hard::{
+    click_action, click_rule, click_target, credential_action, credential_field, delete_files_action, HardClass, TARGET_HINT,
+};
 use crate::harness::park::{post_park, wait_park, ParkRequest};
 use crate::harness::span::{append_span, read_turn_context, redact_args, Origin, Span};
 use crate::tools::ToolOutput;
@@ -87,6 +89,8 @@ pub fn grok_build_click(req: ClickRequest<'_>) -> ClickOutcome {
                 origin: Origin::User,
                 consent_ref: String::new(),
                 usage: None,
+                target: String::new(),
+                target_rule: String::new(),
             };
             let _ = append_span(req.config_dir, &span);
             ClickOutcome::Parked(reason)
@@ -141,8 +145,17 @@ pub fn desk_decide(tool: &str, args: &serde_json::Value) -> GateOutcome {
 }
 
 /// Args as a desktop span stores them. Typed text keeps only its length, and
-/// a credential field's `text` / `value` never leaves (Spike-1a).
+/// a credential field's `text` / `value` never leaves (Spike-1a). The cabin's
+/// click hints (the AX label read at the point, the window) never leave either.
 pub fn desk_args(tool: &str, args: &serde_json::Value) -> String {
+    let mut args = args.clone();
+    if let Some(m) = args.as_object_mut() {
+        m.remove(TARGET_HINT);
+        if tool == "click" {
+            m.remove("window");
+        }
+    }
+    let args = &args;
     match tool {
         "type" => {
             let n = args
@@ -204,7 +217,18 @@ pub fn desk_span(call: &DeskCall<'_>, chat_id: &str, turn: u32) -> Option<Span> 
         s.driver = ComputerUseBackend::GrokBuild.as_str().into();
         s
     };
-    Some(span.on_path("A").in_turn(chat_id, turn).with_ui_changed(call.ui_changed))
+    let span = span.on_path("A").in_turn(chat_id, turn).with_ui_changed(call.ui_changed);
+    Some(with_click_target(span, call.tool, call.args))
+}
+
+/// Spike-2b: a click span says where its target came from and which rule it
+/// matched (`target:"unknown"` when the AX read found nothing).
+fn with_click_target(span: Span, tool: &str, args: &serde_json::Value) -> Span {
+    if tool != "click" {
+        return span;
+    }
+    let rule = click_rule(args).map(|r| r.id).unwrap_or_default();
+    span.with_target(click_target(args).source, &rule)
 }
 
 /// Access for a desktop call: Readonly with the switch off, else the open
@@ -244,6 +268,10 @@ pub fn park_desk_call(
         ),
         "key" => args["keys"].as_str().unwrap_or("").to_string(),
         "delete_files" => delete_files_action(args),
+        "click" => match click_rule(args) {
+            Some(rule) => click_action(args, &rule),
+            None => desk_args(tool, args),
+        },
         _ => desk_args(tool, args),
     };
     let req = ParkRequest {
@@ -267,6 +295,7 @@ pub fn park_desk_call(
     .on_path("A")
     .in_turn(&ctx.chat_id, ctx.turn);
     park_span.access = ctx.access.clone();
+    let mut park_span = with_click_target(park_span, tool, args);
     if driver == ComputerUseBackend::CuaDriver {
         park_span.driver = driver.as_str().into();
     }

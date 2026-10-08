@@ -732,6 +732,24 @@ fn desk_scan_now() -> DeskScan {
     }
 }
 
+/// Spike-2b path A: how long the click-target read may take before the
+/// click counts as unknown (soft, `target:"unknown"`).
+#[cfg(target_os = "linux")]
+pub(crate) const ATSPI_HIT_CAP: Duration = Duration::from_millis(300);
+
+/// Spike-2b path A: the control at a screen point, read-only, through the
+/// same AT-SPI walk as the desk scan and capped at [`ATSPI_HIT_CAP`]. `None`
+/// on a timeout, no python3 or pyatspi, or no control there.
+#[cfg(target_os = "linux")]
+pub fn atspi_target_at(x: i32, y: i32) -> Option<grokhub_core::desktop_mcp::ClickTarget> {
+    let mut cmd = Command::new("python3");
+    cmd.args(["-c", ATSPI_PY]);
+    let out = run_limited(cmd, ATSPI_HIT_CAP).filter(|o| o.status.success())?;
+    let rows: Vec<AtspiRow> = String::from_utf8_lossy(&out.stdout).lines().filter_map(parse_atspi_line).collect();
+    grokhub_core::control_at(&rows, x, y)
+        .map(|r| grokhub_core::desktop_mcp::ClickTarget { label: r.name.clone(), role: r.role.clone() })
+}
+
 pub fn collect_rows() -> Vec<AtspiRow> {
     desk_scan().rows
 }
