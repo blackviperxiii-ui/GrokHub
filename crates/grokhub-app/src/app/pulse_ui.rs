@@ -1791,6 +1791,8 @@ fn source_preview(page: &str) -> Option<String> {
     if !grokhub_core::public_http_url(page) {
         return None;
     }
+    // EgressGuard (Spike-4c): the card's source link came from the model, so it is chat.
+    crate::xai::egress_ok(page, &[grokhub_agent::harness::DataClass::Chat]).ok()?;
     let resp = fetch_agent().get(page).call().ok()?;
     let html_ok = resp.content_type().to_ascii_lowercase().contains("html");
     if !html_ok {
@@ -1811,6 +1813,9 @@ fn cache_image(url: &str) -> bool {
         return true;
     }
     if !grokhub_core::public_http_url(url) {
+        return false;
+    }
+    if crate::xai::egress_ok(url, &[grokhub_agent::harness::DataClass::Chat]).is_err() {
         return false;
     }
     let Ok(resp) = fetch_agent().get(url).call() else {

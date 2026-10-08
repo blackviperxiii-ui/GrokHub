@@ -17,6 +17,8 @@ struct LiveCfg {
     bearer: String,
     auth_kind: AuthKind,
     gate: Gate,
+    /// Who started this turn (Spike-4c): a typed message or a heartbeat act.
+    origin: grokhub_agent::harness::Origin,
     /// Spike-3b: the open desktop episode on this chat.
     episode: Option<grokhub_agent::EpisodeSeed>,
 }
@@ -241,6 +243,7 @@ impl Cabin {
             bearer,
             auth_kind,
             gate: self.native_gate(),
+            origin: self.harness.turn_origin,
             episode: self.native_episode_seed(),
         };
         live_map()
@@ -502,6 +505,7 @@ fn serve_native(session_id: String, ext_rx: std::sync::mpsc::Receiver<ExternalCm
         };
         engine.set_workspace(cfg.workspace);
         engine.set_gate(cfg.gate);
+        engine.set_origin(cfg.origin);
         engine.set_episode(cfg.episode.clone());
         engine.set_imagine_bearer(&cfg.bearer);
         let client = XaiClient::new(cfg.bearer, cfg.auth_kind, Duration::from_secs(120));

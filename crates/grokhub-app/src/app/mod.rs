@@ -3510,6 +3510,7 @@ impl Cabin {
         bump_usage(&mut self.usage, "automation");
         self.daily_auto_used = self.usage.automation;
         self.daily_auto_day = self.usage.day.clone();
+        self.harness.next_origin = Some(grokhub_agent::harness::Origin::Proactive);
         self.send_scheduled_chat(prompt);
     }
 

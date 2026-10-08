@@ -985,6 +985,7 @@ impl Cabin {
         }
         let key = self.bearer();
         std::thread::spawn(move || {
+            let _origin = grokhub_agent::harness::OriginScope::enter(grokhub_agent::harness::Origin::Proactive);
             let _ = tx.send(cabin_fast_llm(key, prompt));
         });
     }
