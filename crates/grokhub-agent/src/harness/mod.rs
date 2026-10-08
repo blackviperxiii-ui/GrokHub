@@ -116,7 +116,7 @@ pub use self_manage::{
 };
 pub(crate) use self_manage::{forget_connection_token, seal_connection_token};
 pub use consent::{
-    consent_path, grant_destination, grant_scope, revoke_grant, scope_excluded, scope_refusal,
+    consent_path, grant_destination, grant_premium, grant_scope, revoke_grant, scope_excluded, scope_refusal,
     ConsentLedger, Grant, Scope, UserClick, CONSENT_FILE, SCOPE_HARD_EXCLUDES, SCOPE_KINDS,
 };
 pub use egress::{

@@ -134,6 +134,11 @@ pub enum Step<'a> {
     /// Floor and hard class come first and ignore the prior; only a soft
     /// call reads MindCheck, which parks a soft card unless it may auto.
     Proactive { name: &'a str, arguments: &'a str, key: &'a str, mind: &'a MindCheck },
+    /// A premium route (Router R2b): `service_tier: "priority"`, the US
+    /// endpoint, 16-agent `xhigh`, or a model over your $/M ceiling. Money is
+    /// hard class: allowed only under your grant for exactly this route key,
+    /// else a hard money card, even under Always, YOLO or Full.
+    Premium { route_key: &'a str, ledger: &'a ConsentLedger },
 }
 
 /// The single entry for the hard floor and the hard class. Every caller asks
@@ -144,6 +149,12 @@ pub fn decide(step: Step<'_>) -> GateOutcome {
     let hit = match step {
         Step::Egress { dest, data, ledger } => {
             return crate::harness::egress::check(dest, data, ledger).0;
+        }
+        Step::Premium { route_key, ledger } => {
+            if ledger.locked().is_none() && ledger.premium_grant(route_key).is_some() {
+                return GateOutcome::Allow;
+            }
+            HardHit::Class(HardClass::Money)
         }
         Step::Scope { scope, ledger } => {
             return match ledger.scope_grant(scope) {
@@ -375,5 +386,37 @@ mod tests {
     fn apply_access_readonly_clears_desktop() {
         let g = apply_access(gate(PermMode::Ask, true), AccessMode::Readonly);
         assert!(!g.desktop);
+    }
+
+    #[test]
+    fn a_premium_route_is_a_hard_money_card_until_your_click_grants_exactly_that_route() {
+        let dir = crate::harness::test_dir("approval-premium");
+        let money = GateOutcome::Park {
+            reason: "hard-class money: Purchase / money — Always cannot skip".into(),
+            hard: Some(HardClass::Money),
+            needs_jeremy: true,
+        };
+        let ledger = ConsentLedger::load(&dir);
+        assert_eq!(decide(Step::Premium { route_key: "premium:grok-heavy", ledger: &ledger }), money);
+        let g = crate::harness::grant_premium(&dir, "premium:grok-heavy", crate::harness::UserClick::from_click()).unwrap();
+        assert_eq!((g.source.as_str(), g.scope.as_str(), g.by.as_str()), ("premium:grok-heavy", "spend", "user"));
+        let ledger = ConsentLedger::load(&dir);
+        assert_eq!(decide(Step::Premium { route_key: "premium:grok-heavy", ledger: &ledger }), GateOutcome::Allow);
+        assert_eq!(decide(Step::Premium { route_key: "premium:grok-heavy+priority", ledger: &ledger }), money);
+        // Revoking it in Settings → Permissions brings the card back.
+        assert_eq!(crate::harness::revoke_grant(&dir, &g.id), Ok(true));
+        let ledger = ConsentLedger::load(&dir);
+        assert_eq!(decide(Step::Premium { route_key: "premium:grok-heavy", ledger: &ledger }), money);
+        assert_eq!(
+            crate::harness::grant_premium(&dir, "hub", crate::harness::UserClick::from_click()).unwrap_err(),
+            "a premium grant needs a premium route"
+        );
+        // The card takes a click: Enter never approves it, Esc denies, and the TTL denies.
+        assert_eq!(hard_card_key(true, false, false), None);
+        assert_eq!(hard_card_key(false, true, false), Some(HardAnswer::Deny));
+        let park = HardPark { id: "p".into(), tool: "route".into(), class: HardClass::Money, reason: String::new(), parked_at: Instant::now() };
+        let later = park.parked_at + APPROVAL_TTL;
+        assert!(matches!(resolve_park(&park, later, Some(HardAnswer::ApproveOnce)), GateOutcome::Refuse { .. }));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

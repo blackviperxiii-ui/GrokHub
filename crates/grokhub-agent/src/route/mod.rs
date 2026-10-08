@@ -6,6 +6,7 @@
 //! shows the reasons. The only provider today is xAI over [`crate::XaiClient`]
 //! (or a test [`ModelClient`]).
 
+pub mod budget;
 pub mod cabin;
 pub mod difficulty;
 pub mod guard;
@@ -16,6 +17,7 @@ pub mod policy;
 pub mod refresh;
 pub mod live;
 pub mod signals;
+pub mod spend;
 pub mod sources;
 pub mod table;
 
@@ -25,6 +27,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 use grokhub_core::model_registry::profile::{ModelProfile, RuntimeSettings};
+use grokhub_core::model_registry::cost_class::{fast_base, fast_entitled, fast_of, route_key, CostClass, RouteOpts};
 use grokhub_core::model_registry::{Credential, ModelState, Registry, EFFORT_LADDER};
 
 use table::RoutingTable;
@@ -62,6 +65,8 @@ pub struct ModelCall {
     pub tools: Vec<Value>,
     /// The chat's span session, so the shadow route can read VerifyGate's verdicts. Empty when none.
     pub session: String,
+    /// A time-boxed task's deadline (ms), for the Fast policy (R2b).
+    pub deadline_ms: Option<u64>,
 }
 
 impl ModelCall {
@@ -75,7 +80,14 @@ impl ModelCall {
             input,
             tools: Vec::new(),
             session: String::new(),
+            deadline_ms: None,
         }
+    }
+
+    /// The task is time-boxed: it must finish by `deadline_ms`.
+    pub fn due_by(mut self, deadline_ms: u64) -> Self {
+        self.deadline_ms = Some(deadline_ms);
+        self
     }
 
     pub fn in_session(mut self, session: &str) -> Self {
@@ -160,12 +172,13 @@ pub fn call_model(client: &dyn ModelClient, call: &ModelCall, cancel: &CancelTok
         ctx_tokens: crate::compact::estimate_input_tokens(&call.input),
         text: &text,
         needs_tools: !call.tools.is_empty(),
+        deadline_ms: call.deadline_ms,
         ..RouteCall::default()
     };
     let decision = live::decide(&dir, &rc, grokhub_core::now_ms());
     if decision.paused() {
         route_log(&dir, &rc, &decision, &RouteDone::unseen());
-        return Err(ClientError::Protocol(live::NO_ROUTE_MSG.into()));
+        return Err(ClientError::Protocol(decision.pause_msg().into()));
     }
     let mut sent = call.clone();
     sent.effort = decision.send_effort(call.effort.as_deref());
@@ -205,6 +218,8 @@ pub struct RouteInput<'a> {
     pub pick: Option<ladder::Pick>,
     /// The model this episode already runs on. `None` at an episode boundary.
     pub episode_model: Option<&'a str>,
+    /// R2b: what this call may spend (cost classes, the Fast policy, grants, budget).
+    pub spend: spend::Spend,
 }
 
 /// The pick: provider, model, effort, one plain sentence, and the rules that fired.
@@ -221,6 +236,12 @@ pub struct Route {
     pub no_route: bool,
     /// The pinned or episode model this route stands in for, when it fell back.
     pub replaced: Option<String>,
+    /// R2b: the cost class of the route that is sent.
+    pub cost_class: CostClass,
+    /// The plain model when the Fast variant was swapped in (the episode keeps this one).
+    pub base: Option<String>,
+    /// A premium route this call wanted but you haven't approved: the cabin asks once.
+    pub premium_ask: Option<String>,
 }
 
 /// Pure and deterministic. R1 sends its effort for listed classes; R2a sends
@@ -277,10 +298,14 @@ impl Router {
             rules.push("registry:empty".into());
             return keep(current);
         }
-        if !gb && reg.entitlement.credential != Credential::Plan {
-            // Only `included` routes are approved until R2b; a key or no sign-in keeps the call's own model.
+        if !gb && reg.entitlement.credential == Credential::None {
+            // No sign-in: nothing native is included, so the call keeps its own model.
             rules.push("cost:not_included".into());
             return keep(current);
+        }
+        if reg.get(current).is_some() && !ids.contains(&current) && policy::route_class(reg, current, gb, &input.spend) == CostClass::Premium {
+            // Over your $/M ceiling and not approved: stand in, and the cabin asks once.
+            rules.push("cost:premium_ungranted".into());
         }
         // A degraded model is still eligible, but a pin or an episode leaves it
         // when a healthy one can take over.
@@ -288,14 +313,21 @@ impl Router {
         let pool: &[&str] = if healthy.is_empty() { ids } else { &healthy };
         let sound = |m: &str| ids.contains(&m) && (healthy.contains(&m) || !healthy.iter().any(|h| *h != m));
         // Stand in for `from`: its redirect successor, then its family chain, then the ranked list.
+        // Left out only for its cost (a Fast variant or an unapproved premium
+        // route): the plain model first, then any included one, never a pause.
+        let priced_out = |m: &str| reg.get(m).is_some_and(|r| r.state.routable()) && !ids.contains(&m) && policy::fits_any_cost(reg, &BTreeMap::new(), m, policy::Fit { grok_build: gb, ..policy::Fit::default() }, 0);
         let stand_in = |from: &str, rules: &mut Vec<String>, tag: &str| -> ModelPick {
             if let Some(s) = successor(reg, from, ids) {
                 rules.push(format!("{tag}:redirect"));
                 return ModelPick { model: s, no_route: false, replaced: Some(from.to_string()) };
             }
+            if let Some(base) = fast_base(reg, from).filter(|b| ids.contains(b)) {
+                rules.push(format!("{tag}:base"));
+                return ModelPick { model: base.to_string(), no_route: false, replaced: Some(from.to_string()) };
+            }
             let ranked = policy::rank(input.class, pool, table, reg, current, input.ctx_tokens);
             let chain = policy::fallback_chain(from, pool);
-            match chain.first().or(if input.pinned { None } else { ranked.first() }) {
+            match chain.first().or(if input.pinned && !priced_out(from) { None } else { ranked.first() }) {
                 Some(m) => {
                     rules.push(format!("{tag}:fallback"));
                     ModelPick { model: m.clone(), no_route: false, replaced: Some(from.to_string()) }
@@ -327,6 +359,12 @@ impl Router {
                 return stand_in(ep, rules, "episode");
             }
         }
+        if !gb && reg.entitlement.credential == Credential::ApiKey && table.rows(input.class).is_empty() && ids.contains(&current) && !e2 {
+            // A key has no evals (they spend only the plan pool), so with no table
+            // row the call keeps its own included model instead of the cheapest.
+            rules.push("key:keep".into());
+            return keep(current);
+        }
         let mut ranked = policy::rank(input.class, ids, table, reg, current, input.ctx_tokens);
         if e2 {
             let away = input.episode_model.unwrap_or(current).trim().to_string();
@@ -347,7 +385,7 @@ impl Router {
         let mut rules: Vec<String> = Vec::new();
         let provider = if input.provider.is_empty() { PROVIDER_XAI } else { input.provider };
         let fit = policy::Fit { needs_image: input.needs_image, needs_tools: input.needs_tools, ctx_tokens: input.ctx_tokens, grok_build: provider == live::PROVIDER_GROK_BUILD };
-        let ids: Vec<&str> = reg.models.keys().map(String::as_str).filter(|id| policy::fits(reg, profiles, id, fit, now_ms)).collect();
+        let ids: Vec<&str> = reg.models.keys().map(String::as_str).filter(|id| policy::fits(reg, profiles, id, fit, &input.spend, now_ms)).collect();
         let row = policy::class_row(input.class);
         let band = row.map(|r| ladder::Band::of(r, input.bump));
         let pick = match (row, band) {
@@ -359,7 +397,33 @@ impl Router {
         };
         let e2 = pick.as_ref().is_some_and(|p| p.rules.iter().any(|r| r == "E2:next_model"));
         let chosen = Self::pick_model(input, reg, &ids, table, e2, &mut rules);
-        let model = chosen.model;
+        let gb = provider == live::PROVIDER_GROK_BUILD;
+        let premium_ask = rules.iter().any(|r| r == "cost:premium_ungranted").then(|| route_key(input.current_model, RouteOpts::default()));
+        // Auto only: a pin is kept as picked. The Fast variant goes only under the latency policy.
+        let fast = (!input.pinned && !chosen.no_route && ids.contains(&chosen.model.as_str()))
+            .then(|| fast_of(reg, &chosen.model))
+            .flatten()
+            .filter(|f| fast_entitled(reg, f) && policy::fits_any_cost(reg, profiles, f, fit, now_ms))
+            .map(str::to_string);
+        let mut fast_fallback = None;
+        let (model, base) = match (&fast, fast.as_ref().map(|_| spend::fast_verdict(&input.spend))) {
+            (Some(f), Some(Ok(rule))) => {
+                rules.push(rule.into());
+                (f.clone(), Some(chosen.model.clone()))
+            }
+            (Some(f), Some(Err(rule))) => {
+                rules.push(rule.into());
+                if rule == "fast:budget_tight" {
+                    fast_fallback = Some(f.clone());
+                }
+                (chosen.model.clone(), None)
+            }
+            _ => (chosen.model.clone(), None),
+        };
+        if row.is_some_and(|r| r.start == "high") && reg.entitlement.credential == Credential::Plan && policy::outranked_by_plan_upgrade(reg, profiles, &model, fit) {
+            // A newer model outside your plan would have taken this: the upgrade nudge counts it.
+            rules.push("plan:would_pick".into());
+        }
         let effort_rules_at = rules.len();
         let mut effort: Option<String> = match (row, band, pick) {
             (Some(row), Some(band), Some(pick)) => {
@@ -399,6 +463,15 @@ impl Router {
         let what = row.map(|r| r.plain).unwrap_or("this step");
         let clause = if row.is_some() { why_clause(what, &rules[effort_rules_at..]) } else { format!("{what} keeps its set effort") };
         let reason = match (&chosen.replaced, rules.iter().any(|r| r == "table")) {
+            _ if base.is_some() => format!("Using {model} at {}: you're waiting, so the faster model is worth it.", effort_word(effort.as_deref())),
+            _ if fast_fallback.is_some() => format!(
+                "Using {model} at {}: this week's budget is tight, so not {}.",
+                effort_word(effort.as_deref()),
+                fast_fallback.as_deref().unwrap_or_default()
+            ),
+            (Some(from), _) if rules.iter().any(|r| r == "cost:premium_ungranted") => {
+                format!("Using {model} at {}: {from} costs more than your price limit, so it needs your OK first.", effort_word(effort.as_deref()))
+            }
             (Some(from), _) => format!("Using {model} at {}: {from} isn't answering.", effort_word(effort.as_deref())),
             (None, true) if model != input.current_model.trim() || input.episode_model.is_none() => {
                 let why = table.row(input.class, &model).map(|r| r.why.clone()).unwrap_or_default();
@@ -407,6 +480,7 @@ impl Router {
             _ => format!("{}: {clause}.", effort_word(effort.as_deref())),
         };
         let settings = profiles.get(&model).map(|p| RuntimeSettings::from_profile(p, input.class));
+        let cost_class = policy::route_class(reg, &model, gb, &input.spend);
         Route {
             provider: provider.to_string(),
             model,
@@ -417,12 +491,18 @@ impl Router {
             settings,
             no_route: chosen.no_route,
             replaced: chosen.replaced,
+            cost_class,
+            base,
+            premium_ask,
         }
     }
 }
 
 #[cfg(test)]
 mod r2a_tests;
+
+#[cfg(test)]
+mod r2b_tests;
 
 #[cfg(test)]
 mod tests {

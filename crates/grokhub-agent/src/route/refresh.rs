@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use grokhub_core::model_registry::cost_class::{cost_class, CostClass};
+use grokhub_core::model_registry::cost_class::{probe_class, CostClass};
 use grokhub_core::model_registry::probe::{Onboarding, ProbeLogLine};
 use grokhub_core::model_registry::profile::{read_profile, write_profile, ModelProfile, ProbeResult};
 use grokhub_core::model_registry::store::{
@@ -105,7 +105,7 @@ fn onboard(config_dir: &Path, reg: &mut Registry, events: &[RegistryEvent], cred
             continue;
         }
         let kept = (!fresh).then(|| read_profile(config_dir, id)).flatten().map(|p| p.probe);
-        let probe = kept.unwrap_or_else(|| first_probe(&rec.sources, cost_class(cred, Some(rec))));
+        let probe = kept.unwrap_or_else(|| first_probe(&rec.sources, probe_class(reg, cred, id)));
         if probe.status == "queued" {
             to_probe.push(id.clone());
         }
@@ -147,7 +147,7 @@ pub fn probe_next(
     let _ = write_json(&path, &queue);
     let mut reg = load_registry(config_dir);
     let rec = reg.get(&id)?;
-    let cost = cost_class(cred, Some(rec));
+    let cost = probe_class(&reg, cred, &id);
     let result = probe(&rec.meta, cost);
     let mut p = ModelProfile::build(&rec.meta, result, now_ms);
     let _ = write_profile(config_dir, &mut p);

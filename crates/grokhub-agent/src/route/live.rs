@@ -28,13 +28,15 @@ use super::difficulty::{difficulty, DifficultyInput};
 use super::guard::{holdout_eligible, in_holdout, load_overrides, HOLDOUT_EFFORT};
 use super::ladder::{self, rung, start_rung, take_tool_errors, turn_hash, user_facing, Band, Obs, Pick, Steer};
 use super::log::{Chosen, RouteOutcome, RouteRecord, RouteSignals, RouteTokens};
-use super::policy::{class_row, MODEL_LIVE, POLICY_LIVE};
+use super::budget::{self, Budget, BudgetNotes};
+use super::policy::{class_row, expected_cost_usd, MODEL_LIVE, POLICY_LIVE};
+use super::spend::{self, Latency, Spend};
 use super::table::{load_table, table_path, RoutingTable};
 use super::signals::{SpanVerifySource, VerifySignal, VerifySource};
 use super::{Route, RouteInput, Router};
 use crate::client::{ClientError, ContentPart, InputItem, ModelClient, ResponsesRequest, StreamEvent, TurnOutput, Usage};
 use crate::CancelToken;
-use crate::harness::{append_span, current_origin, AccessMode, ModelUsage, Span};
+use crate::harness::{append_span, current_origin, AccessMode, ModelUsage, Origin, Span};
 
 /// xAI cost ticks per USD (1 tick = 1e-10 USD).
 pub const TICKS_PER_USD: f64 = 1e10;
@@ -59,6 +61,10 @@ pub struct RouteCall<'a> {
     pub needs_image: bool,
     /// The step offers tools.
     pub needs_tools: bool,
+    /// Who started the call. `None` reads this thread's `OriginScope`.
+    pub origin: Option<Origin>,
+    /// A time-boxed task's deadline (ms), for the Fast policy.
+    pub deadline_ms: Option<u64>,
 }
 
 /// How the call went. Counts and ids only.
@@ -148,9 +154,11 @@ struct Cache {
     prev: BTreeMap<String, Chosen>,
     /// The model each episode (and class) runs on, with the turn it was picked for.
     episodes: BTreeMap<String, (u64, String)>,
+    /// Routed calls so far in each episode's current turn (a latency-bound chain).
+    steps: BTreeMap<String, (u64, u32)>,
 }
 
-static CACHE: Mutex<Cache> = Mutex::new(Cache { reg: None, profiles: None, table: None, prev: BTreeMap::new(), episodes: BTreeMap::new() });
+static CACHE: Mutex<Cache> = Mutex::new(Cache { reg: None, profiles: None, table: None, prev: BTreeMap::new(), episodes: BTreeMap::new(), steps: BTreeMap::new() });
 
 /// Episodes remembered at once; a long-running cabin stays small.
 const EPISODES_CAP: usize = 256;
@@ -176,6 +184,43 @@ static NO_ROUTE: Mutex<Option<(String, String, String)>> = Mutex::new(None);
 /// Take the newest pause, for the cabin's needs-attention line and card.
 pub fn take_no_route() -> Option<(String, String, String)> {
     NO_ROUTE.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
+/// R2b: a premium route a call wanted, not yet asked about (its route key).
+static PREMIUM_ASK: Mutex<Option<String>> = Mutex::new(None);
+/// R2b: user-facing work paused at 100% of the week's budget.
+static BUDGET_ASK: Mutex<bool> = Mutex::new(false);
+
+/// Take the newest premium route a call wanted, for the cabin's hard money card.
+pub fn take_premium_ask() -> Option<String> {
+    PREMIUM_ASK.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
+/// True once after a user-facing call paused at 100%: the cabin shows the ask.
+pub fn take_budget_ask() -> bool {
+    std::mem::take(&mut *BUDGET_ASK.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+/// Count this call in its episode's turn; returns the steps so far.
+fn note_step(key: &str, turn: u64) -> u32 {
+    let mut c = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if c.steps.len() >= EPISODES_CAP && !c.steps.contains_key(key) {
+        c.steps.clear();
+    }
+    let slot = c.steps.entry(key.to_string()).or_insert((turn, 0));
+    if slot.0 != turn {
+        *slot = (turn, 0);
+    }
+    slot.1 += 1;
+    slot.1
+}
+
+/// This week's budget, or none in a unit test that didn't pin a config dir.
+fn week_budget(config_dir: &Path, reg: &Registry, cap_usd: f64, now_ms: u64) -> Budget {
+    if cfg!(test) && !crate::perm::config_pinned() {
+        return Budget::default();
+    }
+    Budget::of(&budget::load_week(config_dir, reg, now_ms), reg.entitlement.credential, cap_usd)
 }
 
 fn mtime(p: &Path) -> Option<SystemTime> {
@@ -259,6 +304,11 @@ pub struct Decision {
     pub recover: bool,
     /// The class is in the table, so the router's effort is sent.
     pub live: bool,
+    /// R2b: the week's budget used, percent.
+    pub budget_pct: Option<u8>,
+    /// R2b: the budget paused this call (background over its share or at 100%,
+    /// or user-facing work at 100% before you said to go on). The message to return.
+    pub budget_pause: Option<&'static str>,
 }
 
 impl Decision {
@@ -271,9 +321,14 @@ impl Decision {
         }
     }
 
-    /// The router found no healthy, included model: pause instead of sending.
+    /// The router found no healthy, included model, or the budget stops it: pause instead of sending.
     pub fn paused(&self) -> bool {
-        self.live && MODEL_LIVE && self.route.no_route
+        self.live && MODEL_LIVE && (self.route.no_route || self.budget_pause.is_some())
+    }
+
+    /// What a paused call returns.
+    pub fn pause_msg(&self) -> &'static str {
+        self.budget_pause.unwrap_or(NO_ROUTE_MSG)
     }
 
     /// The effort to send: the router's for a listed class, the call's own otherwise.
@@ -312,6 +367,8 @@ fn verify_counts(config_dir: &Path, call: &RouteCall<'_>) -> (Option<u32>, bool)
 /// Pick the provider, model and effort for one call and advance its episode's ladder.
 pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision {
     let (reg, profiles) = snapshot(config_dir);
+    let settings = spend::spend_settings();
+    let b = week_budget(config_dir, &reg, settings.weekly_cap_usd, now_ms);
     let d = difficulty(&DifficultyInput { text: call.text, planned_tools: call.planned_tools, plan_mode: call.plan_mode, ctx_tokens: call.ctx_tokens });
     let steer = Steer::from_text(call.text);
     let row = class_row(call.class);
@@ -328,9 +385,9 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
                 rejects,
                 verify_ok,
                 correction: is_correction(call.text),
-                // No self-check score and no spend budget report yet: E4 and DE3 stay quiet.
+                // No self-check score yet, so E4 stays quiet. DE3 reads the week's budget.
                 low_check: None,
-                budget_pct: None,
+                budget_pct: b.pct,
                 ..Obs::default()
             };
             Some(ladder::step(key, r.class, turn_hash(call.text), band, start_rung(band, d, steer, true), obs))
@@ -344,6 +401,16 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     let pin = pinned_model();
     let pinned = call.pinned || (!pin.is_empty() && pin == call.model.trim() && user_facing(call.class));
     let table = table_snapshot(config_dir);
+    let origin = call.origin.unwrap_or_else(current_origin);
+    let facing = row.is_some_and(|r| user_facing(r.class));
+    let steps = if key.is_empty() { 1 } else { note_step(&class_key, turn) };
+    let spend = Spend {
+        settings,
+        latency: Latency::of(origin, facing, steps, call.deadline_ms, now_ms),
+        background: !facing || spend::background_origin(origin),
+        budget_tight: b.tight(),
+        grants: spend::premium_grants(config_dir),
+    };
     let input = RouteInput {
         provider: call.provider,
         class: call.class,
@@ -358,17 +425,33 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         bump,
         pick,
         episode_model: sticky.as_deref(),
+        spend: spend.clone(),
     };
     let route = Router::choose(&input, &reg, &profiles, &table, now_ms);
     let live = POLICY_LIVE && row.is_some();
+    let budget_pause = if !live || route.no_route || call.provider == PROVIDER_GROK_BUILD {
+        None
+    } else if spend.background {
+        let est = reg.get(&route.model).and_then(|r| expected_cost_usd(&r.meta.prices, call.class, call.ctx_tokens)).unwrap_or(0.0);
+        (!b.admits_background(est)).then_some(if b.used_up() { budget::BUDGET_PAUSE_MSG } else { budget::BACKGROUND_PAUSE_MSG })
+    } else if b.used_up() && BudgetNotes::load(config_dir).must_ask(&b) {
+        *BUDGET_ASK.lock().unwrap_or_else(|e| e.into_inner()) = true;
+        Some(budget::BUDGET_PAUSE_MSG)
+    } else {
+        None
+    };
     if live && !route.no_route && !key.is_empty() {
-        keep_episode_model(class_key, turn, &route.model);
+        // The plain model: a Fast swap is decided again on every call.
+        keep_episode_model(class_key, turn, route.base.as_deref().unwrap_or(&route.model));
+    }
+    if let Some(ask) = &route.premium_ask {
+        *PREMIUM_ASK.lock().unwrap_or_else(|e| e.into_inner()) = Some(ask.clone());
     }
     if live && route.no_route {
         let failed = reg.get(call.model).map(|r| r.reason.clone()).unwrap_or_else(|| "It isn't in your model list.".into());
         *NO_ROUTE.lock().unwrap_or_else(|e| e.into_inner()) = Some((call.class.to_string(), call.model.trim().to_string(), failed));
     }
-    Decision { route, d: (d * 100.0).round() as u32, holdout, recover, live }
+    Decision { route, d: (d * 100.0).round() as u32, holdout, recover, live, budget_pct: b.pct, budget_pause }
 }
 
 /// The route record for one call. `call.effort` is what was actually sent.
@@ -403,7 +486,7 @@ pub fn route_record(config_dir: &Path, call: &RouteCall<'_>, decision: &Decision
             verify: verify.clone(),
             origin: Some(current_origin().as_str().to_string()),
             latency: Some(done.latency_ms),
-            budget_pct: None,
+            budget_pct: decision.budget_pct,
             privacy: None,
         },
         candidates_n: route.candidates_n,
@@ -417,11 +500,13 @@ pub fn route_record(config_dir: &Path, call: &RouteCall<'_>, decision: &Decision
             verify,
             tokens: RouteTokens { input: u.input_tokens, cached: u.cached_tokens, out: u.output_tokens, reasoning: u.reasoning_tokens },
             cost_usd: u.cost_in_usd_ticks as f64 / TICKS_PER_USD,
+            limit: done.http == 429 && classify_status(done.http, &done.error) == CallStatus::FreeUsageExhausted,
         }),
         used,
         shadow: !decision.live,
         holdout: decision.holdout,
         settings: route.settings.clone(),
+        cost_class: route.cost_class.as_str().to_string(),
     }
 }
 
@@ -593,7 +678,7 @@ pub fn stream_routed(
     let decision = decide(&dir, &call, grokhub_core::now_ms());
     if decision.paused() {
         route_log(&dir, &call, &decision, &RouteDone::unseen());
-        return Err(ClientError::Protocol(NO_ROUTE_MSG.into()));
+        return Err(ClientError::Protocol(decision.pause_msg().into()));
     }
     let effort = decision.send_effort(req.effort.as_deref());
     let model = decision.send_model(&req.model);
@@ -619,7 +704,8 @@ pub const PROVIDER_GROK_BUILD: &str = "grok_build";
 /// fresh and runs at the router's pick, which is returned with the model it
 /// spawns with (R2a: Auto's pick from Grok Build's own plan list; a pin is kept
 /// while it is listed). A running session keeps the model it spawned with.
-pub fn route_gb_turn(config_dir: &Path, model: &str, pinned: bool, sent: Option<Option<&str>>, session: &str, text: &str) -> (String, Option<String>) {
+/// `origin` is who started the turn: only your own typed turn waits live (R2b).
+pub fn route_gb_turn(config_dir: &Path, model: &str, pinned: bool, sent: Option<Option<&str>>, session: &str, text: &str, origin: Origin) -> (String, Option<String>) {
     let mut call = RouteCall {
         provider: PROVIDER_GROK_BUILD,
         class: DEFAULT_CLASS,
@@ -627,6 +713,7 @@ pub fn route_gb_turn(config_dir: &Path, model: &str, pinned: bool, sent: Option<
         session,
         text,
         pinned,
+        origin: Some(origin),
         ..RouteCall::default()
     };
     let decision = decide(config_dir, &call, grokhub_core::now_ms());
