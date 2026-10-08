@@ -8,6 +8,7 @@
 //! - a Pulse Dismiss or "Not this" raises it by 0.1, cap 1;
 //! - "Don't do this again" on a Done-for-you card sets it to 1.0 for good
 //!   (Spike-6b): that class never auto-acts again and asks if suggested.
+//! - a Pulse Dismiss or "Not this" raises it by 0.1, cap 1.
 //!
 //! `p_mind >= 0.2`, an open ask-first window, or no history at all routes to
 //! [`MindRoute::Ask`] (a soft card), never auto. Priors never touch hard
@@ -170,6 +171,8 @@ impl MindCheck {
                     prior.hundredths = 100;
                     prior.ask_until_ms = u64::MAX;
                 }
+                MindEvent::Approve => prior.hundredths = prior.hundredths.saturating_sub(MIND_APPROVE_STEP),
+                MindEvent::Dismiss => prior.hundredths = (prior.hundredths + MIND_DISMISS_STEP).min(100),
             }
         }
         Some(prior)
@@ -218,6 +221,7 @@ pub fn mind_key(span: &Span) -> String {
 
 /// Deny and approve spans as signals, plus a Done-for-you Undo (`undo`)
 /// and "Don't do this again" (`never`). Hard-class spans are skipped: priors
+/// Deny and approve spans as signals. Hard-class spans are skipped: priors
 /// never touch hard class. A TTL deny and a Halt are deny spans too.
 pub fn signals_from_spans(spans: &[Span]) -> Vec<MindSignal> {
     spans

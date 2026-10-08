@@ -25,6 +25,8 @@ use grokhub_agent::{AccessMode, HardClass};
 /// How often the cabin looks for desktop parks and refreshes the turn file.
 const POLL: Duration = Duration::from_millis(250);
 
+/// The long-run pause card (Spike-3b). Nothing continues until you answer.
+const EPISODE_CAP_NOTE: &str = "Continue, or type what to do next. Nothing runs until you answer.";
 const HARD_NOTE: &str = "Always can't skip this. Approve runs it once. Esc denies.";
 const HEADLESS_NOTE: &str =
     "Grok Build's deny rule stopped this. Approve re-runs this one step with Grok's own Allow. Esc denies.";
@@ -262,6 +264,8 @@ pub(super) struct HarnessState {
     pub inbox_open: bool,
     /// The card an inbox row asked to scroll into view, painted once.
     pub jump: Option<&'static str>,
+    /// Spike-3b: the supervised desktop episode open on a chat.
+    pub episode: Option<super::episode_ui::EpisodeUi>,
 }
 
 /// Readonly until the desktop switch is on; Full only after Grant full.
@@ -449,6 +453,9 @@ impl Cabin {
         if span.origin == hx::Origin::User {
             span.origin = self.harness.turn_origin;
         }
+        if span.episode.is_empty() {
+            span.episode = self.episode_span_id();
+        }
         if span.access.is_empty() {
             span.access = self.access_mode().as_str().into();
         }
@@ -616,6 +623,10 @@ impl Cabin {
             span.access = self.access_mode().as_str().into();
             hx::note_proactive(&crate::config::config_dir(), &span);
         } else {
+        // An episode park's outcome span is the kernel's (Spike-3b).
+        let kernel_park =
+            matches!(&park.source, ParkSource::Desk(id) if id.starts_with(grokhub_agent::episode::PARK_PREFIX));
+        if !kernel_park {
             self.write_span(span, park.path);
         }
         match &park.source {
@@ -722,6 +733,15 @@ impl Cabin {
         self.harness.repair = None;
         self.harness.ladder.reset();
         self.status = if approve { "Resumed".into() } else { "Stopped that step".into() };
+        if park.detector == super::episode_ui::EPISODE_CAP_DETECTOR {
+            if approve {
+                // Continue is the user's click: the episode goes on from here.
+                self.resume_episode(grokhub_agent::episode::Continue::from_click());
+                self.send_chat("Continue".into());
+            } else {
+                self.end_episode(grokhub_agent::episode::EpisodeEnd::Stop);
+            }
+        }
     }
 
     /// Tray Halt and the halt hotkeys: every inbox row is denied with a span,
@@ -910,6 +930,16 @@ impl Cabin {
     /// message does not come here.
     pub(super) fn harness_user_sent(&mut self) {
         let trace = self.trace_id();
+        let resumed = self
+            .harness
+            .soft_parks
+            .iter()
+            .any(|p| p.detector == super::episode_ui::EPISODE_CAP_DETECTOR);
+        if resumed {
+            // The user's typed reply answers the long-run pause (Spike-3b).
+            self.resume_episode(grokhub_agent::episode::Continue::from_typing());
+        }
+        self.episode_user_sent(resumed);
         for park in std::mem::take(&mut self.harness.soft_parks) {
             let args = serde_json::json!({ "detector": park.detector, "evidence": park.evidence }).to_string();
             let mut span = hx::Span::soft_allow(
@@ -1197,7 +1227,7 @@ impl Cabin {
 
     /// Desktop parks from the MCP process, the shared turn file, and the
     /// one-shot pill restore. Throttled to [`POLL`].
-    fn poll_harness(&mut self) {
+    pub(super) fn poll_harness(&mut self) {
         let now = Instant::now();
         if self.harness.last_poll.is_some_and(|t| now.duration_since(t) < POLL) {
             return;
@@ -1209,7 +1239,9 @@ impl Cabin {
             turn: self.turn_no(),
             access: self.access_mode().as_str().into(),
             origin: self.harness.turn_origin,
+            episode: self.episode_span_id(),
         };
+        self.poll_episode();
         if self.harness.turn_ctx.as_ref() != Some(&ctx) {
             let _ = hx::write_turn_context(&dir, &ctx);
             self.harness.turn_ctx = Some(ctx);
@@ -1305,13 +1337,14 @@ impl Cabin {
             }
         }
         if let Some(park) = self.harness.soft_parks.first() {
+            let cap = park.detector == super::episode_ui::EPISODE_CAP_DETECTOR;
             let text = CardText {
                 eyebrow: SOFT_EYEBROW,
                 title: &park.reason.clone(),
                 action: "",
-                note: SOFT_NOTE,
-                primary: "Approve",
-                secondary: "Deny",
+                note: if cap { EPISODE_CAP_NOTE } else { SOFT_NOTE },
+                primary: if cap { "Continue" } else { "Approve" },
+                secondary: if cap { "Stop" } else { "Deny" },
                 hard: false,
             };
             let top = ui.cursor().min.y;

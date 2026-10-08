@@ -156,6 +156,8 @@ pub fn grok_chat(
     }
     let call = route::ModelCall::new(route::Provider::Xai, model, effort);
     route::call_model(&crate::config::config_dir(), &call, |call| {
+    let call = route::cabin::ModelCall::new(route::cabin::Provider::Xai, model, effort);
+    route::cabin::call_model(&crate::config::config_dir(), &call, |call| {
         grok_chat_once(key, call, messages, image_data_url)
     })
 }
@@ -164,6 +166,7 @@ pub fn grok_chat(
 fn grok_chat_once(
     key: &str,
     call: &route::ModelCall<'_>,
+    call: &route::cabin::ModelCall<'_>,
     messages: &[(String, String)],
     image_data_url: Option<&str>,
 ) -> Result<(String, hx::ModelUsage), String> {
@@ -172,6 +175,7 @@ fn grok_chat_once(
     if let Ok(v) = grok_json(&responses_url(), key, responses, timeout) {
         if let Some(text) = merge_reply(&v) {
             return Ok((text, route::xai_usage(&v)));
+            return Ok((text, route::cabin::xai_usage(&v)));
         }
     }
     let body = chat_request_body_vision(call.model, messages, image_data_url, call.effort);
@@ -183,6 +187,7 @@ fn grok_chat_once(
     )?;
     let text = merge_reply(&v).ok_or_else(|| "empty Grok reply".to_string())?;
     Ok((text, route::xai_usage(&v)))
+    Ok((text, route::cabin::xai_usage(&v)))
 }
 
 pub fn grok_imagine_opts(
