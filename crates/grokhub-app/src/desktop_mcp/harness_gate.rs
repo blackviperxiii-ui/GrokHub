@@ -613,7 +613,16 @@ mod tests {
             tail,
             vec![("park".to_string(), "credentials".to_string()), ("deny".to_string(), "credentials".to_string())]
         );
-        let trace = std::fs::read_to_string(hx::span_path(&dir, "chat-1")).unwrap();
+        // Drop ts_ms first: a millisecond clock like 1791467482199 contains "4821".
+        let trace: String = std::fs::read_to_string(hx::span_path(&dir, "chat-1"))
+            .unwrap()
+            .lines()
+            .map(|l| {
+                let mut v: Value = serde_json::from_str(l).unwrap();
+                v.as_object_mut().unwrap().remove("ts_ms");
+                v.to_string()
+            })
+            .collect();
         assert!(!trace.contains("quarterly notes") && !trace.contains("4821"), "typed values stay out: {trace}");
         let _ = std::fs::remove_dir_all(dir);
     }
