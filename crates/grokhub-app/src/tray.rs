@@ -717,6 +717,20 @@ pub fn drop_off_thread<T: Send + 'static>(value: T) {
         .spawn(move || drop(value));
 }
 
+/// Run exit cleanup on a worker and wait at most `limit`. Quit must not hang
+/// on a busy MCP server or a stuck task; the process exits right after.
+/// Returns whether the work finished in time.
+pub fn finish_within(limit: std::time::Duration, work: impl FnOnce() + Send + 'static) -> bool {
+    let (tx, rx) = mpsc::channel();
+    let spawned = thread::Builder::new()
+        .name("grokhub-exit".into())
+        .spawn(move || {
+            work();
+            let _ = tx.send(());
+        });
+    spawned.is_ok() && rx.recv_timeout(limit).is_ok()
+}
+
 /// Tear down the tray. Linux D-Bus shutdown is slow — do that off-thread.
 /// Windows `TrayIcon` is `!Send` and must die on the UI thread that created it
 /// (a drop worker leaves a ghost icon and does not compile).
@@ -1124,6 +1138,38 @@ mod tests {
     fn visible_cabin_keeps_the_tray() {
         assert_eq!(keep_if_hidden(true, 1), Some(1));
         assert_eq!(keep_if_hidden(false, 1), Some(1));
+    }
+
+    #[test]
+    fn exit_cleanup_is_bounded() {
+        assert!(finish_within(std::time::Duration::from_secs(2), || {}));
+        let (_hold, wait) = mpsc::channel::<()>();
+        let started = std::time::Instant::now();
+        assert!(!finish_within(
+            std::time::Duration::from_millis(100),
+            move || {
+                let _ = wait.recv();
+            }
+        ));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        let app = include_str!("app/mod.rs");
+        let on_exit = app
+            .split("fn on_exit(")
+            .nth(1)
+            .and_then(|s| s.split("fn logic(").next())
+            .expect("on_exit");
+        let bounded = on_exit
+            .split("finish_within(")
+            .nth(1)
+            .expect("on_exit must bound its cleanup");
+        assert!(
+            bounded.contains("mcp::shutdown_all") && bounded.contains("halt_all_sessions"),
+            "tray Quit hung on a busy MCP server: {on_exit}"
+        );
+        assert!(
+            on_exit.contains("release_cabin_claim()"),
+            "a clean exit must drop cabin.pid: {on_exit}"
+        );
     }
 
     #[test]
