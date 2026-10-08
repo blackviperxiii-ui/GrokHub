@@ -176,25 +176,35 @@ pub(crate) fn schema() -> Value {
     })
 }
 
-pub(crate) fn run_with_ports(args: &Value) -> ToolOutput {
+pub(crate) fn run_with_ports(args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
     match super::ports::current().fetch {
-        Some(fetch) => run(args, fetch.as_ref()),
+        Some(fetch) => run(args, fetch.as_ref(), stop),
         None => ToolOutput::err(grokhub_core::XAI_NEED_SIGNIN),
     }
 }
 
-pub(crate) fn run(args: &Value, fetch: &dyn PageFetch) -> ToolOutput {
+/// `stop` is cancel or Halt: it denies a hard Send card that is waiting.
+pub(crate) fn run(args: &Value, fetch: &dyn PageFetch, stop: &dyn Fn() -> bool) -> ToolOutput {
     let url = super::str_field(args, "url");
     if url.is_empty() {
         return ToolOutput::err("url is required");
     }
-    match fetch_markdown(&url, fetch) {
+    match fetch_markdown(&url, fetch, stop) {
         Ok(text) => ToolOutput::ok(text),
         Err(err) => ToolOutput::err(err),
     }
 }
 
-fn fetch_markdown(raw: &str, fetch: &dyn PageFetch) -> Result<String, String> {
+/// EgressGuard (Spike-4c) before each hop: the URL is one the model picked, so
+/// it is chat, or personal when it carries a recall-pack line. A redirect to a
+/// new host asks again. A hard Send that is not approved sends nothing.
+fn guard_hop(url: &str, stop: &dyn Fn() -> bool) -> Result<(), String> {
+    let data = crate::harness::model_text_classes(url);
+    let req = crate::harness::EgressReq::new(url, data);
+    crate::harness::guard_or_park(&crate::perm::config_dir(), &req, "web_fetch", &mut || stop())
+}
+
+fn fetch_markdown(raw: &str, fetch: &dyn PageFetch, stop: &dyn Fn() -> bool) -> Result<String, String> {
     let mut current = parse_public_url(raw)?;
     let mut seen = HashSet::new();
     let mut redirects = 0u32;
@@ -204,6 +214,7 @@ fn fetch_markdown(raw: &str, fetch: &dyn PageFetch) -> Result<String, String> {
             return Err("redirect loop".into());
         }
         check_ssrf(&current, fetch)?;
+        guard_hop(&url, stop)?;
         let resp = fetch.get(&url)?;
         if is_redirect(resp.status) {
             redirects = redirects.saturating_add(1);
@@ -706,6 +717,17 @@ mod tests {
         json!({"url": url})
     }
 
+    /// The tool with its egress lines in a scratch config folder.
+    fn run(args: &Value, fetch: &dyn PageFetch) -> ToolOutput {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = crate::harness::test_dir(&format!("web-fetch-{n}"));
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let out = super::run(args, fetch, &|| false);
+        let _ = std::fs::remove_dir_all(dir);
+        out
+    }
+
     #[test]
     fn web_fetch_html_becomes_markdown_and_truncates() {
         let html = r#"<!doctype html><html><head><style>.x{color:red}</style><script>alert(1)</script></head>
@@ -1129,5 +1151,75 @@ mod tests {
             public_only_resolve("1.1.1.1:443").unwrap(),
             vec!["1.1.1.1:443".parse().unwrap()]
         );
+    }
+
+    const MEMORY: &str = "the harbor ferry leaves at nine from pier four";
+
+    fn gets(fetch: &Scripted) -> usize {
+        fetch.gets.lock().unwrap_or_else(|err| err.into_inner()).len()
+    }
+
+    /// Spike-4c: a URL that carries a recall-pack line is personal. To a host
+    /// with no grant it parks a hard Send: Deny fetches nothing, Approve once
+    /// fetches exactly once and logs one `approved_once` line.
+    #[test]
+    fn web_fetch_memory_in_the_url_parks_and_fetches_nothing_until_approved() {
+        let dir = crate::harness::test_dir("web-fetch-park");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let _recall = crate::harness::RecallScope::enter(vec![MEMORY.to_string()]);
+        let url = "https://example.org/search?q=the%20harbor%20ferry%20leaves%20at%20nine%20from%20pier%20four";
+        let fetch = Scripted::new()
+            .host("example.org", vec![IpAddr::from([203, 0, 113, 9])])
+            .page(url, text_page(b"ferry times"));
+        let deny = crate::harness::answer_next_park(dir.clone(), false);
+        let out = super::run(&args(url), &fetch, &|| false);
+        let card = deny.join().unwrap().expect("hard card");
+        assert_eq!(card.action, "web_fetch → example.org (chats, memory)");
+        assert_eq!(card.class, "send");
+        assert!(out.failed && out.text.contains("nothing was sent"), "{}", out.text);
+        assert_eq!(gets(&fetch), 0, "a denied card fetches nothing");
+        assert!(crate::harness::read_egress(&dir).is_empty());
+
+        let approve = crate::harness::answer_next_park(dir.clone(), true);
+        let out = super::run(&args(url), &fetch, &|| false);
+        assert!(approve.join().unwrap().is_some());
+        assert!(!out.failed, "{}", out.text);
+        assert_eq!(gets(&fetch), 1, "approve once fetches once");
+        let log = crate::harness::read_egress(&dir);
+        assert_eq!(log.len(), 1, "{log:?}");
+        assert_eq!((log[0].dest.as_str(), log[0].basis.as_str()), ("example.org", "approved_once"));
+
+        // A halt (the turn's stop) denies a waiting card: still nothing fetched.
+        let out = super::run(&args(url), &fetch, &|| true);
+        assert!(out.failed, "{}", out.text);
+        assert_eq!(gets(&fetch), 1);
+        assert!(crate::harness::pending_parks(&dir).is_empty(), "the park file is gone");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A model-picked URL with no memory is chat: it goes, with one line that
+    /// names the host only (no path, query, or user info). A redirect to a new
+    /// host is its own line.
+    #[test]
+    fn web_fetch_chat_url_goes_with_a_host_only_line() {
+        let dir = crate::harness::test_dir("web-fetch-chat");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let fetch = Scripted::new()
+            .host("example.com", vec![IpAddr::from([203, 0, 113, 5])])
+            .host("docs.example.net", vec![IpAddr::from([203, 0, 113, 6])])
+            .page("https://example.com/go?token=sk-abcdefghijklmnopqrstuv", redirect("https://docs.example.net/page"))
+            .page("https://docs.example.net/page", text_page(b"landed"));
+        let out = super::run(&args("https://example.com/go?token=sk-abcdefghijklmnopqrstuv"), &fetch, &|| false);
+        assert!(!out.failed, "{}", out.text);
+        assert_eq!(gets(&fetch), 2);
+        let log = crate::harness::read_egress(&dir);
+        let rows: Vec<(&str, &str)> = log.iter().map(|l| (l.dest.as_str(), l.basis.as_str())).collect();
+        assert_eq!(rows, vec![("example.com", "chat"), ("docs.example.net", "chat")]);
+        let raw = std::fs::read_to_string(crate::harness::egress_path(&dir)).unwrap();
+        let opened = format!("{log:?}");
+        for text in [&raw, &opened] {
+            assert!(!text.contains("sk-abc") && !text.contains("/go") && !text.contains("landed"), "{text}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -49,7 +49,15 @@ fn read_json_capped(resp: ureq::Response) -> Result<Value, String> {
     serde_json::from_slice(&buf).map_err(|e| e.to_string())
 }
 
+/// EgressGuard (Spike-4c): sign-in talks to xAI's auth host with codes and
+/// tokens only, no chats or memory, so each call is a no-user-data line. The
+/// log holds the host, never a code or token.
+fn egress(url: &str) -> Result<(), String> {
+    crate::xai::egress_ok(url, &[])
+}
+
 fn discovery() -> Result<Discovery, String> {
+    egress(XAI_OAUTH_DISCOVERY)?;
     let resp = ureq::get(XAI_OAUTH_DISCOVERY)
         .set("accept", "application/json")
         .set("user-agent", UA)
@@ -72,6 +80,7 @@ fn discovery() -> Result<Discovery, String> {
 }
 
 fn post_form(url: &str, body: &str) -> Result<(bool, Value), String> {
+    egress(url)?;
     let resp = ureq::post(url)
         .set("content-type", "application/x-www-form-urlencoded")
         .set("accept", "application/json")
@@ -458,6 +467,7 @@ pub fn poll_until_ready(device_code: &str, interval_s: u64) -> Result<XaiOAuthTo
 
 pub fn fetch_userinfo(access: &str) -> Result<grokhub_core::OAuthProfile, String> {
     let url = trusted_xai_url(XAI_OAUTH_USERINFO)?;
+    egress(&url)?;
     let resp = ureq::get(&url)
         .set("authorization", &format!("Bearer {access}"))
         .set("accept", "application/json")
@@ -496,6 +506,7 @@ pub fn fetch_profile_photo(url: &str, access: &str) -> Result<Vec<u8>, String> {
         .next()
         .unwrap_or("")
         .to_ascii_lowercase();
+    egress(&url)?;
     let mut req = ureq::get(&url)
         .set(
             "accept",

@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 use super::rpc::{self, RawTool};
+use crate::harness::egress_dest;
 
 const USER_AGENT: &str = concat!("GrokHub/", env!("CARGO_PKG_VERSION"));
 
@@ -62,6 +63,9 @@ pub(crate) fn connect(
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err(format!("MCP server `{server}` url must be http or https"));
     }
+    // EgressGuard (Spike-4c): the handshake (initialize, tools/list) carries
+    // no user data, so it is one public line per connect.
+    guard_handshake(url)?;
     let mut conn = HttpConn {
         server: server.to_string(),
         agent: agent(tool_timeout.max(startup)),
@@ -76,6 +80,9 @@ pub(crate) fn connect(
     };
     if sse {
         conn.open_legacy(startup)?;
+        if egress_dest(&conn.post_url) != egress_dest(url) {
+            guard_handshake(&conn.post_url)?;
+        }
     }
     let init = conn.roundtrip("initialize", rpc::initialize_params(), startup)?;
     let _ = init;
@@ -91,6 +98,12 @@ impl HttpConn {
         args: &Value,
         timeout: Duration,
     ) -> Result<(String, bool), String> {
+        // Tool args are chat, or personal when they carry a recall-pack line.
+        // A hard Send waits on the cabin's card; Deny sends nothing.
+        let data = crate::harness::model_text_classes(&args.to_string());
+        let req = crate::harness::EgressReq::new(&self.post_url, data);
+        let tool = format!("mcp:{}", self.server);
+        crate::harness::guard_or_park(&crate::perm::config_dir(), &req, &tool, &mut || false)?;
         let result = self.roundtrip(
             "tools/call",
             json!({"name": name, "arguments": args}),
@@ -100,6 +113,7 @@ impl HttpConn {
     }
 
     pub(crate) fn ping(&mut self, timeout: Duration) -> Result<(), String> {
+        guard_handshake(&self.post_url)?;
         self.roundtrip("ping", json!({}), timeout).map(|_| ())
     }
 
@@ -298,6 +312,10 @@ impl Drop for HttpConn {
     }
 }
 
+fn guard_handshake(url: &str) -> Result<(), String> {
+    crate::harness::guard_quiet(&crate::perm::config_dir(), &crate::harness::EgressReq::new(url, &[]))
+}
+
 fn list_tools(conn: &mut HttpConn, timeout: Duration) -> Result<Vec<RawTool>, String> {
     let mut all = Vec::new();
     let mut cursor: Option<String> = None;
@@ -323,12 +341,16 @@ fn agent(read: Duration) -> ureq::Agent {
     } else {
         read
     };
-    ureq::AgentBuilder::new()
+    let builder = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(10))
         .timeout_read(Duration::from_secs(3600).max(read))
         .timeout_write(Duration::from_secs(30))
-        .redirects(0)
-        .build()
+        .redirects(0);
+    // Tests reach a loopback server under a `.test` name, so the guard sees a
+    // real (non-loopback) destination. Production resolves as usual.
+    #[cfg(test)]
+    let builder = builder.resolver(tests::resolve_test_host);
+    builder.build()
 }
 
 fn open_get(
@@ -545,4 +567,180 @@ pub(crate) fn resolve_endpoint(base: &str, endpoint: &str) -> Result<String, Str
         None => "/",
     };
     Ok(format!("{origin}{dir}{endpoint}"))
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use crate::harness::{self as hx, DataClass};
+    use std::io::Write;
+    use std::net::{SocketAddr, TcpListener, TcpStream};
+    use std::sync::atomic::AtomicUsize;
+
+    /// `*.test` names reach the loopback server on the same port.
+    pub(crate) fn resolve_test_host(netloc: &str) -> std::io::Result<Vec<SocketAddr>> {
+        use std::net::ToSocketAddrs;
+        let (host, port) = netloc.rsplit_once(':').unwrap_or((netloc, "80"));
+        if host.ends_with(".test") {
+            let port: u16 = port.parse().unwrap_or(80);
+            return Ok(vec![SocketAddr::from(([127, 0, 0, 1], port))]);
+        }
+        netloc.to_socket_addrs().map(|a| a.collect())
+    }
+
+    /// A Streamable HTTP MCP server that counts every request and each `tools/call`.
+    struct Counting {
+        port: u16,
+        requests: Arc<AtomicUsize>,
+        calls: Arc<AtomicUsize>,
+        stop: Arc<AtomicBool>,
+    }
+
+    impl Counting {
+        fn start() -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let requests = Arc::new(AtomicUsize::new(0));
+            let calls = Arc::new(AtomicUsize::new(0));
+            let stop = Arc::new(AtomicBool::new(false));
+            let (r, c, s) = (requests.clone(), calls.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !s.load(Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((sock, _)) => {
+                            r.fetch_add(1, Ordering::SeqCst);
+                            answer(sock, &c);
+                        }
+                        Err(_) => std::thread::sleep(Duration::from_millis(5)),
+                    }
+                }
+            });
+            Self { port, requests, calls, stop }
+        }
+
+        fn url(&self) -> String {
+            format!("http://mcp.example.test:{}/mcp", self.port)
+        }
+    }
+
+    impl Drop for Counting {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn answer(mut sock: TcpStream, calls: &AtomicUsize) {
+        let _ = sock.set_nonblocking(false);
+        let _ = sock.set_read_timeout(Some(Duration::from_secs(3)));
+        let mut reader = BufReader::new(sock.try_clone().unwrap());
+        let mut len = 0usize;
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                return;
+            }
+            let line = line.trim_end();
+            if line.is_empty() {
+                break;
+            }
+            if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                len = v.trim().parse().unwrap_or(0);
+            }
+        }
+        let mut body = vec![0u8; len];
+        let _ = reader.read_exact(&mut body);
+        let msg: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        let id = msg.get("id").cloned().unwrap_or(Value::Null);
+        let result = match msg["method"].as_str().unwrap_or("") {
+            "initialize" => json!({"protocolVersion": rpc::PROTOCOL, "capabilities": {}, "serverInfo": {"name": "count", "version": "0"}}),
+            "tools/list" => json!({"tools": [{"name": "echo", "description": "Echo", "inputSchema": {"type": "object"}}]}),
+            "tools/call" => {
+                calls.fetch_add(1, Ordering::SeqCst);
+                json!({"content": [{"type": "text", "text": "counted"}]})
+            }
+            _ => json!({}),
+        };
+        let out = if id.is_null() {
+            String::new()
+        } else {
+            json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string()
+        };
+        let status = if out.is_empty() { "202 Accepted" } else { "200 OK" };
+        let _ = write!(
+            sock,
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nMcp-Session-Id: s-1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{out}",
+            out.len()
+        );
+    }
+
+    const MEMORY: &str = "the harbor ferry leaves at nine from pier four";
+
+    fn conn(server: &Counting) -> HttpConn {
+        let (conn, tools) = connect("box", &server.url(), false, &BTreeMap::new(), Duration::from_secs(5), Duration::from_secs(5)).unwrap();
+        assert_eq!(tools.len(), 1);
+        conn
+    }
+
+    #[test]
+    fn mcp_memory_to_an_ungranted_server_parks_and_sends_nothing_until_approved() {
+        let dir = hx::test_dir("mcp-egress");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let _recall = hx::RecallScope::enter(vec![MEMORY.to_string()]);
+        let server = Counting::start();
+        let mut c = conn(&server);
+        let handshake = server.requests.load(Ordering::SeqCst);
+        assert_eq!(handshake, 3, "initialize, initialized, tools/list");
+        let log = hx::read_egress(&dir);
+        assert_eq!(log.len(), 1, "one line for the handshake: {log:?}");
+        assert_eq!((log[0].dest.as_str(), log[0].basis.as_str()), ("mcp.example.test", "public"));
+        assert!(log[0].data_classes.is_empty());
+
+        let args = json!({"note": format!("remember: {MEMORY}")});
+        let deny = hx::answer_next_park(dir.clone(), false);
+        let err = c.call("echo", &args, Duration::from_secs(5)).unwrap_err();
+        let card = deny.join().unwrap().expect("a hard card was posted");
+        assert_eq!((card.path.as_str(), card.class.as_str()), ("E", "send"));
+        assert_eq!(card.action, "mcp:box → mcp.example.test (chats, memory)");
+        assert!(err.contains("Denied: nothing was sent"), "{err}");
+        assert_eq!(server.calls.load(Ordering::SeqCst), 0, "a denied card sends nothing");
+        assert_eq!(server.requests.load(Ordering::SeqCst), handshake);
+        assert_eq!(hx::read_egress(&dir).len(), 1, "no line for a denied send");
+
+        let approve = hx::answer_next_park(dir.clone(), true);
+        let (text, failed) = c.call("echo", &args, Duration::from_secs(5)).unwrap();
+        assert!(approve.join().unwrap().is_some());
+        assert_eq!((text.as_str(), failed), ("counted", false));
+        assert_eq!(server.calls.load(Ordering::SeqCst), 1, "approve once sends exactly once");
+        let log = hx::read_egress(&dir);
+        assert_eq!(log.len(), 2, "{log:?}");
+        assert_eq!(log[1].dest, "mcp.example.test");
+        assert_eq!(log[1].basis, "approved_once");
+        assert_eq!(log[1].data_classes, vec![DataClass::Chat, DataClass::Personal]);
+        let spans = hx::read_spans(&dir, "egress").unwrap();
+        assert_eq!(spans.iter().filter(|s| s.decision == "park" && s.path == "E").count(), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn mcp_chat_args_go_with_one_line_and_no_content() {
+        let dir = hx::test_dir("mcp-chat");
+        let _cfg = crate::perm::ConfigGuard::set(&dir);
+        let server = Counting::start();
+        let mut c = conn(&server);
+        let args = json!({"q": "weather sk-abcdefghijklmnopqrstuv"});
+        let (text, _) = c.call("echo", &args, Duration::from_secs(5)).unwrap();
+        assert_eq!(text, "counted");
+        assert_eq!(server.calls.load(Ordering::SeqCst), 1);
+        let log = hx::read_egress(&dir);
+        assert_eq!(log.len(), 2, "{log:?}");
+        assert_eq!((log[1].dest.as_str(), log[1].basis.as_str()), ("mcp.example.test", "chat"));
+        assert_eq!(log[1].data_classes, vec![DataClass::Chat]);
+        let raw = std::fs::read_to_string(hx::egress_path(&dir)).unwrap();
+        let opened = format!("{log:?}");
+        for text in [&raw, &opened] {
+            assert!(!text.contains("weather") && !text.contains("sk-abc") && !text.contains("/mcp"), "{text}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

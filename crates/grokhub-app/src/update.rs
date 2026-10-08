@@ -349,6 +349,8 @@ pub fn run_update_cmds_with_progress(
 }
 
 pub fn fetch_github_latest_tag() -> Result<String, String> {
+    // EgressGuard (Spike-4c): a public read, no user data.
+    crate::xai::egress_ok(GITHUB_LATEST_API, &[])?;
     let resp = match ureq::get(GITHUB_LATEST_API)
         .set("user-agent", "GrokHub")
         .set("accept", "application/vnd.github+json")
@@ -406,6 +408,7 @@ pub fn fetch_cli_alpha_version() -> Result<String, String> {
 }
 
 fn fetch_text_capped(url: &str) -> Result<String, String> {
+    crate::xai::egress_ok(url, &[])?;
     let resp = match ureq::get(url)
         .set("user-agent", "GrokHub")
         .timeout(Duration::from_secs(8))

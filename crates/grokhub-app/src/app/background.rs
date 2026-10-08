@@ -11,6 +11,7 @@
 //! the new message with a note of the progress (`steer_follow_block`).
 
 use super::*;
+use grokhub_agent::harness as hx;
 use grokhub_agent::Engine;
 use grokhub_core::{
     bg_elapsed_label, bg_result_note, bg_result_post, bg_results_follow, bg_task_prompt,
@@ -20,6 +21,19 @@ use grokhub_core::{
 
 /// `/bg` and a model `BACKGROUND_TASK:` line while Ask is on. A background run
 /// has nobody to approve a tool, so it does not start.
+/// Span tool for a scheduled run starting, and the trace `/loop` runs share.
+pub(super) const AUTOMATION_TOOL: &str = "automation.run";
+pub(super) const LOOP_TRACE: &str = "loops";
+
+/// Span origin for a background run: scheduled jobs are automation.
+pub(super) fn bg_span_origin(origin: BgOrigin) -> hx::Origin {
+    if origin == BgOrigin::Scheduled {
+        hx::Origin::Automation
+    } else {
+        hx::Origin::User
+    }
+}
+
 pub(super) const BG_ASK_OFF: &str = "Background tasks are off while Ask is on, because they can't ask you for approval. Switch to Auto to use /bg.";
 
 /// Session ids headless work reported from a worker thread. The UI files them
@@ -227,6 +241,17 @@ impl Cabin {
         Ok(title)
     }
 
+    /// A scheduled job or `/loop` run started (Spike-4c): one span with origin
+    /// `automation`. The job id only, never its instructions.
+    pub(super) fn automation_span(&self, trace: &str, job: &str) {
+        let args = serde_json::json!({ "job": job }).to_string();
+        let driver = if self.cfg.native_engine { "native" } else { "grok_build" };
+        let span = hx::Span::soft_allow(trace, AUTOMATION_TOOL, &args, "started", "scheduled run", self.access_mode(), driver)
+            .from_origin(hx::Origin::Automation)
+            .on_path("automation");
+        let _ = hx::append_span(&crate::config::config_dir(), &span);
+    }
+
     /// Reasoning effort for a background run. A scheduled automation runs
     /// unwatched, so it stays at low effort like every unattended run; your own
     /// `/bg` work keeps the effort you picked.
@@ -304,7 +329,10 @@ impl Cabin {
         grokhub_agent::watch_cancel(&child_id, cancel.clone());
         let (tx, rx) = mpsc::channel();
         let session = child_id.clone();
+        let started_by = bg_span_origin(origin);
         std::thread::spawn(move || {
+            // The engine and its egress lines take this thread's origin.
+            let _origin = grokhub_agent::harness::OriginScope::enter(started_by);
             run_native_bg(
                 session, workspace, client, auth_kind, bearer, gate, model, effort, system, prompt,
                 cancel, tx,

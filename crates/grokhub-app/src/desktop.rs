@@ -222,6 +222,8 @@ pub fn read_display_outputs() -> Vec<DisplayOutput> {
 
 pub fn probe_hub_health_body(port: u16) -> Option<String> {
     let url = format!("http://127.0.0.1:{port}/v1/health");
+    // Loopback is local, not egress: the guard allows it and logs nothing.
+    crate::xai::egress_ok(&url, &[]).ok()?;
     ureq::get(&url)
         .timeout(Duration::from_millis(400))
         .call()
@@ -231,6 +233,7 @@ pub fn probe_hub_health_body(port: u16) -> Option<String> {
 
 fn cdp_http(port: u16, path: &str) -> Result<String, String> {
     let url = format!("http://127.0.0.1:{port}{path}");
+    crate::xai::egress_ok(&url, &[])?;
     let resp = ureq::get(&url)
         .timeout(Duration::from_millis(400))
         .call()
@@ -440,6 +443,8 @@ fn cdp_ws_method(ws_url: &str, payload: &str) -> Result<(), String> {
     let rest = ws_url
         .strip_prefix("ws://")
         .ok_or_else(|| "cdp websocket must be ws://".to_string())?;
+    // Localhost CDP is loopback: allowed, no egress line.
+    crate::xai::egress_ok(ws_url, &[])?;
     let (host, _) = rest
         .split_once('/')
         .ok_or_else(|| "cdp websocket path missing".to_string())?;

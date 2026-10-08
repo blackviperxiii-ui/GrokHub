@@ -146,7 +146,10 @@ fn read_json_capped(resp: ureq::Response) -> Result<Value, String> {
     serde_json::from_slice(&buf).map_err(|e| e.to_string())
 }
 
+/// EgressGuard (Spike-4c): Imagine's own sign-in, codes and tokens only (no
+/// user data). The log holds the host, never a code or token.
 fn post_form(url: &str, body: &str) -> Result<(bool, Value), String> {
+    crate::xai::egress_ok(url, &[])?;
     let resp = ureq::post(url)
         .set("content-type", "application/x-www-form-urlencoded")
         .set("accept", "application/json")
@@ -161,6 +164,7 @@ fn post_form(url: &str, body: &str) -> Result<(bool, Value), String> {
 }
 
 fn imagine_discovery() -> Result<ImagineEndpoints, String> {
+    crate::xai::egress_ok(XAI_OAUTH_DISCOVERY, &[])?;
     let resp = ureq::get(XAI_OAUTH_DISCOVERY)
         .set("accept", "application/json")
         .set("user-agent", UA)

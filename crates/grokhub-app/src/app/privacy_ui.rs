@@ -65,11 +65,7 @@ struct EgressRow {
 
 /// The words a user reads for a data class. The ids stay in logs and files.
 fn class_label(c: hx::DataClass) -> &'static str {
-    match c {
-        hx::DataClass::Chat => "chats",
-        hx::DataClass::Personal => "memory",
-        hx::DataClass::Sensitive => "sensitive data",
-    }
+    c.label()
 }
 
 /// User words for a set of classes: the hub's pair reads "chats, memory".
@@ -174,7 +170,7 @@ pub(super) fn privacy_report(
         PRIVACY_HEAD.to_string(),
         String::new(),
         format!(
-            "Allowed by default: {} ({HUB_SCOPE_PROSE} in model prompts). Sending {HUB_SCOPE_PROSE} anywhere else waits for your OK: a hard card, or a grant in Settings → Permissions.",
+            "Allowed by default: {} ({HUB_SCOPE_PROSE} in model prompts), and chat text elsewhere, logged below. Sending your memory anywhere else waits for your OK: a hard card, or a grant in Settings → Permissions.",
             grokhub_core::DEFAULT_CONNECTOR_HOSTS.join(", ")
         ),
         String::new(),
@@ -229,6 +225,7 @@ pub(super) fn privacy_report(
             "approved_once" => "approved once",
             "grant" => "your grant",
             "model_host" => "default",
+            "chat" => "allowed",
             other => other,
         };
         match rows.iter_mut().find(|r| r.dest == line.dest && r.basis == basis) {
@@ -266,7 +263,7 @@ pub(super) fn privacy_report(
         out.push(format!("- {} · {times} · {data} · {} · last {}", dest_label(&r.dest), r.basis, ago(r.last)));
     }
     out.push(String::new());
-    out.push("Not watched here: Grok Build's own traffic (its model calls, connectors, and web tools). GrokHub's feed reads, update checks, and Labs web fetch and MCP servers are not logged yet.".into());
+    out.push("Not watched here: Grok Build's own traffic (its model calls, connectors, and web tools) and the commands an Update runs. Everything else GrokHub sends is logged above: model calls, Imagine, Labs web fetch, MCP servers, Pulse previews, update checks, and sign-in.".into());
     out.join("\n")
 }
 
@@ -721,7 +718,7 @@ mod tests {
             [
                 "/privacy — what leaves this computer",
                 "",
-                "Allowed by default: grok.com, x.ai, api.x.ai (chats and memory in model prompts). Sending chats and memory anywhere else waits for your OK: a hard card, or a grant in Settings → Permissions.",
+                "Allowed by default: grok.com, x.ai, api.x.ai (chats and memory in model prompts), and chat text elsewhere, logged below. Sending your memory anywhere else waits for your OK: a hard card, or a grant in Settings → Permissions.",
                 "",
                 "Grants",
                 "- Off: Sync to paired computers (/sync asks each time) · Files in a folder · Installed apps · Browser history · Calendar · Mail · System state",
@@ -731,7 +728,7 @@ mod tests {
                 "Sent in the last 7 days (no content stored)",
                 "- Nothing logged yet.",
                 "",
-                "Not watched here: Grok Build's own traffic (its model calls, connectors, and web tools). GrokHub's feed reads, update checks, and Labs web fetch and MCP servers are not logged yet.",
+                "Not watched here: Grok Build's own traffic (its model calls, connectors, and web tools) and the commands an Update runs. Everything else GrokHub sends is logged above: model calls, Imagine, Labs web fetch, MCP servers, Pulse previews, update checks, and sign-in.",
             ]
             .join("\n")
         );
@@ -752,6 +749,18 @@ mod tests {
         assert!(!got.contains("hub ·"), "the hub is named plainly: {got}");
         assert!(got.contains("- Screen: \"Let Grok control the desktop\" in Settings → Cabin defaults (on)"), "{got}");
         assert!(!got.contains("3 times"), "lines older than 7 days are not summed: {got}");
+        // Spike-4c: the newly guarded calls are new rows in the same grouping.
+        let log = vec![
+            line("example.org", "chat", now - 60_000, &[hx::DataClass::Chat]),
+            line("example.org", "chat", now - 30_000, &[hx::DataClass::Chat]),
+            line("api.github.com", "public", now - 600_000, &[]),
+            line("mcp.example.test", "approved_once", now - 3_600_000, &chat),
+        ];
+        let got = report(&hx::ConsentLedger::empty(), &log, false, now);
+        assert!(
+            got.contains("- example.org · 2 times · chats · allowed · last just now\n- api.github.com · 1 time · no user data · public · last 10m ago\n- mcp.example.test · 1 time · chats, memory · approved once · last 1h ago\n"),
+            "{got}"
+        );
     }
 
     /// SY-02: one user-facing name for the hub data, "chats, memory", on the
@@ -809,7 +818,7 @@ mod tests {
         let intro = got.lines().nth(2).unwrap_or_default();
         assert_eq!(
             intro,
-            "Allowed by default: grok.com, x.ai, api.x.ai (chats and memory in model prompts). Sending chats and memory anywhere else waits for your OK: a hard card, or a grant in Settings → Permissions."
+            "Allowed by default: grok.com, x.ai, api.x.ai (chats and memory in model prompts), and chat text elsewhere, logged below. Sending your memory anywhere else waits for your OK: a hard card, or a grant in Settings → Permissions."
         );
         assert!(got.contains("- Sync to paired computers: on since 1m ago · chats, memory\n"), "{got}");
         assert!(got.contains("- paired computers · 1 time · chats, memory · your grant"), "{got}");
