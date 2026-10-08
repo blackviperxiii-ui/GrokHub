@@ -1905,6 +1905,7 @@ impl Cabin {
         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
             self.paint_inbox(ui);
             self.paint_harness_cards(ui);
+            self.paint_fix_cards(ui);
             let top = ui.cursor().min.y;
             self.paint_perm_ask(ui);
             self.scroll_if_jumped(ui, "ask", top);
