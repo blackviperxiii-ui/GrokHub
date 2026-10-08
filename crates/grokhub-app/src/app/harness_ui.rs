@@ -215,6 +215,8 @@ pub(super) struct HarnessState {
     pub diagnose_rx: Option<mpsc::Receiver<(String, bool)>>,
     /// The running diagnose came from `/diagnose`, so it posts as a slash result.
     pub diagnose_slash: bool,
+    /// The chat that asked for the running diagnose; its answer goes there.
+    pub diagnose_chat: String,
     /// Settings → Permissions: the folder typed for a new files scope.
     pub scope_folder: String,
     /// Settings → Permissions: the browser picked for a history scope.
@@ -280,10 +282,12 @@ pub(super) fn perm_card_eyebrow(p: &grokhub_acp::PermissionAsk) -> &'static str 
     if is_desktop_ask(p) { "Desktop" } else { "Tool" }
 }
 
-/// Typed text never lands in a span: a desktop `type` logs its length only.
+/// Typed text never lands in a span: a desktop `type` (or Cua's `type_text`
+/// and `set_value`) logs its length only.
 pub(super) fn span_args(tool: &str, action: &str) -> String {
     let t = tool.to_ascii_lowercase();
-    if t == "type" || t.ends_with("__type") {
+    let leaf = t.rsplit("__").next().unwrap_or(&t);
+    if matches!(leaf, "type" | "type_text" | "set_value") {
         format!(r#"{{"chars":{}}}"#, action.chars().count())
     } else {
         action.to_string()
@@ -1732,6 +1736,9 @@ mod tests {
         assert_eq!(logged, vec![("approve", r#"{"chars":20}"#)], "typed text stays out of spans");
         assert_eq!(span_args("grokhub-desktop__type", "hunter2"), r#"{"chars":7}"#);
         assert_eq!(span_args("run_terminal_command", "rm -f x"), "rm -f x");
+        assert_eq!(span_args("grokhub-cua__type_text", "hunter2"), r#"{"chars":7}"#);
+        assert_eq!(span_args("mcp__grokhub-cua__set_value", "s3cret"), r#"{"chars":6}"#);
+        assert_eq!(span_args("grokhub-cua__press_key", "Return"), "Return");
         let turn = hx::read_turn_context(&root);
         assert_eq!(turn.chat_id, "session");
         assert_eq!(turn.access, "readonly");

@@ -33,6 +33,7 @@ enum Act {
     Reads(usize),
     Done,
     Say,
+    Shell(&'static str),
 }
 
 type Script = Box<dyn Fn(usize) -> Act + Send + Sync>;
@@ -47,6 +48,8 @@ struct FakeModel {
     tick_ms: u64,
     steer: Option<(usize, SteerQueue)>,
     answer_at: Option<(usize, Arc<FakeParks>, bool)>,
+    /// Stop pressed while this worker call is in flight.
+    cancel_at: Option<(usize, CancelToken)>,
 }
 
 fn first_text(req: &ResponsesRequest, at: usize) -> String {
@@ -98,6 +101,12 @@ impl ModelClient for FakeModel {
                 parks.answer_all(*approve);
             }
         }
+        if let Some((at, token)) = &self.cancel_at {
+            if *at == n {
+                token.cancel();
+                return Err(ClientError::Cancelled);
+            }
+        }
         // A cache that holds the prefix: everything but the last message.
         let cached = if n == 0 { 0 } else { 800 };
         let usage = Usage { cached_tokens: cached, ..usage };
@@ -112,6 +121,7 @@ impl ModelClient for FakeModel {
             ),
             Act::Done => ("All set.\nGOAL_COMPLETE".into(), vec![]),
             Act::Say => ("Which network should I pick?".into(), vec![]),
+            Act::Shell(cmd) => (String::new(), vec![call(n, "run_terminal_command", json!({"command": cmd}))]),
         };
         Ok(TurnOutput { text, reasoning: WORKER_THOUGHT.into(), calls, usage })
     }
@@ -227,6 +237,8 @@ struct Rig {
     parks: Arc<FakeParks>,
     steer: SteerQueue,
     clock: Arc<AtomicU64>,
+    cancel: CancelToken,
+    perms: Option<crate::perm::Policy>,
 }
 
 const T0: u64 = 1_800_000_000_000;
@@ -247,11 +259,14 @@ fn rig(label: &str, script: Script) -> Rig {
             tick_ms: 1_000,
             steer: None,
             answer_at: None,
+            cancel_at: None,
         },
         desk,
         parks: Arc::new(FakeParks::default()),
         steer: SteerQueue::new(),
         clock,
+        cancel: CancelToken::new(),
+        perms: None,
     }
 }
 
@@ -274,10 +289,11 @@ impl Rig {
             parks: &self.parks,
             permits: &ClosedPermits,
             halt: &halt,
-            cancel: &CancelToken::new(),
+            cancel: &self.cancel,
             steer: &self.steer,
             clock: &now,
             held: &[],
+            perms: self.perms.as_ref(),
         };
         run_episode(&k, ep, view, &mut |_| {})
     }
@@ -642,4 +658,40 @@ fn caps_idle_and_header_are_named_and_continue_needs_the_user() {
     };
     assert_eq!(shape.line(3), r#"#3 goal="Go" tool=click decision=allow ui_changed=false result="click ok""#);
     assert!(new_episode_id(T0).starts_with("ep-1a3185c5000-"));
+}
+
+#[test]
+fn stop_during_a_worker_call_ends_the_episode_and_denies_its_parks() {
+    let mut r = rig("stop-mid-call", Box::new(|n| match n {
+        0 => Act::HardClick,
+        _ => Act::Click(n as u32),
+    }));
+    r.model.cancel_at = Some((1, r.cancel.clone()));
+    let mut ep = r.episode("Reply to the thread");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Stop));
+    assert_eq!(ep.ended, Some(EpisodeEnd::Stop));
+    let park = format!("{PARK_PREFIX}{}-1", ep.id);
+    assert_eq!(*r.parks.withdrawn.lock().unwrap(), vec![park]);
+    let spans = r.spans();
+    let deny = spans.iter().find(|s| s.decision == "deny").expect("the parked Send is denied");
+    assert_eq!((deny.tool.as_str(), deny.result.as_str()), ("click", "stopped — fail-closed Deny"));
+    assert_eq!(r.desk.count("click"), 0, "the parked Send never ran");
+    assert!(ep.parks.is_empty());
+}
+
+#[test]
+fn workspace_deny_rules_hold_inside_an_episode() {
+    let mut r = rig("policy", Box::new(|n| match n {
+        0 => Act::Shell("echo episode-policy"),
+        _ => Act::Done,
+    }));
+    let mut policy = crate::perm::Policy::empty();
+    policy.rules.push(crate::perm::parse_rule("Bash(echo *)", crate::perm::Action::Deny).unwrap());
+    r.perms = Some(policy);
+    let mut ep = r.episode("Say hi in a terminal");
+    r.run(&mut ep, &mut EpisodeView::default());
+    let spans = r.spans();
+    let step = spans.iter().find(|s| s.tool == "run_terminal_command").expect("the shell step is logged");
+    assert_eq!(step.decision, "deny", "Always mode still obeys a deny rule: {}", step.result);
 }

@@ -330,6 +330,12 @@ impl NativeEngine {
         let Some(desktop) = self.desktop.as_deref() else {
             return Ok(());
         };
+        // The same guards as `prompt`: the episode's tools need the network
+        // ports and the turn's origin, and its gate the workspace policy.
+        let policy = crate::perm::Policy::load(&self.workspace);
+        crate::mcp::set_workspace(&self.workspace);
+        let _network = crate::tools::install_network(&self.imagine_bearer, &self.conversation_id);
+        let _origin = crate::harness::OriginScope::enter(self.origin);
         let parks = FileParks(&seed.config_dir);
         let clock = grokhub_core::now_ms;
         let k = KernelIn {
@@ -350,6 +356,7 @@ impl NativeEngine {
             steer: &self.steer,
             clock: &clock,
             held: &seed.held,
+            perms: Some(&policy),
         };
         let (kind, session, base) = (self.auth_kind, self.conversation_id.clone(), self.usage.clone());
         let limit = self.context_length;

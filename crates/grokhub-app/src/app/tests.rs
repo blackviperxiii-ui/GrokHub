@@ -27741,6 +27741,28 @@ fn diagnose_slash_without_system_state_is_a_slash_result_with_the_ask() {
     release_isolated(&root, cabin);
 }
 
+#[test]
+fn diagnose_answers_in_the_chat_that_asked_after_a_switch() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("diagnose-switch");
+    std::fs::create_dir_all(&root).unwrap();
+    cabin.threads.push(crate::threads::ChatThread::new("Asked here", false));
+    cabin.threads.push(crate::threads::ChatThread::new("Moved here", false));
+    let (asked, moved) = (cabin.threads.len() - 2, cabin.threads.len() - 1);
+    cabin.apply_switch_thread(asked);
+    cabin.run_slash_line("/diagnose");
+    cabin.apply_switch_thread(moved);
+    let before = cabin.messages.len();
+    wait_diagnose(&mut cabin);
+    assert!(cabin.harness.diagnose_rx.is_none(), "the diagnose finished");
+    assert_eq!(cabin.messages.len(), before, "the chat on screen gets nothing");
+    cabin.apply_switch_thread(asked);
+    let (role, body) = cabin.messages.last().cloned().unwrap();
+    assert_eq!(role, "assistant");
+    assert!(body.ends_with(grokhub_agent::repair::SCOPE_ASK), "{body}");
+    release_isolated(&root, cabin);
+}
+
 // ---- Spike-8a local indexers: the in-context ask card and "Forget these" ----
 
 fn paint_work_cards(ctx: &egui::Context, cabin: &mut Cabin, events: Vec<egui::Event>) -> ScopePaint {

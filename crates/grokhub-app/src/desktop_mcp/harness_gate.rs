@@ -84,11 +84,6 @@ pub(crate) fn handle_desk_line<B: DesktopBackend>(
     outcome
 }
 
-fn delete_key(args: &Value) -> bool {
-    let keys = args["keys"].as_str().unwrap_or("").to_ascii_lowercase().replace(' ', "");
-    matches!(keys.as_str(), "delete" | "del" | "shift+delete" | "shift+del")
-}
-
 /// Spike-2b: what a click will land on, read before `decide` (AT-SPI on
 /// Linux, capped; unknown on Windows, D3), plus the focused window for the
 /// card. Only the matched rule id ever reaches a span.
@@ -101,6 +96,14 @@ fn click_hint<B: DesktopBackend>(server: &mut DesktopServer<B>, args: &Value) ->
         hint["window"] = Value::String(w.active);
     }
     hint
+}
+
+/// A Delete key however it is spelled (`Shift_L+Delete`, `shift+shift+del`):
+/// read with the same parser `decide` and the server use.
+fn delete_key(args: &Value) -> bool {
+    let keys = ["keys", "key"].iter().find_map(|k| args.get(*k).and_then(|v| v.as_str())).unwrap_or("");
+    grokhub_core::desktop_mcp::parse_key_combo(keys)
+        .is_ok_and(|combo| combo.key == grokhub_core::desktop_mcp::KeyName::Delete)
 }
 
 fn strip_window(args: &Value) -> Value {
@@ -694,6 +697,14 @@ mod tests {
         );
         assert!(reply_text(&out).starts_with("Denied: hard-class delete"));
         assert_eq!(s.backend_mut().keys, 1, "the denied Delete was never pressed");
+        // Spellings the combo parser reads as the same key park too.
+        for keys in ["Shift_L+Delete", "shift+shift+del", "SHIFT + DEL"] {
+            let waiter = cabin_answers(&dir, false);
+            let out = handle_desk_line(&mut s, &rpc("key", json!({ "keys": keys })), ON, &dir, &mut || false);
+            assert_eq!(waiter.join().unwrap().expect("park posted").class, "delete", "{keys}");
+            assert!(reply_text(&out).starts_with("Denied: hard-class delete"), "{keys}");
+        }
+        assert_eq!(s.backend_mut().keys, 1, "no denied Delete spelling was pressed");
         let _ = std::fs::remove_dir_all(dir);
     }
 

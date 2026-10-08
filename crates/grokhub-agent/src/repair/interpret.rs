@@ -361,8 +361,18 @@ fn net_test(out: &ProbeOutput) -> Vec<Finding> {
     vec![Finding::new(ProbeId::NetTest, severity, plain, line.trim())]
 }
 
+/// A list probe that failed: nothing on stdout, a non-zero exit and an error
+/// on stderr. Silence then means "couldn't check", not "all good". (`pacman
+/// -Qu` exits 1 with no updates, but says nothing on stderr.)
+fn failed_silently(out: &ProbeOutput) -> bool {
+    out.code != Some(0) && out.stdout.trim().is_empty() && !out.stderr.trim().is_empty()
+}
+
 /// `dpkg --audit`, `dnf check`, `pacman -Qkq`: silence means healthy.
 fn package_health(out: &ProbeOutput) -> Vec<Finding> {
+    if failed_silently(out) {
+        return Vec::new();
+    }
     let lines: Vec<&str> = out.stdout.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
     if lines.is_empty() {
         return vec![Finding::new(ProbeId::PackageHealth, Severity::Ok, "Your installed packages look healthy.", "")];
@@ -378,6 +388,9 @@ fn package_health(out: &ProbeOutput) -> Vec<Finding> {
 
 /// Pending updates from the package lists already on disk.
 fn pending_updates(out: &ProbeOutput) -> Vec<Finding> {
+    if failed_silently(out) {
+        return Vec::new();
+    }
     let lines = out.stdout.lines().map(str::trim).filter(|l| !l.is_empty());
     let n = match out.program.as_str() {
         "apt" => lines.filter(|l| l.contains("[upgradable from:")).count(),
@@ -418,7 +431,10 @@ fn winget_upgrades(out: &ProbeOutput) -> Vec<Finding> {
 
 /// Tab line: reboot pending, number of updates waiting.
 fn wu_pending(out: &ProbeOutput) -> Vec<Finding> {
-    let line = out.stdout.lines().find(|l| l.contains('\t')).unwrap_or("");
+    // A thrown Update Session prints no line at all: couldn't check.
+    let Some(line) = out.stdout.lines().find(|l| l.contains('\t')) else {
+        return Vec::new();
+    };
     let mut cols = line.split('\t').map(str::trim);
     let reboot = cols.next().is_some_and(|c| c.eq_ignore_ascii_case("true"));
     let count = cols.next().and_then(|c| c.parse::<usize>().ok()).unwrap_or(0);
@@ -641,5 +657,25 @@ Swap:     2000000000  1900000000   100000000
             ]
         );
         assert_eq!(plains(ProbeId::WuPending, &out("powershell", 0, "False\t0\n")), vec![(Severity::Ok, "Windows is up to date.".into())]);
+    }
+
+    #[test]
+    fn a_failed_update_or_package_check_is_never_up_to_date() {
+        let failed = |program: &str, code: i32, stderr: &str| ProbeOutput {
+            program: program.into(),
+            code: Some(code),
+            stdout: String::new(),
+            stderr: stderr.into(),
+        };
+        let no_cache = failed("dnf", 1, "Error: Cache-only enabled but no cache for 'fedora'");
+        assert_eq!(plains(ProbeId::PendingUpdates, &no_cache), vec![]);
+        assert_eq!(plains(ProbeId::PackageHealth, &failed("dpkg", 2, "dpkg: error: unable to access the dpkg database")), vec![]);
+        let com = failed("powershell", 1, "Exception from HRESULT: 0x8024402C");
+        assert_eq!(plains(ProbeId::WuPending, &com), vec![]);
+        // pacman -Qu with nothing to update exits 1 and says nothing.
+        assert_eq!(
+            plains(ProbeId::PendingUpdates, &out("pacman", 1, "")),
+            vec![(Severity::Ok, "Your apps are up to date, as of the last update check.".into())]
+        );
     }
 }
