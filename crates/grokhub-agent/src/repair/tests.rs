@@ -190,6 +190,14 @@ fn intent_phrases_pick_probes_and_other_text_goes_to_the_model() {
     assert_eq!(probes_for_intent("this test is slow, can you speed it up?", Os::Linux), None);
     assert_eq!(probes_for_intent("what's wrong with this function?", Os::Linux), None);
     assert_eq!(probes_for_intent("/diagnose", Os::Linux), None);
+    // Coding messages that mention a trouble word and a device word.
+    assert_eq!(probes_for_intent("fix the DNS issue in resolver.rs", Os::Linux), None);
+    assert_eq!(probes_for_intent("the printer module has a problem", Os::Linux), None);
+    assert_eq!(probes_for_intent("wifi scan in src/net/scan is broken", Os::Linux), None);
+    assert_eq!(probes_for_intent("`audio::play` won't start", Os::Linux), None);
+    // Plain words still get the probes.
+    assert_eq!(probes_for_intent("my internet is not working.", Os::Windows), Some(vec![ProbeId::NetTest]));
+    assert_eq!(probes_for_intent("the sound on my laptop is broken", Os::Linux), Some(vec![ProbeId::FailedServices, ProbeId::BootErrors]));
 }
 
 #[test]

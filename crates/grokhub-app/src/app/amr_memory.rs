@@ -123,8 +123,9 @@ impl Cabin {
     pub(super) fn amr_store(&mut self, scratch: bool) -> AmrStore {
         let mut store = amr_store_at(&config::config_dir());
         if !scratch && !self.amr_imported {
-            self.amr_imported = true;
+            // Only a store that opened counts as imported; a failed init tries again.
             if store.init().is_ok() {
+                self.amr_imported = true;
                 let report = grokhub_core::amr::import_legacy(
                     &store,
                     &self.learning.insights,
@@ -185,7 +186,15 @@ impl Cabin {
             .filter(|f| !f.is_empty() && is_plain_text(f))
             .collect();
         let store = self.amr_store(scratch);
-        let turn = self.turn_no();
+        // The turn of the chat the reply ran in, not of the chat on screen.
+        let turn = if thread == self.visible_thread_id() {
+            self.turn_no()
+        } else {
+            self.threads
+                .iter()
+                .find(|t| t.id == thread)
+                .map_or(0, |t| t.messages.iter().filter(|(r, _)| r == "user").count() as u32)
+        };
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let source = format!("chat:{thread}");
@@ -241,7 +250,7 @@ impl Cabin {
     /// anywhere (fail closed) and the status says so.
     pub(super) fn save_memory_amr(&mut self) {
         let disk = config::read_memory("MEMORY.md");
-        let (kept, added) = split_new_lines(&disk, &self.mem_body);
+        let (mut kept, added) = split_new_lines(&disk, &self.mem_body);
         let mut saved = 0usize;
         let mut paused = 0usize;
         let mut last = String::new();
@@ -250,6 +259,12 @@ impl Cabin {
             if status.starts_with("Learning paused") {
                 paused += 1;
             } else if status.starts_with("Memory repo:") {
+                // The store refused it: the line stays in MEMORY.md, not lost.
+                if !kept.is_empty() && !kept.ends_with('\n') {
+                    kept.push('\n');
+                }
+                kept.push_str(line);
+                kept.push('\n');
                 last = status;
             } else {
                 saved += 1;

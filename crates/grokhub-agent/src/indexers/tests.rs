@@ -507,6 +507,12 @@ fn hard_excludes_cover_password_managers_and_key_files() {
         "C:\\Users\\me\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Login Data",
         "/home/me/.local/share/keyrings/login.keyring",
         grok_config.as_str(),
+        // Windows paths are case-blind.
+        "C:\\Users\\me\\.SSH\\known_hosts",
+        "C:\\Users\\me\\Documents\\ID_RSA",
+        "C:\\Users\\me\\AppData\\Roaming\\1PASSWORD\\data.sqlite",
+        "C:\\Users\\me\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\COOKIES",
+        "C:\\Users\\me\\Documents\\Vault.KDBX",
     ] {
         assert!(index_excluded(p), "{p}");
     }

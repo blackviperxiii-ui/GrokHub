@@ -99,10 +99,11 @@ impl Conn {
         name: &str,
         args: &Value,
         timeout: std::time::Duration,
+        stop: &dyn Fn() -> bool,
     ) -> Result<(String, bool), String> {
         match self {
             Conn::Stdio(conn) => conn.call(name, args, timeout),
-            Conn::Http(conn) => conn.call(name, args, timeout),
+            Conn::Http(conn) => conn.call(name, args, timeout, stop),
         }
     }
 
@@ -267,7 +268,9 @@ pub(crate) fn schema_tools(native: usize) -> Vec<Value> {
     tools.iter().map(one_schema).collect()
 }
 
-pub(crate) fn try_dispatch(name: &str, args: &Value) -> Option<ToolOutput> {
+/// `stop` is the run's Stop / Halt: an egress park waiting on a card gives up
+/// when it turns true.
+pub(crate) fn try_dispatch(name: &str, args: &Value, stop: &dyn Fn() -> bool) -> Option<ToolOutput> {
     if name == "search_tool" {
         return Some(search_output(args));
     }
@@ -276,14 +279,14 @@ pub(crate) fn try_dispatch(name: &str, args: &Value) -> Option<ToolOutput> {
     }
     let tools = current_tools();
     if name == "use_tool" {
-        return Some(use_output(&tools, args));
+        return Some(use_output(&tools, args, stop));
     }
     let rec = tools.into_iter().find(|tool| tool.qualified == name)?;
     #[cfg(test)]
     if test_snapshot().is_some() {
         return Some(ToolOutput::ok(format!("test-call {}", rec.qualified)));
     }
-    Some(call_qualified(&rec, args))
+    Some(call_qualified(&rec, args, stop))
 }
 
 pub(crate) fn search_output(args: &Value) -> ToolOutput {
@@ -410,7 +413,7 @@ fn arg_name(arguments: &str) -> String {
         .unwrap_or_default()
 }
 
-fn use_output(tools: &[ToolRec], args: &Value) -> ToolOutput {
+fn use_output(tools: &[ToolRec], args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
     let name = args
         .get("name")
         .and_then(|v| v.as_str())
@@ -427,7 +430,7 @@ fn use_output(tools: &[ToolRec], args: &Value) -> ToolOutput {
     if test_snapshot().is_some() {
         return ToolOutput::ok(format!("test-call {}", rec.qualified));
     }
-    call_qualified(rec, &call_args)
+    call_qualified(rec, &call_args, stop)
 }
 
 fn normalize_args(value: Option<&Value>) -> Value {
@@ -444,7 +447,7 @@ fn normalize_args(value: Option<&Value>) -> Value {
     }
 }
 
-fn call_qualified(rec: &ToolRec, args: &Value) -> ToolOutput {
+fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolOutput {
     let slots = slots_now();
     let Some(slot) = slots.get(&rec.server).cloned() else {
         return ToolOutput::err(format!("MCP server `{}` stopped", rec.server));
@@ -458,7 +461,7 @@ fn call_qualified(rec: &ToolRec, args: &Value) -> ToolOutput {
             .unwrap_or_else(|| format!("MCP server `{}` stopped", rec.server));
         return ToolOutput::err(err);
     };
-    match conn.call(&rec.raw, args, timeout) {
+    match conn.call(&rec.raw, args, timeout, stop) {
         Ok((text, true)) => ToolOutput::err(text),
         Ok((text, false)) => ToolOutput::ok(text),
         Err(err) => {
@@ -1112,6 +1115,7 @@ mod tests {
         let called = try_dispatch(
             "use_tool",
             &json!({"name": "box__t0", "arguments": {"q": "1"}}),
+            &|| false,
         )
         .unwrap();
         assert_eq!(called.text, "test-call box__t0");

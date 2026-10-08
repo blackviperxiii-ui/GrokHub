@@ -183,7 +183,8 @@ pub fn desk_classify(tool: &str, args: &serde_json::Value) -> HardHit {
         }
         "focus_window" => HardHit::None,
         // Spike-2b: what the control under the click does, checked before it runs.
-        "click" => match click_rule(args) {
+        // A drag lets go over a control too, so it is read like a click there.
+        "click" | "drag" => match click_rule(args) {
             Some(rule) => HardHit::Class(rule.class),
             None => HardHit::None,
         },

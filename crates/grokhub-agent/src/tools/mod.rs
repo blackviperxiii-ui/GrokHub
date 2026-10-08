@@ -138,7 +138,7 @@ pub fn dispatch(ctx: &ToolCtx<'_>, name: &str, arguments: &str) -> ToolOutput {
         // Path E: the loop already asked `harness::decide` (via `decide_with`).
         return crate::self_manage::run_native(name, &args);
     }
-    if let Some(output) = crate::mcp::try_dispatch(name, &args) {
+    if let Some(output) = crate::mcp::try_dispatch(name, &args, ctx.stop) {
         return output;
     }
     match name {

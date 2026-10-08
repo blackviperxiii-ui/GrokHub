@@ -824,6 +824,36 @@ Glow stays white.
     }
 
     #[test]
+    fn a_merged_line_remembered_again_comes_back_and_an_edit_back_hides_one() {
+        let tmp = Tmp::new("supersede");
+        let store = AmrStore::at(&tmp.path);
+        store.init().unwrap();
+        let live = |store: &AmrStore| {
+            let mut ids: Vec<String> = store.recallable().0.into_iter().map(|n| n.id).collect();
+            ids.sort();
+            ids
+        };
+        // The dream merged A into B (edge B→A, A tombstoned), then B was forgotten.
+        store.remember(&draft("fact-old", "dark theme in the editor\n")).unwrap();
+        store.remember(&draft("fact-new", "the dark theme in the editor\n")).unwrap();
+        store.link("fact-new", "fact-old", EdgeRel::Supersedes).unwrap();
+        store.forget("fact-old").unwrap();
+        store.forget("fact-new").unwrap();
+        assert!(live(&store).is_empty());
+        // Remembering A again revives it, and it is recallable.
+        store.revive("fact-old").unwrap();
+        assert_eq!(live(&store), vec!["fact-old".to_string()]);
+
+        // Edit tabs → spaces (spaces supersedes tabs), then back to tabs.
+        store.remember(&draft("fact-tabs", "I prefer tabs\n")).unwrap();
+        store.remember(&draft("fact-spaces", "I prefer spaces\n")).unwrap();
+        store.link("fact-spaces", "fact-tabs", EdgeRel::Supersedes).unwrap();
+        assert_eq!(live(&store), vec!["fact-old".to_string(), "fact-spaces".to_string()]);
+        store.link("fact-tabs", "fact-spaces", EdgeRel::Supersedes).unwrap();
+        assert_eq!(live(&store), vec!["fact-old".to_string(), "fact-tabs".to_string()], "the edit back leaves tabs, not nothing");
+    }
+
+    #[test]
     fn remember_line_is_one_node_per_line_redacts_and_pauses_personal() {
         let tmp = Tmp::new("line");
         let store = AmrStore::at(&tmp.path);

@@ -336,12 +336,24 @@ impl AmrStore {
 
     /// Ids that a later node replaced (`supersedes` edge targets). Recall
     /// and `/memory` skip them; the files stay.
+    ///
+    /// Read in log order: an edit back (`A→B` after `B→A`) undoes the first
+    /// edge instead of hiding both. An edge whose replacing node is forgotten
+    /// no longer hides a node that is live again (the user remembered it after
+    /// a dream merge).
     pub fn superseded_ids(&self) -> std::collections::BTreeSet<String> {
-        self.edges()
-            .unwrap_or_default()
+        let mut active: Vec<(String, String)> = Vec::new();
+        for edge in self.edges().unwrap_or_default() {
+            if edge.rel != EdgeRel::Supersedes {
+                continue;
+            }
+            active.retain(|(from, to)| !(from == &edge.to && to == &edge.from));
+            active.push((edge.from, edge.to));
+        }
+        active
             .into_iter()
-            .filter(|edge| edge.rel == EdgeRel::Supersedes)
-            .map(|edge| edge.to)
+            .filter(|(from, to)| !(self.is_forgotten(from) && !self.is_forgotten(to)))
+            .map(|(_, to)| to)
             .collect()
     }
 

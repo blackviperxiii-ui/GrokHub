@@ -119,7 +119,9 @@ pub fn egress_dest(target: &str) -> String {
         let key: String = t.to_ascii_lowercase().chars().take(80).collect();
         return grokhub_core::redact_secrets(&key);
     };
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    // WHATWG URLs (what ureq parses) end the authority at `\` too, so
+    // `http://evil.com\@127.0.0.1/` goes to evil.com, not loopback.
+    let authority = rest.split(['/', '\\', '?', '#']).next().unwrap_or("");
     let authority = authority.rsplit('@').next().unwrap_or(authority);
     let host = if let Some(v6) = authority.strip_prefix('[') {
         format!("[{}]", v6.split(']').next().unwrap_or(""))
@@ -536,6 +538,7 @@ mod tests {
         assert_eq!(egress_dest("http://127.0.0.1:4711/v1/responses"), "127.0.0.1");
         assert_eq!(egress_dest("http://[::1]:9/x"), "[::1]");
         assert_eq!(egress_dest("hub"), "hub");
+        assert_eq!(egress_dest("http://evil.com\\@127.0.0.1/feed"), "evil.com");
         assert!(is_model_host("api.x.ai") && is_model_host("grok.com") && is_model_host("x.ai"));
         assert!(!is_model_host("evilx.ai") && !is_model_host("x.ai.example.org"));
     }
