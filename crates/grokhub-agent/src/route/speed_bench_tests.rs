@@ -232,6 +232,24 @@ fn the_bench_records_every_hot_path_span() {
     }
 }
 
+/// p95 budgets for a debug build on a CI runner, set from the bench (debug,
+/// Linux: decide 1.3 ms, choose 0.15 ms, harness decide 3 µs at p95) with
+/// room for slower Windows runners. Re-parsing the 4 MB model-call log on a
+/// new turn, as before #28, puts decide far over its budget.
+const DECIDE_BUDGET_US: u32 = 25_000;
+const CHOOSE_BUDGET_US: u32 = 10_000;
+const HARNESS_DECIDE_BUDGET_US: u32 = 2_000;
+
+#[test]
+fn decide_and_harness_decide_stay_inside_their_budgets() {
+    let stats = bench("speed-bench-budget", 20);
+    let p95 = |name: &str| stats.iter().find(|s| s.name == name).map(|s| s.p95_us).unwrap_or(u32::MAX);
+    let report = table(&stats);
+    assert!(p95("route:decide") < DECIDE_BUDGET_US, "route:decide over its budget\n{report}");
+    assert!(p95("route:choose") < CHOOSE_BUDGET_US, "route:choose over its budget\n{report}");
+    assert!(p95("harness:decide") < HARNESS_DECIDE_BUDGET_US, "harness:decide over its budget\n{report}");
+}
+
 #[test]
 #[ignore = "timing bench; run it on purpose with --release (see the module doc)"]
 fn speed_bench() {
