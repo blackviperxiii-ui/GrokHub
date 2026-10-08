@@ -133,7 +133,7 @@ pub fn dispatch(ctx: &ToolCtx<'_>, name: &str, arguments: &str) -> ToolOutput {
     if is_readonly(name) {
         return dispatch_readonly(ctx, name, &args);
     }
-    if let Some(output) = crate::mcp::try_dispatch(name, &args) {
+    if let Some(output) = crate::mcp::try_dispatch(name, &args, ctx.stop) {
         return output;
     }
     match name {
