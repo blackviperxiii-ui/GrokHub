@@ -100,7 +100,8 @@ pub(super) fn grant_full_card_on() -> bool {
 pub(super) enum ParkSource {
     /// Path B / E: a Grok Build permission ask waiting on its RPC.
     Ask(grokhub_acp::PermissionAsk),
-    /// Path A: the `--mcp-desktop` process is blocked on this park id.
+    /// Path A: the `--mcp-desktop` process is blocked on this park id. Path E:
+    /// a cabin-owned send (Spike-4c `guard_or_park`) waits on it the same way.
     Desk(String),
     /// Path C: GB's `--deny` rule already stopped it. Nothing is waiting.
     Headless,
@@ -210,6 +211,10 @@ pub(super) struct HarnessState {
     pub lock_seen: Option<(Instant, Option<hx::Locked>)>,
     /// `/privacy` output on its way from the reader thread.
     pub privacy_rx: Option<mpsc::Receiver<String>>,
+    /// `/diagnose` or a "check my computer" answer on its way (Spike-8b).
+    pub diagnose_rx: Option<mpsc::Receiver<(String, bool)>>,
+    /// The running diagnose came from `/diagnose`, so it posts as a slash result.
+    pub diagnose_slash: bool,
     /// Settings → Permissions: the folder typed for a new files scope.
     pub scope_folder: String,
     /// Settings → Permissions: the browser picked for a history scope.
@@ -246,6 +251,11 @@ pub(super) struct HarnessState {
     /// The last finished reply's prose, for the turn-end audit. `None` when
     /// that turn was not on the visible chat.
     pub last_reply: Option<String>,
+    /// Who started the chat turn on screen (Spike-4c). Spans and `turn.json`
+    /// carry it; `send_chat` sets it from `next_origin`, else `user`.
+    pub turn_origin: hx::Origin,
+    /// Set by a heartbeat act right before it sends its chat turn.
+    pub next_origin: Option<hx::Origin>,
     /// Spike-8a local indexers: the scheduler, the in-memory index, the asks.
     pub indexer: super::indexer_ui::IndexerUi,
     /// The decision inbox rows are open under the needs-attention line.
@@ -424,6 +434,12 @@ impl Cabin {
         self.park_hard(ParkSource::Egress(dest.into()), class, "egress", HUB_SYNC_TOOL.into(), action);
     }
 
+    /// A chat turn starts (Spike-4c): a heartbeat act set `next_origin` right
+    /// before it sent; anything else is the user's.
+    pub(super) fn begin_turn_origin(&mut self) {
+        self.harness.turn_origin = self.harness.next_origin.take().unwrap_or_default();
+    }
+
     pub(super) fn write_span(&self, span: hx::Span, path: &str) {
         self.write_span_at(span, path, self.turn_no());
     }
@@ -431,6 +447,10 @@ impl Cabin {
     fn write_span_at(&self, span: hx::Span, path: &str, turn: u32) {
         let trace = self.trace_id();
         let mut span = span.on_path(path).in_turn(&trace, turn);
+        // A step keeps a set origin (repair, self-manage); the rest take the turn's.
+        if span.origin == hx::Origin::User {
+            span.origin = self.harness.turn_origin;
+        }
         if span.episode.is_empty() {
             span.episode = self.episode_span_id();
         }
@@ -1164,6 +1184,7 @@ impl Cabin {
             chat_id: self.trace_id(),
             turn: self.turn_no(),
             access: self.access_mode().as_str().into(),
+            origin: self.harness.turn_origin,
             episode: self.episode_span_id(),
         };
         self.poll_episode();
@@ -1182,7 +1203,9 @@ impl Cabin {
                 continue;
             }
             let class = HardClass::parse(&req.class).unwrap_or(HardClass::IrreversibleOs);
-            self.park_hard(ParkSource::Desk(req.id), class, "A", req.tool, req.action);
+            // Path E: a cabin-owned send (web_fetch, MCP, Imagine) the EgressGuard parked.
+            let path = if req.path == "E" { "E" } else { "A" };
+            self.park_hard(ParkSource::Desk(req.id), class, path, req.tool, req.action);
         }
     }
 
@@ -2611,5 +2634,91 @@ mod tests {
             }
             _ => {}
         }
+    }
+
+    fn key(key: egui::Key) -> egui::Event {
+        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }
+    }
+
+    /// Spike-4c path E: a cabin-owned send the EgressGuard parked (web_fetch,
+    /// MCP, Imagine) shows as the same hard card. Enter leaves it; Esc denies
+    /// it and the waiting call reads Deny. The spans carry the turn's origin.
+    #[test]
+    fn egress_parks_from_path_e_are_hard_cards_enter_waits_esc_denies() {
+        let (_pin, root) = pinned("harness-egress-e");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.harness.next_origin = Some(hx::Origin::Proactive);
+        cabin.begin_turn_origin();
+        let req = hx::ParkRequest {
+            id: "egress-7".into(),
+            path: "E".into(),
+            tool: "web_fetch".into(),
+            action: "web_fetch → example.org (chats, memory)".into(),
+            class: "send".into(),
+            ts_ms: 1,
+        };
+        hx::post_park(&root, &req).unwrap();
+        cabin.poll_harness();
+        let park = cabin.harness.park.clone().expect("egress park shown");
+        assert_eq!(park.source, ParkSource::Desk("egress-7".into()));
+        assert_eq!((park.path, park.class), ("E", HardClass::Send));
+        let (texts, _) = paint_stack(&mut cabin, vec![key(egui::Key::Enter)], 900.0);
+        assert!(texts.iter().any(|t| t == "web_fetch → example.org (chats, memory)"), "{texts:?}");
+        assert!(!texts.iter().any(|t| t == "Always"), "no Always on a hard card: {texts:?}");
+        assert!(cabin.harness.park.is_some(), "Enter must not approve");
+        assert_eq!(hx::take_answer(&root, "egress-7"), None, "nothing answered yet");
+        let _ = paint_stack(&mut cabin, vec![key(egui::Key::Escape)], 900.0);
+        assert!(cabin.harness.park.is_none());
+        assert_eq!(hx::take_answer(&root, "egress-7"), Some(false), "Esc denies the waiting send");
+        let spans = hx::read_spans(&root, "session").unwrap();
+        let last = spans.last().unwrap();
+        assert_eq!((last.decision.as_str(), last.path.as_str(), last.origin), ("deny", "E", hx::Origin::Proactive));
+        assert_eq!(hx::read_turn_context(&root).origin, hx::Origin::Proactive, "turn.json carries it");
+        // The next typed message is the user's again.
+        cabin.begin_turn_origin();
+        cabin.harness.last_poll = None;
+        cabin.poll_harness();
+        assert_eq!(hx::read_turn_context(&root).origin, hx::Origin::User);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Spike-4c rule 1: a heartbeat act's steps say `proactive`, a scheduled
+    /// job's say `automation`, a typed message's say `user`. Repair keeps its own.
+    #[test]
+    fn spans_say_who_started_the_step() {
+        let (_pin, root) = pinned("harness-origin");
+        let mut cabin = Cabin::quiet_for_test();
+        let step = |cabin: &mut Cabin| {
+            let _ = cabin.harness_precheck(ask("send_email", "to someone"));
+            cabin.resolve_hard_park(false, "Jeremy denied");
+        };
+        cabin.harness.next_origin = Some(hx::Origin::Proactive);
+        cabin.begin_turn_origin();
+        step(&mut cabin);
+        cabin.begin_turn_origin();
+        step(&mut cabin);
+        let mut repair = hx::Span::deny("session", hx::RECOVERY_TOOL, "{}", "skip", "soft").from_origin(hx::Origin::Repair);
+        repair.decision = "skip".into();
+        cabin.write_span(repair, "audit");
+        cabin.automation_span("Background", "auto-9");
+        let spans = hx::read_spans(&root, "session").unwrap();
+        let seen: Vec<(&str, hx::Origin)> = spans.iter().map(|s| (s.decision.as_str(), s.origin)).collect();
+        assert_eq!(
+            seen,
+            vec![
+                ("park", hx::Origin::Proactive),
+                ("deny", hx::Origin::Proactive),
+                ("park", hx::Origin::User),
+                ("deny", hx::Origin::User),
+                ("skip", hx::Origin::Repair),
+            ]
+        );
+        let run = hx::read_spans(&root, "Background").unwrap();
+        assert_eq!(run.len(), 1);
+        assert_eq!((run[0].tool.as_str(), run[0].origin, run[0].path.as_str()), ("automation.run", hx::Origin::Automation, "automation"));
+        assert_eq!(run[0].args_redacted, r#"{"job":"auto-9"}"#);
+        assert_eq!(super::super::background::bg_span_origin(grokhub_core::BgOrigin::Scheduled), hx::Origin::Automation);
+        assert_eq!(super::super::background::bg_span_origin(grokhub_core::BgOrigin::User), hx::Origin::User);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

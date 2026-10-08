@@ -90,6 +90,7 @@ pub fn grok_build_click(req: ClickRequest<'_>) -> ClickOutcome {
                 consent_ref: String::new(),
                 target: String::new(),
                 target_rule: String::new(),
+                usage: None,
                 episode: String::new(),
                 goal_step: String::new(),
                 tokens: None,

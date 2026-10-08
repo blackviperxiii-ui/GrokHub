@@ -178,6 +178,7 @@ mod harness_ui;
 mod inbox_ui;
 mod episode_ui;
 mod privacy_ui;
+mod repair_ui;
 mod scope_ui;
 mod indexer_ui;
 mod skill_undo;
@@ -3511,6 +3512,7 @@ impl Cabin {
         bump_usage(&mut self.usage, "automation");
         self.daily_auto_used = self.usage.automation;
         self.daily_auto_day = self.usage.day.clone();
+        self.harness.next_origin = Some(grokhub_agent::harness::Origin::Proactive);
         self.send_scheduled_chat(prompt);
     }
 
@@ -5012,6 +5014,7 @@ impl eframe::App for Cabin {
         self.poll_mem_file();
         self.poll_recall();
         self.poll_privacy();
+        self.poll_diagnose();
         self.poll_native_memory();
         self.drain_native_unattended_usage();
         self.poll_sync();
@@ -5129,6 +5132,7 @@ impl eframe::App for Cabin {
                 || self.mem_file_rx.is_some()
                 || self.recall_rx.is_some()
                 || self.harness.privacy_rx.is_some()
+                || self.harness.diagnose_rx.is_some()
                 || self.sync_rx.is_some()
                 || self.inhabit_rx.is_some()
                 || self.reflect_rx.is_some()
