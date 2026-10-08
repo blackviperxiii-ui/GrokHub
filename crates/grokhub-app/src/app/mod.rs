@@ -56,7 +56,7 @@ use grokhub_core::{
     fact_candidates, fact_candidates_from, filter_palette, inflight_card_title, palette_shortcut,
     release_inflight_card, settle_inflight_card, upsert_inflight_card,
     filter_slash_hits, flush_visible_goal, folder_choices, forbidden_reason,
-    forget_topic, fork_offer_why, format_consult_reply, frame_bytes,
+    forget_topic, format_consult_reply, frame_bytes,
     greet_from_last_job, greeting_fingerprint, greeting_name,
     greeting_prompt, grok_cli_update_cmd, grok_command_hits, halt_when_leaving_tab, has_auth,
     heartbeat_acts, heartbeat_due, heartbeat_repaint_ms, hey_grok_on_press, hey_grok_route,
@@ -136,7 +136,6 @@ use grokhub_core::{
     VoiceState, WallGif, WorkflowVerb, BUBBLE_PAD_X, BUBBLE_PAD_Y, CABIN_FAST_FALLBACK,
     CABIN_FAST_MODEL, CABIN_GITHUB_TOOLS,
     CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, CHIP_VISIBLE_MAX, CONTEXT_BUDGET_TOKENS,
-    FORK_EXPLAINER,
     FRAME_CAP, GOAL_DROP_AFTER, HEARTBEAT_MS, HUB_KIND,
     IDLE_REFLECT_MS, IMAGE_FILE_CAP, IMAGINE_ASPECTS, IMAGINE_STYLES, IMAGINE_WALL_GAP, LOOP_MAX,
     PRESENCE_RING_MS, RESULT_TRIM_KEEP_HOPS, REVIEW_NIGHT_HOUR, SKILL_SAVED_MARK, SKILL_SAVED_NOTE,
@@ -178,6 +177,9 @@ mod harness_ui;
 mod inbox_ui;
 mod episode_ui;
 mod privacy_ui;
+mod router_ui;
+mod budget_ui;
+mod provider_ui;
 mod repair_ui;
 mod scope_ui;
 mod indexer_ui;
@@ -272,10 +274,6 @@ enum SettingsGroup {
 }
 
 const HIDDEN_HEARTBEAT_MS: u64 = 400;
-
-/// `(thread, message count, last length, messages_rev, messages_body_mark)`: the
-/// transcript a cache was built from.
-type TranscriptKey = (String, usize, usize, u64, (u64, usize));
 
 fn mode_status_line(mode: &str, pinned_model: &str) -> String {
     if matches!(mode, "auto" | "adaptive" | "smart") && !settings_pin_blocks_auto(pinned_model) {
@@ -568,8 +566,6 @@ pub struct Cabin {
     chat_views: Vec<ChatView>,
     /// Fold key per `chat_views` row (0 for non-thoughts). Built with the views.
     chat_view_keys: Vec<u64>,
-    /// Transcript key → `(visible turns, token estimate)`.
-    session_size: (TranscriptKey, (usize, u32)),
     chat_view_tid: String,
     chat_view_n: usize,
     chat_view_last: usize,
@@ -765,8 +761,6 @@ pub struct Cabin {
     side_ask_kick: bool,
     /// Plan card open. The body lives on the thread (`plan_body`).
     plan_open: bool,
-    /// Once-only fork how-it-works. Disk flag `fork_explainer_seen`, not AppConfig.
-    fork_explainer_seen: bool,
     tool_cards: Vec<ToolCard>,
     live_blocks: Vec<LiveBlock>,
     /// `(fold_slot, body len, thought_body_key)` per live block, so a frame does not
@@ -853,16 +847,6 @@ pub struct Cabin {
     scroll_to_hooks: bool,
     /// Last frame's composer pill, mic, and Send/Stop disc. Not saved.
     composer_geom: Option<(egui::Rect, egui::Rect, egui::Rect)>,
-}
-
-fn fork_explainer_path() -> PathBuf {
-    config::config_dir().join("fork_explainer_seen")
-}
-
-fn fork_explainer_seen_on_disk() -> bool {
-    std::fs::read_to_string(fork_explainer_path())
-        .map(|s| s.trim() == "1")
-        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -1193,7 +1177,6 @@ impl Cabin {
             thought_buf: String::new(),
             chat_views: vec![],
             chat_view_keys: vec![],
-            session_size: ((String::new(), usize::MAX, usize::MAX, u64::MAX, (0, 0)), (0, 0)),
             chat_view_tid: String::new(),
             chat_view_n: usize::MAX,
             chat_view_last: usize::MAX,
@@ -1364,7 +1347,6 @@ impl Cabin {
             bg: BgWork::default(),
             side_ask_kick: false,
             plan_open: false,
-            fork_explainer_seen: fork_explainer_seen_on_disk(),
             tool_cards: Vec::new(),
             live_blocks: Vec::new(),
             live_keys: Vec::new(),
@@ -1639,7 +1621,6 @@ impl Cabin {
             thought_buf: String::new(),
             chat_views: Vec::new(),
             chat_view_keys: Vec::new(),
-            session_size: ((String::new(), usize::MAX, usize::MAX, u64::MAX, (0, 0)), (0, 0)),
             chat_view_tid: String::new(),
             chat_view_n: 0,
             chat_view_last: 0,
@@ -1810,7 +1791,6 @@ impl Cabin {
             bg: BgWork::default(),
             side_ask_kick: false,
             plan_open: false,
-            fork_explainer_seen: false,
             tool_cards: Vec::new(),
             live_blocks: Vec::new(),
             live_keys: Vec::new(),
@@ -3236,11 +3216,6 @@ impl Cabin {
         }
     }
 
-    pub(super) fn dismiss_fork_explainer(&mut self) {
-        self.fork_explainer_seen = true;
-        let _ = std::fs::write(fork_explainer_path(), b"1");
-    }
-
     fn set_permission_mode(&mut self, mode: PermissionMode) {
         self.permission_mode = mode;
         self.cfg.permission_mode = crate::config::persistable_permission_mode(mode.as_str());
@@ -3456,6 +3431,7 @@ impl Cabin {
                     if !halted {
                         self.tick_indexers();
                     }
+                    self.tick_model_registry(halted);
                     if self.last_persist.elapsed() > Duration::from_secs(2) {
                         self.persist_bg();
                     }
@@ -5046,6 +5022,7 @@ impl eframe::App for Cabin {
         self.poll_mem_file();
         self.poll_recall();
         self.poll_privacy();
+        self.poll_why();
         self.poll_diagnose();
         self.poll_native_memory();
         self.drain_native_unattended_usage();

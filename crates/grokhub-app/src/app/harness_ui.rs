@@ -124,6 +124,12 @@ pub(super) enum ParkSource {
     /// with no ask, and the cabin stopped the turn. Nothing is waiting;
     /// Approve re-runs the step once, like path C.
     Unasked,
+    /// Router R2b: Auto wanted a premium route (this grant key). Nothing is
+    /// waiting; Approve writes a revocable grant for exactly that route.
+    Premium(String),
+    /// Router R3b: allow sending to a provider you added (this provider id).
+    /// Nothing is waiting; Approve writes a revocable destination grant.
+    Provider(String),
 }
 
 /// A path D frame the watchdog already checked (Spike-1c).
@@ -275,6 +281,8 @@ pub(super) struct HarnessState {
     pub next_origin: Option<hx::Origin>,
     /// Spike-8a local indexers: the scheduler, the in-memory index, the asks.
     pub indexer: super::indexer_ui::IndexerUi,
+    /// Router R0: registry refresh, health fold, and `/why`.
+    pub router: super::router_ui::RouterUi,
     /// The decision inbox rows are open under the needs-attention line.
     pub inbox_open: bool,
     /// The card an inbox row asked to scroll into view, painted once.
@@ -684,6 +692,16 @@ impl Cabin {
                 sync_once = approve && dest == hx::HUB_DEST;
             }
             ParkSource::Repair => fix_answer = Some(approve),
+            ParkSource::Premium(key) => {
+                if approve {
+                    self.grant_premium_click(key);
+                }
+            }
+            ParkSource::Provider(id) => {
+                if approve {
+                    self.grant_provider_click(id);
+                }
+            }
             ParkSource::AutoPrepared(args) => {
                 if approve {
                     let (text, failed) = hx::run_approved_once(&self.native_workspace(), &park.tool, args);
@@ -802,6 +820,8 @@ impl Cabin {
                     | ParkSource::AutoPrepared(_)
                     | ParkSource::Unasked
                     | ParkSource::Repair
+                    | ParkSource::Premium(_)
+                    | ParkSource::Provider(_)
             ) {
                 keep.push_back(park);
                 self.harness.park = self.harness.queue.pop_front();
@@ -845,7 +865,9 @@ impl Cabin {
                 | ParkSource::Proactive(_)
                 | ParkSource::AutoPrepared(_)
                 | ParkSource::Unasked
-                | ParkSource::Repair => continue,
+                | ParkSource::Repair
+                | ParkSource::Premium(_)
+                | ParkSource::Provider(_) => continue,
             }
             let args = span_args(&park.tool, &park.action);
             self.write_span(hx::Span::deny(&trace, &park.tool, &args, why, park.class.as_str()), park.path);
@@ -1342,6 +1364,8 @@ impl Cabin {
                 ParkSource::Headless => HEADLESS_NOTE,
                 ParkSource::Unasked => UNASKED_NOTE,
                 ParkSource::Egress(_) => super::privacy_ui::HUB_CARD_NOTE,
+                ParkSource::Premium(_) => super::budget_ui::PREMIUM_CARD_NOTE,
+                ParkSource::Provider(_) => super::provider_ui::PROVIDER_CARD_NOTE,
                 _ => HARD_NOTE,
             };
             let overlay = self.palette_open || self.nav == Nav::Settings || self.find.focused;
@@ -1409,6 +1433,8 @@ impl Cabin {
                 self.resolve_grant_full(grant, "Jeremy kept Supervised");
             }
         }
+        // Router R2b: the week's budget and the upgrade nudge, click only.
+        self.paint_budget_card(ui, running);
         // Spike-8a: in-context scope asks, same card shape, click only.
         self.paint_scope_asks(ui);
         self.paint_work_rows(ui);

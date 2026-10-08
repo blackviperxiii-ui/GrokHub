@@ -2572,6 +2572,22 @@ pub fn self_change_card(kind: &str, name: &str, verb: &str, reason: &str, create
     card
 }
 
+/// Home update from the router (R2a): a model fell back, was retired, or
+/// joined your plan. Tell-only; `source_id` keys it so one incident posts once.
+pub fn router_update_card(source_id: &str, title: &str, body: &str, created_at: u64) -> UpdateCard {
+    let title = clip_line(title, TITLE_CHARS);
+    let body = clip_line(body, BODY_CHARS);
+    let mut card = blank_card(
+        feed_card_id("route", source_id, &title, created_at, false),
+        UpdateKind::SelfChange,
+        title,
+        (!body.is_empty()).then_some(body),
+        created_at,
+    );
+    card.source_id = source_id.trim().to_string();
+    card
+}
+
 /// What a Done-for-you card points at: the ledger line it can undo and
 /// the MindCheck class "Don't do this again" closes. Ids and keys only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

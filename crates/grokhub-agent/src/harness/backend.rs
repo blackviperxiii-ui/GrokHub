@@ -95,6 +95,7 @@ pub fn grok_build_click(req: ClickRequest<'_>) -> ClickOutcome {
                 episode: String::new(),
                 goal_step: String::new(),
                 tokens: None,
+                route: None,
             };
             let _ = append_span(req.config_dir, &span);
             ClickOutcome::Parked(reason)

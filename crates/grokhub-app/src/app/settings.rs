@@ -62,9 +62,21 @@ pub(super) fn cabin_default_model_label(raw: &str) -> &'static str {
         .unwrap_or("Auto")
 }
 
-pub(super) fn cabin_default_efforts() -> &'static [(&'static str, &'static str)] {
-    grokhub_core::REASONING_EFFORTS
-}
+const ROW_MODEL: &str = "Default model";
+const ROW_PERMISSION: &str = "Permission";
+const ROW_DESKTOP: &str = "Let Grok control the desktop";
+const ROW_DESKTOP_TEST: &str = "Desktop control";
+const ROW_SESSION: &str = "Session mode";
+const ROW_COLLAPSE: &str = "Always collapse";
+
+/// Settings → Cabin defaults, in order. There is no effort row: effort is automatic (Router R1).
+#[cfg(test)]
+pub(super) const DEFAULTS_ROWS: &[&str] = &[
+    ROW_MODEL,
+    super::budget_ui::FAST_ROW,
+    super::budget_ui::CAP_ROW,
+    super::budget_ui::CEILING_ROW,
+    ROW_PERMISSION, ROW_DESKTOP, ROW_DESKTOP_TEST, ROW_SESSION, ROW_COLLAPSE];
 
 pub(super) fn cabin_default_permissions() -> &'static [(&'static str, &'static str)] {
     &[("ask", "Ask"), ("auto", "Auto")]
@@ -674,18 +686,19 @@ impl Cabin {
                                                             }
                                                         }
                                                         SettingsSec::Defaults => {
-                                                            let models = cabin_default_models();
-                                                            let model_labels: Vec<String> = models
+                                                            let models = self.router_model_choices();
+                                                            let model_labels: Vec<String> =
+                                                                models.iter().map(|(_, label)| label.clone()).collect();
+                                                            let pin = cabin_default_model_id(&self.cfg.model);
+                                                            let model_selected = models
                                                                 .iter()
-                                                                .map(|(_, label)| (*label).to_string())
-                                                                .collect();
-                                                            let model_selected =
-                                                                cabin_default_model_label(&self.cfg.model)
-                                                                    .to_string();
+                                                                .find(|(id, _)| *id == pin)
+                                                                .map(|(_, label)| label.clone())
+                                                                .unwrap_or_else(|| cabin_default_model_label(&pin).to_string());
                                                             if let Some(i) = crate::cards::settings_dropdown(
                                                                 ui,
-                                                                "Default model",
-                                                                "Chat model for headless grok -p. Auto saves an empty pin.",
+                                                                ROW_MODEL,
+                                                                "Auto picks the model for each step. A model you pick here is kept while it answers.",
                                                                 &model_selected,
                                                                 &model_labels,
                                                             ) {
@@ -698,39 +711,17 @@ impl Cabin {
                                                                     }
                                                                 }
                                                             }
-                                                            let efforts = cabin_default_efforts();
-                                                            let effort_labels: Vec<String> = efforts
-                                                                .iter()
-                                                                .map(|(_, label)| (*label).to_string())
-                                                                .collect();
-                                                            let effort_id = grokhub_core::parse_reasoning_effort(
-                                                                &self.cfg.reasoning_effort,
-                                                            )
-                                                            .unwrap_or("high");
-                                                            let effort_selected =
-                                                                grokhub_core::effort_label(effort_id)
-                                                                    .to_string();
-                                                            if let Some(i) = crate::cards::settings_dropdown(
+                                                            if crate::cards::settings_action(
                                                                 ui,
-                                                                "Reasoning effort",
-                                                                "None through Extra High. Saved for the next cabin turn.",
-                                                                &effort_selected,
-                                                                &effort_labels,
+                                                                "Refresh models",
+                                                                "Check xAI's model list and your plan now.",
+                                                                "Refresh",
                                                             ) {
-                                                                if let Some((id, _)) = efforts.get(i) {
-                                                                    if let Some(effort) =
-                                                                        grokhub_core::parse_reasoning_effort(id)
-                                                                    {
-                                                                        if self.cfg.reasoning_effort != effort {
-                                                                            self.drop_turn_for_pin();
-                                                                            self.cfg.reasoning_effort =
-                                                                                effort.to_string();
-                                                                            self.persist_cfg();
-                                                                            self.status = "Saved".into();
-                                                                        }
-                                                                    }
-                                                                }
+                                                                self.refresh_models_now();
                                                             }
+                                                            self.ui_provider_rows(ui);
+                                                            crate::cards::settings_note(ui, &self.how_auto_picks_lines());
+                                                            self.ui_spend_rows(ui);
                                                             let perms = cabin_default_permissions();
                                                             let perm_labels: Vec<String> = perms
                                                                 .iter()
@@ -743,7 +734,7 @@ impl Cabin {
                                                                 choice_label(perms, &perm_id, "Ask");
                                                             if let Some(i) = crate::cards::settings_dropdown(
                                                                 ui,
-                                                                "Permission",
+                                                                ROW_PERMISSION,
                                                                 "Ask or Auto. Always stays on the composer for this launch.",
                                                                 &perm_selected,
                                                                 &perm_labels,
@@ -765,7 +756,7 @@ impl Cabin {
                                                             }
                                                             if crate::cards::settings_toggle(
                                                                 ui,
-                                                                "Let Grok control the desktop",
+                                                                ROW_DESKTOP,
                                                                 DESKTOP_CONTROL_HINT,
                                                                 &mut self.cfg.desktop_control,
                                                             ) {
@@ -785,7 +776,7 @@ impl Cabin {
                                                             );
                                                             if crate::cards::settings_action(
                                                                 ui,
-                                                                "Desktop control",
+                                                                ROW_DESKTOP_TEST,
                                                                 "Move to each monitor center and capture. Offset is reported when the pointer can be read back.",
                                                                 "Test",
                                                             ) {
@@ -804,7 +795,7 @@ impl Cabin {
                                                                 choice_label(sessions, session_id, "Chat");
                                                             if let Some(i) = crate::cards::settings_dropdown(
                                                                 ui,
-                                                                "Session mode",
+                                                                ROW_SESSION,
                                                                 "Chat, Plan, or btw. Composer pills still change this launch.",
                                                                 &session_selected,
                                                                 &session_labels,
@@ -823,7 +814,7 @@ impl Cabin {
                                                             }
                                                             if crate::cards::settings_toggle(
                                                                 ui,
-                                                                "Always collapse",
+                                                                ROW_COLLAPSE,
                                                                 "Thoughts start collapsed in every session. Expand opens one at a time.",
                                                                 &mut self.cfg.always_collapse_thoughts,
                                                             ) {
@@ -1041,6 +1032,9 @@ impl Cabin {
         }
         self.ui_privacy_rows(ui);
         self.ui_scope_rows(ui);
+        let locked = self.private_lock_for_paint().map(|why| super::privacy_ui::lock_hover(&why));
+        self.ui_premium_rows(ui, locked);
+        self.ui_provider_grant_rows(ui, locked);
         let workspace = self.grok_cwd();
         let dir = grokhub_agent::perm::config_dir();
         crate::cards::section_heading(ui, super::privacy_ui::RULES_HEAD);
@@ -1267,8 +1261,17 @@ mod tests {
             cabin_default_model_id("nope"),
             grokhub_core::sanitize_chat_model("nope")
         );
-        assert_eq!(cabin_default_efforts(), grokhub_core::REASONING_EFFORTS);
-        assert_eq!(grokhub_core::parse_reasoning_effort("max"), Some("xhigh"));
+        assert_eq!(
+            DEFAULTS_ROWS,
+            &[
+                "Default model",
+                "Use Grok 4.7 Fast when you're waiting",
+                "Weekly spend cap",
+                "Price limit",
+                "Permission",
+                "Let Grok control the desktop", "Desktop control", "Session mode", "Always collapse"]
+        );
+        assert!(DEFAULTS_ROWS.iter().all(|r| !r.to_ascii_lowercase().contains("effort")));
         let perms = cabin_default_permissions();
         assert_eq!(perms, &[("ask", "Ask"), ("auto", "Auto")]);
         assert!(perms.iter().all(|(id, _)| *id != "always-approve"));

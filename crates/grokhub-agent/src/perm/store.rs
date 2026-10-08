@@ -40,6 +40,11 @@ impl Drop for ConfigGuard {
     }
 }
 
+/// A [`ConfigGuard`] pinned this thread's config folder (tests do).
+pub fn config_pinned() -> bool {
+    OVERRIDE.with(|slot| slot.borrow().is_some())
+}
+
 pub fn config_dir() -> PathBuf {
     if let Some(dir) = OVERRIDE.with(|slot| slot.borrow().clone()) {
         return dir;
