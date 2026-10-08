@@ -353,3 +353,34 @@ fn card_signals_and_usage_are_deterministic() {
     let a = note_usage(&store, ok, "s2:7", NOW).unwrap();
     assert_eq!(note_usage(&store, ok, "s2:9", NOW).unwrap(), Noted::Known(a.id().unwrap().into()));
 }
+
+#[test]
+fn a_line_a_live_node_still_holds_is_not_stripped_or_proposed_for_removal() {
+    let tmp = Tmp::new("dream-copy");
+    let store = tmp.store();
+    let line = |id: &str| NodeDraft {
+        id: id.into(),
+        node_type: NodeType::Preference,
+        created: "2026-10-01T00:00:00Z".into(),
+        updated: "2026-10-01T00:00:00Z".into(),
+        source: "user".into(),
+        confidence: 0.9,
+        tags: vec![],
+        body: "Prefers short commit titles\n".into(),
+        sensitivity: Sensitivity::Plain,
+        consent_ref: String::new(),
+    };
+    // The same line came in twice (an import and a /remember); the dream retired one copy.
+    store.remember(&line("import-aaaaaaaaaaaa")).unwrap();
+    store.remember(&line("mem-bbbbbbbbbbbb")).unwrap();
+    store.forget("import-aaaaaaaaaaaa").unwrap();
+    let user_md = "# You\n- Prefers short commit titles\n";
+    let files = vec![HubMemoryFile { name: "USER.md".into(), content: user_md.into(), updated_at: 1 }];
+    assert_eq!(strip_forgotten(&store, files)[0].content, user_md);
+    assert!(reflect_diff(&store, user_md).remove.is_empty());
+    // Once the live copy is forgotten too, the line goes.
+    store.forget("mem-bbbbbbbbbbbb").unwrap();
+    let files = vec![HubMemoryFile { name: "USER.md".into(), content: user_md.into(), updated_at: 1 }];
+    assert_eq!(strip_forgotten(&store, files)[0].content, "# You\n");
+    assert_eq!(reflect_diff(&store, user_md).remove, vec!["- Prefers short commit titles".to_string()]);
+}
