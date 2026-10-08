@@ -3,13 +3,14 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
 use grokhub_core::model_registry::profile::RuntimeSettings;
 use grokhub_core::model_registry::Registry;
 
-use crate::harness::{read_spans_tail, Span};
+use crate::harness::{span_path, Span, SpanTail};
 
 /// Span session for model calls (shared with [`super::cabin::MODEL_TRACE`]).
 pub const ROUTE_TRACE: &str = super::cabin::MODEL_TRACE;
@@ -125,10 +126,40 @@ impl Eq for RouteRecord {}
 /// A multi-turn task should get at least this share of its prompt from the cache.
 pub const CACHE_FLOOR_PCT: u64 = 80;
 
+/// Lines of the model-call log kept followed in memory: the most any reader
+/// scans (the week's spend and the accuracy guard).
+pub const ROUTE_TAIL_LINES: usize = 20_000;
+
+static ROUTE_TAIL: Mutex<Option<SpanTail<(u64, RouteRecord)>>> = Mutex::new(None);
+
+fn keep_route(s: Span) -> Option<(u64, RouteRecord)> {
+    s.route.map(|r| (s.ts_ms, *r))
+}
+
+/// Route records in the newest `lines` lines of the model-call log,
+/// `(ts_ms, record)`, oldest first: what `read_spans_tail` over the log
+/// returns, from a tail kept in memory that parses only lines appended since
+/// the last read.
+pub fn route_records(config_dir: &Path, lines: usize) -> Vec<(u64, RouteRecord)> {
+    with_route_records(config_dir, lines, |records| records.cloned().collect())
+}
+
+/// [`route_records`] borrowed: `f` reads them in place, with no copy.
+pub fn with_route_records<R>(config_dir: &Path, lines: usize, f: impl FnOnce(&mut dyn Iterator<Item = &(u64, RouteRecord)>) -> R) -> R {
+    let path = span_path(config_dir, ROUTE_TRACE);
+    let mut slot = ROUTE_TAIL.lock().unwrap_or_else(|e| e.into_inner());
+    let tail = match slot.take() {
+        Some(t) if t.path() == path => slot.insert(t),
+        _ => slot.insert(SpanTail::new(path, ROUTE_TAIL_LINES, keep_route)),
+    };
+    tail.refresh();
+    let mut records = tail.newest_iter(lines.min(ROUTE_TAIL_LINES));
+    f(&mut records)
+}
+
 /// Every route record in the scanned tail, oldest first.
 fn scanned_routes(config_dir: &Path) -> Vec<(u64, RouteRecord)> {
-    let (spans, _) = read_spans_tail(config_dir, ROUTE_TRACE, WHY_SCAN_LINES);
-    spans.into_iter().filter_map(|s: Span| s.route.map(|r| (s.ts_ms, *r))).collect()
+    route_records(config_dir, WHY_SCAN_LINES)
 }
 
 /// The last [`WHY_LINES`] route records, oldest first.
