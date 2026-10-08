@@ -287,6 +287,8 @@ fn write_facts(env: &TickEnv<'_>, scope: &Scope, facts: &[Fact], tables: Vec<Str
             return TickOutcome::Paused(e.to_string());
         }
     }
+    // The grant behind this scope, for each node's `consent_ref` (Spike-5a).
+    let grant = ConsentLedger::load(env.config_dir).scope_grant(scope).map(|g| g.id.clone()).unwrap_or_default();
     'batches: for batch in facts.chunks(BATCH) {
         // The grant is read again before every batch: a revoke lands mid-tick.
         if !allowed(env.config_dir, scope) {
@@ -311,6 +313,7 @@ fn write_facts(env: &TickEnv<'_>, scope: &Scope, facts: &[Fact], tables: Vec<Str
                     Sensitivity::Plain => Sensitivity::Personal,
                     s => s,
                 },
+                consent_ref: grant.clone(),
             };
             match store.remember(&draft) {
                 Ok(_) => written += 1,
