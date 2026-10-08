@@ -722,7 +722,7 @@ pub fn drop_off_thread<T: Send + 'static>(value: T) {
 /// Returns whether the work finished in time.
 pub fn finish_within(limit: std::time::Duration, work: impl FnOnce() + Send + 'static) -> bool {
     let (tx, rx) = mpsc::channel();
-    let spawned = thread::Builder::new()
+    let spawned = std::thread::Builder::new()
         .name("grokhub-exit".into())
         .spawn(move || {
             work();
