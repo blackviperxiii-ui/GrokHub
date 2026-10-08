@@ -1,5 +1,11 @@
 //! Passive health: real calls move a model's state. No health probes.
 //! 403 content-safety and 429 `free-usage-exhausted` are not health signals.
+//!
+//! R2a adds the breaker ([`breaker_observe`]): 3 hard failures in a row (5xx
+//! or a timeout) or a ghost strike quarantine a model. It stays out of routing
+//! for its open backoff ([`BREAKER_BACKOFF_MS`], full jitter), then goes
+//! half-open: one probe or one low-risk background call decides whether it
+//! closes or opens again on the next step.
 
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +28,10 @@ pub const LATENCY_CAP: usize = 500;
 /// 404 strikes that make a listed model a ghost, inside [`STRIKE_WINDOW_MS`].
 pub const GHOST_STRIKES: usize = 2;
 pub const STRIKE_WINDOW_MS: u64 = 24 * 60 * 60 * 1000;
+/// Hard failures in a row (5xx or a timeout) that open the breaker.
+pub const BREAKER_FAILS: u32 = 3;
+/// The open backoff per open, before jitter: 1 m, 5 m, 30 m, 2 h, then 12 h.
+pub const BREAKER_BACKOFF_MS: [u64; 5] = [60_000, 5 * 60_000, 30 * 60_000, 2 * 60 * 60_000, 12 * 60 * 60_000];
 
 /// What a call's answer means for health.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,6 +85,9 @@ pub struct Observation {
     pub reasoning_tokens: u64,
     #[serde(default)]
     pub cost_ticks: i64,
+    /// The HTTP status (0 when there was none: a timeout or no connection).
+    #[serde(default)]
+    pub http: u16,
 }
 
 fn percentile(sorted: &[u64], pct: usize) -> u64 {
@@ -179,6 +192,102 @@ pub fn observe(rec: &mut ModelRecord, listed: bool, obs: &Observation) -> bool {
     rec.state != before
 }
 
+/// The cap of the open backoff for the `opens`-th open (1-based), before jitter.
+pub fn backoff_cap_ms(opens: u32) -> u64 {
+    let step = (opens.max(1) - 1) as usize;
+    BREAKER_BACKOFF_MS[step.min(BREAKER_BACKOFF_MS.len() - 1)]
+}
+
+/// Full jitter: anywhere in `[0, cap]`, drawn from `seed` (FNV-1a, so the
+/// fold stays deterministic and needs no random state).
+pub fn backoff_ms(opens: u32, seed: u64) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325_u64;
+    for b in seed.to_le_bytes() {
+        h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
+    }
+    h % (backoff_cap_ms(opens) + 1)
+}
+
+fn seed_of(id: &str, opens: u32, now_ms: u64) -> u64 {
+    id.bytes().fold(now_ms ^ ((opens as u64) << 48), |h, b| h.rotate_left(5) ^ b as u64)
+}
+
+/// A 5xx answer, a 503, or no answer at all (a timeout or no connection).
+pub fn hard_failure(obs: &Observation) -> bool {
+    match obs.status {
+        CallStatus::Error => obs.http == 0 || (500..600).contains(&obs.http),
+        CallStatus::Pressure => obs.http == 503,
+        _ => false,
+    }
+}
+
+fn open_breaker(rec: &mut ModelRecord, now_ms: u64, why: &str) {
+    let b = &mut rec.breaker;
+    b.opens = b.opens.saturating_add(1);
+    b.fails = 0;
+    b.half_open = false;
+    b.open_until_ms = now_ms.saturating_add(backoff_ms(b.opens, seed_of(&rec.meta.id, b.opens, now_ms)));
+    rec.state = ModelState::Quarantined;
+    rec.reason = why.to_string();
+}
+
+/// Close the breaker: the model answers again.
+pub fn close_breaker(rec: &mut ModelRecord) {
+    rec.breaker = super::record::Breaker::default();
+    rec.state = ModelState::Live;
+    rec.reason = "Answering again.".into();
+}
+
+/// The half-open check came back: a pass closes the breaker, anything else
+/// opens it again on the next step of the schedule. Returns true when the state changed.
+pub fn half_open_result(rec: &mut ModelRecord, ok: bool, now_ms: u64) -> bool {
+    if rec.state != ModelState::Quarantined {
+        return false;
+    }
+    if ok {
+        close_breaker(rec);
+        return true;
+    }
+    open_breaker(rec, now_ms, "Its check after the pause failed, so it waits longer.");
+    false
+}
+
+/// The breaker's half of a call, run after [`observe`]. `listed` is "in your
+/// own fresh list". Returns true when the state changed.
+pub fn breaker_observe(rec: &mut ModelRecord, listed: bool, obs: &Observation) -> bool {
+    let before = rec.state;
+    let now = obs.ts_ms;
+    match obs.status {
+        CallStatus::Ok => {
+            rec.breaker.fails = 0;
+            if rec.state == ModelState::Quarantined {
+                close_breaker(rec);
+            }
+        }
+        CallStatus::NotFound if listed && obs.endpoint_ok => {
+            // The first strike quarantines; the second (inside a day) made it a ghost in `observe`.
+            if matches!(rec.state, ModelState::Live | ModelState::Degraded | ModelState::Probing) {
+                open_breaker(rec, now, "The API said not found for it once, so it rests until a check passes.");
+            }
+        }
+        _ if hard_failure(obs) => {
+            rec.breaker.fails = rec.breaker.fails.saturating_add(1);
+            if rec.state == ModelState::Quarantined && rec.breaker.half_open {
+                open_breaker(rec, now, "Its check after the pause failed, so it waits longer.");
+            } else if rec.breaker.fails >= BREAKER_FAILS && rec.state.routable() {
+                open_breaker(rec, now, "It failed 3 times in a row (server errors or timeouts), so it rests for a while.");
+            }
+        }
+        _ => {}
+    }
+    rec.state != before
+}
+
+/// Quarantined and its open backoff has run out, with no check out yet.
+pub fn half_open_due(rec: &ModelRecord, now_ms: u64) -> bool {
+    rec.state == ModelState::Quarantined && !rec.breaker.half_open && now_ms >= rec.breaker.open_until_ms
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,6 +307,7 @@ mod tests {
             endpoint_ok: true,
             reasoning_tokens: 0,
             cost_ticks: 0,
+            http: 0,
         }
     }
 
@@ -305,5 +415,82 @@ mod tests {
         }
         assert_eq!(r.state, ModelState::Degraded);
         assert_eq!(r.reason, "It is answering more than twice as slowly as its usual week.");
+    }
+
+    fn hard(ts_ms: u64) -> Observation {
+        Observation { http: 502, ..obs(CallStatus::Error, ts_ms) }
+    }
+
+    fn both(r: &mut ModelRecord, o: &Observation) {
+        observe(r, true, o);
+        breaker_observe(r, true, o);
+    }
+
+    #[test]
+    fn three_hard_failures_in_a_row_quarantine_and_an_ok_in_between_resets() {
+        let mut r = rec();
+        both(&mut r, &hard(1));
+        both(&mut r, &hard(2));
+        both(&mut r, &obs(CallStatus::Ok, 3));
+        both(&mut r, &hard(4));
+        both(&mut r, &hard(5));
+        assert_ne!(r.state, ModelState::Quarantined);
+        assert_eq!(r.breaker.fails, 2);
+        // A 400 or a 429 is not a hard failure; a timeout (no status) and a 503 are.
+        both(&mut r, &Observation { http: 400, ..obs(CallStatus::Error, 6) });
+        both(&mut r, &Observation { http: 429, ..obs(CallStatus::Pressure, 7) });
+        assert_eq!(r.breaker.fails, 2);
+        assert!(hard_failure(&Observation { http: 503, ..obs(CallStatus::Pressure, 0) }));
+        assert!(hard_failure(&obs(CallStatus::Error, 0)));
+        both(&mut r, &obs(CallStatus::Error, 8));
+        assert_eq!((r.state, r.breaker.opens), (ModelState::Quarantined, 1));
+        assert!(r.breaker.open_until_ms >= 8 && r.breaker.open_until_ms <= 8 + 60_000);
+        assert!(!r.state.routable());
+    }
+
+    #[test]
+    fn a_ghost_strike_quarantines_and_the_second_makes_a_ghost() {
+        let mut r = rec();
+        both(&mut r, &obs(CallStatus::NotFound, 10));
+        assert_eq!(r.state, ModelState::Quarantined);
+        both(&mut r, &obs(CallStatus::NotFound, 20));
+        assert_eq!(r.state, ModelState::Ghost);
+    }
+
+    #[test]
+    fn backoff_follows_the_schedule_with_bounded_full_jitter() {
+        assert_eq!((1..=7).map(backoff_cap_ms).collect::<Vec<_>>(), vec![60_000, 300_000, 1_800_000, 7_200_000, 43_200_000, 43_200_000, 43_200_000]);
+        for opens in 1..=6 {
+            let cap = backoff_cap_ms(opens);
+            let draws: Vec<u64> = (0..500).map(|s| backoff_ms(opens, s)).collect();
+            assert!(draws.iter().all(|d| *d <= cap), "{opens}");
+            // Full jitter spreads over the whole range, not one point.
+            assert!(draws.iter().any(|d| *d < cap / 4) && draws.iter().any(|d| *d > cap * 3 / 4), "{opens}");
+        }
+        assert_eq!(backoff_ms(2, 77), backoff_ms(2, 77));
+    }
+
+    #[test]
+    fn half_open_lets_one_check_through_then_closes_or_steps_the_backoff() {
+        let mut r = rec();
+        for t in 0..3 {
+            both(&mut r, &hard(t));
+        }
+        let until = r.breaker.open_until_ms;
+        assert!(!half_open_due(&r, until - 1));
+        assert!(half_open_due(&r, until));
+        r.breaker.half_open = true;
+        assert!(!half_open_due(&r, until + 1), "one check at a time");
+        // The check fails: open again on the next step (up to 5 m).
+        assert!(!half_open_result(&mut r, false, until));
+        assert_eq!((r.state, r.breaker.opens, r.breaker.half_open), (ModelState::Quarantined, 2, false));
+        assert!(r.breaker.open_until_ms <= until + 300_000);
+        // A failing background call while half-open also opens it again.
+        r.breaker.half_open = true;
+        both(&mut r, &hard(until + 10));
+        assert_eq!(r.breaker.opens, 3);
+        // A pass closes it.
+        assert!(half_open_result(&mut r, true, until + 20));
+        assert_eq!((r.state, r.breaker.clone()), (ModelState::Live, crate::model_registry::record::Breaker::default()));
     }
 }

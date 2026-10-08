@@ -1,13 +1,16 @@
-//! Router R0 in the cabin: the model registry refresh on the heartbeat, the
-//! passive-health fold, the onboarding probe, and `/why`. Network and file work
-//! run off the UI thread; nothing here changes what a chat sends.
+//! The router in the cabin: the model registry refresh on the heartbeat, the
+//! passive-health fold, the onboarding and half-open probes, the routing table
+//! rebuild (R2a), what the user hears when a model breaks, and `/why`. Network
+//! and file work run off the UI thread.
 
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use grokhub_agent::route::guard::{run_guard, GuardRun};
+use grokhub_agent::route::heal::{heal_messages, joined_messages, pause_msg, HealMsg, HealNotes, Heard, Tier};
 use grokhub_agent::route::refresh::{fold_health, probe_next, run_refresh, RefreshDone, RefreshJob};
-use grokhub_agent::route::sources::{probe_model, GrokBuildSource, XaiApiSource};
+use grokhub_agent::route::sources::{probe_model, rebuild_table, GrokBuildSource, XaiApiSource};
+use grokhub_core::model_registry::RegistryEvent;
 use grokhub_agent::AuthKind;
 use grokhub_core::model_registry::profile::read_profiles;
 use grokhub_core::model_registry::store::load_registry;
@@ -19,16 +22,52 @@ use super::*;
 pub(super) const HEALTH_FOLD_EVERY: Duration = Duration::from_secs(60);
 /// The R1 accuracy guard reads route records and outcomes this often.
 pub(super) const GUARD_EVERY: Duration = Duration::from_secs(60 * 60);
+/// Router lines kept in the Work tree.
+pub(super) const ROUTER_ROWS_MAX: usize = 4;
+
+/// What a refresh or fold told the user, after each incident's once-only check.
+#[derive(Debug, Default)]
+pub(super) struct HealOut {
+    pub msgs: Vec<HealMsg>,
+    /// Incidents that ended: their Work-tree line goes.
+    pub cleared: Vec<String>,
+}
+
+/// Messages for a batch of registry events, each incident told once.
+fn heal_after(dir: &std::path::Path, events: &[RegistryEvent], joined: &[String], pin: &str) -> HealOut {
+    let now = grokhub_core::now_ms();
+    let mut heard = Heard::default();
+    if !events.is_empty() {
+        heard = heal_messages(events, &load_registry(dir), &read_profiles(dir), pin, now);
+    }
+    heard.msgs.extend(joined_messages(joined));
+    if heard.msgs.is_empty() && heard.cleared.is_empty() {
+        return HealOut::default();
+    }
+    let cleared = heard.cleared.clone();
+    let mut notes = HealNotes::load(dir);
+    let msgs = notes.admit(heard, now);
+    notes.save(dir);
+    HealOut { msgs, cleared }
+}
 
 #[derive(Debug, Default)]
 pub(super) struct RouterUi {
     pub clock: Option<RefreshClock>,
-    pub rx: Option<mpsc::Receiver<RefreshDone>>,
-    pub fold_rx: Option<mpsc::Receiver<bool>>,
+    pub rx: Option<mpsc::Receiver<(RefreshDone, HealOut)>>,
+    pub fold_rx: Option<mpsc::Receiver<(bool, HealOut)>>,
     pub last_fold: Option<Instant>,
     pub why_rx: Option<mpsc::Receiver<String>>,
     pub guard_rx: Option<mpsc::Receiver<GuardRun>>,
     pub last_guard: Option<Instant>,
+    /// Refresh models was clicked: the next refresh rebuilds the table even unchanged.
+    pub force_table: bool,
+    /// The pin the router last heard.
+    pub pin: Option<String>,
+    /// Quiet Work-tree lines: (incident key, text), newest first.
+    pub rows: Vec<(String, String)>,
+    /// Pauses already shown this launch (a model that answers again clears them).
+    pub paused: Vec<String>,
 }
 
 impl Cabin {
@@ -58,13 +97,14 @@ impl Cabin {
     pub(super) fn tick_model_registry(&mut self, halted: bool) {
         if let Some(rx) = self.harness.router.rx.take() {
             match rx.try_recv() {
-                Ok(done) => {
+                Ok((done, heal)) => {
                     if let Some(clock) = self.harness.router.clock.as_mut() {
                         clock.signal |= done.signal;
                         if done.gb_version.is_some() {
                             clock.gb_version = done.gb_version;
                         }
                     }
+                    self.deliver_heal(heal);
                 }
                 Err(mpsc::TryRecvError::Empty) => self.harness.router.rx = Some(rx),
                 Err(mpsc::TryRecvError::Disconnected) => {}
@@ -72,16 +112,21 @@ impl Cabin {
         }
         if let Some(rx) = self.harness.router.fold_rx.take() {
             match rx.try_recv() {
-                Ok(signal) => {
+                Ok((signal, heal)) => {
                     if let Some(clock) = self.harness.router.clock.as_mut() {
                         clock.signal |= signal;
                     }
+                    self.deliver_heal(heal);
                 }
                 Err(mpsc::TryRecvError::Empty) => self.harness.router.fold_rx = Some(rx),
                 Err(mpsc::TryRecvError::Disconnected) => {}
             }
         }
         self.poll_guard();
+        self.sync_router_pin();
+        if let Some((_, model, why)) = grokhub_agent::route::live::take_no_route() {
+            self.deliver_heal(HealOut { msgs: vec![pause_msg(&model, &why, &[])], cleared: Vec::new() });
+        }
         if halted || self.scratch() {
             return;
         }
@@ -108,10 +153,13 @@ impl Cabin {
         if fold_due && self.harness.router.rx.is_none() && self.harness.router.fold_rx.is_none() {
             self.harness.router.last_fold = Some(Instant::now());
             let dir = crate::config::config_dir();
+            let pin = self.cfg.model.trim().to_string();
             let (tx, rx) = mpsc::channel();
             self.harness.router.fold_rx = Some(rx);
             std::thread::spawn(move || {
-                let _ = tx.send(fold_health(&dir).1);
+                let (events, signal) = fold_health(&dir);
+                let heal = heal_after(&dir, &events, &[], &pin);
+                let _ = tx.send((signal, heal));
             });
         }
     }
@@ -125,6 +173,8 @@ impl Cabin {
         let gb = grokhub_acp::find_grok().map(|bin| GrokBuildSource { bin, cwd: self.grok_cwd() });
         let named = self.router_named_models();
         let default_model = grokhub_agent::DEFAULT_MODEL.to_string();
+        let pin = self.cfg.model.trim().to_string();
+        let force = std::mem::take(&mut self.harness.router.force_table);
         let dir = crate::config::config_dir();
         let (tx, rx) = mpsc::channel();
         self.harness.router.rx = Some(rx);
@@ -139,10 +189,14 @@ impl Cabin {
             }
             let job = RefreshJob { config_dir: dir.clone(), sources, credential, named, default_model, now_ms: now };
             let done = run_refresh(&job);
-            if let (Some(b), Credential::Plan) = (bearer.as_deref(), credential) {
+            let plan = bearer.as_deref().filter(|_| credential == Credential::Plan);
+            if let Some(b) = plan {
                 while probe_next(&dir, credential, grokhub_core::now_ms(), &mut |m, c| probe_model(&dir, b, m, c)).is_some() {}
             }
-            let _ = tx.send(done);
+            // Evals run only on a plan sign-in (included routes); a key rebuilds from metadata.
+            let table = rebuild_table(&dir, plan, force, grokhub_core::now_ms());
+            let heal = heal_after(&dir, &done.events, &table.joined, &pin);
+            let _ = tx.send((done, heal));
         });
     }
 
@@ -217,5 +271,150 @@ impl Cabin {
             Err(mpsc::TryRecvError::Empty) => self.harness.router.why_rx = Some(rx),
             Err(mpsc::TryRecvError::Disconnected) => {}
         }
+    }
+
+    /// The live router keeps a pin while it answers; Auto is an empty pin.
+    fn sync_router_pin(&mut self) {
+        let pin = self.cfg.model.trim();
+        if self.harness.router.pin.as_deref() != Some(pin) {
+            grokhub_agent::route::live::set_pin(pin);
+            self.harness.router.pin = Some(pin.to_string());
+        }
+    }
+
+    /// Work-tree lines, Home updates and pauses, by tier. Home updates go
+    /// through the feed, which holds them in quiet hours.
+    fn deliver_heal(&mut self, heal: HealOut) {
+        let router = &mut self.harness.router;
+        router.rows.retain(|(k, _)| !heal.cleared.contains(k));
+        router.paused.retain(|k| !heal.cleared.contains(k));
+        let now = now_ms();
+        for m in heal.msgs {
+            match m.tier {
+                Tier::WorkRow => {
+                    let router = &mut self.harness.router;
+                    router.rows.retain(|(k, _)| *k != m.key);
+                    router.rows.insert(0, (m.key, m.text));
+                    router.rows.truncate(ROUTER_ROWS_MAX);
+                }
+                Tier::HomeUpdate => {
+                    let card = grokhub_core::router_update_card(&m.key, &m.title, &m.text, now);
+                    self.post_feed_card(card);
+                }
+                Tier::Pause => {
+                    if self.harness.router.paused.contains(&m.key) {
+                        continue;
+                    }
+                    self.harness.router.paused.push(m.key.clone());
+                    self.status = m.title.clone();
+                    let card = grokhub_core::suggestion_card(&format!("router-{}", m.key), &m.title, &m.text, now);
+                    self.post_feed_card(card);
+                }
+            }
+        }
+    }
+
+    /// Settings → Refresh models: list, probes and the table now.
+    pub(super) fn refresh_models_now(&mut self) {
+        self.harness.router.force_table = true;
+        if let Some(clock) = self.harness.router.clock.as_mut() {
+            clock.demand = true;
+        }
+        self.status = "Refreshing models...".into();
+    }
+
+    /// The Settings model list: Auto first, retired models gone (unless pinned),
+    /// and a tag on a model that isn't in your plan or isn't answering.
+    pub(super) fn router_model_choices(&self) -> Vec<(String, String)> {
+        let (reg, _) = grokhub_agent::route::live::snapshot(&crate::config::config_dir());
+        let pin = self.cfg.model.trim();
+        super::settings::cabin_default_models()
+            .into_iter()
+            .filter(|(id, _)| id.is_empty() || !grokhub_agent::route::heal::settings_hidden(&reg, id, pin))
+            .map(|(id, label)| {
+                let retired = !id.is_empty() && reg.get(id).is_some_and(|r| r.state.tombstone());
+                let label = match grokhub_agent::route::heal::settings_tag(&reg, id) {
+                    _ if retired => format!("{label} (retired)"),
+                    Some(tag) => format!("{label} · {tag}"),
+                    None => label.to_string(),
+                };
+                (id.to_string(), label)
+            })
+            .collect()
+    }
+
+    /// "How Auto picks": read-only, one line per class from the routing table.
+    pub(super) fn how_auto_picks_lines(&self) -> String {
+        let table = grokhub_agent::route::live::table_snapshot(&crate::config::config_dir());
+        if table.classes.is_empty() {
+            return "How Auto picks: the table builds after the model list refreshes.".into();
+        }
+        let mut lines = vec![format!("How Auto picks (table v{}):", table.version)];
+        lines.extend(grokhub_agent::route::table::how_auto_picks(&table));
+        lines.join("\n")
+    }
+
+    /// `/why table`.
+    pub(super) fn run_why_table(&mut self) {
+        let table = grokhub_agent::route::live::table_snapshot(&crate::config::config_dir());
+        let body = grokhub_agent::route::table::why_table_text(&table, now_ms());
+        self.live_mut().push(("assistant".into(), mark_slash_result(&body)));
+        self.stamp_current_access();
+        self.persist();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use grokhub_agent::route::heal::pause_msg;
+
+    fn msg(tier: Tier, key: &str, text: &str) -> HealMsg {
+        HealMsg { tier, key: key.into(), title: format!("title {key}"), text: text.into() }
+    }
+
+    #[test]
+    fn heal_tiers_land_in_the_work_tree_on_home_or_as_a_pause() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("router-heal");
+        std::fs::create_dir_all(&root).unwrap();
+        let _pin = crate::config::TestConfigDir::set(root.clone());
+        let mut app = Cabin::quiet_for_test();
+        let row = "grok-4.6 isn't answering, so I'm using grok-4.7 for now. Your pick is saved.";
+        app.deliver_heal(HealOut {
+            msgs: vec![
+                msg(Tier::WorkRow, "unhealthy:grok-4.6", row),
+                msg(Tier::HomeUpdate, "retired:grok-4.3", "grok-4.3 was retired by xAI"),
+                pause_msg("grok-4.7", "It failed 3 times in a row.", &[]),
+            ],
+            cleared: Vec::new(),
+        });
+        assert_eq!(app.harness.router.rows, vec![("unhealthy:grok-4.6".to_string(), row.to_string())]);
+        assert_eq!(app.status, "Paused: no model in your plan is answering");
+        let titles: Vec<&str> = app.updates.iter().map(|c| c.title.as_str()).collect();
+        assert_eq!(titles.len(), 2, "{titles:?}");
+        assert!(titles.contains(&"title retired:grok-4.3") && titles.contains(&"Paused: no model in your plan is answering"));
+        // The same pause again says nothing; the model answering again clears the row and the pause.
+        app.deliver_heal(HealOut { msgs: vec![pause_msg("grok-4.7", "It failed.", &[])], cleared: Vec::new() });
+        assert_eq!(app.updates.len(), 2);
+        app.deliver_heal(HealOut { msgs: Vec::new(), cleared: vec!["unhealthy:grok-4.6".into(), "noroute:grok-4.7".into()] });
+        assert!(app.harness.router.rows.is_empty());
+        assert!(app.harness.router.paused.is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_pin_reaches_the_router_and_refresh_forces_a_table_rebuild() {
+        let mut app = Cabin::quiet_for_test();
+        app.cfg.model = "grok-4.6".into();
+        app.sync_router_pin();
+        assert_eq!(app.harness.router.pin.as_deref(), Some("grok-4.6"));
+        app.cfg.model = String::new();
+        app.sync_router_pin();
+        assert_eq!(app.harness.router.pin.as_deref(), Some(""));
+        app.harness.router.clock = Some(RefreshClock::new(1));
+        app.refresh_models_now();
+        assert!(app.harness.router.force_table);
+        assert!(app.harness.router.clock.as_ref().unwrap().demand);
     }
 }

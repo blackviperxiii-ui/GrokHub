@@ -1,6 +1,11 @@
 //! One registry refresh, run off the UI thread by the cabin's heartbeat: read
 //! the sources, fold passive health, diff, write span events, build model
 //! profiles for added or changed models, and run at most one onboarding probe.
+//!
+//! R2a: a model is probed only when it is first seen, when its effort list or
+//! endpoint changed, or when its breaker goes half-open; every probe shares
+//! the onboarding queue's daily cap. Any other change (a price, a notice)
+//! rebuilds the profile around the probe it already has.
 
 use std::path::{Path, PathBuf};
 
@@ -76,24 +81,31 @@ pub fn fold_health(config_dir: &Path) -> (Vec<RegistryEvent>, bool) {
     (events, signal)
 }
 
+/// A change that needs a new probe: the effort list or the endpoint.
+fn reprobe(what: &[String]) -> bool {
+    what.iter().any(|w| w == "efforts" || w == "endpoint")
+}
+
 /// Build and write profiles for added or changed models; queue the ones to probe.
-fn onboard(config_dir: &Path, reg: &Registry, events: &[RegistryEvent], cred: Credential, default_model: &str, now_ms: u64) -> usize {
-    let ids: Vec<&String> = events
+fn onboard(config_dir: &Path, reg: &mut Registry, events: &[RegistryEvent], cred: Credential, default_model: &str, now_ms: u64) -> usize {
+    let ids: Vec<(&String, bool)> = events
         .iter()
         .filter_map(|e| match e {
-            RegistryEvent::Added { id } | RegistryEvent::Changed { id, .. } => Some(id),
+            RegistryEvent::Added { id } => Some((id, true)),
+            RegistryEvent::Changed { id, what } => Some((id, reprobe(what))),
             _ => None,
         })
         .collect();
     let mut queue: Onboarding = read_json(&onboarding_path(config_dir)).unwrap_or_default();
     let mut to_probe = Vec::new();
     let mut written = 0;
-    for id in ids {
+    for (id, fresh) in ids {
         let Some(rec) = reg.get(id) else { continue };
         if !rec.state.routable() {
             continue;
         }
-        let probe = first_probe(&rec.sources, cost_class(cred, Some(rec)));
+        let kept = (!fresh).then(|| read_profile(config_dir, id)).flatten().map(|p| p.probe);
+        let probe = kept.unwrap_or_else(|| first_probe(&rec.sources, cost_class(cred, Some(rec))));
         if probe.status == "queued" {
             to_probe.push(id.clone());
         }
@@ -106,6 +118,13 @@ fn onboard(config_dir: &Path, reg: &Registry, events: &[RegistryEvent], cred: Cr
     for (id, p) in grokhub_core::model_registry::profile::read_profiles(config_dir) {
         let due = now_ms.saturating_sub(p.built_at) >= grokhub_core::model_registry::probe::PROBE_RETRY_MS;
         if p.probe.status == "failed" && due && reg.get(&id).is_some_and(|r| r.state.routable()) && !to_probe.contains(&id) {
+            to_probe.push(id);
+        }
+    }
+    // A quarantined model whose backoff ran out gets its one half-open check here.
+    for id in reg.half_open_due(now_ms) {
+        if cred == Credential::Plan && !to_probe.contains(&id) {
+            reg.mark_half_open(&id);
             to_probe.push(id);
         }
     }
@@ -126,12 +145,19 @@ pub fn probe_next(
     let mut queue: Onboarding = read_json(&path).unwrap_or_default();
     let id = queue.take_next(now_ms)?;
     let _ = write_json(&path, &queue);
-    let reg = load_registry(config_dir);
+    let mut reg = load_registry(config_dir);
     let rec = reg.get(&id)?;
     let cost = cost_class(cred, Some(rec));
     let result = probe(&rec.meta, cost);
     let mut p = ModelProfile::build(&rec.meta, result, now_ms);
     let _ = write_profile(config_dir, &mut p);
+    if rec.breaker.half_open {
+        // The half-open check: only a probe that ran and passed closes the breaker.
+        if let Some(ev) = reg.half_open_result(&id, p.probe.status == "ok", now_ms) {
+            let _ = append_span(config_dir, &event_span(&ev));
+        }
+        let _ = save_registry(config_dir, &reg);
+    }
     let line = ProbeLogLine {
         ts_ms: now_ms,
         model: id,
@@ -163,11 +189,11 @@ pub fn run_refresh(job: &RefreshJob<'_>) -> RefreshDone {
     reg.entitlement.credential = job.credential;
     let (mut events, signal) = reg.fold(&take_observations(dir));
     events.extend(reg.apply_refresh(&listings, &job.named, job.now_ms));
-    let _ = save_registry(dir, &reg);
     for ev in &events {
         let _ = append_span(dir, &event_span(ev));
     }
-    let profiles_written = onboard(dir, &reg, &events, job.credential, &job.default_model, job.now_ms);
+    let profiles_written = onboard(dir, &mut reg, &events, job.credential, &job.default_model, job.now_ms);
+    let _ = save_registry(dir, &reg);
     RefreshDone { events, errors, gb_version, signal, profiles_written }
 }
 
@@ -281,6 +307,37 @@ mod tests {
         assert_eq!((p.usable, p.unusable_reason.as_deref()), (false, Some("Tool calls didn't come back in the right shape.")));
         let text = crate::route::why_models_text(&load_registry(&dir), &read_profiles(&dir));
         assert_eq!(text, "grok-4.7 · live · not usable. In your model list. Tool calls didn't come back in the right shape.");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn half_open_checks_share_the_daily_probe_cap() {
+        use grokhub_core::model_registry::probe::PROBE_RUNS_PER_DAY;
+        use grokhub_core::model_registry::{CallStatus, ModelState, Observation};
+        let dir = test_dir("route-refresh-half-open");
+        let ids: Vec<String> = (1..=6).map(|i| format!("grok-4.{i}")).collect();
+        let mut reg = Registry::default();
+        reg.apply_refresh(&[Listing::new(SourceKind::XaiApi, ids.iter().map(|i| meta(i)).collect())], &[], 1);
+        for id in &ids {
+            let fails: Vec<Observation> = (0..3)
+                .map(|t| Observation { model: id.clone(), ts_ms: 10 + t, status: CallStatus::Error, latency_ms: 0, served_model: None, endpoint_ok: true, reasoning_tokens: 0, cost_ticks: 0, http: 503 })
+                .collect();
+            reg.fold(&fails);
+            assert_eq!(reg.get(id).unwrap().state, ModelState::Quarantined);
+        }
+        // A day later every backoff ran out: six half-open checks are due.
+        let now = 1 + grokhub_core::model_registry::probe::DAY_MS;
+        assert_eq!(reg.half_open_due(now).len(), 6);
+        onboard(&dir, &mut reg, &[], Credential::Plan, "", now);
+        save_registry(&dir, &reg).unwrap();
+        let mut ran = 0;
+        while probe_next(&dir, Credential::Plan, now, &mut |_, _| ProbeResult { status: "ok".into(), ..ProbeResult::default() }).is_some() {
+            ran += 1;
+        }
+        assert_eq!(ran, PROBE_RUNS_PER_DAY as usize, "the sixth waits for tomorrow");
+        let reg = load_registry(&dir);
+        let live = ids.iter().filter(|i| reg.get(i).unwrap().state == ModelState::Live).count();
+        assert_eq!((live, ids.len() - live), (5, 1));
         let _ = std::fs::remove_dir_all(dir);
     }
 
