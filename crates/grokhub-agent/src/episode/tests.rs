@@ -695,3 +695,21 @@ fn workspace_deny_rules_hold_inside_an_episode() {
     let step = spans.iter().find(|s| s.tool == "run_terminal_command").expect("the shell step is logged");
     assert_eq!(step.decision, "deny", "Always mode still obeys a deny rule: {}", step.result);
 }
+
+#[test]
+fn a_long_goal_reaches_the_worker_and_the_checker_whole_and_spans_keep_200() {
+    let r = rig("long-goal", clicks_then_done(1));
+    let goal = format!("Open Settings, then {} and finally turn on Wi-Fi", "check the network list carefully, ".repeat(10));
+    assert!(goal.chars().count() > 300);
+    let mut ep = r.episode(&goal);
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    let worker = serde_json::to_string(&responses_body(&r.model.worker_calls.lock().unwrap()[0])).unwrap();
+    assert!(worker.contains("finally turn on Wi-Fi"), "the worker sees the end of the goal");
+    let judge = serde_json::to_string(&responses_body(&r.model.judge_calls.lock().unwrap()[0])).unwrap();
+    assert!(judge.contains("finally turn on Wi-Fi"), "the checker judges the whole goal");
+    for s in r.spans() {
+        assert!(s.goal_step.chars().count() <= GOAL_CAP, "{}", s.goal_step.chars().count());
+    }
+    assert_eq!(r.spans().iter().find(|s| is_step(s)).unwrap().goal_step.chars().count(), GOAL_CAP);
+}

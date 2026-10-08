@@ -310,10 +310,17 @@ impl NativeEngine {
     /// episode. Each step starts the worker fresh from the episode view; the
     /// episode outlives the prompt (Steers, new messages, pauses).
     fn prompt_episode(&mut self, text: &str, seed: &EpisodeSeed, emit: &mut dyn FnMut(AcpEvent)) -> Result<(), String> {
-        use crate::episode::{Continue, Episode, EpisodeEnd, EpisodeStop, EpisodeView, FileParks, KernelIn};
+        use crate::episode::{Continue, Episode, EpisodeEnd, EpisodeStop, EpisodeView, FileParks, KernelIn, Parks};
         let now = grokhub_core::now_ms();
         let open = matches!(&self.episode, Some((ep, _)) if ep.id == seed.id && ep.ended.is_none());
         if !open {
+            // A replaced episode's parks can't run any more: take their files
+            // back so a late Approve answers nothing.
+            if let Some((old, _)) = self.episode.take() {
+                for park in &old.parks {
+                    FileParks(&seed.config_dir).withdraw(&park.id);
+                }
+            }
             let ep = Episode::begin(&seed.id, &seed.chat_id, text, now, &seed.held);
             self.episode = Some((ep, EpisodeView::default()));
         }

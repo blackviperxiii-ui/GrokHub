@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use super::verify::{verify_gate, Observation, Verdict};
 use super::view::{zoom_schema, EpisodeView, Folder, ZOOM_TOOL};
-use super::{CapHit, Episode, EpisodeEnd, OpenPark, StepShape, FANOUT_CAP, PARK_PREFIX};
+use super::{CapHit, Episode, EpisodeEnd, OpenPark, StepShape, FANOUT_CAP, GOAL_CAP, PARK_PREFIX};
 use crate::client::{ContentPart, FunctionCall, InputItem, ModelClient, Usage};
 use crate::gate::{self, Decision, Gate, PermAnswer, PermitWait, Waited};
 use crate::harness::{
@@ -185,7 +185,7 @@ pub fn run_episode(
 ) -> EpisodeOut {
     let mut run = Run { k, ep, view, usage: Usage::default(), tokens: None, obs: None };
     if run.ep.trail.is_empty() {
-        let goal = format!("goal: {}", run.ep.goal);
+        let goal = format!("goal: {}", run.ep.goal.chars().take(GOAL_CAP).collect::<String>());
         run.write(run.ep.marker("begin", "open", &goal));
     }
     if let Some(end) = run.ep.ended {
@@ -252,6 +252,7 @@ impl Run<'_, '_> {
 
     fn write(&mut self, span: Span) {
         let mut span = span.on_path("E").in_turn(&self.ep.chat_id, self.ep.turn).in_episode(&self.ep.id);
+        span.goal_step = span.goal_step.chars().take(GOAL_CAP).collect();
         if span.access.is_empty() {
             span.access = self.k.access.as_str().into();
         }

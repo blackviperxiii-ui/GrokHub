@@ -632,7 +632,10 @@ impl Cabin {
                 sync_once = approve && dest == hx::HUB_DEST;
             }
         }
-        self.status = if approve {
+        self.status = if approve && kernel_park && !self.running {
+            // The kernel runs the step at its next loop, which a message starts.
+            format!("Approved once · {} · send a message to let the session go on", park.class.label())
+        } else if approve {
             format!("Approved once · {}", park.class.label())
         } else {
             format!("Denied · {}", park.class.label())
