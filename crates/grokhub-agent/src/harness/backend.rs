@@ -1,22 +1,42 @@
-//! Computer-use driver adapter. Spike-0: Grok Build CU only (no Cua).
+//! Computer-use driver adapter. Spike-0: Grok Build CU. Spike-2a adds Cua
+//! Driver as a second pair of hands on Linux, behind a spike flag that is off
+//! by default (`cua.rs`); both go through the same `decide`.
 
 use crate::gate::{DeskFlags, Gate};
 use crate::harness::access::AccessMode;
-use crate::harness::approval::{decide, decide_harness, GateOutcome, Step};
-use crate::harness::hard::{credential_field, HardClass};
-use crate::harness::span::{append_span, redact_args, Origin, Span};
+use crate::harness::approval::{decide, decide_harness, GateOutcome, Step, APPROVAL_TTL};
+use crate::harness::hard::{
+    click_action, click_rule, click_target, credential_action, credential_field, delete_files_action, HardClass, TARGET_HINT,
+};
+use crate::harness::park::{post_park, wait_park, ParkRequest};
+use crate::harness::span::{append_span, read_turn_context, redact_args, Origin, Span};
 use crate::tools::ToolOutput;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComputerUseBackend {
     GrokBuild,
+    /// Spike-2a: Cua Driver behind `grokhub --mcp-cua`. Linux only.
+    CuaDriver,
 }
 
 impl ComputerUseBackend {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::GrokBuild => "grok_build",
+            Self::CuaDriver => "cua",
+        }
+    }
+
+    /// Cua only when the `cuaDriver` spike flag and desktop control are both
+    /// on, and only on Linux. Everything else is Grok Build.
+    pub fn selected(cua_flag: bool, desktop_control: bool) -> Self {
+        if cua_flag && desktop_control && cfg!(target_os = "linux") {
+            Self::CuaDriver
+        } else {
+            Self::GrokBuild
         }
     }
 }
@@ -68,6 +88,8 @@ pub fn grok_build_click(req: ClickRequest<'_>) -> ClickOutcome {
                 ui_changed: None,
                 origin: Origin::User,
                 consent_ref: String::new(),
+                target: String::new(),
+                target_rule: String::new(),
                 usage: None,
             };
             let _ = append_span(req.config_dir, &span);
@@ -123,8 +145,17 @@ pub fn desk_decide(tool: &str, args: &serde_json::Value) -> GateOutcome {
 }
 
 /// Args as a desktop span stores them. Typed text keeps only its length, and
-/// a credential field's `text` / `value` never leaves (Spike-1a).
+/// a credential field's `text` / `value` never leaves (Spike-1a). The cabin's
+/// click hints (the AX label read at the point, the window) never leave either.
 pub fn desk_args(tool: &str, args: &serde_json::Value) -> String {
+    let mut args = args.clone();
+    if let Some(m) = args.as_object_mut() {
+        m.remove(TARGET_HINT);
+        if tool == "click" {
+            m.remove("window");
+        }
+    }
+    let args = &args;
     match tool {
         "type" => {
             let n = args
@@ -186,7 +217,90 @@ pub fn desk_span(call: &DeskCall<'_>, chat_id: &str, turn: u32) -> Option<Span> 
         s.driver = ComputerUseBackend::GrokBuild.as_str().into();
         s
     };
-    Some(span.on_path("A").in_turn(chat_id, turn).with_ui_changed(call.ui_changed))
+    let span = span.on_path("A").in_turn(chat_id, turn).with_ui_changed(call.ui_changed);
+    Some(with_click_target(span, call.tool, call.args))
+}
+
+/// Spike-2b: a click span says where its target came from and which rule it
+/// matched (`target:"unknown"` when the AX read found nothing).
+fn with_click_target(span: Span, tool: &str, args: &serde_json::Value) -> Span {
+    if tool != "click" {
+        return span;
+    }
+    let rule = click_rule(args).map(|r| r.id).unwrap_or_default();
+    span.with_target(click_target(args).source, &rule)
+}
+
+/// Access for a desktop call: Readonly with the switch off, else the open
+/// chat's Full grant or Supervised.
+pub fn desk_access(config_dir: &Path, enabled: bool) -> AccessMode {
+    if !enabled {
+        return AccessMode::Readonly;
+    }
+    match AccessMode::parse(&read_turn_context(config_dir).access) {
+        Some(AccessMode::Full) => AccessMode::Full,
+        _ => AccessMode::Supervised,
+    }
+}
+
+/// Post a park for the cabin's hard card and wait. True only on Jeremy's
+/// Approve; TTL, a halt, or a closed cabin is Deny. `tool` and `args` are the
+/// `grokhub-desktop` shape (Cua calls are mapped first, `cua_as_desk`).
+pub fn park_desk_call(
+    config_dir: &Path,
+    tool: &str,
+    args: &serde_json::Value,
+    class: &str,
+    driver: ComputerUseBackend,
+    halted: &mut dyn FnMut() -> bool,
+) -> bool {
+    static N: AtomicU64 = AtomicU64::new(0);
+    let id = format!("{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed));
+    // A credential field's value never reaches the park file, the card, or a span.
+    let action = match tool {
+        _ if class == HardClass::Credentials.as_str() => credential_action(args),
+        "type" => args["text"].as_str().unwrap_or("").to_string(),
+        // The file manager does not say which files are selected.
+        "key" if class == HardClass::Delete.as_str() => format!(
+            "press {} on the files selected in {} (the cabin can't see which)",
+            args["keys"].as_str().unwrap_or(""),
+            args["window"].as_str().unwrap_or("a file manager")
+        ),
+        "key" => args["keys"].as_str().unwrap_or("").to_string(),
+        "delete_files" => delete_files_action(args),
+        "click" => match click_rule(args) {
+            Some(rule) => click_action(args, &rule),
+            None => desk_args(tool, args),
+        },
+        _ => desk_args(tool, args),
+    };
+    let req = ParkRequest {
+        id: id.clone(),
+        path: "A".into(),
+        tool: tool.into(),
+        action: redact_args(&action),
+        class: class.into(),
+        ts_ms: span_now(),
+    };
+    if post_park(config_dir, &req).is_err() {
+        return false;
+    }
+    let ctx = read_turn_context(config_dir);
+    let mut park_span = Span::hard_park(
+        if ctx.chat_id.is_empty() { CU_TRACE } else { &ctx.chat_id },
+        tool,
+        &desk_args(tool, args),
+        HardClass::parse(class).unwrap_or(HardClass::IrreversibleOs),
+    )
+    .on_path("A")
+    .in_turn(&ctx.chat_id, ctx.turn);
+    park_span.access = ctx.access.clone();
+    let mut park_span = with_click_target(park_span, tool, args);
+    if driver == ComputerUseBackend::CuaDriver {
+        park_span.driver = driver.as_str().into();
+    }
+    let _ = append_span(config_dir, &park_span);
+    wait_park(config_dir, &id, APPROVAL_TTL, Duration::from_millis(200), halted)
 }
 
 pub fn computer_tool_names(access: AccessMode) -> &'static [&'static str] {
