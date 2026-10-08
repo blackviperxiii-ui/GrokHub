@@ -233,6 +233,11 @@ impl Episode {
         (ran >= self.wall_cap_ms).then_some(CapHit::Wall(ran / 60_000))
     }
 
+    /// When the wall cap pauses this episode: its time box, for the router's Fast policy.
+    pub fn deadline_ms(&self) -> u64 {
+        self.started_ms.saturating_add(self.wall_cap_ms)
+    }
+
     /// The user answered a pause: another full allowance of steps and time.
     pub fn resume(&mut self, _by: Continue, now_ms: u64) {
         self.step_cap = self.steps.saturating_add(EPISODE_MAX_STEPS);

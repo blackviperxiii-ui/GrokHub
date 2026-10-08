@@ -353,7 +353,9 @@ impl Run<'_, '_> {
 
     fn ask_worker(&mut self) -> Result<crate::client::TurnOutput, String> {
         let mut call = ModelCall::xai(self.k.model, self.k.effort, CLASS_EPISODE, &self.ep.id, self.input())
-            .with_tools(self.worker_tools());
+            .with_tools(self.worker_tools())
+            .in_session(&self.ep.chat_id)
+            .due_by(self.ep.deadline_ms());
         call.provider = self.k.provider.into();
         let routed = call_model(self.k.client, &call, self.k.cancel).map_err(|e| e.to_string())?;
         self.usage.add(&routed.out.usage);
@@ -409,6 +411,8 @@ impl Run<'_, '_> {
 
     /// One ladder rung for a finding: a repair note for the next step, or a pause.
     fn ladder(&mut self, finding: Finding, why: Option<&str>) -> Option<EpisodeStop> {
+        // E1: a detector finding lifts the worker's next step one rung.
+        crate::route::ladder::note_tool_error();
         let step = self.ep.ladder.next(&finding, &self.ep.trail);
         let span = ladder_span(&self.ep.chat_id, &step);
         self.write(span);
@@ -490,6 +494,9 @@ impl Run<'_, '_> {
                     let call = FunctionCall { call_id: park.id.clone(), name: park.tool.clone(), arguments: park.args.clone() };
                     emit(on_event, &call, "in_progress", "", None);
                     let (out, ui) = self.execute(&call);
+                    if out.failed {
+                        crate::route::ladder::note_tool_error();
+                    }
                     emit(on_event, &call, if out.failed { "failed" } else { "completed" }, &out.text, out.image_data_url.clone());
                     let shape = StepShape {
                         goal_step: park.goal_step.clone(),
@@ -581,6 +588,9 @@ impl Run<'_, '_> {
         let returned = outs.iter().filter(|o| o.text != DEAD_WORKER).count();
         for (c, out) in calls[..take].iter().zip(outs) {
             self.ep.steps += 1;
+            if out.failed {
+                crate::route::ladder::note_tool_error();
+            }
             emit(on_event, c, if out.failed { "failed" } else { "completed" }, &out.text, None);
             let shape = StepShape {
                 goal_step: self.ep.goal_step.clone(),
@@ -655,6 +665,9 @@ impl Run<'_, '_> {
         } else {
             self.execute(call)
         };
+        if out.failed {
+            crate::route::ladder::note_tool_error();
+        }
         emit(on_event, call, if out.failed { "failed" } else { "completed" }, &out.text, out.image_data_url.clone());
         self.record(&shape("allow", ui, result_text(&out)), args_redacted, "soft", id);
     }

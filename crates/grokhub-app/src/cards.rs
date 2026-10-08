@@ -174,9 +174,6 @@ pub fn imagine_send_cluster_w() -> f32 {
     crate::theme::IMAGINE_HIT * 2.0 + 12.0
 }
 
-/// Mode pill width inside the composer (replaces ComboBox `.width(84)`).
-pub const MODE_PILL_W: f32 = 84.0;
-
 /// Mic + Send/Stop. Session and permission sit above the bar.
 pub fn composer_go_cluster_w() -> f32 {
     22.0 + 28.0 + 8.0 * 3.0 + 12.0
@@ -735,14 +732,6 @@ pub fn permission_modes() -> &'static [(&'static str, &'static str)] {
     ]
 }
 
-pub fn effort_modes() -> &'static [(&'static str, &'static str)] {
-    grokhub_core::REASONING_EFFORTS
-}
-
-pub fn effort_label(id: &str) -> &'static str {
-    grokhub_core::effort_label(id)
-}
-
 /// Hover copy for the Chat / Plan / btw session pills. Unknown ids stay silent.
 pub fn composer_session_tip(id: &str) -> Option<(&'static str, &'static str)> {
     match id {
@@ -778,14 +767,6 @@ pub fn composer_perm_tip(id: &str) -> Option<(&'static str, &'static str)> {
     }
 }
 
-/// Hover copy for the effort dropdown above the composer.
-pub fn composer_effort_tip() -> (&'static str, &'static str) {
-    (
-        "Effort",
-        "How hard Grok thinks. Higher is slower and deeper. None through Extra High; /effort sets the same.",
-    )
-}
-
 fn show_composer_tip(ui: &mut egui::Ui, title: &str, body: &str) {
     ui.set_max_width(240.0);
     ui.spacing_mut().item_spacing.y = 4.0;
@@ -808,119 +789,50 @@ fn with_composer_tip(resp: egui::Response, title: &str, body: &str) -> egui::Res
     resp.on_hover_ui_at_pointer(|ui| show_composer_tip(ui, title, body))
 }
 
-/// Room for the label, both pads, and the chevron so "Extra High" never runs under it.
-fn dropdown_pill_w(ui: &egui::Ui, label: &str) -> f32 {
-    let label_w = ui.fonts_mut(|f| {
-        f.layout_no_wrap(
-            label.to_owned(),
-            FontId::proportional(crate::theme::FONT_CHROME),
-            Color32::PLACEHOLDER,
-        )
-        .size()
-        .x
-    });
-    (label_w + ui.style().spacing.button_padding.x * 2.0 + 14.0).max(MODE_PILL_W)
+/// Title of the Auto chip's hover card.
+pub const AUTO_CHIP_TIP: &str = "Auto effort";
+
+/// "Auto · Medium": the word Auto, then the current rung in small text.
+pub fn auto_chip_job(rung: &str) -> LayoutJob {
+    let mut job = LayoutJob::default();
+    let fmt = |size: f32, color: Color32| TextFormat { font_id: FontId::proportional(size), color, valign: egui::Align::Center, ..Default::default() };
+    job.append("Auto", 0.0, fmt(crate::theme::FONT_CHROME, crate::theme::fg()));
+    job.append(&format!(" · {rung}"), 0.0, fmt(crate::theme::FONT_META, crate::theme::muted()));
+    job
 }
 
-/// Small down chevron at the right of a dropdown pill, so it reads as a menu.
-fn paint_dropdown_chevron(ui: &egui::Ui, rect: egui::Rect, color: Color32) {
-    let c = egui::pos2(rect.right() - 14.0, rect.center().y + 1.0);
-    let (w, h) = (3.5_f32, 2.0_f32);
-    ui.painter().add(egui::Shape::line(
-        vec![
-            egui::pos2(c.x - w, c.y - h),
-            egui::pos2(c.x, c.y + h),
-            egui::pos2(c.x + w, c.y - h),
-        ],
-        Stroke::new(crate::theme::ICON_STROKE, color),
-    ));
-}
-
-/// Composer menus open upward. If that does not fit, they fall back below the pill.
-pub fn composer_menu_align() -> egui::RectAlign {
-    egui::RectAlign::TOP_START
-}
-
-pub fn composer_menu_align_fallback() -> egui::RectAlign {
-    egui::RectAlign::BOTTOM_START
-}
-
-fn catalog_pill(
-    ui: &mut egui::Ui,
-    popup_id: &'static str,
-    current: &str,
-    items: &[(&'static str, &'static str)],
-    label: &str,
-    tip: Option<(&'static str, &'static str)>,
-) -> Option<String> {
-    let mut next = None;
-    let id = ui.make_persistent_id(popup_id);
-    let pill_w = dropdown_pill_w(ui, label);
-    let mut resp = crate::theme::felt_label_button(
-        ui,
-        label,
-        Color32::TRANSPARENT,
-        crate::theme::muted(),
-        14.0,
-        egui::vec2(pill_w, 28.0),
-        Some(Stroke::new(1.0_f32, crate::theme::border())),
-        false,
-    );
-    paint_dropdown_chevron(ui, resp.rect, crate::theme::muted());
-    if let Some((title, body)) = tip {
-        resp = with_composer_tip(resp, title, body);
-    }
-    if resp.clicked() {
-        egui::Popup::toggle_id(ui.ctx(), id);
-    }
-    egui::Popup::new(id, ui.ctx().clone(), &resp, ui.layer_id())
-        .open_memory(None)
-        .close_behavior(egui::PopupCloseBehavior::CloseOnClick)
-        .align(composer_menu_align())
-        .align_alternatives(&[composer_menu_align_fallback()])
-        .layout(egui::Layout::top_down_justified(egui::Align::LEFT))
-        .show(|ui| {
-            ui.set_min_width(MODE_PILL_W);
-            for (item_id, item_label) in items {
-                let on = *item_id == current;
-                if ui.selectable_label(on, *item_label).clicked() {
-                    if !on {
-                        next = Some((*item_id).to_string());
-                    }
-                    ui.close();
-                }
-            }
-        });
-    next
-}
-
-/// Grok Build reasoning effort (low / medium / high / xhigh).
-pub fn effort_pill(ui: &mut egui::Ui, current: &str) -> Option<String> {
-    let id = grokhub_core::parse_reasoning_effort(current).unwrap_or("high");
-    catalog_pill(
-        ui,
-        "composer-effort-pop",
-        id,
-        effort_modes(),
-        effort_label(id),
-        Some(composer_effort_tip()),
-    )
+/// The read-only Auto chip where the effort pill was. Hover shows the last
+/// reason; a click asks for `/why`. No dropdown, no pulse. True when clicked.
+pub fn auto_chip(ui: &mut egui::Ui, rung: &str, reason: &str) -> bool {
+    let galley = ui.fonts_mut(|f| f.layout_job(auto_chip_job(rung)));
+    let size = egui::vec2(galley.size().x + 24.0, 28.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    let stroke = if resp.hovered() { crate::theme::fg() } else { crate::theme::border() };
+    ui.painter().rect_stroke(rect, 14.0, Stroke::new(1.0_f32, stroke), egui::StrokeKind::Inside);
+    let at = egui::pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0);
+    ui.painter().galley(at, galley, crate::theme::fg());
+    let name = format!("Auto effort, {rung}");
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
+    let resp = with_composer_tip(resp.on_hover_cursor(egui::CursorIcon::PointingHand), AUTO_CHIP_TIP, reason);
+    resp.clicked()
 }
 
 pub struct SessionRowOut {
     pub mode: Option<String>,
     pub perm: Option<String>,
-    pub effort: Option<String>,
+    /// The Auto chip was clicked: show `/why`.
+    pub why: bool,
 }
 
-/// Chat / Plan / btw, Ask / Auto / Always, and reasoning effort above the composer.
-pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> SessionRowOut {
+/// Chat / Plan / btw, Ask / Auto / Always, and the read-only Auto effort chip above the composer.
+/// `auto` is the chip's rung label and its hover reason.
+pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, auto: (&str, &str)) -> SessionRowOut {
     let mut out = SessionRowOut {
         mode: None,
         perm: None,
-        effort: None,
+        why: false,
     };
-    // Wrapped so a narrow pane drops Effort to a second line instead of clipping it.
+    // Wrapped so a narrow pane drops the Auto chip to a second line instead of clipping it.
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 3.0;
         crate::theme::glide_paint(ui, "session-mode");
@@ -978,26 +890,23 @@ pub fn session_row(ui: &mut egui::Ui, mode: &str, perm: &str, effort: &str) -> S
             perm_on.is_some(),
         );
         crate::theme::glide_aim(ui, "session-perm");
-        // Effort drops to its own line as a unit; no divider left dangling at a line end.
-        let effort_id = grokhub_core::parse_reasoning_effort(effort).unwrap_or("high");
-        let effort_w = dropdown_pill_w(ui, effort_label(effort_id));
+        // The chip drops to its own line as a unit; no divider left dangling at a line end.
+        let chip_w = ui.fonts_mut(|f| f.layout_job(auto_chip_job(auto.0)).size().x) + 24.0;
         let gap = ui.spacing().item_spacing.x;
         // Inside horizontal_wrapped, available_width() is the whole row; use the cursor.
         let left_on_line = ui.max_rect().right() - ui.cursor().min.x;
-        if left_on_line < SESSION_DIVIDER_W + effort_w + gap * 2.0 + 1.0 {
+        if left_on_line < SESSION_DIVIDER_W + chip_w + gap * 2.0 + 1.0 {
             ui.end_row();
         } else {
             session_row_divider(ui);
         }
-        if let Some(next) = effort_pill(ui, effort) {
-            out.effort = Some(next);
-        }
+        out.why = auto_chip(ui, auto.0, auto.1);
     });
     ui.add_space(8.0);
     out
 }
 
-/// Hairline between the session, permission, and effort groups.
+/// Hairline between the session, permission, and Auto chip groups.
 const SESSION_DIVIDER_W: f32 = 9.0;
 
 fn session_row_divider(ui: &mut egui::Ui) {
@@ -1600,7 +1509,7 @@ pub fn settings_field(
     title: &str,
     hint: &str,
     value: &mut String,
-    password: bool,
+    masked: bool,
 ) {
     ui.add_space(4.0);
     ui.label(RichText::new(title).size(15.0).color(crate::theme::fg()));
@@ -1617,7 +1526,7 @@ pub fn settings_field(
             let mut edit = egui::TextEdit::singleline(value)
                 .desired_width(f32::INFINITY)
                 .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 2)));
-            if password {
+            if masked {
                 edit = edit.password(true);
             }
             ui.add(edit);
@@ -3485,37 +3394,25 @@ mod tests {
         assert!(composer_perm_tip("chat").is_none());
         assert!(composer_perm_tip("plan").is_none());
 
-        let (effort_t, effort) = composer_effort_tip();
-        assert_eq!(effort_t, "Effort");
-        assert!(
-            effort.contains("None through Extra High") && effort.contains("/effort") && !effort.contains("Max"),
-            "{effort}"
-        );
-        let effort_src = include_str!("cards.rs")
-            .split("pub fn effort_pill(")
+        let chip = include_str!("cards.rs")
+            .split("pub fn auto_chip(")
             .nth(1)
             .and_then(|s| s.split("pub struct SessionRowOut").next())
-            .expect("effort_pill");
+            .expect("auto_chip");
         assert!(
-            effort_src.contains("composer_effort_tip"),
-            "effort dropdown must show hover help: {effort_src}"
+            chip.contains("AUTO_CHIP_TIP") && chip.contains("reason") && !chip.contains("Popup"),
+            "the Auto chip shows the reason on hover and opens no dropdown: {chip}"
         );
     }
 
     #[test]
     fn mode_pill_fits_the_composer_cluster() {
-        assert_eq!(MODE_PILL_W, 84.0);
         assert_eq!(
             composer_go_cluster_w(),
             22.0 + 28.0 + 8.0 * 3.0 + 12.0
         );
         assert_eq!(composer_modes().len(), 3);
         assert_eq!(permission_modes().len(), 3);
-        // 2.10.87: Minimal is off the ladder (a saved one loads as Low).
-        assert_eq!(effort_modes().len(), 5);
-        assert!(effort_modes().iter().all(|(id, label)| *id != "minimal" && *label != "Minimal"));
-        assert!(effort_modes().iter().all(|(id, label)| *id != "max" && *label != "Max"));
-        assert_eq!(effort_label("high"), "High");
         let session = include_str!("cards.rs")
             .split("pub fn session_row(")
             .nth(1)
@@ -3524,8 +3421,8 @@ mod tests {
         assert!(
             session.contains("felt_segment")
                 && session.contains("felt_perm_segment")
-                && session.contains("out.effort = Some(next)"),
-            "composer session row must include effort dropdown: {session}"
+                && session.contains("out.why = auto_chip("),
+            "composer session row ends with the read-only Auto chip: {session}"
         );
         assert_eq!(
             permission_risk_stroke_w("always-approve", false),
@@ -4391,21 +4288,7 @@ mod tests {
     }
 
     #[test]
-    fn composer_menus_prefer_opening_above_the_pill() {
-        assert_eq!(composer_menu_align(), egui::RectAlign::TOP_START);
-        assert_eq!(composer_menu_align_fallback(), egui::RectAlign::BOTTOM_START);
-        assert_ne!(composer_menu_align(), composer_menu_align_fallback());
-        let src = include_str!("cards.rs");
-        let pill = src
-            .split("fn catalog_pill(")
-            .nth(1)
-            .and_then(|s| s.split("pub fn effort_pill(").next())
-            .expect("catalog_pill");
-        assert!(
-            pill.contains("composer_menu_align()")
-                && pill.contains("composer_menu_align_fallback()"),
-            "mode, permission, and effort menus open above the pill: {pill}"
-        );
+    fn titlebar_session_menu_opens_below_its_button() {
         let session = include_str!("app/chat_ui.rs");
         let menu = session
             .split("fn paint_session_actions_menu(")

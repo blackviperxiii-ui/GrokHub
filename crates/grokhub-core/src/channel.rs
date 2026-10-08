@@ -410,7 +410,9 @@ pub fn update_fail_hint(output: &str) -> &'static str {
 /// The causes an Update or channel switch can name (input is lowercased):
 /// dirty clone, Rust too old, no clone, clone on the other branch, build failed.
 fn specific_fail_hint(s: &str) -> Option<&'static str> {
-    Some(if s.contains("uncommitted changes")
+    Some(if s.contains("untracked working tree files would be") {
+        "Your GrokHub source folder has new files the update would overwrite. Move or delete them (git status lists them), then try again."
+    } else if s.contains("uncommitted changes")
         || s.contains("would be overwritten by")
         || s.contains("you have unstaged changes")
         || s.contains("commit your changes or stash them")
@@ -543,7 +545,9 @@ mod channel_switch_tests {
         let rustc = "error: package `eframe v0.36.2` cannot be built because it requires rustc 1.88 or newer, while the currently active rustc version is 1.80.0";
         let on_main = "error: /src is on main but the beta channel builds beta; run with --channel stable to switch, or git checkout beta";
         let on_beta = "source clone is on beta — checkout main, then Update";
+        let untracked = "error: The following untracked working tree files would be overwritten by merge:\n\tdocs/notes.md\nPlease move or remove them before you merge.";
         for (out, hint) in [
+            (untracked, "Your GrokHub source folder has new files the update would overwrite. Move or delete them (git status lists them), then try again."),
             (dirty, "Your GrokHub source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again."),
             (pull_dirty, "Your GrokHub source folder has unsaved code changes. Save or undo them (git commit or git stash), then try again."),
             (rustc, "GrokHub needs a newer Rust to build. Run rustup update, then try again."),

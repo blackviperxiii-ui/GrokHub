@@ -2328,66 +2328,23 @@ impl Cabin {
         self.paint_home_deck_over_chat(ui);
     }
 
-    /// Export, view plan, and the recommended fork offer. Not slash-only.
+    /// View plan. Not slash-only.
     pub(super) fn paint_session_tools(&mut self, ui: &mut egui::Ui) {
         let plan = self
             .threads
             .get(self.thread_idx)
             .map(|t| t.plan_body.clone())
             .unwrap_or_default();
-        let (turns, estimate) = self.session_size();
-        let tokens = if self.grok_usage.context_tokens_used > 0 {
-            self.grok_usage.context_used().min(u64::from(u32::MAX)) as u32
-        } else {
-            estimate
-        };
-        let why = fork_offer_why(turns, tokens, CONTEXT_BUDGET_TOKENS);
-        if plan.trim().is_empty() && why.is_none() {
+        if plan.trim().is_empty() {
             return;
         }
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            if !plan.trim().is_empty() {
-                let label = if self.plan_open { "Hide plan" } else { "View plan" };
-                if crate::cards::ghost_pill(ui, label) {
-                    self.plan_open = !self.plan_open;
-                }
-            }
-            if let Some(why) = why {
-                ui.label(
-                    RichText::new(why)
-                        .size(crate::theme::FONT_META)
-                        .color(crate::theme::muted()),
-                );
-                if crate::cards::ghost_pill(ui, "Fork") {
-                    self.run_slash(Slash::Fork);
-                }
+            let label = if self.plan_open { "Hide plan" } else { "View plan" };
+            if crate::cards::ghost_pill(ui, label) {
+                self.plan_open = !self.plan_open;
             }
         });
-        if why.is_some() && !self.fork_explainer_seen {
-            ui.add_space(4.0);
-            egui::Frame::NONE
-                .fill(crate::theme::elevated())
-                .corner_radius(12.0)
-                .stroke(egui::Stroke::new(1.0_f32, crate::theme::border()))
-                .inner_margin(egui::Margin::same(10))
-                .show(ui, |ui| {
-                    ui.label(
-                        RichText::new("How fork works")
-                            .size(crate::theme::FONT_BODY)
-                            .strong()
-                            .color(crate::theme::fg()),
-                    );
-                    ui.label(
-                        RichText::new(FORK_EXPLAINER)
-                            .size(crate::theme::FONT_META)
-                            .color(crate::theme::muted()),
-                    );
-                    if crate::cards::ghost_pill(ui, "Got it") {
-                        self.dismiss_fork_explainer();
-                    }
-                });
-        }
         if self.plan_open && !plan.trim().is_empty() {
             ui.add_space(4.0);
             egui::Frame::NONE
@@ -2624,8 +2581,8 @@ impl Cabin {
             ui.set_max_width(cap);
             let session_now = self.session_mode.as_str().to_string();
             let perm_now = self.permission_mode.as_str().to_string();
-            let effort_now = self.cfg.reasoning_effort.clone();
-            let row = crate::cards::session_row(ui, &session_now, &perm_now, &effort_now);
+            let (rung, why) = self.auto_chip();
+            let row = crate::cards::session_row(ui, &session_now, &perm_now, (&rung, &why));
             if let Some(mode) = row.mode {
                 if let Some(m) = SessionMode::parse(&mode) {
                     if m == SessionMode::Plan {
@@ -2675,22 +2632,8 @@ impl Cabin {
                     }
                 }
             }
-            if let Some(effort) = row.effort {
-                if let Some(e) = grokhub_core::parse_reasoning_effort(&effort) {
-                    self.confirm = None;
-                    if self.running {
-                        self.halt_in_flight();
-                    }
-                    self.cfg.reasoning_effort = e.to_string();
-                    self.acp = None;
-                    self.acp_spawn_rx = None;
-                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                        t.grok_session = None;
-                    }
-                    self.persist_cfg();
-                    self.persist_idle_key = self.persist_idle_now();
-                    self.status = format!("Effort {}", grokhub_core::effort_label(e));
-                }
+            if row.why {
+                self.run_why(false);
             }
             let composer_id = egui::Id::new("chat-composer");
             let focused = ui.memory(|m| m.has_focus(composer_id));
@@ -2862,34 +2805,6 @@ impl Cabin {
                 }
             }
             });
-    }
-
-    /// Visible turns and the token estimate behind the fork offer. Scanning the whole
-    /// transcript every frame cost more than painting it, so key it like the chat views.
-    /// `messages_rev` catches an in-place edit that keeps the count and the last length.
-    pub(super) fn session_size(&mut self) -> (usize, u32) {
-        let key = (
-            self.visible_thread_id(),
-            self.messages.len(),
-            self.messages.last().map_or(0, |m| m.1.len()),
-            self.messages_rev,
-            self.messages_body_mark(),
-        );
-        let cached = &self.session_size.0;
-        let tail_only = cached.0 == key.0 && cached.1 == key.1 && cached.4 == key.4;
-        if tail_only && self.tail_streaming_here() {
-            // Only the streaming reply grew. The hint catches up when the turn ends.
-            return self.session_size.1;
-        }
-        if self.session_size.0 != key {
-            let msgs = || self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str()));
-            let size = (
-                visible_turn_count_from(msgs()),
-                estimate_messages_from(msgs()),
-            );
-            self.session_size = (key, size);
-        }
-        self.session_size.1
     }
 
     /// A turn is streaming on this tab: only its last message grows, and the pane

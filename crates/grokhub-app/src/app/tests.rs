@@ -1879,7 +1879,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let auto = src
             .split("Slash::AutoPerm =>")
             .nth(1)
-            .and_then(|s| s.split("Slash::Effort(").next())
+            .and_then(|s| s.split("Slash::Effort =>").next())
             .expect("AutoPerm");
         assert!(
             auto.contains("acp_spawn_rx = None"),
@@ -1903,19 +1903,6 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && !mode.contains("self.persist()")
                 && !mode.contains("persist_snap"),
             "/mode must not clone every thread just to write app.json: {mode}"
-        );
-        let effort = src
-            .split("Slash::Effort(level)")
-            .nth(1)
-            .and_then(|s| s.split("Slash::Sessions").next())
-            .expect("Effort");
-        assert!(
-            effort.contains("cfg.reasoning_effort") && effort.contains("parse_reasoning_effort"),
-            "/effort must set reasoning_effort directly: {effort}"
-        );
-        assert!(
-            !effort.contains("cfg.mode"),
-            "/effort must not rewrite legacy cfg.mode: {effort}"
         );
         let appearance = src
             .split("SettingsSec::Appearance => {")
@@ -2023,18 +2010,18 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .expect("session_row");
         assert_eq!(
             row.matches("acp_spawn_rx = None").count(),
-            3,
-            "session/permission/effort row must drop an in-flight handshake: {row}"
+            2,
+            "session/permission row must drop an in-flight handshake: {row}"
         );
         assert_eq!(
             row.matches("grok_session = None").count(),
-            3,
-            "session/permission/effort row must session/new so mode takes: {row}"
+            2,
+            "session/permission row must session/new so mode takes: {row}"
         );
         assert_eq!(
             row.matches("persist_idle_key").count(),
-            3,
-            "session/permission/effort row must not clone every thread — bump the idle key so persist_bg skips: {row}"
+            2,
+            "session/permission row must not clone every thread — bump the idle key so persist_bg skips: {row}"
         );
         assert!(
             row.contains("select_plan_without_rename") && !row.contains("t.title ="),
@@ -2486,8 +2473,9 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "ACP auth is grok login; XAI_API_KEY is the secrets console key: {ensure}"
         );
         assert!(
-            ensure.contains("parse_reasoning_effort") && ensure.contains("cfg.reasoning_effort"),
-            "ACP spawn must pass composer reasoning effort to grok agent: {ensure}"
+            ensure.contains("start_effort(grokhub_agent::route::live::DEFAULT_CLASS)")
+                && !ensure.contains("reasoning_effort("),
+            "ACP spawn starts at the router's class start, not a saved effort: {ensure}"
         );
         assert!(
             !ensure.contains("agent_reasoning_effort_for_mode(&self.cfg.mode)"),
@@ -3487,8 +3475,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "scheduled work stays on grok -p when no ACP session is live: {kick}"
         );
         assert!(
-            kick.contains("parse_reasoning_effort") && kick.contains("cfg.reasoning_effort"),
-            "grok -p must use the Effort dropdown, not the leftover mode ladder: {kick}"
+            kick.contains("route_gb_turn(") && !kick.contains("reasoning_effort_for_mode"),
+            "grok -p takes the router's effort, not the leftover mode ladder: {kick}"
         );
         assert!(
             kick.contains("cabin_has_session"),
@@ -6258,11 +6246,10 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             !tools.contains("Copy session") && !tools.contains("\"Export\""),
             "Copy session and Export leave the composer: {tools}"
         );
+        assert!(src.contains("View plan"), "view plan stays on the thread");
         assert!(
-            src.contains("View plan")
-                && src.contains("How fork works")
-                && src.contains("fork_offer_why"),
-            "view plan and fork stay on the thread"
+            !src.contains("How fork works") && !src.contains("fork_offer_why"),
+            "the fork offer is gone from the thread"
         );
         let menu = src
             .split("fn paint_session_actions_menu")
@@ -7436,7 +7423,6 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .expect("history");
         assert!(
             hist.contains("session_markers")
-                && hist.contains("LastYou")
                 && hist.contains("jump_last_you")
                 && hist.contains("apply_switch_thread")
                 && !hist.contains("self.thread_idx = i"),
@@ -7456,7 +7442,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let auto = src
             .split("Slash::AutoPerm =>")
             .nth(1)
-            .and_then(|s| s.split("Slash::Effort(").next())
+            .and_then(|s| s.split("Slash::Effort =>").next())
             .expect("AutoPerm");
         assert!(
             auto.contains("self.confirm = None"),
@@ -7470,7 +7456,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let perm = row
             .split("if let Some(perm) = row.perm")
             .nth(1)
-            .and_then(|s| s.split("if let Some(effort) = row.effort").next())
+            .and_then(|s| s.split("if row.why").next())
             .expect("perm pills");
         let ask_auto = perm
             .split("self.arm_session_always();")
@@ -7549,18 +7535,12 @@ fn settings_cabin_defaults_section() {
         .nth(1)
         .and_then(|s| s.split("if let Some(s) = next_sec").next())
         .expect("defaults arm");
-    for label in [
-        "Default model",
-        "Reasoning effort",
-        "Permission",
-        "Session mode",
-        "Always collapse",
-    ] {
+    for label in ["ROW_MODEL", "ROW_PERMISSION", "ROW_SESSION", "ROW_COLLAPSE"] {
         assert!(defaults.contains(label), "missing {label}: {defaults}");
     }
-    assert_eq!(defaults.matches("settings_dropdown").count(), 4);
+    assert_eq!(defaults.matches("settings_dropdown").count(), 3);
     assert!(defaults.contains("settings_toggle"));
-    assert!(defaults.contains("parse_reasoning_effort"));
+    assert!(!defaults.contains("effort"), "R1: no effort row: {defaults}");
     assert!(defaults.contains("cabin_default_model_id"));
     assert!(defaults.contains("set_permission_mode"));
     assert!(defaults.contains("set_session_mode"));
@@ -7595,7 +7575,8 @@ fn settings_permissions_editor_lists_rules_and_grants() {
         .nth(1)
         .and_then(|slice| slice.split("if let Some(s) = next_sec").next())
         .expect("defaults arm");
-    assert_eq!(defaults.matches("settings_dropdown").count(), 4);
+    // Model, Permission and Session mode. R1 removed the effort dropdown.
+    assert_eq!(defaults.matches("settings_dropdown").count(), 3);
 }
 
 #[test]
@@ -8282,7 +8263,6 @@ fn transcript_caches_hold_while_the_turn_streams_and_catch_up_after() {
     cabin.thread_idx = 0;
     cabin.messages = cabin.threads[0].messages.clone();
     let _ = cabin.cached_chat_views();
-    let _ = cabin.session_size();
 
     // A turn streams here. The first delta unshares the transcript from its thread,
     // so the views rebuild once.
@@ -8293,9 +8273,8 @@ fn transcript_caches_hold_while_the_turn_streams_and_catch_up_after() {
         last.1.push_str(", the rail");
     }
     let streaming = cabin.cached_chat_views().to_vec();
-    let size = cabin.session_size();
     // Later deltas only grow the last message, and the pane paints it from live
-    // blocks: neither cache rebuilds on them.
+    // blocks: the views do not rebuild on them.
     if let Some(last) = cabin.live_tail_mut().last_mut() {
         last.1
             .push_str(" now keeps its footer and the dock stops wrapping.");
@@ -8305,11 +8284,6 @@ fn transcript_caches_hold_while_the_turn_streams_and_catch_up_after() {
         &streaming[..],
         "stream deltas skip the view rebuild"
     );
-    assert_eq!(
-        cabin.session_size(),
-        size,
-        "stream deltas skip the estimate"
-    );
 
     // An edit before the last message is not a stream delta: rebuild even mid-turn.
     cabin.live_mut()[1].1 = "THINKING:\nThe dock wraps late.\n\nFixed it.".into();
@@ -8317,11 +8291,6 @@ fn transcript_caches_hold_while_the_turn_streams_and_catch_up_after() {
     assert!(
         mid.iter().any(|v| v.body.contains("wraps late")),
         "an earlier edit must rebuild the views while a turn streams: {mid:?}"
-    );
-    assert_ne!(
-        cabin.session_size(),
-        size,
-        "an earlier edit refreshes the estimate"
     );
 
     // The turn ends: the tail catches up once.
@@ -8337,11 +8306,6 @@ fn transcript_caches_hold_while_the_turn_streams_and_catch_up_after() {
     assert!(
         after.iter().any(|v| v.body.contains("wraps late")),
         "the earlier edit survives the tail refresh: {after:?}"
-    );
-    assert_eq!(
-        cabin.session_size(),
-        (2, estimate_messages(&cabin.messages)),
-        "the estimate catches up when the turn ends"
     );
     release_isolated(&root, cabin);
 }
@@ -8407,10 +8371,6 @@ fn chat_view_fold_keys_follow_the_views_as_the_chat_changes() {
         "the dock chat has thoughts: {first:?}"
     );
     assert_eq!(cabin.chat_view_keys, first, "keys are built with the views");
-    assert_eq!(
-        cabin.session_size(),
-        (1, estimate_messages(&cabin.messages))
-    );
 
     // A stream delta grows the last message: only the trailing stretch rekeys.
     if let Some(last) = cabin.live_mut().last_mut() {
@@ -8419,10 +8379,6 @@ fn chat_view_fold_keys_follow_the_views_as_the_chat_changes() {
     let grown = expect(&mut cabin);
     assert_ne!(grown, first, "the grown thought has a new key");
     assert_eq!(cabin.chat_view_keys, grown, "a grown thought rekeys");
-    assert_eq!(
-        cabin.session_size(),
-        (1, estimate_messages(&cabin.messages))
-    );
 
     cabin
         .live_mut()
@@ -8433,10 +8389,6 @@ fn chat_view_fold_keys_follow_the_views_as_the_chat_changes() {
     ));
     let turn = expect(&mut cabin);
     assert_eq!(cabin.chat_view_keys, turn, "a new turn keys its views");
-    assert_eq!(
-        cabin.session_size(),
-        (2, estimate_messages(&cabin.messages))
-    );
 
     cabin.apply_switch_thread(1);
     let switched = expect(&mut cabin);
@@ -8444,15 +8396,11 @@ fn chat_view_fold_keys_follow_the_views_as_the_chat_changes() {
         cabin.chat_view_keys, switched,
         "another chat rebuilds its keys"
     );
-    assert_eq!(
-        cabin.session_size(),
-        (1, estimate_messages(&cabin.messages))
-    );
     release_isolated(&root, cabin);
 }
 
 #[test]
-fn in_place_edit_refreshes_session_size_and_chat_views() {
+fn in_place_edit_refreshes_chat_views() {
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("view-rev");
     let last = "THINKING:\nNow patch it.\n\nDone.";
@@ -8485,15 +8433,7 @@ fn in_place_edit_refreshes_session_size_and_chat_views() {
 
     let _ = cabin.cached_chat_views();
     let before_keys = cabin.chat_view_keys.clone();
-    let before_size = cabin.session_size();
     let before_rev = cabin.messages_rev;
-    assert_eq!(
-        before_size,
-        (
-            visible_turn_count(&cabin.messages),
-            estimate_messages(&cabin.messages),
-        )
-    );
     assert!(
         before_keys.iter().any(|&k| k != 0),
         "the first turn has a thought: {before_keys:?}"
@@ -8523,14 +8463,6 @@ fn in_place_edit_refreshes_session_size_and_chat_views() {
     assert_eq!(cabin.cached_chat_views(), fresh.as_slice());
     assert_eq!(cabin.chat_view_keys, fresh_keys);
     assert_eq!(cabin.chat_view_rev, cabin.messages_rev);
-    assert_ne!(estimate_messages(&cabin.messages), before_size.1);
-    assert_eq!(
-        cabin.session_size(),
-        (
-            visible_turn_count(&cabin.messages),
-            estimate_messages(&cabin.messages),
-        )
-    );
     release_isolated(&root, cabin);
 }
 
@@ -8551,22 +8483,16 @@ fn idle_chat_caches_keep_the_message_revision() {
     cabin.messages = cabin.threads[0].messages.clone();
 
     let _ = cabin.cached_chat_views();
-    let _ = cabin.session_size();
     let rev = cabin.messages_rev;
     let view_rev = cabin.chat_view_rev;
     let keys = cabin.chat_view_keys.clone();
     let views = cabin.chat_views.clone();
-    let cached_key = cabin.session_size.0.clone();
-    let cached_val = cabin.session_size.1;
     let views_ptr = cabin.chat_views.as_ptr();
-    assert_eq!(cabin.session_size(), cached_val);
     assert_eq!(cabin.cached_chat_views().as_ptr(), views_ptr);
     assert_eq!(cabin.messages_rev, rev);
     assert_eq!(cabin.chat_view_rev, view_rev);
     assert_eq!(cabin.chat_view_keys, keys);
     assert_eq!(cabin.chat_views, views);
-    assert_eq!(cabin.session_size.0, cached_key);
-    assert_eq!(cabin.session_size.1, cached_val);
     release_isolated(&root, cabin);
 }
 
@@ -8907,7 +8833,8 @@ fn fake_child_still_up(pid: u32, fake: &std::path::Path) -> bool {
 fn kick_with_fake_grok_runs_the_prompt() {
     let _g = crate::config::hold_test_config();
     let (root, mut cabin) = isolated_cabin("kick-fake-grok");
-    let prompt = "proof-fake-grok-harbor";
+    // "think hard" steers this one episode to the class ceiling (Extra High).
+    let prompt = "proof-fake-grok-harbor think hard";
     let bin_dir = root.join("bin");
     let argv_path = root.join("argv.txt");
     std::fs::create_dir_all(&bin_dir).unwrap();
@@ -8954,7 +8881,11 @@ fn kick_with_fake_grok_runs_the_prompt() {
     cabin.thread_idx = 0;
     cabin.messages = std::sync::Arc::new(vec![("user".into(), prompt.into())]);
     cabin.threads[0].messages = cabin.messages.clone();
-    cabin.cfg.reasoning_effort = "high".into();
+    // A thread outside the router's 10% control arm, so Auto's pick is what runs.
+    cabin.threads[0].id = (0..)
+        .map(|i| format!("fake-grok-{i}"))
+        .find(|id| !grokhub_agent::route::guard::in_holdout(id))
+        .unwrap();
 
     cabin.kick_model(false);
     assert!(
@@ -8997,8 +8928,8 @@ fn kick_with_fake_grok_runs_the_prompt() {
     );
     eprintln!("FAKE_GROK_ARGV_BEGIN\n{argv}FAKE_GROK_ARGV_END");
     assert!(
-        argv.contains("--reasoning-effort\nhigh\n"),
-        "a chat you type keeps the composer effort: {argv:?}"
+        argv.contains("--reasoning-effort\nxhigh\n"),
+        "a chat you type runs at the router's pick (think hard: Extra High): {argv:?}"
     );
 
     // A scheduled run (automation, loop, /send task) is background work: low effort.
@@ -9020,7 +8951,7 @@ fn kick_with_fake_grok_runs_the_prompt() {
     }
     let argv = std::fs::read_to_string(&argv_path).unwrap_or_default();
     assert!(
-        argv.contains("--reasoning-effort\nlow\n") && !argv.contains("\nhigh\n"),
+        argv.contains("--reasoning-effort\nlow\n") && !argv.contains("\nxhigh\n"),
         "background work runs at low effort: {argv:?}"
     );
     drop(restore);
@@ -10437,36 +10368,42 @@ fn save_settings_stores_quiet_hours_and_clears_the_key() {
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
-// Landed from PR #105.
+/// Router R1: `/effort <level>` changes nothing and says effort is automatic.
 #[test]
-fn effort_slash_sets_extra_high_and_rejects_a_bad_level() {
+fn effort_slash_leaves_the_config_byte_identical_and_says_effort_is_automatic() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("effort-slash");
+    let _ = std::fs::remove_dir_all(&root);
     std::env::set_var("GROKHUB_CONFIG", &root);
     let mut cabin = Cabin::quiet_for_test();
-    cabin.run_slash_line("/effort xhigh");
-    assert_eq!(cabin.cfg.reasoning_effort, "xhigh");
-    assert_eq!(cabin.status, "Effort Extra High");
-    cabin.run_slash_line("/effort banana");
-    assert_eq!(cabin.status, "Effort: none | low | medium | high | xhigh");
-    assert_eq!(cabin.cfg.reasoning_effort, "xhigh");
+    crate::config::save(&cabin.cfg).expect("save");
+    let app_json = crate::config::config_dir().join("app.json");
+    let before = std::fs::read(&app_json).expect("app.json");
+    for line in ["/effort high", "/effort xhigh", "/effort banana", "/effort"] {
+        cabin.status.clear();
+        cabin.run_slash_line(line);
+        assert_eq!(cabin.status, "Effort is automatic now, see /why", "{line}");
+        assert_eq!(std::fs::read(&app_json).expect("app.json"), before, "{line} must not touch app.json");
+    }
+    let _ = std::fs::remove_dir_all(&root);
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
-/// 2.10.87: Minimal is gone. `/effort minimal` still works and picks Low.
+/// Router R1: there is no effort control in the composer, Settings or the slash list.
 #[test]
-fn effort_slash_minimal_falls_back_to_low() {
-    let _g = crate::config::hold_test_config();
-    let root = crate::config::test_config_root("effort-minimal");
-    std::env::set_var("GROKHUB_CONFIG", &root);
-    let mut cabin = Cabin::quiet_for_test();
-    cabin.run_slash_line("/effort minimal");
-    assert_eq!(cabin.cfg.reasoning_effort, "low");
-    assert_eq!(cabin.status, "Effort Low");
-    cabin.run_slash_line("/effort none");
-    assert_eq!(cabin.cfg.reasoning_effort, "none");
-    assert_eq!(cabin.status, "Effort None");
-    std::env::remove_var("GROKHUB_CONFIG");
+fn no_effort_selector_anywhere() {
+    // The composer row returns a mode, a permission, and the Auto chip's /why click. Nothing else.
+    let crate::cards::SessionRowOut { mode: _, perm: _, why: _ } = crate::cards::SessionRowOut { mode: None, perm: None, why: false };
+    for (id, label) in crate::cards::composer_modes().iter().chain(crate::cards::permission_modes()) {
+        assert!(!id.contains("effort") && !grokhub_core::REASONING_EFFORTS.iter().any(|(_, l)| l == label), "{id}");
+    }
+    assert!(super::settings::DEFAULTS_ROWS.iter().all(|r| !r.to_ascii_lowercase().contains("effort")));
+    assert!(grokhub_core::SLASH_COMMANDS.iter().all(|d| d.cmd != "/effort"));
+    let help = grokhub_core::slash_help();
+    assert!(help.contains("/effort — effort is automatic now"), "{help}");
+    assert!(!help.contains("/effort <"), "{help}");
+    let job = crate::cards::auto_chip_job("Medium");
+    assert_eq!(job.text, "Auto · Medium");
 }
 
 // Landed from PR #106.
@@ -10771,7 +10708,7 @@ fn voice_without_login_stays_off_and_profile_clears() {
 
 // Landed from PR #119.
 #[test]
-fn scratch_btw_worktree_plan_and_fork() {
+fn scratch_btw_worktree_and_plan() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("scratch-btw");
     std::env::set_var("GROKHUB_CONFIG", &root);
@@ -10795,17 +10732,12 @@ fn scratch_btw_worktree_plan_and_fork() {
     assert_eq!(cabin.status, "Worktree off");
     assert!(!cabin.threads[cabin.thread_idx].grok_worktree);
     cabin.threads[cabin.thread_idx].grok_session = Some("sess-harbor".into());
+    let (count, idx) = (cabin.threads.len(), cabin.thread_idx);
     cabin.run_slash_line("/fork");
-    assert_eq!(
-        cabin.status,
-        "Forked — next send starts a new Grok session from this history"
-    );
-    assert_eq!(cabin.threads[cabin.thread_idx].title, "Fork");
-    assert!(cabin.threads[cabin.thread_idx].grok_fork);
-    assert_eq!(
-        cabin.threads[cabin.thread_idx].grok_session.as_deref(),
-        Some("sess-harbor")
-    );
+    assert_eq!(cabin.threads.len(), count, "/fork no longer opens a chat");
+    assert_eq!(cabin.thread_idx, idx);
+    assert!(!cabin.threads[idx].grok_fork);
+    assert_eq!(cabin.status, "Worktree off", "/fork leaves the status alone");
     cabin.threads[cabin.thread_idx].plan_body = "harbor steps".into();
     cabin.run_slash_line("/view-plan");
     assert!(cabin.plan_open);
@@ -14713,9 +14645,9 @@ fn housekeep_keeps_ideas_until_newer_ones_push_them_out() {
 
 // Landed from PR #160.
 #[test]
-fn fork_and_worktree_stay_off_a_send() {
+fn worktree_stays_off_a_send() {
     let _hold = crate::config::hold_test_config();
-    let root = crate::config::test_config_root("fork-worktree");
+    let root = crate::config::test_config_root("worktree-send");
     let _ = std::fs::create_dir_all(&root);
     std::env::set_var("GROKHUB_CONFIG", &root);
 
@@ -14724,27 +14656,8 @@ fn fork_and_worktree_stay_off_a_send() {
     let seeded = cabin
         .threads
         .get_mut(cabin.thread_idx)
-        .expect("quiet cabin needs one thread before fork");
+        .expect("quiet cabin needs one thread before worktree");
     seeded.grok_session = Some("sess".into());
-
-    let before = cabin.threads.len();
-    cabin.run_slash(super::Slash::Fork);
-
-    assert!(cabin.threads.len() > before);
-    let fork = cabin
-        .threads
-        .get(cabin.thread_idx)
-        .expect("fork chat");
-    assert_eq!(fork.title, "Fork");
-    assert_eq!(fork.grok_session.as_deref(), Some("sess"));
-    assert!(fork.grok_fork);
-    assert!(cabin.acp.is_none());
-    assert_eq!(
-        cabin.status,
-        "Forked — next send starts a new Grok session from this history"
-    );
-    assert!(!cabin.running);
-    assert!(matches!(cabin.nav, super::Nav::Chat));
 
     cabin.run_slash(super::Slash::Worktree);
     let worked = cabin
@@ -16660,7 +16573,6 @@ fn quiet_cabin() -> Cabin {
         thought_buf: String::new(),
         chat_views: Vec::new(),
         chat_view_keys: Vec::new(),
-        session_size: ((String::new(), usize::MAX, usize::MAX, u64::MAX, (0, 0)), (0, 0)),
         chat_view_tid: String::new(),
         chat_view_n: 0,
         chat_view_last: 0,
@@ -16831,7 +16743,6 @@ fn quiet_cabin() -> Cabin {
         bg: super::background::BgWork::default(),
         side_ask_kick: false,
         plan_open: false,
-        fork_explainer_seen: false,
         tool_cards: Vec::new(),
         live_blocks: Vec::new(),
         live_keys: Vec::new(),
@@ -22728,23 +22639,6 @@ fn chip_chat_pairs_empty_when_idle() {
 
 // ---- Cursor fold: Secrets, skills and memory ----
 
-// Folded from PR #253.
-#[test]
-fn dismiss_fork_explainer_stays_off_a_run() {
-    let _g = crate::config::hold_test_config();
-    let (root, mut app) = isolated_cabin("fork-explainer-dismiss");
-    std::fs::create_dir_all(crate::config::config_dir()).expect("config dir");
-    app.fork_explainer_seen = false;
-    app.dismiss_fork_explainer();
-    assert!(app.fork_explainer_seen);
-    let body = std::fs::read_to_string(crate::config::config_dir().join("fork_explainer_seen"))
-        .expect("seen file");
-    assert_eq!(body, "1");
-    assert!(!app.running);
-    assert!(app.chat_job_thread.is_none());
-    release_isolated(&root, app);
-}
-
 // Folded from PR #358.
 #[test]
 fn hold_secret_skips_short_and_keeps_one() {
@@ -22854,21 +22748,6 @@ fn mem_file_idx_maps_soul_user_memory() {
     assert_eq!(Cabin::mem_file_idx("MEMORY.md"), Some(2));
     assert_eq!(Cabin::mem_file_idx("NOTES.md"), None);
     assert_eq!(Cabin::mem_file_idx(""), None);
-}
-
-// Folded from PR #385.
-#[test]
-fn fork_explainer_seen_on_disk_false_when_missing() {
-    let _lock = crate::config::hold_test_config();
-    let root = crate::config::test_config_root("fork-seen-missing");
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).expect("temp config");
-    let _cfg = RestoreEnv::set("GROKHUB_CONFIG", &root);
-    let _ = std::fs::remove_file(root.join("fork_explainer_seen"));
-    assert!(
-        !super::fork_explainer_seen_on_disk(),
-        "a missing fork_explainer_seen marker must read as unseen"
-    );
 }
 
 // Folded from PR #386.
@@ -23825,21 +23704,6 @@ fn signin_button_and_keychain_move() {
     assert_eq!(loaded.access_token, "moved");
     assert!(store.legacy.lock().unwrap().is_none());
     assert!(store.current.lock().unwrap().is_some());
-}
-
-// Folded from PR #422.
-#[test]
-fn cabin_default_efforts_lists_known_ids() {
-    // Real fn: non-empty effort ladder with known ids. No spawn/network.
-    let efforts = cabin_default_efforts();
-    assert!(!efforts.is_empty());
-    let ids: Vec<&str> = efforts.iter().map(|(id, _)| *id).collect();
-    for want in ["none", "low", "medium", "high", "xhigh"] {
-        assert!(ids.contains(&want), "missing effort id {want}: {ids:?}");
-    }
-    // 2.10.87: Minimal is not a real level; Settings must not offer it.
-    assert!(!ids.contains(&"minimal"), "{ids:?}");
-    assert_eq!(ids, vec!["none", "low", "medium", "high", "xhigh"]);
 }
 
 // Folded from PR #426.
@@ -24987,12 +24851,12 @@ fn halt_stops_a_scheduled_run_and_your_stop_does_not() {
 
 /// 2.10.89 review of #485: scheduled runs stay at low effort, like every unattended run.
 #[test]
-fn a_scheduled_run_uses_low_effort_and_your_bg_keeps_yours() {
-    let mut cabin = Cabin::quiet_for_test();
-    cabin.cfg.reasoning_effort = "xhigh".into();
-    assert_eq!(cabin.bg_effort(grokhub_core::BgOrigin::Scheduled), Some("low"));
-    assert_eq!(cabin.bg_effort(grokhub_core::BgOrigin::Agent), Some("xhigh"));
-    assert_eq!(cabin.bg_effort(grokhub_core::BgOrigin::Detached), Some("xhigh"));
+fn a_scheduled_run_uses_low_effort_and_your_bg_starts_at_the_chat_start() {
+    let cabin = Cabin::quiet_for_test();
+    assert_eq!(cabin.bg_effort(grokhub_core::BgOrigin::Scheduled).as_deref(), Some("low"));
+    // R1: your own /bg work starts at everyday chat's start; the router moves it per step.
+    assert_eq!(cabin.bg_effort(grokhub_core::BgOrigin::Agent).as_deref(), Some("medium"));
+    assert_eq!(cabin.bg_effort(grokhub_core::BgOrigin::Detached).as_deref(), Some("medium"));
     let src = include_str!("background.rs");
     let cli = fn_src(src, "start_bg_task");
     assert!(cli.contains("self.bg_effort(origin)"), "{cli}");

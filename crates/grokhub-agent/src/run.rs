@@ -240,7 +240,10 @@ pub fn run_loop(
                 emit_usage(on_event, &usage, history, input.context_length);
             }
         }
-        if !did_compact && crate::compact::needs_auto_compact(history, input.context_length) {
+        // Compact before the context fills, or before a request would cross the
+        // model's long-context threshold (billed at about twice the price there).
+        let long = crate::route::live::crosses_long_context(&crate::perm::config_dir(), input.model, crate::compact::estimate_input_tokens(history));
+        if !did_compact && (crate::compact::needs_auto_compact(history, input.context_length) || long) {
             on_event(LoopEvent::Compact {
                 started: true,
                 usage: usage.clone(),
@@ -296,10 +299,11 @@ pub fn run_loop(
             hosted_search: true,
             call_timeout: None,
         };
-        let turn = match input.client.stream(&req, input.cancel, &mut |ev| match ev {
+        let class = crate::route::live::current_class();
+        let turn = match crate::route::live::stream_routed(input.client, &req, input.cancel, &mut |ev| match ev {
             StreamEvent::TextDelta(text) => on_event(LoopEvent::Text(text)),
             StreamEvent::ReasoningDelta(text) => on_event(LoopEvent::Thought(text)),
-        }) {
+        }, class) {
             Ok(turn) => turn,
             Err(ClientError::Cancelled) => {
                 return finish(input, StopReason::Cancelled, usage, did_compact, true);
@@ -590,6 +594,10 @@ fn user_message(text: &str, image: Option<&str>) -> InputItem {
 }
 
 fn push_output(history: &mut Vec<InputItem>, call: &FunctionCall, output: ToolOutput) {
+    if output.failed {
+        // E1: the next routed step thinks one rung harder.
+        crate::route::ladder::note_tool_error();
+    }
     history.push(InputItem::FunctionCallOutput {
         call_id: call.call_id.clone(),
         output: output.text,

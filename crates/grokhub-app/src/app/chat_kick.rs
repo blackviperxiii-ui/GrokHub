@@ -352,7 +352,13 @@ impl Cabin {
                 .as_ref()
                 .map(|h| h.prompt_with_image(&last_user, image.as_deref()));
             match prompt_err {
-                Some(Ok(())) => self.note_inflight_card(&raw_ask, &thread_label),
+                Some(Ok(())) => {
+                    // GB runs this turn at the effort the session spawned with (per episode at spawn).
+                    let spawned = grokhub_agent::route::live::start_effort(grokhub_agent::route::live::DEFAULT_CLASS);
+                    let thread = self.threads.get(self.thread_idx).map(|t| t.id.clone()).unwrap_or_default();
+                    grokhub_agent::route::live::route_gb_turn(&crate::config::config_dir(), self.cfg.model.trim(), !self.cfg.model.trim().is_empty(), Some(spawned.as_deref()), &thread, &last_user, self.harness.turn_origin);
+                    self.note_inflight_card(&raw_ask, &thread_label)
+                }
                 Some(Err(e)) => {
                     self.acp = None;
                     self.fail_ask_without_acp(&e);
@@ -385,10 +391,14 @@ impl Cabin {
         };
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
         // Automations, loops, and /send tasks run unwatched: always low effort.
-        let effort = if self.scheduled_perm {
-            Some(grokhub_core::BACKGROUND_EFFORT)
+        // A chat you type spawns at the router's pick for this turn (grok -p is one episode).
+        // Auto spawns on the router's model pick; a pin is kept while it is listed.
+        let (model, effort): (String, Option<String>) = if self.scheduled_perm {
+            (model, Some(grokhub_core::BACKGROUND_EFFORT.to_string()))
         } else {
-            grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort)
+            let thread = self.threads.get(idx).map(|t| t.id.clone()).unwrap_or_default();
+            let pinned = !self.cfg.model.trim().is_empty();
+            grokhub_agent::route::live::route_gb_turn(&crate::config::config_dir(), &model, pinned, None, &thread, &last_user, self.harness.turn_origin)
         };
         let resume_in_cabin = resume
             .as_deref()
@@ -417,7 +427,7 @@ impl Cabin {
                 &last_user,
                 cwd,
                 &model,
-                effort.map(str::to_string),
+                effort,
                 mode,
                 image,
             );
@@ -433,7 +443,7 @@ impl Cabin {
             yolo,
             auto,
             Some(model.as_str()),
-            effort,
+            effort.as_deref(),
             mode,
             grokhub_acp::GrokPAttach {
                 image: image.as_deref(),

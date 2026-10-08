@@ -16,25 +16,6 @@ pub fn btw_queues_without_interrupt(session_is_ask: bool, running: bool) -> bool
     session_is_ask && running
 }
 
-/// User/assistant turns before a fork is offered for length.
-pub const FORK_TURN_MIN: usize = 12;
-
-/// Offer a fork when the thread is long, or context use is at least half `budget`.
-///
-/// Divergent-topic detection is omitted (weak signal). No stream event names a
-/// fork, so that cue is omitted too.
-pub fn fork_offer_why(turns: usize, tokens: u32, budget: u32) -> Option<&'static str> {
-    if turns >= FORK_TURN_MIN {
-        return Some("Long thread — fork keeps this line of work");
-    }
-    if budget > 0 && u64::from(tokens) * 2 >= u64::from(budget) {
-        return Some("Context is half full — fork keeps this line of work");
-    }
-    None
-}
-
-pub const FORK_EXPLAINER: &str = "Fork copies this Grok session into a new chat. The next send starts from this history and leaves the original alone.";
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -48,17 +29,5 @@ mod tests {
         assert!(BTW_TIP_BODY.len() < 160, "{}", BTW_TIP_BODY.len());
         assert!(!BTW_TIP_BODY.contains("Ask"));
         assert_eq!(BTW_LABEL, "btw");
-    }
-
-    #[test]
-    fn fork_offer_uses_length_then_half_context() {
-        assert!(fork_offer_why(11, 100, 96_000).is_none());
-        let long = fork_offer_why(FORK_TURN_MIN, 100, 96_000).unwrap();
-        assert!(long.contains("Long thread"), "{long}");
-        let half = fork_offer_why(3, 48_000, 96_000).unwrap();
-        assert!(half.contains("half full"), "{half}");
-        assert!(fork_offer_why(3, 47_999, 96_000).is_none());
-        assert!(fork_offer_why(0, 0, 0).is_none());
-        assert!(!FORK_EXPLAINER.is_empty());
     }
 }
