@@ -43,6 +43,7 @@ impl Cabin {
         let (tx, rx) = mpsc::channel();
         self.harness.diagnose_rx = Some(rx);
         self.harness.diagnose_slash = slash;
+        self.harness.diagnose_chat = self.visible_thread_id();
         self.status = "Checking your computer (read only)…".into();
         std::thread::spawn(move || {
             let ledger = hx::ConsentLedger::load(&dir);
@@ -71,13 +72,26 @@ impl Cabin {
                     self.harness.indexer.asks.ask(hx::Scope::SystemState, repair::SCOPE_ASK_WHY, &ledger, now_ms());
                 }
                 let body = if self.harness.diagnose_slash { mark_slash_result(&body) } else { body };
-                self.live_mut().push(("assistant".into(), body));
                 self.status.clear();
-                self.stamp_current_access();
-                self.persist();
+                self.post_diagnose(body);
             }
             Err(mpsc::TryRecvError::Empty) => self.harness.diagnose_rx = Some(rx),
             Err(mpsc::TryRecvError::Disconnected) => self.status = "Couldn't finish checking your computer".into(),
         }
+    }
+
+    /// The answer goes to the chat that asked, even after a switch; a chat
+    /// deleted meanwhile gets nothing.
+    fn post_diagnose(&mut self, body: String) {
+        let chat = std::mem::take(&mut self.harness.diagnose_chat);
+        if chat.is_empty() || chat == self.visible_thread_id() {
+            self.live_mut().push(("assistant".into(), body));
+            self.stamp_current_access();
+        } else if let Some(t) = self.threads.iter_mut().find(|t| t.id == chat) {
+            Arc::make_mut(&mut t.messages).push(("assistant".into(), body));
+        } else {
+            return;
+        }
+        self.persist();
     }
 }

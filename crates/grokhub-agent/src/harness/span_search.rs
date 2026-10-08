@@ -96,7 +96,10 @@ pub fn search_spans(config_dir: &Path, q: &str, titles: &HashMap<String, String>
                 continue;
             }
             let line = format!("{title} · turn {} · {} · {}", span.turn, span.tool, span.decision);
-            if out.hits.iter().any(|h| h.line == line) {
+            // Two chats can share a title ("New chat"): one row per chat.
+            if out.hits.iter().any(|h| {
+                h.chat_id == span.chat_id && h.turn == span.turn && h.tool == span.tool && h.decision == span.decision
+            }) {
                 continue;
             }
             out.hits.push(SpanHit {
@@ -157,6 +160,19 @@ mod tests {
         text.push_str("not a span\n");
         std::fs::write(&path, text).unwrap();
         assert_eq!(search_spans(&dir, "click OK", &names, &[]).hits.len(), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn two_chats_with_the_same_title_each_keep_their_row() {
+        let dir = crate::harness::test_dir("span-search-same-title");
+        append_span(&dir, &step("chat-a", 1, 1, "click", "allow", "click OK")).unwrap();
+        append_span(&dir, &step("chat-b", 2, 1, "click", "allow", "click OK")).unwrap();
+        let names = titles(&[("chat-a", "New chat"), ("chat-b", "New chat")]);
+        let got = search_spans(&dir, "click OK", &names, &[]);
+        let mut targets: Vec<String> = got.hits.iter().map(|h| h.target()).collect();
+        targets.sort();
+        assert_eq!(targets, vec!["step:1:chat-a".to_string(), "step:1:chat-b".to_string()]);
         let _ = std::fs::remove_dir_all(dir);
     }
 

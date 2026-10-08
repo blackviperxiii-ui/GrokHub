@@ -11232,6 +11232,33 @@ fn amr_save_redacts_secrets_and_pauses_personal_lines_without_a_key() {
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
+// A line the memory repo refuses stays in MEMORY.md instead of vanishing.
+#[test]
+fn amr_save_keeps_a_line_the_store_could_not_write() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("amr-save-fail");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    crate::config::write_memory("MEMORY.md", "keep this line\n").unwrap();
+    // `amr` is a file, so the store can't open.
+    std::fs::write(root.join("amr"), "not a folder").unwrap();
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+    cabin.new_thread(false);
+    cabin.mem_name = "MEMORY.md".into();
+    cabin.mem_body = "keep this line\nprefer nvim\n".into();
+    cabin.save_memory_amr();
+    assert!(cabin.status.starts_with("Memory repo:"), "{}", cabin.status);
+    assert_eq!(cabin.mem_body, "keep this line\nprefer nvim\n");
+    let start = std::time::Instant::now();
+    while crate::config::read_memory("MEMORY.md") != "keep this line\nprefer nvim\n" && start.elapsed() < std::time::Duration::from_secs(2) {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(crate::config::read_memory("MEMORY.md"), "keep this line\nprefer nvim\n");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
 // AMR M2 through the cabin: the first AMR read imports insights and chip
 // preferences once, writes the report, and posts one chat line.
 #[test]
@@ -27875,6 +27902,28 @@ fn diagnose_slash_without_system_state_is_a_slash_result_with_the_ask() {
     let (role, body) = cabin.messages.last().cloned().unwrap();
     assert_eq!(role, "assistant");
     assert!(grokhub_core::is_cabin_slash_turn(&role, &body), "stays out of the next model kick");
+    assert!(body.ends_with(grokhub_agent::repair::SCOPE_ASK), "{body}");
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn diagnose_answers_in_the_chat_that_asked_after_a_switch() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("diagnose-switch");
+    std::fs::create_dir_all(&root).unwrap();
+    cabin.threads.push(crate::threads::ChatThread::new("Asked here", false));
+    cabin.threads.push(crate::threads::ChatThread::new("Moved here", false));
+    let (asked, moved) = (cabin.threads.len() - 2, cabin.threads.len() - 1);
+    cabin.apply_switch_thread(asked);
+    cabin.run_slash_line("/diagnose");
+    cabin.apply_switch_thread(moved);
+    let before = cabin.messages.len();
+    wait_diagnose(&mut cabin);
+    assert!(cabin.harness.diagnose_rx.is_none(), "the diagnose finished");
+    assert_eq!(cabin.messages.len(), before, "the chat on screen gets nothing");
+    cabin.apply_switch_thread(asked);
+    let (role, body) = cabin.messages.last().cloned().unwrap();
+    assert_eq!(role, "assistant");
     assert!(body.ends_with(grokhub_agent::repair::SCOPE_ASK), "{body}");
     release_isolated(&root, cabin);
 }

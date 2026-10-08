@@ -204,6 +204,30 @@ pub fn report_text(report: &DiagnoseReport) -> String {
     out
 }
 
+/// A message about code ("the DNS issue in resolver.rs", "the printer
+/// module") goes to the model: a file name, a path, backticks, `::`, or a
+/// code word.
+fn names_code(lower: &str) -> bool {
+    const CODE_WORDS: &[&str] = &["module", "function", "crate", "class", "method", "repo", "compile", "unit test", "code"];
+    const EXTS: &[&str] = &[
+        "rs", "py", "js", "ts", "tsx", "jsx", "go", "c", "h", "cpp", "hpp", "cs", "java", "kt", "rb", "php", "swift", "sh",
+        "ps1", "toml", "json", "yaml", "yml", "md", "sql", "html", "css",
+    ];
+    if lower.contains('`') || lower.contains("::") {
+        return true;
+    }
+    let words: Vec<&str> = lower.split(|c: char| !(c.is_alphanumeric() || c == '_')).filter(|w| !w.is_empty()).collect();
+    if CODE_WORDS.iter().any(|w| if w.contains(' ') { lower.contains(w) } else { words.contains(w) }) {
+        return true;
+    }
+    lower.split_whitespace().any(|tok| {
+        let tok = tok.trim_matches(|c: char| !(c.is_alphanumeric() || c == '/' || c == '\\' || c == '.' || c == '_'));
+        let path = (tok.contains('/') || tok.contains('\\')) && tok.len() > 1;
+        let file = tok.rsplit_once('.').is_some_and(|(stem, ext)| !stem.is_empty() && EXTS.contains(&ext));
+        path || file
+    })
+}
+
 /// Phrases that mean "check my computer". Some(probes) picks what to check;
 /// None leaves the message to the model. Narrow on purpose: "the build is
 /// broken on my machine" is a coding question, not a diagnose.
@@ -215,6 +239,9 @@ pub fn probes_for_intent(text: &str, os: Os) -> Option<Vec<ProbeId>> {
     ];
     let lower = text.trim().to_lowercase().replace('\u{2019}', "'");
     if lower.is_empty() || lower.len() > 160 || lower.starts_with('/') {
+        return None;
+    }
+    if names_code(&lower) {
         return None;
     }
     let has = |words: &[&str]| words.iter().any(|w| lower.contains(w));
