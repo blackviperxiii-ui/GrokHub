@@ -58,7 +58,7 @@ pub fn call_model<T>(
     let mut rc = super::RouteCall { provider: call.provider.as_str(), class: call.class, model: call.model, effort: call.effort, ..Default::default() };
     let decision = super::live::decide(config_dir, &rc, grokhub_core::now_ms());
     if decision.paused() {
-        return Err(super::live::NO_ROUTE_MSG.into());
+        return Err(decision.pause_msg().into());
     }
     let effort = decision.send_effort(call.effort);
     let model = decision.send_model(call.model);

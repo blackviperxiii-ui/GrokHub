@@ -59,7 +59,7 @@ pub struct Heard {
 
 /// The models that could take an everyday step now.
 fn candidates<'a>(reg: &'a Registry, profiles: &BTreeMap<String, ModelProfile>, now_ms: u64) -> Vec<&'a str> {
-    reg.models.keys().map(String::as_str).filter(|id| policy::fits(reg, profiles, id, Fit::default(), now_ms)).collect()
+    reg.models.keys().map(String::as_str).filter(|id| policy::fits(reg, profiles, id, Fit::default(), &super::spend::Spend { settings: super::spend::spend_settings(), ..Default::default() }, now_ms)).collect()
 }
 
 /// Who stands in for `from`: its redirect successor, then its family, newest first.

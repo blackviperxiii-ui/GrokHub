@@ -9,10 +9,11 @@
 
 use std::collections::BTreeMap;
 
-use grokhub_core::model_registry::cost_class::{cost_class, CostClass};
+use grokhub_core::model_registry::cost_class::{classify, route_key, CostClass, RouteOpts};
 use grokhub_core::model_registry::profile::ModelProfile;
-use grokhub_core::model_registry::{health, ModelRecord, ModelState, Prices, Registry, SourceKind};
+use grokhub_core::model_registry::{health, ModelState, Prices, Registry};
 
+use super::spend::{allowed, Spend};
 use super::table::RoutingTable;
 
 /// R1: listed classes send the router's effort.
@@ -116,18 +117,21 @@ pub struct Fit {
 }
 
 /// A model the router may route a step to: a routable state with no live
-/// ghost strike, a usable profile (none yet keeps today's behavior), on the
-/// approved route (only `included` until R2b; GB's own plan list on the GB
-/// path), and it fits the step (context, image input, tools, the Responses API).
-pub fn fits(reg: &Registry, profiles: &BTreeMap<String, ModelProfile>, id: &str, fit: Fit, now_ms: u64) -> bool {
+/// ghost strike, a usable profile (none yet keeps today's behavior), a cost
+/// class `spend` allows ([`approved`]), and it fits the step (context, image
+/// input, tools, the Responses API).
+pub fn fits(reg: &Registry, profiles: &BTreeMap<String, ModelProfile>, id: &str, fit: Fit, spend: &Spend, now_ms: u64) -> bool {
+    fits_any_cost(reg, profiles, id, fit, now_ms) && approved(reg, id, fit.grok_build, spend)
+}
+
+/// [`fits`] without the cost check: a Fast variant the latency policy may
+/// pick, or a model outside the plan the upgrade nudge counts.
+pub fn fits_any_cost(reg: &Registry, profiles: &BTreeMap<String, ModelProfile>, id: &str, fit: Fit, now_ms: u64) -> bool {
     let Some(rec) = reg.get(id) else {
         return false;
     };
     let strikes = rec.not_found.iter().filter(|t| now_ms.saturating_sub(**t) <= health::STRIKE_WINDOW_MS).count();
     if !rec.state.routable() || strikes >= health::GHOST_STRIKES {
-        return false;
-    }
-    if !approved(reg, rec, fit.grok_build) {
         return false;
     }
     let profile = profiles.get(id);
@@ -147,13 +151,33 @@ pub fn fits(reg: &Registry, profiles: &BTreeMap<String, ModelProfile>, id: &str,
     !rec.meta.context_length.is_some_and(|c| fit.ctx_tokens > c)
 }
 
-/// Only `included` routes are approved until R2b (cost classes). On the GB
-/// path the model must be in Grok Build's own plan list.
-pub fn approved(reg: &Registry, rec: &ModelRecord, grok_build: bool) -> bool {
-    if grok_build {
-        return rec.sources.contains(&SourceKind::GrokBuild);
-    }
-    cost_class(reg.entitlement.credential, Some(rec)) == CostClass::Included
+/// The cost class of `id`'s plain route for this sign-in (R2b). On the GB
+/// path, Grok Build's own plan list is the pool.
+pub fn route_class(reg: &Registry, id: &str, grok_build: bool, spend: &Spend) -> CostClass {
+    classify(reg, id, reg.entitlement.credential, grok_build, RouteOpts::default(), spend.settings.ceiling_usd_per_m)
+}
+
+/// May Auto route here on its own: `included`, or `premium` under your grant
+/// for this route. Fast variants are never in the pool; [`super::Router`]
+/// swaps one in only under the latency policy.
+pub fn approved(reg: &Registry, id: &str, grok_build: bool, spend: &Spend) -> bool {
+    allowed(route_class(reg, id, grok_build, spend), &route_key(id, RouteOpts::default()), spend)
+}
+
+/// A newer model of `model`'s family is outside your plan (`not_in_plan`) and
+/// could take the step: a quality step would have picked it. Counted for the
+/// upgrade nudge only; it is never routed to.
+pub fn outranked_by_plan_upgrade(reg: &Registry, profiles: &BTreeMap<String, ModelProfile>, model: &str, fit: Fit) -> bool {
+    let Some((fam, v)) = family(model) else {
+        return false;
+    };
+    reg.models.values().any(|r| {
+        r.state == ModelState::NotInPlan
+            && family(&r.meta.id).is_some_and(|(f, w)| f == fam && w > v)
+            && !r.meta.context_length.is_some_and(|c| fit.ctx_tokens > c)
+            && !(fit.needs_image && r.meta.input_modalities.as_ref().is_some_and(|m| !m.iter().any(|x| x == "image")))
+            && profiles.get(&r.meta.id).is_none_or(|p| p.usable || p.probe.status.starts_with("not_run"))
+    })
 }
 
 /// A model id's family and version: `grok-4.7` is (`grok-*`, [4, 7]),
