@@ -44,6 +44,11 @@ pub(crate) fn handle_desk_line<B: DesktopBackend>(
         if live && c.tool == "click" {
             c.args[hx::TARGET_HINT] = click_hint(server, &c.args);
         }
+        if live && c.tool == "drag" {
+            // The button comes up at `to`: a short drag onto Send is a click.
+            let at = json!({ "x": c.args["to_x"], "y": c.args["to_y"], "monitor": c.args["monitor"] });
+            c.args[hx::TARGET_HINT] = click_hint(server, &at);
+        }
         let access = access_now(dir, gate.enabled);
         let refused = match precheck(c, gate) {
             Precheck::Pass => None,
@@ -727,6 +732,23 @@ mod tests {
 
     fn at(x: i32, y: i32) -> String {
         rpc("click", json!({ "x": x, "y": y }))
+    }
+
+    #[test]
+    fn a_drag_that_lets_go_on_send_parks_like_a_click() {
+        let dir = crate::config::test_config_root("desk-drag-send");
+        turn(&dir, "full");
+        let mut s = shop();
+        let drag = |x: i32, y: i32| rpc("drag", json!({ "from_x": x, "from_y": y, "to_x": x + 1, "to_y": y }));
+        let waiter = cabin_answers(&dir, false);
+        let out = handle_desk_line(&mut s, &drag(25, 5), ON, &dir, &mut || false);
+        let req = waiter.join().unwrap().expect("send park");
+        assert_eq!((req.class.as_str(), req.action.as_str()), ("send", "Grok wants to click Send in org.shop Checkout — Shop"));
+        assert!(reply_text(&out).starts_with("Denied: hard-class send"), "{}", reply_text(&out));
+        // Letting go on Save is an ordinary drag.
+        let out = handle_desk_line(&mut s, &drag(5, 25), ON, &dir, &mut || false);
+        assert_eq!(reply_text(&out), "dragged");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
