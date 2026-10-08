@@ -494,6 +494,15 @@ impl Router {
             rules.push("plan:would_pick".into());
         }
         let effort_rules_at = rules.len();
+        // The model that is actually sent, and the effort list its listing names.
+        let sent_model = if policy::MODEL_LIVE { model.as_str() } else { input.current_model.trim() };
+        let menu = profiles
+            .get(sent_model)
+            .and_then(|p| p.metadata.efforts.clone())
+            .or_else(|| reg.get(sent_model).and_then(|r| r.meta.efforts.clone()))
+            .filter(|_| !sent_model.to_ascii_lowercase().contains("non-reasoning"));
+        // xAI answers 400 to an effort on a model that doesn't take one (2.10.97).
+        let takes_effort = menu.is_some() || grokhub_core::accepts_reasoning_effort(sent_model);
         let mut effort: Option<String> = match (row, band, pick) {
             (Some(row), Some(band), Some(pick)) => {
                 rules.push(format!("class:{}", row.class));
@@ -501,12 +510,6 @@ impl Router {
                     rules.push(format!("guard:+{}", input.bump));
                 }
                 rules.extend(pick.rules.iter().cloned());
-                // The effort list of the model that is actually sent.
-                let sent_model = if policy::MODEL_LIVE { model.as_str() } else { input.current_model.trim() };
-                let menu = profiles
-                    .get(sent_model)
-                    .and_then(|p| p.metadata.efforts.clone())
-                    .or_else(|| reg.get(sent_model).and_then(|r| r.meta.efforts.clone()));
                 let rung_name = EFFORT_LADDER[pick.rung];
                 let picked = match menu {
                     Some(menu) => {
@@ -518,14 +521,16 @@ impl Router {
                     }
                     // A provider you added sends only an effort its own listing names.
                     None if policy::is_new_provider(reg, sent_model) => None,
-                    None => Some(rung_name.to_string()),
+                    None if takes_effort => Some(rung_name.to_string()),
+                    None => None,
                 };
                 // `minimal` and `max` are not sent: they go out as low and xhigh.
                 picked.map(|e| grokhub_core::parse_reasoning_effort(&e).map(str::to_string).unwrap_or(e))
             }
             _ => {
                 rules.push("class:unlisted".into());
-                input.current_effort.map(str::to_string)
+                // A provider model keeps its own adapter's rules; an xAI one only if it takes an effort.
+                input.current_effort.filter(|_| takes_effort || policy::is_new_provider(reg, sent_model)).map(str::to_string)
             }
         };
         if row.is_none() {
@@ -648,7 +653,7 @@ mod tests {
     }
 
     use grokhub_core::model_registry::profile::ProbeResult;
-    use grokhub_core::model_registry::{Listing, ModelMeta, Prices, SourceKind};
+    use grokhub_core::model_registry::{CallStatus, Listing, ModelMeta, Observation, Prices, RegistryEvent, SourceKind};
 
     fn listed(ids: &[&str]) -> Registry {
         let rows = ids
@@ -887,6 +892,126 @@ mod tests {
         let err = call_model(&echo, &call, &CancelToken::new()).unwrap_err();
         assert_eq!(err, ClientError::Protocol("no route for provider `other`".into()));
         assert!(echo.0.lock().unwrap().is_empty());
+    }
+
+    /// What xAI's listing gives: no effort list on any row.
+    fn xai_listed(ids: &[&str]) -> Registry {
+        let rows = ids
+            .iter()
+            .map(|id| ModelMeta {
+                id: id.to_string(),
+                context_length: Some(256_000),
+                prices: Prices { prompt: Some(1), cached: Some(1), completion: Some(1), ..Prices::default() },
+                ..ModelMeta::default()
+            })
+            .collect();
+        let mut reg = Registry::default();
+        reg.entitlement.credential = Credential::Plan;
+        reg.apply_refresh(&[Listing::new(SourceKind::XaiApi, rows)], &[], 1);
+        reg
+    }
+
+    const NON_REASONING: [&str; 2] = ["grok-4.20-0309-non-reasoning", "grok-4-1-fast-non-reasoning"];
+    const CLASSES: [&str; 8] = ["chat:default", "chat:quick", "plan", "prepare:hard", "eval:item", CLASS_JUDGE, CLASS_COMPACT, "background:summarize"];
+
+    #[test]
+    fn a_non_reasoning_model_never_gets_an_effort_in_any_class() {
+        let reg = xai_listed(&[NON_REASONING[0], NON_REASONING[1], "grok-4.7"]);
+        let none = BTreeMap::new();
+        for class in CLASSES {
+            for model in NON_REASONING {
+                let mut pin = input(class, model, 0.9);
+                pin.pinned = true;
+                let r = Router::choose(&pin, &reg, &none, &no_table(), 10);
+                assert_eq!((r.model.as_str(), r.effort.as_deref()), (model, None), "pinned {model} in {class}");
+                let auto = Router::choose(&input(class, model, 0.9), &reg, &none, &no_table(), 10);
+                if auto.model.contains("non-reasoning") {
+                    assert_eq!(auto.effort, None, "Auto {} in {class}", auto.model);
+                }
+            }
+        }
+        // grok-4.7 takes an effort with no list on its row.
+        let mut pin = input("chat:default", "grok-4.7", 0.5);
+        pin.pinned = true;
+        assert_eq!(Router::choose(&pin, &reg, &none, &no_table(), 10).effort.as_deref(), Some("medium"));
+        let eval = Router::choose(&input("eval:item", "grok-4.7", 0.0), &reg, &none, &no_table(), 10);
+        assert_eq!(eval.effort.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn the_request_body_drops_an_effort_a_model_cant_take() {
+        let body = |model: &str| crate::client::responses_body(&req(model, Some("low"), "s", "hi")).to_string();
+        for model in NON_REASONING {
+            assert_eq!(
+                body(model),
+                format!(r#"{{"input":[{{"content":[{{"text":"hi","type":"input_text"}}],"role":"user","type":"message"}}],"model":"{model}","stream":true,"tools":[{{"type":"web_search"}},{{"type":"x_search"}}]}}"#)
+            );
+        }
+        assert!(body("grok-4.7").contains(r#""reasoning":{"effort":"low"}"#));
+        assert!(body("grok-4.20-multi-agent").contains(r#""reasoning":{"effort":"low"}"#));
+        assert!(!body("grok-4").contains("reasoning"));
+        // A provider's own model is its adapter's call, not ours.
+        assert!(body("openai/gpt-5").contains(r#""reasoning":{"effort":"low"}"#));
+    }
+
+    #[test]
+    fn an_unlisted_pin_that_answers_stays_routable_with_no_pause_card() {
+        let mut reg = xai_listed(&[NON_REASONING[0]]);
+        let ok = Observation {
+            model: "grok-4.7".into(),
+            ts_ms: 5,
+            status: CallStatus::Ok,
+            latency_ms: 900,
+            served_model: Some("grok-4.7".into()),
+            endpoint_ok: true,
+            reasoning_tokens: 0,
+            cost_ticks: 0,
+            http: 200,
+        };
+        let (events, _) = reg.fold(&[ok]);
+        let rec = reg.get("grok-4.7").unwrap();
+        assert_eq!((rec.state, rec.state.routable()), (ModelState::Live, true));
+        let none = BTreeMap::new();
+        let heard = heal::heal_messages(&events, &reg, &none, "grok-4.7", 10);
+        assert_eq!(heard.msgs.iter().map(|m| m.key.as_str()).collect::<Vec<_>>(), Vec::<&str>::new());
+        // A redirected pin with nothing to stand in says nothing either: it still answers.
+        reg.models.get_mut("grok-4.7").unwrap().state = ModelState::Redirected;
+        let only = Registry { models: reg.models.iter().filter(|(k, _)| k.as_str() == "grok-4.7").map(|(k, v)| (k.clone(), v.clone())).collect(), ..reg.clone() };
+        let moved = [RegistryEvent::State { id: "grok-4.7".into(), from: ModelState::Live, to: ModelState::Redirected, reason: String::new() }];
+        assert_eq!(heal::heal_messages(&moved, &only, &none, "grok-4.7", 10).msgs.len(), 0);
+    }
+
+    #[test]
+    fn a_pin_on_an_alias_is_not_a_ghost() {
+        let row = ModelMeta {
+            id: "grok-4.7-0901".into(),
+            aliases: vec!["grok-4.7".into()],
+            context_length: Some(256_000),
+            prices: Prices { prompt: Some(1), cached: Some(1), completion: Some(1), ..Prices::default() },
+            ..ModelMeta::default()
+        };
+        let mut reg = Registry::default();
+        reg.entitlement.credential = Credential::Plan;
+        reg.apply_refresh(&[Listing::new(SourceKind::XaiApi, vec![row])], &["grok-4.7".to_string()], 1);
+        assert_eq!(reg.models.get("grok-4.7").map(|r| r.state), None);
+        let rec = reg.get("grok-4.7").unwrap();
+        assert_eq!((rec.meta.id.as_str(), rec.state), ("grok-4.7-0901", ModelState::Live));
+        assert!(reg.listed("grok-4.7"));
+    }
+
+    /// The 2.10.96 chain: grok-4.7 missing from the registry, Auto lands on a
+    /// non-reasoning model, and the request it sends carries no effort.
+    #[test]
+    fn the_2_10_96_chain_sends_no_effort_to_the_non_reasoning_pick() {
+        let reg = xai_listed(&[NON_REASONING[0]]);
+        let none = BTreeMap::new();
+        let r = Router::choose(&input("chat:default", "grok-4.7", 0.5), &reg, &none, &no_table(), 10);
+        assert_eq!((r.model.as_str(), r.effort.as_deref()), (NON_REASONING[0], None));
+        let body = crate::client::responses_body(&req(&r.model, r.effort.as_deref(), "s", "hi"));
+        assert_eq!(body.get("reasoning"), None);
+        // Even a caller's own effort doesn't reach the wire.
+        let body = crate::client::responses_body(&req(&r.model, Some("high"), "s", "hi"));
+        assert_eq!(body.get("reasoning"), None);
     }
 }
 
