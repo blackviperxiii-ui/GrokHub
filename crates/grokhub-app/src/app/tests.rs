@@ -3536,7 +3536,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && ask_kick.contains("composer_headless_flags")
                 && ask_kick.contains("self.session_mode")
                 && ask_kick[grok_p..].contains("spawn_grok_p_stream"),
-            "scheduled night and phone stay on grok -p with the PermissionMode flags: {ask_kick}"
+            "scheduled night and /send stay on grok -p with the PermissionMode flags: {ask_kick}"
         );
         assert!(
             ask_kick.contains("apply_skill_follow") && ask_kick.contains("active_skill_follow"),
@@ -3545,7 +3545,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     }
 
     #[test]
-    fn scheduled_night_loop_and_phone_inherit_permission_mode() {
+    fn scheduled_night_loop_and_send_inherit_permission_mode() {
         let src = cabin_src();
         let fire_loop = fn_src(&src, "fire_loop");
         assert!(
@@ -3587,7 +3587,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let inbox = fn_src(&src, "drain_inbox");
         assert!(
             inbox.contains("send_scheduled_chat"),
-            "phone /v1/task must inherit PermissionMode: {inbox}"
+            "a queued /send task must inherit PermissionMode: {inbox}"
         );
         let anticipate = fn_src(&src, "tick_anticipate");
         assert!(
@@ -3822,11 +3822,11 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         );
         assert!(
             src.contains("finish_hub_dispatch"),
-            "phone dispatch must complete the hub task so GET /v1/results can see it"
+            "a queued /send task must complete its hub row"
         );
         assert!(
             src.contains("hub_dispatch_ok(&text)"),
-            "GOAL_BLOCKED must not complete a phone task as done"
+            "GOAL_BLOCKED must not complete a queued task as done"
         );
         assert!(
             src.contains("oauth_access_live"),
@@ -3876,15 +3876,15 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .expect("halt_work");
         assert!(
             halt.contains("finish_hub_dispatch"),
-            "Stop / tray halt must complete a claimed phone task"
+            "Stop / tray halt must complete a claimed /send task"
         );
         assert!(
             src.contains("self.finish_hub_dispatch(worker_gone_status(), false)"),
-            "a dropped worker must fail the claimed phone task"
+            "a dropped worker must fail the claimed /send task"
         );
         assert!(
             src.contains("inbox_claim_ready") && src.contains("requeue_claimed_for"),
-            "do not claim a phone task without auth, and unstick claimed rows on boot"
+            "do not claim a /send task without auth, and unstick claimed rows on boot"
         );
         let inbox = src
             .split("fn drain_inbox")
@@ -3893,15 +3893,15 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .expect("drain_inbox");
         assert!(
             inbox.contains("pending_hub_task.is_some()"),
-            "do not claim a second phone task while one is still pending: {inbox}"
+            "do not claim a second /send task while one is still pending: {inbox}"
         );
         assert!(
             inbox.contains("land_on_real_chat"),
-            "a claimed phone task must not land on Scratch: {inbox}"
+            "a claimed /send task must not land on Scratch: {inbox}"
         );
         assert!(
             inbox.contains("self.can_agent()") && !inbox.contains("self.llm_ready()"),
-            "OAuth-only must not claim a phone task — send_chat needs Grok Build: {inbox}"
+            "OAuth-only must not claim a /send task — send_chat needs Grok Build: {inbox}"
         );
         assert!(
             src.contains("night_counts_run"),
@@ -5241,10 +5241,6 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("fn ui_settings").next())
             .expect("save_settings");
         assert!(
-            settings_save.contains("sync_hub_voice"),
-            "Settings Save must refresh the hub voice mint key: {settings_save}"
-        );
-        assert!(
             settings_save.contains("upsert_bound") && settings_save.contains("touch_projects"),
             "Settings Save must keep the sidebar selection on the bound path: {settings_save}"
         );
@@ -5493,8 +5489,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "/inhabit must persist the staged bundle without cloning every thread: {inhabit}"
         );
         assert!(
-            inhabit.contains("inhabit_claim_allowed") && inhabit.contains("to_id"),
-            "/inhabit must name a real peer and skip headphones-as-phone: {inhabit}"
+            inhabit.contains("No paired peer named") && inhabit.contains("to_id"),
+            "/inhabit must name a real peer: {inhabit}"
         );
         let soul = inhabit
             .find("read_memory(\"SOUL.md\")")
@@ -5619,7 +5615,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .expect("persist hub complete");
         assert!(
             complete_at < persist_at && !finish.contains("persist_snap"),
-            "phone task completion must hit hub-state.json without cloning every thread: {finish}"
+            "/send task completion must hit hub-state.json without cloning every thread: {finish}"
         );
         let host_done = src
             .split("Ok(JobOut::HostDone(block))")
@@ -5645,7 +5641,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         );
         assert!(
             consult.contains("Interrupted by consult"),
-            "slash consult during a phone job must fail the dispatch: {consult}"
+            "slash consult during a /send job must fail the dispatch: {consult}"
         );
         let consult_out = src
             .split("Ok(JobOut::Consult(detail))")
@@ -5654,7 +5650,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .expect("Consult");
         assert!(
             !consult_out.contains("finish_hub_dispatch"),
-            "consult must not complete a phone task as the consult reply: {consult_out}"
+            "consult must not complete a /send task as the consult reply: {consult_out}"
         );
         assert!(
             consult_out.contains("status.clear()") || consult_out.contains("status ="),
@@ -5674,7 +5670,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let run_at = chat_consult.find("grok_chat");
         assert!(
             finish_at.is_some_and(|f| run_at.is_some_and(|r| f < r)),
-            "finish the phone task before starting consult: {chat_consult}"
+            "finish the /send task before starting consult: {chat_consult}"
         );
         let rewind = src
             .split("fn rewind_project")
@@ -9005,7 +9001,7 @@ fn kick_with_fake_grok_runs_the_prompt() {
         "a chat you type keeps the composer effort: {argv:?}"
     );
 
-    // A scheduled run (automation, loop, phone task) is background work: low effort.
+    // A scheduled run (automation, loop, /send task) is background work: low effort.
     let _ = std::fs::remove_file(&argv_path);
     cabin.scheduled_perm = true;
     cabin.kick_model(false);
@@ -9848,6 +9844,7 @@ fn discuss_card_opens_one_local_chat() {
         skill: None,
         runs: 1,
         dismissed_at: 0,
+        done_for_you: None,
         pulse: Default::default(),
     });
     cabin.discuss_card("idea-harbor");
@@ -10955,6 +10952,7 @@ fn recall_legacy_finds_memory_line_and_skips_amr() {
             tags: vec!["dock".into()],
             body: "harbor lamp from amr\n".into(),
             sensitivity: grokhub_core::amr::Sensitivity::Plain,
+            consent_ref: String::new(),
         })
         .unwrap();
     cabin.run_slash_line("/recall harbor");
@@ -11006,6 +11004,7 @@ fn recall_amr_returns_seeded_node_not_legacy_memory() {
             tags: vec!["dock".into()],
             body: "pier light stays on\n".into(),
             sensitivity: grokhub_core::amr::Sensitivity::Plain,
+            consent_ref: String::new(),
         })
         .unwrap();
     cabin.run_slash_line("/recall pier");
@@ -11047,6 +11046,7 @@ fn recall_opens_private_notes_and_says_when_they_are_locked() {
             tags: vec![],
             body: "pier nine is home\n".into(),
             sensitivity: grokhub_core::amr::Sensitivity::Personal,
+            consent_ref: String::new(),
         })
         .unwrap();
     let raw = std::fs::read_to_string(root.join("amr/nodes/fact-home.sealed")).unwrap();
@@ -11067,6 +11067,417 @@ fn recall_opens_private_notes_and_says_when_they_are_locked() {
         super::slash::locked_recall_line(2, None).as_deref(),
         Some("2 private notes not searched. Private memory is locked.")
     );
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+fn amr_node_files(root: &std::path::Path) -> Vec<String> {
+    let mut out: Vec<String> = std::fs::read_dir(root.join("amr").join("nodes"))
+        .map(|read| {
+            read.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|name| name.ends_with(".md") || name.ends_with(".sealed"))
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out
+}
+
+fn wait_reflect(cabin: &mut super::Cabin) {
+    let start = std::time::Instant::now();
+    while cabin.reflect_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(2) {
+        cabin.poll_reflect();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(cabin.reflect_rx.is_none(), "reflect did not finish: {}", cabin.status);
+}
+
+// AMR M1: a reflect addition is one node and no MEMORY.md line; /recall reads
+// the node and the old MEMORY.md line (dual-read); /forget tombstones it.
+#[test]
+fn amr_reflect_writes_one_node_and_recall_reads_both_stores() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("amr-reflect");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    crate::config::write_memory("MEMORY.md", "old harbor line\n").unwrap();
+    let memory_before = crate::config::read_memory("MEMORY.md");
+    let user_before = crate::config::read_memory("USER.md");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+    cabin.new_thread(false);
+    cabin.mem_name = "MEMORY.md".into();
+    cabin.mem_body = memory_before.clone();
+    cabin
+        .live_mut()
+        .push(("user".into(), "I prefer the harbor light on at night".into()));
+    let insights_before = cabin.learning.insights.len();
+
+    cabin.run_reflect();
+    wait_reflect(&mut cabin);
+    assert_eq!(cabin.status, "Reflected into the memory repo");
+    assert_eq!(cabin.reflect_diff, "+ I prefer the harbor light on at night");
+    let id = grokhub_core::amr::line_id("I prefer the harbor light on at night");
+    assert_eq!(amr_node_files(&root), vec![format!("{id}.md")]);
+    let node = std::fs::read_to_string(root.join("amr/nodes").join(format!("{id}.md"))).unwrap();
+    let node = grokhub_core::amr::Node::from_markdown(&node).unwrap();
+    assert_eq!(node.node_type, grokhub_core::amr::NodeType::Preference);
+    assert_eq!(node.source, format!("chat:{}", cabin.visible_thread_id()));
+    assert_eq!(node.tags, vec!["reflect".to_string()]);
+    assert_eq!(crate::config::read_memory("MEMORY.md"), memory_before, "no new MEMORY.md line");
+    assert_eq!(crate::config::read_memory("USER.md"), user_before, "USER.md is not written by M1");
+    assert_eq!(cabin.mem_body, memory_before);
+    assert_eq!(cabin.learning.insights.len(), insights_before, "single write: no insight either");
+
+    // A second reflect over the same chat adds nothing.
+    cabin.run_reflect();
+    wait_reflect(&mut cabin);
+    assert_eq!(cabin.status, "Reflect: nothing new");
+    assert_eq!(amr_node_files(&root).len(), 1);
+
+    cabin.run_slash_line("/recall harbor");
+    let body = wait_recall(&mut cabin);
+    assert_eq!(
+        body,
+        format!(
+            "SLASH_RESULT:\namr:{id}: I prefer the harbor light on at night\nMEMORY.md:1: old harbor line\nMEMORY.md: old harbor line \nChat: I prefer the harbor light on at night"
+        )
+    );
+
+    cabin.run_slash(grokhub_core::Slash::Forget(Some("harbor".into())));
+    assert_eq!(cabin.status, "Forgot harbor: 1 note in the memory repo");
+    assert!(root.join("amr/nodes").join(format!("{id}.md")).is_file(), "the node stays on disk");
+    assert!(root.join("amr/nodes").join(format!("{id}.tombstone")).is_file());
+    cabin.run_slash_line("/recall harbor");
+    // The node and the MEMORY.md line are gone; only the chat itself still says it.
+    let after = wait_recall(&mut cabin);
+    let lines: Vec<&str> = after.lines().collect();
+    assert_eq!(lines.len(), 2, "{after}");
+    assert_eq!(lines[0], "SLASH_RESULT:");
+    assert!(lines[1].starts_with("Chat: I prefer the harbor light on at night"), "{after}");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Scratch chats write no node and can't forget one.
+#[test]
+fn amr_scratch_writes_nothing_and_blocks_forget() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("amr-scratch");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+    cabin.new_thread(false);
+    cabin.run_slash(grokhub_core::Slash::MemoryNote("the quay lantern is green".into()));
+    assert_eq!(cabin.status, "Remembered in the memory repo");
+    assert_eq!(amr_node_files(&root).len(), 1);
+
+    cabin.new_thread(true);
+    assert!(cabin.scratch());
+    cabin
+        .live_mut()
+        .push(("user".into(), "I prefer the scratch harbor at dawn".into()));
+    cabin.run_reflect();
+    assert_eq!(cabin.status, "Scratch — no reflect");
+    cabin.run_slash(grokhub_core::Slash::MemoryNote("scratch dock note".into()));
+    assert_eq!(cabin.status, "Scratch — no memory writes");
+    cabin.run_slash(grokhub_core::Slash::Forget(Some("quay".into())));
+    assert_eq!(cabin.status, "Scratch — no memory writes");
+    assert_eq!(amr_node_files(&root).len(), 1, "{:?}", amr_node_files(&root));
+    let id = grokhub_core::amr::line_id("the quay lantern is green");
+    assert!(!root.join("amr/nodes").join(format!("{id}.tombstone")).exists());
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// A secret in a saved MEMORY.md line is redacted in the node; a personal line
+// with no keyring key is paused and leaves no file anywhere.
+#[test]
+fn amr_save_redacts_secrets_and_pauses_personal_lines_without_a_key() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("amr-save");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    crate::config::write_memory("MEMORY.md", "keep this line\n").unwrap();
+    hx::use_key_store_for(&root, std::sync::Arc::new(hx::MemoryKeyStore::unavailable()));
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+    cabin.new_thread(false);
+    cabin.mem_name = "MEMORY.md".into();
+    cabin.mem_body = "keep this line\nthe dock key is sk-abcdefghijklmnopqrstuv\nmy email is ada@example.com\n".into();
+
+    cabin.save_memory_amr();
+    assert_eq!(
+        cabin.status,
+        "Saved 1 to the memory repo. 1 private paused (key locked), not saved."
+    );
+    assert_eq!(cabin.mem_body, "keep this line\n");
+    let id = grokhub_core::amr::line_id("the dock key is [redacted]");
+    assert_eq!(amr_node_files(&root), vec![format!("{id}.md")]);
+    let disk = std::fs::read_to_string(root.join("amr/nodes").join(format!("{id}.md"))).unwrap();
+    assert!(!disk.contains("sk-abcdefghijklmnopqrstuv"), "{disk}");
+    assert!(disk.contains("the dock key is [redacted]\n"), "{disk}");
+    let pid = grokhub_core::amr::line_id("my email is ada@example.com");
+    assert!(!root.join("amr/nodes").join(format!("{pid}.md")).exists());
+    assert!(!root.join("amr/nodes").join(format!("{pid}.sealed")).exists());
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert_eq!(crate::config::read_memory("MEMORY.md"), "keep this line\n");
+
+    cabin.run_slash(grokhub_core::Slash::MemoryNote("my email is ada@example.com".into()));
+    assert!(cabin.status.starts_with("Learning paused: "), "{}", cabin.status);
+    assert!(cabin.status.ends_with(". Nothing was written."), "{}", cabin.status);
+    assert_eq!(amr_node_files(&root).len(), 1);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// A line the memory repo refuses stays in MEMORY.md instead of vanishing.
+#[test]
+fn amr_save_keeps_a_line_the_store_could_not_write() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("amr-save-fail");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    crate::config::write_memory("MEMORY.md", "keep this line\n").unwrap();
+    // `amr` is a file, so the store can't open.
+    std::fs::write(root.join("amr"), "not a folder").unwrap();
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+    cabin.new_thread(false);
+    cabin.mem_name = "MEMORY.md".into();
+    cabin.mem_body = "keep this line\nprefer nvim\n".into();
+    cabin.save_memory_amr();
+    assert!(cabin.status.starts_with("Memory repo:"), "{}", cabin.status);
+    assert_eq!(cabin.mem_body, "keep this line\nprefer nvim\n");
+    let start = std::time::Instant::now();
+    while crate::config::read_memory("MEMORY.md") != "keep this line\nprefer nvim\n" && start.elapsed() < std::time::Duration::from_secs(2) {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(crate::config::read_memory("MEMORY.md"), "keep this line\nprefer nvim\n");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// AMR M2 through the cabin: the first AMR read imports insights and chip
+// preferences once, writes the report, and posts one chat line.
+#[test]
+fn amr_first_recall_imports_learning_and_chips_once() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("amr-import");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let seed = |cabin: &mut Cabin| {
+        cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+        cabin.learning.insights = [
+            ("pref:editor", "prefer nvim for quick edits"),
+            ("fact:ferry", "the harbor ferry leaves at nine"),
+            ("fact:dock", "dock seven holds the spare sails"),
+            ("pref:style:short", "They want short replies."),
+            ("fact:quay", "the quay lantern is kept in the shed"),
+            ("project:keel", "project keel ships on fridays"),
+            ("fact:tide", "high tide is the best time to launch"),
+        ]
+        .iter()
+        .map(|(key, text)| grokhub_core::LearningInsight { key: (*key).into(), text: (*text).into(), hits: 1 })
+        .collect();
+        cabin.chip_memory.last_slash = Some("/imagine".into());
+        cabin.chip_memory.last_surface = Some("skills".into());
+        cabin.chip_memory.hits = serde_json::from_value(serde_json::json!([
+            {"key": "chat:plan", "label": "Plan the week", "value": "typed words", "kind": "chat", "uses": 3, "picks": 3}
+        ]))
+        .unwrap();
+    };
+    let mut cabin = Cabin::quiet_for_test();
+    seed(&mut cabin);
+    cabin.new_thread(false);
+    crate::store::save_learning(&cabin.learning).unwrap();
+    let learning_json = root.join("learning.json");
+    let learning_before = std::fs::read(&learning_json).unwrap();
+    cabin.run_slash_line("/recall ferry");
+    let body = wait_recall(&mut cabin);
+    let id = &amr_node_files(&root)
+        .into_iter()
+        .find(|f| {
+            std::fs::read_to_string(root.join("amr/nodes").join(f)).unwrap().contains("ferry")
+        })
+        .unwrap();
+    assert_eq!(
+        body,
+        format!("SLASH_RESULT:\namr:{}: the harbor ferry leaves at nine", id.trim_end_matches(".md"))
+    );
+    let status: Vec<&String> = cabin
+        .messages
+        .iter()
+        .filter(|m| m.1.contains("Memory import:"))
+        .map(|m| &m.1)
+        .collect();
+    assert_eq!(status.len(), 1, "{:?}", cabin.messages);
+    assert!(status[0].ends_with("Memory import: 10 imported, 0 skipped (learning_state 7, chips 3)."), "{}", status[0]);
+    assert_eq!(amr_node_files(&root).len(), 10);
+    let dreams: Vec<_> = std::fs::read_dir(root.join("amr/dreams")).unwrap().flatten().collect();
+    assert_eq!(dreams.len(), 1);
+    let report = std::fs::read_to_string(dreams[0].path()).unwrap();
+    assert!(report.contains("\n10 imported, 0 skipped.\n"), "{report}");
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert_eq!(std::fs::read(&learning_json).unwrap(), learning_before, "legacy files are not edited");
+
+    // A new session runs the import again and finds nothing new.
+    let mut again = Cabin::quiet_for_test();
+    seed(&mut again);
+    again.new_thread(false);
+    again.run_slash_line("/recall tide");
+    let body = wait_recall(&mut again);
+    assert!(body.contains(": high tide is the best time to launch"), "{body}");
+    assert!(!again.messages.iter().any(|m| m.1.contains("Memory import:")));
+    assert_eq!(amr_node_files(&root).len(), 10);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// Legacy stays legacy: a reflect and a note write MEMORY.md and never make amr/.
+#[test]
+fn legacy_reflect_and_note_never_create_amr() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("legacy-no-amr");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.new_thread(false);
+    cabin.mem_name = "MEMORY.md".into();
+    cabin
+        .live_mut()
+        .push(("user".into(), "I prefer the harbor light on at night".into()));
+    cabin.run_reflect();
+    wait_reflect(&mut cabin);
+    assert_eq!(cabin.status, "Reflected MEMORY.md");
+    assert_eq!(cabin.mem_body, "I prefer the harbor light on at night\n");
+    cabin.run_slash(grokhub_core::Slash::MemoryNote("the quay lantern is green".into()));
+    assert_eq!(cabin.status, "Wrote MEMORY.md");
+    cabin.run_slash(grokhub_core::Slash::Forget(Some("quay".into())));
+    assert_eq!(cabin.status, "Forgot quay");
+    cabin.run_slash_line("/recall harbor");
+    let body = wait_recall(&mut cabin);
+    assert!(body.contains("MEMORY.md:1: I prefer the harbor light on at night"), "{body}");
+    assert!(!root.join("amr").exists(), "legacy must never create amr/");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+fn amr_dream_cabin(label: &str) -> (std::path::PathBuf, Cabin) {
+    let root = crate::config::test_config_root(label);
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.new_thread(false);
+    cabin.running = false;
+    cabin.composer.clear();
+    (root, cabin)
+}
+
+fn last_chat_text(cabin: &Cabin) -> String {
+    cabin.messages.last().map(|m| m.1.clone()).unwrap_or_default()
+}
+
+#[test]
+fn amr_dream_runs_once_a_night_and_memory_dream_prints_it() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = amr_dream_cabin("amr-dream");
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+    crate::config::write_memory("USER.md", "- Likes tea\n").unwrap();
+    crate::config::write_memory("SOUL.md", "Be brief.\n").unwrap();
+    let user_before = crate::config::read_memory("USER.md");
+    let soul_before = crate::config::read_memory("SOUL.md");
+    assert_eq!(user_before, "- Likes tea\n");
+
+    cabin.run_slash_line("/memory dream");
+    assert!(last_chat_text(&cabin).contains("No dream yet."), "{}", last_chat_text(&cabin));
+
+    let store = super::amr_memory::amr_store_at(&root);
+    store.init().unwrap();
+    let now = grokhub_core::now_ms();
+    let stamp = grokhub_core::oauth::unix_ms_to_rfc3339(now);
+    for (id, body, confidence) in [
+        ("quay-a", "The quay lantern is green at night", 0.9),
+        ("quay-b", "the quay lantern is green at night.", 0.5),
+    ] {
+        store
+            .remember(&grokhub_core::amr::NodeDraft {
+                id: id.into(),
+                node_type: grokhub_core::amr::NodeType::Fact,
+                created: stamp.clone(),
+                updated: stamp.clone(),
+                source: "user".into(),
+                confidence,
+                tags: vec![],
+                body: format!("{body}\n"),
+                sensitivity: grokhub_core::amr::Sensitivity::Plain,
+                consent_ref: String::new(),
+            })
+            .unwrap();
+    }
+    let files_before = amr_node_files(&root);
+
+    assert!(cabin.dream_tonight("2026-10-07", REVIEW_NIGHT_HOUR - 1, now).is_none(), "not before the review hour");
+    cabin.running = true;
+    assert!(cabin.dream_tonight("2026-10-07", REVIEW_NIGHT_HOUR, now).is_none(), "never during a turn");
+    cabin.running = false;
+    assert_eq!(cabin.dream_day, None, "a busy night is tried again");
+    cabin.dream_tonight("2026-10-07", REVIEW_NIGHT_HOUR, now)
+        .expect("due")
+        .join()
+        .unwrap();
+    assert!(cabin.dream_tonight("2026-10-07", 23, now).is_none(), "once a night");
+
+    let report = std::fs::read_to_string(root.join("amr").join("dreams").join("2026-10-07.md")).unwrap();
+    assert!(report.starts_with("# Memory dream 2026-10-07\n"), "{report}");
+    assert!(report.contains("- Merged: 1\n"), "{report}");
+    assert!(report.contains("Kept `quay-a`"), "{report}");
+    assert!(store.is_forgotten("quay-b") && !store.is_forgotten("quay-a"));
+    assert_eq!(amr_node_files(&root), files_before, "nothing removed");
+    assert_eq!(crate::config::read_memory("USER.md"), user_before, "USER.md is never written");
+    assert_eq!(crate::config::read_memory("SOUL.md"), soul_before, "SOUL.md is never written");
+
+    cabin.run_slash_line("/memory dream");
+    assert_eq!(cabin.status, "Memory dream");
+    let shown = last_chat_text(&cabin);
+    assert!(shown.contains("# Memory dream 2026-10-07"), "{shown}");
+    assert!(shown.contains("merged `quay-b`"), "{shown}");
+
+    // A new session the same night finds the report and does not run again.
+    let mut later = Cabin::quiet_for_test();
+    later.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+    later.running = false;
+    later.composer.clear();
+    assert!(later.dream_tonight("2026-10-07", REVIEW_NIGHT_HOUR, now).is_none());
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn amr_dream_halt_skips_the_night() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = amr_dream_cabin("amr-dream-halt");
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+    cabin.halt_everything("Stopped");
+    let now = grokhub_core::now_ms();
+    assert!(cabin.dream_tonight("2026-10-07", REVIEW_NIGHT_HOUR, now).is_none());
+    assert_eq!(cabin.dream_day.as_deref(), Some("2026-10-07"), "the night is skipped, not retried");
+    assert!(!root.join("amr").join("dreams").join("2026-10-07.md").exists());
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn legacy_never_dreams_or_creates_amr() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = amr_dream_cabin("legacy-no-dream");
+    let now = grokhub_core::now_ms();
+    assert!(cabin.dream_tonight("2026-10-07", REVIEW_NIGHT_HOUR, now).is_none());
+    cabin.tick_dream();
+    cabin.run_slash_line("/memory dream");
+    assert!(last_chat_text(&cabin).contains("No dream yet."));
+    assert!(!root.join("amr").exists(), "legacy must never create amr/");
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
@@ -11301,7 +11712,7 @@ fn privacy_slash_lists_grants_scopes_and_egress_without_content() {
     let text = grokhub_core::strip_slash_result(&body);
     assert!(text.starts_with("/privacy — what leaves this computer\n"), "{text}");
     assert!(text.contains("- Off: Sync to paired computers (/sync asks each time) · Files in a folder · "), "{text}");
-    assert!(text.contains("Nothing reads the folder, app, browser, calendar, mail or system grants yet."), "{text}");
+    assert!(text.contains("Granted folders, apps, browser history and system state are read on this computer only, never on battery or in quiet hours; calendar and mail aren't read yet."), "{text}");
     assert!(text.contains("- api.x.ai · 1 time · chats · default · last just now"), "{text}");
     release_isolated(&root, cabin);
 }
@@ -11842,7 +12253,7 @@ fn a_scope_is_granted_by_a_pointer_click_only_and_revoked_from_settings_or_priva
 
     let p = paint_permissions(&ctx, &mut cabin, vec![]);
     click_at(&ctx, &mut cabin, p.pill_by("Installed apps", "Allow"));
-    assert_eq!(cabin.status, "Installed apps allowed. Nothing reads it yet. Revoke it here any time.");
+    assert_eq!(cabin.status, "Installed apps allowed. GrokHub learns from it on this computer. Revoke it here any time.");
     let ledger = hx::ConsentLedger::load(&root);
     let g = ledger.scope_grant(&hx::Scope::Apps).cloned().expect("apps granted");
     assert_eq!(ledger.active().count(), 1, "one click, one scope");
@@ -11870,7 +12281,7 @@ fn a_scope_is_granted_by_a_pointer_click_only_and_revoked_from_settings_or_priva
     cabin.harness.scope_folder = "/srv/notes/".into();
     let p = paint_permissions(&ctx, &mut cabin, vec![]);
     click_at(&ctx, &mut cabin, p.pill_by("Files in a folder", "Allow"));
-    assert_eq!(cabin.status, "Files in notes allowed. Nothing reads it yet. Revoke it here any time.");
+    assert_eq!(cabin.status, "Files in notes allowed. GrokHub learns from it on this computer. Revoke it here any time.");
     assert!(cabin.harness.scope_folder.is_empty());
     // SB-03 / SB-06: the folder name titles the row, the path is in the hint,
     // and the next folder row reads "Add a folder".
@@ -12097,7 +12508,7 @@ fn privacy_lists_each_scope_once_under_one_grants_heading() {
             "- Files in notes: on since 1m ago",
             "- Off: Sync to paired computers (/sync asks each time) · Installed apps · Browser history · Mail · System state",
             "- Screen: \"Let Grok control the desktop\" in Settings → Cabin defaults (off)",
-            "Nothing reads the folder, app, browser, calendar, mail or system grants yet.",
+            "Granted folders, apps, browser history and system state are read on this computer only, never on battery or in quiet hours; calendar and mail aren't read yet.",
         ]
         .join("\n")
     );
@@ -12154,15 +12565,11 @@ fn room_binds_a_work_tree_and_rewind_files_needs_a_project() {
 
 // Landed from PR #125.
 #[test]
-fn inhabit_refuses_a_phone_and_a_missing_peer() {
+fn inhabit_refuses_a_missing_peer() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("inhabit");
     std::env::set_var("GROKHUB_CONFIG", &root);
     let mut cabin = Cabin::quiet_for_test();
-    cabin.run_slash_line("/inhabit phone");
-    assert_eq!(cabin.status, "will not inhabit onto the phone");
-    assert!(!cabin.running);
-    assert!(cabin.inhabit_rx.is_none());
     cabin.run_slash_line("/inhabit cabin-2");
     assert_eq!(cabin.status, "No paired peer named cabin-2");
     assert!(!cabin.running);
@@ -15024,6 +15431,14 @@ fn a_second_ask_waits_its_turn_instead_of_cancelling_the_first() {
         .nth(1)
         .and_then(|s| s.split("fn paint_elicit_ask(").next())
         .expect("paint_perm_ask");
+    // The card and the inbox answer through one function.
+    let answer = src
+        .split("fn answer_perm_at(")
+        .nth(1)
+        .and_then(|s| s.split("fn paint_perm_ask(").next())
+        .expect("answer_perm_at");
+    assert!(ask.contains("self.answer_perm_at(0, allow,"), "{ask}");
+    let ask = format!("{ask}{answer}");
     assert!(
         ask.contains("reject_permission(&p)")
             && !ask.contains("answer_permission(p.rpc_id.clone(), false)"),
@@ -15293,6 +15708,7 @@ fn build_idea_files_one_todo() {
         skill: None,
         runs: 1,
         dismissed_at: 0,
+        done_for_you: None,
         pulse: Default::default(),
     }];
 
@@ -15423,6 +15839,7 @@ fn feed_card(id: &str, kind: grokhub_core::UpdateKind, held: bool) -> grokhub_co
         skill: None,
         runs: 1,
         dismissed_at: 0,
+        done_for_you: None,
         pulse: Default::default(),
     }
 }
@@ -15527,6 +15944,7 @@ fn offer_card(id: &str, title: &str, status: UpdateStatus) -> UpdateCard {
         skill: None,
         runs: 1,
         dismissed_at: 0,
+        done_for_you: None,
         pulse: Default::default(),
     }
 }
@@ -16226,11 +16644,16 @@ fn quiet_cabin() -> Cabin {
         palette_files_q: String::new(),
         palette_files_root: String::new(),
         palette_file_rx: None,
+        palette_steps: Vec::new(),
+        palette_steps_q: String::new(),
+        palette_step_rx: None,
         shortcuts_open: false,
         active_skill_follow: None,
         card_notes_follow: None,
         board_notes_edit: None,
         last_anticipate_ms: 0,
+        proactive: Default::default(),
+        last_proactive_ms: 0,
         goal_step: 0,
         followup_step: 0,
         stream_buf: String::new(),
@@ -16421,6 +16844,7 @@ fn quiet_cabin() -> Cabin {
         perm_always_confirm: None,
         confirm: None,
         jump_last_you: false,
+        jump_turn: None,
         find: super::chat_ui::ChatFind::default(),
         elicit_ask: None,
         elicit_draft: String::new(),
@@ -16428,6 +16852,7 @@ fn quiet_cabin() -> Cabin {
         session_mode: grokhub_acp::SessionMode::Chat,
         permission_mode: grokhub_acp::PermissionMode::Ask,
         harness: Default::default(),
+        auto_act: Default::default(),
         scheduled_perm: false,
         grok_sessions: Vec::new(),
         grok_sessions_loaded: false,
@@ -16446,6 +16871,8 @@ fn quiet_cabin() -> Cabin {
         sync_rx: None,
         inhabit_rx: None,
         reflect_rx: None,
+        amr_imported: false,
+        dream_day: None,
         session_show_rx: None,
         import_rx: None,
         inspect_text: String::new(),
@@ -22513,6 +22940,23 @@ fn wait_ledger_lines(root: &std::path::Path, n: usize) -> grokhub_agent::harness
     panic!("ledger never reached {n} lines");
 }
 
+/// Spike-7: a skill patch only lands when a replay of the skill's last
+/// recorded run passes, so the patch tests record one successful run first.
+fn record_weekly_report_run(root: &std::path::Path) {
+    let mut verify = grokhub_agent::harness::fixture_span(1_000, "verify_script", "{}", "allow", "pass", None, "");
+    verify.session_id = "chat-weekly".into();
+    grokhub_agent::harness::append_span(root, &verify).unwrap();
+    let o = grokhub_agent::harness::outcome_from_spans(
+        "chat-weekly:1",
+        "skill:weekly-report",
+        std::slice::from_ref(&verify),
+        &[],
+        false,
+        1_001,
+    );
+    grokhub_core::outcome::append_outcome(root, &o).unwrap();
+}
+
 const WEEKLY_PATCH: &str =
     "SUGGEST_SKILL_PATCH: weekly-report | the user asks for the weekly report | 1. Open report.md 2. Fill the numbers 3. Save a copy as PDF";
 
@@ -22520,6 +22964,7 @@ const WEEKLY_PATCH: &str =
 fn nightly_patch_keeps_the_prior_version_and_typed_undo_puts_it_back() {
     let _g = crate::config::hold_test_config();
     let (_pin, root) = pin_skill_config("skill-undo-typed");
+    record_weekly_report_run(&root);
     let path = skills::save_skill(&weekly_report_skill()).expect("save");
     let v1 = std::fs::read(&path).unwrap();
     let mut cabin = Cabin::quiet_for_test();
@@ -22572,6 +23017,7 @@ fn nightly_patch_keeps_the_prior_version_and_typed_undo_puts_it_back() {
 fn the_model_cannot_undo_a_skill_change_on_its_own() {
     let _g = crate::config::hold_test_config();
     let (_pin, root) = pin_skill_config("skill-undo-model");
+    record_weekly_report_run(&root);
     let path = skills::save_skill(&weekly_report_skill()).expect("save");
     let mut cabin = Cabin::quiet_for_test();
     cabin.skill_list = skills::list_skills();
@@ -22638,7 +23084,10 @@ fn only_typing_or_a_click_builds_an_undo_ask() {
     assert_eq!(
         hits,
         vec![
+            "grokhub-app/src/app/change_undo.rs: UndoAsk::from_click(",
             "grokhub-app/src/app/chat_ui.rs: typed_send = true",
+            "grokhub-app/src/app/repair_ui.rs: UndoAsk::from_click(",
+            "grokhub-app/src/app/self_review_ui.rs: UndoAsk::from_click(",
             "grokhub-app/src/app/skill_undo.rs: UndoAsk::from_click(",
             "grokhub-app/src/app/skill_undo.rs: UndoAsk::from_click(",
             "grokhub-app/src/app/skill_undo.rs: UndoAsk::from_typing(",
@@ -24850,8 +25299,14 @@ fn bg_ask_spawn_passes_deny_args() {
     let sent = last_grok_argv(&argv);
     let desktop_deny = format!("--deny\n{}", grokhub_core::DESKTOP_MCP_RULE);
     let hard = grokhub_agent::harness::HEADLESS_DENY_RULES.len() + grokhub_acp::CLI_CREDENTIAL_DENY.len();
-    assert_eq!(sent.matches("--deny").count(), 1 + hard, "{sent}");
+    // Spike-1c: Grok Build's own computer-use tools are denied on Auto, with the switch off or on.
+    let cu = grokhub_acp::BUILTIN_CU_DENY.len();
+    let has_cu = |sent: &str| grokhub_acp::BUILTIN_CU_DENY.iter().all(|r| sent.contains(&format!("--deny\n{r}\n")));
+    // Spike-2a: the Cua proxy rule follows the desktop deny.
+    assert_eq!(sent.matches("--deny").count(), 2 + hard + cu, "{sent}");
+    assert!(has_cu(&sent), "{sent}");
     assert!(sent.contains(&desktop_deny), "{sent}");
+    assert!(sent.contains(&format!("--deny\n{}\n", grokhub_core::CUA_MCP_RULE)), "{sent}");
     assert!(sent.contains("--deny\nBash(rm -rf /)\n"), "{sent}");
     assert!(sent.contains("--deny\nRead(**/.grok/auth.json)\n"), "{sent}");
     assert!(!sent.contains("--deny\nBash\n"), "{sent}");
@@ -24864,7 +25319,8 @@ fn bg_ask_spawn_passes_deny_args() {
     assert!(started.is_ok(), "{started:?}");
     assert!(poll_until(&mut cabin, 5, |c| c.bg.runs.is_empty()), "auto desktop run ends");
     let sent = last_grok_argv(&argv);
-    assert_eq!(sent.matches("--deny").count(), hard, "{sent}");
+    assert_eq!(sent.matches("--deny").count(), hard + cu, "{sent}");
+    assert!(has_cu(&sent), "{sent}");
     assert!(!sent.contains(&desktop_deny), "{sent}");
     assert!(
         sent.contains(&format!("--allow\n{}", grokhub_core::DESKTOP_MCP_RULE)),
@@ -27095,4 +27551,545 @@ fn heartbeat_halt_skips_every_organ_that_starts_work() {
         halt.find("heartbeat_halt(").expect("halt") < halt.find("halt_work(").expect("work"),
         "Halt holds the pulse before anything else: {halt}"
     );
+}
+
+/// Spike-5c: a skill Grok made through `grokhub-self` under Always is one
+/// self_manage ledger line, and the user's Undo click removes it.
+#[test]
+fn self_made_skill_undo_click_removes_it() {
+    use crate::self_mcp::tests::{call, FakeIo};
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("self-made-undo");
+    let mut server = crate::self_mcp::SelfServer::new(&root);
+    let mut io = FakeIo::answering(false);
+    let (ok, text) = call(
+        &mut server,
+        &mut io,
+        "skill_create",
+        serde_json::json!({ "name": "inbox-zero", "instructions": "1. Archive read mail\n2. Star replies", "reason": "you do this every morning" }),
+    );
+    assert_eq!((ok, text.as_str()), (true, "created skill inbox-zero (change #1; the user can Undo it)"));
+    let folder = skills::skill_folder("inbox-zero");
+    assert!(folder.join("SKILL.md").exists());
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.skill_list = skills::list_skills();
+    let rows = cabin.skill_rows_now();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].label.starts_with("inbox-zero · added "), "{}", rows[0].label);
+    cabin.skill_row_clicked(&rows[0]);
+    assert!(!folder.exists(), "Undo removes the self-made skill");
+    let ledger = grokhub_agent::harness::ChangeLedger::load(&root);
+    let ops: Vec<(&str, &str)> = ledger.all().iter().map(|c| (c.op.as_str(), c.origin.as_str())).collect();
+    assert_eq!(ops, vec![("create", "self_manage"), ("undo", "user")]);
+    let _ = std::fs::remove_dir_all(&root);
+}
+/// Spike-5c: `grokhub --mcp-self` runs in its own process, so its ledger
+/// lines never reach the cabin's in-process queue. The cabin reads them from
+/// disk: a Work-tree row, a Home update, and an automations list that matches
+/// the file, each shown once.
+#[test]
+fn changes_from_the_self_server_process_show_as_work_rows() {
+    use crate::self_mcp::tests::{call, FakeIo};
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("self-elsewhere");
+    let _agent_pin = grokhub_agent::perm::ConfigGuard::set(&root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.poll_self_changes();
+    assert!(cabin.harness.work_rows.is_empty());
+    let mut server = crate::self_mcp::SelfServer::new(&root);
+    let mut io = FakeIo::answering(false);
+    assert!(call(&mut server, &mut io, "skill_create", serde_json::json!({ "name": "inbox-zero", "instructions": "archive read mail" })).0);
+    let (ok, made) = call(&mut server, &mut io, "automation_create", serde_json::json!({ "instructions": "sweep the inbox", "every": "1h" }));
+    assert!(ok, "{made}");
+    let id = made.lines().next().unwrap().trim_start_matches("created ").to_string();
+    // What the other process left behind: lines on disk only.
+    let _ = grokhub_agent::harness::take_self_changes(&root);
+    let _ = grokhub_agent::take_automation_changes();
+    assert!(cabin.automations.is_empty());
+    cabin.harness.ledger_watch.next_ms = 0;
+    cabin.poll_self_changes();
+    let labels: Vec<&str> = cabin.harness.work_rows.iter().map(|r| r.label.as_str()).collect();
+    assert_eq!(labels.len(), 2, "{labels:?}");
+    assert!(labels.contains(&"Grok added skill inbox-zero"), "{labels:?}");
+    let ids: Vec<&str> = cabin.automations.iter().map(|a| a.id.as_str()).collect();
+    assert_eq!(ids, vec![id.as_str()], "the cabin's list matches the file");
+    let cards = cabin.updates.iter().filter(|u| u.kind == grokhub_core::UpdateKind::SelfChange).count();
+    assert_eq!(cards, 2);
+    // Looked again: nothing new, nothing posted twice.
+    cabin.harness.ledger_watch.next_ms = 0;
+    cabin.poll_self_changes();
+    assert_eq!(cabin.harness.work_rows.len(), 2);
+    assert_eq!(cabin.updates.iter().filter(|u| u.kind == grokhub_core::UpdateKind::SelfChange).count(), 2);
+    let _ = std::fs::remove_dir_all(&root);
+}
+/// Spike-5b: an automation the model wrote (an Ideas Add, an Automate offer)
+/// is saved through the ChangeLedger. It shows as a Work-tree row and a Home
+/// update, and the row's Undo click removes it from the file and the
+/// cabin's own list, so the next save does not bring it back.
+#[test]
+fn a_model_written_automation_gets_a_work_row_a_home_update_and_undo() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("self-change-auto");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.poll_self_changes();
+    assert!(cabin.harness.work_rows.is_empty());
+    let route = route_schedule("every weekday at 9, summarize the board").expect("clock route");
+    let said = cabin.commit_schedule(route, grokhub_agent::harness::Origin::SelfManage, "from the idea Board digest");
+    assert!(said.starts_with("Automation added"), "{said}");
+    let id = cabin.automations[0].id.clone();
+    assert!(std::fs::read_to_string(crate::night::path()).unwrap().contains(&id), "saved now, not later");
+    let ledger = grokhub_agent::harness::ChangeLedger::load_kind(&root, grokhub_agent::harness::ChangeKind::Automation);
+    let c = &ledger.all()[0];
+    assert_eq!((c.op.as_str(), c.origin.as_str(), c.id.as_str()), ("create", "self_manage", id.as_str()));
+    assert_eq!(c.reason, "from the idea Board digest");
+    cabin.poll_self_changes();
+    assert_eq!(cabin.harness.work_rows.len(), 1);
+    let row = cabin.harness.work_rows[0].clone();
+    assert_eq!(row.label, format!("Grok added automation {}", cabin.automations[0].name));
+    let card = cabin
+        .updates
+        .iter()
+        .find(|u| u.kind == grokhub_core::UpdateKind::SelfChange)
+        .expect("a Home update");
+    assert_eq!(card.title, format!("GrokHub added automation {}", cabin.automations[0].name));
+    assert_eq!(
+        card.body.as_deref(),
+        Some("from the idea Board digest · Undo it from its Work-tree row or /automations changes.")
+    );
+    cabin.change_row_clicked(&row, super::change_undo::ChangeAct::Undo);
+    assert!(cabin.automations.is_empty(), "the cabin's list follows the file");
+    assert!(!std::fs::read_to_string(crate::night::path()).unwrap().contains(&id));
+    assert!(cabin.harness.work_rows.is_empty());
+    assert!(cabin.status.starts_with("Removed the automation "), "{}", cabin.status);
+    // A user-typed job stays outside the ledger, as before.
+    let route = route_schedule("every day at 7, water the plants").expect("clock route");
+    cabin.commit_schedule(route, grokhub_agent::harness::Origin::User, "");
+    std::thread::sleep(Duration::from_millis(100));
+    let ledger = grokhub_agent::harness::ChangeLedger::load_kind(&root, grokhub_agent::harness::ChangeKind::Automation);
+    assert_eq!(ledger.all().len(), 2, "create and its undo only: {:?}", ledger.all());
+    cabin.poll_self_changes();
+    assert!(cabin.harness.work_rows.is_empty());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// `/connections changes` and `/automations changes` post the report
+/// bubble; from a scheduled send they still only show rows (no slash undoes).
+#[test]
+fn connection_and_automation_changes_reports_post_a_bubble() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("self-change-report");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.send_from_composer("/connections changes".into());
+    cabin.send_scheduled_chat("/automations changes".into());
+    let bodies: Vec<&str> = cabin.messages.iter().map(|m| m.1.as_str()).collect();
+    assert!(bodies.iter().any(|b| b.contains(super::change_undo::CONNECTION_CHANGES_HEAD)), "{bodies:?}");
+    assert!(bodies.iter().any(|b| b.contains(super::change_undo::AUTOMATION_CHANGES_HEAD)), "{bodies:?}");
+    assert!(cabin.change_rows_now(grokhub_agent::harness::ChangeKind::Connection).is_empty());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// Spike-3a: tool steps join History and palette search (legacy mode too),
+// Enter goes back to that chat and turn, and a turn with harness spans leaves
+// one trail node in memory repo mode only.
+fn spike3a_click(chat: &str, turn: u32, ts: u64) -> grokhub_agent::harness::Span {
+    let mut s = grokhub_agent::harness::Span::soft_allow(
+        chat,
+        "click",
+        r#"{"x":40,"y":12}"#,
+        "clicked",
+        "click OK",
+        grokhub_agent::harness::AccessMode::Supervised,
+        "grok_build",
+    )
+    .on_path("A")
+    .in_turn(chat, turn);
+    s.ts_ms = ts;
+    s
+}
+
+fn spike3a_wait(done: &mut dyn FnMut() -> bool) {
+    let start = std::time::Instant::now();
+    while !done() && start.elapsed() < std::time::Duration::from_secs(5) {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn step_search_finds_click_ok_off_the_ui_thread_and_enter_jumps_to_the_turn() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("spike3a-search");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.cfg.memory_backend.is_legacy(), "search needs no memory repo");
+    cabin.threads.clear();
+    let harbor = crate::threads::ChatThread::new("Harbor", false);
+    let pier = crate::threads::ChatThread::new("Pier", false);
+    let mut hidden = crate::threads::ChatThread::new("Hidden", false);
+    hidden.scratch = true;
+    let (harbor_id, pier_id, hidden_id) = (harbor.id.clone(), pier.id.clone(), hidden.id.clone());
+    cabin.threads.push(harbor);
+    cabin.threads.push(pier);
+    cabin.threads.push(hidden);
+    cabin.thread_idx = 0;
+    grokhub_agent::harness::append_span(&root, &spike3a_click(&pier_id, 2, 1_000)).unwrap();
+    grokhub_agent::harness::append_span(&root, &spike3a_click(&hidden_id, 1, 2_000)).unwrap();
+
+    cabin.history_q = "click OK".into();
+    cabin.kick_history_search();
+    assert!(cabin.history_rx.is_some() && cabin.history_hits.is_empty(), "search runs off the UI thread");
+    spike3a_wait(&mut || {
+        cabin.poll_history_search();
+        cabin.history_rx.is_none()
+    });
+    let target = format!("step:2:{pier_id}");
+    assert_eq!(
+        cabin.history_hits,
+        vec![(target.clone(), "Pier · turn 2 · click · allow".to_string())],
+        "the scratch chat's step stays out"
+    );
+    cabin.open_history_hit(&target);
+    assert_eq!(cabin.threads[cabin.thread_idx].id, pier_id);
+    assert_eq!(cabin.jump_turn, Some(2));
+    assert!(matches!(cabin.nav, Nav::Chat));
+
+    // The palette: the same row after the commands, and Enter takes it.
+    cabin.jump_turn = None;
+    let harbor_idx = cabin.threads.iter().position(|t| t.id == harbor_id).unwrap();
+    cabin.switch_thread(harbor_idx);
+    cabin.open_palette();
+    cabin.palette_q = "click OK".into();
+    cabin.kick_palette_steps();
+    spike3a_wait(&mut || {
+        cabin.poll_palette_search();
+        cabin.palette_step_rx.is_none()
+    });
+    assert_eq!(cabin.palette_steps, vec![(target.clone(), "Pier · turn 2 · click · allow".to_string())]);
+    let cmds = grokhub_core::filter_palette(&cabin.palette_q);
+    let pick = super::palette::palette_pick(&cmds, &[], "", &cabin.palette_steps, cmds.len());
+    assert_eq!(pick.as_deref(), Some(target.as_str()));
+    cabin.run_palette(&egui::Context::default(), &target);
+    assert_eq!(cabin.threads[cabin.thread_idx].id, pier_id);
+    assert_eq!(cabin.jump_turn, Some(2));
+    cabin.open_history_hit("step:2:gone-chat");
+    assert_eq!(cabin.status, "That chat is gone");
+
+    // Legacy mode writes no trail.
+    assert!(cabin.write_turn_trail(&pier_id, 2).is_none());
+    cabin.harness_turn_end("Clicked OK.", 2);
+    assert!(!root.join("amr").exists());
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn memory_repo_turn_end_writes_one_trail_and_a_scratch_chat_writes_none() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("spike3a-trail");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    hx::use_key_store_for(&root, std::sync::Arc::new(hx::MemoryKeyStore::new()));
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+    cabin.threads.clear();
+    let dock = crate::threads::ChatThread::new("Dock", false);
+    let mut scratch = crate::threads::ChatThread::new("Scratch", false);
+    scratch.scratch = true;
+    let (dock_id, scratch_id) = (dock.id.clone(), scratch.id.clone());
+    cabin.threads.push(dock);
+    cabin.threads.push(scratch);
+    cabin.thread_idx = 0;
+    hx::append_span(&root, &spike3a_click(&dock_id, 1, 1_791_331_200_000)).unwrap();
+    cabin.harness_turn_end("Clicked OK.", 1);
+    let trail = root.join("amr").join("nodes").join(format!("{}.md", grokhub_core::amr::trail_id(&dock_id, 1)));
+    spike3a_wait(&mut || trail.is_file());
+    let md = std::fs::read_to_string(&trail).unwrap();
+    assert!(
+        md.ends_with(&format!(
+            "---\nTurn 1: 1 step.\nTools: click x1\nDecisions: allow 1\nScreen changed: not measured\nFindings: none\nVerify: none\nSpans: {dock_id}:1791331200000\n"
+        )),
+        "{md}"
+    );
+    assert!(md.contains(&format!("source: span:{dock_id}:1791331200000\n")), "{md}");
+    let trails = |root: &std::path::Path| {
+        std::fs::read_dir(root.join("amr").join("nodes"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("trail-"))
+            .count()
+    };
+    assert_eq!(trails(&root), 1);
+
+    // A scratch chat: same kind of turn, no trail.
+    cabin.thread_idx = 1;
+    hx::append_span(&root, &spike3a_click(&scratch_id, 1, 1_791_331_300_000)).unwrap();
+    assert!(cabin.write_turn_trail(&scratch_id, 1).is_none());
+    cabin.harness_turn_end("Clicked OK.", 1);
+    assert_eq!(trails(&root), 1);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn spike3a_adds_no_nav_page() {
+    // Exhaustive on purpose: a new page fails to compile here.
+    let pages = [
+        Nav::Chat,
+        Nav::Devices,
+        Nav::Memory,
+        Nav::Workboard,
+        Nav::Pulse,
+        Nav::Imagine,
+        Nav::Skills,
+        Nav::Night,
+        Nav::History,
+        Nav::Command,
+        Nav::Connectors,
+        Nav::Agents,
+        Nav::Settings,
+    ];
+    let named: Vec<&str> = pages
+        .iter()
+        .map(|nav| match nav {
+            Nav::Chat => "chat",
+            Nav::Devices => "devices",
+            Nav::Memory => "memory",
+            Nav::Workboard => "workboard",
+            Nav::Pulse => "pulse",
+            Nav::Imagine => "imagine",
+            Nav::Skills => "skills",
+            Nav::Night => "night",
+            Nav::History => "history",
+            Nav::Command => "command",
+            Nav::Connectors => "connectors",
+            Nav::Agents => "agents",
+            Nav::Settings => "settings",
+        })
+        .collect();
+    assert_eq!(named.len(), 13);
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("spike3a-nav");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads.clear();
+    cabin.threads.push(crate::threads::ChatThread::new("Pier", false));
+    let id = cabin.threads[0].id.clone();
+    cabin.open_history_hit(&format!("step:1:{id}"));
+    assert!(matches!(cabin.nav, Nav::Chat), "a step hit opens the chat, not a page of its own");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+
+fn wait_diagnose(cabin: &mut Cabin) {
+    let start = std::time::Instant::now();
+    while cabin.harness.diagnose_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(4) {
+        cabin.poll_diagnose();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn wifi_intent_without_system_state_runs_no_probe_and_posts_the_ask() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("diagnose-intent");
+    std::fs::create_dir_all(&root).unwrap();
+    let before = cabin.messages.len();
+    cabin.send_chat("my wifi doesn't work".into());
+    assert!(!cabin.running, "a diagnose intent never reaches the model");
+    wait_diagnose(&mut cabin);
+    assert_eq!(cabin.messages.len(), before + 2);
+    assert_eq!(cabin.messages[before], ("user".into(), "my wifi doesn't work".into()));
+    assert_eq!(cabin.messages[before + 1], ("assistant".into(), grokhub_agent::repair::SCOPE_ASK.into()));
+    let trace = cabin.threads.get(cabin.thread_idx).map(|t| t.id.clone()).unwrap_or_else(|| "session".into());
+    let spans = hx::read_spans(&root, &trace).unwrap();
+    assert_eq!(spans.len(), 1);
+    assert_eq!(spans[0].tool, "diagnose");
+    assert_eq!(spans[0].decision, "deny");
+    assert_eq!(spans[0].origin, hx::Origin::Repair);
+    let ask = cabin.harness.indexer.asks.first().expect("the Spike-8a ask card is queued");
+    assert_eq!(ask.scope, hx::Scope::SystemState);
+    assert_eq!(ask.why, grokhub_agent::repair::SCOPE_ASK_WHY);
+    assert_eq!(cabin.harness.indexer.asks.len(), 1);
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn diagnose_slash_without_system_state_is_a_slash_result_with_the_ask() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("diagnose-slash");
+    std::fs::create_dir_all(&root).unwrap();
+    let before = cabin.messages.len();
+    cabin.run_slash_line("/diagnose");
+    assert!(!cabin.running);
+    wait_diagnose(&mut cabin);
+    assert_eq!(cabin.messages.len(), before + 1);
+    let (role, body) = cabin.messages.last().cloned().unwrap();
+    assert_eq!(role, "assistant");
+    assert!(grokhub_core::is_cabin_slash_turn(&role, &body), "stays out of the next model kick");
+    assert!(body.ends_with(grokhub_agent::repair::SCOPE_ASK), "{body}");
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn diagnose_answers_in_the_chat_that_asked_after_a_switch() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("diagnose-switch");
+    std::fs::create_dir_all(&root).unwrap();
+    cabin.threads.push(crate::threads::ChatThread::new("Asked here", false));
+    cabin.threads.push(crate::threads::ChatThread::new("Moved here", false));
+    let (asked, moved) = (cabin.threads.len() - 2, cabin.threads.len() - 1);
+    cabin.apply_switch_thread(asked);
+    cabin.run_slash_line("/diagnose");
+    cabin.apply_switch_thread(moved);
+    let before = cabin.messages.len();
+    wait_diagnose(&mut cabin);
+    assert!(cabin.harness.diagnose_rx.is_none(), "the diagnose finished");
+    assert_eq!(cabin.messages.len(), before, "the chat on screen gets nothing");
+    cabin.apply_switch_thread(asked);
+    let (role, body) = cabin.messages.last().cloned().unwrap();
+    assert_eq!(role, "assistant");
+    assert!(body.ends_with(grokhub_agent::repair::SCOPE_ASK), "{body}");
+    release_isolated(&root, cabin);
+}
+
+// ---- Spike-8a local indexers: the in-context ask card and "Forget these" ----
+
+fn paint_work_cards(ctx: &egui::Context, cabin: &mut Cabin, events: Vec<egui::Event>) -> ScopePaint {
+    fn walk(shape: &egui::Shape, p: &mut ScopePaint) {
+        match shape {
+            egui::Shape::Text(t) => p.texts.push((t.galley.text().to_string(), t.pos + t.galley.rect.center().to_vec2())),
+            egui::Shape::Vec(v) => v.iter().for_each(|c| walk(c, p)),
+            _ => {}
+        }
+    }
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 1200.0))),
+        events,
+        ..Default::default()
+    };
+    let out = crate::theme::test_pass(ctx, input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| cabin.paint_harness_cards(ui));
+    });
+    let mut p = ScopePaint { texts: Vec::new(), filled: Vec::new() };
+    for clipped in &out.shapes {
+        walk(&clipped.shape, &mut p);
+    }
+    p
+}
+
+fn click_work_card(ctx: &egui::Context, cabin: &mut Cabin, at: egui::Pos2) {
+    let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let _ = paint_work_cards(ctx, cabin, vec![egui::Event::PointerMoved(at)]);
+    let _ = paint_work_cards(ctx, cabin, vec![press(true)]);
+    let _ = paint_work_cards(ctx, cabin, vec![press(false)]);
+}
+
+/// P5: the agent can ask for a scope in context; only the click on the card's
+/// Allow writes the grant. Enter never does, and Not now leaves it off.
+#[test]
+fn a_scope_ask_card_grants_on_a_click_only() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("scope-ask");
+    std::fs::create_dir_all(&root).unwrap();
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let ledger = hx::ConsentLedger::load(&root);
+    let why = "To suggest the right app for a task I'd read which apps you have installed.";
+    assert!(cabin.harness.indexer.asks.ask(hx::Scope::Apps, why, &ledger, now_ms()));
+    assert!(cabin.harness.indexer.asks.ask(hx::Scope::SystemState, "To spot a full disk early I'd read your disk and services.", &ledger, now_ms()));
+    assert_eq!(cabin.decisions_waiting(), 2, "asks count as decisions");
+
+    let p = paint_work_cards(&ctx, &mut cabin, vec![]);
+    assert!(p.has("Learn from your computer") && p.has("Allow Installed apps?") && p.has(why), "{:?}", p.texts);
+    assert!(!p.has("Allow System state?"), "one card at a time");
+    // Keys never grant: Tab onto the card and press Enter and Space. (A
+    // focused Not now may answer; that only keeps the scope off.)
+    for _ in 0..6 {
+        let _ = paint_work_cards(&ctx, &mut cabin, vec![key(egui::Key::Tab)]);
+        let _ = paint_work_cards(&ctx, &mut cabin, vec![key(egui::Key::Enter)]);
+        let _ = paint_work_cards(&ctx, &mut cabin, vec![key(egui::Key::Space)]);
+    }
+    assert_eq!(hx::ConsentLedger::load(&root).active().count(), 0, "keyboard never grants");
+    cabin.harness.indexer.asks = Default::default();
+    let ledger = hx::ConsentLedger::load(&root);
+    assert!(cabin.harness.indexer.asks.ask(hx::Scope::Apps, why, &ledger, now_ms()));
+    assert!(cabin.harness.indexer.asks.ask(hx::Scope::SystemState, "To spot a full disk early I'd read your disk and services.", &ledger, now_ms()));
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+
+    let p = paint_work_cards(&ctx, &mut cabin, vec![]);
+    click_work_card(&ctx, &mut cabin, p.at("Allow"));
+    assert_eq!(cabin.status, "Installed apps allowed. GrokHub learns from it on this computer. Revoke it here any time.");
+    assert!(hx::ConsentLedger::load(&root).scope_grant(&hx::Scope::Apps).is_some());
+
+    let p = paint_work_cards(&ctx, &mut cabin, vec![]);
+    assert!(p.has("Allow System state?"));
+    click_work_card(&ctx, &mut cabin, p.at("Not now"));
+    assert_eq!(cabin.status, "System state stays off.");
+    assert_eq!(hx::ConsentLedger::load(&root).scope_grant(&hx::Scope::SystemState), None);
+    assert_eq!(cabin.harness.indexer.asks.len(), 0);
+    assert_eq!(hx::ConsentLedger::load(&root).active().count(), 1);
+    release_isolated(&root, cabin);
+}
+
+/// A granted scope lists what it taught GrokHub; "Forget these" retires them.
+#[test]
+fn a_granted_scope_lists_its_facts_and_forget_these_purges_them() {
+    use grokhub_agent::harness as hx;
+    use grokhub_agent::indexers as idx;
+    struct Mains;
+    impl idx::power::PowerSource for Mains {
+        fn on_battery(&self) -> bool {
+            false
+        }
+    }
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("scope-facts");
+    std::fs::create_dir_all(&root).unwrap();
+    let docs = root.join("fixture-home").join("Documents");
+    std::fs::create_dir_all(docs.join(".ssh")).unwrap();
+    std::fs::write(docs.join("plan.md"), "# Q4 launch plan\n## Budget\n").unwrap();
+    std::fs::write(docs.join("todo.txt"), "Call the venue\n").unwrap();
+    std::fs::write(docs.join(".ssh").join("id_ed25519"), "not a real key\n").unwrap();
+    let scope = hx::Scope::Files(docs.display().to_string());
+    hx::grant_scope(&root, &scope, Some(&root.join("fixture-home")), hx::UserClick::from_click()).unwrap();
+    let dirs = idx::paths::PlatformDirs::from_env();
+    let env = idx::TickEnv {
+        config_dir: &root,
+        now_ms: now_ms(),
+        quiet: false,
+        power: &Mains,
+        fs: &idx::fs::RealFs,
+        probe: &idx::system_state::OsProbe,
+        dirs: &dirs,
+    };
+    let out = idx::Scheduler::default().tick(&env);
+    assert!(matches!(out, idx::TickOutcome::Ran { written: 2, .. }), "{out:?}");
+    cabin.harness.indexer.index = std::sync::Arc::new(idx::ScopeIndex::load(&root));
+
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    assert!(p.has("Learned 2 things, sealed on this computer:"), "{:?}", p.texts.iter().map(|t| &t.0).collect::<Vec<_>>());
+    assert!(p.texts.iter().any(|t| t.0.starts_with("File plan.md · ") && t.0.ends_with("title: Q4 launch plan · headings: Budget")));
+    assert!(p.texts.iter().any(|t| t.0.starts_with("File todo.txt · ")));
+    assert!(!p.texts.iter().any(|t| t.0.contains("id_ed25519") || t.0.contains(".ssh")), "hard excludes never show");
+    assert!(p.at(super::indexer_ui::FORGET_THESE).y > p.at("Files in Documents").y, "under its row");
+
+    click_at(&ctx, &mut cabin, p.at(super::indexer_ui::FORGET_THESE));
+    let start = std::time::Instant::now();
+    while cabin.harness.indexer.index.facts.values().any(|v| !v.is_empty()) && start.elapsed() < std::time::Duration::from_secs(4) {
+        cabin.poll_forget();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(cabin.status, "Forgot 2 things learned from Files in Documents. It stays allowed; revoke it to stop reading.");
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    assert!(!p.has(super::indexer_ui::FORGET_THESE));
+    assert!(p.has("Nothing learned to show. GrokHub reads it on a heartbeat, never on battery or in quiet hours."));
+    assert!(hx::ConsentLedger::load(&root).scope_grant(&scope).is_some(), "forgetting is not revoking");
+    assert_eq!(idx::ScopeIndex::load(&root).for_scope(&scope.key()).len(), 0);
+    release_isolated(&root, cabin);
 }

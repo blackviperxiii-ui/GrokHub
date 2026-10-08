@@ -32,6 +32,8 @@ pub enum Slash {
     Forget(Option<String>),
     MemoryNote(String),
     MemoryShow,
+    /// `/memory dream`: the latest AMR dream report, as chat text.
+    MemoryDream,
     Recall(String),
     Board,
     Imagine(String),
@@ -59,6 +61,8 @@ pub enum Slash {
     Sync,
     /// `/privacy`: grants, learning scopes, and what left this computer (Spike-4a). Read only.
     Privacy,
+    /// `/diagnose`: read-only checks of disk, memory, services, logs, network and updates (Spike-8b).
+    Diagnose,
     Hub,
     Inhabit(String),
     Rewind,
@@ -96,6 +100,11 @@ pub enum Slash {
     SkillUndo(String),
     /// `/skills restore <name>`: bring back a skill that was removed.
     SkillRestore(String),
+    /// `/connections changes`: connections GrokHub added, changed, or turned
+    /// off on its own, each with an Undo click.
+    ConnectionChanges,
+    /// `/automations changes`: automations GrokHub made or changed on its own.
+    AutomationChanges,
     GrokConnectors,
     /// `/hooks` — Connectors tab, Hooks section.
     GrokHooks,
@@ -171,6 +180,9 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
             if rest.eq_ignore_ascii_case("show") || rest.is_empty() {
                 return Some(Slash::MemoryShow);
             }
+            if rest.eq_ignore_ascii_case("dream") {
+                return Some(Slash::MemoryDream);
+            }
             let note = rest
                 .strip_prefix("note")
                 .map(|s| s.trim())
@@ -191,6 +203,8 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/workflow" => Some(parse_workflow_arg(rest)),
         "/worktree" => Some(Slash::Worktree),
         "/skills" => Some(parse_skills_arg(rest)),
+        "/connections" if is_changes_arg(rest) => Some(Slash::ConnectionChanges),
+        "/automations" if is_changes_arg(rest) => Some(Slash::AutomationChanges),
         "/workflows" => Some(Slash::GrokWorkflows),
         "/plugins" | "/marketplace" | "/mcps" | "/connectors" => Some(Slash::GrokConnectors),
         "/hooks" => Some(Slash::GrokHooks),
@@ -289,6 +303,7 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/send" if !rest.is_empty() => Some(Slash::Send(rest.to_string())),
         "/sync" => Some(Slash::Sync),
         "/privacy" => Some(Slash::Privacy),
+        "/diagnose" => Some(Slash::Diagnose),
         "/hub" => Some(Slash::Hub),
         "/inhabit" if !rest.is_empty() => Some(Slash::Inhabit(rest.to_string())),
         "/rewind" if rest == "--files" || rest == "--code" || rest == "files" => {
@@ -315,6 +330,11 @@ fn parse_skills_arg(rest: &str) -> Slash {
         "restore" => Slash::SkillChanges,
         _ => Slash::GrokSkills,
     }
+}
+
+/// `changes`, `history`, `undo`, or nothing after `/connections` or `/automations`.
+fn is_changes_arg(rest: &str) -> bool {
+    matches!(rest.to_ascii_lowercase().as_str(), "" | "changes" | "history" | "undo")
 }
 
 /// `/workflow pause|resume|stop <target>`, or a launch name when the first word is not a verb.
@@ -388,6 +408,7 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Forget(_) => "forget",
         Slash::MemoryNote(_) => "memory",
         Slash::MemoryShow => "memory_show",
+        Slash::MemoryDream => "memory_dream",
         Slash::Recall(_) => "recall",
         Slash::Board => "board",
         Slash::Imagine(_) => "imagine",
@@ -414,6 +435,7 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Send(_) => "send",
         Slash::Sync => "sync",
         Slash::Privacy => "privacy",
+        Slash::Diagnose => "diagnose",
         Slash::Hub => "hub",
         Slash::Inhabit(_) => "inhabit",
         Slash::Rewind => "rewind",
@@ -446,6 +468,8 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::SkillChanges => "skill_changes",
         Slash::SkillUndo(_) => "skill_undo",
         Slash::SkillRestore(_) => "skill_restore",
+        Slash::ConnectionChanges => "connection_changes",
+        Slash::AutomationChanges => "automation_changes",
         Slash::GrokConnectors => "grok_connectors",
         Slash::GrokHooks => "grok_hooks",
         Slash::GrokWorkflows => "grok_workflows",
@@ -512,6 +536,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/hub", hint: "Device hub status", insert: "/hub", run_on_pick: true },
     SlashDef { cmd: "/sync", hint: "Sync chats & memory with paired computers", insert: "/sync", run_on_pick: true },
     SlashDef { cmd: "/privacy", hint: "What left this computer, and your grants", insert: "/privacy", run_on_pick: true },
+    SlashDef { cmd: "/diagnose", hint: "Check this computer (read only)", insert: "/diagnose", run_on_pick: true },
     SlashDef { cmd: "/send", hint: "Send a task to another computer", insert: "/send ", run_on_pick: false },
     SlashDef { cmd: "/rewind", hint: "Rewind Grok conversation", insert: "/rewind", run_on_pick: true },
     SlashDef { cmd: "/rewind --files", hint: "Restore last project snapshot", insert: "/rewind --files", run_on_pick: true },
@@ -544,6 +569,8 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/skills changes", hint: "What GrokHub changed in your skills", insert: "/skills changes", run_on_pick: true },
     SlashDef { cmd: "/skills undo", hint: "Undo the newest change to a skill…", insert: "/skills undo ", run_on_pick: false },
     SlashDef { cmd: "/skills restore", hint: "Bring back a removed skill…", insert: "/skills restore ", run_on_pick: false },
+    SlashDef { cmd: "/connections changes", hint: "What GrokHub changed in your connections", insert: "/connections changes", run_on_pick: true },
+    SlashDef { cmd: "/automations changes", hint: "What GrokHub changed in your automations", insert: "/automations changes", run_on_pick: true },
     SlashDef { cmd: "/plugins", hint: "Grok Build plugins and marketplace", insert: "/plugins", run_on_pick: true },
     SlashDef { cmd: "/mcps", hint: "Grok Build MCP servers", insert: "/mcps", run_on_pick: true },
     SlashDef { cmd: "/hooks", hint: "Grok Build hooks", insert: "/hooks", run_on_pick: true },
@@ -691,6 +718,8 @@ pub fn slash_help() -> String {
         "/skills changes — what GrokHub changed in your skills on its own, each with Undo",
         "/skills undo <name> — put back the version before the newest change (typed by you or clicked; a removed skill comes back)",
         "/skills restore <name> — bring back a skill that was removed, from its kept copy",
+        "/connections changes — connections GrokHub added, changed, or turned off on its own, each with Undo",
+        "/automations changes — automations GrokHub made or changed on its own, each with Undo",
         "/plugins /marketplace /mcps — connectors",
         "/hooks — open Connectors with the Hooks section in view",
         "/model <id> — grok -p --model",
@@ -706,6 +735,7 @@ pub fn slash_help() -> String {
         "/board — open Workboards",
         "/skill <name> — run a skill",
         "/memory note <fact> — write MEMORY.md",
+        "/memory dream — show the last overnight memory tidy (memory repo only)",
         "/learn — reflect this chat into MEMORY.md (alias /learn reflect)",
         "/recall <q> — search memory, learned insights, and chats",
         "/forget <topic> — drop memory lines that mention the topic (whole words)",
@@ -718,8 +748,9 @@ pub fn slash_help() -> String {
         "/send <task> — task this box",
         "/sync — merge chats and memory with paired computers (asks first unless Settings → Permissions allows it)",
         "/privacy — your grants, learning scopes (all off), and what left this computer",
+        "/diagnose — check disk, memory, services, logs, network and updates, read only, and say what's wrong in plain words (needs System state in Settings → Permissions)",
         "/hub — devices / pair",
-        "/inhabit <peer> — hand this Grok to another box (not the phone)",
+        "/inhabit <peer> — hand this Grok to another paired computer",
         "/rewind — rewind Grok conversation; /rewind --files restores the last project snapshot",
         "/fork — fork the Grok session into a new chat tab",
         "/btw — side ask. A live run keeps going; the question waits, then sends look-safe. Saved as ask.",
@@ -749,7 +780,7 @@ pub fn slash_help() -> String {
         "/models — Grok catalog",
         "/palette — command palette. Search walks nested files in the bound project (or ~/GrokHub-Work), not only the top of that folder.",
         "Enter sends; Ctrl+Enter newline. Composer Stop is a disc with a small rounded mark. Idle Stop and the idle mic sit still; they ease while hovered, pressed, listening, speaking, or a reply is running. The transcript Running row has no Stop. The changing status text above the composer is gone. The context usage bar stays. No live dot or Thinking label sits on the turn; the composer glow shows a running reply, and Stop's hover names the current action.",
-        "The Ask card names the command, path, or site. Always on that card confirms skip every tool prompt this launch; night / loop / phone inherit --always-approve until quit. Composer Always and a destructive host command reuse that confirm sheet (title, consequence, Confirm or Run, Cancel). Enter / Esc stay Allow / Deny on the Ask card; overlay confirm uses them only when the composer is empty. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out. History is the cabin's own chats (headless grok -p on the thread). Background jobs such as workboard summarize stay off that list. Same on Linux and Windows. History offers Last you and fork branch points when those markers exist.",
+        "The Ask card names the command, path, or site. Always on that card confirms skip every tool prompt this launch; night / loop / /send inherit --always-approve until quit. Composer Always and a destructive host command reuse that confirm sheet (title, consequence, Confirm or Run, Cancel). Enter / Esc stay Allow / Deny on the Ask card; overlay confirm uses them only when the composer is empty. Live secrets stay redacted. Naming a schedule teaches that routine on Automations and leaves the rewind snapshot out. History is the cabin's own chats (headless grok -p on the thread). Background jobs such as workboard summarize stay off that list. Same on Linux and Windows. History offers Last you and fork branch points when those markers exist.",
         "Mode pill: Chat / Plan / btw. Permission: Ask / Auto / Always-approve. Both pills are remembered; Always-approve resets to Ask on the next launch. Effort: None / Low / Medium / High / Extra High. A saved Max loads as Extra High, a saved Minimal as Low. Default model is grok-4.7. Hover a composer pill for what it does. Grok Build runs the agent.",
         "Settings → Behavior: close to tray, living wall, and a quiet hours dropdown. Picking a window saves it. A Quiet until chip shows on the titlebar only while that window is active. Signed-in empty home shows an update feed in the gap under the composer when a card is undismissed, and hides that slot when the feed is empty. A finished /loop posts automation_done from poll_grok_loop. Saving a schedule posts schedule_created. Cards stay until opened or dismissed. A device glance appears only when hub share or a last frame is bound; click opens Devices.",
         "History search drops stale hits when the box changes. Re-opening the memory file already in the editor keeps unsaved typing.",
@@ -791,6 +822,8 @@ mod tests {
             parse_slash("/memory note prefer nvim"),
             Some(Slash::MemoryNote("prefer nvim".into()))
         );
+        assert_eq!(parse_slash("/memory dream"), Some(Slash::MemoryDream));
+        assert_eq!(parse_slash("/dream"), Some(Slash::Dream), "/dream stays the Imagine prompt");
         assert_eq!(parse_slash("/recall pi"), Some(Slash::Recall("pi".into())));
         assert_eq!(parse_slash("/forget wifi"), Some(Slash::Forget(Some("wifi".into()))));
         assert_eq!(parse_slash("/forget"), Some(Slash::Forget(None)));
@@ -859,6 +892,12 @@ mod tests {
         assert_eq!(parse_slash("/skills changes"), Some(Slash::SkillChanges));
         assert_eq!(parse_slash("/skills undo"), Some(Slash::SkillChanges));
         assert_eq!(parse_slash("/skills restore"), Some(Slash::SkillChanges));
+        assert_eq!(parse_slash("/connections changes"), Some(Slash::ConnectionChanges));
+        assert_eq!(parse_slash("/connections"), Some(Slash::ConnectionChanges));
+        assert_eq!(parse_slash("/automations changes"), Some(Slash::AutomationChanges));
+        assert_eq!(parse_slash("/automations History"), Some(Slash::AutomationChanges));
+        assert_eq!(parse_slash("/automations weekly"), None);
+        assert_eq!(slash_kind(&Slash::ConnectionChanges), "connection_changes");
         assert_eq!(
             parse_slash("/skills UNDO weekly-report"),
             Some(Slash::SkillUndo("weekly-report".into()))
@@ -1164,6 +1203,16 @@ mod tests {
         assert_eq!(parse_slash("/connectors"), Some(Slash::GrokConnectors));
         assert!(slash_help().contains("/hooks — open Connectors with the Hooks section in view"));
         assert!(!unknown_cabin_slash("/hooks"));
+    }
+
+    #[test]
+    fn diagnose_slash_is_a_cabin_view() {
+        assert_eq!(parse_slash("/diagnose"), Some(Slash::Diagnose));
+        assert_eq!(parse_slash("/Diagnose"), Some(Slash::Diagnose));
+        assert_eq!(parse_slash("/diagnose").as_ref().map(slash_kind), Some("diagnose"));
+        assert!(slash_help().contains("\n/diagnose — check disk, memory, services, logs, network and updates, read only"));
+        assert!(SLASH_COMMANDS.iter().any(|d| d.cmd == "/diagnose" && d.run_on_pick));
+        assert!(!unknown_cabin_slash("/diagnose"));
     }
 
     #[test]

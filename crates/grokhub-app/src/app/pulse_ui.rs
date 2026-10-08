@@ -100,6 +100,8 @@ pub(super) enum PulseAct {
     Like(String),
     Discuss(String),
     Link(String),
+    Undo(String),
+    NeverAgain(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -371,7 +373,8 @@ fn pulse_menu(
                 ui.close();
             }
         };
-    if !feed {
+    let self_review = grokhub_core::self_review::card_target(&card.source_id);
+    if !feed && self_review.is_none() {
         pick(
             ui,
             "Run in the background",
@@ -387,7 +390,13 @@ fn pulse_menu(
         PulseAct::Snooze(id.clone()),
         act,
     );
-    if kind == PulseType::Learn {
+    if let Some(target) = self_review {
+        let label = match target {
+            grokhub_core::self_review::CardTarget::Revert(_) => "Revert",
+            _ => "Apply change",
+        };
+        pick(ui, label, "", PulseAct::Accept(id.clone()), act);
+    } else if kind == PulseType::Learn {
         pick(
             ui,
             "That's right, keep it",
@@ -396,13 +405,25 @@ fn pulse_menu(
             act,
         );
         pick(ui, "That's wrong", "", PulseAct::Wrong(id.clone()), act);
-    } else if !feed {
+    } else if !feed && card.pulse.proactive.is_none() {
+        // A proactive offer has no Always: a hard one never may, and a soft
+        // one is a single offer, not a schedule.
         pick(ui, "Always do this", "", PulseAct::Always(id.clone()), act);
     }
     pick(ui, "Open", "Enter", PulseAct::Open(id.clone()), act);
     ui.separator();
     pick(ui, "Not this", "N", PulseAct::NotThis(id.clone()), act);
     pick(ui, "Dismiss", "D", PulseAct::Dismiss(id), act);
+}
+
+/// The inline Run button's word: Send… on a prepared draft (it parks the hard
+/// card), Yes on an ask card, else Run.
+pub(super) fn run_label(card: &UpdateCard) -> &'static str {
+    match card.pulse.proactive.as_ref().map(|p| p.route) {
+        Some(grokhub_core::proactive::ProactiveRoute::Prepare) => "Send…",
+        Some(grokhub_core::proactive::ProactiveRoute::Ask) => "Yes",
+        _ => "Run",
+    }
 }
 
 /// A small frameless text button for the row's inline actions.
@@ -504,7 +525,7 @@ pub(super) fn paint_pulse_row(
                                         act = Some(PulseAct::Snooze(card.id.clone()));
                                     }
                                     dot(ui);
-                                    if quick_button(ui, "Run") {
+                                    if quick_button(ui, run_label(card)) {
                                         act = Some(PulseAct::Run(card.id.clone()));
                                     }
                                 },
@@ -549,6 +570,29 @@ pub(super) enum FeedPostAct {
     Like,
     Discuss,
     Link(String),
+    /// Done-for-you Undo (pointer click only).
+    Undo,
+    /// Done-for-you "Don't do this again" (pointer click only).
+    NeverAgain,
+}
+
+/// The Done-for-you pills, while the card is unanswered.
+fn paint_done_for_you(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct> {
+    let open = card.kind == UpdateKind::DoneForYou && card.done_for_you.as_ref().is_some_and(|d| !d.answered);
+    if !open {
+        return None;
+    }
+    let mut act = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        if super::change_undo::click_pill(ui, "Undo") {
+            act = Some(FeedPostAct::Undo);
+        }
+        if super::change_undo::click_pill(ui, "Don't do this again") {
+            act = Some(FeedPostAct::NeverAgain);
+        }
+    });
+    act
 }
 
 /// Title, short takeaway, Read at, images, then Like / Discuss.
@@ -618,6 +662,9 @@ pub(super) fn paint_post_body(
             }
         }
     });
+    if let Some(done) = paint_done_for_you(ui, card) {
+        act = Some(done);
+    }
     act
 }
 
@@ -1081,6 +1128,8 @@ impl Cabin {
                         FeedPostAct::Like => PulseAct::Like(card.id.clone()),
                         FeedPostAct::Discuss => PulseAct::Discuss(card.id.clone()),
                         FeedPostAct::Link(url) => PulseAct::Link(url),
+                        FeedPostAct::Undo => PulseAct::Undo(card.id.clone()),
+                        FeedPostAct::NeverAgain => PulseAct::NeverAgain(card.id.clone()),
                     });
                 }
             });
@@ -1348,6 +1397,8 @@ impl Cabin {
             PulseAct::Like(id) => self.pulse_like(&id, &Self::local_day()),
             PulseAct::Open(id) => self.pulse_open(&id),
             PulseAct::Discuss(id) => self.discuss_card(&id),
+            PulseAct::Undo(id) => self.done_for_you_undo(&id),
+            PulseAct::NeverAgain(id) => self.done_for_you_never(&id),
             PulseAct::Link(url) => {
                 self.follow_update_action(Some(UpdateAction::DeepLink { href: url }))
             }
@@ -1373,7 +1424,21 @@ impl Cabin {
 
     /// Run: the idea's own action as a `/bg` task. The composer stays free.
     pub(super) fn pulse_run(&mut self, id: &str) -> Option<String> {
+        if self.pulse_card(id)?.pulse.proactive.is_some() {
+            self.proactive_click(id);
+            return None;
+        }
+        self.pulse_run_line(id)
+    }
+
+    /// The `/bg` line itself, once any gate said yes.
+    pub(super) fn pulse_run_line(&mut self, id: &str) -> Option<String> {
         let card = self.pulse_card(id)?;
+        // A self-review card is a skill change, not a task: only Apply acts on it.
+        if grokhub_core::self_review::card_target(&card.source_id).is_some() {
+            self.status = "Use Apply change in the card's menu.".into();
+            return None;
+        }
         let line = pc::run_line(&card);
         if grokhub_core::mark_update_opened(&mut self.updates, id) {
             self.persist_updates();
@@ -1407,6 +1472,7 @@ impl Cabin {
         self.pulse_note(&card.title, LedgerReason::Dismiss, day);
         self.pulse_remove(&card);
         self.heartbeat_card_dismissed();
+        self.proactive_dismissed(&card);
     }
 
     /// Not this: a dislike line in the ledger, then the card goes. Cards on the
@@ -1418,6 +1484,7 @@ impl Cabin {
         self.pulse_note(&card.title, LedgerReason::NotThis, day);
         self.pulse_remove(&card);
         self.heartbeat_card_dismissed();
+        self.proactive_not_this(&card);
         self.status = "Got it. Less like this.".into();
     }
 
@@ -1465,6 +1532,9 @@ impl Cabin {
             return;
         };
         self.pulse_note(&card.title, LedgerReason::Accepted, day);
+        if self.apply_self_review_card(id) {
+            return;
+        }
         self.apply_idea(id);
     }
 
@@ -1791,6 +1861,8 @@ fn source_preview(page: &str) -> Option<String> {
     if !grokhub_core::public_http_url(page) {
         return None;
     }
+    // EgressGuard (Spike-4c): the card's source link came from the model, so it is chat.
+    crate::xai::egress_ok(page, &[grokhub_agent::harness::DataClass::Chat]).ok()?;
     let resp = fetch_agent().get(page).call().ok()?;
     let html_ok = resp.content_type().to_ascii_lowercase().contains("html");
     if !html_ok {
@@ -1811,6 +1883,9 @@ fn cache_image(url: &str) -> bool {
         return true;
     }
     if !grokhub_core::public_http_url(url) {
+        return false;
+    }
+    if crate::xai::egress_ok(url, &[grokhub_agent::harness::DataClass::Chat]).is_err() {
         return false;
     }
     let Ok(resp) = fetch_agent().get(url).call() else {

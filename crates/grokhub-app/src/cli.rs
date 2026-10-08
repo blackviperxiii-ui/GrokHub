@@ -9,6 +9,8 @@ pub enum Launch {
     Oauth,
     Help,
     McpDesktop,
+    McpCua,
+    McpSelf,
 }
 
 pub fn parse_args(args: &[String]) -> Launch {
@@ -22,6 +24,8 @@ pub fn parse_args(args: &[String]) -> Launch {
             "--update" => return Launch::Update,
             "--oauth" => return Launch::Oauth,
             "--mcp-desktop" => return Launch::McpDesktop,
+            "--mcp-cua" => return Launch::McpCua,
+            "--mcp-self" => return Launch::McpSelf,
             "-h" | "--help" => return Launch::Help,
             _ => {}
         }
@@ -87,6 +91,13 @@ mod tests {
             !main.contains("attach_cli_console") || main.contains("Launch::Cabin | Launch::Agent | Launch::McpDesktop"),
             "the desktop server must not attach a console"
         );
+    }
+
+    #[test]
+    fn cua_gate_launch_flag() {
+        assert_eq!(parse_args(&args(&["grokhub", "--mcp-cua"])), Launch::McpCua);
+        assert_eq!(parse_args(&args(&["grokhub", "--hub", "--mcp-cua"])), Launch::McpCua);
+        assert_eq!(parse_args(&args(&["grokhub", "--version", "--mcp-cua"])), Launch::Version);
     }
 
     #[test]

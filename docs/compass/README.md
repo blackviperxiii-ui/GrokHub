@@ -8,17 +8,20 @@ The format follows Meta's "compass, not encyclopedia" write-up (Engineering at M
 | --- | --- |
 | [grokhub-core](grokhub-core.md) | `crates/grokhub-core/`: the shared brain, re-exports, script-text tests |
 | [amr](amr.md) | `crates/grokhub-core/src/amr/`: agent memory repo M0 and `/recall` |
-| [slash](slash.md) | slash parsing (core), dispatch (app), native parity (agent), FFI kind |
+| [slash](slash.md) | slash parsing (core), dispatch (app), native parity (agent) |
 | [grokhub-acp](grokhub-acp.md) | `crates/grokhub-acp/`: the `grok` CLI client, ACP, headless `grok -p`, cabin `GROK_HOME` |
 | [grokhub-agent](grokhub-agent.md) | `crates/grokhub-agent/`: the native Lab engine |
 | [harness](harness.md) | `crates/grokhub-agent/src/harness/`: Spike-0 approval gate, paths A/B/C/E |
+| [repair](repair.md) | `crates/grokhub-agent/src/repair/`: Spike-8b read-only diagnose, `/diagnose`, apply later |
+| [indexers](indexers.md) | `crates/grokhub-agent/src/indexers/`: Spike-8a local indexers, scope nodes, Forget these |
 | [grokhub-app](grokhub-app.md) | `crates/grokhub-app/`: the `grokhub` binary and its launch modes |
 | [app-module](app-module.md) | `crates/grokhub-app/src/app/`: the `Cabin` UI and its tests |
 | [app-config](app-config.md) | `crates/grokhub-app/src/config.rs`: `app.json` and safe disk stores |
+| [self-improve](self-improve.md) | Spike-7: task outcomes, the weekly self-review, skill drafts, the replay gate, revert offers |
 | [heartbeat](heartbeat.md) | the 15 s pulse, the proactive-act throttle, scheduled jobs and Halt |
 | [desktop-mcp](desktop-mcp.md) | `crates/grokhub-app/src/desktop_mcp/` and `crates/grokhub-core/src/desktop_mcp.rs` |
+| [self-manage](self-manage.md) | `crates/grokhub-agent/src/self_manage/` and `crates/grokhub-app/src/self_mcp.rs`: Grok's own skill, connection, and automation tools |
 | [grokhub-hub](grokhub-hub.md) | `crates/grokhub-hub/`: LAN `/v1` hub and pairing |
-| [grokhub-ffi](grokhub-ffi.md) | `crates/grokhub-ffi/`: C ABI for Android and Windows |
 | [install-scripts](install-scripts.md) | `scripts/install.sh` and friends, plus the tests that pin their text |
 | [versions-and-channels](versions-and-channels.md) | version bumps, beta/stable channels, the build label |
 

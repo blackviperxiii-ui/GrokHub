@@ -372,6 +372,8 @@ pub fn set_marketplace_url(url: &str) -> Result<(), String> {
 
 pub fn fetch_marketplace(url: &str) -> Result<Vec<MarketEntry>, String> {
     let url = https_index_url(url)?;
+    // EgressGuard (Spike-4c): a plain GET of the index, no user data.
+    crate::harness::guard_quiet(&crate::perm::config_dir(), &crate::harness::EgressReq::new(url, &[]))?;
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(20))
         .redirects(0)
@@ -1091,7 +1093,7 @@ fn mcp_line(name: &str, spec: &Value) -> String {
 }
 
 fn is_desktop_name(name: &str) -> bool {
-    name.trim().to_ascii_lowercase().replace('_', "-") == grokhub_core::DESKTOP_MCP_SERVER
+    grokhub_core::CABIN_CU_SERVERS.contains(&name.trim().to_ascii_lowercase().replace('_', "-").as_str())
 }
 
 fn read_manifest(root: &Path) -> Result<Manifest, String> {

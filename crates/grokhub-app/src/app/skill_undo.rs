@@ -5,7 +5,7 @@
 //! An undo or restore runs only from the user's own typed line
 //! (`HarnessState::typed_send`, set by `send_from_composer`) or a pointer
 //! click on a row (`paint_skill_undo_rows`). The same slash from a night job,
-//! an automation, a phone task, a Pulse run, or an idea only posts the rows,
+//! an automation, a /send task, a Pulse run, or an idea only posts the rows,
 //! so the model never undoes or re-applies a change on its own.
 
 use super::*;
@@ -62,6 +62,7 @@ fn what(op: ChangeOp) -> &'static str {
         ChangeOp::Delete => "removed",
         ChangeOp::Undo => "undone",
         ChangeOp::Restore => "restored",
+        ChangeOp::Accept => "kept",
     }
 }
 
@@ -158,7 +159,7 @@ impl Cabin {
     }
 
     /// `/skills undo <name>`. Only the user's own typed line undoes; anything
-    /// else (night, automation, phone, Pulse, idea text) gets the rows.
+    /// else (night, automation, /send, Pulse, idea text) gets the rows.
     pub(super) fn run_skill_undo(&mut self, name: &str) {
         if !self.harness.typed_send {
             self.run_skill_changes();
@@ -210,10 +211,13 @@ impl Cabin {
         self.harness.skill_rows.clone().unwrap_or_default()
     }
 
-    fn finish_skill_revert(&mut self, name: &str, res: Result<hx::Reverted, String>) {
+    pub(super) fn finish_skill_revert(&mut self, name: &str, res: Result<hx::Reverted, String>) {
         self.harness.skill_rows = None;
         let line = match res {
             Ok(done) => {
+                if done.change.op == hx::ChangeOp::Undo {
+                    self.outcomes_after_undo(name);
+                }
                 match &done.now {
                     Some(bytes) => {
                         let raw = String::from_utf8_lossy(bytes).into_owned();

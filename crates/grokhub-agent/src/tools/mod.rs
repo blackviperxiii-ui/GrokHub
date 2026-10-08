@@ -1,5 +1,6 @@
 //! Workspace tools. `execute` stays read-only. `dispatch` runs the gated set.
 
+pub(crate) mod connections;
 pub(crate) mod control;
 mod desktop;
 mod glob;
@@ -74,6 +75,7 @@ pub fn tool_schemas() -> Vec<Value> {
         control::output_schema(),
         control::scheduler_list_schema(),
         crate::skills::schema(),
+        crate::repair::schema(),
     ]
 }
 
@@ -94,10 +96,14 @@ pub fn schemas_for(gate: &Gate) -> Vec<Value> {
     tools.push(control::monitor_schema());
     tools.push(control::scheduler_create_schema());
     tools.push(control::scheduler_delete_schema());
-    if gate.desktop {
-        tools.extend(desktop::schemas());
-    }
-    tools.extend(crate::mcp::schema_tools());
+    tools.push(connections::add_schema());
+    tools.push(connections::disable_schema());
+    tools.push(connections::delete_schema());
+    let desk = if gate.desktop { desktop::schemas() } else { Vec::new() };
+    let native = desk.len();
+    tools.extend(desk);
+    tools.extend(crate::self_manage::native_schemas());
+    tools.extend(crate::mcp::schema_tools(native));
     tools
 }
 
@@ -128,7 +134,11 @@ pub fn dispatch(ctx: &ToolCtx<'_>, name: &str, arguments: &str) -> ToolOutput {
     if is_readonly(name) {
         return dispatch_readonly(ctx, name, &args);
     }
-    if let Some(output) = crate::mcp::try_dispatch(name, &args) {
+    if crate::self_manage::self_tool(name).is_some() {
+        // Path E: the loop already asked `harness::decide` (via `decide_with`).
+        return crate::self_manage::run_native(name, &args);
+    }
+    if let Some(output) = crate::mcp::try_dispatch(name, &args, ctx.stop) {
         return output;
     }
     match name {
@@ -139,7 +149,10 @@ pub fn dispatch(ctx: &ToolCtx<'_>, name: &str, arguments: &str) -> ToolOutput {
         "monitor" => control::monitor(ctx, &args),
         "scheduler_create" => control::scheduler_create(&args),
         "scheduler_delete" => control::scheduler_delete(&args),
-        "web_fetch" => web_fetch::run_with_ports(&args),
+        "connection_add" => connections::add(&args),
+        "connection_disable" => connections::disable(&args),
+        "connection_delete" => connections::delete(&args),
+        "web_fetch" => web_fetch::run_with_ports(&args, ctx.stop),
         "image_generate" | "image_edit" | "video_generate" | "video_edit" | "video_extend" => {
             media::run_with_ports(name, &args, ctx.stop)
         }
@@ -200,6 +213,7 @@ fn dispatch_readonly(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolOutput 
         "scheduler_list" => control::scheduler_list(),
         "search_tool" => crate::mcp::search_output(args),
         "skill" => crate::skills::tool_run(ctx.workspace, args),
+        "diagnose" => crate::repair::tool_run(args),
         other => ToolOutput::err(format!("{READ_ONLY_PHASE}: `{other}` is not available.")),
     }
 }
@@ -330,6 +344,7 @@ mod tests {
                 "get_command_or_subagent_output",
                 "scheduler_list",
                 "skill",
+                "diagnose",
             ]
         );
         for tool in &tools {

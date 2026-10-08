@@ -1,28 +1,32 @@
-//! ChangeLedger, skills slice (harness design §11 Spike-5, §12 P3).
+//! ChangeLedger (harness design §11 Spike-5, §12 P3): skills, connections,
+//! and automations.
 //!
-//! Every write to a cabin skill that GrokHub makes on its own (a nightly
-//! review patch, a skill learned from a host run, a junk skill moved aside)
-//! keeps the version it replaces and appends one line to
-//! `{config_dir}/changes/skills.jsonl`: skill id, time, origin, a short
-//! reason, and the SHA-256 of the `SKILL.md` bytes before and after. The
-//! ledger holds no skill text, and the id and reason pass through
-//! `redact_secrets`. The bytes live beside it in
-//! `{config_dir}/changes/skills/<id>/<ms>-<hash12>.md`, at most
-//! [`HISTORY_CAP`] files per skill, so Undo puts back the exact file.
+//! Every write GrokHub makes on its own to a cabin skill, a connection (an
+//! MCP server in the native config), or an automation keeps the version it
+//! replaces and appends one line to `{config_dir}/changes/<kind>s.jsonl`:
+//! id, time, origin, a short reason, and the SHA-256 of the bytes before and
+//! after. The ledger holds no skill text, server entry, or job text, and the
+//! id, label, and reason pass through `redact_secrets`. The bytes live beside
+//! it in `{config_dir}/changes/<kind>s/<id>/<ms>-<hash12>.<ext>`, at most
+//! [`HISTORY_CAP`] files per id, so Undo puts back the exact bytes.
 //!
-//! Undo and restore need an [`UndoAsk`], which only the user's own typing in
-//! the composer or a pointer click builds. No model reply, review pass, or
-//! automation can make one (source-scanning test in grokhub-app), so the
-//! model never undoes or re-applies a change on its own. An undone patch is
-//! remembered: the nightly review does not write the same bytes again
-//! ([`ChangeLedger::undone_by_user`]).
+//! Undo, restore, and Keep need an [`UndoAsk`], which only the user's own
+//! typing in the composer or a pointer click builds. No model reply, review
+//! pass, or automation can make one (source-scanning test in grokhub-app), so
+//! the model never undoes, re-applies, or accepts a change on its own. An
+//! undone patch is remembered: the nightly review does not write the same
+//! bytes again ([`ChangeLedger::undone_by_user`]).
 //!
-//! Not built yet (rest of Spike-5): connections and automations, Work-tree
-//! rows, git-backed history, and agent-initiated delete as a hard card.
+//! The ledger records changes and never approves them: `harness::decide`
+//! stays the only gate. [`scope_guard`] refuses any target under harness
+//! policy, the consent store, egress, the Access settings, the ledger itself,
+//! or `~/.grok`, and logs a `ledger_scope_violation` finding.
+//!
+//! Not built yet: git-backed history and a text diff per version.
 
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -35,7 +39,15 @@ use crate::harness::span::Origin;
 pub const CHANGES_DIR: &str = "changes";
 /// The skills ledger inside [`CHANGES_DIR`].
 pub const SKILL_LEDGER_FILE: &str = "skills.jsonl";
-/// Kept versions per skill. The oldest go first.
+/// The connections ledger inside [`CHANGES_DIR`].
+pub const CONNECTION_LEDGER_FILE: &str = "connections.jsonl";
+/// The automations ledger inside [`CHANGES_DIR`].
+pub const AUTOMATION_LEDGER_FILE: &str = "automations.jsonl";
+/// Scope-guard findings inside [`CHANGES_DIR`].
+pub const FINDINGS_FILE: &str = "findings.jsonl";
+/// Detector name on a scope-guard finding.
+pub const LEDGER_SCOPE_VIOLATION: &str = "ledger_scope_violation";
+/// Kept versions per id. The oldest go first.
 pub const HISTORY_CAP: usize = 20;
 /// Ledger lines kept. Older lines are dropped on the next write.
 pub const LEDGER_LINE_CAP: usize = 2000;
@@ -43,11 +55,74 @@ pub const LEDGER_LINE_CAP: usize = 2000;
 const LEDGER_READ_CAP: u64 = 4 * 1024 * 1024;
 /// Longest reason kept on a line, in chars.
 const REASON_MAX: usize = 160;
+/// Longest label kept on a line, in chars.
+const LABEL_MAX: usize = 60;
 /// Largest `SKILL.md` the ledger copies.
 const SKILL_READ_CAP: u64 = 1024 * 1024;
+/// Findings kept; older lines are dropped on the next write.
+const FINDINGS_CAP: usize = 200;
 
 /// One writer at a time: the nightly pass saves several skills on threads.
 static LEDGER_LOCK: Mutex<()> = Mutex::new(());
+
+/// What a ledger line is about.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum ChangeKind {
+    #[default]
+    Skill,
+    /// An MCP server entry in the native MCP config.
+    Connection,
+    /// One job in `automations.json`.
+    Automation,
+}
+
+impl ChangeKind {
+    pub const ALL: [ChangeKind; 3] = [Self::Skill, Self::Connection, Self::Automation];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Skill => "skill",
+            Self::Connection => "connection",
+            Self::Automation => "automation",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.as_str() == raw)
+    }
+
+    pub fn ledger_file(self) -> &'static str {
+        match self {
+            Self::Skill => SKILL_LEDGER_FILE,
+            Self::Connection => CONNECTION_LEDGER_FILE,
+            Self::Automation => AUTOMATION_LEDGER_FILE,
+        }
+    }
+
+    fn history_folder(self) -> &'static str {
+        match self {
+            Self::Skill => "skills",
+            Self::Connection => "connections",
+            Self::Automation => "automations",
+        }
+    }
+
+    fn ext(self) -> &'static str {
+        match self {
+            Self::Skill => "md",
+            _ => "json",
+        }
+    }
+
+    /// The ledger id for a name of this kind. Skills use their folder name;
+    /// connections and automations keep their own key ([`entry_id`]).
+    pub fn id_of(self, name: &str) -> String {
+        match self {
+            Self::Skill => change_id(name),
+            _ => entry_id(name).unwrap_or_default(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -57,6 +132,8 @@ pub enum ChangeOp {
     Delete,
     Undo,
     Restore,
+    /// The user kept a change GrokHub made (Work-tree Keep).
+    Accept,
 }
 
 impl ChangeOp {
@@ -67,12 +144,18 @@ impl ChangeOp {
             Self::Delete => "delete",
             Self::Undo => "undo",
             Self::Restore => "restore",
+            Self::Accept => "accept",
         }
+    }
+
+    /// A line that changed bytes on disk and can be undone.
+    fn undoable(self) -> bool {
+        !matches!(self, Self::Undo | Self::Accept)
     }
 }
 
-/// One ledger line. Hashes are SHA-256 hex of the whole `SKILL.md`; an empty
-/// hash means the skill was not there.
+/// One ledger line. Hashes are SHA-256 hex of the kept bytes; an empty hash
+/// means the target was not there.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Change {
     pub seq: u64,
@@ -91,11 +174,26 @@ pub struct Change {
     /// The `seq` an undo line reverted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub undoes: Option<u64>,
+    /// A short name to show when the id is not one (an automation's title).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
 }
 
-/// Proof that the user asked for an undo or restore: their own typing in the
-/// composer, or a pointer click. Build it only there; a source-scanning test
-/// in grokhub-app fails if either constructor shows up anywhere else.
+impl Change {
+    /// What rows and reports call this target.
+    pub fn shown_name(&self) -> &str {
+        if self.label.is_empty() {
+            &self.id
+        } else {
+            &self.label
+        }
+    }
+}
+
+/// Proof that the user asked for an undo, restore, or Keep: their own typing
+/// in the composer, or a pointer click. Build it only there; a
+/// source-scanning test in grokhub-app fails if either constructor shows up
+/// anywhere else.
 #[derive(Debug)]
 pub struct UndoAsk(());
 
@@ -115,91 +213,195 @@ pub fn change_id(name: &str) -> String {
     grokhub_core::redact_secrets(&grokhub_core::skill_dir_name(name))
 }
 
+/// The ledger id for a connection or automation key. It is also a folder
+/// name, so only `A-Z a-z 0-9 . _ -`, at most 64 chars, not starting with a
+/// dot, and nothing that reads as a secret.
+pub fn entry_id(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    let ok = !name.is_empty()
+        && name.len() <= 64
+        && !name.starts_with('.')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        && grokhub_core::redact_secrets(name) == name;
+    if ok {
+        Ok(name.to_string())
+    } else {
+        Err("use a short name: letters, digits, dot, dash, or underscore".into())
+    }
+}
+
+pub fn ledger_path(config_dir: &Path, kind: ChangeKind) -> PathBuf {
+    config_dir.join(CHANGES_DIR).join(kind.ledger_file())
+}
+
 pub fn skill_ledger_path(config_dir: &Path) -> PathBuf {
-    config_dir.join(CHANGES_DIR).join(SKILL_LEDGER_FILE)
+    ledger_path(config_dir, ChangeKind::Skill)
+}
+
+/// Where the kept versions of one id live.
+pub fn history_dir(config_dir: &Path, kind: ChangeKind, name: &str) -> PathBuf {
+    config_dir.join(CHANGES_DIR).join(kind.history_folder()).join(kind.id_of(name))
 }
 
 /// Where the kept versions of one skill live.
 pub fn skill_history_dir(config_dir: &Path, name: &str) -> PathBuf {
-    config_dir.join(CHANGES_DIR).join("skills").join(change_id(name))
+    history_dir(config_dir, ChangeKind::Skill, name)
 }
 
 pub fn content_hash(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// One target the ledger can keep versions of: a skill's `SKILL.md`, one
+/// server entry in the native MCP config, one job in `automations.json`.
+pub trait ChangeTarget {
+    fn kind(&self) -> ChangeKind;
+    /// The ledger id (also its history folder name).
+    fn id(&self) -> Result<String, String>;
+    /// The file a write lands in. [`scope_guard`] checks it.
+    fn file(&self) -> Result<PathBuf, String>;
+    /// The bytes now, or `None` when the target is not there.
+    fn read(&self) -> Result<Option<Vec<u8>>, String>;
+    /// Put these bytes back, or remove the target.
+    fn put(&self, bytes: Option<&[u8]>) -> Result<(), String>;
+    /// A short name for rows, read from kept bytes. Empty uses the id.
+    fn label_of(&self, _bytes: &[u8]) -> String {
+        String::new()
+    }
+}
+
+/// A cabin skill's `SKILL.md` under `skills_dir`.
+pub struct SkillTarget<'a> {
+    pub skills_dir: &'a Path,
+    pub name: &'a str,
+}
+
+impl ChangeTarget for SkillTarget<'_> {
+    fn kind(&self) -> ChangeKind {
+        ChangeKind::Skill
+    }
+
+    fn id(&self) -> Result<String, String> {
+        Ok(change_id(self.name))
+    }
+
+    fn file(&self) -> Result<PathBuf, String> {
+        skill_md(self.skills_dir, self.name)
+    }
+
+    fn read(&self) -> Result<Option<Vec<u8>>, String> {
+        read_capped(&self.file()?)
+    }
+
+    fn put(&self, bytes: Option<&[u8]>) -> Result<(), String> {
+        let path = self.file()?;
+        match bytes {
+            Some(b) => private_write(&path, b),
+            None => match path.parent() {
+                Some(dir) if dir.exists() => fs::remove_dir_all(dir).map_err(|e| e.to_string()),
+                _ => Ok(()),
+            },
+        }
+    }
+}
+
 /// The ledger as read from disk, oldest line first.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChangeLedger {
+    kind: ChangeKind,
     changes: Vec<Change>,
 }
 
 impl ChangeLedger {
-    /// Missing, unreadable, or oversized reads as empty. Bad lines are skipped.
+    /// The skills ledger. Missing, unreadable, or oversized reads as empty.
     pub fn load(config_dir: &Path) -> Self {
-        let Ok(f) = fs::File::open(skill_ledger_path(config_dir)) else {
-            return Self::default();
+        Self::load_kind(config_dir, ChangeKind::Skill)
+    }
+
+    /// One kind's ledger. Missing, unreadable, or oversized reads as empty.
+    /// Bad lines and lines of another kind are skipped.
+    pub fn load_kind(config_dir: &Path, kind: ChangeKind) -> Self {
+        let empty = Self { kind, changes: Vec::new() };
+        let Ok(f) = fs::File::open(ledger_path(config_dir, kind)) else {
+            return empty;
         };
         if f.metadata().map(|m| m.len() > LEDGER_READ_CAP).unwrap_or(true) {
-            return Self::default();
+            return empty;
         }
         let mut text = String::new();
         if f.take(LEDGER_READ_CAP).read_to_string(&mut text).is_err() {
-            return Self::default();
+            return empty;
         }
         let changes = text
             .lines()
             .map(str::trim)
             .filter(|l| !l.is_empty())
             .filter_map(|l| serde_json::from_str::<Change>(l).ok())
-            .filter(|c| c.kind == "skill" && !c.id.is_empty())
+            .filter(|c| c.kind == kind.as_str() && !c.id.is_empty())
             .collect();
-        Self { changes }
+        Self { kind, changes }
+    }
+
+    pub fn kind(&self) -> ChangeKind {
+        self.kind
     }
 
     pub fn all(&self) -> &[Change] {
         &self.changes
     }
 
-    fn for_skill<'a>(&'a self, name: &str) -> impl DoubleEndedIterator<Item = &'a Change> + 'a {
-        let id = change_id(name);
-        self.changes.iter().filter(move |c| c.id == id)
+    fn for_name<'a>(&'a self, name: &str) -> impl DoubleEndedIterator<Item = &'a Change> + 'a {
+        let id = self.kind.id_of(name);
+        self.changes.iter().filter(move |c| !id.is_empty() && c.id == id)
     }
 
     fn was_undone(&self, seq: u64) -> bool {
         self.changes.iter().any(|c| c.op == ChangeOp::Undo && c.undoes == Some(seq))
     }
 
-    /// The change `/skills undo` reverts next: the newest one on this skill
-    /// that is not an undo and was not undone already. Repeated undos walk
-    /// back one version at a time.
+    /// The change Undo reverts next: the newest one on this id that changed
+    /// bytes and was not undone already. Repeated undos walk back one
+    /// version at a time.
     pub fn undo_target(&self, name: &str) -> Option<&Change> {
-        self.for_skill(name)
+        self.for_name(name)
             .rev()
-            .find(|c| c.op != ChangeOp::Undo && !self.was_undone(c.seq))
+            .find(|c| c.op.undoable() && !self.was_undone(c.seq))
     }
 
     /// The change whose `before` a restore brings back: the newest line on
-    /// this skill, when that line left it gone.
+    /// this id that changed bytes, when that line left it gone.
     pub fn restore_source(&self, name: &str) -> Option<&Change> {
-        self.for_skill(name)
-            .next_back()
+        self.for_name(name)
+            .rev()
+            .find(|c| c.op != ChangeOp::Accept)
             .filter(|c| c.after_hash.is_empty() && !c.before_hash.is_empty())
     }
 
     /// The user undid a change that produced exactly these bytes. The nightly
     /// review must not write them again on its own.
     pub fn undone_by_user(&self, name: &str, after_hash: &str) -> bool {
-        self.for_skill(name)
-            .any(|c| c.op != ChangeOp::Undo && c.after_hash == after_hash && self.was_undone(c.seq))
+        self.for_name(name)
+            .any(|c| c.op.undoable() && c.after_hash == after_hash && self.was_undone(c.seq))
     }
 
-    /// The newest line on this skill came from the user (an undo or a
-    /// restore), so cleanup must leave the skill alone.
+    /// The newest line on this id came from the user (an undo or a
+    /// restore), so cleanup must leave it alone.
     pub fn kept_by_user(&self, name: &str) -> bool {
-        self.for_skill(name)
+        self.for_name(name)
             .next_back()
             .is_some_and(|c| c.origin == Origin::User && matches!(c.op, ChangeOp::Undo | ChangeOp::Restore))
+    }
+
+    /// The user kept at least one change GrokHub made (a Keep click).
+    pub fn accepted_any(&self) -> bool {
+        self.changes.iter().any(|c| c.op == ChangeOp::Accept && c.origin == Origin::User)
+    }
+
+    /// The newest self-made change on this id, still in effect and not kept
+    /// yet: the one a Work-tree row offers Undo and Keep for.
+    pub fn open_self_change(&self, name: &str) -> Option<&Change> {
+        let newest = self.for_name(name).next_back()?;
+        (newest.origin == Origin::SelfManage && newest.op.undoable() && !self.was_undone(newest.seq)).then_some(newest)
     }
 
     /// The newest `n` lines, newest first.
@@ -223,11 +425,12 @@ fn skill_md(skills_dir: &Path, name: &str) -> Result<PathBuf, String> {
     Ok(skills_dir.join(dir).join("SKILL.md"))
 }
 
-fn read_skill(path: &Path) -> Result<Option<Vec<u8>>, String> {
+/// Read a file the ledger may keep, `None` when it is not there.
+pub(crate) fn read_capped(path: &Path) -> Result<Option<Vec<u8>>, String> {
     match fs::File::open(path) {
         Ok(f) => {
             if f.metadata().map(|m| m.len() > SKILL_READ_CAP).unwrap_or(true) {
-                return Err("SKILL.md is too big to keep a copy".into());
+                return Err("the file is too big to keep a copy".into());
             }
             let mut buf = Vec::new();
             f.take(SKILL_READ_CAP).read_to_end(&mut buf).map_err(|e| e.to_string())?;
@@ -238,11 +441,18 @@ fn read_skill(path: &Path) -> Result<Option<Vec<u8>>, String> {
     }
 }
 
-fn private_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+/// Write through a temp file and a rename, owner-only on unix.
+pub(crate) fn private_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let tmp = path.with_extension("tmp");
+    // One temp name per write, so an Undo and an agent save of the same file
+    // cannot rename each other's temp away.
+    static NEXT_TMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT_TMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut tmp_name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+    tmp_name.push(format!(".{}-{n}.tmp", std::process::id()));
+    let tmp = path.with_file_name(tmp_name);
     {
         let mut opts = OpenOptions::new();
         opts.create(true).write(true).truncate(true);
@@ -255,47 +465,66 @@ fn private_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
         f.write_all(bytes).map_err(|e| e.to_string())?;
         f.sync_all().map_err(|e| e.to_string())?;
     }
-    fs::rename(&tmp, path).map_err(|e| e.to_string())
+    if fs::rename(&tmp, path).is_err() {
+        // Windows will not rename over an open or read-only target.
+        let _ = fs::remove_file(path);
+        fs::rename(&tmp, path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
-fn kept_files(dir: &Path) -> Vec<PathBuf> {
+fn kept_files_ext(dir: &Path, ext: &str) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "md"))
+        .filter(|p| p.extension().is_some_and(|x| x == ext))
         .collect();
     files.sort();
     files
 }
 
-fn find_kept(dir: &Path, hash: &str) -> Option<PathBuf> {
-    let tail = format!("-{}.md", hash.get(..12)?);
-    kept_files(dir)
+#[cfg(test)]
+fn kept_files(dir: &Path) -> Vec<PathBuf> {
+    kept_files_ext(dir, "md")
+}
+
+fn find_kept(dir: &Path, ext: &str, hash: &str) -> Option<PathBuf> {
+    let tail = format!("-{}.{ext}", hash.get(..12)?);
+    kept_files_ext(dir, ext)
         .into_iter()
         .rev()
         .find(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(&tail)))
 }
 
-/// Keep one version of a skill. The same bytes kept before move to the
-/// front instead of being copied twice; past [`HISTORY_CAP`] the oldest go.
-fn keep_version(config_dir: &Path, name: &str, bytes: &[u8], at: u64) -> Result<String, String> {
+/// Keep one version. The same bytes kept before move to the front instead
+/// of being copied twice; past [`HISTORY_CAP`] the oldest go. A connection or
+/// automation that holds anything that reads as a secret is not kept: the
+/// write is refused instead.
+fn keep_version(config_dir: &Path, kind: ChangeKind, id: &str, bytes: &[u8], at: u64) -> Result<String, String> {
+    if kind != ChangeKind::Skill {
+        let text = String::from_utf8_lossy(bytes);
+        if grokhub_core::redact_secrets(&text) != text {
+            return Err(format!("this {} holds a secret, so GrokHub won't keep or change it", kind.as_str()));
+        }
+    }
     let hash = content_hash(bytes);
-    let dir = skill_history_dir(config_dir, name);
+    let dir = config_dir.join(CHANGES_DIR).join(kind.history_folder()).join(id);
+    let ext = kind.ext();
     // Names sort oldest first, so a stamp never repeats inside one folder.
-    let last = kept_files(&dir)
+    let last = kept_files_ext(&dir, ext)
         .last()
         .and_then(|p| p.file_name()?.to_str()?.get(..16)?.parse::<u64>().ok())
         .unwrap_or(0);
     let stamp = at.max(last + 1);
-    let fresh = dir.join(format!("{stamp:016}-{}.md", &hash[..12]));
-    match find_kept(&dir, &hash) {
+    let fresh = dir.join(format!("{stamp:016}-{}.{ext}", &hash[..12]));
+    match find_kept(&dir, ext, &hash) {
         Some(old) if old != fresh => fs::rename(&old, &fresh).map_err(|e| e.to_string())?,
         Some(_) => {}
         None => private_write(&fresh, bytes)?,
     }
-    let files = kept_files(&dir);
+    let files = kept_files_ext(&dir, ext);
     if files.len() > HISTORY_CAP {
         for old in &files[..files.len() - HISTORY_CAP] {
             let _ = fs::remove_file(old);
@@ -305,9 +534,9 @@ fn keep_version(config_dir: &Path, name: &str, bytes: &[u8], at: u64) -> Result<
 }
 
 /// The kept bytes for `hash`, checked against the hash.
-fn kept_version(config_dir: &Path, name: &str, hash: &str) -> Result<Vec<u8>, String> {
-    let path = find_kept(&skill_history_dir(config_dir, name), hash)
-        .ok_or("that version is past the history cap")?;
+fn kept_version(config_dir: &Path, kind: ChangeKind, id: &str, hash: &str) -> Result<Vec<u8>, String> {
+    let dir = config_dir.join(CHANGES_DIR).join(kind.history_folder()).join(id);
+    let path = find_kept(&dir, kind.ext(), hash).ok_or("that version is past the history cap")?;
     let bytes = fs::read(&path).map_err(|e| e.to_string())?;
     if content_hash(&bytes) != hash {
         return Err("the kept copy does not match the ledger".into());
@@ -316,11 +545,16 @@ fn kept_version(config_dir: &Path, name: &str, hash: &str) -> Result<Vec<u8>, St
 }
 
 fn append_change(config_dir: &Path, mut change: Change) -> Result<Change, String> {
-    let ledger = ChangeLedger::load(config_dir);
+    let kind = ChangeKind::parse(&change.kind).ok_or("unknown change kind")?;
+    let ledger = ChangeLedger::load_kind(config_dir, kind);
     change.seq = ledger.changes.last().map(|c| c.seq + 1).unwrap_or(1);
     change.reason = grokhub_core::redact_secrets(&change.reason.chars().take(REASON_MAX).collect::<String>());
+    change.label = grokhub_core::redact_secrets(change.label.lines().next().unwrap_or("").trim())
+        .chars()
+        .take(LABEL_MAX)
+        .collect();
     let line = grokhub_core::redact_secrets(&serde_json::to_string(&change).map_err(|e| e.to_string())?);
-    let path = skill_ledger_path(config_dir);
+    let path = ledger_path(config_dir, kind);
     if ledger.changes.len() >= LEDGER_LINE_CAP {
         let keep = &ledger.changes[ledger.changes.len() + 1 - LEDGER_LINE_CAP..];
         let mut text = String::new();
@@ -333,7 +567,14 @@ fn append_change(config_dir: &Path, mut change: Change) -> Result<Change, String
         private_write(&path, text.as_bytes())?;
         return Ok(change);
     }
-    fs::create_dir_all(config_dir.join(CHANGES_DIR)).map_err(|e| e.to_string())?;
+    append_line(&path, &line)?;
+    Ok(change)
+}
+
+fn append_line(path: &Path, line: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
     let mut opts = OpenOptions::new();
     opts.create(true).append(true);
     #[cfg(unix)]
@@ -341,30 +582,222 @@ fn append_change(config_dir: &Path, mut change: Change) -> Result<Change, String
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let mut f = opts.open(&path).map_err(|e| e.to_string())?;
-    writeln!(f, "{line}").map_err(|e| e.to_string())?;
-    Ok(change)
+    let mut f = opts.open(path).map_err(|e| e.to_string())?;
+    writeln!(f, "{line}").map_err(|e| e.to_string())
 }
 
-fn new_change(name: &str, op: ChangeOp, origin: Origin, reason: &str, at: u64) -> Change {
+fn new_change_for(kind: ChangeKind, id: &str, op: ChangeOp, origin: Origin, reason: &str, at: u64) -> Change {
     Change {
         seq: 0,
         at,
-        kind: "skill".into(),
-        id: change_id(name),
+        kind: kind.as_str().into(),
+        id: id.to_string(),
         op,
         origin,
         reason: reason.trim().to_string(),
         before_hash: String::new(),
         after_hash: String::new(),
         undoes: None,
+        label: String::new(),
     }
 }
 
-/// Run `write` on one skill with the ledger around it: the current
-/// `SKILL.md` is kept first, then `write` runs, then the new bytes are kept
-/// and one line is appended. `Ok(None)` when the bytes did not change.
-/// `write` may create, change, or remove the skill folder.
+#[cfg(test)]
+fn new_change(name: &str, op: ChangeOp, origin: Origin, reason: &str, at: u64) -> Change {
+    new_change_for(ChangeKind::Skill, &change_id(name), op, origin, reason, at)
+}
+
+/// A self-made change the cabin has not shown yet (Work-tree row, Home update).
+#[derive(Debug, Clone)]
+struct Fresh {
+    config_dir: PathBuf,
+    kind: ChangeKind,
+    change: Change,
+}
+
+static FRESH: Mutex<Vec<Fresh>> = Mutex::new(Vec::new());
+
+/// Drain the self-made changes written under `config_dir` since the last
+/// call (polled by the cabin each frame). Lines from another config dir stay.
+pub fn take_self_changes(config_dir: &Path) -> Vec<(ChangeKind, Change)> {
+    let mut held = FRESH.lock().unwrap_or_else(|p| p.into_inner());
+    let (mine, rest): (Vec<Fresh>, Vec<Fresh>) = held.drain(..).partition(|f| f.config_dir == config_dir);
+    *held = rest;
+    mine.into_iter().map(|f| (f.kind, f.change)).collect()
+}
+
+fn path_key(p: &Path) -> Vec<String> {
+    p.components()
+        .filter_map(|c| match c {
+            Component::Normal(n) => Some(n.to_string_lossy().to_ascii_lowercase()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Files under the cabin config dir the ledger never targets, with why.
+const GUARDED_FILES: &[(&str, &str)] = &[
+    ("consent.jsonl", "the consent store"),
+    ("egress.jsonl", "the egress log"),
+    ("egress.1.jsonl", "the egress log"),
+    (crate::harness::at_rest::KEY_ID_FILE, "the private-data key"),
+    ("app.json", "the Access settings"),
+];
+
+/// Folders under the cabin config dir the ledger never targets, with why.
+const GUARDED_DIRS: &[(&str, &str)] = &[
+    ("harness", "harness policy"),
+    (CHANGES_DIR, "the change ledger itself"),
+];
+
+/// Refuse a target the agent must never change on its own: harness policy
+/// (the hard-class list, parks, turn state), the consent store, egress, the
+/// Access settings, the ledger itself, and anything under a `.grok` folder
+/// (D1: never `~/.grok`).
+pub fn scope_guard(config_dir: &Path, file: &Path) -> Result<(), String> {
+    let parts = path_key(file);
+    if parts.iter().any(|p| p == ".grok") {
+        return Err("the Grok CLI home (~/.grok) is not GrokHub's to change".into());
+    }
+    let name = parts.last().map(String::as_str).unwrap_or("");
+    if let Some((_, why)) = GUARDED_FILES.iter().find(|(f, _)| *f == name) {
+        return Err(format!("GrokHub never changes {why} on its own"));
+    }
+    let root = path_key(config_dir);
+    if parts.len() > root.len() && parts[..root.len()] == root[..] {
+        let first = parts[root.len()].as_str();
+        if let Some((_, why)) = GUARDED_DIRS.iter().find(|(d, _)| *d == first) {
+            return Err(format!("GrokHub never changes {why} on its own"));
+        }
+    }
+    Ok(())
+}
+
+/// One refused ledger write, `approval_gate_violation`-style: what was
+/// targeted (file name only) and why. No content.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScopeFinding {
+    pub at: u64,
+    pub detector: String,
+    pub kind: String,
+    pub id: String,
+    pub target: String,
+    pub detail: String,
+}
+
+pub fn findings_path(config_dir: &Path) -> PathBuf {
+    config_dir.join(CHANGES_DIR).join(FINDINGS_FILE)
+}
+
+/// Every scope-guard finding on disk, oldest first.
+pub fn read_scope_findings(config_dir: &Path) -> Vec<ScopeFinding> {
+    let text = read_capped(&findings_path(config_dir)).ok().flatten().unwrap_or_default();
+    String::from_utf8_lossy(&text)
+        .lines()
+        .filter_map(|l| serde_json::from_str(l.trim()).ok())
+        .collect()
+}
+
+fn note_scope_finding(config_dir: &Path, kind: ChangeKind, id: &str, file: &Path, why: &str) {
+    let finding = ScopeFinding {
+        at: now_ms(),
+        detector: LEDGER_SCOPE_VIOLATION.into(),
+        kind: kind.as_str().into(),
+        id: grokhub_core::redact_secrets(id),
+        target: grokhub_core::redact_secrets(&file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
+        detail: grokhub_core::redact_secrets(why),
+    };
+    let mut all = read_scope_findings(config_dir);
+    all.push(finding);
+    let start = all.len().saturating_sub(FINDINGS_CAP);
+    let mut text = String::new();
+    for f in &all[start..] {
+        if let Ok(line) = serde_json::to_string(f) {
+            text.push_str(&line);
+            text.push('\n');
+        }
+    }
+    let _ = private_write(&findings_path(config_dir), text.as_bytes());
+}
+
+/// A weekly self-review proposal the scope guard refused (Spike-7): logged
+/// like a refused ledger write, with the target as the model named it.
+pub fn note_proposal_finding(config_dir: &Path, target: &str, why: &str) {
+    note_scope_finding(config_dir, ChangeKind::Skill, "", Path::new(target), why);
+}
+
+/// Run the scope guard for a target; a refusal is logged as a finding.
+fn guard(config_dir: &Path, target: &dyn ChangeTarget) -> Result<PathBuf, String> {
+    let file = target.file()?;
+    if let Err(why) = scope_guard(config_dir, &file) {
+        let id = target.id().unwrap_or_default();
+        note_scope_finding(config_dir, target.kind(), &id, &file, &why);
+        return Err(format!("Refused: {why}."));
+    }
+    Ok(file)
+}
+
+/// Run `write` on one target with the ledger around it: the scope guard
+/// first, then the current bytes are kept, `write` runs, the new bytes are
+/// kept, and one line is appended. `Ok(None)` when the bytes did not change.
+/// `write` may create, change, or remove the target. A self-made line is
+/// queued for the cabin's Work-tree row and Home update.
+pub fn record_change(
+    config_dir: &Path,
+    target: &dyn ChangeTarget,
+    origin: Origin,
+    reason: &str,
+    write: impl FnOnce() -> Result<(), String>,
+) -> Result<Option<Change>, String> {
+    guard(config_dir, target)?;
+    let _held = LEDGER_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let kind = target.kind();
+    let id = target.id()?;
+    let at = now_ms();
+    let before = target.read()?;
+    let before_hash = match &before {
+        Some(b) => keep_version(config_dir, kind, &id, b, at)?,
+        None => String::new(),
+    };
+    write()?;
+    let after = target.read()?;
+    if after == before {
+        return Ok(None);
+    }
+    let after_hash = match &after {
+        Some(b) => match keep_version(config_dir, kind, &id, b, at) {
+            Ok(hash) => hash,
+            Err(why) => {
+                // No version, no write: put the old bytes back.
+                let _ = target.put(before.as_deref());
+                return Err(why);
+            }
+        },
+        None => String::new(),
+    };
+    let op = match (&before, &after) {
+        (None, _) => ChangeOp::Create,
+        (_, None) => ChangeOp::Delete,
+        _ => ChangeOp::Modify,
+    };
+    let mut change = new_change_for(kind, &id, op, origin, reason, at);
+    change.before_hash = before_hash;
+    change.after_hash = after_hash;
+    if let Some(b) = after.as_ref().or(before.as_ref()) {
+        change.label = target.label_of(b);
+    }
+    let change = append_change(config_dir, change)?;
+    if origin == Origin::SelfManage {
+        FRESH.lock().unwrap_or_else(|p| p.into_inner()).push(Fresh {
+            config_dir: config_dir.to_path_buf(),
+            kind,
+            change: change.clone(),
+        });
+    }
+    Ok(Some(change))
+}
+
+/// [`record_change`] on one skill's `SKILL.md`.
 pub fn record_skill_change(
     config_dir: &Path,
     skills_dir: &Path,
@@ -373,36 +806,11 @@ pub fn record_skill_change(
     reason: &str,
     write: impl FnOnce() -> Result<(), String>,
 ) -> Result<Option<Change>, String> {
-    let _held = LEDGER_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let path = skill_md(skills_dir, name)?;
-    let at = now_ms();
-    let before = read_skill(&path)?;
-    let before_hash = match &before {
-        Some(b) => keep_version(config_dir, name, b, at)?,
-        None => String::new(),
-    };
-    write()?;
-    let after = read_skill(&path)?;
-    if after == before {
-        return Ok(None);
-    }
-    let after_hash = match &after {
-        Some(b) => keep_version(config_dir, name, b, at)?,
-        None => String::new(),
-    };
-    let op = match (&before, &after) {
-        (None, _) => ChangeOp::Create,
-        (_, None) => ChangeOp::Delete,
-        _ => ChangeOp::Modify,
-    };
-    let mut change = new_change(name, op, origin, reason, at);
-    change.before_hash = before_hash;
-    change.after_hash = after_hash;
-    append_change(config_dir, change).map(Some)
+    record_change(config_dir, &SkillTarget { skills_dir, name }, origin, reason, write)
 }
 
-/// What an undo or restore left on disk: the line it wrote and the
-/// `SKILL.md` bytes now in place (`None` when the skill is gone).
+/// What an undo or restore left on disk: the line it wrote and the bytes now
+/// in place (`None` when the target is gone).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reverted {
     pub change: Change,
@@ -410,102 +818,118 @@ pub struct Reverted {
     pub now: Option<Vec<u8>>,
 }
 
-/// Put one skill back to `bytes` (or remove its folder), keeping what is
-/// there now first, and append the line.
+/// Put one target back to `bytes` (or remove it), keeping what is there now
+/// first, and append the line.
 fn put_back(
     config_dir: &Path,
-    skills_dir: &Path,
-    name: &str,
+    target: &dyn ChangeTarget,
     bytes: Option<Vec<u8>>,
     mut change: Change,
 ) -> Result<Reverted, String> {
-    let path = skill_md(skills_dir, name)?;
-    let current = read_skill(&path)?;
+    let (kind, id) = (target.kind(), target.id()?);
+    let current = target.read()?;
     if let Some(c) = &current {
-        change.before_hash = keep_version(config_dir, name, c, change.at)?;
+        change.before_hash = keep_version(config_dir, kind, &id, c, change.at)?;
     }
-    match &bytes {
-        Some(b) => {
-            change.after_hash = keep_version(config_dir, name, b, change.at)?;
-            private_write(&path, b)?;
-        }
-        None => {
-            if let Some(dir) = path.parent() {
-                if dir.exists() {
-                    fs::remove_dir_all(dir).map_err(|e| e.to_string())?;
-                }
-            }
-        }
+    if let Some(b) = &bytes {
+        change.after_hash = keep_version(config_dir, kind, &id, b, change.at)?;
+    }
+    target.put(bytes.as_deref())?;
+    if let Some(b) = bytes.as_ref().or(current.as_ref()) {
+        change.label = target.label_of(b);
     }
     let change = append_change(config_dir, change)?;
     Ok(Reverted { change, reverted: None, now: bytes })
 }
 
-/// Undo the newest change on one skill that is still in effect: a patch goes
-/// back to the bytes it replaced, a created skill is removed (its text stays
-/// in history), a removed skill comes back.
-pub fn undo_skill_change(
-    config_dir: &Path,
-    skills_dir: &Path,
-    name: &str,
-    _ask: UndoAsk,
-) -> Result<Reverted, String> {
+/// What a message calls a target: a skill's folder name, else its key.
+fn shown_id(target: &dyn ChangeTarget, id: &str) -> String {
+    match target.kind() {
+        ChangeKind::Skill => grokhub_core::skill_dir_name(id),
+        _ => id.to_string(),
+    }
+}
+
+/// Undo the newest change on one target that is still in effect: a patch
+/// goes back to the bytes it replaced, a created target is removed (its bytes
+/// stay in history), a removed one comes back.
+pub fn undo_change(config_dir: &Path, target: &dyn ChangeTarget, _ask: UndoAsk) -> Result<Reverted, String> {
+    guard(config_dir, target)?;
     let _held = LEDGER_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let ledger = ChangeLedger::load(config_dir);
-    let target = ledger
-        .undo_target(name)
+    let (kind, id) = (target.kind(), target.id()?);
+    let ledger = ChangeLedger::load_kind(config_dir, kind);
+    let target_line = ledger
+        .undo_target(&id)
         .cloned()
-        .ok_or_else(|| format!("No change to undo on {}", grokhub_core::skill_dir_name(name)))?;
-    let bytes = if target.before_hash.is_empty() {
+        .ok_or_else(|| format!("No change to undo on {}", shown_id(target, &id)))?;
+    let bytes = if target_line.before_hash.is_empty() {
         None
     } else {
-        Some(kept_version(config_dir, name, &target.before_hash)?)
+        Some(kept_version(config_dir, kind, &id, &target_line.before_hash)?)
     };
-    let mut change = new_change(
-        name,
+    let mut change = new_change_for(
+        kind,
+        &id,
         ChangeOp::Undo,
         Origin::User,
-        &format!("undo #{} ({})", target.seq, target.reason),
+        &format!("undo #{} ({})", target_line.seq, target_line.reason),
         now_ms(),
     );
-    change.undoes = Some(target.seq);
-    let mut done = put_back(config_dir, skills_dir, name, bytes, change)?;
-    done.reverted = Some(target);
+    change.undoes = Some(target_line.seq);
+    let mut done = put_back(config_dir, target, bytes, change)?;
+    done.reverted = Some(target_line);
     Ok(done)
+}
+
+/// Bring back a target that is gone (undone create, or removed), from the
+/// version it had just before it left.
+pub fn restore_change(config_dir: &Path, target: &dyn ChangeTarget, _ask: UndoAsk) -> Result<Reverted, String> {
+    guard(config_dir, target)?;
+    let _held = LEDGER_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let (kind, id) = (target.kind(), target.id()?);
+    if target.read()?.is_some() {
+        return Err(match kind {
+            ChangeKind::Skill => format!("{} is already there. /skills undo steps it back.", shown_id(target, &id)),
+            _ => format!("{id} is already there. Undo steps it back."),
+        });
+    }
+    let ledger = ChangeLedger::load_kind(config_dir, kind);
+    let source = ledger
+        .restore_source(&id)
+        .cloned()
+        .ok_or_else(|| format!("Nothing kept for {}", shown_id(target, &id)))?;
+    let bytes = kept_version(config_dir, kind, &id, &source.before_hash)?;
+    let change = new_change_for(kind, &id, ChangeOp::Restore, Origin::User, &format!("restore from #{}", source.seq), now_ms());
+    let mut done = put_back(config_dir, target, Some(bytes), change)?;
+    done.reverted = Some(source);
+    Ok(done)
+}
+
+/// Keep a change GrokHub made: one `accept` line by the user. Nothing on
+/// disk changes; it lifts the new-automation cap and clears the row.
+pub fn accept_change(config_dir: &Path, kind: ChangeKind, name: &str, _ask: UndoAsk) -> Result<Change, String> {
+    let _held = LEDGER_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let ledger = ChangeLedger::load_kind(config_dir, kind);
+    let open = ledger
+        .open_self_change(name)
+        .cloned()
+        .ok_or_else(|| format!("No change by GrokHub to keep on {}", kind.id_of(name)))?;
+    let mut change = new_change_for(kind, &open.id, ChangeOp::Accept, Origin::User, &format!("kept #{}", open.seq), now_ms());
+    change.label = open.label.clone();
+    change.before_hash = open.after_hash.clone();
+    change.after_hash = open.after_hash;
+    append_change(config_dir, change)
+}
+
+/// Undo the newest change on one skill that is still in effect.
+pub fn undo_skill_change(config_dir: &Path, skills_dir: &Path, name: &str, ask: UndoAsk) -> Result<Reverted, String> {
+    undo_change(config_dir, &SkillTarget { skills_dir, name }, ask)
 }
 
 /// Bring back a skill that is gone (undone create, or moved aside), from the
 /// version it had just before it left.
-pub fn restore_skill(
-    config_dir: &Path,
-    skills_dir: &Path,
-    name: &str,
-    _ask: UndoAsk,
-) -> Result<Reverted, String> {
-    let _held = LEDGER_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let path = skill_md(skills_dir, name)?;
-    if read_skill(&path)?.is_some() {
-        return Err(format!(
-            "{} is already there. /skills undo steps it back.",
-            grokhub_core::skill_dir_name(name)
-        ));
-    }
-    let ledger = ChangeLedger::load(config_dir);
-    let source = ledger
-        .restore_source(name)
-        .cloned()
-        .ok_or_else(|| format!("Nothing kept for {}", grokhub_core::skill_dir_name(name)))?;
-    let bytes = kept_version(config_dir, name, &source.before_hash)?;
-    let change = new_change(
-        name,
-        ChangeOp::Restore,
-        Origin::User,
-        &format!("restore from #{}", source.seq),
-        now_ms(),
-    );
-    let mut done = put_back(config_dir, skills_dir, name, Some(bytes), change)?;
-    done.reverted = Some(source);
-    Ok(done)
+pub fn restore_skill(config_dir: &Path, skills_dir: &Path, name: &str, ask: UndoAsk) -> Result<Reverted, String> {
+    restore_change(config_dir, &SkillTarget { skills_dir, name }, ask)
 }
 
 #[cfg(test)]

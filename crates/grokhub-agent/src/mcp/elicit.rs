@@ -236,6 +236,36 @@ fn ask(server: &str, id: &Value, params: &Value) -> ElicitAnswer {
     })
 }
 
+/// Ask the user for one secret value on the cabin's elicit card (masked
+/// field). `None` when the run is unattended, there is no card, or the user
+/// declines. The value goes straight back to the caller: it is never logged.
+pub(crate) fn ask_secret(server: &str, message: &str, title: &str) -> Option<String> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let id = json!(format!("{server}-secret-{nanos}"));
+    let params = json!({
+        "message": message,
+        "requestedSchema": {
+            "type": "object",
+            "properties": {
+                "token": {"type": "string", "title": title, "format": "password", "writeOnly": true}
+            },
+            "required": ["token"]
+        }
+    });
+    match ask(server, &id, &params) {
+        ElicitAnswer::Accept(content) => content
+            .get("token")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string),
+        _ => None,
+    }
+}
+
 fn view_for(server: &str, id: &Value, params: &Value) -> ElicitView {
     let wait_id = id_string(id);
     let mut shaped = params.clone();
