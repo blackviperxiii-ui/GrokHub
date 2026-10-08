@@ -448,7 +448,7 @@ fn call_judge(
         timer_cancel.cancel();
         let _ = stop_flag.compare_exchange(LIVE, TIMED_OUT, Ordering::SeqCst, Ordering::SeqCst);
     });
-    let result = client.stream(req, &judge_cancel, &mut |_| {});
+    let result = crate::route::shadow::stream_shadowed(client, req, &judge_cancel, &mut |_| {}, crate::route::CLASS_JUDGE);
     let _ = stop.compare_exchange(LIVE, DONE, Ordering::SeqCst, Ordering::SeqCst);
     let _ = handle.join();
     (result, stop.load(Ordering::SeqCst))

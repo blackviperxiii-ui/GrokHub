@@ -153,6 +153,9 @@ pub fn reject_live(opts: &Opts) -> Result<(), String> {
     }
 }
 
+/// The route class eval items log (not in the §14.3 table, so the shadow keeps today's effort).
+pub const EVAL_CLASS: &str = "eval:item";
+
 pub fn run_suite(opts: &Opts) -> Vec<ItemResult> {
     let _lock = SUITE.lock().unwrap_or_else(|err| err.into_inner());
     if opts.live {
@@ -160,6 +163,8 @@ pub fn run_suite(opts: &Opts) -> Vec<ItemResult> {
     }
     let cfg = scratch("cfg");
     let _guard = cfg.as_ref().map(ConfigGuard::set);
+    // Router R0: eval runs log their shadow routes under their own class.
+    let _class = crate::route::shadow::ClassScope::enter(EVAL_CLASS);
     let fake_acp = locate_fake_acp(opts.fake_acp.as_deref());
     let mut items = Vec::with_capacity(SUITE_ITEMS.len() * 2);
     items.push(measure("xvfb-desktop", "native", desktop_item));
