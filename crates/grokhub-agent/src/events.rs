@@ -40,6 +40,27 @@ pub struct NativeEngine {
     reopen_tasks: bool,
     /// Imagine and web_fetch bearer. Empty means those tools do not dial.
     imagine_bearer: String,
+    /// Who started the next prompt (Spike-4c): egress lines carry it.
+    origin: crate::harness::Origin,
+    /// Spike-3b: the cabin's open desktop episode for the next prompt.
+    episode_seed: Option<EpisodeSeed>,
+    /// The episode this engine is driving, and its view.
+    episode: Option<(crate::episode::Episode, crate::episode::EpisodeView)>,
+}
+
+/// What the cabin says about the episode a prompt belongs to (Spike-3b).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpisodeSeed {
+    pub id: String,
+    pub chat_id: String,
+    pub turn: u32,
+    /// The user answered a long-run pause by typing or clicking Continue.
+    pub resume: bool,
+    /// Spans and park files live here.
+    pub config_dir: PathBuf,
+    /// Secrets the user typed this session (redacted from spans and folds).
+    pub held: Vec<String>,
+    pub access: crate::harness::AccessMode,
 }
 
 pub struct EngineParts {
@@ -82,7 +103,15 @@ impl NativeEngine {
             context_length,
             reopen_tasks: true,
             imagine_bearer: String::new(),
+            origin: crate::harness::current_origin(),
+            episode_seed: None,
+            episode: None,
         }
+    }
+
+    /// The cabin's open episode, or `None` for a plain turn.
+    pub fn set_episode(&mut self, seed: Option<EpisodeSeed>) {
+        self.episode_seed = seed;
     }
 
     /// `/bg` leaves this false so a Halt that landed first is not cleared.
@@ -100,6 +129,11 @@ impl NativeEngine {
 
     pub fn steer(&self) -> SteerQueue {
         self.steer.clone()
+    }
+
+    /// Who starts the next prompt: the user, a heartbeat act, or a scheduled job.
+    pub fn set_origin(&mut self, origin: crate::harness::Origin) {
+        self.origin = origin;
     }
 
     /// Credential for `web_fetch` and Imagine. Empty refuses those tools without a dial.
@@ -170,6 +204,9 @@ impl Engine for NativeEngine {
         if image.is_none() && crate::memory::is_dream_command(text) {
             return self.dream_now(emit);
         }
+        if let Some(seed) = self.episode_seed.clone().filter(|_| self.gate.desktop && self.desktop.is_some()) {
+            return self.prompt_episode(text, &seed, emit);
+        }
         let policy = crate::perm::Policy::load(&self.workspace);
         crate::mcp::set_workspace(&self.workspace);
         let input = LoopIn {
@@ -204,6 +241,7 @@ impl Engine for NativeEngine {
         let before_len = self.history.len();
         let before_usage = self.usage.clone();
         let _network = crate::tools::install_network(&self.imagine_bearer, &self.conversation_id);
+        let _origin = crate::harness::OriginScope::enter(self.origin);
         let mut meter_used = crate::compact::estimate_input_tokens(&self.history);
         let mut meter_limit = self.context_length;
         let out = run_loop(&input, &mut self.history, text, image, &mut |ev| match ev {
@@ -268,6 +306,97 @@ impl Engine for NativeEngine {
 }
 
 impl NativeEngine {
+    /// Spike-3b: a desktop task while desktop control is on runs as an
+    /// episode. Each step starts the worker fresh from the episode view; the
+    /// episode outlives the prompt (Steers, new messages, pauses).
+    fn prompt_episode(&mut self, text: &str, seed: &EpisodeSeed, emit: &mut dyn FnMut(AcpEvent)) -> Result<(), String> {
+        use crate::episode::{Continue, Episode, EpisodeEnd, EpisodeStop, EpisodeView, FileParks, KernelIn};
+        let now = grokhub_core::now_ms();
+        let open = matches!(&self.episode, Some((ep, _)) if ep.id == seed.id && ep.ended.is_none());
+        if !open {
+            let ep = Episode::begin(&seed.id, &seed.chat_id, text, now, &seed.held);
+            self.episode = Some((ep, EpisodeView::default()));
+        }
+        let Some((ep, view)) = self.episode.as_mut() else {
+            return Ok(());
+        };
+        ep.turn = seed.turn;
+        if open {
+            if seed.resume {
+                ep.resume(Continue::from_typing(), now);
+            }
+            ep.steer(text, &seed.held);
+        }
+        let Some(desktop) = self.desktop.as_deref() else {
+            return Ok(());
+        };
+        let parks = FileParks(&seed.config_dir);
+        let clock = grokhub_core::now_ms;
+        let k = KernelIn {
+            client: self.client.as_ref(),
+            provider: crate::route::PROVIDER_XAI,
+            model: &self.model,
+            effort: self.effort.as_deref(),
+            system: &self.system,
+            workspace: &self.workspace,
+            config_dir: &seed.config_dir,
+            gate: self.gate,
+            access: seed.access,
+            desktop,
+            parks: &parks,
+            permits: self.permits.as_ref(),
+            halt: self.halt.as_ref(),
+            cancel: &self.cancel,
+            steer: &self.steer,
+            clock: &clock,
+            held: &seed.held,
+        };
+        let (kind, session, base) = (self.auth_kind, self.conversation_id.clone(), self.usage.clone());
+        let limit = self.context_length;
+        let out = crate::episode::run_episode(&k, ep, view, &mut |ev| {
+            let ev = match ev {
+                LoopEvent::Usage(u) => {
+                    let mut total = base.clone();
+                    total.add(&u);
+                    LoopEvent::Usage(total)
+                }
+                other => other,
+            };
+            if let Some(acp) = to_acp(ev, kind, &session, 0, limit) {
+                emit(acp);
+            }
+        });
+        self.usage.add(&out.usage);
+        let turn = vec![
+            InputItem::Message {
+                role: "user".into(),
+                content: vec![crate::ContentPart::InputText(text.to_string())],
+            },
+            InputItem::Message {
+                role: "assistant".into(),
+                content: vec![crate::ContentPart::InputText(out.reply.clone())],
+            },
+        ];
+        let cwd = self.workspace.display().to_string();
+        let _ = crate::session::record_turn(&session, &cwd, &self.model, &turn, &out.usage, kind.meter(), text);
+        let stop = match out.stop {
+            EpisodeStop::Ended(EpisodeEnd::Verified) => "episode_verified".to_string(),
+            EpisodeStop::Ended(EpisodeEnd::Halt) => "halted".into(),
+            EpisodeStop::Ended(EpisodeEnd::Stop) => "cancelled".into(),
+            EpisodeStop::Ended(EpisodeEnd::Idle) => "episode_idle".into(),
+            EpisodeStop::Paused(_) => "episode_paused".into(),
+            EpisodeStop::LadderPause(_) => "episode_ladder_pause".into(),
+            EpisodeStop::Waiting => "end_turn".into(),
+            EpisodeStop::Error(message) => {
+                emit(AcpEvent::Err(message));
+                "error".into()
+            }
+        };
+        emit(grok_usage_event(&self.usage, self.auth_kind, 0, self.context_length));
+        emit(AcpEvent::Done { stop_reason: stop });
+        Ok(())
+    }
+
     /// Manual `/compact`. The command is not stored as a user turn.
     /// A failure or cancel leaves `history` as it was.
     fn compact_now(&mut self, emit: &mut dyn FnMut(AcpEvent)) -> Result<(), String> {
@@ -510,6 +639,7 @@ mod tests {
                     output_tokens: 1,
                     reasoning_tokens: 1,
                     cost_in_usd_ticks: 9,
+                    cached_tokens: 0,
                 },
             })
         }
@@ -612,6 +742,7 @@ mod tests {
                         output_tokens: 2,
                         reasoning_tokens: 0,
                         cost_in_usd_ticks: 3,
+                        cached_tokens: 0,
                     },
                 });
             }
@@ -624,6 +755,7 @@ mod tests {
                     output_tokens: 1,
                     reasoning_tokens: 0,
                     cost_in_usd_ticks: 1,
+                    cached_tokens: 0,
                 },
             })
         }

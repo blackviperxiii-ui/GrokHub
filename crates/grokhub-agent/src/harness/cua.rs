@@ -616,7 +616,7 @@ fn write_cua_span(dir: &Path, tool: &str, call: &DeskCall<'_>) {
     if let Some(mut span) = desk_span(call, &ctx.chat_id, ctx.turn) {
         span.driver = ComputerUseBackend::CuaDriver.as_str().into();
         span.claim = format!("cua {tool}");
-        let _ = append_span(dir, &span);
+        let _ = append_span(dir, &span.in_episode(&ctx.episode));
     }
 }
 
@@ -672,7 +672,7 @@ mod tests {
     }
 
     fn turn(dir: &Path) {
-        write_turn_context(dir, &TurnContext { chat_id: "chat-c".into(), turn: 2, access: "supervised".into() }).unwrap();
+        write_turn_context(dir, &TurnContext { chat_id: "chat-c".into(), turn: 2, access: "supervised".into(), ..Default::default() }).unwrap();
     }
 
     fn text_of(reply: &str) -> String {
@@ -836,7 +836,7 @@ mod tests {
     #[test]
     fn hermes_clicks_park_by_their_ax_label_before_the_click_is_sent() {
         let dir = test_dir("cua-hermes");
-        write_turn_context(&dir, &TurnContext { chat_id: "chat-h".into(), turn: 1, access: "full".into() }).unwrap();
+        write_turn_context(&dir, &TurnContext { chat_id: "chat-h".into(), turn: 1, access: "full".into(), ..Default::default() }).unwrap();
         let fake = Fake::default();
         *fake.tree.borrow_mut() = [
             "Window: Checkout — Shop",

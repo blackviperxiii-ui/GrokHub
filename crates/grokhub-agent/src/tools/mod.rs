@@ -140,7 +140,7 @@ pub fn dispatch(ctx: &ToolCtx<'_>, name: &str, arguments: &str) -> ToolOutput {
         "monitor" => control::monitor(ctx, &args),
         "scheduler_create" => control::scheduler_create(&args),
         "scheduler_delete" => control::scheduler_delete(&args),
-        "web_fetch" => web_fetch::run_with_ports(&args),
+        "web_fetch" => web_fetch::run_with_ports(&args, ctx.stop),
         "image_generate" | "image_edit" | "video_generate" | "video_edit" | "video_extend" => {
             media::run_with_ports(name, &args, ctx.stop)
         }
