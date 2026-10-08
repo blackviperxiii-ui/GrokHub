@@ -685,6 +685,8 @@ impl Cabin {
             Slash::Send(task) => self.dispatch_send(task),
             Slash::Sync => self.sync_hub(),
             Slash::Privacy => self.run_privacy(),
+            Slash::Why => self.run_why(false),
+            Slash::WhyModels => self.run_why(true),
             Slash::Diagnose => self.run_diagnose(Vec::new(), true),
             Slash::Hub => {
                 self.nav = Nav::Devices;

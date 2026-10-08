@@ -353,7 +353,8 @@ impl Run<'_, '_> {
 
     fn ask_worker(&mut self) -> Result<crate::client::TurnOutput, String> {
         let mut call = ModelCall::xai(self.k.model, self.k.effort, CLASS_EPISODE, &self.ep.id, self.input())
-            .with_tools(self.worker_tools());
+            .with_tools(self.worker_tools())
+            .in_session(&self.ep.chat_id);
         call.provider = self.k.provider.into();
         let routed = call_model(self.k.client, &call, self.k.cancel).map_err(|e| e.to_string())?;
         self.usage.add(&routed.out.usage);

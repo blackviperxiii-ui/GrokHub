@@ -24,7 +24,7 @@ pub use split::{analyze, peeled_primary, Facts, Seg};
 pub(crate) use risk::{git_words_are_read_only_query, git_words_have_unsafe_query_option};
 pub use store::{
     add_grant_at, config_dir, load_all_grants, load_grants, load_rules, project_key,
-    remember_grant, remove_grant, save_rules, ConfigGuard,
+    remember_grant, remove_grant, save_rules, ConfigGuard, config_pinned,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
