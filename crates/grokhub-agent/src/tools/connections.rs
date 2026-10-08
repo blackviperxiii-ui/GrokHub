@@ -20,44 +20,6 @@ use crate::harness::{self as hx, ChangeTarget, McpFile, Origin};
 /// What the user sees on the token card.
 pub(crate) const TOKEN_TITLE: &str = "Token";
 
-pub fn add_schema() -> Value {
-    json!({
-        "type": "function",
-        "name": "connection_add",
-        "description": "Add or update an MCP server (a connection) for this cabin. Give url for an HTTP server or command (and args) for a local one. Never pass a token: set needs_token and the user types it in. The user can undo this.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "description": "Short server name: letters, digits, dot, dash, underscore."},
-                "url": {"type": "string"},
-                "command": {"type": "string"},
-                "args": {"type": "array", "items": {"type": "string"}},
-                "needs_token": {"type": "boolean"},
-                "reason": {"type": "string", "description": "One line on why, shown to the user."}
-            },
-            "required": ["name", "reason"],
-            "additionalProperties": false
-        }
-    })
-}
-
-pub fn disable_schema() -> Value {
-    json!({
-        "type": "function",
-        "name": "connection_disable",
-        "description": "Turn off one MCP server without removing it. The user can undo this.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "reason": {"type": "string"}
-            },
-            "required": ["name", "reason"],
-            "additionalProperties": false
-        }
-    })
-}
-
 pub fn delete_schema() -> Value {
     json!({
         "type": "function",
@@ -115,16 +77,7 @@ fn current(name: &str) -> Result<Option<Map<String, Value>>, String> {
     Ok(bytes.and_then(|b| serde_json::from_slice::<Value>(&b).ok()).and_then(|v| v.as_object().cloned()))
 }
 
-pub fn add(args: &Value) -> ToolOutput {
-    add_with(args, &mut native_token)
-}
-
-/// The native engine's token card (path E): the cabin's masked elicit card.
-fn native_token(message: &str) -> Option<String> {
-    crate::mcp::ask_secret("GrokHub", message, TOKEN_TITLE)
-}
-
-/// [`add`] with the token asked through `ask` (the card's message in, the
+/// Add a connection, with the token asked through `ask` (the card's message in, the
 /// typed value out). `grokhub --mcp-self` asks through MCP elicitation.
 pub(crate) fn add_with(args: &Value, ask: &mut dyn FnMut(&str) -> Option<String>) -> ToolOutput {
     match add_inner(args, false, ask) {
