@@ -199,7 +199,7 @@ impl Cabin {
         self.chat_job_thread = None;
     }
 
-    fn native_workspace(&self) -> std::path::PathBuf {
+    pub(super) fn native_workspace(&self) -> std::path::PathBuf {
         let idx = self
             .chat_job_thread
             .as_deref()

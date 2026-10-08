@@ -88,6 +88,7 @@ pub fn grok_build_click(req: ClickRequest<'_>) -> ClickOutcome {
                 ui_changed: None,
                 origin: Origin::User,
                 consent_ref: String::new(),
+                undo_ref: String::new(),
                 target: String::new(),
                 target_rule: String::new(),
                 usage: None,

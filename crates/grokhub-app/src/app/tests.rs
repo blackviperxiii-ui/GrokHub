@@ -9844,6 +9844,7 @@ fn discuss_card_opens_one_local_chat() {
         skill: None,
         runs: 1,
         dismissed_at: 0,
+        done_for_you: None,
         pulse: Default::default(),
     });
     cabin.discuss_card("idea-harbor");
@@ -15707,6 +15708,7 @@ fn build_idea_files_one_todo() {
         skill: None,
         runs: 1,
         dismissed_at: 0,
+        done_for_you: None,
         pulse: Default::default(),
     }];
 
@@ -15837,6 +15839,7 @@ fn feed_card(id: &str, kind: grokhub_core::UpdateKind, held: bool) -> grokhub_co
         skill: None,
         runs: 1,
         dismissed_at: 0,
+        done_for_you: None,
         pulse: Default::default(),
     }
 }
@@ -15941,6 +15944,7 @@ fn offer_card(id: &str, title: &str, status: UpdateStatus) -> UpdateCard {
         skill: None,
         runs: 1,
         dismissed_at: 0,
+        done_for_you: None,
         pulse: Default::default(),
     }
 }
@@ -16848,6 +16852,7 @@ fn quiet_cabin() -> Cabin {
         session_mode: grokhub_acp::SessionMode::Chat,
         permission_mode: grokhub_acp::PermissionMode::Ask,
         harness: Default::default(),
+        auto_act: Default::default(),
         scheduled_perm: false,
         grok_sessions: Vec::new(),
         grok_sessions_loaded: false,

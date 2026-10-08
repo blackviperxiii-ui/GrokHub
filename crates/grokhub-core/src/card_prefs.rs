@@ -156,6 +156,7 @@ fn kind_key(kind: UpdateKind) -> &'static str {
         UpdateKind::Idea => "idea",
         UpdateKind::Digest => "digest",
         UpdateKind::SelfChange => "self_change",
+        UpdateKind::DoneForYou => "done_for_you",
     }
 }
 
@@ -472,7 +473,7 @@ fn base_score(card: &UpdateCard) -> f64 {
         1.0
     } else {
         match card.kind {
-            UpdateKind::AutomationDone => 0.5,
+            UpdateKind::AutomationDone | UpdateKind::DoneForYou => 0.5,
             UpdateKind::ScheduleCreated
             | UpdateKind::Suggestion
             | UpdateKind::AutomateOffer
