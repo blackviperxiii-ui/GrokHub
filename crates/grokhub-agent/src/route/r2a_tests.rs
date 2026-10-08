@@ -17,7 +17,7 @@ use super::{live, Router, RouteInput};
 use crate::client::{ClientError, ContentPart, InputItem, ModelClient, ResponsesRequest, StreamEvent, TurnOutput, Usage};
 use crate::CancelToken;
 
-const IDS: [&str; 4] = ["grok-4.7", "grok-4.6", "grok-4.5", "grok-4.3"];
+pub(super) const IDS: [&str; 4] = ["grok-4.7", "grok-4.6", "grok-4.5", "grok-4.3"];
 const NOW: u64 = 1_000_000;
 
 fn meta(id: &str, image: bool) -> ModelMeta {
@@ -60,7 +60,7 @@ fn listing(metas: Vec<ModelMeta>, tier: &str) -> Listing {
 }
 
 /// Four grok-4.x models on a plan sign-in, every profile usable.
-fn fleet() -> (Registry, BTreeMap<String, ModelProfile>) {
+pub(super) fn fleet() -> (Registry, BTreeMap<String, ModelProfile>) {
     let mut reg = Registry::default();
     reg.entitlement.credential = Credential::Plan;
     reg.apply_refresh(&[listing(IDS.iter().map(|id| meta(id, true)).collect(), "SuperGrok Heavy")], &[], 1);
@@ -237,7 +237,7 @@ fn a_vision_step_never_picks_a_model_without_image_input() {
 }
 
 /// A hand-made table with `top` first in chat:default, the rest after.
-fn top_first(top: &str) -> RoutingTable {
+pub(super) fn top_first(top: &str) -> RoutingTable {
     let mut order: Vec<&str> = vec![top];
     order.extend(IDS.iter().filter(|id| **id != top));
     let ranked = order
