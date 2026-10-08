@@ -111,6 +111,9 @@ pub(super) enum ParkSource {
     /// A path A / B park whose turn was steered (Spike-1a). Its call was
     /// denied with the old turn; Approve re-runs the step once, like path C.
     Held,
+    /// A Spike-9 fix step classified hard. Nothing is running yet; Approve
+    /// sends it to Grok Build once, Deny stops the fix.
+    Repair,
     /// Spike-6a: the final step of a proactive card (this card id). Nothing
     /// ran; Approve runs the step once on its normal path.
     Proactive(String),
@@ -218,11 +221,13 @@ pub(super) struct HarnessState {
     /// `/privacy` output on its way from the reader thread.
     pub privacy_rx: Option<mpsc::Receiver<String>>,
     /// `/diagnose` or a "check my computer" answer on its way (Spike-8b).
-    pub diagnose_rx: Option<mpsc::Receiver<(String, bool)>>,
+    pub diagnose_rx: Option<mpsc::Receiver<super::repair_ui::DiagnoseDone>>,
     /// The running diagnose came from `/diagnose`, so it posts as a slash result.
     pub diagnose_slash: bool,
     /// The chat that asked for the running diagnose; its answer goes there.
     pub diagnose_chat: String,
+    /// Spike-9 fix proposals and the fix being applied.
+    pub fixes: super::repair_ui::FixUi,
     /// Settings → Permissions: the folder typed for a new files scope.
     pub scope_folder: String,
     /// Settings → Permissions: the browser picked for a history scope.
@@ -599,6 +604,11 @@ impl Cabin {
         }
     }
 
+    /// A fix step classified hard parks the same white card (Spike-9).
+    pub(super) fn park_repair(&mut self, class: HardClass, command: String) {
+        self.park_hard(ParkSource::Repair, class, "repair", grokhub_agent::repair::REPAIR_TOOL.into(), command);
+    }
+
     /// A hard card past `APPROVAL_TTL` is denied with a span. Painting and the
     /// unattended heartbeat both check, so no one watching still means Deny.
     pub(super) fn expire_hard_park(&mut self) {
@@ -623,6 +633,7 @@ impl Cabin {
             return;
         };
         let mut sync_once = false;
+        let mut fix_answer = None;
         let trace = match park.source {
             ParkSource::AutoPrepared(_) => hx::PROACTIVE_TRACE.to_string(),
             _ => self.trace_id(),
@@ -674,6 +685,7 @@ impl Cabin {
             ParkSource::Egress(dest) => {
                 sync_once = approve && dest == hx::HUB_DEST;
             }
+            ParkSource::Repair => fix_answer = Some(approve),
             ParkSource::AutoPrepared(args) => {
                 if approve {
                     let (text, failed) = hx::run_approved_once(&self.native_workspace(), &park.tool, args);
@@ -696,6 +708,9 @@ impl Cabin {
         self.harness.park = self.harness.queue.pop_front();
         if sync_once {
             self.run_hub_sync(super::privacy_ui::HubSend::Once);
+        }
+        if let Some(approve) = fix_answer {
+            self.fix_hard_answered(approve);
         }
     }
 
@@ -788,6 +803,7 @@ impl Cabin {
                     | ParkSource::Proactive(_)
                     | ParkSource::AutoPrepared(_)
                     | ParkSource::Unasked
+                    | ParkSource::Repair
             ) {
                 keep.push_back(park);
                 self.harness.park = self.harness.queue.pop_front();
@@ -830,7 +846,8 @@ impl Cabin {
                 | ParkSource::Held
                 | ParkSource::Proactive(_)
                 | ParkSource::AutoPrepared(_)
-                | ParkSource::Unasked => continue,
+                | ParkSource::Unasked
+                | ParkSource::Repair => continue,
             }
             let args = span_args(&park.tool, &park.action);
             self.write_span(hx::Span::deny(&trace, &park.tool, &args, why, park.class.as_str()), park.path);
@@ -982,6 +999,7 @@ impl Cabin {
 
     /// Halt denies every parked card with a span.
     pub(super) fn halt_hard_parks(&mut self) {
+        self.halt_fix();
         while self.harness.park.is_some() {
             self.resolve_hard_park(false, "halted — fail-closed Deny");
         }
