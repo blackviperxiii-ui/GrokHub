@@ -13,6 +13,9 @@ impl Cabin {
         self.palette_files_q.clear();
         self.palette_files_root.clear();
         self.palette_file_rx = None;
+        self.palette_steps.clear();
+        self.palette_steps_q.clear();
+        self.palette_step_rx = None;
         self.settings_menu_open = false;
     }
 
@@ -48,6 +51,7 @@ impl Cabin {
             "shortcuts" => self.shortcuts_open = true,
             "voice" => self.listen_voice(),
             slash if slash.starts_with('/') => self.run_slash_line(slash),
+            step if step.starts_with("step:") => self.open_history_hit(step),
             path if path.starts_with("file:") => {
                 if let Some(shown) = palette_file_shown(path) {
                     match crate::desktop::open_path(shown) {
@@ -83,7 +87,8 @@ impl Cabin {
         let cmds = filter_palette(&self.palette_q);
         let files = self.palette_files.clone();
         let root = self.palette_files_root.clone();
-        let n = cmds.len() + files.len();
+        let steps = self.palette_steps.clone();
+        let n = cmds.len() + files.len() + steps.len();
         let shown = egui::Window::new("Search")
             .title_bar(false)
             .collapsible(false)
@@ -107,7 +112,7 @@ impl Cabin {
                 {
                     self.palette_pick = slash_pick_step(self.palette_pick, n, -1);
                 } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
-                    picked = palette_row_action(&cmds, &files, &root, self.palette_pick);
+                    picked = palette_pick(&cmds, &files, &root, &steps, self.palette_pick);
                 }
                 egui::ScrollArea::vertical()
                     .max_height(PALETTE_LIST_H)
@@ -117,8 +122,10 @@ impl Cabin {
                         for i in 0..n {
                             let label = if i < cmds.len() {
                                 cmds[i].0.to_string()
-                            } else {
+                            } else if i < cmds.len() + files.len() {
                                 files[i - cmds.len()].clone()
+                            } else {
+                                steps[i - cmds.len() - files.len()].1.clone()
                             };
                             // Every row takes the shortcut slot, so labels line up
                             // whether or not a key shows at the right.
@@ -133,7 +140,7 @@ impl Cabin {
                                 .add_sized([ui.available_width(), 28.0], row)
                                 .clicked()
                             {
-                                picked = palette_row_action(&cmds, &files, &root, i);
+                                picked = palette_pick(&cmds, &files, &root, &steps, i);
                             }
                         }
                     });
@@ -167,7 +174,12 @@ impl Cabin {
             self.palette_files.clear();
             self.palette_files_q.clear();
             self.palette_files_root.clear();
+            self.palette_steps.clear();
+            self.palette_steps_q.clear();
             return;
+        }
+        if self.palette_step_rx.is_none() && self.palette_steps_q != q {
+            self.kick_palette_steps();
         }
         let root_now = self.palette_search_root();
         palette_forget_stale_walk(
@@ -202,7 +214,33 @@ impl Cabin {
         });
     }
 
+    /// Spike-3a: tool-step rows for the palette query, read off the UI thread.
+    pub(super) fn kick_palette_steps(&mut self) {
+        let q = self.palette_q.trim().to_string();
+        self.palette_steps_q = q.clone();
+        let titles = self.step_search_titles();
+        let held = self.secret_hold.clone();
+        let dir = config::config_dir();
+        let (tx, rx) = mpsc::channel();
+        self.palette_step_rx = Some(rx);
+        std::thread::spawn(move || {
+            let hits = step_hits(&dir, &q, &titles, &held);
+            let _ = tx.send((q, hits));
+        });
+    }
+
     pub(super) fn poll_palette_search(&mut self) {
+        if let Some(rx) = self.palette_step_rx.take() {
+            match rx.try_recv() {
+                Ok((q, hits)) => {
+                    if self.palette_open && q == self.palette_q.trim() {
+                        self.palette_steps = hits;
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => self.palette_step_rx = Some(rx),
+                Err(mpsc::TryRecvError::Disconnected) => {}
+            }
+        }
         let Some(rx) = self.palette_file_rx.take() else {
             return;
         };
@@ -228,6 +266,20 @@ impl Cabin {
             return bound;
         }
         self.work_root()
+    }
+}
+
+/// The action for palette row `i`: commands, then files, then tool steps.
+pub(super) fn palette_pick(
+    cmds: &[(&str, &str)],
+    files: &[String],
+    root: &str,
+    steps: &[(String, String)],
+    i: usize,
+) -> Option<String> {
+    match i.checked_sub(cmds.len() + files.len()) {
+        Some(j) => steps.get(j).map(|(target, _)| target.clone()),
+        None => palette_row_action(cmds, files, root, i),
     }
 }
 

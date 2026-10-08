@@ -158,6 +158,8 @@ mod native_sessions;
 mod native_unattended;
 mod chat_kick;
 mod palette;
+mod step_search;
+use step_search::{parse_step_target, step_hits, turn_jump_row};
 mod settings;
 mod plus;
 mod projects;
@@ -537,6 +539,10 @@ pub struct Cabin {
     palette_files_q: String,
     palette_files_root: String,
     palette_file_rx: Option<mpsc::Receiver<(String, String, Vec<String>)>>,
+    /// Spike-3a: tool-step rows for the palette query, `(step:<turn>:<chat>, line)`.
+    palette_steps: Vec<(String, String)>,
+    palette_steps_q: String,
+    palette_step_rx: Option<HistoryHitsRx>,
     shortcuts_open: bool,
     active_skill_follow: Option<String>,
     /// Changed notes from workboard cards linked to this chat, sent with this turn.
@@ -772,6 +778,8 @@ pub struct Cabin {
     confirm: Option<ConfirmKind>,
     /// History "Last you" scroll once the thread is open.
     jump_last_you: bool,
+    /// Spike-3a: a step hit opened this chat; scroll to that turn's Work card.
+    jump_turn: Option<u32>,
     /// Ctrl+F in the open chat.
     find: ChatFind,
     elicit_ask: Option<grokhub_acp::ElicitAsk>,
@@ -1155,6 +1163,9 @@ impl Cabin {
             palette_files_q: String::new(),
             palette_files_root: String::new(),
             palette_file_rx: None,
+            palette_steps: Vec::new(),
+            palette_steps_q: String::new(),
+            palette_step_rx: None,
             shortcuts_open: false,
             active_skill_follow: None,
             card_notes_follow: None,
@@ -1350,6 +1361,7 @@ impl Cabin {
             perm_always_confirm: None,
             confirm: None,
             jump_last_you: false,
+            jump_turn: None,
             find: ChatFind::default(),
             elicit_ask: None,
             elicit_draft: String::new(),
@@ -1592,6 +1604,9 @@ impl Cabin {
             palette_files_q: String::new(),
             palette_files_root: String::new(),
             palette_file_rx: None,
+            palette_steps: Vec::new(),
+            palette_steps_q: String::new(),
+            palette_step_rx: None,
             shortcuts_open: false,
             active_skill_follow: None,
             card_notes_follow: None,
@@ -1787,6 +1802,7 @@ impl Cabin {
             perm_always_confirm: None,
             confirm: None,
             jump_last_you: false,
+            jump_turn: None,
             find: ChatFind::default(),
             elicit_ask: None,
             elicit_draft: String::new(),

@@ -742,6 +742,7 @@ impl Cabin {
             return;
         }
         self.write_span_at(hx::Span::reply(&trace, reply, &self.secret_hold), "audit", turn);
+        let _ = self.write_turn_trail(&trace, turn);
         if !self.harness.soft_parks.is_empty() {
             return;
         }
@@ -768,6 +769,23 @@ impl Cabin {
                 }
             }
         }
+    }
+
+    /// Spike-3a (AMR M4): one `trail` node for this turn, off the UI thread.
+    /// Memory repo mode only; legacy and scratch chats write none. Built from
+    /// spans only (it reads, never runs anything). A sealed trail with no key
+    /// is `Paused` and writes nothing; the turn ends as usual either way.
+    pub(super) fn write_turn_trail(&mut self, chat: &str, turn: u32) -> Option<std::thread::JoinHandle<()>> {
+        if !self.amr_on() || self.scratch() {
+            return None;
+        }
+        let store = self.amr_store(false);
+        let held = self.secret_hold.clone();
+        let dir = crate::config::config_dir();
+        let chat = chat.to_string();
+        Some(std::thread::spawn(move || {
+            let _ = hx::write_trail(&store, &dir, &chat, turn, &held, grokhub_core::now_ms());
+        }))
     }
 
     /// [`Self::harness_turn_end`] on the reply `finish_acp_turn` kept. `turn`
