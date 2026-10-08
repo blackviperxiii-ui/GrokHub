@@ -7,6 +7,9 @@ on:
     branches: [main, beta]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   linux:
     runs-on: ubuntu-latest
