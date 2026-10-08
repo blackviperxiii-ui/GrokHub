@@ -211,6 +211,10 @@ pub(super) struct HarnessState {
     pub lock_seen: Option<(Instant, Option<hx::Locked>)>,
     /// `/privacy` output on its way from the reader thread.
     pub privacy_rx: Option<mpsc::Receiver<String>>,
+    /// `/diagnose` or a "check my computer" answer on its way (Spike-8b).
+    pub diagnose_rx: Option<mpsc::Receiver<(String, bool)>>,
+    /// The running diagnose came from `/diagnose`, so it posts as a slash result.
+    pub diagnose_slash: bool,
     /// Settings → Permissions: the folder typed for a new files scope.
     pub scope_folder: String,
     /// Settings → Permissions: the browser picked for a history scope.
