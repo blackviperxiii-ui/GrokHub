@@ -112,7 +112,7 @@ const SLASH_PARITY: &[SlashParity] = &[
     row("model", "native: model catalog"),
     row("context", "native: turn and token status"),
     row("compact", "native: compact the native session"),
-    row("fork", "native: fork the native session file"),
+    row("fork", "N/A: fork is not in the cabin"),
     row("resume", "native: History"),
     row("loop", "native: Automations"),
     row("plan", "native: plan mode"),
@@ -122,7 +122,7 @@ const SLASH_PARITY: &[SlashParity] = &[
     row("flush", "native: write pending memory before compaction"),
     row("dream", "native: one low-effort rewrite of MEMORY.md"),
     row("recap", "native: last user lines in the status line"),
-    row("rewind", "N/A: native sessions are append-only; use /fork"),
+    row("rewind", "N/A: native sessions are append-only"),
     row("jump", "N/A: pager transcript jump"),
     row("expand", "N/A: pager transcript expand"),
     row("edit-prompt", "N/A: pager prompt editor"),
@@ -304,6 +304,10 @@ mod tests {
             unparsed_native_slash("/voice"),
             Some(UnparsedSlash::Note(text)) if text.starts_with("N/A:")
         ));
+        assert_eq!(
+            unparsed_native_slash("/fork"),
+            Some(UnparsedSlash::Note("N/A: fork is not in the cabin"))
+        );
         assert_eq!(
             unparsed_native_slash("/full"),
             unparsed_native_slash("/fullscreen")
