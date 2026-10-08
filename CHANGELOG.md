@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The Home suggestion for a paused job now names it ("Paused: Fix the tray icon") and says how long it has been paused. Clicking it opens that job's chat, or the Workboard when the job has no chat, instead of a new Discuss chat about "that job".
 - Speed spans on the auto router, the harness guards and the send path, a speed bench (`speed_bench`) and `docs/audits/speed-2026-10-08.md`. Each route record now carries how long the router's decision took (`timing_us`). Nothing else changes.
 
 ## 2.10.96 — 2026-10-08
