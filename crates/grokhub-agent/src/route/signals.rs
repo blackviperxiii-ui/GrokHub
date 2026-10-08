@@ -28,6 +28,10 @@ impl VerifySignal {
 pub trait VerifySource {
     /// The `step`-th VerifyGate check of `episode` (1-based), or its latest when `step` is 0.
     fn verdict(&self, episode: &str, step: u32) -> Option<VerifySignal>;
+    /// A real source (#548). A stub says `false`, and self-tuning refuses to run on it.
+    fn ready(&self) -> bool {
+        true
+    }
 }
 
 pub trait OriginSource {
@@ -36,6 +40,33 @@ pub trait OriginSource {
 
 pub trait OutcomeSource {
     fn outcome(&self, span_id: &str) -> Option<OutcomeResult>;
+    /// A real source (#556). A stub says `false`, and self-tuning refuses to run on it.
+    fn ready(&self) -> bool {
+        true
+    }
+}
+
+/// A hook with no source behind it: every answer is `None`.
+pub struct StubSource;
+
+impl VerifySource for StubSource {
+    fn verdict(&self, _episode: &str, _step: u32) -> Option<VerifySignal> {
+        None
+    }
+
+    fn ready(&self) -> bool {
+        false
+    }
+}
+
+impl OutcomeSource for StubSource {
+    fn outcome(&self, _span_id: &str) -> Option<OutcomeResult> {
+        None
+    }
+
+    fn ready(&self) -> bool {
+        false
+    }
 }
 
 /// Spans VerifyGate checks scanned per lookup.
