@@ -5,7 +5,8 @@ use super::AmrError;
 /// `amr_schema` written into `amr/README.md`.
 pub const AMR_SCHEMA: u32 = 1;
 
-/// The six node kinds. Files use the lowercase names.
+/// The node kinds. Files use the lowercase names. Spike-5a added the user
+/// model kinds (`routine`, `need`, `mind_prior`) after the first six.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeType {
     Preference,
@@ -14,6 +15,9 @@ pub enum NodeType {
     Trail,
     Person,
     Project,
+    Routine,
+    Need,
+    MindPrior,
 }
 
 impl NodeType {
@@ -25,7 +29,15 @@ impl NodeType {
             Self::Trail => "trail",
             Self::Person => "person",
             Self::Project => "project",
+            Self::Routine => "routine",
+            Self::Need => "need",
+            Self::MindPrior => "mind_prior",
         }
+    }
+
+    /// The user model kinds `/memory` lists (Spike-5a).
+    pub fn is_user_model(self) -> bool {
+        matches!(self, Self::Fact | Self::Preference | Self::Routine | Self::Need | Self::MindPrior)
     }
 
     pub fn parse(raw: &str) -> Result<Self, AmrError> {
@@ -36,6 +48,9 @@ impl NodeType {
             "trail" => Ok(Self::Trail),
             "person" => Ok(Self::Person),
             "project" => Ok(Self::Project),
+            "routine" => Ok(Self::Routine),
+            "need" => Ok(Self::Need),
+            "mind_prior" => Ok(Self::MindPrior),
             other => Err(AmrError::UnknownType(other.to_string())),
         }
     }
@@ -52,6 +67,11 @@ pub struct Node {
     pub confidence: f32,
     pub tags: Vec<String>,
     pub body: String,
+    /// The consent grant behind a `scope:` node. Empty when none applied;
+    /// written only when set, so older nodes read back unchanged.
+    pub consent_ref: String,
+    /// Written only when not plain. A `.md` file is always plain.
+    pub sensitivity: Sensitivity,
 }
 
 /// A node to write. `remember` redacts `source`, `tags`, and `body`.
@@ -67,6 +87,8 @@ pub struct NodeDraft {
     pub body: String,
     /// Which tier the file lands in (harness design §12 P1/P4).
     pub sensitivity: Sensitivity,
+    /// The consent grant id for a `scope:<grant>` source, else empty.
+    pub consent_ref: String,
 }
 
 /// The tier of a learned node. Plain stays readable markdown; personal and
@@ -81,6 +103,23 @@ pub enum Sensitivity {
 impl Sensitivity {
     pub fn sealed(self) -> bool {
         !matches!(self, Self::Plain)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::Personal => "personal",
+            Self::Sensitive => "sensitive",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Result<Self, AmrError> {
+        match raw {
+            "plain" => Ok(Self::Plain),
+            "personal" => Ok(Self::Personal),
+            "sensitive" => Ok(Self::Sensitive),
+            other => Err(AmrError::BadFrontmatter(format!("sensitivity {other}"))),
+        }
     }
 }
 
@@ -146,9 +185,17 @@ pub enum EdgeRel {
 
 impl Node {
     /// Canonical markdown. `to_markdown(from_markdown(s)) == s` for this shape.
+    /// `consent_ref` and `sensitivity` lines appear only when set.
     pub fn to_markdown(&self) -> String {
+        let mut extra = String::new();
+        if !self.consent_ref.is_empty() {
+            extra.push_str(&format!("consent_ref: {}\n", self.consent_ref));
+        }
+        if self.sensitivity.sealed() {
+            extra.push_str(&format!("sensitivity: {}\n", self.sensitivity.as_str()));
+        }
         format!(
-            "---\nid: {id}\ntype: {ty}\ncreated: {created}\nupdated: {updated}\nsource: {source}\nconfidence: {confidence}\ntags: {tags}\n---\n{body}",
+            "---\nid: {id}\ntype: {ty}\ncreated: {created}\nupdated: {updated}\nsource: {source}\nconfidence: {confidence}\ntags: {tags}\n{extra}---\n{body}",
             id = self.id,
             ty = self.node_type.as_str(),
             created = self.created,
@@ -237,6 +284,8 @@ fn parse_frontmatter(front: &str, body: &str) -> Result<Node, AmrError> {
     let mut source = None;
     let mut confidence = None;
     let mut tags = None;
+    let mut consent_ref = None;
+    let mut sensitivity = None;
     for line in front.lines() {
         if line.trim().is_empty() {
             continue;
@@ -254,6 +303,8 @@ fn parse_frontmatter(front: &str, body: &str) -> Result<Node, AmrError> {
             "source" => set_once(&mut source, value.to_string())?,
             "confidence" => set_once(&mut confidence, parse_confidence(value)?)?,
             "tags" => set_once(&mut tags, parse_tags(value)?)?,
+            "consent_ref" => set_once(&mut consent_ref, value.to_string())?,
+            "sensitivity" => set_once(&mut sensitivity, Sensitivity::parse(value)?)?,
             other => return Err(AmrError::BadFrontmatter(other.to_string())),
         }
     }
@@ -268,6 +319,8 @@ fn parse_frontmatter(front: &str, body: &str) -> Result<Node, AmrError> {
         confidence: confidence.ok_or(AmrError::ConfidenceOutOfRange)?,
         tags: tags.ok_or_else(|| AmrError::BadFrontmatter("tags".into()))?,
         body: body.to_string(),
+        consent_ref: consent_ref.unwrap_or_default(),
+        sensitivity: sensitivity.unwrap_or(Sensitivity::Plain),
     })
 }
 

@@ -25,6 +25,8 @@ use grokhub_agent::{AccessMode, HardClass};
 /// How often the cabin looks for desktop parks and refreshes the turn file.
 const POLL: Duration = Duration::from_millis(250);
 
+/// The long-run pause card (Spike-3b). Nothing continues until you answer.
+const EPISODE_CAP_NOTE: &str = "Continue, or type what to do next. Nothing runs until you answer.";
 const HARD_NOTE: &str = "Always can't skip this. Approve runs it once. Esc denies.";
 const HEADLESS_NOTE: &str =
     "Grok Build's deny rule stopped this. Approve re-runs this one step with Grok's own Allow. Esc denies.";
@@ -250,6 +252,8 @@ pub(super) struct HarnessState {
     pub inbox_open: bool,
     /// The card an inbox row asked to scroll into view, painted once.
     pub jump: Option<&'static str>,
+    /// Spike-3b: the supervised desktop episode open on a chat.
+    pub episode: Option<super::episode_ui::EpisodeUi>,
 }
 
 /// Readonly until the desktop switch is on; Full only after Grant full.
@@ -427,6 +431,9 @@ impl Cabin {
     fn write_span_at(&self, span: hx::Span, path: &str, turn: u32) {
         let trace = self.trace_id();
         let mut span = span.on_path(path).in_turn(&trace, turn);
+        if span.episode.is_empty() {
+            span.episode = self.episode_span_id();
+        }
         if span.access.is_empty() {
             span.access = self.access_mode().as_str().into();
         }
@@ -568,7 +575,12 @@ impl Cabin {
         } else {
             hx::Span::deny(&trace, &park.tool, &span_args(&park.tool, &park.action), why, park.class.as_str())
         };
-        self.write_span(span, park.path);
+        // An episode park's outcome span is the kernel's (Spike-3b).
+        let kernel_park =
+            matches!(&park.source, ParkSource::Desk(id) if id.starts_with(grokhub_agent::episode::PARK_PREFIX));
+        if !kernel_park {
+            self.write_span(span, park.path);
+        }
         match &park.source {
             ParkSource::Ask(p) => {
                 if let Some(h) = &self.acp {
@@ -657,6 +669,15 @@ impl Cabin {
         self.harness.repair = None;
         self.harness.ladder.reset();
         self.status = if approve { "Resumed".into() } else { "Stopped that step".into() };
+        if park.detector == super::episode_ui::EPISODE_CAP_DETECTOR {
+            if approve {
+                // Continue is the user's click: the episode goes on from here.
+                self.resume_episode(grokhub_agent::episode::Continue::from_click());
+                self.send_chat("Continue".into());
+            } else {
+                self.end_episode(grokhub_agent::episode::EpisodeEnd::Stop);
+            }
+        }
     }
 
     /// Tray Halt and the halt hotkeys: every inbox row is denied with a span,
@@ -835,6 +856,16 @@ impl Cabin {
     /// message does not come here.
     pub(super) fn harness_user_sent(&mut self) {
         let trace = self.trace_id();
+        let resumed = self
+            .harness
+            .soft_parks
+            .iter()
+            .any(|p| p.detector == super::episode_ui::EPISODE_CAP_DETECTOR);
+        if resumed {
+            // The user's typed reply answers the long-run pause (Spike-3b).
+            self.resume_episode(grokhub_agent::episode::Continue::from_typing());
+        }
+        self.episode_user_sent(resumed);
         for park in std::mem::take(&mut self.harness.soft_parks) {
             let args = serde_json::json!({ "detector": park.detector, "evidence": park.evidence }).to_string();
             let mut span = hx::Span::soft_allow(
@@ -1122,7 +1153,7 @@ impl Cabin {
 
     /// Desktop parks from the MCP process, the shared turn file, and the
     /// one-shot pill restore. Throttled to [`POLL`].
-    fn poll_harness(&mut self) {
+    pub(super) fn poll_harness(&mut self) {
         let now = Instant::now();
         if self.harness.last_poll.is_some_and(|t| now.duration_since(t) < POLL) {
             return;
@@ -1133,7 +1164,9 @@ impl Cabin {
             chat_id: self.trace_id(),
             turn: self.turn_no(),
             access: self.access_mode().as_str().into(),
+            episode: self.episode_span_id(),
         };
+        self.poll_episode();
         if self.harness.turn_ctx.as_ref() != Some(&ctx) {
             let _ = hx::write_turn_context(&dir, &ctx);
             self.harness.turn_ctx = Some(ctx);
@@ -1234,13 +1267,14 @@ impl Cabin {
             }
         }
         if let Some(park) = self.harness.soft_parks.first() {
+            let cap = park.detector == super::episode_ui::EPISODE_CAP_DETECTOR;
             let text = CardText {
                 eyebrow: SOFT_EYEBROW,
                 title: &park.reason.clone(),
                 action: "",
-                note: SOFT_NOTE,
-                primary: "Approve",
-                secondary: "Deny",
+                note: if cap { EPISODE_CAP_NOTE } else { SOFT_NOTE },
+                primary: if cap { "Continue" } else { "Approve" },
+                secondary: if cap { "Stop" } else { "Deny" },
                 hard: false,
             };
             let top = ui.cursor().min.y;
@@ -2402,6 +2436,36 @@ mod tests {
         let spans = hx::read_spans(&root, "session").unwrap();
         assert_eq!(spans.last().unwrap().decision, "deny");
         assert_eq!(spans.last().unwrap().result, "Jeremy denied (Esc)");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Spike-5a: a forget the agent starts is a hard Delete card, even under
+    /// Always: Approve and Deny only, and Enter leaves it parked.
+    #[test]
+    fn agent_forget_parks_a_hard_delete_card_enter_cannot_approve() {
+        let (_pin, root) = pinned("agent-forget");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.permission_mode = PermissionMode::AlwaysApprove;
+        assert_eq!(cabin.harness_precheck(ask(hx::AGENT_FORGET_TOOL, "forget 3 learned notes")), None);
+        assert!(cabin.harness.park.is_some());
+        let (texts, _) = paint_stack(&mut cabin, Vec::new(), 900.0);
+        assert!(texts.iter().any(|t| t == "Delete"), "{texts:?}");
+        let buttons: Vec<_> = texts
+            .iter()
+            .filter(|t| *t == "Approve" || *t == "Deny" || *t == "Always" || *t == "Allow")
+            .cloned()
+            .collect();
+        assert_eq!(buttons, vec!["Approve".to_string(), "Deny".to_string()]);
+        let enter = egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let _ = paint_stack(&mut cabin, vec![enter], 900.0);
+        assert!(cabin.harness.park.is_some(), "Enter must not approve an agent forget");
+        assert_eq!(hx::read_spans(&root, "session").unwrap().last().unwrap().decision, "park");
         let _ = std::fs::remove_dir_all(root);
     }
 

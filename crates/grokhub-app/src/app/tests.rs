@@ -10951,6 +10951,7 @@ fn recall_legacy_finds_memory_line_and_skips_amr() {
             tags: vec!["dock".into()],
             body: "harbor lamp from amr\n".into(),
             sensitivity: grokhub_core::amr::Sensitivity::Plain,
+            consent_ref: String::new(),
         })
         .unwrap();
     cabin.run_slash_line("/recall harbor");
@@ -11002,6 +11003,7 @@ fn recall_amr_returns_seeded_node_not_legacy_memory() {
             tags: vec!["dock".into()],
             body: "pier light stays on\n".into(),
             sensitivity: grokhub_core::amr::Sensitivity::Plain,
+            consent_ref: String::new(),
         })
         .unwrap();
     cabin.run_slash_line("/recall pier");
@@ -11043,6 +11045,7 @@ fn recall_opens_private_notes_and_says_when_they_are_locked() {
             tags: vec![],
             body: "pier nine is home\n".into(),
             sensitivity: grokhub_core::amr::Sensitivity::Personal,
+            consent_ref: String::new(),
         })
         .unwrap();
     let raw = std::fs::read_to_string(root.join("amr/nodes/fact-home.sealed")).unwrap();
@@ -11383,6 +11386,7 @@ fn amr_dream_runs_once_a_night_and_memory_dream_prints_it() {
                 tags: vec![],
                 body: format!("{body}\n"),
                 sensitivity: grokhub_core::amr::Sensitivity::Plain,
+                consent_ref: String::new(),
             })
             .unwrap();
     }
