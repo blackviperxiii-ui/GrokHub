@@ -212,7 +212,7 @@ fn de2_reads_outcome_records_and_the_rung_each_run_used() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-// ------------------------------------------------------------- local model
+// local model
 
 fn meta(id: &str) -> ModelMeta {
     ModelMeta {
