@@ -218,7 +218,7 @@ pub fn scheduler_create(args: &Value) -> ToolOutput {
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     let task_id = text_field(args, "task_id");
-    match write_automation(&prompt, mins, fire, task_id.as_deref()) {
+    match write_automation(&prompt, mins, fire, task_id.as_deref(), now_ms()) {
         Ok(text) => ToolOutput::ok(text),
         Err(err) => ToolOutput::err(err),
     }
@@ -261,7 +261,7 @@ fn text_field(args: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn interval_minutes(raw: &str) -> Result<u32, String> {
+pub(crate) fn interval_minutes(raw: &str) -> Result<u32, String> {
     let raw = raw.trim();
     let split = raw
         .find(|c: char| !c.is_ascii_digit())
@@ -335,16 +335,28 @@ fn save_list(path: &Path, list: &[Automation]) -> Result<(), String> {
     }
 }
 
-fn write_automation(
+/// Save the list through the ChangeLedger: these tools are the agent's own
+/// changes (Spike-5b), so each keeps the version it replaces and shows a
+/// Work-tree row with Undo. Returns the ledger seq (0 when nothing changed).
+fn ledgered(path: &Path, id: &str, reason: &str, write: impl FnOnce() -> Result<(), String>) -> Result<u64, String> {
+    let target = crate::harness::AutomationsFile { path, id };
+    let config = crate::perm::config_dir();
+    let change = crate::harness::record_change(&config, &target, crate::harness::Origin::SelfManage, reason, write)?;
+    Ok(change.map(|c| c.seq).unwrap_or(0))
+}
+
+pub(crate) fn write_automation(
     prompt: &str,
     mins: u32,
     fire: bool,
     task_id: Option<&str>,
+    now_ms: u64,
 ) -> Result<String, String> {
     let _guard = STORE.lock().unwrap_or_else(|err| err.into_inner());
     let path = store_path();
     let mut list = load_list(&path)?;
-    let now = clock();
+    let mut now = clock();
+    now.now_ms = now_ms;
     let name = auto_name(prompt);
     if let Some(id) = task_id {
         let Some(row) = list.iter_mut().find(|row| row.id == id) else {
@@ -368,12 +380,15 @@ fn write_automation(
         if let Some(slot) = list.iter_mut().find(|item| item.id == id) {
             *slot = row.clone();
         }
-        save_list(&path, &list)?;
+        ledgered(&path, &id, &format!("changed to every {mins} min"), || save_list(&path, &list))?;
         note_change(AutomationChange::Upsert(Box::new(row)));
         return Ok(format!("updated {id}\nevery {mins} min"));
     }
     if list.len() >= LOOP_MAX {
         return Err(format!("at most {LOOP_MAX} automations"));
+    }
+    if let Some(why) = crate::harness::automation_cap_refusal(&crate::perm::config_dir(), now_ms) {
+        return Err(why);
     }
     let mut row = Automation {
         id: uid("auto"),
@@ -397,12 +412,12 @@ fn write_automation(
     }
     let id = row.id.clone();
     list.push(row.clone());
-    save_list(&path, &list)?;
+    ledgered(&path, &id, &format!("scheduled every {mins} min"), || save_list(&path, &list))?;
     note_change(AutomationChange::Upsert(Box::new(row)));
     Ok(format!("created {id}\nevery {mins} min"))
 }
 
-fn delete_automation(id: &str) -> Result<String, String> {
+pub(crate) fn delete_automation(id: &str) -> Result<String, String> {
     let _guard = STORE.lock().unwrap_or_else(|err| err.into_inner());
     let path = store_path();
     let mut list = load_list(&path)?;
@@ -411,12 +426,37 @@ fn delete_automation(id: &str) -> Result<String, String> {
     if list.len() == before {
         return Err(format!("automation {id} not found"));
     }
-    save_list(&path, &list)?;
+    ledgered(&path, id, "removed by the agent", || save_list(&path, &list))?;
     note_change(AutomationChange::Delete(id.to_string()));
     Ok(format!("deleted {id}"))
 }
 
-fn list_automations() -> Result<String, String> {
+/// One automation by id, as stored.
+pub(crate) fn find_automation(id: &str) -> Result<Option<Automation>, String> {
+    let _guard = STORE.lock().unwrap_or_else(|err| err.into_inner());
+    Ok(load_list(&store_path())?.into_iter().find(|row| row.id == id))
+}
+
+/// Turn one automation off without removing it, through the ChangeLedger
+/// (Spike-5c `automation_disable`).
+pub(crate) fn disable_automation(id: &str, reason: &str) -> Result<String, String> {
+    let _guard = STORE.lock().unwrap_or_else(|err| err.into_inner());
+    let path = store_path();
+    let mut list = load_list(&path)?;
+    let Some(row) = list.iter_mut().find(|row| row.id == id) else {
+        return Err(format!("automation {id} not found"));
+    };
+    if !row.enabled {
+        return Ok(format!("{id} is already off"));
+    }
+    row.enabled = false;
+    let row = row.clone();
+    ledgered(&path, id, reason, || save_list(&path, &list))?;
+    note_change(AutomationChange::Upsert(Box::new(row)));
+    Ok(format!("turned off {id}"))
+}
+
+pub(crate) fn list_automations() -> Result<String, String> {
     let _guard = STORE.lock().unwrap_or_else(|err| err.into_inner());
     let list = load_list(&store_path())?;
     if list.is_empty() {
@@ -529,6 +569,48 @@ mod tests {
         assert!(failed.failed, "{}", failed.text);
         assert_eq!(std::fs::read_to_string(&broken).unwrap(), "{not json");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Spike-5b: scheduler writes are the agent's own, so each keeps a
+    /// version, and a third new job in a week is refused in plain words
+    /// until the user keeps one.
+    #[test]
+    fn agent_jobs_are_versioned_and_capped_at_two_a_week() {
+        let dir = crate::harness::test_dir("auto-cap");
+        let _guard = crate::perm::ConfigGuard::set(&dir);
+        let now = now_ms();
+        write_automation("check the build", 10, false, None, now).unwrap();
+        write_automation("sweep the inbox", 30, false, None, now).unwrap();
+        assert_eq!(
+            write_automation("water the plants", 60, false, None, now + 1).unwrap_err(),
+            "Not added: GrokHub already made 2 automations on its own this week. \
+             Keep one from its Work-tree row, or add this one yourself on the Automations page."
+        );
+        assert_eq!(load_list(&store_path()).unwrap().len(), 2, "the third was not written");
+        let week = crate::harness::WEEK_MS;
+        assert!(write_automation("water the plants", 60, false, None, now + week + 1).is_ok(), "a week on, room again");
+        let ledger = crate::harness::ChangeLedger::load_kind(&dir, crate::harness::ChangeKind::Automation);
+        let lines: Vec<(&str, &str, &str)> =
+            ledger.all().iter().map(|c| (c.op.as_str(), c.origin.as_str(), c.reason.as_str())).collect();
+        assert_eq!(
+            lines,
+            [
+                ("create", "self_manage", "scheduled every 10 min"),
+                ("create", "self_manage", "scheduled every 30 min"),
+                ("create", "self_manage", "scheduled every 60 min"),
+            ]
+        );
+        let id = ledger.all()[0].id.clone();
+        write_automation("check the build twice", 5, false, Some(&id), now).unwrap();
+        delete_automation(&id).unwrap();
+        let ops: Vec<&str> = crate::harness::ChangeLedger::load_kind(&dir, crate::harness::ChangeKind::Automation)
+            .all()
+            .iter()
+            .map(|c| c.op.as_str())
+            .collect();
+        assert_eq!(ops, ["create", "create", "create", "modify", "delete"]);
+        let _ = take_automation_changes();
+        let _ = crate::harness::take_self_changes(&dir);
     }
 
     #[test]

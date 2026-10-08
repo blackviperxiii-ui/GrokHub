@@ -903,7 +903,7 @@ pub fn single_turn_args_full(
     }
     // btw (saved as ask) stays look-only: do not remap to --always-approve.
     // Composer Ask leftover flags match scheduled Ask (no yolo).
-    // Night / loop / phone inherit the pill via PermissionMode::scheduled_flags.
+    // Night / loop / /send inherit the pill via PermissionMode::scheduled_flags.
     if let Some(m) = model.map(str::trim).filter(|s| !s.is_empty()) {
         a.push("--model".into());
         a.push(m.to_string());
@@ -984,6 +984,7 @@ pub const ASK_DENY_RULES: &[&str] = &[
     "Edit",
     "Write",
     grokhub_core::DESKTOP_MCP_RULE,
+    grokhub_core::CUA_MCP_RULE,
 ];
 
 /// Fail closed on an unwatched `grok -p` while Ask is on.
@@ -1039,8 +1040,34 @@ pub fn with_hard_deny(mut args: Vec<String>, rules: &[&str]) -> Vec<String> {
     args
 }
 
+/// Spike-1c path D: Grok Build computer-use tools that drive the screen,
+/// mouse, or keyboard, in the only form a GB rule can name them: an MCP tool
+/// that is not the cabin's own `grokhub-desktop`. GB rules name only `Bash`,
+/// `Read`, `Edit`/`Write`, `Grep`/`Glob`, `MCPTool`, `WebFetch` and
+/// `WebSearch`, so a built-in (non-MCP) tool such as `computer_screenshot`
+/// has no rule; it is listed in `GB_DENY_GAPS` and the cabin's path D
+/// watchdog checks its frames. None of these match a `grokhub-desktop__*`
+/// tool, so desktop work goes to the gated path A tools.
+pub const BUILTIN_CU_DENY: &[&str] = &[
+    "MCPTool(computer__*)",
+    "MCPTool(computer-use__*)",
+    "MCPTool(computer_use__*)",
+    "MCPTool(*__computer_*)",
+    "MCPTool(*__mouse_*)",
+    "MCPTool(*__keyboard_*)",
+];
+
+/// Deny GB's own computer-use tools when desktop control is off (Readonly),
+/// or when it is on and the pill is Auto or Always (no ask reaches the
+/// cabin). Under Ask they stay: path B classifies each ask.
+pub fn builtin_cu_denied(permission: PermissionMode, desktop: bool) -> bool {
+    !desktop || permission.auto_allows()
+}
+
 /// Desktop allow/deny for every headless `grok -p`. Plan and btw (Ask) deny
 /// the desktop tools even on Auto or Always. Attended Ask never reaches here.
+/// GB's own computer-use tools get [`BUILTIN_CU_DENY`] per [`builtin_cu_denied`]:
+/// only `--deny` pairs, never an allow or a looser mode.
 pub fn apply_desktop_spawn_args(
     args: Vec<String>,
     permission: PermissionMode,
@@ -1055,7 +1082,17 @@ pub fn apply_desktop_spawn_args(
             PermissionMode::Ask => grokhub_core::DesktopPermMode::Ask,
         },
     };
-    grokhub_core::apply_desktop_mcp_args(args, mode, false, enabled)
+    let mut args = grokhub_core::apply_desktop_mcp_args(args, mode, false, enabled);
+    // Spike-2a: the Cua proxy is denied wherever the desktop tools are, and never allowed here.
+    let desk_denied = args.windows(2).any(|w| w[0] == "--deny" && w[1] == grokhub_core::DESKTOP_MCP_RULE);
+    if desk_denied && !args.windows(2).any(|w| w[0] == "--deny" && w[1] == grokhub_core::CUA_MCP_RULE) {
+        args = with_hard_deny(args, &[grokhub_core::CUA_MCP_RULE]);
+    }
+    if builtin_cu_denied(permission, enabled) {
+        with_hard_deny(args, BUILTIN_CU_DENY)
+    } else {
+        args
+    }
 }
 
 pub fn agent_args_resume(
@@ -1098,6 +1135,57 @@ pub fn register_desktop_mcp(bin: &Path, cwd: &Path, exe: &Path) -> Result<String
 /// Remove the cabin registration. Same isolated runner as [`register_desktop_mcp`].
 pub fn unregister_desktop_mcp(bin: &Path, cwd: &Path) -> Result<String, String> {
     let argv = desktop_mcp_remove_argv();
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    grok_stdout_timeout(bin, cwd, &refs, 20)
+}
+
+/// `grok mcp add grokhub-self -- <exe> --mcp-self` (Spike-5c).
+pub fn self_mcp_add_argv(exe: &str) -> Vec<String> {
+    vec![
+        "mcp".into(),
+        "add".into(),
+        grokhub_core::SELF_MCP_SERVER.into(),
+        "--".into(),
+        exe.into(),
+        "--mcp-self".into(),
+    ]
+}
+
+/// Register Grok's self-manage server in the cabin `GROK_HOME`, never
+/// `~/.grok` (rule 5). Same isolated runner as [`register_desktop_mcp`].
+pub fn register_self_mcp(bin: &Path, cwd: &Path, exe: &Path) -> Result<String, String> {
+    let argv = self_mcp_add_argv(&exe.display().to_string());
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    grok_stdout_timeout(bin, cwd, &refs, 20)
+}
+
+/// Spike-2a: `grok mcp add grokhub-cua -- <exe> --mcp-cua`
+pub fn cua_mcp_add_argv(exe: &str) -> Vec<String> {
+    vec![
+        "mcp".into(),
+        "add".into(),
+        grokhub_core::CUA_MCP_SERVER.into(),
+        "--".into(),
+        exe.into(),
+        "--mcp-cua".into(),
+    ]
+}
+
+/// `grok mcp remove grokhub-cua`
+pub fn cua_mcp_remove_argv() -> Vec<String> {
+    vec!["mcp".into(), "remove".into(), grokhub_core::CUA_MCP_SERVER.into()]
+}
+
+/// Register the Cua gate proxy in the cabin `GROK_HOME`, never `~/.grok`.
+pub fn register_cua_mcp(bin: &Path, cwd: &Path, exe: &Path) -> Result<String, String> {
+    let argv = cua_mcp_add_argv(&exe.display().to_string());
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+    grok_stdout_timeout(bin, cwd, &refs, 20)
+}
+
+/// Remove the Cua gate proxy from the cabin `GROK_HOME`.
+pub fn unregister_cua_mcp(bin: &Path, cwd: &Path) -> Result<String, String> {
+    let argv = cua_mcp_remove_argv();
     let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
     grok_stdout_timeout(bin, cwd, &refs, 20)
 }
@@ -2035,6 +2123,7 @@ mod tests {
                 "Edit",
                 "Write",
                 grokhub_core::DESKTOP_MCP_RULE,
+                grokhub_core::CUA_MCP_RULE,
             ]
             .as_slice()
         );
@@ -2142,6 +2231,14 @@ mod tests {
     }
 
     #[test]
+    fn self_mcp_add_argv_names_the_self_server() {
+        assert_eq!(
+            self_mcp_add_argv("/usr/bin/grokhub"),
+            ["mcp", "add", "grokhub-self", "--", "/usr/bin/grokhub", "--mcp-self"]
+        );
+    }
+
+    #[test]
     fn desktop_mcp_register_uses_isolated_runner() {
         let add = desktop_mcp_add_argv("/usr/bin/grokhub");
         assert_eq!(
@@ -2177,6 +2274,88 @@ mod tests {
         assert!(
             unreg.contains("grok_stdout_timeout") && !unreg.contains("grok_user_stdout"),
             "desktop MCP remove must use the cabin GROK_HOME runner: {unreg}"
+        );
+    }
+
+    #[test]
+    fn cua_proxy_registers_in_the_cabin_home_and_is_denied_with_the_desktop_rule() {
+        assert_eq!(
+            cua_mcp_add_argv("/usr/bin/grokhub"),
+            ["mcp", "add", "grokhub-cua", "--", "/usr/bin/grokhub", "--mcp-cua"]
+        );
+        assert_eq!(cua_mcp_remove_argv(), ["mcp", "remove", "grokhub-cua"]);
+        let has = |argv: &[String], flag: &str| {
+            argv.windows(2).any(|w| w[0] == flag && w[1] == grokhub_core::CUA_MCP_RULE)
+        };
+        for perm in [PermissionMode::Ask, PermissionMode::Auto, PermissionMode::AlwaysApprove] {
+            for desktop in [false, true] {
+                let argv = apply_desktop_spawn_args(Vec::new(), perm, SessionMode::Chat, desktop);
+                let desk_denied = argv.windows(2).any(|w| w[0] == "--deny" && w[1] == grokhub_core::DESKTOP_MCP_RULE);
+                assert_eq!(has(&argv, "--deny"), desk_denied, "{perm:?} desktop={desktop}: {argv:?}");
+                assert!(!has(&argv, "--allow"), "never an allow: {argv:?}");
+            }
+            let plan = apply_desktop_spawn_args(Vec::new(), perm, SessionMode::Plan, true);
+            assert!(has(&plan, "--deny"), "Plan denies the Cua proxy: {plan:?}");
+        }
+        let off = apply_desktop_spawn_args(Vec::new(), PermissionMode::AlwaysApprove, SessionMode::Chat, false);
+        assert_eq!(off.iter().filter(|a| a.as_str() == grokhub_core::CUA_MCP_RULE).count(), 1);
+    }
+
+    /// The rule after each `--deny` / `--allow` in an argv.
+    fn rules_after<'a>(argv: &'a [String], flag: &str) -> Vec<&'a str> {
+        argv.windows(2).filter(|w| w[0] == flag).map(|w| w[1].as_str()).collect()
+    }
+
+    #[test]
+    fn builtin_cu_deny_follows_access_and_the_pill() {
+        let pills = [PermissionMode::AlwaysApprove, PermissionMode::Auto, PermissionMode::Ask];
+        for perm in pills {
+            for desktop in [true, false] {
+                let base = perm.scheduled_args();
+                let without = grokhub_core::apply_desktop_mcp_args(
+                    base.clone(),
+                    match perm {
+                        PermissionMode::AlwaysApprove => grokhub_core::DesktopPermMode::Always,
+                        PermissionMode::Auto => grokhub_core::DesktopPermMode::Auto,
+                        PermissionMode::Ask => grokhub_core::DesktopPermMode::Ask,
+                    },
+                    false,
+                    desktop,
+                );
+                let argv = apply_desktop_spawn_args(base, perm, SessionMode::Chat, desktop);
+                let denied = rules_after(&argv, "--deny");
+                let want = !desktop || perm != PermissionMode::Ask;
+                assert_eq!(builtin_cu_denied(perm, desktop), want, "{perm:?} desktop={desktop}");
+                for rule in BUILTIN_CU_DENY {
+                    assert_eq!(denied.contains(rule), want, "{perm:?} desktop={desktop}: {rule} in {argv:?}");
+                    assert!(!rules_after(&argv, "--allow").contains(rule), "{argv:?}");
+                }
+                // The only change is `--deny` pairs on the end: no allow, no looser mode.
+                // The Cua proxy rule (Spike-2a) follows the desktop deny.
+                let mut tail = Vec::new();
+                if rules_after(&without, "--deny").contains(&grokhub_core::DESKTOP_MCP_RULE) {
+                    tail.push("--deny".to_string());
+                    tail.push(grokhub_core::CUA_MCP_RULE.to_string());
+                }
+                if want {
+                    for rule in BUILTIN_CU_DENY {
+                        tail.push("--deny".to_string());
+                        tail.push((*rule).to_string());
+                    }
+                }
+                assert_eq!(argv, [without, tail].concat(), "{perm:?} desktop={desktop}");
+            }
+        }
+        assert_eq!(
+            BUILTIN_CU_DENY,
+            &[
+                "MCPTool(computer__*)",
+                "MCPTool(computer-use__*)",
+                "MCPTool(computer_use__*)",
+                "MCPTool(*__computer_*)",
+                "MCPTool(*__mouse_*)",
+                "MCPTool(*__keyboard_*)",
+            ]
         );
     }
 

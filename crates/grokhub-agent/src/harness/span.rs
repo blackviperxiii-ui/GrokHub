@@ -44,6 +44,46 @@ pub struct Span {
     /// The consent grant that allowed this step (`g-…`, or `approved-once`). Empty when none applied.
     #[serde(default)]
     pub consent_ref: String,
+    /// The change-ledger line an auto-act wrote (`connection:12`), so Undo
+    /// and the "why" can find it (Spike-6b). Empty for every other step.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub undo_ref: String,
+    /// Spike-2b: where a click's target came from: the cabin's AX read (`ax`),
+    /// the caller's args (`args`), or nothing found (`unknown`). Empty otherwise.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub target: String,
+    /// Spike-2b: the click-target rule that matched (`send:Send`). Never the
+    /// on-screen label.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub target_rule: String,
+    /// Tokens and cost of a model call (Spike-4c router). Absent on every other step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<ModelUsage>,
+    /// Spike-3b: the supervised desktop episode this step belongs to. One
+    /// episode is one trace across turns, Steers and pauses.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub episode: String,
+    /// Spike-3b: the goal step the episode worker was on (redacted, capped).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub goal_step: String,
+    /// Spike-3b: tokens and cost of the model call this step made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<crate::route::CallTokens>,
+}
+
+/// What one model call used, as the provider reported it. Counts only.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelUsage {
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub cached_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub reasoning_tokens: u64,
+    #[serde(default)]
+    pub cost_in_usd_ticks: i64,
 }
 
 /// Who started a step. Every origin goes through `harness::decide`; none skips it.
@@ -98,6 +138,13 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            undo_ref: String::new(),
+            target: String::new(),
+            target_rule: String::new(),
+            usage: None,
+            episode: String::new(),
+            goal_step: String::new(),
+            tokens: None,
         }
     }
 
@@ -120,6 +167,13 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            undo_ref: String::new(),
+            target: String::new(),
+            target_rule: String::new(),
+            usage: None,
+            episode: String::new(),
+            goal_step: String::new(),
+            tokens: None,
         }
     }
 
@@ -142,6 +196,13 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            undo_ref: String::new(),
+            target: String::new(),
+            target_rule: String::new(),
+            usage: None,
+            episode: String::new(),
+            goal_step: String::new(),
+            tokens: None,
         }
     }
 
@@ -164,6 +225,13 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            undo_ref: String::new(),
+            target: String::new(),
+            target_rule: String::new(),
+            usage: None,
+            episode: String::new(),
+            goal_step: String::new(),
+            tokens: None,
         }
     }
 
@@ -190,10 +258,36 @@ impl Span {
         self
     }
 
+    /// Tag a click's target source and matched rule (Spike-2b).
+    pub fn with_target(mut self, target: &str, rule: &str) -> Self {
+        self.target = target.into();
+        self.target_rule = rule.into();
+        self
+    }
+
+    /// Tag the episode the step belongs to (Spike-3b). Empty leaves it unset.
+    pub fn in_episode(mut self, episode: &str) -> Self {
+        self.episode = episode.into();
+        self
+    }
+
     /// Tag the consent grant that allowed the step.
     pub fn with_consent(mut self, grant_id: &str) -> Self {
         self.consent_ref = grant_id.into();
         self
+    }
+
+    /// What the reply told the user at the end of a turn (Spike-1a), so the
+    /// detectors can check a claim against the steps. Secret-shaped strings and
+    /// `held` values (secrets the user typed this session) are redacted, and
+    /// only the first [`CLAIM_CAP`] chars are kept.
+    pub fn reply(session_id: &str, text: &str, held: &[String]) -> Self {
+        let clean = grokhub_core::redact_held_secrets(&grokhub_core::redact_secrets(text), held);
+        let claim: String = clean.trim().chars().take(CLAIM_CAP).collect();
+        let mut s = Self::deny(session_id, REPLY_TOOL, "{}", "", "soft");
+        s.claim = claim;
+        s.decision = "say".into();
+        s
     }
 
     /// `{session}:{ts_ms}`, how `egress.jsonl` points at a span.
@@ -201,6 +295,13 @@ impl Span {
         format!("{}:{}", self.session_id, self.ts_ms)
     }
 }
+
+/// Span tool for a reply's claim (decision `say`).
+pub const REPLY_TOOL: &str = "reply";
+/// Span tool for a verify script run (`result` is `pass` or `fail`).
+pub const VERIFY_TOOL: &str = "verify_script";
+/// How much of a reply a `say` span keeps.
+pub const CLAIM_CAP: usize = 400;
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -215,6 +316,8 @@ pub fn redact_args(raw: &str) -> String {
     for key in [
         "password",
         "passwd",
+        "passcode",
+        "verification_code",
         "api_key",
         "apikey",
         "secret",
@@ -252,6 +355,12 @@ pub struct TurnContext {
     pub chat_id: String,
     pub turn: u32,
     pub access: String,
+    /// Who started the turn (Spike-4c). Old files read as `user`.
+    #[serde(default)]
+    pub origin: Origin,
+    /// Spike-3b: the open desktop episode, so path A spans carry its id.
+    #[serde(default)]
+    pub episode: String,
 }
 
 pub fn turn_context_path(config_dir: &Path) -> PathBuf {
@@ -322,6 +431,52 @@ pub fn read_spans(config_dir: &Path, session_id: &str) -> Result<Vec<Span>, Stri
     Ok(out)
 }
 
+/// How much of one span file [`read_spans_tail`] reads from its end.
+pub const SPAN_TAIL_BYTES: u64 = 4 * 1024 * 1024;
+
+/// The newest `max_lines` spans of `spans/<session>.jsonl`, oldest first, and
+/// how many lines were read. Only the last [`SPAN_TAIL_BYTES`] of the file are
+/// read. Unlike [`read_spans`], a line that is not a span is skipped, so one
+/// bad line never hides a whole file from search.
+pub fn read_spans_tail(config_dir: &Path, session_id: &str, max_lines: usize) -> (Vec<Span>, usize) {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = fs::File::open(span_path(config_dir, session_id)) else {
+        return (Vec::new(), 0);
+    };
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let start = len.saturating_sub(SPAN_TAIL_BYTES);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return (Vec::new(), 0);
+    }
+    let mut bytes = Vec::new();
+    if file.read_to_end(&mut bytes).is_err() {
+        return (Vec::new(), 0);
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    let mut lines: Vec<&str> = text.lines().collect();
+    if start > 0 && !lines.is_empty() {
+        // The first line is cut mid-way by the seek.
+        lines.remove(0);
+    }
+    let mut out = Vec::new();
+    let mut read = 0usize;
+    for line in lines.iter().rev() {
+        if read == max_lines {
+            break;
+        }
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        read += 1;
+        if let Ok(span) = serde_json::from_str::<Span>(line) {
+            out.push(span);
+        }
+    }
+    out.reverse();
+    (out, read)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,6 +504,21 @@ mod tests {
         let r = redact_args(raw);
         assert!(r.contains("%redacted%"), "{r}");
         assert!(!r.contains("s3cret"), "{r}");
+    }
+
+    #[test]
+    fn reply_span_redacts_shaped_and_held_secrets_and_caps_the_claim() {
+        let s = Span::reply(
+            "chat-r",
+            "Logged in with hunter2222 and key sk-abcdefghijklmnopqrstuv, then done.",
+            &["hunter2222".into()],
+        );
+        assert_eq!(s.claim, "Logged in with [redacted] and key [redacted], then done.");
+        assert_eq!((s.tool.as_str(), s.decision.as_str(), s.args_redacted.as_str()), (REPLY_TOOL, "say", "{}"));
+        let long = Span::reply("chat-r", &"a".repeat(CLAIM_CAP + 50), &[]);
+        assert_eq!(long.claim.chars().count(), CLAIM_CAP);
+        let r = redact_args(r#"{"passcode":"9911","verification_code":"424242"}"#);
+        assert!(!r.contains("9911") && !r.contains("424242"), "{r}");
     }
 
     #[test]
@@ -380,9 +550,14 @@ mod tests {
             chat_id: "chat-9".into(),
             turn: 4,
             access: "full".into(),
+            origin: Origin::Proactive,
+            episode: "ep-1".into(),
         };
         write_turn_context(&dir, &ctx).unwrap();
         assert_eq!(read_turn_context(&dir), ctx);
+        // A turn file from before Spike-4c has no origin: it reads as the user's.
+        fs::write(turn_context_path(&dir), r#"{"chat_id":"chat-1","turn":2,"access":"supervised"}"#).unwrap();
+        assert_eq!(read_turn_context(&dir).origin, Origin::User);
     }
 
     #[test]
@@ -424,6 +599,7 @@ mod tests {
         for s in &got {
             assert_eq!(s.origin, Origin::User);
             assert_eq!(s.consent_ref, "");
+            assert_eq!((s.target.as_str(), s.target_rule.as_str()), ("", ""));
         }
         assert_eq!(got[0].path, "A");
         assert_eq!(got[0].ui_changed, Some(true));
@@ -436,5 +612,10 @@ mod tests {
         let back: Span = serde_json::from_str(&line).unwrap();
         assert_eq!(back, tagged);
         assert_eq!(tagged.span_ref(), format!("chat-old:{}", tagged.ts_ms));
+        // Spike-2b: a click span adds its target and rule; nothing else changes.
+        let click = Span::soft_allow("chat-old", "click", "{}", "parked", "c", AccessMode::Full, "cua").with_target("ax", "send:Send");
+        let line = serde_json::to_string(&click).unwrap();
+        assert!(line.ends_with(r#","consent_ref":"","target":"ax","target_rule":"send:Send"}"#), "{line}");
+        assert_eq!(serde_json::from_str::<Span>(&line).unwrap(), click);
     }
 }

@@ -1500,9 +1500,13 @@ pub fn spawn_grok_p_stream(
     Ok((pid, rx))
 }
 
-fn grok_p_child(
+/// The argv of one `grok -p` turn (interactive composer, chat kick, and
+/// background runs all spawn through here). Ask deny, the cabin's hard-deny
+/// rules, and the rules for GB's own computer-use tools add only `--deny`
+/// pairs (`apply_desktop_spawn_args`).
+pub fn grok_p_argv(
     prompt: &str,
-    cwd: &Path,
+    cwd: &str,
     resume: Option<&str>,
     always_approve: bool,
     auto: bool,
@@ -1511,9 +1515,8 @@ fn grok_p_child(
     mode: SessionMode,
     attach: GrokPAttach<'_>,
     fork: bool,
-    skip_cabin_home: bool,
     worktree: bool,
-) -> Result<Child, String> {
+) -> Vec<String> {
     let GrokPAttach {
         image,
         learned,
@@ -1521,16 +1524,9 @@ fn grok_p_child(
         desktop,
         hard_deny,
     } = attach;
-    let program = find_grok().ok_or_else(|| {
-        "Grok Build CLI missing — install from x.ai/cli or set GROKHUB_GROK".to_string()
-    })?;
-    if crate::locate::grok_marked_unusable(&program) {
-        return Err(crate::locate::doctor_broken_hint().into());
-    }
-    let cwd_path = ensure_session_cwd(cwd)?;
     let mut args = crate::locate::single_turn_args_full(
         prompt,
-        &cwd_path.display().to_string(),
+        cwd,
         resume,
         always_approve,
         auto,
@@ -1560,7 +1556,43 @@ fn grok_p_child(
     } else {
         PermissionMode::Ask
     };
-    args = crate::locate::apply_desktop_spawn_args(args, perm, mode, desktop);
+    crate::locate::apply_desktop_spawn_args(args, perm, mode, desktop)
+}
+
+fn grok_p_child(
+    prompt: &str,
+    cwd: &Path,
+    resume: Option<&str>,
+    always_approve: bool,
+    auto: bool,
+    model: Option<&str>,
+    effort: Option<&str>,
+    mode: SessionMode,
+    attach: GrokPAttach<'_>,
+    fork: bool,
+    skip_cabin_home: bool,
+    worktree: bool,
+) -> Result<Child, String> {
+    let program = find_grok().ok_or_else(|| {
+        "Grok Build CLI missing — install from x.ai/cli or set GROKHUB_GROK".to_string()
+    })?;
+    if crate::locate::grok_marked_unusable(&program) {
+        return Err(crate::locate::doctor_broken_hint().into());
+    }
+    let cwd_path = ensure_session_cwd(cwd)?;
+    let args = grok_p_argv(
+        prompt,
+        &cwd_path.display().to_string(),
+        resume,
+        always_approve,
+        auto,
+        model,
+        effort,
+        mode,
+        attach,
+        fork,
+        worktree,
+    );
     let mut cmd = Command::new(&program);
     cmd.args(&args)
         .current_dir(&cwd_path)
@@ -2368,6 +2400,59 @@ pub fn wait_event(rx: &Receiver<AcpEvent>, timeout: Duration) -> Result<AcpEvent
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Spike-1c path D: the argv every composer, chat-kick, and background
+    /// `grok -p` gets. Built-in computer use is denied under Auto or Always
+    /// with desktop control on, and under Readonly whatever the pill; Ask
+    /// with desktop control on leaves it to path B. Never an allow for it,
+    /// never a looser mode than the pill.
+    #[test]
+    fn grok_p_argv_denies_builtin_cu_on_auto_always_and_readonly() {
+        let hard = ["Bash(rm *)"];
+        for perm in [PermissionMode::AlwaysApprove, PermissionMode::Auto, PermissionMode::Ask] {
+            for desktop in [true, false] {
+                let (always, auto) = perm.composer_headless_flags();
+                let argv = grok_p_argv(
+                    "hi",
+                    "/work",
+                    None,
+                    always,
+                    auto,
+                    None,
+                    None,
+                    SessionMode::Chat,
+                    GrokPAttach {
+                        image: None,
+                        learned: "",
+                        deny: perm.needs_approval(),
+                        desktop,
+                        hard_deny: &hard,
+                    },
+                    false,
+                    false,
+                );
+                let pairs = |flag: &str| -> Vec<String> {
+                    argv.windows(2).filter(|w| w[0] == flag).map(|w| w[1].clone()).collect()
+                };
+                let denied = pairs("--deny");
+                let want = perm != PermissionMode::Ask || !desktop;
+                for rule in crate::locate::BUILTIN_CU_DENY {
+                    assert_eq!(denied.iter().any(|d| d == rule), want, "{perm:?} desktop={desktop}: {rule} {argv:?}");
+                    assert!(!pairs("--allow").iter().any(|a| a == rule), "{argv:?}");
+                }
+                assert!(denied.iter().any(|d| d == "Bash(rm *)"), "{argv:?}");
+                let always_flags = argv.iter().filter(|a| *a == "--always-approve").count();
+                assert_eq!(always_flags, usize::from(perm == PermissionMode::AlwaysApprove), "{argv:?}");
+                let modes = pairs("--permission-mode");
+                let want_modes: Vec<String> = match perm {
+                    PermissionMode::Auto => vec!["auto".into()],
+                    PermissionMode::Ask => vec!["dontAsk".into()],
+                    PermissionMode::AlwaysApprove => vec![],
+                };
+                assert_eq!(modes, want_modes, "{perm:?}: {argv:?}");
+            }
+        }
+    }
 
     #[test]
     fn spawn_opts_missing_grok() {

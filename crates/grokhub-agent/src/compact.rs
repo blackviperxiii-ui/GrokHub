@@ -609,6 +609,7 @@ mod tests {
             output_tokens: output,
             reasoning_tokens: 0,
             cost_in_usd_ticks: cost,
+            cached_tokens: 0,
         }
     }
 

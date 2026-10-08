@@ -826,6 +826,7 @@ mod tests {
                 output_tokens: 1,
                 reasoning_tokens: 0,
                 cost_in_usd_ticks: 4,
+                cached_tokens: 0,
             },
         );
         let bad = review_write(&garbage, true, JUDGE_TIMEOUT);
@@ -1511,12 +1512,14 @@ mod tests {
             output_tokens: 4,
             reasoning_tokens: 1,
             cost_in_usd_ticks: 20,
+            cached_tokens: 0,
         };
         let judge = Usage {
             input_tokens: 3,
             output_tokens: 2,
             reasoning_tokens: 5,
             cost_in_usd_ticks: 7,
+            cached_tokens: 0,
         };
         let fake = LoopFake {
             turns: Mutex::new(vec![write_turn("used.txt", model.clone()), done()]),

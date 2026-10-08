@@ -8,7 +8,7 @@
 //! commands that name this file.
 //!
 //! Scopes (P5) are all off: a scope reads as on only while a user grant for it
-//! is active. Nothing reads a scope yet; the indexers arrive in Spike-8.
+//! is active. Spike-8a's indexers (`crate::indexers`) read a scope only while it is.
 //!
 //! Spike-4b: every line is sealed at rest (`at_rest`, key in the OS keyring).
 //! With the keyring down or the key missing the ledger reads as locked: no
@@ -140,9 +140,11 @@ impl Scope {
 
 /// True when a path touches a hard exclude (`.ssh`, browser `Cookies`, …).
 pub fn scope_excluded(path: &str) -> bool {
-    let p = path.replace('\\', "/");
-    SCOPE_HARD_EXCLUDES.iter().any(|x| {
-        p == *x
+    // Case-blind: Windows and macOS paths are (`.SSH`, `cookies`), and
+    // excluding a little more on Linux fails closed.
+    let p = path.replace('\\', "/").to_lowercase();
+    SCOPE_HARD_EXCLUDES.iter().map(|x| x.to_lowercase()).any(|x| {
+        p == x
             || p.ends_with(&format!("/{x}"))
             || p.contains(&format!("/{x}/"))
             || p.starts_with(&format!("{x}/"))

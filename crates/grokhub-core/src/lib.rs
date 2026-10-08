@@ -1,4 +1,4 @@
-//! Shared GrokHub brain. Linux, Windows, and Android must call this — not a second protocol.
+//! Shared GrokHub brain. Linux and Windows call this — not a second protocol.
 
 pub mod amr;
 pub mod appearance;
@@ -18,6 +18,7 @@ pub mod chips;
 pub mod connector;
 pub mod consult;
 pub mod context;
+pub mod cursor_motion;
 pub mod desktop_entry;
 pub mod desktop_mcp;
 pub mod diagnostics;
@@ -48,15 +49,19 @@ pub mod models;
 pub mod oauth;
 pub mod openclaw;
 pub mod organs;
+pub mod outcome;
 pub mod pair;
 pub mod paths;
+pub mod proactive;
 pub mod project;
 pub mod pulse;
 pub mod recipe;
 pub mod pii;
+pub mod proactive_auto;
 pub mod redact;
 pub mod reflect;
 pub mod review;
+pub mod self_review;
 pub mod rewind;
 pub mod shortcuts;
 pub mod skill;
@@ -204,8 +209,8 @@ pub use context::{
 };
 pub use desktop_entry::{desktop_bin_path, desktop_entry_uses_prefix_bin, rewrite_desktop_entry};
 pub use desktop_mcp::{
-    apply_desktop_mcp_args, desktop_mcp_args, stamp_halts, DesktopPermMode, DESKTOP_MCP_RULE,
-    DESKTOP_MCP_SERVER,
+    apply_desktop_mcp_args, desktop_mcp_args, stamp_halts, DesktopPermMode, CABIN_CU_SERVERS, CUA_MCP_RULE,
+    CUA_MCP_SERVER, DESKTOP_MCP_RULE, DESKTOP_MCP_SERVER, SELF_MCP_SERVER,
 };
 pub use diagnostics::diagnostics_bundle;
 pub use doctor::{
@@ -220,7 +225,7 @@ pub use feel::{
     PRESS_EXPANSION, PRESS_SECS, SELECT_SECS, ALWAYS_SETTLE_SECS, GLOW_SETTLE_SECS,
 };
 pub use frame::{
-    encode_b64, frame_bytes, jpeg_data_url, store_frame, FrameGet, PresenceFrame, FRAME_CAP,
+    encode_b64, frame_bytes, jpeg_data_url, store_frame, PresenceFrame, FRAME_CAP,
 };
 pub use goal::{
     blend_thread_goal, compact_keep_pin, compact_keep_start_from, flush_visible_goal,
@@ -252,6 +257,10 @@ pub use heartbeat::{
 };
 pub use heartbeat_throttle::{
     ActOutcome, HeartbeatPace, HeartbeatThrottle, PaceGate, PaceHold, ProactiveAct, PACE_NORMAL,
+};
+pub use proactive_auto::{
+    ceiling_allows, AccessTier, AutoAct, AutoBudget, AutoCandidate, CeilingCtx, CeilingMiss, PillMode,
+    AUTO_CONFIDENCE_MIN, AUTO_PER_DAY, AUTO_P_MIND_MAX, AUTO_REVERSIBILITY,
 };
 pub use history::{
     dedupe_hits, palette_file_shown, palette_forget_stale_walk, palette_row_action,
@@ -312,7 +321,7 @@ pub use imagine_auth::{
 };
 pub use xai_signin::{choose_xai_bearer, delete_xai_oauth, load_xai_oauth, OAuthAccountStore};
 pub use inhabit::{
-    can_inhabit, inhabit_bundle_usable, inhabit_claim_allowed, inhabit_ready, InhabitBundle,
+    can_inhabit, inhabit_bundle_usable, inhabit_ready, InhabitBundle,
 };
 pub use learning::{
     apply_local_lessons, extract_insights, insight_key_for_fact, insight_pin, is_actionable_need,
@@ -415,7 +424,7 @@ pub use slash::{
 };
 pub use state::{
     clear_pending_after_complete, inbox_claim_ready, load_hub_state, merge_put_snapshot,
-    save_hub_state, state_for_disk, CompleteError, HubState, MintRealtimeFn, PairError,
+    save_hub_state, state_for_disk, CompleteError, HubState, PairError,
     DEFAULT_PORT, HUB_KIND,
 };
 pub use stream::{
@@ -481,14 +490,13 @@ pub use verify::{
     verify_script_path, VerifyResult,
 };
 pub use voice::{
-    cabin_eyes_for_turn, client_secret_ws_protocol, client_secrets_body, client_secrets_url,
-    dedicated_voice_model, encode_input_audio_append, encode_session_update, hey_grok_on_press,
+    cabin_eyes_for_turn, dedicated_voice_model, encode_input_audio_append, encode_session_update, hey_grok_on_press,
     hey_grok_route, hey_grok_starts_ptt, is_voice_error, live_pcm_argv, live_pcm_frame_bytes,
-    parse_client_secret, parse_realtime_event, parse_stt_text, parse_voice_event_text,
+    parse_realtime_event, parse_stt_text, parse_voice_event_text,
     pcm_from_capture, ptt_after_speak, ptt_after_stt, realtime_can_connect,
     redact_cabin_from_memory, reduce_voice_state, should_attach_cabin_frame,
     should_capture_before_chat, should_mute_speaker, speech_can_connect, stt_multipart, stt_url,
-    transcribe_route, tts_request_body, tts_url, voice_can_connect, voice_client_secret_denied,
+    transcribe_route, tts_request_body, tts_url, voice_can_connect,
     voice_log_role, voice_mode_active, voice_mode_label, voice_session_url, voice_state_after_ptt_stt,
     voice_stream_token, voice_strip_visible, voice_transcript_sends_chat, voice_tts_script,
     CabinEyesState, HeyGrokAction, HeyGrokRoute, PttLine, TranscribeRoute, VoiceEvent, VoiceRole,
@@ -496,7 +504,7 @@ pub use voice::{
 };
 pub use windshield::{
     build_windshield, filter_atspi_rows, is_interactive_role, keep_atspi_row, lock_check_titles,
-    parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse, pick_named_row, rank_atspi_rows,
+    control_at, parse_atspi_line, parse_wmctrl_line, parse_xdotool_mouse, pick_named_row, rank_atspi_rows,
     refused_lock, tab_list_from_rows, window_name_from_atspi, window_name_from_wmctrl,
     windshield_browser_line, windshield_prompt, AtspiRow, PendingStep, WindshieldFrame,
 };
@@ -525,7 +533,7 @@ pub use update_feed::{
     automation_home_note, clear_less_mute, hide_home_source, home_event_cards, mute_less_like,
     record_home_floors, refresh_event_why, runs_latest_line, source_hidden, surfaces_on_home,
     unhide_home_source, HOME_HIDDEN_NOTE, LESS_MUTE_MS,
-    post_update, release_quiet_hold, resume_needs_fresh_chat, schedule_created_card,
+    post_update, release_quiet_hold, resume_needs_fresh_chat, schedule_created_card, self_change_card, done_for_you_card, DoneForYou,
     suggestion_card, tick_feed_pulse, visible_digests, visible_ideas, visible_updates,
     digest_lookup_prompt, digest_steer, drop_dead_links, parse_lookup, public_http_url, post_help, remember_dismissed_source,
     remember_turned_down, turned_down_titles, turned_down_topic,
@@ -680,12 +688,9 @@ mod tests {
             data_url: "data:image/jpeg;base64,AAAA".into(),
             at: 1,
         }));
-        st.console_api_key = "xai-should-not-persist".into();
         let disk = state_for_disk(&st);
         let s = serde_json::to_string(&disk).unwrap();
         assert!(!s.contains("data:image"));
-        assert!(!s.contains("xai-should-not-persist"));
-        assert!(disk.console_api_key.is_empty());
         assert!(s.contains(&st.device_id));
     }
 }

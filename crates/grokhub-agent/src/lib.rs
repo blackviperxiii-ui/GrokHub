@@ -3,22 +3,27 @@
 mod auto_review;
 mod client;
 mod compact;
+pub mod episode;
 mod eval;
 mod events;
 mod gate;
 pub mod harness;
 mod hooks;
 mod image_budget;
+pub mod indexers;
 pub mod mcp;
 mod memory;
 mod models;
 pub mod perm;
 pub mod plugins;
+pub mod repair;
 mod prompt;
 mod research;
 mod retry;
+pub mod route;
 mod run;
 mod scan;
+pub mod self_manage;
 mod session;
 mod session_tools;
 mod skills;
@@ -37,7 +42,7 @@ pub use client::{
 };
 pub use compact::{estimate_input_tokens, manual_compact_targets_native, message_text};
 pub use eval::{parse_args, reject_live, render_report, run_suite, ItemResult, Opts, SUITE_ITEMS};
-pub use events::{meter_for, Engine, EngineParts, NativeEngine, StampHalt};
+pub use events::{meter_for, Engine, EngineParts, EpisodeSeed, NativeEngine, StampHalt};
 pub use gate::{ClosedPermits, Gate, PermAnswer, PermMode, PermitInbox, PermitNote, PermitWait};
 pub use harness::{AccessMode, ComputerUseBackend, GateOutcome, HardClass, APPROVAL_GATE_VIOLATION};
 pub use hooks::{
@@ -49,8 +54,9 @@ pub use mcp::{
     ElicitView,
 };
 pub use memory::{
-    dream, first_turn_injection, flush_pending, is_dream_command, is_flush_command,
-    queue_memory_status, remember, take_memory_status, INJECT_BYTE_CAP, INJECT_TOKEN_CAP,
+    amr_enabled, amr_store, dream, first_turn_injection, flush_pending, is_dream_command,
+    is_flush_command, queue_memory_status, remember, remember_note_text, take_memory_status,
+    INJECT_BYTE_CAP, INJECT_TOKEN_CAP,
 };
 pub use models::{
     context_length_for, parse_listed_models, parse_xai_models, pick_model, ListedModel,

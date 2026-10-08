@@ -12,3 +12,5 @@ serde_json.workspace = true
 getrandom.workspace = true
 hex.workspace = true
 sha2 = "0.10"
+# AMR `index.sqlite` FTS5. Same bundled sqlite as grokhub-agent.
+rusqlite = { version = "0.32", features = ["bundled"] }
