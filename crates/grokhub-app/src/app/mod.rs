@@ -1449,6 +1449,8 @@ impl Cabin {
             #[cfg(not(test))]
             crate::desktop_mcp::maybe_register_on_start(c.cfg.desktop_control);
             #[cfg(not(test))]
+            crate::self_mcp::maybe_register_on_start();
+            #[cfg(not(test))]
             crate::desktop_mcp::set_desktop_enabled(c.cfg.desktop_control);
         }
         c

@@ -1,6 +1,6 @@
 //! Workspace tools. `execute` stays read-only. `dispatch` runs the gated set.
 
-mod connections;
+pub(crate) mod connections;
 pub(crate) mod control;
 mod desktop;
 mod glob;
@@ -102,6 +102,7 @@ pub fn schemas_for(gate: &Gate) -> Vec<Value> {
     let desk = if gate.desktop { desktop::schemas() } else { Vec::new() };
     let native = desk.len();
     tools.extend(desk);
+    tools.extend(crate::self_manage::native_schemas());
     tools.extend(crate::mcp::schema_tools(native));
     tools
 }
@@ -132,6 +133,10 @@ pub fn dispatch(ctx: &ToolCtx<'_>, name: &str, arguments: &str) -> ToolOutput {
     };
     if is_readonly(name) {
         return dispatch_readonly(ctx, name, &args);
+    }
+    if crate::self_manage::self_tool(name).is_some() {
+        // Path E: the loop already asked `harness::decide` (via `decide_with`).
+        return crate::self_manage::run_native(name, &args);
     }
     if let Some(output) = crate::mcp::try_dispatch(name, &args, ctx.stop) {
         return output;
