@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+The release notes now name the real Windows installer, `GrokHub-Setup-2.10.96.exe` with no `v`, and mention the portable `grokhub-windows-v2.10.96.zip`.
+
 ## 2.10.96 — 2026-10-08
 
 Chat on the native engine works again: GrokHub sent `connection_add` and `connection_disable` to the model twice (once from Spike-5b's connection tools, once from Spike-5c's self-manage tools), and the API refused every turn with "Duplicate function definition provided". The self-manage table is now the only source, and a native engine error no longer reads as "ACP session/new failed". When Update stops because new files in your GrokHub folder are in the way, it now says so instead of asking you to commit or stash.

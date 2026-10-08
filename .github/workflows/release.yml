@@ -23,6 +23,9 @@ jobs:
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libgl1-mesa-dev libwayland-dev libasound2-dev
       - run: ./scripts/make-release-bundle.sh
+      - name: Version without the v
+        id: ver
+        run: echo "num=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -34,8 +37,9 @@ jobs:
             **Linux:** extract `grokhub-linux-${{ github.ref_name }}.tar.gz` and run `./install.sh`,
             or `cargo install --path crates/grokhub-app` from a clone.
 
-            **Windows:** run `GrokHub-Setup-${{ github.ref_name }}.exe` (no admin).
-            Installs to `%LOCALAPPDATA%\Programs\GrokHub`.
+            **Windows:** run `GrokHub-Setup-${{ steps.ver.outputs.num }}.exe` (no admin).
+            Installs to `%LOCALAPPDATA%\Programs\GrokHub`. Or unzip the portable
+            `grokhub-windows-${{ github.ref_name }}.zip`.
 
   windows-installer:
     runs-on: windows-latest
