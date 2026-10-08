@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.10.96 — 2026-10-08
 
 Bug hunt (`docs/audits/bug-hunt-2026-10-08.md`). The hard-action check no longer misses a delete or shutdown after a newline, inside `$(...)` or backticks, or behind `env`, `time`, `nice`, `timeout`, `pkexec` or `busybox`, and it now catches MCP tools named like `reply`, `forward`, `sendMessage`, `send_sms`, `post_tweet`, `create_charge`, `buy`, `transfer` or `drop_table`. A one-time approval no longer covers a longer command that contains it. Step logs no longer keep `Authorization` headers, `x-api-key`, access or refresh tokens or client secrets. Long host output, the nightly review and the step log no longer crash on accented or CJK text at the size cap. A permissions file saved with a BOM keeps its Deny rules, and a file that can't be read is never overwritten. Screenshots work again on GNOME with a non-ASCII Pictures folder. On Windows, the maximize button restores again. Quit from the tray no longer hangs on a busy MCP server, and a clean exit no longer leaves a pid file that can stop the next launch. A failed settings or key save now says so instead of "Saved". rustls is updated for RUSTSEC-2026-0285.
 
@@ -19,6 +19,11 @@ Router R2a (model healing). Auto now picks the model too, from a routing table G
 Router R1 (automatic effort). GrokHub now picks how hard to think on every step by itself: low for routine work, higher for hard work, one step up after a failed tool, a rejected check or a correction, and back down after clean steps. The effort dropdown, the Settings effort row and `/effort` are gone (`/effort` now says effort is automatic; a saved effort is dropped once). A read-only "Auto · Medium" chip shows the current level; hover for the reason, click for `/why`. Say "think hard" or "keep it quick" to steer one task. Background work keeps the same effort as before, preparing a hard action never goes below High, and the model picker is unchanged with Auto first.
 
 Router R0 (watch only). GrokHub now keeps its own list of which Grok models exist, which your plan or key can use, and which are healthy (`models/registry.json`, refreshed 30 seconds after start, every 6 hours, and when your sign-in or Grok Build version changes), builds a profile for each new model with a small capped check (only when it's included in your plan), and logs on every model call which model and effort it would have picked and why. Nothing changes yet: calls still use your model and effort. `/why` shows the last 10 reasons and `/why models` lists each model's state.
+
+- Linux: `grokhub-linux-v2.10.96.tar.gz` and AUR `pkgver=2.10.96`.
+- Windows: `GrokHub-Setup-2.10.96.exe` and `grokhub-windows-v2.10.96.zip`.
+
+## 2.10.95 — 2026-10-08
 
 Fix it (Spike-9). After a diagnose finds something, GrokHub shows one card per fix with what's wrong, what it will do, why, how to undo it and the risk. Fix it (a click, never Enter) backs up every settings file the fix touches, takes a system snapshot when snapper, Timeshift, btrfs or System Restore is there, then hands each step to Grok Build one at a time; deleting files, removing apps or drivers, boot and partition changes park a hard card, and wiping a disk is never done in the app. Your computer's own password prompt is yours to answer. GrokHub checks again and only says fixed when the problem is gone; Undo fix puts the files back exactly. Fixing never runs unattended.
 
@@ -50,11 +55,7 @@ Memory repo M1–M2 (only with `"memory_backend": "amr"` in `app.json`): reflect
 
 Self-management ledger (Spike-5b). Connections and automations GrokHub adds, changes, or removes on its own now keep the version they replace, show a Work-tree row ("Grok added connection notes") with Undo and Keep, and appear in the next Home update; `/connections changes` and `/automations changes` list them. Agent-made connections land in the cabin's own MCP config (never `~/.grok`), deletes and token-needing connections are hard cards, a token is typed by you and sealed with your keychain key, and GrokHub adds at most 2 automations a week on its own until you keep one.
 
-Trust floor, finished (Spike-4c). Every call GrokHub itself makes now goes through the egress guard and shows up in `/privacy`: Labs web fetch (each redirect too), HTTP MCP servers, Imagine, the plugin index, Pulse previews, the GitHub tool, update checks, cited-link checks, sign-in, and local browser control (loopback, not logged). Memory sent to a place you haven't granted waits on a hard Send card and nothing goes until you click Approve. Spans and send-log lines say who started the step (you, a heartbeat act, or a scheduled job), and cabin model calls log their tokens and cost. A coverage test fails on any new fetch that skips the guard. Grok Build's own traffic stays outside, as before. No new UI beyond new `/privacy` rows. No version bump.
-
 Removed the scrapped phone/Android pairing: the phone-only hub routes (`/v1/task`, `/v1/task/:id`, `/v1/inbox`, `/v1/results`, `/v1/frame.jpg`, `/v1/voice/client-secret`), the `grokhub-ffi` C ABI crate, and phone wording on Devices, slash help, and the Always sheet. Computer-to-computer pairing, `/sync`, `/inhabit`, `/send`, and desktop voice are unchanged, and an old `hub-state.json` with phone rows still loads. No version bump.
-
-Self-management ledger (Spike-5b). Connections and automations GrokHub adds, changes, or removes on its own now keep the version they replace, show a Work-tree row ("Grok added connection notes") with Undo and Keep, and appear in the next Home update; `/connections changes` and `/automations changes` list them. Agent-made connections land in the cabin's own MCP config (never `~/.grok`), deletes and token-needing connections are hard cards, a token is typed by you and sealed with your keychain key, and GrokHub adds at most 2 automations a week on its own until you keep one.
 
 Safety loop (Spike-1a). The harness now catches a click that changed nothing, a step repeated with no effect, "done" with no check, and a claim no step backs; it retries once, backtracks, then pauses for you (hard actions never retry), and typing into a password, PIN, OTP, 2FA or verification-code field is a hard credentials action whose value never reaches spans or logs. No UI changes.
 
@@ -71,6 +72,9 @@ Clicks are checked by what they hit (Spike-2b). Before a desktop or Cua click ru
 Long supervised desktop sessions (Spike-3b). A message you type while desktop control is on starts one desktop session per chat: every step, Steer and pause shares one episode id in the trace, the Work tree heads it "Desktop session · 12 steps · 4 min" above the last frame and cursor, and it pauses after 60 steps or 30 minutes with a Continue / Stop card that counts in the needs-attention line (nothing continues on its own). On the native engine each step starts the model fresh from a 48,000-byte episode view whose older steps fold into short summaries (`zoom` opens them), hard steps still park, and the session only finishes when an independent check that sees just the goal and the final screen says VERIFY_OK. Halt, Stop or 10 idle minutes end it.
 
 Release bump list: the version strings that were in the old README (headline, both Latest rows, `--version` examples) now live in `docs/REFERENCE.md`, so `CLAUDE.md`, `.cursor/rules/repo-gates.mdc` and the versions compass list that file instead. `README.md` has no version strings. Docs only, no version bump.
+
+- Linux: `grokhub-linux-v2.10.95.tar.gz` and AUR `pkgver=2.10.95`.
+- Windows: `GrokHub-Setup-2.10.95.exe` and `grokhub-windows-v2.10.95.zip`.
 
 ## 2.10.94 — 2026-10-07
 
