@@ -42,6 +42,25 @@ pub struct NativeEngine {
     imagine_bearer: String,
     /// Who started the next prompt (Spike-4c): egress lines carry it.
     origin: crate::harness::Origin,
+    /// Spike-3b: the cabin's open desktop episode for the next prompt.
+    episode_seed: Option<EpisodeSeed>,
+    /// The episode this engine is driving, and its view.
+    episode: Option<(crate::episode::Episode, crate::episode::EpisodeView)>,
+}
+
+/// What the cabin says about the episode a prompt belongs to (Spike-3b).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpisodeSeed {
+    pub id: String,
+    pub chat_id: String,
+    pub turn: u32,
+    /// The user answered a long-run pause by typing or clicking Continue.
+    pub resume: bool,
+    /// Spans and park files live here.
+    pub config_dir: PathBuf,
+    /// Secrets the user typed this session (redacted from spans and folds).
+    pub held: Vec<String>,
+    pub access: crate::harness::AccessMode,
 }
 
 pub struct EngineParts {

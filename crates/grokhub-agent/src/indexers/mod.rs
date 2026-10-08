@@ -268,7 +268,7 @@ impl Scheduler {
         }
         self.last_run.insert(scope.key(), env.now_ms);
         let (facts, tables) = gather(&scope, env);
-        let out = write_facts(env, &scope, &grant_id, &facts, tables);
+        let out = write_facts(env, &scope, &facts, tables);
         if let TickOutcome::Ran { kind, written, known, stopped, tables } = &out {
             write_span(env.config_dir, kind, *written, *known, *stopped, tables, &grant_id);
         }
@@ -276,7 +276,7 @@ impl Scheduler {
     }
 }
 
-fn write_facts(env: &TickEnv<'_>, scope: &Scope, grant_id: &str, facts: &[Fact], tables: Vec<String>) -> TickOutcome {
+fn write_facts(env: &TickEnv<'_>, scope: &Scope, facts: &[Fact], tables: Vec<String>) -> TickOutcome {
     let kind = scope_kind(scope);
     let key = scope.key();
     let store = scope_store(env.config_dir);
@@ -312,7 +312,6 @@ fn write_facts(env: &TickEnv<'_>, scope: &Scope, grant_id: &str, facts: &[Fact],
                     Sensitivity::Plain => Sensitivity::Personal,
                     s => s,
                 },
-                consent_ref: grant_id.to_string(),
                 consent_ref: consent_ref.clone(),
             };
             match store.remember(&draft) {

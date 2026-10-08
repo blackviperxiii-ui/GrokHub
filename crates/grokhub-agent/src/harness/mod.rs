@@ -53,9 +53,6 @@
 //! node at turn end, from already-redacted span fields only; `span_search`
 //! reads `spans/*.jsonl` for History and palette search. Both only read
 //! spans and never execute anything.
-//! Spike-2b: a click is classified by the control it lands on (`hard.rs`
-//! `click_target_class`): a Send, Pay, Delete or Reset button parks before
-//! the click runs, on every path, and spans keep only the matched rule.
 
 mod access;
 mod approval;
@@ -73,8 +70,8 @@ mod hard;
 mod ladder;
 mod mindcheck;
 mod park;
-mod self_manage;
 mod path_d;
+mod self_manage;
 mod span;
 mod span_search;
 mod trail;

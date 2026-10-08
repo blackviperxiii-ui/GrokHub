@@ -214,6 +214,10 @@ pub(super) struct HarnessState {
     pub lock_seen: Option<(Instant, Option<hx::Locked>)>,
     /// `/privacy` output on its way from the reader thread.
     pub privacy_rx: Option<mpsc::Receiver<String>>,
+    /// `/diagnose` or a "check my computer" answer on its way (Spike-8b).
+    pub diagnose_rx: Option<mpsc::Receiver<(String, bool)>>,
+    /// The running diagnose came from `/diagnose`, so it posts as a slash result.
+    pub diagnose_slash: bool,
     /// Settings → Permissions: the folder typed for a new files scope.
     pub scope_folder: String,
     /// Settings → Permissions: the browser picked for a history scope.
@@ -236,6 +240,8 @@ pub(super) struct HarnessState {
     pub work_rows: Vec<super::change_undo::ChangeRow>,
     /// The rows of the last day were read back from disk.
     pub work_rows_loaded: bool,
+    /// Ledger lines another process wrote (`grokhub --mcp-self`, Spike-5c).
+    pub ledger_watch: super::change_undo::LedgerWatch,
     /// True only while `send_from_composer` hands the user's own typed line
     /// to `send_chat`. `/skills undo` and `/skills restore` act on it; from
     /// anywhere else they only show the Undo rows.
@@ -1329,9 +1335,9 @@ impl Cabin {
                 self.resolve_grant_full(grant, "Jeremy kept Supervised");
             }
         }
-        self.paint_work_rows(ui);
         // Spike-8a: in-context scope asks, same card shape, click only.
         self.paint_scope_asks(ui);
+        self.paint_work_rows(ui);
     }
 
     /// An inbox row asked for this card: bring what was just painted (from

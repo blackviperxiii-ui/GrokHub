@@ -43,7 +43,17 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     f.write_all(bytes).map_err(|e| e.to_string())?;
     f.sync_all().map_err(|e| e.to_string())?;
     drop(f);
-    fs::rename(&tmp, path).map_err(|e| {
+    // Windows refuses a replace while another writer's replace holds the
+    // destination; that clears within a few ms.
+    let mut renamed = fs::rename(&tmp, path);
+    for _ in 0..5 {
+        if renamed.is_ok() || !cfg!(windows) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        renamed = fs::rename(&tmp, path);
+    }
+    renamed.map_err(|e| {
         let _ = fs::remove_file(&tmp);
         e.to_string()
     })?;
@@ -1582,6 +1592,27 @@ mod tests {
             atomic.contains("sync_all") && atomic.contains("rename"),
             "atomic_write must stay fsync+rename: {atomic}"
         );
+    }
+
+    /// A background persist and a ledgered save can write automations.json
+    /// at once; neither may lose its temp file to the other's rename.
+    #[test]
+    fn two_writers_of_one_file_both_succeed() {
+        let root = test_config_root("atomic-two");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("root");
+        let path = root.join("automations.json");
+        let writers: Vec<_> = (0..2)
+            .map(|w| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    (0..300).filter(|i| atomic_write(&path, format!("[{w},{i}]").as_bytes()).is_err()).count()
+                })
+            })
+            .collect();
+        let failed: usize = writers.into_iter().map(|h| h.join().unwrap()).sum();
+        assert_eq!(failed, 0);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[cfg(unix)]

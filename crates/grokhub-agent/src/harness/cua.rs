@@ -672,7 +672,7 @@ mod tests {
     }
 
     fn turn(dir: &Path) {
-        write_turn_context(dir, &TurnContext { chat_id: "chat-c".into(), turn: 2, access: "supervised".into(), origin: Default::default() }).unwrap();
+        write_turn_context(dir, &TurnContext { chat_id: "chat-c".into(), turn: 2, access: "supervised".into(), ..Default::default() }).unwrap();
     }
 
     fn text_of(reply: &str) -> String {
@@ -836,7 +836,6 @@ mod tests {
     #[test]
     fn hermes_clicks_park_by_their_ax_label_before_the_click_is_sent() {
         let dir = test_dir("cua-hermes");
-        write_turn_context(&dir, &TurnContext { chat_id: "chat-h".into(), turn: 1, access: "full".into(), origin: Default::default() }).unwrap();
         write_turn_context(&dir, &TurnContext { chat_id: "chat-h".into(), turn: 1, access: "full".into(), ..Default::default() }).unwrap();
         let fake = Fake::default();
         *fake.tree.borrow_mut() = [
