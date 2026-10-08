@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+Chat on the native engine works again: GrokHub sent `connection_add` and `connection_disable` to the model twice (once from Spike-5b's connection tools, once from Spike-5c's self-manage tools), and the API refused every turn with "Duplicate function definition provided". The self-manage table is now the only source, and a native engine error no longer reads as "ACP session/new failed". When Update stops because new files in your GrokHub folder are in the way, it now says so instead of asking you to commit or stash.
+
+Fork is removed. The "Long thread" and "Context is half full" offer under the chat, its Fork button and the "How fork works" card are gone, along with `/fork`, the Fork button on native History rows and the Branch markers on the History page. The context usage bar stays, and `/bg` still runs on its own copy of the chat's session.
+
 Router R1 (automatic effort). GrokHub now picks how hard to think on every step by itself: low for routine work, higher for hard work, one step up after a failed tool, a rejected check or a correction, and back down after clean steps. The effort dropdown, the Settings effort row and `/effort` are gone (`/effort` now says effort is automatic; a saved effort is dropped once). A read-only "Auto · Medium" chip shows the current level; hover for the reason, click for `/why`. Say "think hard" or "keep it quick" to steer one task. Background work keeps the same effort as before, preparing a hard action never goes below High, and the model picker is unchanged with Auto first.
 
 Router R0 (watch only). GrokHub now keeps its own list of which Grok models exist, which your plan or key can use, and which are healthy (`models/registry.json`, refreshed 30 seconds after start, every 6 hours, and when your sign-in or Grok Build version changes), builds a profile for each new model with a small capped check (only when it's included in your plan), and logs on every model call which model and effort it would have picked and why. Nothing changes yet: calls still use your model and effort. `/why` shows the last 10 reasons and `/why models` lists each model's state.
