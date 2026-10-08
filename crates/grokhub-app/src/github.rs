@@ -11,6 +11,11 @@ pub fn run_github_tool(tool: &str, args: &str, token: &str) -> String {
         Err(e) => return e,
     };
     let url = format!("https://api.github.com{path}");
+    // EgressGuard (Spike-4c): the model picked the tool and its args, so the
+    // request is chat. The token is a header and never reaches the log.
+    if let Err(why) = crate::xai::egress_ok(&url, &[grokhub_agent::harness::DataClass::Chat]) {
+        return why;
+    }
     let resp = match ureq::get(&url)
         .set("authorization", &format!("Bearer {}", token.trim()))
         .set("user-agent", "GrokHub")
