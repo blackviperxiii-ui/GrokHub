@@ -227,32 +227,6 @@ impl Cabin {
                     self.kick_imagine();
                 }
             }
-            Slash::Fork => {
-                let sid = self
-                    .threads
-                    .get(self.thread_idx)
-                    .and_then(|t| t.grok_session.clone());
-                let cwd = self
-                    .threads
-                    .get(self.thread_idx)
-                    .and_then(|t| t.grok_cwd.clone());
-                let user_home = self
-                    .threads
-                    .get(self.thread_idx)
-                    .map(|t| t.grok_user_home)
-                    .unwrap_or(false);
-                self.new_thread(false);
-                if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                    t.grok_session = sid;
-                    t.grok_cwd = cwd;
-                    t.grok_user_home = user_home;
-                    t.grok_fork = true;
-                    t.title = "Fork".into();
-                }
-                self.acp = None;
-                self.status =
-                    "Forked — next send starts a new Grok session from this history".into();
-            }
             Slash::Workflow(name) => {
                 self.send_grok_slash(&format!("/workflow {name}"));
                 self.status = format!("Workflow {name}");
@@ -1024,15 +998,11 @@ impl Cabin {
                 self.show_native_session_info();
                 true
             }
-            Slash::Fork => {
-                self.fork_native_thread();
-                true
-            }
             Slash::Rewind => {
                 // Native sessions are append-only JSONL. Dropping only the bubble would
                 // leave the reply in the model's history, so this says so instead.
                 self.status =
-                    "N/A on native threads: the session is append-only. Use /fork to branch."
+                    "N/A on native threads: the session is append-only."
                         .into();
                 true
             }
@@ -1209,47 +1179,6 @@ impl Cabin {
         self.inspect_text = lines.join("\n");
         self.nav = Nav::Connectors;
         self.status = "Native session".into();
-    }
-
-    fn fork_native_thread(&mut self) {
-        let (sid, cwd, user_home) = self
-            .threads
-            .get(self.thread_idx)
-            .map(|thread| {
-                (
-                    thread.grok_session.clone(),
-                    thread.grok_cwd.clone(),
-                    thread.grok_user_home,
-                )
-            })
-            .unwrap_or((None, None, false));
-        let forked = sid
-            .as_deref()
-            .filter(|id| !id.trim().is_empty())
-            .and_then(|id| grokhub_agent::fork_session(id).ok());
-        self.new_thread(false);
-        if let Some(thread) = self.threads.get_mut(self.thread_idx) {
-            thread.native = true;
-            thread.grok_fork = true;
-            thread.title = "Fork".into();
-            thread.grok_user_home = user_home;
-            if let Some(info) = forked {
-                thread.grok_session = Some(info.id);
-                thread.grok_cwd = if info.cwd.trim().is_empty() {
-                    cwd
-                } else {
-                    Some(info.cwd)
-                };
-                self.status = "Forked the native session".into();
-            } else {
-                thread.grok_session = None;
-                thread.grok_cwd = cwd;
-                self.status = "Forked — native session starts fresh".into();
-            }
-        }
-        self.acp = None;
-        self.stamp_current_access();
-        self.persist();
     }
 
     fn native_usage_status(&self) -> String {
