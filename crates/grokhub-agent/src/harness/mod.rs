@@ -23,9 +23,16 @@
 //! personal and sensitive AMR nodes) with a key held in the OS keyring, and
 //! fails closed without it.
 //!
-//! Spike-5 slice: `changes` (ChangeLedger for skills) keeps every version a
-//! self-managed skill write replaces; undo and restore need a user's typing
-//! or click (`UndoAsk`).
+//! Spike-5: `changes` (ChangeLedger for skills, connections, and automations)
+//! keeps every version a self-managed write replaces; undo, restore, and Keep
+//! need a user's typing or click (`UndoAsk`). `self_manage` holds the
+//! connection and automation targets and the new-automation cap (Spike-5b).
+//!
+//! Spike-5a: `mindcheck` folds denies, undos, approves and Pulse dismisses
+//! into a prior per action class ("if unsure whether you'd be upset, ask").
+//! It is a soft-path input to `decide` (`Step::Proactive`), never a second
+//! gate, and never touches hard class. An agent-started memory forget is
+//! hard class Delete (`agent_forget`).
 //!
 //! Spike-5a: `mindcheck` folds denies, undos, approves and Pulse dismisses
 //! into a prior per action class ("if unsure whether you'd be upset, ask").
@@ -64,6 +71,7 @@ mod ladder;
 mod mindcheck;
 mod park;
 mod path_d;
+mod self_manage;
 mod span;
 mod span_search;
 mod trail;
@@ -89,10 +97,17 @@ pub use cua::{
     CUA_MISSING_MSG, CUA_OFF_MSG, CUA_PERMISSION_MODE, CUA_TOOLS,
 };
 pub use changes::{
-    change_id, content_hash, record_skill_change, restore_skill, skill_history_dir, skill_ledger_path,
-    undo_skill_change, Change, ChangeLedger, ChangeOp, Reverted, UndoAsk, CHANGES_DIR, HISTORY_CAP,
-    LEDGER_LINE_CAP, SKILL_LEDGER_FILE,
+    accept_change, change_id, content_hash, entry_id, findings_path, history_dir, ledger_path, read_scope_findings,
+    record_change, record_skill_change, restore_change, restore_skill, scope_guard, skill_history_dir,
+    skill_ledger_path, take_self_changes, undo_change, undo_skill_change, Change, ChangeKind, ChangeLedger,
+    ChangeOp, ChangeTarget, Reverted, ScopeFinding, SkillTarget, UndoAsk, AUTOMATION_LEDGER_FILE, CHANGES_DIR,
+    CONNECTION_LEDGER_FILE, FINDINGS_FILE, HISTORY_CAP, LEDGER_LINE_CAP, LEDGER_SCOPE_VIOLATION, SKILL_LEDGER_FILE,
 };
+pub use self_manage::{
+    automation_cap_refusal, open_connection_token, tool_origin, undo_connection, AutomationsFile, McpFile,
+    SELF_AUTOMATION_WEEK_CAP, SELF_MANAGE_TOOLS, WEEK_MS,
+};
+pub(crate) use self_manage::{forget_connection_token, seal_connection_token};
 pub use consent::{
     consent_path, grant_destination, grant_scope, revoke_grant, scope_excluded, scope_refusal,
     ConsentLedger, Grant, Scope, UserClick, CONSENT_FILE, SCOPE_HARD_EXCLUDES, SCOPE_KINDS,

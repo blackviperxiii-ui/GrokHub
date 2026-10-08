@@ -232,6 +232,13 @@ pub(super) struct HarnessState {
     /// Undo / Restore rows under the newest `/skills changes` bubble, as last
     /// read from the ChangeLedger. `None` means read it again.
     pub skill_rows: Option<Vec<super::skill_undo::SkillRow>>,
+    /// Undo rows under the newest `/connections changes` or `/automations
+    /// changes` bubble, for that kind. `None` means read it again.
+    pub change_rows: Option<(hx::ChangeKind, Vec<super::change_undo::ChangeRow>)>,
+    /// Work-tree rows for changes GrokHub made on its own (Spike-5b).
+    pub work_rows: Vec<super::change_undo::ChangeRow>,
+    /// The rows of the last day were read back from disk.
+    pub work_rows_loaded: bool,
     /// True only while `send_from_composer` hands the user's own typed line
     /// to `send_chat`. `/skills undo` and `/skills restore` act on it; from
     /// anywhere else they only show the Undo rows.
@@ -477,7 +484,8 @@ impl Cabin {
         }
         match hx::decide(Step::Ask { title: &p.title, action: &p.action }) {
             GateOutcome::Refuse { reason } => {
-                self.write_span(hx::Span::deny(&trace, &p.title, &span_args(&p.title, &p.action), &reason, "floor"), path);
+                let span = hx::Span::deny(&trace, &p.title, &span_args(&p.title, &p.action), &reason, "floor");
+                self.write_span(span.from_origin(hx::tool_origin(&p.title)), path);
                 if let Some(h) = &self.acp {
                     let _ = h.reject_permission(&p);
                 }
@@ -495,7 +503,8 @@ impl Cabin {
                 } else {
                     p.action.clone()
                 };
-                self.write_span(hx::Span::hard_park(&trace, &p.title, &span_args(&p.title, &action), class), path);
+                let span = hx::Span::hard_park(&trace, &p.title, &span_args(&p.title, &action), class);
+                self.write_span(span.from_origin(hx::tool_origin(&p.title)), path);
                 let tool = p.title.clone();
                 self.park_hard(ParkSource::Ask(p), class, path, tool, action);
                 None
@@ -1321,6 +1330,7 @@ impl Cabin {
         }
         // Spike-8a: in-context scope asks, same card shape, click only.
         self.paint_scope_asks(ui);
+        self.paint_work_rows(ui);
     }
 
     /// An inbox row asked for this card: bring what was just painted (from

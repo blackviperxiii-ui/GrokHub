@@ -182,6 +182,7 @@ mod repair_ui;
 mod scope_ui;
 mod indexer_ui;
 mod skill_undo;
+mod change_undo;
 mod glance;
 mod sidebar;
 mod pages;
@@ -5025,6 +5026,7 @@ impl eframe::App for Cabin {
         self.poll_single();
         self.poll_bg_runs();
         self.poll_native_automations();
+        self.poll_self_changes();
         self.poll_native_side_events();
         self.poll_pick();
         // While hidden, eframe hands `logic` the last shown frame's input every
