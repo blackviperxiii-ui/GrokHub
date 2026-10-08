@@ -34,6 +34,11 @@ pub fn line_id(text: &str) -> String {
     hashed_id("mem", &[&normalized])
 }
 
+/// `trail-<12 hex>` for one chat turn, so a turn has at most one trail node.
+pub fn trail_id(chat_id: &str, turn: u32) -> String {
+    hashed_id("trail", &[chat_id, &turn.to_string()])
+}
+
 /// A line with an email, phone, card, SSN or street address is personal and
 /// gets sealed. Everything else stays plain markdown.
 pub fn sensitivity_for(text: &str) -> Sensitivity {

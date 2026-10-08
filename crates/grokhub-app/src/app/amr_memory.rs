@@ -11,6 +11,9 @@
 //!   durable chip fields once (deterministic ids, so a rerun adds nothing).
 //! - M3: once a night, after the review, the dream tidies the store
 //!   (`AmrStore::dream_once`). `/memory dream` shows the latest report.
+//! - M4 (Spike-3a): a turn with harness spans leaves one `trail` node
+//!   (`harness_turn_end` → `write_turn_trail`); a fact learned from that turn
+//!   links to it with `learned_from_span`.
 
 use super::*;
 
@@ -182,6 +185,7 @@ impl Cabin {
             .filter(|f| !f.is_empty() && is_plain_text(f))
             .collect();
         let store = self.amr_store(scratch);
+        let turn = self.turn_no();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let source = format!("chat:{thread}");
@@ -198,7 +202,9 @@ impl Cabin {
                     },
                     now_ms(),
                 );
-                if let Ok(Remembered::New(_)) = result {
+                if let Ok(Remembered::New(id)) = &result {
+                    // M4: a fact learned after this turn's trail points back at it.
+                    let _ = grokhub_agent::harness::link_learned(&store, id, &thread, turn);
                     added.push(format!("+ {fact}"));
                 }
             }
