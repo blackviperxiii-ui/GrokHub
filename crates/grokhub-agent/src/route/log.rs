@@ -78,7 +78,7 @@ pub struct RouteRecord {
     pub signals: RouteSignals,
     #[serde(default)]
     pub candidates_n: u32,
-    /// What the router picked. Its effort is sent for listed classes; its model is logged only until R2.
+    /// What the router picked. Its model and effort are sent for listed classes.
     #[serde(default)]
     pub chosen: Chosen,
     /// The previous route's pick in the same episode, if any.

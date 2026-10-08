@@ -699,6 +699,7 @@ impl Cabin {
             Slash::Privacy => self.run_privacy(),
             Slash::Why => self.run_why(false),
             Slash::WhyModels => self.run_why(true),
+            Slash::WhyTable => self.run_why_table(),
             Slash::Diagnose => self.run_diagnose(Vec::new(), true),
             Slash::Hub => {
                 self.nav = Nav::Devices;

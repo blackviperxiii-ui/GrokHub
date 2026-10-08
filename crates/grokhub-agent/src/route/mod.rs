@@ -141,8 +141,9 @@ pub struct Routed {
 }
 
 /// Send one call to its provider. An unknown provider is an error, never a
-/// silent fallback to another one. The router picks the effort for a listed
-/// class (the model stays the call's own until R2); the route record logs what was sent.
+/// silent fallback to another one. The router picks the model and effort for a
+/// listed class, and pauses when no healthy model can take it; the route record
+/// logs what was sent.
 pub fn call_model(client: &dyn ModelClient, call: &ModelCall, cancel: &CancelToken) -> Result<Routed, ClientError> {
     if call.provider != PROVIDER_XAI {
         return Err(ClientError::Protocol(format!("no route for provider `{}`", call.provider)));

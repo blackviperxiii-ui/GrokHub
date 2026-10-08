@@ -152,8 +152,8 @@ impl RoutingTable {
 
     /// Same ranking: same models, efforts and order in every class.
     pub fn same_ranking(&self, other: &RoutingTable) -> bool {
-        let key = |t: &RoutingTable| -> Vec<(String, Vec<(String, Option<String>)>)> {
-            t.classes.iter().map(|(c, ct)| (c.clone(), ct.ranked.iter().map(|r| (r.model.clone(), r.effort.clone())).collect())).collect()
+        let key = |t: &RoutingTable| -> Vec<(String, Vec<String>)> {
+            t.classes.iter().map(|(c, ct)| (c.clone(), ct.ranked.iter().map(|r| format!("{}@{:?}", r.model, r.effort)).collect())).collect()
         };
         key(self) == key(other)
     }

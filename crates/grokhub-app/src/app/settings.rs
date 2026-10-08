@@ -681,18 +681,19 @@ impl Cabin {
                                                             }
                                                         }
                                                         SettingsSec::Defaults => {
-                                                            let models = cabin_default_models();
-                                                            let model_labels: Vec<String> = models
+                                                            let models = self.router_model_choices();
+                                                            let model_labels: Vec<String> =
+                                                                models.iter().map(|(_, label)| label.clone()).collect();
+                                                            let pin = cabin_default_model_id(&self.cfg.model);
+                                                            let model_selected = models
                                                                 .iter()
-                                                                .map(|(_, label)| (*label).to_string())
-                                                                .collect();
-                                                            let model_selected =
-                                                                cabin_default_model_label(&self.cfg.model)
-                                                                    .to_string();
+                                                                .find(|(id, _)| *id == pin)
+                                                                .map(|(_, label)| label.clone())
+                                                                .unwrap_or_else(|| cabin_default_model_label(&pin).to_string());
                                                             if let Some(i) = crate::cards::settings_dropdown(
                                                                 ui,
                                                                 ROW_MODEL,
-                                                                "Chat model for headless grok -p. Auto saves an empty pin.",
+                                                                "Auto picks the model for each step. A model you pick here is kept while it answers.",
                                                                 &model_selected,
                                                                 &model_labels,
                                                             ) {
@@ -705,6 +706,15 @@ impl Cabin {
                                                                     }
                                                                 }
                                                             }
+                                                            if crate::cards::settings_action(
+                                                                ui,
+                                                                "Refresh models",
+                                                                "Check xAI's model list and your plan now.",
+                                                                "Refresh",
+                                                            ) {
+                                                                self.refresh_models_now();
+                                                            }
+                                                            crate::cards::settings_note(ui, &self.how_auto_picks_lines());
                                                             let perms = cabin_default_permissions();
                                                             let perm_labels: Vec<String> = perms
                                                                 .iter()

@@ -227,3 +227,47 @@ impl HealNotes {
         out
     }
 }
+
+/// The tag the Settings model list shows beside a model, if any.
+pub fn settings_tag(reg: &Registry, id: &str) -> Option<&'static str> {
+    match reg.get(id)?.state {
+        ModelState::NotInPlan => Some("Not in your plan"),
+        ModelState::Degraded | ModelState::Quarantined | ModelState::Ghost => Some("Not answering"),
+        _ => None,
+    }
+}
+
+/// Retired and pruned models leave the Settings list, unless one is your pin.
+pub fn settings_hidden(reg: &Registry, id: &str, pin: &str) -> bool {
+    id != pin.trim() && reg.get(id).is_some_and(|r| r.state.tombstone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use grokhub_core::model_registry::{CallStatus, Listing, ModelMeta, Observation, SourceKind};
+
+    #[test]
+    fn settings_tags_and_hides_by_state() {
+        let mut reg = Registry::default();
+        let mut old = ModelMeta::bare("grok-4.3");
+        old.context_length = Some(1);
+        old.deprecated = Some(true);
+        let mut live = ModelMeta::bare("grok-4.7");
+        live.context_length = Some(1);
+        reg.apply_refresh(&[Listing::new(SourceKind::XaiApi, vec![old, live])], &[], 1);
+        assert_eq!(settings_tag(&reg, "grok-4.7"), None);
+        assert_eq!(settings_tag(&reg, "grok-9"), None);
+        assert!(settings_hidden(&reg, "grok-4.3", ""));
+        assert!(!settings_hidden(&reg, "grok-4.3", "grok-4.3"), "your retired pin stays visible");
+        assert!(!settings_hidden(&reg, "grok-4.7", ""));
+        let fail = |ts_ms| Observation { model: "grok-4.7".into(), ts_ms, status: CallStatus::Error, latency_ms: 0, served_model: None, endpoint_ok: true, reasoning_tokens: 0, cost_ticks: 0, http: 500 };
+        reg.fold(&[fail(10), fail(11), fail(12)]);
+        assert_eq!(settings_tag(&reg, "grok-4.7"), Some("Not answering"));
+        let mut fresh = ModelMeta::bare("grok-4.7");
+        fresh.context_length = Some(1);
+        reg.apply_refresh(&[Listing::new(SourceKind::XaiApi, vec![fresh])], &[], 20);
+        assert_eq!(reg.get("grok-4.3").map(|r| r.state), Some(ModelState::NotInPlan));
+        assert_eq!(settings_tag(&reg, "grok-4.3"), Some("Not in your plan"));
+    }
+}

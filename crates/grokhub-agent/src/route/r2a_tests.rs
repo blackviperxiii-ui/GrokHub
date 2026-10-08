@@ -80,6 +80,8 @@ fn ask<'a>(model: &'a str, pinned: bool) -> RouteInput<'a> {
 }
 
 type Apply = fn(&mut Registry, u64) -> Vec<RegistryEvent>;
+/// (fixture, the pin's state after, pinned route, its rule, the one message tier for a pin, for Auto)
+type Fixture = (&'static str, Apply, ModelState, &'static str, &'static str, Option<Tier>, Option<Tier>);
 
 /// The pinned model in every fixture.
 const PIN: &str = "grok-4.6";
@@ -107,8 +109,7 @@ fn placeholder(reg: &mut Registry, t: u64) -> Vec<RegistryEvent> {
 
 #[test]
 fn chaos_fixtures_heal_with_the_right_route_and_exactly_the_planned_messages() {
-    // (fixture, the pin's state after, pinned route, its rule, the one message tier for a pin, for Auto)
-    let fixtures: &[(&str, Apply, ModelState, &str, &str, Option<Tier>, Option<Tier>)] = &[
+    let fixtures: &[Fixture] = &[
         ("404 storm", storm, ModelState::Ghost, "grok-4.7", "pin:fallback", Some(Tier::HomeUpdate), None),
         ("429 burst", busy, ModelState::Degraded, "grok-4.7", "pin:fallback", Some(Tier::WorkRow), None),
         ("503 flap", flap, ModelState::Quarantined, "grok-4.7", "pin:fallback", Some(Tier::WorkRow), None),

@@ -400,6 +400,7 @@ mod tests {
                 r.cached_tokens = 768;
             }
             ProbeKind::Speed => r.text = "1 2 3 4 5 6 7 8 9 10".into(),
+            ProbeKind::Eval => unreachable!("a profile probe never sends an eval"),
         }
         r
     }
