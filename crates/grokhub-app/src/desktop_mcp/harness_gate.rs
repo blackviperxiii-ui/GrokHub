@@ -281,7 +281,7 @@ pub(crate) fn write_span(
         ctx.turn,
     );
     if let Some(span) = span {
-        let _ = hx::append_span(config_dir, &span);
+        let _ = hx::append_span(config_dir, &span.in_episode(&ctx.episode));
     }
 }
 

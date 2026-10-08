@@ -616,7 +616,7 @@ fn write_cua_span(dir: &Path, tool: &str, call: &DeskCall<'_>) {
     if let Some(mut span) = desk_span(call, &ctx.chat_id, ctx.turn) {
         span.driver = ComputerUseBackend::CuaDriver.as_str().into();
         span.claim = format!("cua {tool}");
-        let _ = append_span(dir, &span);
+        let _ = append_span(dir, &span.in_episode(&ctx.episode));
     }
 }
 
