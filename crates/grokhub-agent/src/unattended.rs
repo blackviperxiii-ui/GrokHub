@@ -300,6 +300,7 @@ mod tests {
                     output_tokens: 2,
                     reasoning_tokens: 0,
                     cost_in_usd_ticks: 1,
+                    cached_tokens: 0,
                 },
             })
         }
@@ -542,6 +543,7 @@ mod tests {
                     output_tokens: 7,
                     reasoning_tokens: 3,
                     cost_in_usd_ticks: 42,
+                    cached_tokens: 0,
                 },
             })
         }

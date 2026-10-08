@@ -650,6 +650,7 @@ mod tests {
                     output_tokens: 3,
                     reasoning_tokens: 1,
                     cost_in_usd_ticks: 5,
+                    cached_tokens: 0,
                 },
             })
         }
@@ -813,6 +814,7 @@ mod tests {
                 output_tokens: 3,
                 reasoning_tokens: 1,
                 cost_in_usd_ticks: 5,
+                cached_tokens: 0,
             },
             meter: "API credits".into(),
             context_tokens_used: 9,

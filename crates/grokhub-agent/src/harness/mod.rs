@@ -41,6 +41,7 @@
 //! Spike-2b: a click is classified by the control it lands on (`hard.rs`
 //! `click_target_class`): a Send, Pay, Delete or Reset button parks before
 //! the click runs, on every path, and spans keep only the matched rule.
+//!
 //! Spike-3a (AMR M4): `trail` turns one turn's spans into one AMR `trail`
 //! node at turn end, from already-redacted span fields only; `span_search`
 //! reads `spans/*.jsonl` for History and palette search. Both only read

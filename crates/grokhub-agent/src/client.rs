@@ -36,6 +36,8 @@ pub struct Usage {
     pub output_tokens: u64,
     pub reasoning_tokens: u64,
     pub cost_in_usd_ticks: i64,
+    /// Input tokens served from the prompt cache (`input_tokens_details.cached_tokens`).
+    pub cached_tokens: u64,
 }
 
 impl Usage {
@@ -44,6 +46,7 @@ impl Usage {
         self.output_tokens = self.output_tokens.saturating_add(other.output_tokens);
         self.reasoning_tokens = self.reasoning_tokens.saturating_add(other.reasoning_tokens);
         self.cost_in_usd_ticks = self.cost_in_usd_ticks.saturating_add(other.cost_in_usd_ticks);
+        self.cached_tokens = self.cached_tokens.saturating_add(other.cached_tokens);
     }
 
     /// Tokens and cost added since `earlier`. Underflow stays at zero.
@@ -57,6 +60,7 @@ impl Usage {
             cost_in_usd_ticks: self
                 .cost_in_usd_ticks
                 .saturating_sub(earlier.cost_in_usd_ticks),
+            cached_tokens: self.cached_tokens.saturating_sub(earlier.cached_tokens),
         }
     }
 }

@@ -203,6 +203,11 @@ pub(crate) fn parse_usage_value(v: &Value) -> Usage {
         output_tokens: body.get("output_tokens").and_then(|n| n.as_u64()).unwrap_or(0),
         reasoning_tokens: reasoning,
         cost_in_usd_ticks: cost,
+        cached_tokens: body
+            .get("input_tokens_details")
+            .and_then(|d| d.get("cached_tokens"))
+            .and_then(|n| n.as_u64())
+            .unwrap_or(0),
     }
 }
 
