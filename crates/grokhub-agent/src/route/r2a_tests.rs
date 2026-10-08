@@ -7,6 +7,7 @@ use std::sync::Mutex;
 
 use grokhub_core::model_registry::profile::{write_profile, EffortTiming, ModelProfile, ProbeResult};
 use grokhub_core::model_registry::store::save_registry;
+use grokhub_core::model_registry::cost_class::CostClass;
 use grokhub_core::model_registry::{CallStatus, Credential, Listing, ModelMeta, ModelState, Observation, Prices, Registry, RegistryEvent, SourceKind};
 
 use super::heal::{heal_messages, HealNotes, Tier};
@@ -201,9 +202,21 @@ fn fallback_never_picks_a_route_that_is_not_included() {
         assert!(r.no_route, "pinned={pinned}: {:?}", r.rule_ids);
         assert_ne!(r.model, "grok-4.8");
     }
-    // An API key is metered: Auto doesn't pick for it (R2b decides), it keeps the call's own model.
+    // R2b: a key at list price is included up to your $/M ceiling. grok-4.5
+    // ($25/M out) is over the default $15/M, so it's premium: Auto stands in
+    // with grok-4.3 ($15/M) and the cabin asks once.
     let (mut keyed, profiles) = fleet();
     keyed.entitlement.credential = Credential::ApiKey;
+    let r = Router::choose(&ask("grok-4.5", false), &keyed, &profiles, &RoutingTable::default(), NOW);
+    assert_eq!((r.model.as_str(), r.rule_ids[0].as_str(), r.replaced.as_deref()), ("grok-4.3", "cost:premium_ungranted", None));
+    assert_eq!((r.cost_class, r.premium_ask.as_deref()), (CostClass::Included, Some("premium:grok-4.5")));
+    // Under a $30/M ceiling it is included, and with no table row a key keeps the call's own model.
+    let mut wide = ask("grok-4.5", false);
+    wide.spend.settings.ceiling_usd_per_m = 30.0;
+    let r = Router::choose(&wide, &keyed, &profiles, &RoutingTable::default(), NOW);
+    assert_eq!((r.model.as_str(), r.rule_ids[0].as_str(), r.premium_ask.clone()), ("grok-4.5", "key:keep", None));
+    // No sign-in: nothing native is included, the call keeps its own model.
+    keyed.entitlement.credential = Credential::None;
     let r = Router::choose(&ask("grok-4.5", false), &keyed, &profiles, &RoutingTable::default(), NOW);
     assert_eq!((r.model.as_str(), r.rule_ids[0].as_str()), ("grok-4.5", "cost:not_included"));
 }

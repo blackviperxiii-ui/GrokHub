@@ -71,7 +71,12 @@ const ROW_COLLAPSE: &str = "Always collapse";
 
 /// Settings → Cabin defaults, in order. There is no effort row: effort is automatic (Router R1).
 #[cfg(test)]
-pub(super) const DEFAULTS_ROWS: &[&str] = &[ROW_MODEL, ROW_PERMISSION, ROW_DESKTOP, ROW_DESKTOP_TEST, ROW_SESSION, ROW_COLLAPSE];
+pub(super) const DEFAULTS_ROWS: &[&str] = &[
+    ROW_MODEL,
+    super::budget_ui::FAST_ROW,
+    super::budget_ui::CAP_ROW,
+    super::budget_ui::CEILING_ROW,
+    ROW_PERMISSION, ROW_DESKTOP, ROW_DESKTOP_TEST, ROW_SESSION, ROW_COLLAPSE];
 
 pub(super) fn cabin_default_permissions() -> &'static [(&'static str, &'static str)] {
     &[("ask", "Ask"), ("auto", "Auto")]
@@ -715,6 +720,7 @@ impl Cabin {
                                                                 self.refresh_models_now();
                                                             }
                                                             crate::cards::settings_note(ui, &self.how_auto_picks_lines());
+                                                            self.ui_spend_rows(ui);
                                                             let perms = cabin_default_permissions();
                                                             let perm_labels: Vec<String> = perms
                                                                 .iter()
@@ -1025,6 +1031,8 @@ impl Cabin {
         }
         self.ui_privacy_rows(ui);
         self.ui_scope_rows(ui);
+        let locked = self.private_lock_for_paint().map(|why| super::privacy_ui::lock_hover(&why));
+        self.ui_premium_rows(ui, locked);
         let workspace = self.grok_cwd();
         let dir = grokhub_agent::perm::config_dir();
         crate::cards::section_heading(ui, super::privacy_ui::RULES_HEAD);
@@ -1253,7 +1261,13 @@ mod tests {
         );
         assert_eq!(
             DEFAULTS_ROWS,
-            &["Default model", "Permission", "Let Grok control the desktop", "Desktop control", "Session mode", "Always collapse"]
+            &[
+                "Default model",
+                "Use Grok 4.7 Fast when you're waiting",
+                "Weekly spend cap",
+                "Price limit",
+                "Permission",
+                "Let Grok control the desktop", "Desktop control", "Session mode", "Always collapse"]
         );
         assert!(DEFAULTS_ROWS.iter().all(|r| !r.to_ascii_lowercase().contains("effort")));
         let perms = cabin_default_permissions();

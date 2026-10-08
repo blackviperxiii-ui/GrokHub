@@ -84,7 +84,9 @@ fn dest_label(dest: &str) -> &str {
 
 /// How `/privacy` names an active grant (no id: SY-08).
 pub(super) fn grant_label(g: &hx::Grant) -> String {
-    if g.destination == hx::HUB_DEST {
+    if g.source.starts_with(grokhub_agent::route::spend::PREMIUM_PREFIX) {
+        super::budget_ui::premium_label(&g.source)
+    } else if g.destination == hx::HUB_DEST {
         HUB_ROW.to_string()
     } else if !g.destination.is_empty() {
         format!("Send to {}", g.destination)
@@ -661,8 +663,9 @@ mod tests {
     }
 
     /// Rule 4: the agent never widens its own permissions. Outside tests, a
-    /// grant is built only from a Settings click: the hub row in this file and
-    /// the scope rows in `scope_ui.rs`.
+    /// grant is built only from a Settings click: the hub row in this file,
+    /// the scope rows in `scope_ui.rs`, and the premium hard card's Approve
+    /// click in `budget_ui.rs` (Router R2b).
     #[test]
     fn only_a_settings_click_writes_a_grant() {
         let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -686,7 +689,7 @@ mod tests {
                 }
                 let text = std::fs::read_to_string(&path).unwrap_or_default();
                 let live = text.split("#[cfg(test)]").next().unwrap_or("");
-                for needle in ["UserClick::from_click(", "grant_destination(", "grant_scope("] {
+                for needle in ["UserClick::from_click(", "grant_destination(", "grant_scope(", "grant_premium("] {
                     for _ in live.matches(needle) {
                         let rel = path.strip_prefix(&crates).unwrap_or(&path);
                         let rel = rel.display().to_string().replace('\\', "/");
@@ -700,7 +703,10 @@ mod tests {
             hits,
             vec![
                 "grokhub-agent/src/harness/consent.rs: grant_destination(",
+                "grokhub-agent/src/harness/consent.rs: grant_premium(",
                 "grokhub-agent/src/harness/consent.rs: grant_scope(",
+                "grokhub-app/src/app/budget_ui.rs: UserClick::from_click(",
+                "grokhub-app/src/app/budget_ui.rs: grant_premium(",
                 "grokhub-app/src/app/privacy_ui.rs: UserClick::from_click(",
                 "grokhub-app/src/app/privacy_ui.rs: grant_destination(",
                 "grokhub-app/src/app/scope_ui.rs: UserClick::from_click(",

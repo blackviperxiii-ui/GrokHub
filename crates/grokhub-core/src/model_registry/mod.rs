@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub use cost_class::{cost_class, CostClass};
+pub use cost_class::{CostClass, RouteOpts};
 pub use discover::{gb_listing, parse_model_row, parse_xai_catalog, CatalogSource, Listing};
 pub use entitlement::{tier_notice, Credential, Entitlement};
 pub use health::{classify_status, CallStatus, Observation};

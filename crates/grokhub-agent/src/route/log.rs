@@ -34,7 +34,7 @@ pub struct RouteSignals {
     pub origin: Option<String>,
     /// This call's wall time, ms.
     pub latency: Option<u64>,
-    /// No spend budget exists yet, so this stays `null`.
+    /// The week's budget used, percent (R2b), or `null` with no cap and no limit hit.
     pub budget_pct: Option<u8>,
     /// No privacy routing exists yet, so this stays `null`.
     pub privacy: Option<String>,
@@ -55,6 +55,9 @@ pub struct RouteOutcome {
     pub verify: Option<String>,
     pub tokens: RouteTokens,
     pub cost_usd: f64,
+    /// R2b: the call hit the plan's usage limit (429 `free-usage-exhausted`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub limit: bool,
 }
 
 /// `{span_id, episode, step, class, d, ctx_tokens, signals, candidates_n,
@@ -103,6 +106,9 @@ pub struct RouteRecord {
     pub holdout: bool,
     #[serde(default)]
     pub settings: Option<RuntimeSettings>,
+    /// R2b: the sent route's cost class (`included`, `autonomous_premium`, `premium`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cost_class: String,
 }
 
 // `d` and `cost_usd` are finite (rounded rules and token math), so equality is total.

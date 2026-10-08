@@ -444,7 +444,7 @@ mod tests {
 
     #[test]
     fn a_non_included_route_never_probes() {
-        for cost in [CostClass::Metered, CostClass::Unknown] {
+        for cost in [CostClass::Premium, CostClass::AutonomousPremium, CostClass::Unknown] {
             let mut fake = Fake { sent: Vec::new(), reply: Box::new(good) };
             let (r, guards, _, _) = run(&meta(), cost, &mut fake, true);
             assert_eq!(r.status, "not_run: cost_class");
