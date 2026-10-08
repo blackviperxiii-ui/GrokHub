@@ -16,6 +16,8 @@ pub enum SourceKind {
     GrokBuild,
     /// Grok Build config in the cabin Grok home, read only.
     GbConfig,
+    /// The on-device model (Router R3a plumbing). Lists nothing while `localModel` is off.
+    Local,
 }
 
 impl SourceKind {
@@ -24,6 +26,7 @@ impl SourceKind {
             Self::XaiApi => "xai_api",
             Self::GrokBuild => "grok_build",
             Self::GbConfig => "gb_config",
+            Self::Local => "local",
         }
     }
 }

@@ -73,6 +73,18 @@ impl Band {
         let up = |r: usize| (r + bump as usize).min(ceiling);
         Self { floor: up(rung(row.floor).unwrap_or(0)), start: up(rung(row.start).unwrap_or(0)), ceiling }
     }
+
+    /// [`Band::of`] with a self-tuned start (R3a) merged over the class table,
+    /// clamped inside the floor and ceiling. Floors and ceilings are never
+    /// tuned, and `prepare:hard` never starts lower than its row says.
+    pub fn tuned(row: &ClassRow, bump: u8, start: Option<&str>) -> Self {
+        let mut b = Self::of(row, bump);
+        if let Some(r) = start.and_then(rung) {
+            let r = r.clamp(b.floor, b.ceiling.max(b.floor));
+            b.start = if row.class == PREPARE_HARD { r.max(b.start) } else { r };
+        }
+        b
+    }
 }
 
 /// Where a step starts: the class start, moved by the user's words or by difficulty.
@@ -121,6 +133,8 @@ pub struct Obs {
     pub low_check: Option<bool>,
     /// Spend budget used, percent. `None` while no budget exists.
     pub budget_pct: Option<u8>,
+    /// DE2: the rung this task's signature is known to succeed at ([`routine_rung`]).
+    pub routine: Option<usize>,
 }
 
 /// One episode's effort in one class.
@@ -149,9 +163,31 @@ pub struct Pick {
     pub recover: bool,
 }
 
-/// DE2 (known routine) arrives with R3's local learning. Nothing is routine yet.
-fn known_routine(_class: &str) -> bool {
-    false
+/// DE2: successes a task signature needs at one lower rung.
+pub const ROUTINE_MIN_SUCCESSES: usize = 3;
+/// DE2: how far back those successes may be.
+pub const ROUTINE_WINDOW_MS: u64 = 14 * 24 * 60 * 60 * 1000;
+
+/// One task signature's finished runs (Spike-7 outcome records joined with the
+/// rung each ran at). Built outside [`advance`]; no I/O here.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Routine {
+    /// `(rung, finished_at)` of each successful run.
+    pub successes: Vec<(usize, u64)>,
+    /// The newest failed run: successes before it don't count.
+    pub last_failure: Option<u64>,
+}
+
+/// DE2 (known routine): the lowest rung below the class start with at least
+/// [`ROUTINE_MIN_SUCCESSES`] successes inside [`ROUTINE_WINDOW_MS`] (and since the
+/// signature's last failure). Never below the floor; never for `prepare:hard`.
+pub fn routine_rung(class: &str, r: &Routine, band: Band, now_ms: u64) -> Option<usize> {
+    if class.trim() == PREPARE_HARD {
+        return None;
+    }
+    let since = now_ms.saturating_sub(ROUTINE_WINDOW_MS).max(r.last_failure.map(|f| f + 1).unwrap_or(0));
+    (band.floor..band.start)
+        .find(|rung| r.successes.iter().filter(|(x, at)| x == rung && *at >= since && *at <= now_ms).count() >= ROUTINE_MIN_SUCCESSES)
 }
 
 /// Advance one episode's state for the next call. Pure: the caller keeps the state.
@@ -180,6 +216,12 @@ pub fn advance(prev: Option<&EffortState>, class: &str, band: Band, start: (usiz
             rules.push(format!("{id}:ceiling"));
         }
     };
+    let steered = rules.iter().any(|r| r.starts_with("steer:"));
+    if let Some(r) = obs.routine.filter(|r| fresh && user && !hard && !st.hold && !steered && *r < st.rung) {
+        st.rung = r.max(band.floor);
+        st.moved = Move::Down;
+        rules.push("DE2".into());
+    }
     let mut recover = false;
     if user {
         if fresh && obs.correction {
@@ -225,11 +267,6 @@ pub fn advance(prev: Option<&EffortState>, class: &str, band: Band, start: (usiz
         st.clean = 0;
         st.moved = Move::Down;
         rules.push("DE1".into());
-    }
-    if !hard && known_routine(class) && st.rung > band.floor {
-        st.rung -= 1;
-        st.moved = Move::Down;
-        rules.push("DE2".into());
     }
     if !hard && obs.budget_pct.is_some_and(|p| p >= 80) {
         // Below a floor would need an ask card, so DE3 stops at the floor.
@@ -307,6 +344,11 @@ pub fn finish(episode: &str, class: &str, ok: bool) {
     if let Some(st) = STATES.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&key(episode, class)) {
         st.last_ok = ok;
     }
+}
+
+/// This call starts a new turn for `episode` in `class` (or its first call).
+pub fn is_new_turn(episode: &str, class: &str, turn: u64) -> bool {
+    STATES.lock().unwrap_or_else(|e| e.into_inner()).get(&key(episode, class)).is_none_or(|s| s.turn != turn)
 }
 
 /// The rung this episode is on now, if it has routed a call in `class`.
@@ -460,6 +502,56 @@ mod tests {
         let hard = EffortState { rung: rung("xhigh").unwrap(), ..EffortState::default() };
         let (_, p) = go(Some(&hard), PREPARE_HARD, Obs { budget_pct: Some(99), ..step_obs() });
         assert_eq!(name(p.rung), "xhigh", "prepare:hard ignores DE3");
+    }
+
+    const DAY: u64 = 24 * 60 * 60 * 1000;
+
+    fn wins(rung_name: &str, days_ago: &[u64], now: u64) -> Routine {
+        Routine { successes: days_ago.iter().map(|d| (rung(rung_name).unwrap(), now - d * DAY)).collect(), last_failure: None }
+    }
+
+    #[test]
+    fn de2_three_low_successes_in_14_days_start_the_next_run_at_low() {
+        let now = 100 * DAY;
+        let b = band("chat:default");
+        let r = routine_rung("chat:default", &wins("low", &[1, 5, 13], now), b, now);
+        assert_eq!(r, Some(rung("low").unwrap()));
+        let (_, p) = go(None, "chat:default", Obs { new_turn: true, routine: r, ..Obs::default() });
+        assert_eq!((name(p.rung), p.moved, p.rules.clone()), ("low", Move::Down, vec!["DE2".to_string()]));
+        // Two successes, or three spread over 20 days, are not a routine.
+        assert_eq!(routine_rung("chat:default", &wins("low", &[1, 5], now), b, now), None);
+        assert_eq!(routine_rung("chat:default", &wins("low", &[1, 10, 20], now), b, now), None);
+        // A failure after them resets the count.
+        let mut failed = wins("low", &[3, 5, 6], now);
+        failed.last_failure = Some(now - 2 * DAY);
+        assert_eq!(routine_rung("chat:default", &failed, b, now), None);
+        // Successes at the start rung or above lower nothing.
+        assert_eq!(routine_rung("chat:default", &wins("medium", &[1, 2, 3], now), b, now), None);
+    }
+
+    #[test]
+    fn de2_never_lowers_prepare_hard_never_goes_below_the_floor_and_waits_out_a_reject() {
+        let now = 100 * DAY;
+        let hard = band(PREPARE_HARD);
+        assert_eq!(routine_rung(PREPARE_HARD, &wins("low", &[1, 2, 3], now), hard, now), None);
+        // Even handed a low rung, advance keeps prepare:hard at High.
+        let (_, p) = advance(None, PREPARE_HARD, hard, (hard.start, vec![]), &Obs { new_turn: true, routine: Some(rung("low").unwrap()), ..Obs::default() });
+        assert_eq!(name(p.rung), "high");
+        assert!(!p.rules.contains(&"DE2".to_string()));
+        // code:multi-file's floor is medium: successes at low don't count below it.
+        let multi = band("code:multi-file");
+        assert_eq!(routine_rung("code:multi-file", &wins("low", &[1, 2, 3], now), multi, now), None);
+        assert_eq!(routine_rung("code:multi-file", &wins("medium", &[1, 2, 3], now), multi, now), Some(rung("medium").unwrap()));
+        // After a reject, the next turn keeps its hold: no DE2 until VERIFY_OK.
+        let mut s = go(None, "chat:default", Obs { new_turn: true, ..Obs::default() }).0;
+        s = go(Some(&s), "chat:default", Obs { rejects: Some(1), ..step_obs() }).0;
+        let low = Some(rung("low").unwrap());
+        let (_, p) = go(Some(&s), "chat:default", Obs { new_turn: true, routine: low, ..Obs::default() });
+        assert_eq!(name(p.rung), "medium");
+        // "think hard" wins over a routine.
+        let b = band("chat:default");
+        let (_, p) = advance(None, "chat:default", b, start_rung(b, 0.5, Steer::Harder, true), &Obs { new_turn: true, routine: low, ..Obs::default() });
+        assert_eq!(name(p.rung), "xhigh");
     }
 
     #[test]

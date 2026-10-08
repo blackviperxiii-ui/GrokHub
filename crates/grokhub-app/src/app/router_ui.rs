@@ -7,6 +7,9 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use grokhub_agent::route::guard::{run_guard, GuardRun};
+use grokhub_agent::route::learn::{self, TuneRun};
+use grokhub_agent::route::local::LocalSource;
+use grokhub_agent::route::signals::{LedgerOutcomeSource, SpanVerifySource};
 use grokhub_agent::route::heal::{heal_messages, joined_messages, pause_msg, HealMsg, HealNotes, Heard, Tier};
 use grokhub_agent::route::refresh::{fold_health, probe_next, run_refresh, RefreshDone, RefreshJob};
 use grokhub_agent::route::sources::{probe_model, rebuild_table, GrokBuildSource, XaiApiSource};
@@ -60,6 +63,8 @@ pub(super) struct RouterUi {
     pub why_rx: Option<mpsc::Receiver<String>>,
     pub guard_rx: Option<mpsc::Receiver<GuardRun>>,
     pub last_guard: Option<Instant>,
+    /// R3a self-tuning, on the guard's hourly slot.
+    pub tune_rx: Option<mpsc::Receiver<Result<TuneRun, String>>>,
     /// Refresh models was clicked: the next refresh rebuilds the table even unchanged.
     pub force_table: bool,
     /// The pin the router last heard.
@@ -125,6 +130,7 @@ impl Cabin {
             }
         }
         self.poll_guard();
+        self.poll_tune();
         self.sync_router_pin();
         self.sync_spend();
         self.poll_route_asks();
@@ -144,6 +150,15 @@ impl Cabin {
             std::thread::spawn(move || {
                 let _ = tx.send(run_guard(&dir, now));
             });
+            if self.harness.router.tune_rx.is_none() {
+                let dir = crate::config::config_dir();
+                let (tx, rx) = mpsc::channel();
+                self.harness.router.tune_rx = Some(rx);
+                std::thread::spawn(move || {
+                    let verify = SpanVerifySource { config_dir: dir.clone(), session: String::new() };
+                    let _ = tx.send(learn::tick(&dir, &verify, &LedgerOutcomeSource::new(&dir), now));
+                });
+            }
         }
         let stamp = self.router_auth_stamp();
         let idle = !self.running && !self.heartbeat_busy();
@@ -192,6 +207,8 @@ impl Cabin {
             if let Some(g) = gb.as_ref() {
                 sources.push(g);
             }
+            // Lists nothing while `localModel` is off (the default).
+            sources.push(&LocalSource);
             let job = RefreshJob { config_dir: dir.clone(), sources, credential, named, default_model, now_ms: now };
             let done = run_refresh(&job);
             let plan = bearer.as_deref().filter(|_| credential == Credential::Plan);
@@ -224,6 +241,17 @@ impl Cabin {
             }
             Err(mpsc::TryRecvError::Empty) => self.harness.router.guard_rx = Some(rx),
             Err(mpsc::TryRecvError::Disconnected) => {}
+        }
+    }
+
+    /// Self-tuning runs on its own; a promotion or rollback is a ledger line
+    /// and the weekly review's router line, so nothing is shown here.
+    fn poll_tune(&mut self) {
+        let Some(rx) = self.harness.router.tune_rx.take() else {
+            return;
+        };
+        if let Err(mpsc::TryRecvError::Empty) = rx.try_recv() {
+            self.harness.router.tune_rx = Some(rx);
         }
     }
 
@@ -280,6 +308,7 @@ impl Cabin {
 
     /// The live router keeps a pin while it answers; Auto is an empty pin.
     fn sync_router_pin(&mut self) {
+        grokhub_agent::route::local::set_enabled(self.cfg.local_model);
         let pin = self.cfg.model.trim();
         if self.harness.router.pin.as_deref() != Some(pin) {
             grokhub_agent::route::live::set_pin(pin);
@@ -362,7 +391,12 @@ impl Cabin {
     /// `/why table`.
     pub(super) fn run_why_table(&mut self) {
         let table = grokhub_agent::route::live::table_snapshot(&crate::config::config_dir());
-        let body = grokhub_agent::route::table::why_table_text(&table, now_ms());
+        let dir = crate::config::config_dir();
+        let mut body = grokhub_agent::route::table::why_table_text(&table, now_ms());
+        for line in learn::why_table_lines(&dir, now_ms()) {
+            body.push('\n');
+            body.push_str(&line);
+        }
         self.live_mut().push(("assistant".into(), mark_slash_result(&body)));
         self.stamp_current_access();
         self.persist();

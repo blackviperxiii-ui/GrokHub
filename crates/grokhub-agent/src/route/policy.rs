@@ -58,6 +58,12 @@ pub const CLASS_TABLE: &[ClassRow] = &[
     row("repair:diagnose", "medium", "low", "high", "a computer check"),
 ];
 
+/// R3a: a class's band with its self-tuned start merged over the table row,
+/// clamped inside the floor and ceiling ([`super::ladder::Band::tuned`]).
+pub fn tuned_band(row: &ClassRow, bump: u8, tuning: &super::tune::Tuning) -> super::ladder::Band {
+    super::ladder::Band::tuned(row, bump, tuning.starts.get(row.class).map(String::as_str))
+}
+
 /// Call-site names that already exist, mapped onto table classes.
 pub const CLASS_ALIASES: &[(&str, &str)] = &[
     ("episode:step", "desktop:soft"),

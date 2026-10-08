@@ -24,7 +24,13 @@ use super::cabin::{MODEL_TOOL, MODEL_TRACE};
 use grokhub_core::model_registry::EFFORT_LADDER;
 use grokhub_core::outcome::is_correction;
 
-use super::difficulty::{difficulty, DifficultyInput};
+use super::difficulty::{estimate, DifficultyInput};
+use super::learn;
+use super::local::LocalGate;
+use super::policy::ClassRow;
+use super::tune::{self, StepRisk};
+use grokhub_core::model_registry::cost_class::CostClass;
+use grokhub_core::outcome::topic_signature;
 use super::guard::{holdout_eligible, in_holdout, load_overrides, HOLDOUT_EFFORT};
 use super::ladder::{self, rung, start_rung, take_tool_errors, turn_hash, user_facing, Band, Obs, Pick, Steer};
 use super::log::{Chosen, RouteOutcome, RouteRecord, RouteSignals, RouteTokens};
@@ -65,6 +71,14 @@ pub struct RouteCall<'a> {
     pub origin: Option<Origin>,
     /// A time-boxed task's deadline (ms), for the Fast policy.
     pub deadline_ms: Option<u64>,
+    /// R3a DE2: the task's Spike-7 signature (`skill:<name>`). Empty reads the topic of `text`.
+    pub signature: &'a str,
+    /// R3a: the step's data is marked sensitive (the local privacy route; off by default).
+    pub sensitive: bool,
+    /// R3a: you granted sending sensitive data to the cloud.
+    pub cloud_grant: bool,
+    /// The step offers a send, delete, credential or other hard-class tool.
+    pub hard_tool: bool,
 }
 
 /// How the call went. Counts and ids only.
@@ -309,6 +323,8 @@ pub struct Decision {
     /// R2b: the budget paused this call (background over its share or at 100%,
     /// or user-facing work at 100% before you said to go on). The message to return.
     pub budget_pause: Option<&'static str>,
+    /// R3a: the self-tuning mark for the route record (`canary:<id>`, `shadow:<id>`).
+    pub tune: Option<String>,
 }
 
 impl Decision {
@@ -324,6 +340,11 @@ impl Decision {
     /// The router found no healthy, included model, or the budget stops it: pause instead of sending.
     pub fn paused(&self) -> bool {
         self.live && MODEL_LIVE && (self.route.no_route || self.budget_pause.is_some())
+    }
+
+    /// The router sent this step to the on-device model (R3a; never while the flag is off).
+    pub fn on_device(&self) -> bool {
+        self.live && !self.paused() && self.route.provider == super::local::PROVIDER_LOCAL
     }
 
     /// What a paused call returns.
@@ -369,17 +390,30 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     let (reg, profiles) = snapshot(config_dir);
     let settings = spend::spend_settings();
     let b = week_budget(config_dir, &reg, settings.weekly_cap_usd, now_ms);
-    let d = difficulty(&DifficultyInput { text: call.text, planned_tools: call.planned_tools, plan_mode: call.plan_mode, ctx_tokens: call.ctx_tokens });
+    let rt = super::local::runtime();
+    let d = estimate(&DifficultyInput { text: call.text, planned_tools: call.planned_tools, plan_mode: call.plan_mode, ctx_tokens: call.ctx_tokens }, rt.as_deref());
     let steer = Steer::from_text(call.text);
     let row = class_row(call.class);
     let bump = row.and_then(|r| load_overrides(config_dir).get(r.class).map(|o| o.steps)).unwrap_or(0);
     let key = episode_key(call);
     let holdout = holdout_eligible(call.class) && in_holdout(key);
+    let facing = row.is_some_and(|r| user_facing(r.class));
+    let (rejects, verify_ok) = if facing && !key.is_empty() { verify_counts(config_dir, call) } else { (None, false) };
+    let pin = pinned_model();
+    let pinned = call.pinned || (!pin.is_empty() && pin == call.model.trim() && user_facing(call.class));
+    let tuned = learn::live_tune(config_dir);
+    let risk = StepRisk { class: call.class, holdout, under_reject: rejects.unwrap_or(0) > 0 && !verify_ok, pinned, hard_tool: call.hard_tool };
+    let st = learn::step_tune(&tuned, call.class, key, &risk);
+    let turn = turn_hash(call.text);
+    let mut routine = None;
     let pick = match row {
         Some(_) if holdout => Some(Pick { rung: rung(HOLDOUT_EFFORT).unwrap_or(0), rules: vec!["holdout".into()], ..Pick::default() }),
         Some(r) if user_facing(r.class) && !key.is_empty() => {
-            let band = Band::of(r, bump);
-            let (rejects, verify_ok) = verify_counts(config_dir, call);
+            let band = Band::tuned(r, bump, st.start.as_deref());
+            if ladder::is_new_turn(key, r.class, turn) {
+                let sig = if call.signature.is_empty() { topic_signature(call.text) } else { call.signature.to_string() };
+                routine = ladder::routine_rung(r.class, &learn::routine_for(config_dir, &sig, r.class, now_ms), band, now_ms);
+            }
             let obs = Obs {
                 tool_errors: take_tool_errors(),
                 rejects,
@@ -388,21 +422,28 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
                 // No self-check score yet, so E4 stays quiet. DE3 reads the week's budget.
                 low_check: None,
                 budget_pct: b.pct,
+                routine,
                 ..Obs::default()
             };
-            Some(ladder::step(key, r.class, turn_hash(call.text), band, start_rung(band, d, steer, true), obs))
+            Some(ladder::step(key, r.class, turn, band, start_rung(band, d, steer, true), obs))
         }
         _ => None,
     };
     let recover = pick.as_ref().is_some_and(|p| p.recover);
     let class_key = format!("{key}\u{1f}{}", row.map(|r| r.class).unwrap_or(call.class));
-    let turn = turn_hash(call.text);
     let sticky = if key.is_empty() { None } else { episode_model(&class_key, turn) };
-    let pin = pinned_model();
-    let pinned = call.pinned || (!pin.is_empty() && pin == call.model.trim() && user_facing(call.class));
-    let table = table_snapshot(config_dir);
+    let base_table = table_snapshot(config_dir);
+    let table: Arc<RoutingTable> = match (&st.canary_order, tuned.tuning.orders.is_empty()) {
+        (None, true) => base_table,
+        (order, _) => {
+            let mut t = tune::tuned_table(&base_table, &tuned.tuning);
+            if let (Some(m), Some(r)) = (order, row) {
+                t = tune::with_order(&t, r.class, m);
+            }
+            Arc::new(t)
+        }
+    };
     let origin = call.origin.unwrap_or_else(current_origin);
-    let facing = row.is_some_and(|r| user_facing(r.class));
     let steps = if key.is_empty() { 1 } else { note_step(&class_key, turn) };
     let spend = Spend {
         settings,
@@ -426,8 +467,15 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         pick,
         episode_model: sticky.as_deref(),
         spend: spend.clone(),
+        routine,
+        start: st.start.as_deref(),
+        local: LocalGate::now(call.sensitive, call.cloud_grant, call.hard_tool),
     };
     let route = Router::choose(&input, &reg, &profiles, &table, now_ms);
+    let mut tune_mark = st.mark.clone();
+    if let (Some(c), Some(r)) = (&st.shadow, row) {
+        tune_mark = Some(shadow_mark(c, r, &input, &reg, &profiles, &table, now_ms));
+    }
     let live = POLICY_LIVE && row.is_some();
     let budget_pause = if !live || route.no_route || call.provider == PROVIDER_GROK_BUILD {
         None
@@ -451,7 +499,31 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         let failed = reg.get(call.model).map(|r| r.reason.clone()).unwrap_or_else(|| "It isn't in your model list.".into());
         *NO_ROUTE.lock().unwrap_or_else(|e| e.into_inner()) = Some((call.class.to_string(), call.model.trim().to_string(), failed));
     }
-    Decision { route, d: (d * 100.0).round() as u32, holdout, recover, live, budget_pct: b.pct, budget_pause }
+    Decision { route, d: (d * 100.0).round() as u32, holdout, recover, live, budget_pct: b.pct, budget_pause, tune: tune_mark }
+}
+
+/// A shadow candidate computed next to the live pick, logged only:
+/// `shadow:<id>`, or `shadow:<id>!` when it could not be served inside the
+/// filters (fit, entitlement, cost class, privacy, floors).
+fn shadow_mark(c: &tune::Candidate, row: &ClassRow, input: &RouteInput<'_>, reg: &Registry, profiles: &BTreeMap<String, ModelProfile>, table: &RoutingTable, now_ms: u64) -> String {
+    let mut shadow = input.clone();
+    shadow.pick = None;
+    shadow.episode_model = None;
+    shadow.pinned = false;
+    let ok = match &c.change {
+        Some(tune::Change::Order { model }) => {
+            let t = tune::with_order(table, row.class, model);
+            let r = Router::choose(&shadow, reg, profiles, &t, now_ms);
+            !r.no_route && r.model == *model && r.cost_class == CostClass::Included
+        }
+        Some(tune::Change::Start { effort }) => {
+            let floor = Band::of(row, input.bump).floor;
+            shadow.start = Some(effort);
+            rung(effort).is_some_and(|x| x >= floor) && !Router::choose(&shadow, reg, profiles, table, now_ms).no_route
+        }
+        None => false,
+    };
+    format!("shadow:{}{}", c.id, if ok { "" } else { "!" })
 }
 
 /// The route record for one call. `call.effort` is what was actually sent.
@@ -487,7 +559,7 @@ pub fn route_record(config_dir: &Path, call: &RouteCall<'_>, decision: &Decision
             origin: Some(current_origin().as_str().to_string()),
             latency: Some(done.latency_ms),
             budget_pct: decision.budget_pct,
-            privacy: None,
+            privacy: route.rule_ids.iter().any(|r| r == "privacy:local_only").then(|| "local_only".to_string()),
         },
         candidates_n: route.candidates_n,
         chosen,
@@ -507,6 +579,7 @@ pub fn route_record(config_dir: &Path, call: &RouteCall<'_>, decision: &Decision
         holdout: decision.holdout,
         settings: route.settings.clone(),
         cost_class: route.cost_class.as_str().to_string(),
+        tune: decision.tune.clone(),
     }
 }
 
@@ -686,7 +759,11 @@ pub fn stream_routed(
     sent.effort = effort.clone();
     sent.model = model.clone();
     let started = std::time::Instant::now();
-    let out = client.stream(&sent, cancel, sink);
+    let on_device = decision.on_device();
+    let out = if on_device { super::local::serve(class, &text) } else { client.stream(&sent, cancel, sink) };
+    if on_device {
+        call.provider = super::local::PROVIDER_LOCAL;
+    }
     call.effort = effort.as_deref();
     call.model = &model;
     route_log(&dir, &call, &decision, &RouteDone::of(&out, started.elapsed()));
