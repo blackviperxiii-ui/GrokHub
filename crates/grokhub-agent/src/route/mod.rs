@@ -3,8 +3,9 @@
 //! [`live::stream_routed`] or [`cabin::call_model`], which take the effort from
 //! [`Router::choose`]. There is no effort setting: the class table
 //! ([`policy`]), difficulty and the ladder ([`ladder`]) decide, and `/why`
-//! shows the reasons. The only provider today is xAI over [`crate::XaiClient`]
-//! (or a test [`ModelClient`]).
+//! shows the reasons. xAI goes over [`crate::XaiClient`] (or a test
+//! [`ModelClient`]); a provider you added with your own key (R3b) goes over
+//! [`providers::call_model`], only under its key and your destination grant.
 
 pub mod budget;
 pub mod cabin;
@@ -16,6 +17,7 @@ pub mod learn;
 pub mod local;
 pub mod log;
 pub mod policy;
+pub mod providers;
 pub mod refresh;
 pub mod live;
 pub mod signals;
@@ -31,6 +33,7 @@ use std::collections::BTreeMap;
 
 use grokhub_core::model_registry::profile::{ModelProfile, RuntimeSettings};
 use grokhub_core::model_registry::cost_class::{fast_base, fast_entitled, fast_of, route_key, CostClass, RouteOpts};
+use grokhub_core::model_registry::discover::split_provider_model;
 use grokhub_core::model_registry::{Credential, ModelState, Registry, EFFORT_LADDER};
 
 use table::RoutingTable;
@@ -178,7 +181,9 @@ pub fn call_model(client: &dyn ModelClient, call: &ModelCall, cancel: &CancelTok
         deadline_ms: call.deadline_ms,
         ..RouteCall::default()
     };
-    let decision = live::decide(&dir, &rc, grokhub_core::now_ms());
+    rc.providers = true;
+    let now = grokhub_core::now_ms();
+    let decision = live::decide(&dir, &rc, now);
     if decision.paused() {
         route_log(&dir, &rc, &decision, &RouteDone::unseen());
         return Err(ClientError::Protocol(decision.pause_msg().into()));
@@ -188,9 +193,18 @@ pub fn call_model(client: &dyn ModelClient, call: &ModelCall, cancel: &CancelTok
     sent.model = decision.send_model(&call.model);
     let started = std::time::Instant::now();
     let on_device = decision.on_device();
-    let out = if on_device { local::serve(&call.class, &text) } else { client.stream(&sent.request(), cancel, &mut |_| {}) };
+    let out = if on_device {
+        local::serve(&call.class, &text)
+    } else if decision.on_provider() {
+        let span_id = format!("{}:{now}", if call.session.is_empty() { &call.conversation_id } else { &call.session });
+        providers::call_model(&dir, &sent.model, sent.effort.as_deref(), &sent.request(), providers::call_data(rc.sensitive), &span_id, cancel)
+    } else {
+        client.stream(&sent.request(), cancel, &mut |_| {})
+    };
     if on_device {
         rc.provider = local::PROVIDER_LOCAL;
+    } else if decision.on_provider() {
+        rc.provider = &decision.route.provider;
     }
     rc.effort = sent.effort.as_deref();
     rc.model = &sent.model;
@@ -233,6 +247,9 @@ pub struct RouteInput<'a> {
     pub start: Option<&'a str>,
     /// R3a: the local model's gate. Off by default, so no `local:*` id is ever picked.
     pub local: local::LocalGate,
+    /// R3b: the provider model you picked in Settings for this (your own) chat.
+    /// Taken only while it is a candidate (its key and a grant covering the data).
+    pub prefer: Option<&'a str>,
 }
 
 /// The pick: provider, model, effort, one plain sentence, and the rules that fired.
@@ -321,21 +338,29 @@ impl Router {
             // Over your $/M ceiling and not approved: stand in, and the cabin asks once.
             rules.push("cost:premium_ungranted".into());
         }
+        // R3b: a provider you added is never a stand-in or a fallback, and never
+        // the cheapest pick: only a pin or the class preference (a table row) takes it.
+        let own: Vec<&str> = ids.iter().copied().filter(|m| !policy::is_new_provider(reg, m)).collect();
+        let preferred: Vec<&str> = ids.iter().copied().filter(|m| !policy::is_new_provider(reg, m) || table.row(input.class, m).is_some()).collect();
         // A degraded model is still eligible, but a pin or an episode leaves it
         // when a healthy one can take over.
-        let healthy: Vec<&str> = ids.iter().copied().filter(|m| reg.get(m).is_some_and(|r| r.state != ModelState::Degraded)).collect();
-        let pool: &[&str] = if healthy.is_empty() { ids } else { &healthy };
-        let sound = |m: &str| ids.contains(&m) && (healthy.contains(&m) || !healthy.iter().any(|h| *h != m));
+        let healthy: Vec<&str> = own.iter().copied().filter(|m| reg.get(m).is_some_and(|r| r.state != ModelState::Degraded)).collect();
+        let pool: &[&str] = if healthy.is_empty() { &own } else { &healthy };
+        let sound = |m: &str| ids.contains(&m) && (healthy.contains(&m) || policy::is_new_provider(reg, m) || !healthy.iter().any(|h| *h != m));
         // Stand in for `from`: its redirect successor, then its family chain, then the ranked list.
         // Left out only for its cost (a Fast variant or an unapproved premium
         // route): the plain model first, then any included one, never a pause.
-        let priced_out = |m: &str| reg.get(m).is_some_and(|r| r.state.routable()) && !ids.contains(&m) && policy::fits_any_cost(reg, &BTreeMap::new(), m, policy::Fit { grok_build: gb, ..policy::Fit::default() }, 0);
+        let priced_out = |m: &str| (policy::is_new_provider(reg, m) && !ids.contains(&m)) || reg.get(m).is_some_and(|r| r.state.routable()) && !ids.contains(&m) && policy::fits_any_cost(reg, &BTreeMap::new(), m, policy::Fit { grok_build: gb, ..policy::Fit::default() }, 0);
         let stand_in = |from: &str, rules: &mut Vec<String>, tag: &str| -> ModelPick {
-            if let Some(s) = successor(reg, from, ids) {
+            if policy::is_new_provider(reg, from) && !ids.contains(&from) {
+                // A provider pin with no key or no grant for this data: xAI takes it.
+                rules.push("provider:ungranted".into());
+            }
+            if let Some(s) = successor(reg, from, &own) {
                 rules.push(format!("{tag}:redirect"));
                 return ModelPick { model: s, no_route: false, replaced: Some(from.to_string()) };
             }
-            if let Some(base) = fast_base(reg, from).filter(|b| ids.contains(b)) {
+            if let Some(base) = fast_base(reg, from).filter(|b| own.contains(b)) {
                 rules.push(format!("{tag}:base"));
                 return ModelPick { model: base.to_string(), no_route: false, replaced: Some(from.to_string()) };
             }
@@ -346,7 +371,7 @@ impl Router {
                     rules.push(format!("{tag}:fallback"));
                     ModelPick { model: m.clone(), no_route: false, replaced: Some(from.to_string()) }
                 }
-                None if ids.contains(&from) => {
+                None if own.contains(&from) => {
                     rules.push(format!("{tag}:degraded_kept"));
                     keep(from)
                 }
@@ -356,6 +381,10 @@ impl Router {
                 }
             }
         };
+        if let Some(p) = input.prefer.map(str::trim).filter(|p| ids.contains(p) && policy::is_new_provider(reg, p)) {
+            rules.push("provider:picked".into());
+            return keep(p);
+        }
         if input.pinned {
             if sound(current) {
                 rules.push("pin".into());
@@ -379,7 +408,7 @@ impl Router {
             rules.push("key:keep".into());
             return keep(current);
         }
-        let mut ranked = policy::rank(input.class, ids, table, reg, current, input.ctx_tokens);
+        let mut ranked = policy::rank(input.class, &preferred, table, reg, current, input.ctx_tokens);
         if e2 {
             let away = input.episode_model.unwrap_or(current).trim().to_string();
             ranked.retain(|m| *m != away);
@@ -432,7 +461,11 @@ impl Router {
         } else {
             Self::pick_model(input, reg, &ids, table, e2, &mut rules)
         };
-        let provider = if local::is_local(&chosen.model) && !chosen.no_route { local::PROVIDER_LOCAL } else { provider };
+        let provider = match split_provider_model(&chosen.model) {
+            _ if local::is_local(&chosen.model) && !chosen.no_route => local::PROVIDER_LOCAL,
+            Some((p, _)) if !chosen.no_route && policy::is_new_provider(reg, &chosen.model) => p,
+            _ => provider,
+        };
         let gb = provider == live::PROVIDER_GROK_BUILD;
         let premium_ask = rules.iter().any(|r| r == "cost:premium_ungranted").then(|| route_key(input.current_model, RouteOpts::default()));
         // Auto only: a pin is kept as picked. The Fast variant goes only under the latency policy.
@@ -483,6 +516,8 @@ impl Router {
                         }
                         c
                     }
+                    // A provider you added sends only an effort its own listing names.
+                    None if policy::is_new_provider(reg, sent_model) => None,
                     None => Some(rung_name.to_string()),
                 };
                 // `minimal` and `max` are not sent: they go out as low and xhigh.
@@ -505,6 +540,10 @@ impl Router {
                 effort_word(effort.as_deref()),
                 fast_fallback.as_deref().unwrap_or_default()
             ),
+            _ if rules.iter().any(|r| r == "provider:picked") => format!("Using {model} at {}: you picked it in Settings.", effort_word(effort.as_deref())),
+            (Some(from), _) if rules.iter().any(|r| r == "provider:ungranted") => {
+                format!("Using {model} at {}: {from} needs its key and your OK in Settings first.", effort_word(effort.as_deref()))
+            }
             (Some(from), _) if rules.iter().any(|r| r == "cost:premium_ungranted") => {
                 format!("Using {model} at {}: {from} costs more than your price limit, so it needs your OK first.", effort_word(effort.as_deref()))
             }
@@ -539,6 +578,9 @@ mod r2a_tests;
 
 #[cfg(test)]
 mod r2b_tests;
+
+#[cfg(test)]
+mod r3b_tests;
 
 #[cfg(test)]
 mod tests {

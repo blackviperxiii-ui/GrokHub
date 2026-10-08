@@ -151,6 +151,85 @@ pub fn gb_listing(ids: &[String], gb_version: Option<&str>) -> Listing {
     listing
 }
 
+/// The registry id of a model on a provider you added: `<provider>/<model>`.
+/// xAI ids never have a `/`, so the two can't collide.
+pub fn provider_model_id(provider: &str, model: &str) -> String {
+    format!("{}/{}", provider.trim(), model.trim())
+}
+
+/// `(provider, model)` of a provider model id; `None` for an xAI id.
+pub fn split_provider_model(id: &str) -> Option<(&str, &str)> {
+    let (p, m) = id.trim().split_once('/')?;
+    (!p.is_empty() && !m.is_empty()).then_some((p, m))
+}
+
+/// USD per token (`"0.000003"` or a number) as cents per 100M tokens, the
+/// unit xAI reports. A missing, negative or unparsable price stays unknown.
+fn usd_per_token(v: Option<&Value>) -> Option<u64> {
+    let usd = match v? {
+        Value::String(s) => s.trim().parse::<f64>().ok()?,
+        Value::Number(n) => n.as_f64()?,
+        _ => return None,
+    };
+    (usd.is_finite() && usd >= 0.0).then(|| (usd * 1e10).round() as u64)
+}
+
+/// An effort list the listing itself names. Nothing is filled from code.
+fn listed_efforts(row: &Value) -> Option<Vec<String>> {
+    const KEYS: &[&str] = &["efforts", "reasoning_efforts", "reasoning_effort", "supported_efforts"];
+    let caps = row.get("capabilities");
+    KEYS.iter()
+        .find_map(|k| strings(row.get(*k)))
+        .or_else(|| KEYS.iter().find_map(|k| strings(caps.and_then(|c| c.get(*k)))))
+        .or_else(|| strings(caps.and_then(|c| c.get("effort")).and_then(|e| e.get("levels").or(Some(e)))))
+}
+
+/// An OpenAI-compatible `/models` listing (OpenRouter and the like), ids as
+/// `<provider>/<model>`. Prices are USD per token there; unknown stays `None`.
+pub fn parse_openai_compatible_catalog(provider: &str, body: &str) -> Result<Vec<ModelMeta>, String> {
+    let mut out = Vec::new();
+    for row in rows(body)? {
+        let Some(id) = str_of(&row, &["id"]) else { continue };
+        let top = row.get("top_provider").cloned().unwrap_or(Value::Null);
+        let pricing = row.get("pricing").cloned().unwrap_or(Value::Null);
+        let params = strings(row.get("supported_parameters"));
+        out.push(ModelMeta {
+            id: provider_model_id(provider, &id),
+            context_length: u64_of(&row, &["context_length", "context_window"]).or_else(|| u64_of(&top, &["context_length"])),
+            max_output: u64_of(&top, &["max_completion_tokens"]).or_else(|| u64_of(&row, &["max_output_tokens", "max_completion_tokens"])),
+            prices: Prices {
+                prompt: usd_per_token(pricing.get("prompt")),
+                cached: usd_per_token(pricing.get("input_cache_read")),
+                completion: usd_per_token(pricing.get("completion")),
+                ..Prices::default()
+            },
+            efforts: listed_efforts(&row),
+            input_modalities: strings(row.get("architecture").and_then(|a| a.get("input_modalities"))),
+            output_modalities: strings(row.get("architecture").and_then(|a| a.get("output_modalities"))),
+            tool_calling: params.as_ref().map(|p| p.iter().any(|x| x == "tools")),
+            ..ModelMeta::default()
+        });
+    }
+    Ok(out)
+}
+
+/// Anthropic's `/v1/models`, ids as `<provider>/<model>`. It lists no
+/// prices, so they stay unknown (ranked last, never the cheapest pick).
+pub fn parse_anthropic_catalog(provider: &str, body: &str) -> Result<Vec<ModelMeta>, String> {
+    let mut out = Vec::new();
+    for row in rows(body)? {
+        let Some(id) = str_of(&row, &["id"]) else { continue };
+        out.push(ModelMeta {
+            id: provider_model_id(provider, &id),
+            context_length: u64_of(&row, &["max_input_tokens", "context_window", "context_length"]),
+            max_output: u64_of(&row, &["max_tokens", "max_output_tokens"]),
+            efforts: listed_efforts(&row),
+            ..ModelMeta::default()
+        });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,5 +286,53 @@ mod tests {
     fn a_bad_payload_is_an_error_not_an_empty_list() {
         assert_eq!(parse_xai_catalog(Some("{}"), None).unwrap_err(), "models payload has no data array");
         assert_eq!(parse_xai_catalog(None, None).unwrap_err(), "no models payload");
+    }
+
+    #[test]
+    fn openai_compatible_rows_parse_prices_per_token_and_keep_unknowns_null() {
+        let body = r#"{"data":[
+            {"id":"vendor/model-a","context_length":200000,
+             "pricing":{"prompt":"0.000003","completion":"0.000015","input_cache_read":"0.0000003"},
+             "top_provider":{"max_completion_tokens":64000},
+             "architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},
+             "supported_parameters":["tools","reasoning"],"reasoning_efforts":["low","high"]},
+            {"id":"vendor/model-b","pricing":{"prompt":"-1","completion":"abc"},"supported_parameters":["temperature"]},
+            {"id":"vendor/model-c"},
+            {"object":"no id"}
+        ]}"#;
+        let got = parse_openai_compatible_catalog("openrouter", body).unwrap();
+        assert_eq!(got.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), vec!["openrouter/vendor/model-a", "openrouter/vendor/model-b", "openrouter/vendor/model-c"]);
+        let a = &got[0];
+        // $3 / $15 / $0.30 per million is 30_000 / 150_000 / 3_000 cents per 100M, as xAI reports.
+        assert_eq!(a.prices, Prices { prompt: Some(30_000), cached: Some(3_000), completion: Some(150_000), ..Prices::default() });
+        assert_eq!((a.context_length, a.max_output), (Some(200_000), Some(64_000)));
+        assert_eq!(a.efforts.as_deref(), Some(&["low".to_string(), "high".into()][..]));
+        assert_eq!(a.tool_calling, Some(true));
+        assert_eq!(a.input_modalities.as_deref(), Some(&["text".to_string(), "image".into()][..]));
+        assert_eq!(a.api_shape, None);
+        let b = &got[1];
+        assert_eq!(b.prices, Prices::default(), "a negative or unparsable price is unknown");
+        assert_eq!((b.tool_calling, b.efforts.as_ref()), (Some(false), None), "no effort list is filled from code");
+        let c = &got[2];
+        assert_eq!((c.context_length, c.tool_calling, c.prices.is_empty()), (None, None, true));
+        assert_eq!(split_provider_model("openrouter/vendor/model-a"), Some(("openrouter", "vendor/model-a")));
+        assert_eq!(split_provider_model("grok-4.7"), None);
+        assert_eq!(split_provider_model("/x"), None);
+    }
+
+    #[test]
+    fn anthropic_rows_have_no_prices_and_only_the_efforts_they_name() {
+        let body = r#"{"data":[
+            {"id":"model-x","type":"model","display_name":"X","max_input_tokens":200000,"max_tokens":32000,
+             "capabilities":{"effort":{"levels":["low","medium","high"]}}},
+            {"id":"model-y","type":"model"}
+        ],"has_more":false}"#;
+        let got = parse_anthropic_catalog("anthropic", body).unwrap();
+        assert_eq!(got[0].id, "anthropic/model-x");
+        assert_eq!((got[0].context_length, got[0].max_output), (Some(200_000), Some(32_000)));
+        assert_eq!(got[0].efforts.as_deref(), Some(&["low".to_string(), "medium".into(), "high".into()][..]));
+        assert!(got[0].prices.is_empty(), "Anthropic lists no prices: unknown, never guessed");
+        assert_eq!((got[1].efforts.as_ref(), got[1].context_length), (None, None));
+        assert_eq!(parse_anthropic_catalog("anthropic", "{}").unwrap_err(), "models payload has no data array");
     }
 }

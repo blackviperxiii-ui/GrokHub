@@ -18,7 +18,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub use cost_class::{CostClass, RouteOpts};
-pub use discover::{gb_listing, parse_model_row, parse_xai_catalog, CatalogSource, Listing};
+pub use discover::{
+    gb_listing, parse_anthropic_catalog, parse_model_row, parse_openai_compatible_catalog, parse_xai_catalog, provider_model_id,
+    split_provider_model, CatalogSource, Listing,
+};
 pub use entitlement::{tier_notice, Credential, Entitlement};
 pub use health::{classify_status, CallStatus, Observation};
 pub use record::{Breaker, ModelMeta, ModelRecord, ModelState, Notice, Prices, SourceKind};

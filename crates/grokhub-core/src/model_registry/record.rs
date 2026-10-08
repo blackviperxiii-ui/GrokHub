@@ -18,6 +18,10 @@ pub enum SourceKind {
     GbConfig,
     /// The on-device model (Router R3a plumbing). Lists nothing while `localModel` is off.
     Local,
+    /// An OpenAI-compatible `/models` (OpenRouter and the like) you added a key for (Router R3b).
+    OpenAiCompatible,
+    /// Anthropic's `/v1/models` with a key you added (Router R3b).
+    Anthropic,
 }
 
 impl SourceKind {
@@ -27,7 +31,14 @@ impl SourceKind {
             Self::GrokBuild => "grok_build",
             Self::GbConfig => "gb_config",
             Self::Local => "local",
+            Self::OpenAiCompatible => "openai_compatible",
+            Self::Anthropic => "anthropic",
         }
+    }
+
+    /// A provider you added with your own key: cost class `new_provider`.
+    pub fn is_new_provider(self) -> bool {
+        matches!(self, Self::OpenAiCompatible | Self::Anthropic)
     }
 }
 
