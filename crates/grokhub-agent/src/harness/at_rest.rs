@@ -885,6 +885,7 @@ mod tests {
             tags: vec!["home".into()],
             body: "Home harbor is Pier 9.".into(),
             sensitivity: Sensitivity::Personal,
+            consent_ref: String::new(),
         };
         amr.remember(&draft).unwrap();
         let raw = fs::read_to_string(d.join("amr/nodes/fact-home.sealed")).unwrap();

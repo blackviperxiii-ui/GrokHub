@@ -392,6 +392,52 @@ pub fn read_spans(config_dir: &Path, session_id: &str) -> Result<Vec<Span>, Stri
     Ok(out)
 }
 
+/// How much of one span file [`read_spans_tail`] reads from its end.
+pub const SPAN_TAIL_BYTES: u64 = 4 * 1024 * 1024;
+
+/// The newest `max_lines` spans of `spans/<session>.jsonl`, oldest first, and
+/// how many lines were read. Only the last [`SPAN_TAIL_BYTES`] of the file are
+/// read. Unlike [`read_spans`], a line that is not a span is skipped, so one
+/// bad line never hides a whole file from search.
+pub fn read_spans_tail(config_dir: &Path, session_id: &str, max_lines: usize) -> (Vec<Span>, usize) {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = fs::File::open(span_path(config_dir, session_id)) else {
+        return (Vec::new(), 0);
+    };
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let start = len.saturating_sub(SPAN_TAIL_BYTES);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return (Vec::new(), 0);
+    }
+    let mut bytes = Vec::new();
+    if file.read_to_end(&mut bytes).is_err() {
+        return (Vec::new(), 0);
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    let mut lines: Vec<&str> = text.lines().collect();
+    if start > 0 && !lines.is_empty() {
+        // The first line is cut mid-way by the seek.
+        lines.remove(0);
+    }
+    let mut out = Vec::new();
+    let mut read = 0usize;
+    for line in lines.iter().rev() {
+        if read == max_lines {
+            break;
+        }
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        read += 1;
+        if let Ok(span) = serde_json::from_str::<Span>(line) {
+            out.push(span);
+        }
+    }
+    out.reverse();
+    (out, read)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

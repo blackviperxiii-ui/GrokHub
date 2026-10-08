@@ -758,6 +758,7 @@ impl Cabin {
             return;
         }
         self.write_span_at(hx::Span::reply(&trace, reply, &self.secret_hold), "audit", turn);
+        let _ = self.write_turn_trail(&trace, turn);
         if !self.harness.soft_parks.is_empty() {
             return;
         }
@@ -784,6 +785,23 @@ impl Cabin {
                 }
             }
         }
+    }
+
+    /// Spike-3a (AMR M4): one `trail` node for this turn, off the UI thread.
+    /// Memory repo mode only; legacy and scratch chats write none. Built from
+    /// spans only (it reads, never runs anything). A sealed trail with no key
+    /// is `Paused` and writes nothing; the turn ends as usual either way.
+    pub(super) fn write_turn_trail(&mut self, chat: &str, turn: u32) -> Option<std::thread::JoinHandle<()>> {
+        if !self.amr_on() || self.scratch() {
+            return None;
+        }
+        let store = self.amr_store(false);
+        let held = self.secret_hold.clone();
+        let dir = crate::config::config_dir();
+        let chat = chat.to_string();
+        Some(std::thread::spawn(move || {
+            let _ = hx::write_trail(&store, &dir, &chat, turn, &held, grokhub_core::now_ms());
+        }))
     }
 
     /// [`Self::harness_turn_end`] on the reply `finish_acp_turn` kept. `turn`
@@ -2393,6 +2411,36 @@ mod tests {
         let spans = hx::read_spans(&root, "session").unwrap();
         assert_eq!(spans.last().unwrap().decision, "deny");
         assert_eq!(spans.last().unwrap().result, "Jeremy denied (Esc)");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Spike-5a: a forget the agent starts is a hard Delete card, even under
+    /// Always: Approve and Deny only, and Enter leaves it parked.
+    #[test]
+    fn agent_forget_parks_a_hard_delete_card_enter_cannot_approve() {
+        let (_pin, root) = pinned("agent-forget");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.permission_mode = PermissionMode::AlwaysApprove;
+        assert_eq!(cabin.harness_precheck(ask(hx::AGENT_FORGET_TOOL, "forget 3 learned notes")), None);
+        assert!(cabin.harness.park.is_some());
+        let (texts, _) = paint_stack(&mut cabin, Vec::new(), 900.0);
+        assert!(texts.iter().any(|t| t == "Delete"), "{texts:?}");
+        let buttons: Vec<_> = texts
+            .iter()
+            .filter(|t| *t == "Approve" || *t == "Deny" || *t == "Always" || *t == "Allow")
+            .cloned()
+            .collect();
+        assert_eq!(buttons, vec!["Approve".to_string(), "Deny".to_string()]);
+        let enter = egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let _ = paint_stack(&mut cabin, vec![enter], 900.0);
+        assert!(cabin.harness.park.is_some(), "Enter must not approve an agent forget");
+        assert_eq!(hx::read_spans(&root, "session").unwrap().last().unwrap().decision, "park");
         let _ = std::fs::remove_dir_all(root);
     }
 
