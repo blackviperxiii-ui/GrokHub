@@ -96,8 +96,6 @@ pub fn schemas_for(gate: &Gate) -> Vec<Value> {
     tools.push(control::monitor_schema());
     tools.push(control::scheduler_create_schema());
     tools.push(control::scheduler_delete_schema());
-    tools.push(connections::add_schema());
-    tools.push(connections::disable_schema());
     tools.push(connections::delete_schema());
     let desk = if gate.desktop { desktop::schemas() } else { Vec::new() };
     let native = desk.len();
@@ -149,8 +147,6 @@ pub fn dispatch(ctx: &ToolCtx<'_>, name: &str, arguments: &str) -> ToolOutput {
         "monitor" => control::monitor(ctx, &args),
         "scheduler_create" => control::scheduler_create(&args),
         "scheduler_delete" => control::scheduler_delete(&args),
-        "connection_add" => connections::add(&args),
-        "connection_disable" => connections::disable(&args),
         "connection_delete" => connections::delete(&args),
         "web_fetch" => web_fetch::run_with_ports(&args, ctx.stop),
         "image_generate" | "image_edit" | "video_generate" | "video_edit" | "video_extend" => {
@@ -352,6 +348,28 @@ mod tests {
             assert_eq!(tool["parameters"]["type"], "object");
             assert!(tool["name"].as_str().is_some());
         }
+    }
+
+    /// The API answers 400 "Duplicate function definition provided" when two
+    /// tools share a name, so chat fails before the first token.
+    #[test]
+    fn schemas_for_has_no_duplicate_names() {
+        for readonly_session in [false, true] {
+            for desktop in [false, true] {
+                let gate = Gate { mode: gate::PermMode::Always, readonly_session, attended: true, desktop };
+                let tools = schemas_for(&gate);
+                let mut seen = std::collections::BTreeSet::new();
+                for tool in &tools {
+                    let name = tool["name"].as_str().unwrap_or_default();
+                    assert!(seen.insert(name), "duplicate tool {name} (readonly={readonly_session}, desktop={desktop})");
+                }
+            }
+        }
+        let full = schemas_for(&Gate { mode: gate::PermMode::Always, readonly_session: false, attended: true, desktop: false });
+        let count = |n: &str| full.iter().filter(|t| t["name"] == n).count();
+        assert_eq!(count("connection_add"), 1);
+        assert_eq!(count("connection_disable"), 1);
+        assert_eq!(count("connection_delete"), 1);
     }
 
     #[test]
