@@ -114,6 +114,7 @@ pub fn remember_line(
         tags: w.tags.clone(),
         body: format!("{text}\n"),
         sensitivity: sensitivity_for(text),
+        consent_ref: String::new(),
     };
     match store.remember(&draft) {
         Ok(id) => Ok(Remembered::New(id.as_str().to_string())),
