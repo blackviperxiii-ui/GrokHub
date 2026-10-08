@@ -192,6 +192,7 @@ mod voice;
 mod threads_nav;
 mod background;
 mod heartbeat_gate;
+mod proactive_ui;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -553,6 +554,9 @@ pub struct Cabin {
     /// Card whose notes are open for editing, and the text being typed.
     board_notes_edit: Option<(String, String)>,
     last_anticipate_ms: u64,
+    /// Spike-6a card budget (mutes, dismissal streak, quiet-hours queue).
+    proactive: grokhub_core::proactive::ProactiveBudget,
+    last_proactive_ms: u64,
     goal_step: u32,
     followup_step: u32,
     stream_buf: String,
@@ -1174,6 +1178,8 @@ impl Cabin {
             card_notes_follow: None,
             board_notes_edit: None,
             last_anticipate_ms: 0,
+            proactive: proactive_ui::load_budget(),
+            last_proactive_ms: 0,
             goal_step,
             followup_step: 0,
             stream_buf: String::new(),
@@ -1617,6 +1623,8 @@ impl Cabin {
             card_notes_follow: None,
             board_notes_edit: None,
             last_anticipate_ms: 0,
+            proactive: proactive_ui::load_budget(),
+            last_proactive_ms: 0,
             goal_step: 0,
             followup_step: 0,
             stream_buf: String::new(),
@@ -3480,6 +3488,11 @@ impl Cabin {
         }
         let clock = Self::local_clock();
         let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
+        // Spike-6a cards: busy is should_anticipate's seat check plus a card
+        // waiting on you; quiet hours only queue.
+        let busy = !should_anticipate(self.running, self.review_busy, self.composer.trim().is_empty(), false)
+            || self.heartbeat_busy();
+        self.tick_proactive(now_ms(), quiet, busy);
         if !should_anticipate(
             self.running,
             self.review_busy,

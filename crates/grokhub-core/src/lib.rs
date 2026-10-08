@@ -51,6 +51,7 @@ pub mod openclaw;
 pub mod organs;
 pub mod pair;
 pub mod paths;
+pub mod proactive;
 pub mod project;
 pub mod pulse;
 pub mod recipe;

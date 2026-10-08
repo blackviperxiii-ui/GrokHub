@@ -396,13 +396,25 @@ fn pulse_menu(
             act,
         );
         pick(ui, "That's wrong", "", PulseAct::Wrong(id.clone()), act);
-    } else if !feed {
+    } else if !feed && card.pulse.proactive.is_none() {
+        // A proactive offer has no Always: a hard one never may, and a soft
+        // one is a single offer, not a schedule.
         pick(ui, "Always do this", "", PulseAct::Always(id.clone()), act);
     }
     pick(ui, "Open", "Enter", PulseAct::Open(id.clone()), act);
     ui.separator();
     pick(ui, "Not this", "N", PulseAct::NotThis(id.clone()), act);
     pick(ui, "Dismiss", "D", PulseAct::Dismiss(id), act);
+}
+
+/// The inline Run button's word: Send… on a prepared draft (it parks the hard
+/// card), Yes on an ask card, else Run.
+pub(super) fn run_label(card: &UpdateCard) -> &'static str {
+    match card.pulse.proactive.as_ref().map(|p| p.route) {
+        Some(grokhub_core::proactive::ProactiveRoute::Prepare) => "Send…",
+        Some(grokhub_core::proactive::ProactiveRoute::Ask) => "Yes",
+        _ => "Run",
+    }
 }
 
 /// A small frameless text button for the row's inline actions.
@@ -504,7 +516,7 @@ pub(super) fn paint_pulse_row(
                                         act = Some(PulseAct::Snooze(card.id.clone()));
                                     }
                                     dot(ui);
-                                    if quick_button(ui, "Run") {
+                                    if quick_button(ui, run_label(card)) {
                                         act = Some(PulseAct::Run(card.id.clone()));
                                     }
                                 },
@@ -1373,6 +1385,15 @@ impl Cabin {
 
     /// Run: the idea's own action as a `/bg` task. The composer stays free.
     pub(super) fn pulse_run(&mut self, id: &str) -> Option<String> {
+        if self.pulse_card(id)?.pulse.proactive.is_some() {
+            self.proactive_click(id);
+            return None;
+        }
+        self.pulse_run_line(id)
+    }
+
+    /// The `/bg` line itself, once any gate said yes.
+    pub(super) fn pulse_run_line(&mut self, id: &str) -> Option<String> {
         let card = self.pulse_card(id)?;
         let line = pc::run_line(&card);
         if grokhub_core::mark_update_opened(&mut self.updates, id) {
@@ -1407,6 +1428,7 @@ impl Cabin {
         self.pulse_note(&card.title, LedgerReason::Dismiss, day);
         self.pulse_remove(&card);
         self.heartbeat_card_dismissed();
+        self.proactive_dismissed(&card);
     }
 
     /// Not this: a dislike line in the ledger, then the card goes. Cards on the
@@ -1418,6 +1440,7 @@ impl Cabin {
         self.pulse_note(&card.title, LedgerReason::NotThis, day);
         self.pulse_remove(&card);
         self.heartbeat_card_dismissed();
+        self.proactive_not_this(&card);
         self.status = "Got it. Less like this.".into();
     }
 
