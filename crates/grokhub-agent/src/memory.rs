@@ -324,6 +324,37 @@ fn amr_injection_lines(user_text: &str) -> Vec<String> {
     out
 }
 
+/// The recalled lines in a history's memory block (Spike-4c), so egress can
+/// tell when a call carries one. Text outside the fences is the preamble.
+pub fn recall_lines(history: &[crate::InputItem]) -> Vec<String> {
+    let mut out = Vec::new();
+    for item in history {
+        let crate::InputItem::Message { role, content } = item else {
+            continue;
+        };
+        if role != "system" {
+            continue;
+        }
+        for part in content {
+            let crate::ContentPart::InputText(text) = part else {
+                continue;
+            };
+            let Some(block) = text.split(OPEN_TAG).nth(1).and_then(|b| b.split(CLOSE_TAG).next()) else {
+                continue;
+            };
+            let mut inside = false;
+            for line in block.lines() {
+                if line.trim() == "```" {
+                    inside = !inside;
+                } else if inside && !line.trim().is_empty() {
+                    out.push(line.trim().to_string());
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Rebuild the index from the markdown files. Returns the number of entries.
 /// Runtime recall uses [`rebuild_if_stale`], which reindexes per file.
 #[cfg(test)]

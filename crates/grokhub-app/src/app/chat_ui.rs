@@ -1165,6 +1165,10 @@ impl Cabin {
                         self.chat_tail_frames = 0;
                     }
                 }
+                if self.jump_turn.is_some() {
+                    // A step search jump wins over pinning the tail, like find.
+                    self.chat_tail_frames = 0;
+                }
                 let find_hits = self.find.hits().to_vec();
                 let find_row = self.find.current_row();
                 let find_jump = self.find.jump;
@@ -1181,6 +1185,7 @@ impl Cabin {
                         let mut act = ChatBlockAct::None;
                         let jump_you = self.jump_last_you;
                         let mut jumped_you = false;
+                        let no_turn_row;
                         let fold_thread = self.visible_thread_id();
                         let start_collapsed = grokhub_core::session_thoughts_start_collapsed(
                             self.cfg.always_collapse_thoughts,
@@ -1234,6 +1239,10 @@ impl Cabin {
                                 )
                             };
                             let last_you_i = shown.iter().rposition(|v| v.kind == ChatKind::User);
+                            // "Last you", or the turn a step search hit opened.
+                            let turn_i = self.jump_turn.and_then(|t| turn_jump_row(shown, t));
+                            no_turn_row = self.jump_turn.is_some() && turn_i.is_none();
+                            let turn_i = if jump_you { None } else { turn_i };
                             let prev_heights: Vec<f32> =
                                 ui.ctx().data(|d| d.get_temp(row_h_id)).unwrap_or_default();
                             let mut next_heights = Vec::with_capacity(shown.len());
@@ -1247,7 +1256,7 @@ impl Cabin {
                                     // burn that same slot or the next painted row renumbers.
                                     ui.skip_ahead_auto_ids(1);
                                     next_heights.push(cached_h);
-                                    if jump_you && last_you_i == Some(i) {
+                                    if (jump_you && last_you_i == Some(i)) || turn_i == Some(i) {
                                         let slot = egui::Rect::from_min_size(
                                             origin,
                                             egui::vec2(row_w, cached_h),
@@ -1329,7 +1338,7 @@ impl Cabin {
                                         }
                                         p
                                     });
-                                if jump_you && last_you_i == Some(i) {
+                                if (jump_you && last_you_i == Some(i)) || turn_i == Some(i) {
                                     ui.scroll_to_rect(painted.response.rect, Some(egui::Align::Center));
                                     jumped_you = true;
                                 }
@@ -1378,8 +1387,9 @@ impl Cabin {
                         if let Some((row, act)) = change_hit {
                             self.change_row_clicked(&row, act);
                         }
-                        if jumped_you {
+                        if jumped_you || no_turn_row {
                             self.jump_last_you = false;
+                            self.jump_turn = None;
                         }
                         if find_jumped {
                             self.find.jump = false;
@@ -1873,6 +1883,7 @@ impl Cabin {
         .id_salt("chat-work-tree")
         .default_open(false)
         .show(ui, |ui| {
+            self.paint_episode_header(ui);
             for card in &self.tool_cards {
                 paint_tool_card_body(ui, card);
                 ui.add_space(6.0);

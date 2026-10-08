@@ -424,6 +424,7 @@ impl Cabin {
             image: None,
         };
         std::thread::spawn(move || {
+            let _origin = grokhub_agent::harness::OriginScope::enter(grokhub_agent::harness::Origin::Automation);
             let done = execute(job);
             if done.stop_reason == "halted" || done.stop_reason == "cancelled" {
                 return;
@@ -475,6 +476,7 @@ impl Cabin {
         self.review_rx = Some(rx);
         self.review_busy = true;
         std::thread::spawn(move || {
+            let _origin = grokhub_agent::harness::OriginScope::enter(grokhub_agent::harness::Origin::Proactive);
             if config::read_memory(&mem_name) != mem_body {
                 let _ = config::write_memory(&mem_name, &mem_body);
             }
@@ -587,6 +589,7 @@ impl Cabin {
         };
         let workspace = self.grok_cwd();
         std::thread::spawn(move || {
+            let _origin = grokhub_agent::harness::OriginScope::enter(grokhub_agent::harness::Origin::Proactive);
             let text = fast_text(&ready, &workspace, &prompt).unwrap_or_default();
             let _ = tx.send(text);
         });
@@ -650,6 +653,7 @@ mod tests {
                     output_tokens: 3,
                     reasoning_tokens: 1,
                     cost_in_usd_ticks: 5,
+                    cached_tokens: 0,
                 },
             })
         }
@@ -813,6 +817,7 @@ mod tests {
                 output_tokens: 3,
                 reasoning_tokens: 1,
                 cost_in_usd_ticks: 5,
+                cached_tokens: 0,
             },
             meter: "API credits".into(),
             context_tokens_used: 9,

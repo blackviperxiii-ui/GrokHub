@@ -510,6 +510,7 @@ impl Cabin {
                 }
                 AcpEvent::Done { stop_reason } => {
                     self.sync_native_title_from_store();
+                    self.episode_turn_done(&stop_reason);
                     if stop_reason.eq_ignore_ascii_case("cancelled") || !self.running {
                         continue;
                     }

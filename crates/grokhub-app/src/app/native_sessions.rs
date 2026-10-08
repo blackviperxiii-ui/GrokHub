@@ -453,6 +453,7 @@ mod tests {
             output_tokens: 1,
             reasoning_tokens: 0,
             cost_in_usd_ticks: 9,
+            cached_tokens: 0,
         };
         grokhub_agent::record_turn(
             "native-merge",

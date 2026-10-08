@@ -75,6 +75,7 @@ pub fn tool_schemas() -> Vec<Value> {
         control::output_schema(),
         control::scheduler_list_schema(),
         crate::skills::schema(),
+        crate::repair::schema(),
     ]
 }
 
@@ -95,6 +96,9 @@ pub fn schemas_for(gate: &Gate) -> Vec<Value> {
     tools.push(control::monitor_schema());
     tools.push(control::scheduler_create_schema());
     tools.push(control::scheduler_delete_schema());
+    tools.push(connections::add_schema());
+    tools.push(connections::disable_schema());
+    tools.push(connections::delete_schema());
     let desk = if gate.desktop { desktop::schemas() } else { Vec::new() };
     let native = desk.len();
     tools.extend(desk);
@@ -148,7 +152,7 @@ pub fn dispatch(ctx: &ToolCtx<'_>, name: &str, arguments: &str) -> ToolOutput {
         "connection_add" => connections::add(&args),
         "connection_disable" => connections::disable(&args),
         "connection_delete" => connections::delete(&args),
-        "web_fetch" => web_fetch::run_with_ports(&args),
+        "web_fetch" => web_fetch::run_with_ports(&args, ctx.stop),
         "image_generate" | "image_edit" | "video_generate" | "video_edit" | "video_extend" => {
             media::run_with_ports(name, &args, ctx.stop)
         }
@@ -209,6 +213,7 @@ fn dispatch_readonly(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolOutput 
         "scheduler_list" => control::scheduler_list(),
         "search_tool" => crate::mcp::search_output(args),
         "skill" => crate::skills::tool_run(ctx.workspace, args),
+        "diagnose" => crate::repair::tool_run(args),
         other => ToolOutput::err(format!("{READ_ONLY_PHASE}: `{other}` is not available.")),
     }
 }
@@ -339,6 +344,7 @@ mod tests {
                 "get_command_or_subagent_output",
                 "scheduler_list",
                 "skill",
+                "diagnose",
             ]
         );
         for tool in &tools {

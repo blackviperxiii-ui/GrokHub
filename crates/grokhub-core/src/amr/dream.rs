@@ -584,6 +584,7 @@ mod tests {
             tags: tags.iter().map(|t| t.to_string()).collect(),
             body: format!("{body}\n"),
             sensitivity: Sensitivity::Plain,
+            consent_ref: String::new(),
         }
     }
 
@@ -936,6 +937,8 @@ mod tests {
             confidence: 0.1,
             tags: vec![],
             body: "dock key sk-abcdefghijklmnopqrstuv\n".into(),
+            consent_ref: String::new(),
+            sensitivity: Sensitivity::Plain,
         };
         fs::write(tmp.0.join("nodes/raw-key.md"), raw.to_markdown()).unwrap();
         let pref = NodeDraft {

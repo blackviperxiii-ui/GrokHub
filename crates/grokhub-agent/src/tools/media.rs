@@ -50,14 +50,6 @@ impl UreqImagine {
         Self { agent, bearer }
     }
 
-    fn endpoint(path: &str) -> String {
-        format!(
-            "{}/{}",
-            grokhub_core::XAI_BASE.trim_end_matches('/'),
-            path.trim_start_matches('/')
-        )
-    }
-
     fn auth_header(&self) -> String {
         let bearer = &self.bearer;
         format!("Bearer {bearer}")
@@ -68,7 +60,7 @@ impl ImagineApi for UreqImagine {
     fn post_json(&self, path: &str, body: &Value) -> Result<Value, String> {
         let response = self
             .agent
-            .post(&Self::endpoint(path))
+            .post(&endpoint(path))
             .set("Authorization", &self.auth_header())
             .set("User-Agent", crate::USER_AGENT)
             .send_json(body)
@@ -79,7 +71,7 @@ impl ImagineApi for UreqImagine {
     fn get_json(&self, path: &str) -> Result<Value, String> {
         let response = self
             .agent
-            .get(&Self::endpoint(path))
+            .get(&endpoint(path))
             .set("Authorization", &self.auth_header())
             .set("User-Agent", crate::USER_AGENT)
             .call()
@@ -107,6 +99,22 @@ impl ImagineApi for UreqImagine {
         }
         Ok(buf)
     }
+}
+
+fn endpoint(path: &str) -> String {
+    format!(
+        "{}/{}",
+        grokhub_core::XAI_BASE.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    )
+}
+
+/// EgressGuard (Spike-4c) in front of each Imagine call. The prompt is chat,
+/// or personal when it carries a recall-pack line; api.x.ai is a model host,
+/// so both go with one line. Polls and result downloads carry no user data.
+fn guard(url: &str, data: &[crate::harness::DataClass], stop: &dyn Fn() -> bool) -> Result<(), String> {
+    let req = crate::harness::EgressReq::new(url, data);
+    crate::harness::guard_or_park(&crate::perm::config_dir(), &req, "imagine", &mut || stop())
 }
 
 fn https_host(url: &str) -> Option<String> {
@@ -271,7 +279,10 @@ pub(crate) fn run_with_ports(name: &str, args: &Value, stop: &dyn Fn() -> bool) 
 
 #[cfg(test)]
 pub(crate) fn execute(name: &str, args: &Value, api: &dyn ImagineApi) -> ToolOutput {
-    execute_with(name, args, api, &|| false, None)
+    let (dir, _cfg) = tests::scratch_config();
+    let out = execute_with(name, args, api, &|| false, None);
+    let _ = std::fs::remove_dir_all(dir);
+    out
 }
 
 /// `stop` is cancel or Halt; a video poll checks it every 200 ms.
@@ -313,7 +324,7 @@ fn save_results(text: &str, api: &dyn ImagineApi, dir: &std::path::Path, video: 
         let bytes = if let Some(data) = url.strip_prefix("data:") {
             decode_data_url(data)
         } else {
-            api.download(url)
+            guard(url, &[], &|| false).and_then(|()| api.download(url))
         };
         let saved = bytes.and_then(|bytes| {
             if bytes.len() < 32 {
@@ -547,11 +558,14 @@ fn run_call(
     api: &dyn ImagineApi,
     stop: &dyn Fn() -> bool,
 ) -> Result<String, String> {
+    let url = endpoint(call.path);
+    guard(&url, crate::harness::model_text_classes(&call.body.to_string()), stop)?;
     match api.post_json(call.path, &call.body) {
         Ok(body) => finish(call, api, body, false, stop),
         Err(err) => {
             if let Some(fallback) = call.mask_fallback.as_ref() {
                 if grokhub_core::imagine_mask_rejected(&err) && !stop() {
+                    guard(&url, crate::harness::model_text_classes(&fallback.to_string()), stop)?;
                     let body = api.post_json(call.path, fallback)?;
                     return finish(call, api, body, true, stop);
                 }
@@ -623,7 +637,9 @@ fn poll_video(
         if std::time::Instant::now() >= deadline {
             return Err("video timed out".into());
         }
-        let body = api.get_json(&format!("videos/{id}"))?;
+        let path = format!("videos/{id}");
+        guard(&endpoint(&path), &[], stop)?;
+        let body = api.get_json(&path)?;
         if let Some(url) = video_url_now(&body)? {
             return Ok(url);
         }
@@ -818,7 +834,7 @@ fn audio_flag(args: &Value) -> Result<bool, String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::auto_review::{review, ReviewIn};
     use crate::gate::{self, decide_with, Decision, Gate, PermMode};
@@ -1017,6 +1033,15 @@ mod tests {
             json!({"prompt": "x", "video": "https://cdn.example/v.mp4"}),
         );
         assert_eq!(extended.body["duration"], 6);
+    }
+
+    /// A scratch config folder (own in-memory keyring) pinned for this thread.
+    pub(crate) fn scratch_config() -> (std::path::PathBuf, crate::perm::ConfigGuard) {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = crate::harness::test_dir(&format!("media-{n}"));
+        let cfg = crate::perm::ConfigGuard::set(&dir);
+        (dir, cfg)
     }
 
     struct FakeImagine {
@@ -1328,6 +1353,7 @@ mod tests {
             grokhub_core::now_ms()
         ));
         let dir = root.join("sessions").join("native-x").join("media");
+        let (cfg_dir, _cfg) = scratch_config();
         let args = json!({"prompt": "a cabin", "n": 2});
         let out = execute_with(
             "image_generate",
@@ -1352,6 +1378,12 @@ mod tests {
         assert!(out.text.contains("(not saved: HTTP 404)"), "{}", out.text);
         let names: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
         assert_eq!(names.len(), 1);
+        // One line for the prompt, one per download: hosts only, no prompt, no path.
+        let log = crate::harness::read_egress(&cfg_dir);
+        let rows: Vec<(&str, &str)> = log.iter().map(|l| (l.dest.as_str(), l.basis.as_str())).collect();
+        assert_eq!(rows, vec![("api.x.ai", "model_host"), ("imgen.x.ai", "public"), ("imgen.x.ai", "public")]);
+        assert!(!format!("{log:?}").contains("cabin") && !format!("{log:?}").contains(".png"), "{log:?}");
+        let _ = std::fs::remove_dir_all(&cfg_dir);
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(
             https_host("https://imgen.x.ai/a.png").as_deref(),
@@ -1363,6 +1395,7 @@ mod tests {
 
     #[test]
     fn video_poll_stops_on_cancel() {
+        let (cfg_dir, _cfg) = scratch_config();
         let stop_at = std::time::Instant::now() + Duration::from_millis(300);
         let start = std::time::Instant::now();
         let out = execute_with(
@@ -1379,5 +1412,6 @@ mod tests {
             "{:?}",
             start.elapsed()
         );
+        let _ = std::fs::remove_dir_all(cfg_dir);
     }
 }

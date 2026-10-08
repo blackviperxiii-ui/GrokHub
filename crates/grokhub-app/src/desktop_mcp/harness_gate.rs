@@ -281,7 +281,7 @@ pub(crate) fn write_span(
         ctx.turn,
     );
     if let Some(span) = span {
-        let _ = hx::append_span(config_dir, &span);
+        let _ = hx::append_span(config_dir, &span.in_episode(&ctx.episode));
     }
 }
 
@@ -510,7 +510,7 @@ mod tests {
 
     fn turn(dir: &Path, access: &str) {
         let _ = std::fs::create_dir_all(dir);
-        hx::write_turn_context(dir, &hx::TurnContext { chat_id: "chat-1".into(), turn: 3, access: access.into() }).unwrap();
+        hx::write_turn_context(dir, &hx::TurnContext { chat_id: "chat-1".into(), turn: 3, access: access.into(), ..Default::default() }).unwrap();
     }
 
     fn spans(dir: &Path) -> Vec<hx::Span> {

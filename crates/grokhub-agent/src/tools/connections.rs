@@ -20,6 +20,61 @@ use crate::harness::{self as hx, ChangeTarget, McpFile, Origin};
 /// What the user sees on the token card.
 pub(crate) const TOKEN_TITLE: &str = "Token";
 
+pub fn add_schema() -> Value {
+    json!({
+        "type": "function",
+        "name": "connection_add",
+        "description": "Add or update an MCP server (a connection) for this cabin. Give url for an HTTP server or command (and args) for a local one. Never pass a token: set needs_token and the user types it in. The user can undo this.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Short server name: letters, digits, dot, dash, underscore."},
+                "url": {"type": "string"},
+                "command": {"type": "string"},
+                "args": {"type": "array", "items": {"type": "string"}},
+                "needs_token": {"type": "boolean"},
+                "reason": {"type": "string", "description": "One line on why, shown to the user."}
+            },
+            "required": ["name", "reason"],
+            "additionalProperties": false
+        }
+    })
+}
+
+pub fn disable_schema() -> Value {
+    json!({
+        "type": "function",
+        "name": "connection_disable",
+        "description": "Turn off one MCP server without removing it. The user can undo this.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "reason": {"type": "string"}
+            },
+            "required": ["name", "reason"],
+            "additionalProperties": false
+        }
+    })
+}
+
+pub fn delete_schema() -> Value {
+    json!({
+        "type": "function",
+        "name": "connection_delete",
+        "description": "Remove one MCP server. Always asks the user first.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "reason": {"type": "string"}
+            },
+            "required": ["name"],
+            "additionalProperties": false
+        }
+    })
+}
+
 fn text(args: &Value, key: &str) -> String {
     args.get(key).and_then(|v| v.as_str()).unwrap_or("").trim().to_string()
 }
@@ -148,7 +203,10 @@ fn add_inner(args: &Value, keep_token: bool, ask: &mut dyn FnMut(&str) -> Option
             let config = crate::perm::config_dir();
             let ledger = hx::ConsentLedger::load(&config);
             let dest = hx::egress_dest(&url);
-            let data = [hx::DataClass::Chat];
+            // A standing connection is not a one-off chat fetch. Chat-only calls are
+            // allowed without a grant; this still needs one unless the host is local
+            // or a model host.
+            let data = [hx::DataClass::Personal];
             if !hx::decide(hx::Step::Egress { dest: &dest, data: &data, ledger: &ledger }).is_allow() {
                 return Err(format!(
                     "{dest} is a new host for GrokHub. Grant it in Settings, Privacy before a connection can reach it. Nothing was added."

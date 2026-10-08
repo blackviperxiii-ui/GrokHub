@@ -158,6 +158,8 @@ mod native_sessions;
 mod native_unattended;
 mod chat_kick;
 mod palette;
+mod step_search;
+use step_search::{parse_step_target, step_hits, turn_jump_row};
 mod settings;
 mod plus;
 mod projects;
@@ -174,7 +176,9 @@ mod board_ui;
 mod confirm;
 mod harness_ui;
 mod inbox_ui;
+mod episode_ui;
 mod privacy_ui;
+mod repair_ui;
 mod scope_ui;
 mod indexer_ui;
 mod skill_undo;
@@ -538,6 +542,10 @@ pub struct Cabin {
     palette_files_q: String,
     palette_files_root: String,
     palette_file_rx: Option<mpsc::Receiver<(String, String, Vec<String>)>>,
+    /// Spike-3a: tool-step rows for the palette query, `(step:<turn>:<chat>, line)`.
+    palette_steps: Vec<(String, String)>,
+    palette_steps_q: String,
+    palette_step_rx: Option<HistoryHitsRx>,
     shortcuts_open: bool,
     active_skill_follow: Option<String>,
     /// Changed notes from workboard cards linked to this chat, sent with this turn.
@@ -773,6 +781,8 @@ pub struct Cabin {
     confirm: Option<ConfirmKind>,
     /// History "Last you" scroll once the thread is open.
     jump_last_you: bool,
+    /// Spike-3a: a step hit opened this chat; scroll to that turn's Work card.
+    jump_turn: Option<u32>,
     /// Ctrl+F in the open chat.
     find: ChatFind,
     elicit_ask: Option<grokhub_acp::ElicitAsk>,
@@ -1156,6 +1166,9 @@ impl Cabin {
             palette_files_q: String::new(),
             palette_files_root: String::new(),
             palette_file_rx: None,
+            palette_steps: Vec::new(),
+            palette_steps_q: String::new(),
+            palette_step_rx: None,
             shortcuts_open: false,
             active_skill_follow: None,
             card_notes_follow: None,
@@ -1351,6 +1364,7 @@ impl Cabin {
             perm_always_confirm: None,
             confirm: None,
             jump_last_you: false,
+            jump_turn: None,
             find: ChatFind::default(),
             elicit_ask: None,
             elicit_draft: String::new(),
@@ -1595,6 +1609,9 @@ impl Cabin {
             palette_files_q: String::new(),
             palette_files_root: String::new(),
             palette_file_rx: None,
+            palette_steps: Vec::new(),
+            palette_steps_q: String::new(),
+            palette_step_rx: None,
             shortcuts_open: false,
             active_skill_follow: None,
             card_notes_follow: None,
@@ -1790,6 +1807,7 @@ impl Cabin {
             perm_always_confirm: None,
             confirm: None,
             jump_last_you: false,
+            jump_turn: None,
             find: ChatFind::default(),
             elicit_ask: None,
             elicit_draft: String::new(),
@@ -3496,6 +3514,7 @@ impl Cabin {
         bump_usage(&mut self.usage, "automation");
         self.daily_auto_used = self.usage.automation;
         self.daily_auto_day = self.usage.day.clone();
+        self.harness.next_origin = Some(grokhub_agent::harness::Origin::Proactive);
         self.send_scheduled_chat(prompt);
     }
 
@@ -4638,6 +4657,10 @@ impl Cabin {
 
     fn halt_work(&mut self, status: impl Into<String>) {
         let status = status.into();
+        // A redirect steers the turn; every other stop ends the desktop episode.
+        if status != "Redirected" {
+            self.end_episode(grokhub_agent::episode::EpisodeEnd::Stop);
+        }
         self.heartbeat_turn_stopped();
         self.halt_in_flight();
         self.finish_hub_dispatch(&status, false);
@@ -4649,6 +4672,7 @@ impl Cabin {
     /// Composer Stop and `/stop` leave background runs alone.
     fn halt_everything(&mut self, status: impl Into<String>) {
         self.heartbeat_halt(now_ms());
+        self.end_episode(grokhub_agent::episode::EpisodeEnd::Halt);
         self.halt_inbox();
         self.stop_all_bg_runs();
         self.halt_work(status);
@@ -4992,6 +5016,7 @@ impl eframe::App for Cabin {
         self.poll_mem_file();
         self.poll_recall();
         self.poll_privacy();
+        self.poll_diagnose();
         self.poll_native_memory();
         self.drain_native_unattended_usage();
         self.poll_sync();
@@ -5109,6 +5134,7 @@ impl eframe::App for Cabin {
                 || self.mem_file_rx.is_some()
                 || self.recall_rx.is_some()
                 || self.harness.privacy_rx.is_some()
+                || self.harness.diagnose_rx.is_some()
                 || self.sync_rx.is_some()
                 || self.inhabit_rx.is_some()
                 || self.reflect_rx.is_some()
