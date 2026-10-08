@@ -26,8 +26,12 @@ package() {
   cd "${srcdir}/${pkgname}"
   install -Dm755 target/release/grokhub "${pkgdir}/usr/bin/grokhub"
   install -Dm755 target/release/grokhub-hub "${pkgdir}/usr/bin/grokhub-hub"
-  install -Dm644 packaging/grokhub.desktop \
-    "${pkgdir}/usr/share/applications/grokhub.desktop"
+  # KWin matches the .desktop by its Exec path, so ScreenShot2 needs it absolute.
+  install -dm755 "${pkgdir}/usr/share/applications"
+  sed -e 's|^Exec=grokhub$|Exec=/usr/bin/grokhub|' \
+      -e 's|^TryExec=grokhub$|TryExec=/usr/bin/grokhub|' \
+      packaging/grokhub.desktop >"${pkgdir}/usr/share/applications/grokhub.desktop"
+  chmod 644 "${pkgdir}/usr/share/applications/grokhub.desktop"
   install -Dm644 packaging/grokhub.svg \
     "${pkgdir}/usr/share/icons/hicolor/scalable/apps/grokhub.svg"
   if [[ -d packaging/icons/hicolor ]]; then
