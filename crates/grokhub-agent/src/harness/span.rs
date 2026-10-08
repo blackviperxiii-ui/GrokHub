@@ -44,6 +44,10 @@ pub struct Span {
     /// The consent grant that allowed this step (`g-…`, or `approved-once`). Empty when none applied.
     #[serde(default)]
     pub consent_ref: String,
+    /// The change-ledger line an auto-act wrote (`connection:12`), so Undo
+    /// and the "why" can find it (Spike-6b). Empty for every other step.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub undo_ref: String,
     /// Spike-2b: where a click's target came from: the cabin's AX read (`ax`),
     /// the caller's args (`args`), or nothing found (`unknown`). Empty otherwise.
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -52,6 +56,34 @@ pub struct Span {
     /// on-screen label.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub target_rule: String,
+    /// Tokens and cost of a model call (Spike-4c router). Absent on every other step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<ModelUsage>,
+    /// Spike-3b: the supervised desktop episode this step belongs to. One
+    /// episode is one trace across turns, Steers and pauses.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub episode: String,
+    /// Spike-3b: the goal step the episode worker was on (redacted, capped).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub goal_step: String,
+    /// Spike-3b: tokens and cost of the model call this step made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<crate::route::CallTokens>,
+}
+
+/// What one model call used, as the provider reported it. Counts only.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelUsage {
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub cached_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub reasoning_tokens: u64,
+    #[serde(default)]
+    pub cost_in_usd_ticks: i64,
 }
 
 /// Who started a step. Every origin goes through `harness::decide`; none skips it.
@@ -106,8 +138,13 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            undo_ref: String::new(),
             target: String::new(),
             target_rule: String::new(),
+            usage: None,
+            episode: String::new(),
+            goal_step: String::new(),
+            tokens: None,
         }
     }
 
@@ -130,8 +167,13 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            undo_ref: String::new(),
             target: String::new(),
             target_rule: String::new(),
+            usage: None,
+            episode: String::new(),
+            goal_step: String::new(),
+            tokens: None,
         }
     }
 
@@ -154,8 +196,13 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            undo_ref: String::new(),
             target: String::new(),
             target_rule: String::new(),
+            usage: None,
+            episode: String::new(),
+            goal_step: String::new(),
+            tokens: None,
         }
     }
 
@@ -178,8 +225,13 @@ impl Span {
             ui_changed: None,
             origin: Origin::User,
             consent_ref: String::new(),
+            undo_ref: String::new(),
             target: String::new(),
             target_rule: String::new(),
+            usage: None,
+            episode: String::new(),
+            goal_step: String::new(),
+            tokens: None,
         }
     }
 
@@ -210,6 +262,12 @@ impl Span {
     pub fn with_target(mut self, target: &str, rule: &str) -> Self {
         self.target = target.into();
         self.target_rule = rule.into();
+        self
+    }
+
+    /// Tag the episode the step belongs to (Spike-3b). Empty leaves it unset.
+    pub fn in_episode(mut self, episode: &str) -> Self {
+        self.episode = episode.into();
         self
     }
 
@@ -297,6 +355,12 @@ pub struct TurnContext {
     pub chat_id: String,
     pub turn: u32,
     pub access: String,
+    /// Who started the turn (Spike-4c). Old files read as `user`.
+    #[serde(default)]
+    pub origin: Origin,
+    /// Spike-3b: the open desktop episode, so path A spans carry its id.
+    #[serde(default)]
+    pub episode: String,
 }
 
 pub fn turn_context_path(config_dir: &Path) -> PathBuf {
@@ -486,9 +550,14 @@ mod tests {
             chat_id: "chat-9".into(),
             turn: 4,
             access: "full".into(),
+            origin: Origin::Proactive,
+            episode: "ep-1".into(),
         };
         write_turn_context(&dir, &ctx).unwrap();
         assert_eq!(read_turn_context(&dir), ctx);
+        // A turn file from before Spike-4c has no origin: it reads as the user's.
+        fs::write(turn_context_path(&dir), r#"{"chat_id":"chat-1","turn":2,"access":"supervised"}"#).unwrap();
+        assert_eq!(read_turn_context(&dir).origin, Origin::User);
     }
 
     #[test]

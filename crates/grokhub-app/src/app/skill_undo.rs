@@ -62,6 +62,7 @@ fn what(op: ChangeOp) -> &'static str {
         ChangeOp::Delete => "removed",
         ChangeOp::Undo => "undone",
         ChangeOp::Restore => "restored",
+        ChangeOp::Accept => "kept",
     }
 }
 
@@ -210,10 +211,13 @@ impl Cabin {
         self.harness.skill_rows.clone().unwrap_or_default()
     }
 
-    fn finish_skill_revert(&mut self, name: &str, res: Result<hx::Reverted, String>) {
+    pub(super) fn finish_skill_revert(&mut self, name: &str, res: Result<hx::Reverted, String>) {
         self.harness.skill_rows = None;
         let line = match res {
             Ok(done) => {
+                if done.change.op == hx::ChangeOp::Undo {
+                    self.outcomes_after_undo(name);
+                }
                 match &done.now {
                     Some(bytes) => {
                         let raw = String::from_utf8_lossy(bytes).into_owned();

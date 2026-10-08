@@ -5,18 +5,20 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::schema::{check_confidence, Edge, EdgeRel, Node, NodeDraft, NodeHit, NodeId};
+use super::index::{AmrIndex, INDEX_FILE};
+use super::schema::{check_confidence, Edge, EdgeRel, Node, NodeDraft, NodeHit, NodeId, Sensitivity};
 use super::{AmrError, Sealer};
 use crate::redact::redact_secrets;
 
 const README: &str = "\
 amr_schema: 1
 Local files only. Nothing in amr/ is hub-synced.
-nodes/<id>.md is one preference, fact, decision, trail, person, or project. You can cat it or git it.
+nodes/<id>.md is one preference, fact, decision, trail, person, project, routine, need, or mind prior. You can cat it or git it.
 nodes/<id>.sealed is a personal or sensitive node, sealed at rest. Its key is in your OS keyring.
 edges/edges.jsonl stores one JSON edge per line.
 dreams/ holds reports, such as import-<date>.md from the one-time import.
 Secrets are redacted on write. forget leaves nodes/<id>.tombstone: the node stays on disk and recall skips it.
+index.sqlite is a full-text index of the plain nodes. Delete it any time; it is rebuilt from nodes/.
 ";
 
 const RECALL_CAP: usize = 20;
@@ -153,8 +155,9 @@ impl AmrStore {
         let loaded = self.load_live();
         report.locked = loaded.locked;
         report.why = loaded.why;
+        let superseded = self.superseded_ids();
         let mut hits = Vec::new();
-        for node in &loaded.nodes {
+        for node in loaded.nodes.iter().filter(|n| !superseded.contains(&n.id)) {
             hits.extend(match_lines(node, &query));
         }
         hits.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
@@ -191,14 +194,15 @@ impl AmrStore {
         self.write_tombstone(&id, now, "")
     }
 
-    /// `forgotten: <stamp>` plus `extra` lines. An existing tombstone stays as it is.
+    /// `forgotten: <stamp>` plus `extra` lines, and the id leaves
+    /// `index.sqlite`. An existing tombstone stays as it is.
     pub(super) fn write_tombstone(&self, id: &NodeId, now_ms: u64, extra: &str) -> Result<(), AmrError> {
         let marker = self.node_path(id)?.with_extension(TOMBSTONE_EXT);
-        if marker.is_file() {
-            return Ok(());
+        if !marker.is_file() {
+            let stamp = crate::oauth::unix_ms_to_rfc3339(now_ms);
+            fs::write(&marker, format!("forgotten: {stamp}\n{extra}")).map_err(io_err)?;
         }
-        let stamp = crate::oauth::unix_ms_to_rfc3339(now_ms);
-        fs::write(&marker, format!("forgotten: {stamp}\n{extra}")).map_err(io_err)
+        self.unindex(id.as_str())
     }
 
     /// True when the node is stored sealed (`nodes/<id>.sealed`).
@@ -274,6 +278,15 @@ impl AmrStore {
     /// Every node that is not tombstoned, sorted by file name. Sealed nodes
     /// that can't be opened are counted in `locked`. A bad file is skipped.
     pub(super) fn load_live(&self) -> Loaded {
+        self.load_nodes(false)
+    }
+
+    /// Tombstoned nodes only, so a forget can be kept out of synced files.
+    pub(super) fn load_forgotten(&self) -> Loaded {
+        self.load_nodes(true)
+    }
+
+    fn load_nodes(&self, tombstoned: bool) -> Loaded {
         let mut loaded = Loaded { nodes: Vec::new(), locked: 0, why: None };
         let Ok(read) = fs::read_dir(self.root.join("nodes")) else {
             return loaded;
@@ -282,7 +295,7 @@ impl AmrStore {
         for entry in read.flatten() {
             let path = entry.path();
             if matches!(path.extension().and_then(|ext| ext.to_str()), Some("md" | SEALED_EXT))
-                && !path.with_extension(TOMBSTONE_EXT).is_file()
+                && path.with_extension(TOMBSTONE_EXT).is_file() == tombstoned
             {
                 files.push(path);
             }
@@ -292,7 +305,8 @@ impl AmrStore {
             let Ok(text) = fs::read_to_string(&path) else {
                 continue;
             };
-            let text = if path.extension().and_then(|ext| ext.to_str()) == Some(SEALED_EXT) {
+            let sealed = path.extension().and_then(|ext| ext.to_str()) == Some(SEALED_EXT);
+            let text = if sealed {
                 let id = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
                 let opened = match &self.sealer {
                     Some(sealer) => sealer.open(&node_aad(id), text.trim()),
@@ -309,11 +323,82 @@ impl AmrStore {
             } else {
                 text
             };
-            if let Ok(node) = Node::from_markdown(&text) {
+            if let Ok(mut node) = Node::from_markdown(&text) {
+                // Sealed before Spike-5a wrote the tier into the frontmatter.
+                if sealed && !node.sensitivity.sealed() {
+                    node.sensitivity = Sensitivity::Personal;
+                }
                 loaded.nodes.push(node);
             }
         }
         loaded
+    }
+
+    /// Ids that a later node replaced (`supersedes` edge targets). Recall
+    /// and `/memory` skip them; the files stay.
+    ///
+    /// Read in log order: an edit back (`A→B` after `B→A`) undoes the first
+    /// edge instead of hiding both. An edge whose replacing node is forgotten
+    /// no longer hides a node that is live again (the user remembered it after
+    /// a dream merge).
+    pub fn superseded_ids(&self) -> std::collections::BTreeSet<String> {
+        let mut active: Vec<(String, String)> = Vec::new();
+        for edge in self.edges().unwrap_or_default() {
+            if edge.rel != EdgeRel::Supersedes {
+                continue;
+            }
+            active.retain(|(from, to)| !(from == &edge.to && to == &edge.from));
+            active.push((edge.from, edge.to));
+        }
+        active
+            .into_iter()
+            .filter(|(from, to)| !(self.is_forgotten(from) && !self.is_forgotten(to)))
+            .map(|(_, to)| to)
+            .collect()
+    }
+
+    /// Live nodes that recall can return: not tombstoned, not superseded.
+    /// Sealed nodes appear only when they opened.
+    pub fn recallable(&self) -> (Vec<Node>, usize) {
+        let loaded = self.load_live();
+        let superseded = self.superseded_ids();
+        let nodes = loaded.nodes.into_iter().filter(|n| !superseded.contains(&n.id)).collect();
+        (nodes, loaded.locked)
+    }
+
+    /// `amr/index.sqlite`.
+    pub fn index_path(&self) -> PathBuf {
+        self.root.join(INDEX_FILE)
+    }
+
+    /// Rebuild `index.sqlite` from the plain recallable nodes. Sealed text
+    /// never goes in it. Refuses scratch.
+    pub fn rebuild_index(&self) -> Result<AmrIndex, AmrError> {
+        if self.scratch {
+            return Err(AmrError::Scratch);
+        }
+        fs::create_dir_all(&self.root).map_err(io_err)?;
+        let (nodes, _) = self.recallable();
+        let plain: Vec<Node> = nodes.into_iter().filter(|n| !n.sensitivity.sealed()).collect();
+        let index = AmrIndex::open(&self.index_path())?;
+        index.replace_all(&plain)?;
+        Ok(index)
+    }
+
+    /// An in-memory index of the sealed nodes that open right now (unlock).
+    pub fn sealed_index(&self) -> Result<AmrIndex, AmrError> {
+        let (nodes, _) = self.recallable();
+        let sealed: Vec<Node> = nodes.into_iter().filter(|n| n.sensitivity.sealed()).collect();
+        AmrIndex::in_memory(&sealed)
+    }
+
+    /// Drop `id` from `index.sqlite` when the file is there.
+    pub(super) fn unindex(&self, id: &str) -> Result<(), AmrError> {
+        let path = self.index_path();
+        if !path.is_file() {
+            return Ok(());
+        }
+        AmrIndex::open(&path)?.remove(id)
     }
 
     /// Write `nodes/<id>.md`. Refuses duplicates, bad ids, and scratch.
@@ -326,6 +411,10 @@ impl AmrStore {
         frontmatter_safe("created", &draft.created)?;
         frontmatter_safe("updated", &draft.updated)?;
         frontmatter_safe("source", &draft.source)?;
+        frontmatter_safe("consent_ref", &draft.consent_ref)?;
+        if draft.source.trim().is_empty() {
+            return Err(AmrError::BadFrontmatter("empty source".into()));
+        }
         for tag in &draft.tags {
             frontmatter_safe("tag", tag)?;
         }
@@ -345,6 +434,8 @@ impl AmrStore {
             confidence: draft.confidence,
             tags,
             body,
+            consent_ref: redact_secrets(&draft.consent_ref),
+            sensitivity: draft.sensitivity,
         };
         let plain_path = self.node_path(&id)?;
         let sealed_path = plain_path.with_extension(SEALED_EXT);
@@ -384,6 +475,9 @@ impl AmrStore {
             Err(err) => return Err(io_err(err)),
         };
         file.write_all(bytes.as_bytes()).map_err(io_err)?;
+        if !draft.sensitivity.sealed() && self.index_path().is_file() {
+            AmrIndex::open(&self.index_path())?.add(&node)?;
+        }
         Ok(id)
     }
 

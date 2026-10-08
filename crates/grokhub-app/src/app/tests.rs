@@ -9844,6 +9844,7 @@ fn discuss_card_opens_one_local_chat() {
         skill: None,
         runs: 1,
         dismissed_at: 0,
+        done_for_you: None,
         pulse: Default::default(),
     });
     cabin.discuss_card("idea-harbor");
@@ -10951,6 +10952,7 @@ fn recall_legacy_finds_memory_line_and_skips_amr() {
             tags: vec!["dock".into()],
             body: "harbor lamp from amr\n".into(),
             sensitivity: grokhub_core::amr::Sensitivity::Plain,
+            consent_ref: String::new(),
         })
         .unwrap();
     cabin.run_slash_line("/recall harbor");
@@ -11002,6 +11004,7 @@ fn recall_amr_returns_seeded_node_not_legacy_memory() {
             tags: vec!["dock".into()],
             body: "pier light stays on\n".into(),
             sensitivity: grokhub_core::amr::Sensitivity::Plain,
+            consent_ref: String::new(),
         })
         .unwrap();
     cabin.run_slash_line("/recall pier");
@@ -11043,6 +11046,7 @@ fn recall_opens_private_notes_and_says_when_they_are_locked() {
             tags: vec![],
             body: "pier nine is home\n".into(),
             sensitivity: grokhub_core::amr::Sensitivity::Personal,
+            consent_ref: String::new(),
         })
         .unwrap();
     let raw = std::fs::read_to_string(root.join("amr/nodes/fact-home.sealed")).unwrap();
@@ -11229,6 +11233,33 @@ fn amr_save_redacts_secrets_and_pauses_personal_lines_without_a_key() {
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
+// A line the memory repo refuses stays in MEMORY.md instead of vanishing.
+#[test]
+fn amr_save_keeps_a_line_the_store_could_not_write() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("amr-save-fail");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    crate::config::write_memory("MEMORY.md", "keep this line\n").unwrap();
+    // `amr` is a file, so the store can't open.
+    std::fs::write(root.join("amr"), "not a folder").unwrap();
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+    cabin.new_thread(false);
+    cabin.mem_name = "MEMORY.md".into();
+    cabin.mem_body = "keep this line\nprefer nvim\n".into();
+    cabin.save_memory_amr();
+    assert!(cabin.status.starts_with("Memory repo:"), "{}", cabin.status);
+    assert_eq!(cabin.mem_body, "keep this line\nprefer nvim\n");
+    let start = std::time::Instant::now();
+    while crate::config::read_memory("MEMORY.md") != "keep this line\nprefer nvim\n" && start.elapsed() < std::time::Duration::from_secs(2) {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(crate::config::read_memory("MEMORY.md"), "keep this line\nprefer nvim\n");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
 // AMR M2 through the cabin: the first AMR read imports insights and chip
 // preferences once, writes the report, and posts one chat line.
 #[test]
@@ -11383,6 +11414,7 @@ fn amr_dream_runs_once_a_night_and_memory_dream_prints_it() {
                 tags: vec![],
                 body: format!("{body}\n"),
                 sensitivity: grokhub_core::amr::Sensitivity::Plain,
+                consent_ref: String::new(),
             })
             .unwrap();
     }
@@ -15676,6 +15708,7 @@ fn build_idea_files_one_todo() {
         skill: None,
         runs: 1,
         dismissed_at: 0,
+        done_for_you: None,
         pulse: Default::default(),
     }];
 
@@ -15806,6 +15839,7 @@ fn feed_card(id: &str, kind: grokhub_core::UpdateKind, held: bool) -> grokhub_co
         skill: None,
         runs: 1,
         dismissed_at: 0,
+        done_for_you: None,
         pulse: Default::default(),
     }
 }
@@ -15910,6 +15944,7 @@ fn offer_card(id: &str, title: &str, status: UpdateStatus) -> UpdateCard {
         skill: None,
         runs: 1,
         dismissed_at: 0,
+        done_for_you: None,
         pulse: Default::default(),
     }
 }
@@ -16617,6 +16652,8 @@ fn quiet_cabin() -> Cabin {
         card_notes_follow: None,
         board_notes_edit: None,
         last_anticipate_ms: 0,
+        proactive: Default::default(),
+        last_proactive_ms: 0,
         goal_step: 0,
         followup_step: 0,
         stream_buf: String::new(),
@@ -16815,6 +16852,7 @@ fn quiet_cabin() -> Cabin {
         session_mode: grokhub_acp::SessionMode::Chat,
         permission_mode: grokhub_acp::PermissionMode::Ask,
         harness: Default::default(),
+        auto_act: Default::default(),
         scheduled_perm: false,
         grok_sessions: Vec::new(),
         grok_sessions_loaded: false,
@@ -22902,6 +22940,23 @@ fn wait_ledger_lines(root: &std::path::Path, n: usize) -> grokhub_agent::harness
     panic!("ledger never reached {n} lines");
 }
 
+/// Spike-7: a skill patch only lands when a replay of the skill's last
+/// recorded run passes, so the patch tests record one successful run first.
+fn record_weekly_report_run(root: &std::path::Path) {
+    let mut verify = grokhub_agent::harness::fixture_span(1_000, "verify_script", "{}", "allow", "pass", None, "");
+    verify.session_id = "chat-weekly".into();
+    grokhub_agent::harness::append_span(root, &verify).unwrap();
+    let o = grokhub_agent::harness::outcome_from_spans(
+        "chat-weekly:1",
+        "skill:weekly-report",
+        std::slice::from_ref(&verify),
+        &[],
+        false,
+        1_001,
+    );
+    grokhub_core::outcome::append_outcome(root, &o).unwrap();
+}
+
 const WEEKLY_PATCH: &str =
     "SUGGEST_SKILL_PATCH: weekly-report | the user asks for the weekly report | 1. Open report.md 2. Fill the numbers 3. Save a copy as PDF";
 
@@ -22909,6 +22964,7 @@ const WEEKLY_PATCH: &str =
 fn nightly_patch_keeps_the_prior_version_and_typed_undo_puts_it_back() {
     let _g = crate::config::hold_test_config();
     let (_pin, root) = pin_skill_config("skill-undo-typed");
+    record_weekly_report_run(&root);
     let path = skills::save_skill(&weekly_report_skill()).expect("save");
     let v1 = std::fs::read(&path).unwrap();
     let mut cabin = Cabin::quiet_for_test();
@@ -22961,6 +23017,7 @@ fn nightly_patch_keeps_the_prior_version_and_typed_undo_puts_it_back() {
 fn the_model_cannot_undo_a_skill_change_on_its_own() {
     let _g = crate::config::hold_test_config();
     let (_pin, root) = pin_skill_config("skill-undo-model");
+    record_weekly_report_run(&root);
     let path = skills::save_skill(&weekly_report_skill()).expect("save");
     let mut cabin = Cabin::quiet_for_test();
     cabin.skill_list = skills::list_skills();
@@ -23027,8 +23084,10 @@ fn only_typing_or_a_click_builds_an_undo_ask() {
     assert_eq!(
         hits,
         vec![
+            "grokhub-app/src/app/change_undo.rs: UndoAsk::from_click(",
             "grokhub-app/src/app/chat_ui.rs: typed_send = true",
             "grokhub-app/src/app/repair_ui.rs: UndoAsk::from_click(",
+            "grokhub-app/src/app/self_review_ui.rs: UndoAsk::from_click(",
             "grokhub-app/src/app/skill_undo.rs: UndoAsk::from_click(",
             "grokhub-app/src/app/skill_undo.rs: UndoAsk::from_click(",
             "grokhub-app/src/app/skill_undo.rs: UndoAsk::from_typing(",
@@ -27494,6 +27553,141 @@ fn heartbeat_halt_skips_every_organ_that_starts_work() {
     );
 }
 
+/// Spike-5c: a skill Grok made through `grokhub-self` under Always is one
+/// self_manage ledger line, and the user's Undo click removes it.
+#[test]
+fn self_made_skill_undo_click_removes_it() {
+    use crate::self_mcp::tests::{call, FakeIo};
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("self-made-undo");
+    let mut server = crate::self_mcp::SelfServer::new(&root);
+    let mut io = FakeIo::answering(false);
+    let (ok, text) = call(
+        &mut server,
+        &mut io,
+        "skill_create",
+        serde_json::json!({ "name": "inbox-zero", "instructions": "1. Archive read mail\n2. Star replies", "reason": "you do this every morning" }),
+    );
+    assert_eq!((ok, text.as_str()), (true, "created skill inbox-zero (change #1; the user can Undo it)"));
+    let folder = skills::skill_folder("inbox-zero");
+    assert!(folder.join("SKILL.md").exists());
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.skill_list = skills::list_skills();
+    let rows = cabin.skill_rows_now();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].label.starts_with("inbox-zero · added "), "{}", rows[0].label);
+    cabin.skill_row_clicked(&rows[0]);
+    assert!(!folder.exists(), "Undo removes the self-made skill");
+    let ledger = grokhub_agent::harness::ChangeLedger::load(&root);
+    let ops: Vec<(&str, &str)> = ledger.all().iter().map(|c| (c.op.as_str(), c.origin.as_str())).collect();
+    assert_eq!(ops, vec![("create", "self_manage"), ("undo", "user")]);
+    let _ = std::fs::remove_dir_all(&root);
+}
+/// Spike-5c: `grokhub --mcp-self` runs in its own process, so its ledger
+/// lines never reach the cabin's in-process queue. The cabin reads them from
+/// disk: a Work-tree row, a Home update, and an automations list that matches
+/// the file, each shown once.
+#[test]
+fn changes_from_the_self_server_process_show_as_work_rows() {
+    use crate::self_mcp::tests::{call, FakeIo};
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("self-elsewhere");
+    let _agent_pin = grokhub_agent::perm::ConfigGuard::set(&root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.poll_self_changes();
+    assert!(cabin.harness.work_rows.is_empty());
+    let mut server = crate::self_mcp::SelfServer::new(&root);
+    let mut io = FakeIo::answering(false);
+    assert!(call(&mut server, &mut io, "skill_create", serde_json::json!({ "name": "inbox-zero", "instructions": "archive read mail" })).0);
+    let (ok, made) = call(&mut server, &mut io, "automation_create", serde_json::json!({ "instructions": "sweep the inbox", "every": "1h" }));
+    assert!(ok, "{made}");
+    let id = made.lines().next().unwrap().trim_start_matches("created ").to_string();
+    // What the other process left behind: lines on disk only.
+    let _ = grokhub_agent::harness::take_self_changes(&root);
+    let _ = grokhub_agent::take_automation_changes();
+    assert!(cabin.automations.is_empty());
+    cabin.harness.ledger_watch.next_ms = 0;
+    cabin.poll_self_changes();
+    let labels: Vec<&str> = cabin.harness.work_rows.iter().map(|r| r.label.as_str()).collect();
+    assert_eq!(labels.len(), 2, "{labels:?}");
+    assert!(labels.contains(&"Grok added skill inbox-zero"), "{labels:?}");
+    let ids: Vec<&str> = cabin.automations.iter().map(|a| a.id.as_str()).collect();
+    assert_eq!(ids, vec![id.as_str()], "the cabin's list matches the file");
+    let cards = cabin.updates.iter().filter(|u| u.kind == grokhub_core::UpdateKind::SelfChange).count();
+    assert_eq!(cards, 2);
+    // Looked again: nothing new, nothing posted twice.
+    cabin.harness.ledger_watch.next_ms = 0;
+    cabin.poll_self_changes();
+    assert_eq!(cabin.harness.work_rows.len(), 2);
+    assert_eq!(cabin.updates.iter().filter(|u| u.kind == grokhub_core::UpdateKind::SelfChange).count(), 2);
+    let _ = std::fs::remove_dir_all(&root);
+}
+/// Spike-5b: an automation the model wrote (an Ideas Add, an Automate offer)
+/// is saved through the ChangeLedger. It shows as a Work-tree row and a Home
+/// update, and the row's Undo click removes it from the file and the
+/// cabin's own list, so the next save does not bring it back.
+#[test]
+fn a_model_written_automation_gets_a_work_row_a_home_update_and_undo() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("self-change-auto");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.poll_self_changes();
+    assert!(cabin.harness.work_rows.is_empty());
+    let route = route_schedule("every weekday at 9, summarize the board").expect("clock route");
+    let said = cabin.commit_schedule(route, grokhub_agent::harness::Origin::SelfManage, "from the idea Board digest");
+    assert!(said.starts_with("Automation added"), "{said}");
+    let id = cabin.automations[0].id.clone();
+    assert!(std::fs::read_to_string(crate::night::path()).unwrap().contains(&id), "saved now, not later");
+    let ledger = grokhub_agent::harness::ChangeLedger::load_kind(&root, grokhub_agent::harness::ChangeKind::Automation);
+    let c = &ledger.all()[0];
+    assert_eq!((c.op.as_str(), c.origin.as_str(), c.id.as_str()), ("create", "self_manage", id.as_str()));
+    assert_eq!(c.reason, "from the idea Board digest");
+    cabin.poll_self_changes();
+    assert_eq!(cabin.harness.work_rows.len(), 1);
+    let row = cabin.harness.work_rows[0].clone();
+    assert_eq!(row.label, format!("Grok added automation {}", cabin.automations[0].name));
+    let card = cabin
+        .updates
+        .iter()
+        .find(|u| u.kind == grokhub_core::UpdateKind::SelfChange)
+        .expect("a Home update");
+    assert_eq!(card.title, format!("GrokHub added automation {}", cabin.automations[0].name));
+    assert_eq!(
+        card.body.as_deref(),
+        Some("from the idea Board digest · Undo it from its Work-tree row or /automations changes.")
+    );
+    cabin.change_row_clicked(&row, super::change_undo::ChangeAct::Undo);
+    assert!(cabin.automations.is_empty(), "the cabin's list follows the file");
+    assert!(!std::fs::read_to_string(crate::night::path()).unwrap().contains(&id));
+    assert!(cabin.harness.work_rows.is_empty());
+    assert!(cabin.status.starts_with("Removed the automation "), "{}", cabin.status);
+    // A user-typed job stays outside the ledger, as before.
+    let route = route_schedule("every day at 7, water the plants").expect("clock route");
+    cabin.commit_schedule(route, grokhub_agent::harness::Origin::User, "");
+    std::thread::sleep(Duration::from_millis(100));
+    let ledger = grokhub_agent::harness::ChangeLedger::load_kind(&root, grokhub_agent::harness::ChangeKind::Automation);
+    assert_eq!(ledger.all().len(), 2, "create and its undo only: {:?}", ledger.all());
+    cabin.poll_self_changes();
+    assert!(cabin.harness.work_rows.is_empty());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// `/connections changes` and `/automations changes` post the report
+/// bubble; from a scheduled send they still only show rows (no slash undoes).
+#[test]
+fn connection_and_automation_changes_reports_post_a_bubble() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("self-change-report");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.send_from_composer("/connections changes".into());
+    cabin.send_scheduled_chat("/automations changes".into());
+    let bodies: Vec<&str> = cabin.messages.iter().map(|m| m.1.as_str()).collect();
+    assert!(bodies.iter().any(|b| b.contains(super::change_undo::CONNECTION_CHANGES_HEAD)), "{bodies:?}");
+    assert!(bodies.iter().any(|b| b.contains(super::change_undo::AUTOMATION_CHANGES_HEAD)), "{bodies:?}");
+    assert!(cabin.change_rows_now(grokhub_agent::harness::ChangeKind::Connection).is_empty());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 // Spike-3a: tool steps join History and palette search (legacy mode too),
 // Enter goes back to that chat and turn, and a turn with harness spans leaves
 // one trail node in memory repo mode only.
@@ -27686,6 +27880,7 @@ fn spike3a_adds_no_nav_page() {
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
+
 fn wait_diagnose(cabin: &mut Cabin) {
     let start = std::time::Instant::now();
     while cabin.harness.diagnose_rx.is_some() && start.elapsed() < std::time::Duration::from_secs(4) {
@@ -27733,6 +27928,28 @@ fn diagnose_slash_without_system_state_is_a_slash_result_with_the_ask() {
     let (role, body) = cabin.messages.last().cloned().unwrap();
     assert_eq!(role, "assistant");
     assert!(grokhub_core::is_cabin_slash_turn(&role, &body), "stays out of the next model kick");
+    assert!(body.ends_with(grokhub_agent::repair::SCOPE_ASK), "{body}");
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn diagnose_answers_in_the_chat_that_asked_after_a_switch() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("diagnose-switch");
+    std::fs::create_dir_all(&root).unwrap();
+    cabin.threads.push(crate::threads::ChatThread::new("Asked here", false));
+    cabin.threads.push(crate::threads::ChatThread::new("Moved here", false));
+    let (asked, moved) = (cabin.threads.len() - 2, cabin.threads.len() - 1);
+    cabin.apply_switch_thread(asked);
+    cabin.run_slash_line("/diagnose");
+    cabin.apply_switch_thread(moved);
+    let before = cabin.messages.len();
+    wait_diagnose(&mut cabin);
+    assert!(cabin.harness.diagnose_rx.is_none(), "the diagnose finished");
+    assert_eq!(cabin.messages.len(), before, "the chat on screen gets nothing");
+    cabin.apply_switch_thread(asked);
+    let (role, body) = cabin.messages.last().cloned().unwrap();
+    assert_eq!(role, "assistant");
     assert!(body.ends_with(grokhub_agent::repair::SCOPE_ASK), "{body}");
     release_isolated(&root, cabin);
 }

@@ -23,10 +23,23 @@
 //! personal and sensitive AMR nodes) with a key held in the OS keyring, and
 //! fails closed without it.
 //!
-//! Spike-5 slice: `changes` (ChangeLedger for skills) keeps every version a
-//! self-managed skill write replaces; undo and restore need a user's typing
-//! or click (`UndoAsk`).
+//! Spike-5: `changes` (ChangeLedger for skills, connections, and automations)
+//! keeps every version a self-managed write replaces; undo, restore, and Keep
+//! need a user's typing or click (`UndoAsk`). `self_manage` holds the
+//! connection and automation targets and the new-automation cap (Spike-5b).
 //!
+//! Spike-5a: `mindcheck` folds denies, undos, approves and Pulse dismisses
+//! into a prior per action class ("if unsure whether you'd be upset, ask").
+//! It is a soft-path input to `decide` (`Step::Proactive`), never a second
+//! gate, and never touches hard class. An agent-started memory forget is
+//! hard class Delete (`agent_forget`).
+//!
+//! Spike-6b: `proactive` runs one auto-act the autonomy ceiling
+//! (`grokhub_core::AutoAct`) admitted, through `decide` (`Step::Proactive`)
+//! and the native dispatch, only when a change-ledger target exists, and
+//! links the ledger line on its span (`undo_ref`).
+//!
+
 //! Spike-1a safety loop: `detect` catches failed or looping actions and
 //! unbacked claims, `audit` runs them in two cheap passes, and `ladder`
 //! recovers (retry once, backtrack) or pauses for the user. Hard class is
@@ -35,6 +48,7 @@
 //! Spike-2b: a click is classified by the control it lands on (`hard.rs`
 //! `click_target_class`): a Send, Pay, Delete or Reset button parks before
 //! the click runs, on every path, and spans keep only the matched rule.
+//!
 //! Spike-3a (AMR M4): `trail` turns one turn's spans into one AMR `trail`
 //! node at turn end, from already-redacted span fields only; `span_search`
 //! reads `spans/*.jsonl` for History and palette search. Both only read
@@ -50,10 +64,16 @@ mod consent;
 mod cua;
 mod detect;
 mod egress;
+#[cfg(test)]
+mod egress_coverage;
 mod hard;
 mod ladder;
+mod mindcheck;
 mod park;
 mod path_d;
+mod proactive;
+mod self_improve;
+mod self_manage;
 mod span;
 mod span_search;
 mod trail;
@@ -79,18 +99,29 @@ pub use cua::{
     CUA_MISSING_MSG, CUA_OFF_MSG, CUA_PERMISSION_MODE, CUA_TOOLS,
 };
 pub use changes::{
-    change_id, content_hash, record_skill_change, restore_skill, skill_history_dir, skill_ledger_path,
-    undo_skill_change, Change, ChangeLedger, ChangeOp, Reverted, UndoAsk, CHANGES_DIR, HISTORY_CAP,
-    LEDGER_LINE_CAP, SKILL_LEDGER_FILE,
+    accept_change, change_id, note_proposal_finding, content_hash, entry_id, findings_path, history_dir, ledger_path, read_scope_findings,
+    record_change, record_skill_change, restore_change, restore_skill, scope_guard, skill_history_dir,
+    skill_ledger_path, take_self_changes, undo_change, undo_skill_change, Change, ChangeKind, ChangeLedger,
+    ChangeOp, ChangeTarget, Reverted, ScopeFinding, SkillTarget, UndoAsk, AUTOMATION_LEDGER_FILE, CHANGES_DIR,
+    CONNECTION_LEDGER_FILE, FINDINGS_FILE, HISTORY_CAP, LEDGER_LINE_CAP, LEDGER_SCOPE_VIOLATION, SKILL_LEDGER_FILE,
 };
+pub use self_improve::{
+    last_recorded_run, outcome_from_spans, patch_marks, reject_live_replay, replay_gate, replay_patch, run_weekly,
+    spans_for, ReplayOpts, WeeklyPass, REPLAY_LIVE_REFUSED, REPLAY_TOOL, SELF_REVIEW_SESSION, SELF_REVIEW_TOOL,
+};
+pub use self_manage::{
+    automation_cap_refusal, open_connection_token, tool_origin, undo_connection, AutomationsFile, McpFile,
+    SELF_AUTOMATION_WEEK_CAP, SELF_MANAGE_TOOLS, WEEK_MS,
+};
+pub(crate) use self_manage::{forget_connection_token, seal_connection_token};
 pub use consent::{
     consent_path, grant_destination, grant_scope, revoke_grant, scope_excluded, scope_refusal,
     ConsentLedger, Grant, Scope, UserClick, CONSENT_FILE, SCOPE_HARD_EXCLUDES, SCOPE_KINDS,
 };
 pub use egress::{
-    append_egress, egress_dest, egress_path, guard_egress, is_local_dest, is_model_host,
-    read_egress, read_egress_report, record_approved_once, DataClass, EgressBasis, EgressLine,
-    EgressRead, EgressReq, EGRESS_FILE,
+    append_egress, current_origin, egress_dest, egress_path, guard_egress, guard_or_park, guard_quiet,
+    is_local_dest, is_model_host, model_text_classes, read_egress, read_egress_report, record_approved_once,
+    DataClass, EgressBasis, EgressLine, EgressRead, EgressReq, OriginScope, RecallScope, EGRESS_FILE,
     HUB_DEST, HUB_SYNC_DATA,
 };
 pub use audit::{audit_file, audit_spans, pass1, pass2, summarize, Audit, SpanDigest, Window, WindowAudit, WindowSummary};
@@ -109,13 +140,22 @@ pub use hard::{
 };
 pub use path_d::{builtin_cu, cu_look_only, decide_unasked, unasked_action, unasked_title};
 pub use ladder::{hard_target, ladder_span, Ladder, LadderStep, Rung, RECOVERY_TOOL};
+pub use mindcheck::{
+    agent_forget, learn, mind_key, note_prior, signals_from_cards, signals_from_changes, signals_from_spans, Candidate,
+    Clock, MindCheck, MindEvent, MindRoute, MindSignal, Prior, SystemClock, AGENT_FORGET_TOOL, MIND_APPROVE_STEP,
+    MIND_ASK_AT, MIND_ASK_FIRST_MS, MIND_DENY, MIND_DISMISS_STEP, SKILL_CHANGE_KEY,
+};
+pub use proactive::{
+    answer_span, ledger_target, note_proactive, proactive_key, proactive_mind, proactive_span, run_approved_once, run_auto_act, step_class,
+    AutoRun, DECISION_ASK, DECISION_AUTO, DECISION_NEVER, DECISION_UNDO, PROACTIVE_TRACE,
+};
 pub use park::{
     answer_park, clear_park, park_dir, pending_parks, post_park, take_answer, wait_park,
     ParkRequest,
 };
 pub use span::{
     append_span, read_spans, read_spans_tail, read_turn_context, redact_args, span_path, turn_context_path,
-    write_turn_context, Origin, Span, TurnContext, CLAIM_CAP, REPLY_TOOL, SPAN_TAIL_BYTES, VERIFY_TOOL,
+    write_turn_context, ModelUsage, Origin, Span, TurnContext, CLAIM_CAP, REPLY_TOOL, SPAN_TAIL_BYTES, VERIFY_TOOL,
 };
 pub use span_search::{search_spans, SpanHit, SpanSearch, SPAN_SEARCH_FILES, SPAN_SEARCH_HITS, SPAN_SEARCH_LINES};
 pub use trail::{link_learned, trail_body, trail_draft, write_trail, TrailWrite, TRAIL_BODY_CAP};
@@ -132,4 +172,21 @@ pub(crate) fn test_dir(label: &str) -> std::path::PathBuf {
     std::fs::create_dir_all(&p).expect("harness test dir");
     use_key_store_for(&p, std::sync::Arc::new(MemoryKeyStore::new()));
     p
+}
+
+/// Test stand-in for the cabin's click: answer the first park that shows up
+/// under `dir` (Approve or Deny) and hand back what the card would show.
+#[cfg(test)]
+pub(crate) fn answer_next_park(dir: std::path::PathBuf, approve: bool) -> std::thread::JoinHandle<Option<ParkRequest>> {
+    std::thread::spawn(move || {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < until {
+            if let Some(req) = pending_parks(&dir).into_iter().next() {
+                answer_park(&dir, &req.id, approve).expect("answer park");
+                return Some(req);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        None
+    })
 }

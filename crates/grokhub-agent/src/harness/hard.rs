@@ -166,22 +166,14 @@ pub fn desk_classify(tool: &str, args: &serde_json::Value) -> HardHit {
                 hit => hit,
             }
         }
+        // Read the combo the way the backend will press it, so modifier order
+        // and aliases (`Alt+Ctrl+Del`, `control+alt+delete`) gate the same.
         "key" => {
-            let keys = ["keys", "key"]
-                .iter()
-                .find_map(|k| args.get(*k).and_then(|v| v.as_str()))
-                .unwrap_or("")
-                .to_ascii_lowercase()
-                .replace(' ', "");
-            if matches!(
-                keys.as_str(),
-                "ctrl+alt+delete" | "ctrl+alt+del" | "ctrl+alt+backspace" | "ctrl+alt+end"
-            ) {
-                HardHit::Class(HardClass::IrreversibleOs)
-            } else if is_delete_key(&keys) && file_manager_window(args) {
-                HardHit::Class(HardClass::Delete)
-            } else {
-                HardHit::None
+            let keys = ["keys", "key"].iter().find_map(|k| args.get(*k).and_then(|v| v.as_str())).unwrap_or("");
+            match grokhub_core::desktop_mcp::parse_key_combo(keys) {
+                Ok(combo) if session_ending_combo(&combo) => HardHit::Class(HardClass::IrreversibleOs),
+                Ok(combo) if is_delete_combo(&combo) && file_manager_window(args) => HardHit::Class(HardClass::Delete),
+                _ => HardHit::None,
             }
         }
         // An app name is checked like a shell head (`shutdown` is not an app to open).
@@ -191,7 +183,8 @@ pub fn desk_classify(tool: &str, args: &serde_json::Value) -> HardHit {
         }
         "focus_window" => HardHit::None,
         // Spike-2b: what the control under the click does, checked before it runs.
-        "click" => match click_rule(args) {
+        // A drag lets go over a control too, so it is read like a click there.
+        "click" | "drag" => match click_rule(args) {
             Some(rule) => HardHit::Class(rule.class),
             None => HardHit::None,
         },
@@ -201,6 +194,13 @@ pub fn desk_classify(tool: &str, args: &serde_json::Value) -> HardHit {
             None => HardHit::None,
         },
     }
+}
+
+/// Ctrl+Alt+Delete (the Windows secure attention sequence), Ctrl+Alt+Backspace,
+/// and Ctrl+Alt+End, with any other modifiers held too.
+fn session_ending_combo(combo: &grokhub_core::desktop_mcp::KeyCombo) -> bool {
+    use grokhub_core::desktop_mcp::KeyName;
+    combo.ctrl && combo.alt && matches!(combo.key, KeyName::Delete | KeyName::Backspace | KeyName::End)
 }
 
 /// Spike-2b: the rule a click target matched. `id` names the rule
@@ -391,8 +391,8 @@ pub fn click_action(args: &serde_json::Value, rule: &ClickRule) -> String {
 }
 
 /// Delete and Shift+Delete. On a file manager they delete the selection.
-fn is_delete_key(keys: &str) -> bool {
-    matches!(keys, "delete" | "del" | "shift+delete" | "shift+del")
+fn is_delete_combo(combo: &grokhub_core::desktop_mcp::KeyCombo) -> bool {
+    combo.key == grokhub_core::desktop_mcp::KeyName::Delete && !combo.ctrl && !combo.alt && !combo.super_key
 }
 
 /// Window class or title words of a file manager. The path A gate adds the
@@ -483,8 +483,14 @@ fn unquote(w: &str) -> String {
 
 fn leaf(w: &str) -> &str {
     let w = w.rsplit(['/', '\\']).next().unwrap_or(w);
-    w.strip_suffix(".exe").unwrap_or(w)
+    w.strip_suffix(".exe").or_else(|| w.strip_suffix(".com")).unwrap_or(w)
 }
+
+/// PowerShell launch flags that take a value before the command.
+const PWSH_VALUE_FLAGS: &[&str] = &[
+    "-executionpolicy", "-ep", "-ex", "-exec", "-windowstyle", "-w", "-workingdirectory", "-wd", "-configurationname",
+    "-inputformat", "-if", "-outputformat", "-of", "-psconsolefile", "-settingsfile", "-version", "-v",
+];
 
 /// Index of the real command head in a segment's words, past `sudo` / `doas`,
 /// `xargs` and its flags, `cmd /c`, `powershell -c` (and `pwsh`, `bash -c`, `sh -c`).
@@ -494,10 +500,17 @@ fn head_at(words: &[String]) -> Option<usize> {
         let w = leaf(&words[i]).to_ascii_lowercase();
         match w.as_str() {
             "sudo" | "doas" | "nohup" | "command" | "exec" => i += 1,
-            "xargs" | "powershell" | "pwsh" => {
+            "xargs" => {
                 i += 1;
                 while words.get(i).is_some_and(|n| n.starts_with('-')) {
                     i += 1;
+                }
+            }
+            "powershell" | "pwsh" => {
+                i += 1;
+                while let Some(flag) = words.get(i).filter(|n| n.starts_with('-')) {
+                    // `-ExecutionPolicy Bypass` and its kin: the value is not the head.
+                    i += if PWSH_VALUE_FLAGS.contains(&flag.to_ascii_lowercase().as_str()) { 2 } else { 1 };
                 }
             }
             "cmd" => {
@@ -741,6 +754,16 @@ pub const HEADLESS_DENY_RULES: &[&str] = &[
     "Bash(*; recycle *)",
     "Bash(*&& recycle *)",
     "Bash(*| recycle *)",
+    "Bash(clear-recyclebin*)",
+    "Bash(sudo clear-recyclebin*)",
+    "Bash(*; clear-recyclebin*)",
+    "Bash(*&& clear-recyclebin*)",
+    "Bash(*| clear-recyclebin*)",
+    "Bash(Clear-RecycleBin*)",
+    "Bash(sudo Clear-RecycleBin*)",
+    "Bash(*; Clear-RecycleBin*)",
+    "Bash(*&& Clear-RecycleBin*)",
+    "Bash(*| Clear-RecycleBin*)",
     "Bash(*gio trash *)",
     "Bash(*gio remove *)",
     "Bash(*trash:/*)",
@@ -785,6 +808,57 @@ pub const HEADLESS_DENY_RULES: &[&str] = &[
     "Bash(*; diskpart*)",
     "Bash(*&& diskpart*)",
     "Bash(*| diskpart*)",
+    // Windows power and disk cmdlets, and format.com (Spike-1W)
+    "Bash(format *)",
+    "Bash(sudo format *)",
+    "Bash(*; format *)",
+    "Bash(*&& format *)",
+    "Bash(*| format *)",
+    "Bash(format.com*)",
+    "Bash(sudo format.com*)",
+    "Bash(*; format.com*)",
+    "Bash(*&& format.com*)",
+    "Bash(*| format.com*)",
+    "Bash(stop-computer*)",
+    "Bash(sudo stop-computer*)",
+    "Bash(*; stop-computer*)",
+    "Bash(*&& stop-computer*)",
+    "Bash(*| stop-computer*)",
+    "Bash(Stop-Computer*)",
+    "Bash(sudo Stop-Computer*)",
+    "Bash(*; Stop-Computer*)",
+    "Bash(*&& Stop-Computer*)",
+    "Bash(*| Stop-Computer*)",
+    "Bash(restart-computer*)",
+    "Bash(sudo restart-computer*)",
+    "Bash(*; restart-computer*)",
+    "Bash(*&& restart-computer*)",
+    "Bash(*| restart-computer*)",
+    "Bash(Restart-Computer*)",
+    "Bash(sudo Restart-Computer*)",
+    "Bash(*; Restart-Computer*)",
+    "Bash(*&& Restart-Computer*)",
+    "Bash(*| Restart-Computer*)",
+    "Bash(format-volume*)",
+    "Bash(sudo format-volume*)",
+    "Bash(*; format-volume*)",
+    "Bash(*&& format-volume*)",
+    "Bash(*| format-volume*)",
+    "Bash(Format-Volume*)",
+    "Bash(sudo Format-Volume*)",
+    "Bash(*; Format-Volume*)",
+    "Bash(*&& Format-Volume*)",
+    "Bash(*| Format-Volume*)",
+    "Bash(clear-disk*)",
+    "Bash(sudo clear-disk*)",
+    "Bash(*; clear-disk*)",
+    "Bash(*&& clear-disk*)",
+    "Bash(*| clear-disk*)",
+    "Bash(Clear-Disk*)",
+    "Bash(sudo Clear-Disk*)",
+    "Bash(*; Clear-Disk*)",
+    "Bash(*&& Clear-Disk*)",
+    "Bash(*| Clear-Disk*)",
     "Bash(*systemctl poweroff*)",
     "Bash(*systemctl reboot*)",
     "MCPTool(*hard_irreversible_stub*)",
@@ -846,6 +920,10 @@ pub const HEADLESS_DENY_RULES: &[&str] = &[
     "Bash(*consent.jsonl*)",
     "Edit(**/consent.jsonl)",
     "Write(**/consent.jsonl)",
+    // Spike-5c: Grok's own delete tools on `grokhub-self` (credentials ride in args, see GB_DENY_GAPS)
+    "MCPTool(grokhub-self__skill_delete)",
+    "MCPTool(grokhub-self__connection_remove)",
+    "MCPTool(grokhub-self__automation_delete)",
 ];
 
 /// Hard patterns no GB `--deny` rule can express, with a sample each. GB
@@ -873,11 +951,16 @@ pub const GB_DENY_GAPS: &[(&str, &str)] = &[
         "grokhub-desktop__click",
         "a click on a Send, Pay, Delete, or Reset control (the label under the click point, not the tool name)",
     ),
+    ("grokhub-self__connection_add", "a connection with needs_token (args, not the name); same for connection_modify"),
 ];
 
 /// Floor for shell commands: host_safety paths, rm -rf /, fork bomb, mkfs, dd to a disk,
 /// curl|sh as root.
 pub fn hard_floor(name: &str, arguments: &str) -> Option<HardFloor> {
+    if crate::self_manage::self_tool(name).is_some() {
+        let args = serde_json::from_str::<serde_json::Value>(arguments).unwrap_or_default();
+        return crate::self_manage::scope_guard(name, &args).map(|f| HardFloor { reason: f.detail });
+    }
     if !SHELL_TOOLS.contains(&name) {
         return ledger_write(name, arguments).then(|| HardFloor { reason: LEDGER_FLOOR.into() });
     }
@@ -952,6 +1035,9 @@ pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
         let cmd = command_arg(arguments).unwrap_or_default().to_ascii_lowercase();
         return command_class(&cmd);
     }
+    if let Some(class) = crate::self_manage::self_class(name, &serde_json::from_str(arguments).unwrap_or_default()) {
+        return class.hard();
+    }
     let lower = name.to_ascii_lowercase();
     let leaf = lower.rsplit("__").next().unwrap_or(&lower);
     // Spike-2b path E: a click that names its target is classified by it.
@@ -963,6 +1049,13 @@ pub fn hard_class(name: &str, arguments: &str) -> Option<HardClass> {
     }
     if is_typing_tool(leaf)
         && serde_json::from_str::<serde_json::Value>(arguments).is_ok_and(|v| credential_field(&v))
+    {
+        return Some(HardClass::Credentials);
+    }
+    // Spike-5b: a connection that needs a token (the user types it in).
+    if leaf == "connection_add"
+        && serde_json::from_str::<serde_json::Value>(arguments)
+            .is_ok_and(|v| v.get("needs_token").and_then(|b| b.as_bool()) == Some(true))
     {
         return Some(HardClass::Credentials);
     }
@@ -1007,9 +1100,13 @@ const DELETE_NAMES: &[&str] = &["delete", "trash", "remove_file", "purge"];
 const CREDENTIAL_NAMES: &[&str] = &["password", "credential", "secret", "api_key", "token_write"];
 
 /// Shell command heads per hard class (the first word of a segment, after `sudo` / `doas`).
-const IRREVERSIBLE_HEADS: &[&str] = &["shutdown", "reboot", "poweroff", "halt", "wipefs", "shred", "diskpart"];
+const IRREVERSIBLE_HEADS: &[&str] = &[
+    "shutdown", "reboot", "poweroff", "halt", "wipefs", "shred", "diskpart", "format", "stop-computer", "restart-computer",
+    "format-volume", "clear-disk",
+];
 const DELETE_HEADS: &[&str] = &[
     "rm", "rmdir", "unlink", "trash", "trash-put", "del", "erase", "rd", "remove-item", "remove-itemsafely", "recycle",
+    "clear-recyclebin",
 ];
 const SEND_HEADS: &[&str] = &["sendmail", "mail", "mutt"];
 const CREDENTIAL_HEADS: &[&str] = &["passwd", "chpasswd"];
@@ -1082,9 +1179,12 @@ mod tests {
 
     #[test]
     fn headless_deny_rules_cover_the_floor_and_stubs() {
-        assert_eq!(HEADLESS_DENY_RULES.len(), 202);
-        assert_eq!(HEADLESS_DENY_RULES[199], "Bash(*consent.jsonl*)");
-        assert_eq!(HEADLESS_DENY_RULES[201], "Write(**/consent.jsonl)");
+        assert_eq!(HEADLESS_DENY_RULES.len(), 265);
+        assert_eq!(HEADLESS_DENY_RULES[259], "Bash(*consent.jsonl*)");
+        assert_eq!(HEADLESS_DENY_RULES[261], "Write(**/consent.jsonl)");
+        assert_eq!(HEADLESS_DENY_RULES[262], "MCPTool(grokhub-self__skill_delete)");
+        assert_eq!(HEADLESS_DENY_RULES[263], "MCPTool(grokhub-self__connection_remove)");
+        assert_eq!(HEADLESS_DENY_RULES[264], "MCPTool(grokhub-self__automation_delete)");
         assert_eq!(HEADLESS_DENY_RULES[0], "Bash(rm -rf /)");
         assert!(HEADLESS_DENY_RULES.contains(&"Bash(rm *)"));
         assert!(HEADLESS_DENY_RULES.contains(&"MCPTool(*hard_send_stub*)"));
@@ -1120,7 +1220,7 @@ mod tests {
     #[test]
     fn gb_deny_rules_cover_every_hard_name_and_command() {
         let heads = [IRREVERSIBLE_HEADS, DELETE_HEADS, SEND_HEADS, CREDENTIAL_HEADS].concat();
-        assert_eq!(heads.len(), 23);
+        assert_eq!(heads.len(), 29);
         for h in &heads {
             for cmd in [
                 format!("{h} target"),
@@ -1191,6 +1291,11 @@ mod tests {
         for cmd in ["cargo test", "git push origin beta", "ls -la", "npm run format", "cat package.json"] {
             assert!(!gb_denies("Bash", cmd), "over-deny: {cmd}");
         }
+        for (tool, _) in crate::self_manage::SELF_TOOLS {
+            let mcp = format!("{}__{tool}", crate::self_manage::SELF_MCP_SERVER);
+            let hard = hard_class(&mcp, "{}");
+            assert_eq!(hard.is_some(), gb_denies("MCPTool", &mcp), "{mcp}: {hard:?}");
+        }
         for tool in ["srv__list_files", "grokhub-desktop__click", "gmail__search_threads"] {
             assert!(!gb_denies("MCPTool", tool), "over-deny: {tool}");
         }
@@ -1221,7 +1326,7 @@ mod tests {
 
     #[test]
     fn gb_deny_gaps_are_hard_but_no_rule_can_match_them() {
-        assert_eq!(GB_DENY_GAPS.len(), 9);
+        assert_eq!(GB_DENY_GAPS.len(), 10);
         for (sample, _) in &GB_DENY_GAPS[..5] {
             assert!(hard_shell(sample), "classifier: {sample}");
             assert!(!gb_denies("Bash", sample), "now covered, drop it from the gaps: {sample}");
@@ -1238,6 +1343,13 @@ mod tests {
         // Spike-2b: a click's class is the control under it, not the tool name.
         assert_eq!(GB_DENY_GAPS[8].0, "grokhub-desktop__click");
         assert!(!gb_denies("MCPTool", GB_DENY_GAPS[8].0));
+        // A connection that needs a token is credentials by its args; the name stays soft.
+        assert!(!gb_denies("MCPTool", GB_DENY_GAPS[9].0));
+        assert_eq!(
+            hard_class(GB_DENY_GAPS[9].0, r#"{"name":"crm","url":"http://127.0.0.1:9/mcp","needs_token":true}"#),
+            Some(HardClass::Credentials)
+        );
+        assert_eq!(hard_class(GB_DENY_GAPS[9].0, r#"{"name":"crm","url":"http://127.0.0.1:9/mcp"}"#), None);
         assert_eq!(
             desk_classify("type", &serde_json::json!({ "text": "hunter22", "label": "Password" })),
             HardHit::Class(HardClass::Credentials)
@@ -1443,6 +1555,43 @@ mod tests {
         assert_eq!(key("Delete", "kate notes.txt — Kate"), HardHit::None);
         assert_eq!(key("ctrl+c", "org.kde.dolphin Downloads — Dolphin"), HardHit::None);
         assert_eq!(desk_classify("key", &serde_json::json!({ "keys": "Delete" })), HardHit::None);
+    }
+
+    #[test]
+    fn key_combos_gate_in_any_order_and_alias() {
+        let key = |keys: &str, window: &str| desk_classify("key", &serde_json::json!({ "keys": keys, "window": window }));
+        let os = HardHit::Class(HardClass::IrreversibleOs);
+        for keys in ["Alt+Ctrl+Del", "control+alt+delete", "ctrl_l + alt_l + Delete", "ctrl+shift+alt+end", "Alt+Ctrl+BackSpace"] {
+            assert_eq!(key(keys, ""), os, "{keys}");
+        }
+        let delete = HardHit::Class(HardClass::Delete);
+        assert_eq!(key("Shift+Del", "CabinetWClass Scratch"), delete);
+        assert_eq!(key("del", "CabinetWClass Scratch"), delete);
+        assert_eq!(key("ctrl+delete", "CabinetWClass Scratch"), HardHit::None, "Ctrl+Delete deletes a word, not files");
+        assert_eq!(key("alt+delete", "Notepad"), HardHit::None);
+        assert_eq!(key("not a key", "CabinetWClass Scratch"), HardHit::None);
+    }
+
+    #[test]
+    fn windows_launch_flags_and_power_cmdlets_park() {
+        let ask = |cmd: &str| classify_ask("Run command", cmd);
+        let delete = HardHit::Class(HardClass::Delete);
+        let os = HardHit::Class(HardClass::IrreversibleOs);
+        assert_eq!(ask("powershell -ExecutionPolicy Bypass -Command Remove-Item C:\\tmp\\x.txt"), delete);
+        assert_eq!(ask("pwsh.exe -NoProfile -WindowStyle Hidden -c del x.txt"), delete);
+        assert_eq!(ask("powershell -ep bypass Clear-RecycleBin -Force"), delete);
+        assert_eq!(
+            delete_targets("powershell -ExecutionPolicy Bypass -Command Remove-Item C:\\tmp\\x.txt"),
+            vec!["C:\\tmp\\x.txt"]
+        );
+        for cmd in ["Stop-Computer -Force", "Restart-Computer", "format.com D: /q", "Format-Volume -DriveLetter D", "Clear-Disk -Number 1"] {
+            assert_eq!(ask(cmd), os, "{cmd}");
+        }
+        // `leaf` drops `.com`, so path C needs its own `format.com` rules.
+        assert!(gb_denies("Bash", "format.com D: /q"));
+        assert!(gb_denies("Bash", "cd C:\\; format.com D: /q"));
+        assert_eq!(ask("powershell -ExecutionPolicy Bypass -Command Get-ChildItem"), HardHit::None);
+        assert_eq!(ask("Format-Table Name"), HardHit::None);
     }
 
     #[test]

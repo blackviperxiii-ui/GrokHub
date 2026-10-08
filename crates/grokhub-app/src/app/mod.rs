@@ -176,11 +176,15 @@ mod board_ui;
 mod confirm;
 mod harness_ui;
 mod inbox_ui;
+mod episode_ui;
 mod privacy_ui;
 mod repair_ui;
 mod scope_ui;
 mod indexer_ui;
 mod skill_undo;
+mod self_review_ui;
+mod change_undo;
+mod proactive_auto;
 mod glance;
 mod sidebar;
 mod pages;
@@ -190,10 +194,13 @@ mod voice;
 mod threads_nav;
 mod background;
 mod heartbeat_gate;
+mod proactive_ui;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod native_signin_tests;
+#[cfg(test)]
+mod self_review_tests;
 
 use acp::*;
 use chat_ui::*;
@@ -551,6 +558,9 @@ pub struct Cabin {
     /// Card whose notes are open for editing, and the text being typed.
     board_notes_edit: Option<(String, String)>,
     last_anticipate_ms: u64,
+    /// Spike-6a card budget (mutes, dismissal streak, quiet-hours queue).
+    proactive: grokhub_core::proactive::ProactiveBudget,
+    last_proactive_ms: u64,
     goal_step: u32,
     followup_step: u32,
     stream_buf: String,
@@ -791,6 +801,9 @@ pub struct Cabin {
     permission_mode: PermissionMode,
     /// Spike-0 harness: Full grant, parked hard-class cards, path C hits.
     harness: harness_ui::HarnessState,
+    /// Spike-6b: candidates waiting for the ceiling, today's auto budget,
+    /// and the ledger lines auto-acts wrote.
+    auto_act: proactive_auto::AutoState,
     /// Night / loop / `/send` tasks inherit the composer PermissionMode pill.
     scheduled_perm: bool,
     grok_sessions: Vec<grokhub_acp::GrokSession>,
@@ -1172,6 +1185,8 @@ impl Cabin {
             card_notes_follow: None,
             board_notes_edit: None,
             last_anticipate_ms: 0,
+            proactive: proactive_ui::load_budget(),
+            last_proactive_ms: 0,
             goal_step,
             followup_step: 0,
             stream_buf: String::new(),
@@ -1373,6 +1388,7 @@ impl Cabin {
                 full_card_on: harness_ui::grant_full_card_on(),
                 ..Default::default()
             },
+            auto_act: Default::default(),
             scheduled_perm: false,
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
@@ -1446,6 +1462,8 @@ impl Cabin {
             c.open_fresh_home();
             #[cfg(not(test))]
             crate::desktop_mcp::maybe_register_on_start(c.cfg.desktop_control);
+            #[cfg(not(test))]
+            crate::self_mcp::maybe_register_on_start();
             #[cfg(not(test))]
             crate::desktop_mcp::set_desktop_enabled(c.cfg.desktop_control);
         }
@@ -1613,6 +1631,8 @@ impl Cabin {
             card_notes_follow: None,
             board_notes_edit: None,
             last_anticipate_ms: 0,
+            proactive: proactive_ui::load_budget(),
+            last_proactive_ms: 0,
             goal_step: 0,
             followup_step: 0,
             stream_buf: String::new(),
@@ -1811,6 +1831,7 @@ impl Cabin {
             session_mode: SessionMode::Chat,
             permission_mode: PermissionMode::Ask,
             harness: Default::default(),
+            auto_act: Default::default(),
             scheduled_perm: false,
             grok_sessions: Vec::new(),
             grok_sessions_loaded: false,
@@ -2714,6 +2735,11 @@ impl Cabin {
             if ledger.undone_by_user(&patched.name, &after) {
                 continue;
             }
+            let (old, new) = (grokhub_core::render_skill_md(&existing), grokhub_core::render_skill_md(&patched));
+            if let Err(note) = grokhub_agent::harness::replay_gate(&config::config_dir(), &patched.name, &old, &new, now_ms()) {
+                self.status = note;
+                continue;
+            }
             if let Some(s) = self.skill_list.iter_mut().find(|s| s.name == patched.name) {
                 *s = patched.clone();
             }
@@ -3447,6 +3473,7 @@ impl Cabin {
                 HeartbeatAct::Review => {
                     if !night_fired && !self.running {
                         self.tick_review();
+                        self.tick_self_review();
                         self.tick_dream();
                     }
                 }
@@ -3474,8 +3501,14 @@ impl Cabin {
         if self.scratch() {
             return;
         }
+        self.tick_auto_act();
         let clock = Self::local_clock();
         let quiet = quiet_hours_active(&clock.hm(), &self.cfg.quiet_start, &self.cfg.quiet_end);
+        // Spike-6a cards: busy is should_anticipate's seat check plus a card
+        // waiting on you; quiet hours only queue.
+        let busy = !should_anticipate(self.running, self.review_busy, self.composer.trim().is_empty(), false)
+            || self.heartbeat_busy();
+        self.tick_proactive(now_ms(), quiet, busy);
         if !should_anticipate(
             self.running,
             self.review_busy,
@@ -3510,6 +3543,7 @@ impl Cabin {
         bump_usage(&mut self.usage, "automation");
         self.daily_auto_used = self.usage.automation;
         self.daily_auto_day = self.usage.day.clone();
+        self.harness.next_origin = Some(grokhub_agent::harness::Origin::Proactive);
         self.send_scheduled_chat(prompt);
     }
 
@@ -4652,6 +4686,10 @@ impl Cabin {
 
     fn halt_work(&mut self, status: impl Into<String>) {
         let status = status.into();
+        // A redirect steers the turn; every other stop ends the desktop episode.
+        if status != "Redirected" {
+            self.end_episode(grokhub_agent::episode::EpisodeEnd::Stop);
+        }
         self.heartbeat_turn_stopped();
         self.halt_in_flight();
         self.finish_hub_dispatch(&status, false);
@@ -4663,6 +4701,7 @@ impl Cabin {
     /// Composer Stop and `/stop` leave background runs alone.
     fn halt_everything(&mut self, status: impl Into<String>) {
         self.heartbeat_halt(now_ms());
+        self.end_episode(grokhub_agent::episode::EpisodeEnd::Halt);
         self.halt_inbox();
         self.stop_all_bg_runs();
         self.halt_work(status);
@@ -4978,6 +5017,7 @@ impl eframe::App for Cabin {
         self.poll_acp();
         self.poll_chips();
         self.poll_review();
+        self.poll_self_review();
         self.poll_digest_lookup();
         self.window_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
         self.poll_greeting();
@@ -5018,6 +5058,7 @@ impl eframe::App for Cabin {
         self.poll_single();
         self.poll_bg_runs();
         self.poll_native_automations();
+        self.poll_self_changes();
         self.poll_native_side_events();
         self.poll_pick();
         // While hidden, eframe hands `logic` the last shown frame's input every

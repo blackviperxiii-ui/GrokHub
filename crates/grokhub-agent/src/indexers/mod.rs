@@ -80,12 +80,13 @@ pub fn index_excluded(path: &str) -> bool {
     if hx::scope_excluded(path) {
         return true;
     }
-    let p = path.replace('\\', "/");
-    if INDEX_EXCLUDES.iter().any(|x| p.ends_with(&format!("/{x}")) || p.contains(&format!("/{x}/")) || p == *x) {
+    // Case-blind, like `scope_excluded`: `ID_RSA`, `1PASSWORD`, `Keyrings`.
+    let p = path.replace('\\', "/").to_lowercase();
+    if INDEX_EXCLUDES.iter().map(|x| x.to_lowercase()).any(|x| p.ends_with(&format!("/{x}")) || p.contains(&format!("/{x}/")) || p == x) {
         return true;
     }
     let name = p.rsplit('/').next().unwrap_or("");
-    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_string()).unwrap_or_default();
     EXCLUDED_EXTS.contains(&ext.as_str()) || EXCLUDED_STEMS.iter().any(|s| name.starts_with(s))
 }
 
@@ -293,6 +294,7 @@ fn write_facts(env: &TickEnv<'_>, scope: &Scope, facts: &[Fact], tables: Vec<Str
             stopped = true;
             break;
         }
+        let consent_ref = ConsentLedger::load(env.config_dir).scope_grant(scope).map(|g| g.id.clone()).unwrap_or_default();
         for f in batch {
             if written >= NODE_CAP_PER_TICK {
                 break 'batches;
@@ -311,6 +313,7 @@ fn write_facts(env: &TickEnv<'_>, scope: &Scope, facts: &[Fact], tables: Vec<Str
                     Sensitivity::Plain => Sensitivity::Personal,
                     s => s,
                 },
+                consent_ref: consent_ref.clone(),
             };
             match store.remember(&draft) {
                 Ok(_) => written += 1,

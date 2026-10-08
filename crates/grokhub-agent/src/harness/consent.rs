@@ -140,9 +140,11 @@ impl Scope {
 
 /// True when a path touches a hard exclude (`.ssh`, browser `Cookies`, …).
 pub fn scope_excluded(path: &str) -> bool {
-    let p = path.replace('\\', "/");
-    SCOPE_HARD_EXCLUDES.iter().any(|x| {
-        p == *x
+    // Case-blind: Windows and macOS paths are (`.SSH`, `cookies`), and
+    // excluding a little more on Linux fails closed.
+    let p = path.replace('\\', "/").to_lowercase();
+    SCOPE_HARD_EXCLUDES.iter().map(|x| x.to_lowercase()).any(|x| {
+        p == x
             || p.ends_with(&format!("/{x}"))
             || p.contains(&format!("/{x}/"))
             || p.starts_with(&format!("{x}/"))

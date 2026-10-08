@@ -88,8 +88,13 @@ pub fn grok_build_click(req: ClickRequest<'_>) -> ClickOutcome {
                 ui_changed: None,
                 origin: Origin::User,
                 consent_ref: String::new(),
+                undo_ref: String::new(),
                 target: String::new(),
                 target_rule: String::new(),
+                usage: None,
+                episode: String::new(),
+                goal_step: String::new(),
+                tokens: None,
             };
             let _ = append_span(req.config_dir, &span);
             ClickOutcome::Parked(reason)
@@ -150,7 +155,7 @@ pub fn desk_args(tool: &str, args: &serde_json::Value) -> String {
     let mut args = args.clone();
     if let Some(m) = args.as_object_mut() {
         m.remove(TARGET_HINT);
-        if tool == "click" {
+        if tool == "click" || tool == "drag" {
             m.remove("window");
         }
     }
@@ -267,7 +272,7 @@ pub fn park_desk_call(
         ),
         "key" => args["keys"].as_str().unwrap_or("").to_string(),
         "delete_files" => delete_files_action(args),
-        "click" => match click_rule(args) {
+        "click" | "drag" => match click_rule(args) {
             Some(rule) => click_action(args, &rule),
             None => desk_args(tool, args),
         },
@@ -292,7 +297,8 @@ pub fn park_desk_call(
         HardClass::parse(class).unwrap_or(HardClass::IrreversibleOs),
     )
     .on_path("A")
-    .in_turn(&ctx.chat_id, ctx.turn);
+    .in_turn(&ctx.chat_id, ctx.turn)
+    .in_episode(&ctx.episode);
     park_span.access = ctx.access.clone();
     let mut park_span = with_click_target(park_span, tool, args);
     if driver == ComputerUseBackend::CuaDriver {

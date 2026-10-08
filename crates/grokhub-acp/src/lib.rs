@@ -42,8 +42,9 @@ pub use locate::{
     grok_marked_unusable, grok_stdout, grok_stdout_timeout, grok_user_stdout_allow_fail,
     grok_user_stdout_timeout, grok_user_stdout_wait, grok_version, hide_windows_console,
     invalidate_grok_bin_cache, invalidate_grok_key_cache, is_cli_hard_failure, mark_grok_unusable,
-    parse_grok_auth_key, prepare_cabin_grok_home, register_cua_mcp, register_desktop_mcp, silence_windows_hard_errors,
-    single_turn_args, single_turn_args_full, unregister_cua_mcp, unregister_desktop_mcp, with_ask_deny, with_hard_deny, which,
+    parse_grok_auth_key, prepare_cabin_grok_home, register_cua_mcp, register_desktop_mcp, register_self_mcp, self_mcp_add_argv,
+    silence_windows_hard_errors, single_turn_args, single_turn_args_full, unregister_cua_mcp, unregister_desktop_mcp, with_ask_deny,
+    with_hard_deny, which,
     write_cli_auth_if_needed, builtin_cu_denied, ASK_DENY_RULES, BUILTIN_CU_DENY, CLI_CREDENTIAL_DENY,
 };
 pub use protocol::{
