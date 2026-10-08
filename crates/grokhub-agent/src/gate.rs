@@ -195,6 +195,7 @@ pub fn is_known(name: &str) -> bool {
         || is_desktop(name)
         || name == WEB_FETCH
         || is_media(name)
+        || crate::self_manage::self_tool(name).is_some()
 }
 
 pub fn readonly_refusal(name: &str) -> String {
@@ -237,7 +238,7 @@ pub fn user_cancelled(name: &str) -> String {
 pub const NOT_EXECUTED: &str = "Not executed: earlier action failed";
 
 pub fn decide(gate: &Gate, name: &str, latched_always: bool, desk: Option<DeskFlags>) -> Decision {
-    if is_readonly(name) {
+    if is_readonly(name) || crate::self_manage::is_read(name) {
         return Decision::Run;
     }
     if gate.readonly_session {
