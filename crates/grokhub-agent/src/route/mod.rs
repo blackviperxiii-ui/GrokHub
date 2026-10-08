@@ -12,6 +12,8 @@ pub mod difficulty;
 pub mod guard;
 pub mod heal;
 pub mod ladder;
+pub mod learn;
+pub mod local;
 pub mod log;
 pub mod policy;
 pub mod refresh;
@@ -20,6 +22,7 @@ pub mod signals;
 pub mod spend;
 pub mod sources;
 pub mod table;
+pub mod tune;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -184,7 +187,11 @@ pub fn call_model(client: &dyn ModelClient, call: &ModelCall, cancel: &CancelTok
     sent.effort = decision.send_effort(call.effort.as_deref());
     sent.model = decision.send_model(&call.model);
     let started = std::time::Instant::now();
-    let out = client.stream(&sent.request(), cancel, &mut |_| {});
+    let on_device = decision.on_device();
+    let out = if on_device { local::serve(&call.class, &text) } else { client.stream(&sent.request(), cancel, &mut |_| {}) };
+    if on_device {
+        rc.provider = local::PROVIDER_LOCAL;
+    }
     rc.effort = sent.effort.as_deref();
     rc.model = &sent.model;
     route_log(&dir, &rc, &decision, &RouteDone::of(&out, started.elapsed()));
@@ -220,6 +227,12 @@ pub struct RouteInput<'a> {
     pub episode_model: Option<&'a str>,
     /// R2b: what this call may spend (cost classes, the Fast policy, grants, budget).
     pub spend: spend::Spend,
+    /// R3a DE2: the rung this task's signature is known to succeed at, for a fresh pick.
+    pub routine: Option<usize>,
+    /// R3a: the self-tuned (or canary) class start, clamped into the band.
+    pub start: Option<&'a str>,
+    /// R3a: the local model's gate. Off by default, so no `local:*` id is ever picked.
+    pub local: local::LocalGate,
 }
 
 /// The pick: provider, model, effort, one plain sentence, and the rules that fired.
@@ -258,7 +271,7 @@ pub fn effort_word(e: Option<&str>) -> &'static str {
 
 /// The plain clause for the rule that moved effort last.
 fn why_clause(plain: &str, rules: &[String]) -> String {
-    const MOVES: &[&str] = &["E1", "E2", "E3", "E4", "E5", "DE1", "DE3", "steer:harder", "steer:quicker", "d<0.3", "d>0.7"];
+    const MOVES: &[&str] = &["E1", "E2", "E3", "E4", "E5", "DE1", "DE2", "DE3", "steer:harder", "steer:quicker", "d<0.3", "d>0.7"];
     let last = rules.iter().rev().find(|r| MOVES.contains(&r.as_str()));
     match last.map(String::as_str) {
         Some("E1") => "a tool failed, so it thinks harder".into(),
@@ -267,6 +280,7 @@ fn why_clause(plain: &str, rules: &[String]) -> String {
         Some("E4") => "the self-check was weak".into(),
         Some("E5") => format!("{plain}, which never runs below High"),
         Some("DE1") => "the last steps went cleanly".into(),
+        Some("DE2") => "this task has gone well at this level before".into(),
         Some("DE3") => "most of the budget is used".into(),
         Some("steer:harder") => "you asked it to think hard".into(),
         Some("steer:quicker") => "you asked to keep it quick".into(),
@@ -385,18 +399,40 @@ impl Router {
         let mut rules: Vec<String> = Vec::new();
         let provider = if input.provider.is_empty() { PROVIDER_XAI } else { input.provider };
         let fit = policy::Fit { needs_image: input.needs_image, needs_tools: input.needs_tools, ctx_tokens: input.ctx_tokens, grok_build: provider == live::PROVIDER_GROK_BUILD };
-        let ids: Vec<&str> = reg.models.keys().map(String::as_str).filter(|id| policy::fits(reg, profiles, id, fit, &input.spend, now_ms)).collect();
+        // A local route only while the flag is on, for an eligible class, on the live tier.
+        let ids: Vec<&str> = reg
+            .models
+            .keys()
+            .map(String::as_str)
+            .filter(|id| !local::is_local(id) || local::admits(&input.local, id, input.class, input.ctx_tokens))
+            .filter(|id| policy::fits(reg, profiles, id, fit, &input.spend, now_ms))
+            .collect();
         let row = policy::class_row(input.class);
-        let band = row.map(|r| ladder::Band::of(r, input.bump));
+        let band = row.map(|r| ladder::Band::tuned(r, input.bump, input.start));
         let pick = match (row, band) {
             (Some(row), Some(band)) => Some(input.pick.clone().unwrap_or_else(|| {
                 let start = ladder::start_rung(band, input.d, input.steer, ladder::user_facing(row.class));
-                ladder::advance(None, row.class, band, start, &ladder::Obs { new_turn: true, ..ladder::Obs::default() }).1
+                ladder::advance(None, row.class, band, start, &ladder::Obs { new_turn: true, routine: input.routine, ..ladder::Obs::default() }).1
             })),
             _ => None,
         };
         let e2 = pick.as_ref().is_some_and(|p| p.rules.iter().any(|r| r == "E2:next_model"));
-        let chosen = Self::pick_model(input, reg, &ids, table, e2, &mut rules);
+        let chosen = if local::privacy_only(&input.local) {
+            // Sensitive data and no cloud grant: the device or nothing.
+            match ids.iter().find(|id| local::is_local(id)) {
+                Some(id) => {
+                    rules.push("privacy:local_only".into());
+                    ModelPick { model: id.to_string(), no_route: false, replaced: None }
+                }
+                None => {
+                    rules.push("privacy:no_local".into());
+                    ModelPick { model: input.current_model.trim().to_string(), no_route: true, replaced: None }
+                }
+            }
+        } else {
+            Self::pick_model(input, reg, &ids, table, e2, &mut rules)
+        };
+        let provider = if local::is_local(&chosen.model) && !chosen.no_route { local::PROVIDER_LOCAL } else { provider };
         let gb = provider == live::PROVIDER_GROK_BUILD;
         let premium_ask = rules.iter().any(|r| r == "cost:premium_ungranted").then(|| route_key(input.current_model, RouteOpts::default()));
         // Auto only: a pin is kept as picked. The Fast variant goes only under the latency policy.
@@ -808,3 +844,6 @@ mod tests {
         assert!(echo.0.lock().unwrap().is_empty());
     }
 }
+
+#[cfg(test)]
+mod r3a_tests;

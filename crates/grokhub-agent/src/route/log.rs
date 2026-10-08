@@ -36,7 +36,7 @@ pub struct RouteSignals {
     pub latency: Option<u64>,
     /// The week's budget used, percent (R2b), or `null` with no cap and no limit hit.
     pub budget_pct: Option<u8>,
-    /// No privacy routing exists yet, so this stays `null`.
+    /// `local_only` when sensitive data with no cloud grant kept the step on the device (R3a; off by default).
     pub privacy: Option<String>,
 }
 
@@ -109,6 +109,10 @@ pub struct RouteRecord {
     /// R2b: the sent route's cost class (`included`, `autonomous_premium`, `premium`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub cost_class: String,
+    /// R3a self-tuning: `canary:<candidate>` when a canary served the step,
+    /// `shadow:<candidate>` when one was computed next to it (`!` when it broke a filter).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tune: Option<String>,
 }
 
 // `d` and `cost_usd` are finite (rounded rules and token math), so equality is total.

@@ -352,6 +352,10 @@ pub struct AppConfig {
     /// that once, and it is never written back.
     #[serde(default, rename = "reasoningEffort", skip_serializing)]
     pub legacy_reasoning_effort: Option<String>,
+    /// Router R3a: the on-device model route (`localModel`). Off by default and
+    /// with no runtime; no Settings row or slash command turns it on.
+    #[serde(default)]
+    pub local_model: bool,
     /// Composer session pill — chat / plan / ask.
     #[serde(default = "default_session_mode")]
     pub session_mode: String,
@@ -556,6 +560,7 @@ impl Default for AppConfig {
             close_to_tray_tip_seen: false,
             mode: String::new(),
             legacy_reasoning_effort: None,
+            local_model: false,
             session_mode: default_session_mode(),
             permission_mode: default_permission_mode(),
             always_collapse_thoughts: false,
@@ -1047,6 +1052,10 @@ mod tests {
         assert_eq!(loaded.source_dir, "/tmp/Grok-Hub");
         assert_eq!(loaded.legacy_reasoning_effort, None);
         let body = fs::read_to_string(config_dir().join("app.json")).expect("app.json");
+        // Router R3a: the local model is off in a fresh config and in an old file without the key.
+        assert!(!loaded.local_model && body.contains("\"localModel\": false"), "{body}");
+        let old: AppConfig = serde_json::from_str("{}").expect("empty config");
+        assert!(!old.local_model);
         assert!(
             !body.contains("xai-test") && !body.to_ascii_lowercase().contains("apikey"),
             "app.json must omit the leftover console-key field: {body}"
