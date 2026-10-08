@@ -7,7 +7,7 @@ use crate::desktop::{
 };
 use crate::helpers::{
     cabin_menu_should_dismiss, click_project_opens_board, collect_other_chip_threads, expand_home,
-    next_maximized, wants_live_repaint,
+    maximized_now, next_maximized, wants_live_repaint,
 };
 use crate::host::{host_working_dir, resolve_host_cite_path, run_host, run_host_stream};
 use crate::secrets::{self, Secrets};
@@ -418,6 +418,8 @@ pub struct Cabin {
     persist_idle_key: String,
     persist_rx: Option<mpsc::Receiver<()>>,
     persist_io: Arc<Mutex<()>>,
+    /// Last settings or key write that failed, for the status line.
+    persist_err: Arc<Mutex<Option<String>>>,
     /// Generation of the newest full snapshot handed to a persist worker.
     persist_gen: u64,
     /// What the persist workers have written, so an older snapshot that takes
@@ -1045,6 +1047,7 @@ impl Cabin {
             persist_idle_key: String::new(),
             persist_rx: None,
             persist_io: Arc::new(Mutex::new(())),
+            persist_err: Arc::new(Mutex::new(None)),
             persist_gen: 0,
             persist_mark: Arc::new(Mutex::new(PersistMark::default())),
             cfg_slot,
@@ -1498,6 +1501,7 @@ impl Cabin {
             persist_idle_key: String::new(),
             persist_rx: None,
             persist_io: Arc::new(Mutex::new(())),
+            persist_err: Arc::new(Mutex::new(None)),
             persist_gen: 0,
             persist_mark: Arc::new(Mutex::new(PersistMark::default())),
             cfg_slot: Arc::new(Mutex::new(CfgSlot { gen: 0, cfg })),
@@ -1920,13 +1924,7 @@ impl Cabin {
             return;
         };
         let size = inner.map(|r| r.size()).unwrap_or(outer.size());
-        #[cfg(windows)]
-        let maximized = {
-            let _ = egui_max;
-            self.win_max
-        };
-        #[cfg(not(windows))]
-        let maximized = egui_max.unwrap_or(self.win_max);
+        let maximized = maximized_now(egui_max, self.win_max);
         if let Some(g) = crate::window::remember_geom(
             self.window_visible,
             maximized,
@@ -4963,18 +4961,26 @@ impl eframe::App for Cabin {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // No background `grok -p` outlives the cabin.
         self.kill_bg_runs();
-        grokhub_agent::halt_all_sessions();
-        self.stop_native_unattended();
-        grokhub_agent::mcp::shutdown_all();
         // The close frame spawned a persist. Wait for it: the process exits right after this,
         // and two writers of app.json share one temp file.
-        let _io = self.persist_io.lock();
-        let mut cfg = self.cfg.clone();
-        cfg.api_key.clear();
-        let _ = crate::config::save(&cfg);
+        {
+            let _io = self.persist_io.lock();
+            let mut cfg = self.cfg.clone();
+            cfg.api_key.clear();
+            let _ = crate::config::save(&cfg);
+        }
         if let Some(tray) = self.tray.take() {
             crate::tray::drop_tray(tray);
         }
+        // A pid file left behind names a pid Windows soon reuses; the next
+        // launch would read it as a running cabin and exit with no window.
+        crate::tray::release_cabin_claim();
+        // `shutdown_all` waits for each MCP server's lock, which a tool call or a
+        // slow server start holds for up to a minute. Settings are saved above.
+        crate::tray::finish_within(Duration::from_secs(2), || {
+            grokhub_agent::halt_all_sessions();
+            grokhub_agent::mcp::shutdown_all();
+        });
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -4988,6 +4994,7 @@ impl eframe::App for Cabin {
             }
         }
         self.poll_job();
+        self.poll_persist_err();
         self.poll_imagine_save();
         self.poll_host_diff();
         self.poll_acp();

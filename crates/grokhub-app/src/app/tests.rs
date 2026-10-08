@@ -10605,7 +10605,7 @@ fn skill_hub_help_and_clear() {
     cabin.skill_list.clear();
     cabin.run_slash_line("/skill missing-harbor");
     assert_eq!(cabin.status, "No skill missing-harbor");
-    assert!(matches!(cabin.nav, Nav::Chat) || !matches!(cabin.nav, Nav::Devices));
+    assert!(matches!(cabin.nav, Nav::Chat), "{:?}", cabin.nav);
     cabin.run_slash_line("/hub");
     assert!(matches!(cabin.nav, Nav::Devices));
     assert_eq!(cabin.status, "Start share on Devices");
@@ -16451,6 +16451,7 @@ fn quiet_cabin() -> Cabin {
         persist_rx: None,
         persist_io: std::sync::Arc::new(std::sync::Mutex::new(())),
         persist_gen: 0,
+        persist_err: std::sync::Arc::new(std::sync::Mutex::new(None)),
         persist_mark: std::sync::Arc::new(std::sync::Mutex::new(PersistMark::default())),
         cfg_slot: std::sync::Arc::new(std::sync::Mutex::new(super::CfgSlot { gen: 0, cfg })),
         board: Vec::new(),
@@ -27955,5 +27956,29 @@ fn a_granted_scope_lists_its_facts_and_forget_these_purges_them() {
     assert!(p.has("Nothing learned to show. GrokHub reads it on a heartbeat, never on battery or in quiet hours."));
     assert!(hx::ConsentLedger::load(&root).scope_grant(&scope).is_some(), "forgetting is not revoking");
     assert_eq!(idx::ScopeIndex::load(&root).for_scope(&scope.key()).len(), 0);
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn failed_settings_write_replaces_saved_on_the_status_line() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("persist-err");
+    std::fs::create_dir_all(&root).unwrap();
+    let blocker = root.join("not-a-dir");
+    std::fs::write(&blocker, b"x").unwrap();
+    std::env::set_var("GROKHUB_CONFIG", blocker.join("cfg"));
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.status = "Saved".into();
+    cabin.persist_cfg();
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(5) && cabin.status == "Saved" {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        cabin.poll_persist_err();
+    }
+    assert!(
+        cabin.status.starts_with("Could not save settings: "),
+        "{}",
+        cabin.status
+    );
     release_isolated(&root, cabin);
 }
