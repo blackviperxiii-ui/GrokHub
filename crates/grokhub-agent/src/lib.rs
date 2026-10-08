@@ -10,6 +10,7 @@ mod gate;
 pub mod harness;
 mod hooks;
 mod image_budget;
+pub mod indexers;
 pub mod mcp;
 mod memory;
 mod models;

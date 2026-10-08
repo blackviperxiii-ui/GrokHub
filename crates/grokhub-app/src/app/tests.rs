@@ -3536,7 +3536,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
                 && ask_kick.contains("composer_headless_flags")
                 && ask_kick.contains("self.session_mode")
                 && ask_kick[grok_p..].contains("spawn_grok_p_stream"),
-            "scheduled night and phone stay on grok -p with the PermissionMode flags: {ask_kick}"
+            "scheduled night and /send stay on grok -p with the PermissionMode flags: {ask_kick}"
         );
         assert!(
             ask_kick.contains("apply_skill_follow") && ask_kick.contains("active_skill_follow"),
@@ -3545,7 +3545,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
     }
 
     #[test]
-    fn scheduled_night_loop_and_phone_inherit_permission_mode() {
+    fn scheduled_night_loop_and_send_inherit_permission_mode() {
         let src = cabin_src();
         let fire_loop = fn_src(&src, "fire_loop");
         assert!(
@@ -3587,7 +3587,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let inbox = fn_src(&src, "drain_inbox");
         assert!(
             inbox.contains("send_scheduled_chat"),
-            "phone /v1/task must inherit PermissionMode: {inbox}"
+            "a queued /send task must inherit PermissionMode: {inbox}"
         );
         let anticipate = fn_src(&src, "tick_anticipate");
         assert!(
@@ -3822,11 +3822,11 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         );
         assert!(
             src.contains("finish_hub_dispatch"),
-            "phone dispatch must complete the hub task so GET /v1/results can see it"
+            "a queued /send task must complete its hub row"
         );
         assert!(
             src.contains("hub_dispatch_ok(&text)"),
-            "GOAL_BLOCKED must not complete a phone task as done"
+            "GOAL_BLOCKED must not complete a queued task as done"
         );
         assert!(
             src.contains("oauth_access_live"),
@@ -3876,15 +3876,15 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .expect("halt_work");
         assert!(
             halt.contains("finish_hub_dispatch"),
-            "Stop / tray halt must complete a claimed phone task"
+            "Stop / tray halt must complete a claimed /send task"
         );
         assert!(
             src.contains("self.finish_hub_dispatch(worker_gone_status(), false)"),
-            "a dropped worker must fail the claimed phone task"
+            "a dropped worker must fail the claimed /send task"
         );
         assert!(
             src.contains("inbox_claim_ready") && src.contains("requeue_claimed_for"),
-            "do not claim a phone task without auth, and unstick claimed rows on boot"
+            "do not claim a /send task without auth, and unstick claimed rows on boot"
         );
         let inbox = src
             .split("fn drain_inbox")
@@ -3893,15 +3893,15 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .expect("drain_inbox");
         assert!(
             inbox.contains("pending_hub_task.is_some()"),
-            "do not claim a second phone task while one is still pending: {inbox}"
+            "do not claim a second /send task while one is still pending: {inbox}"
         );
         assert!(
             inbox.contains("land_on_real_chat"),
-            "a claimed phone task must not land on Scratch: {inbox}"
+            "a claimed /send task must not land on Scratch: {inbox}"
         );
         assert!(
             inbox.contains("self.can_agent()") && !inbox.contains("self.llm_ready()"),
-            "OAuth-only must not claim a phone task — send_chat needs Grok Build: {inbox}"
+            "OAuth-only must not claim a /send task — send_chat needs Grok Build: {inbox}"
         );
         assert!(
             src.contains("night_counts_run"),
@@ -5241,10 +5241,6 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .and_then(|s| s.split("fn ui_settings").next())
             .expect("save_settings");
         assert!(
-            settings_save.contains("sync_hub_voice"),
-            "Settings Save must refresh the hub voice mint key: {settings_save}"
-        );
-        assert!(
             settings_save.contains("upsert_bound") && settings_save.contains("touch_projects"),
             "Settings Save must keep the sidebar selection on the bound path: {settings_save}"
         );
@@ -5493,8 +5489,8 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             "/inhabit must persist the staged bundle without cloning every thread: {inhabit}"
         );
         assert!(
-            inhabit.contains("inhabit_claim_allowed") && inhabit.contains("to_id"),
-            "/inhabit must name a real peer and skip headphones-as-phone: {inhabit}"
+            inhabit.contains("No paired peer named") && inhabit.contains("to_id"),
+            "/inhabit must name a real peer: {inhabit}"
         );
         let soul = inhabit
             .find("read_memory(\"SOUL.md\")")
@@ -5619,7 +5615,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .expect("persist hub complete");
         assert!(
             complete_at < persist_at && !finish.contains("persist_snap"),
-            "phone task completion must hit hub-state.json without cloning every thread: {finish}"
+            "/send task completion must hit hub-state.json without cloning every thread: {finish}"
         );
         let host_done = src
             .split("Ok(JobOut::HostDone(block))")
@@ -5645,7 +5641,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         );
         assert!(
             consult.contains("Interrupted by consult"),
-            "slash consult during a phone job must fail the dispatch: {consult}"
+            "slash consult during a /send job must fail the dispatch: {consult}"
         );
         let consult_out = src
             .split("Ok(JobOut::Consult(detail))")
@@ -5654,7 +5650,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
             .expect("Consult");
         assert!(
             !consult_out.contains("finish_hub_dispatch"),
-            "consult must not complete a phone task as the consult reply: {consult_out}"
+            "consult must not complete a /send task as the consult reply: {consult_out}"
         );
         assert!(
             consult_out.contains("status.clear()") || consult_out.contains("status ="),
@@ -5674,7 +5670,7 @@ fn avatar_menu_hides_email_and_uses_saved_name_and_picture() {
         let run_at = chat_consult.find("grok_chat");
         assert!(
             finish_at.is_some_and(|f| run_at.is_some_and(|r| f < r)),
-            "finish the phone task before starting consult: {chat_consult}"
+            "finish the /send task before starting consult: {chat_consult}"
         );
         let rewind = src
             .split("fn rewind_project")
@@ -9005,7 +9001,7 @@ fn kick_with_fake_grok_runs_the_prompt() {
         "a chat you type keeps the composer effort: {argv:?}"
     );
 
-    // A scheduled run (automation, loop, phone task) is background work: low effort.
+    // A scheduled run (automation, loop, /send task) is background work: low effort.
     let _ = std::fs::remove_file(&argv_path);
     cabin.scheduled_perm = true;
     cabin.kick_model(false);
@@ -10955,6 +10951,7 @@ fn recall_legacy_finds_memory_line_and_skips_amr() {
             tags: vec!["dock".into()],
             body: "harbor lamp from amr\n".into(),
             sensitivity: grokhub_core::amr::Sensitivity::Plain,
+            consent_ref: String::new(),
         })
         .unwrap();
     cabin.run_slash_line("/recall harbor");
@@ -11006,6 +11003,7 @@ fn recall_amr_returns_seeded_node_not_legacy_memory() {
             tags: vec!["dock".into()],
             body: "pier light stays on\n".into(),
             sensitivity: grokhub_core::amr::Sensitivity::Plain,
+            consent_ref: String::new(),
         })
         .unwrap();
     cabin.run_slash_line("/recall pier");
@@ -11047,6 +11045,7 @@ fn recall_opens_private_notes_and_says_when_they_are_locked() {
             tags: vec![],
             body: "pier nine is home\n".into(),
             sensitivity: grokhub_core::amr::Sensitivity::Personal,
+            consent_ref: String::new(),
         })
         .unwrap();
     let raw = std::fs::read_to_string(root.join("amr/nodes/fact-home.sealed")).unwrap();
@@ -11387,6 +11386,7 @@ fn amr_dream_runs_once_a_night_and_memory_dream_prints_it() {
                 tags: vec![],
                 body: format!("{body}\n"),
                 sensitivity: grokhub_core::amr::Sensitivity::Plain,
+                consent_ref: String::new(),
             })
             .unwrap();
     }
@@ -11684,7 +11684,7 @@ fn privacy_slash_lists_grants_scopes_and_egress_without_content() {
     let text = grokhub_core::strip_slash_result(&body);
     assert!(text.starts_with("/privacy — what leaves this computer\n"), "{text}");
     assert!(text.contains("- Off: Sync to paired computers (/sync asks each time) · Files in a folder · "), "{text}");
-    assert!(text.contains("Nothing reads the folder, app, browser, calendar, mail or system grants yet."), "{text}");
+    assert!(text.contains("Granted folders, apps, browser history and system state are read on this computer only, never on battery or in quiet hours; calendar and mail aren't read yet."), "{text}");
     assert!(text.contains("- api.x.ai · 1 time · chats · default · last just now"), "{text}");
     release_isolated(&root, cabin);
 }
@@ -12225,7 +12225,7 @@ fn a_scope_is_granted_by_a_pointer_click_only_and_revoked_from_settings_or_priva
 
     let p = paint_permissions(&ctx, &mut cabin, vec![]);
     click_at(&ctx, &mut cabin, p.pill_by("Installed apps", "Allow"));
-    assert_eq!(cabin.status, "Installed apps allowed. Nothing reads it yet. Revoke it here any time.");
+    assert_eq!(cabin.status, "Installed apps allowed. GrokHub learns from it on this computer. Revoke it here any time.");
     let ledger = hx::ConsentLedger::load(&root);
     let g = ledger.scope_grant(&hx::Scope::Apps).cloned().expect("apps granted");
     assert_eq!(ledger.active().count(), 1, "one click, one scope");
@@ -12253,7 +12253,7 @@ fn a_scope_is_granted_by_a_pointer_click_only_and_revoked_from_settings_or_priva
     cabin.harness.scope_folder = "/srv/notes/".into();
     let p = paint_permissions(&ctx, &mut cabin, vec![]);
     click_at(&ctx, &mut cabin, p.pill_by("Files in a folder", "Allow"));
-    assert_eq!(cabin.status, "Files in notes allowed. Nothing reads it yet. Revoke it here any time.");
+    assert_eq!(cabin.status, "Files in notes allowed. GrokHub learns from it on this computer. Revoke it here any time.");
     assert!(cabin.harness.scope_folder.is_empty());
     // SB-03 / SB-06: the folder name titles the row, the path is in the hint,
     // and the next folder row reads "Add a folder".
@@ -12480,7 +12480,7 @@ fn privacy_lists_each_scope_once_under_one_grants_heading() {
             "- Files in notes: on since 1m ago",
             "- Off: Sync to paired computers (/sync asks each time) · Installed apps · Browser history · Mail · System state",
             "- Screen: \"Let Grok control the desktop\" in Settings → Cabin defaults (off)",
-            "Nothing reads the folder, app, browser, calendar, mail or system grants yet.",
+            "Granted folders, apps, browser history and system state are read on this computer only, never on battery or in quiet hours; calendar and mail aren't read yet.",
         ]
         .join("\n")
     );
@@ -12537,15 +12537,11 @@ fn room_binds_a_work_tree_and_rewind_files_needs_a_project() {
 
 // Landed from PR #125.
 #[test]
-fn inhabit_refuses_a_phone_and_a_missing_peer() {
+fn inhabit_refuses_a_missing_peer() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("inhabit");
     std::env::set_var("GROKHUB_CONFIG", &root);
     let mut cabin = Cabin::quiet_for_test();
-    cabin.run_slash_line("/inhabit phone");
-    assert_eq!(cabin.status, "will not inhabit onto the phone");
-    assert!(!cabin.running);
-    assert!(cabin.inhabit_rx.is_none());
     cabin.run_slash_line("/inhabit cabin-2");
     assert_eq!(cabin.status, "No paired peer named cabin-2");
     assert!(!cabin.running);
@@ -27691,4 +27687,144 @@ fn spike3a_adds_no_nav_page() {
     cabin.open_history_hit(&format!("step:1:{id}"));
     assert!(matches!(cabin.nav, Nav::Chat), "a step hit opens the chat, not a page of its own");
     std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// ---- Spike-8a local indexers: the in-context ask card and "Forget these" ----
+
+fn paint_work_cards(ctx: &egui::Context, cabin: &mut Cabin, events: Vec<egui::Event>) -> ScopePaint {
+    fn walk(shape: &egui::Shape, p: &mut ScopePaint) {
+        match shape {
+            egui::Shape::Text(t) => p.texts.push((t.galley.text().to_string(), t.pos + t.galley.rect.center().to_vec2())),
+            egui::Shape::Vec(v) => v.iter().for_each(|c| walk(c, p)),
+            _ => {}
+        }
+    }
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 1200.0))),
+        events,
+        ..Default::default()
+    };
+    let out = crate::theme::test_pass(ctx, input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| cabin.paint_harness_cards(ui));
+    });
+    let mut p = ScopePaint { texts: Vec::new(), filled: Vec::new() };
+    for clipped in &out.shapes {
+        walk(&clipped.shape, &mut p);
+    }
+    p
+}
+
+fn click_work_card(ctx: &egui::Context, cabin: &mut Cabin, at: egui::Pos2) {
+    let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let _ = paint_work_cards(ctx, cabin, vec![egui::Event::PointerMoved(at)]);
+    let _ = paint_work_cards(ctx, cabin, vec![press(true)]);
+    let _ = paint_work_cards(ctx, cabin, vec![press(false)]);
+}
+
+/// P5: the agent can ask for a scope in context; only the click on the card's
+/// Allow writes the grant. Enter never does, and Not now leaves it off.
+#[test]
+fn a_scope_ask_card_grants_on_a_click_only() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("scope-ask");
+    std::fs::create_dir_all(&root).unwrap();
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let ledger = hx::ConsentLedger::load(&root);
+    let why = "To suggest the right app for a task I'd read which apps you have installed.";
+    assert!(cabin.harness.indexer.asks.ask(hx::Scope::Apps, why, &ledger, now_ms()));
+    assert!(cabin.harness.indexer.asks.ask(hx::Scope::SystemState, "To spot a full disk early I'd read your disk and services.", &ledger, now_ms()));
+    assert_eq!(cabin.decisions_waiting(), 2, "asks count as decisions");
+
+    let p = paint_work_cards(&ctx, &mut cabin, vec![]);
+    assert!(p.has("Learn from your computer") && p.has("Allow Installed apps?") && p.has(why), "{:?}", p.texts);
+    assert!(!p.has("Allow System state?"), "one card at a time");
+    // Keys never grant: Tab onto the card and press Enter and Space. (A
+    // focused Not now may answer; that only keeps the scope off.)
+    for _ in 0..6 {
+        let _ = paint_work_cards(&ctx, &mut cabin, vec![key(egui::Key::Tab)]);
+        let _ = paint_work_cards(&ctx, &mut cabin, vec![key(egui::Key::Enter)]);
+        let _ = paint_work_cards(&ctx, &mut cabin, vec![key(egui::Key::Space)]);
+    }
+    assert_eq!(hx::ConsentLedger::load(&root).active().count(), 0, "keyboard never grants");
+    cabin.harness.indexer.asks = Default::default();
+    let ledger = hx::ConsentLedger::load(&root);
+    assert!(cabin.harness.indexer.asks.ask(hx::Scope::Apps, why, &ledger, now_ms()));
+    assert!(cabin.harness.indexer.asks.ask(hx::Scope::SystemState, "To spot a full disk early I'd read your disk and services.", &ledger, now_ms()));
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+
+    let p = paint_work_cards(&ctx, &mut cabin, vec![]);
+    click_work_card(&ctx, &mut cabin, p.at("Allow"));
+    assert_eq!(cabin.status, "Installed apps allowed. GrokHub learns from it on this computer. Revoke it here any time.");
+    assert!(hx::ConsentLedger::load(&root).scope_grant(&hx::Scope::Apps).is_some());
+
+    let p = paint_work_cards(&ctx, &mut cabin, vec![]);
+    assert!(p.has("Allow System state?"));
+    click_work_card(&ctx, &mut cabin, p.at("Not now"));
+    assert_eq!(cabin.status, "System state stays off.");
+    assert_eq!(hx::ConsentLedger::load(&root).scope_grant(&hx::Scope::SystemState), None);
+    assert_eq!(cabin.harness.indexer.asks.len(), 0);
+    assert_eq!(hx::ConsentLedger::load(&root).active().count(), 1);
+    release_isolated(&root, cabin);
+}
+
+/// A granted scope lists what it taught GrokHub; "Forget these" retires them.
+#[test]
+fn a_granted_scope_lists_its_facts_and_forget_these_purges_them() {
+    use grokhub_agent::harness as hx;
+    use grokhub_agent::indexers as idx;
+    struct Mains;
+    impl idx::power::PowerSource for Mains {
+        fn on_battery(&self) -> bool {
+            false
+        }
+    }
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("scope-facts");
+    std::fs::create_dir_all(&root).unwrap();
+    let docs = root.join("fixture-home").join("Documents");
+    std::fs::create_dir_all(docs.join(".ssh")).unwrap();
+    std::fs::write(docs.join("plan.md"), "# Q4 launch plan\n## Budget\n").unwrap();
+    std::fs::write(docs.join("todo.txt"), "Call the venue\n").unwrap();
+    std::fs::write(docs.join(".ssh").join("id_ed25519"), "not a real key\n").unwrap();
+    let scope = hx::Scope::Files(docs.display().to_string());
+    hx::grant_scope(&root, &scope, Some(&root.join("fixture-home")), hx::UserClick::from_click()).unwrap();
+    let dirs = idx::paths::PlatformDirs::from_env();
+    let env = idx::TickEnv {
+        config_dir: &root,
+        now_ms: now_ms(),
+        quiet: false,
+        power: &Mains,
+        fs: &idx::fs::RealFs,
+        probe: &idx::system_state::OsProbe,
+        dirs: &dirs,
+    };
+    let out = idx::Scheduler::default().tick(&env);
+    assert!(matches!(out, idx::TickOutcome::Ran { written: 2, .. }), "{out:?}");
+    cabin.harness.indexer.index = std::sync::Arc::new(idx::ScopeIndex::load(&root));
+
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    assert!(p.has("Learned 2 things, sealed on this computer:"), "{:?}", p.texts.iter().map(|t| &t.0).collect::<Vec<_>>());
+    assert!(p.texts.iter().any(|t| t.0.starts_with("File plan.md · ") && t.0.ends_with("title: Q4 launch plan · headings: Budget")));
+    assert!(p.texts.iter().any(|t| t.0.starts_with("File todo.txt · ")));
+    assert!(!p.texts.iter().any(|t| t.0.contains("id_ed25519") || t.0.contains(".ssh")), "hard excludes never show");
+    assert!(p.at(super::indexer_ui::FORGET_THESE).y > p.at("Files in Documents").y, "under its row");
+
+    click_at(&ctx, &mut cabin, p.at(super::indexer_ui::FORGET_THESE));
+    let start = std::time::Instant::now();
+    while cabin.harness.indexer.index.facts.values().any(|v| !v.is_empty()) && start.elapsed() < std::time::Duration::from_secs(4) {
+        cabin.poll_forget();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(cabin.status, "Forgot 2 things learned from Files in Documents. It stays allowed; revoke it to stop reading.");
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    assert!(!p.has(super::indexer_ui::FORGET_THESE));
+    assert!(p.has("Nothing learned to show. GrokHub reads it on a heartbeat, never on battery or in quiet hours."));
+    assert!(hx::ConsentLedger::load(&root).scope_grant(&scope).is_some(), "forgetting is not revoking");
+    assert_eq!(idx::ScopeIndex::load(&root).for_scope(&scope.key()).len(), 0);
+    release_isolated(&root, cabin);
 }

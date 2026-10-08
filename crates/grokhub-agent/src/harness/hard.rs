@@ -167,9 +167,9 @@ pub fn desk_classify(tool: &str, args: &serde_json::Value) -> HardHit {
             }
         }
         "key" => {
-            let keys = args
-                .get("keys")
-                .and_then(|v| v.as_str())
+            let keys = ["keys", "key"]
+                .iter()
+                .find_map(|k| args.get(*k).and_then(|v| v.as_str()))
                 .unwrap_or("")
                 .to_ascii_lowercase()
                 .replace(' ', "");
