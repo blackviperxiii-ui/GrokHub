@@ -36,6 +36,10 @@
 //! Spike-2b: a click is classified by the control it lands on (`hard.rs`
 //! `click_target_class`): a Send, Pay, Delete or Reset button parks before
 //! the click runs, on every path, and spans keep only the matched rule.
+//! Spike-3a (AMR M4): `trail` turns one turn's spans into one AMR `trail`
+//! node at turn end, from already-redacted span fields only; `span_search`
+//! reads `spans/*.jsonl` for History and palette search. Both only read
+//! spans and never execute anything.
 
 mod access;
 mod approval;
@@ -53,6 +57,8 @@ mod park;
 mod path_d;
 mod self_manage;
 mod span;
+mod span_search;
+mod trail;
 
 pub use access::{always_does_not_imply_full, AccessMode};
 pub use approval::{
@@ -117,9 +123,11 @@ pub use park::{
     ParkRequest,
 };
 pub use span::{
-    append_span, read_spans, read_turn_context, redact_args, span_path, turn_context_path,
-    write_turn_context, Origin, Span, TurnContext, CLAIM_CAP, REPLY_TOOL, VERIFY_TOOL,
+    append_span, read_spans, read_spans_tail, read_turn_context, redact_args, span_path, turn_context_path,
+    write_turn_context, Origin, Span, TurnContext, CLAIM_CAP, REPLY_TOOL, SPAN_TAIL_BYTES, VERIFY_TOOL,
 };
+pub use span_search::{search_spans, SpanHit, SpanSearch, SPAN_SEARCH_FILES, SPAN_SEARCH_HITS, SPAN_SEARCH_LINES};
+pub use trail::{link_learned, trail_body, trail_draft, write_trail, TrailWrite, TRAIL_BODY_CAP};
 
 /// Scratch dir for harness tests, under the workspace `target/` (not the
 /// shared system temp dir). It gets its own in-memory keyring, so no test
