@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Security: a phone, or a computer paired under another computer's name, can no longer take over a session through Inhabit. Phones can't pair, a bundle goes only to the computer it names by id, and a bundle with no destination goes to nobody. Risky typed text on a hard card and in the inbox no longer shows API keys, GitHub tokens or bearer tokens; other typing shows as "type N chars into <window>".
+
 ## 2.10.96 — 2026-10-08
 
 Chat on the native engine works again: GrokHub sent `connection_add` and `connection_disable` to the model twice (once from Spike-5b's connection tools, once from Spike-5c's self-manage tools), and the API refused every turn with "Duplicate function definition provided". The self-manage table is now the only source, and a native engine error no longer reads as "ACP session/new failed". When Update stops because new files in your GrokHub folder are in the way, it now says so instead of asking you to commit or stash.
