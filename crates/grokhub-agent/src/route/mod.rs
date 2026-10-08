@@ -583,7 +583,7 @@ mod r2b_tests;
 mod r3b_tests;
 
 #[cfg(test)]
-mod speed_bench;
+mod speed_bench_tests;
 
 #[cfg(test)]
 mod tests {
