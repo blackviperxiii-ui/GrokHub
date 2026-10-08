@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 
 use grokhub_core::model_registry::cost_class::{classify, route_key, CostClass, RouteOpts};
+use grokhub_core::model_registry::discover::split_provider_model;
 use grokhub_core::model_registry::profile::ModelProfile;
 use grokhub_core::model_registry::{health, ModelState, Prices, Registry};
 
@@ -167,7 +168,16 @@ pub fn route_class(reg: &Registry, id: &str, grok_build: bool, spend: &Spend) ->
 /// for this route. Fast variants are never in the pool; [`super::Router`]
 /// swaps one in only under the latency policy.
 pub fn approved(reg: &Registry, id: &str, grok_build: bool, spend: &Spend) -> bool {
-    allowed(route_class(reg, id, grok_build, spend), &route_key(id, RouteOpts::default()), spend)
+    match route_class(reg, id, grok_build, spend) {
+        // R3b: a provider you added, only with its key and a grant covering this call's data.
+        CostClass::NewProvider => split_provider_model(id).is_some_and(|(p, _)| spend.providers.iter().any(|x| x == p)),
+        class => allowed(class, &route_key(id, RouteOpts::default()), spend),
+    }
+}
+
+/// A model on a provider you added (R3b), not xAI: only its own sources list it.
+pub fn is_new_provider(reg: &Registry, id: &str) -> bool {
+    reg.get(id).is_some_and(|r| !r.sources.is_empty() && r.sources.iter().all(|s| s.is_new_provider()))
 }
 
 /// A newer model of `model`'s family is outside your plan (`not_in_plan`) and

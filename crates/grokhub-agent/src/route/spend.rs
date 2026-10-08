@@ -103,11 +103,16 @@ pub struct Spend {
     pub budget_tight: bool,
     /// Premium route keys you approved (`premium:grok-heavy`).
     pub grants: Vec<String>,
+    /// R3b: providers you added that this call may use: a key in the keyring
+    /// and a destination grant covering the call's data. Empty for a call
+    /// site that can't send to them (cabin calls, Grok Build turns).
+    pub providers: Vec<String>,
 }
 
 /// May Auto route to this class on its own? `included` always, `premium`
 /// only under your grant for exactly `key`. A Fast variant goes through
-/// [`fast_verdict`] instead, and the rest never.
+/// [`fast_verdict`] instead, a provider you added through
+/// [`super::policy::approved`] (key and grant), and the rest never.
 pub fn allowed(class: CostClass, key: &str, spend: &Spend) -> bool {
     match class {
         CostClass::Included => true,

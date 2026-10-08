@@ -79,6 +79,8 @@ pub struct RouteCall<'a> {
     pub cloud_grant: bool,
     /// The step offers a send, delete, credential or other hard-class tool.
     pub hard_tool: bool,
+    /// R3b: the call site can send to a provider you added (native calls only).
+    pub providers: bool,
 }
 
 /// How the call went. Counts and ids only.
@@ -187,6 +189,19 @@ pub fn set_pin(model: &str) {
 
 fn pinned_model() -> String {
     PIN.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// R3b: the provider model you picked in Settings for your own chats
+/// (`<provider>/<model>`), set by the cabin. Empty is none.
+static PROVIDER_PICK: Mutex<String> = Mutex::new(String::new());
+
+/// The cabin sets this on start and whenever Settings changes it.
+pub fn set_provider_pick(model: &str) {
+    *PROVIDER_PICK.lock().unwrap_or_else(|e| e.into_inner()) = model.trim().to_string();
+}
+
+fn provider_pick() -> String {
+    PROVIDER_PICK.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 /// The text a call that paused returns: no healthy, included model could take it.
@@ -347,6 +362,11 @@ impl Decision {
         self.live && !self.paused() && self.route.provider == super::local::PROVIDER_LOCAL
     }
 
+    /// The router sent this step to a provider you added (R3b): only with its key and your grant.
+    pub fn on_provider(&self) -> bool {
+        self.live && !self.paused() && self.route.cost_class == CostClass::NewProvider
+    }
+
     /// What a paused call returns.
     pub fn pause_msg(&self) -> &'static str {
         self.budget_pause.unwrap_or(NO_ROUTE_MSG)
@@ -451,7 +471,10 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         background: !facing || spend::background_origin(origin),
         budget_tight: b.tight(),
         grants: spend::premium_grants(config_dir),
+        // R3b: a provider you added only with its key and a grant covering this call's data.
+        providers: if call.providers { super::providers::usable(config_dir, super::providers::call_data(call.sensitive)) } else { Vec::new() },
     };
+    let picked = provider_pick();
     let input = RouteInput {
         provider: call.provider,
         class: call.class,
@@ -470,6 +493,8 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
         routine,
         start: st.start.as_deref(),
         local: LocalGate::now(call.sensitive, call.cloud_grant, call.hard_tool),
+        // Your own chats only, never the holdout; the router still checks key and grant.
+        prefer: (call.providers && facing && !holdout && !picked.is_empty()).then_some(picked.as_str()),
     };
     let route = Router::choose(&input, &reg, &profiles, &table, now_ms);
     let mut tune_mark = st.mark.clone();
@@ -746,9 +771,11 @@ pub fn stream_routed(
         text: &text,
         needs_image,
         needs_tools: !req.tools.is_empty() || req.hosted_search,
+        providers: true,
         ..RouteCall::default()
     };
-    let decision = decide(&dir, &call, grokhub_core::now_ms());
+    let now = grokhub_core::now_ms();
+    let decision = decide(&dir, &call, now);
     if decision.paused() {
         route_log(&dir, &call, &decision, &RouteDone::unseen());
         return Err(ClientError::Protocol(decision.pause_msg().into()));
@@ -760,9 +787,25 @@ pub fn stream_routed(
     sent.model = model.clone();
     let started = std::time::Instant::now();
     let on_device = decision.on_device();
-    let out = if on_device { super::local::serve(class, &text) } else { client.stream(&sent, cancel, sink) };
+    let out = if on_device {
+        super::local::serve(class, &text)
+    } else if decision.on_provider() {
+        // Not streamed: the whole answer arrives as one delta.
+        let span_id = format!("{}:{now}", req.conversation_id);
+        let out = super::providers::call_model(&dir, &model, effort.as_deref(), &sent, super::providers::call_data(call.sensitive), &span_id, cancel);
+        if let Ok(turn) = &out {
+            if !turn.text.is_empty() {
+                sink(StreamEvent::TextDelta(turn.text.clone()));
+            }
+        }
+        out
+    } else {
+        client.stream(&sent, cancel, sink)
+    };
     if on_device {
         call.provider = super::local::PROVIDER_LOCAL;
+    } else if decision.on_provider() {
+        call.provider = &decision.route.provider;
     }
     call.effort = effort.as_deref();
     call.model = &model;

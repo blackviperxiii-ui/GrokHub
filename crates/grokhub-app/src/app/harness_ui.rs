@@ -127,6 +127,9 @@ pub(super) enum ParkSource {
     /// Router R2b: Auto wanted a premium route (this grant key). Nothing is
     /// waiting; Approve writes a revocable grant for exactly that route.
     Premium(String),
+    /// Router R3b: allow sending to a provider you added (this provider id).
+    /// Nothing is waiting; Approve writes a revocable destination grant.
+    Provider(String),
 }
 
 /// A path D frame the watchdog already checked (Spike-1c).
@@ -694,6 +697,11 @@ impl Cabin {
                     self.grant_premium_click(key);
                 }
             }
+            ParkSource::Provider(id) => {
+                if approve {
+                    self.grant_provider_click(id);
+                }
+            }
             ParkSource::AutoPrepared(args) => {
                 if approve {
                     let (text, failed) = hx::run_approved_once(&self.native_workspace(), &park.tool, args);
@@ -813,6 +821,7 @@ impl Cabin {
                     | ParkSource::Unasked
                     | ParkSource::Repair
                     | ParkSource::Premium(_)
+                    | ParkSource::Provider(_)
             ) {
                 keep.push_back(park);
                 self.harness.park = self.harness.queue.pop_front();
@@ -857,7 +866,8 @@ impl Cabin {
                 | ParkSource::AutoPrepared(_)
                 | ParkSource::Unasked
                 | ParkSource::Repair
-                | ParkSource::Premium(_) => continue,
+                | ParkSource::Premium(_)
+                | ParkSource::Provider(_) => continue,
             }
             let args = span_args(&park.tool, &park.action);
             self.write_span(hx::Span::deny(&trace, &park.tool, &args, why, park.class.as_str()), park.path);
@@ -1355,6 +1365,7 @@ impl Cabin {
                 ParkSource::Unasked => UNASKED_NOTE,
                 ParkSource::Egress(_) => super::privacy_ui::HUB_CARD_NOTE,
                 ParkSource::Premium(_) => super::budget_ui::PREMIUM_CARD_NOTE,
+                ParkSource::Provider(_) => super::provider_ui::PROVIDER_CARD_NOTE,
                 _ => HARD_NOTE,
             };
             let overlay = self.palette_open || self.nav == Nav::Settings || self.find.focused;

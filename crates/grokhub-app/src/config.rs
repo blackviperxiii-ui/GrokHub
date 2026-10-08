@@ -356,6 +356,10 @@ pub struct AppConfig {
     /// with no runtime; no Settings row or slash command turns it on.
     #[serde(default)]
     pub local_model: bool,
+    /// Router R3b: the model on a provider you added (`<provider>/<model>`)
+    /// for your own chats. Used only while its key and your grant exist.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub provider_model: String,
     /// Composer session pill — chat / plan / ask.
     #[serde(default = "default_session_mode")]
     pub session_mode: String,
@@ -561,6 +565,7 @@ impl Default for AppConfig {
             mode: String::new(),
             legacy_reasoning_effort: None,
             local_model: false,
+            provider_model: String::new(),
             session_mode: default_session_mode(),
             permission_mode: default_permission_mode(),
             always_collapse_thoughts: false,

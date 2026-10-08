@@ -184,6 +184,7 @@ fn no_premium_or_extra_spend_route_without_a_grant_over_random_signals() {
             background: rng.coin(),
             budget_tight: rng.coin(),
             grants: grants.clone(),
+            providers: Vec::new(),
         };
         let provider = if rng.next().is_multiple_of(4) { live::PROVIDER_GROK_BUILD } else { "xai" };
         let input = RouteInput {
