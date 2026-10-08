@@ -182,7 +182,7 @@ pub use chat_view::{
     SKILL_SAVED_MARK, SKILL_SAVED_NOTE, THOUGHT_CLUSTER_GAP, THOUGHT_ROW_LABEL,
 };
 pub use cabin_engine::{absorb_cabin, brief_for, engine_slug, note_part, CabinDirective, PartNote};
-pub use channel::{auto_off_target, beta_caught_up_to_main, channel_status_line, channel_switch_fail_hint, channel_switch_preflight, channel_switch_shell, parse_version_line, update_fail_hint, version_line, BuildVersion, Channel, ChannelTips, CHANNEL_AUTO_OFF_NOTE, CHANNEL_RECEIPT, CHANNEL_WINDOWS_NOTE};
+pub use channel::{auto_off_step, beta_caught_up_to_main, channel_status_line, channel_switch_fail_hint, channel_switch_preflight, channel_switch_shell, parse_version_line, update_fail_hint, version_line, AutoOffStep, BuildVersion, Channel, ChannelTips, CHANNEL_AUTO_OFF_NOTE, CHANNEL_BETA_SINCE, CHANNEL_RECEIPT, CHANNEL_WINDOWS_NOTE};
 pub use chips::{
     build_quick_chips, cabin_pace, chip_dismissed_for_good, chip_memory_key, chip_scan,
     local_lessons,

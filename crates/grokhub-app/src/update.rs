@@ -1,13 +1,13 @@
 use crate::config;
 use crate::host::run_host;
 use grokhub_core::{
-    auto_off_target, channel_status_line, channel_switch_fail_hint, discover_source,
+    auto_off_step, channel_status_line, channel_switch_fail_hint, discover_source,
     fetch_channel_tips, forbidden_reason, parse_github_latest_tag, switch_clone_to_main,
     update_fail_hint,
     parse_installed_cli_version, parse_published_cli_alpha, restart_acts,
     restart_bin, systemd_user_restart_args, systemd_user_stop_args, update_progress_pct,
-    update_step_label, update_wipes_config, Channel, RestartAct, CHANNEL_AUTO_OFF_NOTE,
-    CHANNEL_RECEIPT, CLI_ALPHA_VERSION_FALLBACK, CLI_ALPHA_VERSION_URL, GITHUB_LATEST_API,
+    update_step_label, update_wipes_config, AutoOffStep, Channel, RestartAct, CHANNEL_AUTO_OFF_NOTE,
+    CHANNEL_BETA_SINCE, CHANNEL_RECEIPT, CLI_ALPHA_VERSION_FALLBACK, CLI_ALPHA_VERSION_URL, GITHUB_LATEST_API,
     TEXT_FILE_CAP,
 };
 #[cfg(any(test, windows))]
@@ -156,17 +156,22 @@ pub fn channel_auto_off_note() -> &'static str {
     CHANNEL_AUTO_OFF_NOTE
 }
 
-/// Write the install channel receipt (`channel` next to `source`).
+/// Write the install channel receipt (`channel` next to `source`). A channel
+/// write is a switch, so the Beta auto-off baseline goes with it: turning Beta
+/// on starts a fresh one, switching to stable deletes it.
 pub fn write_installed_channel(channel: Channel) -> Result<(), String> {
     let dir = config::config_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("channel receipt: {e}"))?;
     std::fs::write(dir.join(CHANNEL_RECEIPT), channel.receipt())
-        .map_err(|e| format!("channel receipt: {e}"))
+        .map_err(|e| format!("channel receipt: {e}"))?;
+    let _ = std::fs::remove_file(dir.join(CHANNEL_BETA_SINCE));
+    Ok(())
 }
 
-/// When on Beta and beta has caught up to main — `origin/beta` and
-/// `origin/main` have the same tree (squash promote + merge-commit sync) or the
-/// same tip — switch back to stable for real: check the clone out on `main`
+/// When on Beta, main has been promoted since opting in (its tree moved past
+/// the `channel.beta-since` baseline), and beta has caught up to it —
+/// `origin/beta` and `origin/main` have the same tree (squash promote +
+/// merge-commit sync) or the same tip — switch back to stable for real: check the clone out on `main`
 /// at `origin/main` (no rebuild — the trees match, so the next Update builds
 /// main), then write `stable` so the Labs toggle reads off. Linux only;
 /// Windows no-ops (channels not supported yet — see [`CHANNEL_WINDOWS_NOTE`]).
@@ -176,6 +181,9 @@ pub fn write_installed_channel(channel: Channel) -> Result<(), String> {
 /// cabin says nothing. When the clone can't move to main (uncommitted changes,
 /// another branch, a local-only main commit) it stays on beta and the receipt
 /// is untouched; the returned line says why. Returns `None` when nothing changed.
+///
+/// The first check after opting in only records main's tree as the baseline,
+/// so a beta that already equals main (right after a main → beta sync) stays on.
 pub fn try_auto_off_beta_channel(source: Option<&std::path::Path>) -> Option<String> {
     if cfg!(windows) {
         return None;
@@ -186,9 +194,16 @@ pub fn try_auto_off_beta_channel(source: Option<&std::path::Path>) -> Option<Str
     }
     let source = source?;
     let tips = fetch_channel_tips(source).ok()?;
-    let Some(Channel::Stable) = auto_off_target(current, &tips) else {
-        return None;
-    };
+    let since_path = config::config_dir().join(CHANNEL_BETA_SINCE);
+    let since = std::fs::read_to_string(&since_path).ok();
+    match auto_off_step(current, &tips, since.as_deref()) {
+        AutoOffStep::Stay => return None,
+        AutoOffStep::RecordBaseline(tree) => {
+            let _ = std::fs::write(&since_path, format!("{tree}\n"));
+            return None;
+        }
+        AutoOffStep::SwitchToStable => {}
+    }
     if let Err(e) = switch_clone_to_main(source) {
         let why = match update_fail_hint(&e) {
             "Update failed" => e,
@@ -1098,7 +1113,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_off_target_from_core_drives_receipt_policy() {
+    fn auto_off_step_from_core_drives_receipt_policy() {
         let tips = |b: &str, m: &str, bt: &str, mt: &str| grokhub_core::ChannelTips {
             beta_sha: b.into(),
             main_sha: m.into(),
@@ -1106,15 +1121,42 @@ mod tests {
             main_tree: mt.into(),
         };
         let tree = "47fd2b27aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let older = "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         assert_eq!(
-            auto_off_target(Channel::Beta, &tips("abcdef0", "abcdef0", "", "")),
-            Some(Channel::Stable)
+            auto_off_step(Channel::Beta, &tips("e79aa50f", "7266ae6a", tree, tree), Some(older)),
+            AutoOffStep::SwitchToStable
         );
         assert_eq!(
-            auto_off_target(Channel::Beta, &tips("e79aa50f", "7266ae6a", tree, tree)),
-            Some(Channel::Stable)
+            auto_off_step(Channel::Beta, &tips("e79aa50f", "7266ae6a", tree, tree), Some(tree)),
+            AutoOffStep::Stay
         );
-        assert!(auto_off_target(Channel::Beta, &tips("aaaaaaa", "bbbbbbb", "", "")).is_none());
+        assert_eq!(
+            auto_off_step(Channel::Beta, &tips("e79aa50f", "7266ae6a", tree, tree), None),
+            AutoOffStep::RecordBaseline(tree.into())
+        );
+        assert_eq!(
+            auto_off_step(Channel::Beta, &tips("aaaaaaa", "bbbbbbb", older, tree), Some(older)),
+            AutoOffStep::Stay
+        );
+    }
+
+    #[test]
+    fn write_installed_channel_drops_the_beta_since_baseline() {
+        let _g = crate::config::hold_test_config();
+        let cfg = crate::config::test_config_root("channel-beta-since-drop");
+        let _ = fs::remove_dir_all(&cfg);
+        let _pin = crate::config::TestConfigDir::set(cfg.clone());
+        fs::create_dir_all(&cfg).unwrap();
+        let since = cfg.join(CHANNEL_BETA_SINCE);
+        fs::write(&since, "47fd2b27aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n").unwrap();
+        write_installed_channel(Channel::Beta).unwrap();
+        assert!(!since.exists(), "turning Beta on clears the baseline");
+        assert_eq!(fs::read_to_string(cfg.join(CHANNEL_RECEIPT)).unwrap(), "beta\n");
+        fs::write(&since, "47fd2b27aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n").unwrap();
+        write_installed_channel(Channel::Stable).unwrap();
+        assert!(!since.exists(), "switching to stable deletes the baseline");
+        assert_eq!(fs::read_to_string(cfg.join(CHANNEL_RECEIPT)).unwrap(), "stable\n");
+        let _ = fs::remove_dir_all(&cfg);
     }
 
     fn git_in(dir: &std::path::Path, args: &[&str]) -> String {
@@ -1127,6 +1169,14 @@ mod tests {
     /// `work`, beta gets a feature, main gets it by squash, and beta gets main
     /// back by merge commit: same tree, different SHAs, client refs stale.
     fn same_tree_clone(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let (base, client, _) = same_tree_clone_with_seed(tag);
+        (base, client)
+    }
+
+    /// [`same_tree_clone`] plus main's tree before the promote (the seed tree).
+    fn same_tree_clone_with_seed(
+        tag: &str,
+    ) -> (std::path::PathBuf, std::path::PathBuf, String) {
         let base = std::env::temp_dir()
             .join(format!("grokhub-auto-off-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
@@ -1143,6 +1193,7 @@ mod tests {
         git_in(&work, &["config", "commit.gpgsign", "false"]);
         git_in(&work, &["add", "."]);
         git_in(&work, &["commit", "-q", "-m", "seed"]);
+        let seed_tree = git_in(&work, &["rev-parse", "HEAD^{tree}"]);
         git_in(&work, &["remote", "add", "origin", &base.join("origin.git").display().to_string()]);
         git_in(&work, &["push", "-q", "origin", "main", "main:beta"]);
         git_in(&base, &["clone", "-q", "-b", "beta", "origin.git", "client"]);
@@ -1156,7 +1207,7 @@ mod tests {
         git_in(&work, &["checkout", "-q", "beta"]);
         git_in(&work, &["merge", "-q", "--no-ff", "main", "-m", "sync main into beta"]);
         git_in(&work, &["push", "-q", "origin", "main", "beta"]);
-        (base.clone(), base.join("client"))
+        (base.clone(), base.join("client"), seed_tree)
     }
 
     #[test]
@@ -1166,8 +1217,10 @@ mod tests {
         let _ = fs::remove_dir_all(&cfg);
         let _pin = crate::config::TestConfigDir::set(cfg.clone());
         fs::create_dir_all(&cfg).unwrap();
-        let (base, client) = same_tree_clone("flip");
+        let (base, client, seed_tree) = same_tree_clone_with_seed("flip");
         fs::write(cfg.join(CHANNEL_RECEIPT), Channel::Beta.receipt()).unwrap();
+        // Opted in before the promote: the baseline is main's seed tree.
+        fs::write(cfg.join(CHANNEL_BETA_SINCE), format!("{seed_tree}\n")).unwrap();
         let msg = try_auto_off_beta_channel(Some(&client));
         if cfg!(windows) {
             // Windows stays disabled: no fetch, no checkout, receipt untouched.
@@ -1188,6 +1241,36 @@ mod tests {
                 git_in(&client, &["rev-parse", "origin/main"])
             );
             assert!(grokhub_core::update_cmds_in(&client, Channel::Stable).is_ok());
+            assert!(!cfg.join(CHANNEL_BETA_SINCE).exists(), "stable deletes the baseline");
+        }
+        let _ = fs::remove_dir_all(&base);
+        let _ = fs::remove_dir_all(&cfg);
+    }
+
+    /// The 2.10.94 bug: turning Beta on right after a main → beta sync (trees
+    /// equal) flipped straight back to stable. Now the first check records main's
+    /// tree and every later check with that tree stays on beta.
+    #[test]
+    fn beta_turned_on_after_a_sync_stays_on_across_checks() {
+        let _g = crate::config::hold_test_config();
+        let cfg = crate::config::test_config_root("channel-auto-off-sticks");
+        let _ = fs::remove_dir_all(&cfg);
+        let _pin = crate::config::TestConfigDir::set(cfg.clone());
+        fs::create_dir_all(&cfg).unwrap();
+        let (base, client) = same_tree_clone("sticks");
+        write_installed_channel(Channel::Beta).unwrap();
+        for _ in 0..3 {
+            assert_eq!(try_auto_off_beta_channel(Some(&client)), None);
+            assert_eq!(receipt_channel(), Channel::Beta);
+            assert_eq!(git_in(&client, &["symbolic-ref", "--short", "HEAD"]), "beta");
+        }
+        if cfg!(windows) {
+            assert!(!cfg.join(CHANNEL_BETA_SINCE).exists(), "Windows never checks");
+        } else {
+            assert_eq!(
+                fs::read_to_string(cfg.join(CHANNEL_BETA_SINCE)).unwrap(),
+                format!("{}\n", git_in(&client, &["rev-parse", "origin/main^{tree}"]))
+            );
         }
         let _ = fs::remove_dir_all(&base);
         let _ = fs::remove_dir_all(&cfg);
@@ -1200,8 +1283,9 @@ mod tests {
         let _ = fs::remove_dir_all(&cfg);
         let _pin = crate::config::TestConfigDir::set(cfg.clone());
         fs::create_dir_all(&cfg).unwrap();
-        let (base, client) = same_tree_clone("safe");
+        let (base, client, seed_tree) = same_tree_clone_with_seed("safe");
         fs::write(cfg.join(CHANNEL_RECEIPT), Channel::Beta.receipt()).unwrap();
+        fs::write(cfg.join(CHANNEL_BETA_SINCE), format!("{seed_tree}\n")).unwrap();
         // Dirty clone: stays on beta, edit kept, receipt untouched, says why.
         fs::write(client.join("Cargo.toml"), "[workspace] # wip\n").unwrap();
         let msg = try_auto_off_beta_channel(Some(&client));
