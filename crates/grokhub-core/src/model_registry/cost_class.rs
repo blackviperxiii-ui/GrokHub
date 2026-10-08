@@ -131,6 +131,10 @@ pub fn classify(reg: &Registry, id: &str, cred: Credential, grok_build: bool, op
     if !opts.plain() {
         return CostClass::Premium;
     }
+    if rec.sources == [SourceKind::Local] {
+        // An on-device model costs nothing and needs no sign-in.
+        return if grok_build { CostClass::Unknown } else { CostClass::Included };
+    }
     if !grok_build && cred == Credential::None {
         // Not signed in: nothing native is billed or included.
         return CostClass::Unknown;

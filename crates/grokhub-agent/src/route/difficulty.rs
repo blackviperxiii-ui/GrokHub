@@ -49,6 +49,16 @@ pub fn difficulty(input: &DifficultyInput<'_>) -> f64 {
     (d.min(1.0) * 100.0).round() / 100.0
 }
 
+/// R3a: the optional local difficulty estimator. With the local model off (or
+/// no runtime, or a bad answer) this is [`difficulty`], unchanged.
+pub fn estimate(input: &DifficultyInput<'_>, local: Option<&dyn super::local::LocalRuntime>) -> f64 {
+    let model = local.filter(|_| super::local::enabled()).and_then(|rt| rt.difficulty(input.text).ok()).and_then(|v| v.get("d").and_then(serde_json::Value::as_f64));
+    match model {
+        Some(d) if d.is_finite() => (d.clamp(0.0, 1.0) * 100.0).round() / 100.0,
+        _ => difficulty(input),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

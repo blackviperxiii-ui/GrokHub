@@ -252,6 +252,7 @@ impl Cabin {
             };
             self.post_self_review_card(card, now);
         }
+        self.post_router_review(now);
         let stats = sr::skill_stats(&outcomes, now, sr::WEEK_MS);
         let client = if self.harness.self_review.budget > 0 && stats.iter().any(|s| s.failures > 0)
         {
@@ -340,6 +341,28 @@ impl Cabin {
         self.persist_updates();
     }
 
+    /// Router R3a in the weekly pass: at most two cost-raising tuning cards
+    /// (inside the five) and one Home line on what the router changed.
+    fn post_router_review(&mut self, now: u64) {
+        let dir = config::config_dir();
+        let mut posted = 0;
+        for (source, title, body) in grokhub_agent::route::learn::cards_due(&dir, now) {
+            let before = self.harness.self_review.budget;
+            let candidate = match sr::card_target(&source) {
+                Some(CardTarget::Router(id)) => id,
+                _ => continue,
+            };
+            let details = format!("{body}\n\nAccept applies it through the change list, and Undo puts it back. Nothing changes without your click.");
+            let card = ProposalCard { source, skill: &candidate, title: &title, body: &body, details, md: "" };
+            self.post_self_review_card(card, now);
+            posted += usize::from(self.harness.self_review.budget < before);
+        }
+        grokhub_agent::route::learn::cards_posted(&dir, posted, now);
+        let line = grokhub_agent::route::learn::review_line(&dir, now);
+        let card = grokhub_core::router_update_card("router-review", "Weekly router review", &line, now);
+        self.post_feed_card(card);
+    }
+
     /// Post one Suggestion card inside the pass's budget and remember what
     /// Apply does. A live card for the same source is left alone. The caller
     /// saves the feed once: one save thread per card could land out of order.
@@ -394,6 +417,16 @@ impl Cabin {
         };
         let (dir, skills_dir) = (config::config_dir(), skills::skills_dir());
         let done = match target {
+            CardTarget::Router(candidate) => match grokhub_agent::route::learn::accept_card(&dir, &candidate, grokhub_core::now_ms()) {
+                Ok(msg) => {
+                    self.status = msg;
+                    true
+                }
+                Err(e) => {
+                    self.status = e;
+                    false
+                }
+            },
             CardTarget::Revert(name) => {
                 let res =
                     hx::undo_skill_change(&dir, &skills_dir, &name, hx::UndoAsk::from_click());

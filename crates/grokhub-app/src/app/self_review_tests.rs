@@ -509,3 +509,70 @@ fn a_success_drop_after_a_patch_gives_a_revert_card_and_revert_puts_v1_back() {
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Router R3a: a cost-raising tuning change is one of the week's cards, the
+/// review gets one router line, and only the Accept click changes the router.
+#[test]
+fn a_cost_raising_router_card_rides_the_weekly_pass_and_applies_only_on_accept() {
+    use grokhub_agent::route::{learn, tune};
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin("r3a-router-card");
+    let now = grokhub_core::now_ms();
+    let card = tune::Candidate {
+        id: "chat:default#7".into(),
+        class: "chat:default".into(),
+        change: Some(tune::Change::Start {
+            effort: "high".into(),
+        }),
+        stage: tune::Stage::Card,
+        created_at: now,
+        cost_rise_pct: Some(30.0),
+        ..tune::Candidate::default()
+    };
+    let state = tune::TuneState {
+        candidates: vec![card],
+        ..tune::TuneState::default()
+    };
+    grokhub_core::model_registry::store::write_json(&learn::state_path(&root), &state).unwrap();
+    let calls = fake("");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.run_self_review_now(now);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let cards = self_review_cards(&cabin);
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].source_id, "self-review:router:chat:default#7");
+    assert_eq!(cards[0].title, "Start everyday chat at High?");
+    assert_eq!(
+        cards[0].body.as_deref(),
+        Some("everyday chat would do better at High, which costs about 30% more. Start it at High?")
+    );
+    let review = cabin
+        .updates
+        .iter()
+        .find(|c| c.source_id == "router-review")
+        .expect("the weekly router line");
+    assert_eq!(
+        review.body.as_deref(),
+        Some("Router: 0 changes kept, 0 rolled back.")
+    );
+    assert!(!learn::tuning_path(&root).exists(), "nothing changes before the click");
+    cabin.pulse_accept(&cards[0].id, "2026-10-11");
+    assert_eq!(
+        learn::load_tuning(&root).starts.get("chat:default").map(String::as_str),
+        Some("high")
+    );
+    assert_eq!(
+        cabin.status,
+        "Router changed (everyday chat: start at High). Undo is on the change list."
+    );
+    let line = hx::ChangeLedger::load_kind(&root, hx::ChangeKind::Model)
+        .all()
+        .last()
+        .cloned()
+        .unwrap();
+    assert_eq!(
+        (line.id.as_str(), line.origin.as_str()),
+        ("route_tuning", "self_manage")
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
