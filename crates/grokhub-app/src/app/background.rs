@@ -206,7 +206,7 @@ impl Cabin {
             yolo,
             auto,
             Some(model.as_str()),
-            effort,
+            effort.as_deref(),
             self.session_mode,
             grokhub_acp::GrokPAttach {
                 image: None,
@@ -254,12 +254,12 @@ impl Cabin {
 
     /// Reasoning effort for a background run. A scheduled automation runs
     /// unwatched, so it stays at low effort like every unattended run; your own
-    /// `/bg` work keeps the effort you picked.
-    pub(super) fn bg_effort(&self, origin: BgOrigin) -> Option<&'static str> {
+    /// `/bg` work starts at everyday chat's start (the router moves it from there).
+    pub(super) fn bg_effort(&self, origin: BgOrigin) -> Option<String> {
         if origin == BgOrigin::Scheduled {
-            Some(grokhub_core::BACKGROUND_EFFORT)
+            Some(grokhub_core::BACKGROUND_EFFORT.to_string())
         } else {
-            grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort)
+            grokhub_agent::route::live::start_effort(grokhub_agent::route::live::DEFAULT_CLASS)
         }
     }
 
@@ -317,7 +317,7 @@ impl Cabin {
         let (client, auth_kind, bearer) = native_bg_model(self)?;
         let gate = self.native_bg_gate();
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
-        let effort = self.bg_effort(origin).map(str::to_string);
+        let effort = self.bg_effort(origin);
         let rules = grokhub_acp::cabin_rules_for(
             &grokhub_core::brief_for(&self.learning, "chat"),
             self.cfg.desktop_control,

@@ -353,9 +353,10 @@ impl Cabin {
                 .map(|h| h.prompt_with_image(&last_user, image.as_deref()));
             match prompt_err {
                 Some(Ok(())) => {
-                    // Router R0 shadow: GB runs this turn at the effort it spawned with.
-                    let effort = grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort);
-                    grokhub_agent::route::shadow::shadow_gb_turn(&crate::config::config_dir(), self.cfg.model.trim(), effort, "", &last_user);
+                    // GB runs this turn at the effort the session spawned with (per episode at spawn).
+                    let spawned = grokhub_agent::route::live::start_effort(grokhub_agent::route::live::DEFAULT_CLASS);
+                    let thread = self.threads.get(self.thread_idx).map(|t| t.id.clone()).unwrap_or_default();
+                    grokhub_agent::route::live::route_gb_turn(&crate::config::config_dir(), self.cfg.model.trim(), Some(spawned.as_deref()), &thread, &last_user);
                     self.note_inflight_card(&raw_ask, &thread_label)
                 }
                 Some(Err(e)) => {
@@ -390,10 +391,12 @@ impl Cabin {
         };
         let model = grokhub_core::cabin_spawn_model(&self.cfg.model).to_string();
         // Automations, loops, and /send tasks run unwatched: always low effort.
-        let effort = if self.scheduled_perm {
-            Some(grokhub_core::BACKGROUND_EFFORT)
+        // A chat you type spawns at the router's pick for this turn (grok -p is one episode).
+        let effort: Option<String> = if self.scheduled_perm {
+            Some(grokhub_core::BACKGROUND_EFFORT.to_string())
         } else {
-            grokhub_core::parse_reasoning_effort(&self.cfg.reasoning_effort)
+            let thread = self.threads.get(idx).map(|t| t.id.clone()).unwrap_or_default();
+            grokhub_agent::route::live::route_gb_turn(&crate::config::config_dir(), &model, None, &thread, &last_user)
         };
         let resume_in_cabin = resume
             .as_deref()
@@ -422,7 +425,7 @@ impl Cabin {
                 &last_user,
                 cwd,
                 &model,
-                effort.map(str::to_string),
+                effort,
                 mode,
                 image,
             );
@@ -438,7 +441,7 @@ impl Cabin {
             yolo,
             auto,
             Some(model.as_str()),
-            effort,
+            effort.as_deref(),
             mode,
             grokhub_acp::GrokPAttach {
                 image: image.as_deref(),
@@ -452,7 +455,6 @@ impl Cabin {
             worktree,
         ) {
             Ok((pid, rx)) => {
-                grokhub_agent::route::shadow::shadow_gb_turn(&crate::config::config_dir(), &model, effort, "", &last_user);
                 self.grok_p_pid = Some(pid);
                 self.grok_p_rx = Some(rx);
                 if let Some(t) = self.threads.get_mut(idx) {

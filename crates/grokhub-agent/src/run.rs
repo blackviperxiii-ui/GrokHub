@@ -296,8 +296,8 @@ pub fn run_loop(
             hosted_search: true,
             call_timeout: None,
         };
-        let class = crate::route::shadow::current_class();
-        let turn = match crate::route::shadow::stream_shadowed(input.client, &req, input.cancel, &mut |ev| match ev {
+        let class = crate::route::live::current_class();
+        let turn = match crate::route::live::stream_routed(input.client, &req, input.cancel, &mut |ev| match ev {
             StreamEvent::TextDelta(text) => on_event(LoopEvent::Text(text)),
             StreamEvent::ReasoningDelta(text) => on_event(LoopEvent::Thought(text)),
         }, class) {
@@ -591,6 +591,10 @@ fn user_message(text: &str, image: Option<&str>) -> InputItem {
 }
 
 fn push_output(history: &mut Vec<InputItem>, call: &FunctionCall, output: ToolOutput) {
+    if output.failed {
+        // E1: the next routed step thinks one rung harder.
+        crate::route::ladder::note_tool_error();
+    }
     history.push(InputItem::FunctionCallOutput {
         call_id: call.call_id.clone(),
         output: output.text,

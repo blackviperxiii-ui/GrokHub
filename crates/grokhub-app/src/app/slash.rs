@@ -196,10 +196,11 @@ impl Cabin {
                     self.cfg.model = id.to_string();
                     self.persist_cfg();
                 }
-                if !effort.is_empty() {
-                    self.run_slash(Slash::Effort(effort.to_string()));
-                }
-                self.status = format!("grok --model {}", self.cfg.model);
+                self.status = if effort.is_empty() {
+                    format!("grok --model {}", self.cfg.model)
+                } else {
+                    format!("grok --model {} · {}", self.cfg.model, grokhub_core::EFFORT_AUTO_MSG)
+                };
             }
             Slash::Goal(obj) => {
                 let obj = obj.trim();
@@ -540,23 +541,8 @@ impl Cabin {
                 self.persist_idle_key = self.persist_idle_now();
                 self.status = "Permission auto".into();
             }
-            Slash::Effort(level) => {
-                if let Some(effort) = grokhub_core::parse_reasoning_effort(&level) {
-                    if self.running {
-                        self.halt_in_flight();
-                    }
-                    self.cfg.reasoning_effort = effort.to_string();
-                    self.acp = None;
-                    self.acp_spawn_rx = None;
-                    if let Some(t) = self.threads.get_mut(self.thread_idx) {
-                        t.grok_session = None;
-                    }
-                    self.persist_cfg();
-                    self.persist_idle_key = self.persist_idle_now();
-                    self.status = format!("Effort {}", grokhub_core::effort_label(effort));
-                } else {
-                    self.status = "Effort: none | low | medium | high | xhigh".into();
-                }
+            Slash::Effort => {
+                self.status = grokhub_core::EFFORT_AUTO_MSG.into();
             }
             Slash::Sessions => {
                 self.nav = Nav::History;
@@ -1117,7 +1103,7 @@ impl Cabin {
                 self.persist();
             }
             grokhub_agent::UnparsedSlash::EffortHint => {
-                self.status = "Effort: none | low | medium | high | xhigh".into();
+                self.status = grokhub_core::EFFORT_AUTO_MSG.into();
             }
             grokhub_agent::UnparsedSlash::Note(text) => {
                 self.status = text.into();

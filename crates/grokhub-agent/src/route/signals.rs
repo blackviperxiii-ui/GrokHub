@@ -47,19 +47,29 @@ pub struct SpanVerifySource {
     pub session: String,
 }
 
-impl VerifySource for SpanVerifySource {
-    fn verdict(&self, episode: &str, step: u32) -> Option<VerifySignal> {
+impl SpanVerifySource {
+    /// Every decided VerifyGate check of `episode`, oldest first.
+    pub fn checks(&self, episode: &str) -> Vec<VerifySignal> {
         if episode.is_empty() || self.session.is_empty() {
-            return None;
+            return Vec::new();
         }
         let (spans, _) = read_spans_tail(&self.config_dir, &self.session, VERIFY_SCAN_LINES);
-        let checks: Vec<&Span> = spans.iter().filter(|s| s.tool == VERIFY_TOOL && s.episode == episode).collect();
-        let check = if step == 0 { checks.last() } else { checks.get(step as usize - 1) }?;
-        match check.result.as_str() {
-            "pass" => Some(VerifySignal::Ok),
-            "fail" => Some(VerifySignal::Reject),
-            _ => None,
-        }
+        spans
+            .iter()
+            .filter(|s| s.tool == VERIFY_TOOL && s.episode == episode)
+            .filter_map(|s| match s.result.as_str() {
+                "pass" => Some(VerifySignal::Ok),
+                "fail" => Some(VerifySignal::Reject),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+impl VerifySource for SpanVerifySource {
+    fn verdict(&self, episode: &str, step: u32) -> Option<VerifySignal> {
+        let checks = self.checks(episode);
+        if step == 0 { checks.last() } else { checks.get(step as usize - 1) }.copied()
     }
 }
 
@@ -109,6 +119,7 @@ mod tests {
         assert_eq!(v.verdict("ep-1", 0), Some(VerifySignal::Ok));
         assert_eq!(v.verdict("ep-1", 3), None);
         assert_eq!(v.verdict("ep-2", 0), None);
+        assert_eq!(v.checks("ep-1"), vec![VerifySignal::Reject, VerifySignal::Ok]);
         let mut s = Span::deny("chat-1", "x", "{}", "", "soft");
         s.origin = Origin::Automation;
         assert_eq!(SpanOriginSource.origin(&s), Some(Origin::Automation));
