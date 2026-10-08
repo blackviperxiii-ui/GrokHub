@@ -111,6 +111,9 @@ pub(super) enum ParkSource {
     /// A path A / B park whose turn was steered (Spike-1a). Its call was
     /// denied with the old turn; Approve re-runs the step once, like path C.
     Held,
+    /// Spike-6a: the final step of a proactive card (this card id). Nothing
+    /// ran; Approve runs the step once on its normal path.
+    Proactive(String),
     /// Path D (Spike-1c): Grok Build's own computer use tried a hard step
     /// with no ask, and the cabin stopped the turn. Nothing is waiting;
     /// Approve re-runs the step once, like path C.
@@ -562,7 +565,7 @@ impl Cabin {
         hit
     }
 
-    fn park_hard(
+    pub(super) fn park_hard(
         &mut self,
         source: ParkSource,
         class: HardClass,
@@ -628,6 +631,12 @@ impl Cabin {
             ParkSource::Unasked => {
                 if approve {
                     self.start_oneshot(&park.action, Some((park.tool.clone(), park.class)));
+                }
+            }
+            ParkSource::Proactive(_) => {
+                if approve {
+                    self.harness.next_origin = Some(hx::Origin::Proactive);
+                    self.start_oneshot(&park.action, None);
                 }
             }
             ParkSource::Egress(dest) => {
@@ -731,7 +740,7 @@ impl Cabin {
         while let Some(park) = self.harness.park.clone() {
             if matches!(
                 park.source,
-                ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held | ParkSource::Unasked
+                ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held | ParkSource::Proactive(_) | ParkSource::Unasked
             ) {
                 keep.push_back(park);
                 self.harness.park = self.harness.queue.pop_front();
@@ -769,7 +778,7 @@ impl Cabin {
                 ParkSource::Desk(id) => {
                     let _ = hx::answer_park(&dir, id, false);
                 }
-                ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held | ParkSource::Unasked => continue,
+                ParkSource::Headless | ParkSource::Egress(_) | ParkSource::Held | ParkSource::Proactive(_) | ParkSource::Unasked => continue,
             }
             let args = span_args(&park.tool, &park.action);
             self.write_span(hx::Span::deny(&trace, &park.tool, &args, why, park.class.as_str()), park.path);
