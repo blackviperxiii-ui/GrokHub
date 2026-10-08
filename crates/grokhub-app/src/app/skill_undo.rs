@@ -215,6 +215,9 @@ impl Cabin {
         self.harness.skill_rows = None;
         let line = match res {
             Ok(done) => {
+                if done.change.op == hx::ChangeOp::Undo {
+                    self.outcomes_after_undo(name);
+                }
                 match &done.now {
                     Some(bytes) => {
                         let raw = String::from_utf8_lossy(bytes).into_owned();

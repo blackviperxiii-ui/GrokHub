@@ -373,7 +373,8 @@ fn pulse_menu(
                 ui.close();
             }
         };
-    if !feed {
+    let self_review = grokhub_core::self_review::card_target(&card.source_id);
+    if !feed && self_review.is_none() {
         pick(
             ui,
             "Run in the background",
@@ -389,7 +390,13 @@ fn pulse_menu(
         PulseAct::Snooze(id.clone()),
         act,
     );
-    if kind == PulseType::Learn {
+    if let Some(target) = self_review {
+        let label = match target {
+            grokhub_core::self_review::CardTarget::Revert(_) => "Revert",
+            _ => "Apply change",
+        };
+        pick(ui, label, "", PulseAct::Accept(id.clone()), act);
+    } else if kind == PulseType::Learn {
         pick(
             ui,
             "That's right, keep it",
@@ -1427,6 +1434,11 @@ impl Cabin {
     /// The `/bg` line itself, once any gate said yes.
     pub(super) fn pulse_run_line(&mut self, id: &str) -> Option<String> {
         let card = self.pulse_card(id)?;
+        // A self-review card is a skill change, not a task: only Apply acts on it.
+        if grokhub_core::self_review::card_target(&card.source_id).is_some() {
+            self.status = "Use Apply change in the card's menu.".into();
+            return None;
+        }
         let line = pc::run_line(&card);
         if grokhub_core::mark_update_opened(&mut self.updates, id) {
             self.persist_updates();
@@ -1520,6 +1532,9 @@ impl Cabin {
             return;
         };
         self.pulse_note(&card.title, LedgerReason::Accepted, day);
+        if self.apply_self_review_card(id) {
+            return;
+        }
         self.apply_idea(id);
     }
 

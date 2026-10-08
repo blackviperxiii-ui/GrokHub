@@ -1664,6 +1664,7 @@ impl Cabin {
         self.pin_chat_tail();
         self.heartbeat_user_sent();
         if !self.running {
+            self.outcome_user_said(&text);
             self.harness_user_sent();
         }
         self.harness.typed_send = true;
