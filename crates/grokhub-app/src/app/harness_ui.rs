@@ -585,7 +585,7 @@ impl Cabin {
             ParkSource::Desk(id) => {
                 let _ = hx::answer_park(&crate::config::config_dir(), id, approve);
             }
-            ParkSource::Headless | ParkSource::Held | ParkSource::Unasked => {
+            ParkSource::Headless | ParkSource::Held => {
                 if approve {
                     self.start_oneshot(&park.action, None);
                 }
@@ -1294,18 +1294,6 @@ impl Cabin {
         }
         // Spike-8a: in-context scope asks, same card shape, click only.
         self.paint_scope_asks(ui);
-    }
-
-    /// An inbox row asked for this card: bring what was just painted (from
-    /// `top` to the cursor) into view once.
-    pub(super) fn scroll_if_jumped(&mut self, ui: &egui::Ui, card: &str, top: f32) {
-        if self.harness.jump != Some(card) {
-            return;
-        }
-        self.harness.jump = None;
-        let bottom = ui.cursor().min.y.max(top + 1.0);
-        let rect = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=bottom);
-        ui.scroll_to_rect(rect, Some(egui::Align::Center));
     }
 
     /// An inbox row asked for this card: bring what was just painted (from
