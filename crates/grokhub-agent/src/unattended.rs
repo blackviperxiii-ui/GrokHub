@@ -56,7 +56,7 @@ pub const UNATTENDED_CLASS: &str = "background:unattended";
 
 pub fn run_unattended(spec: UnattendedRun) -> UnattendedDone {
     // Router R0: scheduled runs log their shadow routes under their own class.
-    let _class = crate::route::shadow::ClassScope::enter(UNATTENDED_CLASS);
+    let _class = crate::route::live::ClassScope::enter(UNATTENDED_CLASS);
     let session = spec.session_id.clone();
     let cancel = spec.cancel.clone();
     let hub = crate::tasks::hub_for(&session);

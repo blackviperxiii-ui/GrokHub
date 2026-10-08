@@ -144,7 +144,7 @@ pub fn request_summary(
         hosted_search: false,
         call_timeout: None,
     };
-    match crate::route::shadow::stream_shadowed(client, &req, cancel, &mut |_| {}, crate::route::CLASS_COMPACT) {
+    match crate::route::live::stream_routed(client, &req, cancel, &mut |_| {}, crate::route::CLASS_COMPACT) {
         Ok(turn) => {
             if cancel.is_cancelled() {
                 return Err(CompactError::Cancelled);

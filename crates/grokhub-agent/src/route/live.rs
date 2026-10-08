@@ -1,7 +1,8 @@
-//! Router R0 shadow mode: every model call site calls [`shadow_log`] after its
-//! call. It asks [`super::Router::choose`] what it *would* pick, writes that as
-//! the `route` record on a `model-calls` span, and logs the call's status for
-//! passive health (`models/health.jsonl`). It never changes the call.
+//! Router R1 live routing: every model call site asks [`decide`] before it
+//! sends, sends the effort the router picked (for a class the table lists), then
+//! calls [`route_log`], which writes the `route` record on a `model-calls` span
+//! and the call's status for passive health (`models/health.jsonl`). The model
+//! stays the call's own until R2 ([`super::policy::MODEL_LIVE`]).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -13,10 +14,16 @@ use grokhub_core::model_registry::store::{append_observation, load_registry, pro
 use grokhub_core::model_registry::{classify_status, CallStatus, Observation, Registry};
 
 use super::cabin::{MODEL_TOOL, MODEL_TRACE};
+use grokhub_core::model_registry::EFFORT_LADDER;
+use grokhub_core::outcome::is_correction;
+
 use super::difficulty::{difficulty, DifficultyInput};
+use super::guard::{holdout_eligible, in_holdout, load_overrides, HOLDOUT_EFFORT};
+use super::ladder::{self, rung, start_rung, take_tool_errors, turn_hash, user_facing, Band, Obs, Pick, Steer};
 use super::log::{Chosen, RouteOutcome, RouteRecord, RouteSignals, RouteTokens};
-use super::signals::{SpanVerifySource, VerifySource};
-use super::{RouteInput, Router};
+use super::policy::{class_row, POLICY_LIVE};
+use super::signals::{SpanVerifySource, VerifySignal, VerifySource};
+use super::{Route, RouteInput, Router};
 use crate::client::{ClientError, ContentPart, InputItem, ModelClient, ResponsesRequest, StreamEvent, TurnOutput, Usage};
 use crate::CancelToken;
 use crate::harness::{append_span, current_origin, AccessMode, ModelUsage, Span};
@@ -26,7 +33,7 @@ pub const TICKS_PER_USD: f64 = 1e10;
 
 /// One call, as the call site knows it. `text` feeds difficulty only and is never stored.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct ShadowCall<'a> {
+pub struct RouteCall<'a> {
     pub provider: &'a str,
     pub class: &'a str,
     pub model: &'a str,
@@ -46,7 +53,7 @@ pub struct ShadowCall<'a> {
 
 /// How the call went. Counts and ids only.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ShadowDone {
+pub struct RouteDone {
     pub ok: bool,
     /// HTTP status (200 on success, 0 when there was none) and the error text for classifying it.
     pub http: u16,
@@ -72,7 +79,7 @@ fn http_of(err: &ClientError) -> u16 {
     }
 }
 
-impl ShadowDone {
+impl RouteDone {
     /// A call whose result the cabin never sees (a Grok Build turn).
     pub fn unseen() -> Self {
         Self { cancelled: true, ..Self::default() }
@@ -160,10 +167,83 @@ pub fn snapshot(config_dir: &Path) -> (Arc<Registry>, Arc<BTreeMap<String, Model
     (reg, profiles)
 }
 
-/// Build the shadow record for one call. Pure apart from the VerifyGate lookup.
-pub fn route_record(config_dir: &Path, call: &ShadowCall<'_>, done: &ShadowDone, now_ms: u64) -> RouteRecord {
+/// What the router decided for one call, before it is sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Decision {
+    pub route: Route,
+    /// Difficulty, rounded to hundredths.
+    pub d: u32,
+    /// The call is in the internal 10% control arm (fixed High).
+    pub holdout: bool,
+    /// A third VerifyGate reject: the 1a recovery ladder has the episode now.
+    pub recover: bool,
+    /// The class is in the table, so the router's effort is sent.
+    pub live: bool,
+}
+
+impl Decision {
+    /// The effort to send: the router's for a listed class, the call's own otherwise.
+    pub fn send_effort(&self, call_effort: Option<&str>) -> Option<String> {
+        if self.live {
+            self.route.effort.clone()
+        } else {
+            call_effort.map(str::to_string)
+        }
+    }
+
+    fn d(&self) -> f64 {
+        self.d as f64 / 100.0
+    }
+}
+
+/// The id the ladder and the holdout key on: the episode, else the chat session.
+fn episode_key<'a>(call: &RouteCall<'a>) -> &'a str {
+    if call.episode.is_empty() {
+        call.session
+    } else {
+        call.episode
+    }
+}
+
+/// VerifyGate rejects so far in the episode, and whether its latest check passed.
+fn verify_counts(config_dir: &Path, call: &RouteCall<'_>) -> (Option<u32>, bool) {
+    if call.episode.is_empty() || call.session.is_empty() {
+        return (None, false);
+    }
+    let checks = SpanVerifySource { config_dir: config_dir.to_path_buf(), session: call.session.to_string() }.checks(call.episode);
+    let rejects = checks.iter().filter(|c| **c == VerifySignal::Reject).count() as u32;
+    (Some(rejects), checks.last() == Some(&VerifySignal::Ok))
+}
+
+/// Pick the provider, model and effort for one call and advance its episode's ladder.
+pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision {
     let (reg, profiles) = snapshot(config_dir);
     let d = difficulty(&DifficultyInput { text: call.text, planned_tools: call.planned_tools, plan_mode: call.plan_mode, ctx_tokens: call.ctx_tokens });
+    let steer = Steer::from_text(call.text);
+    let row = class_row(call.class);
+    let bump = row.and_then(|r| load_overrides(config_dir).get(r.class).map(|o| o.steps)).unwrap_or(0);
+    let key = episode_key(call);
+    let holdout = holdout_eligible(call.class) && in_holdout(key);
+    let pick = match row {
+        Some(_) if holdout => Some(Pick { rung: rung(HOLDOUT_EFFORT).unwrap_or(0), rules: vec!["holdout".into()], ..Pick::default() }),
+        Some(r) if user_facing(r.class) && !key.is_empty() => {
+            let band = Band::of(r, bump);
+            let (rejects, verify_ok) = verify_counts(config_dir, call);
+            let obs = Obs {
+                tool_errors: take_tool_errors(),
+                rejects,
+                verify_ok,
+                correction: is_correction(call.text),
+                // No self-check score and no spend budget report yet: E4 and DE3 stay quiet.
+                low_check: None,
+                budget_pct: None,
+                ..Obs::default()
+            };
+            Some(ladder::step(key, r.class, turn_hash(call.text), band, start_rung(band, d, steer, true), obs))
+        }
+        _ => None,
+    };
+    let recover = pick.as_ref().is_some_and(|p| p.recover);
     let input = RouteInput {
         provider: call.provider,
         class: call.class,
@@ -173,30 +253,40 @@ pub fn route_record(config_dir: &Path, call: &ShadowCall<'_>, done: &ShadowDone,
         d,
         ctx_tokens: call.ctx_tokens,
         needs_image: call.needs_image,
+        steer,
+        bump,
+        pick,
     };
     let route = Router::choose(&input, &reg, &profiles, now_ms);
+    Decision { route, d: (d * 100.0).round() as u32, holdout, recover, live: POLICY_LIVE && row.is_some() }
+}
+
+/// The route record for one call. `call.effort` is what was actually sent.
+pub fn route_record(config_dir: &Path, call: &RouteCall<'_>, decision: &Decision, done: &RouteDone) -> RouteRecord {
+    let route = &decision.route;
     let verify = SpanVerifySource { config_dir: config_dir.to_path_buf(), session: call.session.to_string() }
         .verdict(call.episode, 0)
         .map(|v| v.as_str().to_string());
     let chosen = Chosen { provider: route.provider.clone(), model: route.model.clone(), effort: route.effort.clone() };
     let provider = if call.provider.is_empty() { super::PROVIDER_XAI } else { call.provider };
     let used = Chosen { provider: provider.to_string(), model: call.model.to_string(), effort: call.effort.map(str::to_string) };
-    let prev = if call.episode.is_empty() {
+    let key = episode_key(call);
+    let prev = if key.is_empty() {
         None
     } else {
         let mut c = CACHE.lock().unwrap_or_else(|e| e.into_inner());
         if c.prev.len() > 256 {
             c.prev.clear();
         }
-        c.prev.insert(call.episode.to_string(), chosen.clone())
+        c.prev.insert(format!("{key}\u{1f}{}", call.class), chosen.clone())
     };
     let u = &done.usage;
     RouteRecord {
         span_id: String::new(),
-        episode: call.episode.to_string(),
+        episode: key.to_string(),
         step: call.step,
         class: call.class.to_string(),
-        d,
+        d: decision.d(),
         ctx_tokens: call.ctx_tokens,
         signals: RouteSignals {
             failures: call.failures,
@@ -209,8 +299,8 @@ pub fn route_record(config_dir: &Path, call: &ShadowCall<'_>, done: &ShadowDone,
         candidates_n: route.candidates_n,
         chosen,
         prev,
-        rule_ids: route.rule_ids,
-        reason: route.reason,
+        rule_ids: route.rule_ids.clone(),
+        reason: route.reason.clone(),
         pinned: call.pinned,
         outcome: (!done.cancelled).then(|| RouteOutcome {
             ok: done.ok,
@@ -219,13 +309,36 @@ pub fn route_record(config_dir: &Path, call: &ShadowCall<'_>, done: &ShadowDone,
             cost_usd: u.cost_in_usd_ticks as f64 / TICKS_PER_USD,
         }),
         used,
-        shadow: true,
-        settings: route.settings,
+        shadow: !decision.live,
+        holdout: decision.holdout,
+        settings: route.settings.clone(),
     }
 }
 
+/// The last user-facing pick (effort and reason), for the composer's Auto chip.
+static LAST_USER: Mutex<Option<(Option<String>, String)>> = Mutex::new(None);
+
+/// Effort and plain reason of the newest user-facing routed call, if any.
+pub fn last_user_pick() -> Option<(Option<String>, String)> {
+    LAST_USER.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+fn note_user_pick(call: &RouteCall<'_>, decision: &Decision) {
+    if decision.live && user_facing(call.class) {
+        *LAST_USER.lock().unwrap_or_else(|e| e.into_inner()) = Some((call.effort.map(str::to_string), decision.route.reason.clone()));
+    }
+}
+
+/// The class table's start effort for `class` (no difficulty, no ladder), as it goes on the wire.
+/// `None` for an unlisted class.
+pub fn start_effort(class: &str) -> Option<String> {
+    let row = class_row(class)?;
+    let e = EFFORT_LADDER[Band::of(row, 0).start];
+    Some(grokhub_core::parse_reasoning_effort(e).unwrap_or(e).to_string())
+}
+
 /// The passive-health line for one call, or `None` when it says nothing about the model.
-pub fn observation(call: &ShadowCall<'_>, done: &ShadowDone, now_ms: u64) -> Option<Observation> {
+pub fn observation(call: &RouteCall<'_>, done: &RouteDone, now_ms: u64) -> Option<Observation> {
     if done.cancelled || call.model.trim().is_empty() || call.provider == "grok_build" {
         return None;
     }
@@ -242,10 +355,16 @@ pub fn observation(call: &ShadowCall<'_>, done: &ShadowDone, now_ms: u64) -> Opt
     })
 }
 
-/// Write the shadow route span and the health line for one call. Never fails the call.
-pub fn shadow_log(config_dir: &Path, call: &ShadowCall<'_>, done: &ShadowDone) -> RouteRecord {
+/// Write the route span and the health line for one call. Never fails the call.
+/// `call.effort` is what was sent.
+pub fn route_log(config_dir: &Path, call: &RouteCall<'_>, decision: &Decision, done: &RouteDone) -> RouteRecord {
     let now = grokhub_core::now_ms();
-    let mut rec = route_record(config_dir, call, done, now);
+    let mut rec = route_record(config_dir, call, decision, done);
+    let key = episode_key(call);
+    if !key.is_empty() {
+        ladder::finish(key, class_row(call.class).map(|r| r.class).unwrap_or(call.class), done.ok);
+    }
+    note_user_pick(call, decision);
     // This crate's own tests drive fake clients with made-up model ids: only a
     // test that pinned a scratch config folder gets the span and health lines.
     if cfg!(test) && !crate::perm::config_pinned() {
@@ -317,7 +436,7 @@ pub fn current_class() -> &'static str {
 }
 
 /// The newest user text in a request (difficulty only; never stored).
-fn last_user_text(input: &[InputItem]) -> (String, bool) {
+pub(crate) fn last_user_text(input: &[InputItem]) -> (String, bool) {
     let mut image = false;
     let mut text = String::new();
     for item in input.iter().rev() {
@@ -336,18 +455,19 @@ fn last_user_text(input: &[InputItem]) -> (String, bool) {
     (text, image)
 }
 
-/// `client.stream`, then the shadow route log for it. The request is sent as given.
-pub fn stream_shadowed(
+/// The single helper every native model call goes through: the router picks
+/// the effort (for a listed class), the request is sent with it, and the route
+/// record logs what was sent.
+pub fn stream_routed(
     client: &dyn ModelClient,
     req: &ResponsesRequest,
     cancel: &CancelToken,
     sink: &mut dyn FnMut(StreamEvent),
     class: &str,
 ) -> Result<TurnOutput, ClientError> {
-    let started = std::time::Instant::now();
-    let out = client.stream(req, cancel, sink);
+    let dir = crate::perm::config_dir();
     let (text, needs_image) = last_user_text(&req.input);
-    let call = ShadowCall {
+    let mut call = RouteCall {
         provider: super::PROVIDER_XAI,
         class,
         model: &req.model,
@@ -356,26 +476,43 @@ pub fn stream_shadowed(
         ctx_tokens: crate::compact::estimate_input_tokens(&req.input),
         text: &text,
         needs_image,
-        ..ShadowCall::default()
+        ..RouteCall::default()
     };
-    shadow_log(&crate::perm::config_dir(), &call, &ShadowDone::of(&out, started.elapsed()));
+    let decision = decide(&dir, &call, grokhub_core::now_ms());
+    let effort = decision.send_effort(req.effort.as_deref());
+    let mut sent = req.clone();
+    sent.effort = effort.clone();
+    let started = std::time::Instant::now();
+    let out = client.stream(&sent, cancel, sink);
+    call.effort = effort.as_deref();
+    route_log(&dir, &call, &decision, &RouteDone::of(&out, started.elapsed()));
     out
 }
 
-/// Provider name for turns Grok Build runs itself (effort is set per episode at spawn).
+/// Provider name for turns Grok Build runs itself.
 pub const PROVIDER_GROK_BUILD: &str = "grok_build";
 
-/// Shadow-log one Grok Build turn as it is sent. GB makes the model calls, so
-/// the record has no outcome and feeds no health; `text` is read for difficulty only.
-pub fn shadow_gb_turn(config_dir: &Path, model: &str, effort: Option<&str>, session: &str, text: &str) -> RouteRecord {
-    let call = ShadowCall {
+/// Route one Grok Build turn as it is sent. GB makes the model calls, so the
+/// record has no outcome and feeds no health; `text` is read for difficulty
+/// only. `sent` is the effort the turn really runs at: GB takes effort per
+/// episode at spawn (R0 Step-0: live `set_config_option` is not verified), so a
+/// session already running keeps its spawn effort. `None` means this turn spawns
+/// fresh and runs at the router's pick, which is returned.
+pub fn route_gb_turn(config_dir: &Path, model: &str, sent: Option<Option<&str>>, session: &str, text: &str) -> Option<String> {
+    let mut call = RouteCall {
         provider: PROVIDER_GROK_BUILD,
         class: DEFAULT_CLASS,
         model,
-        effort,
         session,
         text,
-        ..ShadowCall::default()
+        ..RouteCall::default()
     };
-    shadow_log(config_dir, &call, &ShadowDone::unseen())
+    let decision = decide(config_dir, &call, grokhub_core::now_ms());
+    let effort = match sent {
+        Some(e) => e.map(str::to_string),
+        None => decision.route.effort.clone(),
+    };
+    call.effort = effort.as_deref();
+    route_log(config_dir, &call, &decision, &RouteDone::unseen());
+    effort
 }
