@@ -664,8 +664,9 @@ mod tests {
 
     /// Rule 4: the agent never widens its own permissions. Outside tests, a
     /// grant is built only from a Settings click: the hub row in this file,
-    /// the scope rows in `scope_ui.rs`, and the premium hard card's Approve
-    /// click in `budget_ui.rs` (Router R2b).
+    /// the scope rows in `scope_ui.rs`, the premium hard card's Approve
+    /// click in `budget_ui.rs` (Router R2b), and the provider hard send card's
+    /// Approve click in `provider_ui.rs` (Router R3b).
     #[test]
     fn only_a_settings_click_writes_a_grant() {
         let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -709,6 +710,8 @@ mod tests {
                 "grokhub-app/src/app/budget_ui.rs: grant_premium(",
                 "grokhub-app/src/app/privacy_ui.rs: UserClick::from_click(",
                 "grokhub-app/src/app/privacy_ui.rs: grant_destination(",
+                "grokhub-app/src/app/provider_ui.rs: UserClick::from_click(",
+                "grokhub-app/src/app/provider_ui.rs: grant_destination(",
                 "grokhub-app/src/app/scope_ui.rs: UserClick::from_click(",
                 "grokhub-app/src/app/scope_ui.rs: grant_scope(",
             ]

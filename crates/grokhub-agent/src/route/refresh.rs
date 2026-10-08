@@ -57,6 +57,10 @@ pub fn event_span(ev: &RegistryEvent) -> Span {
 
 /// The profile's probe field before any probe ran.
 fn first_probe(rec_sources: &[SourceKind], cost: CostClass) -> ProbeResult {
+    if rec_sources.iter().any(|s| s.is_new_provider()) {
+        // R3b: probes stay on the plan pool, so a provider you added ranks on its listing alone.
+        return ProbeResult::status("not_run: cost_class");
+    }
     if !rec_sources.contains(&SourceKind::XaiApi) {
         return ProbeResult::status("not_run: gb_only");
     }
