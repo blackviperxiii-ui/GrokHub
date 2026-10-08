@@ -867,9 +867,7 @@ impl Cabin {
                             if let Some(i) = self.threads.iter().position(|t| t.id == mark.thread_id)
                             {
                                 self.apply_switch_thread(i);
-                                if mark.kind == SessionMarkKind::LastYou {
-                                    self.jump_last_you = true;
-                                }
+                                self.jump_last_you = true;
                                 self.nav = Nav::Chat;
                             }
                         }

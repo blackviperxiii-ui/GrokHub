@@ -553,6 +553,7 @@ impl Cabin {
                         }
                     }
                     self.running = false;
+                    let native = self.acp.as_ref().is_some_and(|h| h.session_id.starts_with("native-"));
                     self.acp = None;
                     if grokhub_acp::is_sigterm_status(&e) && !self.turn_retried {
                         self.turn_retried = true;
@@ -561,7 +562,8 @@ impl Cabin {
                         continue;
                     }
                     self.scheduled_perm = false;
-                    let e = grokhub_acp::explain_handshake_error(&e, &self.grok_cwd());
+                    // A native engine turn never ran session/new; keep its own error.
+                    let e = if native { e } else { grokhub_acp::explain_handshake_error(&e, &self.grok_cwd()) };
                     self.status = self.apply_job_fail(&e);
                     self.abandon_turn_card();
                     self.chat_job_thread = None;
