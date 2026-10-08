@@ -1,7 +1,7 @@
 # Compass: versions, channels, and the build label
 
 ## Owns
-- The one lockstep version (`VERSION`, `[workspace.package] version` in `Cargo.toml`) and what `grokhub --version` prints: `GrokHub 2.10.94-beta (beta @ abc1234)` on beta, `GrokHub 2.10.94 (main @ abc1234)` on stable.
+- The one lockstep version (`VERSION`, `[workspace.package] version` in `Cargo.toml`) and what `grokhub --version` prints: `GrokHub 2.10.95-beta (beta @ abc1234)` on beta, `GrokHub 2.10.95 (main @ abc1234)` on stable.
 - Install channels: `stable` builds `main`, `beta` builds `beta`; the choice lives in the `channel` receipt in the config dir.
 ## Quick commands
 - `cargo run -p grokhub-app -- --version`
