@@ -4,8 +4,10 @@
 //! A scope grant is written only here, from a pointer click on Allow
 //! (`cards::settings_grant_row`; Enter or Space on a focused Allow does nothing).
 //! Revoke is a ghost and only takes access away; `/privacy` lists the same
-//! grants with its own ghost Revoke. Nothing reads a scope yet (Spike-8), and
-//! the screen stays the desktop switch. While private data is locked every
+//! grants with its own ghost Revoke. Spike-8a's indexers read the granted
+//! scopes (calendar and mail have no reader yet), each granted row lists what
+//! it taught GrokHub with "Forget these" (`indexer_ui.rs`), and the screen
+//! stays the desktop switch. While private data is locked every
 //! pill here is disabled, with the lock on hover (SB-01).
 
 use super::*;
@@ -14,7 +16,7 @@ use grokhub_agent::harness as hx;
 /// The heading over the scope rows, in Settings and in `/privacy`.
 pub(super) const SCOPES_HEAD: &str = "What GrokHub can read";
 /// SB-09: the screen's setting is named in quotes, with where it lives.
-pub(super) const SCOPES_NOTE: &str = "Each is off until you allow it here. Nothing reads them yet: a later update will, and only what you allowed. Screen access is \"Let Grok control the desktop\" in Settings → Cabin defaults.";
+pub(super) const SCOPES_NOTE: &str = "Each is off until you allow it here. What you allow is read on this computer only, sealed, and never on battery or in quiet hours. Screen access is \"Let Grok control the desktop\" in Settings → Cabin defaults.";
 /// Browsers the history row offers: (scope id, name the user reads).
 pub(super) const BROWSERS: &[(&str, &str)] = &[
     ("firefox", "Firefox"),
@@ -50,8 +52,8 @@ fn scope_reads(kind: &str) -> &'static str {
         "files" => "A folder you pick. Never your whole home folder, keys or logins.",
         "apps" => "Installed apps and how often you open them.",
         "browser_history" => "Pages you visited in one browser. Never cookies or saved logins.",
-        // SB-10 TODO: name the calendar source and the mail account once the
-        // Spike-8 readers exist; until then there is nothing to name.
+        // SB-10 TODO: name the calendar source and the mail account once a
+        // cabin-owned reader exists (Spike-8a has none: GB's connectors are outside, D1).
         "calendar" => "Your calendar events.",
         "mail" => "Your mail.",
         "system_state" => "Disk, services, logs and updates. Read only.",
@@ -182,6 +184,7 @@ impl Cabin {
         let on_hint = |at: u64, rest: &str| format!("On since {}. {rest}", grokhub_core::pulse::ago_label(at, now));
         let mut grant: Option<hx::Scope> = None;
         let mut revoke: Option<String> = None;
+        let mut forget: Option<(String, Vec<String>)> = None;
         let mut choose = false;
         for (kind, label) in hx::SCOPE_KINDS {
             ui.push_id(("scope-row", *kind), |ui| {
@@ -202,6 +205,9 @@ impl Cabin {
                         let pill = crate::cards::GrantPill::Revoke;
                         if crate::cards::settings_grant_row(ui, &title, &hint, hover, pill, locked, false, |_| {}) {
                             revoke = Some(g.id.clone());
+                        }
+                        if let Some(ids) = self.ui_scope_facts(ui, &g.source, locked.is_some()) {
+                            forget = Some((g.source.clone(), ids));
                         }
                     });
                 }
@@ -281,6 +287,9 @@ impl Cabin {
         if let Some(id) = revoke {
             self.revoke_other_grant(&id);
         }
+        if let Some((source, ids)) = forget {
+            self.forget_scope_facts(&source, ids);
+        }
     }
 
     /// The folder dialog's answer, once it has one. A cancel leaves the field as is.
@@ -302,8 +311,9 @@ impl Cabin {
         }
     }
 
-    /// The Allow click on a scope row. The only caller of `grant_scope` (rule 4).
-    fn grant_scope_click(&mut self, scope: &hx::Scope) {
+    /// The Allow click on a scope row or on an in-context ask card
+    /// (`paint_scope_asks`). The only caller of `grant_scope` (rule 4).
+    pub(super) fn grant_scope_click(&mut self, scope: &hx::Scope) {
         let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(std::path::PathBuf::from);
         let dir = crate::config::config_dir();
         let label = scope_label(&scope.key());
@@ -317,7 +327,11 @@ impl Cabin {
                 if matches!(scope, hx::Scope::Files(_)) {
                     self.harness.scope_folder.clear();
                 }
-                self.status = format!("{label} allowed. Nothing reads it yet. Revoke it here any time.");
+                self.status = if grokhub_agent::indexers::has_reader(scope) {
+                    format!("{label} allowed. GrokHub learns from it on this computer. Revoke it here any time.")
+                } else {
+                    format!("{label} allowed. Nothing reads it yet. Revoke it here any time.")
+                };
                 self.harness.scope_note = None;
             }
             Err(e) => {

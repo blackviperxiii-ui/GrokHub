@@ -10951,6 +10951,7 @@ fn recall_legacy_finds_memory_line_and_skips_amr() {
             tags: vec!["dock".into()],
             body: "harbor lamp from amr\n".into(),
             sensitivity: grokhub_core::amr::Sensitivity::Plain,
+            consent_ref: String::new(),
         })
         .unwrap();
     cabin.run_slash_line("/recall harbor");
@@ -11002,6 +11003,7 @@ fn recall_amr_returns_seeded_node_not_legacy_memory() {
             tags: vec!["dock".into()],
             body: "pier light stays on\n".into(),
             sensitivity: grokhub_core::amr::Sensitivity::Plain,
+            consent_ref: String::new(),
         })
         .unwrap();
     cabin.run_slash_line("/recall pier");
@@ -11043,6 +11045,7 @@ fn recall_opens_private_notes_and_says_when_they_are_locked() {
             tags: vec![],
             body: "pier nine is home\n".into(),
             sensitivity: grokhub_core::amr::Sensitivity::Personal,
+            consent_ref: String::new(),
         })
         .unwrap();
     let raw = std::fs::read_to_string(root.join("amr/nodes/fact-home.sealed")).unwrap();
@@ -11383,6 +11386,7 @@ fn amr_dream_runs_once_a_night_and_memory_dream_prints_it() {
                 tags: vec![],
                 body: format!("{body}\n"),
                 sensitivity: grokhub_core::amr::Sensitivity::Plain,
+                consent_ref: String::new(),
             })
             .unwrap();
     }
@@ -11680,7 +11684,7 @@ fn privacy_slash_lists_grants_scopes_and_egress_without_content() {
     let text = grokhub_core::strip_slash_result(&body);
     assert!(text.starts_with("/privacy — what leaves this computer\n"), "{text}");
     assert!(text.contains("- Off: Sync to paired computers (/sync asks each time) · Files in a folder · "), "{text}");
-    assert!(text.contains("Nothing reads the folder, app, browser, calendar, mail or system grants yet."), "{text}");
+    assert!(text.contains("Granted folders, apps, browser history and system state are read on this computer only, never on battery or in quiet hours; calendar and mail aren't read yet."), "{text}");
     assert!(text.contains("- api.x.ai · 1 time · chats · default · last just now"), "{text}");
     release_isolated(&root, cabin);
 }
@@ -12221,7 +12225,7 @@ fn a_scope_is_granted_by_a_pointer_click_only_and_revoked_from_settings_or_priva
 
     let p = paint_permissions(&ctx, &mut cabin, vec![]);
     click_at(&ctx, &mut cabin, p.pill_by("Installed apps", "Allow"));
-    assert_eq!(cabin.status, "Installed apps allowed. Nothing reads it yet. Revoke it here any time.");
+    assert_eq!(cabin.status, "Installed apps allowed. GrokHub learns from it on this computer. Revoke it here any time.");
     let ledger = hx::ConsentLedger::load(&root);
     let g = ledger.scope_grant(&hx::Scope::Apps).cloned().expect("apps granted");
     assert_eq!(ledger.active().count(), 1, "one click, one scope");
@@ -12249,7 +12253,7 @@ fn a_scope_is_granted_by_a_pointer_click_only_and_revoked_from_settings_or_priva
     cabin.harness.scope_folder = "/srv/notes/".into();
     let p = paint_permissions(&ctx, &mut cabin, vec![]);
     click_at(&ctx, &mut cabin, p.pill_by("Files in a folder", "Allow"));
-    assert_eq!(cabin.status, "Files in notes allowed. Nothing reads it yet. Revoke it here any time.");
+    assert_eq!(cabin.status, "Files in notes allowed. GrokHub learns from it on this computer. Revoke it here any time.");
     assert!(cabin.harness.scope_folder.is_empty());
     // SB-03 / SB-06: the folder name titles the row, the path is in the hint,
     // and the next folder row reads "Add a folder".
@@ -12476,7 +12480,7 @@ fn privacy_lists_each_scope_once_under_one_grants_heading() {
             "- Files in notes: on since 1m ago",
             "- Off: Sync to paired computers (/sync asks each time) · Installed apps · Browser history · Mail · System state",
             "- Screen: \"Let Grok control the desktop\" in Settings → Cabin defaults (off)",
-            "Nothing reads the folder, app, browser, calendar, mail or system grants yet.",
+            "Granted folders, apps, browser history and system state are read on this computer only, never on battery or in quiet hours; calendar and mail aren't read yet.",
         ]
         .join("\n")
     );
@@ -16609,6 +16613,9 @@ fn quiet_cabin() -> Cabin {
         palette_files_q: String::new(),
         palette_files_root: String::new(),
         palette_file_rx: None,
+        palette_steps: Vec::new(),
+        palette_steps_q: String::new(),
+        palette_step_rx: None,
         shortcuts_open: false,
         active_skill_follow: None,
         card_notes_follow: None,
@@ -16804,6 +16811,7 @@ fn quiet_cabin() -> Cabin {
         perm_always_confirm: None,
         confirm: None,
         jump_last_you: false,
+        jump_turn: None,
         find: super::chat_ui::ChatFind::default(),
         elicit_ask: None,
         elicit_draft: String::new(),
@@ -27487,4 +27495,336 @@ fn heartbeat_halt_skips_every_organ_that_starts_work() {
         halt.find("heartbeat_halt(").expect("halt") < halt.find("halt_work(").expect("work"),
         "Halt holds the pulse before anything else: {halt}"
     );
+}
+
+// Spike-3a: tool steps join History and palette search (legacy mode too),
+// Enter goes back to that chat and turn, and a turn with harness spans leaves
+// one trail node in memory repo mode only.
+fn spike3a_click(chat: &str, turn: u32, ts: u64) -> grokhub_agent::harness::Span {
+    let mut s = grokhub_agent::harness::Span::soft_allow(
+        chat,
+        "click",
+        r#"{"x":40,"y":12}"#,
+        "clicked",
+        "click OK",
+        grokhub_agent::harness::AccessMode::Supervised,
+        "grok_build",
+    )
+    .on_path("A")
+    .in_turn(chat, turn);
+    s.ts_ms = ts;
+    s
+}
+
+fn spike3a_wait(done: &mut dyn FnMut() -> bool) {
+    let start = std::time::Instant::now();
+    while !done() && start.elapsed() < std::time::Duration::from_secs(5) {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn step_search_finds_click_ok_off_the_ui_thread_and_enter_jumps_to_the_turn() {
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("spike3a-search");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(cabin.cfg.memory_backend.is_legacy(), "search needs no memory repo");
+    cabin.threads.clear();
+    let harbor = crate::threads::ChatThread::new("Harbor", false);
+    let pier = crate::threads::ChatThread::new("Pier", false);
+    let mut hidden = crate::threads::ChatThread::new("Hidden", false);
+    hidden.scratch = true;
+    let (harbor_id, pier_id, hidden_id) = (harbor.id.clone(), pier.id.clone(), hidden.id.clone());
+    cabin.threads.push(harbor);
+    cabin.threads.push(pier);
+    cabin.threads.push(hidden);
+    cabin.thread_idx = 0;
+    grokhub_agent::harness::append_span(&root, &spike3a_click(&pier_id, 2, 1_000)).unwrap();
+    grokhub_agent::harness::append_span(&root, &spike3a_click(&hidden_id, 1, 2_000)).unwrap();
+
+    cabin.history_q = "click OK".into();
+    cabin.kick_history_search();
+    assert!(cabin.history_rx.is_some() && cabin.history_hits.is_empty(), "search runs off the UI thread");
+    spike3a_wait(&mut || {
+        cabin.poll_history_search();
+        cabin.history_rx.is_none()
+    });
+    let target = format!("step:2:{pier_id}");
+    assert_eq!(
+        cabin.history_hits,
+        vec![(target.clone(), "Pier · turn 2 · click · allow".to_string())],
+        "the scratch chat's step stays out"
+    );
+    cabin.open_history_hit(&target);
+    assert_eq!(cabin.threads[cabin.thread_idx].id, pier_id);
+    assert_eq!(cabin.jump_turn, Some(2));
+    assert!(matches!(cabin.nav, Nav::Chat));
+
+    // The palette: the same row after the commands, and Enter takes it.
+    cabin.jump_turn = None;
+    let harbor_idx = cabin.threads.iter().position(|t| t.id == harbor_id).unwrap();
+    cabin.switch_thread(harbor_idx);
+    cabin.open_palette();
+    cabin.palette_q = "click OK".into();
+    cabin.kick_palette_steps();
+    spike3a_wait(&mut || {
+        cabin.poll_palette_search();
+        cabin.palette_step_rx.is_none()
+    });
+    assert_eq!(cabin.palette_steps, vec![(target.clone(), "Pier · turn 2 · click · allow".to_string())]);
+    let cmds = grokhub_core::filter_palette(&cabin.palette_q);
+    let pick = super::palette::palette_pick(&cmds, &[], "", &cabin.palette_steps, cmds.len());
+    assert_eq!(pick.as_deref(), Some(target.as_str()));
+    cabin.run_palette(&egui::Context::default(), &target);
+    assert_eq!(cabin.threads[cabin.thread_idx].id, pier_id);
+    assert_eq!(cabin.jump_turn, Some(2));
+    cabin.open_history_hit("step:2:gone-chat");
+    assert_eq!(cabin.status, "That chat is gone");
+
+    // Legacy mode writes no trail.
+    assert!(cabin.write_turn_trail(&pier_id, 2).is_none());
+    cabin.harness_turn_end("Clicked OK.", 2);
+    assert!(!root.join("amr").exists());
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn memory_repo_turn_end_writes_one_trail_and_a_scratch_chat_writes_none() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("spike3a-trail");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    hx::use_key_store_for(&root, std::sync::Arc::new(hx::MemoryKeyStore::new()));
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+    cabin.threads.clear();
+    let dock = crate::threads::ChatThread::new("Dock", false);
+    let mut scratch = crate::threads::ChatThread::new("Scratch", false);
+    scratch.scratch = true;
+    let (dock_id, scratch_id) = (dock.id.clone(), scratch.id.clone());
+    cabin.threads.push(dock);
+    cabin.threads.push(scratch);
+    cabin.thread_idx = 0;
+    hx::append_span(&root, &spike3a_click(&dock_id, 1, 1_791_331_200_000)).unwrap();
+    cabin.harness_turn_end("Clicked OK.", 1);
+    let trail = root.join("amr").join("nodes").join(format!("{}.md", grokhub_core::amr::trail_id(&dock_id, 1)));
+    spike3a_wait(&mut || trail.is_file());
+    let md = std::fs::read_to_string(&trail).unwrap();
+    assert!(
+        md.ends_with(&format!(
+            "---\nTurn 1: 1 step.\nTools: click x1\nDecisions: allow 1\nScreen changed: not measured\nFindings: none\nVerify: none\nSpans: {dock_id}:1791331200000\n"
+        )),
+        "{md}"
+    );
+    assert!(md.contains(&format!("source: span:{dock_id}:1791331200000\n")), "{md}");
+    let trails = |root: &std::path::Path| {
+        std::fs::read_dir(root.join("amr").join("nodes"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("trail-"))
+            .count()
+    };
+    assert_eq!(trails(&root), 1);
+
+    // A scratch chat: same kind of turn, no trail.
+    cabin.thread_idx = 1;
+    hx::append_span(&root, &spike3a_click(&scratch_id, 1, 1_791_331_300_000)).unwrap();
+    assert!(cabin.write_turn_trail(&scratch_id, 1).is_none());
+    cabin.harness_turn_end("Clicked OK.", 1);
+    assert_eq!(trails(&root), 1);
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+#[test]
+fn spike3a_adds_no_nav_page() {
+    // Exhaustive on purpose: a new page fails to compile here.
+    let pages = [
+        Nav::Chat,
+        Nav::Devices,
+        Nav::Memory,
+        Nav::Workboard,
+        Nav::Pulse,
+        Nav::Imagine,
+        Nav::Skills,
+        Nav::Night,
+        Nav::History,
+        Nav::Command,
+        Nav::Connectors,
+        Nav::Agents,
+        Nav::Settings,
+    ];
+    let named: Vec<&str> = pages
+        .iter()
+        .map(|nav| match nav {
+            Nav::Chat => "chat",
+            Nav::Devices => "devices",
+            Nav::Memory => "memory",
+            Nav::Workboard => "workboard",
+            Nav::Pulse => "pulse",
+            Nav::Imagine => "imagine",
+            Nav::Skills => "skills",
+            Nav::Night => "night",
+            Nav::History => "history",
+            Nav::Command => "command",
+            Nav::Connectors => "connectors",
+            Nav::Agents => "agents",
+            Nav::Settings => "settings",
+        })
+        .collect();
+    assert_eq!(named.len(), 13);
+    let _g = crate::config::hold_test_config();
+    let root = crate::config::test_config_root("spike3a-nav");
+    std::env::set_var("GROKHUB_CONFIG", &root);
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.threads.clear();
+    cabin.threads.push(crate::threads::ChatThread::new("Pier", false));
+    let id = cabin.threads[0].id.clone();
+    cabin.open_history_hit(&format!("step:1:{id}"));
+    assert!(matches!(cabin.nav, Nav::Chat), "a step hit opens the chat, not a page of its own");
+    std::env::remove_var("GROKHUB_CONFIG");
+}
+
+// ---- Spike-8a local indexers: the in-context ask card and "Forget these" ----
+
+fn paint_work_cards(ctx: &egui::Context, cabin: &mut Cabin, events: Vec<egui::Event>) -> ScopePaint {
+    fn walk(shape: &egui::Shape, p: &mut ScopePaint) {
+        match shape {
+            egui::Shape::Text(t) => p.texts.push((t.galley.text().to_string(), t.pos + t.galley.rect.center().to_vec2())),
+            egui::Shape::Vec(v) => v.iter().for_each(|c| walk(c, p)),
+            _ => {}
+        }
+    }
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 1200.0))),
+        events,
+        ..Default::default()
+    };
+    let out = crate::theme::test_pass(ctx, input, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| cabin.paint_harness_cards(ui));
+    });
+    let mut p = ScopePaint { texts: Vec::new(), filled: Vec::new() };
+    for clipped in &out.shapes {
+        walk(&clipped.shape, &mut p);
+    }
+    p
+}
+
+fn click_work_card(ctx: &egui::Context, cabin: &mut Cabin, at: egui::Pos2) {
+    let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let _ = paint_work_cards(ctx, cabin, vec![egui::Event::PointerMoved(at)]);
+    let _ = paint_work_cards(ctx, cabin, vec![press(true)]);
+    let _ = paint_work_cards(ctx, cabin, vec![press(false)]);
+}
+
+/// P5: the agent can ask for a scope in context; only the click on the card's
+/// Allow writes the grant. Enter never does, and Not now leaves it off.
+#[test]
+fn a_scope_ask_card_grants_on_a_click_only() {
+    use grokhub_agent::harness as hx;
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("scope-ask");
+    std::fs::create_dir_all(&root).unwrap();
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let ledger = hx::ConsentLedger::load(&root);
+    let why = "To suggest the right app for a task I'd read which apps you have installed.";
+    assert!(cabin.harness.indexer.asks.ask(hx::Scope::Apps, why, &ledger, now_ms()));
+    assert!(cabin.harness.indexer.asks.ask(hx::Scope::SystemState, "To spot a full disk early I'd read your disk and services.", &ledger, now_ms()));
+    assert_eq!(cabin.decisions_waiting(), 2, "asks count as decisions");
+
+    let p = paint_work_cards(&ctx, &mut cabin, vec![]);
+    assert!(p.has("Learn from your computer") && p.has("Allow Installed apps?") && p.has(why), "{:?}", p.texts);
+    assert!(!p.has("Allow System state?"), "one card at a time");
+    // Keys never grant: Tab onto the card and press Enter and Space. (A
+    // focused Not now may answer; that only keeps the scope off.)
+    for _ in 0..6 {
+        let _ = paint_work_cards(&ctx, &mut cabin, vec![key(egui::Key::Tab)]);
+        let _ = paint_work_cards(&ctx, &mut cabin, vec![key(egui::Key::Enter)]);
+        let _ = paint_work_cards(&ctx, &mut cabin, vec![key(egui::Key::Space)]);
+    }
+    assert_eq!(hx::ConsentLedger::load(&root).active().count(), 0, "keyboard never grants");
+    cabin.harness.indexer.asks = Default::default();
+    let ledger = hx::ConsentLedger::load(&root);
+    assert!(cabin.harness.indexer.asks.ask(hx::Scope::Apps, why, &ledger, now_ms()));
+    assert!(cabin.harness.indexer.asks.ask(hx::Scope::SystemState, "To spot a full disk early I'd read your disk and services.", &ledger, now_ms()));
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+
+    let p = paint_work_cards(&ctx, &mut cabin, vec![]);
+    click_work_card(&ctx, &mut cabin, p.at("Allow"));
+    assert_eq!(cabin.status, "Installed apps allowed. GrokHub learns from it on this computer. Revoke it here any time.");
+    assert!(hx::ConsentLedger::load(&root).scope_grant(&hx::Scope::Apps).is_some());
+
+    let p = paint_work_cards(&ctx, &mut cabin, vec![]);
+    assert!(p.has("Allow System state?"));
+    click_work_card(&ctx, &mut cabin, p.at("Not now"));
+    assert_eq!(cabin.status, "System state stays off.");
+    assert_eq!(hx::ConsentLedger::load(&root).scope_grant(&hx::Scope::SystemState), None);
+    assert_eq!(cabin.harness.indexer.asks.len(), 0);
+    assert_eq!(hx::ConsentLedger::load(&root).active().count(), 1);
+    release_isolated(&root, cabin);
+}
+
+/// A granted scope lists what it taught GrokHub; "Forget these" retires them.
+#[test]
+fn a_granted_scope_lists_its_facts_and_forget_these_purges_them() {
+    use grokhub_agent::harness as hx;
+    use grokhub_agent::indexers as idx;
+    struct Mains;
+    impl idx::power::PowerSource for Mains {
+        fn on_battery(&self) -> bool {
+            false
+        }
+    }
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("scope-facts");
+    std::fs::create_dir_all(&root).unwrap();
+    let docs = root.join("fixture-home").join("Documents");
+    std::fs::create_dir_all(docs.join(".ssh")).unwrap();
+    std::fs::write(docs.join("plan.md"), "# Q4 launch plan\n## Budget\n").unwrap();
+    std::fs::write(docs.join("todo.txt"), "Call the venue\n").unwrap();
+    std::fs::write(docs.join(".ssh").join("id_ed25519"), "not a real key\n").unwrap();
+    let scope = hx::Scope::Files(docs.display().to_string());
+    hx::grant_scope(&root, &scope, Some(&root.join("fixture-home")), hx::UserClick::from_click()).unwrap();
+    let dirs = idx::paths::PlatformDirs::from_env();
+    let env = idx::TickEnv {
+        config_dir: &root,
+        now_ms: now_ms(),
+        quiet: false,
+        power: &Mains,
+        fs: &idx::fs::RealFs,
+        probe: &idx::system_state::OsProbe,
+        dirs: &dirs,
+    };
+    let out = idx::Scheduler::default().tick(&env);
+    assert!(matches!(out, idx::TickOutcome::Ran { written: 2, .. }), "{out:?}");
+    cabin.harness.indexer.index = std::sync::Arc::new(idx::ScopeIndex::load(&root));
+
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts_on(&ctx);
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    assert!(p.has("Learned 2 things, sealed on this computer:"), "{:?}", p.texts.iter().map(|t| &t.0).collect::<Vec<_>>());
+    assert!(p.texts.iter().any(|t| t.0.starts_with("File plan.md · ") && t.0.ends_with("title: Q4 launch plan · headings: Budget")));
+    assert!(p.texts.iter().any(|t| t.0.starts_with("File todo.txt · ")));
+    assert!(!p.texts.iter().any(|t| t.0.contains("id_ed25519") || t.0.contains(".ssh")), "hard excludes never show");
+    assert!(p.at(super::indexer_ui::FORGET_THESE).y > p.at("Files in Documents").y, "under its row");
+
+    click_at(&ctx, &mut cabin, p.at(super::indexer_ui::FORGET_THESE));
+    let start = std::time::Instant::now();
+    while cabin.harness.indexer.index.facts.values().any(|v| !v.is_empty()) && start.elapsed() < std::time::Duration::from_secs(4) {
+        cabin.poll_forget();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(cabin.status, "Forgot 2 things learned from Files in Documents. It stays allowed; revoke it to stop reading.");
+    let p = paint_permissions(&ctx, &mut cabin, vec![]);
+    assert!(!p.has(super::indexer_ui::FORGET_THESE));
+    assert!(p.has("Nothing learned to show. GrokHub reads it on a heartbeat, never on battery or in quiet hours."));
+    assert!(hx::ConsentLedger::load(&root).scope_grant(&scope).is_some(), "forgetting is not revoking");
+    assert_eq!(idx::ScopeIndex::load(&root).for_scope(&scope.key()).len(), 0);
+    release_isolated(&root, cabin);
 }

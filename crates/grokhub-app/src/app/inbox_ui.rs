@@ -3,7 +3,8 @@
 //! The needs-attention line ("N things need a decision. Everything else is on
 //! track.") opens into one row per decision on Home (the chat's approval
 //! stack) and the Workboard: hard parks, Grok Build asks, recovery-ladder
-//! pauses, the Grant full offer, and an MCP input ask. Each row says what Grok
+//! pauses, the Grant full offer, an MCP input ask, and a Spike-8a scope ask
+//! (its Approve opens the card, where only a click grants). Each row says what Grok
 //! wants in plain words and which chat it is from, with Approve and Deny.
 //! A row answers through the same function as its card, so both write the
 //! same span and both clear. Clicking a row's words jumps to its card.
@@ -37,6 +38,8 @@ pub(super) enum InboxKey {
     Soft(usize),
     Full,
     Elicit,
+    /// A Spike-8a scope ask. Approve opens its card: only a click there grants.
+    Scope(usize),
 }
 
 impl InboxKey {
@@ -48,6 +51,7 @@ impl InboxKey {
             Self::Soft(_) => "soft",
             Self::Full => "full",
             Self::Elicit => "elicit",
+            Self::Scope(_) => "scope",
         }
     }
 
@@ -163,6 +167,10 @@ impl Cabin {
         if let Some(e) = &self.elicit_ask {
             rows.push(row(InboxKey::Elicit, false, cut(&format!("{} wants input", e.server_name)), self.turn_chat()));
         }
+        for (i, a) in self.harness.indexer.asks.all().iter().enumerate() {
+            let label = super::scope_ui::scope_label(&a.scope.key());
+            rows.push(row(InboxKey::Scope(i), false, cut(&format!("Learn from {label}: {}", a.why)), self.visible_thread_id()));
+        }
         rows
     }
 
@@ -181,6 +189,13 @@ impl Cabin {
                     }
                 }
                 self.elicit_draft.clear();
+            }
+            InboxKey::Scope(_) if approve => self.inbox_jump(key),
+            InboxKey::Scope(i) => {
+                if let Some(a) = self.harness.indexer.asks.all().get(i).cloned() {
+                    self.harness.indexer.asks.remove(&a.scope);
+                    self.status = format!("{} stays off.", super::scope_ui::scope_label(&a.scope.key()));
+                }
             }
         }
     }
@@ -213,6 +228,7 @@ impl Cabin {
                 let p = self.harness.soft_parks.remove(i);
                 self.harness.soft_parks.insert(0, p);
             }
+            InboxKey::Scope(i) => self.harness.indexer.asks.promote(i),
             _ => {}
         }
         self.harness.jump = Some(key.card());
@@ -602,6 +618,42 @@ mod tests {
             let (approve, deny) = row_button_ids(key);
             assert!(ctx.read_response(approve).is_some() && ctx.read_response(deny).is_some(), "{key:?}");
         }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Spike-8a: a scope ask gets a row, but its Approve only opens the card;
+    /// no key or row click grants. Deny leaves the scope off.
+    #[test]
+    fn a_scope_ask_row_opens_its_card_and_never_grants() {
+        let (_pin, root) = pinned("inbox-scope");
+        let mut cabin = Cabin::quiet_for_test();
+        let ledger = hx::ConsentLedger::load(&root);
+        let asks = &mut cabin.harness.indexer.asks;
+        assert!(asks.ask(hx::Scope::Apps, "To suggest the right app I'd read your installed apps.", &ledger, now_ms()));
+        assert!(asks.ask(hx::Scope::SystemState, "To spot a full disk early I'd read your disk.", &ledger, now_ms()));
+        let rows = cabin.inbox_rows();
+        assert_eq!(rows.len(), cabin.decisions_waiting());
+        let shown: Vec<_> = rows.iter().map(|r| (r.key, r.hard, r.what.as_str())).collect();
+        assert_eq!(
+            shown,
+            vec![
+                (InboxKey::Scope(0), false, "Learn from Installed apps: To suggest the right app I'd read your installed apps."),
+                (InboxKey::Scope(1), false, "Learn from System state: To spot a full disk early I'd read your disk."),
+            ]
+        );
+        cabin.harness.inbox_open = true;
+        let ctx = snapped();
+        frame(&ctx, Vec::new(), &mut cabin);
+        let (approve, _) = row_button_ids(InboxKey::Scope(1));
+        ctx.memory_mut(|m| m.request_focus(approve));
+        frame(&ctx, key(egui::Key::Enter), &mut cabin);
+        assert_eq!(hx::ConsentLedger::load(&root).active().count(), 0, "a row never grants");
+        assert_eq!(cabin.harness.jump, Some("scope"));
+        assert_eq!(cabin.harness.indexer.asks.first().map(|a| a.scope.key()).as_deref(), Some("system_state"), "the jumped ask is on the card");
+        cabin.inbox_answer(InboxKey::Scope(1), false);
+        assert_eq!(cabin.status, "Installed apps stays off.");
+        assert_eq!(cabin.inbox_rows().len(), 1);
+        assert_eq!(hx::ConsentLedger::load(&root).active().count(), 0);
         let _ = std::fs::remove_dir_all(root);
     }
 

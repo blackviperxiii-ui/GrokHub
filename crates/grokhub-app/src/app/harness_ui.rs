@@ -237,6 +237,8 @@ pub(super) struct HarnessState {
     /// The last finished reply's prose, for the turn-end audit. `None` when
     /// that turn was not on the visible chat.
     pub last_reply: Option<String>,
+    /// Spike-8a local indexers: the scheduler, the in-memory index, the asks.
+    pub indexer: super::indexer_ui::IndexerUi,
     /// The decision inbox rows are open under the needs-attention line.
     pub inbox_open: bool,
     /// The card an inbox row asked to scroll into view, painted once.
@@ -370,6 +372,7 @@ impl Cabin {
             + usize::from(self.perm_ask.is_some())
             + self.perm_queue.len()
             + usize::from(self.elicit_ask.is_some())
+            + self.harness.indexer.asks.len()
     }
 
     pub(super) fn trace_id(&self) -> String {
@@ -739,6 +742,7 @@ impl Cabin {
             return;
         }
         self.write_span_at(hx::Span::reply(&trace, reply, &self.secret_hold), "audit", turn);
+        let _ = self.write_turn_trail(&trace, turn);
         if !self.harness.soft_parks.is_empty() {
             return;
         }
@@ -765,6 +769,23 @@ impl Cabin {
                 }
             }
         }
+    }
+
+    /// Spike-3a (AMR M4): one `trail` node for this turn, off the UI thread.
+    /// Memory repo mode only; legacy and scratch chats write none. Built from
+    /// spans only (it reads, never runs anything). A sealed trail with no key
+    /// is `Paused` and writes nothing; the turn ends as usual either way.
+    pub(super) fn write_turn_trail(&mut self, chat: &str, turn: u32) -> Option<std::thread::JoinHandle<()>> {
+        if !self.amr_on() || self.scratch() {
+            return None;
+        }
+        let store = self.amr_store(false);
+        let held = self.secret_hold.clone();
+        let dir = crate::config::config_dir();
+        let chat = chat.to_string();
+        Some(std::thread::spawn(move || {
+            let _ = hx::write_trail(&store, &dir, &chat, turn, &held, grokhub_core::now_ms());
+        }))
     }
 
     /// [`Self::harness_turn_end`] on the reply `finish_acp_turn` kept. `turn`
@@ -1237,6 +1258,8 @@ impl Cabin {
                 self.resolve_grant_full(grant, "Jeremy kept Supervised");
             }
         }
+        // Spike-8a: in-context scope asks, same card shape, click only.
+        self.paint_scope_asks(ui);
     }
 
     /// An inbox row asked for this card: bring what was just painted (from
@@ -1255,19 +1278,19 @@ impl Cabin {
 /// White accents on the dark cabin: #E7E9EA ring and title on the surface
 /// fill, the approval enter motion, the thinking rim while a reply runs. No
 /// Thinking label, no pulse at rest.
-struct CardText<'a> {
-    eyebrow: &'a str,
-    title: &'a str,
-    action: &'a str,
-    note: &'a str,
-    primary: &'a str,
-    secondary: &'a str,
+pub(super) struct CardText<'a> {
+    pub(super) eyebrow: &'a str,
+    pub(super) title: &'a str,
+    pub(super) action: &'a str,
+    pub(super) note: &'a str,
+    pub(super) primary: &'a str,
+    pub(super) secondary: &'a str,
     /// Hard: danger Approve, 2px stroke, monospace command. Soft: white primary, proportional.
-    hard: bool,
+    pub(super) hard: bool,
 }
 
 /// Some(true) primary, Some(false) secondary. Click only: no Enter.
-fn harness_card(
+pub(super) fn harness_card(
     ui: &mut egui::Ui,
     id: (&str, String),
     text: CardText<'_>,
@@ -2369,6 +2392,36 @@ mod tests {
         let spans = hx::read_spans(&root, "session").unwrap();
         assert_eq!(spans.last().unwrap().decision, "deny");
         assert_eq!(spans.last().unwrap().result, "Jeremy denied (Esc)");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Spike-5a: a forget the agent starts is a hard Delete card, even under
+    /// Always: Approve and Deny only, and Enter leaves it parked.
+    #[test]
+    fn agent_forget_parks_a_hard_delete_card_enter_cannot_approve() {
+        let (_pin, root) = pinned("agent-forget");
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.permission_mode = PermissionMode::AlwaysApprove;
+        assert_eq!(cabin.harness_precheck(ask(hx::AGENT_FORGET_TOOL, "forget 3 learned notes")), None);
+        assert!(cabin.harness.park.is_some());
+        let (texts, _) = paint_stack(&mut cabin, Vec::new(), 900.0);
+        assert!(texts.iter().any(|t| t == "Delete"), "{texts:?}");
+        let buttons: Vec<_> = texts
+            .iter()
+            .filter(|t| *t == "Approve" || *t == "Deny" || *t == "Always" || *t == "Allow")
+            .cloned()
+            .collect();
+        assert_eq!(buttons, vec!["Approve".to_string(), "Deny".to_string()]);
+        let enter = egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let _ = paint_stack(&mut cabin, vec![enter], 900.0);
+        assert!(cabin.harness.park.is_some(), "Enter must not approve an agent forget");
+        assert_eq!(hx::read_spans(&root, "session").unwrap().last().unwrap().decision, "park");
         let _ = std::fs::remove_dir_all(root);
     }
 
