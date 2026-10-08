@@ -2,8 +2,9 @@
 //!
 //! Local files under `{config}/amr`. Nothing here is synced: do not add `amr/`
 //! to hub sync in M0. A node is plain markdown you can `cat` or commit yourself.
-//! `remember` redacts secrets before the file is written. There is no network,
-//! no daemon, and no sqlite index.
+//! `remember` redacts secrets before the file is written. There is no network
+//! and no daemon. Spike-5a adds `index.sqlite`, an FTS5 index rebuilt from the
+//! plain node files ([`AmrStore::rebuild_index`]); the files stay the truth.
 //!
 //! ```text
 //! amr/
@@ -32,11 +33,21 @@
 //! store's [`Sealer`] (AEAD, key in the OS keyring; grokhub-agent provides
 //! it). No sealer, or a locked one, means [`AmrError::Paused`] and no write.
 //! This crate stays free of crypto: it only calls the trait.
+//!
+//! Spike-5a user model: `fact`, `preference`, `routine`, `need` and
+//! `mind_prior` nodes, written by rule-based signal writers ([`note_chat`],
+//! corrections with `supersedes` / `contradicts` edges, edits, Pulse ledger
+//! lines, card signals, usage), listed with their source by [`memory_rows`],
+//! edited by [`edit_node`] and forgotten by [`forget_node`]. Reflect returns a
+//! [`ReflectDiff`]; nothing writes USER.md on its own.
 
 mod dream;
 mod import;
+mod index;
 mod schema;
+mod signal;
 mod store;
+mod user_model;
 mod write;
 
 pub use dream::{
@@ -45,7 +56,16 @@ pub use dream::{
 };
 pub use import::{durable_chip_prefs, import_legacy, write_import_report, ImportReport, ImportTally};
 pub use schema::{Edge, EdgeRel, Node, NodeDraft, NodeHit, NodeId, NodeType, Sensitivity, AMR_SCHEMA};
+pub use index::{AmrIndex, INDEX_FILE};
+pub use signal::{
+    detect_correction, import_pulse_ledger, note_card_signal, note_chat, note_usage, note_user_edit, pulse_ledger_dual,
+    unsafe_to_learn, user_model_type, ChatLine, Correction, Noted, Usage,
+};
 pub use store::{AmrStore, ForgetReport, RecallReport};
+pub use user_model::{
+    edit_node, forget_node, memory_rows, memory_text, reflect_diff, strip_forgotten, MemoryRow, ReflectDiff, SourceLink,
+    UserForget, REFLECT_MIN_CONFIDENCE,
+};
 pub use write::{line_id, node_type_for, remember_line, sensitivity_for, trail_id, LineWrite, Remembered};
 
 /// `source` of a node a local indexer wrote (Spike-8a): `scope:<scope key>`.
@@ -130,11 +150,19 @@ impl MemoryBackend {
 
 /// Host-facing memory seam (harness design §9.4).
 ///
-/// `recall`, `remember`, `link`, and `forget` (a tombstone, M1). Scratch is
-/// not a trait method: set it on [`AmrStore`] so writes and forgets refuse.
+/// `recall`, `note`, `reflect`, `forget` and `scratch` (Spike-5a), plus the
+/// M0 `remember` and `link`. Scratch is set on [`AmrStore`]; `scratch` reads
+/// it, and every write then refuses.
 pub trait MemoryEngine {
     /// Display lines for `/recall`. An empty store is an empty vec.
     fn recall(&self, query: &str) -> Vec<String>;
+
+    /// Note one chat line during the chat (a correction supersedes).
+    /// Legacy returns [`AmrError::Unsupported`].
+    fn note(&self, line: &ChatLine<'_>, now_ms: u64) -> Result<Noted, AmrError>;
+
+    /// What reflect would change in USER.md. Never writes.
+    fn reflect(&self, user_md: &str) -> ReflectDiff;
 
     /// Write one node. Legacy returns [`AmrError::Unsupported`].
     fn remember(&self, draft: &NodeDraft) -> Result<NodeId, AmrError>;
@@ -145,6 +173,9 @@ pub trait MemoryEngine {
     /// Tombstone one node so recall stops returning it. Legacy returns
     /// [`AmrError::Unsupported`].
     fn forget(&self, id: &str) -> Result<(), AmrError>;
+
+    /// True when this chat is scratch: nothing is written.
+    fn scratch(&self) -> bool;
 }
 
 impl MemoryEngine for AmrStore {
@@ -153,6 +184,14 @@ impl MemoryEngine for AmrStore {
             .into_iter()
             .map(|hit| hit.display())
             .collect()
+    }
+
+    fn note(&self, line: &ChatLine<'_>, now_ms: u64) -> Result<Noted, AmrError> {
+        note_chat(self, line, now_ms)
+    }
+
+    fn reflect(&self, user_md: &str) -> ReflectDiff {
+        reflect_diff(self, user_md)
     }
 
     fn remember(&self, draft: &NodeDraft) -> Result<NodeId, AmrError> {
@@ -165,6 +204,10 @@ impl MemoryEngine for AmrStore {
 
     fn forget(&self, id: &str) -> Result<(), AmrError> {
         AmrStore::forget(self, id)
+    }
+
+    fn scratch(&self) -> bool {
+        self.is_scratch()
     }
 }
 
@@ -191,6 +234,14 @@ impl MemoryEngine for LegacyMemory {
         crate::host_safety::recall_hits(query, &refs)
     }
 
+    fn note(&self, _line: &ChatLine<'_>, _now_ms: u64) -> Result<Noted, AmrError> {
+        Err(AmrError::Unsupported)
+    }
+
+    fn reflect(&self, _user_md: &str) -> ReflectDiff {
+        ReflectDiff::default()
+    }
+
     fn remember(&self, _draft: &NodeDraft) -> Result<NodeId, AmrError> {
         Err(AmrError::Unsupported)
     }
@@ -202,7 +253,14 @@ impl MemoryEngine for LegacyMemory {
     fn forget(&self, _id: &str) -> Result<(), AmrError> {
         Err(AmrError::Unsupported)
     }
+
+    fn scratch(&self) -> bool {
+        false
+    }
 }
+
+#[cfg(test)]
+mod user_model_tests;
 
 #[cfg(test)]
 mod tests {
@@ -232,6 +290,8 @@ Second line.
             confidence: 0.75,
             tags: vec!["ui".into(), "composer".into()],
             body: "Glow stays white.\nSecond line.\n".into(),
+            consent_ref: String::new(),
+            sensitivity: Sensitivity::Plain,
         }
     }
 
@@ -246,6 +306,7 @@ Second line.
             tags: vec!["dock".into()],
             body: body.into(),
             sensitivity: Sensitivity::Plain,
+            consent_ref: String::new(),
         }
     }
 
@@ -592,6 +653,7 @@ Glow stays white.
                 tags: vec!["plain".into(), secret.into()],
                 body: format!("see {secret} now\n"),
                 sensitivity: Sensitivity::Plain,
+                consent_ref: String::new(),
             })
             .unwrap();
         assert_eq!(written.as_str(), "fact-key");
