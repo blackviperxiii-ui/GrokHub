@@ -26,6 +26,7 @@ const READONLY: &[&str] = &[
     "ask_user_question",
     "enter_plan_mode",
     "exit_plan_mode",
+    "diagnose",
 ];
 const EDIT: &[&str] = &["write", "search_replace"];
 const SHELL: &[&str] = &["run_terminal_command"];
