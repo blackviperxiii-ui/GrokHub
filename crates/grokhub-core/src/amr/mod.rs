@@ -46,7 +46,7 @@ pub use dream::{
 pub use import::{durable_chip_prefs, import_legacy, write_import_report, ImportReport, ImportTally};
 pub use schema::{Edge, EdgeRel, Node, NodeDraft, NodeHit, NodeId, NodeType, Sensitivity, AMR_SCHEMA};
 pub use store::{AmrStore, ForgetReport, RecallReport};
-pub use write::{line_id, node_type_for, remember_line, sensitivity_for, LineWrite, Remembered};
+pub use write::{line_id, node_type_for, remember_line, sensitivity_for, trail_id, LineWrite, Remembered};
 
 /// `source` of a node a local indexer wrote (Spike-8a): `scope:<scope key>`.
 /// The dream leaves these alone; "Forget these" in Settings retires them.
