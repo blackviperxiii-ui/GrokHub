@@ -72,6 +72,7 @@ mod mindcheck;
 mod park;
 mod path_d;
 mod proactive;
+mod self_improve;
 mod self_manage;
 mod span;
 mod span_search;
@@ -98,11 +99,15 @@ pub use cua::{
     CUA_MISSING_MSG, CUA_OFF_MSG, CUA_PERMISSION_MODE, CUA_TOOLS,
 };
 pub use changes::{
-    accept_change, change_id, content_hash, entry_id, findings_path, history_dir, ledger_path, read_scope_findings,
+    accept_change, change_id, note_proposal_finding, content_hash, entry_id, findings_path, history_dir, ledger_path, read_scope_findings,
     record_change, record_skill_change, restore_change, restore_skill, scope_guard, skill_history_dir,
     skill_ledger_path, take_self_changes, undo_change, undo_skill_change, Change, ChangeKind, ChangeLedger,
     ChangeOp, ChangeTarget, Reverted, ScopeFinding, SkillTarget, UndoAsk, AUTOMATION_LEDGER_FILE, CHANGES_DIR,
     CONNECTION_LEDGER_FILE, FINDINGS_FILE, HISTORY_CAP, LEDGER_LINE_CAP, LEDGER_SCOPE_VIOLATION, SKILL_LEDGER_FILE,
+};
+pub use self_improve::{
+    last_recorded_run, outcome_from_spans, patch_marks, reject_live_replay, replay_gate, replay_patch, run_weekly,
+    spans_for, ReplayOpts, WeeklyPass, REPLAY_LIVE_REFUSED, REPLAY_TOOL, SELF_REVIEW_SESSION, SELF_REVIEW_TOOL,
 };
 pub use self_manage::{
     automation_cap_refusal, open_connection_token, tool_origin, undo_connection, AutomationsFile, McpFile,
