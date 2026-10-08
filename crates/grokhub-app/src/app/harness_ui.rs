@@ -246,12 +246,12 @@ pub(super) struct HarnessState {
     /// The last finished reply's prose, for the turn-end audit. `None` when
     /// that turn was not on the visible chat.
     pub last_reply: Option<String>,
+    /// Spike-8a local indexers: the scheduler, the in-memory index, the asks.
+    pub indexer: super::indexer_ui::IndexerUi,
     /// The decision inbox rows are open under the needs-attention line.
     pub inbox_open: bool,
     /// The card an inbox row asked to scroll into view, painted once.
     pub jump: Option<&'static str>,
-    /// Spike-8a local indexers: the scheduler, the in-memory index, the asks.
-    pub indexer: super::indexer_ui::IndexerUi,
 }
 
 /// Readonly until the desktop switch is on; Full only after Grant full.

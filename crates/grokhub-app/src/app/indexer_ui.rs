@@ -146,7 +146,9 @@ impl Cabin {
             hard: false,
         };
         let id = ("scope-ask", ask.scope.key());
+        let top = ui.cursor().min.y;
         let answer = super::harness_ui::harness_card(ui, id, text, self.running);
+        self.scroll_if_jumped(ui, "scope", top);
         // A grant takes a pointer click: Enter or Space on a focused Allow does nothing.
         let pointer = ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Primary));
         if let Some(allow) = answer.filter(|allow| !allow || pointer) {

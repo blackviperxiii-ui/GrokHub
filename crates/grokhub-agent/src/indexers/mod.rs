@@ -431,6 +431,19 @@ impl ScopeAsks {
         self.asks.first()
     }
 
+    /// Every pending ask, oldest first.
+    pub fn all(&self) -> &[ScopeAsk] {
+        &self.asks
+    }
+
+    /// Put the `i`th ask on the card slot (the decision inbox jumped to it).
+    pub fn promote(&mut self, i: usize) {
+        if i < self.asks.len() {
+            let a = self.asks.remove(i);
+            self.asks.insert(0, a);
+        }
+    }
+
     /// The card was answered (Allow or Not now).
     pub fn remove(&mut self, scope: &Scope) {
         self.asks.retain(|a| a.scope != *scope);
