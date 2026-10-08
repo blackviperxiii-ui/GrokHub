@@ -89,8 +89,15 @@ fn capitalized(text: &str) -> String {
     }
 }
 
+/// Keys and values you typed into a secret prompt never show on a row. The park
+/// file is scrubbed when it's written; this catches older files and Grok Build asks.
+fn scrub(text: &str, held: &[String]) -> String {
+    grokhub_core::redact_held_secrets(&grokhub_core::redact_secret_words(text), held)
+}
+
 /// A hard park in plain words. A delete names its paths and count.
-pub(super) fn hard_words(class: HardClass, tool: &str, action: &str) -> String {
+pub(super) fn hard_words(class: HardClass, tool: &str, action: &str, held: &[String]) -> String {
+    let action = scrub(action, held);
     let action = if action.trim().is_empty() { tool } else { action.trim() };
     let text = match class {
         HardClass::Delete => {
@@ -113,14 +120,15 @@ pub(super) fn hard_words(class: HardClass, tool: &str, action: &str) -> String {
 }
 
 /// A Grok Build ask in plain words.
-pub(super) fn ask_words(p: &grokhub_acp::PermissionAsk) -> String {
-    let action = p.action.trim();
+pub(super) fn ask_words(p: &grokhub_acp::PermissionAsk, held: &[String]) -> String {
+    let (title, action) = (scrub(&p.title, held), scrub(&p.action, held));
+    let (title, action) = (title.trim(), action.trim());
     let text = if super::harness_ui::is_desktop_ask(p) {
-        format!("Use the desktop: {}", if action.is_empty() { p.title.trim() } else { action })
+        format!("Use the desktop: {}", if action.is_empty() { title } else { action })
     } else if action.is_empty() {
-        p.title.trim().to_string()
+        title.to_string()
     } else {
-        format!("{}: {action}", p.title.trim())
+        format!("{title}: {action}")
     };
     cut(&text)
 }
@@ -152,10 +160,10 @@ impl Cabin {
             chat_id,
         };
         for (i, p) in self.harness.park.iter().chain(self.harness.queue.iter()).enumerate() {
-            rows.push(row(InboxKey::Hard(i), true, hard_words(p.class, &p.tool, &p.action), p.chat_id.clone()));
+            rows.push(row(InboxKey::Hard(i), true, hard_words(p.class, &p.tool, &p.action, &self.secret_hold), p.chat_id.clone()));
         }
         for (i, p) in self.perm_ask.iter().chain(self.perm_queue.iter()).enumerate() {
-            rows.push(row(InboxKey::Ask(i), false, ask_words(p), self.turn_chat()));
+            rows.push(row(InboxKey::Ask(i), false, ask_words(p, &self.secret_hold), self.turn_chat()));
         }
         for (i, p) in self.harness.soft_parks.iter().enumerate() {
             let what = cut(&format!("Paused and needs you: {}", p.reason));
@@ -736,12 +744,27 @@ mod tests {
     }
 
     #[test]
+    fn inbox_rows_scrub_keys_tokens_and_held_secrets() {
+        let held = vec!["hunter2-pin-0042".to_string()];
+        let raw = "curl -H 'Authorization: Bearer abcdefghijklmnopqrstuv' -d sk-abcdefghijklmnopqrstuv ghp_abcdefghijklmnopqrstuvwx hunter2-pin-0042";
+        assert_eq!(
+            hard_words(HardClass::Send, "type", raw, &held),
+            "Send: curl -H 'Authorization: [redacted]' -d [redacted] [redacted] [redacted]"
+        );
+        let p = ask("Run sk-abcdefghijklmnopqrstuv", raw);
+        assert_eq!(
+            ask_words(&p, &held),
+            "Run [redacted]: curl -H 'Authorization: [redacted]' -d [redacted] [redacted] [redacted]"
+        );
+    }
+
+    #[test]
     fn hard_words_say_the_action_plainly() {
-        assert_eq!(hard_words(HardClass::Delete, "delete_files", "delete 2 paths: /a, /b"), "Delete 2 paths: /a, /b");
-        assert_eq!(hard_words(HardClass::Send, "send_email", "to someone"), "Send: to someone");
-        assert_eq!(hard_words(HardClass::Money, "buy", ""), "Spend money: buy");
-        assert_eq!(hard_words(HardClass::Delete, "key", "press Delete on the files selected in Files (the cabin can't see which)"), "Press Delete on the files selected in Files (the cabin can't see which)");
+        assert_eq!(hard_words(HardClass::Delete, "delete_files", "delete 2 paths: /a, /b", &[]), "Delete 2 paths: /a, /b");
+        assert_eq!(hard_words(HardClass::Send, "send_email", "to someone", &[]), "Send: to someone");
+        assert_eq!(hard_words(HardClass::Money, "buy", "", &[]), "Spend money: buy");
+        assert_eq!(hard_words(HardClass::Delete, "key", "press Delete on the files selected in Files (the cabin can't see which)", &[]), "Press Delete on the files selected in Files (the cabin can't see which)");
         let long = "x".repeat(300);
-        assert_eq!(hard_words(HardClass::Send, "t", &long).chars().count(), ROW_CHARS);
+        assert_eq!(hard_words(HardClass::Send, "t", &long, &[]).chars().count(), ROW_CHARS);
     }
 }
