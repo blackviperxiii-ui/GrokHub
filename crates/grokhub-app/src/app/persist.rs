@@ -283,6 +283,7 @@ impl Cabin {
             Ok(mut g) => publish_cfg(&mut g, cfg),
             Err(_) => return,
         };
+        let err = self.persist_err.clone();
         std::thread::spawn(move || {
             let _pin = pin_scheduled_dir(dir.clone());
             let Ok(_disk) = io.lock() else {
@@ -293,9 +294,21 @@ impl Cabin {
                 Err(_) => return,
             };
             if let Some(cfg) = cfg {
-                let _ = config::save_in(&dir, &cfg);
+                note_persist_err(&err, config::save_in(&dir, &cfg), "settings");
             }
         });
+    }
+
+    /// Show a failed background write instead of leaving "Saved" up.
+    pub(super) fn poll_persist_err(&mut self) {
+        let failed = self
+            .persist_err
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take());
+        if let Some(line) = failed {
+            self.status = line;
+        }
     }
 
     /// Hide/quit must not clone every thread when idle persist already wrote.
@@ -311,10 +324,11 @@ impl Cabin {
         let io = self.persist_io.clone();
         let secrets = self.secrets.clone();
         let dir = config::config_dir();
+        let err = self.persist_err.clone();
         std::thread::spawn(move || {
             let _pin = pin_scheduled_dir(dir);
             if let Ok(_g) = io.lock() {
-                let _ = secrets::save(&secrets);
+                note_persist_err(&err, secrets::save(&secrets), "keys");
             }
         });
     }
@@ -369,5 +383,13 @@ impl Cabin {
             let _ = crate::feed::save(&list);
         });
         self.persist_idle_key = self.persist_idle_now();
+    }
+}
+
+fn note_persist_err(slot: &Mutex<Option<String>>, result: Result<(), String>, what: &str) {
+    if let Err(e) = result {
+        if let Ok(mut slot) = slot.lock() {
+            *slot = Some(format!("Could not save {what}: {e}"));
+        }
     }
 }
