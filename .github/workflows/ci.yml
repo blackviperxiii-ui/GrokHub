@@ -24,6 +24,11 @@ env:
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   CARGO_TERM_COLOR: always
 
+# Tests, lint and the Windows release build run side by side, so the wall
+# time is the slowest job, not their sum. `linux` and `windows` keep their
+# names (tests); the lint and release jobs are new checks.
+# Each job restores its own build cache; caches save only from pushes to beta
+# and main, so PRs start warm from their base branch.
 jobs:
   linux:
     runs-on: ubuntu-latest
@@ -31,13 +36,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
       - uses: rui314/setup-mold@v1
-      # Restores on every run; saves only from pushes to beta and main, so PRs
-      # start warm from their base branch.
       - uses: Swatinem/rust-cache@v2
         with:
+          shared-key: linux-test
           cache-on-failure: true
           save-if: ${{ github.event_name == 'push' }}
       - name: Native GUI build deps
@@ -48,9 +50,6 @@ jobs:
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libgl1-mesa-dev libwayland-dev libasound2-dev
       - run: cargo test --workspace --locked -- --test-threads=1
-      # Carcass: deny dead_code workspace-wide. Retired direct-xAI helpers
-      # must be deleted, not allowed.
-      - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo build -p grokhub-app -p grokhub-hub
       - name: Cabin binary exists
         run: test -x target/debug/grokhub && test -x target/debug/grokhub-hub
@@ -72,7 +71,45 @@ jobs:
           fi
           echo "rust-only tree ok"
 
+  linux-lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: rui314/setup-mold@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-lint
+          cache-on-failure: true
+          save-if: ${{ github.event_name == 'push' }}
+      - name: Native GUI build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libgl1-mesa-dev libwayland-dev libasound2-dev
+      # Carcass: deny dead_code workspace-wide. Retired direct-xAI helpers
+      # must be deleted, not allowed.
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
   windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-test
+          cache-on-failure: true
+          save-if: ${{ github.event_name == 'push' }}
+      - run: cargo test --workspace --locked -- --test-threads=1
+
+  windows-lint:
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -82,12 +119,24 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
+          shared-key: windows-lint
           cache-on-failure: true
           save-if: ${{ github.event_name == 'push' }}
-      - run: cargo test --workspace --locked -- --test-threads=1
       # Carcass: deny dead_code workspace-wide. Retired direct-xAI helpers
       # must be deleted, not allowed.
       - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  windows-release:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-release
+          cache-on-failure: true
+          save-if: ${{ github.event_name == 'push' }}
       - run: cargo build --release --locked -p grokhub-app -p grokhub-hub
       - name: Cabin binaries exist
         shell: pwsh
