@@ -82,6 +82,8 @@ pub struct RouteCall<'a> {
     pub hard_tool: bool,
     /// R3b: the call site can send to a provider you added (native calls only).
     pub providers: bool,
+    /// The episode just re-planned: one model and one rung up for this call only.
+    pub step_up: bool,
 }
 
 /// How the call went. Counts and ids only.
@@ -455,7 +457,14 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
                 routine,
                 ..Obs::default()
             };
-            Some(ladder::step(key, r.class, turn, band, start_rung(band, d, steer, true), obs))
+            let mut pick = ladder::step(key, r.class, turn, band, start_rung(band, d, steer, true), obs);
+            if call.step_up {
+                // Only this call: the saved state keeps its rung, so the episode drops back after.
+                pick.rung = (pick.rung + 1).min(band.ceiling.max(band.floor));
+                pick.moved = ladder::Move::Up;
+                pick.rules.push(super::STEP_UP_RULE.into());
+            }
+            Some(pick)
         }
         _ => None,
     };
@@ -531,7 +540,8 @@ pub fn decide(config_dir: &Path, call: &RouteCall<'_>, now_ms: u64) -> Decision 
     } else {
         None
     };
-    if live && !route.no_route && !key.is_empty() {
+    if live && !route.no_route && !key.is_empty() && !call.step_up {
+        // A stepped-up call keeps the episode's own model, so the next call drops back.
         // The plain model: a Fast swap is decided again on every call.
         keep_episode_model(class_key, turn, route.base.as_deref().unwrap_or(&route.model));
     }
