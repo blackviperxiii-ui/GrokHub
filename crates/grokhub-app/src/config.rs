@@ -421,6 +421,10 @@ pub struct AppConfig {
     /// Settings → Screen recording: lets "Record my screen" take stills. Off until turned on.
     #[serde(default)]
     pub screen_record: bool,
+    /// Settings → Quiet self-review: the weekly pass logs its suggestions
+    /// (Settings shows the newest) instead of posting Pulse cards. Off by default.
+    #[serde(default)]
+    pub self_improve_quiet: bool,
     /// Spike-2a flag: Cua Driver as a second pair of hands on Linux
     /// (`grokhub --mcp-cua`). Omitted from `app.json` while false. No Settings control.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -607,6 +611,7 @@ impl Default for AppConfig {
             composer_glow: false,
             desktop_control: false,
             screen_record: false,
+            self_improve_quiet: false,
             cua_driver: false,
             cua_driver_path: String::new(),
             theme: default_theme(),

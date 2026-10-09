@@ -577,6 +577,7 @@ impl Cabin {
                                                                 }
                                                             }
                                                             self.ui_dream_time_row(ui);
+                                                            self.ui_quiet_self_review_rows(ui);
                                                             if crate::cards::settings_action(ui, "Setup", "Walk through first-run setup again.", "Open") {
                                                                 self.open_setup(super::setup_wizard::SetupStep::Welcome);
                                                             }
