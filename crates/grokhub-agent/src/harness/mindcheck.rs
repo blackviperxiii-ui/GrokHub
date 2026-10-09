@@ -7,10 +7,13 @@
 //! - each later approve lowers it by 0.05, floor 0;
 //! - a Pulse Dismiss or "Not this" raises it by 0.1, cap 1;
 //! - "Don't do this again" on a Done-for-you card sets it to 1.0 for good
-//!   (Spike-6b): that class never auto-acts again and asks if suggested.
+//!   (Spike-6b): that class never auto-acts again and is never suggested.
+//! - Dismiss on a proactive card (a `dismiss` span) raises it by 0.1 too.
 //!
 //! `p_mind >= 0.2`, an open ask-first window, or no history at all routes to
-//! [`MindRoute::Ask`] (a soft card), never auto. Priors never touch hard
+//! [`MindRoute::Ask`], never auto. For a soft step the cabin shows that as a
+//! one-tap suggestion card that names the item (Harness 7), not an approval
+//! prompt. Priors never touch hard
 //! class: hard spans are not read, and a hard candidate is always Ask (the
 //! gate parks it anyway). MindCheck is a soft-path input to
 //! [`decide`](crate::harness::decide) through [`Step::Proactive`](crate::harness::Step),
@@ -216,8 +219,8 @@ pub fn mind_key(span: &Span) -> String {
     }
 }
 
-/// Deny and approve spans as signals, plus a Done-for-you Undo (`undo`)
-/// and "Don't do this again" (`never`). Hard-class spans are skipped: priors
+/// Deny and approve spans as signals, plus a Done-for-you Undo (`undo`),
+/// "Don't do this again" (`never`) and a proactive card's Dismiss (`dismiss`). Hard-class spans are skipped: priors
 /// never touch hard class. A TTL deny and a Halt are deny spans too.
 pub fn signals_from_spans(spans: &[Span]) -> Vec<MindSignal> {
     spans
@@ -229,6 +232,7 @@ pub fn signals_from_spans(spans: &[Span]) -> Vec<MindSignal> {
                 "approve" => MindEvent::Approve,
                 "undo" => MindEvent::Undo,
                 "never" => MindEvent::Never,
+                "dismiss" => MindEvent::Dismiss,
                 _ => return None,
             };
             Some(MindSignal {
