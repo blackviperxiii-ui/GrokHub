@@ -86,6 +86,7 @@ impl Cabin {
                 self.nav = Nav::Memory;
                 self.status = "Memory".into();
             }
+            Slash::MemoryPrune => self.run_memory_prune(),
             Slash::MemoryDream => {
                 let text = amr_memory::memory_dream_text(&config::config_dir());
                 self.live_mut().push(("assistant".into(), mark_slash_result(&text)));

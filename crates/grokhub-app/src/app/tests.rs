@@ -11339,6 +11339,83 @@ fn last_chat_text(cabin: &Cabin) -> String {
     cabin.messages.last().map(|m| m.1.clone()).unwrap_or_default()
 }
 
+/// Card 12: memory retention runs once a day on its own (no dream, any hour)
+/// and `/memory prune` answers in the chat with what it retired.
+#[test]
+fn amr_retention_prunes_daily_apart_from_dream_and_memory_prune_reports() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = amr_dream_cabin("amr-retention");
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+    assert_eq!(cabin.cfg.amr_retention_days, 90);
+    let store = super::amr_memory::amr_store_at(&root);
+    store.init().unwrap();
+    let now = grokhub_core::now_ms();
+    let day = 86_400_000u64;
+    for (id, body, confidence, age_days) in [
+        ("old-guess", "Maybe the ferry leaves at six", 0.2, 200),
+        ("mid-guess", "Perhaps the tram runs late", 0.2, 40),
+        ("old-fact", "Lives near the north harbor", 0.9, 200),
+    ] {
+        let stamp = grokhub_core::oauth::unix_ms_to_rfc3339(now - age_days * day);
+        store
+            .remember(&grokhub_core::amr::NodeDraft {
+                id: id.into(),
+                node_type: grokhub_core::amr::NodeType::Fact,
+                created: stamp.clone(),
+                updated: stamp,
+                source: "user".into(),
+                confidence,
+                tags: vec![],
+                body: format!("{body}\n"),
+                sensitivity: grokhub_core::amr::Sensitivity::Plain,
+                consent_ref: String::new(),
+            })
+            .unwrap();
+    }
+    let files_before = amr_node_files(&root);
+    let wait = |cabin: &mut Cabin| {
+        for _ in 0..200 {
+            cabin.poll_amr_prune();
+            if !cabin.status.starts_with("Running") && cabin.status.starts_with("Memory retention") {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("retention never finished: {}", cabin.status);
+    };
+
+    let chat_before = cabin.messages.len();
+    cabin.tick_amr_retention("2026-10-09");
+    wait(&mut cabin);
+    assert_eq!(cabin.status, "Memory retention: retired 1 unsure note not updated in 90 days, kept 2.");
+    assert_eq!(cabin.messages.len(), chat_before, "the daily run posts no chat line");
+    assert!(store.is_forgotten("old-guess"));
+    assert!(!store.is_forgotten("mid-guess") && !store.is_forgotten("old-fact"));
+    assert_eq!(cabin.dream_day, None, "no dream ran");
+    assert!(!root.join("amr").join("dreams").join("2026-10-09.md").exists());
+    assert_eq!(amr_node_files(&root), files_before, "nothing removed from disk");
+    cabin.status.clear();
+    cabin.tick_amr_retention("2026-10-09");
+    cabin.poll_amr_prune();
+    assert_eq!(cabin.status, "", "once a day");
+
+    cabin.cfg.amr_retention_days = 0;
+    cabin.run_slash_line("/memory prune");
+    wait(&mut cabin);
+    assert!(last_chat_text(&cabin).ends_with("Memory retention: keeping everything (2 notes)."), "{}", last_chat_text(&cabin));
+
+    cabin.cfg.amr_retention_days = 30;
+    cabin.run_slash_line("/memory prune");
+    wait(&mut cabin);
+    assert!(
+        last_chat_text(&cabin).ends_with("Memory retention: retired 1 unsure note not updated in 30 days, kept 1."),
+        "{}",
+        last_chat_text(&cabin)
+    );
+    assert!(store.is_forgotten("mid-guess") && !store.is_forgotten("old-fact"));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn amr_dream_runs_once_a_night_and_memory_dream_prints_it() {
     let _g = crate::config::hold_test_config();
@@ -16817,6 +16894,7 @@ fn quiet_cabin() -> Cabin {
         reflect_rx: None,
         amr_imported: false,
         dream_day: None,
+        amr_prune: amr_memory::AmrPrune::default(),
         session_show_rx: None,
         import_rx: None,
         inspect_text: String::new(),
