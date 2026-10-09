@@ -69,10 +69,6 @@ impl Policy {
     pub fn auto_writes_skill(self) -> bool {
         matches!(self.skill_write, SkillWrite::Auto)
     }
-
-    pub fn stages_skill(self) -> bool {
-        matches!(self.skill_write, SkillWrite::Stage)
-    }
 }
 
 

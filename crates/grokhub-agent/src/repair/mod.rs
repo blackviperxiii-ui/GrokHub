@@ -29,7 +29,7 @@ pub use interpret::{
     interpret, Finding, ProbeOutput, Severity, DISK_CRIT_PCT, DISK_WARN_PCT, LOG_WARN_LINES, MEM_WARN_PCT,
 };
 pub use probes::{
-    on_path, probe_spec, probe_spec_with, read_only_violation, Os, PackageManager, ProbeId, ProbeSpec,
+    on_path, probe_spec_with, read_only_violation, Os, PackageManager, ProbeId, ProbeSpec,
     LINUX_PROBES, LOG_LINE_CAP, OUTPUT_CAP, PROBE_TIMEOUT, WINDOWS_PROBES,
 };
 pub use run::{redact_output, run_spec, ProbeRun};

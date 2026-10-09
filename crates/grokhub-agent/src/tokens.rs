@@ -24,8 +24,7 @@ pub fn estimate_token_bytes(bytes: u64) -> u64 {
 }
 
 /// Inverse of [`estimate_tokens`]: convert a token budget into a character
-/// budget. Used by skill discovery to size text passages against the model's
-/// context window.
+/// budget.
 #[inline]
 pub fn estimate_chars(tokens: u64) -> u64 {
     tokens.saturating_mul(BYTES_PER_TOKEN)

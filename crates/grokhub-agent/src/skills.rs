@@ -565,7 +565,7 @@ fn credential_name(name: &str) -> bool {
         || (lower.contains("auth") && lower.ends_with(".json"))
 }
 
-fn clip_chars(text: &str, max: usize) -> String {
+pub(crate) fn clip_chars(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         return text.to_string();
     }

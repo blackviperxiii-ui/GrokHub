@@ -3,27 +3,6 @@
 
 use std::path::{Path, PathBuf};
 
-/// Switch, halt, and lock, in that order. Input calls also refuse the lock
-/// screen. Ask stays in [`desktop_mcp_args`](crate::desktop_mcp::desktop_mcp_args):
-/// a broker request cannot supply its own gate.
-pub fn desktop_block_reason(
-    enabled: bool,
-    halted: bool,
-    locked: bool,
-    input: bool,
-) -> Option<&'static str> {
-    if !enabled {
-        return Some(OFF_MSG);
-    }
-    if halted {
-        return Some(HALT_MSG);
-    }
-    if input && locked {
-        return Some(LOCK_MSG);
-    }
-    None
-}
-
 /// Wayland input after the compositor session is up. Order is the fallback order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputRouteId {

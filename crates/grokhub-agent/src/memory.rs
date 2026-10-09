@@ -43,6 +43,7 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use crate::client::{
     CancelToken, ClientError, ContentPart, InputItem, ModelClient, ResponsesRequest,
 };
+use crate::episode::clip_bytes;
 use crate::tokens::{self, estimate_tokens};
 
 /// Hard cap on one memory file, matching the cabin memory editor.
@@ -541,7 +542,7 @@ fn format_injection(snippets: &[String]) -> Option<String> {
         if out.len() + piece.len() + close.len() > max_bytes {
             let room = max_bytes.saturating_sub(out.len() + close.len() + 1);
             if room > 16 {
-                out.push_str(&truncate_bytes(&piece, room));
+                out.push_str(clip_bytes(&piece, room));
                 out.push('\n');
                 added = true;
             }
@@ -644,7 +645,7 @@ fn extract_pending(history: &[InputItem]) -> String {
         };
         parts.push(format!("{label}: {text}"));
     }
-    truncate_bytes(&parts.join("\n"), 8_000)
+    clip_bytes(&parts.join("\n"), 8_000).to_string()
 }
 
 fn dream_prompt(workspace_body: &str, global_body: &str) -> String {
@@ -939,17 +940,6 @@ fn fnv(bytes: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     hash
-}
-
-fn truncate_bytes(text: &str, max: usize) -> String {
-    if text.len() <= max {
-        return text.to_string();
-    }
-    let mut end = max;
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text.get(..end).unwrap_or("").to_string()
 }
 
 #[cfg(test)]

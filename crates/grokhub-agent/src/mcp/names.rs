@@ -6,6 +6,8 @@
 
 use std::collections::HashSet;
 
+use crate::skills::clip_chars;
+
 pub const NAME_MAX: usize = 64;
 const DELIM: &str = "__";
 
@@ -39,13 +41,13 @@ fn unique_name(server: &str, tool: &str, used: &mut HashSet<String>) -> String {
         let room = NAME_MAX.saturating_sub(suffix.len()).max(DELIM.len() + 2);
         let base = fit(server, tool, room);
         let candidate = format!("{base}{suffix}");
-        let candidate = clip_ascii(&candidate, NAME_MAX);
+        let candidate = clip_chars(&candidate, NAME_MAX);
         if claim(&candidate, used) {
             return candidate;
         }
     }
     let fallback = format!("mcp_{}", used.len());
-    let fallback = clip_ascii(&fallback, NAME_MAX);
+    let fallback = clip_chars(&fallback, NAME_MAX);
     used.insert(fallback.clone());
     fallback
 }
@@ -78,11 +80,11 @@ fn fit(server: &str, tool: &str, max: usize) -> String {
     }
     let mut name = format!("{server}{DELIM}{tool}");
     if name.len() > max {
-        name = clip_ascii(&name, max);
+        name = clip_chars(&name, max);
     }
     if !starts_ok(&name) {
         name = format!("m{name}");
-        name = clip_ascii(&name, max);
+        name = clip_chars(&name, max);
     }
     name
 }
@@ -117,10 +119,6 @@ fn starts_ok(name: &str) -> bool {
     name.chars()
         .next()
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-}
-
-fn clip_ascii(name: &str, max: usize) -> String {
-    name.chars().take(max).collect()
 }
 
 pub fn reserved(name: &str) -> bool {

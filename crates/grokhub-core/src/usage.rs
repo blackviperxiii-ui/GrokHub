@@ -103,10 +103,6 @@ pub fn budget_line(day: &UsageDay, cap: u64) -> String {
     )
 }
 
-pub fn usage_day_key(clock_ymd: &str) -> String {
-    clock_ymd.trim().to_string()
-}
-
 pub fn bump_usage(day: &mut UsageDay, bucket: &str) {
     match bucket {
         "imagine" => day.imagine = day.imagine.saturating_add(1),

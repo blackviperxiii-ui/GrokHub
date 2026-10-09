@@ -1129,14 +1129,6 @@ mod tests {
         assert_eq!(rail_icon_for("workboard"), RailIcon::Folder);
         assert_ne!(RailIcon::Search, RailIcon::Compose);
         assert_ne!(RailIcon::Imagine, RailIcon::Grid);
-        let _ = paint_image_mode;
-        let _ = paint_video_mode;
-        let _ = paint_agent_mode;
-        let _ = paint_style_auto;
-        let _ = paint_aspect_rect;
-        let _ = paint_menu_caret;
-        let _ = paint_plus_at;
-        let _ = paint_folder_caret;
         assert_ne!(RailIcon::File, RailIcon::Folder);
     }
 

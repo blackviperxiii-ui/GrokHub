@@ -181,17 +181,6 @@ pub fn approved_cmds(steps: &[HostPlanStep]) -> Vec<String> {
         .collect()
 }
 
-/// YOLO still holds destructive steps when `/approve risky` is on,
-/// and holds anything that leaves the bound project.
-pub fn yolo_plan_split(
-    plan: &[HostPlanStep],
-    risky_only: bool,
-    project_root: &str,
-) -> (Vec<String>, Vec<HostPlanStep>) {
-    let home = crate::user_home().and_then(|p| p.into_os_string().into_string().ok());
-    yolo_plan_split_in(plan, risky_only, project_root, home.as_deref())
-}
-
 pub fn yolo_plan_split_in(
     plan: &[HostPlanStep],
     risky_only: bool,
