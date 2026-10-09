@@ -185,6 +185,7 @@ mod budget_ui;
 mod provider_ui;
 mod repair_ui;
 mod screen_record_ui;
+mod audio_check_ui;
 mod scope_ui;
 mod indexer_ui;
 mod skill_undo;
@@ -806,6 +807,7 @@ pub struct Cabin {
     /// A screen recording in progress (`/record`), with its Stop flag.
     screen_rec: Option<screen_record_ui::LiveRecording>,
     screen_diag_rx: Option<mpsc::Receiver<screen_record_ui::DiagDone>>,
+    audio_check: Option<audio_check_ui::LiveAudioCheck>,
     /// Spike-6b: candidates waiting for the ceiling, today's auto budget,
     /// and the ledger lines auto-acts wrote.
     auto_act: proactive_auto::AutoState,
@@ -1421,6 +1423,7 @@ impl Cabin {
             mcp_doctor_rx: None,
             screen_rec: None,
             screen_diag_rx: None,
+            audio_check: None,
             mcp_status: HashMap::new(),
             scroll_to_hooks: false,
             composer_geom: None,
@@ -1866,6 +1869,7 @@ impl Cabin {
             mcp_doctor_rx: None,
             screen_rec: None,
             screen_diag_rx: None,
+            audio_check: None,
             mcp_status: HashMap::new(),
             scroll_to_hooks: false,
             composer_geom: None,
@@ -5091,6 +5095,7 @@ impl eframe::App for Cabin {
         self.poll_diagnose();
         self.poll_screen_recording(ctx);
         self.poll_screen_diagnosis();
+        self.poll_audio_check(ctx);
         self.poll_native_memory();
         self.drain_native_unattended_usage();
         self.poll_sync();
@@ -5321,6 +5326,7 @@ impl eframe::App for Cabin {
             self.ui_palette(&ctx);
         }
         self.paint_record_indicator(&ctx);
+        self.paint_listen_indicator(&ctx);
         if self.confirm.as_ref().is_some_and(|c| c.paints_overlay()) {
             self.paint_confirm_overlay(&ctx);
         }
