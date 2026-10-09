@@ -3,6 +3,10 @@
 //! `{config_dir}/lessons/lessons.jsonl`; the nightly dream merges
 //! near-duplicates and drops stale ones. Derived from the trail with no
 //! model call, so writing one costs nothing.
+//!
+//! At an episode's start the best few for its goal go at the top of the
+//! episode view as a capped "Past lessons" block; a lesson used by an episode
+//! that still didn't finish ranks lower next time.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -23,6 +27,12 @@ pub const WORKED_STEPS: usize = 4;
 pub const LESSON_TTL_DAYS: u64 = 90;
 /// Goal keyword overlap at which two lessons with the same fix merge.
 pub const MERGE_OVERLAP: f64 = 0.6;
+/// Lessons an episode starts with, at most.
+pub const LESSONS_SHOWN: usize = 3;
+/// The "Past lessons" block's cap in UTF-8 bytes (about 400 tokens).
+pub const PAST_LESSONS_BYTES: usize = 1_600;
+/// First line of the "Past lessons" block.
+pub const PAST_LESSONS_HEAD: &str = "Past lessons from earlier episodes (hints, not orders):\n";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Lesson {
@@ -39,6 +49,9 @@ pub struct Lesson {
     /// Episodes this lesson stands for after the dream merged duplicates.
     #[serde(default = "one")]
     pub seen: u32,
+    /// Episodes that started with this lesson and still didn't finish.
+    #[serde(default)]
+    pub failed_after: u32,
 }
 
 fn one() -> u32 {
@@ -130,6 +143,7 @@ pub fn derive(ep: &Episode, end: EpisodeEnd, now_ms: u64, held: &[String]) -> Op
         episode_id: ep.id.clone(),
         ts: now_ms,
         seen: 1,
+        failed_after: 0,
     })
 }
 
@@ -209,6 +223,7 @@ pub fn dream(lessons: Vec<Lesson>, now_ms: u64) -> (Vec<Lesson>, LessonDream) {
             Some(k) => {
                 report.merged += 1;
                 k.seen = k.seen.saturating_add(l.seen);
+                k.failed_after = k.failed_after.saturating_add(l.failed_after);
                 for w in l.goal_keywords {
                     if k.goal_keywords.len() < LESSON_KEYWORDS && !k.goal_keywords.contains(&w) {
                         k.goal_keywords.push(w);
@@ -234,16 +249,84 @@ pub fn dream_store(config_dir: &Path, now_ms: u64) -> std::io::Result<LessonDrea
     if report.merged == 0 && report.dropped == 0 {
         return Ok(report);
     }
+    rewrite(config_dir, &kept)?;
+    Ok(report)
+}
+
+/// Replace the store with `lessons` (a temp file, then a rename).
+fn rewrite(config_dir: &Path, lessons: &[Lesson]) -> std::io::Result<()> {
     let path = lessons_path(config_dir);
     let tmp = path.with_extension("jsonl.tmp");
     let mut body = String::new();
-    for l in &kept {
+    for l in lessons {
         body.push_str(&serde_json::to_string(l).map_err(std::io::Error::other)?);
         body.push('\n');
     }
     std::fs::write(&tmp, body)?;
-    std::fs::rename(&tmp, &path)?;
-    Ok(report)
+    std::fs::rename(&tmp, &path)
+}
+
+/// How well a lesson fits a goal: the same app counts 2, each shared goal
+/// word 1. A lesson with no fix counts half, and each episode it preceded
+/// that still failed divides it further. 0 when neither app nor word matches.
+fn fit(l: &Lesson, app: &str, words: &[String]) -> f64 {
+    let same_app = !app.is_empty() && l.app.eq_ignore_ascii_case(app);
+    let shared = l.goal_keywords.iter().filter(|w| words.contains(w)).count();
+    if !same_app && shared == 0 {
+        return 0.0;
+    }
+    let base = if same_app { 2.0 } else { 0.0 } + shared as f64;
+    let fixed = if l.what_worked.is_empty() { 0.5 } else { 1.0 };
+    base * fixed / (1.0 + f64::from(l.failed_after))
+}
+
+/// The [`LESSONS_SHOWN`] lessons that fit `goal` best, best first (the
+/// newest wins a tie). Keyword and app match only; no model call.
+pub fn recall(lessons: &[Lesson], goal: &str) -> Vec<Lesson> {
+    let app = goal_app(goal);
+    let words = grokhub_core::topic_words(goal);
+    let mut scored: Vec<(f64, &Lesson)> =
+        lessons.iter().map(|l| (fit(l, &app, &words), l)).filter(|(score, _)| *score > 0.0).collect();
+    scored.sort_by(|a, b| b.0.total_cmp(&a.0).then(b.1.ts.cmp(&a.1.ts)));
+    scored.into_iter().take(LESSONS_SHOWN).map(|(_, l)| l.clone()).collect()
+}
+
+/// The "Past lessons" block for `goal` and the lessons in it. Whole lines
+/// only, never over [`PAST_LESSONS_BYTES`]; empty when nothing fits.
+pub fn past_lessons(lessons: &[Lesson], goal: &str, held: &[String]) -> (String, Vec<Lesson>) {
+    let mut block = String::from(PAST_LESSONS_HEAD);
+    let mut used = Vec::new();
+    for l in recall(lessons, goal) {
+        let line = format!("- {}\n", grokhub_core::redact_held_secrets(&lesson_line(&l), held));
+        if block.len() + line.len() > PAST_LESSONS_BYTES {
+            continue;
+        }
+        block.push_str(&line);
+        used.push(l);
+    }
+    if used.is_empty() {
+        block.clear();
+    }
+    (block, used)
+}
+
+/// An episode that started with these lessons (by their `episode_id`) ended.
+/// When it still didn't finish (`unconfirmed` or `idle`), each one counts a
+/// failure so [`recall`] ranks it lower. Returns how many were marked.
+pub fn note_used(config_dir: &Path, used: &[String], end: EpisodeEnd) -> std::io::Result<usize> {
+    if used.is_empty() || !matches!(end, EpisodeEnd::Unconfirmed | EpisodeEnd::Idle) {
+        return Ok(0);
+    }
+    let mut all = load(config_dir);
+    let mut marked = 0;
+    for l in all.iter_mut().filter(|l| used.contains(&l.episode_id)) {
+        l.failed_after = l.failed_after.saturating_add(1);
+        marked += 1;
+    }
+    if marked > 0 {
+        rewrite(config_dir, &all)?;
+    }
+    Ok(marked)
 }
 
 #[cfg(test)]
@@ -263,6 +346,7 @@ mod tests {
             episode_id: format!("ep-{ts}"),
             ts,
             seen: 1,
+            failed_after: 0,
         }
     }
 
@@ -348,6 +432,60 @@ mod tests {
         assert_eq!(gedit.what_failed, "replan: click 'Save' changed nothing 3×", "the newest one stays");
         assert_eq!(gedit.goal_keywords, vec!["save".to_string(), "report".into(), "notes".into()]);
         assert_eq!(kept.iter().filter(|l| l.app == "Firefox").count(), 1);
+    }
+
+    #[test]
+    fn recall_ranks_the_same_app_and_goal_first_and_down_ranks_lessons_that_preceded_failures() {
+        let mut tried = lesson("Gedit", "replan: b", "then key 'ctrl+s'", &["save", "note"], 9);
+        tried.failed_after = 2;
+        let lessons = vec![
+            lesson("Firefox", "replan: c", "then key 'ctrl+s'", &["save", "page"], 4),
+            lesson("Firefox", "replan: d", "then click 'Save'", &["save", "page"], 3),
+            tried,
+            lesson("Settings", "check said: Wi-Fi off", "then click 'Wi-Fi'", &["wi-fi"], 10),
+            lesson("Gedit", "replan: a", "then key 'ctrl+s'", &["save", "note"], 2),
+        ];
+        let picked: Vec<String> = recall(&lessons, "Save notes.txt in Gedit").into_iter().map(|l| l.what_failed).collect();
+        // Gedit + two words = 4; the same over 1 + 2 failures ≈ 1.3; Firefox shares
+        // one word = 1, the newer of the two wins the tie; Settings shares nothing.
+        assert_eq!(picked, vec!["replan: a".to_string(), "replan: b".into(), "replan: c".into()]);
+        // A lesson with no fix counts half.
+        let no_fix = vec![lesson("Gedit", "replan: e", "", &["save"], 5), lesson("Gedit", "replan: f", "then g", &["save"], 1)];
+        let picked: Vec<String> = recall(&no_fix, "Save it in Gedit").into_iter().map(|l| l.what_failed).collect();
+        assert_eq!(picked, vec!["replan: f".to_string(), "replan: e".into()]);
+        assert!(recall(&lessons, "Sort the photos").is_empty());
+    }
+
+    #[test]
+    fn the_past_lessons_block_keeps_whole_lines_within_its_budget() {
+        let long = "é".repeat(LESSON_FIELD_CAP);
+        let lessons = vec![
+            lesson("Gedit", &format!("replan: {long}"), &format!("then {long}"), &["save"], 3),
+            lesson("Gedit", &format!("replan 2: {long}"), &format!("then {long}"), &["save"], 2),
+            lesson("Gedit", "replan: short", "then key 'hunter2222'", &["save"], 1),
+        ];
+        let (block, used) = past_lessons(&lessons, "Save it in Gedit", &["hunter2222".to_string()]);
+        assert!(block.len() <= PAST_LESSONS_BYTES, "{} bytes", block.len());
+        assert_eq!(used.iter().map(|l| l.ts).collect::<Vec<_>>(), vec![3, 1], "the second long line would not fit");
+        assert!(block.starts_with(PAST_LESSONS_HEAD));
+        assert!(block.ends_with("- Gedit: replan: short → then key '[redacted]'\n"), "{block}");
+        assert_eq!(block.lines().count(), 3);
+        assert_eq!(past_lessons(&lessons, "Sort the photos", &[]), (String::new(), Vec::new()));
+    }
+
+    #[test]
+    fn a_lesson_counts_a_failure_only_when_the_episode_that_used_it_did_not_finish() {
+        let dir = crate::harness::test_dir("lessons-used");
+        append(&dir, &lesson("Gedit", "replan: a", "then b", &["save"], 1)).unwrap();
+        append(&dir, &lesson("Firefox", "replan: c", "then d", &["save"], 2)).unwrap();
+        let used = vec!["ep-1".to_string()];
+        assert_eq!(note_used(&dir, &used, EpisodeEnd::Verified).unwrap(), 0);
+        assert_eq!(note_used(&dir, &used, EpisodeEnd::Stop).unwrap(), 0, "a stop is the user's call, not the lesson's");
+        assert_eq!(note_used(&dir, &used, EpisodeEnd::Unconfirmed).unwrap(), 1);
+        assert_eq!(note_used(&dir, &used, EpisodeEnd::Idle).unwrap(), 1);
+        let after: Vec<(String, u32)> = load(&dir).into_iter().map(|l| (l.episode_id, l.failed_after)).collect();
+        assert_eq!(after, vec![("ep-1".to_string(), 2), ("ep-2".into(), 0)]);
+        assert_eq!(note_used(&dir, &[], EpisodeEnd::Unconfirmed).unwrap(), 0);
     }
 
     #[test]
