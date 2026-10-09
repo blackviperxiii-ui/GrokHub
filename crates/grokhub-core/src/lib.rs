@@ -137,7 +137,7 @@ pub use chat::{
     chat_request_body_for_mode, chat_request_body_vision, chat_timeout_secs, effective_chat_mode,
     effort_label, extract_host_cmds, failover_model, is_composer_ladder_model, model_for_mode,
     needs_auth_banner, paint_connect_banner, parse_chat_content, parse_chat_reasoning,
-    parse_model_reasoning, parse_model_text, parse_reasoning_effort, parse_responses_reasoning,
+    accepts_reasoning_effort, parse_model_reasoning, parse_model_text, parse_reasoning_effort, parse_responses_reasoning,
     parse_responses_text, reasoning_effort_for_mode, resolve_chat_model, responses_request_body,
     responses_url, route_auto_mode, settings_pin_blocks_auto, should_failover_status,
     BACKGROUND_EFFORT, CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, DEFAULT_MODEL, REASONING_EFFORTS,
@@ -182,7 +182,7 @@ pub use chat_view::{
     SKILL_SAVED_MARK, SKILL_SAVED_NOTE, THOUGHT_CLUSTER_GAP, THOUGHT_ROW_LABEL,
 };
 pub use cabin_engine::{absorb_cabin, brief_for, engine_slug, note_part, CabinDirective, PartNote};
-pub use channel::{auto_off_target, beta_caught_up_to_main, channel_status_line, channel_switch_fail_hint, channel_switch_preflight, channel_switch_shell, parse_version_line, update_fail_hint, version_line, BuildVersion, Channel, ChannelTips, CHANNEL_AUTO_OFF_NOTE, CHANNEL_RECEIPT, CHANNEL_WINDOWS_NOTE};
+pub use channel::{auto_off_step, beta_caught_up_to_main, channel_status_line, channel_switch_fail_hint, channel_switch_preflight, channel_switch_shell, parse_version_line, update_fail_hint, version_line, AutoOffStep, BuildVersion, Channel, ChannelTips, CHANNEL_AUTO_OFF_NOTE, CHANNEL_BETA_SINCE, CHANNEL_RECEIPT, CHANNEL_WINDOWS_NOTE};
 pub use chips::{
     build_quick_chips, cabin_pace, chip_dismissed_for_good, chip_memory_key, chip_scan,
     local_lessons,

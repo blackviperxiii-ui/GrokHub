@@ -125,9 +125,30 @@ fn listed_state(meta: &ModelMeta, api: bool, rec: &ModelRecord, now_ms: u64) -> 
     (ModelState::Live, "In your model list.".into())
 }
 
+/// A call that answered OK this recently keeps a named model out of Ghost.
+const ANSWERED_RECENTLY_MS: u64 = 24 * 60 * 60 * 1000;
+
+fn answered_since(rec: &ModelRecord, since_ms: u64) -> bool {
+    rec.health.recent.iter().any(|m| m.ok && m.ts_ms >= since_ms)
+}
+
 impl Registry {
+    /// The record for `id`, or for the listed model that carries `id` as an
+    /// alias when `id` itself isn't listed (a pin on `grok-4.7-latest`).
     pub fn get(&self, id: &str) -> Option<&ModelRecord> {
-        self.models.get(id.trim())
+        self.models.get(self.canonical(id))
+    }
+
+    /// `id`, or the listed model that names it as an alias.
+    pub fn canonical<'a>(&'a self, id: &'a str) -> &'a str {
+        let id = id.trim();
+        if self.models.get(id).is_some_and(|r| !r.sources.is_empty() && r.absent_since_ms == 0) {
+            return id;
+        }
+        self.models
+            .iter()
+            .find(|(key, r)| key.as_str() != id && !r.sources.is_empty() && r.absent_since_ms == 0 && r.meta.aliases.iter().any(|a| a == id))
+            .map_or(id, |(key, _)| key.as_str())
     }
 
     /// In your own fresh list right now.
@@ -209,6 +230,18 @@ impl Registry {
             let (to, reason) = listed_state(meta, api, rec, now_ms);
             Self::set_state(rec, to, reason, now_ms, &mut events);
         }
+        // An id the fresh list only carries as another model's alias.
+        let aliased: Vec<&str> = merged
+            .values()
+            .flat_map(|(meta, _)| meta.aliases.iter().map(String::as_str))
+            .filter(|a| !merged.contains_key(*a))
+            .collect();
+        let stale: Vec<String> = self.models.keys().filter(|id| aliased.contains(&id.as_str())).cloned().collect();
+        for id in stale {
+            // A bare record a call or pin made for an alias: the listed model stands for it.
+            self.models.remove(&id);
+            events.push(RegistryEvent::Deleted { id });
+        }
         for (id, rec) in self.models.iter_mut() {
             if merged.contains_key(id) {
                 continue;
@@ -217,10 +250,15 @@ impl Registry {
             if rec.absent_since_ms == 0 {
                 rec.absent_since_ms = now_ms;
             }
-            if named.iter().any(|n| n.trim() == id) && was_absent {
+            let named_here = named.iter().any(|n| n.trim() == id);
+            if named_here && was_absent && answered_since(rec, now_ms.saturating_sub(ANSWERED_RECENTLY_MS)) {
+                Self::set_state(rec, ModelState::Live, "It isn't listed, but it answered in the last day.".into(), now_ms, &mut events);
+            } else if named_here && was_absent {
                 Self::set_state(rec, ModelState::Ghost, "A pin, default, skill or automation names it, but no source lists it.".into(), now_ms, &mut events);
             } else if now_ms.saturating_sub(rec.absent_since_ms) >= PRUNE_AFTER_MS {
                 Self::set_state(rec, ModelState::Pruned, "No source has listed it for 30 days.".into(), now_ms, &mut events);
+            } else if was_absent && rec.state == ModelState::Live && answered_since(rec, now_ms.saturating_sub(ANSWERED_RECENTLY_MS)) {
+                // Unlisted but answering as itself (see `health::observe`): it stays routable.
             } else if !matches!(rec.state, ModelState::NotInPlan | ModelState::Ghost | ModelState::Pruned) {
                 events.push(RegistryEvent::Removed { id: id.clone() });
                 Self::set_state(rec, ModelState::NotInPlan, "It isn't in your own fresh model list.".into(), now_ms, &mut events);
@@ -243,7 +281,7 @@ impl Registry {
         }
         for name in named {
             let id = name.trim();
-            if id.is_empty() || self.models.contains_key(id) || merged.contains_key(id) {
+            if id.is_empty() || self.models.contains_key(id) || merged.contains_key(id) || aliased.contains(&id) {
                 continue;
             }
             let mut rec = ModelRecord { meta: ModelMeta::bare(id), first_seen_ms: now_ms, absent_since_ms: now_ms, ..ModelRecord::default() };
@@ -263,7 +301,8 @@ impl Registry {
         let mut events = Vec::new();
         let mut signal = false;
         for obs in observations {
-            let id = obs.model.trim();
+            let id = self.canonical(obs.model.trim()).to_string();
+            let id = id.as_str();
             if id.is_empty() {
                 continue;
             }
@@ -528,12 +567,15 @@ mod tests {
         // The first strike quarantines it, the second makes it a ghost.
         assert_eq!(ev.len(), 2);
         assert_eq!(reg.get("grok-4.7").unwrap().state, ModelState::Ghost);
-        // An unlisted slug that still answers is redirected.
+        // An unlisted slug that answers as itself stays routable (2.10.97: it was an
+        // unroutable Redirected with no successor, which dropped a working pin).
         let mut unlisted = o(CallStatus::Ok, 30);
         unlisted.model = "grok-secret".into();
         let (_, signal) = reg.fold(&[unlisted]);
-        assert!(signal);
-        assert_eq!(reg.get("grok-secret").unwrap().state, ModelState::Redirected);
+        assert!(!signal, "no not-found and no redirect");
+        let rec = reg.get("grok-secret").unwrap();
+        assert_eq!((rec.state, rec.reason.as_str()), (ModelState::Live, "It isn't listed, but it answers as itself."));
+        assert!(rec.state.routable());
     }
 
     #[test]
