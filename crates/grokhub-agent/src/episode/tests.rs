@@ -476,7 +476,7 @@ fn halt_while_a_step_waits_past_its_ttl_denies_it() {
     assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Waiting);
     r.desk.halt.store(true, Ordering::SeqCst);
     assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Halt));
-    let last_deny = r.spans().into_iter().filter(|s| s.decision == "deny").last().unwrap();
+    let last_deny = r.spans().into_iter().rev().find(|s| s.decision == "deny").unwrap();
     assert_eq!((last_deny.tool.as_str(), last_deny.result.as_str()), ("click", "halt — fail-closed Deny"));
     assert_eq!(*r.parks.withdrawn.lock().unwrap(), vec![format!("{PARK_PREFIX}{}-8", ep.id)]);
     // An approve that lands after the halt finds nothing to run.

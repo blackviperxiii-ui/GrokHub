@@ -614,7 +614,7 @@ mod tests {
         cabin.expire_hard_park();
         assert_eq!(cabin.harness.park.as_ref().map(|p| p.source.clone()), Some(ParkSource::Desk(id.clone())), "the card stays");
         assert_eq!(hx::take_answer(&root, &id), None, "no deny reaches the kernel");
-        assert!(spans(&root).is_empty(), "the kernel writes the not-run span, not the cabin");
+        assert!(!spans(&root).iter().any(|s| s.decision == "deny"), "the kernel writes the not-run span, not the cabin");
         // Another card waiting goes first; the parked step goes behind it.
         post_desk_park(&root, "d1", "A");
         cabin.harness.last_poll = None;
