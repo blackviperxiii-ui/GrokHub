@@ -91,11 +91,12 @@ pub(super) fn dual_read_hits(amr: Vec<String>, legacy: Vec<String>) -> Vec<Strin
     out
 }
 
-/// `/memory dream`: the newest `amr/dreams/<date>.md`, or "No dream yet".
-/// Reads only, so legacy never creates `amr/`.
+/// `/memory dream`: the newest `amr/dreams/<date>.md` under a "What changed"
+/// block, or "No dream yet". Reads only, so legacy never creates `amr/`.
 pub(super) fn memory_dream_text(config_dir: &std::path::Path) -> String {
+    use grokhub_core::what_changed as wc;
     match grokhub_core::amr::latest_dream(&config_dir.join("amr")) {
-        Some((_, text)) => text,
+        Some((_, text)) => wc::with_block(&wc::from_dream(&text), &text),
         None => "No dream yet. GrokHub dreams once a night after the review, in memory repo mode.".into(),
     }
 }
