@@ -273,6 +273,8 @@ fn at_100_percent_background_pauses_and_chat_asks_until_you_say_go_on() {
     let chat = live::decide(&dir, &call("chat:default"), now);
     assert_eq!((chat.paused(), chat.pause_msg()), (true, BUDGET_PAUSE_MSG));
     assert!(live::take_budget_ask());
+    // A budget pause is not a no-route wait: it never retries on its own, it waits for you.
+    assert_eq!(live::take_no_route(), None);
     // You said to keep going this week: chat goes, background still waits.
     BudgetNotes { go_on_week: budget::week_of(now), ..BudgetNotes::default() }.save(&dir);
     assert!(!live::decide(&dir, &call("chat:default"), now).paused());

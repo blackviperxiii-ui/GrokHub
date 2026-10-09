@@ -104,6 +104,7 @@ pub(super) enum PulseAct {
     NeverAgain(String),
     Retry(String),
     DeleteRecording(String),
+    RetryNow,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -588,6 +589,8 @@ pub(super) enum FeedPostAct {
     Retry,
     /// Screen recording card: delete its folder (after a confirm).
     DeleteRecording,
+    /// No-route wait card: check the models now.
+    RetryNow,
 }
 
 /// Open and Retry on a crash card (a run killed from outside, exit 143).
@@ -606,6 +609,14 @@ fn paint_crash(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct> {
         }
     });
     act
+}
+
+/// Retry now on a no-route wait card; the wait also retries on its own.
+fn paint_model_wait(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct> {
+    if !grokhub_core::is_model_wait_card(card) || card.status == grokhub_core::UpdateStatus::Dismissed {
+        return None;
+    }
+    super::change_undo::click_pill(ui, "Retry now").then_some(FeedPostAct::RetryNow)
 }
 
 /// Open and Delete recording on a screen recording card.
@@ -720,6 +731,9 @@ pub(super) fn paint_post_body(
     }
     if let Some(rec) = paint_recording(ui, card) {
         act = Some(rec);
+    }
+    if let Some(wait) = paint_model_wait(ui, card) {
+        act = Some(wait);
     }
     act
 }
@@ -1195,6 +1209,7 @@ impl Cabin {
                         FeedPostAct::Open => PulseAct::Open(card.id.clone()),
                         FeedPostAct::Retry => PulseAct::Retry(card.id.clone()),
                         FeedPostAct::DeleteRecording => PulseAct::DeleteRecording(card.id.clone()),
+                        FeedPostAct::RetryNow => PulseAct::RetryNow,
                     });
                 }
             });
@@ -1466,6 +1481,7 @@ impl Cabin {
             PulseAct::NeverAgain(id) => self.done_for_you_never(&id),
             PulseAct::Retry(id) => self.crash_retry(&id),
             PulseAct::DeleteRecording(id) => self.arm_delete_recording(&id),
+            PulseAct::RetryNow => self.retry_model_wait_now(),
             PulseAct::Link(url) => {
                 self.follow_update_action(Some(UpdateAction::DeepLink { href: url }))
             }
