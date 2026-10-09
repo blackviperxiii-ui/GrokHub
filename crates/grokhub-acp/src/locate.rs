@@ -936,7 +936,9 @@ pub fn cabin_rules(learned: &str) -> String {
 /// One line on the cabin rules while Settings → desktop control is on.
 /// Off stays byte-identical to [`cabin_rules`].
 pub const DESKTOP_CABIN_LINE: &str =
-    "Prefer the grokhub-desktop tools over shell xdotool or PowerShell for the screen.";
+    "Prefer the grokhub-desktop tools over shell xdotool or PowerShell for the screen. \
+     Take a screenshot only when the task needs to see the screen, never for a greeting or plain chat. \
+     If a screenshot fails, do not try it again; say what blocked it.";
 
 pub fn cabin_rules_for(learned: &str, desktop: bool) -> String {
     let base = cabin_rules(learned);
@@ -1535,6 +1537,11 @@ mod tests {
         let armed = cabin_rules_for("", true);
         assert!(armed.starts_with(CABIN_DESKTOP_RULES));
         assert!(armed.contains(DESKTOP_CABIN_LINE));
+        assert!(armed.ends_with(
+            "\nPrefer the grokhub-desktop tools over shell xdotool or PowerShell for the screen. Take a \
+             screenshot only when the task needs to see the screen, never for a greeting or plain chat. If a \
+             screenshot fails, do not try it again; say what blocked it."
+        ));
         assert_ne!(armed, CABIN_DESKTOP_RULES);
         let with = cabin_rules("Around 21:00 they skip night.");
         assert_eq!(cabin_rules_for("Around 21:00 they skip night.", false), with);

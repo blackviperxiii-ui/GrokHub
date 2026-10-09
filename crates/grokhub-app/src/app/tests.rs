@@ -27537,6 +27537,68 @@ fn a_model_written_automation_gets_a_work_row_a_home_update_and_undo() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Bug 4: a routing-table write or an R3a tuning change is tell-only. Each
+/// posts exactly one Home note naming it and makes no Undo/Keep row; the
+/// ledger lines stay for `/why table`. A connection change in the same poll
+/// still gets its Work-tree row and Home update.
+#[test]
+fn router_model_changes_post_one_home_note_and_no_undo_row() {
+    use grokhub_agent::harness as hx;
+    use grokhub_agent::route::{learn, table, tune};
+    use hx::ChangeTarget as _;
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("self-change-model");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.poll_self_changes();
+    assert!(cabin.harness.work_rows.is_empty());
+    let mut t = table::RoutingTable::default();
+    assert_eq!(table::write_table(&root, &mut t, "first build"), Ok(true));
+    let mut tuning = tune::Tuning::default();
+    tuning.starts.insert("chat:default".into(), "high".into());
+    learn::write_tuning(&root, &tuning, "chat:default starts at High").expect("tuning");
+    let mcp = root.join("mcp_test.json");
+    let target = hx::McpFile { path: &mcp, name: "wiki" };
+    hx::record_change(&root, &target, hx::Origin::SelfManage, "you asked for the wiki", || {
+        target.put(Some(br#"{"url":"http://127.0.0.1:9/wiki"}"#))
+    })
+    .expect("connection")
+    .expect("a ledger line");
+    cabin.poll_self_changes();
+    let labels: Vec<&str> = cabin.harness.work_rows.iter().map(|r| r.label.as_str()).collect();
+    assert_eq!(labels, vec!["Grok added connection wiki"], "no Undo/Keep row for router changes");
+    let notes: Vec<(&str, Option<&str>)> = cabin
+        .updates
+        .iter()
+        .filter(|u| u.source_id.starts_with("model:"))
+        .map(|u| (u.title.as_str(), u.body.as_deref()))
+        .collect();
+    assert_eq!(notes.len(), 2, "{notes:?}");
+    assert!(
+        notes.contains(&("Router added routing table", Some("routing table v1: first build · /why table shows the picks."))),
+        "{notes:?}"
+    );
+    assert!(
+        notes.contains(&("Router added router tuning", Some("chat:default starts at High · /why table shows the picks."))),
+        "{notes:?}"
+    );
+    let conn = cabin.updates.iter().find(|u| u.source_id == "connection:wiki").expect("connection Home update");
+    assert_eq!(conn.title, "GrokHub added connection wiki");
+    // The ledger lines stay, so `/why table` and history still read them.
+    let ids: Vec<String> =
+        hx::ChangeLedger::load_kind(&root, hx::ChangeKind::Model).all().iter().map(|c| c.id.clone()).collect();
+    assert_eq!(ids.len(), 2, "{ids:?}");
+    assert!(ids.contains(&"route_tuning".to_string()), "{ids:?}");
+    // Looked again and after a restart: no router row, no second note.
+    cabin.harness.ledger_watch.next_ms = 0;
+    cabin.poll_self_changes();
+    assert_eq!(cabin.updates.iter().filter(|u| u.source_id.starts_with("model:")).count(), 2);
+    let mut fresh = Cabin::quiet_for_test();
+    fresh.poll_self_changes();
+    let labels: Vec<&str> = fresh.harness.work_rows.iter().map(|r| r.label.as_str()).collect();
+    assert_eq!(labels, vec!["Grok added connection wiki"]);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// `/connections changes` and `/automations changes` post the report
 /// bubble; from a scheduled send they still only show rows (no slash undoes).
 #[test]

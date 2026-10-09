@@ -345,7 +345,10 @@ pub fn responses_body(req: &ResponsesRequest) -> Value {
         .as_deref()
         .map(str::trim)
         .map(|e| grokhub_core::parse_reasoning_effort(e).unwrap_or(e));
-    if let Some(effort) = effort.filter(|s| !s.is_empty() && *s != "none") {
+    // Only a model that takes an effort gets one: the rest answer HTTP 400 (2.10.97).
+    // A non-grok id isn't ours to judge.
+    let takes_effort = grokhub_core::accepts_reasoning_effort(model) || !model.to_ascii_lowercase().starts_with("grok-");
+    if let Some(effort) = effort.filter(|s| takes_effort && !s.is_empty() && *s != "none") {
         body["reasoning"] = json!({"effort": effort});
     }
     if has_image {
@@ -415,7 +418,7 @@ impl XaiClient {
         if let GateOutcome::Park { reason, .. } | GateOutcome::Refuse { reason } = egress {
             return Err(ClientError::Protocol(reason));
         }
-        let body = responses_body(req);
+        let body = crate::timing::time("client:body", || responses_body(req));
         let mut call = self
             .agent
             .post(&self.url)
@@ -429,7 +432,9 @@ impl XaiClient {
         if let Some(limit) = req.call_timeout {
             call = call.timeout(limit);
         }
+        let sent = crate::timing::lap("client:to_headers");
         let response = call.send_json(body);
+        drop(sent);
         let response = match response {
             Ok(resp) => resp,
             Err(ureq::Error::Status(status, resp)) => {

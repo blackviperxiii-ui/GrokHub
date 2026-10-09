@@ -1,6 +1,8 @@
 //! Capture after KWin ScreenShot2: spectacle, then the Screenshot portal.
+//! Once KWin answers `NoAuthorized` it is not asked again this session.
 //! Route tests use fakes and never launch spectacle or a portal.
 
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -17,6 +19,42 @@ pub(crate) trait ShotRoute: Send {
 pub(crate) struct ShotChain {
     routes: Vec<(CaptureRouteId, Box<dyn ShotRoute>)>,
     active: Option<CaptureRouteId>,
+    /// KWin said `NoAuthorized`: skip ScreenShot2 for the rest of the session.
+    kwin_refused: bool,
+    /// The running binary, named in the fix when KWin refuses.
+    exe: PathBuf,
+}
+
+/// KWin's ScreenShot2 refusal (the `.desktop` match failed).
+fn kwin_refusal(err: &str) -> bool {
+    err.contains("NoAuthorized")
+}
+
+/// The `.desktop` KWin reads for `exe`: `<prefix>/share/applications` for a
+/// `<prefix>/bin` install, else the user's applications dir.
+fn desktop_entry_for(exe: &Path, home: Option<&Path>) -> PathBuf {
+    let prefix = exe
+        .parent()
+        .filter(|dir| dir.file_name().is_some_and(|name| name == "bin"))
+        .and_then(Path::parent);
+    match (prefix, home) {
+        (Some(prefix), _) => prefix.join("share/applications/grokhub.desktop"),
+        (None, Some(home)) => home.join(".local/share/applications/grokhub.desktop"),
+        (None, None) => PathBuf::from("~/.local/share/applications/grokhub.desktop"),
+    }
+}
+
+/// One plain error with the exact fix, when KWin refused and the other routes failed too.
+fn kwin_refused_message(exe: &Path, desktop: &Path) -> String {
+    format!(
+        "KDE refused the screenshot (KWin ScreenShot2: NoAuthorized), and Spectacle and the \
+         Screenshot portal did not work either. GrokHub will not ask KWin again this session. \
+         To fix it, make {desktop} contain the line \
+         X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2 and an absolute Exec={exe}, \
+         run kbuildsycoca6, then restart GrokHub. Do not take another screenshot until then.",
+        desktop = desktop.display(),
+        exe = exe.display(),
+    )
 }
 
 impl ShotChain {
@@ -30,12 +68,15 @@ impl ShotChain {
             routes.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
             capture_route_order()
         );
-        Self { routes, active: None }
+        let exe = std::env::current_exe()
+            .and_then(|path| path.canonicalize())
+            .unwrap_or_else(|_| PathBuf::from("/usr/bin/grokhub"));
+        Self { routes, active: None, kwin_refused: false, exe }
     }
 
     #[cfg(test)]
     pub(crate) fn from_routes(routes: Vec<(CaptureRouteId, Box<dyn ShotRoute>)>) -> Self {
-        Self { routes, active: None }
+        Self { routes, active: None, kwin_refused: false, exe: PathBuf::from("/usr/bin/grokhub") }
     }
 
     #[cfg(test)]
@@ -47,20 +88,39 @@ impl ShotChain {
         if let Some(id) = self.active {
             let route = self.routes.iter_mut().find(|(route_id, _)| *route_id == id);
             if let Some((_, route)) = route {
-                return route.capture(monitor, monitors);
+                match route.capture(monitor, monitors) {
+                    Err(err) if id == CaptureRouteId::ScreenShot2 && kwin_refusal(&err) => {
+                        self.kwin_refused = true;
+                        self.active = None;
+                    }
+                    done => return done,
+                }
             }
         }
         let mut failures = Vec::new();
         for index in 0..self.routes.len() {
             let id = self.routes[index].0;
+            if id == CaptureRouteId::ScreenShot2 && self.kwin_refused {
+                continue;
+            }
             match self.routes[index].1.capture(monitor, monitors) {
                 Ok(shot) => {
                     self.active = Some(id);
                     super::publish_capture_backend(capture_route_label(id));
                     return Ok(shot);
                 }
-                Err(err) => failures.push(err),
+                Err(err) => {
+                    if id == CaptureRouteId::ScreenShot2 && kwin_refusal(&err) {
+                        self.kwin_refused = true;
+                    }
+                    failures.push(err);
+                }
             }
+        }
+        if self.kwin_refused {
+            let home = std::env::var_os("HOME").map(PathBuf::from);
+            let desktop = desktop_entry_for(&self.exe, home.as_deref());
+            return Err(kwin_refused_message(&self.exe, &desktop));
         }
         Err(failures.join(" "))
     }
@@ -319,6 +379,17 @@ mod tests {
         log: std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
     }
 
+    struct Refuse {
+        log: std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
+    }
+
+    impl ShotRoute for Refuse {
+        fn capture(&mut self, _monitor: &str, _monitors: &[MonitorGeom]) -> Result<CapturedShot, String> {
+            self.log.lock().unwrap_or_else(|err| err.into_inner()).push("kwin");
+            Err("ScreenShot2: org.kde.KWin.ScreenShot2.Error.NoAuthorized: The process is not authorized to take a screenshot".into())
+        }
+    }
+
     impl ShotRoute for Script {
         fn capture(&mut self, _monitor: &str, _monitors: &[MonitorGeom]) -> Result<CapturedShot, String> {
             self.log.lock().unwrap_or_else(|err| err.into_inner()).push(self.name);
@@ -359,5 +430,63 @@ mod tests {
         chain.capture("all", &[]).unwrap();
         let seen = log.lock().unwrap_or_else(|err| err.into_inner()).clone();
         assert_eq!(seen, vec!["kwin", "spectacle", "portal", "portal"]);
+    }
+
+    #[test]
+    fn kwin_refused_once_is_not_asked_again_and_the_error_names_the_fix() {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut chain = ShotChain::from_routes(vec![
+            (CaptureRouteId::ScreenShot2, Box::new(Refuse { log: log.clone() })),
+            (CaptureRouteId::Spectacle, Box::new(Script { name: "spectacle", fail: true, log: log.clone() })),
+            (CaptureRouteId::PortalScreenshot, Box::new(Script { name: "portal", fail: true, log: log.clone() })),
+        ]);
+        let first = chain.capture("all", &[]).unwrap_err();
+        let want = "KDE refused the screenshot (KWin ScreenShot2: NoAuthorized), and Spectacle and the \
+                    Screenshot portal did not work either. GrokHub will not ask KWin again this session. \
+                    To fix it, make /usr/share/applications/grokhub.desktop contain the line \
+                    X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2 and an absolute \
+                    Exec=/usr/bin/grokhub, run kbuildsycoca6, then restart GrokHub. Do not take \
+                    another screenshot until then.";
+        assert_eq!(first, want);
+        let second = chain.capture("all", &[]).unwrap_err();
+        assert_eq!(second, want);
+        let seen = log.lock().unwrap_or_else(|err| err.into_inner()).clone();
+        assert_eq!(seen, vec!["kwin", "spectacle", "portal", "spectacle", "portal"]);
+        assert_eq!(chain.label(), None);
+    }
+
+    #[test]
+    fn kwin_refused_then_portal_still_captures_without_asking_kwin() {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut chain = ShotChain::from_routes(vec![
+            (CaptureRouteId::ScreenShot2, Box::new(Refuse { log: log.clone() })),
+            (CaptureRouteId::Spectacle, Box::new(Script { name: "spectacle", fail: true, log: log.clone() })),
+            (CaptureRouteId::PortalScreenshot, Box::new(Script { name: "portal", fail: false, log: log.clone() })),
+        ]);
+        assert_eq!(chain.capture("all", &[]).unwrap().geom.id, "portal");
+        assert_eq!(chain.label(), Some("portal Screenshot"));
+        let seen = log.lock().unwrap_or_else(|err| err.into_inner()).clone();
+        assert_eq!(seen, vec!["kwin", "spectacle", "portal"]);
+    }
+
+    #[test]
+    fn desktop_entry_follows_the_install_prefix() {
+        let home = Path::new("/home/jeremy");
+        assert_eq!(
+            desktop_entry_for(Path::new("/usr/bin/grokhub"), Some(home)),
+            PathBuf::from("/usr/share/applications/grokhub.desktop")
+        );
+        assert_eq!(
+            desktop_entry_for(Path::new("/home/jeremy/.local/bin/grokhub"), Some(home)),
+            PathBuf::from("/home/jeremy/.local/share/applications/grokhub.desktop")
+        );
+        assert_eq!(
+            desktop_entry_for(Path::new("/home/jeremy/GrokHub/target/release/grokhub"), Some(home)),
+            PathBuf::from("/home/jeremy/.local/share/applications/grokhub.desktop")
+        );
+        assert_eq!(
+            desktop_entry_for(Path::new("/opt/x/grokhub"), None),
+            PathBuf::from("~/.local/share/applications/grokhub.desktop")
+        );
     }
 }

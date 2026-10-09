@@ -1191,6 +1191,32 @@ impl Cabin {
         })
     }
 
+    /// A paused-job suggestion opens that job, like Open chat on its Workboard
+    /// card; a job with no chat opens the Workboard. Resuming stays the normal
+    /// path from there.
+    fn open_paused_job(&mut self, card: &UpdateCard, job: &str) {
+        let thread = self
+            .board
+            .iter()
+            .find(|c| c.id == job)
+            .and_then(|c| c.thread_id.clone())
+            .filter(|tid| self.threads.iter().any(|t| t.id == *tid));
+        let did = if thread.is_some() {
+            grokhub_core::UseAction::OpenedChat
+        } else {
+            grokhub_core::UseAction::OpenedBoard
+        };
+        self.log_card_use(card, grokhub_core::UseDepth::Opened, did);
+        match thread {
+            Some(tid) => self.open_board_thread(&tid),
+            None => self.nav = Nav::Workboard,
+        }
+        if let Some(saved) = self.updates.iter_mut().find(|c| c.id == card.id) {
+            saved.status = UpdateStatus::Opened;
+        }
+        self.persist_updates();
+    }
+
     pub(super) fn discuss_card(&mut self, id: &str) {
         let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() else {
             return;
@@ -1200,6 +1226,10 @@ impl Cabin {
             return;
         }
         if !matches!(card.kind, UpdateKind::Digest | UpdateKind::Suggestion) {
+            return;
+        }
+        if let Some(job) = grokhub_core::paused_job_of(&card) {
+            self.open_paused_job(&card, job);
             return;
         }
         self.log_card_use(
@@ -2541,6 +2571,45 @@ Streams are retried instead of partial output. ZEPHYRTAIL";
             (flying.top() - slot.top()).abs() < 0.5,
             "reduced motion must snap fly y, {flying:?} vs {slot:?}"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_paused_job_suggestion_opens_that_job() {
+        let _g = crate::config::hold_test_config();
+        let root = crate::config::test_config_root("paused-job-card");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::create_dir_all(&root);
+        std::env::set_var("GROKHUB_CONFIG", &root);
+        let mut cabin = Cabin::quiet_for_test();
+        cabin.new_thread(false);
+        let job_thread = cabin.threads[cabin.thread_idx].id.clone();
+        cabin.new_thread(false);
+        let mut job = grokhub_core::BoardCard::new("Fix the tray icon", "Paused. This is where to resume.", "");
+        job.thread_id = Some(job_thread.clone());
+        let job_id = job.id.clone();
+        cabin.board.push(job);
+        let threads_before = cabin.threads.len();
+        let card = grokhub_core::suggestion_card(&format!("pause:{job_id}"), "Paused: Fix the tray icon", "Paused 2 hours ago.", 5);
+        let id = card.id.clone();
+        cabin.updates.push(card);
+        cabin.nav = Nav::Pulse;
+        cabin.discuss_card(&id);
+        assert_eq!(cabin.nav, Nav::Chat);
+        assert_eq!(cabin.threads[cabin.thread_idx].id, job_thread, "the job's own chat");
+        assert_eq!(cabin.threads.len(), threads_before, "no Discuss chat");
+        let saved = cabin.updates.iter().find(|c| c.id == id).unwrap();
+        assert_eq!((saved.status, saved.discuss_thread.as_deref()), (UpdateStatus::Opened, None));
+        // A paused job with no chat opens the Workboard instead.
+        let lone = grokhub_core::BoardCard::new("Sort receipts", "Paused. This is where to resume.", "");
+        let lone_id = lone.id.clone();
+        cabin.board.push(lone);
+        let card = grokhub_core::suggestion_card(&format!("pause:{lone_id}"), "Paused: Sort receipts", "", 6);
+        let id = card.id.clone();
+        cabin.updates.push(card);
+        cabin.discuss_card(&id);
+        assert_eq!(cabin.nav, Nav::Workboard);
+        assert_eq!(cabin.threads.len(), threads_before);
         let _ = std::fs::remove_dir_all(&root);
     }
 
