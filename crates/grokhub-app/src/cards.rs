@@ -1019,6 +1019,7 @@ pub fn chip_hit_act(index: usize, dismiss: egui::Rect, pointer: egui::Pos2) -> C
 fn begin_chip_dismiss_hits(ui: &egui::Ui) {
     ui.ctx().data_mut(|d| {
         d.insert_temp(egui::Id::new("qchip-dismiss-hits"), Vec::<egui::Rect>::new());
+        d.insert_temp(egui::Id::new("qchip-pills"), Vec::<egui::Rect>::new());
     });
 }
 
@@ -1058,6 +1059,33 @@ pub fn fluid_chip_count(widths: &[f32], row_w: f32, gap: f32) -> usize {
         n += 1;
     }
     n
+}
+
+/// Width of the first `fit` pills plus the gaps between them.
+pub fn chip_cluster_w(widths: &[f32], fit: usize, gap: f32) -> f32 {
+    let n = fit.min(widths.len());
+    let pills: f32 = widths[..n].iter().sum();
+    pills + gap * n.saturating_sub(1) as f32
+}
+
+/// Leading space that centers a `cluster_w` chip cluster in a `row_w` row, the
+/// chat box column. Snapped to a whole physical pixel at `ppp` so the cluster
+/// sits on the midline at every scale factor. A cluster wider than the row
+/// starts at the row's left edge.
+pub fn chip_cluster_lead(row_w: f32, cluster_w: f32, ppp: f32) -> f32 {
+    let lead = ((row_w - cluster_w) * 0.5).max(0.0);
+    let ppp = if ppp > 0.0 { ppp } else { 1.0 };
+    (lead * ppp).round() / ppp
+}
+
+#[cfg(test)]
+fn remember_chip_pill(ui: &egui::Ui, rect: egui::Rect) {
+    ui.ctx().data_mut(|d| {
+        let id = egui::Id::new("qchip-pills");
+        let mut pills = d.get_temp::<Vec<egui::Rect>>(id).unwrap_or_default();
+        pills.push(rect);
+        d.insert_temp(id, pills);
+    });
 }
 
 /// Single-line label. Overflow becomes an ellipsis at `max_w` instead of a second line.
@@ -1153,8 +1181,9 @@ pub fn paint_empty_chip_state(ui: &mut egui::Ui) {
         egui::vec2(max_w, CHIP_ROW_H),
         egui::Layout::left_to_right(egui::Align::Center)
             .with_main_wrap(false)
-            .with_main_align(egui::Align::Center),
+            .with_main_align(egui::Align::Min),
         |ui| {
+            ui.set_max_width(max_w);
             let fill = quick_chip_fill(false);
             let color = quick_chip_fg(false);
             let budget = chip_label_budget(max_w);
@@ -1166,8 +1195,13 @@ pub fn paint_empty_chip_state(ui: &mut egui::Ui) {
                 budget,
             );
             let pill_w = (CHIP_PAD_X + galley.size().x.max(8.0) + CHIP_PAD_X).min(max_w);
+            #[cfg(test)]
+            begin_chip_dismiss_hits(ui);
+            ui.add_space(chip_cluster_lead(max_w, pill_w, ui.ctx().pixels_per_point()));
             let (rect, resp) =
                 ui.allocate_exact_size(egui::vec2(pill_w, CHIP_ROW_H), Sense::hover());
+            #[cfg(test)]
+            remember_chip_pill(ui, rect);
             paint_chip_pill(ui, rect, fill, false);
             let text_pos = egui::pos2(
                 rect.left() + CHIP_PAD_X,
@@ -1216,6 +1250,8 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
             let mut chip_hover: Option<egui::Rect> = None;
             #[cfg(test)]
             begin_chip_dismiss_hits(ui);
+            let cluster_w = chip_cluster_w(&widths, fit, CHIP_GAP);
+            ui.add_space(chip_cluster_lead(max_w, cluster_w, ui.ctx().pixels_per_point()));
             let mut used = 0.0f32;
             for (i, c) in chips.iter().enumerate().take(fit) {
                 let galley = measured[i].clone();
@@ -1252,6 +1288,8 @@ pub fn quick_chip_row(ui: &mut egui::Ui, chips: &[grokhub_core::QuickChip]) -> O
                     chip_hover = Some(rect);
                 }
                 paint_chip_pill(ui, rect, fill, c.primary);
+                #[cfg(test)]
+                remember_chip_pill(ui, rect);
                 let text_pos = egui::pos2(
                     rect.left() + CHIP_PAD_X,
                     rect.center().y - galley.size().y * 0.5,
@@ -3949,6 +3987,88 @@ mod tests {
         let _ = chip_frame(&ctx, 0.50, Some(label), Some(true), &chips);
         let (applied, _, _) = chip_frame(&ctx, 0.54, Some(label), Some(false), &chips);
         assert_eq!(applied, Some(ChipRowAct::Apply(0)));
+    }
+
+    #[test]
+    fn chip_cluster_lead_centers_within_a_pixel() {
+        assert_eq!(chip_cluster_w(&[100.0, 80.0, 60.0], 2, CHIP_GAP), 186.0);
+        assert_eq!(chip_cluster_w(&[100.0, 80.0, 60.0], 3, CHIP_GAP), 252.0);
+        assert_eq!(chip_cluster_w(&[100.0], 5, CHIP_GAP), 100.0);
+        assert_eq!(chip_cluster_w(&[], 0, CHIP_GAP), 0.0);
+        assert_eq!(chip_cluster_lead(600.0, 252.0, 1.0), 174.0);
+        assert_eq!(chip_cluster_lead(601.0, 252.0, 1.0), 175.0);
+        assert_eq!(chip_cluster_lead(601.0, 252.0, 2.0), 174.5);
+        assert_eq!(chip_cluster_lead(300.0, 420.0, 1.0), 0.0);
+        assert_eq!(chip_cluster_lead(500.0, 100.0, 0.0), 200.0);
+        for (row_w, cluster_w) in [(360.0, 117.0), (480.5, 301.25), (760.0, 433.0), (1033.0, 77.7)] {
+            for ppp in [1.0f32, 1.25, 1.5, 2.0] {
+                let lead = chip_cluster_lead(row_w, cluster_w, ppp);
+                let off_px = (lead + cluster_w * 0.5 - row_w * 0.5).abs() * ppp;
+                assert!(
+                    off_px <= 1.0,
+                    "row {row_w} cluster {cluster_w} at {ppp}x: lead {lead} is {off_px} px off center"
+                );
+                assert_eq!((lead * ppp).fract(), 0.0, "lead lands on a physical pixel");
+            }
+        }
+    }
+
+    fn chip_pills_in_column(screen_w: f32, ppp: f32, chips: &[grokhub_core::QuickChip]) -> (egui::Rect, Vec<egui::Rect>) {
+        let ctx = egui::Context::default();
+        install_chip_fonts(&ctx);
+        ctx.set_pixels_per_point(ppp);
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(screen_w, 400.0),
+            )),
+            ..Default::default()
+        };
+        let mut col = egui::Rect::NOTHING;
+        for _ in 0..2 {
+            let _ = crate::theme::test_pass(&ctx, raw.clone(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    ui.vertical_centered_justified(|ui| {
+                        ui.set_max_width(composer_pill_w(ui.ctx().content_rect().width()));
+                        col = ui.max_rect();
+                        let _ = quick_chip_row(ui, chips);
+                    });
+                });
+            });
+        }
+        let pills = ctx
+            .data(|d| d.get_temp::<Vec<egui::Rect>>(egui::Id::new("qchip-pills")))
+            .unwrap_or_default();
+        (col, pills)
+    }
+
+    #[test]
+    fn quick_chips_sit_centered_under_the_chat_box() {
+        let chips = vec![
+            sample_chip("Continue", true),
+            sample_chip("Fix the failing test", false),
+            sample_chip("Plan", false),
+        ];
+        for screen_w in [700.0f32, 900.0, 1400.0, 1920.0] {
+            for ppp in [1.0f32, 1.25, 1.5, 2.0] {
+                let (col, pills) = chip_pills_in_column(screen_w, ppp, &chips);
+                assert_eq!(pills.len(), 3, "all three chips fit at {screen_w}px {ppp}x: {pills:?}");
+                let left = pills.first().unwrap().left();
+                let right = pills.last().unwrap().right();
+                let mid = (left + right) * 0.5;
+                assert!(
+                    (mid - col.center().x).abs() <= 1.0,
+                    "chips centered on the chat box at {screen_w}px {ppp}x: cluster {left}..{right}, box {col:?}"
+                );
+            }
+        }
+        let (col, empty) = chip_pills_in_column(900.0, 1.5, &[]);
+        assert_eq!(empty.len(), 1, "the empty state paints one pill: {empty:?}");
+        assert!(
+            (empty[0].center().x - col.center().x).abs() <= 1.0,
+            "the Nothing queued pill is centered too: {:?} vs {col:?}",
+            empty[0]
+        );
     }
 
     #[test]
