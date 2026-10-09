@@ -184,6 +184,7 @@ mod model_download_ui;
 mod budget_ui;
 mod provider_ui;
 mod repair_ui;
+mod screen_record_ui;
 mod scope_ui;
 mod indexer_ui;
 mod skill_undo;
@@ -802,6 +803,9 @@ pub struct Cabin {
     permission_mode: PermissionMode,
     /// Spike-0 harness: Full grant, parked hard-class cards, path C hits.
     harness: harness_ui::HarnessState,
+    /// A screen recording in progress (`/record`), with its Stop flag.
+    screen_rec: Option<screen_record_ui::LiveRecording>,
+    screen_diag_rx: Option<mpsc::Receiver<screen_record_ui::DiagDone>>,
     /// Spike-6b: candidates waiting for the ceiling, today's auto budget,
     /// and the ledger lines auto-acts wrote.
     auto_act: proactive_auto::AutoState,
@@ -1415,6 +1419,8 @@ impl Cabin {
             grok_ext_q: Vec::new(),
             connector_note: String::new(),
             mcp_doctor_rx: None,
+            screen_rec: None,
+            screen_diag_rx: None,
             mcp_status: HashMap::new(),
             scroll_to_hooks: false,
             composer_geom: None,
@@ -1858,6 +1864,8 @@ impl Cabin {
             grok_ext_q: Vec::new(),
             connector_note: String::new(),
             mcp_doctor_rx: None,
+            screen_rec: None,
+            screen_diag_rx: None,
             mcp_status: HashMap::new(),
             scroll_to_hooks: false,
             composer_geom: None,
@@ -5081,6 +5089,8 @@ impl eframe::App for Cabin {
         self.poll_privacy();
         self.poll_why();
         self.poll_diagnose();
+        self.poll_screen_recording(ctx);
+        self.poll_screen_diagnosis();
         self.poll_native_memory();
         self.drain_native_unattended_usage();
         self.poll_sync();
@@ -5310,6 +5320,7 @@ impl eframe::App for Cabin {
         if self.palette_open {
             self.ui_palette(&ctx);
         }
+        self.paint_record_indicator(&ctx);
         if self.confirm.as_ref().is_some_and(|c| c.paints_overlay()) {
             self.paint_confirm_overlay(&ctx);
         }

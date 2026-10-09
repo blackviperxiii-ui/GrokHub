@@ -252,6 +252,8 @@ pub(super) enum FeedAct {
     NeverAgain(String),
     /// Retry on a crash card.
     Retry(String),
+    /// Delete recording on a screen recording card.
+    DeleteRecording(String),
 }
 
 /// Done-for-you cards carry a white rule down the left edge, the cabin's
@@ -882,6 +884,7 @@ impl Cabin {
             Some(FeedAct::Undo(id)) => self.done_for_you_undo(&id),
             Some(FeedAct::NeverAgain(id)) => self.done_for_you_never(&id),
             Some(FeedAct::Retry(id)) => self.crash_retry(&id),
+            Some(FeedAct::DeleteRecording(id)) => self.arm_delete_recording(&id),
             Some(FeedAct::Link(url)) => {
                 self.follow_update_action(Some(UpdateAction::DeepLink { href: url }));
             }
@@ -1821,6 +1824,9 @@ fn paint_full_feed_card(
                             super::pulse_ui::FeedPostAct::NeverAgain => FeedAct::NeverAgain(card.id.clone()),
                             super::pulse_ui::FeedPostAct::Open => FeedAct::Open(card.id.clone()),
                             super::pulse_ui::FeedPostAct::Retry => FeedAct::Retry(card.id.clone()),
+                            super::pulse_ui::FeedPostAct::DeleteRecording => {
+                                FeedAct::DeleteRecording(card.id.clone())
+                            }
                         });
                     }
                 });

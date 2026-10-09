@@ -1,5 +1,5 @@
 use grokhub_core::{
-    chat_request_body_vision, chat_timeout_secs,
+    chat_request_body_images, chat_timeout_secs,
     dedicated_imagine_model, frame_bytes, imagine_edit_body,
     imagine_edit_mask_fallback, imagine_empty_reply_hint, imagine_generation_body,
     imagine_image_fallback_model, imagine_image_shaped, imagine_is_network_stall,
@@ -8,7 +8,7 @@ use grokhub_core::{
     media_ext_from_bytes, merge_thinking, parse_imagine_url,
     parse_imagine_urls, parse_model_reasoning, parse_model_text, parse_stt_text,
     parse_video_job_status, parse_video_request_id, parse_video_url,
-    responses_request_body, responses_url, stt_multipart, stt_url, tts_request_body, tts_url,
+    responses_request_body_images, responses_url, stt_multipart, stt_url, tts_request_body, tts_url,
     video_failure_detail, video_moderation_blocked,
     ImagineVideoOp, PresenceFrame, VideoBodyReq, VideoJobStatus, MEDIA_FILE_CAP, TEXT_FILE_CAP,
     XAI_BASE,
@@ -157,8 +157,27 @@ pub fn grok_chat(
     // Background helpers pass the background effort; the rest is a quick user ask.
     let class = if effort == Some(grokhub_core::BACKGROUND_EFFORT) { "background:summarize" } else { "chat:quick" };
     let call = route::cabin::ModelCall::new(route::cabin::Provider::Xai, model, effort, class);
+    let images: Vec<&str> = image_data_url.into_iter().collect();
     route::cabin::call_model(&crate::config::config_dir(), &call, |call| {
-        grok_chat_once(key, call, messages, image_data_url)
+        grok_chat_once(key, call, messages, &images)
+    })
+}
+
+/// A quick routed ask with several stills on the last user message, in order.
+pub fn grok_chat_images(
+    api_key: &str,
+    model: &str,
+    messages: &[(String, String)],
+    images: &[String],
+) -> Result<String, String> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err("Connect Grok in Settings".into());
+    }
+    let call = route::cabin::ModelCall::new(route::cabin::Provider::Xai, model, None, "chat:quick");
+    let images: Vec<&str> = images.iter().map(String::as_str).collect();
+    route::cabin::call_model(&crate::config::config_dir(), &call, |call| {
+        grok_chat_once(key, call, messages, &images)
     })
 }
 
@@ -167,16 +186,16 @@ fn grok_chat_once(
     key: &str,
     call: &route::cabin::ModelCall<'_>,
     messages: &[(String, String)],
-    image_data_url: Option<&str>,
+    images: &[&str],
 ) -> Result<(String, hx::ModelUsage), String> {
     let timeout = chat_timeout_secs(call.effort);
-    let responses = responses_request_body(call.model, messages, image_data_url, call.effort);
+    let responses = responses_request_body_images(call.model, messages, images, call.effort);
     if let Ok(v) = grok_json(&responses_url(), key, responses, timeout) {
         if let Some(text) = merge_reply(&v) {
             return Ok((text, route::cabin::xai_usage(&v)));
         }
     }
-    let body = chat_request_body_vision(call.model, messages, image_data_url, call.effort);
+    let body = chat_request_body_images(call.model, messages, images, call.effort);
     let v = grok_json(
         &format!("{XAI_BASE}/chat/completions"),
         key,

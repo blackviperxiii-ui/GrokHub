@@ -66,6 +66,8 @@ const ROW_MODEL: &str = "Default model";
 const ROW_PERMISSION: &str = "Permission";
 const ROW_DESKTOP: &str = "Let Grok control the desktop";
 const ROW_DESKTOP_TEST: &str = "Desktop control";
+const ROW_SCREEN_RECORD: &str = "Screen recording";
+const SCREEN_RECORD_HINT: &str = "Lets /record take a still every 2 seconds for up to 2 minutes, with a red indicator and Stop. Recordings stay in ~/GrokHub/recordings; a few stills go to Grok only for the diagnosis.";
 const ROW_SESSION: &str = "Session mode";
 const ROW_COLLAPSE: &str = "Always collapse";
 
@@ -76,7 +78,7 @@ pub(super) const DEFAULTS_ROWS: &[&str] = &[
     super::budget_ui::FAST_ROW,
     super::budget_ui::CAP_ROW,
     super::budget_ui::CEILING_ROW,
-    ROW_PERMISSION, ROW_DESKTOP, ROW_DESKTOP_TEST, ROW_SESSION, ROW_COLLAPSE];
+    ROW_PERMISSION, ROW_DESKTOP, ROW_DESKTOP_TEST, ROW_SCREEN_RECORD, ROW_SESSION, ROW_COLLAPSE];
 
 pub(super) fn cabin_default_permissions() -> &'static [(&'static str, &'static str)] {
     &[("ask", "Ask"), ("auto", "Auto")]
@@ -789,6 +791,15 @@ impl Cabin {
                                                                     self.cfg.desktop_control,
                                                                 );
                                                             }
+                                                            if crate::cards::settings_toggle(
+                                                                ui,
+                                                                ROW_SCREEN_RECORD,
+                                                                SCREEN_RECORD_HINT,
+                                                                &mut self.cfg.screen_record,
+                                                            ) {
+                                                                self.persist_cfg();
+                                                                self.status = "Saved".into();
+                                                            }
                                                             let sessions = cabin_default_sessions();
                                                             let session_labels: Vec<String> = sessions
                                                                 .iter()
@@ -1274,7 +1285,7 @@ mod tests {
                 "Weekly spend cap",
                 "Price limit",
                 "Permission",
-                "Let Grok control the desktop", "Desktop control", "Session mode", "Always collapse"]
+                "Let Grok control the desktop", "Desktop control", "Screen recording", "Session mode", "Always collapse"]
         );
         assert!(DEFAULTS_ROWS.iter().all(|r| !r.to_ascii_lowercase().contains("effort")));
         let perms = cabin_default_permissions();

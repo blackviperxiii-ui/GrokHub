@@ -66,6 +66,9 @@ pub enum Slash {
     Privacy,
     /// `/diagnose`: read-only checks of disk, memory, services, logs, network and updates (Spike-8b).
     Diagnose,
+    /// `/record [what's wrong]` starts a consented screen recording; `/record stop` ends it.
+    Record(String),
+    RecordStop,
     /// `/why`: the last 10 route reasons (Router R0, shadow). Read only.
     Why,
     /// `/why models`: one line per model with its state, usable, and reason.
@@ -313,6 +316,8 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/sync" => Some(Slash::Sync),
         "/privacy" => Some(Slash::Privacy),
         "/diagnose" => Some(Slash::Diagnose),
+        "/record" if rest.eq_ignore_ascii_case("stop") => Some(Slash::RecordStop),
+        "/record" => Some(Slash::Record(rest.to_string())),
         "/why" if rest.is_empty() => Some(Slash::Why),
         "/why" if rest.eq_ignore_ascii_case("models") => Some(Slash::WhyModels),
         "/why" if rest.eq_ignore_ascii_case("table") => Some(Slash::WhyTable),
@@ -448,6 +453,8 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Sync => "sync",
         Slash::Privacy => "privacy",
         Slash::Diagnose => "diagnose",
+        Slash::Record(_) => "record",
+        Slash::RecordStop => "record_stop",
         Slash::Why | Slash::WhyModels | Slash::WhyTable => "why",
         Slash::Hub => "hub",
         Slash::Inhabit(_) => "inhabit",
@@ -549,6 +556,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/sync", hint: "Sync chats & memory with paired computers", insert: "/sync", run_on_pick: true },
     SlashDef { cmd: "/privacy", hint: "What left this computer, and your grants", insert: "/privacy", run_on_pick: true },
     SlashDef { cmd: "/diagnose", hint: "Check this computer (read only)", insert: "/diagnose", run_on_pick: true },
+    SlashDef { cmd: "/record", hint: "Record my screen and diagnose it (say what's wrong)", insert: "/record ", run_on_pick: false },
     SlashDef { cmd: "/why", hint: "Why Auto would pick each model and effort", insert: "/why", run_on_pick: true },
     SlashDef { cmd: "/send", hint: "Send a task to another computer", insert: "/send ", run_on_pick: false },
     SlashDef { cmd: "/rewind", hint: "Rewind Grok conversation", insert: "/rewind", run_on_pick: true },
@@ -762,6 +770,7 @@ pub fn slash_help() -> String {
         "/privacy — your grants, learning scopes (all off), and what left this computer",
         "/why — the last 10 reasons the router gave for a model and effort (Auto picks both; a model you pin stays yours); /why models lists each model's state; /why table shows how Auto picks",
         "/diagnose — check disk, memory, services, logs, network and updates, read only, and say what's wrong in plain words (needs System state in Settings → Permissions)",
+        "/record — record the screen (up to 2:00) and diagnose it; /record stop ends it. Add what's wrong after it. Needs Screen recording in Settings → Cabin defaults",
         "/hub — devices / pair",
         "/inhabit <peer> — hand this Grok to another paired computer",
         "/rewind — rewind Grok conversation; /rewind --files restores the last project snapshot",
@@ -1236,6 +1245,21 @@ mod tests {
         assert!(slash_help().contains("\n/diagnose — check disk, memory, services, logs, network and updates, read only"));
         assert!(SLASH_COMMANDS.iter().any(|d| d.cmd == "/diagnose" && d.run_on_pick));
         assert!(!unknown_cabin_slash("/diagnose"));
+    }
+
+    #[test]
+    fn record_slash_takes_a_note_and_stop() {
+        assert_eq!(parse_slash("/record"), Some(Slash::Record(String::new())));
+        assert_eq!(
+            parse_slash("/record video stutters on 4K YouTube"),
+            Some(Slash::Record("video stutters on 4K YouTube".into()))
+        );
+        assert_eq!(parse_slash("/record stop"), Some(Slash::RecordStop));
+        assert_eq!(parse_slash("/record Stop"), Some(Slash::RecordStop));
+        assert_eq!(parse_slash("/record stop").as_ref().map(slash_kind), Some("record_stop"));
+        assert!(slash_help().contains("\n/record — record the screen (up to 2:00) and diagnose it; /record stop ends it"));
+        assert!(SLASH_COMMANDS.iter().any(|d| d.cmd == "/record" && d.insert == "/record "));
+        assert!(!unknown_cabin_slash("/record"));
     }
 
     #[test]

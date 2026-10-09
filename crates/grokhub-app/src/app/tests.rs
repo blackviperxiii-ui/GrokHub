@@ -16832,6 +16832,8 @@ fn quiet_cabin() -> Cabin {
         grok_ext_q: Vec::new(),
         connector_note: String::new(),
         mcp_doctor_rx: None,
+        screen_rec: None,
+        screen_diag_rx: None,
         mcp_status: HashMap::new(),
         scroll_to_hooks: false,
         composer_geom: None,
