@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Long tasks no longer stop at 60 steps, 30 minutes or 50 turns: a desktop session, a chat, `/bg` and night jobs run until they're done, you Stop or Halt. A run that's stuck or repeating itself is told to re-plan and keeps going instead of pausing, and approving a card after the reply ended now picks the task back up instead of waiting for you to type.
+
 ## 2.10.98 — 2026-10-08
 
 - Security: a phone, or a computer paired under another computer's name, can no longer take over a session through Inhabit. Phones can't pair, a bundle goes only to the computer it names by id, and a bundle with no destination goes to nobody. Risky typed text on a hard card and in the inbox no longer shows API keys, GitHub tokens or bearer tokens; other typing shows as "type N chars into <window>".
