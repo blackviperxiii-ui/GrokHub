@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 2.11.0 — 2026-10-09
+
 - Remote MCP servers that need a sign-in work now (Settings → Labs → Native MCP). Each remote server with no credentials of its own gets a Sign in row: GrokHub finds the server's sign-in page, registers itself, and opens your browser; when you approve, the row says "Signed in to Linear as ada@example.com" and the server connects. The token is sealed on this device with your keyring key, is refreshed before it expires, and Sign out removes it. A server whose entry already has its own `Authorization` header or saved token keeps using that.
 - Adding your own AI provider (Settings → Cabin defaults) now asks before it saves the key: a credentials card says "Save your key for openrouter.ai to your keyring", and Esc drops the key. A new "Provider type" row lets you mark a proxy as OpenAI- or Anthropic-compatible when its address doesn't say. "Get a key" opens the key page for OpenAI, Anthropic, OpenRouter, Groq, Mistral or DeepSeek, and "Sign in with OpenRouter" gets a key through your browser instead of copy and paste. After the models refresh, a quiet line names what came in ("Added 2 models from openrouter.ai: …") or says the provider turned the key down.
 - The suggestion chips under the chat box sit centered on it at every window width and display scale, instead of hugging its left edge. "Nothing queued" is centered too.
@@ -16,6 +18,9 @@
 - Desktop control has five new tools, matching the Desktop app. `watch_path` starts watching a file or folder (four levels deep, up to 16 watches), `watch_events` lists what was created, modified or deleted since the last look, and `unwatch_path` stops it. `get_window_geometry` reads a window's size and position and `set_window_geometry` moves or resizes it (X11 and Windows; KDE Wayland can set but not read). Moving a window is held while the desktop is locked or halted, like other input, and needs no new approval.
 - A desktop session no longer stops and waits when the final check says the task isn't done. It re-plans with the checker's reason and keeps going. A checker that can't be reached is tried again, then once on a stronger route, and only then the session re-plans with "checker unavailable". If the checker gives the same reason three times in a row and the screen hasn't changed, the session ends with a note naming the goal and the reason ("Couldn't confirm: …"), with no card and no pause. Hard approvals still park as before.
 - A desktop session catches a loop sooner. Clicking the same button that fails twice, or the same button that changes nothing three times, or hitting the same error three times, makes it re-plan right away instead of after eight idle steps (that backstop is now five). After any re-plan the next three steps quietly run one model and one effort step up, then drop back, with no card or prompt. Goal follow-ups no longer stop after four steps: they go on until the goal is done or blocked, or you Stop or Halt.
+
+- Linux: `grokhub-linux-v2.11.0.tar.gz` and AUR `pkgver=2.11.0`.
+- Windows: `GrokHub-Setup-2.11.0.exe` and `grokhub-windows-v2.11.0.zip`.
 
 ## 2.10.99 — 2026-10-09
 
