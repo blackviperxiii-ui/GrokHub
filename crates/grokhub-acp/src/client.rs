@@ -1290,27 +1290,6 @@ pub fn parse_single_turn(stdout: &str) -> Result<SingleTurn, String> {
     })
 }
 
-/// Spawn `grok -p` in the cabin grok home. Not `agent stdio` — that child of
-/// the GUI is SIGTERM'd (exit 143) while pushing the model catalog.
-pub fn run_single_turn(
-    prompt: &str,
-    cwd: &Path,
-    resume: Option<&str>,
-    always_approve: bool,
-    auto: bool,
-) -> Result<SingleTurn, String> {
-    run_single_turn_full(
-        prompt,
-        cwd,
-        resume,
-        always_approve,
-        auto,
-        None,
-        None,
-        SessionMode::Chat,
-    )
-}
-
 pub fn run_single_turn_full(
     prompt: &str,
     cwd: &Path,

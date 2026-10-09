@@ -43,28 +43,14 @@ fn board_notes_edit_id(id: &str) -> egui::Id {
     egui::Id::new(("board-notes-edit", id))
 }
 
-/// "3m ago", "2h ago", "4d ago" for a Follow up card's last run.
-pub(super) fn ago_label(then_ms: u64, now_ms: u64) -> String {
-    if then_ms == 0 {
-        return String::new();
-    }
-    let s = now_ms.saturating_sub(then_ms) / 1000;
-    match s {
-        0..=59 => "just now".into(),
-        60..=3_599 => format!("{}m ago", s / 60),
-        3_600..=86_399 => format!("{}h ago", s / 3_600),
-        _ => format!("{}d ago", s / 86_400),
-    }
-}
-
 /// The short line under a card's title: what it has, not buttons.
 pub(super) fn card_meta_line(card: &BoardCard, now_ms: u64) -> String {
     let mut parts: Vec<String> = Vec::new();
     if card.automation.is_some() {
-        let ago = ago_label(card.updated_ms, now_ms);
-        parts.push(if ago.is_empty() {
+        parts.push(if card.updated_ms == 0 {
             "From an automation".into()
         } else {
+            let ago = grokhub_core::pulse::ago_label(card.updated_ms, now_ms);
             format!("Ran {ago}")
         });
     }

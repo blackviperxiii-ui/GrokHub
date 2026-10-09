@@ -366,7 +366,7 @@ fn the_live_path_keeps_an_episode_on_its_model_and_pauses_with_no_route() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-// ------------------------------------------------------------- the table
+// the table
 
 use grokhub_core::model_registry::probe::{ProbeCall, ProbeReply, ProbeTransport};
 

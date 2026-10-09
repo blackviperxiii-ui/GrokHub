@@ -160,7 +160,7 @@ impl RoutingTable {
     }
 }
 
-// ------------------------------------------------------------------ eval set
+// eval set
 
 /// How an eval reply is scored. Every check is mechanical.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -352,7 +352,7 @@ pub fn passes(check: Check, reply: &ProbeReply) -> bool {
     }
 }
 
-// ----------------------------------------------------------------- the cache
+// the cache
 
 /// Eval scores, cached by (profile `source_hash`, eval set version, effort),
 /// so a rebuild only re-runs pairs that changed. `models/eval_cache.json`.
@@ -411,7 +411,7 @@ fn round(x: f64, places: i32) -> f64 {
     (x * f).round() / f
 }
 
-// ------------------------------------------------------------------ building
+// building
 
 /// What the table is built from. No I/O behind it.
 pub struct TableInputs<'a> {
@@ -614,7 +614,7 @@ pub fn run_evals(inp: &TableInputs<'_>, cache: &mut EvalCache, env: EvalEnv<'_>)
     run
 }
 
-// ------------------------------------------------------------------- storage
+// storage
 
 pub fn table_path(config_dir: &Path) -> PathBuf {
     models_dir(config_dir).join(TABLE_FILE)

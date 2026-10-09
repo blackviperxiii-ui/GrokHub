@@ -1975,7 +1975,6 @@ name = "grokhub-app"
 version = "2.10.98"
 dependencies = [
  "ashpd",
- "base64",
  "eframe",
  "evdev",
  "global-hotkey",

@@ -24,20 +24,16 @@ use std::sync::{Arc, Mutex};
 
 const MISS: &str = "Or log into an X11 session.";
 
-trait Injector: Send {
-    fn run(&mut self, args: &[String]) -> Result<(), String>;
-}
-
 #[cfg(target_os = "linux")]
 impl CommandRun for RealInjector {
     fn run(&mut self, args: &[String]) -> Result<(), String> {
-        Injector::run(self, args)
+        RealInjector::run(self, args)
     }
 }
 
 struct RealInjector;
 
-impl Injector for RealInjector {
+impl RealInjector {
     fn run(&mut self, args: &[String]) -> Result<(), String> {
         input_ready()?;
         let out = run_bin("ydotool", args, 4000)?;
@@ -56,7 +52,7 @@ pub(crate) struct WaylandBackend {
     note: Option<String>,
     needs_restart: bool,
     was_locked: bool,
-    injector: Box<dyn Injector>,
+    injector: RealInjector,
     #[cfg(target_os = "linux")]
     routes: Option<InputChain>,
     #[cfg(target_os = "linux")]
@@ -75,7 +71,7 @@ impl WaylandBackend {
             note: None,
             needs_restart: false,
             was_locked: false,
-            injector: Box::new(RealInjector),
+            injector: RealInjector,
             #[cfg(target_os = "linux")]
             routes: linux_input(&stack),
             #[cfg(target_os = "linux")]
@@ -104,7 +100,7 @@ impl WaylandBackend {
             note: None,
             needs_restart: false,
             was_locked: false,
-            injector: Box::new(RealInjector),
+            injector: RealInjector,
             routes: Some(InputChain::fakes(share, Box::new(injector))),
             shots: Some(super::capture::ShotChain::live()),
         }
