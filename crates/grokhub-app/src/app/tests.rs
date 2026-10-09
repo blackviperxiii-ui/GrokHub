@@ -10407,18 +10407,43 @@ fn no_effort_selector_anywhere() {
     assert_eq!(job.text, "Auto · Medium");
 }
 
-// Landed from PR #106.
+// Landed from PR #106. `/health` is one chat block since card 10.
 #[test]
-fn health_slash_opens_about_and_writes_the_doctor_line() {
+fn health_slash_posts_updates_failed_services_and_the_last_dream_in_one_block() {
     let _g = crate::config::hold_test_config();
     let root = crate::config::test_config_root("health-slash");
+    let _ = std::fs::remove_dir_all(&root);
     std::env::set_var("GROKHUB_CONFIG", &root);
     let mut cabin = Cabin::quiet_for_test();
     cabin.run_slash_line("/health");
-    assert!(matches!(cabin.nav, Nav::Settings));
-    assert!(matches!(cabin.settings_sec, SettingsSec::About));
-    assert_eq!(cabin.status, cabin.doctor_text());
-    assert!(cabin.status.contains("ok ") || cabin.status.contains("ERR "));
+    let empty = last_chat_text(&cabin);
+    assert!(
+        empty.contains("Health\n\nUpdates: none pending.\nServices: ")
+            && empty.ends_with("\nLast dream: none yet. GrokHub dreams once a night after the review, in memory repo mode."),
+        "{empty}"
+    );
+    assert!(cabin.status.starts_with("Health: no updates · "), "{}", cabin.status);
+
+    let dreams = root.join("amr").join("dreams");
+    std::fs::create_dir_all(&dreams).unwrap();
+    std::fs::write(
+        dreams.join("2026-10-08.md"),
+        "# Memory dream 2026-10-08\n\n## Merged\n\n- Kept `n1` \"Uses pnpm\", merged `n2` \"uses pnpm\" because 80% shared words.\n\n## Retired\n\n- Retired `n9` \"old token path\" because confidence 0.2.\n",
+    )
+    .unwrap();
+    cabin.cabin_latest = Some("v99.0.0".into());
+    let failing = grokhub_core::mark_automation_failed(health_job("a1"), "disk full");
+    cabin.automations = vec![failing];
+    cabin.run_slash_line("/health");
+    let block = last_chat_text(&cabin);
+    assert!(
+        block.contains("Health\n\nUpdates: GrokHub 99.0.0 is ready. Run /update.\nServices: "),
+        "{block}"
+    );
+    assert!(block.contains("\n- Automation Board summary: Last run failed — disk full\n"), "{block}");
+    assert!(block.ends_with("\nLast dream: 2026-10-08, 1 merged, 1 retired."), "{block}");
+    assert!(cabin.status.starts_with("Health: 1 update · "), "{}", cabin.status);
+    assert!(!cabin.status.ends_with("services ok"), "a failed automation is a failed service: {}", cabin.status);
     std::env::remove_var("GROKHUB_CONFIG");
 }
 
@@ -11314,6 +11339,83 @@ fn last_chat_text(cabin: &Cabin) -> String {
     cabin.messages.last().map(|m| m.1.clone()).unwrap_or_default()
 }
 
+/// Card 12: memory retention runs once a day on its own (no dream, any hour)
+/// and `/memory prune` answers in the chat with what it retired.
+#[test]
+fn amr_retention_prunes_daily_apart_from_dream_and_memory_prune_reports() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = amr_dream_cabin("amr-retention");
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+    assert_eq!(cabin.cfg.amr_retention_days, 90);
+    let store = super::amr_memory::amr_store_at(&root);
+    store.init().unwrap();
+    let now = grokhub_core::now_ms();
+    let day = 86_400_000u64;
+    for (id, body, confidence, age_days) in [
+        ("old-guess", "Maybe the ferry leaves at six", 0.2, 200),
+        ("mid-guess", "Perhaps the tram runs late", 0.2, 40),
+        ("old-fact", "Lives near the north harbor", 0.9, 200),
+    ] {
+        let stamp = grokhub_core::oauth::unix_ms_to_rfc3339(now - age_days * day);
+        store
+            .remember(&grokhub_core::amr::NodeDraft {
+                id: id.into(),
+                node_type: grokhub_core::amr::NodeType::Fact,
+                created: stamp.clone(),
+                updated: stamp,
+                source: "user".into(),
+                confidence,
+                tags: vec![],
+                body: format!("{body}\n"),
+                sensitivity: grokhub_core::amr::Sensitivity::Plain,
+                consent_ref: String::new(),
+            })
+            .unwrap();
+    }
+    let files_before = amr_node_files(&root);
+    let wait = |cabin: &mut Cabin| {
+        for _ in 0..200 {
+            cabin.poll_amr_prune();
+            if !cabin.status.starts_with("Running") && cabin.status.starts_with("Memory retention") {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("retention never finished: {}", cabin.status);
+    };
+
+    let chat_before = cabin.messages.len();
+    cabin.tick_amr_retention("2026-10-09");
+    wait(&mut cabin);
+    assert_eq!(cabin.status, "Memory retention: retired 1 unsure note not updated in 90 days, kept 2.");
+    assert_eq!(cabin.messages.len(), chat_before, "the daily run posts no chat line");
+    assert!(store.is_forgotten("old-guess"));
+    assert!(!store.is_forgotten("mid-guess") && !store.is_forgotten("old-fact"));
+    assert_eq!(cabin.dream_day, None, "no dream ran");
+    assert!(!root.join("amr").join("dreams").join("2026-10-09.md").exists());
+    assert_eq!(amr_node_files(&root), files_before, "nothing removed from disk");
+    cabin.status.clear();
+    cabin.tick_amr_retention("2026-10-09");
+    cabin.poll_amr_prune();
+    assert_eq!(cabin.status, "", "once a day");
+
+    cabin.cfg.amr_retention_days = 0;
+    cabin.run_slash_line("/memory prune");
+    wait(&mut cabin);
+    assert!(last_chat_text(&cabin).ends_with("Memory retention: keeping everything (2 notes)."), "{}", last_chat_text(&cabin));
+
+    cabin.cfg.amr_retention_days = 30;
+    cabin.run_slash_line("/memory prune");
+    wait(&mut cabin);
+    assert!(
+        last_chat_text(&cabin).ends_with("Memory retention: retired 1 unsure note not updated in 30 days, kept 1."),
+        "{}",
+        last_chat_text(&cabin)
+    );
+    assert!(store.is_forgotten("mid-guess") && !store.is_forgotten("old-fact"));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 fn amr_dream_runs_once_a_night_and_memory_dream_prints_it() {
     let _g = crate::config::hold_test_config();
@@ -11376,6 +11478,10 @@ fn amr_dream_runs_once_a_night_and_memory_dream_prints_it() {
     cabin.run_slash_line("/memory dream");
     assert_eq!(cabin.status, "Memory dream");
     let shown = last_chat_text(&cabin);
+    assert!(
+        shown.contains("What changed: 0 added, 1 merged, 0 retired\n- Merged: \"the quay lantern is green at night.\"\n\n# Memory dream 2026-10-07"),
+        "the What changed block sits above the report: {shown}"
+    );
     assert!(shown.contains("# Memory dream 2026-10-07"), "{shown}");
     assert!(shown.contains("merged `quay-b`"), "{shown}");
 
@@ -16788,6 +16894,7 @@ fn quiet_cabin() -> Cabin {
         reflect_rx: None,
         amr_imported: false,
         dream_day: None,
+        amr_prune: amr_memory::AmrPrune::default(),
         session_show_rx: None,
         import_rx: None,
         inspect_text: String::new(),
@@ -16803,6 +16910,9 @@ fn quiet_cabin() -> Cabin {
         grok_ext_q: Vec::new(),
         connector_note: String::new(),
         mcp_doctor_rx: None,
+        screen_rec: None,
+        screen_diag_rx: None,
+        audio_check: None,
         mcp_status: HashMap::new(),
         scroll_to_hooks: false,
         composer_geom: None,
@@ -27602,6 +27712,50 @@ fn router_model_changes_post_one_home_note_and_no_undo_row() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Card 12: a self-tuning promotion posts one info-only "why" card naming the
+/// model, the class, the scores and the day, and no ledger note, Undo or Keep.
+#[test]
+fn a_router_promotion_posts_one_why_card_and_no_prompt() {
+    use grokhub_agent::route::{learn, tune};
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("router-why-card");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.poll_self_changes();
+    let mut tuning = tune::Tuning::default();
+    tuning.orders.insert("chat:default".into(), "grok-4-fast".into());
+    let reason = format!("{}everyday chat: grok-4-fast first (12% cheaper, 20% faster, quality held)", learn::TUNED_PREFIX);
+    learn::write_tuning(&root, &tuning, &reason).expect("tuning");
+    cabin.poll_self_changes();
+    assert!(cabin.harness.work_rows.is_empty(), "no Undo/Keep row for a router change");
+    assert_eq!(cabin.updates.iter().filter(|u| u.source_id.starts_with("model:")).count(), 0, "the why card replaces the note");
+
+    let promoted = tune::Candidate {
+        id: "chat:default#3".into(),
+        class: "chat:default".into(),
+        change: Some(tune::Change::Order { model: "grok-4-fast".into() }),
+        stage: tune::Stage::Watch,
+        // 2026-10-06 15:00 UTC.
+        promoted_at: Some(1_791_298_800_000),
+        baseline: Some(tune::Snap { n: 400, pass_pct: 85.0, rework_pct: 4.0, cost_per_step: 0.0100, p50_ms: 2_000, p95_ms: 4_000 }),
+        promoted_snap: Some(tune::Snap { n: 60, pass_pct: 92.0, rework_pct: 3.0, cost_per_step: 0.0088, p50_ms: 1_600, p95_ms: 3_200 }),
+        ..tune::Candidate::default()
+    };
+    let shadow = tune::Candidate { id: "chat:default#4".into(), class: "chat:default".into(), ..tune::Candidate::default() };
+    let state = tune::TuneState { candidates: vec![promoted, shadow], ..tune::TuneState::default() };
+    cabin.post_why_cards(&state, &["chat:default#3".to_string(), "chat:default#4".to_string()]);
+    let why: Vec<&grokhub_core::UpdateCard> = cabin.updates.iter().filter(|u| u.source_id.starts_with("router-why:")).collect();
+    assert_eq!(why.len(), 1, "only the promoted candidate gets a card");
+    assert_eq!(why[0].source_id, "router-why:chat:default#3");
+    assert_eq!(why[0].title, "Why grok-4-fast for everyday chat: 92% pass vs 85%, promoted Oct 6");
+    assert_eq!(
+        why[0].body.as_deref(),
+        Some("Auto now runs everyday chat with grok-4-fast first: 12% cheaper and 20% faster over 60 canary steps. Info only; Auto keeps tuning on its own.")
+    );
+    assert_eq!(why[0].action, None, "info only: no Accept, Undo or Keep");
+    assert!(cabin.harness.work_rows.is_empty());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// `/connections changes` and `/automations changes` post the report
 /// bubble; from a scheduled send they still only show rows (no slash undoes).
 #[test]
@@ -28045,5 +28199,123 @@ fn failed_settings_write_replaces_saved_on_the_status_line() {
         "{}",
         cabin.status
     );
+    release_isolated(&root, cabin);
+}
+
+fn crash_cards(cabin: &super::Cabin) -> Vec<grokhub_core::UpdateCard> {
+    cabin
+        .updates
+        .iter()
+        .filter(|c| grokhub_core::is_crash_card(c))
+        .cloned()
+        .collect()
+}
+
+fn bg_run_on(thread_id: &str, title: &str, rx: Option<mpsc::Receiver<grokhub_acp::GrokPEvent>>) -> super::background::BgRun {
+    super::background::BgRun {
+        id: 41,
+        thread_id: thread_id.into(),
+        title: title.into(),
+        origin: grokhub_core::BgOrigin::User,
+        pid: None,
+        rx,
+        say: String::new(),
+        action: String::new(),
+        started: std::time::Instant::now(),
+        end: None,
+        session: String::new(),
+        resumed: None,
+        fork_hold: false,
+        native_session: None,
+        automation: None,
+    }
+}
+
+#[test]
+fn a_background_run_killed_from_outside_posts_one_named_crash_card_and_stop_posts_none() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("crash-bg");
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.thread_idx = 0;
+    let id = cabin.threads[0].id.clone();
+
+    let (tx, rx) = mpsc::channel();
+    tx.send(grokhub_acp::GrokPEvent::Err("agent closed (exit 143)".into())).unwrap();
+    cabin.bg.runs.push(bg_run_on(&id, "Index ~/Projects", Some(rx)));
+    cabin.poll_bg_runs();
+    let cards = crash_cards(&cabin);
+    assert_eq!(cards.len(), 1, "one card for one crash: {cards:?}");
+    assert_eq!(cards[0].title, "Crashed: Index ~/Projects (exit 143, killed)");
+    assert_eq!(cards[0].prompt.as_deref(), Some("/bg Index ~/Projects"));
+    assert_eq!(
+        cards[0].action,
+        Some(grokhub_core::UpdateAction::OpenSession { thread_id: id.clone() })
+    );
+    assert!(cabin.bg.runs.is_empty(), "the run ended");
+
+    // Stop from GrokHub drops the receiver first: no crash card.
+    let (_tx2, rx2) = mpsc::channel();
+    let mut stopped = bg_run_on(&id, "Sort the inbox", Some(rx2));
+    stopped.id = 42;
+    cabin.bg.runs.push(stopped);
+    cabin.stop_bg_run(42);
+    assert_eq!(crash_cards(&cabin).len(), 1, "Stop is not a crash");
+
+    // Retry opens the chat and starts the run again.
+    let card_id = cards[0].id.clone();
+    cabin.crash_retry(&card_id);
+    assert_eq!(cabin.updates.iter().find(|c| c.id == card_id).map(|c| c.status), Some(grokhub_core::UpdateStatus::Opened));
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn a_killed_reply_retries_once_quietly_and_a_second_kill_posts_one_crash_card() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("crash-turn");
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.thread_idx = 0;
+    let id = cabin.threads[0].id.clone();
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), "Index ~/Projects".into())]);
+    cabin.chat_job_thread = Some(id.clone());
+
+    // First kill with nothing streamed: the automatic retry, no card.
+    let (tx, rx) = mpsc::channel();
+    tx.send(grokhub_acp::GrokPEvent::Err("agent closed (exit 143)".into())).unwrap();
+    cabin.grok_p_rx = Some(rx);
+    cabin.running = true;
+    cabin.turn_retried = false;
+    cabin.poll_single();
+    assert!(cabin.turn_retried, "the first kill is retried");
+    assert!(crash_cards(&cabin).is_empty(), "a retry in flight is not a crash");
+
+    // The retry finishes: still no card.
+    let (tx, rx) = mpsc::channel();
+    tx.send(grokhub_acp::GrokPEvent::End(grokhub_acp::SingleTurn {
+        session_id: "s-retry".into(),
+        text: "Indexed 40 folders.".into(),
+        thought: String::new(),
+        usage: Default::default(),
+        stop_reason: "end_turn".into(),
+    }))
+    .unwrap();
+    cabin.grok_p_rx = Some(rx);
+    cabin.running = true;
+    cabin.chat_job_thread = Some(id.clone());
+    cabin.poll_single();
+    assert!(crash_cards(&cabin).is_empty(), "a successful retry posts nothing");
+
+    // Killed again after the retry was spent: one named card.
+    let (tx, rx) = mpsc::channel();
+    tx.send(grokhub_acp::GrokPEvent::Err("signal 15".into())).unwrap();
+    cabin.grok_p_rx = Some(rx);
+    cabin.running = true;
+    cabin.turn_retried = true;
+    cabin.chat_job_thread = Some(id.clone());
+    cabin.poll_single();
+    let cards = crash_cards(&cabin);
+    assert_eq!(cards.len(), 1, "{cards:?}");
+    assert_eq!(cards[0].title, "Crashed: Index ~/Projects (exit 143, killed)");
+    assert_eq!(cards[0].prompt.as_deref(), Some("/retry"));
+    assert!(!cabin.running);
     release_isolated(&root, cabin);
 }

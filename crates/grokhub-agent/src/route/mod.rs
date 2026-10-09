@@ -73,7 +73,13 @@ pub struct ModelCall {
     pub session: String,
     /// A time-boxed task's deadline (ms), for the Fast policy (R2b).
     pub deadline_ms: Option<u64>,
+    /// The episode just re-planned: this call goes one model and one rung up
+    /// ([`STEP_UP_RULE`]). The episode stays on its own model afterwards.
+    pub step_up: bool,
 }
+
+/// The route rule on a call stepped up after a re-plan.
+pub const STEP_UP_RULE: &str = "replan:step_up";
 
 impl ModelCall {
     pub fn xai(model: &str, effort: Option<&str>, class: &str, conversation_id: &str, input: Vec<InputItem>) -> Self {
@@ -87,6 +93,7 @@ impl ModelCall {
             tools: Vec::new(),
             session: String::new(),
             deadline_ms: None,
+            step_up: false,
         }
     }
 
@@ -179,6 +186,7 @@ pub fn call_model(client: &dyn ModelClient, call: &ModelCall, cancel: &CancelTok
         text: &text,
         needs_tools: !call.tools.is_empty(),
         deadline_ms: call.deadline_ms,
+        step_up: call.step_up,
         ..RouteCall::default()
     };
     rc.providers = true;
@@ -445,7 +453,7 @@ impl Router {
             })),
             _ => None,
         };
-        let e2 = pick.as_ref().is_some_and(|p| p.rules.iter().any(|r| r == "E2:next_model"));
+        let e2 = pick.as_ref().is_some_and(|p| p.rules.iter().any(|r| r == "E2:next_model" || r == STEP_UP_RULE));
         let chosen = if local::privacy_only(&input.local) {
             // Sensitive data and no cloud grant: the device or nothing.
             match ids.iter().find(|id| local::is_local(id)) {

@@ -402,6 +402,7 @@ impl NativeEngine {
             EpisodeStop::Ended(EpisodeEnd::Halt) => "halted".into(),
             EpisodeStop::Ended(EpisodeEnd::Stop) => "cancelled".into(),
             EpisodeStop::Ended(EpisodeEnd::Idle) => "episode_idle".into(),
+            EpisodeStop::Ended(EpisodeEnd::Unconfirmed) => "episode_unconfirmed".into(),
             EpisodeStop::LadderPause(_) => "episode_ladder_pause".into(),
             EpisodeStop::Waiting => "end_turn".into(),
             EpisodeStop::Error(message) => {

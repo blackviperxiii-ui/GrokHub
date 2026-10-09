@@ -27,11 +27,15 @@ const TYPED: &str = "hunter2-typed-value-91";
 #[derive(Clone)]
 enum Act {
     Click(u32),
+    /// The same "Save" click every time.
+    ClickSave,
     HardClick,
     Type,
     Zoom(&'static str),
     Reads(usize),
     Done,
+    /// Done, with a `VERIFY_OK` of its own: no detector finding on a reject.
+    DoneSelfChecked,
     Say,
     Shell(&'static str),
 }
@@ -44,6 +48,10 @@ struct FakeModel {
     judge_calls: Mutex<Vec<ResponsesRequest>>,
     fold_calls: Mutex<Vec<ResponsesRequest>>,
     judge_says: &'static str,
+    /// The first this-many checker calls fail to run.
+    judge_errors: usize,
+    /// From this checker call (0-based) on, it says this instead.
+    judge_later: Option<(usize, &'static str)>,
     clock: Arc<AtomicU64>,
     tick_ms: u64,
     steer: Option<(usize, SteerQueue)>,
@@ -76,8 +84,19 @@ impl ModelClient for FakeModel {
         let system = first_text(req, 0);
         let usage = Usage { input_tokens: 1_000, output_tokens: 20, reasoning_tokens: 5, cost_in_usd_ticks: 10, cached_tokens: 0 };
         if system == JUDGE_SYSTEM {
-            self.judge_calls.lock().unwrap().push(req.clone());
-            return Ok(TurnOutput { text: self.judge_says.into(), reasoning: String::new(), calls: vec![], usage });
+            let n = {
+                let mut calls = self.judge_calls.lock().unwrap();
+                calls.push(req.clone());
+                calls.len() - 1
+            };
+            if n < self.judge_errors {
+                return Err(ClientError::Protocol("checker offline".into()));
+            }
+            let says = match self.judge_later {
+                Some((from, later)) if n >= from => later,
+                _ => self.judge_says,
+            };
+            return Ok(TurnOutput { text: says.into(), reasoning: String::new(), calls: vec![], usage });
         }
         if system == FOLD_SYSTEM {
             self.fold_calls.lock().unwrap().push(req.clone());
@@ -112,6 +131,7 @@ impl ModelClient for FakeModel {
         let usage = Usage { cached_tokens: cached, ..usage };
         let (text, calls) = match (self.script)(n) {
             Act::Click(x) => (String::new(), vec![call(n, "click", json!({"x": x, "y": 40}))]),
+            Act::ClickSave => (String::new(), vec![call(n, "click", json!({"x": 120, "y": 40, "label": "Save"}))]),
             Act::HardClick => (String::new(), vec![call(n, "click", json!({"x": 900, "y": 40, "label": "Send"}))]),
             Act::Type => (String::new(), vec![call(n, "type", json!({"text": TYPED}))]),
             Act::Zoom(id) => (String::new(), vec![call(n, "zoom", json!({"span_ref": id, "n": 1}))]),
@@ -120,6 +140,7 @@ impl ModelClient for FakeModel {
                 (0..k).map(|i| call(n * 100 + i, "read_file", json!({"path": format!("missing-{i}.txt")}))).collect(),
             ),
             Act::Done => ("All set.\nGOAL_COMPLETE".into(), vec![]),
+            Act::DoneSelfChecked => ("Saved it.\nVERIFY_OK\nGOAL_COMPLETE".into(), vec![]),
             Act::Say => ("Which network should I pick?".into(), vec![]),
             Act::Shell(cmd) => (String::new(), vec![call(n, "run_terminal_command", json!({"command": cmd}))]),
         };
@@ -136,6 +157,8 @@ struct FakeDesk {
     calls_at_halt: Mutex<Option<usize>>,
     /// Every screenshot is the same frame: no step changes the screen.
     still: bool,
+    /// A click on this label fails.
+    fail_label: Option<&'static str>,
 }
 
 impl FakeDesk {
@@ -166,6 +189,9 @@ impl DesktopOps for FakeDesk {
         if name == "click" && Some(clicks) == self.halt_after_clicks {
             self.halt.store(true, Ordering::SeqCst);
             *self.calls_at_halt.lock().unwrap() = Some(n);
+        }
+        if name == "click" && self.fail_label.is_some() && args.get("label").and_then(Value::as_str) == self.fail_label {
+            return ToolOutput::err("no such button");
         }
         if name == "screenshot" {
             return ToolOutput {
@@ -257,6 +283,8 @@ fn rig(label: &str, script: Script) -> Rig {
             judge_calls: Mutex::new(vec![]),
             fold_calls: Mutex::new(vec![]),
             judge_says: "VERIFY_OK",
+            judge_errors: 0,
+            judge_later: None,
             clock: Arc::clone(&clock),
             tick_ms: 1_000,
             steer: None,
@@ -469,7 +497,7 @@ fn an_episode_past_30_minutes_keeps_going() {
 }
 
 #[test]
-fn twenty_clicks_that_change_nothing_replan_twice_quietly_and_verify() {
+fn twenty_clicks_that_change_nothing_replan_every_five_quietly_and_verify() {
     let mut r = rig("stall", clicks_then_done(20));
     r.desk.still = true;
     let mut ep = r.episode("Turn on Wi-Fi in Settings");
@@ -479,11 +507,11 @@ fn twenty_clicks_that_change_nothing_replan_twice_quietly_and_verify() {
     let spans = r.spans();
     assert!(spans.iter().filter(|s| is_step(s)).all(|s| s.ui_changed == Some(false)));
     let replans: Vec<_> = spans.iter().filter(|s| s.tool == crate::harness::RECOVERY_TOOL).collect();
-    assert_eq!(replans.len(), 2);
+    assert_eq!(replans.len(), 4);
     for s in &replans {
         assert_eq!((s.decision.as_str(), s.result.as_str(), s.approval_class.as_str()), ("replan", "replan", "soft"));
         assert!(s.args_redacted.contains(r#""detector":"no_progress""#), "{}", s.args_redacted);
-        assert_eq!(s.claim, "no_progress: 8 steps in a row changed nothing");
+        assert_eq!(s.claim, "no_progress: 5 steps in a row changed nothing");
     }
     assert!(!spans.iter().any(|s| s.decision == "pause"));
     assert!(r.parks.posted.lock().unwrap().is_empty(), "no card");
@@ -493,8 +521,8 @@ fn twenty_clicks_that_change_nothing_replan_twice_quietly_and_verify() {
         .filter(|(_, t)| t.contains(&format!("GrokHub's check: {REPLAN_NOTE}")))
         .map(|(i, _)| i)
         .collect();
-    assert_eq!(told, vec![8, 16], "the worker is told to re-plan after the 8th and 16th still click");
-    assert_eq!(ep.stall, 4);
+    assert_eq!(told, vec![5, 10, 15, 20], "the worker is told to re-plan after every 5th still click");
+    assert_eq!(ep.stall, 0);
 }
 
 #[test]
@@ -692,7 +720,7 @@ fn a_fan_out_runs_at_most_20_reads_and_counts_its_returns() {
 
 #[test]
 fn idle_stall_and_header_are_named_and_progress_resets_the_stall() {
-    assert_eq!((EPISODE_IDLE.as_secs(), FANOUT_CAP, STALL_REPLAN), (600, 20, 8));
+    assert_eq!((EPISODE_IDLE.as_secs(), FANOUT_CAP, STALL_REPLAN, STEP_UP_STEPS), (600, 20, 5, 3));
     let mut ep = Episode::begin("ep-1", CHAT, "Go", T0, &[]);
     assert!(!ep.idle(T0 + 599_999));
     assert!(ep.idle(T0 + 600_000));
@@ -700,12 +728,12 @@ fn idle_stall_and_header_are_named_and_progress_resets_the_stall() {
     assert_eq!(ep.header(T0 + 4 * 60_000 + 5_000), "Desktop session · 12 steps · 4 min");
     assert_eq!(episode_header(1, std::time::Duration::ZERO), "Desktop session · 1 step · 0 min");
     // A screen change or a quiet success moves; no change or a failure doesn't; a park is neutral.
-    for _ in 0..7 {
+    for _ in 0..4 {
         assert!(!ep.note_progress("allow", Some(false), false));
     }
     assert!(!ep.note_progress("park", None, false));
-    assert_eq!(ep.stall, 7);
-    assert!(ep.note_progress("deny", None, true), "the 8th step with no progress re-plans");
+    assert_eq!(ep.stall, 4);
+    assert!(ep.note_progress("deny", None, true), "the 5th step with no progress re-plans");
     assert_eq!(ep.stall, 0);
     assert!(!ep.note_progress("allow", None, true));
     assert!(!ep.note_progress("allow", Some(true), true));
@@ -779,4 +807,197 @@ fn a_long_goal_reaches_the_worker_and_the_checker_whole_and_spans_keep_200() {
         assert!(s.goal_step.chars().count() <= GOAL_CAP, "{}", s.goal_step.chars().count());
     }
     assert_eq!(r.spans().iter().find(|s| is_step(s)).unwrap().goal_step.chars().count(), GOAL_CAP);
+}
+
+/// The `harness_recovery` spans in order: (decision, detector, claim).
+fn recoveries(spans: &[crate::harness::Span]) -> Vec<(String, String, String)> {
+    spans
+        .iter()
+        .filter(|s| s.tool == crate::harness::RECOVERY_TOOL)
+        .map(|s| {
+            let args: Value = serde_json::from_str(&s.args_redacted).unwrap();
+            (s.decision.clone(), args["detector"].as_str().unwrap_or("").to_string(), s.claim.clone())
+        })
+        .collect()
+}
+
+#[test]
+fn a_reject_with_no_finding_replans_with_the_reason_and_later_verifies() {
+    let mut r = rig("reject-replan", Box::new(|n| match n {
+        0 => Act::Click(5),
+        1 => Act::DoneSelfChecked,
+        2 => Act::Click(6),
+        _ => Act::Done,
+    }));
+    r.model.judge_says = "REJECT: notes.txt is not saved";
+    r.model.judge_later = Some((1, "VERIFY_OK"));
+    let mut ep = r.episode("Save notes.txt in the editor");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified), "a reject never leaves it waiting");
+    let spans = r.spans();
+    assert_eq!(
+        recoveries(&spans),
+        vec![("replan".to_string(), "verify_reject".to_string(), "verify_reject: notes.txt is not saved".to_string())]
+    );
+    let replan = spans.iter().find(|s| s.tool == crate::harness::RECOVERY_TOOL).unwrap();
+    assert_eq!(replan.origin, crate::harness::Origin::Repair);
+    let next = r.model.worker_calls.lock().unwrap()[2].clone();
+    assert!(
+        first_text(&next, 2).contains(&format!("GrokHub's check: {REPLAN_NOTE} The independent check said: notes.txt is not saved")),
+        "{}",
+        first_text(&next, 2)
+    );
+    let checks: Vec<&str> = spans.iter().filter(|s| s.tool == VERIFY_TOOL).map(|s| s.result.as_str()).collect();
+    assert_eq!(checks, vec!["fail", "pass"]);
+    assert_eq!(r.model.judge_calls.lock().unwrap().len(), 2);
+    assert_eq!(ep.ended, Some(EpisodeEnd::Verified));
+}
+
+#[test]
+fn a_checker_that_cannot_run_is_retried_then_escalated_and_passes() {
+    let mut r = rig("checker-escalate", clicks_then_done(1));
+    r.model.judge_errors = 2;
+    let mut ep = r.episode("Turn on Wi-Fi in Settings");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(r.model.judge_calls.lock().unwrap().len(), 3);
+    let spans = r.spans();
+    let rec = recoveries(&spans);
+    assert_eq!(rec.len(), 2);
+    assert_eq!((rec[0].0.as_str(), rec[0].1.as_str()), ("retry", "checker_error"));
+    assert_eq!((rec[1].0.as_str(), rec[1].1.as_str()), ("escalate", "checker_error"));
+    assert!(rec[0].2.starts_with("checker_error: ") && rec[0].2.contains("checker offline"), "{}", rec[0].2);
+    let check = spans.iter().find(|s| s.tool == VERIFY_TOOL).unwrap();
+    assert_eq!(check.result, "pass");
+    assert_eq!(check.tokens.as_ref().unwrap().class, "episode:step", "the last try routes as the worker's class");
+    assert_eq!(r.model.worker_calls.lock().unwrap().len(), 2, "the worker was not sent back");
+}
+
+#[test]
+fn a_checker_still_down_after_escalating_replans_as_checker_unavailable() {
+    let mut r = rig("checker-down", Box::new(|_| Act::Done));
+    r.model.judge_errors = 3;
+    let mut ep = r.episode("Turn on Wi-Fi in Settings");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    let rec = recoveries(&r.spans());
+    let decisions: Vec<(&str, &str)> = rec.iter().map(|(d, det, _)| (d.as_str(), det.as_str())).collect();
+    assert_eq!(decisions, vec![("retry", "checker_error"), ("escalate", "checker_error"), ("replan", "verify_reject")]);
+    assert_eq!(rec[2].2, "verify_reject: checker unavailable");
+    let next = r.model.worker_calls.lock().unwrap()[1].clone();
+    assert!(first_text(&next, 2).contains("The independent check said: checker unavailable"), "{}", first_text(&next, 2));
+    assert_eq!(r.model.judge_calls.lock().unwrap().len(), 4, "three tries, then the next claim's check");
+}
+
+#[test]
+fn the_same_reject_three_times_on_an_unchanged_screen_ends_with_a_named_note() {
+    let mut r = rig("same-reject", Box::new(|_| Act::Done));
+    r.desk.still = true;
+    r.model.judge_says = "REJECT: the Wi-Fi toggle is still off";
+    let mut ep = r.episode("Turn on Wi-Fi in Settings");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Unconfirmed));
+    assert_eq!(out.reply, "Couldn't confirm: Turn on Wi-Fi in Settings — checker says the Wi-Fi toggle is still off");
+    assert_eq!(ep.ended, Some(EpisodeEnd::Unconfirmed));
+    assert_eq!(r.model.judge_calls.lock().unwrap().len(), 3);
+    let spans = r.spans();
+    let end = spans.last().unwrap();
+    assert_eq!((end.tool.as_str(), end.decision.as_str(), end.result.as_str()), (EPISODE_TOOL, "end", "unconfirmed"));
+    assert!(r.parks.posted.lock().unwrap().is_empty(), "no card");
+    assert_eq!(EpisodeEnd::Unconfirmed.as_str(), "unconfirmed");
+
+    // The same reject while the screen keeps changing keeps going.
+    let mut r = rig("same-reject-moving", Box::new(|n| if n % 2 == 0 { Act::Done } else { Act::Click(n as u32) }));
+    r.model.judge_says = "REJECT: the Wi-Fi toggle is still off";
+    r.model.judge_later = Some((4, "VERIFY_OK"));
+    let mut ep = r.episode("Turn on Wi-Fi in Settings");
+    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(r.model.judge_calls.lock().unwrap().len(), 5);
+}
+
+#[test]
+fn note_reject_counts_only_the_same_reason_on_the_same_screen() {
+    let mut ep = Episode::begin("ep-r", CHAT, "Save notes.txt", T0, &[]);
+    assert!(!ep.note_reject("not saved", "aaa"));
+    assert!(!ep.note_reject("not saved", "aaa"));
+    assert!(!ep.note_reject("not saved", "bbb"), "the screen changed: the count starts over");
+    assert!(!ep.note_reject("wrong folder", "bbb"), "another reason starts over");
+    assert!(!ep.note_reject("wrong folder", "bbb"));
+    assert!(ep.note_reject("wrong folder", "bbb"));
+    assert_eq!(ep.last_reject, Some(("wrong folder".into(), "bbb".into(), 3)));
+}
+
+fn worker_tokens(spans: &[crate::harness::Span]) -> Vec<(String, String)> {
+    spans
+        .iter()
+        .filter(|s| is_step(s))
+        .map(|s| {
+            let t = s.tokens.as_ref().unwrap();
+            (t.model.clone(), t.effort.clone())
+        })
+        .collect()
+}
+
+#[test]
+fn a_save_button_that_does_nothing_replans_on_the_third_click_and_steps_up_for_three_steps() {
+    let mut r = rig("dead-save", Box::new(|n| match n {
+        0..=2 => Act::ClickSave,
+        3..=6 => Act::Click(n as u32),
+        _ => Act::Done,
+    }));
+    r.desk.still = true;
+    let mut ep = r.episode("Save notes.txt in the editor");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    let spans = r.spans();
+    assert_eq!(
+        recoveries(&spans),
+        vec![("replan".into(), "repeat_call".into(), "replan: click 'Save' changed nothing 3×".into())],
+        "one re-plan on the third click, before the stall backstop, and 1a's loop finding is not run twice"
+    );
+    let told: Vec<usize> = nows(&r.model)
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.contains(&format!("GrokHub's check: {REPLAN_NOTE}")))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(told, vec![3], "the worker is told right after the third click");
+    let efforts: Vec<String> = worker_tokens(&spans).into_iter().map(|(_, e)| e).collect();
+    assert_eq!(efforts, vec!["low", "low", "low", "medium", "medium", "medium", "low"], "three stepped-up calls, then back");
+    let marks: Vec<(String, String)> = spans
+        .iter()
+        .filter(|s| s.tool == EPISODE_TOOL && s.decision == "step_up")
+        .map(|s| (s.result.clone(), s.claim.clone()))
+        .collect();
+    assert_eq!(marks, vec![("grok-4.7".to_string(), "stepped up to grok-4.7 medium for 3 steps".to_string())], "one quiet note naming the model");
+    assert!(r.parks.posted.lock().unwrap().is_empty(), "no card, no prompt");
+    assert_eq!(ep.step_up, 0);
+}
+
+#[test]
+fn an_identical_failing_click_replans_on_the_second_try() {
+    let mut r = rig("failing-save", Box::new(|n| match n {
+        0 | 1 => Act::ClickSave,
+        2 => Act::Click(7),
+        _ => Act::Done,
+    }));
+    r.desk.fail_label = Some("Save");
+    let mut ep = r.episode("Save notes.txt in the editor");
+    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    let spans = r.spans();
+    let steps: Vec<&str> = spans.iter().filter(|s| is_step(s)).map(|s| s.result.as_str()).collect();
+    assert_eq!(steps, vec!["failed: no such button", "failed: no such button", "click ok"]);
+    assert_eq!(recoveries(&spans), vec![("replan".into(), "repeat_call".into(), "replan: click 'Save' failed 2×".into())]);
+    assert!(first_text(&r.model.worker_calls.lock().unwrap()[2], 2).contains(&format!("GrokHub's check: {REPLAN_NOTE}")));
+}
+
+#[test]
+fn varied_clicks_that_move_the_screen_never_replan_or_step_up() {
+    let r = rig("varied", clicks_then_done(12));
+    let mut ep = r.episode("Sort the photos");
+    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    let spans = r.spans();
+    assert!(recoveries(&spans).is_empty());
+    assert!(worker_tokens(&spans).iter().all(|(m, e)| (m.as_str(), e.as_str()) == ("grok-4.7", "low")));
+    assert!(!spans.iter().any(|s| s.decision == "step_up"));
 }

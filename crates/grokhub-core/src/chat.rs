@@ -58,18 +58,29 @@ pub fn chat_request_body_vision(
     image_data_url: Option<&str>,
     effort: Option<&str>,
 ) -> Value {
+    let images: Vec<&str> = image_data_url.into_iter().collect();
+    chat_request_body_images(model, messages, &images, effort)
+}
+
+/// Chat Completions body with every `data:image` URL on the last user message, in order.
+pub fn chat_request_body_images(
+    model: &str,
+    messages: &[(String, String)],
+    images: &[&str],
+    effort: Option<&str>,
+) -> Value {
     let mut msgs: Vec<Value> = messages
         .iter()
         .map(|(role, content)| json!({ "role": role, "content": content }))
         .collect();
-    if let Some(url) = image_data_url.filter(|s| s.starts_with("data:image")) {
+    let urls: Vec<&str> = images.iter().copied().filter(|s| s.starts_with("data:image")).collect();
+    if !urls.is_empty() {
         if let Some(last) = msgs.last_mut() {
             if last["role"] == "user" {
                 let text = last["content"].as_str().unwrap_or("").to_string();
-                last["content"] = json!([
-                    { "type": "text", "text": text },
-                    { "type": "image_url", "image_url": { "url": url } }
-                ]);
+                let mut parts = vec![json!({ "type": "text", "text": text })];
+                parts.extend(urls.iter().map(|url| json!({ "type": "image_url", "image_url": { "url": url } })));
+                last["content"] = Value::Array(parts);
             }
         }
     }
@@ -319,19 +330,30 @@ pub fn responses_request_body(
     image_data_url: Option<&str>,
     effort: Option<&str>,
 ) -> Value {
+    let images: Vec<&str> = image_data_url.into_iter().collect();
+    responses_request_body_images(model, messages, &images, effort)
+}
+
+/// Responses body with every `data:image` URL on the last user message, in order.
+pub fn responses_request_body_images(
+    model: &str,
+    messages: &[(String, String)],
+    images: &[&str],
+    effort: Option<&str>,
+) -> Value {
     let resolved = if model.is_empty() { DEFAULT_MODEL } else { model };
     let mut input: Vec<Value> = messages
         .iter()
         .map(|(role, content)| json!({ "role": role, "content": content }))
         .collect();
-    if let Some(url) = image_data_url.filter(|s| s.starts_with("data:image")) {
+    let urls: Vec<&str> = images.iter().copied().filter(|s| s.starts_with("data:image")).collect();
+    if !urls.is_empty() {
         if let Some(last) = input.last_mut() {
             if last["role"] == "user" {
                 let text = last["content"].as_str().unwrap_or("").to_string();
-                last["content"] = json!([
-                    { "type": "input_text", "text": text },
-                    { "type": "input_image", "image_url": url }
-                ]);
+                let mut parts = vec![json!({ "type": "input_text", "text": text })];
+                parts.extend(urls.iter().map(|url| json!({ "type": "input_image", "image_url": url })));
+                last["content"] = Value::Array(parts);
             }
         }
     }
@@ -419,6 +441,40 @@ pub fn parse_model_reasoning(body: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn several_stills_ride_the_last_user_message_in_order() {
+        let msgs = vec![
+            ("system".to_string(), "diagnose".to_string()),
+            ("user".to_string(), "video stutters".to_string()),
+        ];
+        let stills = ["data:image/png;base64,AAA", "https://x/y.png", "data:image/jpeg;base64,BBB"];
+        let r = responses_request_body_images("grok-4.7", &msgs, &stills, None);
+        assert_eq!(r["input"][0], json!({ "role": "system", "content": "diagnose" }));
+        assert_eq!(
+            r["input"][1]["content"],
+            json!([
+                { "type": "input_text", "text": "video stutters" },
+                { "type": "input_image", "image_url": "data:image/png;base64,AAA" },
+                { "type": "input_image", "image_url": "data:image/jpeg;base64,BBB" }
+            ])
+        );
+        let c = chat_request_body_images("grok-4.7", &msgs, &stills, None);
+        assert_eq!(
+            c["messages"][1]["content"],
+            json!([
+                { "type": "text", "text": "video stutters" },
+                { "type": "image_url", "image_url": { "url": "data:image/png;base64,AAA" } },
+                { "type": "image_url", "image_url": { "url": "data:image/jpeg;base64,BBB" } }
+            ])
+        );
+        assert_eq!(
+            responses_request_body("grok-4.7", &msgs, Some("data:image/png;base64,AAA"), None),
+            responses_request_body_images("grok-4.7", &msgs, &["data:image/png;base64,AAA"], None),
+            "one image is the same body as before"
+        );
+        assert_eq!(chat_request_body_images("grok-4.7", &msgs, &[], None)["messages"][1]["content"], "video stutters");
+    }
 
     #[test]
     fn only_reasoning_models_accept_an_effort() {

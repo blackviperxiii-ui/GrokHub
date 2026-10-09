@@ -31,6 +31,8 @@ use crate::harness::{private_write, record_change, ChangeKind, ChangeTarget, Ori
 pub const TUNING_FILE: &str = "route_tuning.json";
 /// The ledger id of the tuning file.
 pub const TUNING_ID: &str = "route_tuning";
+/// How every promotion's ledger reason starts; its "why" card says the rest.
+pub const TUNED_PREFIX: &str = "router tuned ";
 pub const STATE_FILE: &str = "tune_state.json";
 pub const SCORECARDS_FILE: &str = "scorecards.json";
 pub const TUNING_SCHEMA: u32 = 1;
@@ -407,7 +409,7 @@ pub fn tick(config_dir: &Path, verify: &dyn VerifySource, outcome_hook: &dyn Out
             Verdict::Promote { cost_gain_pct, latency_gain_pct } => {
                 let before = tuning.value(&c.class, &change);
                 tuning.apply(&c.class, &change);
-                let reason = format!("router tuned {}: {} ({cost_gain_pct:.0}% cheaper, {latency_gain_pct:.0}% faster, quality held)", plain(&c.class), change.label());
+                let reason = format!("{TUNED_PREFIX}{}: {} ({cost_gain_pct:.0}% cheaper, {latency_gain_pct:.0}% faster, quality held)", plain(&c.class), change.label());
                 write_tuning(config_dir, &tuning, &reason)?;
                 let c = &mut state.candidates[i];
                 c.stage = Stage::Watch;
@@ -497,7 +499,7 @@ pub fn accept_card(config_dir: &Path, id: &str, now_ms: u64) -> Result<String, S
     c.stage = Stage::Accepted;
     c.promoted_at = Some(now_ms);
     write_json(&state_path(config_dir), &state)?;
-    Ok(format!("Router changed ({what}). Undo is on the change list."))
+    Ok(format!("Router changed ({what}). /why table shows it."))
 }
 
 /// The weekly self-review's router line.

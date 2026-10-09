@@ -250,6 +250,10 @@ pub(super) enum FeedAct {
     Undo(String),
     /// "Don't do this again" on a Done-for-you card. Pointer click only.
     NeverAgain(String),
+    /// Retry on a crash card.
+    Retry(String),
+    /// Delete recording on a screen recording card.
+    DeleteRecording(String),
 }
 
 /// Done-for-you cards carry a white rule down the left edge, the cabin's
@@ -341,6 +345,22 @@ impl Cabin {
         }
         let card = schedule_created_card(source_id, title, when_label, now_ms());
         self.post_feed_card(card);
+    }
+
+    /// Retry on a crash card: open the chat the run was in and send the
+    /// card's retry line there (`/retry`, or `/bg …` for a background run).
+    pub(super) fn crash_retry(&mut self, id: &str) {
+        let Some(card) = self.updates.iter().find(|c| c.id == id).cloned() else {
+            return;
+        };
+        let Some(line) = card.prompt.clone().filter(|_| grokhub_core::is_crash_card(&card)) else {
+            return;
+        };
+        if mark_update_opened(&mut self.updates, id) {
+            self.persist_updates();
+        }
+        self.follow_update_action(card.action.clone());
+        self.send_chat(line);
     }
 
     pub(super) fn post_feed_card(&mut self, card: UpdateCard) {
@@ -863,6 +883,8 @@ impl Cabin {
             Some(FeedAct::Like(id)) => self.pulse_like(&id, &Self::local_day()),
             Some(FeedAct::Undo(id)) => self.done_for_you_undo(&id),
             Some(FeedAct::NeverAgain(id)) => self.done_for_you_never(&id),
+            Some(FeedAct::Retry(id)) => self.crash_retry(&id),
+            Some(FeedAct::DeleteRecording(id)) => self.arm_delete_recording(&id),
             Some(FeedAct::Link(url)) => {
                 self.follow_update_action(Some(UpdateAction::DeepLink { href: url }));
             }
@@ -1800,6 +1822,11 @@ fn paint_full_feed_card(
                             super::pulse_ui::FeedPostAct::Link(url) => FeedAct::Link(url),
                             super::pulse_ui::FeedPostAct::Undo => FeedAct::Undo(card.id.clone()),
                             super::pulse_ui::FeedPostAct::NeverAgain => FeedAct::NeverAgain(card.id.clone()),
+                            super::pulse_ui::FeedPostAct::Open => FeedAct::Open(card.id.clone()),
+                            super::pulse_ui::FeedPostAct::Retry => FeedAct::Retry(card.id.clone()),
+                            super::pulse_ui::FeedPostAct::DeleteRecording => {
+                                FeedAct::DeleteRecording(card.id.clone())
+                            }
                         });
                     }
                 });

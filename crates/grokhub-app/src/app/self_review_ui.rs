@@ -7,9 +7,11 @@
 
 use std::sync::mpsc;
 
+use eframe::egui;
 use grokhub_agent::harness as hx;
 use grokhub_core::outcome::{self as oc, TaskOutcome};
 use grokhub_core::self_review::{self as sr, CardTarget};
+use grokhub_core::what_changed as wc;
 use serde::{Deserialize, Serialize};
 
 use super::Cabin;
@@ -33,6 +35,9 @@ pub(super) struct SelfReviewFile {
     pub last_day: Option<String>,
     #[serde(default)]
     pub pending: Vec<PendingProposal>,
+    /// Suggestions quiet mode logged instead of posting, newest last.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub quiet_log: Vec<sr::QuietEntry>,
 }
 
 /// What one card says and what its Apply writes.
@@ -73,6 +78,34 @@ fn save_state(s: &SelfReviewFile) {
 }
 
 /// A draft skill from the newest run's steps (tool names only, no args).
+pub(super) const QUIET_ROW: &str = "Quiet self-review";
+const QUIET_HINT: &str = "The Sunday self-review logs its suggestions here instead of posting Pulse cards. Nothing is applied either way.";
+/// Logged suggestions Settings shows.
+const QUIET_LINES: usize = 5;
+
+/// What Settings shows under the switch.
+pub(super) fn quiet_log_note(log: &[sr::QuietEntry]) -> String {
+    let lines = sr::quiet_log_lines(log, QUIET_LINES);
+    if lines.is_empty() {
+        "Nothing logged yet. The self-review runs on Sunday at dream time.".into()
+    } else {
+        format!("Logged suggestions, newest first:\n{}", lines.join("\n"))
+    }
+}
+
+/// Quiet mode: the suggestion goes to the log in `self_review.json`, not Pulse.
+fn log_quiet(source: &str, title: &str, body: &str) {
+    let mut state = load_state();
+    let entry = sr::QuietEntry {
+        day: Cabin::local_day(),
+        source: source.to_string(),
+        title: title.to_string(),
+        body: body.to_string(),
+    };
+    sr::add_quiet_entry(&mut state.quiet_log, entry);
+    save_state(&state);
+}
+
 fn draft_md(cand: &sr::DraftCandidate, spans: &[hx::Span]) -> String {
     let mut steps: Vec<String> = Vec::new();
     for s in spans
@@ -186,6 +219,18 @@ impl Cabin {
     }
 
     /// The hour from Settings → Dream time, clamped to 0–23.
+    /// Settings → Behavior: the quiet mode switch, and while it's on the
+    /// newest suggestions it logged.
+    pub(super) fn ui_quiet_self_review_rows(&mut self, ui: &mut egui::Ui) {
+        if crate::cards::settings_toggle(ui, QUIET_ROW, QUIET_HINT, &mut self.cfg.self_improve_quiet) {
+            self.persist_cfg();
+            self.status = "Saved".into();
+        }
+        if self.cfg.self_improve_quiet {
+            crate::cards::settings_note(ui, &quiet_log_note(&load_state().quiet_log));
+        }
+    }
+
     pub(super) fn dream_hour(&self) -> u32 {
         self.cfg.dream_hour.min(23)
     }
@@ -256,9 +301,11 @@ impl Cabin {
             let spans = hx::spans_for(&dir, &d.span_ids);
             let md = draft_md(&d, &spans);
             let numbers = format!("You did this {} times in the last two weeks", d.runs);
-            let details = format!(
-                "{numbers}. Apply saves it as a new skill you can undo.\n\n{}",
-                sr::line_diff("", &md)
+            let diff = sr::line_diff("", &md);
+            let steps = grokhub_core::parse_skill_md(&md).instructions;
+            let details = wc::with_block(
+                &wc::from_line_diff(&sr::line_diff("", &steps)),
+                &format!("{numbers}. Apply saves it as a new skill you can undo.\n\n{diff}"),
             );
             let title = format!("Make a skill: {}", d.name);
             let card = ProposalCard {
@@ -343,9 +390,12 @@ impl Cabin {
                 grokhub_core::render_skill_md(&patched),
             );
             let stats = format!("{}.", p.numbers);
-            let details = format!(
-                "{stats} Apply changes the skill's steps; you can undo it.\n\n{}",
-                sr::diff_excerpt(&old, &new, 2)
+            let details = wc::with_block(
+                &wc::from_line_diff(&sr::line_diff(&existing.instructions, &patched.instructions)),
+                &format!(
+                    "{stats} Apply changes the skill's steps; you can undo it.\n\n{}",
+                    sr::diff_excerpt(&old, &new, 2)
+                ),
             );
             let card = ProposalCard {
                 source: sr::patch_source(&p.skill),
@@ -371,13 +421,17 @@ impl Cabin {
                 Some(CardTarget::Router(id)) => id,
                 _ => continue,
             };
-            let details = format!("{body}\n\nAccept applies it through the change list, and Undo puts it back. Nothing changes without your click.");
+            let details = format!("{body}\n\nAccept applies it. Nothing changes without your click, and /why table shows the router's picks.");
             let card = ProposalCard { source, skill: &candidate, title: &title, body: &body, details, md: "" };
             self.post_self_review_card(card, now);
             posted += usize::from(self.harness.self_review.budget < before);
         }
         grokhub_agent::route::learn::cards_posted(&dir, posted, now);
         let line = grokhub_agent::route::learn::review_line(&dir, now);
+        if self.cfg.self_improve_quiet {
+            log_quiet("router-review", "Weekly router review", &line);
+            return;
+        }
         let card = grokhub_core::router_update_card("router-review", "Weekly router review", &line, now);
         self.post_feed_card(card);
     }
@@ -403,6 +457,10 @@ impl Cabin {
             return;
         }
         self.harness.self_review.budget -= 1;
+        if self.cfg.self_improve_quiet {
+            log_quiet(&source, title, body);
+            return;
+        }
         let mut card = grokhub_core::suggestion_card(&source, title, body, now);
         card.details = Some(details);
         grokhub_core::post_update(&mut self.updates, card);
