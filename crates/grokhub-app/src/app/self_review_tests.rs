@@ -259,6 +259,10 @@ fn the_weekly_pass_posts_at_most_five_cards_with_numbers_and_refuses_a_consent_t
     );
     let details = first.details.clone().unwrap_or_default();
     assert!(
+        details.starts_with("What changed: 1 added, 0 merged, 0 removed\n- Added: \"3. wait for the file\"\n\n3 of 5"),
+        "the What changed block sits above the numbers: {details}"
+    );
+    assert!(
         details.contains("  2. click Export\n+ 3. wait for the file\n"),
         "{details}"
     );
@@ -426,6 +430,10 @@ fn three_similar_runs_in_two_weeks_stage_one_draft_and_apply_creates_it() {
         Some("You did this 3 times in the last two weeks")
     );
     let details = cards[0].details.clone().unwrap_or_default();
+    assert!(
+        details.starts_with("What changed: 1 added, 0 merged, 0 removed\n- Added: \"1. open_file\"\n\nYou did this 3 times"),
+        "the What changed block sits above the numbers: {details}"
+    );
     assert!(
         details.contains("+ name: summarize-march-invoic\n")
             && details.contains("+ 1. open_file\n"),
