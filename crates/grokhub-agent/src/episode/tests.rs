@@ -134,6 +134,8 @@ struct FakeDesk {
     /// Halt once this many clicks ran.
     halt_after_clicks: Option<usize>,
     calls_at_halt: Mutex<Option<usize>>,
+    /// Every screenshot is the same frame: no step changes the screen.
+    still: bool,
 }
 
 impl FakeDesk {
@@ -168,7 +170,7 @@ impl DesktopOps for FakeDesk {
         if name == "screenshot" {
             return ToolOutput {
                 text: "windows: Settings, Terminal".into(),
-                image_data_url: Some(format!("data:image/png;base64,FRAME{n}")),
+                image_data_url: Some(if self.still { "data:image/png;base64,FRAME".into() } else { format!("data:image/png;base64,FRAME{n}") }),
                 failed: false,
             };
         }
@@ -433,38 +435,95 @@ fn steer_at_step_5_keeps_the_episode_id_and_the_parks() {
     assert_eq!(sends.len(), 1);
 }
 
-#[test]
-fn the_60_step_cap_pauses_and_no_step_61_runs_until_the_user_answers() {
-    let r = rig("cap", Box::new(|n| if n < 62 { Act::Click(n as u32) } else { Act::Done }));
-    let mut ep = r.episode("Sort the photos");
-    let mut view = EpisodeView::default();
-    let out = r.run(&mut ep, &mut view);
-    assert_eq!(out.stop, EpisodeStop::Paused(CapHit::Steps(60)));
-    assert_eq!(CapHit::Steps(60).question(), "Paused after 60 steps. Continue?");
-    assert_eq!(r.desk.count("click"), 60);
-    let worker_calls = r.model.worker_calls.lock().unwrap().len();
-    let pause = r.spans().into_iter().find(|s| s.decision == "pause").unwrap();
-    assert_eq!(pause.claim, "Paused after 60 steps. Continue?");
-    // Running again without an answer pauses again: no step 61, no model call.
-    assert_eq!(r.run(&mut ep, &mut view).stop, EpisodeStop::Paused(CapHit::Steps(60)));
-    assert_eq!(r.desk.count("click"), 60);
-    assert_eq!(r.model.worker_calls.lock().unwrap().len(), worker_calls);
-    assert_eq!(r.spans().iter().filter(|s| s.decision == "pause").count(), 1);
-    ep.resume(Continue::from_typing(), r.clock.load(Ordering::SeqCst));
-    assert_eq!(r.run(&mut ep, &mut view).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
-    assert_eq!(r.desk.count("click"), 62);
+/// The text message (input 2) of every worker call: goal step, note, observation.
+fn nows(m: &FakeModel) -> Vec<String> {
+    m.worker_calls.lock().unwrap().iter().map(|r| first_text(r, 2)).collect()
 }
 
 #[test]
-fn the_wall_cap_pauses_too() {
-    let mut r = rig("wall", Box::new(|n| Act::Click(n as u32)));
-    r.model.tick_ms = 10 * 60_000;
+fn a_100_step_episode_runs_to_verified_with_no_pause() {
+    let r = rig("hundred", clicks_then_done(100));
     let mut ep = r.episode("Sort the photos");
     let out = r.run(&mut ep, &mut EpisodeView::default());
-    assert_eq!(out.stop, EpisodeStop::Paused(CapHit::Wall(30)));
-    assert_eq!(CapHit::Wall(30).question(), "Paused after 30 minutes. Continue?");
-    // Clicks at 10 and 20 minutes; the third worker answer lands at 30 and waits.
-    assert_eq!(r.desk.count("click"), 2);
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(r.desk.count("click"), 100);
+    assert_eq!(ep.steps, 100);
+    let spans = r.spans();
+    assert_eq!(spans.iter().filter(|s| is_step(s)).count(), 100);
+    assert!(!spans.iter().any(|s| s.decision == "pause"), "no pause span");
+    assert!(!spans.iter().any(|s| s.tool == crate::harness::RECOVERY_TOOL), "every click moved: no re-plan");
+    assert!(r.parks.posted.lock().unwrap().is_empty(), "no card");
+    assert_eq!(spans.last().unwrap().claim, "Desktop session · 100 steps · 1 min");
+}
+
+#[test]
+fn an_episode_past_30_minutes_keeps_going() {
+    let mut r = rig("long", clicks_then_done(10));
+    r.model.tick_ms = 5 * 60_000;
+    let mut ep = r.episode("Sort the photos");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(r.desk.count("click"), 10);
+    // Eleven worker calls five minutes apart: 55 minutes.
+    assert_eq!(r.spans().last().unwrap().claim, "Desktop session · 10 steps · 55 min");
+}
+
+#[test]
+fn twenty_clicks_that_change_nothing_replan_twice_quietly_and_verify() {
+    let mut r = rig("stall", clicks_then_done(20));
+    r.desk.still = true;
+    let mut ep = r.episode("Turn on Wi-Fi in Settings");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(r.desk.count("click"), 20);
+    let spans = r.spans();
+    assert!(spans.iter().filter(|s| is_step(s)).all(|s| s.ui_changed == Some(false)));
+    let replans: Vec<_> = spans.iter().filter(|s| s.tool == crate::harness::RECOVERY_TOOL).collect();
+    assert_eq!(replans.len(), 2);
+    for s in &replans {
+        assert_eq!((s.decision.as_str(), s.result.as_str(), s.approval_class.as_str()), ("replan", "replan", "soft"));
+        assert!(s.args_redacted.contains(r#""detector":"no_progress""#), "{}", s.args_redacted);
+        assert_eq!(s.claim, "no_progress: 8 steps in a row changed nothing");
+    }
+    assert!(!spans.iter().any(|s| s.decision == "pause"));
+    assert!(r.parks.posted.lock().unwrap().is_empty(), "no card");
+    let told: Vec<usize> = nows(&r.model)
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.contains(&format!("GrokHub's check: {REPLAN_NOTE}")))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(told, vec![8, 16], "the worker is told to re-plan after the 8th and 16th still click");
+    assert_eq!(ep.stall, 4);
+}
+
+#[test]
+fn a_hard_park_approved_after_the_turn_ended_runs_once_on_the_resume_prompt() {
+    let r = rig("resume", Box::new(|n| match n {
+        0 => Act::HardClick,
+        1 => Act::Say,
+        _ => Act::Done,
+    }));
+    let mut ep = r.episode("Reply to the thread");
+    let mut view = EpisodeView::default();
+    assert_eq!(r.run(&mut ep, &mut view).stop, EpisodeStop::Waiting);
+    assert_eq!(r.desk.count("click"), 0, "parked, not run");
+    assert_eq!(ep.parks.len(), 1);
+    // The user approves on the card after the turn ended, then the cabin
+    // sends the resume prompt: no Steer, same goal step.
+    r.parks.answer_all(true);
+    let out = r.run(&mut ep, &mut view);
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    let sends: Vec<_> = r.desk.calls.lock().unwrap().iter().filter(|(_, a)| a.get("label").is_some()).cloned().collect();
+    assert_eq!(sends.len(), 1, "the approved Send ran once");
+    let spans = r.spans();
+    let ran: Vec<_> = spans.iter().filter(|s| s.decision == "approve").collect();
+    assert_eq!(ran.len(), 1);
+    assert_eq!((ran[0].tool.as_str(), ran[0].goal_step.as_str()), ("click", "Reply to the thread"));
+    assert!(ran[0].hard_approved);
+    let last = nows(&r.model).pop().unwrap();
+    assert!(last.starts_with("Step 2 of this episode.\nGoal step: Reply to the thread\n"), "{last}");
+    assert!(ep.parks.is_empty());
 }
 
 #[test]
@@ -512,19 +571,19 @@ fn views(m: &FakeModel) -> Vec<String> {
 #[test]
 fn sixty_steps_stay_under_the_budget_and_the_prefix_holds_between_folds() {
     let budget = 3_000;
-    let r = rig("budget", Box::new(|n| Act::Click(n as u32)));
+    let r = rig("budget", clicks_then_done(60));
     let mut ep = r.episode("Sort the photos");
     let mut view = EpisodeView::new(budget);
-    assert_eq!(r.run(&mut ep, &mut view).stop, EpisodeStop::Paused(CapHit::Steps(60)));
+    assert_eq!(r.run(&mut ep, &mut view).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
     let views = views(&r.model);
-    assert_eq!(views.len(), 60);
+    assert_eq!(views.len(), 61);
     for v in &views {
         assert!(v.len() <= budget, "{} bytes over the {budget}-byte budget", v.len());
     }
     let folds = r.spans().iter().filter(|s| s.decision == "fold").count();
     assert!(folds > 10, "a 3,000-byte view must fold: {folds}");
     let stable = views.windows(2).filter(|w| w[1].starts_with(&w[0])).count();
-    assert!(stable >= 59 - folds, "{stable} stable of 59 with {folds} folds");
+    assert!(stable >= 60 - folds, "{stable} stable of 60 with {folds} folds");
     // Byte-identical wire prefix (system + view) between two steps with no fold.
     let calls = r.model.worker_calls.lock().unwrap();
     let wire = |req: &ResponsesRequest| serde_json::to_string(&crate::client::input_wire_value(&req.input[..2])).unwrap();
@@ -632,20 +691,28 @@ fn a_fan_out_runs_at_most_20_reads_and_counts_its_returns() {
 }
 
 #[test]
-fn caps_idle_and_header_are_named_and_continue_needs_the_user() {
-    assert_eq!((EPISODE_MAX_STEPS, EPISODE_MAX_WALL.as_secs(), EPISODE_IDLE.as_secs(), FANOUT_CAP), (60, 1_800, 600, 20));
+fn idle_stall_and_header_are_named_and_progress_resets_the_stall() {
+    assert_eq!((EPISODE_IDLE.as_secs(), FANOUT_CAP, STALL_REPLAN), (600, 20, 8));
     let mut ep = Episode::begin("ep-1", CHAT, "Go", T0, &[]);
     assert!(!ep.idle(T0 + 599_999));
     assert!(ep.idle(T0 + 600_000));
     ep.steps = 12;
     assert_eq!(ep.header(T0 + 4 * 60_000 + 5_000), "Desktop session · 12 steps · 4 min");
     assert_eq!(episode_header(1, std::time::Duration::ZERO), "Desktop session · 1 step · 0 min");
-    ep.steps = 60;
-    assert_eq!(ep.cap_hit(T0), Some(CapHit::Steps(60)));
-    ep.resume(Continue::from_click(), T0 + 1);
-    assert_eq!(ep.cap_hit(T0 + 1), None);
-    ep.steps = 120;
-    assert_eq!(ep.cap_hit(T0 + 1), Some(CapHit::Steps(120)));
+    // A screen change or a quiet success moves; no change or a failure doesn't; a park is neutral.
+    for _ in 0..7 {
+        assert!(!ep.note_progress("allow", Some(false), false));
+    }
+    assert!(!ep.note_progress("park", None, false));
+    assert_eq!(ep.stall, 7);
+    assert!(ep.note_progress("deny", None, true), "the 8th step with no progress re-plans");
+    assert_eq!(ep.stall, 0);
+    assert!(!ep.note_progress("allow", None, true));
+    assert!(!ep.note_progress("allow", Some(true), true));
+    assert_eq!(ep.stall, 0, "the screen changed");
+    assert!(!ep.note_progress("allow", Some(false), false));
+    assert!(!ep.note_progress("allow", None, false));
+    assert_eq!(ep.stall, 0, "a read with no screen reading that worked moved");
     let held = vec!["hunter2222".to_string()];
     let secret = Episode::begin("ep-2", CHAT, "Log in with hunter2222 and sk-abcdefghijklmnopqrstuv", T0, &held);
     assert_eq!(secret.goal, "Log in with [redacted] and [redacted]");

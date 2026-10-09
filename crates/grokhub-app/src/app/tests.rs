@@ -9868,13 +9868,13 @@ impl Drop for IsolatedConfig {
     }
 }
 
-struct HideGrok {
+pub(super) struct HideGrok {
     path: Option<std::ffi::OsString>,
     grok: Option<std::ffi::OsString>,
 }
 
 impl HideGrok {
-    fn arm() -> Self {
+    pub(super) fn arm() -> Self {
         let path = std::env::var_os("PATH");
         let grok = std::env::var_os("GROKHUB_GROK");
         std::env::set_var("PATH", "");
