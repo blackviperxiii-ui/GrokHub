@@ -418,7 +418,7 @@ impl XaiClient {
         if let GateOutcome::Park { reason, .. } | GateOutcome::Refuse { reason } = egress {
             return Err(ClientError::Protocol(reason));
         }
-        let body = responses_body(req);
+        let body = crate::timing::time("client:body", || responses_body(req));
         let mut call = self
             .agent
             .post(&self.url)
@@ -432,7 +432,9 @@ impl XaiClient {
         if let Some(limit) = req.call_timeout {
             call = call.timeout(limit);
         }
+        let sent = crate::timing::lap("client:to_headers");
         let response = call.send_json(body);
+        drop(sent);
         let response = match response {
             Ok(resp) => resp,
             Err(ureq::Error::Status(status, resp)) => {

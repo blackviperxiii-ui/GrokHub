@@ -387,7 +387,7 @@ pub use recipe::{
     RecipeDoc, ReplayOp, ScreenSize, TabAction,
 };
 pub use pii::{redact_pii, redact_recall};
-pub use redact::{forget_topic, is_plain_text, redact_held_secrets, redact_secrets};
+pub use redact::{forget_topic, is_plain_text, redact_held_secrets, redact_secret_words, redact_secrets};
 pub use reflect::{
     fact_candidates, fact_candidates_from, restore_memory_prev, should_idle_reflect,
     surgical_memory_edit, MemoryEdit, IDLE_REFLECT_MS,
@@ -425,7 +425,7 @@ pub use slash::{
 };
 pub use state::{
     clear_pending_after_complete, inbox_claim_ready, load_hub_state, merge_put_snapshot,
-    save_hub_state, state_for_disk, CompleteError, HubState, PairError,
+    is_phone_name, save_hub_state, state_for_disk, CompleteError, HubState, PairError,
     DEFAULT_PORT, HUB_KIND,
 };
 pub use stream::{
@@ -533,7 +533,7 @@ pub use update_feed::{
     unhide_home_source, HOME_HIDDEN_NOTE, LESS_MUTE_MS,
     post_update, release_quiet_hold, resume_needs_fresh_chat, schedule_created_card, self_change_card, router_update_card, done_for_you_card, DoneForYou,
     suggestion_card, tick_feed_pulse, visible_digests, visible_ideas, visible_updates,
-    digest_lookup_prompt, digest_steer, drop_dead_links, parse_lookup, public_http_url, post_help, remember_dismissed_source,
+    digest_lookup_prompt, digest_steer, drop_dead_links, parse_lookup, paused_job_of, public_http_url, post_help, remember_dismissed_source,
     remember_turned_down, turned_down_titles, turned_down_topic,
     DigestEdition, HelpTick, ParsedLookup, PausedJob, RepeatedAction, PAUSE_OFFER_MS,
     CardReaction, CitedLink, DigestMaterial, FeedPulse, PulseNow, PulseTick, TasteNote,
