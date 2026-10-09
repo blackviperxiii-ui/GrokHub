@@ -1,6 +1,13 @@
 //! Hard-class actions Always cannot skip, plus the hard floor (no UI bypass).
 //!
 //! The floor covers shell commands only, the same scope as `host_safety`.
+//! Hard class covers shell commands, named tools, and every click, key and
+//! typed text that reaches the OS: path A (`grokhub-desktop`), the in-app
+//! desktop tools (`click`, `key`, `type`, read by their args here too), the
+//! Cua sidecar (`cua_as_desk`), and paths B and D (`classify_ask`). A click
+//! is hard by the control's label or declared effect, or by a risky window
+//! when nothing names the control; Enter, Ctrl+Enter and Alt+S are hard in a
+//! chat, mail or checkout window.
 //! Hard class never applies to read-only tools (read_file, grep, list_dir, …).
 
 use grokhub_core::host_safety;
@@ -83,6 +90,17 @@ pub fn classify(name: &str, arguments: &str) -> HardHit {
     if let Some(floor) = hard_floor(name, arguments) {
         return HardHit::Floor(floor);
     }
+    // Card 18: a desktop act (the in-app tools, or an MCP server's `click`,
+    // `key`, `type` or Cua-shaped tool) is read by its args wherever a tool
+    // call is classified, the same as path A.
+    let leaf = name.rsplit("__").next().unwrap_or(name);
+    if matches!(leaf, "click" | "drag" | "key" | "type") || crate::harness::cua::cua_as_desk(leaf, &serde_json::Value::Null).is_some() {
+        let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or_else(|_| serde_json::json!({}));
+        let hit = desk_classify(leaf, &args);
+        if hit != HardHit::None {
+            return hit;
+        }
+    }
     match hard_class(name, arguments) {
         Some(class) => HardHit::Class(class),
         None => HardHit::None,
@@ -149,8 +167,10 @@ fn ask_click(title: &str, action: &str) -> Option<ClickRule> {
 }
 
 /// Path A: a `grokhub-desktop` tool call. Typed text is checked like a shell
-/// command (a terminal may have focus). Key combos that end the session are
-/// irreversible OS. Clicks, moves, scrolls, and screenshots are soft.
+/// command (a terminal may have focus), and a typed newline like Enter. Key
+/// combos that end the session are irreversible OS; Enter sends or pays in
+/// a chat, mail or checkout window ([`enter_class`]). A click is read by the
+/// control it lands on. Moves, scrolls, and screenshots are soft.
 pub fn desk_classify(tool: &str, args: &serde_json::Value) -> HardHit {
     // Spike-2a: a Cua Driver call is read as the desk tool it matches.
     if let Some((desk, mapped)) = crate::harness::cua::cua_as_desk(tool, args) {
@@ -163,6 +183,10 @@ pub fn desk_classify(tool: &str, args: &serde_json::Value) -> HardHit {
             match classify("run_terminal_command", &as_shell) {
                 floor @ HardHit::Floor(_) => floor,
                 _ if credential_field(args) => HardHit::Class(HardClass::Credentials),
+                HardHit::None if text.contains(['\n', '\r']) => match enter_class(&ENTER, window_of(args)) {
+                    Some(class) => HardHit::Class(class),
+                    None => HardHit::None,
+                },
                 hit => hit,
             }
         }
@@ -173,6 +197,11 @@ pub fn desk_classify(tool: &str, args: &serde_json::Value) -> HardHit {
             match grokhub_core::desktop_mcp::parse_key_combo(keys) {
                 Ok(combo) if session_ending_combo(&combo) => HardHit::Class(HardClass::IrreversibleOs),
                 Ok(combo) if is_delete_combo(&combo) && file_manager_window(args) => HardHit::Class(HardClass::Delete),
+                Ok(combo) if is_paste_combo(&combo) && credential_field(args) => HardHit::Class(HardClass::Credentials),
+                Ok(combo) => match enter_class(&combo, window_of(args)) {
+                    Some(class) => HardHit::Class(class),
+                    None => HardHit::None,
+                },
                 _ => HardHit::None,
             }
         }
@@ -206,6 +235,82 @@ fn session_ending_combo(combo: &grokhub_core::desktop_mcp::KeyCombo) -> bool {
     combo.ctrl && combo.alt && matches!(combo.key, KeyName::Delete | KeyName::Backspace | KeyName::End)
 }
 
+/// A plain Enter, which a typed newline presses.
+const ENTER: grokhub_core::desktop_mcp::KeyCombo = grokhub_core::desktop_mcp::KeyCombo {
+    ctrl: false,
+    alt: false,
+    shift: false,
+    super_key: false,
+    key: grokhub_core::desktop_mcp::KeyName::Return,
+};
+
+/// Window words of a chat app, where Enter sends what the composer holds.
+const CHAT_WINDOWS: &[&str] = &[
+    "slack", "discord", "telegram", "whatsapp", "signal", "teams", "messenger", "element", "messages", "chat", "wechat",
+    "skype", "mattermost", "zulip",
+];
+/// Window words of a mail app or a compose window, where Ctrl+Enter (Cmd+Enter,
+/// Outlook's Alt+S) sends.
+const MAIL_WINDOWS: &[&str] =
+    &["thunderbird", "outlook", "mail", "gmail", "compose", "evolution", "geary", "kmail", "mailspring", "draft", "inbox"];
+/// Window words of a checkout or payment page, where Enter submits the form.
+const MONEY_WINDOWS: &[&str] = &["checkout", "payment", "billing", "cart", "purchase"];
+/// Window words of a message being written, where an unnamed control may be Send.
+const COMPOSE_WINDOWS: &[&str] = &["compose", "draft", "reply", "forward"];
+
+/// The focused window the gate added (`window`), else what the caller named (`app`).
+fn window_of(args: &serde_json::Value) -> &str {
+    str_at(args, &["window", "app"]).unwrap_or("")
+}
+
+fn window_has(window: &str, list: &[&str]) -> bool {
+    field_words(window).iter().any(|w| list.contains(&w.as_str()))
+}
+
+/// What Enter (or a send chord) does in `window`: pays on a checkout page,
+/// sends in a chat app (Enter, Ctrl+Enter) or a mail window (Ctrl+Enter,
+/// Cmd+Enter, Alt+S). Shift+Enter is a new line and stays soft.
+fn enter_class(combo: &grokhub_core::desktop_mcp::KeyCombo, window: &str) -> Option<HardClass> {
+    use grokhub_core::desktop_mcp::KeyName;
+    let enter = combo.key == KeyName::Return && !combo.shift;
+    let alt_s = combo.alt && !combo.ctrl && matches!(combo.key, KeyName::Char(c) if c.eq_ignore_ascii_case(&'s'));
+    let chat_send = enter && !combo.alt && window_has(window, CHAT_WINDOWS);
+    let mail_send = ((enter && (combo.ctrl || combo.super_key)) || alt_s) && window_has(window, MAIL_WINDOWS);
+    if enter && window_has(window, MONEY_WINDOWS) {
+        Some(HardClass::Money)
+    } else if chat_send || mail_send {
+        Some(HardClass::Send)
+    } else {
+        None
+    }
+}
+
+/// Ctrl+V and Shift+Insert: a paste types the clipboard into the field.
+fn is_paste_combo(combo: &grokhub_core::desktop_mcp::KeyCombo) -> bool {
+    use grokhub_core::desktop_mcp::KeyName;
+    (combo.ctrl && matches!(combo.key, KeyName::Char(c) if c.eq_ignore_ascii_case(&'v')))
+        || (combo.shift && combo.key == KeyName::Insert)
+}
+
+/// Whether `decide` needs the focused window for this call: a Delete or
+/// Enter key, a paste, or typed text with a newline. Path A, the in-app
+/// desktop tools and the Cua sidecar add it as `window` first.
+pub fn needs_window(tool: &str, args: &serde_json::Value) -> bool {
+    use grokhub_core::desktop_mcp::KeyName;
+    match tool {
+        "key" => {
+            let keys = ["keys", "key"].iter().find_map(|k| args.get(*k).and_then(|v| v.as_str())).unwrap_or("");
+            grokhub_core::desktop_mcp::parse_key_combo(keys).is_ok_and(|c| {
+                matches!(c.key, KeyName::Delete | KeyName::Return)
+                    || (c.alt && matches!(c.key, KeyName::Char('s' | 'S')))
+                    || is_paste_combo(&c)
+            })
+        }
+        "type" => args.get("text").and_then(|v| v.as_str()).is_some_and(|t| t.contains(['\n', '\r'])),
+        _ => false,
+    }
+}
+
 /// Spike-2b: the rule a click target matched. `id` names the rule
 /// (`send:Send`, `money:Place order`), never the on-screen label.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -231,12 +336,17 @@ impl ClickRule {
 
 /// Click label phrases per class, matched as whole words in order, any case.
 /// Longer phrases come first so the rule id names the longest match.
-const CLICK_MONEY: &[&str] =
-    &["confirm payment", "place order", "pay", "buy", "purchase", "checkout", "subscribe", "donate", "transfer"];
-const CLICK_SEND: &[&str] = &["send", "resend", "post", "publish", "reply", "tweet", "share", "upload"];
+const CLICK_MONEY: &[&str] = &[
+    "confirm payment", "confirm purchase", "place your order", "place order", "complete order", "confirm order", "order now",
+    "check out", "pay", "buy", "purchase", "checkout", "subscribe", "donate", "transfer",
+];
+const CLICK_SEND: &[&str] = &["send", "resend", "post", "publish", "reply", "forward", "tweet", "share", "upload"];
 const CLICK_DELETE: &[&str] =
-    &["empty recycle bin", "empty trash", "empty bin", "delete", "remove", "erase", "discard"];
-const CLICK_OS: &[&str] = &["factory reset", "reset", "wipe", "format"];
+    &["empty recycle bin", "empty trash", "empty bin", "move to trash", "move to bin", "delete", "remove", "erase", "discard"];
+const CLICK_CREDENTIALS: &[&str] =
+    &["show password", "reveal password", "copy password", "export passwords", "export password"];
+const CLICK_OS: &[&str] =
+    &["factory reset", "reset", "wipe", "format", "uninstall", "shut down", "shutdown", "power off", "log out", "log off"];
 
 /// "Reset zoom", "Reset view": a reset of what the window shows, not of data.
 const SOFT_RESETS: &[&str] = &["zoom", "view", "filter", "filters", "search", "sort", "layout", "columns", "selection", "font", "scale"];
@@ -292,8 +402,11 @@ pub fn click_target_in(effect: Option<&str>, label: &str, role: &str, context: &
         return Some(ClickRule { class, id: format!("{}:effect", class.as_str()) });
     }
     let words = field_words(label);
-    if words.is_empty() || TEXT_ROLES.contains(&field_words(role).join(" ").as_str()) {
+    if TEXT_ROLES.contains(&field_words(role).join(" ").as_str()) {
         return None;
+    }
+    if words.is_empty() {
+        return unlabeled_in(context);
     }
     let joined = words.join(" ");
     if UNDO_LEADS.iter().any(|u| joined == *u || joined.starts_with(&format!("{u} "))) {
@@ -303,6 +416,7 @@ pub fn click_target_in(effect: Option<&str>, label: &str, role: &str, context: &
         (HardClass::Money, CLICK_MONEY),
         (HardClass::Send, CLICK_SEND),
         (HardClass::Delete, CLICK_DELETE),
+        (HardClass::Credentials, CLICK_CREDENTIALS),
         (HardClass::IrreversibleOs, CLICK_OS),
     ] {
         for phrase in list {
@@ -331,6 +445,19 @@ pub fn click_target_in(effect: Option<&str>, label: &str, role: &str, context: &
         }
     }
     None
+}
+
+/// A click on a control nothing names errs to hard in a risky window: a
+/// checkout or payment page (Money), or a message being written (Send).
+fn unlabeled_in(context: &str) -> Option<ClickRule> {
+    let class = if window_has(context, MONEY_WINDOWS) {
+        HardClass::Money
+    } else if window_has(context, COMPOSE_WINDOWS) || phrase_at(&field_words(context), "new message").is_some() {
+        HardClass::Send
+    } else {
+        return None;
+    };
+    Some(ClickRule { class, id: format!("{}:an unlabeled control", class.as_str()) })
 }
 
 /// Where a click's target came from, for the span: the cabin's AX read
@@ -2009,6 +2136,27 @@ mod tests {
         (None, "Wipe", "push button", "", "irreversible_os:Wipe"),
         (None, "Format", "push button", "", "irreversible_os:Format"),
         (None, "Format disk", "push button", "", "irreversible_os:Format"),
+        // Card 18: more labels per class.
+        (None, "Place your order", "push button", "", "money:Place your order"),
+        (None, "Check out", "link", "", "money:Check out"),
+        (None, "Confirm purchase", "push button", "", "money:Confirm purchase"),
+        (None, "Order now", "push button", "", "money:Order now"),
+        (None, "Forward", "push button", "", "send:Forward"),
+        (None, "Move to Trash", "menu item", "", "delete:Move to trash"),
+        (None, "Show password", "push button", "", "credentials:Show password"),
+        (None, "Copy password", "menu item", "", "credentials:Copy password"),
+        (None, "Export passwords", "push button", "", "credentials:Export passwords"),
+        (None, "Uninstall", "push button", "", "irreversible_os:Uninstall"),
+        (None, "Shut Down", "push button", "", "irreversible_os:Shut down"),
+        (None, "Power off", "menu item", "", "irreversible_os:Power off"),
+        (None, "Log Out", "push button", "", "irreversible_os:Log out"),
+        // Nothing names the control: hard only in a risky window.
+        (None, "", "push button", "Checkout — Shop", "money:an unlabeled control"),
+        (None, "", "", "Payment details - Firefox", "money:an unlabeled control"),
+        (None, "", "", "Compose: Lunch", "send:an unlabeled control"),
+        (None, "", "", "New Message - Thunderbird", "send:an unlabeled control"),
+        (None, "", "push button", "Slack | general", ""),
+        (None, "", "label", "Checkout — Shop", ""),
         // A declared effect beats the label.
         (Some("payment"), "Continue", "push button", "", "money:effect"),
         (Some("destructive"), "OK", "push button", "", "delete:effect"),
@@ -2074,6 +2222,82 @@ mod tests {
         // Path E: a native click that names its target.
         assert_eq!(classify("click", r#"{"x":1,"y":2,"label":"Factory reset"}"#), HardHit::Class(HardClass::IrreversibleOs));
         assert_eq!(classify("click", r#"{"x":1,"y":2}"#), HardHit::None);
+    }
+
+    #[test]
+    fn enter_and_send_chords_are_hard_in_chat_mail_and_checkout_windows() {
+        use serde_json::json;
+        let key = |keys: &str, window: &str| desk_classify("key", &json!({ "keys": keys, "window": window }));
+        let send = HardHit::Class(HardClass::Send);
+        let money = HardHit::Class(HardClass::Money);
+        let creds = HardHit::Class(HardClass::Credentials);
+        assert_eq!(key("Return", "Slack | general | Acme"), send);
+        assert_eq!(key("ctrl+Return", "#dev - Discord"), send);
+        assert_eq!(key("ctrl+Return", "Write: Hello - Thunderbird"), send);
+        assert_eq!(key("super+Return", "Compose - Mail"), send);
+        assert_eq!(key("alt+s", "Untitled - Message (HTML) - Outlook"), send);
+        assert_eq!(key("Return", "Checkout — Firefox"), money);
+        assert_eq!(key("ctrl+Return", "Payment - Shop"), money);
+        // A new line, a plain Enter in a mail list, and other windows stay soft.
+        assert_eq!(key("shift+Return", "Slack | general | Acme"), HardHit::None);
+        assert_eq!(key("Return", "Inbox - Thunderbird"), HardHit::None);
+        assert_eq!(key("Return", "Terminal"), HardHit::None);
+        assert_eq!(key("Return", ""), HardHit::None);
+        assert_eq!(key("alt+s", "Untitled - Notepad"), HardHit::None);
+        assert_eq!(key("ctrl+s", "Write: Hello - Thunderbird"), HardHit::None);
+        // A paste types the clipboard into a password field.
+        assert_eq!(desk_classify("key", &json!({ "keys": "ctrl+v", "label": "Password" })), creds);
+        assert_eq!(desk_classify("key", &json!({ "keys": "shift+Insert", "field": { "role": "AXSecureTextField" } })), creds);
+        assert_eq!(desk_classify("key", &json!({ "keys": "ctrl+v", "label": "Search" })), HardHit::None);
+        // A typed newline presses Enter.
+        assert_eq!(desk_classify("type", &json!({ "text": "lunch?\n", "window": "Messages" })), send);
+        assert_eq!(desk_classify("type", &json!({ "text": "4111\r", "window": "Payment — Shop" })), money);
+        assert_eq!(desk_classify("type", &json!({ "text": "lunch?", "window": "Messages" })), HardHit::None);
+        // Only these calls make path A and the in-app tools look up the window.
+        for (tool, args) in [
+            ("key", json!({ "keys": "Return" })),
+            ("key", json!({ "keys": "alt+S" })),
+            ("key", json!({ "keys": "ctrl+v" })),
+            ("key", json!({ "keys": "Delete" })),
+            ("type", json!({ "text": "a\nb" })),
+        ] {
+            assert!(needs_window(tool, &args), "{tool} {args}");
+        }
+        for (tool, args) in [
+            ("key", json!({ "keys": "ctrl+c" })),
+            ("key", json!({ "keys": "s" })),
+            ("type", json!({ "text": "ab" })),
+            ("click", json!({ "x": 1, "y": 2 })),
+        ] {
+            assert!(!needs_window(tool, &args), "{tool} {args}");
+        }
+    }
+
+    /// Card 18 audit: every path a click, key or typed text takes to the OS
+    /// is classified by its args, not only path A.
+    #[test]
+    fn every_path_that_reaches_the_os_classifies_clicks_keys_and_typing() {
+        let os = HardHit::Class(HardClass::IrreversibleOs);
+        let send = HardHit::Class(HardClass::Send);
+        // In-app desktop tools (`classify` is what `gate::decide_with` and the run loop read).
+        assert_eq!(classify("key", r#"{"keys":"ctrl+alt+delete"}"#), os);
+        assert_eq!(classify("type", r#"{"text":"rm notes.txt"}"#), HardHit::Class(HardClass::Delete));
+        assert_eq!(classify("key", r#"{"keys":"Return","window":"Slack | general"}"#), send);
+        assert_eq!(classify("drag", r#"{"to_x":1,"to_y":2,"_target":{"label":"Send","role":"push button"}}"#), send);
+        // Another MCP server's desktop tools, plain and Cua-shaped.
+        assert_eq!(classify("remote-desk__key", r#"{"keys":"ctrl+alt+backspace"}"#), os);
+        assert_eq!(classify("remote-desk__press_key", r#"{"key":"ctrl+alt+delete"}"#), os);
+        assert_eq!(classify("remote-desk__type_text", r##"{"text":"hi\n","window":"#dev - Discord"}"##), send);
+        // The Cua sidecar, read as the desk tool it matches.
+        let hotkey = serde_json::json!({"keys": ["ctrl", "Return"], "window": "Compose - Mail"});
+        assert_eq!(desk_classify("hotkey", &hotkey), send);
+        // Paths B and D: an ask card that clicks.
+        assert_eq!(classify_ask("computer_click", r#"click "Place your order""#), HardHit::Class(HardClass::Money));
+        assert_eq!(classify_ask("Click", "click Uninstall"), os);
+        // Soft steps stay soft on every path.
+        assert_eq!(classify("key", r#"{"keys":"ctrl+c"}"#), HardHit::None);
+        assert_eq!(classify("remote-desk__type_text", r#"{"text":"hello"}"#), HardHit::None);
+        assert_eq!(classify("scroll", r#"{"x":1,"y":2,"dy":-3}"#), HardHit::None);
     }
 
     #[test]

@@ -848,6 +848,7 @@ impl Run<'_, '_> {
         }
         if gate::is_desktop(&call.name) {
             let args: Value = serde_json::from_str(&call.arguments).unwrap_or_else(|_| json!({}));
+            let args = self.k.desktop.hint(&call.name, &args);
             let desk = harness::decide(Step::Desk { tool: &call.name, args: &args });
             if !desk.is_allow() {
                 return desk;
