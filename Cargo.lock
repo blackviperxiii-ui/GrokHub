@@ -1940,7 +1940,7 @@ dependencies = [
 
 [[package]]
 name = "grokhub-acp"
-version = "2.11.0"
+version = "2.12.0"
 dependencies = [
  "grokhub-core",
  "serde",
@@ -1949,7 +1949,7 @@ dependencies = [
 
 [[package]]
 name = "grokhub-agent"
-version = "2.11.0"
+version = "2.12.0"
 dependencies = [
  "base64",
  "globset",
@@ -1972,7 +1972,7 @@ dependencies = [
 
 [[package]]
 name = "grokhub-app"
-version = "2.11.0"
+version = "2.12.0"
 dependencies = [
  "ashpd",
  "eframe",
@@ -2003,7 +2003,7 @@ dependencies = [
 
 [[package]]
 name = "grokhub-core"
-version = "2.11.0"
+version = "2.12.0"
 dependencies = [
  "getrandom 0.2.17",
  "hex",
@@ -2015,7 +2015,7 @@ dependencies = [
 
 [[package]]
 name = "grokhub-hub"
-version = "2.11.0"
+version = "2.12.0"
 dependencies = [
  "grokhub-core",
  "serde",
