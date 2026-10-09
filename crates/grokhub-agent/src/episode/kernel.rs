@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use super::verify::{verify_gate, Observation, Verdict};
 use super::view::{zoom_schema, EpisodeView, Folder, ZOOM_TOOL};
-use super::{CapHit, Episode, EpisodeEnd, OpenPark, StepShape, FANOUT_CAP, GOAL_CAP, PARK_PREFIX};
+use super::{Episode, EpisodeEnd, OpenPark, StepShape, FANOUT_CAP, GOAL_CAP, PARK_PREFIX, REPLAN_NOTE, STALL_REPLAN};
 use crate::client::{ContentPart, FunctionCall, InputItem, ModelClient, Usage};
 use crate::gate::{self, Decision, Gate, PermAnswer, PermitWait, Waited};
 use crate::harness::{
@@ -96,9 +96,7 @@ pub struct KernelIn<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EpisodeStop {
     Ended(EpisodeEnd),
-    /// A long-run limit: the cabin shows the pause card.
-    Paused(CapHit),
-    /// The 1a ladder paused (a rejected claim or a loop it can't repair).
+    /// The 1a ladder paused: a hard-class step or a failed screenshot.
     LadderPause(LadderStep),
     /// The worker answered without tools and without claiming done. The
     /// episode stays open for the user's next message.
@@ -174,8 +172,9 @@ struct Run<'a, 'b> {
     obs: Option<Observation>,
 }
 
-/// Drive one turn of an episode. It returns when the episode ends, pauses,
-/// waits on the user, or errors. Call again with the same `ep` and `view`
+/// Drive one turn of an episode. It returns when the episode ends, the
+/// ladder pauses, the worker waits on the user, or it errors. No step count
+/// or wall time stops it. Call again with the same `ep` and `view`
 /// for the next turn.
 pub fn run_episode(
     k: &KernelIn<'_>,
@@ -204,9 +203,6 @@ pub fn run_episode(
         for note in k.steer.drain() {
             run.ep.steer(&note, k.held);
         }
-        if let Some(stop) = run.check_cap() {
-            return run.out(stop, String::new());
-        }
         if run.obs.is_none() {
             run.obs = run.observe();
         }
@@ -229,9 +225,7 @@ pub fn run_episode(
                 None => continue,
             }
         }
-        if let Some(stop) = run.batch(&turn.calls, on_event) {
-            return run.out(stop, String::new());
-        }
+        run.batch(&turn.calls, on_event);
         if k.halt.halted() {
             continue;
         }
@@ -281,16 +275,27 @@ impl Run<'_, '_> {
             self.write(s);
         }
         self.ep.last_ms = self.now();
+        let failed = shape.decision == "deny" || shape.result.starts_with("failed");
+        if self.ep.note_progress(&shape.decision, shape.ui_changed, failed) {
+            self.replan();
+        }
     }
 
-    fn check_cap(&mut self) -> Option<EpisodeStop> {
-        let hit = self.ep.cap_hit(self.now())?;
-        if self.ep.paused != Some(hit) {
-            self.ep.paused = Some(hit);
-            let span = self.ep.marker("pause", hit.key(), &hit.question());
-            self.write(span);
-        }
-        Some(EpisodeStop::Paused(hit))
+    /// [`STALL_REPLAN`] steps moved nothing: a quiet repair span and a
+    /// re-plan note for the next step. No card, nothing counted, no pause.
+    fn replan(&mut self) {
+        let step = LadderStep {
+            rung: Rung::Replan,
+            detector: "no_progress".into(),
+            target: format!("episode#{}", self.ep.id),
+            hard: None,
+            evidence: Vec::new(),
+            reason: format!("no_progress: {STALL_REPLAN} steps in a row changed nothing"),
+            prompt: Some(REPLAN_NOTE.into()),
+        };
+        let span = ladder_span(&self.ep.chat_id, &step);
+        self.write(span);
+        self.ep.note = Some(REPLAN_NOTE.into());
     }
 
     /// A screenshot through the same gate as any step. Not a step itself;
@@ -354,8 +359,7 @@ impl Run<'_, '_> {
     fn ask_worker(&mut self) -> Result<crate::client::TurnOutput, String> {
         let mut call = ModelCall::xai(self.k.model, self.k.effort, CLASS_EPISODE, &self.ep.id, self.input())
             .with_tools(self.worker_tools())
-            .in_session(&self.ep.chat_id)
-            .due_by(self.ep.deadline_ms());
+            .in_session(&self.ep.chat_id);
         call.provider = self.k.provider.into();
         let routed = call_model(self.k.client, &call, self.k.cancel).map_err(|e| e.to_string())?;
         self.usage.add(&routed.out.usage);
@@ -417,7 +421,7 @@ impl Run<'_, '_> {
         let span = ladder_span(&self.ep.chat_id, &step);
         self.write(span);
         match step.rung {
-            Rung::Retry | Rung::Backtrack => {
+            Rung::Retry | Rung::Backtrack | Rung::Replan => {
                 let mut note = step.prompt.clone().unwrap_or_default();
                 if let Some(why) = why {
                     note.push_str(&format!(" The independent check said: {why}"));
@@ -538,20 +542,18 @@ impl Run<'_, '_> {
 
     /// One model turn's calls. Independent reads fan out; everything else
     /// runs in order. A parked or denied hard step stops the rest.
-    fn batch(&mut self, calls: &[FunctionCall], on_event: &mut dyn FnMut(LoopEvent)) -> Option<EpisodeStop> {
+    fn batch(&mut self, calls: &[FunctionCall], on_event: &mut dyn FnMut(LoopEvent)) {
         // Only reads every gate allows fan out; a denied or asked read takes
         // the one-at-a-time path, which answers it.
         let reads = calls.len() > 1
             && calls.iter().all(|c| is_read(&c.name) && matches!(self.verdict(c), GateOutcome::Allow));
         if reads {
-            return self.fan(calls, on_event);
+            self.fan(calls, on_event);
+            return;
         }
         for (i, call) in calls.iter().enumerate() {
             if self.k.halt.halted() || self.k.cancel.is_cancelled() {
-                return None;
-            }
-            if let Some(stop) = self.check_cap() {
-                return Some(stop);
+                return;
             }
             if !self.step(call, on_event) {
                 for rest in &calls[i + 1..] {
@@ -560,12 +562,10 @@ impl Run<'_, '_> {
                 break;
             }
         }
-        None
     }
 
-    fn fan(&mut self, calls: &[FunctionCall], on_event: &mut dyn FnMut(LoopEvent)) -> Option<EpisodeStop> {
-        let room = self.ep.cap_room();
-        let take = calls.len().min(FANOUT_CAP).min(room);
+    fn fan(&mut self, calls: &[FunctionCall], on_event: &mut dyn FnMut(LoopEvent)) {
+        let take = calls.len().min(FANOUT_CAP);
         let workspace = self.k.workspace;
         let view = &*self.view;
         let jobs: Vec<Box<dyn FnOnce() -> ToolOutput + Send + '_>> = calls[..take]
@@ -605,7 +605,6 @@ impl Run<'_, '_> {
         for c in &calls[take..] {
             emit(on_event, c, "failed", FANOUT_CAPPED, None);
         }
-        self.check_cap()
     }
 
     /// Gate one call and run, park, or deny it. False stops the batch.
@@ -743,13 +742,6 @@ impl Run<'_, '_> {
             parked_ms: now,
             goal_step: self.ep.goal_step.clone(),
         });
-    }
-}
-
-impl Episode {
-    /// Steps left before the step cap.
-    fn cap_room(&self) -> usize {
-        self.step_cap.saturating_sub(self.steps) as usize
     }
 }
 
