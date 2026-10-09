@@ -393,10 +393,11 @@ pub fn run_loop(
             let id = tool_id(call);
             let gate_lap = crate::timing::lap("loop:tool_gate");
             let desk = tools::desk_flags(&call.name, &gate, input.desktop);
+            let gate_args = hinted_args(&gate, input.desktop, call);
             let base = gate::decide_with(
                 &gate,
                 &call.name,
-                &call.arguments,
+                &gate_args,
                 always,
                 desk,
                 input.workspace,
@@ -447,7 +448,7 @@ pub fn run_loop(
             let pre_context = constrained.context;
             let (output, extra_usage) = match constrained.decision {
                 Decision::Refuse(text) => {
-                    batch_failed = hard_step(call);
+                    batch_failed = hard_step(&call.name, &gate_args);
                     crate::hooks::on_permission_denied(
                         input.conversation_id,
                         input.workspace,
@@ -514,7 +515,7 @@ pub fn run_loop(
                             )
                         }
                         Waited::Answer(PermAnswer::Deny) => {
-                            batch_failed = hard_step(call);
+                            batch_failed = hard_step(&call.name, &gate_args);
                             crate::hooks::on_permission_denied(
                                 input.conversation_id,
                                 input.workspace,
@@ -571,8 +572,21 @@ pub fn run_loop(
 
 /// A hard-class step (money, send, delete, credentials, irreversible OS) or
 /// a floor refusal. When one is denied, the rest of its batch does not run.
-fn hard_step(call: &FunctionCall) -> bool {
-    !crate::harness::decide(crate::harness::Step::Tool { name: &call.name, arguments: &call.arguments }).is_allow()
+fn hard_step(name: &str, arguments: &str) -> bool {
+    !crate::harness::decide(crate::harness::Step::Tool { name, arguments }).is_allow()
+}
+
+/// The arguments the gate reads: a desktop call's own, plus the focused
+/// window and the control under a click ([`DesktopOps::hint`]). The call
+/// still runs with its own arguments.
+fn hinted_args<'c>(gate: &Gate, desktop: Option<&dyn DesktopOps>, call: &'c FunctionCall) -> std::borrow::Cow<'c, str> {
+    match desktop {
+        Some(desk) if gate.desktop && gate::is_desktop(&call.name) => {
+            let args: serde_json::Value = serde_json::from_str(&call.arguments).unwrap_or_else(|_| serde_json::json!({}));
+            std::borrow::Cow::Owned(desk.hint(&call.name, &args).to_string())
+        }
+        _ => std::borrow::Cow::Borrowed(&call.arguments),
+    }
 }
 
 fn emit_usage(
@@ -1516,6 +1530,59 @@ mod tests {
                 ("4".to_string(), "Not executed: earlier action failed".to_string()),
             ]
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Card 18: the desktop reports Slack has focus, so Enter there is a
+    /// send and parks under Always; Deny keeps it from being pressed. The
+    /// same Enter with no window hint is a plain key.
+    struct InSlack(Spy);
+
+    impl DesktopOps for InSlack {
+        fn halted(&self) -> bool {
+            false
+        }
+        fn locked(&self) -> bool {
+            false
+        }
+        fn call(&self, name: &str, args: &serde_json::Value) -> ToolOutput {
+            assert!(args.get("window").is_none(), "the gate's hint never reaches the desktop");
+            self.0.call(name, args)
+        }
+        fn hint(&self, _name: &str, args: &serde_json::Value) -> serde_json::Value {
+            let mut hinted = args.clone();
+            hinted["window"] = "Slack | general | Acme".into();
+            hinted
+        }
+    }
+
+    #[test]
+    fn enter_in_a_chat_app_parks_by_the_window_the_desktop_reports() {
+        let dir = workspace("enter-slack");
+        let script = || Script {
+            turns: Mutex::new(vec![
+                ScriptTurn { text: String::new(), calls: vec![call("1", "key", r#"{"keys":"Return"}"#)], usage: Usage::default() },
+                ScriptTurn { text: "done".into(), calls: Vec::new(), usage: Usage::default() },
+            ]),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let slack = InSlack(Spy { calls: AtomicUsize::new(0), halted: false, locked: false });
+        let deny = Answer { answer: PermAnswer::Deny, asks: AtomicUsize::new(0) };
+        let (out, history, events) = once(&script(), &dir, chat(gate::PermMode::Always, true, true), Some(&slack), &deny);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(deny.asks.load(Ordering::SeqCst), 1, "Enter in Slack parked under Always");
+        assert_eq!(slack.0.calls.load(Ordering::SeqCst), 0, "the denied Enter was never pressed");
+        assert!(events.iter().any(|ev| matches!(ev, LoopEvent::Permission { name, .. } if name == "key")));
+        assert!(history.iter().any(|item| matches!(
+            item,
+            InputItem::FunctionCallOutput { call_id, output } if call_id == "1" && *output == gate::user_rejected("key")
+        )));
+        let plain = Spy { calls: AtomicUsize::new(0), halted: false, locked: false };
+        let (_, _, _) = once(&script(), &dir, chat(gate::PermMode::Always, true, true), Some(&plain), &deny);
+        assert_eq!(deny.asks.load(Ordering::SeqCst), 1, "no window, no ask: Enter is a plain key");
+        assert_eq!(plain.calls.load(Ordering::SeqCst), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
