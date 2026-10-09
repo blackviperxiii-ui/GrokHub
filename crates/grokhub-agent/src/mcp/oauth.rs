@@ -5,9 +5,8 @@
 //! Every request is a handshake-class send (no user data) behind the
 //! EgressGuard, like `http::connect`.
 
-use std::io::{Read, Write};
-use std::net::TcpListener;
-use std::time::{Duration, Instant};
+use std::io::Read;
+use std::time::Duration;
 
 use grokhub_core::mcp_oauth::{
     auth_server_metadata_urls, authorize_url, challenge_resource_metadata, challenge_scope, code_form,
@@ -22,7 +21,6 @@ use super::rpc;
 
 /// How long the loopback waits for the browser to come back.
 pub(super) const LOOPBACK_SECS: u64 = 300;
-const READ_CAP: usize = 16 * 1024;
 const BODY_CAP: u64 = 256 * 1024;
 const REQUEST_SECS: u64 = 20;
 
@@ -117,46 +115,6 @@ fn discover(server: &str, url: &str) -> Result<(AuthServer, Option<String>), Str
     Err(format!("{server} doesn't offer a browser sign-in"))
 }
 
-fn close_page() -> Vec<u8> {
-    let body = b"<p>Signed in. You can close this tab.</p>";
-    let mut out = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-    )
-    .into_bytes();
-    out.extend_from_slice(body);
-    out
-}
-
-/// Wait on the loopback for `/callback`, answering strays (a favicon, a prefetch) with 404.
-fn wait_code(listener: &TcpListener, state: &str, who: &str, wait: Duration) -> Result<String, String> {
-    let deadline = Instant::now() + wait;
-    loop {
-        if Instant::now() >= deadline {
-            return Err(format!("{who} timed out"));
-        }
-        let mut stream = match listener.accept() {
-            Ok((stream, _)) => stream,
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(40));
-                continue;
-            }
-            Err(e) => return Err(e.to_string()),
-        };
-        let _ = stream.set_nonblocking(false);
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-        let mut buf = [0u8; READ_CAP];
-        let n = stream.read(&mut buf).unwrap_or(0).min(READ_CAP);
-        let head = String::from_utf8_lossy(&buf[..n]);
-        if !head.starts_with("GET /callback") {
-            let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-            continue;
-        }
-        let _ = stream.write_all(&close_page());
-        return grokhub_core::pkce::loopback_code(&head, state, who);
-    }
-}
-
 fn save(server: &str, signin: &McpSignIn) -> Result<(), String> {
     let json = serde_json::to_string(signin).map_err(|e| e.to_string())?;
     crate::harness::seal_mcp_signin(&crate::perm::config_dir(), server, &json)
@@ -180,10 +138,7 @@ pub(super) fn sign_in(
     open: &dyn Fn(&str) -> Result<(), String>,
     wait: Duration,
 ) -> Result<String, String> {
-    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
-    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    let redirect = format!("http://127.0.0.1:{port}/callback");
+    let (listener, redirect) = crate::loopback::bind()?;
     let (auth, scope) = discover(server, url)?;
     let register = auth
         .registration_endpoint
@@ -208,7 +163,7 @@ pub(super) fn sign_in(
         resource: &resource,
     });
     open(&link)?;
-    let code = wait_code(&listener, &state, &format!("{server} sign-in"), wait)?;
+    let code = crate::loopback::wait_code(&listener, &state, &format!("{server} sign-in"), wait)?;
     let (ok, v) = post(
         &auth.token_endpoint,
         "application/x-www-form-urlencoded",
@@ -263,7 +218,8 @@ pub(super) mod tests {
     use super::*;
     use crate::harness as hx;
     use serde_json::json;
-    use std::io::{BufRead, BufReader};
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
     use std::net::TcpStream;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
