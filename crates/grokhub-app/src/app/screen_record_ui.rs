@@ -293,7 +293,8 @@ impl Cabin {
         }
     }
 
-    /// Red indicator with the clock and Stop, above every page while recording.
+    /// Red indicator with the clock and Stop, above every page while recording,
+    /// under the title bar so the window buttons stay reachable.
     pub(super) fn paint_record_indicator(&mut self, ctx: &egui::Context) {
         let Some(live) = self.screen_rec.as_ref() else {
             return;
@@ -302,7 +303,7 @@ impl Cabin {
         let mut stop = false;
         egui::Area::new(egui::Id::new("screen-record-indicator"))
             .order(egui::Order::Foreground)
-            .anchor(egui::Align2::RIGHT_TOP, [-16.0, 12.0])
+            .anchor(egui::Align2::RIGHT_TOP, [-16.0, 52.0])
             .show(ctx, |ui| {
                 egui::Frame::NONE
                     .fill(crate::theme::elevated())
