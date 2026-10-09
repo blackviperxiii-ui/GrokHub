@@ -250,6 +250,25 @@ pub(super) fn top_first(top: &str) -> RoutingTable {
 }
 
 #[test]
+fn a_replan_steps_up_one_model_for_the_call_and_the_episode_drops_back_after() {
+    let (reg, profiles) = fleet();
+    let table = top_first("grok-4.7");
+    let mut i = ask("grok-4.7", false);
+    i.episode_model = Some("grok-4.7");
+    let before = Router::choose(&i, &reg, &profiles, &table, NOW);
+    assert_eq!(before.model, "grok-4.7");
+    assert!(before.rule_ids.contains(&"episode:keep".to_string()), "{:?}", before.rule_ids);
+    i.pick = Some(Pick { rung: rung("high").unwrap(), rules: vec![super::STEP_UP_RULE.into()], ..Pick::default() });
+    let up = Router::choose(&i, &reg, &profiles, &table, NOW);
+    assert_eq!(up.model, "grok-4.6", "the next model in the class order");
+    assert!(up.rule_ids.contains(&"model:next".to_string()), "{:?}", up.rule_ids);
+    assert!(up.premium_ask.is_none(), "no prompt");
+    // The episode's own model never moved, so the next plain call is back on it.
+    i.pick = None;
+    assert_eq!(Router::choose(&i, &reg, &profiles, &table, NOW).model, "grok-4.7");
+}
+
+#[test]
 fn one_model_per_episode_over_fifty_episodes() {
     let (mut reg, profiles) = fleet();
     let tables = [top_first("grok-4.7"), top_first("grok-4.5")];
