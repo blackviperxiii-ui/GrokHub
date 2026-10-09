@@ -678,6 +678,8 @@ impl Cabin {
             Slash::WhyModels => self.run_why(true),
             Slash::WhyTable => self.run_why_table(),
             Slash::Diagnose => self.run_diagnose(Vec::new(), true),
+            Slash::Record(note) => self.start_screen_recording(note),
+            Slash::RecordStop => self.stop_screen_recording(),
             Slash::Hub => {
                 self.nav = Nav::Devices;
                 self.status = if self.hub_on {
