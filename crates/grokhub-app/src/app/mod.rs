@@ -138,7 +138,7 @@ use grokhub_core::{
     CHAT_TAIL_FRAMES, CHAT_TAIL_SLACK, CHIP_VISIBLE_MAX, CONTEXT_BUDGET_TOKENS,
     FRAME_CAP, GOAL_DROP_AFTER, HEARTBEAT_MS, HUB_KIND,
     IDLE_REFLECT_MS, IMAGE_FILE_CAP, IMAGINE_ASPECTS, IMAGINE_STYLES, IMAGINE_WALL_GAP, LOOP_MAX,
-    PRESENCE_RING_MS, RESULT_TRIM_KEEP_HOPS, REVIEW_NIGHT_HOUR, SKILL_SAVED_MARK, SKILL_SAVED_NOTE,
+    PRESENCE_RING_MS, RESULT_TRIM_KEEP_HOPS, SKILL_SAVED_MARK, SKILL_SAVED_NOTE,
     TEXT_FILE_CAP, THOUGHT_ROW_LABEL, TRANSCRIBERS, UPDATE_CHECK_EVERY, WALL_GIF_EVERY_MS,
     WALL_GIF_MAX,
 };
@@ -3312,6 +3312,19 @@ impl Cabin {
         }
     }
 
+    /// The local time zone's short name (`CDT`) for Settings, read once off
+    /// the UI thread. Empty until then, and on Windows.
+    fn local_zone() -> String {
+        static ZONE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        static ASKED: std::sync::Once = std::sync::Once::new();
+        ASKED.call_once(|| {
+            std::thread::spawn(|| {
+                let _ = ZONE.set(Self::date_out("+%Z"));
+            });
+        });
+        ZONE.get().cloned().unwrap_or_default()
+    }
+
     fn local_clock() -> LocalClock {
         if let Ok(g) = LAST_CLOCK.lock() {
             if let Some((at, clock, inflight)) = g.as_ref() {
@@ -3447,8 +3460,7 @@ impl Cabin {
                 HeartbeatAct::Review => {
                     if !night_fired && !self.running {
                         self.tick_review();
-                        self.tick_self_review();
-                        self.tick_dream();
+                        self.tick_night_passes();
                     }
                 }
                 HeartbeatAct::Wall => self.tick_wall(),

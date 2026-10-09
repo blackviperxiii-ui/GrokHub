@@ -1,4 +1,5 @@
 use super::*;
+use grokhub_core::REVIEW_NIGHT_HOUR;
 use eframe::egui;
 use super::pages::BoardAct;
 use grokhub_core::ChatRunPhase;
@@ -11406,7 +11407,8 @@ fn legacy_never_dreams_or_creates_amr() {
     let (root, mut cabin) = amr_dream_cabin("legacy-no-dream");
     let now = grokhub_core::now_ms();
     assert!(cabin.dream_tonight("2026-10-07", REVIEW_NIGHT_HOUR, now).is_none());
-    cabin.tick_dream();
+    let wednesday = LocalClock { now_ms: now, weekday: 3, hour: 21, minute: 0 };
+    assert!(cabin.night_passes("2026-10-07", &wednesday, now).1.is_none());
     cabin.run_slash_line("/memory dream");
     assert!(last_chat_text(&cabin).contains("No dream yet."));
     assert!(!root.join("amr").exists(), "legacy must never create amr/");

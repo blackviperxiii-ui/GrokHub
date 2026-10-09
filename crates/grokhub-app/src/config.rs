@@ -378,6 +378,10 @@ pub struct AppConfig {
     pub quiet_end: String,
     #[serde(default = "default_daily_auto")]
     pub daily_auto_cap: u32,
+    /// Local hour (0–23) when dream, the nightly review and the Sunday
+    /// self-review run. Old configs load as 21; out of range clamps.
+    #[serde(default = "default_dream_hour", deserialize_with = "de_dream_hour")]
+    pub dream_hour: u32,
     /// Grok Build tokens a day before the cabin warns. 0 is off.
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub daily_token_budget: u64,
@@ -494,6 +498,16 @@ fn default_daily_auto() -> u32 {
     40
 }
 
+fn default_dream_hour() -> u32 {
+    grokhub_core::REVIEW_NIGHT_HOUR
+}
+
+/// A number clamps to 0–23; anything else is the default.
+fn de_dream_hour<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let raw = serde_json::Value::deserialize(d)?;
+    Ok(raw.as_i64().map_or_else(default_dream_hour, |h| h.clamp(0, 23) as u32))
+}
+
 fn default_imagine_wall() -> bool {
     true
 }
@@ -573,6 +587,7 @@ impl Default for AppConfig {
             quiet_start: default_quiet_start(),
             quiet_end: default_quiet_end(),
             daily_auto_cap: default_daily_auto(),
+            dream_hour: default_dream_hour(),
             daily_token_budget: 0,
             budget_pauses_scheduled: default_budget_pause(),
             heartbeat: HeartbeatPace::default(),
@@ -1332,6 +1347,22 @@ mod tests {
         );
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn dream_hour_defaults_to_nine_pm_clamps_and_round_trips() {
+        let old: AppConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.dream_hour, 21);
+        assert_eq!(AppConfig::default().dream_hour, 21);
+        for (raw, want) in [("23", 23), ("0", 0), ("25", 23), ("-3", 0), ("\"late\"", 21), ("7.5", 21)] {
+            let cfg: AppConfig = serde_json::from_str(&format!("{{\"dreamHour\": {raw}}}")).unwrap();
+            assert_eq!(cfg.dream_hour, want, "{raw}");
+        }
+        let cfg = AppConfig { dream_hour: 6, ..AppConfig::default() };
+        let text = serde_json::to_string(&cfg).unwrap();
+        assert!(text.contains("\"dreamHour\":6"), "{text}");
+        let back: AppConfig = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.dream_hour, 6);
     }
 
     #[test]
