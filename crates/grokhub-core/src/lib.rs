@@ -80,6 +80,7 @@ pub mod tui_gaps;
 pub mod trajectory;
 pub mod turn_timeline;
 pub mod update;
+pub mod what_changed;
 pub mod card_prefs;
 pub mod card_signals;
 pub mod update_feed;
