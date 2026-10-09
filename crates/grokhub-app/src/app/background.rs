@@ -441,17 +441,7 @@ impl Cabin {
         let (Some(rx), Some(pid)) = (self.grok_p_rx.take(), self.grok_p_pid.take()) else {
             return false;
         };
-        let vis = self.visible_thread_id();
-        let ask = if thread_id == vis {
-            last_user_scan(self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())))
-        } else {
-            self.threads
-                .iter()
-                .find(|t| t.id == thread_id)
-                .and_then(|t| last_user_scan(t.messages.iter().map(|m| (m.0.as_str(), m.1.as_str()))))
-        }
-        .unwrap_or_default();
-        let mut title = bg_task_title(&ask);
+        let mut title = bg_task_title(&self.last_ask_on(&thread_id));
         if title.is_empty() {
             title = "Reply".into();
         }
@@ -500,7 +490,7 @@ impl Cabin {
         self.turn_log.clear();
         self.thought_seam = false;
         self.say_seam = false;
-        if thread_id == vis {
+        if thread_id == self.visible_thread_id() {
             self.tool_cards.clear();
             self.live_blocks.clear();
             if self.messages.last().is_some_and(|m| m.0 == "assistant") {
@@ -526,12 +516,39 @@ impl Cabin {
         }
     }
 
+    /// The newest thing you asked in `thread_id`, or "".
+    pub(super) fn last_ask_on(&self, thread_id: &str) -> String {
+        if thread_id == self.visible_thread_id() {
+            last_user_scan(self.messages.iter().map(|m| (m.0.as_str(), m.1.as_str())))
+        } else {
+            self.threads
+                .iter()
+                .find(|t| t.id == thread_id)
+                .and_then(|t| last_user_scan(t.messages.iter().map(|m| (m.0.as_str(), m.1.as_str()))))
+        }
+        .unwrap_or_default()
+    }
+
+    /// A chat reply was killed from outside (exit 143) and the one automatic
+    /// retry did not finish it: one card naming what you asked, with Open and
+    /// Retry (`/retry` in that chat).
+    pub(super) fn post_turn_crash(&mut self) {
+        let thread = self
+            .chat_job_thread
+            .clone()
+            .unwrap_or_else(|| self.visible_thread_id());
+        let job = bg_task_title(&self.last_ask_on(&thread));
+        let card = grokhub_core::crash_card(&thread, &job, &thread, "/retry", now_ms());
+        self.post_feed_card(card);
+    }
+
     /// Drain every run's events this frame, then post the ones that ended.
     pub(super) fn poll_bg_runs(&mut self) {
         self.file_hidden_sessions();
         if self.bg.runs.is_empty() {
             return;
         }
+        let mut crashed: Vec<grokhub_core::UpdateCard> = Vec::new();
         for run in self.bg.runs.iter_mut() {
             let Some(rx) = run.rx.take() else {
                 continue;
@@ -558,7 +575,10 @@ impl Cabin {
                         break;
                     }
                     Ok(GrokPEvent::Err(e)) => {
+                        // Stop drops the receiver first, so a SIGTERM that
+                        // reaches here came from outside GrokHub.
                         run.end = Some(if grokhub_acp::is_sigterm_status(&e) {
+                            crashed.push(bg_crash_card(run));
                             BgEnd::Stopped
                         } else {
                             BgEnd::Failed(rewrite_truncation_error(&e))
@@ -584,6 +604,9 @@ impl Cabin {
             } else {
                 run.pid = None;
             }
+        }
+        for card in crashed {
+            self.post_feed_card(card);
         }
         self.post_finished_bg_runs();
     }
@@ -1202,6 +1225,19 @@ fn empty_grok_usage() -> GrokUsage {
         cost_in_usd_ticks: 0,
         meter: String::new(),
     }
+}
+
+
+/// The crash card for a background run killed from outside. A moved-off chat
+/// turn retries in its chat; any other run starts again with `/bg`.
+fn bg_crash_card(run: &BgRun) -> grokhub_core::UpdateCard {
+    let retry = if run.origin == BgOrigin::Detached {
+        "/retry".to_string()
+    } else {
+        format!("/bg {}", run.title)
+    };
+    let source = format!("bg:{}:{}", run.thread_id, run.title);
+    grokhub_core::crash_card(&source, &run.title, &run.thread_id, &retry, now_ms())
 }
 
 #[cfg(test)]

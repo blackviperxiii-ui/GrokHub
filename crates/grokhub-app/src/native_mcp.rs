@@ -25,6 +25,26 @@ fn paint_state() -> &'static Mutex<PaintState> {
     })
 }
 
+/// The last checked MCP servers for `/health`: how many are on, and each
+/// one in error by name. Reads the Settings cache; pings nothing.
+pub fn health_rows() -> (usize, Vec<String>) {
+    let held = paint_state().lock().unwrap_or_else(|err| err.into_inner());
+    servers_health(&held.rows)
+}
+
+fn servers_health(rows: &[grokhub_agent::mcp::DoctorRow]) -> (usize, Vec<String>) {
+    let on = rows.iter().filter(|r| r.status != "disabled").count();
+    let failed = rows
+        .iter()
+        .filter(|r| r.status == "error")
+        .map(|r| match r.last_error.trim() {
+            "" => format!("MCP {}: error", r.name),
+            why => format!("MCP {}: error, {why}", r.name),
+        })
+        .collect();
+    (on, failed)
+}
+
 enum Job {
     Import,
     Doctor,
@@ -424,6 +444,30 @@ mod tests {
         let (hint, button, job) = sign_in_action(&row(SignIn::SignedIn("Signed in to linear as ada@example.com".into()))).unwrap();
         assert_eq!((hint.as_str(), button), ("Signed in to linear as ada@example.com", "Sign out"));
         assert!(matches!(job, Job::SignOut(name) if name == "linear"));
+    }
+
+    #[test]
+    fn health_counts_servers_that_are_on_and_names_each_one_in_error() {
+        use grokhub_agent::mcp::{DoctorRow, SignIn};
+        let row = |name: &str, status: &str, err: &str| DoctorRow {
+            name: name.into(),
+            status: status.into(),
+            tool_count: 0,
+            last_error: err.into(),
+            detail: String::new(),
+            sign_in: SignIn::NotOffered,
+        };
+        let rows = vec![
+            row("github", "error", "timed out after 5s"),
+            row("linear", "connected", ""),
+            row("old", "disabled", ""),
+            row("files", "error", " "),
+        ];
+        assert_eq!(
+            servers_health(&rows),
+            (3, vec!["MCP github: error, timed out after 5s".to_string(), "MCP files: error".to_string()])
+        );
+        assert_eq!(servers_health(&[]), (0, Vec::new()));
     }
 
     #[test]

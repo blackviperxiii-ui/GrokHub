@@ -259,6 +259,10 @@ fn the_weekly_pass_posts_at_most_five_cards_with_numbers_and_refuses_a_consent_t
     );
     let details = first.details.clone().unwrap_or_default();
     assert!(
+        details.starts_with("What changed: 1 added, 0 merged, 0 removed\n- Added: \"3. wait for the file\"\n\n3 of 5"),
+        "the What changed block sits above the numbers: {details}"
+    );
+    assert!(
         details.contains("  2. click Export\n+ 3. wait for the file\n"),
         "{details}"
     );
@@ -427,6 +431,10 @@ fn three_similar_runs_in_two_weeks_stage_one_draft_and_apply_creates_it() {
     );
     let details = cards[0].details.clone().unwrap_or_default();
     assert!(
+        details.starts_with("What changed: 1 added, 0 merged, 0 removed\n- Added: \"1. open_file\"\n\nYou did this 3 times"),
+        "the What changed block sits above the numbers: {details}"
+    );
+    assert!(
         details.contains("+ name: summarize-march-invoic\n")
             && details.contains("+ 1. open_file\n"),
         "{details}"
@@ -563,7 +571,7 @@ fn a_cost_raising_router_card_rides_the_weekly_pass_and_applies_only_on_accept()
     );
     assert_eq!(
         cabin.status,
-        "Router changed (everyday chat: start at High). Undo is on the change list."
+        "Router changed (everyday chat: start at High). /why table shows it."
     );
     let line = hx::ChangeLedger::load_kind(&root, hx::ChangeKind::Model)
         .all()
@@ -637,5 +645,79 @@ fn dream_and_the_weekly_self_review_run_once_on_the_same_night_at_a_custom_hour(
     assert!(!reviewed && dream.is_none(), "each runs once a night");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(self_review_cards(&cabin).len(), 1);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Three similar finished asks in the last few days: one skill draft is due.
+fn stage_draft_runs(root: &std::path::Path, now: u64) {
+    for (i, ask) in [
+        "Summarize the March invoices",
+        "summarize invoices for March",
+        "Summarize March invoices again",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let mut s = hx::fixture_span(10 + i as u64, "open_file", "{}", "allow", "opened", Some(true), "");
+        s.session_id = format!("chat-q{i}");
+        hx::append_span(root, &s).unwrap();
+        let sig = OutcomeSignals {
+            verify_ok: true,
+            ..Default::default()
+        };
+        let o = TaskOutcome::finished(&format!("chat-q{i}:1"), &oc::topic_signature(ask), &sig, now - (i as u64 + 1) * DAY)
+            .with_spans([s.span_ref()]);
+        oc::append_outcome(root, &o).unwrap();
+    }
+}
+
+#[test]
+fn quiet_mode_logs_the_weekly_suggestions_and_posts_no_cards() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin("spike7-quiet");
+    let now = grokhub_core::now_ms();
+    stage_draft_runs(&root, now);
+    let _calls = fake("");
+    let mut cabin = Cabin::quiet_for_test();
+    assert!(!cabin.cfg.self_improve_quiet, "quiet mode is off by default");
+    cabin.cfg.self_improve_quiet = true;
+    let before = cabin.updates.len();
+    cabin.run_self_review_now(now);
+    assert!(self_review_cards(&cabin).is_empty());
+    assert!(cabin.updates.iter().all(|c| c.source_id != "router-review"));
+    assert_eq!(cabin.updates.len(), before, "quiet mode posts nothing to Pulse");
+    let state = super::self_review_ui::load_state();
+    assert!(state.pending.is_empty(), "nothing waits on an Apply that has no card");
+    let day = Cabin::local_day();
+    let sources: Vec<(&str, &str, &str)> = state
+        .quiet_log
+        .iter()
+        .map(|e| (e.day.as_str(), e.source.as_str(), e.title.as_str()))
+        .collect();
+    assert_eq!(
+        sources,
+        vec![
+            (day.as_str(), "self-review:draft:summarize-march-invoic", "Make a skill: summarize-march-invoic"),
+            (day.as_str(), "router-review", "Weekly router review"),
+        ]
+    );
+    let note = super::self_review_ui::quiet_log_note(&state.quiet_log);
+    assert!(note.starts_with("Logged suggestions, newest first:\n"), "{note}");
+    assert!(
+        note.contains(&format!("\n{day} · Make a skill: summarize-march-invoic: You did this 3 times in the last two weeks")),
+        "{note}"
+    );
+    assert_eq!(
+        super::self_review_ui::quiet_log_note(&[]),
+        "Nothing logged yet. The self-review runs on Sunday at dream time."
+    );
+
+    cabin.cfg.self_improve_quiet = false;
+    cabin.run_self_review_now(now);
+    let cards = self_review_cards(&cabin);
+    assert_eq!(cards.len(), 1, "off again, the pass posts its card as before");
+    assert_eq!(cards[0].title, "Make a skill: summarize-march-invoic");
+    assert!(cabin.updates.iter().any(|c| c.source_id == "router-review"));
+    assert_eq!(super::self_review_ui::load_state().quiet_log.len(), 2, "off, nothing more is logged");
     let _ = std::fs::remove_dir_all(&root);
 }

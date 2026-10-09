@@ -9,7 +9,10 @@
 //! Halt, Stop, or [`EPISODE_IDLE`] without a step also end it.
 //!
 //! There is no step or wall-time cap. After [`STALL_REPLAN`] steps that move
-//! nothing the worker is told to re-plan ([`REPLAN_NOTE`]) and goes on. Every
+//! nothing the worker is told to re-plan ([`REPLAN_NOTE`]) and goes on. A
+//! checker reject, or a checker that can't run, re-plans with its reason
+//! instead of waiting; the same reject on an unchanged screen
+//! [`SAME_REJECT_END`] times ends the episode with a named note. Every
 //! step goes through `harness::decide`; the episode adds no executor and no
 //! bypass. Hard class always parks.
 
@@ -23,10 +26,13 @@ use std::time::Duration;
 use crate::harness::{Ladder, Origin, Span};
 
 pub use kernel::{
-    fan_out, run_episode, step_span, EpisodeOut, EpisodeStop, FileParks, KernelIn, Parks, DEAD_WORKER, EPISODE_RULES,
-    FANOUT_CAPPED,
+    fan_out, run_episode, step_span, EpisodeOut, EpisodeStop, FileParks, KernelIn, Parks, CHECKER_ERROR, DEAD_WORKER,
+    EPISODE_RULES, FANOUT_CAPPED, VERIFY_REJECT,
 };
-pub use verify::{parse_verdict, verify_call, verify_gate, Observation, Verdict, JUDGE_SYSTEM, OBSERVATION_CAP};
+pub use verify::{
+    parse_verdict, verify_call, verify_call_at, verify_gate, Observation, Verdict, CHECKER_UNAVAILABLE, ESCALATED_CLASS,
+    JUDGE_SYSTEM, OBSERVATION_CAP,
+};
 pub use view::{
     clip_bytes, zoom_schema, EpisodeView, FoldDone, Folder, ViewNode, FOLD_CAP_BYTES, FOLD_SYSTEM, VIEW_BUDGET_BYTES,
     VIEW_HEAD, ZOOM_TOOL,
@@ -38,6 +44,9 @@ pub const STALL_REPLAN: u32 = 8;
 pub const REPLAN_NOTE: &str = "The last steps changed nothing. Stop repeating them. Re-read the goal, \
 say in one line what you tried, then pick a different approach (another tool, another route or a smaller sub-step), \
 take a fresh screenshot and go on.";
+/// The same checker reject, on an unchanged screen, this many times in a row
+/// ends the episode with a named note instead of re-planning again.
+pub const SAME_REJECT_END: u32 = 3;
 /// An open episode with no step for this long ends.
 pub const EPISODE_IDLE: Duration = Duration::from_secs(10 * 60);
 /// Most independent reads one fan-out runs side by side.
@@ -72,6 +81,9 @@ pub enum EpisodeEnd {
     Halt,
     Stop,
     Idle,
+    /// The checker kept rejecting for the same reason on an unchanged
+    /// screen ([`SAME_REJECT_END`] times): ended with a named note.
+    Unconfirmed,
 }
 
 impl EpisodeEnd {
@@ -81,6 +93,7 @@ impl EpisodeEnd {
             Self::Halt => "halt",
             Self::Stop => "stop",
             Self::Idle => "idle",
+            Self::Unconfirmed => "unconfirmed",
         }
     }
 }
@@ -154,6 +167,9 @@ pub struct Episode {
     /// Spans this episode wrote, for the detectors and the ladder.
     pub trail: Vec<Span>,
     pub(crate) seen_findings: Vec<String>,
+    /// The latest checker reject: its reason, the observation hash it saw,
+    /// and how many times in a row both stayed the same.
+    pub(crate) last_reject: Option<(String, String, u32)>,
 }
 
 fn cap_text(text: &str, held: &[String]) -> String {
@@ -180,6 +196,7 @@ impl Episode {
             turn: 0,
             trail: Vec::new(),
             seen_findings: Vec::new(),
+            last_reject: None,
         }
     }
 
@@ -205,6 +222,17 @@ impl Episode {
             return true;
         }
         false
+    }
+
+    /// Count a checker reject. True when the same reason on the same
+    /// observation came [`SAME_REJECT_END`] times in a row.
+    pub fn note_reject(&mut self, why: &str, obs_hash: &str) -> bool {
+        let n = match &self.last_reject {
+            Some((w, h, n)) if w == why && h == obs_hash => n.saturating_add(1),
+            _ => 1,
+        };
+        self.last_reject = Some((why.to_string(), obs_hash.to_string(), n));
+        n >= SAME_REJECT_END
     }
 
     /// No step for [`EPISODE_IDLE`].

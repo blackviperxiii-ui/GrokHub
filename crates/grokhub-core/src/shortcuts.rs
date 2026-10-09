@@ -146,6 +146,10 @@ pub fn filter_palette(q: &str) -> Vec<(&'static str, &'static str)> {
         ("nav:agents", "agent"),
         ("nav:connectors", "connectors"),
         ("nav:connectors", "connector"),
+        ("/record", "screen"),
+        ("/audiocheck", "audio"),
+        ("/audiocheck", "microphone"),
+        ("/audiocheck", "sound"),
     ];
     let rows = [
         ("Chat", "nav:chat"),
@@ -165,6 +169,8 @@ pub fn filter_palette(q: &str) -> Vec<(&'static str, &'static str)> {
         ("Update", "/update"),
         ("Connect Grok OAuth", "oauth"),
         ("Copy diagnostics", "diag"),
+        ("Record my screen", "/record"),
+        ("Check my audio", "/audiocheck"),
         ("Import OpenClaw", "/import"),
         ("Hey Grok", "voice"),
         ("Keyboard shortcuts", "shortcuts"),
@@ -199,9 +205,13 @@ mod tests {
         );
         assert_eq!(filter_palette("ideas"), vec![("Pulse", "nav:pulse")]);
         assert!(filter_palette("set").iter().any(|(l, _)| *l == "Settings"));
-        // Off the rail, so an empty query hides them (20 - Devices/Agents/Connectors).
+        // Off the rail, so an empty query hides them (22 - Devices/Agents/Connectors).
         // Night is not its own row; `night` still resolves to Automations above.
-        assert_eq!(filter_palette("").len(), 17);
+        assert_eq!(filter_palette("").len(), 19);
+        assert_eq!(filter_palette("record"), vec![("Record my screen", "/record")]);
+        assert_eq!(filter_palette("screen"), vec![("Record my screen", "/record")]);
+        assert_eq!(filter_palette("check my audio"), vec![("Check my audio", "/audiocheck")]);
+        assert_eq!(filter_palette("microphone"), vec![("Check my audio", "/audiocheck")]);
         let empty = filter_palette("");
         for gone in ["Devices", "Agents", "Connectors", "Night"] {
             assert!(

@@ -251,7 +251,7 @@ impl Cabin {
             e.last_ms = now_ms();
         }
         match stop_reason {
-            "episode_verified" | "halted" | "cancelled" | "episode_idle" => {
+            "episode_verified" | "halted" | "cancelled" | "episode_idle" | "episode_unconfirmed" => {
                 self.harness.episode = None;
             }
             "episode_ladder_pause" => {
