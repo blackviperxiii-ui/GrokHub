@@ -1443,6 +1443,84 @@ fn record_wav(path: &Path) -> Result<(), String> {
     }
 }
 
+/// `pactl` output in the C locale, or `None` when pactl is missing or fails.
+pub fn pactl_text(args: &[&str]) -> Option<String> {
+    if !which("pactl") {
+        return None;
+    }
+    let mut cmd = spawn_bin("pactl");
+    cmd.args(args).env("LC_ALL", "C");
+    let out = run_limited(cmd, Duration::from_secs(4))?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// The audio check's clip: `CLIP_SECS` of raw s16le mono from `device`
+/// (`None` = the default input), kept in memory only. Returns the sample
+/// rate and the bytes. The recorder is stopped once it has enough, or at the
+/// deadline if it stalls.
+pub fn record_clip(device: Option<&str>) -> Result<(u32, Vec<u8>), String> {
+    use grokhub_core::audio_check as ac;
+    #[cfg(windows)]
+    {
+        if device.is_none() {
+            if let Ok(pcm) = crate::win_audio::record_pcm_secs(ac::CLIP_SECS) {
+                return Ok((crate::win_audio::RATE, pcm));
+            }
+        }
+    }
+    let picked = ac::CLIP_RECORDERS
+        .iter()
+        .filter(|b| which(b))
+        .find_map(|b| ac::clip_argv(b, device).map(|argv| (*b, argv)));
+    let Some((bin, argv)) = picked else {
+        return Err(if device.is_some() {
+            "No recorder here can pick an input: install pulseaudio-utils (parecord) or pipewire (pw-record).".into()
+        } else {
+            "No recorder found: install pulseaudio-utils (parecord), pipewire (pw-record), ffmpeg or alsa-utils (arecord).".into()
+        });
+    };
+    let want = (ac::CLIP_RATE * 2 * ac::CLIP_SECS) as usize;
+    let mut cmd = spawn_bin(bin);
+    cmd.args(&argv)
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    crate::host::hide_windows_console(&mut cmd);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("{bin} didn't start: {e}"))?;
+    let mut out = child.stdout.take().ok_or("the recorder gave no output")?;
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::with_capacity(want);
+        let mut chunk = [0u8; 8192];
+        while buf.len() < want {
+            match out.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            }
+        }
+        buf.truncate(want);
+        buf
+    });
+    let deadline = Instant::now() + Duration::from_secs(u64::from(ac::CLIP_SECS) + 3);
+    while !reader.is_finished() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    kill_limited(&mut child);
+    let _ = child.wait();
+    let pcm = reader.join().unwrap_or_default();
+    if pcm.len() < 64 {
+        return Err(format!("{bin} recorded no sound data"));
+    }
+    Ok((ac::CLIP_RATE, pcm))
+}
+
 fn transcribe(wav: &Path) -> Result<String, String> {
     let dest = wav.to_str().ok_or("wav")?;
     let bin = first_bin(TRANSCRIBERS).ok_or("install whisper (openai-whisper or whisper.cpp)")?;

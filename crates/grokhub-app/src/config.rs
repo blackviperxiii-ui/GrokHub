@@ -418,6 +418,17 @@ pub struct AppConfig {
     /// Settings → Let Grok control the desktop. Off until the user turns it on.
     #[serde(default)]
     pub desktop_control: bool,
+    /// Settings → Screen recording: lets "Record my screen" take stills. Off until turned on.
+    #[serde(default)]
+    pub screen_record: bool,
+    /// Settings → Quiet self-review: the weekly pass logs its suggestions
+    /// (Settings shows the newest) instead of posting Pulse cards. Off by default.
+    #[serde(default)]
+    pub self_improve_quiet: bool,
+    /// Settings → Memory retention: unsure, unlinked AMR notes not updated in
+    /// this many days are retired once a day, apart from dream. 0 keeps all.
+    #[serde(default = "default_amr_retention_days", deserialize_with = "de_amr_retention_days")]
+    pub amr_retention_days: u32,
     /// Spike-2a flag: Cua Driver as a second pair of hands on Linux
     /// (`grokhub --mcp-cua`). Omitted from `app.json` while false. No Settings control.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -512,6 +523,17 @@ fn de_dream_hour<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error
     Ok(raw.as_i64().map_or_else(default_dream_hour, |h| h.clamp(0, 23) as u32))
 }
 
+/// 90 days: what the dream's TTL retired before retention was its own setting.
+fn default_amr_retention_days() -> u32 {
+    grokhub_core::amr::DREAM_TTL_DAYS as u32
+}
+
+/// A whole number clamps to 0–3650; anything else is the default.
+fn de_amr_retention_days<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let raw = serde_json::Value::deserialize(d)?;
+    Ok(raw.as_i64().map_or_else(default_amr_retention_days, |n| n.clamp(0, 3650) as u32))
+}
+
 fn default_imagine_wall() -> bool {
     true
 }
@@ -603,6 +625,9 @@ impl Default for AppConfig {
             imagine_wall: default_imagine_wall(),
             composer_glow: false,
             desktop_control: false,
+            screen_record: false,
+            self_improve_quiet: false,
+            amr_retention_days: default_amr_retention_days(),
             cua_driver: false,
             cua_driver_path: String::new(),
             theme: default_theme(),
@@ -1356,6 +1381,18 @@ mod tests {
         );
         let _ = fs::remove_dir_all(&root);
         std::env::remove_var("GROKHUB_CONFIG");
+    }
+
+    #[test]
+    fn amr_retention_defaults_to_90_days_clamps_and_round_trips() {
+        let old: AppConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.amr_retention_days, 90);
+        for (raw, want) in [("30", 30), ("0", 0), ("99999", 3650), ("-4", 0), ("\"long\"", 90)] {
+            let cfg: AppConfig = serde_json::from_str(&format!("{{\"amrRetentionDays\": {raw}}}")).unwrap();
+            assert_eq!(cfg.amr_retention_days, want, "{raw}");
+        }
+        let text = serde_json::to_string(&AppConfig { amr_retention_days: 180, ..AppConfig::default() }).unwrap();
+        assert!(text.contains("\"amrRetentionDays\":180"), "{text}");
     }
 
     #[test]

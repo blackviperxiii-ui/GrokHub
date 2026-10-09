@@ -75,6 +75,12 @@ pub(super) enum ConfirmKind {
     },
     /// Read-only: what the last scheduled run reported, when nothing else is stored.
     LastRun { title: String, body: String },
+    /// Delete a screen recording's folder. `title` names the recording.
+    DeleteRecording {
+        card_id: String,
+        dir: String,
+        title: String,
+    },
 }
 
 impl ConfirmKind {
@@ -83,7 +89,8 @@ impl ConfirmKind {
             Self::AlwaysSession
             | Self::DestructiveHost { .. }
             | Self::RemoveJob { .. }
-            | Self::LastRun { .. } => true,
+            | Self::LastRun { .. }
+            | Self::DeleteRecording { .. } => true,
         }
     }
 }
@@ -125,6 +132,15 @@ pub(super) fn remove_job_spec() -> ConfirmSpec {
         title: "Remove job",
         consequence: "The job is deleted and will not run again.",
         primary: REMOVE_JOB_PRIMARY,
+        danger: true,
+    }
+}
+
+pub(super) fn delete_recording_spec() -> ConfirmSpec {
+    ConfirmSpec {
+        title: "Delete recording",
+        consequence: "The stills are deleted from this computer. This can't be undone.",
+        primary: "Delete",
         danger: true,
     }
 }
@@ -251,6 +267,9 @@ impl Cabin {
                 format!("Last run · {title}"),
                 body.clone(),
             ),
+            ConfirmKind::DeleteRecording { dir, title, .. } => {
+                (delete_recording_spec(), format!("Delete {title}?"), dir.clone())
+            }
         };
         let overlay_open = self.palette_open || self.nav == Nav::Settings || self.find.focused;
         let steal = confirm_key(
@@ -290,6 +309,9 @@ impl Cabin {
             }
             ConfirmKind::RemoveJob { kind, id, .. } => self.delete_confirmed_job(kind, &id),
             ConfirmKind::LastRun { .. } => {}
+            ConfirmKind::DeleteRecording { card_id, dir, title } => {
+                self.delete_recording(&card_id, &dir, &title)
+            }
         }
     }
 

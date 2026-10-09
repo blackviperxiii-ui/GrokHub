@@ -164,7 +164,7 @@ fn a_cost_raising_card_changes_nothing_until_accepted_and_undo_puts_the_file_bac
     assert!(learn::cards_due(&dir, T0 + DAY_MS).is_empty());
     assert_eq!(learn::cards_due(&dir, T0 + 8 * DAY_MS).len(), 1);
     // Accept writes through the ledger; Undo removes the file again (it was not there).
-    assert_eq!(learn::accept_card(&dir, "chat:default#2", T0).unwrap(), "Router changed (everyday chat: start at High). Undo is on the change list.");
+    assert_eq!(learn::accept_card(&dir, "chat:default#2", T0).unwrap(), "Router changed (everyday chat: start at High). /why table shows it.");
     assert_eq!(learn::load_tuning(&dir).starts.get("chat:default").map(String::as_str), Some("high"));
     let line = ChangeLedger::load_kind(&dir, ChangeKind::Model).all().last().cloned().unwrap();
     assert_eq!((line.id.as_str(), line.reason.as_str()), (learn::TUNING_ID, "you accepted: everyday chat: start at High"));

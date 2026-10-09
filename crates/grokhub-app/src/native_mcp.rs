@@ -25,10 +25,32 @@ fn paint_state() -> &'static Mutex<PaintState> {
     })
 }
 
+/// The last checked MCP servers for `/health`: how many are on, and each
+/// one in error by name. Reads the Settings cache; pings nothing.
+pub fn health_rows() -> (usize, Vec<String>) {
+    let held = paint_state().lock().unwrap_or_else(|err| err.into_inner());
+    servers_health(&held.rows)
+}
+
+fn servers_health(rows: &[grokhub_agent::mcp::DoctorRow]) -> (usize, Vec<String>) {
+    let on = rows.iter().filter(|r| r.status != "disabled").count();
+    let failed = rows
+        .iter()
+        .filter(|r| r.status == "error")
+        .map(|r| match r.last_error.trim() {
+            "" => format!("MCP {}: error", r.name),
+            why => format!("MCP {}: error, {why}", r.name),
+        })
+        .collect();
+    (on, failed)
+}
+
 enum Job {
     Import,
     Doctor,
     Restart(String),
+    SignIn(String),
+    SignOut(String),
 }
 
 pub fn paint(ui: &mut eframe::egui::Ui) {
@@ -72,6 +94,11 @@ pub fn paint(ui: &mut eframe::egui::Ui) {
         if crate::cards::settings_action(ui, &row.name, &hint, "Restart") {
             spawn(Job::Restart(row.name.clone()));
         }
+        if let Some((hint, button, job)) = sign_in_action(row) {
+            if crate::cards::settings_action(ui, &format!("{} sign-in", row.name), &hint, button) {
+                spawn(job);
+            }
+        }
     }
     if busy {
         ui.ctx().request_repaint_after(Duration::from_millis(200));
@@ -91,6 +118,20 @@ fn row_hint(row: &grokhub_agent::mcp::DoctorRow) -> String {
     hint
 }
 
+/// The sign-in row under a remote server: Sign in, or the account and Sign out.
+fn sign_in_action(row: &grokhub_agent::mcp::DoctorRow) -> Option<(String, &'static str, Job)> {
+    use grokhub_agent::mcp::SignIn;
+    match &row.sign_in {
+        SignIn::NotOffered => None,
+        SignIn::SignedOut => Some((
+            format!("Sign in to {} in your browser. The token is sealed on this device.", row.name),
+            "Sign in",
+            Job::SignIn(row.name.clone()),
+        )),
+        SignIn::SignedIn(line) => Some((line.clone(), "Sign out", Job::SignOut(row.name.clone()))),
+    }
+}
+
 fn spawn(job: Job) {
     {
         let mut held = paint_state().lock().unwrap_or_else(|err| err.into_inner());
@@ -98,6 +139,9 @@ fn spawn(job: Job) {
             return;
         }
         held.busy = true;
+        if let Job::SignIn(name) = &job {
+            held.note = format!("Finish signing in to {name} in your browser");
+        }
     }
     std::thread::spawn(move || {
         let (rows, note) = match job {
@@ -115,6 +159,17 @@ fn spawn(job: Job) {
                     Err(err) => err,
                 };
                 (grokhub_agent::mcp::doctor(), note)
+            }
+            Job::SignIn(name) => {
+                let note = match grokhub_agent::mcp::sign_in(&name, &|url| crate::oauth::open_browser(url)) {
+                    Ok(line) => line,
+                    Err(err) => err,
+                };
+                (grokhub_agent::mcp::doctor(), note)
+            }
+            Job::SignOut(name) => {
+                let note = grokhub_agent::mcp::sign_out(&name);
+                (grokhub_agent::mcp::configured(), note)
             }
         };
         let mut held = paint_state().lock().unwrap_or_else(|err| err.into_inner());
@@ -369,6 +424,51 @@ fn split_top(text: &str, sep: char) -> Vec<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_rows_offer_sign_in_then_name_the_account_and_sign_out() {
+        use grokhub_agent::mcp::{DoctorRow, SignIn};
+        let row = |sign_in| DoctorRow {
+            name: "linear".into(),
+            status: "error".into(),
+            tool_count: 0,
+            last_error: String::new(),
+            detail: "http https://mcp.linear.app/mcp".into(),
+            sign_in,
+        };
+        assert!(sign_in_action(&row(SignIn::NotOffered)).is_none());
+        let (hint, button, job) = sign_in_action(&row(SignIn::SignedOut)).unwrap();
+        assert_eq!(hint, "Sign in to linear in your browser. The token is sealed on this device.");
+        assert_eq!(button, "Sign in");
+        assert!(matches!(job, Job::SignIn(name) if name == "linear"));
+        let (hint, button, job) = sign_in_action(&row(SignIn::SignedIn("Signed in to linear as ada@example.com".into()))).unwrap();
+        assert_eq!((hint.as_str(), button), ("Signed in to linear as ada@example.com", "Sign out"));
+        assert!(matches!(job, Job::SignOut(name) if name == "linear"));
+    }
+
+    #[test]
+    fn health_counts_servers_that_are_on_and_names_each_one_in_error() {
+        use grokhub_agent::mcp::{DoctorRow, SignIn};
+        let row = |name: &str, status: &str, err: &str| DoctorRow {
+            name: name.into(),
+            status: status.into(),
+            tool_count: 0,
+            last_error: err.into(),
+            detail: String::new(),
+            sign_in: SignIn::NotOffered,
+        };
+        let rows = vec![
+            row("github", "error", "timed out after 5s"),
+            row("linear", "connected", ""),
+            row("old", "disabled", ""),
+            row("files", "error", " "),
+        ];
+        assert_eq!(
+            servers_health(&rows),
+            (3, vec!["MCP github: error, timed out after 5s".to_string(), "MCP files: error".to_string()])
+        );
+        assert_eq!(servers_health(&[]), (0, Vec::new()));
+    }
 
     #[test]
     fn native_mcp_import_copies_server_definitions_only() {

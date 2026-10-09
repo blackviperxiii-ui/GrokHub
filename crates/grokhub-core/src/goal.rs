@@ -322,7 +322,6 @@ where
     }
 }
 
-pub const FOLLOWUP_MAX_STEPS: u32 = 4;
 pub const FOLLOWUP_PROMPT: &str =
     "FOLLOWUP: Finish the incomplete work from your last reply. Act now with Grok Build tools or computer-use if needed. End with status.";
 
@@ -401,14 +400,11 @@ pub fn is_auto_continue_prompt(content: &str) -> bool {
     t.starts_with("FOLLOWUP:") || t.starts_with("[Goal step ")
 }
 
-pub fn should_auto_continue_goal(
-    outcome: &str,
-    pin: &str,
-    running: bool,
-    step: u32,
-    max_steps: u32,
-) -> bool {
-    outcome == "continue" && !pin.trim().is_empty() && !running && step < max_steps.max(1)
+/// A goal follow-up goes on while the reply says continue. No step count
+/// ends it: only an outcome (complete or blocked), Halt, Stop, a budget pause
+/// or a hard approval does.
+pub fn should_auto_continue_goal(outcome: &str, pin: &str, running: bool) -> bool {
+    outcome == "continue" && !pin.trim().is_empty() && !running
 }
 
 fn promised_action(assistant: &str) -> bool {
@@ -495,17 +491,13 @@ pub fn reply_needs_followup(user: &str, assistant: &str, truncated: bool) -> boo
     promised_action(assistant)
 }
 
-pub fn next_goal_prompt(pin: &str, prior: &str, step: u32, max_steps: u32) -> Option<String> {
+pub fn next_goal_prompt(pin: &str, prior: &str, step: u32) -> Option<String> {
     if pin.trim().is_empty() {
         return None;
     }
-    if step >= max_steps.max(1) {
-        return None;
-    }
     Some(format!(
-        "[Goal step {}/{}]\nTask: {}\nLast progress:\n{}\n\nContinue autonomously. Use Grok Build tools and computer-use as needed.\nWhen fully finished, say clearly: GOAL_COMPLETE\nIf blocked on the user, say: GOAL_BLOCKED: <reason>",
+        "[Goal step {}]\nTask: {}\nLast progress:\n{}\n\nContinue autonomously. Use Grok Build tools and computer-use as needed.\nWhen fully finished, say clearly: GOAL_COMPLETE\nIf blocked on the user, say: GOAL_BLOCKED: <reason>",
         step + 1,
-        max_steps.max(1),
         pin.trim(),
         prior.chars().take(1500).collect::<String>()
     ))
@@ -593,9 +585,11 @@ mod tests {
             "complete",
             "thinking-only is not an incomplete job"
         );
-        let p = next_goal_prompt("flash the pi", "wrote image", 0, 6).unwrap();
-        assert!(p.contains("Goal step 1/6"));
-        assert!(next_goal_prompt("flash the pi", "x", 6, 6).is_none());
+        let p = next_goal_prompt("flash the pi", "wrote image", 0).unwrap();
+        assert!(p.starts_with("[Goal step 1]\nTask: flash the pi\n"), "{p}");
+        let past_four = next_goal_prompt("flash the pi", "x", 9).expect("goal follow-ups go past 4 steps");
+        assert!(past_four.starts_with("[Goal step 10]\n"), "{past_four}");
+        assert!(next_goal_prompt("  ", "x", 0).is_none(), "no pin, no goal step");
         assert_eq!(
             goal_pin_for_job(Some("thr-a"), "thr-b", "", &[("thr-a".into(), "flash pi".into())]),
             "flash pi"
@@ -685,12 +679,13 @@ If this fails, tell me your distro.";
             "check to make sure all tools are installed"
         );
         assert_eq!(goal_continue_pin("hands", "check tools"), "hands");
-        assert!(should_auto_continue_goal("continue", "check tools", false, 0, 6));
+        assert!(should_auto_continue_goal("continue", "check tools", false));
         assert!(
-            !should_auto_continue_goal("continue", "check tools", true, 0, 6),
+            !should_auto_continue_goal("continue", "check tools", true),
             "do not send_chat a goal step while host is already running"
         );
-        assert!(!should_auto_continue_goal("complete", "check tools", false, 0, 6));
+        assert!(!should_auto_continue_goal("complete", "check tools", false));
+        assert!(!should_auto_continue_goal("blocked", "check tools", false));
         assert!(!reply_needs_followup(
             "check to make sure all tools are installed",
             "THINKING:\nydotool is not found, I'll apt install it\n\n",
@@ -702,7 +697,6 @@ If this fails, tell me your distro.";
             false
         ));
         assert!(is_auto_continue_prompt(FOLLOWUP_PROMPT));
-        assert_eq!(FOLLOWUP_MAX_STEPS, 4);
         assert!(FOLLOWUP_PROMPT.starts_with("FOLLOWUP:"));
         assert!(
             FOLLOWUP_PROMPT.contains("computer-use"),
@@ -716,7 +710,7 @@ If this fails, tell me your distro.";
             ),
             "thinking-only XML tool_call on a mouse ask must continue"
         );
-        let goal = next_goal_prompt("open a new tab", "found Firefox", 0, 6).unwrap();
+        let goal = next_goal_prompt("open a new tab", "found Firefox", 0).unwrap();
         assert!(
             goal.contains("computer-use"),
             "goal continue must mention computer-use: {goal}"

@@ -115,7 +115,9 @@ pub use self_manage::{
     automation_cap_refusal, open_connection_token, tool_origin, undo_connection, AutomationsFile, McpFile,
     SELF_AUTOMATION_WEEK_CAP, SELF_MANAGE_TOOLS, WEEK_MS,
 };
-pub(crate) use self_manage::{forget_connection_token, seal_connection_token};
+pub(crate) use self_manage::{
+    forget_connection_token, forget_mcp_signin, open_mcp_signin, seal_connection_token, seal_mcp_signin,
+};
 pub use consent::{
     consent_path, grant_destination, grant_premium, grant_scope, revoke_grant, scope_excluded, scope_refusal,
     ConsentLedger, Grant, Scope, UserClick, CONSENT_FILE, SCOPE_HARD_EXCLUDES, SCOPE_KINDS,
