@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- When no model in your plan answers, GrokHub no longer stops and waits for you. It keeps checking on its own (after 15 s, 30 s, 1 m and 2 m, then every 5 minutes, with no limit) and resumes the paused chat turn as soon as a model answers, with one quiet note: "Back on grok-4.6; resumed: Summarize inbox". While it waits, Home shows an information card naming the models and the step ("Waiting for a model: grok-4.7 … “Summarize inbox” picks up on its own once one answers.") with a Retry now button and nothing to approve. It only ever tries models in your plan, so waiting never spends money. The budget pause is unchanged and still waits for you.
 - Every card on your feed now names the thing it's about. A card that can't name its item isn't posted at all, so you won't see a bare "Automation finished" or "Pick that job back up?". The router's cards name the model or step: "Paused: grok-4.7 isn't answering", "Your plan no longer includes grok-4.3", "Auto now thinks harder on everyday chat". A paused job's idea no longer says "That job is still paused". On the Ideas board, situation and router suggestions keep their own title instead of reading "I can paused: …". Crash, screen-recording and audio-check cards no longer say "Your automation … finished". Settings → Permissions now says calendar and mail are read through Grok Build's Google Calendar and Gmail connectors.
 
 ## 2.12.0 — 2026-10-09

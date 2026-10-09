@@ -18243,6 +18243,10 @@ fn every_home_card_the_cabin_posts_names_its_item() {
     rows.push(("post_self_review_card", posted_card(&cabin, "post_self_review_card", |c| c.source_id == "revert:inbox-zero"), "inbox-zero"));
     cabin.post_router_review(now);
     rows.push(("post_router_review", posted_card(&cabin, "post_router_review", |c| c.source_id == "router-review"), "router review"));
+    cabin.live_mut().push(("user".into(), "Summarize inbox".into()));
+    cabin.start_model_wait("chat:default", "grok-4.7", now);
+    rows.push(("start_model_wait", posted_card(&cabin, "start_model_wait", grokhub_core::is_model_wait_card), "grok-4.7"));
+    rows.push(("model_wait_card", super::model_wait_ui::model_wait_card(&["grok-4.6".into()], "grok-4.6", "9:05 PM", "dream time", now), "grok-4.6"));
     // Sites a test cabin can't reach without a live run: the card from the same call.
     let guard_text = "Auto was succeeding less on everyday chat, so it now starts that work one step higher.";
     let guard = super::router_ui::guard_card("chat:default", guard_text, now);
