@@ -1,4 +1,5 @@
-//! Agent loop. Turns stop when the model stops calling tools, or at the cap.
+//! Agent loop. Turns stop when the model stops calling tools, or at the
+//! caller's turn cap (`max_turns` 0 means none).
 
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
@@ -12,8 +13,11 @@ use crate::{
     StreamEvent, Usage,
 };
 
-pub const DEFAULT_MAX_TURNS: u32 = 50;
 const REPEAT_LIMIT: u32 = 3;
+/// What a call repeated [`REPEAT_LIMIT`] times gets back instead of running.
+pub const REPEAT_REPLAN: &str = "not run: the same call already ran twice. Stop repeating it. \
+Re-read the goal, say in one line what you tried, then pick a different approach \
+(another tool, another route or a smaller sub-step) and go on.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StopReason {
@@ -21,7 +25,6 @@ pub enum StopReason {
     Cancelled,
     Halted,
     MaxTurns,
-    RepeatedCall,
     Error(String),
 }
 
@@ -151,7 +154,7 @@ fn finish(
 ) -> LoopOut {
     if fire {
         let event = match &stop {
-            StopReason::EndTurn | StopReason::RepeatedCall => "Stop",
+            StopReason::EndTurn => "Stop",
             StopReason::Error(_) => "StopFailure",
             StopReason::Cancelled | StopReason::Halted | StopReason::MaxTurns => "StopCancelled",
         };
@@ -220,12 +223,14 @@ pub fn run_loop(
         }
         crate::hooks::PromptHook::Continue { .. } => {}
     }
-    let max_turns = if input.max_turns == 0 {
-        DEFAULT_MAX_TURNS
-    } else {
-        input.max_turns
-    };
-    for _turn in 0..max_turns {
+    let mut step_ended: Option<std::time::Instant> = None;
+    let mut turns = 0u32;
+    loop {
+        if input.max_turns != 0 && turns >= input.max_turns {
+            return finish(input, StopReason::MaxTurns, usage, did_compact, true);
+        }
+        turns = turns.saturating_add(1);
+        let turn_top = crate::timing::lap("loop:pre_request");
         if input.cancel.is_cancelled() {
             return finish(input, StopReason::Cancelled, usage, did_compact, true);
         }
@@ -300,6 +305,10 @@ pub fn run_loop(
             call_timeout: None,
         };
         let class = crate::route::live::current_class();
+        drop(turn_top);
+        if let Some(t) = step_ended {
+            crate::timing::record("loop:step_gap", t.elapsed());
+        }
         let turn = match crate::route::live::stream_routed(input.client, &req, input.cancel, &mut |ev| match ev {
             StreamEvent::TextDelta(text) => on_event(LoopEvent::Text(text)),
             StreamEvent::ReasoningDelta(text) => on_event(LoopEvent::Thought(text)),
@@ -318,6 +327,7 @@ pub fn run_loop(
                 );
             }
         };
+        step_ended = Some(std::time::Instant::now());
         usage.add(&turn.usage);
         emit_usage(on_event, &usage, history, input.context_length);
         if !turn.text.is_empty() {
@@ -349,7 +359,6 @@ pub fn run_loop(
             }
             continue;
         }
-        let mut repeated = false;
         let mut always = gate.mode == gate::PermMode::Always;
         for call in &turn.calls {
             history.push(InputItem::FunctionCall {
@@ -377,15 +386,12 @@ pub fn run_loop(
             let seen = repeats.entry(key).or_insert(0);
             *seen = seen.saturating_add(1);
             if *seen >= REPEAT_LIMIT {
-                repeated = true;
-                let output = ToolOutput::err(format!(
-                    "{}; the same call already ran twice, so it was not run again",
-                    tools::READ_ONLY_PHASE
-                ));
+                let output = ToolOutput::err(REPEAT_REPLAN);
                 push_output(history, call, output);
                 continue;
             }
             let id = tool_id(call);
+            let gate_lap = crate::timing::lap("loop:tool_gate");
             let desk = tools::desk_flags(&call.name, &gate, input.desktop);
             let base = gate::decide_with(
                 &gate,
@@ -436,6 +442,7 @@ pub fn run_loop(
                 arguments: &call.arguments,
                 tool_use_id: &id,
             });
+            drop(gate_lap);
             let ask_reason = constrained.ask_reason;
             let pre_context = constrained.context;
             let (output, extra_usage) = match constrained.decision {
@@ -556,14 +563,10 @@ pub fn run_loop(
                 return finish(input, StopReason::Halted, usage, did_compact, true);
             }
         }
-        if repeated {
-            return finish(input, StopReason::RepeatedCall, usage, did_compact, true);
-        }
         for note in input.steer.drain() {
             history.push(user_message(&note, None));
         }
     }
-    finish(input, StopReason::MaxTurns, usage, did_compact, true)
 }
 
 /// A hard-class step (money, send, delete, credentials, irreversible OS) or
@@ -667,6 +670,7 @@ fn note_tool(
     on_event: &mut dyn FnMut(LoopEvent),
     pre_context: &str,
 ) -> (ToolOutput, Usage) {
+    let _lap = crate::timing::lap("loop:tool_run");
     let (mut output, usage) = run_allowed(
         input,
         gate,
@@ -997,8 +1001,29 @@ mod tests {
     }
 
     #[test]
-    fn default_turn_cap_is_fifty() {
-        assert_eq!(DEFAULT_MAX_TURNS, 50);
+    fn no_turn_cap_runs_past_fifty_tool_turns_to_the_reply() {
+        let dir = workspace("nocap");
+        let mut turns: Vec<ScriptTurn> = (0..80)
+            .map(|n| ScriptTurn {
+                text: String::new(),
+                calls: vec![call(&format!("t{n}"), "list_dir", &format!(r#"{{"path":"p{n}"}}"#))],
+                usage: Usage::default(),
+            })
+            .collect();
+        turns.push(ScriptTurn { text: "all done".into(), calls: Vec::new(), usage: Usage::default() });
+        let script = Script {
+            turns: Mutex::new(turns),
+            seen: Mutex::new(Vec::new()),
+            cancel_on_text: false,
+            steer: None,
+        };
+        let (out, history, events) = run(&script, &dir, 0, &CancelToken::new(), &SteerQueue::new(), &NeverHalt);
+        assert_eq!(out.stop, StopReason::EndTurn);
+        assert_eq!(script.seen.lock().unwrap().len(), 81);
+        let outputs = history.iter().filter(|i| matches!(i, InputItem::FunctionCallOutput { .. })).count();
+        assert_eq!(outputs, 80);
+        assert!(events.iter().any(|ev| matches!(ev, LoopEvent::Text(t) if t == "all done")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1027,7 +1052,7 @@ mod tests {
         let (out, history, events) = run(
             &script,
             &dir,
-            DEFAULT_MAX_TURNS,
+            0,
             &CancelToken::new(),
             &SteerQueue::new(),
             &NeverHalt,
@@ -1126,14 +1151,24 @@ mod tests {
             steer: None,
         };
         let (out, history, _) = run(&repeat, &dir, 10, &CancelToken::new(), &SteerQueue::new(), &NeverHalt);
-        assert_eq!(out.stop, StopReason::RepeatedCall);
+        // The third identical call re-plans instead of ending the run.
+        assert_eq!(out.stop, StopReason::EndTurn);
+        let replans: Vec<&str> = history
+            .iter()
+            .filter_map(|item| match item {
+                InputItem::FunctionCallOutput { output, .. } if output.contains(REPEAT_REPLAN) => Some(output.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(replans.len(), 1);
         let runs = history
             .iter()
             .filter(|item| {
-                matches!(item, InputItem::FunctionCallOutput { output, .. } if !output.contains("not run again"))
+                matches!(item, InputItem::FunctionCallOutput { output, .. } if !output.contains(REPEAT_REPLAN))
             })
             .count();
         assert_eq!(runs, 2);
+        assert_eq!(repeat.seen.lock().unwrap().len(), 4, "the model got a turn after the re-plan note");
 
         let cancel_script = Script {
             turns: Mutex::new(vec![ScriptTurn {

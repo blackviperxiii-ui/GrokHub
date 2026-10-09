@@ -241,6 +241,15 @@ pub(super) fn work_row(kind: ChangeKind, c: &hx::Change) -> ChangeRow {
     }
 }
 
+/// The one tell-only Home note for a router change (routing table or
+/// tuning). It carries no Undo or Keep; the ledger line stays for `/why table`.
+pub(super) fn model_change_note(c: &hx::Change) -> grokhub_core::UpdateCard {
+    let title = format!("Router {} {}", what(c.op), c.shown_name());
+    let why = c.reason.trim();
+    let body = if why.is_empty() { "/why table shows the picks.".to_string() } else { format!("{why} · /why table shows the picks.") };
+    grokhub_core::router_update_card(&format!("model:{}#{}", c.id, c.seq), &title, &body, c.at)
+}
+
 /// Work-tree rows after a restart: self-made changes from the last day that
 /// are still in effect and not kept, newest first.
 /// `skip` drops lines that already have their own Undo (a Done-for-you card).
@@ -259,7 +268,7 @@ pub(super) fn work_rows_from_disk(
             }
             seen.push(&c.id);
             if let Some(open) = ledger.open_self_change(&c.id) {
-                if now_ms.saturating_sub(open.at) < WORK_ROW_MS && !skip(kind, open.seq) {
+                if kind != ChangeKind::Model && now_ms.saturating_sub(open.at) < WORK_ROW_MS && !skip(kind, open.seq) {
                     found.push((open.at, work_row(kind, open)));
                 }
             }
@@ -331,7 +340,7 @@ impl Cabin {
     }
 
     /// Each frame: changes GrokHub just made on its own become a Work-tree
-    /// row and a Home update. The first call also brings back the rows of
+    /// row and a Home update (router changes: the Home note only). The first call also brings back the rows of
     /// the last day from disk.
     pub(super) fn poll_self_changes(&mut self) {
         let dir = config::config_dir();
@@ -358,6 +367,11 @@ impl Cabin {
         for (kind, c) in fresh {
             // An auto-act's Done-for-you card already carries its Undo.
             if self.auto_lines().contains(&(kind, c.seq)) {
+                continue;
+            }
+            if kind == ChangeKind::Model {
+                // Router changes are tell-only: one Home note, no Undo/Keep row.
+                self.post_feed_card(model_change_note(&c));
                 continue;
             }
             if kind == ChangeKind::Skill {

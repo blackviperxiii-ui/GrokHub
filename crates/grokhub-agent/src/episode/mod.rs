@@ -8,10 +8,10 @@
 //! and VerifyGate passes; `GOAL_COMPLETE` counts only after `VERIFY_OK`.
 //! Halt, Stop, or [`EPISODE_IDLE`] without a step also end it.
 //!
-//! Long-run limits ([`EPISODE_MAX_STEPS`], [`EPISODE_MAX_WALL`]) pause with a
-//! question the user answers by typing or clicking Continue ([`Continue`]);
-//! nothing continues on its own. Every step goes through `harness::decide`;
-//! the episode adds no executor and no bypass. Hard class always parks.
+//! There is no step or wall-time cap. After [`STALL_REPLAN`] steps that move
+//! nothing the worker is told to re-plan ([`REPLAN_NOTE`]) and goes on. Every
+//! step goes through `harness::decide`; the episode adds no executor and no
+//! bypass. Hard class always parks.
 
 mod kernel;
 mod view;
@@ -32,15 +32,17 @@ pub use view::{
     VIEW_HEAD, ZOOM_TOOL,
 };
 
-/// Steps an episode runs before it pauses and asks to continue.
-pub const EPISODE_MAX_STEPS: u32 = 60;
-/// Wall time an episode runs before it pauses and asks to continue.
-pub const EPISODE_MAX_WALL: Duration = Duration::from_secs(30 * 60);
+/// Steps in a row that move nothing before the worker is told to re-plan.
+pub const STALL_REPLAN: u32 = 8;
+/// The worker's next note after [`STALL_REPLAN`] steps with no progress.
+pub const REPLAN_NOTE: &str = "The last steps changed nothing. Stop repeating them. Re-read the goal, \
+say in one line what you tried, then pick a different approach (another tool, another route or a smaller sub-step), \
+take a fresh screenshot and go on.";
 /// An open episode with no step for this long ends.
 pub const EPISODE_IDLE: Duration = Duration::from_secs(10 * 60);
 /// Most independent reads one fan-out runs side by side.
 pub const FANOUT_CAP: usize = 20;
-/// Span tool for episode markers (`begin`, `pause`, `resume`, `end`, `fold`).
+/// Span tool for episode markers (`begin`, `end`, `fold`).
 pub const EPISODE_TOOL: &str = "episode";
 /// Park ids the episode kernel posts. The cabin card answers them; the
 /// kernel writes their spans.
@@ -80,46 +82,6 @@ impl EpisodeEnd {
             Self::Stop => "stop",
             Self::Idle => "idle",
         }
-    }
-}
-
-/// A long-run limit the episode reached.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CapHit {
-    Steps(u32),
-    /// Minutes of wall time.
-    Wall(u64),
-}
-
-impl CapHit {
-    /// The pause card's question.
-    pub fn question(self) -> String {
-        match self {
-            Self::Steps(n) => format!("Paused after {n} steps. Continue?"),
-            Self::Wall(m) => format!("Paused after {m} minutes. Continue?"),
-        }
-    }
-
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::Steps(_) => "steps",
-            Self::Wall(_) => "wall",
-        }
-    }
-}
-
-/// The user's answer to a cap pause. Built only from their typing or their
-/// click, so no code path continues an episode on its own.
-#[derive(Debug)]
-pub struct Continue(());
-
-impl Continue {
-    pub fn from_typing() -> Self {
-        Self(())
-    }
-
-    pub fn from_click() -> Self {
-        Self(())
     }
 }
 
@@ -180,9 +142,8 @@ pub struct Episode {
     pub started_ms: u64,
     pub last_ms: u64,
     pub steps: u32,
-    step_cap: u32,
-    wall_cap_ms: u64,
-    pub paused: Option<CapHit>,
+    /// Steps in a row that moved nothing (see [`Episode::note_progress`]).
+    pub stall: u32,
     pub ended: Option<EpisodeEnd>,
     pub parks: Vec<OpenPark>,
     pub ladder: Ladder,
@@ -211,9 +172,7 @@ impl Episode {
             started_ms: now_ms,
             last_ms: now_ms,
             steps: 0,
-            step_cap: EPISODE_MAX_STEPS,
-            wall_cap_ms: EPISODE_MAX_WALL.as_millis() as u64,
-            paused: None,
+            stall: 0,
             ended: None,
             parks: Vec::new(),
             ladder: Ladder::new(),
@@ -224,26 +183,28 @@ impl Episode {
         }
     }
 
-    /// The limit this episode reached, if any. Checked before every step.
-    pub fn cap_hit(&self, now_ms: u64) -> Option<CapHit> {
-        if self.steps >= self.step_cap {
-            return Some(CapHit::Steps(self.steps));
+    /// Count one recorded step toward a stall. A step moved when the screen
+    /// changed, or when there was no screen reading and it didn't fail. A
+    /// park is neutral. True when [`STALL_REPLAN`] steps in a row moved
+    /// nothing; the count then starts over.
+    pub fn note_progress(&mut self, decision: &str, ui_changed: Option<bool>, failed: bool) -> bool {
+        if decision == "park" {
+            return false;
         }
-        let ran = now_ms.saturating_sub(self.started_ms);
-        (ran >= self.wall_cap_ms).then_some(CapHit::Wall(ran / 60_000))
-    }
-
-    /// When the wall cap pauses this episode: its time box, for the router's Fast policy.
-    pub fn deadline_ms(&self) -> u64 {
-        self.started_ms.saturating_add(self.wall_cap_ms)
-    }
-
-    /// The user answered a pause: another full allowance of steps and time.
-    pub fn resume(&mut self, _by: Continue, now_ms: u64) {
-        self.step_cap = self.steps.saturating_add(EPISODE_MAX_STEPS);
-        self.wall_cap_ms = now_ms.saturating_sub(self.started_ms) + EPISODE_MAX_WALL.as_millis() as u64;
-        self.paused = None;
-        self.last_ms = now_ms;
+        let moved = match ui_changed {
+            Some(changed) => changed,
+            None => !failed,
+        };
+        if moved {
+            self.stall = 0;
+            return false;
+        }
+        self.stall = self.stall.saturating_add(1);
+        if self.stall >= STALL_REPLAN {
+            self.stall = 0;
+            return true;
+        }
+        false
     }
 
     /// No step for [`EPISODE_IDLE`].

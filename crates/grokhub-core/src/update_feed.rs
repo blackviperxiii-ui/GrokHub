@@ -2896,16 +2896,15 @@ pub fn post_help(
             if now.saturating_sub(seen) < PAUSE_OFFER_MS {
                 continue;
             }
+            // Name the job: "That job is still paused" left you guessing which one.
+            let name = clip_line(job.title, TITLE_CHARS);
+            if name.is_empty() {
+                continue;
+            }
             let source = format!("pause:{}", job.id.trim());
-            if post_situation(
-                cards,
-                pulse,
-                now,
-                quiet,
-                &source,
-                "That job is still paused.",
-                "Want me to pick it back up?",
-            ) {
+            let title = format!("Paused: {name}");
+            let body = format!("Paused {}. Want me to pick it back up?", paused_ago(now.saturating_sub(seen)));
+            if post_situation(cards, pulse, now, quiet, &source, &title, &body) {
                 posted = true;
                 break;
             }
@@ -2942,6 +2941,26 @@ pub fn post_help(
         posted,
         ping: posted && !quiet,
     }
+}
+
+/// How long a job has sat paused, in plain words ("2 hours ago").
+fn paused_ago(ms: u64) -> String {
+    let mins = ms / 60_000;
+    let (n, unit) = match mins {
+        0 => return "just now".into(),
+        1..=59 => (mins, "minute"),
+        60..=1_439 => (mins / 60, "hour"),
+        _ => (mins / 1_440, "day"),
+    };
+    format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
+}
+
+/// The id of the workboard card a paused-job suggestion is about.
+pub fn paused_job_of(card: &UpdateCard) -> Option<&str> {
+    if card.kind != UpdateKind::Suggestion {
+        return None;
+    }
+    card.source_id.strip_prefix("pause:").map(str::trim).filter(|id| !id.is_empty())
 }
 
 fn has_unread_suggestion(cards: &[UpdateCard]) -> bool {
@@ -4064,14 +4083,64 @@ https://xstack.grok.me/post ZEPHYRTAIL"
             .map(|c| (c.title.clone(), c.body.clone(), c.source_id.clone()))
             .collect();
         assert_eq!(suggestions.len(), 1);
-        assert!(suggestions[0].0.contains("still paused"));
-        assert!(suggestions[0].1.as_deref().unwrap().contains("pick it back up"));
+        assert_eq!(suggestions[0].0, "Paused: Ship the harbor");
+        assert_eq!(suggestions[0].1.as_deref(), Some("Paused 30 minutes ago. Want me to pick it back up?"));
+        assert_eq!(suggestions[0].2, "pause:job-1");
         let source = suggestions[0].2.clone();
         remember_dismissed_source(&mut pulse, &source);
         cards.retain(|c| c.kind != UpdateKind::Suggestion);
         let after = post_help(&mut cards, &mut pulse, later + PAUSE_OFFER_MS, false, false, &paused, &[], "");
         assert!(!after.posted);
         assert!(cards.iter().all(|c| c.kind != UpdateKind::Suggestion));
+    }
+
+    #[test]
+    fn a_paused_job_with_no_title_gets_no_suggestion() {
+        let paused = [PausedJob { id: "job-2", title: "   ", detail: "Paused. This is where to resume." }];
+        let mut cards = Vec::new();
+        let mut pulse = FeedPulse::default();
+        post_help(&mut cards, &mut pulse, 1_000, false, false, &paused, &[], "");
+        let tick = post_help(&mut cards, &mut pulse, 1_000 + 3 * PAUSE_OFFER_MS, false, false, &paused, &[], "");
+        assert!(!tick.posted);
+        assert!(cards.is_empty(), "{cards:?}");
+    }
+
+    #[test]
+    fn the_paused_suggestion_points_at_its_job_and_says_how_long() {
+        let paused = [PausedJob { id: " job-9 ", title: "Fix the tray icon", detail: "Paused. This is where to resume." }];
+        let mut cards = Vec::new();
+        let mut pulse = FeedPulse::default();
+        post_help(&mut cards, &mut pulse, 0, false, false, &paused, &[], "");
+        assert!(post_help(&mut cards, &mut pulse, 2 * 3_600_000 + 5 * 60_000, false, false, &paused, &[], "").posted);
+        let card = cards.iter().find(|c| c.kind == UpdateKind::Suggestion).expect("suggestion");
+        assert_eq!(card.title, "Paused: Fix the tray icon");
+        assert_eq!(card.body.as_deref(), Some("Paused 2 hours ago. Want me to pick it back up?"));
+        assert_eq!(paused_job_of(card), Some("job-9"));
+        let idea = cards.iter().find(|c| c.kind == UpdateKind::Idea).expect("idea");
+        assert_eq!(paused_job_of(idea), None, "only the suggestion opens the job");
+        assert_eq!(
+            [paused_ago(0), paused_ago(60_000), paused_ago(45 * 60_000), paused_ago(3_600_000), paused_ago(3 * 86_400_000)],
+            ["just now", "1 minute ago", "45 minutes ago", "1 hour ago", "3 days ago"]
+        );
+    }
+
+    /// No situation card may point at "that job" or "it" without naming the thing.
+    #[test]
+    fn situation_cards_name_what_they_are_about() {
+        let paused = [PausedJob { id: "job-1", title: "Ship the harbor", detail: "Paused. This is where to resume." }];
+        let repeat = RepeatedAction { key: "open-cabin", label: "Open the cabin", count: 3, dismissed: false, automated: false };
+        for (paused, repeats, name) in [(&paused[..], &[][..], "Ship the harbor"), (&[][..], &[repeat][..], "Open the cabin")] {
+            let mut cards = Vec::new();
+            let mut pulse = FeedPulse::default();
+            post_help(&mut cards, &mut pulse, 0, false, true, paused, repeats, "");
+            post_help(&mut cards, &mut pulse, PAUSE_OFFER_MS, false, true, paused, repeats, "");
+            let card = cards.iter().find(|c| c.kind == UpdateKind::Suggestion).expect("suggestion");
+            assert!(card.title.contains(name), "{card:?}");
+            let text = format!("{} {}", card.title, card.body.as_deref().unwrap_or("")).to_ascii_lowercase();
+            for vague in ["that job", "this task", "this job", "that task"] {
+                assert!(!text.contains(vague), "{vague:?} in {text:?}");
+            }
+        }
     }
 
     #[test]

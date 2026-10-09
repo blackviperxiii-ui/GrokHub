@@ -31,6 +31,7 @@ mod slash_parity;
 mod sse;
 mod subagent;
 pub mod tasks;
+pub mod timing;
 pub mod tokens;
 mod tools;
 mod unattended;
@@ -70,7 +71,7 @@ pub use retry::{
     TRANSPORT_REBUILD_BACKOFF,
 };
 pub use run::{
-    run_loop, HaltCheck, LoopEvent, LoopIn, LoopOut, SteerQueue, StopReason, DEFAULT_MAX_TURNS,
+    run_loop, HaltCheck, LoopEvent, LoopIn, LoopOut, SteerQueue, StopReason, REPEAT_REPLAN,
 };
 pub use session::{
     attach_run, cancel_session, delete_session, export_markdown, fork_session, format_cost_ticks,

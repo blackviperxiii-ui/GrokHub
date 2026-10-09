@@ -482,6 +482,7 @@ pub fn has_sealed_data(config_dir: &Path) -> bool {
 /// here is sealed, so there is nothing to open (fresh or legacy config).
 /// `None`: the answer isn't ready yet (`wait = false` on a blocking store).
 pub fn read_key(config_dir: &Path, wait: bool) -> Option<Result<Option<Arc<LearnedKey>>, Locked>> {
+    let _lap = crate::timing::lap("harness:keyring_read");
     let keys = keys_for(config_dir);
     Some(match keys.key(wait)? {
         Err(()) => Err(Locked::Unavailable),
@@ -503,6 +504,7 @@ pub fn read_key(config_dir: &Path, wait: bool) -> Option<Result<Option<Arc<Learn
 /// sealed and no key id is recorded), stores it in the keyring, reads it
 /// back, then records its id. Never replaces a keyring entry.
 pub fn write_key(config_dir: &Path) -> Result<Arc<LearnedKey>, Locked> {
+    let _lap = crate::timing::lap("harness:keyring_write");
     let keys = keys_for(config_dir);
     // Writes re-ask the keyring once the cached answer is stale, so a key
     // deleted from the keyring stops new sealing within `RECHECK`.
@@ -603,6 +605,7 @@ pub struct SealedRead {
 /// Read a JSONL file of the learned tier. A legacy file (no sealed line) is
 /// read as plaintext when the keyring answers; a sealed file needs the key.
 pub fn read_sealed_jsonl(config_dir: &Path, text: &str, aad: &str, wait: bool) -> SealedRead {
+    let _lap = crate::timing::lap("harness:sealed_read");
     let rows: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
     if rows.is_empty() {
         return SealedRead::default();
@@ -639,6 +642,7 @@ pub fn read_sealed_jsonl(config_dir: &Path, text: &str, aad: &str, wait: bool) -
 /// place first (every line kept, order kept) so no plaintext is left behind.
 /// Fails closed: no key means nothing is written.
 pub fn append_sealed_line(config_dir: &Path, path: &Path, aad: &str, line: &str) -> Result<(), Locked> {
+    let _lap = crate::timing::lap("harness:sealed_append");
     let key = write_key(config_dir)?;
     migrate_file(&key, path, aad).map_err(|_| Locked::Unwritable)?;
     let sealed = seal_with(&key, aad, line.as_bytes()).map_err(|_| Locked::Unwritable)?;

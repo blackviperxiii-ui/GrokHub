@@ -1968,6 +1968,8 @@ mod channel_tip_tests {
     fn same_tree_different_sha_after_squash_and_merge_sync_is_caught_up() {
         let fx = TipsFixture::new("same-tree");
         fx.commit_on("beta", "feature.txt");
+        // Opted in to Beta before the promote: the baseline is main's old tree.
+        let before_promote = git_out(&fx.work, &["rev-parse", "origin/main^{tree}"]);
         fx.squash_promote_and_merge_sync();
         let tips = fetch_channel_tips(&fx.client).expect("fetch");
         // The fetch moved the stale client refs to the real tips.
@@ -1977,9 +1979,19 @@ mod channel_tip_tests {
         assert_eq!(tips.beta_tree, tips.main_tree, "same code: trees match");
         assert_eq!(tips.beta_tree, git_out(&fx.work, &["rev-parse", "origin/beta^{tree}"]));
         assert!(crate::channel::beta_caught_up_to_main(&tips));
+        assert_ne!(before_promote, tips.main_tree, "the promote moved main's tree");
         assert_eq!(
-            crate::channel::auto_off_target(Channel::Beta, &tips),
-            Some(Channel::Stable)
+            crate::channel::auto_off_step(Channel::Beta, &tips, Some(&before_promote)),
+            crate::channel::AutoOffStep::SwitchToStable
+        );
+        // Opted in after the sync (beta == main already): record and stay on.
+        assert_eq!(
+            crate::channel::auto_off_step(Channel::Beta, &tips, None),
+            crate::channel::AutoOffStep::RecordBaseline(tips.main_tree.clone())
+        );
+        assert_eq!(
+            crate::channel::auto_off_step(Channel::Beta, &tips, Some(&tips.main_tree)),
+            crate::channel::AutoOffStep::Stay
         );
     }
 
@@ -1993,7 +2005,11 @@ mod channel_tip_tests {
         assert_ne!(tips.beta_sha, tips.main_sha);
         assert_ne!(tips.beta_tree, tips.main_tree);
         assert!(!crate::channel::beta_caught_up_to_main(&tips));
-        assert_eq!(crate::channel::auto_off_target(Channel::Beta, &tips), None);
+        let seed_tree = git_out(&fx.work, &["rev-parse", "origin/main~1^{tree}"]);
+        assert_eq!(
+            crate::channel::auto_off_step(Channel::Beta, &tips, Some(&seed_tree)),
+            crate::channel::AutoOffStep::Stay
+        );
     }
 
     #[test]
