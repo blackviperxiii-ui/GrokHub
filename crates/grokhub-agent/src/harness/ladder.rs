@@ -5,10 +5,14 @@
 //!
 //! A hard-class step is never retried: it pauses at once. A denied or
 //! timed-out hard step stays denied until the user approves a fresh card.
-//! A failed screenshot pauses at once too: Retry and Backtrack both ask for
-//! another shot, and each one can be a new approval card.
+//! A screenshot already falls back through every capture backend inside one
+//! call, so a failed one climbs the soft ladder like any step. Only the note
+//! that every backend failed ([`CAPTURE_FAILED_HEAD`]) pauses, and the pause
+//! names each backend's error.
 
 use std::collections::BTreeMap;
+
+use grokhub_core::desktop_mcp::CAPTURE_FAILED_HEAD;
 
 use crate::harness::detect::{failed_result, step_hash, Finding};
 use crate::harness::hard::{hard_class, HardClass};
@@ -24,7 +28,7 @@ pub enum Rung {
     /// Soft and out of retries: re-read the goal and try another approach.
     /// Repeats; it never stops the run.
     Replan,
-    /// Hard class or a failed screenshot: the user decides.
+    /// Hard class, or no capture backend works: the user decides.
     Pause,
 }
 
@@ -71,14 +75,18 @@ fn subject<'a>(finding: &Finding, spans: &'a [Span]) -> Option<&'a Span> {
         .find(|s| s.tool == finding.tool)
 }
 
-/// The finding is about a screenshot step that failed (refused, errored).
-pub fn failed_screenshot(finding: &Finding, spans: &[Span]) -> bool {
-    finding.tool.to_ascii_lowercase().contains("screenshot")
-        && finding
-            .evidence
-            .iter()
-            .filter_map(|e| spans.get(e.at))
-            .any(|s| s.tool == finding.tool && (failed_result(&s.result) || s.result.contains("NoAuthorized")))
+/// The finding is about a screenshot that failed on every capture backend:
+/// the "Can't capture the screen: …" note it came back with.
+pub fn capture_exhausted(finding: &Finding, spans: &[Span]) -> Option<String> {
+    if !finding.tool.to_ascii_lowercase().contains("screenshot") {
+        return None;
+    }
+    finding
+        .evidence
+        .iter()
+        .filter_map(|e| spans.get(e.at))
+        .filter(|s| s.tool == finding.tool && failed_result(&s.result))
+        .find_map(|s| s.result.find(CAPTURE_FAILED_HEAD).map(|at| s.result[at..].trim().to_string()))
 }
 
 /// Hard class that keeps the ladder from retrying: any step the finding
@@ -137,12 +145,12 @@ impl Ladder {
             .map(|e| e.span.clone())
             .collect::<Vec<_>>();
         let hard = hard_target(finding, spans);
-        let shot_failed = failed_screenshot(finding, spans);
+        let no_capture = capture_exhausted(finding, spans);
         let n = self.tried.entry(target.clone()).or_insert(0);
         *n = n.saturating_add(1);
         let rung = match (hard, *n) {
             (Some(_), _) => Rung::Pause,
-            _ if shot_failed => Rung::Pause,
+            _ if no_capture.is_some() => Rung::Pause,
             (None, 1) => Rung::Retry,
             (None, 2) => Rung::Backtrack,
             _ => Rung::Replan,
@@ -153,11 +161,10 @@ impl Ladder {
                 finding.detector,
                 c.as_str()
             ),
-            None if shot_failed => format!(
-                "{}: the screenshot failed; GrokHub does not take another one on its own",
-                finding.detector
-            ),
-            None => format!("{}: {}", finding.detector, finding.detail),
+            None => match &no_capture {
+                Some(note) => format!("{}: {note}", finding.detector),
+                None => format!("{}: {}", finding.detector, finding.detail),
+            },
         };
         let prompt = match rung {
             Rung::Retry => Some(format!(
@@ -415,7 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_screenshot_goes_straight_to_pause() {
+    fn a_failed_screenshot_climbs_the_soft_ladder_and_only_no_backend_at_all_pauses() {
         let mut spans = vec![
             span(
                 1,
@@ -428,8 +435,6 @@ mod tests {
             ),
             span(2, "reply", "{}", "say", "soft", None, "Done.\nGOAL_COMPLETE"),
         ];
-        spans[0].result =
-            "error: ScreenShot2: org.kde.KWin.ScreenShot2.Error.NoAuthorized".into();
         let finding = Finding {
             detector: "action_loop".into(),
             tool: "grokhub-desktop__screenshot".into(),
@@ -441,19 +446,29 @@ mod tests {
                 quote: String::new(),
             }],
         };
+        // One backend's refusal no longer pauses at once: no card per retry.
+        spans[0].result =
+            "error: ScreenShot2: org.kde.KWin.ScreenShot2.Error.NoAuthorized".into();
+        assert_eq!(capture_exhausted(&finding, &spans), None);
         let mut ladder = Ladder::new();
-        let step = ladder.next(&finding, &spans);
+        let rungs: Vec<Rung> = (0..3).map(|_| ladder.next(&finding, &spans).rung).collect();
+        assert_eq!(rungs, vec![Rung::Retry, Rung::Backtrack, Rung::Replan]);
+        // Every backend failed twice: one pause, naming each backend's error.
+        spans[0].result = "error: Can't capture the screen: KWin ScreenShot2: NoAuthorized; \
+                           spectacle: not installed; portal Screenshot: timed out."
+            .into();
+        let step = Ladder::new().next(&finding, &spans);
         assert_eq!(step.rung, Rung::Pause);
         assert_eq!(step.prompt, None);
         assert_eq!(step.hard, None);
         assert_eq!(
             step.reason,
-            "action_loop: the screenshot failed; GrokHub does not take another one on its own"
+            "action_loop: Can't capture the screen: KWin ScreenShot2: NoAuthorized; \
+             spectacle: not installed; portal Screenshot: timed out."
         );
-        assert_eq!(ladder.next(&finding, &spans).rung, Rung::Pause, "never climbs to retry");
         // The same screenshot step that worked still starts at Retry.
         spans[0].result = "ok".into();
-        assert!(!failed_screenshot(&finding, &spans));
+        assert_eq!(capture_exhausted(&finding, &spans), None);
         assert_eq!(Ladder::new().next(&finding, &spans).rung, Rung::Retry);
     }
 

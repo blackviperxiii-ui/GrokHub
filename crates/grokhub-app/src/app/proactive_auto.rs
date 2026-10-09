@@ -9,7 +9,7 @@
 //!   through the native dispatch (path E, origin proactive). The ledger line
 //!   it wrote is the card's Undo.
 //! - Missed: an `ask` span names the `CeilingMiss`, and the step becomes a
-//!   Spike-6a card under its card budget: "Should I …?" when MindCheck is
+//!   Spike-6a card under its card budget: a one-tap suggestion when MindCheck is
 //!   why, "I can …" otherwise. Quiet hours queue it; busy drops it.
 //! - Hard class: prepare, don't do. The prepared step parks a hard card,
 //!   whatever Access, the pill or the hour; an unattended park times out to
@@ -135,9 +135,14 @@ impl Cabin {
     }
 
     /// A step the ceiling did not admit becomes a Spike-6a card under its
-    /// card budget: "Should I …?" when MindCheck is why, "I can …" otherwise.
-    /// A click on it meets `harness::decide` like any proactive card.
+    /// card budget: a one-tap suggestion when MindCheck is why, "I can …"
+    /// otherwise. A click on it meets `harness::decide` like any proactive
+    /// card. A class you said "Don't do this again" to is never offered.
     fn offer_card(&mut self, c: &AutoCandidate, miss: CeilingMiss, by_hand: bool) {
+        let mind = hx::proactive_mind(&config::config_dir(), Arc::new(hx::SystemClock));
+        if mind.prior(&c.key).is_some_and(|p| p.never) {
+            return;
+        }
         let now = now_ms();
         let mut cand = pro::Candidate::soft(pro::CandidateSource::SystemState, &c.offer, &c.offer, c.value, c.confidence, &c.why);
         cand.scope = c.scope.clone();
@@ -148,7 +153,7 @@ impl Cabin {
             (false, false) => pro::Reversibility::Irreversible,
         };
         let route = match miss {
-            CeilingMiss::PMind | CeilingMiss::MindCheck | CeilingMiss::NoHistory => pro::ProactiveRoute::Ask,
+            CeilingMiss::PMind | CeilingMiss::MindCheck | CeilingMiss::NoHistory => pro::ProactiveRoute::Suggest,
             _ => pro::ProactiveRoute::ICan,
         };
         let (quiet, busy) = (self.quiet_now(), self.heartbeat_busy());
@@ -243,7 +248,7 @@ impl Cabin {
         let span = hx::answer_span(&done.mind_key, hx::DECISION_NEVER, self.access_mode());
         hx::note_proactive(&config::config_dir(), &span);
         self.mark_answered(id);
-        self.status = "GrokHub won't do this on its own again. It will ask.".into();
+        self.status = "GrokHub won't do or suggest this again.".into();
     }
 }
 
@@ -495,7 +500,7 @@ mod tests {
             assert_eq!(mcp_bytes(), before, "{label}: nothing ran");
             assert!(proactive_spans(&r.root).iter().all(|s| s.decision != "auto"), "{label}");
             let route = match miss {
-                CeilingMiss::PMind | CeilingMiss::NoHistory => pro::ProactiveRoute::Ask,
+                CeilingMiss::PMind | CeilingMiss::NoHistory => pro::ProactiveRoute::Suggest,
                 _ => pro::ProactiveRoute::ICan,
             };
             if miss == CeilingMiss::QuietHours {
@@ -544,7 +549,7 @@ mod tests {
         r.cabin.tick_auto_act();
         let id = done_cards(&r.cabin)[0].id.clone();
         r.cabin.done_for_you_never(&id);
-        assert_eq!(r.cabin.status, "GrokHub won't do this on its own again. It will ask.");
+        assert_eq!(r.cabin.status, "GrokHub won't do or suggest this again.");
         let mind = hx::proactive_mind(&r.root, Arc::new(hx::SystemClock));
         assert_eq!(mind.mind_prior("proactive:connection_disable"), 1.0);
         let never = proactive_spans(&r.root).into_iter().rfind(|s| s.decision == "never").expect("never span");
@@ -555,7 +560,7 @@ mod tests {
         r.cabin.auto_act.queue.push_back(turn_off("calendar"));
         r.cabin.tick_auto_act();
         assert_eq!(last_ask(&r.root), "p_mind");
-        assert_eq!(offer_cards(&r.cabin), vec![("connection_disable".to_string(), pro::ProactiveRoute::Ask)]);
+        assert!(offer_cards(&r.cabin).is_empty(), "a class you said never to is not suggested either");
         assert_eq!(done_cards(&r.cabin).len(), 1);
         assert_eq!(mcp_bytes(), before);
     }

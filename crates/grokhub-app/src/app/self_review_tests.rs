@@ -624,9 +624,25 @@ fn dream_and_the_weekly_self_review_run_once_on_the_same_night_at_a_custom_hour(
     let today = "2026-10-11";
     let dream_report = root.join("amr").join("dreams").join("2026-10-11.md");
 
+    use grokhub_agent::episode::lessons;
+    let lesson = |ts: u64| lessons::Lesson {
+        goal_keywords: vec!["save".into(), "note".into()],
+        app: "Gedit".into(),
+        what_failed: "replan: click 'Save' changed nothing 3×".into(),
+        what_worked: "then key 'ctrl+s'".into(),
+        outcome: "verified".into(),
+        episode_id: format!("ep-{ts}"),
+        ts,
+        seen: 1,
+        failed_after: 0,
+    };
+    lessons::append(&root, &lesson(now - 2 * DAY)).unwrap();
+    lessons::append(&root, &lesson(now - DAY)).unwrap();
+
     let (reviewed, dream) = cabin.night_passes(today, &sunday(22), now);
     assert!(!reviewed && dream.is_none(), "nothing before 11 PM");
     assert_eq!(super::self_review_ui::load_state().last_day, None);
+    assert_eq!(lessons::load(&root).len(), 2, "lessons wait for the dream hour too");
 
     let (reviewed, dream) = cabin.night_passes(today, &sunday(23), now);
     assert!(reviewed, "the weekly self-review starts at 11 PM");
@@ -640,6 +656,8 @@ fn dream_and_the_weekly_self_review_run_once_on_the_same_night_at_a_custom_hour(
     let report = std::fs::read_to_string(&dream_report).unwrap();
     assert!(report.starts_with("# Memory dream 2026-10-11\n"), "{report}");
     assert!(report.contains("- Merged: 1\n"), "{report}");
+    let tidy = lessons::load(&root);
+    assert_eq!((tidy.len(), tidy[0].seen, tidy[0].ts), (1, 2, now - DAY), "the dream merged the two lessons");
 
     let (reviewed, dream) = cabin.night_passes(today, &sunday(23), now);
     assert!(!reviewed && dream.is_none(), "each runs once a night");
