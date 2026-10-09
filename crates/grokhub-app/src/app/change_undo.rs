@@ -250,6 +250,11 @@ pub(super) fn model_change_note(c: &hx::Change) -> grokhub_core::UpdateCard {
     grokhub_core::router_update_card(&format!("model:{}#{}", c.id, c.seq), &title, &body, c.at)
 }
 
+/// A self-tuning promotion, which posts its own "why" card instead of a note.
+pub(super) fn is_promotion(c: &hx::Change) -> bool {
+    c.id == grokhub_agent::route::learn::TUNING_ID && c.reason.starts_with(grokhub_agent::route::learn::TUNED_PREFIX)
+}
+
 /// Work-tree rows after a restart: self-made changes from the last day that
 /// are still in effect and not kept, newest first.
 /// `skip` drops lines that already have their own Undo (a Done-for-you card).
@@ -371,7 +376,10 @@ impl Cabin {
             }
             if kind == ChangeKind::Model {
                 // Router changes are tell-only: one Home note, no Undo/Keep row.
-                self.post_feed_card(model_change_note(&c));
+                // A tuning promotion's note is its "why" card (router_ui).
+                if !is_promotion(&c) {
+                    self.post_feed_card(model_change_note(&c));
+                }
                 continue;
             }
             if kind == ChangeKind::Skill {
