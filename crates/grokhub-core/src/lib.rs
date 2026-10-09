@@ -3,6 +3,7 @@
 pub mod amr;
 pub mod appearance;
 pub mod attach;
+pub mod audio_check;
 pub mod automation;
 pub mod autonomy;
 pub mod bg_task;
@@ -21,6 +22,7 @@ pub mod context;
 pub mod cursor_motion;
 pub mod desktop_entry;
 pub mod desktop_mcp;
+pub mod file_watch;
 pub mod diagnostics;
 pub mod doctor;
 pub mod export;
@@ -37,6 +39,7 @@ pub mod host_cite;
 pub mod host_plan;
 pub mod host_safety;
 pub mod hub_sync;
+pub mod health;
 pub mod hygiene;
 pub mod ideas;
 pub mod imagine;
@@ -66,6 +69,7 @@ pub mod proactive_auto;
 pub mod redact;
 pub mod reflect;
 pub mod review;
+pub mod screen_record;
 pub mod self_review;
 pub mod rewind;
 pub mod shortcuts;
@@ -80,6 +84,7 @@ pub mod tui_gaps;
 pub mod trajectory;
 pub mod turn_timeline;
 pub mod update;
+pub mod what_changed;
 pub mod card_prefs;
 pub mod card_signals;
 pub mod update_feed;
@@ -138,11 +143,12 @@ pub use capture::{
 };
 pub use chat::{
     agent_reasoning_effort_for_mode, cabin_spawn_model, chat_request_body,
-    chat_request_body_for_mode, chat_request_body_vision, chat_timeout_secs, effective_chat_mode,
+    chat_request_body_for_mode, chat_request_body_images, chat_request_body_vision, chat_timeout_secs,
+    effective_chat_mode,
     effort_label, extract_host_cmds, failover_model, is_composer_ladder_model, model_for_mode,
     needs_auth_banner, paint_connect_banner, parse_chat_content, parse_chat_reasoning,
     accepts_reasoning_effort, parse_model_reasoning, parse_model_text, parse_reasoning_effort, parse_responses_reasoning,
-    parse_responses_text, reasoning_effort_for_mode, resolve_chat_model, responses_request_body,
+    parse_responses_text, reasoning_effort_for_mode, resolve_chat_model, responses_request_body, responses_request_body_images,
     responses_url, route_auto_mode, settings_pin_blocks_auto, should_failover_status,
     BACKGROUND_EFFORT, CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, DEFAULT_MODEL, REASONING_EFFORTS,
     XAI_BASE,
@@ -522,7 +528,8 @@ pub use update_feed::{
     CARD_ACTION_DONE, CARD_ACTION_TAG, modified_ideas, post_skill_idea, set_idea_draft,
     IDEA_MODIFIED_MAX,
     board_covers_topic, live_generated_ideas, post_generated_ideas, purge_one_off_ideas, purge_template_ideas,
-    automation_failed_card,
+    audio_check_card, automation_failed_card, crash_card, is_crash_card, screen_recording_card, screen_recording_dir,
+    CRASH_SOURCE_PREFIX, SCREEN_RECORDING_SOURCE_PREFIX,
     archive_digest, archived_digests, automate_offer_card, automation_done_card,
     digest_card, digest_topic_refused, discuss_context, short_takeaway, TAKEAWAY_MAX,
     dismiss_idea, dismiss_update, dismiss_update_at,

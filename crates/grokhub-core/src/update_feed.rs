@@ -709,7 +709,7 @@ fn card_is_failure(card: &UpdateCard) -> bool {
     if card.kind != UpdateKind::AutomationDone {
         return false;
     }
-    if card.id.starts_with("fail-") {
+    if card.id.starts_with("fail-") || card.id.starts_with("crash-") {
         return true;
     }
     let title = card.title.to_ascii_lowercase();
@@ -2511,6 +2511,102 @@ pub fn automation_failed_card(source_id: &str, name: &str, why: &str, created_at
     card
 }
 
+/// Source prefix of a crash card: a run killed from outside (exit 143).
+pub const CRASH_SOURCE_PREFIX: &str = "crash:";
+
+/// A run was killed from outside (SIGTERM, exit 143) and no retry finished it.
+/// The title names the job ("Crashed: Index ~/Projects (exit 143, killed)").
+/// Open goes to its chat; Retry sends `retry` there. Same kind as a finished
+/// automation so older feeds still load. One card per `source_id`: a second
+/// crash of the same job bumps it instead of adding another.
+pub fn crash_card(source_id: &str, job: &str, thread_id: &str, retry: &str, created_at: u64) -> UpdateCard {
+    const TAIL: &str = " (exit 143, killed)";
+    let job = clip_line(job, TITLE_CHARS - "Crashed: ".len() - TAIL.len());
+    let job = if job.is_empty() { "Reply".to_string() } else { job };
+    let title = format!("Crashed: {job}{TAIL}");
+    let source = format!("{CRASH_SOURCE_PREFIX}{}", source_id.trim());
+    let mut card = blank_card(
+        feed_card_id("crash", &source, &title, created_at, true),
+        UpdateKind::AutomationDone,
+        title,
+        Some("Something outside GrokHub stopped it before it finished. Retry runs it again.".into()),
+        created_at,
+    );
+    if !thread_id.trim().is_empty() {
+        card.action = Some(UpdateAction::OpenSession {
+            thread_id: thread_id.trim().to_string(),
+        });
+    }
+    card.prompt = Some(retry.trim().to_string()).filter(|r| !r.is_empty());
+    card.source_id = source;
+    refresh_event_why(&mut card);
+    card
+}
+
+pub fn is_crash_card(card: &UpdateCard) -> bool {
+    card.source_id.starts_with(CRASH_SOURCE_PREFIX)
+}
+
+pub const SCREEN_RECORDING_SOURCE_PREFIX: &str = "screenrec:";
+
+/// A screen recording and its diagnosis. The title names the recording
+/// ("Screen recording 0:42: video stutters on 4K YouTube"); the body is the
+/// likely cause, or why it was not diagnosed. Open goes to the full report in
+/// its chat; Delete recording removes the folder after a confirm.
+pub fn screen_recording_card(dir: &str, title: &str, summary: &str, thread_id: &str, created_at: u64) -> UpdateCard {
+    let title = clip_line(title, TITLE_CHARS);
+    let summary = clip_line(summary, BODY_CHARS);
+    let source = format!("{SCREEN_RECORDING_SOURCE_PREFIX}{}", dir.trim());
+    let mut card = blank_card(
+        feed_card_id("screenrec", &source, &title, created_at, true),
+        UpdateKind::AutomationDone,
+        title,
+        (!summary.is_empty()).then_some(summary),
+        created_at,
+    );
+    if !thread_id.trim().is_empty() {
+        card.action = Some(UpdateAction::OpenSession {
+            thread_id: thread_id.trim().to_string(),
+        });
+    }
+    card.source_id = source;
+    refresh_event_why(&mut card);
+    card
+}
+
+/// The recording folder a screen recording card stands for.
+pub fn screen_recording_dir(card: &UpdateCard) -> Option<&str> {
+    card.source_id
+        .strip_prefix(SCREEN_RECORDING_SOURCE_PREFIX)
+        .filter(|d| !d.is_empty())
+}
+
+/// An audio check. The title names the input and the problem ("Audio check:
+/// Yeti input clipping at -0.2 dBFS"); the body is the first fix and the
+/// default output. A new check of the same input replaces the card. Open
+/// goes to the full report in its chat.
+pub fn audio_check_card(input: &str, title: &str, summary: &str, thread_id: &str, created_at: u64) -> UpdateCard {
+    let title = clip_line(title, TITLE_CHARS);
+    let summary = clip_line(summary, BODY_CHARS);
+    let input = input.trim();
+    let source = format!("audiocheck:{}", if input.is_empty() { "default" } else { input });
+    let mut card = blank_card(
+        feed_card_id("audiocheck", &source, &title, created_at, true),
+        UpdateKind::AutomationDone,
+        title,
+        (!summary.is_empty()).then_some(summary),
+        created_at,
+    );
+    if !thread_id.trim().is_empty() {
+        card.action = Some(UpdateAction::OpenSession {
+            thread_id: thread_id.trim().to_string(),
+        });
+    }
+    card.source_id = source;
+    refresh_event_why(&mut card);
+    card
+}
+
 /// User saved a clock job or an interval loop.
 /// Home update for a change GrokHub made on its own (Spike-5b): "GrokHub
 /// added connection notes". `kind` is `skill`, `connection`, or
@@ -4013,6 +4109,76 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         assert!(blank.body.is_some());
         let done = automation_done_card("a1", "Board summary", "ok", 5);
         assert_ne!(c.id, done.id, "a failure must not replace the done card");
+    }
+
+    #[test]
+    fn a_screen_recording_card_names_the_recording_and_keeps_its_folder() {
+        let c = screen_recording_card(
+            "/home/ada/GrokHub/recordings/r1",
+            "Screen recording 0:42: video stutters on 4K YouTube",
+            "Likely cause: hardware video decoding is off.",
+            "t9",
+            7,
+        );
+        assert_eq!(c.title, "Screen recording 0:42: video stutters on 4K YouTube");
+        assert_eq!(c.body.as_deref(), Some("Likely cause: hardware video decoding is off."));
+        assert_eq!(c.action, Some(UpdateAction::OpenSession { thread_id: "t9".into() }));
+        assert_eq!(c.source_id, "screenrec:/home/ada/GrokHub/recordings/r1");
+        assert_eq!(screen_recording_dir(&c), Some("/home/ada/GrokHub/recordings/r1"));
+        assert!(!is_crash_card(&c));
+        assert_eq!(screen_recording_dir(&crash_card("t1", "Index", "t1", "/retry", 5)), None);
+    }
+
+    #[test]
+    fn an_audio_check_card_names_the_input_and_replaces_the_last_check_of_it() {
+        let c = audio_check_card(
+            "alsa_input.usb-Yeti",
+            "Audio check: Yeti input clipping at -0.2 dBFS",
+            "Lower Yeti's input volume. Default output: HDMI.",
+            "t4",
+            7,
+        );
+        assert_eq!(c.title, "Audio check: Yeti input clipping at -0.2 dBFS");
+        assert_eq!(c.body.as_deref(), Some("Lower Yeti's input volume. Default output: HDMI."));
+        assert_eq!(c.action, Some(UpdateAction::OpenSession { thread_id: "t4".into() }));
+        assert_eq!(c.source_id, "audiocheck:alsa_input.usb-Yeti");
+        assert_eq!(c.id, "audiocheck-audiocheck:alsa_input.usb-Yeti");
+        assert_eq!(audio_check_card("alsa_input.usb-Yeti", "Audio check: later", "", "", 9).id, c.id);
+        assert_eq!(audio_check_card("", "Audio check: x", "", "", 9).source_id, "audiocheck:default");
+        assert_eq!(audio_check_card("", "Audio check: x", "", "", 9).action, None);
+    }
+
+    #[test]
+    fn a_crash_card_names_the_job_opens_its_chat_and_survives_a_dismiss() {
+        let c = crash_card("t1", "Index ~/Projects", "t1", "/retry", 5);
+        assert_eq!(c.kind, UpdateKind::AutomationDone);
+        assert_eq!(c.title, "Crashed: Index ~/Projects (exit 143, killed)");
+        assert_eq!(
+            c.action,
+            Some(UpdateAction::OpenSession { thread_id: "t1".into() })
+        );
+        assert_eq!(c.prompt.as_deref(), Some("/retry"));
+        assert_eq!(c.source_id, "crash:t1");
+        assert!(is_crash_card(&c));
+        assert!(!is_crash_card(&automation_failed_card("t1", "Index", "x", 5)));
+        assert_eq!(crash_card("t2", "  ", "", "", 5).title, "Crashed: Reply (exit 143, killed)");
+        let long = crash_card("t3", &"word ".repeat(30), "t3", "/retry", 5);
+        assert!(long.title.starts_with("Crashed: word word"), "{}", long.title);
+        assert!(long.title.ends_with("… (exit 143, killed)"), "{}", long.title);
+
+        // A second crash of the same chat bumps one card.
+        let mut cards = Vec::new();
+        post_update(&mut cards, c.clone());
+        post_update(&mut cards, crash_card("t1", "Index ~/Projects", "t1", "/retry", 9));
+        assert_eq!(cards.len(), 1, "{cards:?}");
+        // After a dismiss, a new crash still shows: it is a failure.
+        let first = cards[0].id.clone();
+        dismiss_update(&mut cards, &first);
+        post_update(&mut cards, crash_card("t1", "Index ~/Projects", "t1", "/retry", 20));
+        assert!(
+            cards.iter().any(|x| x.status != UpdateStatus::Dismissed && is_crash_card(x)),
+            "{cards:?}"
+        );
     }
 
     #[test]

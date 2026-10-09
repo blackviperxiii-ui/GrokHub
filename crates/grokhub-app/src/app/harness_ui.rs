@@ -128,6 +128,9 @@ pub(super) enum ParkSource {
     /// Router R3b: allow sending to a provider you added (this provider id).
     /// Nothing is waiting; Approve writes a revocable destination grant.
     Provider(String),
+    /// Router R3b: save the key for this destination to the keyring. The key
+    /// waits in `ProviderUi::pending`; Approve saves it, Deny drops it.
+    ProviderKey(String),
 }
 
 /// A path D frame the watchdog already checked (Spike-1c).
@@ -638,6 +641,7 @@ impl Cabin {
         };
         let mut sync_once = false;
         let mut fix_answer = None;
+        let mut key_answer = None;
         let trace = match park.source {
             ParkSource::AutoPrepared(_) => hx::PROACTIVE_TRACE.to_string(),
             _ => self.trace_id(),
@@ -700,6 +704,7 @@ impl Cabin {
                     self.grant_provider_click(id);
                 }
             }
+            ParkSource::ProviderKey(_) => key_answer = Some(approve),
             ParkSource::AutoPrepared(args) => {
                 if approve {
                     let (text, failed) = hx::run_approved_once(&self.native_workspace(), &park.tool, args);
@@ -726,6 +731,10 @@ impl Cabin {
         }
         if let Some(approve) = fix_answer {
             self.fix_hard_answered(approve);
+        }
+        // After the next card is up, so the send card it parks isn't lost.
+        if let Some(approve) = key_answer {
+            self.answer_provider_key(approve);
         }
         if resume {
             let status = self.status.clone();
@@ -822,6 +831,7 @@ impl Cabin {
                     | ParkSource::Repair
                     | ParkSource::Premium(_)
                     | ParkSource::Provider(_)
+                    | ParkSource::ProviderKey(_)
             ) {
                 keep.push_back(park);
                 self.harness.park = self.harness.queue.pop_front();
@@ -867,7 +877,8 @@ impl Cabin {
                 | ParkSource::Unasked
                 | ParkSource::Repair
                 | ParkSource::Premium(_)
-                | ParkSource::Provider(_) => continue,
+                | ParkSource::Provider(_)
+                | ParkSource::ProviderKey(_) => continue,
             }
             let args = span_args(&park.tool, &park.action);
             self.write_span(hx::Span::deny(&trace, &park.tool, &args, why, park.class.as_str()), park.path);
@@ -1357,6 +1368,7 @@ impl Cabin {
                 ParkSource::Egress(_) => super::privacy_ui::HUB_CARD_NOTE,
                 ParkSource::Premium(_) => super::budget_ui::PREMIUM_CARD_NOTE,
                 ParkSource::Provider(_) => super::provider_ui::PROVIDER_CARD_NOTE,
+                ParkSource::ProviderKey(_) => super::provider_ui::KEY_CARD_NOTE,
                 _ => HARD_NOTE,
             };
             let overlay = self.palette_open || self.nav == Nav::Settings || self.find.focused;

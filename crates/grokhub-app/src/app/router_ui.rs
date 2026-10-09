@@ -110,10 +110,14 @@ impl Cabin {
                     if let Some(clock) = self.harness.router.clock.as_mut() {
                         clock.signal |= done.signal;
                         if done.gb_version.is_some() {
-                            clock.gb_version = done.gb_version;
+                            clock.gb_version = done.gb_version.clone();
                         }
                     }
                     self.deliver_heal(heal);
+                    let added = grokhub_agent::route::providers::load_providers(&crate::config::config_dir());
+                    if let Some(note) = super::provider_ui::provider_refresh_note(&done.events, &done.errors, &added) {
+                        self.status = note;
+                    }
                 }
                 Err(mpsc::TryRecvError::Empty) => self.harness.router.rx = Some(rx),
                 Err(mpsc::TryRecvError::Disconnected) => {}
@@ -133,6 +137,7 @@ impl Cabin {
         }
         self.poll_guard();
         self.poll_tune();
+        self.poll_openrouter_sign_in();
         self.sync_router_pin();
         self.sync_spend();
         self.poll_route_asks();
@@ -251,14 +256,31 @@ impl Cabin {
         }
     }
 
-    /// Self-tuning runs on its own; a promotion or rollback is a ledger line
-    /// and the weekly review's router line, so nothing is shown here.
+    /// Self-tuning runs on its own and asks nothing. A promotion gets one
+    /// info-only "why" card; a rollback is a ledger line and the weekly
+    /// review's router line.
     fn poll_tune(&mut self) {
         let Some(rx) = self.harness.router.tune_rx.take() else {
             return;
         };
-        if let Err(mpsc::TryRecvError::Empty) = rx.try_recv() {
-            self.harness.router.tune_rx = Some(rx);
+        match rx.try_recv() {
+            Ok(Ok(run)) if !run.promoted.is_empty() => {
+                let state = learn::load_state(&crate::config::config_dir());
+                self.post_why_cards(&state, &run.promoted);
+            }
+            Ok(_) | Err(mpsc::TryRecvError::Disconnected) => {}
+            Err(mpsc::TryRecvError::Empty) => self.harness.router.tune_rx = Some(rx),
+        }
+    }
+
+    /// One "Why grok-4-fast for summaries" card per promoted candidate. No actions.
+    pub(super) fn post_why_cards(&mut self, state: &grokhub_agent::route::tune::TuneState, promoted: &[String]) {
+        for c in state.candidates.iter().filter(|c| promoted.contains(&c.id)) {
+            let Some((title, body)) = grokhub_agent::route::tune::why_card_text(c) else {
+                continue;
+            };
+            let at = c.promoted_at.unwrap_or_else(now_ms);
+            self.post_feed_card(grokhub_core::router_update_card(&format!("router-why:{}", c.id), &title, &body, at));
         }
     }
 

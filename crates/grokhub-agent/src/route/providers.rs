@@ -200,11 +200,24 @@ pub fn provider(config_dir: &Path, id: &str) -> Option<Provider> {
 /// that worked is the provider (no key) saved. Adding sends nothing: the
 /// destination is allowed separately, on a hard send card.
 pub fn add_provider(config_dir: &Path, base_url: &str, key: &str, now_ms: u64) -> Result<Provider, String> {
-    let (url, kind, id) = parse_base_url(base_url)?;
+    add_provider_as(config_dir, base_url, key, None, now_ms)
+}
+
+/// A pasted key: whole, one word.
+pub fn check_key(key: &str) -> Result<&str, String> {
     let key = key.trim();
     if key.len() < 8 || key.contains(char::is_whitespace) {
         return Err("Paste the whole key.".into());
     }
+    Ok(key)
+}
+
+/// [`add_provider`] with the API shape you picked; `None` detects it from the host.
+/// A proxy that speaks Anthropic's API under another host needs the pick.
+pub fn add_provider_as(config_dir: &Path, base_url: &str, key: &str, kind: Option<ProviderKind>, now_ms: u64) -> Result<Provider, String> {
+    let (url, detected, id) = parse_base_url(base_url)?;
+    let kind = kind.unwrap_or(detected);
+    let key = check_key(key)?;
     vault_for(config_dir).ok_or_else(|| "The keyring isn't available, so the key wasn't saved.".to_string())?.set(&id, key)?;
     forget_key_cache(config_dir, &id);
     let mut all = load_providers(config_dir);
@@ -226,6 +239,60 @@ pub fn remove_provider(config_dir: &Path, id: &str) -> Result<(), String> {
     let mut all = load_providers(config_dir);
     all.retain(|p| p.id != id);
     save_providers(config_dir, &all)
+}
+
+// ---- Getting a key ------------------------------------------------------------
+
+pub const OPENROUTER_BASE: &str = "https://openrouter.ai/api/v1";
+const OPENROUTER_AUTH: &str = "https://openrouter.ai/auth";
+const OPENROUTER_KEYS: &str = "https://openrouter.ai/api/v1/auth/keys";
+
+fn host_is(host: &str, domain: &str) -> bool {
+    host == domain || host.strip_suffix(domain).is_some_and(|rest| rest.ends_with('.'))
+}
+
+/// Where a known provider hands out API keys, from its address. `None` for
+/// one GrokHub doesn't know: its dashboard has the key.
+pub fn key_page(base_url: &str) -> Option<&'static str> {
+    let host = egress_dest(base_url);
+    [
+        ("openai.com", "https://platform.openai.com/api-keys"),
+        ("anthropic.com", "https://console.anthropic.com/settings/keys"),
+        ("openrouter.ai", "https://openrouter.ai/settings/keys"),
+        ("groq.com", "https://console.groq.com/keys"),
+        ("mistral.ai", "https://console.mistral.ai/api-keys"),
+        ("deepseek.com", "https://platform.deepseek.com/api_keys"),
+    ]
+    .iter()
+    .find(|(domain, _)| host_is(&host, domain))
+    .map(|(_, page)| *page)
+}
+
+/// OpenRouter's browser sign-in page (its OAuth PKCE flow) with our loopback.
+pub fn openrouter_auth_url(callback: &str, challenge: &str) -> String {
+    let query = grokhub_core::pkce::form(&[("callback_url", callback), ("code_challenge", challenge), ("code_challenge_method", "S256")]);
+    format!("{OPENROUTER_AUTH}?{query}")
+}
+
+/// Sign in to OpenRouter in the browser `open` launches and come back with a
+/// new key. Nothing is saved here: the cabin asks you on a credentials card
+/// first. OpenRouter sends no `state`; the code only buys a key together with
+/// this verifier (PKCE), and the exchange carries no user data.
+pub fn openrouter_key(config_dir: &Path, open: &dyn Fn(&str) -> Result<(), String>, wait: Duration) -> Result<Zeroizing<String>, String> {
+    let (listener, redirect) = crate::loopback::bind()?;
+    let verifier = grokhub_core::pkce::pkce_verifier();
+    open(&openrouter_auth_url(&redirect, &grokhub_core::pkce::pkce_challenge(&verifier)))?;
+    let code = crate::loopback::wait_code(&listener, "", "OpenRouter sign-in", wait)?;
+    crate::harness::guard_quiet(config_dir, &EgressReq::new(OPENROUTER_KEYS, &[]))?;
+    let body = json!({"code": code, "code_verifier": verifier, "code_challenge_method": "S256"}).to_string();
+    let headers = [("User-Agent".to_string(), USER_AGENT.to_string()), ("Content-Type".into(), "application/json".into())];
+    let r = transport_for(config_dir).post(OPENROUTER_KEYS, &headers, &body)?;
+    if !(200..300).contains(&r.status) {
+        return Err(format!("OpenRouter didn't hand over a key (HTTP {})", r.status));
+    }
+    let v: Value = serde_json::from_str(&r.body).map_err(|_| "OpenRouter's answer had no key".to_string())?;
+    let key = v.get("key").and_then(Value::as_str).map(str::trim).filter(|k| !k.is_empty()).ok_or("OpenRouter's answer had no key")?;
+    Ok(Zeroizing::new(key.to_string()))
 }
 
 // ---- The keyring -----------------------------------------------------------

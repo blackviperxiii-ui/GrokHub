@@ -620,6 +620,12 @@ impl DesktopBackend for LiveBackend {
     fn list_windows(&mut self) -> Result<grokhub_core::desktop_mcp::DesktopWindows, String> {
         apps::list_windows()
     }
+    fn window_geometry(&mut self, title: &str) -> Result<grokhub_core::desktop_mcp::WindowGeom, String> {
+        apps::window_geometry(title)
+    }
+    fn set_window_geometry(&mut self, title: &str, geom: &grokhub_core::desktop_mcp::WindowGeom) -> Result<String, String> {
+        apps::set_window_geometry(title, geom)
+    }
     fn trash(&mut self, paths: &[std::path::PathBuf]) -> Result<(), String> {
         apps::trash(paths)
     }
@@ -694,6 +700,22 @@ fn mcp_tool_output(body: serde_json::Value) -> grokhub_agent::ToolOutput {
         text,
         image_data_url: image,
         failed,
+    }
+}
+
+/// Full-screen stills for "Record my screen", one per call, as `(bytes, mime)`.
+/// Connects to the desktop backend on the first call and keeps it.
+pub(crate) fn screen_grabber() -> impl FnMut() -> Result<(Vec<u8>, String), String> {
+    let mut backend: Option<Box<dyn DesktopBackend>> = None;
+    move || {
+        if backend.is_none() {
+            backend = Some(connect_backend()?);
+        }
+        let shot = backend
+            .as_mut()
+            .ok_or_else(|| "no desktop backend".to_string())?
+            .screenshot("all")?;
+        Ok((shot.bytes, shot.mime))
     }
 }
 
