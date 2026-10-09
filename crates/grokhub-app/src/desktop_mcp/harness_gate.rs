@@ -41,6 +41,10 @@ pub(crate) fn handle_desk_line<B: DesktopBackend>(
                 c.args["window"] = Value::String(w.active);
             }
         }
+        if live && c.tool == "delete_files" && no_bin(&c.args) {
+            // The card must say the files go for good where there's no Recycle Bin.
+            c.args[hx::NO_BIN_HINT] = Value::Bool(true);
+        }
         if live && c.tool == "click" {
             c.args[hx::TARGET_HINT] = click_hint(server, &c.args);
         }
@@ -111,11 +115,20 @@ fn delete_key(args: &Value) -> bool {
         .is_ok_and(|combo| combo.key == grokhub_core::desktop_mcp::KeyName::Delete)
 }
 
+/// A trash move with a path on a drive that has no Recycle Bin.
+fn no_bin(args: &Value) -> bool {
+    args.get("to_trash").and_then(Value::as_bool) == Some(true)
+        && args["paths"]
+            .as_array()
+            .is_some_and(|a| a.iter().filter_map(Value::as_str).any(|p| super::apps::no_recycle_bin(Path::new(p))))
+}
+
 fn strip_window(args: &Value) -> Value {
     let mut a = args.clone();
     if let Some(m) = a.as_object_mut() {
         m.remove("window");
         m.remove(hx::TARGET_HINT);
+        m.remove(hx::NO_BIN_HINT);
     }
     a
 }
