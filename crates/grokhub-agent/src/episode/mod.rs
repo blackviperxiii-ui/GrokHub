@@ -8,8 +8,12 @@
 //! and VerifyGate passes; `GOAL_COMPLETE` counts only after `VERIFY_OK`.
 //! Halt, Stop, or [`EPISODE_IDLE`] without a step also end it.
 //!
-//! There is no step or wall-time cap. After [`STALL_REPLAN`] steps that move
-//! nothing the worker is told to re-plan ([`REPLAN_NOTE`]) and goes on. A
+//! There is no step or wall-time cap. A loop (an identical call failing
+//! twice, the same call changing nothing three times, the same failure three
+//! times; see [`loops`]) re-plans at once. After [`STALL_REPLAN`] steps that
+//! move nothing the worker is told to re-plan ([`REPLAN_NOTE`]) and goes on.
+//! Any re-plan steps the worker up one model for [`STEP_UP_STEPS`] steps,
+//! quietly, then it drops back. A
 //! checker reject, or a checker that can't run, re-plans with its reason
 //! instead of waiting; the same reject on an unchanged screen
 //! [`SAME_REJECT_END`] times ends the episode with a named note. Every
@@ -17,9 +21,11 @@
 //! bypass. Hard class always parks.
 
 mod kernel;
+pub mod loops;
 mod view;
 mod verify;
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
@@ -39,8 +45,11 @@ pub use view::{
 };
 
 /// Steps in a row that move nothing before the worker is told to re-plan.
-pub const STALL_REPLAN: u32 = 8;
-/// The worker's next note after [`STALL_REPLAN`] steps with no progress.
+/// The slow backstop: [`loops`] catches a repeated call sooner.
+pub const STALL_REPLAN: u32 = 5;
+/// Worker calls that go one model up after a re-plan, before dropping back.
+pub const STEP_UP_STEPS: u32 = 3;
+/// The worker's next note after a re-plan.
 pub const REPLAN_NOTE: &str = "The last steps changed nothing. Stop repeating them. Re-read the goal, \
 say in one line what you tried, then pick a different approach (another tool, another route or a smaller sub-step), \
 take a fresh screenshot and go on.";
@@ -170,6 +179,10 @@ pub struct Episode {
     /// The latest checker reject: its reason, the observation hash it saw,
     /// and how many times in a row both stayed the same.
     pub(crate) last_reject: Option<(String, String, u32)>,
+    /// The last few steps, for [`loops::note_call`].
+    pub(crate) ring: VecDeque<loops::LoopEntry>,
+    /// Worker calls still stepped up after the latest re-plan.
+    pub step_up: u32,
 }
 
 fn cap_text(text: &str, held: &[String]) -> String {
@@ -197,6 +210,8 @@ impl Episode {
             trail: Vec::new(),
             seen_findings: Vec::new(),
             last_reject: None,
+            ring: VecDeque::new(),
+            step_up: 0,
         }
     }
 

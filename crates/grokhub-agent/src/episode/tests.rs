@@ -27,6 +27,8 @@ const TYPED: &str = "hunter2-typed-value-91";
 #[derive(Clone)]
 enum Act {
     Click(u32),
+    /// The same "Save" click every time.
+    ClickSave,
     HardClick,
     Type,
     Zoom(&'static str),
@@ -129,6 +131,7 @@ impl ModelClient for FakeModel {
         let usage = Usage { cached_tokens: cached, ..usage };
         let (text, calls) = match (self.script)(n) {
             Act::Click(x) => (String::new(), vec![call(n, "click", json!({"x": x, "y": 40}))]),
+            Act::ClickSave => (String::new(), vec![call(n, "click", json!({"x": 120, "y": 40, "label": "Save"}))]),
             Act::HardClick => (String::new(), vec![call(n, "click", json!({"x": 900, "y": 40, "label": "Send"}))]),
             Act::Type => (String::new(), vec![call(n, "type", json!({"text": TYPED}))]),
             Act::Zoom(id) => (String::new(), vec![call(n, "zoom", json!({"span_ref": id, "n": 1}))]),
@@ -154,6 +157,8 @@ struct FakeDesk {
     calls_at_halt: Mutex<Option<usize>>,
     /// Every screenshot is the same frame: no step changes the screen.
     still: bool,
+    /// A click on this label fails.
+    fail_label: Option<&'static str>,
 }
 
 impl FakeDesk {
@@ -184,6 +189,9 @@ impl DesktopOps for FakeDesk {
         if name == "click" && Some(clicks) == self.halt_after_clicks {
             self.halt.store(true, Ordering::SeqCst);
             *self.calls_at_halt.lock().unwrap() = Some(n);
+        }
+        if name == "click" && self.fail_label.is_some() && args.get("label").and_then(Value::as_str) == self.fail_label {
+            return ToolOutput::err("no such button");
         }
         if name == "screenshot" {
             return ToolOutput {
@@ -489,7 +497,7 @@ fn an_episode_past_30_minutes_keeps_going() {
 }
 
 #[test]
-fn twenty_clicks_that_change_nothing_replan_twice_quietly_and_verify() {
+fn twenty_clicks_that_change_nothing_replan_every_five_quietly_and_verify() {
     let mut r = rig("stall", clicks_then_done(20));
     r.desk.still = true;
     let mut ep = r.episode("Turn on Wi-Fi in Settings");
@@ -499,11 +507,11 @@ fn twenty_clicks_that_change_nothing_replan_twice_quietly_and_verify() {
     let spans = r.spans();
     assert!(spans.iter().filter(|s| is_step(s)).all(|s| s.ui_changed == Some(false)));
     let replans: Vec<_> = spans.iter().filter(|s| s.tool == crate::harness::RECOVERY_TOOL).collect();
-    assert_eq!(replans.len(), 2);
+    assert_eq!(replans.len(), 4);
     for s in &replans {
         assert_eq!((s.decision.as_str(), s.result.as_str(), s.approval_class.as_str()), ("replan", "replan", "soft"));
         assert!(s.args_redacted.contains(r#""detector":"no_progress""#), "{}", s.args_redacted);
-        assert_eq!(s.claim, "no_progress: 8 steps in a row changed nothing");
+        assert_eq!(s.claim, "no_progress: 5 steps in a row changed nothing");
     }
     assert!(!spans.iter().any(|s| s.decision == "pause"));
     assert!(r.parks.posted.lock().unwrap().is_empty(), "no card");
@@ -513,8 +521,8 @@ fn twenty_clicks_that_change_nothing_replan_twice_quietly_and_verify() {
         .filter(|(_, t)| t.contains(&format!("GrokHub's check: {REPLAN_NOTE}")))
         .map(|(i, _)| i)
         .collect();
-    assert_eq!(told, vec![8, 16], "the worker is told to re-plan after the 8th and 16th still click");
-    assert_eq!(ep.stall, 4);
+    assert_eq!(told, vec![5, 10, 15, 20], "the worker is told to re-plan after every 5th still click");
+    assert_eq!(ep.stall, 0);
 }
 
 #[test]
@@ -712,7 +720,7 @@ fn a_fan_out_runs_at_most_20_reads_and_counts_its_returns() {
 
 #[test]
 fn idle_stall_and_header_are_named_and_progress_resets_the_stall() {
-    assert_eq!((EPISODE_IDLE.as_secs(), FANOUT_CAP, STALL_REPLAN), (600, 20, 8));
+    assert_eq!((EPISODE_IDLE.as_secs(), FANOUT_CAP, STALL_REPLAN, STEP_UP_STEPS), (600, 20, 5, 3));
     let mut ep = Episode::begin("ep-1", CHAT, "Go", T0, &[]);
     assert!(!ep.idle(T0 + 599_999));
     assert!(ep.idle(T0 + 600_000));
@@ -720,12 +728,12 @@ fn idle_stall_and_header_are_named_and_progress_resets_the_stall() {
     assert_eq!(ep.header(T0 + 4 * 60_000 + 5_000), "Desktop session · 12 steps · 4 min");
     assert_eq!(episode_header(1, std::time::Duration::ZERO), "Desktop session · 1 step · 0 min");
     // A screen change or a quiet success moves; no change or a failure doesn't; a park is neutral.
-    for _ in 0..7 {
+    for _ in 0..4 {
         assert!(!ep.note_progress("allow", Some(false), false));
     }
     assert!(!ep.note_progress("park", None, false));
-    assert_eq!(ep.stall, 7);
-    assert!(ep.note_progress("deny", None, true), "the 8th step with no progress re-plans");
+    assert_eq!(ep.stall, 4);
+    assert!(ep.note_progress("deny", None, true), "the 5th step with no progress re-plans");
     assert_eq!(ep.stall, 0);
     assert!(!ep.note_progress("allow", None, true));
     assert!(!ep.note_progress("allow", Some(true), true));
@@ -917,4 +925,79 @@ fn note_reject_counts_only_the_same_reason_on_the_same_screen() {
     assert!(!ep.note_reject("wrong folder", "bbb"));
     assert!(ep.note_reject("wrong folder", "bbb"));
     assert_eq!(ep.last_reject, Some(("wrong folder".into(), "bbb".into(), 3)));
+}
+
+fn worker_tokens(spans: &[crate::harness::Span]) -> Vec<(String, String)> {
+    spans
+        .iter()
+        .filter(|s| is_step(s))
+        .map(|s| {
+            let t = s.tokens.as_ref().unwrap();
+            (t.model.clone(), t.effort.clone())
+        })
+        .collect()
+}
+
+#[test]
+fn a_save_button_that_does_nothing_replans_on_the_third_click_and_steps_up_for_three_steps() {
+    let mut r = rig("dead-save", Box::new(|n| match n {
+        0..=2 => Act::ClickSave,
+        3..=6 => Act::Click(n as u32),
+        _ => Act::Done,
+    }));
+    r.desk.still = true;
+    let mut ep = r.episode("Save notes.txt in the editor");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    let spans = r.spans();
+    assert_eq!(
+        recoveries(&spans),
+        vec![("replan".into(), "repeat_call".into(), "replan: click 'Save' changed nothing 3×".into())],
+        "one re-plan on the third click, before the stall backstop, and 1a's loop finding is not run twice"
+    );
+    let told: Vec<usize> = nows(&r.model)
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.contains(&format!("GrokHub's check: {REPLAN_NOTE}")))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(told, vec![3], "the worker is told right after the third click");
+    let efforts: Vec<String> = worker_tokens(&spans).into_iter().map(|(_, e)| e).collect();
+    assert_eq!(efforts, vec!["low", "low", "low", "medium", "medium", "medium", "low"], "three stepped-up calls, then back");
+    let marks: Vec<(String, String)> = spans
+        .iter()
+        .filter(|s| s.tool == EPISODE_TOOL && s.decision == "step_up")
+        .map(|s| (s.result.clone(), s.claim.clone()))
+        .collect();
+    assert_eq!(marks, vec![("grok-4.7".to_string(), "stepped up to grok-4.7 medium for 3 steps".to_string())], "one quiet note naming the model");
+    assert!(r.parks.posted.lock().unwrap().is_empty(), "no card, no prompt");
+    assert_eq!(ep.step_up, 0);
+}
+
+#[test]
+fn an_identical_failing_click_replans_on_the_second_try() {
+    let mut r = rig("failing-save", Box::new(|n| match n {
+        0 | 1 => Act::ClickSave,
+        2 => Act::Click(7),
+        _ => Act::Done,
+    }));
+    r.desk.fail_label = Some("Save");
+    let mut ep = r.episode("Save notes.txt in the editor");
+    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    let spans = r.spans();
+    let steps: Vec<&str> = spans.iter().filter(|s| is_step(s)).map(|s| s.result.as_str()).collect();
+    assert_eq!(steps, vec!["failed: no such button", "failed: no such button", "click ok"]);
+    assert_eq!(recoveries(&spans), vec![("replan".into(), "repeat_call".into(), "replan: click 'Save' failed 2×".into())]);
+    assert!(first_text(&r.model.worker_calls.lock().unwrap()[2], 2).contains(&format!("GrokHub's check: {REPLAN_NOTE}")));
+}
+
+#[test]
+fn varied_clicks_that_move_the_screen_never_replan_or_step_up() {
+    let r = rig("varied", clicks_then_done(12));
+    let mut ep = r.episode("Sort the photos");
+    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    let spans = r.spans();
+    assert!(recoveries(&spans).is_empty());
+    assert!(worker_tokens(&spans).iter().all(|(m, e)| (m.as_str(), e.as_str()) == ("grok-4.7", "low")));
+    assert!(!spans.iter().any(|s| s.decision == "step_up"));
 }
