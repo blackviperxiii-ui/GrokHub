@@ -185,7 +185,7 @@ pub fn clip_argv(bin: &str, device: Option<&str>) -> Option<Vec<String>> {
 
 /// Raw s16le bytes to samples (a trailing odd byte is dropped).
 pub fn pcm_samples(bytes: &[u8]) -> Vec<i16> {
-    bytes.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect()
+    bytes.as_chunks::<2>().0.iter().map(|&b| i16::from_le_bytes(b)).collect()
 }
 
 /// A 16-bit PCM WAV: its rate and the first channel's samples.
