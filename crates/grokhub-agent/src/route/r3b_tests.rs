@@ -516,3 +516,94 @@ fn a_pinned_provider_call_routes_logs_its_provider_and_the_key_is_in_no_file_or_
     }
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// OpenRouter's key exchange, faked: a 200 with a key for `good-code`, else a 403.
+#[derive(Default)]
+struct KeyWire(Mutex<Vec<Sent>>);
+
+impl ProviderTransport for KeyWire {
+    fn get(&self, url: &str, _: &[(String, String)]) -> Result<HttpReply, String> {
+        Err(format!("no GET expected: {url}"))
+    }
+    fn post(&self, url: &str, headers: &[(String, String)], body: &str) -> Result<HttpReply, String> {
+        self.0.lock().unwrap().push((url.into(), headers.to_vec(), body.into()));
+        if body.contains(r#""code":"good-code""#) {
+            Ok(HttpReply { status: 200, body: json!({"key": KEY, "user_id": "u-1"}).to_string() })
+        } else {
+            Ok(HttpReply { status: 403, body: "{}".into() })
+        }
+    }
+}
+
+/// The browser: approve at once by calling the `callback_url` with `code`.
+fn approving_browser(code: &'static str, seen: Arc<Mutex<String>>) -> impl Fn(&str) -> Result<(), String> {
+    move |link: &str| {
+        *seen.lock().unwrap() = link.to_string();
+        let query = link.split_once('?').map(|(_, q)| q).unwrap_or("");
+        let callback = query
+            .split('&')
+            .find_map(|p| p.strip_prefix("callback_url="))
+            .unwrap_or("")
+            .replace("%3A", ":")
+            .replace("%2F", "/");
+        let target = callback.trim_start_matches("http://").to_string();
+        let (host, path) = target.split_once('/').map(|(h, p)| (h.to_string(), p.to_string())).unwrap();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let mut sock = std::net::TcpStream::connect(&host).unwrap();
+            let _ = write!(sock, "GET /{path}?code={code} HTTP/1.1\r\nHost: {host}\r\n\r\n");
+            let mut sink = String::new();
+            let _ = sock.read_to_string(&mut sink);
+        });
+        Ok(())
+    }
+}
+
+#[test]
+fn openrouter_sign_in_buys_a_key_with_pkce_and_saves_nothing_itself() {
+    let dir = test_dir("r3b-openrouter-signin");
+    providers::use_vault_for(&dir, Arc::new(MemoryVault::default()));
+    let wire = Arc::new(KeyWire::default());
+    providers::use_transport_for(&dir, wire.clone());
+    let seen = Arc::new(Mutex::new(String::new()));
+    let key = providers::openrouter_key(&dir, &approving_browser("good-code", seen.clone()), std::time::Duration::from_secs(10)).unwrap();
+    assert_eq!(key.as_str(), KEY);
+    let link = seen.lock().unwrap().clone();
+    assert!(link.starts_with("https://openrouter.ai/auth?callback_url=http%3A%2F%2F127.0.0.1%3A"), "{link}");
+    assert!(link.contains("%2Fcallback&code_challenge=") && link.ends_with("&code_challenge_method=S256"), "{link}");
+    let sent = wire.0.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].0, "https://openrouter.ai/api/v1/auth/keys");
+    let body: serde_json::Value = serde_json::from_str(&sent[0].2).unwrap();
+    assert_eq!((body["code"].as_str(), body["code_challenge_method"].as_str()), (Some("good-code"), Some("S256")));
+    // The verifier sent is the one the challenge in the link was made from.
+    let challenge = link.split("code_challenge=").nth(1).unwrap().split('&').next().unwrap();
+    assert_eq!(grokhub_core::pkce::pkce_challenge(body["code_verifier"].as_str().unwrap()), challenge);
+    // One handshake line, no user data; nothing saved, no provider added.
+    let log = read_egress(&dir);
+    assert_eq!(log.len(), 1, "{log:?}");
+    assert_eq!((log[0].dest.as_str(), log[0].data_classes.len()), ("openrouter.ai", 0));
+    assert!(!providers::has_key(&dir, "openrouter") && providers::load_providers(&dir).is_empty());
+    // A code OpenRouter refuses buys nothing.
+    let err = providers::openrouter_key(&dir, &approving_browser("bad-code", seen), std::time::Duration::from_secs(10)).unwrap_err();
+    assert_eq!(err, "OpenRouter didn't hand over a key (HTTP 403)");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn key_pages_and_the_api_shape_pick_follow_the_address() {
+    assert_eq!(providers::key_page("https://api.openai.com/v1"), Some("https://platform.openai.com/api-keys"));
+    assert_eq!(providers::key_page("https://api.anthropic.com"), Some("https://console.anthropic.com/settings/keys"));
+    assert_eq!(providers::key_page(OR_URL), Some("https://openrouter.ai/settings/keys"));
+    assert_eq!(providers::key_page("https://api.groq.com/openai/v1"), Some("https://console.groq.com/keys"));
+    assert_eq!(providers::key_page("https://llm.example.com/v1"), None);
+    assert_eq!(providers::key_page("https://notopenai.com/v1"), None, "a lookalike host is not OpenAI");
+    let (dir, _wire) = setup("r3b-kind-pick");
+    let detected = providers::add_provider_as(&dir, "https://llm.example.com/v1", KEY, None, NOW).unwrap();
+    assert_eq!((detected.id.as_str(), detected.kind), ("llm", ProviderKind::OpenAiCompatible));
+    let proxy = providers::add_provider_as(&dir, "https://claude-proxy.example.org", KEY, Some(ProviderKind::Anthropic), NOW).unwrap();
+    assert_eq!((proxy.kind, proxy.models_url().as_str()), (ProviderKind::Anthropic, "https://claude-proxy.example.org/v1/models"));
+    assert_eq!(providers::check_key("short"), Err("Paste the whole key.".to_string()));
+    assert_eq!(providers::check_key(&format!("  {KEY} ")), Ok(KEY));
+    let _ = std::fs::remove_dir_all(dir);
+}

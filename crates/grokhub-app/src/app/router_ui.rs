@@ -110,10 +110,14 @@ impl Cabin {
                     if let Some(clock) = self.harness.router.clock.as_mut() {
                         clock.signal |= done.signal;
                         if done.gb_version.is_some() {
-                            clock.gb_version = done.gb_version;
+                            clock.gb_version = done.gb_version.clone();
                         }
                     }
                     self.deliver_heal(heal);
+                    let added = grokhub_agent::route::providers::load_providers(&crate::config::config_dir());
+                    if let Some(note) = super::provider_ui::provider_refresh_note(&done.events, &done.errors, &added) {
+                        self.status = note;
+                    }
                 }
                 Err(mpsc::TryRecvError::Empty) => self.harness.router.rx = Some(rx),
                 Err(mpsc::TryRecvError::Disconnected) => {}
@@ -133,6 +137,7 @@ impl Cabin {
         }
         self.poll_guard();
         self.poll_tune();
+        self.poll_openrouter_sign_in();
         self.sync_router_pin();
         self.sync_spend();
         self.poll_route_asks();
