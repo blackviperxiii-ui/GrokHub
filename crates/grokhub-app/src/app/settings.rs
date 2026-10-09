@@ -574,18 +574,9 @@ impl Cabin {
                                                                     self.status = "Saved".into();
                                                                 }
                                                             }
-                                                            let hours: Vec<String> = (0..24).map(grokhub_core::hour_label).collect();
-                                                            let dream_line = grokhub_core::dream_time_line(self.dream_hour(), &Self::local_zone());
-                                                            if let Some(h) = crate::cards::settings_dropdown(
-                                                                ui,
-                                                                "Dream time",
-                                                                &dream_line,
-                                                                &grokhub_core::hour_label(self.dream_hour()),
-                                                                &hours,
-                                                            ) {
-                                                                self.cfg.dream_hour = h as u32;
-                                                                self.persist_cfg();
-                                                                self.status = format!("Dream time: {}", grokhub_core::hour_label(self.cfg.dream_hour));
+                                                            self.ui_dream_time_row(ui);
+                                                            if crate::cards::settings_action(ui, "Setup", "Walk through first-run setup again.", "Open") {
+                                                                self.open_setup(super::setup_wizard::SetupStep::Welcome);
                                                             }
                                                             let budgets = grokhub_core::TOKEN_BUDGETS;
                                                             let budget_labels: Vec<String> = budgets

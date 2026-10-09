@@ -179,6 +179,7 @@ mod episode_ui;
 mod privacy_ui;
 mod router_ui;
 mod local_ai_ui;
+mod setup_wizard;
 mod budget_ui;
 mod provider_ui;
 mod repair_ui;
@@ -419,6 +420,8 @@ pub struct Cabin {
     persist_idle_key: String,
     persist_rx: Option<mpsc::Receiver<()>>,
     persist_io: Arc<Mutex<()>>,
+    /// The first-run setup wizard (welcome, app setup, on-device model).
+    setup: setup_wizard::SetupWizard,
     /// Last settings or key write that failed, for the status line.
     persist_err: Arc<Mutex<Option<String>>>,
     /// Generation of the newest full snapshot handed to a persist worker.
@@ -1048,6 +1051,7 @@ impl Cabin {
             persist_idle_key: String::new(),
             persist_rx: None,
             persist_io: Arc::new(Mutex::new(())),
+            setup: setup_wizard::SetupWizard::default(),
             persist_err: Arc::new(Mutex::new(None)),
             persist_gen: 0,
             persist_mark: Arc::new(Mutex::new(PersistMark::default())),
@@ -1502,6 +1506,7 @@ impl Cabin {
             persist_idle_key: String::new(),
             persist_rx: None,
             persist_io: Arc::new(Mutex::new(())),
+            setup: setup_wizard::SetupWizard::default(),
             persist_err: Arc::new(Mutex::new(None)),
             persist_gen: 0,
             persist_mark: Arc::new(Mutex::new(PersistMark::default())),
@@ -5277,6 +5282,8 @@ impl eframe::App for Cabin {
             self.paint_confirm_overlay(&ctx);
         }
         self.paint_shortcuts(&ctx);
+        self.tick_setup_wizard();
+        self.paint_setup_wizard(&ctx);
         self.ui_plus_overlays(&ctx);
         self.ui_imagine_overlays(&ctx);
         self.ui_project_overlays(&ctx);
