@@ -27634,6 +27634,50 @@ fn router_model_changes_post_one_home_note_and_no_undo_row() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// Card 12: a self-tuning promotion posts one info-only "why" card naming the
+/// model, the class, the scores and the day, and no ledger note, Undo or Keep.
+#[test]
+fn a_router_promotion_posts_one_why_card_and_no_prompt() {
+    use grokhub_agent::route::{learn, tune};
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin_skill_config("router-why-card");
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.poll_self_changes();
+    let mut tuning = tune::Tuning::default();
+    tuning.orders.insert("chat:default".into(), "grok-4-fast".into());
+    let reason = format!("{}everyday chat: grok-4-fast first (12% cheaper, 20% faster, quality held)", learn::TUNED_PREFIX);
+    learn::write_tuning(&root, &tuning, &reason).expect("tuning");
+    cabin.poll_self_changes();
+    assert!(cabin.harness.work_rows.is_empty(), "no Undo/Keep row for a router change");
+    assert_eq!(cabin.updates.iter().filter(|u| u.source_id.starts_with("model:")).count(), 0, "the why card replaces the note");
+
+    let promoted = tune::Candidate {
+        id: "chat:default#3".into(),
+        class: "chat:default".into(),
+        change: Some(tune::Change::Order { model: "grok-4-fast".into() }),
+        stage: tune::Stage::Watch,
+        // 2026-10-06 15:00 UTC.
+        promoted_at: Some(1_791_298_800_000),
+        baseline: Some(tune::Snap { n: 400, pass_pct: 85.0, rework_pct: 4.0, cost_per_step: 0.0100, p50_ms: 2_000, p95_ms: 4_000 }),
+        promoted_snap: Some(tune::Snap { n: 60, pass_pct: 92.0, rework_pct: 3.0, cost_per_step: 0.0088, p50_ms: 1_600, p95_ms: 3_200 }),
+        ..tune::Candidate::default()
+    };
+    let shadow = tune::Candidate { id: "chat:default#4".into(), class: "chat:default".into(), ..tune::Candidate::default() };
+    let state = tune::TuneState { candidates: vec![promoted, shadow], ..tune::TuneState::default() };
+    cabin.post_why_cards(&state, &["chat:default#3".to_string(), "chat:default#4".to_string()]);
+    let why: Vec<&grokhub_core::UpdateCard> = cabin.updates.iter().filter(|u| u.source_id.starts_with("router-why:")).collect();
+    assert_eq!(why.len(), 1, "only the promoted candidate gets a card");
+    assert_eq!(why[0].source_id, "router-why:chat:default#3");
+    assert_eq!(why[0].title, "Why grok-4-fast for everyday chat: 92% pass vs 85%, promoted Oct 6");
+    assert_eq!(
+        why[0].body.as_deref(),
+        Some("Auto now runs everyday chat with grok-4-fast first: 12% cheaper and 20% faster over 60 canary steps. Info only; Auto keeps tuning on its own.")
+    );
+    assert_eq!(why[0].action, None, "info only: no Accept, Undo or Keep");
+    assert!(cabin.harness.work_rows.is_empty());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// `/connections changes` and `/automations changes` post the report
 /// bubble; from a scheduled send they still only show rows (no slash undoes).
 #[test]

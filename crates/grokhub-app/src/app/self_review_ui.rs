@@ -421,7 +421,7 @@ impl Cabin {
                 Some(CardTarget::Router(id)) => id,
                 _ => continue,
             };
-            let details = format!("{body}\n\nAccept applies it through the change list, and Undo puts it back. Nothing changes without your click.");
+            let details = format!("{body}\n\nAccept applies it. Nothing changes without your click, and /why table shows the router's picks.");
             let card = ProposalCard { source, skill: &candidate, title: &title, body: &body, details, md: "" };
             self.post_self_review_card(card, now);
             posted += usize::from(self.harness.self_review.budget < before);

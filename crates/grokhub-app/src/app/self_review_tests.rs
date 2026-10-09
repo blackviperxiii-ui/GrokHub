@@ -571,7 +571,7 @@ fn a_cost_raising_router_card_rides_the_weekly_pass_and_applies_only_on_accept()
     );
     assert_eq!(
         cabin.status,
-        "Router changed (everyday chat: start at High). Undo is on the change list."
+        "Router changed (everyday chat: start at High). /why table shows it."
     );
     let line = hx::ChangeLedger::load_kind(&root, hx::ChangeKind::Model)
         .all()
