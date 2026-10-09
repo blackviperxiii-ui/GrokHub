@@ -10,6 +10,20 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same PR cancels the run it replaces. Pushes to beta and
+# main always finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# CI profile: no incremental artifacts, line tables instead of full debug
+# info (less to link and write, most of all on Windows). The release build
+# keeps the real release profile.
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_TERM_COLOR: always
+
 jobs:
   linux:
     runs-on: ubuntu-latest
@@ -19,6 +33,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - uses: rui314/setup-mold@v1
+      # Restores on every run; saves only from pushes to beta and main, so PRs
+      # start warm from their base branch.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          save-if: ${{ github.event_name == 'push' }}
       - name: Native GUI build deps
         run: |
           sudo apt-get update
@@ -59,6 +80,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          save-if: ${{ github.event_name == 'push' }}
       - run: cargo test --workspace --locked -- --test-threads=1
       # Carcass: deny dead_code workspace-wide. Retired direct-xAI helpers
       # must be deleted, not allowed.
