@@ -5,6 +5,7 @@ mod config;
 mod elicit;
 mod http;
 mod names;
+mod oauth;
 mod rpc;
 mod stdio;
 
@@ -52,6 +53,34 @@ pub struct DoctorRow {
     pub tool_count: usize,
     pub last_error: String,
     pub detail: String,
+    pub sign_in: SignIn,
+}
+
+/// A server's browser sign-in, for its row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignIn {
+    /// A stdio server, or one whose entry already carries its credentials.
+    NotOffered,
+    SignedOut,
+    /// "Signed in to Linear as ada@example.com".
+    SignedIn(String),
+}
+
+fn has_auth_header(headers: &BTreeMap<String, String>) -> bool {
+    headers.keys().any(|k| k.eq_ignore_ascii_case("authorization"))
+}
+
+fn sign_in_state(name: &str, def: &ServerDef) -> SignIn {
+    let TransportDef::Http { url, .. } = &def.transport else {
+        return SignIn::NotOffered;
+    };
+    if def.token_ref.is_some() || has_auth_header(&def.headers) {
+        return SignIn::NotOffered;
+    }
+    match oauth::load(name).filter(|s| s.resource == grokhub_core::mcp_oauth::resource_for(url)) {
+        Some(s) => SignIn::SignedIn(grokhub_core::mcp_oauth::signed_in_line(name, s.account.as_deref())),
+        None => SignIn::SignedOut,
+    }
 }
 
 #[derive(Clone)]
@@ -174,6 +203,7 @@ pub fn configured() -> Vec<DoctorRow> {
     config::load_servers_for(&workspace)
         .into_iter()
         .map(|(name, def)| DoctorRow {
+            sign_in: sign_in_state(&name, &def),
             name,
             status: if def.enabled {
                 "not checked"
@@ -196,6 +226,7 @@ pub fn doctor() -> Vec<DoctorRow> {
         let mut inner = lock_slot(&slot);
         if !inner.def.enabled {
             rows.push(DoctorRow {
+                sign_in: sign_in_state(&name, &inner.def),
                 name,
                 status: "disabled".into(),
                 tool_count: 0,
@@ -219,6 +250,7 @@ pub fn doctor() -> Vec<DoctorRow> {
             "stopped"
         };
         rows.push(DoctorRow {
+            sign_in: sign_in_state(&name, &inner.def),
             name,
             status: status.into(),
             tool_count: inner.tools.len(),
@@ -255,6 +287,39 @@ pub fn restart(name: &str) -> Result<(), String> {
             .unwrap_or_else(|| format!("MCP server `{name}` stopped")));
     }
     Ok(())
+}
+
+/// Sign in to an HTTP server in the browser `open` launches, then reconnect
+/// it with the new token. Returns the line naming the account.
+pub fn sign_in(name: &str, open: &dyn Fn(&str) -> Result<(), String>) -> Result<String, String> {
+    let (slots, _) = load_slots();
+    let slot = slots
+        .get(name)
+        .cloned()
+        .ok_or_else(|| format!("MCP server `{name}` is not configured"))?;
+    let url = match &lock_slot(&slot).def.transport {
+        TransportDef::Http { url, .. } => url.clone(),
+        TransportDef::Stdio { .. } => return Err(format!("MCP server `{name}` runs on this machine and has no sign-in")),
+    };
+    let line = oauth::sign_in(name, &url, open, std::time::Duration::from_secs(oauth::LOOPBACK_SECS))?;
+    match restart(name) {
+        Ok(()) => Ok(line),
+        Err(err) => Ok(format!("{line}, but it didn't connect: {err}")),
+    }
+}
+
+/// Forget a server's sign-in and drop its connection.
+pub fn sign_out(name: &str) -> String {
+    oauth::forget(name);
+    if let Some(slot) = slots_now().get(name) {
+        let mut inner = lock_slot(slot);
+        inner.conn.take();
+        inner.tried = false;
+        inner.last_error = None;
+        inner.raw.clear();
+        inner.tools.clear();
+    }
+    format!("Signed out of {name}")
 }
 
 /// MCP schemas for the native engine. `native` is how many desktop tools
@@ -467,6 +532,10 @@ fn call_qualified(rec: &ToolRec, args: &Value, stop: &dyn Fn() -> bool) -> ToolO
         Err(err) => {
             inner.conn.take();
             inner.last_error = Some(clip_err(&err));
+            // An expired sign-in: the next use reconnects, refreshing the token.
+            if http::is_unauthorized(&err) {
+                inner.tried = false;
+            }
             ToolOutput::err(err)
         }
     }
@@ -634,14 +703,27 @@ fn open_def(name: &str, def: &ServerDef, workspace: &Path) -> Result<(Conn, Vec<
                     .ok_or("its token is missing or locked: add the connection again")?;
                 headers.entry("Authorization".into()).or_insert_with(|| format!("Bearer {token}"));
             }
-            let (conn, tools) = http::connect(
-                name,
-                url,
-                *sse,
-                &headers,
-                def.startup_timeout,
-                def.tool_timeout,
-            )?;
+            let signed = !has_auth_header(&headers);
+            if signed {
+                if let Some(token) = oauth::bearer(name, url) {
+                    headers.insert("Authorization".into(), format!("Bearer {token}"));
+                }
+            }
+            let open = |headers: &BTreeMap<String, String>| {
+                http::connect(name, url, *sse, headers, def.startup_timeout, def.tool_timeout)
+            };
+            let (conn, tools) = match open(&headers) {
+                Err(err) if signed && http::is_unauthorized(&err) => {
+                    if !has_auth_header(&headers) {
+                        return Err(format!("{err}. Sign in on its row under Native MCP"));
+                    }
+                    // The token was refused: refresh once and try again.
+                    let token = oauth::refresh_now(name, url).map_err(|e| format!("{err}. {e}"))?;
+                    headers.insert("Authorization".into(), format!("Bearer {token}"));
+                    open(&headers)?
+                }
+                other => other?,
+            };
             Ok((Conn::Http(conn), tools))
         }
     }
@@ -1275,5 +1357,39 @@ mod tests {
                 usage: crate::Usage::default(),
             })
         }
+    }
+
+    #[test]
+    fn a_signed_in_server_connects_refreshes_once_on_401_and_signs_out() {
+        use super::{configured, doctor, invalidate, oauth, restart, shutdown_all, sign_in, sign_out, SignIn};
+        let dir = crate::harness::test_dir("mcp-oauth-slots");
+        let _guard = ConfigGuard::set(&dir);
+        let server = oauth::tests::AuthMcp::start();
+        let doc = format!(r#"{{"mcpServers": {{"linear": {{"url": "{}", "type": "http"}}, "kept": {{"url": "{}", "bearerToken": "sk-abcdefghijklmnopqrstuv"}}}}}}"#, server.url(), server.url());
+        std::fs::write(dir.join("mcp.json"), doc).unwrap();
+        invalidate();
+        let state = |name: &str| configured().into_iter().find(|r| r.name == name).map(|r| r.sign_in);
+        assert_eq!(state("linear"), Some(SignIn::SignedOut));
+        assert_eq!(state("kept"), Some(SignIn::NotOffered), "its entry carries its own credentials");
+        let err = restart("linear").unwrap_err();
+        assert!(err.contains("HTTP 401") && err.ends_with("Sign in on its row under Native MCP"), "{err}");
+
+        let line = sign_in("linear", &oauth::tests::approving_browser("good-code")).unwrap();
+        assert_eq!(line, "Signed in to linear");
+        assert_eq!(state("linear"), Some(SignIn::SignedIn("Signed in to linear".into())));
+        let row = doctor().into_iter().find(|r| r.name == "linear").unwrap();
+        assert_eq!((row.status.as_str(), row.tool_count), ("connected", 1));
+
+        // The server stops taking at-1: one refresh, and the reconnect succeeds.
+        *server.live.lock().unwrap() = "at-2".into();
+        restart("linear").unwrap();
+        assert_eq!(server.refreshes.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(oauth::load("linear").unwrap().access_token, "at-2");
+
+        assert_eq!(sign_out("linear"), "Signed out of linear");
+        assert_eq!(state("linear"), Some(SignIn::SignedOut));
+        assert!(restart("linear").unwrap_err().ends_with("Sign in on its row under Native MCP"));
+        shutdown_all();
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
