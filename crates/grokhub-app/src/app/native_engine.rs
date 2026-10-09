@@ -96,10 +96,8 @@ impl Cabin {
         if !self.native_engine_for_current() {
             return false;
         }
-        let ready = match self.ensure_native_engine() {
-            Ok(()) => self.publish_native_cfg(),
-            Err(err) => Err(err),
-        };
+        // `ensure_native_engine` publishes the config (with the episode seed) once.
+        let ready = self.ensure_native_engine();
         self.side_ask_kick = false;
         if let Err(err) = ready {
             self.fail_native(&err);
@@ -110,7 +108,10 @@ impl Cabin {
             .as_ref()
             .map(|handle| handle.prompt_with_image(last_user, image));
         match prompted {
-            Some(Ok(())) => self.note_inflight_card(raw_ask, thread_label),
+            Some(Ok(())) => {
+                self.episode_resume_sent();
+                self.note_inflight_card(raw_ask, thread_label);
+            }
             Some(Err(err)) => self.fail_native(&err),
             None => self.fail_native("native engine is not running"),
         }

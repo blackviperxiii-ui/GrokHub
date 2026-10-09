@@ -10,6 +10,7 @@
 - Carried from 2.10.97: Labs → Beta moves a main install to beta again. The switch no longer stops on GrokHub's own `Cargo.lock` change, and Beta stays on after a sync.
 - Carried from 2.10.97: KDE screenshots ask KWin once. After you refuse, GrokHub stops asking and uses the fallback, and the Arch packages' menu entry starts GrokHub by its full path.
 - Carried from 2.10.97: a model change the router makes on its own is now a note that tells you, not an Undo / Keep row that asks.
+- Carried from 2.10.97: long tasks no longer stop at 60 steps, 30 minutes or 50 turns: a desktop session, a chat, `/bg` and night jobs run until they're done, you Stop or Halt. A run that's stuck or repeating itself is told to re-plan and keeps going instead of pausing, and approving a card after the reply ended now picks the task back up instead of waiting for you to type.
 
 ## 2.10.96 — 2026-10-08
 
