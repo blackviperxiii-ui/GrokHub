@@ -425,11 +425,11 @@ fn pulse_menu(
 }
 
 /// The inline Run button's word: Send… on a prepared draft (it parks the hard
-/// card), Yes on an ask card, else Run.
+/// card), Do it on a one-tap suggestion, else Run.
 pub(super) fn run_label(card: &UpdateCard) -> &'static str {
     match card.pulse.proactive.as_ref().map(|p| p.route) {
         Some(grokhub_core::proactive::ProactiveRoute::Prepare) => "Send…",
-        Some(grokhub_core::proactive::ProactiveRoute::Ask) => "Yes",
+        Some(grokhub_core::proactive::ProactiveRoute::Suggest) => "Do it",
         _ => "Run",
     }
 }
