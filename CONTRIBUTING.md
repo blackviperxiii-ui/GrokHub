@@ -19,9 +19,10 @@ These rules apply to every contributor and every bot (Cursor, Claude, GrokHub). 
 ## Versions
 
 - PRs into `beta` don't bump the version. They add their notes under `## Unreleased` in `CHANGELOG.md`.
-- Beta builds show the base version plus `-beta`, with the branch and short SHA: `GrokHub 2.10.92-beta (beta @ abc1234)`. `crates/grokhub-app/build.rs` reads these from git; never edit the Cargo version for them.
-- Each `beta` → `main` promotion carries exactly one patch bump and one release.
-- A hotfix to `main` carries its own bump and is merged back into `beta`.
+- Semver: PATCH (`x.y.Z`) for a fix or polish rollout, MINOR (`x.Y.0`) for a promotion with at least one new user-facing feature, MAJOR (`X.0.0`) only on Jeremy's say. No cap on any part.
+- Beta builds will carry `-beta.N` (e.g. `2.11.0-beta.3`); until then they show the base version plus `-beta`, with the branch and short SHA: `GrokHub 2.11.0-beta (beta @ abc1234)`. `crates/grokhub-app/build.rs` reads these from git; never edit the Cargo version for them.
+- Each `beta` → `main` promotion carries exactly one bump (PATCH or MINOR) and one release.
+- A hotfix to `main` carries its own PATCH bump and is merged back into `beta`.
 - A bump changes the files listed in `CLAUDE.md` (Commits, PRs, versions).
 
 ## Tests
