@@ -43,11 +43,11 @@ pub use client::{
 };
 pub use compact::{estimate_input_tokens, manual_compact_targets_native, message_text};
 pub use eval::{parse_args, reject_live, render_report, run_suite, ItemResult, Opts, SUITE_ITEMS};
-pub use events::{meter_for, Engine, EngineParts, EpisodeSeed, NativeEngine, StampHalt};
+pub use events::{Engine, EngineParts, EpisodeSeed, NativeEngine, StampHalt};
 pub use gate::{ClosedPermits, Gate, PermAnswer, PermMode, PermitInbox, PermitNote, PermitWait};
 pub use harness::{AccessMode, ComputerUseBackend, GateOutcome, HardClass, APPROVAL_GATE_VIOLATION};
 pub use hooks::{
-    discover_hooks, folder_trusted, on_session_end, set_folder_trust, on_subagent_start, on_subagent_stop, HookInfo, HookOrigin,
+    discover_hooks, folder_trusted, set_folder_trust, on_subagent_start, on_subagent_stop, HookInfo, HookOrigin,
 };
 pub use mcp::{
     alias_elicit, attach_elicit, configured, detach_elicit, doctor, import_documents, import_paths,

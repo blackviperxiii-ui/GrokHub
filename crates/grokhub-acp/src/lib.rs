@@ -20,7 +20,7 @@ pub use client::{
     explain_handshake_error, inspect_json, is_placeholder_session_title, is_session_cwd_error,
     is_sigterm_status, jsonrpc_error_text, list_sessions, merge_grok_sessions, parse_session_list,
     history_label_after_plan, parse_session_markdown, parse_single_turn, preferred_history_title,
-    run_single_turn, title_after_selecting_plan,
+    title_after_selecting_plan,
     grok_p_argv, run_single_turn_full, spawn_grok_p_stream, session_usage, GrokPAttach,
     session_title_from_chat_history,
     show_session, split_session_row, wait_event, AcpHandle, ExternalCmd, GrokSession, NativePerm,
@@ -30,7 +30,7 @@ pub use client::{
 pub use install::{
     begin_ensure_grok_alpha, begin_grok_install, begin_grok_install_force, begin_keep_cli_alpha,
     grok_cli_install_cmd,
-    install_grok_blocking, install_grok_blocking_force, keep_cli_alpha_blocking,
+    install_grok_blocking, keep_cli_alpha_blocking,
     prepend_dir_to_path, prepend_grok_bin_to_process_path,
 };
 pub use locate::{

@@ -3,7 +3,7 @@
 ## Owns
 - Spike-8b diagnose (pillar P6 step 1): "something's wrong with my computer", `/diagnose`, or the native `diagnose` tool runs fixed read-only probes and answers in plain words. Diagnose itself writes nothing to the system.
 - Spike-9 fix (pillar P6 steps 2–4): `plans_for` turns warning findings into `FixPlan`s (what, why, undo, risk; empty ones are rejected). Rules classify each step through `harness::decide(Step::Repair)`: the shell floor and hard class, then `REPAIR_FLOOR` and the repair table (package removal, cache and file deletes, `reg delete`, drivers, partitions and boot, boot-critical service disable, piped passwords). `ApplyRun` refuses unattended, takes the restore point (file backups into `{config_dir}/rewind/repair-<id>`, plus a snapper / Timeshift / btrfs / System Restore step), writes the `restore_point` span first, then hands soft steps to Grok Build one at a time (path B, under the pill), parks hard ones on the hard card (`ParkSource::Repair`), never runs hard-floor ones, re-runs the finding's probe, and Undo fix restores files byte for byte.
-- Probes are ids (`ProbeId`), never commands. `probe_spec` maps each id to one program and argv per `Os`, run by `run_spec` with no shell, a 10 s `PROBE_TIMEOUT`, and `OUTPUT_CAP` per stream.
+- Probes are ids (`ProbeId`), never commands. `probe_spec_with` maps each id to one program and argv per `Os`, run by `run_spec` with no shell, a 10 s `PROBE_TIMEOUT`, and `OUTPUT_CAP` per stream.
 ## Quick commands
 - `cargo test -p grokhub-agent repair::` (classifier, fixtures, gate, redaction, timeout)
 - `cargo test -p grokhub-app diagnose`, `cargo test -p grokhub-app wifi_intent` and `cargo test -p grokhub-app repair_ui` (cabin answers and fix cards; isolate `GROKHUB_CONFIG`)

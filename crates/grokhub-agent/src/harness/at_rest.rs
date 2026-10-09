@@ -96,11 +96,6 @@ impl KeyringOs {
     }
 }
 
-/// The store's name on this OS, for messages.
-pub fn keyring_name() -> &'static str {
-    keyring_name_for(KeyringOs::current())
-}
-
 /// The store's name on `os`. Windows and macOS never say "Secret Service".
 pub fn keyring_name_for(os: KeyringOs) -> &'static str {
     match os {

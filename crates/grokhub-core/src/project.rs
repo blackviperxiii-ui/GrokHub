@@ -489,15 +489,6 @@ pub fn project_name_from_path(p: &str) -> String {
         .to_string()
 }
 
-pub fn expand_host_path_token(tok: &str) -> Option<String> {
-    expand_host_path_token_in(
-        tok,
-        crate::user_home()
-            .as_ref()
-            .and_then(|p| p.to_str()),
-    )
-}
-
 fn peel_host_path_token(tok: &str) -> String {
     let t = tok.trim_matches(|c| matches!(c, '"' | '\'' | '`'));
     if let Some((_, v)) = t.split_once('=') {

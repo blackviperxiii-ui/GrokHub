@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
+use crate::skills::clip_chars;
+
 const MAX_NAME: usize = 64;
 const MAX_READ: u64 = 1_048_576;
 const MAX_WALK: usize = 20_000;
@@ -203,7 +205,7 @@ pub fn persona_body(workspace: &Path, name: &str) -> Option<String> {
             continue;
         }
         if let Some(agent) = bundle.agents.iter().find(|agent| agent.name == name) {
-            return Some(clip(&agent.body, 8_000));
+            return Some(clip_chars(&agent.body, 8_000));
         }
     }
     None
@@ -1568,7 +1570,7 @@ fn push_docs(out: &mut String, tag: &str, docs: &[Doc]) {
             "- {}: {}\n{}\n",
             doc.name,
             doc.description,
-            clip(&doc.body, 4_000)
+            clip_chars(&doc.body, 4_000)
         );
         if out.len() + block.len() > 16_000 {
             break;
@@ -2019,14 +2021,6 @@ fn forbidden_path(path: &Path) -> bool {
         .and_then(|s| s.to_str())
         .unwrap_or("");
     parent == ".grok" && name.eq_ignore_ascii_case(concat!("config", ".toml"))
-}
-
-fn clip(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        text.to_string()
-    } else {
-        text.chars().take(max).collect()
-    }
 }
 
 #[cfg(test)]

@@ -150,7 +150,7 @@ Pair code `ABC-234`. Devices paints a real LAN IPv4 (`http://192.168.x.x:18766`)
 Linux tarball: `grokhub-linux-v*.tar.gz` from `./scripts/make-release-bundle.sh`.  
 Windows installer: `GrokHub-Setup-<version>.exe` from `./scripts/make-windows-release.ps1` (Inno Setup). A tag publishes both.
 
-Arch notes: [`packaging/README-ARCH.md`](packaging/README-ARCH.md).
+Arch notes: [`packaging/README-ARCH.md`](../packaging/README-ARCH.md).
 
 ## Uninstall
 
@@ -174,7 +174,7 @@ cargo run -p grokhub-hub
 cargo run -p grokhub-app -- --update
 ```
 
-Spec: [`docs/superpowers/specs/2026-08-14-rust-parity-design.md`](docs/superpowers/specs/2026-08-14-rust-parity-design.md).
+Spec: [`docs/superpowers/specs/2026-08-14-rust-parity-design.md`](superpowers/specs/2026-08-14-rust-parity-design.md).
 
 ## License
 
