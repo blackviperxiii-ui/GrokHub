@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.96** — Native chat works again, Fork is gone, and a new model router picks the effort and the model for each step, heals around broken models, keeps to a weekly budget, and can use your own key for another AI provider (off until you allow it).
+**v2.10.97** — Chat works again on models that don't take a thinking level (the HTTP 400 "reasoningEffort" error), Labs → Beta moves a main install to beta, KDE screenshots ask KWin only once, and the router tells you about its own model changes instead of asking.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.96.tar.gz`, AUR | **v2.10.96** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.96.exe`, `grokhub-windows-v2.10.96.zip` | **v2.10.96** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.97.tar.gz`, AUR | **v2.10.97** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.97.exe`, `grokhub-windows-v2.10.97.zip` | **v2.10.97** |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
 
@@ -77,14 +77,14 @@ There are two channels. **Stable** builds `main`, where releases are cut. **Beta
 ```bash
 ./scripts/install.sh --user --channel beta     # fetch origin, check out beta, build, install
 ./scripts/install.sh --user --channel stable   # back to main
-grokhub --version                              # GrokHub 2.10.96-beta (beta @ abc1234) or GrokHub 2.10.96 (main @ f7dcf9a)
+grokhub --version                              # GrokHub 2.10.97-beta (beta @ abc1234) or GrokHub 2.10.97 (main @ f7dcf9a)
 ```
 
 `--channel` fetches `origin`, checks out the branch (creating a local tracking branch the first time, and fast-forwarding it after that), then builds and installs. Stable follows `main`, not the latest release tag, because the in-app Update already pulls `main`. The switch refuses to run over uncommitted changes, and it stops instead of resetting when your local branch has commits that aren't on `origin`.
 
 The channel is saved to `~/.config/GrokHub/channel` (or `$GROKHUB_CONFIG/channel`), next to the `source` receipt. A plain `./scripts/install.sh --user` keeps the saved channel and builds whatever is checked out; it doesn't move git. Settings → **Update**, `/update`, and `grokhub --update` read the receipt: a beta install pulls `origin beta` and never `origin main`. If the clone isn't on the channel's branch, Update stops and says which command to run. `./scripts/install.sh --dry-run` prints the channel, branch, and receipt it would use, and exits.
 
-`--version` comes from `crates/grokhub-app/build.rs`, which reads the branch and short SHA from git at build time. A beta build adds `-beta` to the version; the Cargo version itself never changes. A build made without git shows just `GrokHub 2.10.96`.
+`--version` comes from `crates/grokhub-app/build.rs`, which reads the branch and short SHA from git at build time. A beta build adds `-beta` to the version; the Cargo version itself never changes. A build made without git shows just `GrokHub 2.10.97`.
 
 Limits: channels are Linux-only for now. `scripts/install-windows.ps1` has no `-Channel`, and Windows Setup always installs stable releases (a beta receipt on Windows never falls back to the stable release zip). The Update chip still only notices new releases, so on beta, use Settings → **Update** to pull new beta commits.
 

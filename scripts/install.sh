@@ -90,8 +90,18 @@ if [[ "$SWITCH" -eq 0 ]]; then
   fi
 fi
 if [[ "$SWITCH" -eq 1 ]]; then
-  if ! git diff --quiet || ! git diff --cached --quiet; then
+  CHANGED="$(git status --porcelain --untracked-files=no)"
+  if [[ "$CHANGED" == " M Cargo.lock" ]]; then
+    # A lone Cargo.lock rewrite comes from a cargo or rust-analyzer run without
+    # --locked, not from someone's edit. Set it aside under a name so it can be
+    # found again (git stash list). Never touch any other change.
+    STASH_MSG="grokhub install.sh: Cargo.lock set aside before --channel $CHANNEL"
+    git stash push -q -m "$STASH_MSG" -- Cargo.lock
+    echo "set aside a tool-made Cargo.lock change (git stash list: $STASH_MSG)"
+  elif [[ -n "$CHANGED" ]]; then
     echo "error: $ROOT has uncommitted changes; commit or stash them before --channel $CHANNEL" >&2
+    echo "changed files:" >&2
+    printf '%s\n' "$CHANGED" >&2
     exit 1
   fi
   git fetch origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
@@ -180,6 +190,11 @@ PREFIX="$PREFIX" bash "$ROOT/scripts/install-grok-cli.sh" \
 mkdir -p "$CONFIG_DIR"
 printf '%s\n' "$ROOT" > "$CONFIG_DIR/source"
 printf '%s\n' "$CHANNEL" > "$RECEIPT"
+if [[ "$SWITCH" -eq 1 ]]; then
+  # A switch drops the Beta auto-off baseline: turning Beta on starts a fresh
+  # one on the next check, and stable has none.
+  rm -f "$CONFIG_DIR/channel.beta-since"
+fi
 
 echo "installed $PREFIX/bin/grokhub ($("$PREFIX/bin/grokhub" --version 2>/dev/null || echo "channel $CHANNEL"))"
 echo "installed $PREFIX/bin/grokhub-hub"

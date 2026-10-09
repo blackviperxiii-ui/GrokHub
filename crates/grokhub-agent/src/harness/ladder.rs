@@ -5,10 +5,12 @@
 //!
 //! A hard-class step is never retried: it pauses at once. A denied or
 //! timed-out hard step stays denied until the user approves a fresh card.
+//! A failed screenshot pauses at once too: Retry and Backtrack both ask for
+//! another shot, and each one can be a new approval card.
 
 use std::collections::BTreeMap;
 
-use crate::harness::detect::{step_hash, Finding};
+use crate::harness::detect::{failed_result, step_hash, Finding};
 use crate::harness::hard::{hard_class, HardClass};
 use crate::harness::span::{redact_args, Origin, Span};
 
@@ -62,6 +64,16 @@ fn subject<'a>(finding: &Finding, spans: &'a [Span]) -> Option<&'a Span> {
         .iter()
         .filter_map(|e| spans.get(e.at))
         .find(|s| s.tool == finding.tool)
+}
+
+/// The finding is about a screenshot step that failed (refused, errored).
+pub fn failed_screenshot(finding: &Finding, spans: &[Span]) -> bool {
+    finding.tool.to_ascii_lowercase().contains("screenshot")
+        && finding
+            .evidence
+            .iter()
+            .filter_map(|e| spans.get(e.at))
+            .any(|s| s.tool == finding.tool && (failed_result(&s.result) || s.result.contains("NoAuthorized")))
 }
 
 /// Hard class that keeps the ladder from retrying: any step the finding
@@ -120,10 +132,12 @@ impl Ladder {
             .map(|e| e.span.clone())
             .collect::<Vec<_>>();
         let hard = hard_target(finding, spans);
+        let shot_failed = failed_screenshot(finding, spans);
         let n = self.tried.entry(target.clone()).or_insert(0);
         *n = n.saturating_add(1);
         let rung = match (hard, *n) {
             (Some(_), _) => Rung::Pause,
+            _ if shot_failed => Rung::Pause,
             (None, 1) => Rung::Retry,
             (None, 2) => Rung::Backtrack,
             _ => Rung::Pause,
@@ -133,6 +147,10 @@ impl Ladder {
                 "{}: hard-class {} is never retried on its own; it needs your approval",
                 finding.detector,
                 c.as_str()
+            ),
+            None if shot_failed => format!(
+                "{}: the screenshot failed; GrokHub does not take another one on its own",
+                finding.detector
             ),
             None => format!("{}: {}", finding.detector, finding.detail),
         };
@@ -380,6 +398,49 @@ mod tests {
         ];
         let f = claimed_click_no_change(&ok).remove(0);
         assert_eq!(Ladder::new().next(&f, &ok).rung, Rung::Retry);
+    }
+
+    #[test]
+    fn failed_screenshot_goes_straight_to_pause() {
+        let mut spans = vec![
+            span(
+                1,
+                "grokhub-desktop__screenshot",
+                r#"{"monitor":"all"}"#,
+                "allow",
+                "soft",
+                None,
+                "",
+            ),
+            span(2, "reply", "{}", "say", "soft", None, "Done.\nGOAL_COMPLETE"),
+        ];
+        spans[0].result =
+            "error: ScreenShot2: org.kde.KWin.ScreenShot2.Error.NoAuthorized".into();
+        let finding = Finding {
+            detector: "action_loop".into(),
+            tool: "grokhub-desktop__screenshot".into(),
+            detail: "`grokhub-desktop__screenshot` ran 3 times".into(),
+            evidence: vec![Evidence {
+                span: "chat-l:1".into(),
+                at: 0,
+                field: "result".into(),
+                quote: String::new(),
+            }],
+        };
+        let mut ladder = Ladder::new();
+        let step = ladder.next(&finding, &spans);
+        assert_eq!(step.rung, Rung::Pause);
+        assert_eq!(step.prompt, None);
+        assert_eq!(step.hard, None);
+        assert_eq!(
+            step.reason,
+            "action_loop: the screenshot failed; GrokHub does not take another one on its own"
+        );
+        assert_eq!(ladder.next(&finding, &spans).rung, Rung::Pause, "never climbs to retry");
+        // The same screenshot step that worked still starts at Retry.
+        spans[0].result = "ok".into();
+        assert!(!failed_screenshot(&finding, &spans));
+        assert_eq!(Ladder::new().next(&finding, &spans).rung, Rung::Retry);
     }
 
     #[test]
