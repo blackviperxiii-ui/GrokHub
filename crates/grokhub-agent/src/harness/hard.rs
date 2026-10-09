@@ -405,18 +405,29 @@ fn file_manager_window(args: &serde_json::Value) -> bool {
     FILE_MANAGER_WINDOWS.iter().any(|w| window.contains(w))
 }
 
+/// Arg hint the path A gate sets on a `delete_files` to the trash when a
+/// path's drive has no Recycle Bin (a network, removable or unknown drive on
+/// Windows). The server never sees it.
+pub const NO_BIN_HINT: &str = "_no_bin";
+
 /// What a card, park file, and span say about a `delete_files` call: the
-/// verb, the count, and every path, so Approve names exactly what goes.
+/// verb, the count, and every path, so Approve names exactly what goes. A
+/// trash move where there is no Recycle Bin (the [`NO_BIN_HINT`], or a
+/// `\\server\share` path) says the files are gone for good, because they are.
 pub fn delete_files_action(args: &serde_json::Value) -> String {
     let paths: Vec<&str> = args
         .get("paths")
         .and_then(|v| v.as_array())
         .map(|a| a.iter().filter_map(|p| p.as_str()).collect())
         .unwrap_or_default();
-    let verb = if args.get("to_trash").and_then(|v| v.as_bool()) == Some(true) {
-        "move to the trash"
-    } else {
+    let no_bin = args.get(NO_BIN_HINT).and_then(|v| v.as_bool()) == Some(true)
+        || paths.iter().any(|p| p.starts_with("\\\\"));
+    let verb = if args.get("to_trash").and_then(|v| v.as_bool()) != Some(true) {
         "delete"
+    } else if no_bin {
+        "delete permanently (no Recycle Bin on that drive)"
+    } else {
+        "move to the trash"
     };
     let noun = if paths.len() == 1 { "path" } else { "paths" };
     format!("{verb} {} {noun}: {}", paths.len(), paths.join(", "))
@@ -450,6 +461,26 @@ pub fn delete_targets(cmd: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// `powershell` / `pwsh` with `-EncodedCommand` or any prefix PowerShell
+/// takes for it (`-e`, `-en`, `-enc`, `-ec`, also with `/`), past launch
+/// flags and their values.
+fn encoded_pwsh(words: &[String]) -> bool {
+    words.iter().enumerate().any(|(i, w)| {
+        if !matches!(leaf(w).to_ascii_lowercase().as_str(), "powershell" | "pwsh") {
+            return false;
+        }
+        let mut j = i + 1;
+        while let Some(raw) = words.get(j).filter(|f| f.starts_with(['-', '/']) && f.len() > 1) {
+            let flag = format!("-{}", raw[1..].to_ascii_lowercase());
+            if flag == "-ec" || "-encodedcommand".starts_with(&flag) {
+                return true;
+            }
+            j += if PWSH_VALUE_FLAGS.contains(&flag.as_str()) { 2 } else { 1 };
+        }
+        false
+    })
 }
 
 /// Words of one shell segment. Single and double quotes group; backslashes
@@ -671,8 +702,9 @@ pub fn credential_action(args: &serde_json::Value) -> String {
 /// classifier stays the source of truth on paths A, B, and E. The Grok CLI
 /// credential-file rules ride along from `grokhub_acp::CLI_CREDENTIAL_DENY`.
 /// Each shell head has five forms: bare, `sudo`, and after `; `, `&& `, `| `.
-/// What GB rules can't express is listed in [`GB_DENY_GAPS`].
-pub const HEADLESS_DENY_RULES: &[&str] = &[
+/// [`HEADLESS_DENY_RULES`] adds the case, path, wrapper and encoded-command
+/// forms built from these. What GB rules can't express is listed in [`GB_DENY_GAPS`].
+const BASE_DENY_RULES: &[&str] = &[
     // Hard floor
     "Bash(rm -rf /)",
     "Bash(rm -rf /*)",
@@ -950,6 +982,95 @@ pub const HEADLESS_DENY_RULES: &[&str] = &[
     "MCPTool(grokhub-self__automation_delete)",
 ];
 
+/// Every path C `--deny` rule: [`BASE_DENY_RULES`], then the forms GB's
+/// literal, case-sensitive globs need to see what the cabin classifier
+/// already reads through (card 29 part 3):
+/// - Case: an UPPER and a Capitalized form of each [`CASE_HEADS`] rule
+///   (`REMOVE-ITEM x`, `Del x`). Cmd and PowerShell ignore case.
+/// - A full path: `/bin/rm x`, `C:\Windows\System32\shutdown.exe /s`.
+/// - A wrapper: `cmd /c del x`, `powershell -Command "Remove-Item x"`, `bash -c 'rm x'`.
+/// - Encoded PowerShell (`-EncodedCommand`, `-enc`, `-e`) is denied outright:
+///   its body can't be read by a rule or by the classifier.
+pub static HEADLESS_DENY_RULES: std::sync::LazyLock<Vec<&'static str>> = std::sync::LazyLock::new(|| {
+    let mut out: Vec<&'static str> = BASE_DENY_RULES.to_vec();
+    for rule in extra_deny_rules() {
+        if !out.contains(&rule.as_str()) {
+            out.push(Box::leak(rule.into_boxed_str()));
+        }
+    }
+    out
+});
+
+/// Shell heads Windows reads in any case (cmd built-ins, PowerShell cmdlets
+/// and aliases, and `.exe` / `.com` names).
+const CASE_HEADS: &[&str] = &[
+    "rm", "rmdir", "del", "erase", "rd", "remove-item", "remove-itemsafely", "clear-recyclebin", "shutdown",
+    "diskpart", "format", "format.com", "stop-computer", "restart-computer", "format-volume", "clear-disk",
+];
+/// The five head positions of [`BASE_DENY_RULES`].
+const HEAD_FORMS: &[&str] = &["", "sudo ", "*; ", "*&& ", "*| "];
+/// Programs that run from a full path (`/bin/rm`, `...\System32\shutdown.exe`).
+const PATH_HEADS: &[&str] = &[
+    "rm", "rmdir", "unlink", "shred", "wipefs", "trash", "trash-put", "shutdown", "reboot", "poweroff", "halt",
+    "diskpart", "format",
+];
+/// Deletes that come behind a wrapper: `cmd /c`, `powershell -Command` / `-c`, `bash -c`.
+const WRAPPED_HEADS: &[&str] = &["rm", "rmdir", "del", "erase", "rd", "remove-item", "Remove-Item", "shutdown"];
+const WRAPPERS: &[&str] = &["/c ", "/C ", "-c ", "-command ", "-Command "];
+/// PowerShell names and the `-EncodedCommand` spellings it accepts.
+const PWSH_NAMES: &[&str] = &["powershell", "PowerShell", "POWERSHELL", "pwsh"];
+const ENCODED_FLAGS: &[&str] = &[
+    "-e", "-E", "-ec", "-EC", "-en", "-enc", "-Enc", "-ENC", "-encodedcommand", "-EncodedCommand", "-ENCODEDCOMMAND",
+];
+
+fn capitalized(head: &str) -> String {
+    let mut c = head.chars();
+    c.next().map(|f| f.to_ascii_uppercase().to_string() + c.as_str()).unwrap_or_default()
+}
+
+fn extra_deny_rules() -> Vec<String> {
+    let mut out = Vec::new();
+    for rule in BASE_DENY_RULES {
+        let Some(body) = rule.strip_prefix("Bash(") else {
+            continue;
+        };
+        for form in HEAD_FORMS {
+            let Some(rest) = body.strip_prefix(form) else {
+                continue;
+            };
+            for head in CASE_HEADS {
+                let Some(tail) = rest.strip_prefix(head) else {
+                    continue;
+                };
+                if tail.starts_with([' ', '*']) {
+                    for cased in [head.to_ascii_uppercase(), capitalized(head)] {
+                        out.push(format!("Bash({form}{cased}{tail}"));
+                    }
+                }
+            }
+        }
+    }
+    for head in PATH_HEADS {
+        out.push(format!("Bash(*/{head} *)"));
+        out.push(format!("Bash(*\\{head} *)"));
+        out.push(format!("Bash(*\\{head}.exe *)"));
+    }
+    out.push("Bash(*\\format.com *)".into());
+    for head in WRAPPED_HEADS {
+        for wrap in WRAPPERS {
+            for quote in ["", "\"", "'"] {
+                out.push(format!("Bash(*{wrap}{quote}{head} *)"));
+            }
+        }
+    }
+    for name in PWSH_NAMES {
+        for flag in ENCODED_FLAGS {
+            out.push(format!("Bash(*{name}*{flag} *)"));
+        }
+    }
+    out
+}
+
 /// Hard patterns no GB `--deny` rule can express, with a sample each. GB
 /// rules match a shell command line or a tool name, never a tool's args or a
 /// separator without spaces. These stay gated on paths A, B, and E only, and a
@@ -958,10 +1079,10 @@ pub const HEADLESS_DENY_RULES: &[&str] = &[
 /// tool, so the cabin's watchdog checks its frames instead.
 pub const GB_DENY_GAPS: &[(&str, &str)] = &[
     ("doas rm notes.txt", "`doas` prefix (only `sudo` forms are listed)"),
-    ("/bin/rm notes.txt", "a head called by absolute path"),
     ("true&&rm notes.txt", "a separator with no space after it"),
-    ("cmd /c del notes.txt", "a wrapper (`cmd /c`, `powershell -c`, `bash -c`, `xargs`) in front of the head"),
+    ("rEmOvE-iTeM notes.txt", "a head in mixed case (lower, UPPER, Capitalized and PascalCase are listed)"),
     ("$f.InvokeVerb('delete')", "a Recycle Bin move through the Windows shell verb"),
+    ("powershell /enc ZQBjAGgAbwA=", "encoded PowerShell with `/` or an unlisted prefix (`-enco`, `-encodedc`)"),
     ("grokhub-desktop__type", "typed text into a password, PIN, OTP, 2FA, or verification-code field (args, not the name)"),
     (
         "grokhub-desktop__key",
@@ -1177,7 +1298,12 @@ fn command_class(cmd: &str) -> Option<HardClass> {
     for seg in &segs {
         let h = head(seg);
         let h = h.as_str();
-        if IRREVERSIBLE_HEADS.contains(&h) || IRREVERSIBLE_PHRASES.iter().any(|p| seg.contains(p)) {
+        let words: Vec<String> = seg.split_whitespace().map(unquote).collect();
+        // Its body can't be read, so it can't be shown as safe.
+        if encoded_pwsh(&words)
+            || IRREVERSIBLE_HEADS.contains(&h)
+            || IRREVERSIBLE_PHRASES.iter().any(|p| seg.contains(p))
+        {
             return Some(HardClass::IrreversibleOs);
         }
         let recycle_verb = seg.contains("invokeverb") && seg.contains("delete");
@@ -1227,7 +1353,8 @@ mod tests {
 
     #[test]
     fn headless_deny_rules_cover_the_floor_and_stubs() {
-        assert_eq!(HEADLESS_DENY_RULES.len(), 265);
+        assert_eq!(BASE_DENY_RULES.len(), 265);
+        assert_eq!(&HEADLESS_DENY_RULES[..265], BASE_DENY_RULES);
         assert_eq!(HEADLESS_DENY_RULES[259], "Bash(*consent.jsonl*)");
         assert_eq!(HEADLESS_DENY_RULES[261], "Write(**/consent.jsonl)");
         assert_eq!(HEADLESS_DENY_RULES[262], "MCPTool(grokhub-self__skill_delete)");
@@ -1246,7 +1373,7 @@ mod tests {
     /// GB rule `Kind(glob)` against a command line or a tool name. Stand-in
     /// for GB's matcher: `*` (and `**`) spans any text, everything else is literal.
     fn gb_denies(kind: &str, subject: &str) -> bool {
-        rule_hits(HEADLESS_DENY_RULES, kind, subject)
+        rule_hits(&HEADLESS_DENY_RULES, kind, subject)
     }
 
     fn rule_hits(rules: &[&str], kind: &str, subject: &str) -> bool {
@@ -1347,6 +1474,104 @@ mod tests {
         for tool in ["srv__list_files", "grokhub-desktop__click", "gmail__search_threads"] {
             assert!(!gb_denies("MCPTool", tool), "over-deny: {tool}");
         }
+    }
+
+    /// Card 29 part 3: case, full paths, wrappers and encoded PowerShell on path C.
+    #[test]
+    fn gb_rules_see_case_full_paths_wrappers_and_encoded_powershell() {
+        assert_eq!(HEADLESS_DENY_RULES.len(), 635);
+        let argv: usize = HEADLESS_DENY_RULES.iter().map(|r| "--deny".len() + r.len() + 4).sum();
+        assert!(argv < 24_000, "a Windows command line holds 32,767 chars: {argv}");
+        // G1: Windows reads these heads in any case.
+        for cmd in [
+            "REMOVE-ITEM notes.txt",
+            "Remove-item notes.txt",
+            "DEL notes.txt",
+            "Del notes.txt",
+            "cd x; RD /s /q out",
+            "dir && ERASE notes.txt",
+            "SHUTDOWN /s /t 0",
+            "Stop-computer -Force",
+            "RM notes.txt",
+        ] {
+            assert!(hard_shell(cmd), "classifier: {cmd}");
+            assert!(gb_denies("Bash", cmd), "no GB deny rule for `{cmd}`");
+        }
+        // A head called by its full path.
+        for cmd in [
+            "/bin/rm notes.txt",
+            "/usr/bin/shred -u notes.txt",
+            "cd /tmp && /sbin/reboot now",
+            "C:\\Windows\\System32\\shutdown.exe /s /t 0",
+            "C:\\Windows\\System32\\format.com D: /q",
+        ] {
+            assert!(hard_shell(cmd), "classifier: {cmd}");
+            assert!(gb_denies("Bash", cmd), "no GB deny rule for `{cmd}`");
+        }
+        // A delete behind a wrapper.
+        for cmd in [
+            "cmd /c del notes.txt",
+            "cmd.exe /C rd /s /q out",
+            "powershell -Command Remove-Item notes.txt",
+            "powershell -NoProfile -Command \"Remove-Item notes.txt\"",
+            "pwsh -c 'rm notes.txt'",
+            "bash -c \"rm -rf build\"",
+            "sh -c 'rmdir out'",
+        ] {
+            assert!(hard_shell(cmd), "classifier: {cmd}");
+            assert!(gb_denies("Bash", cmd), "no GB deny rule for `{cmd}`");
+        }
+        // G4: an encoded body can't be read, so it is denied outright on path C
+        // and parks a card everywhere else.
+        for cmd in [
+            "powershell -EncodedCommand ZQBjAGgAbwA=",
+            "powershell.exe -NoProfile -enc ZQBjAGgAbwA=",
+            "PowerShell -ExecutionPolicy Bypass -e ZQBjAGgAbwA=",
+            "pwsh -ec ZQBjAGgAbwA=",
+            "POWERSHELL -ENC ZQBjAGgAbwA=",
+        ] {
+            assert_eq!(
+                classify("run_terminal_command", &sh(cmd)),
+                HardHit::Class(HardClass::IrreversibleOs),
+                "classifier: {cmd}"
+            );
+            assert!(gb_denies("Bash", cmd), "no GB deny rule for `{cmd}`");
+        }
+        assert!(hard_shell("powershell /enc ZQBjAGgAbwA="));
+        // Ordinary Windows and shell work stays open.
+        for cmd in [
+            "powershell -ExecutionPolicy Bypass -File build.ps1",
+            "powershell -Command Get-ChildItem",
+            "cmd /c dir",
+            "echo -en hi",
+            "grep -e todo src/main.rs",
+            "bash -c \"cargo test\"",
+            "Get-Content notes.txt",
+            "/usr/bin/ls -la",
+        ] {
+            assert!(!hard_shell(cmd), "classifier over-deny: {cmd}");
+            assert!(!gb_denies("Bash", cmd), "GB over-deny: {cmd}");
+        }
+    }
+
+    /// G2: a trash move where Windows has no Recycle Bin is a permanent delete.
+    #[test]
+    fn a_trash_move_with_no_recycle_bin_says_it_deletes_for_good() {
+        let unc = serde_json::json!({ "paths": ["\\\\nas\\share\\a.txt"], "to_trash": true });
+        assert_eq!(
+            delete_files_action(&unc),
+            "delete permanently (no Recycle Bin on that drive) 1 path: \\\\nas\\share\\a.txt"
+        );
+        let usb = serde_json::json!({ "paths": ["E:\\a.txt", "E:\\b.txt"], "to_trash": true, NO_BIN_HINT: true });
+        assert_eq!(
+            delete_files_action(&usb),
+            "delete permanently (no Recycle Bin on that drive) 2 paths: E:\\a.txt, E:\\b.txt"
+        );
+        assert_eq!(desk_classify("delete_files", &usb), HardHit::Class(HardClass::Delete));
+        let fixed = serde_json::json!({ "paths": ["C:\\a.txt"], "to_trash": true });
+        assert_eq!(delete_files_action(&fixed), "move to the trash 1 path: C:\\a.txt");
+        let hint_off = serde_json::json!({ "paths": ["C:\\a.txt"], "to_trash": true, NO_BIN_HINT: false });
+        assert_eq!(delete_files_action(&hint_off), "move to the trash 1 path: C:\\a.txt");
     }
 
     #[test]
