@@ -201,6 +201,7 @@ pub fn run_episode(
     if run.ep.trail.is_empty() {
         let goal = format!("goal: {}", run.ep.goal.chars().take(GOAL_CAP).collect::<String>());
         run.write(run.ep.marker("begin", "open", &goal));
+        run.recall_lessons();
     }
     if let Some(end) = run.ep.ended {
         return run.out(EpisodeStop::Ended(end), String::new());
@@ -568,9 +569,23 @@ impl Run<'_, '_> {
         self.write(span);
     }
 
+    /// The best past lessons for this goal go at the top of the view, and a
+    /// quiet `lesson_used` marker names each one.
+    fn recall_lessons(&mut self) {
+        let (block, used) = lessons::past_lessons(&lessons::load(self.k.config_dir), &self.ep.goal, self.k.held);
+        self.view.set_lessons(&block);
+        for l in used {
+            let claim = format!("Used lesson: {}", lessons::lesson_line(&l));
+            self.write(self.ep.marker("lesson_used", &l.episode_id, &claim));
+            self.ep.used_lessons.push(l.episode_id);
+        }
+    }
+
     /// An episode that had to recover writes one lesson, and a quiet
-    /// `lesson` marker names it. A trivial run writes nothing.
+    /// `lesson` marker names it. A trivial run writes nothing. Lessons it
+    /// started with count a failure when it still didn't finish.
     fn learn(&mut self, why: EpisodeEnd) {
+        let _ = lessons::note_used(self.k.config_dir, &self.ep.used_lessons, why);
         let Some(lesson) = lessons::derive(self.ep, why, self.now(), self.k.held) else {
             return;
         };

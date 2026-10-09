@@ -634,6 +634,7 @@ fn dream_and_the_weekly_self_review_run_once_on_the_same_night_at_a_custom_hour(
         episode_id: format!("ep-{ts}"),
         ts,
         seen: 1,
+        failed_after: 0,
     };
     lessons::append(&root, &lesson(now - 2 * DAY)).unwrap();
     lessons::append(&root, &lesson(now - DAY)).unwrap();
