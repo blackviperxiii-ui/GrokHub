@@ -188,9 +188,39 @@ pub fn open_connection_token(config_dir: &Path, name: &str) -> Option<String> {
     LearnedVault::new(config_dir).open(&token_aad(name), sealed.trim()).ok()
 }
 
-/// Remove a connection's sealed token (its entry left the config).
+/// Remove a connection's sealed token and its MCP sign-in (its entry left the config).
 pub(crate) fn forget_connection_token(config_dir: &Path, name: &str) {
     if let Ok(path) = token_path(config_dir, name) {
+        let _ = fs::remove_file(path);
+    }
+    forget_mcp_signin(config_dir, name);
+}
+
+fn signin_path(config_dir: &Path, name: &str) -> Result<PathBuf, String> {
+    Ok(config_dir.join(TOKEN_DIR).join(format!("{}.signin.sealed", entry_id(name)?)))
+}
+
+fn signin_aad(name: &str) -> String {
+    format!("grokhub-mcp-signin:v1:{name}")
+}
+
+/// Seal one MCP server's browser sign-in (client and tokens, as JSON). Fails
+/// closed when the keyring has no key: nothing is written.
+pub(crate) fn seal_mcp_signin(config_dir: &Path, name: &str, json: &str) -> Result<(), String> {
+    let path = signin_path(config_dir, name)?;
+    let sealed = LearnedVault::new(config_dir).seal(&signin_aad(name), json)?;
+    private_write(&path, sealed.as_bytes())
+}
+
+/// The sign-in sealed for one MCP server. `None` when there is none or it can't be opened.
+pub(crate) fn open_mcp_signin(config_dir: &Path, name: &str) -> Option<String> {
+    let sealed = fs::read_to_string(signin_path(config_dir, name).ok()?).ok()?;
+    LearnedVault::new(config_dir).open(&signin_aad(name), sealed.trim()).ok()
+}
+
+/// Sign out: the sealed sign-in goes.
+pub(crate) fn forget_mcp_signin(config_dir: &Path, name: &str) {
+    if let Ok(path) = signin_path(config_dir, name) {
         let _ = fs::remove_file(path);
     }
 }
