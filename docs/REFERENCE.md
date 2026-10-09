@@ -2,12 +2,12 @@
 
 Native Rust cabin. No Electron. No Tauri. One repo, one `main`, one version — two ship artifacts.
 
-**v2.10.98** — Sending a message is faster (the router no longer re-reads its log on every message), Inhabit can no longer be taken over by a phone or a misnamed computer and approvals hide typed keys and tokens, the paused-job suggestion names the job and opens it, plus the 2.10.98 fixes for the chat 400, Labs → Beta, KDE screenshots and router notes.
+**v2.10.99** — Beta promotion with full new agent harness (ladder/audit/gates/proactive/self-manage), ideas board, learning engine, feed_ui + chips overhaul, AMR, desktop_mcp, and speed/guard improvements.
 
 | Platform | Artifact | Latest |
 |----------|----------|--------|
-| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.98.tar.gz`, AUR | **v2.10.98** |
-| **Windows** (x86_64) | `GrokHub-Setup-2.10.98.exe`, `grokhub-windows-v2.10.98.zip` | **v2.10.98** |
+| **Linux** (Arch / CachyOS) | `grokhub-linux-v2.10.99.tar.gz`, AUR | **v2.10.99** |
+| **Windows** (x86_64) | `GrokHub-Setup-2.10.99.exe`, `grokhub-windows-v2.10.99.zip` | **v2.10.99** |
 
 Windows vs Linux in the cabin is `cfg(windows)` / `cfg(unix)`. The older [GrokHub-Windows](https://github.com/blackviperxiii-ui/GrokHub-Windows) fork is an archive source — new cabin work lands here.
 

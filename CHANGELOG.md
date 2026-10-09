@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.10.99 — 2026-10-09
+
+- **Beta promotion (squash-merged)**: Full new agent harness (ladder, audit, approval gates, hard gates, proactive, self-manage, span, consent, park, trail), ideas board + learning engine, major feed_ui/chips/board_ui overhaul, autonomy + AMR improvements, desktop_mcp parity, native engine fixes, self-review, pulse, router R3/R4 updates, and speed/guard enhancements from cabin-2.10.30.
+- All new harness docs in `docs/compass/harness.md` and updated compass reference.
+- Linux: `grokhub-linux-v2.10.99.tar.gz` and AUR `pkgver=2.10.99`.
+- Windows: `GrokHub-Setup-2.10.99.exe` and `grokhub-windows-v2.10.99.zip`.
+
 ## 2.10.98 — 2026-10-08
 
 - Security: a phone, or a computer paired under another computer's name, can no longer take over a session through Inhabit. Phones can't pair, a bundle goes only to the computer it names by id, and a bundle with no destination goes to nobody. Risky typed text on a hard card and in the inbox no longer shows API keys, GitHub tokens or bearer tokens; other typing shows as "type N chars into <window>".
