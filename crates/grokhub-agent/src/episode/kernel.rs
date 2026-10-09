@@ -22,6 +22,7 @@ use crate::route::{call_model, CallTokens, ModelCall, BACKGROUND_EFFORT, CLASS_C
 use crate::run::{HaltCheck, LoopEvent, SteerQueue};
 use crate::tools::{self, DesktopOps, ToolCtx, ToolOutput};
 use crate::CancelToken;
+use grokhub_core::desktop_mcp::CAPTURE_FAILED_HEAD;
 
 /// What every worker step is told, after the cabin's own system prompt.
 /// Fixed text, so the prompt prefix stays cacheable.
@@ -919,9 +920,12 @@ fn arg_line(name: &str, arguments: &str) -> String {
     }
 }
 
-/// What a step line and its span keep of a result: the text, never the image.
+/// What a step line and its span keep of a result: the text, never the
+/// image. A "no capture backend works" note is kept whole so the pause names
+/// every backend's error.
 fn result_text(out: &ToolOutput) -> String {
-    let t: String = out.text.chars().take(super::STEP_RESULT_CAP).collect();
+    let cap = if out.text.contains(CAPTURE_FAILED_HEAD) { super::CAPTURE_NOTE_CAP } else { super::STEP_RESULT_CAP };
+    let t: String = out.text.chars().take(cap).collect();
     if out.failed && !t.starts_with("failed") {
         format!("failed: {t}")
     } else {

@@ -12,12 +12,31 @@ pub enum InputRouteId {
     Ydotool,
 }
 
-/// Capture after a KDE session. Grim stays the wlroots path and is not in this list.
+/// Screenshot backends. KDE tries ScreenShot2, spectacle, then the portal;
+/// wlroots tries grim, then the portal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CaptureRouteId {
     ScreenShot2,
     Spectacle,
     PortalScreenshot,
+    Grim,
+}
+
+/// Rounds through every backend before a screenshot fails.
+pub const CAPTURE_PASSES: usize = 2;
+
+/// Opens the one note a screenshot gives after every backend failed
+/// [`CAPTURE_PASSES`] times. The recovery ladder pauses on it, and only on it.
+pub const CAPTURE_FAILED_HEAD: &str = "Can't capture the screen:";
+
+/// "Can't capture the screen: KWin ScreenShot2 denied …; portal Screenshot timed out."
+/// One clause per backend, its latest error.
+pub fn capture_failed_note(failures: &[(CaptureRouteId, String)]) -> String {
+    let parts: Vec<String> = failures
+        .iter()
+        .map(|(id, err)| format!("{}: {}", capture_route_label(*id), err.trim().trim_end_matches('.')))
+        .collect();
+    format!("{CAPTURE_FAILED_HEAD} {}.", parts.join("; "))
 }
 
 pub fn input_route_order() -> &'static [InputRouteId] {
@@ -37,6 +56,10 @@ pub fn capture_route_order() -> &'static [CaptureRouteId] {
     ]
 }
 
+pub fn wlroots_capture_order() -> &'static [CaptureRouteId] {
+    &[CaptureRouteId::Grim, CaptureRouteId::PortalScreenshot]
+}
+
 pub fn input_route_label(route: InputRouteId) -> &'static str {
     match route {
         InputRouteId::Libei => "RemoteDesktop portal (libei)",
@@ -51,6 +74,7 @@ pub fn capture_route_label(route: CaptureRouteId) -> &'static str {
         CaptureRouteId::ScreenShot2 => "KWin ScreenShot2",
         CaptureRouteId::Spectacle => "spectacle",
         CaptureRouteId::PortalScreenshot => "portal Screenshot",
+        CaptureRouteId::Grim => "grim",
     }
 }
 
