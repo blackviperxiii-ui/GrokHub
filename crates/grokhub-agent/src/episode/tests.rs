@@ -32,6 +32,8 @@ enum Act {
     Zoom(&'static str),
     Reads(usize),
     Done,
+    /// Done, with a `VERIFY_OK` of its own: no detector finding on a reject.
+    DoneSelfChecked,
     Say,
     Shell(&'static str),
 }
@@ -44,6 +46,10 @@ struct FakeModel {
     judge_calls: Mutex<Vec<ResponsesRequest>>,
     fold_calls: Mutex<Vec<ResponsesRequest>>,
     judge_says: &'static str,
+    /// The first this-many checker calls fail to run.
+    judge_errors: usize,
+    /// From this checker call (0-based) on, it says this instead.
+    judge_later: Option<(usize, &'static str)>,
     clock: Arc<AtomicU64>,
     tick_ms: u64,
     steer: Option<(usize, SteerQueue)>,
@@ -76,8 +82,19 @@ impl ModelClient for FakeModel {
         let system = first_text(req, 0);
         let usage = Usage { input_tokens: 1_000, output_tokens: 20, reasoning_tokens: 5, cost_in_usd_ticks: 10, cached_tokens: 0 };
         if system == JUDGE_SYSTEM {
-            self.judge_calls.lock().unwrap().push(req.clone());
-            return Ok(TurnOutput { text: self.judge_says.into(), reasoning: String::new(), calls: vec![], usage });
+            let n = {
+                let mut calls = self.judge_calls.lock().unwrap();
+                calls.push(req.clone());
+                calls.len() - 1
+            };
+            if n < self.judge_errors {
+                return Err(ClientError::Protocol("checker offline".into()));
+            }
+            let says = match self.judge_later {
+                Some((from, later)) if n >= from => later,
+                _ => self.judge_says,
+            };
+            return Ok(TurnOutput { text: says.into(), reasoning: String::new(), calls: vec![], usage });
         }
         if system == FOLD_SYSTEM {
             self.fold_calls.lock().unwrap().push(req.clone());
@@ -120,6 +137,7 @@ impl ModelClient for FakeModel {
                 (0..k).map(|i| call(n * 100 + i, "read_file", json!({"path": format!("missing-{i}.txt")}))).collect(),
             ),
             Act::Done => ("All set.\nGOAL_COMPLETE".into(), vec![]),
+            Act::DoneSelfChecked => ("Saved it.\nVERIFY_OK\nGOAL_COMPLETE".into(), vec![]),
             Act::Say => ("Which network should I pick?".into(), vec![]),
             Act::Shell(cmd) => (String::new(), vec![call(n, "run_terminal_command", json!({"command": cmd}))]),
         };
@@ -257,6 +275,8 @@ fn rig(label: &str, script: Script) -> Rig {
             judge_calls: Mutex::new(vec![]),
             fold_calls: Mutex::new(vec![]),
             judge_says: "VERIFY_OK",
+            judge_errors: 0,
+            judge_later: None,
             clock: Arc::clone(&clock),
             tick_ms: 1_000,
             steer: None,
@@ -779,4 +799,122 @@ fn a_long_goal_reaches_the_worker_and_the_checker_whole_and_spans_keep_200() {
         assert!(s.goal_step.chars().count() <= GOAL_CAP, "{}", s.goal_step.chars().count());
     }
     assert_eq!(r.spans().iter().find(|s| is_step(s)).unwrap().goal_step.chars().count(), GOAL_CAP);
+}
+
+/// The `harness_recovery` spans in order: (decision, detector, claim).
+fn recoveries(spans: &[crate::harness::Span]) -> Vec<(String, String, String)> {
+    spans
+        .iter()
+        .filter(|s| s.tool == crate::harness::RECOVERY_TOOL)
+        .map(|s| {
+            let args: Value = serde_json::from_str(&s.args_redacted).unwrap();
+            (s.decision.clone(), args["detector"].as_str().unwrap_or("").to_string(), s.claim.clone())
+        })
+        .collect()
+}
+
+#[test]
+fn a_reject_with_no_finding_replans_with_the_reason_and_later_verifies() {
+    let mut r = rig("reject-replan", Box::new(|n| match n {
+        0 => Act::Click(5),
+        1 => Act::DoneSelfChecked,
+        2 => Act::Click(6),
+        _ => Act::Done,
+    }));
+    r.model.judge_says = "REJECT: notes.txt is not saved";
+    r.model.judge_later = Some((1, "VERIFY_OK"));
+    let mut ep = r.episode("Save notes.txt in the editor");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified), "a reject never leaves it waiting");
+    let spans = r.spans();
+    assert_eq!(
+        recoveries(&spans),
+        vec![("replan".to_string(), "verify_reject".to_string(), "verify_reject: notes.txt is not saved".to_string())]
+    );
+    let replan = spans.iter().find(|s| s.tool == crate::harness::RECOVERY_TOOL).unwrap();
+    assert_eq!(replan.origin, crate::harness::Origin::Repair);
+    let next = r.model.worker_calls.lock().unwrap()[2].clone();
+    assert!(
+        first_text(&next, 2).contains(&format!("GrokHub's check: {REPLAN_NOTE} The independent check said: notes.txt is not saved")),
+        "{}",
+        first_text(&next, 2)
+    );
+    let checks: Vec<&str> = spans.iter().filter(|s| s.tool == VERIFY_TOOL).map(|s| s.result.as_str()).collect();
+    assert_eq!(checks, vec!["fail", "pass"]);
+    assert_eq!(r.model.judge_calls.lock().unwrap().len(), 2);
+    assert_eq!(ep.ended, Some(EpisodeEnd::Verified));
+}
+
+#[test]
+fn a_checker_that_cannot_run_is_retried_then_escalated_and_passes() {
+    let mut r = rig("checker-escalate", clicks_then_done(1));
+    r.model.judge_errors = 2;
+    let mut ep = r.episode("Turn on Wi-Fi in Settings");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(r.model.judge_calls.lock().unwrap().len(), 3);
+    let spans = r.spans();
+    let rec = recoveries(&spans);
+    assert_eq!(rec.len(), 2);
+    assert_eq!((rec[0].0.as_str(), rec[0].1.as_str()), ("retry", "checker_error"));
+    assert_eq!((rec[1].0.as_str(), rec[1].1.as_str()), ("escalate", "checker_error"));
+    assert!(rec[0].2.starts_with("checker_error: ") && rec[0].2.contains("checker offline"), "{}", rec[0].2);
+    let check = spans.iter().find(|s| s.tool == VERIFY_TOOL).unwrap();
+    assert_eq!(check.result, "pass");
+    assert_eq!(check.tokens.as_ref().unwrap().class, "episode:step", "the last try routes as the worker's class");
+    assert_eq!(r.model.worker_calls.lock().unwrap().len(), 2, "the worker was not sent back");
+}
+
+#[test]
+fn a_checker_still_down_after_escalating_replans_as_checker_unavailable() {
+    let mut r = rig("checker-down", Box::new(|_| Act::Done));
+    r.model.judge_errors = 3;
+    let mut ep = r.episode("Turn on Wi-Fi in Settings");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    let rec = recoveries(&r.spans());
+    let decisions: Vec<(&str, &str)> = rec.iter().map(|(d, det, _)| (d.as_str(), det.as_str())).collect();
+    assert_eq!(decisions, vec![("retry", "checker_error"), ("escalate", "checker_error"), ("replan", "verify_reject")]);
+    assert_eq!(rec[2].2, "verify_reject: checker unavailable");
+    let next = r.model.worker_calls.lock().unwrap()[1].clone();
+    assert!(first_text(&next, 2).contains("The independent check said: checker unavailable"), "{}", first_text(&next, 2));
+    assert_eq!(r.model.judge_calls.lock().unwrap().len(), 4, "three tries, then the next claim's check");
+}
+
+#[test]
+fn the_same_reject_three_times_on_an_unchanged_screen_ends_with_a_named_note() {
+    let mut r = rig("same-reject", Box::new(|_| Act::Done));
+    r.desk.still = true;
+    r.model.judge_says = "REJECT: the Wi-Fi toggle is still off";
+    let mut ep = r.episode("Turn on Wi-Fi in Settings");
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Unconfirmed));
+    assert_eq!(out.reply, "Couldn't confirm: Turn on Wi-Fi in Settings — checker says the Wi-Fi toggle is still off");
+    assert_eq!(ep.ended, Some(EpisodeEnd::Unconfirmed));
+    assert_eq!(r.model.judge_calls.lock().unwrap().len(), 3);
+    let spans = r.spans();
+    let end = spans.last().unwrap();
+    assert_eq!((end.tool.as_str(), end.decision.as_str(), end.result.as_str()), (EPISODE_TOOL, "end", "unconfirmed"));
+    assert!(r.parks.posted.lock().unwrap().is_empty(), "no card");
+    assert_eq!(EpisodeEnd::Unconfirmed.as_str(), "unconfirmed");
+
+    // The same reject while the screen keeps changing keeps going.
+    let mut r = rig("same-reject-moving", Box::new(|n| if n % 2 == 0 { Act::Done } else { Act::Click(n as u32) }));
+    r.model.judge_says = "REJECT: the Wi-Fi toggle is still off";
+    r.model.judge_later = Some((4, "VERIFY_OK"));
+    let mut ep = r.episode("Turn on Wi-Fi in Settings");
+    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(r.model.judge_calls.lock().unwrap().len(), 5);
+}
+
+#[test]
+fn note_reject_counts_only_the_same_reason_on_the_same_screen() {
+    let mut ep = Episode::begin("ep-r", CHAT, "Save notes.txt", T0, &[]);
+    assert!(!ep.note_reject("not saved", "aaa"));
+    assert!(!ep.note_reject("not saved", "aaa"));
+    assert!(!ep.note_reject("not saved", "bbb"), "the screen changed: the count starts over");
+    assert!(!ep.note_reject("wrong folder", "bbb"), "another reason starts over");
+    assert!(!ep.note_reject("wrong folder", "bbb"));
+    assert!(ep.note_reject("wrong folder", "bbb"));
+    assert_eq!(ep.last_reject, Some(("wrong folder".into(), "bbb".into(), 3)));
 }
