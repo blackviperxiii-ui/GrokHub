@@ -31,6 +31,7 @@ mod slash_parity;
 mod sse;
 mod subagent;
 pub mod tasks;
+pub mod timing;
 pub mod tokens;
 mod tools;
 mod unattended;

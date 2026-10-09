@@ -4,10 +4,11 @@
 //! signal is `None` (written as `null`), never a guess.
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use grokhub_core::outcome::{read_outcomes, OutcomeResult};
 
-use crate::harness::{read_spans_tail, Origin, Span, VERIFY_TOOL};
+use crate::harness::{span_path, Origin, Span, SpanTail, VERIFY_TOOL};
 
 /// What VerifyGate said about an episode step. The checker's reason text stays on its span.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,22 +79,46 @@ pub struct SpanVerifySource {
     pub session: String,
 }
 
+/// Chat span files followed at once for VerifyGate lookups.
+const VERIFY_TAILS: usize = 32;
+
+/// Each followed chat span file keeps only its decided checks: `(episode, verdict)`.
+static TAILS: Mutex<Vec<SpanTail<(String, VerifySignal)>>> = Mutex::new(Vec::new());
+
+fn keep_check(s: Span) -> Option<(String, VerifySignal)> {
+    if s.tool != VERIFY_TOOL {
+        return None;
+    }
+    match s.result.as_str() {
+        "pass" => Some((s.episode, VerifySignal::Ok)),
+        "fail" => Some((s.episode, VerifySignal::Reject)),
+        _ => None,
+    }
+}
+
 impl SpanVerifySource {
-    /// Every decided VerifyGate check of `episode`, oldest first.
+    /// Every decided VerifyGate check of `episode`, oldest first, from the
+    /// newest [`VERIFY_SCAN_LINES`] lines of the chat's span file (followed
+    /// in memory, so a step parses only the lines added since the last one).
     pub fn checks(&self, episode: &str) -> Vec<VerifySignal> {
         if episode.is_empty() || self.session.is_empty() {
             return Vec::new();
         }
-        let (spans, _) = read_spans_tail(&self.config_dir, &self.session, VERIFY_SCAN_LINES);
-        spans
-            .iter()
-            .filter(|s| s.tool == VERIFY_TOOL && s.episode == episode)
-            .filter_map(|s| match s.result.as_str() {
-                "pass" => Some(VerifySignal::Ok),
-                "fail" => Some(VerifySignal::Reject),
-                _ => None,
-            })
-            .collect()
+        let path = span_path(&self.config_dir, &self.session);
+        let mut tails = TAILS.lock().unwrap_or_else(|e| e.into_inner());
+        let at = match tails.iter().position(|t| t.path() == path) {
+            Some(i) => i,
+            None => {
+                if tails.len() >= VERIFY_TAILS {
+                    tails.remove(0);
+                }
+                tails.push(SpanTail::new(path, VERIFY_SCAN_LINES, keep_check));
+                tails.len() - 1
+            }
+        };
+        let tail = &mut tails[at];
+        tail.refresh();
+        tail.newest(VERIFY_SCAN_LINES).into_iter().filter(|(ep, _)| ep == episode).map(|(_, v)| v).collect()
     }
 }
 

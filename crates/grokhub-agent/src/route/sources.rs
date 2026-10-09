@@ -209,6 +209,7 @@ pub fn probe_span(call: &ProbeCall, reply: &ProbeReply) -> Span {
 
 /// Probe one model for real: guarded, spanned, with the gap between calls slept.
 pub fn probe_model(config_dir: &Path, bearer: &str, meta: &ModelMeta, cost: CostClass) -> ProbeResult {
+    let _lap = crate::timing::lap("route:onboarding_probe");
     let _origin = OriginScope::enter(Origin::SelfManage);
     let mut transport = XaiProbeTransport { bearer: bearer.to_string() };
     let mut guard_fn = || guard(config_dir, RESPONSES_URL).is_ok();
@@ -224,6 +225,7 @@ pub fn probe_model(config_dir: &Path, bearer: &str, meta: &ModelMeta, cost: Cost
 /// build runs on the real wire: guarded, spanned as `background:eval`
 /// (origin `self_manage`), only on `included` routes.
 pub fn rebuild_table(config_dir: &Path, plan_bearer: Option<&str>, force: bool, now_ms: u64) -> super::table::Rebuilt {
+    let _lap = crate::timing::lap("route:table_rebuild");
     let _origin = OriginScope::enter(Origin::SelfManage);
     let Some(bearer) = plan_bearer else {
         return super::table::rebuild(config_dir, None, force, now_ms);
