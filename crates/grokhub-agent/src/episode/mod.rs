@@ -135,6 +135,8 @@ pub struct StepShape {
 
 /// How much of a result a step line keeps.
 pub const STEP_RESULT_CAP: usize = 120;
+/// How much of a "Can't capture the screen" note a span keeps.
+pub const CAPTURE_NOTE_CAP: usize = 600;
 
 impl StepShape {
     /// The step's one line in the episode view.
