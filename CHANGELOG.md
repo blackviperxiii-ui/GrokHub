@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Every card on your feed now names the thing it's about. A card that can't name its item isn't posted at all, so you won't see a bare "Automation finished" or "Pick that job back up?". The router's cards name the model or step: "Paused: grok-4.7 isn't answering", "Your plan no longer includes grok-4.3", "Auto now thinks harder on everyday chat". A paused job's idea no longer says "That job is still paused". On the Ideas board, situation and router suggestions keep their own title instead of reading "I can paused: …". Crash, screen-recording and audio-check cards no longer say "Your automation … finished". Settings → Permissions now says calendar and mail are read through Grok Build's Google Calendar and Gmail connectors.
+
 ## 2.12.0 — 2026-10-09
 
 - When GrokHub isn't sure you'd want something done on its own, it now shows a one-tap suggestion that names the item ("Tidy Downloads: move 14 installers to ~/Downloads/old") with a Do it button, instead of asking "Should I …?". Do it runs it once through the normal checks. Dismiss is quiet: no prompt, the topic stays off your feed for the rest of the day, and GrokHub counts it as a mild no. "Don't do this again" now also means it won't suggest it again. Sending, paying, deleting, credentials and irreversible system steps still wait on the white approval card.

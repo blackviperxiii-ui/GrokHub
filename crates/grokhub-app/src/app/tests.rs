@@ -12262,7 +12262,8 @@ fn scope_rows_are_all_off_under_what_grokhub_can_read() {
     }
     assert!(!p.filled.iter().any(|r| r.contains(p.pill_by("Sync to paired computers", "Allow"))), "Sync's Allow too");
     assert!(!p.has("Revoke"), "nothing granted, nothing to revoke");
-    assert!(p.has("Off. Your calendar events."), "plain hints");
+    assert!(p.has("Off. Your calendar events, read through Grok Build's Google Calendar connector."), "plain hints");
+    assert!(p.has("Off. Your mail, read through Grok Build's Gmail connector."), "the hint names where mail is read");
     // SB-04: the folder row offers the native dialog next to the typed path.
     let choose = p.pill_by("Files in a folder", super::scope_ui::CHOOSE_FOLDER);
     assert!((choose.y - p.pill_by("Files in a folder", "Allow").y).abs() < 2.0, "the dialog button sits by the folder's Allow");
@@ -12305,7 +12306,7 @@ fn a_scope_is_granted_by_a_pointer_click_only_and_revoked_from_settings_or_priva
     let revoke = p.pill_by("Installed apps", "Revoke");
     assert!(!p.filled.iter().any(|r| r.contains(revoke)), "Revoke is a ghost");
     assert!(p.texts.iter().any(|t| t.0.starts_with("On since ") && t.0.ends_with("how often you open them.")));
-    assert!(p.has("Off. Your mail."));
+    assert!(p.has("Off. Your mail, read through Grok Build's Gmail connector."));
 
     // A folder: typed, then clicked. Home itself is refused even with a click.
     let home = std::env::var("HOME").unwrap_or_default();
@@ -18133,6 +18134,178 @@ fn chat_find_bar_paints_and_steps_with_the_arrows() {
     });
     assert!(app.find.open);
     assert_eq!(app.find.label(), "2 of 2");
+}
+
+/// The first card on the feed that `pick` matches, or a failure naming `site`.
+fn posted_card(cabin: &Cabin, site: &str, pick: impl Fn(&UpdateCard) -> bool) -> UpdateCard {
+    cabin.updates.iter().find(|c| pick(c)).cloned().unwrap_or_else(|| panic!("{site} posted no card: {:?}", cabin.updates))
+}
+
+/// Fns in this crate's live code that build or post a Home card.
+fn app_feed_post_sites() -> std::collections::BTreeSet<String> {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut sites = std::collections::BTreeSet::new();
+    let mut dirs = vec![src];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+                continue;
+            }
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            if !name.ends_with(".rs") || name.ends_with("tests.rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+            let live = text.split("\n#[cfg(test)]\nmod ").next().unwrap();
+            let mut current = String::new();
+            for line in live.lines() {
+                let decl = line.trim_start().trim_start_matches("pub(super) ").trim_start_matches("pub(crate) ").trim_start_matches("pub ");
+                if let Some(rest) = decl.strip_prefix("fn ") {
+                    current = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                }
+                let posts = line.contains("post_feed_card(") || line.contains("post_update(");
+                if (posts && current != "post_feed_card") || line.contains("-> grokhub_core::UpdateCard") || line.contains("-> UpdateCard") {
+                    sites.insert(current.clone());
+                }
+            }
+        }
+    }
+    sites
+}
+
+/// Every Home card the cabin posts names its item: one row per post site,
+/// driven through the site where a test cabin can, else built from the same
+/// call the site makes. A new site with no row fails here.
+#[test]
+fn every_home_card_the_cabin_posts_names_its_item() {
+    use grokhub_agent::route::heal::{joined_messages, pause_msg};
+    use grokhub_agent::route::tune;
+    use grokhub_core::proactive::{proactive_card, Candidate, CandidateSource, ProactiveRoute};
+    let _g = config::hold_test_config();
+    let root = config::test_config_root("feed-names");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let _pin = config::TestConfigDir::set(root.clone());
+    let mut cabin = Cabin::quiet_for_test();
+    let now = now_ms();
+    let mut rows: Vec<(&str, UpdateCard, &str)> = Vec::new();
+
+    cabin.note_automation_done("auto-1", "Nightly backup", "Copied 3 files.");
+    rows.push(("note_automation_done", posted_card(&cabin, "note_automation_done", |c| c.source_id == "auto-1"), "Nightly backup"));
+    cabin.note_schedule_created("sched-1", "Morning brief", "every day at 8:00");
+    rows.push(("note_schedule_created", posted_card(&cabin, "note_schedule_created", |c| c.source_id == "sched-1"), "Morning brief"));
+    cabin.automations.push(health_job("job-7"));
+    cabin.note_auto_failed("job-7", "The disk is full.");
+    rows.push(("note_auto_failed", posted_card(&cabin, "note_auto_failed", |c| c.title.ends_with(" failed")), "Board summary"));
+    cabin.live_mut().push(("user".into(), "Index ~/Projects".into()));
+    cabin.post_turn_crash();
+    rows.push(("post_turn_crash", posted_card(&cabin, "post_turn_crash", grokhub_core::is_crash_card), "Index ~/Projects"));
+    cabin.deliver_heal(super::router_ui::HealOut {
+        msgs: [vec![pause_msg("grok-4.7", "It failed 3 times in a row.", &[])], joined_messages(&["grok-4.8".to_string()])].concat(),
+        cleared: Vec::new(),
+    });
+    rows.push(("deliver_heal", posted_card(&cabin, "deliver_heal", |c| c.title.starts_with("Paused:")), "grok-4.7"));
+    rows.push(("deliver_heal", posted_card(&cabin, "deliver_heal", |c| c.source_id == "new:grok-4.8"), "grok-4.8"));
+    let promoted = tune::Candidate {
+        id: "chat:default#3".into(),
+        class: "chat:default".into(),
+        change: Some(tune::Change::Order { model: "grok-4-fast".into() }),
+        stage: tune::Stage::Watch,
+        promoted_at: Some(1_791_298_800_000),
+        baseline: Some(tune::Snap { n: 400, pass_pct: 85.0, rework_pct: 4.0, cost_per_step: 0.0100, p50_ms: 2_000, p95_ms: 4_000 }),
+        promoted_snap: Some(tune::Snap { n: 60, pass_pct: 92.0, rework_pct: 3.0, cost_per_step: 0.0088, p50_ms: 1_600, p95_ms: 3_200 }),
+        ..tune::Candidate::default()
+    };
+    cabin.post_why_cards(&tune::TuneState { candidates: vec![promoted], ..tune::TuneState::default() }, &["chat:default#3".to_string()]);
+    rows.push(("post_why_cards", posted_card(&cabin, "post_why_cards", |c| c.source_id.starts_with("router-why:")), "grok-4-fast"));
+    cabin.post_screen_done("Screen recording 0:42: video stutters on 4K", std::path::Path::new("rec-1"), "", Err("No xAI key.".into()));
+    rows.push(("post_screen_done", posted_card(&cabin, "post_screen_done", |c| c.source_id.starts_with("screenrec:")), "video stutters on 4K"));
+    let report = grokhub_core::audio_check::AudioReport {
+        title: "Yeti input clipping".into(),
+        card_title: "Audio check: Yeti input clipping at -0.2 dBFS".into(),
+        summary: "Lower the gain.".into(),
+        text: "Yeti input clipping at -0.2 dBFS.".into(),
+    };
+    cabin.finish_audio_check("", Ok(("Yeti".into(), report)));
+    rows.push(("finish_audio_check", posted_card(&cabin, "finish_audio_check", |c| c.source_id.starts_with("audiocheck:")), "Yeti"));
+    let sam = Candidate::soft(CandidateSource::Mail, "reply to Sam's email", "sam reply", 0.9, 0.8, "Sam asked about Friday.");
+    assert_eq!(cabin.post_proactive(vec![sam], now), 1);
+    rows.push(("post_proactive", posted_card(&cabin, "post_proactive", |c| c.pulse.proactive.is_some()), "Sam's email"));
+    let revert = grokhub_core::self_review::RevertCandidate { skill: "inbox-zero".into(), version: 2, before: (9, 10), after: (3, 10) };
+    let (title, body) = (revert.title(), revert.numbers());
+    cabin.harness.self_review.budget = 1;
+    cabin.post_self_review_card(
+        super::self_review_ui::ProposalCard { source: "revert:inbox-zero".into(), skill: "inbox-zero", title: &title, body: &body, details: String::new(), md: "" },
+        now,
+    );
+    rows.push(("post_self_review_card", posted_card(&cabin, "post_self_review_card", |c| c.source_id == "revert:inbox-zero"), "inbox-zero"));
+    cabin.post_router_review(now);
+    rows.push(("post_router_review", posted_card(&cabin, "post_router_review", |c| c.source_id == "router-review"), "router review"));
+    // Sites a test cabin can't reach without a live run: the card from the same call.
+    let guard_text = "Auto was succeeding less on everyday chat, so it now starts that work one step higher.";
+    let guard = super::router_ui::guard_card("chat:default", guard_text, now);
+    rows.push(("guard_card", guard.clone(), "everyday chat"));
+    rows.push(("poll_guard", guard, "everyday chat"));
+    let run = super::background::BgRun {
+        id: 1,
+        thread_id: "t-bg".into(),
+        title: "Sync ~/Photos".into(),
+        origin: grokhub_core::BgOrigin::User,
+        pid: None,
+        rx: None,
+        say: String::new(),
+        action: String::new(),
+        started: std::time::Instant::now(),
+        end: None,
+        session: String::new(),
+        resumed: None,
+        fork_hold: false,
+        native_session: None,
+        automation: None,
+    };
+    let crashed = super::background::bg_crash_card(&run);
+    rows.push(("bg_crash_card", crashed.clone(), "Sync ~/Photos"));
+    rows.push(("poll_bg_runs", crashed, "Sync ~/Photos"));
+    let change = grokhub_agent::harness::Change {
+        seq: 3,
+        at: now,
+        kind: "model".into(),
+        id: "chat:default".into(),
+        op: grokhub_agent::harness::ChangeOp::Modify,
+        origin: Default::default(),
+        reason: String::new(),
+        before_hash: String::new(),
+        after_hash: String::new(),
+        undoes: None,
+        label: String::new(),
+    };
+    rows.push(("model_change_note", super::change_undo::model_change_note(&change), "chat:default"));
+    rows.push(("poll_self_changes", grokhub_core::self_change_card("skill", "inbox-zero", "added", "", now), "inbox-zero"));
+    let done = grokhub_core::DoneForYou {
+        kind: "connection".into(),
+        target: "notes".into(),
+        undo_ref: 4,
+        mind_key: "proactive:connection_disable".into(),
+        answered: false,
+    };
+    rows.push(("tick_auto_act", grokhub_core::done_for_you_card("Turned off the notes connection", "It failed every start.", done, now), "notes connection"));
+    let notes = Candidate::soft(CandidateSource::SystemState, "turn off the notes connection", "turn off the notes connection", 0.8, 0.9, "It failed every start.");
+    rows.push(("offer_card", proactive_card(&notes, ProactiveRoute::Suggest, now), "notes connection"));
+    rows.push(("offer_card", proactive_card(&notes, ProactiveRoute::ICan, now), "notes connection"));
+
+    for (site, card, name) in &rows {
+        let text = format!("{} {}", card.title, card.body.as_deref().unwrap_or(""));
+        assert!(text.contains(name), "{site}: {name:?} not in {text:?}");
+        assert!(grokhub_core::names_its_item(card), "{site}: {card:?}");
+        let mut feed = Vec::new();
+        assert!(grokhub_core::post_update(&mut feed, card.clone()), "{site}: the feed refused a named card");
+    }
+    let covered: std::collections::BTreeSet<String> = rows.iter().map(|(site, ..)| site.to_string()).collect();
+    let missing: Vec<String> = app_feed_post_sites().difference(&covered).cloned().collect();
+    assert!(missing.is_empty(), "Home card sites with no row in this test: {missing:?}");
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 fn health_job(id: &str) -> grokhub_core::Automation {

@@ -364,7 +364,9 @@ impl Cabin {
     }
 
     pub(super) fn post_feed_card(&mut self, card: UpdateCard) {
-        post_update(&mut self.updates, card);
+        if !post_update(&mut self.updates, card) {
+            return;
+        }
         let now = now_ms();
         let rank = grokhub_core::rank_home_events(
             &self.updates,
