@@ -3,7 +3,7 @@
 //! a flip takes effect without a restart. The route goes live only with a
 //! runtime installed, and then only for background classes; chat never goes
 //! local. With nothing installed the row says so and offers Set up, which
-//! opens the onboarding wizard once that lands.
+//! opens the setup wizard's on-device model step.
 
 use grokhub_agent::route::local;
 
@@ -26,9 +26,6 @@ pub(super) fn local_model_status(on: bool, installed: bool, tier: &str) -> Strin
         (true, false) => "On-device model for background tasks: on, no local model installed".into(),
     }
 }
-
-/// What Set up says until the onboarding wizard is in the build.
-pub(super) const LOCAL_SETUP_PENDING: &str = "Local model setup isn't in this build yet.";
 
 impl Cabin {
     /// Save the toggle and hand it to the router now. A live route change
@@ -60,9 +57,9 @@ impl Cabin {
         }
     }
 
-    /// Set up: the onboarding wizard's local AI step. A status line until it lands.
+    /// Set up: the setup wizard's on-device model step.
     pub(super) fn open_local_setup(&mut self) {
-        self.status = LOCAL_SETUP_PENDING.into();
+        self.open_setup(super::setup_wizard::SetupStep::LocalAi);
     }
 }
 
@@ -115,7 +112,7 @@ mod tests {
         assert!(!app.cfg.local_model);
         assert_eq!(app.status, "On-device model for background tasks: off");
         app.open_local_setup();
-        assert_eq!(app.status, "Local model setup isn't in this build yet.");
+        assert_eq!(app.setup.step, Some(super::super::setup_wizard::SetupStep::LocalAi));
         local::set_enabled(false);
         let _ = std::fs::remove_dir_all(root);
     }

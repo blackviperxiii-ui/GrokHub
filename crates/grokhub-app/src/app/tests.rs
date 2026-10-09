@@ -16452,6 +16452,7 @@ fn quiet_cabin() -> Cabin {
         persist_idle_key: String::new(),
         persist_rx: None,
         persist_io: std::sync::Arc::new(std::sync::Mutex::new(())),
+        setup: super::setup_wizard::SetupWizard::default(),
         persist_gen: 0,
         persist_err: std::sync::Arc::new(std::sync::Mutex::new(None)),
         persist_mark: std::sync::Arc::new(std::sync::Mutex::new(PersistMark::default())),
