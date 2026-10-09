@@ -121,6 +121,20 @@ pub const REASONING_EFFORTS: &[(&str, &str)] = &[
     ("xhigh", "Extra High"),
 ];
 
+/// Models that take `reasoning.effort` (docs.x.ai Reasoning guide): grok-4.7,
+/// grok-4.6, grok-4.5 and grok-4.20-multi-agent, with their dated or `-latest`
+/// ids. Every other xAI model answers 400 to it, and a `-non-reasoning` id never
+/// takes one.
+pub fn accepts_reasoning_effort(model: &str) -> bool {
+    let m = model.trim().to_ascii_lowercase();
+    if m.contains("non-reasoning") {
+        return false;
+    }
+    ["grok-4.7", "grok-4.6", "grok-4.5", "grok-4.20-multi-agent"]
+        .iter()
+        .any(|f| m.strip_prefix(f).is_some_and(|rest| rest.is_empty() || rest.starts_with('-')))
+}
+
 /// Normalize effort ids and legacy aliases (`/effort`, `/mode`).
 pub fn parse_reasoning_effort(s: &str) -> Option<&'static str> {
     match s.trim().to_ascii_lowercase().as_str() {
@@ -405,6 +419,16 @@ pub fn parse_model_reasoning(body: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_reasoning_models_accept_an_effort() {
+        for m in ["grok-4.7", "grok-4.7-latest", "GROK-4.6", "grok-4.5-0901", "grok-4.20-multi-agent", " grok-4.20-multi-agent-0309 "] {
+            assert!(accepts_reasoning_effort(m), "{m}");
+        }
+        for m in ["grok-4.20-0309-non-reasoning", "grok-4-1-fast-non-reasoning", "grok-4.20-0309-reasoning", "grok-4-fast", "grok-3-mini", "grok-4.70", "grok-code-fast-1", ""] {
+            assert!(!accepts_reasoning_effort(m), "{m}");
+        }
+    }
 
     #[test]
     fn banner() {
