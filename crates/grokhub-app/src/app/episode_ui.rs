@@ -8,15 +8,16 @@
 //!
 //! The live view is the Work tree that is already there: a group header
 //! ("Desktop session · 12 steps · 4 min") above the step rows, the last
-//! frame and the agent cursor marker. The step-cap pause is a ladder pause
-//! card (Continue / Stop) counted in `decisions_waiting()`. No new chrome.
+//! frame and the agent cursor marker. There is no step or time cap. An
+//! Approve with no reply running resumes the run ([`Cabin::resume_parked_run`]).
+//! No new chrome.
 
 use super::*;
 use grokhub_agent::episode as ep;
 use grokhub_agent::harness as hx;
 
-/// The soft park detector for a long-run limit.
-pub(super) const EPISODE_CAP_DETECTOR: &str = "episode_cap";
+/// The turn an Approve with no reply running sends to resume the run.
+pub(super) const RESUME_TEXT: &str = "Continue";
 /// How often the header re-counts the episode's steps from its spans.
 const STEP_COUNT_EVERY_MS: u64 = 1_000;
 
@@ -28,11 +29,8 @@ pub(super) struct EpisodeUi {
     /// Last step or turn activity, for the idle end.
     pub last_ms: u64,
     pub steps: u32,
-    /// The cabin's own limits (Grok Build turns); the native kernel keeps its own.
-    pub step_cap: u32,
-    pub wall_cap_ms: u64,
-    pub paused: bool,
-    /// The next native prompt carries the user's Continue.
+    /// The next native prompt resumes the run. Set until that prompt was
+    /// actually sent ([`Cabin::episode_resume_sent`]).
     pub resume: bool,
     pub counted_ms: u64,
     /// How far into the chat's span file `steps` has counted, so each count
@@ -48,9 +46,6 @@ impl EpisodeUi {
             started_ms: now,
             last_ms: now,
             steps: 0,
-            step_cap: ep::EPISODE_MAX_STEPS,
-            wall_cap_ms: ep::EPISODE_MAX_WALL.as_millis() as u64,
-            paused: false,
             resume: false,
             counted_ms: 0,
             counted_bytes: 0,
@@ -59,15 +54,6 @@ impl EpisodeUi {
 
     pub(super) fn header(&self, now: u64) -> String {
         ep::episode_header(self.steps, Duration::from_millis(now.saturating_sub(self.started_ms)))
-    }
-
-    /// A Grok Build turn's limit: the native kernel checks its own.
-    fn cap_hit(&self, now: u64) -> Option<ep::CapHit> {
-        if self.steps >= self.step_cap {
-            return Some(ep::CapHit::Steps(self.steps));
-        }
-        let ran = now.saturating_sub(self.started_ms);
-        (ran >= self.wall_cap_ms).then_some(ep::CapHit::Wall(ran / 60_000))
     }
 }
 
@@ -116,8 +102,7 @@ impl Cabin {
 
     /// The user typed a message (no reply running). With desktop control on
     /// it opens an episode on this chat, or continues the open one.
-    /// `resumed` is true when it answered a long-run pause.
-    pub(super) fn episode_user_sent(&mut self, resumed: bool) {
+    pub(super) fn episode_user_sent(&mut self) {
         let now = now_ms();
         if !self.cfg.desktop_control {
             if self.harness.episode.is_some() {
@@ -130,12 +115,7 @@ impl Cabin {
             self.end_episode(ep::EpisodeEnd::Stop);
         }
         match self.harness.episode.as_mut() {
-            Some(e) => {
-                e.last_ms = now;
-                if resumed {
-                    e.resume = true;
-                }
-            }
+            Some(e) => e.last_ms = now,
             None => {
                 let e = EpisodeUi::new(&trace, now);
                 let native = self.native_engine_for_current();
@@ -148,21 +128,31 @@ impl Cabin {
         }
     }
 
-    /// The user's Continue (typed reply or the card): the cap moves on by
-    /// another full allowance. Nothing else calls this.
-    pub(super) fn resume_episode(&mut self, _by: ep::Continue) {
-        let now = now_ms();
+    /// The user approved a park with no reply running: the run goes on as
+    /// a real turn. The open episode keeps its goal step, and approved
+    /// kernel parks run at the kernel's next loop. Mid-turn this does
+    /// nothing: the live run already picks the answer up.
+    pub(super) fn resume_parked_run(&mut self) {
+        if self.running {
+            return;
+        }
         let native = self.native_engine_for_current();
         let Some(e) = self.harness.episode.as_mut() else {
+            self.send_chat(RESUME_TEXT.into());
             return;
         };
-        e.paused = false;
         e.resume = true;
-        e.step_cap = e.steps.saturating_add(ep::EPISODE_MAX_STEPS);
-        e.wall_cap_ms = now.saturating_sub(e.started_ms) + ep::EPISODE_MAX_WALL.as_millis() as u64;
-        e.last_ms = now;
+        e.last_ms = now_ms();
         if !native {
-            self.write_episode_marker("resume", "continue", "you answered the pause");
+            self.write_episode_marker("resume", "continue", "you approved; the run goes on");
+        }
+        self.send_chat(RESUME_TEXT.into());
+    }
+
+    /// The native prompt that carried the resume was sent.
+    pub(super) fn episode_resume_sent(&mut self) {
+        if let Some(e) = self.harness.episode.as_mut() {
+            e.resume = false;
         }
     }
 
@@ -181,7 +171,6 @@ impl Cabin {
             let _ = hx::append_span(&crate::config::config_dir(), &span);
             self.deny_episode_parks(&e);
         }
-        self.harness.soft_parks.retain(|p| p.detector != EPISODE_CAP_DETECTOR);
         self.harness.episode = None;
     }
 
@@ -218,8 +207,7 @@ impl Cabin {
         self.write_span(span, "E");
     }
 
-    /// Throttled from `poll_harness`: the idle end, the header's step count,
-    /// and the step / wall limit on Grok Build turns.
+    /// Throttled from `poll_harness`: the idle end and the header's step count.
     pub(super) fn poll_episode(&mut self) {
         let now = now_ms();
         let Some(e) = self.harness.episode.as_ref() else {
@@ -229,7 +217,7 @@ impl Cabin {
             if let Some(e) = self.harness.episode.as_mut() {
                 e.last_ms = now;
             }
-        } else if now.saturating_sub(e.last_ms) >= ep::EPISODE_IDLE.as_millis() as u64 && !e.paused {
+        } else if now.saturating_sub(e.last_ms) >= ep::EPISODE_IDLE.as_millis() as u64 {
             self.end_episode(ep::EpisodeEnd::Idle);
             return;
         }
@@ -241,7 +229,6 @@ impl Cabin {
         }
         let (id, chat, from) = (e.id.clone(), e.chat_id.clone(), e.counted_bytes);
         let (new_steps, upto) = count_new_steps(&hx::span_path(&crate::config::config_dir(), &chat), from, &id);
-        let native = self.native_engine_for_current();
         let Some(e) = self.harness.episode.as_mut() else {
             return;
         };
@@ -252,44 +239,10 @@ impl Cabin {
         }
         e.steps = e.steps.saturating_add(new_steps);
         e.counted_bytes = upto;
-        if native || e.paused || !self.running {
-            return;
-        }
-        if let Some(hit) = e.cap_hit(now) {
-            self.pause_episode(hit);
-        }
-    }
-
-    /// A long-run limit: stop the live turn like a Steer (parks and their
-    /// spans stay), then the pause card waits for the user. Nothing resumes
-    /// on its own.
-    pub(super) fn pause_episode(&mut self, hit: ep::CapHit) {
-        let Some(e) = self.harness.episode.as_mut() else {
-            return;
-        };
-        e.paused = true;
-        let chat = e.chat_id.clone();
-        if self.running && !self.native_engine_for_current() {
-            let parks = self.take_parks_for_steer();
-            self.halt_in_flight();
-            self.restore_parks_after_steer(parks);
-            self.write_episode_marker("pause", hit.key(), &hit.question());
-        }
-        self.harness.repair = None;
-        self.harness.soft_parks.retain(|p| p.detector != EPISODE_CAP_DETECTOR);
-        self.harness.soft_parks.push(super::harness_ui::SoftPark {
-            detector: EPISODE_CAP_DETECTOR.into(),
-            reason: hit.question(),
-            evidence: Vec::new(),
-            chat_id: chat,
-        });
-        if self.chrome_here() {
-            self.status = crate::motion::needs_attention_summary(self.decisions_waiting());
-        }
     }
 
     /// A native turn ended: read how (`Done` stop reason) and the kernel's
-    /// newest pause or ladder span.
+    /// newest ladder pause span.
     pub(super) fn episode_turn_done(&mut self, stop_reason: &str) {
         if self.harness.episode.is_none() || !self.native_engine_for_current() {
             return;
@@ -300,18 +253,6 @@ impl Cabin {
         match stop_reason {
             "episode_verified" | "halted" | "cancelled" | "episode_idle" => {
                 self.harness.episode = None;
-            }
-            "episode_paused" => {
-                let spans = self.episode_spans();
-                let hit = spans.iter().rev().find(|s| s.tool == ep::EPISODE_TOOL && s.decision == "pause").map(|s| {
-                    let n = s.claim.split_whitespace().nth(2).and_then(|n| n.parse::<u64>().ok());
-                    if s.result == "wall" {
-                        ep::CapHit::Wall(n.unwrap_or(ep::EPISODE_MAX_WALL.as_secs() / 60))
-                    } else {
-                        ep::CapHit::Steps(n.map_or(ep::EPISODE_MAX_STEPS, |n| n as u32))
-                    }
-                });
-                self.pause_episode(hit.unwrap_or(ep::CapHit::Steps(ep::EPISODE_MAX_STEPS)));
             }
             "episode_ladder_pause" => {
                 let spans = self.episode_spans();
@@ -341,22 +282,20 @@ impl Cabin {
             .collect()
     }
 
-    /// The seed the native engine gets with the next prompt. Taking it
-    /// clears the one-shot resume.
-    pub(super) fn native_episode_seed(&mut self) -> Option<grokhub_agent::EpisodeSeed> {
+    /// The seed the native engine gets with the next prompt. Reading it
+    /// leaves the resume flag set: the config can be published more than
+    /// once before the prompt goes ([`Self::episode_resume_sent`] clears it).
+    pub(super) fn native_episode_seed(&self) -> Option<grokhub_agent::EpisodeSeed> {
         let trace = self.trace_id();
-        let turn = self.turn_no();
-        let access = self.access_mode();
-        let held = self.secret_hold.clone();
-        let e = self.harness.episode.as_mut().filter(|e| e.chat_id == trace)?;
+        let e = self.harness.episode.as_ref().filter(|e| e.chat_id == trace)?;
         let seed = grokhub_agent::EpisodeSeed {
             id: e.id.clone(),
             chat_id: e.chat_id.clone(),
-            turn,
-            resume: std::mem::take(&mut e.resume),
+            turn: self.turn_no(),
+            resume: e.resume,
             config_dir: crate::config::config_dir(),
-            held,
-            access,
+            held: self.secret_hold.clone(),
+            access: self.access_mode(),
         };
         Some(seed)
     }
@@ -457,50 +396,128 @@ mod tests {
         assert_eq!(cabin.episode_here().unwrap().steps, 5, "nothing new, nothing added");
     }
 
+    fn resume_marks(root: &std::path::Path) -> usize {
+        spans(root).iter().filter(|s| s.tool == ep::EPISODE_TOOL && s.decision == "resume").count()
+    }
+
+    fn soft_park(cabin: &mut Cabin) {
+        let chat_id = cabin.trace_id();
+        cabin.harness.soft_parks.push(super::super::harness_ui::SoftPark {
+            detector: "action_loop".into(),
+            reason: "the screenshot failed".into(),
+            evidence: Vec::new(),
+            chat_id,
+        });
+    }
+
     #[test]
-    fn the_step_cap_pause_is_counted_and_only_the_user_continues() {
-        let (_pin, root) = pinned("episode-cap");
+    fn a_120_step_turn_never_posts_a_card_or_pauses() {
+        let (_pin, root) = pinned("episode-no-cap");
         let mut cabin = desk_cabin();
         cabin.harness_user_sent();
-        for x in 0..ep::EPISODE_MAX_STEPS {
+        for x in 0..120 {
             step(&cabin, x);
         }
         let (_tx, rx) = mpsc::channel();
         cabin.grok_p_rx = Some(rx);
         cabin.running = true;
         cabin.poll_episode();
-        let e = cabin.episode_here().unwrap().clone();
-        assert_eq!((e.steps, e.paused), (60, true));
-        assert!(!cabin.running, "the turn stopped at the cap");
-        assert_eq!(cabin.harness.soft_parks.len(), 1);
-        assert_eq!(cabin.harness.soft_parks[0].reason, "Paused after 60 steps. Continue?");
-        assert_eq!(cabin.decisions_waiting(), 1, "the pause counts in the needs-attention line");
-        // Nothing resumes on its own: polls leave it paused with one card.
-        cabin.harness.episode.as_mut().unwrap().counted_ms = 0;
-        cabin.poll_episode();
-        assert!(cabin.episode_here().unwrap().paused);
-        assert_eq!(cabin.decisions_waiting(), 1);
-        let pauses = spans(&root).iter().filter(|s| s.decision == "pause" && s.tool == ep::EPISODE_TOOL).count();
-        assert_eq!(pauses, 1);
-        // The user's typed reply continues it with another 60 steps.
-        cabin.harness_user_sent();
-        let e = cabin.episode_here().unwrap().clone();
-        assert_eq!((e.paused, e.step_cap, e.id), (false, 120, cabin.episode_span_id()));
+        assert_eq!(cabin.episode_here().unwrap().steps, 120);
+        assert!(cabin.running, "the turn keeps going");
+        assert!(cabin.harness.soft_parks.is_empty());
         assert_eq!(cabin.decisions_waiting(), 0);
-        assert!(spans(&root).iter().any(|s| s.tool == ep::EPISODE_TOOL && s.decision == "resume"));
+        assert!(!spans(&root).iter().any(|s| s.decision == "pause"));
     }
 
     #[test]
-    fn stop_on_the_pause_card_ends_the_episode() {
-        let (_pin, root) = pinned("episode-cap-stop");
+    fn the_resume_flag_survives_every_publish_and_clears_once_the_prompt_is_sent() {
+        let (_pin, _root) = pinned("episode-resume-flag");
         let mut cabin = desk_cabin();
         cabin.harness_user_sent();
-        cabin.pause_episode(ep::CapHit::Wall(30));
-        assert_eq!(cabin.harness.soft_parks[0].reason, "Paused after 30 minutes. Continue?");
+        cabin.harness.episode.as_mut().unwrap().resume = true;
+        // `ensure_native_engine` and a second publish both read the seed.
+        assert!(cabin.native_episode_seed().unwrap().resume);
+        assert!(cabin.native_episode_seed().unwrap().resume);
+        cabin.episode_resume_sent();
+        assert!(!cabin.native_episode_seed().unwrap().resume);
+        // The turn kick publishes once, and clears the flag only on a sent prompt.
+        let src = include_str!("native_engine.rs");
+        let kick = src.split("fn kick_native_turn(").nth(1).and_then(|s| s.split("fn prompt_native_memory").next()).unwrap();
+        assert!(!kick.contains("publish_native_cfg"), "{kick}");
+        // Whitespace-free, so Windows CRLF checkouts read the same.
+        let flat: String = kick.split_whitespace().collect();
+        assert!(flat.contains("Some(Ok(()))=>{self.episode_resume_sent();"), "{kick}");
+    }
+
+    #[test]
+    fn approving_the_last_pause_with_no_reply_running_resumes_and_never_mid_turn() {
+        let (_pin, root) = pinned("episode-approve-resume");
+        let _hide = crate::app::tests::HideGrok::arm();
+        let mut cabin = desk_cabin();
+        cabin.harness_user_sent();
+        soft_park(&mut cabin);
+        soft_park(&mut cabin);
+        cabin.answer_soft_park(0, true, "");
+        assert_eq!(resume_marks(&root), 0, "one pause is still open");
+        cabin.answer_soft_park(0, true, "");
+        assert_eq!(resume_marks(&root), 1, "the last Approve resumes the run");
+        assert!(cabin.episode_here().unwrap().resume);
+        assert_eq!(cabin.status, "Resumed");
+        // Mid-turn the live run picks the answer up: nothing is sent twice.
+        cabin.episode_resume_sent();
+        soft_park(&mut cabin);
+        let (_tx, rx) = mpsc::channel();
+        cabin.grok_p_rx = Some(rx);
+        cabin.running = true;
+        cabin.answer_soft_park(0, true, "");
+        assert_eq!(resume_marks(&root), 1);
+        assert!(!cabin.episode_here().unwrap().resume);
+        // Deny is unchanged: the episode stays open and nothing resumes.
+        cabin.running = false;
+        cabin.grok_p_rx = None;
+        soft_park(&mut cabin);
         cabin.answer_soft_park(0, false, "Denied");
-        assert!(cabin.harness.episode.is_none());
-        let end = spans(&root).into_iter().rev().find(|s| s.tool == ep::EPISODE_TOOL).unwrap();
-        assert_eq!((end.decision.as_str(), end.result.as_str()), ("end", "stop"));
+        assert_eq!(cabin.status, "Stopped that step");
+        assert_eq!(resume_marks(&root), 1);
+        assert!(cabin.harness.episode.is_some());
+    }
+
+    #[test]
+    fn approving_a_kernel_park_after_the_turn_ended_goes_on() {
+        let (_pin, root) = pinned("episode-park-resume");
+        let _hide = crate::app::tests::HideGrok::arm();
+        let mut cabin = desk_cabin();
+        cabin.harness_user_sent();
+        let eid = cabin.episode_span_id();
+        let post = |n: u32| {
+            let id = format!("{}{eid}-{n}", ep::PARK_PREFIX);
+            hx::post_park(
+                &root,
+                &hx::ParkRequest { id: id.clone(), path: "E".into(), tool: "click".into(), action: "click".into(), class: "send".into(), ts_ms: 1 },
+            )
+            .unwrap();
+            id
+        };
+        let id = post(3);
+        cabin.poll_harness();
+        cabin.resolve_hard_park(true, "");
+        assert_eq!(hx::take_answer(&root, &id), Some(true), "the kernel reads the Approve");
+        assert_eq!(cabin.status, "Approved once · Send · going on");
+        assert_eq!(resume_marks(&root), 1);
+        assert!(cabin.episode_here().unwrap().resume);
+        // With a reply running the live kernel runs it; no second send.
+        cabin.episode_resume_sent();
+        let id = post(5);
+        cabin.harness.last_poll = None;
+        cabin.poll_harness();
+        let (_tx, rx) = mpsc::channel();
+        cabin.grok_p_rx = Some(rx);
+        cabin.running = true;
+        cabin.resolve_hard_park(true, "");
+        assert_eq!(hx::take_answer(&root, &id), Some(true));
+        assert_eq!(cabin.status, "Approved once · Send");
+        assert_eq!(resume_marks(&root), 1);
+        assert!(!cabin.episode_here().unwrap().resume);
     }
 
     #[test]
@@ -536,7 +553,7 @@ mod tests {
     fn an_episode_that_ends_idle_denies_its_open_parks() {
         let (_pin, root) = pinned("episode-park-idle");
         let mut cabin = desk_cabin();
-        cabin.episode_user_sent(false);
+        cabin.episode_user_sent();
         let eid = cabin.harness.episode.as_ref().unwrap().id.clone();
         let id = format!("{}{eid}-3", ep::PARK_PREFIX);
         hx::post_park(

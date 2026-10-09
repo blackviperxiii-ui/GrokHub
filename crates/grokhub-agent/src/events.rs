@@ -9,7 +9,7 @@ use crate::gate::{Gate, PermitWait};
 use crate::tools::DesktopOps;
 use crate::{
     run_loop, AuthKind, CancelToken, HaltCheck, InputItem, LoopEvent, LoopIn, ModelClient, SteerQueue,
-    StopReason, Usage, DEFAULT_MAX_TURNS,
+    StopReason, Usage,
 };
 
 pub trait Engine {
@@ -25,6 +25,7 @@ pub struct NativeEngine {
     system: String,
     conversation_id: String,
     auth_kind: AuthKind,
+    /// 0 means no cap (chat, `/bg`, night jobs).
     max_turns: u32,
     cancel: CancelToken,
     steer: SteerQueue,
@@ -54,7 +55,8 @@ pub struct EpisodeSeed {
     pub id: String,
     pub chat_id: String,
     pub turn: u32,
-    /// The user answered a long-run pause by typing or clicking Continue.
+    /// The user's Continue (typed, clicked, or an Approve with no reply
+    /// running): the prompt resumes the run and is not a new goal step.
     pub resume: bool,
     /// Spans and park files live here.
     pub config_dir: PathBuf,
@@ -91,7 +93,7 @@ impl NativeEngine {
             system: parts.system,
             conversation_id: parts.conversation_id,
             auth_kind: parts.auth_kind,
-            max_turns: if parts.max_turns == 0 { DEFAULT_MAX_TURNS } else { parts.max_turns },
+            max_turns: parts.max_turns,
             cancel: parts.cancel,
             steer: parts.steer,
             halt: parts.halt,
@@ -287,7 +289,6 @@ impl Engine for NativeEngine {
             StopReason::Cancelled => "cancelled".to_string(),
             StopReason::Halted => "halted".to_string(),
             StopReason::MaxTurns => "max_turns".to_string(),
-            StopReason::RepeatedCall => "repeated_call".to_string(),
             StopReason::Error(message) => {
                 emit(AcpEvent::Err(message));
                 "error".into()
@@ -310,7 +311,7 @@ impl NativeEngine {
     /// episode. Each step starts the worker fresh from the episode view; the
     /// episode outlives the prompt (Steers, new messages, pauses).
     fn prompt_episode(&mut self, text: &str, seed: &EpisodeSeed, emit: &mut dyn FnMut(AcpEvent)) -> Result<(), String> {
-        use crate::episode::{Continue, Episode, EpisodeEnd, EpisodeStop, EpisodeView, FileParks, KernelIn, Parks};
+        use crate::episode::{Episode, EpisodeEnd, EpisodeStop, EpisodeView, FileParks, KernelIn, Parks};
         let now = grokhub_core::now_ms();
         let open = matches!(&self.episode, Some((ep, _)) if ep.id == seed.id && ep.ended.is_none());
         if !open {
@@ -330,9 +331,12 @@ impl NativeEngine {
         ep.turn = seed.turn;
         if open {
             if seed.resume {
-                ep.resume(Continue::from_typing(), now);
+                // "Continue" is not a new goal: keep the goal step. Parks the
+                // user approved run at the top of the next loop.
+                ep.last_ms = now;
+            } else {
+                ep.steer(text, &seed.held);
             }
-            ep.steer(text, &seed.held);
         }
         let Some(desktop) = self.desktop.as_deref() else {
             return Ok(());
@@ -398,7 +402,6 @@ impl NativeEngine {
             EpisodeStop::Ended(EpisodeEnd::Halt) => "halted".into(),
             EpisodeStop::Ended(EpisodeEnd::Stop) => "cancelled".into(),
             EpisodeStop::Ended(EpisodeEnd::Idle) => "episode_idle".into(),
-            EpisodeStop::Paused(_) => "episode_paused".into(),
             EpisodeStop::LadderPause(_) => "episode_ladder_pause".into(),
             EpisodeStop::Waiting => "end_turn".into(),
             EpisodeStop::Error(message) => {
