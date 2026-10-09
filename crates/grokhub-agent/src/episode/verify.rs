@@ -8,7 +8,7 @@
 use sha2::{Digest, Sha256};
 
 use crate::client::{ClientError, ContentPart, InputItem, ModelClient};
-use crate::route::{call_model, CallTokens, ModelCall, BACKGROUND_EFFORT, CLASS_JUDGE};
+use crate::route::{call_model, CallTokens, ModelCall, BACKGROUND_EFFORT, CLASS_EPISODE, CLASS_JUDGE};
 use crate::tools::ToolOutput;
 use crate::CancelToken;
 
@@ -16,6 +16,15 @@ use crate::CancelToken;
 pub const JUDGE_SYSTEM: &str = "You are GrokHub's VerifyGate. You did not do this task and you do not see how it was done. \
 You get the goal and the final state of the desktop. Reply with exactly VERIFY_OK when the final state shows the goal is met. \
 Otherwise reply REJECT: followed by one short reason.";
+
+/// The checker's last try, after two calls that could not run, goes up the
+/// route ladder: it routes as the worker's class (`episode:step`, at the
+/// worker's effort) instead of `background:judge`, which never climbs. The
+/// router still picks its model and effort. Its input is still only the goal
+/// and the observation.
+pub const ESCALATED_CLASS: &str = CLASS_EPISODE;
+/// The reject reason when the checker still could not run after that.
+pub const CHECKER_UNAVAILABLE: &str = "checker unavailable";
 
 /// How much of an observation's text the checker gets.
 pub const OBSERVATION_CAP: usize = 4_000;
@@ -70,6 +79,19 @@ pub fn parse_verdict(text: &str) -> Verdict {
 /// The checker's call: its own system line, then the goal and the final
 /// observation. Nothing else goes in.
 pub fn verify_call(model: &str, goal: &str, obs: &Observation, conversation_id: &str) -> ModelCall {
+    verify_call_at(model, CLASS_JUDGE, Some(BACKGROUND_EFFORT), goal, obs, conversation_id)
+}
+
+/// [`verify_call`] routed as `class` at `effort` (the last try uses
+/// [`ESCALATED_CLASS`] and the worker's effort).
+pub fn verify_call_at(
+    model: &str,
+    class: &str,
+    effort: Option<&str>,
+    goal: &str,
+    obs: &Observation,
+    conversation_id: &str,
+) -> ModelCall {
     let input = vec![
         InputItem::Message { role: "system".into(), content: vec![ContentPart::InputText(JUDGE_SYSTEM.into())] },
         InputItem::Message {
@@ -77,18 +99,11 @@ pub fn verify_call(model: &str, goal: &str, obs: &Observation, conversation_id: 
             content: vec![ContentPart::InputText(format!("Goal:\n{goal}\n\nFinal observation:\n{}", obs.line()))],
         },
     ];
-    ModelCall::xai(model, Some(BACKGROUND_EFFORT), CLASS_JUDGE, conversation_id, input)
+    ModelCall::xai(model, effort, class, conversation_id, input)
 }
 
-pub fn verify_gate(
-    client: &dyn ModelClient,
-    model: &str,
-    goal: &str,
-    obs: &Observation,
-    conversation_id: &str,
-    cancel: &CancelToken,
-) -> Result<(Verdict, CallTokens), ClientError> {
-    let routed = call_model(client, &verify_call(model, goal, obs, conversation_id), cancel)?;
+pub fn verify_gate(client: &dyn ModelClient, call: &ModelCall, cancel: &CancelToken) -> Result<(Verdict, CallTokens), ClientError> {
+    let routed = call_model(client, call, cancel)?;
     Ok((parse_verdict(&routed.out.text), routed.tokens))
 }
 
