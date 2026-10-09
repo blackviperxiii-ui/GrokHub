@@ -223,12 +223,14 @@ pub fn run_loop(
         }
         crate::hooks::PromptHook::Continue { .. } => {}
     }
+    let mut step_ended: Option<std::time::Instant> = None;
     let mut turns = 0u32;
     loop {
         if input.max_turns != 0 && turns >= input.max_turns {
             return finish(input, StopReason::MaxTurns, usage, did_compact, true);
         }
         turns = turns.saturating_add(1);
+        let turn_top = crate::timing::lap("loop:pre_request");
         if input.cancel.is_cancelled() {
             return finish(input, StopReason::Cancelled, usage, did_compact, true);
         }
@@ -303,6 +305,10 @@ pub fn run_loop(
             call_timeout: None,
         };
         let class = crate::route::live::current_class();
+        drop(turn_top);
+        if let Some(t) = step_ended {
+            crate::timing::record("loop:step_gap", t.elapsed());
+        }
         let turn = match crate::route::live::stream_routed(input.client, &req, input.cancel, &mut |ev| match ev {
             StreamEvent::TextDelta(text) => on_event(LoopEvent::Text(text)),
             StreamEvent::ReasoningDelta(text) => on_event(LoopEvent::Thought(text)),
@@ -321,6 +327,7 @@ pub fn run_loop(
                 );
             }
         };
+        step_ended = Some(std::time::Instant::now());
         usage.add(&turn.usage);
         emit_usage(on_event, &usage, history, input.context_length);
         if !turn.text.is_empty() {
@@ -384,6 +391,7 @@ pub fn run_loop(
                 continue;
             }
             let id = tool_id(call);
+            let gate_lap = crate::timing::lap("loop:tool_gate");
             let desk = tools::desk_flags(&call.name, &gate, input.desktop);
             let base = gate::decide_with(
                 &gate,
@@ -434,6 +442,7 @@ pub fn run_loop(
                 arguments: &call.arguments,
                 tool_use_id: &id,
             });
+            drop(gate_lap);
             let ask_reason = constrained.ask_reason;
             let pre_context = constrained.context;
             let (output, extra_usage) = match constrained.decision {
@@ -661,6 +670,7 @@ fn note_tool(
     on_event: &mut dyn FnMut(LoopEvent),
     pre_context: &str,
 ) -> (ToolOutput, Usage) {
+    let _lap = crate::timing::lap("loop:tool_run");
     let (mut output, usage) = run_allowed(
         input,
         gate,

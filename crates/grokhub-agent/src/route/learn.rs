@@ -6,7 +6,7 @@
 //! the old bytes back). Self-tuning refuses to run while the VerifyGate or
 //! outcome hook is a stub.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -15,18 +15,18 @@ use std::time::SystemTime;
 use grokhub_core::model_registry::profile::{read_profiles, ModelProfile};
 use grokhub_core::model_registry::store::{load_registry, models_dir, read_json, write_json};
 use grokhub_core::model_registry::Registry;
-use grokhub_core::outcome::{read_outcomes, OutcomeResult, TaskOutcome};
+use grokhub_core::outcome::{outcomes_path, read_outcomes, OutcomeResult, TaskOutcome};
 
 use super::guard::load_overrides;
 use super::ladder::{rung, Band, Routine, ROUTINE_WINDOW_MS};
 use super::local::is_local;
-use super::log::{RouteRecord, ROUTE_TRACE};
+use super::log::{route_records, with_route_records, RouteRecord};
 use super::policy::{approved, class_row, expected_cost_usd, fits_any_cost, is_new_provider, Fit, CLASS_TABLE};
 use super::signals::{OutcomeSource, VerifySource};
 use super::spend::{premium_grants, spend_settings, Spend};
 use super::table::{load_table, profiles_hash};
 use super::tune::{self, Arm, Candidate, Change, Evidence, Filters, Snap, Stage, Step, TuneState, Tuning, Verdict, DAY_MS, REJECT_DAYS, WEEK_MS};
-use crate::harness::{private_write, read_spans_tail, record_change, ChangeKind, ChangeTarget, Origin};
+use crate::harness::{private_write, record_change, ChangeKind, ChangeTarget, Origin};
 
 pub const TUNING_FILE: &str = "route_tuning.json";
 /// The ledger id of the tuning file.
@@ -228,25 +228,34 @@ pub fn steps_from(records: &[(u64, RouteRecord)], outcomes: &[TaskOutcome], reg:
 }
 
 fn read_records(config_dir: &Path, lines: usize) -> Vec<(u64, RouteRecord)> {
-    let (spans, _) = read_spans_tail(config_dir, ROUTE_TRACE, lines);
-    spans.into_iter().filter_map(|s| s.route.map(|r| (s.ts_ms, *r))).collect()
+    route_records(config_dir, lines)
 }
 
 /// DE2: this signature's finished runs in `class` and the rung each ran at
 /// (the highest effort its episode sent).
-pub fn routine_from(records: &[(u64, RouteRecord)], outcomes: &[TaskOutcome], signature: &str, class: &str, now_ms: u64) -> Routine {
+pub fn routine_from<'a>(records: impl IntoIterator<Item = &'a (u64, RouteRecord)>, outcomes: &[TaskOutcome], signature: &str, class: &str, now_ms: u64) -> Routine {
     let mut out = Routine::default();
     if signature.is_empty() {
         return out;
     }
     let class = table_class(class).unwrap_or(class);
     let since = now_ms.saturating_sub(ROUTINE_WINDOW_MS);
-    for o in outcomes.iter().filter(|o| o.signature == signature && o.finished_at >= since) {
-        let ran = records
-            .iter()
-            .filter(|(_, r)| table_class(&r.class) == Some(class) && !r.holdout && outcome_of(std::slice::from_ref(o), &r.episode).is_some())
-            .filter_map(|(_, r)| r.used.effort.as_deref().and_then(rung))
-            .max();
+    let mut picked = outcomes.iter().filter(|o| o.signature == signature && o.finished_at >= since).peekable();
+    if picked.peek().is_none() {
+        return out;
+    }
+    // The highest rung each episode of this class sent, read once.
+    let mut ran_by_episode: HashMap<&str, Option<usize>> = HashMap::new();
+    for (_, r) in records.into_iter().filter(|(_, r)| !r.episode.is_empty() && !r.holdout && table_class(&r.class) == Some(class)) {
+        let slot = ran_by_episode.entry(r.episode.as_str()).or_default();
+        *slot = (*slot).max(r.used.effort.as_deref().and_then(rung));
+    }
+    for o in picked {
+        // The episodes `outcome_of` ties to this outcome: its own, and any
+        // `<episode>:` its task id starts with.
+        let own = (!o.episode.is_empty()).then_some(o.episode.as_str());
+        let prefixes = o.task.match_indices(':').map(|(at, _)| &o.task[..at]);
+        let ran = own.into_iter().chain(prefixes).filter_map(|e| ran_by_episode.get(e).copied().flatten()).max();
         match (o.effective(now_ms), ran) {
             (OutcomeResult::Success, Some(r)) => out.successes.push((r, o.finished_at)),
             (OutcomeResult::Failure, _) => out.last_failure = out.last_failure.max(Some(o.finished_at)),
@@ -256,16 +265,34 @@ pub fn routine_from(records: &[(u64, RouteRecord)], outcomes: &[TaskOutcome], si
     out
 }
 
+type OutcomeStamp = (PathBuf, Option<SystemTime>, u64);
+static OUTCOMES: Mutex<Option<(OutcomeStamp, Arc<Vec<TaskOutcome>>)>> = Mutex::new(None);
+
+/// `outcomes.jsonl`, re-read only when the file changes.
+fn cached_outcomes(config_dir: &Path) -> Arc<Vec<TaskOutcome>> {
+    let path = outcomes_path(config_dir);
+    let meta = fs::metadata(&path).ok();
+    let stamp = (path, meta.as_ref().and_then(|m| m.modified().ok()), meta.map_or(0, |m| m.len()));
+    if let Some((s, o)) = OUTCOMES.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if *s == stamp {
+            return o.clone();
+        }
+    }
+    let o = Arc::new(read_outcomes(config_dir));
+    *OUTCOMES.lock().unwrap_or_else(|e| e.into_inner()) = Some((stamp, o.clone()));
+    o
+}
+
 /// DE2 for one call: read the outcomes and the route log's tail.
 pub fn routine_for(config_dir: &Path, signature: &str, class: &str, now_ms: u64) -> Routine {
     if signature.is_empty() {
         return Routine::default();
     }
-    let outcomes = read_outcomes(config_dir);
+    let outcomes = cached_outcomes(config_dir);
     if !outcomes.iter().any(|o| o.signature == signature) {
         return Routine::default();
     }
-    routine_from(&read_records(config_dir, ROUTINE_SCAN_LINES), &outcomes, signature, class, now_ms)
+    with_route_records(config_dir, ROUTINE_SCAN_LINES, |records| routine_from(records, &outcomes, signature, class, now_ms))
 }
 
 /// The registry and R2b spend rules as tuner filters.

@@ -18,9 +18,8 @@ use grokhub_core::model_registry::store::{append_line, models_dir, read_json, wr
 use grokhub_core::outcome::{read_outcomes, OutcomeResult, TaskOutcome};
 
 use super::ladder::{user_facing, PREPARE_HARD};
-use super::log::{RouteRecord, ROUTE_TRACE};
+use super::log::{route_records, RouteRecord};
 use super::policy::class_row;
-use crate::harness::read_spans_tail;
 
 /// One episode in ten runs at the fixed control effort.
 pub const HOLDOUT_EVERY: u64 = 10;
@@ -176,8 +175,7 @@ pub fn run_guard(config_dir: &Path, now_ms: u64) -> GuardRun {
         note_once(config_dir, &format!("guard-waiting:{day}"), "guard waiting on outcomes", now_ms);
         return GuardRun { reverted: Vec::new(), waiting: true };
     }
-    let (spans, _) = read_spans_tail(config_dir, ROUTE_TRACE, GUARD_SCAN_LINES);
-    let (ts, records): (Vec<u64>, Vec<RouteRecord>) = spans.into_iter().filter_map(|s| s.route.map(|r| (s.ts_ms, *r))).unzip();
+    let (ts, records): (Vec<u64>, Vec<RouteRecord>) = route_records(config_dir, GUARD_SCAN_LINES).into_iter().unzip();
     let mut overrides = load_overrides(config_dir);
     let stats = tally(&records, &ts, &outcomes, &overrides, now_ms);
     let mut run = GuardRun::default();
@@ -209,6 +207,7 @@ pub fn run_guard(config_dir: &Path, now_ms: u64) -> GuardRun {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::route::log::ROUTE_TRACE;
 
     #[test]
     fn holdout_is_about_one_in_ten_and_deterministic() {
