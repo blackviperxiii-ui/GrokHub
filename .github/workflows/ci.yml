@@ -30,29 +30,33 @@ env:
 # Each job restores its own build cache; caches save only from pushes to beta
 # and main, so PRs start warm from their base branch.
 jobs:
-  linux:
+  # Decides whether the build jobs run. A PR that only touches docs, Markdown,
+  # screenshots or research skips them; a skipped job counts as passed for
+  # required checks. Pushes to beta and main and manual runs always build.
+  # The Electron guard runs here so it covers every change, docs-only ones
+  # included.
+  changes:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ github.event_name != 'pull_request' || steps.filter.outputs.code == 'true' }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: rui314/setup-mold@v1
-      - uses: Swatinem/rust-cache@v2
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'pull_request'
         with:
-          shared-key: linux-test
-          cache-on-failure: true
-          save-if: ${{ github.event_name == 'push' }}
-      - name: Native GUI build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev \
-            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-            libgl1-mesa-dev libwayland-dev libasound2-dev
-      - run: cargo test --workspace --locked -- --test-threads=1
-      - run: cargo build -p grokhub-app -p grokhub-hub
-      - name: Cabin binary exists
-        run: test -x target/debug/grokhub && test -x target/debug/grokhub-hub
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '**'
+              - '!docs/**'
+              - '!**/*.md'
+              - '!screenshots/**'
+              - '!research/**'
       - name: No Electron leftover
         run: |
           test ! -f package.json
@@ -71,7 +75,41 @@ jobs:
           fi
           echo "rust-only tree ok"
 
+
+  linux:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-test
+          cache-on-failure: true
+          save-if: ${{ github.event_name == 'push' }}
+      - name: Native GUI build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libgtk-3-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libgl1-mesa-dev libwayland-dev libasound2-dev
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      # Each test runs in its own process (see .config/nextest.toml), so they
+      # run in parallel. nextest skips doctests; `cargo test --doc` runs them.
+      - run: cargo nextest run --workspace --locked --profile ci
+      - run: cargo test --doc --workspace --locked
+      - run: cargo build -p grokhub-app -p grokhub-hub
+      - name: Cabin binary exists
+        run: test -x target/debug/grokhub && test -x target/debug/grokhub-hub
   linux-lint:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -97,6 +135,8 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   windows:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -107,9 +147,15 @@ jobs:
           shared-key: windows-test
           cache-on-failure: true
           save-if: ${{ github.event_name == 'push' }}
-      - run: cargo test --workspace --locked -- --test-threads=1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - run: cargo nextest run --workspace --locked --profile ci
+      - run: cargo test --doc --workspace --locked
 
   windows-lint:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -127,6 +173,8 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   windows-release:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
