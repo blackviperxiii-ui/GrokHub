@@ -314,6 +314,124 @@ mod tests {
         assert!(!base.join("prefix").exists(), "nothing installed");
         let _ = std::fs::remove_dir_all(&base);
     }
+
+    /// A temp `origin` with `main` and `beta`, and a `clone` on `main` carrying
+    /// the real `scripts/install.sh` and a committed `Cargo.lock`. A stub
+    /// `cargo` on PATH exits 7, so a run that gets past the switch stops there.
+    #[cfg(unix)]
+    fn switch_fixture(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("grokhub-chan-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let repo = base.join("clone");
+        std::fs::create_dir_all(repo.join("scripts")).unwrap();
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::create_dir_all(base.join("cfg")).unwrap();
+        std::fs::create_dir_all(base.join("bin")).unwrap();
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/install.sh");
+        std::fs::copy(script, repo.join("scripts/install.sh")).unwrap();
+        std::fs::write(repo.join("Cargo.lock"), "version = 4\n").unwrap();
+        std::fs::write(repo.join("src/lib.rs"), "pub fn a() {}\n").unwrap();
+        let cargo = base.join("bin/cargo");
+        std::fs::write(&cargo, "#!/bin/sh\necho cargo-stub \"$@\"\nexit 7\n").unwrap();
+        std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let git = |dir: &std::path::Path, args: &[&str]| {
+            let out = std::process::Command::new("git").args(args).current_dir(dir).output().unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        git(&base, &["init", "-q", "--bare", "-b", "main", "origin.git"]);
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["config", "user.email", "cabin@test"]);
+        git(&repo, &["config", "user.name", "Cabin"]);
+        git(&repo, &["config", "commit.gpgsign", "false"]);
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-q", "-m", "seed"]);
+        git(&repo, &["remote", "add", "origin", &base.join("origin.git").display().to_string()]);
+        git(&repo, &["push", "-q", "origin", "main", "main:beta"]);
+        (base, repo)
+    }
+
+    #[cfg(unix)]
+    fn run_switch_to_beta(base: &std::path::Path, repo: &std::path::Path) -> std::process::Output {
+        let path = format!("{}:{}", base.join("bin").display(), std::env::var("PATH").unwrap_or_default());
+        std::process::Command::new("bash")
+            .arg(repo.join("scripts/install.sh"))
+            .args(["--user", "--channel", "beta"])
+            .env("GROKHUB_CONFIG", base.join("cfg"))
+            .env("PREFIX", base.join("prefix"))
+            .env("PATH", path)
+            .output()
+            .unwrap()
+    }
+
+    #[cfg(unix)]
+    fn git_stdout(dir: &std::path::Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git").args(args).current_dir(dir).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// Jeremy's case: a cargo run rewrote Cargo.lock in the source folder. The
+    /// switch sets that one file aside in a named stash and goes on to beta.
+    #[cfg(unix)]
+    #[test]
+    fn install_sh_stashes_a_lone_cargo_lock_change_and_switches() {
+        let (base, repo) = switch_fixture("lock-only");
+        std::fs::write(repo.join("Cargo.lock"), "version = 4\n# rewritten by cargo\n").unwrap();
+        let out = run_switch_to_beta(&base, &repo);
+        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        let lines: Vec<&str> = stdout.lines().collect();
+        assert_eq!(out.status.code(), Some(7), "stopped at the cargo stub: {stdout}");
+        let sha = git_stdout(&repo, &["rev-parse", "--short=7", "HEAD"]);
+        assert!(
+            lines.contains(&"set aside a tool-made Cargo.lock change (git stash list: grokhub install.sh: Cargo.lock set aside before --channel beta)"),
+            "{stdout}"
+        );
+        assert!(lines.contains(&format!("channel beta: {sha} on beta").as_str()), "{stdout}");
+        assert!(lines.contains(&"cargo-stub build --release --locked -p grokhub-app -p grokhub-hub"), "{stdout}");
+        assert_eq!(git_stdout(&repo, &["symbolic-ref", "--short", "HEAD"]), "beta");
+        assert_eq!(git_stdout(&repo, &["status", "--porcelain", "--untracked-files=no"]), "");
+        assert_eq!(
+            git_stdout(&repo, &["stash", "list", "--format=%gs"]),
+            "On main: grokhub install.sh: Cargo.lock set aside before --channel beta"
+        );
+        // The set-aside change is recoverable as it was.
+        assert_eq!(
+            git_stdout(&repo, &["show", "stash@{0}:Cargo.lock"]),
+            "version = 4\n# rewritten by cargo"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A real code edit next to Cargo.lock still refuses, lists both files
+    /// (into update.log via the host output), and touches neither.
+    #[cfg(unix)]
+    #[test]
+    fn install_sh_refuses_a_real_edit_plus_cargo_lock_and_lists_both() {
+        let (base, repo) = switch_fixture("lock-and-rs");
+        std::fs::write(repo.join("Cargo.lock"), "version = 4\n# rewritten by cargo\n").unwrap();
+        std::fs::write(repo.join("src/lib.rs"), "pub fn a() { /* wip */ }\n").unwrap();
+        let out = run_switch_to_beta(&base, &repo);
+        assert_eq!(out.status.code(), Some(1));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stderr).trim_end(),
+            format!(
+                "error: {} has uncommitted changes; commit or stash them before --channel beta\nchanged files:\n M Cargo.lock\n M src/lib.rs",
+                repo.display()
+            )
+        );
+        assert_eq!(git_stdout(&repo, &["symbolic-ref", "--short", "HEAD"]), "main");
+        assert_eq!(git_stdout(&repo, &["stash", "list"]), "");
+        assert_eq!(
+            std::fs::read_to_string(repo.join("Cargo.lock")).unwrap(),
+            "version = 4\n# rewritten by cargo\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.join("src/lib.rs")).unwrap(),
+            "pub fn a() { /* wip */ }\n"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
 
 /// Shown next to the Labs Beta channel toggle: `beta · beta @ abc1234`.
@@ -368,14 +486,40 @@ fn normalize_git_sha(s: &str) -> String {
     s.trim().to_ascii_lowercase()
 }
 
-/// When the receipt is Beta and beta has caught up to main (same tree or same
-/// tip), return [`Channel::Stable`] so the caller can rewrite the receipt and
-/// flip the Labs toggle off. Otherwise `None` (stay put). Pure — no I/O.
-pub fn auto_off_target(current: Channel, tips: &ChannelTips) -> Option<Channel> {
-    if current == Channel::Beta && beta_caught_up_to_main(tips) {
-        Some(Channel::Stable)
-    } else {
-        None
+/// Next to the `channel` receipt: main's tree on the first auto-off check after
+/// opting in to Beta. Auto-off waits until main's tree moves past it (a real
+/// promote), so a beta that equals main right after a main → beta sync stays on.
+/// Turning Beta on clears it; switching to stable deletes it.
+pub const CHANNEL_BETA_SINCE: &str = "channel.beta-since";
+
+/// What one auto-off check should do. See [`auto_off_step`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AutoOffStep {
+    /// Stay on the current channel; nothing to write.
+    Stay,
+    /// First check since opting in: store this main tree as the baseline, stay on beta.
+    RecordBaseline(String),
+    /// Main moved past the baseline and beta caught up to it: switch to stable.
+    SwitchToStable,
+}
+
+/// Auto-off policy for one check. Only Beta ever moves. With no valid
+/// `beta_since` baseline, record main's tree and stay. With one, switch to
+/// stable only when beta caught up to main (same tree or tip) and main's tree
+/// is no longer the baseline. Pure — no I/O.
+pub fn auto_off_step(current: Channel, tips: &ChannelTips, beta_since: Option<&str>) -> AutoOffStep {
+    if current != Channel::Beta {
+        return AutoOffStep::Stay;
+    }
+    let main_tree = normalize_git_sha(&tips.main_tree);
+    if !valid_git_hash(&main_tree) {
+        return AutoOffStep::Stay;
+    }
+    let baseline = beta_since.map(normalize_git_sha).filter(|b| valid_git_hash(b));
+    match baseline {
+        None => AutoOffStep::RecordBaseline(main_tree),
+        Some(b) if b != main_tree && beta_caught_up_to_main(tips) => AutoOffStep::SwitchToStable,
+        Some(_) => AutoOffStep::Stay,
     }
 }
 
@@ -651,22 +795,66 @@ mod channel_switch_tests {
     }
 
     #[test]
-    fn auto_off_target_flips_beta_when_caught_up_only() {
+    fn auto_off_waits_for_main_to_move_past_the_opt_in_baseline() {
         let tree = "47fd2b27aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let older = "1111111aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let caught_up = tips("e79aa50f", "7266ae6a", tree, tree);
+        // First check after opting in: record main's tree, stay on beta.
         assert_eq!(
-            auto_off_target(Channel::Beta, &tips("abc1234", "abc1234", "", "")),
-            Some(Channel::Stable)
+            auto_off_step(Channel::Beta, &caught_up, None),
+            AutoOffStep::RecordBaseline(tree.into())
         );
         assert_eq!(
-            auto_off_target(Channel::Beta, &tips("e79aa50f", "7266ae6a", tree, tree)),
-            Some(Channel::Stable)
+            auto_off_step(Channel::Beta, &caught_up, Some("  \n")),
+            AutoOffStep::RecordBaseline(tree.into())
         );
-        assert_eq!(auto_off_target(Channel::Beta, &tips("aaa", "bbb", "", "")), None);
+        // Same tree as the baseline (a sync, no promote): stays on.
         assert_eq!(
-            auto_off_target(Channel::Stable, &tips("abc1234", "abc1234", tree, tree)),
-            None
+            auto_off_step(Channel::Beta, &caught_up, Some(&format!("{tree}\n"))),
+            AutoOffStep::Stay
         );
-        assert_eq!(auto_off_target(Channel::Beta, &ChannelTips::default()), None);
+        // An opt-in from before a promote: main moved past the baseline and
+        // beta caught up, so Beta turns off.
+        assert_eq!(
+            auto_off_step(Channel::Beta, &caught_up, Some(older)),
+            AutoOffStep::SwitchToStable
+        );
+        // Main moved but beta is not caught up: stays on.
+        let ahead = tips("e79aa50f", "7266ae6a", older, tree);
+        assert_eq!(
+            auto_off_step(Channel::Beta, &ahead, Some("2222222aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")),
+            AutoOffStep::Stay
+        );
+        // Stable never moves; a missing main tree records nothing.
+        assert_eq!(auto_off_step(Channel::Stable, &caught_up, Some(older)), AutoOffStep::Stay);
+        assert_eq!(auto_off_step(Channel::Beta, &ChannelTips::default(), None), AutoOffStep::Stay);
+        assert_eq!(
+            auto_off_step(Channel::Beta, &tips("abc1234", "abc1234", "", ""), Some(older)),
+            AutoOffStep::Stay
+        );
+        assert_eq!(CHANNEL_BETA_SINCE, "channel.beta-since");
+    }
+
+    #[test]
+    fn beta_turned_on_while_beta_equals_main_sticks_across_checks() {
+        let tree = "47fd2b27aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let synced = tips("e79aa50f", "7266ae6a", tree, tree);
+        let AutoOffStep::RecordBaseline(baseline) = auto_off_step(Channel::Beta, &synced, None) else {
+            panic!("first check records the baseline");
+        };
+        assert_eq!(baseline, tree);
+        // Every later check and every main -> beta sync with the same tree stays on.
+        for _ in 0..3 {
+            assert_eq!(auto_off_step(Channel::Beta, &synced, Some(&baseline)), AutoOffStep::Stay);
+        }
+        let same_sha = tips("7266ae6a", "7266ae6a", tree, tree);
+        assert_eq!(auto_off_step(Channel::Beta, &same_sha, Some(&baseline)), AutoOffStep::Stay);
+        // The next promote changes main's tree; once beta catches up, Beta turns off.
+        let promoted = "3333333aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        assert_eq!(
+            auto_off_step(Channel::Beta, &tips("aa11bb22", "cc33dd44", promoted, promoted), Some(&baseline)),
+            AutoOffStep::SwitchToStable
+        );
     }
 
     #[test]

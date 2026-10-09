@@ -161,8 +161,10 @@ pub fn observe(rec: &mut ModelRecord, listed: bool, obs: &Observation) -> bool {
                 rec.state = ModelState::Redirected;
                 rec.reason = format!("It answered as {served}.");
             } else if !listed && matches!(rec.state, ModelState::NotInPlan | ModelState::Ghost) {
-                rec.state = ModelState::Redirected;
-                rec.reason = "It isn't listed, but it still answers.".into();
+                // It answered as itself: routable. Redirected with no successor dropped a working model.
+                rec.state = ModelState::Live;
+                rec.reason = "It isn't listed, but it answers as itself.".into();
+                rec.not_found.clear();
             }
             rec.health.latencies.push_back((now, obs.latency_ms));
             while rec.health.latencies.len() > LATENCY_CAP {

@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.10.97 — 2026-10-08
+
+- Chat no longer fails with HTTP 400 "does not support parameter reasoningEffort": GrokHub sends a thinking level only to models that take one (Grok 4.7, 4.6, 4.5 and 4.20 multi-agent), never to a non-reasoning model. A model you picked that xAI lists under another name, or that isn't listed but answers, stays in use, and the false "Paused: no model in your plan is answering" card is gone.
+- Labs → Beta moves a main install to beta again: the switch no longer stops on GrokHub's own `Cargo.lock` change, and Beta stays on after a sync.
+- KDE screenshots ask KWin once: after you refuse, GrokHub stops asking and uses the fallback, and the Arch packages' menu entry starts GrokHub by its full path.
+- A model change the router makes on its own is now a note that tells you, not an Undo / Keep row that asks.
+
+- Linux: `grokhub-linux-v2.10.97.tar.gz` and AUR `pkgver=2.10.97`.
+- Windows: `GrokHub-Setup-2.10.97.exe` and `grokhub-windows-v2.10.97.zip`.
+
 ## 2.10.96 — 2026-10-08
 
 Chat on the native engine works again: GrokHub sent `connection_add` and `connection_disable` to the model twice (once from Spike-5b's connection tools, once from Spike-5c's self-manage tools), and the API refused every turn with "Duplicate function definition provided". The self-manage table is now the only source, and a native engine error no longer reads as "ACP session/new failed". When Update stops because new files in your GrokHub folder are in the way, it now says so instead of asking you to commit or stash.
