@@ -697,6 +697,22 @@ fn mcp_tool_output(body: serde_json::Value) -> grokhub_agent::ToolOutput {
     }
 }
 
+/// Full-screen stills for "Record my screen", one per call, as `(bytes, mime)`.
+/// Connects to the desktop backend on the first call and keeps it.
+pub(crate) fn screen_grabber() -> impl FnMut() -> Result<(Vec<u8>, String), String> {
+    let mut backend: Option<Box<dyn DesktopBackend>> = None;
+    move || {
+        if backend.is_none() {
+            backend = Some(connect_backend()?);
+        }
+        let shot = backend
+            .as_mut()
+            .ok_or_else(|| "no desktop backend".to_string())?
+            .screenshot("all")?;
+        Ok((shot.bytes, shot.mime))
+    }
+}
+
 fn connect_backend() -> Result<Box<dyn DesktopBackend>, String> {
     #[cfg(windows)]
     {

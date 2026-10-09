@@ -103,6 +103,7 @@ pub(super) enum PulseAct {
     Undo(String),
     NeverAgain(String),
     Retry(String),
+    DeleteRecording(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -414,6 +415,9 @@ fn pulse_menu(
     if grokhub_core::is_crash_card(card) && card.prompt.is_some() {
         pick(ui, "Retry", "", PulseAct::Retry(id.clone()), act);
     }
+    if grokhub_core::screen_recording_dir(card).is_some() {
+        pick(ui, "Delete recording", "", PulseAct::DeleteRecording(id.clone()), act);
+    }
     pick(ui, "Open", "Enter", PulseAct::Open(id.clone()), act);
     ui.separator();
     pick(ui, "Not this", "N", PulseAct::NotThis(id.clone()), act);
@@ -582,6 +586,8 @@ pub(super) enum FeedPostAct {
     Open,
     /// Crash card: run it again.
     Retry,
+    /// Screen recording card: delete its folder (after a confirm).
+    DeleteRecording,
 }
 
 /// Open and Retry on a crash card (a run killed from outside, exit 143).
@@ -597,6 +603,24 @@ fn paint_crash(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct> {
         }
         if card.prompt.is_some() && super::change_undo::click_pill(ui, "Retry") {
             act = Some(FeedPostAct::Retry);
+        }
+    });
+    act
+}
+
+/// Open and Delete recording on a screen recording card.
+fn paint_recording(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct> {
+    if grokhub_core::screen_recording_dir(card).is_none() || card.status == grokhub_core::UpdateStatus::Dismissed {
+        return None;
+    }
+    let mut act = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        if card.action.is_some() && super::change_undo::click_pill(ui, "Open") {
+            act = Some(FeedPostAct::Open);
+        }
+        if super::change_undo::click_pill(ui, "Delete recording") {
+            act = Some(FeedPostAct::DeleteRecording);
         }
     });
     act
@@ -694,6 +718,9 @@ pub(super) fn paint_post_body(
     if let Some(crash) = paint_crash(ui, card) {
         act = Some(crash);
     }
+    if let Some(rec) = paint_recording(ui, card) {
+        act = Some(rec);
+    }
     act
 }
 
@@ -712,6 +739,9 @@ pub(super) fn post_source(card: &UpdateCard) -> String {
     }
     if grokhub_core::is_crash_card(card) {
         return "Crash".into();
+    }
+    if grokhub_core::screen_recording_dir(card).is_some() {
+        return "Screen recording".into();
     }
     match card.kind {
         UpdateKind::AutomationDone => "Automation run".into(),
@@ -1164,6 +1194,7 @@ impl Cabin {
                         FeedPostAct::NeverAgain => PulseAct::NeverAgain(card.id.clone()),
                         FeedPostAct::Open => PulseAct::Open(card.id.clone()),
                         FeedPostAct::Retry => PulseAct::Retry(card.id.clone()),
+                        FeedPostAct::DeleteRecording => PulseAct::DeleteRecording(card.id.clone()),
                     });
                 }
             });
@@ -1434,6 +1465,7 @@ impl Cabin {
             PulseAct::Undo(id) => self.done_for_you_undo(&id),
             PulseAct::NeverAgain(id) => self.done_for_you_never(&id),
             PulseAct::Retry(id) => self.crash_retry(&id),
+            PulseAct::DeleteRecording(id) => self.arm_delete_recording(&id),
             PulseAct::Link(url) => {
                 self.follow_update_action(Some(UpdateAction::DeepLink { href: url }))
             }

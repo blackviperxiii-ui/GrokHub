@@ -67,6 +67,7 @@ pub mod proactive_auto;
 pub mod redact;
 pub mod reflect;
 pub mod review;
+pub mod screen_record;
 pub mod self_review;
 pub mod rewind;
 pub mod shortcuts;
@@ -140,11 +141,12 @@ pub use capture::{
 };
 pub use chat::{
     agent_reasoning_effort_for_mode, cabin_spawn_model, chat_request_body,
-    chat_request_body_for_mode, chat_request_body_vision, chat_timeout_secs, effective_chat_mode,
+    chat_request_body_for_mode, chat_request_body_images, chat_request_body_vision, chat_timeout_secs,
+    effective_chat_mode,
     effort_label, extract_host_cmds, failover_model, is_composer_ladder_model, model_for_mode,
     needs_auth_banner, paint_connect_banner, parse_chat_content, parse_chat_reasoning,
     accepts_reasoning_effort, parse_model_reasoning, parse_model_text, parse_reasoning_effort, parse_responses_reasoning,
-    parse_responses_text, reasoning_effort_for_mode, resolve_chat_model, responses_request_body,
+    parse_responses_text, reasoning_effort_for_mode, resolve_chat_model, responses_request_body, responses_request_body_images,
     responses_url, route_auto_mode, settings_pin_blocks_auto, should_failover_status,
     BACKGROUND_EFFORT, CABIN_FAST_FALLBACK, CABIN_FAST_MODEL, DEFAULT_MODEL, REASONING_EFFORTS,
     XAI_BASE,
@@ -524,7 +526,8 @@ pub use update_feed::{
     CARD_ACTION_DONE, CARD_ACTION_TAG, modified_ideas, post_skill_idea, set_idea_draft,
     IDEA_MODIFIED_MAX,
     board_covers_topic, live_generated_ideas, post_generated_ideas, purge_one_off_ideas, purge_template_ideas,
-    automation_failed_card, crash_card, is_crash_card, CRASH_SOURCE_PREFIX,
+    automation_failed_card, crash_card, is_crash_card, screen_recording_card, screen_recording_dir,
+    CRASH_SOURCE_PREFIX, SCREEN_RECORDING_SOURCE_PREFIX,
     archive_digest, archived_digests, automate_offer_card, automation_done_card,
     digest_card, digest_topic_refused, discuss_context, short_takeaway, TAKEAWAY_MAX,
     dismiss_idea, dismiss_update, dismiss_update_at,
