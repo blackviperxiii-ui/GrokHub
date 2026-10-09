@@ -51,7 +51,7 @@ mod user_model;
 mod write;
 
 pub use dream::{
-    dream_report_path, latest_dream, DreamMerge, DreamOpts, DreamReport, DreamRetire, DREAM_DUP_JACCARD,
+    dream_report_path, latest_dream, DreamMerge, DreamOpts, DreamReport, DreamRetire, PruneReport, DREAM_DUP_JACCARD,
     DREAM_PROPOSE_CONFIDENCE, DREAM_RECENT_DAYS, DREAM_STALE_BELOW, DREAM_TAG_JACCARD, DREAM_TTL_DAYS,
 };
 pub use import::{durable_chip_prefs, import_legacy, write_import_report, ImportReport, ImportTally};
