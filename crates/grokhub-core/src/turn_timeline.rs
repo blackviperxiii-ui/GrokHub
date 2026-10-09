@@ -403,7 +403,7 @@ pub fn tool_status_running(status: &str) -> bool {
     )
 }
 
-fn clip_chars(s: &str, max: usize) -> String {
+pub(crate) fn clip_chars(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
     }

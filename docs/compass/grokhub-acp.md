@@ -8,7 +8,7 @@
 - `cargo test -p grokhub-acp --test fake_agent` (drives the `grokhub-fake-acp` bin; set `FAKE_ACP_*` env in the test)
 - `cargo run -p grokhub-acp --example ping`
 ## Key files
-- `crates/grokhub-acp/src/client.rs`: `SpawnOpts`, `connect`, `AcpHandle`, `spawn_grok_p_stream`, `run_single_turn`, session listing.
+- `crates/grokhub-acp/src/client.rs`: `SpawnOpts`, `connect`, `AcpHandle`, `spawn_grok_p_stream`, `run_single_turn_full`, session listing.
 - `crates/grokhub-acp/src/locate.rs`: `find_grok`, `cabin_grok_home`, `cabin_leader_socket`, `with_ask_deny`, `with_hard_deny`, `CLI_CREDENTIAL_DENY`, `register_desktop_mcp`.
 - `crates/grokhub-acp/src/protocol.rs`: JSON-RPC shapes, `AcpEvent`, `PermissionMode::uses_acp` / `scheduled_args`, `ASK_ACP_DOWN`.
 - `crates/grokhub-acp/src/stream.rs` (streaming-json events) and `crates/grokhub-acp/src/install.rs` (alpha install).

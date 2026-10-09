@@ -83,10 +83,6 @@ pub fn install_grok_blocking() -> Result<PathBuf, String> {
     install_grok_blocking_opts(false)
 }
 
-pub fn install_grok_blocking_force() -> Result<PathBuf, String> {
-    install_grok_blocking_opts(true)
-}
-
 fn install_grok_blocking_opts(force: bool) -> Result<PathBuf, String> {
     if !force {
         if let Some(p) = find_grok() {

@@ -35,14 +35,6 @@ impl GateOutcome {
     pub fn needs_viper(&self) -> bool {
         matches!(self, Self::Park { needs_viper: true, .. })
     }
-
-    pub fn as_decision(&self) -> Decision {
-        match self {
-            Self::Allow => Decision::Run,
-            Self::Park { .. } => Decision::Ask,
-            Self::Refuse { reason } => Decision::Refuse(reason.clone()),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

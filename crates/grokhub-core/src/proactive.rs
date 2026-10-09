@@ -42,7 +42,7 @@ pub const NOTIFY_DUE_MS: u64 = HOUR_MS;
 /// Card ids start with this, so the cabin can tell its own offers apart.
 pub const PROACTIVE_ID_PREFIX: &str = "proactive-";
 
-// ---------------------------------------------------------------- candidates
+// candidates
 
 /// Where a candidate came from. Calendar, Mail and SystemState are read only
 /// with a consent grant for their scope.
@@ -194,7 +194,7 @@ fn unit(v: f64) -> f64 {
     }
 }
 
-// ---------------------------------------------------------------- routes
+// routes
 
 /// Where a surfaced candidate goes. There is no "act" route in 6a: every
 /// route is a card and nothing runs without your click.
@@ -284,7 +284,7 @@ pub fn notify_os(candidate: &Candidate, now_ms: u64, reminders_on: bool) -> bool
     reminders_on && candidate.due_at.is_some_and(|due| due >= now_ms && due - now_ms < NOTIFY_DUE_MS)
 }
 
-// ---------------------------------------------------------------- watch
+// watch
 
 /// An open workboard card.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -491,7 +491,7 @@ pub fn rank_candidates(mut cands: Vec<Candidate>) -> Vec<Candidate> {
     cands
 }
 
-// ---------------------------------------------------------------- budget
+// budget
 
 /// The card budget, beside (not instead of) the heartbeat act throttle.
 /// Serde so mutes and the quiet queue survive a relaunch.

@@ -322,7 +322,6 @@ where
     }
 }
 
-pub const GOAL_MAX_STEPS: u32 = 6;
 pub const FOLLOWUP_MAX_STEPS: u32 = 4;
 pub const FOLLOWUP_PROMPT: &str =
     "FOLLOWUP: Finish the incomplete work from your last reply. Act now with Grok Build tools or computer-use if needed. End with status.";

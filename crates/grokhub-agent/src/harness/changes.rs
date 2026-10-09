@@ -28,8 +28,8 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
+use grokhub_core::now_ms;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -415,13 +415,6 @@ impl ChangeLedger {
     pub fn recent(&self, n: usize) -> Vec<&Change> {
         self.changes.iter().rev().take(n).collect()
     }
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 fn skill_md(skills_dir: &Path, name: &str) -> Result<PathBuf, String> {

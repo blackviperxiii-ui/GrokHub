@@ -568,27 +568,6 @@ pub fn idea_rank(card: &UpdateCard, now: u64) -> i64 {
     score
 }
 
-/// Pin up to three ideas the first time the board has any. Later cards stay on Ideas only.
-pub fn seal_feed_ideas(cards: &mut [UpdateCard], pulse: &mut FeedPulse, now: u64) {
-    if pulse.feed_slots_spent > 0 {
-        return;
-    }
-    let mut idxs: Vec<usize> = cards
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| c.kind == UpdateKind::Idea && surfaced(c) && !c.feed_kept)
-        .map(|(i, _)| i)
-        .collect();
-    idxs.sort_by(|&a, &b| idea_rank(&cards[b], now).cmp(&idea_rank(&cards[a], now)));
-    let n = idxs.len().min(IDEA_DISCOVERY_MAX);
-    for i in idxs.into_iter().take(n) {
-        cards[i].feed_pin = true;
-    }
-    if n > 0 {
-        pulse.feed_slots_spent = n as u8;
-    }
-}
-
 /// Take one idea off the home feed and leave it on the Ideas board. No replacement.
 pub fn unpin_feed_idea(cards: &mut [UpdateCard], id: &str) -> bool {
     let Some(card) = cards
@@ -1096,20 +1075,6 @@ pub fn hold_if_quiet(card: &mut UpdateCard, quiet: bool) {
 /// An already-empty non-scratch chat is the feed surface; do not stack another one.
 pub fn resume_needs_fresh_chat(message_count: usize, scratch: bool) -> bool {
     message_count > 0 || scratch
-}
-
-pub fn card_matches(card: &UpdateCard, query: &str) -> bool {
-    let q = query.trim().to_ascii_lowercase();
-    if q.is_empty() {
-        return true;
-    }
-    card.title.to_ascii_lowercase().contains(&q)
-        || card
-            .body
-            .as_deref()
-            .unwrap_or("")
-            .to_ascii_lowercase()
-            .contains(&q)
 }
 
 /// What the person said on the card, in full. Idea drafts keep this.

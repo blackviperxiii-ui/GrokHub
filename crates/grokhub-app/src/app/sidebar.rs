@@ -127,7 +127,7 @@ impl Cabin {
     }
 
     fn toggle_maximize(&mut self, ctx: &egui::Context) {
-        let currently = ctx.input(|i| i.viewport().maximized).unwrap_or(self.win_max);
+        let currently = maximized_now(ctx.input(|i| i.viewport().maximized), self.win_max);
         self.win_max = next_maximized(currently);
         self.cfg.window.maximized = self.win_max;
         self.geom_dirty = true;

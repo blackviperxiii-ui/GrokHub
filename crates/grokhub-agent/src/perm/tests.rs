@@ -830,3 +830,47 @@ fn unattended_refuses_dangerous_and_unsplittable_in_every_mode() {
         }
     }
 }
+
+#[test]
+fn rules_file_with_a_bom_keeps_its_deny_rules() {
+    let dir = ws_file("bom-rules");
+    std::fs::write(
+        dir.join("permission-rules.json"),
+        "\u{feff}{\"deny\": [\"Bash(rm -rf *)\"]}",
+    )
+    .unwrap();
+    let rules = load_rules(&dir);
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].action, Action::Deny);
+    assert_eq!(rules[0].source, "Bash(rm -rf *)");
+}
+
+#[test]
+fn save_rules_refuses_to_overwrite_an_unreadable_file() {
+    let dir = ws_file("bad-rules");
+    let path = dir.join("permission-rules.json");
+    let hand_edited = "{\"deny\": [\"Bash(rm -rf *)\",]}";
+    std::fs::write(&path, hand_edited).unwrap();
+    let added = parse_rule("Bash(npm test)", Action::Allow).unwrap();
+    assert!(save_rules(&dir, &[added]).is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), hand_edited);
+}
+
+#[test]
+fn grants_file_with_a_bom_survives_a_new_grant() {
+    let dir = ws_file("bom-grants");
+    let ws = dir.join("other");
+    std::fs::create_dir_all(&ws).unwrap();
+    std::fs::write(
+        dir.join("permission-grants.json"),
+        "\u{feff}{\"projects\": {\"/kept/project\": [\"npm test\"]}}",
+    )
+    .unwrap();
+    add_grant_at(&dir, &ws, "cargo build").unwrap();
+    let all = load_all_grants(&dir);
+    assert_eq!(
+        all.get("/kept/project"),
+        Some(&vec!["npm test".to_string()])
+    );
+    assert_eq!(all.len(), 2);
+}

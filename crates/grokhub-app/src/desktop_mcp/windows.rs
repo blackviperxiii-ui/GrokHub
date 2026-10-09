@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use grokhub_core::desktop_mcp::{
     union_monitor, CapturedShot, DesktopBackend, KeyCombo, MonitorGeom, MouseButton, ShotGeom,
+    LOCK_MSG,
 };
 
 use super::keys::{vk_mods, vk_of};
@@ -21,8 +22,6 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     MOUSEEVENTF_WHEEL, MOUSEINPUT, VK_RETURN,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::SetCursorPos;
-
-const LOCK_MSG: &str = "The lock screen is up. Unlock this computer, then try again.";
 
 pub(crate) fn enable_per_monitor_dpi() {
     unsafe {

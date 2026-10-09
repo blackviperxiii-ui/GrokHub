@@ -171,26 +171,6 @@ pub fn remote_tracking_tips(source: &Path) -> Result<(String, String), String> {
     Ok((beta, main))
 }
 
-/// Network probe: `git ls-remote origin refs/heads/beta refs/heads/main`.
-pub fn ls_remote_channel_tips(source: &Path) -> Result<(String, String), String> {
-    if !is_grokhub_source(source) {
-        return Err("not a GrokHub source tree".into());
-    }
-    let (ok, out) = git_stdout(
-        source,
-        &[
-            "ls-remote",
-            "origin",
-            "refs/heads/beta",
-            "refs/heads/main",
-        ],
-    )?;
-    if !ok {
-        return Err("git ls-remote origin failed".into());
-    }
-    Ok(parse_ls_remote_tips(&out))
-}
-
 /// Labs Beta auto-off probe: fetch `beta` and `main` from `origin` into
 /// `origin/beta` / `origin/main`, then read both tip SHAs and trees
 /// (`origin/<branch>^{tree}`). Uses only the clone's existing `origin` remote.
@@ -295,11 +275,6 @@ pub fn canonical_github_origin(url: &str) -> bool {
 /// fetches an unvalidated remote and then runs its install script.
 pub fn origin_needs_retarget(url: &str) -> bool {
     !canonical_github_origin(url)
-}
-
-/// Alias used by older call sites — same as `origin_needs_retarget`.
-pub fn stale_github_origin(url: &str) -> bool {
-    origin_needs_retarget(url)
 }
 
 pub fn update_cmds(source: &Path) -> Result<Vec<String>, String> {
@@ -441,14 +416,6 @@ pub fn settings_update_note() -> &'static str {
         "Downloads the latest Windows zip from GitHub into %LOCALAPPDATA%\\Programs\\GrokHub, then runs grok update --alpha. A source clone on main overlays with install-windows.ps1 instead. Does not wipe %APPDATA%\\GrokHub."
     } else {
         "Pulls origin/main, overlays the GUI, then runs grok update --alpha so the CLI stays on the fastest track. The clone must be on main. Does not wipe ~/.config/GrokHub."
-    }
-}
-
-pub fn settings_update_action_hint() -> &'static str {
-    if cfg!(windows) {
-        "Latest GitHub zip, or overlay a source clone, then grok update --alpha."
-    } else {
-        "Pulls this clone, overlays the GUI, and updates grok on alpha."
     }
 }
 

@@ -19,10 +19,7 @@ fn push_host_line(buf: &mut String, line: &str, cap: usize) -> bool {
     if buf.len() <= cap {
         return true;
     }
-    buf.truncate(cap);
-    while !buf.is_empty() && !buf.is_char_boundary(buf.len()) {
-        buf.pop();
-    }
+    buf.truncate(buf.floor_char_boundary(cap));
     false
 }
 
@@ -458,6 +455,14 @@ mod tests {
         assert!(out.contains("after"), "{out}");
         assert!(out.contains("[stderr]") && out.contains("err"), "{out}");
         assert!(out.contains("exit 0"), "{out}");
+    }
+
+    #[test]
+    fn push_host_line_caps_on_a_char_boundary() {
+        let mut buf = String::new();
+        let line = format!("x{}", "é".repeat(10));
+        assert!(!push_host_line(&mut buf, &line, 6));
+        assert_eq!(buf, "xéé");
     }
 
     #[test]
