@@ -2831,6 +2831,15 @@ mod tests {
                 CaptureRouteId::PortalScreenshot
             ]
         );
+        assert_eq!(wlroots_capture_order(), &[CaptureRouteId::Grim, CaptureRouteId::PortalScreenshot]);
+        assert_eq!(
+            capture_failed_note(&[
+                (CaptureRouteId::Grim, "grim: compositor doesn't support wlr-screencopy.".into()),
+                (CaptureRouteId::PortalScreenshot, " portal screenshot: timed out ".into()),
+            ]),
+            "Can't capture the screen: grim: grim: compositor doesn't support wlr-screencopy; \
+             portal Screenshot: portal screenshot: timed out."
+        );
         assert_eq!(
             desktop_control_status(
                 input_route_label(InputRouteId::Libei),

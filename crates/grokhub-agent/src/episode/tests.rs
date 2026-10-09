@@ -38,6 +38,7 @@ enum Act {
     DoneSelfChecked,
     Say,
     Shell(&'static str),
+    Shot,
 }
 
 type Script = Box<dyn Fn(usize) -> Act + Send + Sync>;
@@ -143,6 +144,7 @@ impl ModelClient for FakeModel {
             Act::DoneSelfChecked => ("Saved it.\nVERIFY_OK\nGOAL_COMPLETE".into(), vec![]),
             Act::Say => ("Which network should I pick?".into(), vec![]),
             Act::Shell(cmd) => (String::new(), vec![call(n, "run_terminal_command", json!({"command": cmd}))]),
+            Act::Shot => (String::new(), vec![call(n, "screenshot", json!({}))]),
         };
         Ok(TurnOutput { text, reasoning: WORKER_THOUGHT.into(), calls, usage })
     }
@@ -159,6 +161,8 @@ struct FakeDesk {
     still: bool,
     /// A click on this label fails.
     fail_label: Option<&'static str>,
+    /// Every screenshot fails with this.
+    shot_error: Option<&'static str>,
 }
 
 impl FakeDesk {
@@ -192,6 +196,9 @@ impl DesktopOps for FakeDesk {
         }
         if name == "click" && self.fail_label.is_some() && args.get("label").and_then(Value::as_str) == self.fail_label {
             return ToolOutput::err("no such button");
+        }
+        if let (Some(err), "screenshot") = (self.shot_error, name) {
+            return ToolOutput::err(err);
         }
         if name == "screenshot" {
             return ToolOutput {
@@ -1062,4 +1069,31 @@ fn an_episode_that_failed_then_recovered_hands_its_lesson_to_the_next_run() {
     assert_eq!(spans[1].decision, "lesson_used", "named right after the begin marker");
     // It finished, so the lesson keeps its rank.
     assert_eq!(lessons::load(&next.dir)[0].failed_after, 0);
+}
+
+fn shots_then_done(shots: usize) -> Script {
+    Box::new(move |n| if n < shots { Act::Shot } else { Act::Done })
+}
+
+#[test]
+fn a_screenshot_that_fails_on_one_backend_never_pauses_and_no_backend_at_all_pauses_once() {
+    let one = rig("shot-one", shots_then_done(6));
+    let desk = FakeDesk { shot_error: Some("portal Screenshot: timed out"), ..FakeDesk::default() };
+    let one = Rig { desk, ..one };
+    let mut ep = one.episode("Open the Settings");
+    assert_eq!(one.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    let spans = one.spans();
+    assert!(!spans.iter().any(|s| s.decision == "pause" || s.decision == "park"), "no pause, no card");
+
+    let note = "Can't capture the screen: KWin ScreenShot2: NoAuthorized; spectacle: not installed; \
+                portal Screenshot: timed out after 30 s while waiting for the desktop portal to answer the request.";
+    let none = rig("shot-none", shots_then_done(6));
+    let desk = FakeDesk { shot_error: Some(note), ..FakeDesk::default() };
+    let none = Rig { desk, ..none };
+    let mut ep = none.episode("Open the Settings");
+    let stop = none.run(&mut ep, &mut EpisodeView::default()).stop;
+    let EpisodeStop::LadderPause(step) = stop else { panic!("one pause: {stop:?}") };
+    assert_eq!(step.reason, format!("action_loop: {note}"), "the pause names every backend's error");
+    let pauses = none.spans().iter().filter(|s| s.tool == crate::harness::RECOVERY_TOOL && s.decision == "pause").count();
+    assert_eq!(pauses, 1);
 }
