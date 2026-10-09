@@ -44,6 +44,7 @@ pub mod xai_signin;
 pub mod imagine_auth;
 pub mod inhabit;
 pub mod learning;
+pub mod local_setup;
 pub mod md;
 pub mod model_registry;
 pub mod models;

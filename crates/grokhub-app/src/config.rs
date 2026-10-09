@@ -432,6 +432,9 @@ pub struct AppConfig {
     /// First-run Get Started completed (Super Grok OAuth succeeded once).
     #[serde(default)]
     pub get_started_done: bool,
+    /// The first-run setup wizard was finished or skipped (`setupDone`).
+    #[serde(default)]
+    pub setup_done: bool,
     /// Display name for the rail and avatar menu. Empty means the user has not set one.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub display_name: String,
@@ -605,6 +608,7 @@ impl Default for AppConfig {
             theme: default_theme(),
             window: crate::window::WindowGeom::default(),
             get_started_done: false,
+            setup_done: false,
             display_name: String::new(),
             profile_picture: String::new(),
             digest_brief: String::new(),
@@ -1077,6 +1081,7 @@ mod tests {
         assert!(!loaded.local_model && body.contains("\"localModel\": false"), "{body}");
         let old: AppConfig = serde_json::from_str("{}").expect("empty config");
         assert!(!old.local_model);
+        assert!(!old.setup_done && body.contains("\"setupDone\": false"), "{body}");
         let on: AppConfig = serde_json::from_str(r#"{"localModel":true}"#).expect("localModel on");
         assert!(on.local_model);
         assert!(serde_json::to_string(&on).expect("json").contains("\"localModel\":true"));
