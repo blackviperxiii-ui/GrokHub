@@ -6,14 +6,15 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
-use super::verify::{verify_gate, Observation, Verdict};
+use super::verify::{verify_call, verify_call_at, verify_gate, Observation, Verdict, CHECKER_UNAVAILABLE, ESCALATED_CLASS};
 use super::view::{zoom_schema, EpisodeView, Folder, ZOOM_TOOL};
 use super::{Episode, EpisodeEnd, OpenPark, StepShape, FANOUT_CAP, GOAL_CAP, PARK_PREFIX, REPLAN_NOTE, STALL_REPLAN};
 use crate::client::{ContentPart, FunctionCall, InputItem, ModelClient, Usage};
 use crate::gate::{self, Decision, Gate, PermAnswer, PermitWait, Waited};
 use crate::harness::{
     self, action_loop, append_span, desk_args, done_without_criteria, hard_class, ladder_span, post_park, AccessMode,
-    Finding, GateOutcome, HardClass, LadderStep, ParkRequest, Rung, Span, Step, APPROVAL_TTL, VERIFY_TOOL,
+    Finding, GateOutcome, HardClass, LadderStep, Origin, ParkRequest, Rung, Span, Step, APPROVAL_TTL, RECOVERY_TOOL,
+    VERIFY_TOOL,
 };
 use crate::route::{call_model, CallTokens, ModelCall, BACKGROUND_EFFORT, CLASS_COMPACT, CLASS_EPISODE};
 use crate::run::{HaltCheck, LoopEvent, SteerQueue};
@@ -26,6 +27,12 @@ pub const EPISODE_RULES: &str = "You are on a supervised desktop session the use
 Each step you see the episode so far, the current goal step and the latest observation. \
 Call one or a few desktop tools to make progress. A step that sends, pays, deletes, types a credential or cannot be undone waits for the user's click. \
 When the goal is met, reply GOAL_COMPLETE with no tool calls; an independent check decides whether it is done.";
+
+/// Detector name on the re-plan span when the checker rejects and no
+/// detector finding matches, or the checker could not run.
+pub const VERIFY_REJECT: &str = "verify_reject";
+/// Detector name on the spans for a checker call that could not run.
+pub const CHECKER_ERROR: &str = "checker_error";
 
 /// A fan-out read whose worker died returns this, so it can't hide.
 pub const DEAD_WORKER: &str = "worker returned nothing";
@@ -170,6 +177,9 @@ struct Run<'a, 'b> {
     /// step span of the batch carries them.
     tokens: Option<CallTokens>,
     obs: Option<Observation>,
+    /// The note that replaces the worker's last words when the episode ends
+    /// unconfirmed.
+    end_note: Option<String>,
 }
 
 /// Drive one turn of an episode. It returns when the episode ends, the
@@ -182,7 +192,7 @@ pub fn run_episode(
     view: &mut EpisodeView,
     on_event: &mut dyn FnMut(LoopEvent),
 ) -> EpisodeOut {
-    let mut run = Run { k, ep, view, usage: Usage::default(), tokens: None, obs: None };
+    let mut run = Run { k, ep, view, usage: Usage::default(), tokens: None, obs: None, end_note: None };
     if run.ep.trail.is_empty() {
         let goal = format!("goal: {}", run.ep.goal.chars().take(GOAL_CAP).collect::<String>());
         run.write(run.ep.marker("begin", "open", &goal));
@@ -217,10 +227,11 @@ pub fn run_episode(
         if turn.calls.is_empty() {
             match run.claim(&turn.text) {
                 Some(stop) => {
-                    if !turn.text.trim().is_empty() {
-                        on_event(LoopEvent::Text(turn.text.clone()));
+                    let reply = run.end_note.take().unwrap_or(turn.text);
+                    if !reply.trim().is_empty() {
+                        on_event(LoopEvent::Text(reply.clone()));
                     }
-                    return run.out(stop, turn.text);
+                    return run.out(stop, reply);
                 }
                 None => continue,
             }
@@ -369,7 +380,10 @@ impl Run<'_, '_> {
     }
 
     /// No tools: a claim. `GOAL_COMPLETE` goes to VerifyGate; anything else
-    /// waits on the user. `None` means the ladder sent the worker back.
+    /// waits on the user. `None` means the worker goes on: a reject re-plans
+    /// with the checker's reason (through the ladder when a detector matches)
+    /// and never waits. The same reject on an unchanged screen
+    /// [`super::SAME_REJECT_END`] times ends the episode with a named note.
     fn claim(&mut self, text: &str) -> Option<EpisodeStop> {
         let mut reply = Span::reply(&self.ep.chat_id, text, self.k.held);
         reply.tokens = self.tokens.take();
@@ -381,15 +395,8 @@ impl Run<'_, '_> {
             text: "no observation: the gate did not allow a screenshot".into(),
             ..Observation::default()
         });
-        let verdict = verify_gate(self.k.client, self.k.model, &self.ep.goal, &fin, &self.ep.id, self.k.cancel);
-        let (verdict, tokens) = match verdict {
-            Ok((v, t)) => {
-                self.usage.add(&usage_of(&t));
-                (v, Some(t))
-            }
-            Err(e) => (Verdict::Reject(format!("the checker could not run: {e}")), None),
-        };
         self.write(reply);
+        let (verdict, tokens) = self.check(&fin);
         let mut check = Span::deny(&self.ep.chat_id, VERIFY_TOOL, "{}", "", "soft");
         check.decision = "allow".into();
         check.tokens = tokens;
@@ -405,12 +412,79 @@ impl Run<'_, '_> {
                 check.result = "fail".into();
                 check.claim = why.clone();
                 self.write(check);
+                if self.ep.note_reject(&why, &fin.hash) {
+                    return Some(self.unconfirmed(&why));
+                }
+                if why == CHECKER_UNAVAILABLE {
+                    return self.verify_replan(&why);
+                }
                 match done_without_criteria(&self.ep.trail).pop() {
                     Some(finding) => self.ladder(finding, Some(&why)),
-                    None => Some(EpisodeStop::Waiting),
+                    None => self.verify_replan(&why),
                 }
             }
         }
+    }
+
+    /// VerifyGate with fallbacks. A call that can't run is tried once more,
+    /// then once up the route ladder ([`ESCALATED_CLASS`]); each
+    /// retry writes a quiet `checker_error` span. Still nothing: a reject
+    /// with [`CHECKER_UNAVAILABLE`].
+    fn check(&mut self, fin: &Observation) -> (Verdict, Option<CallTokens>) {
+        for i in 0..3 {
+            let call = match i {
+                2 => verify_call_at(self.k.model, ESCALATED_CLASS, self.k.effort, &self.ep.goal, fin, &self.ep.id),
+                _ => verify_call(self.k.model, &self.ep.goal, fin, &self.ep.id),
+            };
+            match verify_gate(self.k.client, &call, self.k.cancel) {
+                Ok((v, t)) => {
+                    self.usage.add(&usage_of(&t));
+                    return (v, Some(t));
+                }
+                Err(_) if self.k.cancel.is_cancelled() || self.k.halt.halted() => break,
+                Err(e) => {
+                    let next = match i {
+                        0 => "retry",
+                        1 => "escalate",
+                        _ => continue,
+                    };
+                    let args = json!({"detector": CHECKER_ERROR, "target": VERIFY_TOOL}).to_string();
+                    let mut span = Span::deny(&self.ep.chat_id, RECOVERY_TOOL, &args, next, "soft");
+                    span.decision = next.into();
+                    span.claim = format!("{CHECKER_ERROR}: {}", e.to_string().chars().take(200).collect::<String>());
+                    self.write(span.from_origin(Origin::Repair));
+                }
+            }
+        }
+        (Verdict::Reject(CHECKER_UNAVAILABLE.into()), None)
+    }
+
+    /// The checker rejected with no detector finding, or could not run: a
+    /// quiet re-plan span and the re-plan note with its reason for the next
+    /// step. No card, no pause.
+    fn verify_replan(&mut self, why: &str) -> Option<EpisodeStop> {
+        let step = LadderStep {
+            rung: Rung::Replan,
+            detector: VERIFY_REJECT.into(),
+            target: format!("{VERIFY_TOOL}#{}", self.ep.id),
+            hard: None,
+            evidence: Vec::new(),
+            reason: format!("{VERIFY_REJECT}: {why}"),
+            prompt: Some(REPLAN_NOTE.into()),
+        };
+        let span = ladder_span(&self.ep.chat_id, &step);
+        self.write(span);
+        self.ep.note = Some(format!("{REPLAN_NOTE} The independent check said: {why}"));
+        None
+    }
+
+    /// The same reject on an unchanged screen too many times: end with a
+    /// note naming the goal and the reason. No card, no pause.
+    fn unconfirmed(&mut self, why: &str) -> EpisodeStop {
+        let goal: String = self.ep.goal.chars().take(GOAL_CAP).collect();
+        self.end_note = Some(format!("Couldn't confirm: {goal} — checker says {why}"));
+        self.end(EpisodeEnd::Unconfirmed);
+        EpisodeStop::Ended(EpisodeEnd::Unconfirmed)
     }
 
     /// One ladder rung for a finding: a repair note for the next step, or a pause.

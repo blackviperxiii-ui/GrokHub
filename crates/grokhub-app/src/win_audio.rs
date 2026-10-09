@@ -17,7 +17,7 @@ use windows_sys::Win32::Media::Audio::{
 };
 use windows_sys::Win32::Media::Multimedia::mciSendStringW;
 
-const RATE: u32 = 24_000;
+pub(crate) const RATE: u32 = 24_000;
 const FRAME: usize = 4800; // 100 ms s16le mono
 const MMSYSERR_NOERROR: u32 = 0;
 

@@ -37,6 +37,8 @@ pub enum Slash {
     MemoryShow,
     /// `/memory dream`: the latest AMR dream report, as chat text.
     MemoryDream,
+    /// `/memory prune`: run memory retention now and say what it retired.
+    MemoryPrune,
     Recall(String),
     Board,
     Imagine(String),
@@ -66,6 +68,12 @@ pub enum Slash {
     Privacy,
     /// `/diagnose`: read-only checks of disk, memory, services, logs, network and updates (Spike-8b).
     Diagnose,
+    /// `/record [what's wrong]` starts a consented screen recording; `/record stop` ends it.
+    Record(String),
+    RecordStop,
+    /// `/audiocheck [input]`: list outputs and inputs, record a short clip and
+    /// say what's wrong with it. Changes nothing.
+    AudioCheck(String),
     /// `/why`: the last 10 route reasons (Router R0, shadow). Read only.
     Why,
     /// `/why models`: one line per model with its state, usable, and reason.
@@ -192,6 +200,9 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
             if rest.eq_ignore_ascii_case("dream") {
                 return Some(Slash::MemoryDream);
             }
+            if rest.eq_ignore_ascii_case("prune") {
+                return Some(Slash::MemoryPrune);
+            }
             let note = rest
                 .strip_prefix("note")
                 .map(|s| s.trim())
@@ -313,6 +324,9 @@ pub fn parse_slash(line: &str) -> Option<Slash> {
         "/sync" => Some(Slash::Sync),
         "/privacy" => Some(Slash::Privacy),
         "/diagnose" => Some(Slash::Diagnose),
+        "/record" if rest.eq_ignore_ascii_case("stop") => Some(Slash::RecordStop),
+        "/record" => Some(Slash::Record(rest.to_string())),
+        "/audiocheck" => Some(Slash::AudioCheck(rest.to_string())),
         "/why" if rest.is_empty() => Some(Slash::Why),
         "/why" if rest.eq_ignore_ascii_case("models") => Some(Slash::WhyModels),
         "/why" if rest.eq_ignore_ascii_case("table") => Some(Slash::WhyTable),
@@ -421,6 +435,7 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::MemoryNote(_) => "memory",
         Slash::MemoryShow => "memory_show",
         Slash::MemoryDream => "memory_dream",
+        Slash::MemoryPrune => "memory_prune",
         Slash::Recall(_) => "recall",
         Slash::Board => "board",
         Slash::Imagine(_) => "imagine",
@@ -448,6 +463,9 @@ pub fn slash_kind(s: &Slash) -> &'static str {
         Slash::Sync => "sync",
         Slash::Privacy => "privacy",
         Slash::Diagnose => "diagnose",
+        Slash::Record(_) => "record",
+        Slash::RecordStop => "record_stop",
+        Slash::AudioCheck(_) => "audiocheck",
         Slash::Why | Slash::WhyModels | Slash::WhyTable => "why",
         Slash::Hub => "hub",
         Slash::Inhabit(_) => "inhabit",
@@ -516,7 +534,7 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/clear", hint: "Clear current chat", insert: "/clear", run_on_pick: true },
     SlashDef { cmd: "/compact", hint: "Compact Grok context", insert: "/compact", run_on_pick: true },
     SlashDef { cmd: "/context", hint: "Show Grok Build context", insert: "/context", run_on_pick: true },
-    SlashDef { cmd: "/health", hint: "Run install/session health pass", insert: "/health", run_on_pick: true },
+    SlashDef { cmd: "/health", hint: "Updates, failed services and the last dream", insert: "/health", run_on_pick: true },
     SlashDef { cmd: "/fix", hint: "Self-heal stuck UI + health pass", insert: "/fix", run_on_pick: true },
     SlashDef { cmd: "/memory", hint: "Show memory files", insert: "/memory ", run_on_pick: false },
     SlashDef { cmd: "/learn", hint: "Run self-improve reflect", insert: "/learn", run_on_pick: true },
@@ -549,6 +567,8 @@ pub const SLASH_COMMANDS: &[SlashDef] = &[
     SlashDef { cmd: "/sync", hint: "Sync chats & memory with paired computers", insert: "/sync", run_on_pick: true },
     SlashDef { cmd: "/privacy", hint: "What left this computer, and your grants", insert: "/privacy", run_on_pick: true },
     SlashDef { cmd: "/diagnose", hint: "Check this computer (read only)", insert: "/diagnose", run_on_pick: true },
+    SlashDef { cmd: "/record", hint: "Record my screen and diagnose it (say what's wrong)", insert: "/record ", run_on_pick: false },
+    SlashDef { cmd: "/audiocheck", hint: "Check my audio: devices, levels, clipping, crackle", insert: "/audiocheck", run_on_pick: true },
     SlashDef { cmd: "/why", hint: "Why Auto would pick each model and effort", insert: "/why", run_on_pick: true },
     SlashDef { cmd: "/send", hint: "Send a task to another computer", insert: "/send ", run_on_pick: false },
     SlashDef { cmd: "/rewind", hint: "Rewind Grok conversation", insert: "/rewind", run_on_pick: true },
@@ -748,6 +768,7 @@ pub fn slash_help() -> String {
         "/skill <name> — run a skill",
         "/memory note <fact> — write MEMORY.md",
         "/memory dream — show the last overnight memory tidy (memory repo only)",
+        "/memory prune — retire unsure notes older than Memory retention now (memory repo only)",
         "/learn — reflect this chat into MEMORY.md (alias /learn reflect)",
         "/recall <q> — search memory, learned insights, and chats",
         "/forget <topic> — drop memory lines that mention the topic (whole words)",
@@ -762,6 +783,8 @@ pub fn slash_help() -> String {
         "/privacy — your grants, learning scopes (all off), and what left this computer",
         "/why — the last 10 reasons the router gave for a model and effort (Auto picks both; a model you pin stays yours); /why models lists each model's state; /why table shows how Auto picks",
         "/diagnose — check disk, memory, services, logs, network and updates, read only, and say what's wrong in plain words (needs System state in Settings → Permissions)",
+        "/record — record the screen (up to 2:00) and diagnose it; /record stop ends it. Add what's wrong after it. Needs Screen recording in Settings → Cabin defaults",
+        "/audiocheck — list outputs and inputs, listen to the default input (or /audiocheck yeti) for 5 seconds, and name what's wrong: muted, silent, clipping, too quiet, dropouts or crackle. Changes nothing",
         "/hub — devices / pair",
         "/inhabit <peer> — hand this Grok to another paired computer",
         "/rewind — rewind Grok conversation; /rewind --files restores the last project snapshot",
@@ -780,7 +803,7 @@ pub fn slash_help() -> String {
         "/pin — pin or unpin this chat",
         "/delete — delete this chat tab",
         "/context — Grok Build context (server tokens + reasoning; visible turns as fallback)",
-        "/health — doctor",
+        "/health — updates, failed services, last dream",
         "/fix — halt + doctor",
         "/remember <fact> — write MEMORY.md",
         "/mode auto|fast|balance|think|max — legacy composer ladder (effort is automatic now)",
@@ -835,6 +858,7 @@ mod tests {
             Some(Slash::MemoryNote("prefer nvim".into()))
         );
         assert_eq!(parse_slash("/memory dream"), Some(Slash::MemoryDream));
+        assert_eq!(parse_slash("/memory prune"), Some(Slash::MemoryPrune));
         assert_eq!(parse_slash("/dream"), Some(Slash::Dream), "/dream stays the Imagine prompt");
         assert_eq!(parse_slash("/recall pi"), Some(Slash::Recall("pi".into())));
         assert_eq!(parse_slash("/forget wifi"), Some(Slash::Forget(Some("wifi".into()))));
@@ -1236,6 +1260,31 @@ mod tests {
         assert!(slash_help().contains("\n/diagnose — check disk, memory, services, logs, network and updates, read only"));
         assert!(SLASH_COMMANDS.iter().any(|d| d.cmd == "/diagnose" && d.run_on_pick));
         assert!(!unknown_cabin_slash("/diagnose"));
+    }
+
+    #[test]
+    fn record_slash_takes_a_note_and_stop() {
+        assert_eq!(parse_slash("/record"), Some(Slash::Record(String::new())));
+        assert_eq!(
+            parse_slash("/record video stutters on 4K YouTube"),
+            Some(Slash::Record("video stutters on 4K YouTube".into()))
+        );
+        assert_eq!(parse_slash("/record stop"), Some(Slash::RecordStop));
+        assert_eq!(parse_slash("/record Stop"), Some(Slash::RecordStop));
+        assert_eq!(parse_slash("/record stop").as_ref().map(slash_kind), Some("record_stop"));
+        assert!(slash_help().contains("\n/record — record the screen (up to 2:00) and diagnose it; /record stop ends it"));
+        assert!(SLASH_COMMANDS.iter().any(|d| d.cmd == "/record" && d.insert == "/record "));
+        assert!(!unknown_cabin_slash("/record"));
+    }
+
+    #[test]
+    fn audiocheck_slash_takes_an_optional_input() {
+        assert_eq!(parse_slash("/audiocheck"), Some(Slash::AudioCheck(String::new())));
+        assert_eq!(parse_slash("/audiocheck Blue Yeti"), Some(Slash::AudioCheck("Blue Yeti".into())));
+        assert_eq!(parse_slash("/audiocheck").as_ref().map(slash_kind), Some("audiocheck"));
+        assert!(slash_help().contains("\n/audiocheck — list outputs and inputs, listen to the default input"));
+        assert!(SLASH_COMMANDS.iter().any(|d| d.cmd == "/audiocheck" && d.run_on_pick));
+        assert!(!unknown_cabin_slash("/audiocheck"));
     }
 
     #[test]
