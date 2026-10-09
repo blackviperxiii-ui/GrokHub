@@ -10,6 +10,7 @@ use std::sync::mpsc;
 use grokhub_agent::harness as hx;
 use grokhub_core::outcome::{self as oc, TaskOutcome};
 use grokhub_core::self_review::{self as sr, CardTarget};
+use grokhub_core::what_changed as wc;
 use serde::{Deserialize, Serialize};
 
 use super::Cabin;
@@ -256,9 +257,11 @@ impl Cabin {
             let spans = hx::spans_for(&dir, &d.span_ids);
             let md = draft_md(&d, &spans);
             let numbers = format!("You did this {} times in the last two weeks", d.runs);
-            let details = format!(
-                "{numbers}. Apply saves it as a new skill you can undo.\n\n{}",
-                sr::line_diff("", &md)
+            let diff = sr::line_diff("", &md);
+            let steps = grokhub_core::parse_skill_md(&md).instructions;
+            let details = wc::with_block(
+                &wc::from_line_diff(&sr::line_diff("", &steps)),
+                &format!("{numbers}. Apply saves it as a new skill you can undo.\n\n{diff}"),
             );
             let title = format!("Make a skill: {}", d.name);
             let card = ProposalCard {
@@ -343,9 +346,12 @@ impl Cabin {
                 grokhub_core::render_skill_md(&patched),
             );
             let stats = format!("{}.", p.numbers);
-            let details = format!(
-                "{stats} Apply changes the skill's steps; you can undo it.\n\n{}",
-                sr::diff_excerpt(&old, &new, 2)
+            let details = wc::with_block(
+                &wc::from_line_diff(&sr::line_diff(&existing.instructions, &patched.instructions)),
+                &format!(
+                    "{stats} Apply changes the skill's steps; you can undo it.\n\n{}",
+                    sr::diff_excerpt(&old, &new, 2)
+                ),
             );
             let card = ProposalCard {
                 source: sr::patch_source(&p.skill),

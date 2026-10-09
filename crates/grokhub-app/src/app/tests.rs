@@ -11376,6 +11376,10 @@ fn amr_dream_runs_once_a_night_and_memory_dream_prints_it() {
     cabin.run_slash_line("/memory dream");
     assert_eq!(cabin.status, "Memory dream");
     let shown = last_chat_text(&cabin);
+    assert!(
+        shown.contains("What changed: 0 added, 1 merged, 0 retired\n- Merged: \"the quay lantern is green at night.\"\n\n# Memory dream 2026-10-07"),
+        "the What changed block sits above the report: {shown}"
+    );
     assert!(shown.contains("# Memory dream 2026-10-07"), "{shown}");
     assert!(shown.contains("merged `quay-b`"), "{shown}");
 
