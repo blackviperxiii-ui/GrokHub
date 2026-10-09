@@ -22,6 +22,7 @@ pub mod context;
 pub mod cursor_motion;
 pub mod desktop_entry;
 pub mod desktop_mcp;
+pub mod file_watch;
 pub mod diagnostics;
 pub mod doctor;
 pub mod export;
