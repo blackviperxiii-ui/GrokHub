@@ -47,6 +47,7 @@ pub mod learning;
 pub mod local_setup;
 pub mod md;
 pub mod model_registry;
+pub mod model_download;
 pub mod models;
 pub mod oauth;
 pub mod openclaw;

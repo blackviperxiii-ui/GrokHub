@@ -180,6 +180,7 @@ mod privacy_ui;
 mod router_ui;
 mod local_ai_ui;
 mod setup_wizard;
+mod model_download_ui;
 mod budget_ui;
 mod provider_ui;
 mod repair_ui;

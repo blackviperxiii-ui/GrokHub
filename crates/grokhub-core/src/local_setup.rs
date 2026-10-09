@@ -25,14 +25,21 @@ pub struct LocalModel {
     pub min_vram_mb: u64,
     /// The router tier it serves (`route::local::TIERS`).
     pub tier: &'static str,
+    /// The Hugging Face repo and GGUF file it downloads from.
+    pub repo: &'static str,
+    pub file: &'static str,
 }
 
 /// Biggest first: the wizard suggests the first one that fits.
 pub const LOCAL_MODELS: &[LocalModel] = &[
-    LocalModel { id: "qwen2.5-7b-instruct-q4_k_m", name: "Qwen 2.5 7B", download_mb: 4_680, min_ram_mb: 16_384, min_vram_mb: 6_144, tier: "local:small" },
-    LocalModel { id: "qwen2.5-3b-instruct-q4_k_m", name: "Qwen 2.5 3B", download_mb: 1_930, min_ram_mb: 8_192, min_vram_mb: 3_072, tier: "local:small" },
-    LocalModel { id: "qwen2.5-1.5b-instruct-q4_k_m", name: "Qwen 2.5 1.5B", download_mb: 1_120, min_ram_mb: 4_096, min_vram_mb: 2_048, tier: "local:tiny" },
+    LocalModel { id: "qwen2.5-7b-instruct-q4_k_m", name: "Qwen 2.5 7B", download_mb: 4_680, min_ram_mb: 16_384, min_vram_mb: 6_144, tier: "local:small", repo: "bartowski/Qwen2.5-7B-Instruct-GGUF", file: "Qwen2.5-7B-Instruct-Q4_K_M.gguf" },
+    LocalModel { id: "qwen2.5-3b-instruct-q4_k_m", name: "Qwen 2.5 3B", download_mb: 1_930, min_ram_mb: 8_192, min_vram_mb: 3_072, tier: "local:small", repo: "bartowski/Qwen2.5-3B-Instruct-GGUF", file: "Qwen2.5-3B-Instruct-Q4_K_M.gguf" },
+    LocalModel { id: "qwen2.5-1.5b-instruct-q4_k_m", name: "Qwen 2.5 1.5B", download_mb: 1_120, min_ram_mb: 4_096, min_vram_mb: 2_048, tier: "local:tiny", repo: "bartowski/Qwen2.5-1.5B-Instruct-GGUF", file: "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf" },
 ];
+
+pub fn model_by_id(id: &str) -> Option<&'static LocalModel> {
+    LOCAL_MODELS.iter().find(|m| m.id == id)
+}
 
 /// Free disk kept spare after a download.
 pub const DISK_HEADROOM_MB: u64 = 2_048;

@@ -10,11 +10,15 @@ use grokhub_agent::route::local;
 use super::*;
 
 /// The toggle's hint, by state. It leads with On or Off (SB-07).
-pub(super) fn local_model_hint(on: bool, installed: bool) -> &'static str {
-    match (on, installed) {
-        (false, _) => "Off. Background work uses your cloud model.",
-        (true, true) => "On. Dream, digests and summaries run on this device. Chat still uses your cloud model.",
-        (true, false) => "On, but no local model is installed. Background work uses your cloud model until one is set up.",
+/// `downloaded` names a model file on disk that this build has no runtime for.
+pub(super) fn local_model_hint(on: bool, installed: bool, downloaded: Option<&str>) -> String {
+    match (on, installed, downloaded) {
+        (false, _, _) => "Off. Background work uses your cloud model.".into(),
+        (true, true, _) => "On. Dream, digests and summaries run on this device. Chat still uses your cloud model.".into(),
+        (true, false, Some(name)) => {
+            format!("On. {name} is downloaded, but this build can't run it yet, so background work uses your cloud model.")
+        }
+        (true, false, None) => "On, but no local model is installed. Background work uses your cloud model until one is set up.".into(),
     }
 }
 
@@ -49,10 +53,11 @@ impl Cabin {
     pub(super) fn ui_local_model_rows(&mut self, ui: &mut egui::Ui) {
         let installed = local::installed();
         let mut on = self.cfg.local_model;
-        if crate::cards::settings_toggle(ui, "On-device model for background tasks", local_model_hint(on, installed), &mut on) {
+        let downloaded = self.downloaded_model_name();
+        if crate::cards::settings_toggle(ui, "On-device model for background tasks", &local_model_hint(on, installed, downloaded), &mut on) {
             self.set_local_model(on);
         }
-        if !installed && crate::cards::settings_action(ui, "Local model", "No local model installed.", "Set up") {
+        if !installed && crate::cards::settings_action(ui, "Local model", &self.local_model_row_hint(), "Set up") {
             self.open_local_setup();
         }
     }
@@ -69,11 +74,15 @@ mod tests {
 
     #[test]
     fn the_hint_and_status_name_each_state() {
-        assert_eq!(local_model_hint(false, false), "Off. Background work uses your cloud model.");
-        assert_eq!(local_model_hint(false, true), "Off. Background work uses your cloud model.");
-        assert_eq!(local_model_hint(true, true), "On. Dream, digests and summaries run on this device. Chat still uses your cloud model.");
+        assert_eq!(local_model_hint(false, false, None), "Off. Background work uses your cloud model.");
+        assert_eq!(local_model_hint(false, true, Some("Qwen 2.5 7B")), "Off. Background work uses your cloud model.");
+        assert_eq!(local_model_hint(true, true, None), "On. Dream, digests and summaries run on this device. Chat still uses your cloud model.");
         assert_eq!(
-            local_model_hint(true, false),
+            local_model_hint(true, false, Some("Qwen 2.5 7B")),
+            "On. Qwen 2.5 7B is downloaded, but this build can't run it yet, so background work uses your cloud model."
+        );
+        assert_eq!(
+            local_model_hint(true, false, None),
             "On, but no local model is installed. Background work uses your cloud model until one is set up."
         );
         assert_eq!(local_model_status(false, true, "local:small"), "On-device model for background tasks: off");
