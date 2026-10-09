@@ -11,8 +11,29 @@ use crate::redact::{is_plain_text, redact_secrets};
 use crate::skill::{skill_dir_name, skill_safe, SkillMd};
 use serde::{Deserialize, Serialize};
 
-/// Local hour when the first-run review becomes due (21:00).
+/// Default local hour for dream, the nightly review and the Sunday
+/// self-review (21:00). The cabin reads the hour from its `dreamHour` setting.
 pub const REVIEW_NIGHT_HOUR: u32 = 21;
+
+/// `9 PM`, `12 AM`, `12 PM`: an hour (clamped to 0–23) on a 12-hour clock.
+pub fn hour_label(hour: u32) -> String {
+    let hour = hour.min(23);
+    let half = if hour < 12 { "AM" } else { "PM" };
+    let twelve = match hour % 12 {
+        0 => 12,
+        h => h,
+    };
+    format!("{twelve} {half}")
+}
+
+/// The Settings caption for the dream hour, with the local time zone when known.
+pub fn dream_time_line(hour: u32, zone: &str) -> String {
+    let zone = match zone.trim() {
+        "" => "local time",
+        z => z,
+    };
+    format!("Dream and self-review run at {} ({zone}).", hour_label(hour))
+}
 
 /// Hard cap per suggestion kind so the Suggested grids stay short.
 pub const SUGGEST_CAP: usize = 6;
@@ -858,6 +879,31 @@ mod tests {
             &clock(10),
             REVIEW_NIGHT_HOUR
         ));
+    }
+
+    #[test]
+    fn review_due_follows_a_custom_hour() {
+        for hour in [23, 0] {
+            if hour > 0 {
+                assert!(!review_due(None, "2026-08-16", &clock(hour - 1), hour), "{hour}: not before");
+            }
+            assert!(review_due(None, "2026-08-16", &clock(hour), hour), "{hour}: due at the hour");
+            assert!(review_due(None, "2026-08-16", &clock(23), hour), "{hour}: due after");
+            assert!(!review_due(Some("2026-08-16"), "2026-08-16", &clock(23), hour), "{hour}: not twice a day");
+        }
+        assert!(!review_due(None, "2026-08-16", &clock(22), 23));
+    }
+
+    #[test]
+    fn hour_labels_and_the_dream_time_line() {
+        assert_eq!(hour_label(0), "12 AM");
+        assert_eq!(hour_label(9), "9 AM");
+        assert_eq!(hour_label(12), "12 PM");
+        assert_eq!(hour_label(21), "9 PM");
+        assert_eq!(hour_label(23), "11 PM");
+        assert_eq!(hour_label(40), "11 PM");
+        assert_eq!(dream_time_line(21, "CDT"), "Dream and self-review run at 9 PM (CDT).");
+        assert_eq!(dream_time_line(0, " "), "Dream and self-review run at 12 AM (local time).");
     }
 
     #[test]

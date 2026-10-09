@@ -875,7 +875,7 @@ impl Cabin {
             self.suggestions.last_session_suggest_day.as_deref(),
             &today,
             &Self::local_clock(),
-            REVIEW_NIGHT_HOUR,
+            self.dream_hour(),
         ) {
             return;
         }
@@ -931,7 +931,7 @@ impl Cabin {
             self.suggestions.last_review_day.as_deref(),
             &today,
             &Self::local_clock(),
-            REVIEW_NIGHT_HOUR,
+            self.dream_hour(),
         ) {
             return;
         }

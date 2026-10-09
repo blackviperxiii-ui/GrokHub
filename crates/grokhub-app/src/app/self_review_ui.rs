@@ -185,24 +185,43 @@ impl Cabin {
         }
     }
 
-    /// Sunday night on the review slot: post revert and draft cards, then
-    /// ask the model for skill changes off the UI thread.
-    pub(super) fn tick_self_review(&mut self) {
+    /// The hour from Settings → Dream time, clamped to 0–23.
+    pub(super) fn dream_hour(&self) -> u32 {
+        self.cfg.dream_hour.min(23)
+    }
+
+    /// The review slot's night passes on the local clock. AMR dream takes no
+    /// tokens, so no `heartbeat_may` slot.
+    pub(super) fn tick_night_passes(&mut self) {
+        let _ = self.night_passes(&Self::local_day(), &Self::local_clock(), grokhub_core::now_ms());
+    }
+
+    /// Tonight's passes in order, each once a night at or after the dream
+    /// hour: the Sunday self-review, then dream. Returns whether the
+    /// self-review started and dream's thread.
+    pub(super) fn night_passes(
+        &mut self,
+        today: &str,
+        clock: &grokhub_core::LocalClock,
+        now: u64,
+    ) -> (bool, Option<std::thread::JoinHandle<()>>) {
+        let reviewed = self.self_review_tonight(today, clock, now);
+        (reviewed, self.dream_tonight(today, clock.hour, now))
+    }
+
+    /// Sunday night: post revert and draft cards, then ask the model for
+    /// skill changes off the UI thread.
+    fn self_review_tonight(&mut self, today: &str, clock: &grokhub_core::LocalClock, now: u64) -> bool {
         let mut state = load_state();
-        let today = Self::local_day();
         if self.harness.self_review.rx.is_some()
-            || !sr::self_review_due(
-                state.last_day.as_deref(),
-                &today,
-                &Self::local_clock(),
-                grokhub_core::REVIEW_NIGHT_HOUR,
-            )
+            || !sr::self_review_due(state.last_day.as_deref(), today, clock, self.dream_hour())
         {
-            return;
+            return false;
         }
-        state.last_day = Some(today);
+        state.last_day = Some(today.to_string());
         save_state(&state);
-        self.run_self_review_now(grokhub_core::now_ms());
+        self.run_self_review_now(now);
+        true
     }
 
     /// The weekly pass as of `now` (the tick, or a test).
