@@ -36,7 +36,13 @@ pub(crate) fn windows_changed(before: &DesktopWindows, after: &DesktopWindows) -
 #[cfg(target_os = "linux")]
 pub(crate) use linux::{focus_window, list_windows, open_app, trash};
 #[cfg(windows)]
-pub(crate) use win::{focus_window, list_windows, open_app, trash};
+pub(crate) use win::{focus_window, list_windows, no_recycle_bin, open_app, trash};
+
+/// Outside Windows a trash move with no trash fails instead of deleting.
+#[cfg(not(windows))]
+pub(crate) fn no_recycle_bin(_path: &std::path::Path) -> bool {
+    false
+}
 
 #[cfg(not(any(target_os = "linux", windows)))]
 pub(crate) fn open_app(_app: &str) -> Result<(), String> {
@@ -379,6 +385,22 @@ mod win {
             }
         }
         Ok(got)
+    }
+
+    /// Only a fixed drive has a Recycle Bin. On a network share, a removable
+    /// or unknown drive, `SHFileOperationW` with undo deletes for good (G2).
+    pub(crate) fn no_recycle_bin(path: &std::path::Path) -> bool {
+        use std::path::{Component, Prefix};
+        let root = match path.components().next() {
+            Some(Component::Prefix(p)) => match p.kind() {
+                Prefix::Disk(d) | Prefix::VerbatimDisk(d) => format!("{}:\\", d as char),
+                _ => return true,
+            },
+            _ => return true,
+        };
+        let wide: Vec<u16> = root.encode_utf16().chain(Some(0)).collect();
+        // DRIVE_FIXED
+        unsafe { windows_sys::Win32::Storage::FileSystem::GetDriveTypeW(wide.as_ptr()) != 3 }
     }
 
     /// Recycle Bin: `SHFileOperationW` delete with undo, no dialogs.
