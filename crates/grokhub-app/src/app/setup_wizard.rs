@@ -86,7 +86,7 @@ fn ram_mb() -> Option<u64> {
     // SAFETY: a zeroed MEMORYSTATUSEX with dwLength set is what the call expects.
     let mut m: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
     m.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
-    (unsafe { GlobalMemoryStatusEx(&mut m) } != 0).then(|| m.ullTotalPhys / (1_024 * 1_024))
+    (unsafe { GlobalMemoryStatusEx(&mut m) } != 0).then_some(m.ullTotalPhys / (1_024 * 1_024))
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
