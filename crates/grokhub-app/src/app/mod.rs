@@ -2942,6 +2942,14 @@ impl Cabin {
     }
 
     fn doctor_text(&self) -> String {
+        self.doctor_checks()
+            .into_iter()
+            .map(|l| format!("{} {}", if l.ok { "ok" } else { "ERR" }, l.text))
+            .collect::<Vec<_>>()
+            .join(" · ")
+    }
+
+    fn doctor_checks(&self) -> Vec<grokhub_core::DoctorLine> {
         let mut lines = grokhub_core::doctor_lines(self.llm_ready(), true, HUB_KIND);
         lines.extend(grokhub_core::doctor_extras(
             self.last_receipt_ok,
@@ -2950,10 +2958,33 @@ impl Cabin {
         let (ok, text) = grokhub_acp::doctor_grok_line(grokhub_acp::find_grok().as_deref());
         lines.push(grokhub_core::DoctorLine { ok, text });
         lines
-            .into_iter()
-            .map(|l| format!("{} {}", if l.ok { "ok" } else { "ERR" }, l.text))
-            .collect::<Vec<_>>()
-            .join(" · ")
+    }
+
+    /// `/health` from what this session already knows: the last update probe,
+    /// the doctor checks, failing automations, MCP servers and the newest dream.
+    fn health_input(&self) -> grokhub_core::health::HealthInput {
+        let checks = self.doctor_checks();
+        let mut failed: Vec<String> =
+            checks.iter().filter(|l| !l.ok).map(|l| l.text.clone()).collect();
+        for a in &self.automations {
+            if let Some(line) = grokhub_core::automation_health_line(a) {
+                failed.push(format!("Automation {}: {line}", a.name));
+            }
+        }
+        let (servers, server_errs) = crate::native_mcp::health_rows();
+        failed.extend(server_errs);
+        let cli_newer =
+            should_update_cli_alpha(self.cli_installed.as_deref(), self.cli_alpha.as_deref());
+        grokhub_core::health::HealthInput {
+            cabin_update: self
+                .cabin_update_available()
+                .then(|| self.cabin_latest.clone())
+                .flatten(),
+            cli_update: cli_newer.then(|| self.cli_alpha.clone()).flatten(),
+            failed,
+            checked: checks.len() + self.automations.len() + servers,
+            last_dream: grokhub_core::amr::latest_dream(&config::config_dir().join("amr")),
+        }
     }
 
     fn visible_host_receipts(&self) -> Vec<(String, bool)> {
