@@ -576,3 +576,66 @@ fn a_cost_raising_router_card_rides_the_weekly_pass_and_applies_only_on_accept()
     );
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn dream_and_the_weekly_self_review_run_once_on_the_same_night_at_a_custom_hour() {
+    let _g = crate::config::hold_test_config();
+    let (_pin, root) = pin("dream-hour-e2e");
+    let now = grokhub_core::now_ms();
+    skills::save_skill(&skill("weekly-report", "1. Open report.md\n2. click Save")).unwrap();
+    recorded(&root, "weekly-report", "w:1", false, now - 2 * DAY, &["click"]);
+    recorded(&root, "weekly-report", "w:2", true, now - DAY, &["click"]);
+    let calls = fake("PATCH_SKILL: skill:weekly-report | Wait for the save | 1. Open report.md 2. click Save 3. wait for the toast");
+    let store = super::amr_memory::amr_store_at(&root);
+    store.init().unwrap();
+    let stamp = grokhub_core::oauth::unix_ms_to_rfc3339(now);
+    for (id, body, confidence) in [("dock-a", "The dock bell rings twice", 0.9), ("dock-b", "the dock bell rings twice.", 0.5)] {
+        store
+            .remember(&grokhub_core::amr::NodeDraft {
+                id: id.into(),
+                node_type: grokhub_core::amr::NodeType::Fact,
+                created: stamp.clone(),
+                updated: stamp.clone(),
+                source: "user".into(),
+                confidence,
+                tags: vec![],
+                body: format!("{body}\n"),
+                sensitivity: grokhub_core::amr::Sensitivity::Plain,
+                consent_ref: String::new(),
+            })
+            .unwrap();
+    }
+    let mut cabin = Cabin::quiet_for_test();
+    cabin.new_thread(false);
+    cabin.running = false;
+    cabin.composer.clear();
+    cabin.cfg.memory_backend = grokhub_core::amr::MemoryBackend::Amr;
+    cabin.cfg.dream_hour = 23;
+    cabin.skill_list = skills::list_skills();
+    let sunday = |hour| grokhub_core::LocalClock { now_ms: now, weekday: 0, hour, minute: 0 };
+    let today = "2026-10-11";
+    let dream_report = root.join("amr").join("dreams").join("2026-10-11.md");
+
+    let (reviewed, dream) = cabin.night_passes(today, &sunday(22), now);
+    assert!(!reviewed && dream.is_none(), "nothing before 11 PM");
+    assert_eq!(super::self_review_ui::load_state().last_day, None);
+
+    let (reviewed, dream) = cabin.night_passes(today, &sunday(23), now);
+    assert!(reviewed, "the weekly self-review starts at 11 PM");
+    dream.expect("dream starts the same tick, after the self-review").join().unwrap();
+    wait_pass(&mut cabin);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(super::self_review_ui::load_state().last_day.as_deref(), Some(today));
+    let cards = self_review_cards(&cabin);
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].title, "Wait for the save");
+    let report = std::fs::read_to_string(&dream_report).unwrap();
+    assert!(report.starts_with("# Memory dream 2026-10-11\n"), "{report}");
+    assert!(report.contains("- Merged: 1\n"), "{report}");
+
+    let (reviewed, dream) = cabin.night_passes(today, &sunday(23), now);
+    assert!(!reviewed && dream.is_none(), "each runs once a night");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(self_review_cards(&cabin).len(), 1);
+    let _ = std::fs::remove_dir_all(&root);
+}

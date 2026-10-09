@@ -313,12 +313,6 @@ impl Cabin {
         }
     }
 
-    /// AMR M3 on the review slot: once a night after the review. No tokens, so
-    /// no `heartbeat_may` slot.
-    pub(super) fn tick_dream(&mut self) {
-        let _ = self.dream_tonight(&Self::local_day(), Self::local_clock().hour, now_ms());
-    }
-
     /// Start tonight's dream off the UI thread when it is due: memory repo
     /// mode, past the review hour, the review not in flight, and no turn or
     /// card waiting on the user. Halt skips the night. A report already on
@@ -330,7 +324,7 @@ impl Cabin {
         now: u64,
     ) -> Option<std::thread::JoinHandle<()>> {
         if !self.amr_on()
-            || hour < REVIEW_NIGHT_HOUR
+            || hour < self.dream_hour()
             || self.dream_day.as_deref() == Some(today)
             || self.review_busy
             || self.heartbeat_busy()
