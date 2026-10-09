@@ -709,7 +709,7 @@ fn card_is_failure(card: &UpdateCard) -> bool {
     if card.kind != UpdateKind::AutomationDone {
         return false;
     }
-    if card.id.starts_with("fail-") {
+    if card.id.starts_with("fail-") || card.id.starts_with("crash-") {
         return true;
     }
     let title = card.title.to_ascii_lowercase();
@@ -2511,6 +2511,42 @@ pub fn automation_failed_card(source_id: &str, name: &str, why: &str, created_at
     card
 }
 
+/// Source prefix of a crash card: a run killed from outside (exit 143).
+pub const CRASH_SOURCE_PREFIX: &str = "crash:";
+
+/// A run was killed from outside (SIGTERM, exit 143) and no retry finished it.
+/// The title names the job ("Crashed: Index ~/Projects (exit 143, killed)").
+/// Open goes to its chat; Retry sends `retry` there. Same kind as a finished
+/// automation so older feeds still load. One card per `source_id`: a second
+/// crash of the same job bumps it instead of adding another.
+pub fn crash_card(source_id: &str, job: &str, thread_id: &str, retry: &str, created_at: u64) -> UpdateCard {
+    const TAIL: &str = " (exit 143, killed)";
+    let job = clip_line(job, TITLE_CHARS - "Crashed: ".len() - TAIL.len());
+    let job = if job.is_empty() { "Reply".to_string() } else { job };
+    let title = format!("Crashed: {job}{TAIL}");
+    let source = format!("{CRASH_SOURCE_PREFIX}{}", source_id.trim());
+    let mut card = blank_card(
+        feed_card_id("crash", &source, &title, created_at, true),
+        UpdateKind::AutomationDone,
+        title,
+        Some("Something outside GrokHub stopped it before it finished. Retry runs it again.".into()),
+        created_at,
+    );
+    if !thread_id.trim().is_empty() {
+        card.action = Some(UpdateAction::OpenSession {
+            thread_id: thread_id.trim().to_string(),
+        });
+    }
+    card.prompt = Some(retry.trim().to_string()).filter(|r| !r.is_empty());
+    card.source_id = source;
+    refresh_event_why(&mut card);
+    card
+}
+
+pub fn is_crash_card(card: &UpdateCard) -> bool {
+    card.source_id.starts_with(CRASH_SOURCE_PREFIX)
+}
+
 /// User saved a clock job or an interval loop.
 /// Home update for a change GrokHub made on its own (Spike-5b): "GrokHub
 /// added connection notes". `kind` is `skill`, `connection`, or
@@ -4013,6 +4049,39 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         assert!(blank.body.is_some());
         let done = automation_done_card("a1", "Board summary", "ok", 5);
         assert_ne!(c.id, done.id, "a failure must not replace the done card");
+    }
+
+    #[test]
+    fn a_crash_card_names_the_job_opens_its_chat_and_survives_a_dismiss() {
+        let c = crash_card("t1", "Index ~/Projects", "t1", "/retry", 5);
+        assert_eq!(c.kind, UpdateKind::AutomationDone);
+        assert_eq!(c.title, "Crashed: Index ~/Projects (exit 143, killed)");
+        assert_eq!(
+            c.action,
+            Some(UpdateAction::OpenSession { thread_id: "t1".into() })
+        );
+        assert_eq!(c.prompt.as_deref(), Some("/retry"));
+        assert_eq!(c.source_id, "crash:t1");
+        assert!(is_crash_card(&c));
+        assert!(!is_crash_card(&automation_failed_card("t1", "Index", "x", 5)));
+        assert_eq!(crash_card("t2", "  ", "", "", 5).title, "Crashed: Reply (exit 143, killed)");
+        let long = crash_card("t3", &"word ".repeat(30), "t3", "/retry", 5);
+        assert!(long.title.starts_with("Crashed: word word"), "{}", long.title);
+        assert!(long.title.ends_with("… (exit 143, killed)"), "{}", long.title);
+
+        // A second crash of the same chat bumps one card.
+        let mut cards = Vec::new();
+        post_update(&mut cards, c.clone());
+        post_update(&mut cards, crash_card("t1", "Index ~/Projects", "t1", "/retry", 9));
+        assert_eq!(cards.len(), 1, "{cards:?}");
+        // After a dismiss, a new crash still shows: it is a failure.
+        let first = cards[0].id.clone();
+        dismiss_update(&mut cards, &first);
+        post_update(&mut cards, crash_card("t1", "Index ~/Projects", "t1", "/retry", 20));
+        assert!(
+            cards.iter().any(|x| x.status != UpdateStatus::Dismissed && is_crash_card(x)),
+            "{cards:?}"
+        );
     }
 
     #[test]

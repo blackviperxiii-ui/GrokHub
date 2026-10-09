@@ -28051,3 +28051,121 @@ fn failed_settings_write_replaces_saved_on_the_status_line() {
     );
     release_isolated(&root, cabin);
 }
+
+fn crash_cards(cabin: &super::Cabin) -> Vec<grokhub_core::UpdateCard> {
+    cabin
+        .updates
+        .iter()
+        .filter(|c| grokhub_core::is_crash_card(c))
+        .cloned()
+        .collect()
+}
+
+fn bg_run_on(thread_id: &str, title: &str, rx: Option<mpsc::Receiver<grokhub_acp::GrokPEvent>>) -> super::background::BgRun {
+    super::background::BgRun {
+        id: 41,
+        thread_id: thread_id.into(),
+        title: title.into(),
+        origin: grokhub_core::BgOrigin::User,
+        pid: None,
+        rx,
+        say: String::new(),
+        action: String::new(),
+        started: std::time::Instant::now(),
+        end: None,
+        session: String::new(),
+        resumed: None,
+        fork_hold: false,
+        native_session: None,
+        automation: None,
+    }
+}
+
+#[test]
+fn a_background_run_killed_from_outside_posts_one_named_crash_card_and_stop_posts_none() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("crash-bg");
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.thread_idx = 0;
+    let id = cabin.threads[0].id.clone();
+
+    let (tx, rx) = mpsc::channel();
+    tx.send(grokhub_acp::GrokPEvent::Err("agent closed (exit 143)".into())).unwrap();
+    cabin.bg.runs.push(bg_run_on(&id, "Index ~/Projects", Some(rx)));
+    cabin.poll_bg_runs();
+    let cards = crash_cards(&cabin);
+    assert_eq!(cards.len(), 1, "one card for one crash: {cards:?}");
+    assert_eq!(cards[0].title, "Crashed: Index ~/Projects (exit 143, killed)");
+    assert_eq!(cards[0].prompt.as_deref(), Some("/bg Index ~/Projects"));
+    assert_eq!(
+        cards[0].action,
+        Some(grokhub_core::UpdateAction::OpenSession { thread_id: id.clone() })
+    );
+    assert!(cabin.bg.runs.is_empty(), "the run ended");
+
+    // Stop from GrokHub drops the receiver first: no crash card.
+    let (_tx2, rx2) = mpsc::channel();
+    let mut stopped = bg_run_on(&id, "Sort the inbox", Some(rx2));
+    stopped.id = 42;
+    cabin.bg.runs.push(stopped);
+    cabin.stop_bg_run(42);
+    assert_eq!(crash_cards(&cabin).len(), 1, "Stop is not a crash");
+
+    // Retry opens the chat and starts the run again.
+    let card_id = cards[0].id.clone();
+    cabin.crash_retry(&card_id);
+    assert_eq!(cabin.updates.iter().find(|c| c.id == card_id).map(|c| c.status), Some(grokhub_core::UpdateStatus::Opened));
+    release_isolated(&root, cabin);
+}
+
+#[test]
+fn a_killed_reply_retries_once_quietly_and_a_second_kill_posts_one_crash_card() {
+    let _g = crate::config::hold_test_config();
+    let (root, mut cabin) = isolated_cabin("crash-turn");
+    cabin.threads = vec![crate::threads::ChatThread::new("Chat", false)];
+    cabin.thread_idx = 0;
+    let id = cabin.threads[0].id.clone();
+    cabin.messages = std::sync::Arc::new(vec![("user".into(), "Index ~/Projects".into())]);
+    cabin.chat_job_thread = Some(id.clone());
+
+    // First kill with nothing streamed: the automatic retry, no card.
+    let (tx, rx) = mpsc::channel();
+    tx.send(grokhub_acp::GrokPEvent::Err("agent closed (exit 143)".into())).unwrap();
+    cabin.grok_p_rx = Some(rx);
+    cabin.running = true;
+    cabin.turn_retried = false;
+    cabin.poll_single();
+    assert!(cabin.turn_retried, "the first kill is retried");
+    assert!(crash_cards(&cabin).is_empty(), "a retry in flight is not a crash");
+
+    // The retry finishes: still no card.
+    let (tx, rx) = mpsc::channel();
+    tx.send(grokhub_acp::GrokPEvent::End(grokhub_acp::SingleTurn {
+        session_id: "s-retry".into(),
+        text: "Indexed 40 folders.".into(),
+        thought: String::new(),
+        usage: Default::default(),
+        stop_reason: "end_turn".into(),
+    }))
+    .unwrap();
+    cabin.grok_p_rx = Some(rx);
+    cabin.running = true;
+    cabin.chat_job_thread = Some(id.clone());
+    cabin.poll_single();
+    assert!(crash_cards(&cabin).is_empty(), "a successful retry posts nothing");
+
+    // Killed again after the retry was spent: one named card.
+    let (tx, rx) = mpsc::channel();
+    tx.send(grokhub_acp::GrokPEvent::Err("signal 15".into())).unwrap();
+    cabin.grok_p_rx = Some(rx);
+    cabin.running = true;
+    cabin.turn_retried = true;
+    cabin.chat_job_thread = Some(id.clone());
+    cabin.poll_single();
+    let cards = crash_cards(&cabin);
+    assert_eq!(cards.len(), 1, "{cards:?}");
+    assert_eq!(cards[0].title, "Crashed: Index ~/Projects (exit 143, killed)");
+    assert_eq!(cards[0].prompt.as_deref(), Some("/retry"));
+    assert!(!cabin.running);
+    release_isolated(&root, cabin);
+}

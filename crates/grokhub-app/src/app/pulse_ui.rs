@@ -102,6 +102,7 @@ pub(super) enum PulseAct {
     Link(String),
     Undo(String),
     NeverAgain(String),
+    Retry(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -410,6 +411,9 @@ fn pulse_menu(
         // one is a single offer, not a schedule.
         pick(ui, "Always do this", "", PulseAct::Always(id.clone()), act);
     }
+    if grokhub_core::is_crash_card(card) && card.prompt.is_some() {
+        pick(ui, "Retry", "", PulseAct::Retry(id.clone()), act);
+    }
     pick(ui, "Open", "Enter", PulseAct::Open(id.clone()), act);
     ui.separator();
     pick(ui, "Not this", "N", PulseAct::NotThis(id.clone()), act);
@@ -574,6 +578,28 @@ pub(super) enum FeedPostAct {
     Undo,
     /// Done-for-you "Don't do this again" (pointer click only).
     NeverAgain,
+    /// Crash card: open the chat the run was in.
+    Open,
+    /// Crash card: run it again.
+    Retry,
+}
+
+/// Open and Retry on a crash card (a run killed from outside, exit 143).
+fn paint_crash(ui: &mut egui::Ui, card: &UpdateCard) -> Option<FeedPostAct> {
+    if !grokhub_core::is_crash_card(card) || card.status == grokhub_core::UpdateStatus::Dismissed {
+        return None;
+    }
+    let mut act = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        if card.action.is_some() && super::change_undo::click_pill(ui, "Open") {
+            act = Some(FeedPostAct::Open);
+        }
+        if card.prompt.is_some() && super::change_undo::click_pill(ui, "Retry") {
+            act = Some(FeedPostAct::Retry);
+        }
+    });
+    act
 }
 
 /// The Done-for-you pills, while the card is unanswered.
@@ -665,6 +691,9 @@ pub(super) fn paint_post_body(
     if let Some(done) = paint_done_for_you(ui, card) {
         act = Some(done);
     }
+    if let Some(crash) = paint_crash(ui, card) {
+        act = Some(crash);
+    }
     act
 }
 
@@ -680,6 +709,9 @@ pub(super) fn post_source(card: &UpdateCard) -> String {
     }
     if let Some(host) = card.citations.first().and_then(|u| pc::source_host(u)) {
         return host;
+    }
+    if grokhub_core::is_crash_card(card) {
+        return "Crash".into();
     }
     match card.kind {
         UpdateKind::AutomationDone => "Automation run".into(),
@@ -1130,6 +1162,8 @@ impl Cabin {
                         FeedPostAct::Link(url) => PulseAct::Link(url),
                         FeedPostAct::Undo => PulseAct::Undo(card.id.clone()),
                         FeedPostAct::NeverAgain => PulseAct::NeverAgain(card.id.clone()),
+                        FeedPostAct::Open => PulseAct::Open(card.id.clone()),
+                        FeedPostAct::Retry => PulseAct::Retry(card.id.clone()),
                     });
                 }
             });
@@ -1399,6 +1433,7 @@ impl Cabin {
             PulseAct::Discuss(id) => self.discuss_card(&id),
             PulseAct::Undo(id) => self.done_for_you_undo(&id),
             PulseAct::NeverAgain(id) => self.done_for_you_never(&id),
+            PulseAct::Retry(id) => self.crash_retry(&id),
             PulseAct::Link(url) => {
                 self.follow_update_action(Some(UpdateAction::DeepLink { href: url }))
             }

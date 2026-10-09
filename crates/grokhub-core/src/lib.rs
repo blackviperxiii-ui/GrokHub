@@ -523,7 +523,7 @@ pub use update_feed::{
     CARD_ACTION_DONE, CARD_ACTION_TAG, modified_ideas, post_skill_idea, set_idea_draft,
     IDEA_MODIFIED_MAX,
     board_covers_topic, live_generated_ideas, post_generated_ideas, purge_one_off_ideas, purge_template_ideas,
-    automation_failed_card,
+    automation_failed_card, crash_card, is_crash_card, CRASH_SOURCE_PREFIX,
     archive_digest, archived_digests, automate_offer_card, automation_done_card,
     digest_card, digest_topic_refused, discuss_context, short_takeaway, TAKEAWAY_MAX,
     dismiss_idea, dismiss_update, dismiss_update_at,
