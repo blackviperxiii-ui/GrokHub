@@ -22,6 +22,8 @@ use crate::tools::{DesktopOps, ToolOutput};
 use crate::{CancelToken, InputItem, ModelClient, Usage};
 
 const DEPTH_LIMIT: u32 = 2;
+/// Turns a subagent gets when its parent runs with no cap (`max_turns` 0).
+const SUBAGENT_MAX_TURNS: u32 = 50;
 
 pub struct SpawnCall<'a> {
     pub name: &'a str,
@@ -269,7 +271,7 @@ fn spawn(call: SpawnCall<'_>) -> (ToolOutput, Usage) {
         system: child_system(call.system, &spec.persona, spec.explore),
         conversation_id,
         parent_session: call.session.to_string(),
-        max_turns: call.max_turns,
+        max_turns: if call.max_turns == 0 { SUBAGENT_MAX_TURNS } else { call.max_turns },
         cancel: child_cancel.clone(),
         steer,
         gate: child_gate(call.gate, spec.explore),

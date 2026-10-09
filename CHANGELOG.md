@@ -6,6 +6,7 @@
 - Labs → Beta moves a main install to beta again: the switch no longer stops on GrokHub's own `Cargo.lock` change, and Beta stays on after a sync.
 - KDE screenshots ask KWin once: after you refuse, GrokHub stops asking and uses the fallback, and the Arch packages' menu entry starts GrokHub by its full path.
 - A model change the router makes on its own is now a note that tells you, not an Undo / Keep row that asks.
+- Long tasks no longer stop at 60 steps, 30 minutes or 50 turns: a desktop session, a chat, `/bg` and night jobs run until they're done, you Stop or Halt. A run that's stuck or repeating itself is told to re-plan and keeps going instead of pausing, and approving a card after the reply ended now picks the task back up instead of waiting for you to type.
 
 - Linux: `grokhub-linux-v2.10.97.tar.gz` and AUR `pkgver=2.10.97`.
 - Windows: `GrokHub-Setup-2.10.97.exe` and `grokhub-windows-v2.10.97.zip`.
