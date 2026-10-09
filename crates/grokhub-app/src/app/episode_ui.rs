@@ -4,7 +4,9 @@
 //! an episode on that chat; every later turn, Steer and pause shares its id,
 //! and every span the cabin, the desktop MCP (`turn.json`) or the native
 //! kernel writes carries it. Halt, Stop, `VERIFY_OK` after `GOAL_COMPLETE`
-//! (native kernel), or [`ep::EPISODE_IDLE`] with no step end it.
+//! (native kernel), or [`ep::EPISODE_IDLE`] with no step end it. A step
+//! parked on its white card keeps the episode open past both the idle time
+//! and the card's TTL, so a late Approve still runs it once.
 //!
 //! The live view is the Work tree that is already there: a group header
 //! ("Desktop session · 12 steps · 4 min") above the step rows, the last
@@ -39,6 +41,12 @@ pub(super) struct EpisodeUi {
 }
 
 impl EpisodeUi {
+    /// The card is for one of this episode's kernel parks.
+    fn owns(&self, p: &super::harness_ui::HardParkUi) -> bool {
+        let prefix = format!("{}{}-", ep::PARK_PREFIX, self.id);
+        matches!(&p.source, super::harness_ui::ParkSource::Desk(id) if id.starts_with(&prefix))
+    }
+
     fn new(chat_id: &str, now: u64) -> Self {
         Self {
             id: ep::new_episode_id(now),
@@ -177,8 +185,7 @@ impl Cabin {
     /// An episode ended with no kernel turn to read its parks: their cards go
     /// and each is denied with a span, so a later Approve can't land nowhere.
     fn deny_episode_parks(&mut self, e: &EpisodeUi) {
-        let prefix = format!("{}{}-", ep::PARK_PREFIX, e.id);
-        let mine = |p: &super::harness_ui::HardParkUi| matches!(&p.source, super::harness_ui::ParkSource::Desk(id) if id.starts_with(&prefix));
+        let mine = |p: &super::harness_ui::HardParkUi| e.owns(p);
         let mut gone: Vec<super::harness_ui::HardParkUi> = Vec::new();
         if self.harness.park.as_ref().is_some_and(mine) {
             gone.extend(self.harness.park.take());
@@ -200,6 +207,15 @@ impl Cabin {
         }
     }
 
+    /// A card for a step the open episode parked.
+    pub(super) fn episode_park(&self, p: &super::harness_ui::HardParkUi) -> bool {
+        self.harness.episode.as_ref().is_some_and(|e| e.owns(p))
+    }
+
+    fn episode_has_parks(&self) -> bool {
+        self.harness.park.iter().chain(self.harness.queue.iter()).any(|p| self.episode_park(p))
+    }
+
     fn write_episode_marker(&self, decision: &str, result: &str, claim: &str) {
         let mut span = hx::Span::deny(&self.trace_id(), ep::EPISODE_TOOL, "{}", result, "soft");
         span.decision = decision.into();
@@ -217,7 +233,7 @@ impl Cabin {
             if let Some(e) = self.harness.episode.as_mut() {
                 e.last_ms = now;
             }
-        } else if now.saturating_sub(e.last_ms) >= ep::EPISODE_IDLE.as_millis() as u64 {
+        } else if now.saturating_sub(e.last_ms) >= ep::EPISODE_IDLE.as_millis() as u64 && !self.episode_has_parks() {
             self.end_episode(ep::EpisodeEnd::Idle);
             return;
         }
@@ -569,6 +585,69 @@ mod tests {
         let deny = spans(&root).into_iter().find(|s| s.tool == "click").expect("a deny span");
         assert_eq!((deny.decision.as_str(), deny.result.as_str()), ("deny", "episode ended — fail-closed Deny"));
         assert_eq!(deny.episode, eid);
+    }
+
+    fn post_desk_park(root: &std::path::Path, id: &str, path: &str) {
+        hx::post_park(
+            root,
+            &hx::ParkRequest { id: id.into(), path: path.into(), tool: "click".into(), action: "click Send".into(), class: "send".into(), ts_ms: 1 },
+        )
+        .unwrap();
+    }
+
+    fn past_ttl(cabin: &mut Cabin) {
+        if let Some(p) = cabin.harness.park.as_mut() {
+            p.parked_at = std::time::Instant::now() - hx::APPROVAL_TTL - std::time::Duration::from_secs(1);
+        }
+    }
+
+    #[test]
+    fn a_parked_step_past_its_ttl_keeps_its_card_and_lets_other_cards_go_first() {
+        let (_pin, root) = pinned("episode-park-ttl");
+        let mut cabin = desk_cabin();
+        cabin.episode_user_sent();
+        let eid = cabin.harness.episode.as_ref().unwrap().id.clone();
+        let id = format!("{}{eid}-8", ep::PARK_PREFIX);
+        post_desk_park(&root, &id, "E");
+        cabin.poll_harness();
+        past_ttl(&mut cabin);
+        cabin.expire_hard_park();
+        assert_eq!(cabin.harness.park.as_ref().map(|p| p.source.clone()), Some(ParkSource::Desk(id.clone())), "the card stays");
+        assert_eq!(hx::take_answer(&root, &id), None, "no deny reaches the kernel");
+        assert!(spans(&root).is_empty(), "the kernel writes the not-run span, not the cabin");
+        // Another card waiting goes first; the parked step goes behind it.
+        post_desk_park(&root, "d1", "A");
+        cabin.harness.last_poll = None;
+        cabin.poll_harness();
+        cabin.expire_hard_park();
+        assert_eq!(cabin.harness.park.as_ref().map(|p| p.source.clone()), Some(ParkSource::Desk("d1".into())));
+        assert_eq!(cabin.harness.queue.iter().map(|p| p.source.clone()).collect::<Vec<_>>(), vec![ParkSource::Desk(id.clone())]);
+        // A card that isn't the episode's still fails closed at its TTL.
+        past_ttl(&mut cabin);
+        cabin.expire_hard_park();
+        assert_eq!(hx::take_answer(&root, "d1"), Some(false));
+        assert_eq!(cabin.harness.park.as_ref().map(|p| p.source.clone()), Some(ParkSource::Desk(id)));
+    }
+
+    #[test]
+    fn ten_idle_minutes_with_a_parked_step_keep_the_episode_open_until_it_is_answered() {
+        let (_pin, root) = pinned("episode-park-wait");
+        let mut cabin = desk_cabin();
+        cabin.episode_user_sent();
+        let eid = cabin.harness.episode.as_ref().unwrap().id.clone();
+        post_desk_park(&root, &format!("{}{eid}-3", ep::PARK_PREFIX), "E");
+        cabin.poll_harness();
+        let idle = now_ms() - ep::EPISODE_IDLE.as_millis() as u64;
+        cabin.harness.episode.as_mut().unwrap().last_ms = idle;
+        cabin.poll_episode();
+        assert_eq!(cabin.harness.episode.as_ref().map(|e| e.id.clone()), Some(eid));
+        assert!(!spans(&root).iter().any(|s| s.decision == "end"), "no idle end while a step waits");
+        cabin.resolve_hard_park(false, "Denied");
+        cabin.harness.episode.as_mut().unwrap().last_ms = idle;
+        cabin.poll_episode();
+        assert!(cabin.harness.episode.is_none(), "answered, the idle end applies again");
+        let end = spans(&root).into_iter().rev().find(|s| s.tool == ep::EPISODE_TOOL).unwrap();
+        assert_eq!(end.result, "idle");
     }
 
     #[test]

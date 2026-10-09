@@ -42,6 +42,8 @@ pub const DEAD_WORKER: &str = "worker returned nothing";
 /// A read past [`FANOUT_CAP`] in one fan-out.
 pub const FANOUT_CAPPED: &str = "not run: one fan-out runs at most 20 reads";
 const PARKED: &str = "parked: waiting for your approval";
+/// Opens the reply when the worker has nothing left but a parked step.
+pub const WAITING_ON_YOU: &str = "Waiting on you: ";
 /// Tools only the chat run loop can serve.
 const LOOP_ONLY: &[&str] = &[
     "spawn_subagent",
@@ -356,6 +358,9 @@ impl Run<'_, '_> {
         if let Some(note) = &self.ep.note {
             now.push_str(&format!("GrokHub's check: {note}\n"));
         }
+        for park in self.ep.parks.iter().filter(|p| p.waiting) {
+            now.push_str(&waiting_line(park));
+        }
         let mut content = Vec::new();
         match &self.obs {
             Some(obs) => {
@@ -422,6 +427,13 @@ impl Run<'_, '_> {
     fn claim(&mut self, text: &str) -> Option<EpisodeStop> {
         let mut reply = Span::reply(&self.ep.chat_id, text, self.k.held);
         reply.tokens = self.tokens.take();
+        if !self.ep.parks.is_empty() {
+            // A parked step is part of the goal: no check yet. The episode
+            // waits (it doesn't end) and the reply names what it waits on.
+            self.write(reply);
+            self.end_note = Some(parked_reply(text, &self.ep.parks));
+            return Some(EpisodeStop::Waiting);
+        }
         if !grokhub_core::verify::has_goal_complete(text) {
             self.write(reply);
             return Some(EpisodeStop::Waiting);
@@ -609,20 +621,30 @@ impl Run<'_, '_> {
         self.end(why);
     }
 
-    /// Answered parks run once or are denied; expired ones fail closed.
+    /// Answered parks run once or are denied. One past the TTL is denied for
+    /// now (not run) and keeps waiting: a late Approve still runs it once.
     fn settle_parks(&mut self, on_event: &mut dyn FnMut(LoopEvent)) {
         let now = self.now();
-        for park in std::mem::take(&mut self.ep.parks) {
+        for mut park in std::mem::take(&mut self.ep.parks) {
             let answer = self.k.parks.answer(&park.id);
             let expired = now.saturating_sub(park.parked_ms) >= APPROVAL_TTL.as_millis() as u64;
-            let deny = match (answer, expired) {
-                (Some(true), _) => None,
-                (Some(false), _) => Some("denied".to_string()),
-                (None, true) => {
-                    self.k.parks.withdraw(&park.id);
-                    Some(format!("hard-class {} timed out ({}s) — fail-closed Deny", park.class.as_str(), APPROVAL_TTL.as_secs()))
-                }
-                (None, false) => {
+            let deny = match answer {
+                Some(true) => None,
+                Some(false) => Some("denied".to_string()),
+                None => {
+                    if expired && !park.waiting {
+                        // Fail-closed for this step only: it is not run, the
+                        // card stays, and the rest of the goal goes on.
+                        park.waiting = true;
+                        let shape = StepShape {
+                            goal_step: park.goal_step.clone(),
+                            tool: park.tool.clone(),
+                            decision: "deny".into(),
+                            ui_changed: None,
+                            result: timed_out(&park),
+                        };
+                        self.record(&shape, &park.args_redacted, park.class.as_str(), &format!("s{}w", park.step));
+                    }
                     self.ep.parks.push(park);
                     continue;
                 }
@@ -870,7 +892,7 @@ impl Run<'_, '_> {
             id: id.clone(),
             path: "E".into(),
             tool: call.name.clone(),
-            action,
+            action: action.clone(),
             class: class.as_str().into(),
             ts_ms: now,
         };
@@ -883,10 +905,48 @@ impl Run<'_, '_> {
             tool: call.name.clone(),
             args: call.arguments.clone(),
             args_redacted: args_redacted.into(),
+            action,
             class,
             parked_ms: now,
             goal_step: self.ep.goal_step.clone(),
+            waiting: false,
         });
+    }
+}
+
+/// The step span's result when a park passes the approval TTL unanswered.
+fn timed_out(park: &OpenPark) -> String {
+    format!(
+        "hard-class {} unanswered after {}s — not run; waiting on your card",
+        park.class.as_str(),
+        APPROVAL_TTL.as_secs()
+    )
+}
+
+/// The worker's line, each step, for a park past the TTL.
+fn waiting_line(park: &OpenPark) -> String {
+    format!(
+        "Waiting on the user: `{}` (step {}) runs only after they approve its card. \
+Do the other parts of the goal that don't depend on it; don't retry it.\n",
+        park.action, park.step
+    )
+}
+
+/// The reply when the worker stops with steps still parked: what it said
+/// (without the done marker) and the steps it waits on.
+fn parked_reply(said: &str, parks: &[OpenPark]) -> String {
+    let said: Vec<&str> = said
+        .lines()
+        .filter(|l| !l.trim().starts_with("GOAL_COMPLETE") && !l.trim().starts_with("VERIFY_OK"))
+        .collect();
+    let names: Vec<String> = parks.iter().map(|p| format!("\u{201c}{}\u{201d}", p.action)).collect();
+    let card = if parks.len() == 1 { "its card" } else { "their cards" };
+    let waiting = format!("{WAITING_ON_YOU}{}. Approve {card} and I'll run it once and go on.", names.join("; "));
+    let said = said.join("\n");
+    if said.trim().is_empty() {
+        waiting
+    } else {
+        format!("{}\n\n{waiting}", said.trim())
     }
 }
 
