@@ -26,5 +26,6 @@
 - Subagents: Explore is read-only, General copies the parent gate, depth 2 stops grandchildren, a worktree never falls back to the parent tree.
 - Its `memory.rs` keeps `MEMORY.md` plus a rebuildable `index.sqlite` (bundled rusqlite); it never touches USER.md or SOUL.md and is not AMR; its recall pack (`first_turn_injection`) goes through `redact_recall` before the model sees it.
 - No tokio: MCP uses one worker thread per stdio child or HTTP read.
+- MCP browser sign-in (`crates/grokhub-agent/src/mcp/oauth.rs`, pure parts in `crates/grokhub-core/src/mcp_oauth.rs`, PKCE in `crates/grokhub-core/src/pkce.rs`): a remote server with no `Authorization` on its entry signs in from its Native MCP row. The sign-in is sealed by `seal_mcp_signin` (keyring key, next to the connection tokens), refreshed a minute before expiry, and refreshed once on a 401 before the row asks for a new sign-in. An entry that carries its own header or `tokenRef` never uses it.
 ## See also
 - [harness](harness.md), [grokhub-acp](grokhub-acp.md), [slash](slash.md), [app-config](app-config.md)
