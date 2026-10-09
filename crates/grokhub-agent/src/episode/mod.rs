@@ -184,6 +184,8 @@ pub struct Episode {
     pub(crate) ring: VecDeque<loops::LoopEntry>,
     /// Worker calls still stepped up after the latest re-plan.
     pub step_up: u32,
+    /// The `episode_id`s of the past lessons this episode started with.
+    pub used_lessons: Vec<String>,
 }
 
 fn cap_text(text: &str, held: &[String]) -> String {
@@ -213,6 +215,7 @@ impl Episode {
             last_reject: None,
             ring: VecDeque::new(),
             step_up: 0,
+            used_lessons: Vec::new(),
         }
     }
 
