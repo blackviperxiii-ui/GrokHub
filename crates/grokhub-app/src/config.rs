@@ -418,6 +418,9 @@ pub struct AppConfig {
     /// Settings → Let Grok control the desktop. Off until the user turns it on.
     #[serde(default)]
     pub desktop_control: bool,
+    /// Settings → Screen recording: lets "Record my screen" take stills. Off until turned on.
+    #[serde(default)]
+    pub screen_record: bool,
     /// Spike-2a flag: Cua Driver as a second pair of hands on Linux
     /// (`grokhub --mcp-cua`). Omitted from `app.json` while false. No Settings control.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -603,6 +606,7 @@ impl Default for AppConfig {
             imagine_wall: default_imagine_wall(),
             composer_glow: false,
             desktop_control: false,
+            screen_record: false,
             cua_driver: false,
             cua_driver_path: String::new(),
             theme: default_theme(),

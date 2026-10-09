@@ -2547,6 +2547,40 @@ pub fn is_crash_card(card: &UpdateCard) -> bool {
     card.source_id.starts_with(CRASH_SOURCE_PREFIX)
 }
 
+pub const SCREEN_RECORDING_SOURCE_PREFIX: &str = "screenrec:";
+
+/// A screen recording and its diagnosis. The title names the recording
+/// ("Screen recording 0:42: video stutters on 4K YouTube"); the body is the
+/// likely cause, or why it was not diagnosed. Open goes to the full report in
+/// its chat; Delete recording removes the folder after a confirm.
+pub fn screen_recording_card(dir: &str, title: &str, summary: &str, thread_id: &str, created_at: u64) -> UpdateCard {
+    let title = clip_line(title, TITLE_CHARS);
+    let summary = clip_line(summary, BODY_CHARS);
+    let source = format!("{SCREEN_RECORDING_SOURCE_PREFIX}{}", dir.trim());
+    let mut card = blank_card(
+        feed_card_id("screenrec", &source, &title, created_at, true),
+        UpdateKind::AutomationDone,
+        title,
+        (!summary.is_empty()).then_some(summary),
+        created_at,
+    );
+    if !thread_id.trim().is_empty() {
+        card.action = Some(UpdateAction::OpenSession {
+            thread_id: thread_id.trim().to_string(),
+        });
+    }
+    card.source_id = source;
+    refresh_event_why(&mut card);
+    card
+}
+
+/// The recording folder a screen recording card stands for.
+pub fn screen_recording_dir(card: &UpdateCard) -> Option<&str> {
+    card.source_id
+        .strip_prefix(SCREEN_RECORDING_SOURCE_PREFIX)
+        .filter(|d| !d.is_empty())
+}
+
 /// User saved a clock job or an interval loop.
 /// Home update for a change GrokHub made on its own (Spike-5b): "GrokHub
 /// added connection notes". `kind` is `skill`, `connection`, or
@@ -4049,6 +4083,24 @@ https://xstack.grok.me/post ZEPHYRTAIL"
         assert!(blank.body.is_some());
         let done = automation_done_card("a1", "Board summary", "ok", 5);
         assert_ne!(c.id, done.id, "a failure must not replace the done card");
+    }
+
+    #[test]
+    fn a_screen_recording_card_names_the_recording_and_keeps_its_folder() {
+        let c = screen_recording_card(
+            "/home/ada/GrokHub/recordings/r1",
+            "Screen recording 0:42: video stutters on 4K YouTube",
+            "Likely cause: hardware video decoding is off.",
+            "t9",
+            7,
+        );
+        assert_eq!(c.title, "Screen recording 0:42: video stutters on 4K YouTube");
+        assert_eq!(c.body.as_deref(), Some("Likely cause: hardware video decoding is off."));
+        assert_eq!(c.action, Some(UpdateAction::OpenSession { thread_id: "t9".into() }));
+        assert_eq!(c.source_id, "screenrec:/home/ada/GrokHub/recordings/r1");
+        assert_eq!(screen_recording_dir(&c), Some("/home/ada/GrokHub/recordings/r1"));
+        assert!(!is_crash_card(&c));
+        assert_eq!(screen_recording_dir(&crash_card("t1", "Index", "t1", "/retry", 5)), None);
     }
 
     #[test]
