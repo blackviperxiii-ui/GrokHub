@@ -14,6 +14,3 @@ path = "src/bin/fake_acp.rs"
 grokhub-core = { path = "../grokhub-core" }
 serde.workspace = true
 serde_json.workspace = true
-
-[dev-dependencies]
-serde_json.workspace = true

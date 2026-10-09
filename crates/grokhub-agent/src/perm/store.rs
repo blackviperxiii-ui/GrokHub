@@ -6,6 +6,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -97,10 +98,7 @@ pub fn load_rules(dir: &Path) -> Vec<Rule> {
 }
 
 fn load_rules_unlocked(dir: &Path) -> Vec<Rule> {
-    let Ok(text) = fs::read_to_string(dir.join(RULES_FILE)) else {
-        return Vec::new();
-    };
-    let Ok(file) = serde_json::from_str::<RulesFile>(&text) else {
+    let Ok(file) = read_store::<RulesFile>(&dir.join(RULES_FILE)) else {
         return Vec::new();
     };
     let mut rules = Vec::new();
@@ -120,6 +118,9 @@ fn load_rules_unlocked(dir: &Path) -> Vec<Rule> {
 
 pub fn save_rules(dir: &Path, rules: &[Rule]) -> Result<(), String> {
     let _guard = IO.lock().unwrap_or_else(|err| err.into_inner());
+    // Rules come from load_rules, which reads an unreadable file as empty.
+    // Saving over it would wipe the user's hand-edited deny rules.
+    read_store::<RulesFile>(&dir.join(RULES_FILE))?;
     let mut file = RulesFile::default();
     for rule in rules {
         let slot = match rule.action {
@@ -139,6 +140,7 @@ pub fn load_grants(dir: &Path, workspace: &Path) -> Vec<String> {
     let _guard = IO.lock().unwrap_or_else(|err| err.into_inner());
     let key = project_key(workspace);
     load_grants_file(dir)
+        .unwrap_or_default()
         .projects
         .get(&key)
         .cloned()
@@ -147,7 +149,7 @@ pub fn load_grants(dir: &Path, workspace: &Path) -> Vec<String> {
 
 pub fn load_all_grants(dir: &Path) -> BTreeMap<String, Vec<String>> {
     let _guard = IO.lock().unwrap_or_else(|err| err.into_inner());
-    load_grants_file(dir).projects
+    load_grants_file(dir).unwrap_or_default().projects
 }
 
 pub fn remember_grant(workspace: &Path, command: &str) -> Result<(), String> {
@@ -158,7 +160,7 @@ pub fn remember_grant(workspace: &Path, command: &str) -> Result<(), String> {
     let _guard = IO.lock().unwrap_or_else(|err| err.into_inner());
     let dir = config_dir();
     let key = project_key(workspace);
-    let mut file = load_grants_file(&dir);
+    let mut file = load_grants_file(&dir)?;
     let slot = file.projects.entry(key).or_default();
     if !slot.iter().any(|existing| existing == command) {
         slot.push(command.to_string());
@@ -170,7 +172,7 @@ pub fn remove_grant(workspace: &Path, command: &str) -> Result<(), String> {
     let _guard = IO.lock().unwrap_or_else(|err| err.into_inner());
     let dir = config_dir();
     let key = project_key(workspace);
-    let mut file = load_grants_file(&dir);
+    let mut file = load_grants_file(&dir)?;
     if let Some(slot) = file.projects.get_mut(&key) {
         slot.retain(|existing| existing != command);
         if slot.is_empty() {
@@ -187,7 +189,7 @@ pub fn add_grant_at(dir: &Path, workspace: &Path, command: &str) -> Result<(), S
     }
     let _guard = IO.lock().unwrap_or_else(|err| err.into_inner());
     let key = project_key(workspace);
-    let mut file = load_grants_file(dir);
+    let mut file = load_grants_file(dir)?;
     let slot = file.projects.entry(key).or_default();
     if !slot.iter().any(|existing| existing == command) {
         slot.push(command.to_string());
@@ -195,11 +197,23 @@ pub fn add_grant_at(dir: &Path, workspace: &Path, command: &str) -> Result<(), S
     write_grants(dir, &file)
 }
 
-fn load_grants_file(dir: &Path) -> GrantsFile {
-    let Ok(text) = fs::read_to_string(dir.join(GRANTS_FILE)) else {
-        return GrantsFile::default();
+fn load_grants_file(dir: &Path) -> Result<GrantsFile, String> {
+    read_store(&dir.join(GRANTS_FILE))
+}
+
+/// A missing file is empty. A file that exists but does not parse is an error,
+/// so a write never replaces what the user saved. Windows editors add a BOM.
+fn read_store<T: serde::de::DeserializeOwned + Default>(path: &Path) -> Result<T, String> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(T::default()),
+        Err(err) => return Err(format!("{}: {err}", path.display())),
     };
-    serde_json::from_str(&text).unwrap_or_default()
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+    if text.trim().is_empty() {
+        return Ok(T::default());
+    }
+    serde_json::from_str(text).map_err(|err| format!("{}: {err}", path.display()))
 }
 
 fn write_grants(dir: &Path, file: &GrantsFile) -> Result<(), String> {
@@ -212,12 +226,14 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
     let tmp = path.with_extension("tmp");
-    fs::write(&tmp, bytes).map_err(|err| err.to_string())?;
-    match fs::rename(&tmp, path) {
-        Ok(()) => Ok(()),
-        Err(_) => {
-            let _ = fs::remove_file(path);
-            fs::rename(&tmp, path).map_err(|err| err.to_string())
-        }
-    }
+    let mut file = fs::File::create(&tmp).map_err(|err| err.to_string())?;
+    file.write_all(bytes).map_err(|err| err.to_string())?;
+    file.sync_all().map_err(|err| err.to_string())?;
+    drop(file);
+    // rename replaces the destination on every platform. Deleting the
+    // destination first and then failing the rename again would lose the file.
+    fs::rename(&tmp, path).map_err(|err| {
+        let _ = fs::remove_file(&tmp);
+        err.to_string()
+    })
 }

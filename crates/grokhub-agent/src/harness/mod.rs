@@ -85,7 +85,7 @@ pub use approval::{
     HardAnswer, HardPark, Step, APPROVAL_TTL,
 };
 pub use at_rest::{
-    has_sealed_data, keyring_name, keyring_name_for, read_key, recheck_keyring, set_default_key_store, use_key_store_for, use_os_keyring,
+    has_sealed_data, keyring_name_for, read_key, recheck_keyring, set_default_key_store, use_key_store_for, use_os_keyring,
     KeyStore, KeyringOs, LearnedVault, Locked, MemoryKeyStore, OsKeyring, KEY_ACCOUNT, KEY_ID_FILE, KEY_SERVICE,
     SEALED_PREFIX,
 };
@@ -138,7 +138,7 @@ pub use hard::{
     classify, classify_ask, click_action, click_rule, click_target, click_target_class, click_target_in, credential_action,
     credential_field, credential_hint, delete_files_action, delete_targets, desk_classify, hard_class, hard_floor,
     ClickRule, ClickTarget, HardClass, HardFloor, HardHit, BUILTIN_CU_DENY, GB_DENY_GAPS, HEADLESS_DENY_RULES,
-    TARGET_HINT,
+    NO_BIN_HINT, TARGET_HINT,
 };
 pub use path_d::{builtin_cu, cu_look_only, decide_unasked, unasked_action, unasked_title};
 pub use ladder::{hard_target, ladder_span, Ladder, LadderStep, Rung, RECOVERY_TOOL};

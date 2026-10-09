@@ -4,6 +4,8 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
+use crate::episode::clip_bytes;
+
 const TEMPLATE: &str = include_str!("prompt_template.md");
 const AGENTS_CAP: usize = 64 * 1024;
 
@@ -64,7 +66,7 @@ fn layered_agents(workspace: &Path, home: Option<&Path>) -> Option<String> {
     if parts.is_empty() {
         return None;
     }
-    Some(clip_bytes(&parts.join("\n\n"), AGENTS_CAP))
+    Some(clip_bytes(&parts.join("\n\n"), AGENTS_CAP).to_string())
 }
 
 fn push_md(out: &mut Vec<String>, path: &Path) {
@@ -94,18 +96,6 @@ fn read_capped(path: &Path) -> Option<String> {
         buf.truncate(cut);
     }
     Some(String::from_utf8_lossy(&buf).into_owned())
-}
-
-fn clip_bytes(text: &str, max: usize) -> String {
-    let bytes = text.as_bytes();
-    if bytes.len() <= max {
-        return text.to_string();
-    }
-    let mut cut = max;
-    while cut > 0 && bytes[cut] & 0xC0 == 0x80 {
-        cut -= 1;
-    }
-    String::from_utf8_lossy(&bytes[..cut]).into_owned()
 }
 
 fn regular_file(path: &Path) -> bool {

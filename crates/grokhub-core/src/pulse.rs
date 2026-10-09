@@ -93,7 +93,7 @@ pub fn ago_label(at_ms: u64, now_ms: u64) -> String {
     }
 }
 
-// ---------------------------------------------------------------- categories
+// categories
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PulseCategory {
@@ -311,7 +311,7 @@ fn card_text(card: &UpdateCard) -> String {
     text
 }
 
-// ---------------------------------------------------------------- card types
+// card types
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PulseType {
@@ -532,7 +532,7 @@ pub fn is_feed_card(card: &UpdateCard) -> bool {
     !is_idea_card(card)
 }
 
-// ---------------------------------------------------------------- ledger
+// ledger
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LedgerReason {
@@ -630,7 +630,7 @@ fn parse_ledger_line(line: &str) -> Option<LedgerEntry> {
     })
 }
 
-// ---------------------------------------------------------------- ranking
+// ranking
 
 /// Rule weights, in the brief's order. Deterministic: no clock noise, no model.
 pub const SCORE_SKILL_ASK: i64 = 1000;
@@ -826,7 +826,7 @@ pub fn feed_posts(cards: &[UpdateCard], inputs: &PulseInputs) -> Vec<UpdateCard>
     posts
 }
 
-// ---------------------------------------------------------------- buttons
+// buttons
 
 /// Run: the idea's own action as a background task. Never the composer.
 pub fn run_line(card: &UpdateCard) -> String {
@@ -877,7 +877,7 @@ pub fn snooze_card(cards: &mut [UpdateCard], id: &str, until: u64) -> bool {
     }
 }
 
-// ---------------------------------------------------------------- feed instructions
+// feed instructions
 
 /// Our own default wording. The person can rewrite all of it.
 pub const DEFAULT_FEED_INSTRUCTIONS: &str = "Keep my feed short and easy to skim. Mostly news and stories about the things I work on and care about, each explained plainly in two or three sentences, with a real source and a real image when the source has one. No clickbait, no filler, no repeats.
@@ -962,7 +962,7 @@ pub fn recent_taste(ledger: &[LedgerEntry], n: usize) -> Vec<LedgerEntry> {
         .collect()
 }
 
-// ---------------------------------------------------------------- quiet hours
+// quiet hours
 
 pub const QUIET_DIGEST_TITLE: &str = "While you were in quiet hours";
 pub const QUIET_DIGEST_SOURCE: &str = "pulse:quiet";
@@ -1004,7 +1004,7 @@ pub fn release_quiet_batch(cards: &mut Vec<UpdateCard>, now_ms: u64) -> (usize, 
     (n, Some(id))
 }
 
-// ---------------------------------------------------------------- real images
+// real images
 
 /// The page's own preview image: `og:image`, else `twitter:image`. Relative
 /// paths resolve against the page. Only public http(s) URLs.
@@ -1119,7 +1119,7 @@ pub fn source_host(url: &str) -> Option<String> {
     (!host.is_empty()).then_some(host)
 }
 
-// ---------------------------------------------------------------- migration
+// migration
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PulseMigration {

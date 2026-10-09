@@ -574,6 +574,10 @@ impl Cabin {
                                                                     self.status = "Saved".into();
                                                                 }
                                                             }
+                                                            self.ui_dream_time_row(ui);
+                                                            if crate::cards::settings_action(ui, "Setup", "Walk through first-run setup again.", "Open") {
+                                                                self.open_setup(super::setup_wizard::SetupStep::Welcome);
+                                                            }
                                                             let budgets = grokhub_core::TOKEN_BUDGETS;
                                                             let budget_labels: Vec<String> = budgets
                                                                 .iter()
@@ -719,6 +723,7 @@ impl Cabin {
                                                             ) {
                                                                 self.refresh_models_now();
                                                             }
+                                                            self.ui_local_model_rows(ui);
                                                             self.ui_provider_rows(ui);
                                                             crate::cards::settings_note(ui, &self.how_auto_picks_lines());
                                                             self.ui_spend_rows(ui);
