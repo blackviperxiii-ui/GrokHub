@@ -41,13 +41,13 @@ pub(super) struct SelfReviewFile {
 }
 
 /// What one card says and what its Apply writes.
-struct ProposalCard<'a> {
-    source: String,
-    skill: &'a str,
-    title: &'a str,
-    body: &'a str,
-    details: String,
-    md: &'a str,
+pub(super) struct ProposalCard<'a> {
+    pub source: String,
+    pub skill: &'a str,
+    pub title: &'a str,
+    pub body: &'a str,
+    pub details: String,
+    pub md: &'a str,
 }
 
 #[derive(Debug, Default)]
@@ -413,7 +413,7 @@ impl Cabin {
 
     /// Router R3a in the weekly pass: at most two cost-raising tuning cards
     /// (inside the five) and one Home line on what the router changed.
-    fn post_router_review(&mut self, now: u64) {
+    pub(super) fn post_router_review(&mut self, now: u64) {
         let dir = config::config_dir();
         let mut posted = 0;
         for (source, title, body) in grokhub_agent::route::learn::cards_due(&dir, now) {
@@ -440,7 +440,7 @@ impl Cabin {
     /// Post one Suggestion card inside the pass's budget and remember what
     /// Apply does. A live card for the same source is left alone. The caller
     /// saves the feed once: one save thread per card could land out of order.
-    fn post_self_review_card(&mut self, card: ProposalCard<'_>, now: u64) {
+    pub(super) fn post_self_review_card(&mut self, card: ProposalCard<'_>, now: u64) {
         let ProposalCard {
             source,
             skill,

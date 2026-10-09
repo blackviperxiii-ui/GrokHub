@@ -76,7 +76,7 @@ pub fn pause_msg(model: &str, failed: &str, tried: &[String]) -> HealMsg {
     HealMsg {
         tier: Tier::Pause,
         key: format!("noroute:{model}"),
-        title: "Paused: no model in your plan is answering".into(),
+        title: format!("Paused: {model} isn't answering"),
         text: format!("{model}: {failed} {tried} You can wait for it to come back, refresh the model list, or pick another model in Settings."),
     }
 }
@@ -139,7 +139,7 @@ pub fn heal_messages(events: &[RegistryEvent], reg: &Registry, profiles: &BTreeM
             (ModelState::NotInPlan, Some(f)) if tier_notice.is_none() => heard.msgs.push(HealMsg {
                 tier: Tier::HomeUpdate,
                 key: format!("plan:{id}"),
-                title: "Your plan changed".into(),
+                title: format!("Your plan no longer includes {id}"),
                 text: format!("Your plan changed, so {id} isn't included anymore. I'll use {f}."),
             }),
             // A degraded pin with nothing healthy to stand in keeps answering, slowly.
@@ -167,7 +167,7 @@ pub fn heal_messages(events: &[RegistryEvent], reg: &Registry, profiles: &BTreeM
                 Some(f) => format!("Your plan changed, so {lost} isn't included anymore. I'll use {f}."),
                 None => format!("Your plan changed, so {lost} isn't included anymore."),
             };
-            heard.msgs.push(HealMsg { tier: Tier::HomeUpdate, key: format!("tier:{notice}"), title: "Your plan changed".into(), text });
+            heard.msgs.push(HealMsg { tier: Tier::HomeUpdate, key: format!("tier:{notice}"), title: format!("Your plan no longer includes {lost}"), text });
         }
     }
     heard
