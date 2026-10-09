@@ -587,8 +587,10 @@ mod tests {
              Keep one from its Work-tree row, or add this one yourself on the Automations page."
         );
         assert_eq!(load_list(&store_path()).unwrap().len(), 2, "the third was not written");
-        let week = crate::harness::WEEK_MS;
-        assert!(write_automation("water the plants", 60, false, None, now + week + 1).is_ok(), "a week on, room again");
+        // The ledger stamps each line with the real clock, so a week on is
+        // counted from after the writes, not from `now`.
+        let week_on = now_ms() + crate::harness::WEEK_MS;
+        assert!(write_automation("water the plants", 60, false, None, week_on).is_ok(), "a week on, room again");
         let ledger = crate::harness::ChangeLedger::load_kind(&dir, crate::harness::ChangeKind::Automation);
         let lines: Vec<(&str, &str, &str)> =
             ledger.all().iter().map(|c| (c.op.as_str(), c.origin.as_str(), c.reason.as_str())).collect();
