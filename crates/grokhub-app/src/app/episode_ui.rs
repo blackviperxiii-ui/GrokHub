@@ -444,7 +444,9 @@ mod tests {
         let src = include_str!("native_engine.rs");
         let kick = src.split("fn kick_native_turn(").nth(1).and_then(|s| s.split("fn prompt_native_memory").next()).unwrap();
         assert!(!kick.contains("publish_native_cfg"), "{kick}");
-        assert!(kick.contains("Some(Ok(())) => {\n                self.episode_resume_sent();"), "{kick}");
+        // Whitespace-free, so Windows CRLF checkouts read the same.
+        let flat: String = kick.split_whitespace().collect();
+        assert!(flat.contains("Some(Ok(()))=>{self.episode_resume_sent();"), "{kick}");
     }
 
     #[test]
