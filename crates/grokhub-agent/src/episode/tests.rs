@@ -1001,3 +1001,30 @@ fn varied_clicks_that_move_the_screen_never_replan_or_step_up() {
     assert!(worker_tokens(&spans).iter().all(|(m, e)| (m.as_str(), e.as_str()) == ("grok-4.7", "low")));
     assert!(!spans.iter().any(|s| s.decision == "step_up"));
 }
+
+#[test]
+fn an_episode_that_recovered_writes_one_lesson_and_a_clean_one_writes_none() {
+    let mut r = rig("lesson", Box::new(|n| match n {
+        0..=2 => Act::ClickSave,
+        3 => Act::Click(7),
+        _ => Act::Done,
+    }));
+    r.desk.still = true;
+    let mut ep = r.episode("Save notes.txt in Gedit");
+    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    let stored = lessons::load(&r.dir);
+    assert_eq!(stored.len(), 1);
+    let l = &stored[0];
+    assert_eq!((l.app.as_str(), l.outcome.as_str(), l.episode_id.as_str()), ("Gedit", "verified", ep.id.as_str()));
+    assert_eq!(l.what_failed, "replan: click 'Save' changed nothing 3×");
+    assert_eq!(l.what_worked, "then click at 7,40");
+    let spans = r.spans();
+    let mark = spans.iter().find(|s| s.tool == EPISODE_TOOL && s.decision == "lesson").expect("a quiet lesson marker");
+    assert_eq!((mark.result.as_str(), mark.claim.as_str()), ("saved", "Gedit: replan: click 'Save' changed nothing 3× → then click at 7,40"));
+    assert_eq!(spans.last().unwrap().decision, "end", "the end marker stays last");
+
+    let clean = rig("lesson-clean", clicks_then_done(3));
+    let mut ep = clean.episode("Save notes.txt in Gedit");
+    assert_eq!(clean.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert!(lessons::load(&clean.dir).is_empty(), "a trivial run teaches nothing");
+}
