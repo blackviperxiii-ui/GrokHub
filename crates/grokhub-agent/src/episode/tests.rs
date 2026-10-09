@@ -385,30 +385,105 @@ fn a_25_step_episode_is_one_trace_with_one_shape_per_step() {
     assert_eq!(ep.ended, Some(EpisodeEnd::Verified));
 }
 
-#[test]
-fn a_hard_step_parks_and_ttl_denies_it_while_the_episode_goes_on() {
-    let mut r = rig("hard", Box::new(|n| match n {
+/// Step 8 is a hard Send; the other 19 clicks don't depend on it. Worker
+/// calls are 30 s apart, so the card passes the 300 s TTL at call 18.
+fn send_parked_past_ttl(label: &str) -> Rig {
+    let mut r = rig(label, Box::new(|n| match n {
         7 => Act::HardClick,
         n if n < 20 => Act::Click(n as u32),
         _ => Act::Done,
     }));
     r.model.tick_ms = 30_000;
+    r
+}
+
+fn sends(r: &Rig) -> usize {
+    r.desk.calls.lock().unwrap().iter().filter(|(_, a)| a.get("label").is_some()).count()
+}
+
+#[test]
+fn an_unanswered_hard_step_parks_only_itself_and_the_episode_waits_instead_of_ending() {
+    let r = send_parked_past_ttl("hard");
     let mut ep = r.episode("Reply to the thread");
     let out = r.run(&mut ep, &mut EpisodeView::default());
-    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(out.stop, EpisodeStop::Waiting, "a parked step keeps the episode open");
+    let action = r#"click {"label":"Send","x":900,"y":40}"#;
+    assert_eq!(r.parks.posted.lock().unwrap()[0].action, action);
+    assert_eq!(
+        out.reply,
+        format!("All set.\n\n{WAITING_ON_YOU}\u{201c}{action}\u{201d}. Approve its card and I'll run it once and go on.")
+    );
     let spans = r.spans();
     let park = spans.iter().find(|s| s.decision == "park").unwrap();
     assert_eq!((park.tool.as_str(), park.approval_class.as_str(), park.claim.as_str()), ("click", "send", "episode step 8"));
-    let deny = spans.iter().find(|s| s.decision == "deny").unwrap();
-    assert_eq!(deny.result, "hard-class send timed out (300s) — fail-closed Deny");
-    assert_eq!(deny.episode, ep.id);
-    assert_eq!(r.parks.posted.lock().unwrap().len(), 1);
-    assert_eq!(r.parks.posted.lock().unwrap()[0].id, format!("{PARK_PREFIX}{}-8", ep.id));
-    assert_eq!(*r.parks.withdrawn.lock().unwrap(), vec![format!("{PARK_PREFIX}{}-8", ep.id)]);
-    // The parked Send never reached the desktop; the other 19 clicks did.
+    let deny: Vec<_> = spans.iter().filter(|s| s.decision == "deny").collect();
+    assert_eq!(deny.len(), 1, "one span when the TTL passes, not one per step");
+    assert_eq!(deny[0].result, "hard-class send unanswered after 300s — not run; waiting on your card");
+    assert_eq!(deny[0].episode, ep.id);
+    // The Send never ran; the 19 clicks that don't need it did.
     assert_eq!(r.desk.count("click"), 19);
-    assert!(r.desk.calls.lock().unwrap().iter().all(|(_, a)| a.get("label").is_none()));
+    assert_eq!(sends(&r), 0);
+    assert!(!spans.iter().any(|s| s.tool == VERIFY_TOOL), "no check while a step is parked");
+    assert!(!spans.iter().any(|s| s.decision == "end"), "the episode did not end");
+    // The card stays up for a late answer; nothing withdrew it.
+    assert!(r.parks.withdrawn.lock().unwrap().is_empty());
+    assert_eq!((ep.parks.len(), ep.parks[0].waiting), (1, true));
+    // From the TTL on, every worker call is told what waits and to go on without it.
+    let line = format!("Waiting on the user: `{action}` (step 8) runs only after they approve its card. Do the other parts of the goal that don't depend on it; don't retry it.");
+    let told: Vec<bool> = nows(&r.model).iter().map(|n| n.contains(&line)).collect();
+    assert_eq!(told.iter().position(|t| *t), Some(18));
+    assert!(told[18..].iter().all(|t| *t));
+}
+
+#[test]
+fn a_late_approve_runs_the_parked_step_once_and_the_episode_finishes() {
+    let r = send_parked_past_ttl("late-approve");
+    let mut ep = r.episode("Reply to the thread");
+    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Waiting);
+    r.parks.answer_all(true);
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(sends(&r), 1);
+    let ran: Vec<_> = r.spans().into_iter().filter(|s| s.decision == "approve").collect();
+    assert_eq!(ran.len(), 1);
+    assert!(ran[0].hard_approved);
+    assert_eq!((ran[0].tool.as_str(), ran[0].goal_step.as_str()), ("click", "Reply to the thread"));
     assert!(ep.parks.is_empty());
+    // A second answer or another turn never runs it again.
+    r.parks.answer_all(true);
+    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(sends(&r), 1);
+}
+
+#[test]
+fn a_late_deny_never_runs_the_parked_step() {
+    let r = send_parked_past_ttl("late-deny");
+    let mut ep = r.episode("Reply to the thread");
+    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Waiting);
+    r.parks.answer_all(false);
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified), "the rest of the goal finishes");
+    assert_eq!(sends(&r), 0);
+    let results: Vec<String> = r.spans().into_iter().filter(|s| s.decision == "deny").map(|s| s.result).collect();
+    assert_eq!(results, vec!["hard-class send unanswered after 300s — not run; waiting on your card".to_string(), "denied".to_string()]);
+    assert!(ep.parks.is_empty());
+}
+
+#[test]
+fn halt_while_a_step_waits_past_its_ttl_denies_it() {
+    let r = send_parked_past_ttl("wait-halt");
+    let mut ep = r.episode("Reply to the thread");
+    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Waiting);
+    r.desk.halt.store(true, Ordering::SeqCst);
+    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Halt));
+    let last_deny = r.spans().into_iter().rev().find(|s| s.decision == "deny").unwrap();
+    assert_eq!((last_deny.tool.as_str(), last_deny.result.as_str()), ("click", "halt — fail-closed Deny"));
+    assert_eq!(*r.parks.withdrawn.lock().unwrap(), vec![format!("{PARK_PREFIX}{}-8", ep.id)]);
+    // An approve that lands after the halt finds nothing to run.
+    r.parks.answer_all(true);
+    r.desk.halt.store(false, Ordering::SeqCst);
+    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Halt));
+    assert_eq!(sends(&r), 0);
 }
 
 #[test]
