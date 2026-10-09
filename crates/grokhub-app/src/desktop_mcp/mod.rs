@@ -620,6 +620,12 @@ impl DesktopBackend for LiveBackend {
     fn list_windows(&mut self) -> Result<grokhub_core::desktop_mcp::DesktopWindows, String> {
         apps::list_windows()
     }
+    fn window_geometry(&mut self, title: &str) -> Result<grokhub_core::desktop_mcp::WindowGeom, String> {
+        apps::window_geometry(title)
+    }
+    fn set_window_geometry(&mut self, title: &str, geom: &grokhub_core::desktop_mcp::WindowGeom) -> Result<String, String> {
+        apps::set_window_geometry(title, geom)
+    }
     fn trash(&mut self, paths: &[std::path::PathBuf]) -> Result<(), String> {
         apps::trash(paths)
     }

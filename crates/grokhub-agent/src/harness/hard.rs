@@ -182,6 +182,9 @@ pub fn desk_classify(tool: &str, args: &serde_json::Value) -> HardHit {
             classify("run_terminal_command", &serde_json::json!({ "command": app }).to_string())
         }
         "focus_window" => HardHit::None,
+        // Card 12 parity: moving a window or reading files' sizes and times
+        // can all be put back or change nothing, so they stay soft.
+        "get_window_geometry" | "set_window_geometry" | "watch_path" | "watch_events" | "unwatch_path" => HardHit::None,
         // Spike-2b: what the control under the click does, checked before it runs.
         // A drag lets go over a control too, so it is read like a click there.
         "click" | "drag" => match click_rule(args) {
@@ -1883,6 +1886,11 @@ mod tests {
         }
         assert_eq!(desk_classify("open_app", &serde_json::json!({ "app": "org.kde.dolphin" })), HardHit::None);
         assert_eq!(desk_classify("focus_window", &serde_json::json!({ "title": "Dolphin" })), HardHit::None);
+        let geom = serde_json::json!({ "title": "Send money", "x": 0, "y": 0, "width": 800, "height": 600 });
+        assert_eq!(desk_classify("set_window_geometry", &geom), HardHit::None, "a window's title is not what it does");
+        for tool in ["get_window_geometry", "watch_path", "watch_events", "unwatch_path"] {
+            assert_eq!(desk_classify(tool, &serde_json::json!({ "path": "/home/ada/payments", "id": "w1" })), HardHit::None, "{tool}");
+        }
         assert_eq!(
             desk_classify("open_app", &serde_json::json!({ "app": "shutdown" })),
             HardHit::Class(HardClass::IrreversibleOs)
