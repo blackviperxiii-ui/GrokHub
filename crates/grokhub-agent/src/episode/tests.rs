@@ -38,6 +38,7 @@ enum Act {
     DoneSelfChecked,
     Say,
     Shell(&'static str),
+    Shot,
 }
 
 type Script = Box<dyn Fn(usize) -> Act + Send + Sync>;
@@ -143,6 +144,7 @@ impl ModelClient for FakeModel {
             Act::DoneSelfChecked => ("Saved it.\nVERIFY_OK\nGOAL_COMPLETE".into(), vec![]),
             Act::Say => ("Which network should I pick?".into(), vec![]),
             Act::Shell(cmd) => (String::new(), vec![call(n, "run_terminal_command", json!({"command": cmd}))]),
+            Act::Shot => (String::new(), vec![call(n, "screenshot", json!({}))]),
         };
         Ok(TurnOutput { text, reasoning: WORKER_THOUGHT.into(), calls, usage })
     }
@@ -159,6 +161,8 @@ struct FakeDesk {
     still: bool,
     /// A click on this label fails.
     fail_label: Option<&'static str>,
+    /// Every screenshot fails with this.
+    shot_error: Option<&'static str>,
 }
 
 impl FakeDesk {
@@ -192,6 +196,9 @@ impl DesktopOps for FakeDesk {
         }
         if name == "click" && self.fail_label.is_some() && args.get("label").and_then(Value::as_str) == self.fail_label {
             return ToolOutput::err("no such button");
+        }
+        if let (Some(err), "screenshot") = (self.shot_error, name) {
+            return ToolOutput::err(err);
         }
         if name == "screenshot" {
             return ToolOutput {
@@ -378,30 +385,105 @@ fn a_25_step_episode_is_one_trace_with_one_shape_per_step() {
     assert_eq!(ep.ended, Some(EpisodeEnd::Verified));
 }
 
-#[test]
-fn a_hard_step_parks_and_ttl_denies_it_while_the_episode_goes_on() {
-    let mut r = rig("hard", Box::new(|n| match n {
+/// Step 8 is a hard Send; the other 19 clicks don't depend on it. Worker
+/// calls are 30 s apart, so the card passes the 300 s TTL at call 18.
+fn send_parked_past_ttl(label: &str) -> Rig {
+    let mut r = rig(label, Box::new(|n| match n {
         7 => Act::HardClick,
         n if n < 20 => Act::Click(n as u32),
         _ => Act::Done,
     }));
     r.model.tick_ms = 30_000;
+    r
+}
+
+fn sends(r: &Rig) -> usize {
+    r.desk.calls.lock().unwrap().iter().filter(|(_, a)| a.get("label").is_some()).count()
+}
+
+#[test]
+fn an_unanswered_hard_step_parks_only_itself_and_the_episode_waits_instead_of_ending() {
+    let r = send_parked_past_ttl("hard");
     let mut ep = r.episode("Reply to the thread");
     let out = r.run(&mut ep, &mut EpisodeView::default());
-    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(out.stop, EpisodeStop::Waiting, "a parked step keeps the episode open");
+    let action = r#"click {"label":"Send","x":900,"y":40}"#;
+    assert_eq!(r.parks.posted.lock().unwrap()[0].action, action);
+    assert_eq!(
+        out.reply,
+        format!("All set.\n\n{WAITING_ON_YOU}\u{201c}{action}\u{201d}. Approve its card and I'll run it once and go on.")
+    );
     let spans = r.spans();
     let park = spans.iter().find(|s| s.decision == "park").unwrap();
     assert_eq!((park.tool.as_str(), park.approval_class.as_str(), park.claim.as_str()), ("click", "send", "episode step 8"));
-    let deny = spans.iter().find(|s| s.decision == "deny").unwrap();
-    assert_eq!(deny.result, "hard-class send timed out (300s) — fail-closed Deny");
-    assert_eq!(deny.episode, ep.id);
-    assert_eq!(r.parks.posted.lock().unwrap().len(), 1);
-    assert_eq!(r.parks.posted.lock().unwrap()[0].id, format!("{PARK_PREFIX}{}-8", ep.id));
-    assert_eq!(*r.parks.withdrawn.lock().unwrap(), vec![format!("{PARK_PREFIX}{}-8", ep.id)]);
-    // The parked Send never reached the desktop; the other 19 clicks did.
+    let deny: Vec<_> = spans.iter().filter(|s| s.decision == "deny").collect();
+    assert_eq!(deny.len(), 1, "one span when the TTL passes, not one per step");
+    assert_eq!(deny[0].result, "hard-class send unanswered after 300s — not run; waiting on your card");
+    assert_eq!(deny[0].episode, ep.id);
+    // The Send never ran; the 19 clicks that don't need it did.
     assert_eq!(r.desk.count("click"), 19);
-    assert!(r.desk.calls.lock().unwrap().iter().all(|(_, a)| a.get("label").is_none()));
+    assert_eq!(sends(&r), 0);
+    assert!(!spans.iter().any(|s| s.tool == VERIFY_TOOL), "no check while a step is parked");
+    assert!(!spans.iter().any(|s| s.decision == "end"), "the episode did not end");
+    // The card stays up for a late answer; nothing withdrew it.
+    assert!(r.parks.withdrawn.lock().unwrap().is_empty());
+    assert_eq!((ep.parks.len(), ep.parks[0].waiting), (1, true));
+    // From the TTL on, every worker call is told what waits and to go on without it.
+    let line = format!("Waiting on the user: `{action}` (step 8) runs only after they approve its card. Do the other parts of the goal that don't depend on it; don't retry it.");
+    let told: Vec<bool> = nows(&r.model).iter().map(|n| n.contains(&line)).collect();
+    assert_eq!(told.iter().position(|t| *t), Some(18));
+    assert!(told[18..].iter().all(|t| *t));
+}
+
+#[test]
+fn a_late_approve_runs_the_parked_step_once_and_the_episode_finishes() {
+    let r = send_parked_past_ttl("late-approve");
+    let mut ep = r.episode("Reply to the thread");
+    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Waiting);
+    r.parks.answer_all(true);
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(sends(&r), 1);
+    let ran: Vec<_> = r.spans().into_iter().filter(|s| s.decision == "approve").collect();
+    assert_eq!(ran.len(), 1);
+    assert!(ran[0].hard_approved);
+    assert_eq!((ran[0].tool.as_str(), ran[0].goal_step.as_str()), ("click", "Reply to the thread"));
     assert!(ep.parks.is_empty());
+    // A second answer or another turn never runs it again.
+    r.parks.answer_all(true);
+    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert_eq!(sends(&r), 1);
+}
+
+#[test]
+fn a_late_deny_never_runs_the_parked_step() {
+    let r = send_parked_past_ttl("late-deny");
+    let mut ep = r.episode("Reply to the thread");
+    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Waiting);
+    r.parks.answer_all(false);
+    let out = r.run(&mut ep, &mut EpisodeView::default());
+    assert_eq!(out.stop, EpisodeStop::Ended(EpisodeEnd::Verified), "the rest of the goal finishes");
+    assert_eq!(sends(&r), 0);
+    let results: Vec<String> = r.spans().into_iter().filter(|s| s.decision == "deny").map(|s| s.result).collect();
+    assert_eq!(results, vec!["hard-class send unanswered after 300s — not run; waiting on your card".to_string(), "denied".to_string()]);
+    assert!(ep.parks.is_empty());
+}
+
+#[test]
+fn halt_while_a_step_waits_past_its_ttl_denies_it() {
+    let r = send_parked_past_ttl("wait-halt");
+    let mut ep = r.episode("Reply to the thread");
+    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Waiting);
+    r.desk.halt.store(true, Ordering::SeqCst);
+    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Halt));
+    let last_deny = r.spans().into_iter().rev().find(|s| s.decision == "deny").unwrap();
+    assert_eq!((last_deny.tool.as_str(), last_deny.result.as_str()), ("click", "halt — fail-closed Deny"));
+    assert_eq!(*r.parks.withdrawn.lock().unwrap(), vec![format!("{PARK_PREFIX}{}-8", ep.id)]);
+    // An approve that lands after the halt finds nothing to run.
+    r.parks.answer_all(true);
+    r.desk.halt.store(false, Ordering::SeqCst);
+    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Halt));
+    assert_eq!(sends(&r), 0);
 }
 
 #[test]
@@ -1000,4 +1082,93 @@ fn varied_clicks_that_move_the_screen_never_replan_or_step_up() {
     assert!(recoveries(&spans).is_empty());
     assert!(worker_tokens(&spans).iter().all(|(m, e)| (m.as_str(), e.as_str()) == ("grok-4.7", "low")));
     assert!(!spans.iter().any(|s| s.decision == "step_up"));
+}
+
+#[test]
+fn an_episode_that_recovered_writes_one_lesson_and_a_clean_one_writes_none() {
+    let mut r = rig("lesson", Box::new(|n| match n {
+        0..=2 => Act::ClickSave,
+        3 => Act::Click(7),
+        _ => Act::Done,
+    }));
+    r.desk.still = true;
+    let mut ep = r.episode("Save notes.txt in Gedit");
+    assert_eq!(r.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    let stored = lessons::load(&r.dir);
+    assert_eq!(stored.len(), 1);
+    let l = &stored[0];
+    assert_eq!((l.app.as_str(), l.outcome.as_str(), l.episode_id.as_str()), ("Gedit", "verified", ep.id.as_str()));
+    assert_eq!(l.what_failed, "replan: click 'Save' changed nothing 3×");
+    assert_eq!(l.what_worked, "then click at 7,40");
+    let spans = r.spans();
+    let mark = spans.iter().find(|s| s.tool == EPISODE_TOOL && s.decision == "lesson").expect("a quiet lesson marker");
+    assert_eq!((mark.result.as_str(), mark.claim.as_str()), ("saved", "Gedit: replan: click 'Save' changed nothing 3× → then click at 7,40"));
+    assert_eq!(spans.last().unwrap().decision, "end", "the end marker stays last");
+
+    let clean = rig("lesson-clean", clicks_then_done(3));
+    let mut ep = clean.episode("Save notes.txt in Gedit");
+    assert_eq!(clean.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert!(lessons::load(&clean.dir).is_empty(), "a trivial run teaches nothing");
+}
+
+#[test]
+fn an_episode_that_failed_then_recovered_hands_its_lesson_to_the_next_run() {
+    let mut first = rig("lesson-next", Box::new(|n| match n {
+        0..=2 => Act::ClickSave,
+        3 => Act::Click(7),
+        _ => Act::Done,
+    }));
+    first.desk.still = true;
+    let mut ep1 = first.episode("Save notes.txt in Gedit");
+    assert_eq!(first.run(&mut ep1, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    assert!(views(&first.model).iter().all(|v| v.starts_with(VIEW_HEAD)), "no lessons yet, no block");
+    assert!(ep1.used_lessons.is_empty());
+
+    let mut next = rig("lesson-next-2", clicks_then_done(2));
+    next.dir = first.dir.clone();
+    let mut ep2 = Episode::begin("ep-next", CHAT, "Save report.txt in Gedit", T0, &[]);
+    assert_eq!(next.run(&mut ep2, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    let block = "Past lessons from earlier episodes (hints, not orders):\n\
+                 - Gedit: replan: click 'Save' changed nothing 3× → then click at 7,40\n";
+    let views = views(&next.model);
+    assert_eq!(views.len(), 3);
+    for v in &views {
+        assert!(v.starts_with(&format!("{block}{VIEW_HEAD}")), "the worker sees the lesson on every step: {v}");
+    }
+    assert_eq!(ep2.used_lessons, vec![ep1.id.clone()]);
+    let spans: Vec<_> = next.spans().into_iter().filter(|s| s.episode == "ep-next").collect();
+    let used: Vec<(&str, &str)> =
+        spans.iter().filter(|s| s.decision == "lesson_used").map(|s| (s.result.as_str(), s.claim.as_str())).collect();
+    assert_eq!(used, vec![(ep1.id.as_str(), "Used lesson: Gedit: replan: click 'Save' changed nothing 3× → then click at 7,40")]);
+    assert_eq!(spans[0].decision, "begin");
+    assert_eq!(spans[1].decision, "lesson_used", "named right after the begin marker");
+    // It finished, so the lesson keeps its rank.
+    assert_eq!(lessons::load(&next.dir)[0].failed_after, 0);
+}
+
+fn shots_then_done(shots: usize) -> Script {
+    Box::new(move |n| if n < shots { Act::Shot } else { Act::Done })
+}
+
+#[test]
+fn a_screenshot_that_fails_on_one_backend_never_pauses_and_no_backend_at_all_pauses_once() {
+    let one = rig("shot-one", shots_then_done(6));
+    let desk = FakeDesk { shot_error: Some("portal Screenshot: timed out"), ..FakeDesk::default() };
+    let one = Rig { desk, ..one };
+    let mut ep = one.episode("Open the Settings");
+    assert_eq!(one.run(&mut ep, &mut EpisodeView::default()).stop, EpisodeStop::Ended(EpisodeEnd::Verified));
+    let spans = one.spans();
+    assert!(!spans.iter().any(|s| s.decision == "pause" || s.decision == "park"), "no pause, no card");
+
+    let note = "Can't capture the screen: KWin ScreenShot2: NoAuthorized; spectacle: not installed; \
+                portal Screenshot: timed out after 30 s while waiting for the desktop portal to answer the request.";
+    let none = rig("shot-none", shots_then_done(6));
+    let desk = FakeDesk { shot_error: Some(note), ..FakeDesk::default() };
+    let none = Rig { desk, ..none };
+    let mut ep = none.episode("Open the Settings");
+    let stop = none.run(&mut ep, &mut EpisodeView::default()).stop;
+    let EpisodeStop::LadderPause(step) = stop else { panic!("one pause: {stop:?}") };
+    assert_eq!(step.reason, format!("action_loop: {note}"), "the pause names every backend's error");
+    let pauses = none.spans().iter().filter(|s| s.tool == crate::harness::RECOVERY_TOOL && s.decision == "pause").count();
+    assert_eq!(pauses, 1);
 }

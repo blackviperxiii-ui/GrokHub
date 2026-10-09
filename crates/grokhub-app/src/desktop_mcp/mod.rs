@@ -668,6 +668,13 @@ impl grokhub_agent::DesktopOps for NativeDesktop {
             Err(err) => grokhub_agent::ToolOutput::err(err),
         }
     }
+
+    fn hint(&self, name: &str, args: &serde_json::Value) -> serde_json::Value {
+        let mut hinted = args.clone();
+        let mut server = self.inner.lock().unwrap_or_else(|err| err.into_inner());
+        harness_gate::add_hints(&mut server, name, &mut hinted);
+        hinted
+    }
 }
 
 fn mcp_tool_output(body: serde_json::Value) -> grokhub_agent::ToolOutput {

@@ -390,13 +390,13 @@ pub fn i_can_title(card: &UpdateCard) -> String {
     if lower.starts_with("i can ") && title.chars().count() <= I_CAN_MAX {
         return title.to_string();
     }
-    // A proactive ask card asks first ("Should I …?") in the same voice.
-    let asks = card
+    // A proactive suggestion's title is the item itself ("Tidy the board").
+    let suggests = card
         .pulse
         .proactive
         .as_ref()
-        .is_some_and(|p| p.route == crate::proactive::ProactiveRoute::Ask);
-    if asks && title.chars().count() <= I_CAN_MAX {
+        .is_some_and(|p| p.route == crate::proactive::ProactiveRoute::Suggest);
+    if suggests && title.chars().count() <= I_CAN_MAX {
         return title.to_string();
     }
     let action = card.idea_action();

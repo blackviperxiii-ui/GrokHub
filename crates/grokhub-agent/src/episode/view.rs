@@ -69,6 +69,9 @@ pub struct EpisodeView {
     budget: usize,
     nodes: HashMap<String, ViewNode>,
     top: Vec<String>,
+    /// The "Past lessons" block, set once at the episode's start. It sits
+    /// first and never changes, so the cached prefix holds.
+    lessons: String,
 }
 
 impl Default for EpisodeView {
@@ -91,7 +94,12 @@ pub fn clip_bytes(s: &str, max: usize) -> &str {
 
 impl EpisodeView {
     pub fn new(budget: usize) -> Self {
-        Self { budget, nodes: HashMap::new(), top: Vec::new() }
+        Self { budget, nodes: HashMap::new(), top: Vec::new(), lessons: String::new() }
+    }
+
+    /// Put the "Past lessons" block (already capped and redacted) at the top.
+    pub fn set_lessons(&mut self, block: &str) {
+        self.lessons = block.to_string();
     }
 
     pub fn budget(&self) -> usize {
@@ -105,7 +113,8 @@ impl EpisodeView {
 
     /// The view as the worker gets it.
     pub fn render(&self) -> String {
-        let mut out = String::from(VIEW_HEAD);
+        let mut out = self.lessons.clone();
+        out.push_str(VIEW_HEAD);
         for node in self.lines() {
             out.push_str(&node.line());
         }

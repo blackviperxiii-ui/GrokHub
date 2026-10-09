@@ -206,8 +206,11 @@ pub enum ProactiveRoute {
     ICan,
     /// Hard class: a prepared draft, and its final step is a hard card.
     Prepare,
-    /// MindCheck is unsure: "Should I …?" first.
-    Ask,
+    /// MindCheck is unsure: a one-tap suggestion that names the item
+    /// ("Tidy the board"). One tap runs it through the gate; Dismiss is quiet.
+    /// Saved cards from older builds said `ask`.
+    #[serde(alias = "ask")]
+    Suggest,
 }
 
 /// `None` under the Pulse threshold. `unsure` is MindCheck's Ask.
@@ -219,7 +222,7 @@ pub fn route(candidate: &Candidate, unsure: bool) -> Option<ProactiveRoute> {
     if candidate.class == CandidateClass::Hard {
         return Some(ProactiveRoute::Prepare);
     }
-    Some(if unsure { ProactiveRoute::Ask } else { ProactiveRoute::ICan })
+    Some(if unsure { ProactiveRoute::Suggest } else { ProactiveRoute::ICan })
 }
 
 /// The proactive part of a Pulse card. Serde-default on `PulseMeta`, so
@@ -241,9 +244,15 @@ pub struct ProactiveMeta {
 
 /// The card for a surfaced candidate, on the existing Pulse/Home surfaces.
 pub fn proactive_card(candidate: &Candidate, route: ProactiveRoute, now_ms: u64) -> UpdateCard {
+    // Hard class is never a suggestion: its final step parks the hard card.
+    debug_assert!(
+        route != ProactiveRoute::Suggest || candidate.class != CandidateClass::Hard,
+        "hard candidate routed to a suggestion: {}",
+        candidate.action
+    );
     let step = candidate.prepare_step();
     let title = match route {
-        ProactiveRoute::Ask => format!("Should I {}?", candidate.action.trim_end_matches(['.', '?'])),
+        ProactiveRoute::Suggest => upper_first(candidate.action.trim().trim_end_matches(['.', '?'])),
         ProactiveRoute::Prepare => format!("I can draft this: {}", candidate.action),
         ProactiveRoute::ICan => format!("I can {}", candidate.action),
     };
@@ -266,6 +275,15 @@ pub fn proactive_card(candidate: &Candidate, route: ProactiveRoute, now_ms: u64)
         final_step: (candidate.class == CandidateClass::Hard).then(|| candidate.action.clone()),
     });
     card
+}
+
+/// `action` with its first letter capitalized: a suggestion card's title.
+fn upper_first(action: &str) -> String {
+    let mut chars = action.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
 
 /// Lowercase words joined by `-`: the topic as a card id part and a MindCheck key.
@@ -544,6 +562,14 @@ impl ProactiveBudget {
         self.dismissed(now_ms);
     }
 
+    /// Dismiss on a proactive card: the topic stays off the feed for a day,
+    /// and it counts toward the dismissal streak. No prompt follows.
+    pub fn dismiss(&mut self, topic: &str, now_ms: u64) {
+        self.mutes.retain(|(_, until)| now_ms < *until);
+        self.mutes.push((topic.to_string(), now_ms.saturating_add(DAY_MS)));
+        self.dismissed(now_ms);
+    }
+
     /// A proactive card dismissed. Two in a row halve the budget for 24 h.
     pub fn dismissed(&mut self, now_ms: u64) {
         self.dismiss_streak += 1;
@@ -640,7 +666,7 @@ mod tests {
         for unsure in [false, true] {
             assert!(matches!(
                 route(&c, unsure),
-                Some(ProactiveRoute::ICan | ProactiveRoute::Ask)
+                Some(ProactiveRoute::ICan | ProactiveRoute::Suggest)
             ));
         }
     }
@@ -666,11 +692,46 @@ mod tests {
     }
 
     #[test]
-    fn unsure_gives_an_ask_card() {
+    fn unsure_gives_a_one_tap_suggestion_that_names_the_item() {
         let c = cand("standup prep", 0.5);
-        assert_eq!(route(&c, true), Some(ProactiveRoute::Ask));
-        let card = proactive_card(&c, ProactiveRoute::Ask, T0);
-        assert_eq!(card.title, "Should I prep standup prep?");
+        assert_eq!(route(&c, true), Some(ProactiveRoute::Suggest));
+        let card = proactive_card(&c, ProactiveRoute::Suggest, T0);
+        assert_eq!(card.title, "Prep standup prep");
+        assert_eq!(card.pulse.proactive.as_ref().map(|p| p.route), Some(ProactiveRoute::Suggest));
+        // Saved ask cards from older builds read back as suggestions.
+        let old: ProactiveMeta = serde_json::from_str(r#"{"help":500,"route":"ask","topic":"t","tool":""}"#).unwrap();
+        assert_eq!(old.route, ProactiveRoute::Suggest);
+        assert_eq!(serde_json::to_value(ProactiveRoute::Suggest).unwrap(), serde_json::json!("suggest"));
+    }
+
+    #[test]
+    fn suggestion_cards_name_the_item_and_hard_class_is_never_one() {
+        for action in ["tidy Downloads: move 14 installers to ~/Downloads/old", "archive 3 finished board cards", "get standup prep ready"] {
+            let mut c = Candidate::soft(CandidateSource::UserModel, action, action, 0.9, 1.0, "w");
+            c.reversible = Reversibility::Ledger;
+            let card = proactive_card(&c, ProactiveRoute::Suggest, T0);
+            assert_eq!(card.title.to_ascii_lowercase(), action.to_ascii_lowercase(), "{card:?}");
+            let text = format!("{} {}", card.title, card.body.as_deref().unwrap_or("")).to_ascii_lowercase();
+            for vague in ["this", "that", "should i"] {
+                assert!(!text.split_whitespace().any(|w| w == vague), "{vague:?} in {text:?}");
+            }
+        }
+        // Unsure or not, a hard candidate is a prepared draft whose last step parks.
+        let mut hard = cand("reply to Sam", 0.9);
+        hard.class = CandidateClass::Hard;
+        assert_eq!(route(&hard, true), Some(ProactiveRoute::Prepare));
+        assert_eq!(route(&hard, false), Some(ProactiveRoute::Prepare));
+    }
+
+    #[test]
+    fn a_dismissed_topic_stays_off_the_feed_for_a_day() {
+        let mut budget = ProactiveBudget::default();
+        budget.dismiss("standup prep", T0);
+        assert!(budget.muted("standup prep", T0 + DAY_MS - 1));
+        assert!(!budget.muted("standup prep", T0 + DAY_MS));
+        assert_eq!(budget.dismiss_streak, 1);
+        assert!(budget.surface(vec![cand("standup prep", 0.9)], T0 + 60_000, false, false).is_empty());
+        assert_eq!(budget.surface(vec![cand("standup prep", 0.9)], T0 + DAY_MS, false, false).len(), 1);
     }
 
     #[test]

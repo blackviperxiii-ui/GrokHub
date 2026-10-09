@@ -618,15 +618,24 @@ impl Cabin {
 
     /// A hard card past `APPROVAL_TTL` is denied with a span. Painting and the
     /// unattended heartbeat both check, so no one watching still means Deny.
+    /// A step the open episode parked is the exception: the kernel denies it
+    /// for now and goes on, and its card stays for a late answer (behind any
+    /// other card waiting).
     pub(super) fn expire_hard_park(&mut self) {
-        if self
-            .harness
-            .park
-            .as_ref()
-            .is_some_and(|p| p.parked_at.elapsed() >= hx::APPROVAL_TTL)
-        {
-            self.resolve_hard_park(false, "timed out — fail-closed Deny");
+        let Some(park) = self.harness.park.as_ref() else {
+            return;
+        };
+        if park.parked_at.elapsed() < hx::APPROVAL_TTL {
+            return;
         }
+        if self.episode_park(park) {
+            if let Some(next) = self.harness.queue.pop_front() {
+                let waiting = self.harness.park.replace(next);
+                self.harness.queue.extend(waiting);
+            }
+            return;
+        }
+        self.resolve_hard_park(false, "timed out — fail-closed Deny");
     }
 
     /// A hard step GrokHub prepared on its own waits on the white card.

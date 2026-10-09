@@ -34,24 +34,12 @@ pub(crate) fn handle_desk_line<B: DesktopBackend>(
     let live = gate.enabled && !gate.halted;
     let mut parked = None;
     if let Some(c) = call.as_mut() {
-        if live && c.tool == "key" && delete_key(&c.args) {
-            // `decide` can only call a Delete key hard when it knows a file
-            // manager has focus.
-            if let Ok(w) = server.backend_mut().list_windows() {
-                c.args["window"] = Value::String(w.active);
-            }
+        if live {
+            add_hints(server, &c.tool, &mut c.args);
         }
         if live && c.tool == "delete_files" && no_bin(&c.args) {
             // The card must say the files go for good where there's no Recycle Bin.
             c.args[hx::NO_BIN_HINT] = Value::Bool(true);
-        }
-        if live && c.tool == "click" {
-            c.args[hx::TARGET_HINT] = click_hint(server, &c.args);
-        }
-        if live && c.tool == "drag" {
-            // The button comes up at `to`: a short drag onto Send is a click.
-            let at = json!({ "x": c.args["to_x"], "y": c.args["to_y"], "monitor": c.args["monitor"] });
-            c.args[hx::TARGET_HINT] = click_hint(server, &at);
         }
         let access = access_now(dir, gate.enabled);
         let refused = match precheck(c, gate) {
@@ -107,12 +95,25 @@ fn click_hint<B: DesktopBackend>(server: &mut DesktopServer<B>, args: &Value) ->
     hint
 }
 
-/// A Delete key however it is spelled (`Shift_L+Delete`, `shift+shift+del`):
-/// read with the same parser `decide` and the server use.
-fn delete_key(args: &Value) -> bool {
-    let keys = ["keys", "key"].iter().find_map(|k| args.get(*k).and_then(|v| v.as_str())).unwrap_or("");
-    grokhub_core::desktop_mcp::parse_key_combo(keys)
-        .is_ok_and(|combo| combo.key == grokhub_core::desktop_mcp::KeyName::Delete)
+/// What `decide` reads beside a call's own args, for path A and the in-app
+/// desktop tools alike: the focused window for a Delete or Enter key, a paste
+/// or a typed newline (`needs_window`), and the control under a click. A
+/// drag lets go at `to`, so a short drag onto Send reads as a click there.
+pub(crate) fn add_hints<B: DesktopBackend>(server: &mut DesktopServer<B>, tool: &str, args: &mut Value) {
+    if !args.is_object() {
+        return;
+    }
+    if hx::needs_window(tool, args) {
+        if let Ok(w) = server.backend_mut().list_windows() {
+            args["window"] = Value::String(w.active);
+        }
+    }
+    let at = match tool {
+        "click" => args.clone(),
+        "drag" => json!({ "x": args["to_x"], "y": args["to_y"], "monitor": args["monitor"] }),
+        _ => return,
+    };
+    args[hx::TARGET_HINT] = click_hint(server, &at);
 }
 
 /// A trash move with a path on a drive that has no Recycle Bin.
@@ -834,11 +835,59 @@ mod tests {
     }
 
     #[test]
+    fn an_unnamed_control_on_a_checkout_page_parks_and_deny_never_clicks() {
+        let dir = crate::config::test_config_root("desk-unnamed-checkout");
+        turn(&dir, "full");
+        let mut s = shop();
+        s.backend_mut().slow = true;
+        let waiter = cabin_answers(&dir, false);
+        let out = handle_desk_line(&mut s, &at(5, 5), ON, &dir, &mut || false);
+        let req = waiter.join().unwrap().expect("money park");
+        assert_eq!(
+            (req.class.as_str(), req.action.as_str()),
+            ("money", "Grok wants to click an unlabeled control in org.shop Checkout — Shop")
+        );
+        assert!(reply_text(&out).starts_with("Denied: hard-class money"), "{}", reply_text(&out));
+        assert_eq!(s.backend_mut().clicks, 0, "the denied click never landed");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn enter_parks_as_send_in_a_chat_app_and_stays_a_plain_key_elsewhere() {
+        let dir = crate::config::test_config_root("desk-enter-send");
+        turn(&dir, "full");
+        let mut s = desk();
+        let enter = rpc("key", json!({ "keys": "Return" }));
+        // GrokHub has focus: Enter is a plain key.
+        assert_eq!(reply_text(&handle_desk_line(&mut s, &enter, ON, &dir, &mut || false)), "keyed");
+        s.backend_mut().windows.active = "Slack | general | Acme".into();
+        // Shift+Enter is a new line in the composer.
+        let newline = rpc("key", json!({ "keys": "shift+Return" }));
+        assert_eq!(reply_text(&handle_desk_line(&mut s, &newline, ON, &dir, &mut || false)), "keyed");
+        let waiter = cabin_answers(&dir, false);
+        let out = handle_desk_line(&mut s, &enter, ON, &dir, &mut || false);
+        let req = waiter.join().unwrap().expect("send park");
+        assert_eq!((req.class.as_str(), req.action.as_str()), ("send", "press Return in Slack | general | Acme"));
+        assert!(reply_text(&out).starts_with("Denied: hard-class send"), "{}", reply_text(&out));
+        // A typed newline presses Enter too, and the card never shows the text.
+        let waiter = cabin_answers(&dir, false);
+        let out = handle_desk_line(&mut s, &rpc("type", json!({ "text": "see you at 5\n" })), ON, &dir, &mut || false);
+        let req = waiter.join().unwrap().expect("typed send park");
+        assert_eq!((req.class.as_str(), req.action.as_str()), ("send", "type 13 chars into Slack | general | Acme and press Enter"));
+        assert!(reply_text(&out).starts_with("Denied: hard-class send"), "{}", reply_text(&out));
+        assert_eq!(s.backend_mut().keys, 2, "only GrokHub's Enter and the Shift+Enter were pressed");
+        assert!(s.backend_mut().typed.is_empty(), "the denied text was never typed");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn an_atspi_timeout_is_an_unknown_soft_click() {
         let dir = crate::config::test_config_root("desk-hit-timeout");
         turn(&dir, "full");
         let mut s = shop();
         s.backend_mut().slow = true;
+        // Off the checkout page: there an unnamed control parks (card 18).
+        s.backend_mut().windows.active = "org.shop Catalog — Shop".into();
         let out = handle_desk_line(&mut s, &at(5, 5), ON, &dir, &mut || false);
         assert_eq!(reply_text(&out), "clicked");
         let last = spans(&dir).pop().unwrap();

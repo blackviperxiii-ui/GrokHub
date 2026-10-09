@@ -51,7 +51,7 @@ fn normalize(text: &str) -> String {
 /// "click 'Save'", "click at 120,40", or the bare tool.
 pub fn call_label(tool: &str, args: &str) -> String {
     let v: Value = serde_json::from_str(args).unwrap_or(Value::Null);
-    let named = ["label", "name", "target", "title", "text", "key", "command", "path", "url"]
+    let named = ["label", "name", "target", "title", "text", "key", "keys", "command", "path", "url"]
         .iter()
         .find_map(|k| v.get(*k).and_then(Value::as_str).filter(|s| !s.trim().is_empty()));
     if let Some(n) = named {
