@@ -187,7 +187,7 @@ impl Cabin {
         let title = sr::recording_title(done.secs, note);
         if done.frames.is_empty() {
             let why = done.err.unwrap_or_else(|| "no stills were taken".into());
-            self.post_screen_report(chat, format!("{title}\n\nThe recording didn't start: {why}."));
+            self.post_into_chat(chat, format!("{title}\n\nThe recording didn't start: {why}."));
             self.status = format!("Screen recording failed: {why}");
             return;
         }
@@ -240,14 +240,14 @@ impl Cabin {
                 format!("Saved on this computer, not diagnosed: {}", why.trim()),
             ),
         };
-        self.post_screen_report(chat, text);
+        self.post_into_chat(chat, text);
         let card = grokhub_core::screen_recording_card(&dir.display().to_string(), title, &summary, chat, now_ms());
         self.post_feed_card(card);
         self.status = title.to_string();
     }
 
-    /// Into the chat that started the recording, even after a switch.
-    fn post_screen_report(&mut self, chat: &str, body: String) {
+    /// Into the chat that asked, even after a switch.
+    pub(super) fn post_into_chat(&mut self, chat: &str, body: String) {
         if chat.is_empty() || chat == self.visible_thread_id() {
             self.live_mut().push(("assistant".into(), body));
             self.stamp_current_access();
