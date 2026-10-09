@@ -1,5 +1,5 @@
 //! Linux Wayland. KDE uses the RemoteDesktop portal and KWin ScreenShot2.
-//! wlroots keeps grim and ydotool.
+//! wlroots keeps ydotool, and captures with grim, then the Screenshot portal.
 
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -196,28 +196,6 @@ impl WaylandBackend {
         parse_kscreen_doctor(&String::from_utf8_lossy(&out.stdout))
     }
 
-    fn grab_grim(&self, output: Option<&str>) -> Result<(Vec<u8>, u32, u32), String> {
-        if !crate::desktop::which("grim") {
-            return Err(format!("Wayland capture needs grim. {MISS}"));
-        }
-        let dest = std::env::temp_dir().join(format!(
-            "grokhub-desk-{}-{}.png",
-            std::process::id(),
-            grokhub_core::now_ms()
-        ));
-        let args = grim_capture_args(&dest.display().to_string(), output);
-        let run = run_bin("grim", &args, 8000);
-        let image = run.and_then(|_| {
-            image::open(&dest)
-                .map(|img| img.to_rgba8())
-                .map_err(|err| format!("grim image: {err}"))
-        });
-        let _ = std::fs::remove_file(&dest);
-        let image = image?;
-        let (w, h) = image.dimensions();
-        Ok((image.into_raw(), w, h))
-    }
-
     fn locked_now(&self) -> bool {
         let titles = crate::desktop::lock_titles();
         let refs: Vec<&str> = titles.iter().map(String::as_str).collect();
@@ -241,47 +219,21 @@ impl DesktopBackend for WaylandBackend {
     }
 
     fn screenshot(&mut self, monitor: &str) -> Result<CapturedShot, String> {
-        if self.stack.capture == DesktopCaptureKind::ScreenShot2 {
-            #[cfg(target_os = "linux")]
-            {
-                let mons = self.kde_monitors().unwrap_or_default();
-                if let Some(shots) = self.shots.as_mut() {
-                    return shots.capture(monitor, &mons);
-                }
+        #[cfg(target_os = "linux")]
+        if self.shots.is_some() {
+            let mons = if self.stack.capture == DesktopCaptureKind::ScreenShot2 {
+                self.kde_monitors().unwrap_or_default()
+            } else {
+                self.wl_monitors().unwrap_or_default()
+            };
+            if let Some(shots) = self.shots.as_mut() {
+                return shots.capture(monitor, &mons);
             }
+        }
+        if self.stack.capture == DesktopCaptureKind::ScreenShot2 {
             return Err("KWin ScreenShot2 is only available on Linux.".into());
         }
-        let mons = self.wl_monitors().unwrap_or_default();
-        if monitor != "all" {
-            let mon = mons
-                .iter()
-                .find(|item| item.id == monitor || item.name == monitor)
-                .cloned()
-                .ok_or_else(|| format!("No monitor \"{monitor}\"."))?;
-            let (rgba, w, h) = self.grab_grim(Some(&mon.name))?;
-            return finish(&mon, w, h, &rgba);
-        }
-        let (rgba, w, h) = self.grab_grim(None)?;
-        let origin = union_monitor(&mons);
-        let (x, y, scale) = match &origin {
-            Some(geom) => (geom.x, geom.y, geom.scale_factor),
-            None => (0, 0, 1.0),
-        };
-        let (bytes, mime, iw, ih) = super::encode_rgba(&rgba, w, h)?;
-        Ok(CapturedShot {
-            bytes,
-            mime,
-            geom: ShotGeom {
-                id: "all".into(),
-                x,
-                y,
-                physical_w: w,
-                physical_h: h,
-                scale_factor: scale,
-                image_w: iw,
-                image_h: ih,
-            },
-        })
+        grim_shot(monitor, &self.wl_monitors().unwrap_or_default())
     }
 
     fn move_abs(&mut self, x: i32, y: i32) -> Result<(), String> {
@@ -473,12 +425,79 @@ fn linux_input(stack: &DesktopStack) -> Option<InputChain> {
     Some(InputChain::live(share, Box::new(RealInjector)))
 }
 
+/// One grim shot of `monitor` (or "all"), placed by `mons`.
+fn grim_shot(monitor: &str, mons: &[MonitorGeom]) -> Result<CapturedShot, String> {
+    if monitor != "all" {
+        let mon = mons
+            .iter()
+            .find(|item| item.id == monitor || item.name == monitor)
+            .cloned()
+            .ok_or_else(|| format!("No monitor \"{monitor}\"."))?;
+        let (rgba, w, h) = grab_grim(Some(&mon.name))?;
+        return finish(&mon, w, h, &rgba);
+    }
+    let (rgba, w, h) = grab_grim(None)?;
+    let origin = union_monitor(mons);
+    let (x, y, scale) = match &origin {
+        Some(geom) => (geom.x, geom.y, geom.scale_factor),
+        None => (0, 0, 1.0),
+    };
+    let (bytes, mime, iw, ih) = super::encode_rgba(&rgba, w, h)?;
+    Ok(CapturedShot {
+        bytes,
+        mime,
+        geom: ShotGeom {
+            id: "all".into(),
+            x,
+            y,
+            physical_w: w,
+            physical_h: h,
+            scale_factor: scale,
+            image_w: iw,
+            image_h: ih,
+        },
+    })
+}
+
+fn grab_grim(output: Option<&str>) -> Result<(Vec<u8>, u32, u32), String> {
+    if !crate::desktop::which("grim") {
+        return Err(format!("Wayland capture needs grim. {MISS}"));
+    }
+    let dest = std::env::temp_dir().join(format!(
+        "grokhub-desk-{}-{}.png",
+        std::process::id(),
+        grokhub_core::now_ms()
+    ));
+    let args = grim_capture_args(&dest.display().to_string(), output);
+    let run = run_bin("grim", &args, 8000);
+    let image = run.and_then(|_| {
+        image::open(&dest)
+            .map(|img| img.to_rgba8())
+            .map_err(|err| format!("grim image: {err}"))
+    });
+    let _ = std::fs::remove_file(&dest);
+    let image = image?;
+    let (w, h) = image.dimensions();
+    Ok((image.into_raw(), w, h))
+}
+
+/// grim as the first wlroots capture backend.
+#[cfg(target_os = "linux")]
+struct GrimRoute;
+
+#[cfg(target_os = "linux")]
+impl super::capture::ShotRoute for GrimRoute {
+    fn capture(&mut self, monitor: &str, monitors: &[MonitorGeom]) -> Result<CapturedShot, String> {
+        grim_shot(monitor, monitors)
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn linux_shots(stack: &DesktopStack) -> Option<super::capture::ShotChain> {
-    if stack.capture == DesktopCaptureKind::ScreenShot2 {
-        Some(super::capture::ShotChain::live())
-    } else {
-        None
+    match stack.capture {
+        DesktopCaptureKind::ScreenShot2 => Some(super::capture::ShotChain::live()),
+        DesktopCaptureKind::Grim => Some(super::capture::ShotChain::wlroots(Box::new(GrimRoute))),
+        _ => None,
     }
 }
 
