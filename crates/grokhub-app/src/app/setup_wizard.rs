@@ -2,9 +2,8 @@
 //! time), and the local AI step, which reads this machine's GPU, RAM and free
 //! disk and suggests the on-device model that fits. It opens once on a fresh
 //! profile; finishing or skipping sets `setupDone`. Settings → Behavior →
-//! Setup and Cabin defaults → Local model → Set up open it again. The
-//! download itself comes later; this step only shows what fits and where it
-//! will go.
+//! Setup and Cabin defaults → Local model → Set up open it again. The local
+//! AI step downloads the suggested model (`model_download_ui.rs`).
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -29,6 +28,10 @@ pub(super) struct SetupWizard {
     checked: bool,
     pub(super) hw: Option<Hardware>,
     hw_rx: Option<mpsc::Receiver<Hardware>>,
+    /// The model download in flight.
+    pub(super) dl: Option<super::model_download_ui::ModelDl>,
+    /// The model that finished downloading and passed its check.
+    pub(super) installed: Option<grokhub_core::model_download::Installed>,
 }
 
 /// Open on its own only on a fresh profile that hasn't finished or skipped it.
@@ -131,10 +134,12 @@ impl Cabin {
     pub(super) fn tick_setup_wizard(&mut self) {
         if !self.setup.checked {
             self.setup.checked = true;
+            self.setup.installed = grokhub_core::model_download::installed(&models_dir());
             if should_open_setup(self.cfg.setup_done, self.has_real_history()) {
                 self.open_setup(SetupStep::Welcome);
             }
         }
+        self.poll_model_download();
         let Some(rx) = self.setup.hw_rx.take() else {
             return;
         };
@@ -249,17 +254,25 @@ impl Cabin {
     }
 
     fn ui_setup_local_ai(&mut self, ui: &mut egui::Ui) {
+        let mut pick = None;
         match self.setup.hw.as_ref() {
             Some(hw) => {
                 crate::cards::settings_note(ui, &format!("This machine: {}.", ls::hardware_line(hw)));
                 crate::cards::settings_note(ui, &ls::suggestion_line(hw));
+                pick = ls::suggest(hw);
             }
             None => crate::cards::settings_note(ui, "Checking this machine's GPU, memory and free disk…"),
         }
         crate::cards::settings_note(ui, &format!("Models go to {}.", models_dir().display()));
+        let dl_model = self.setup.dl.as_ref().map(|d| d.model);
+        if let Some(m) = dl_model.or(pick) {
+            self.ui_model_download(ui, m);
+        }
         let installed = local::installed();
         let mut on = self.cfg.local_model;
-        if crate::cards::settings_toggle(ui, "On-device model for background tasks", super::local_ai_ui::local_model_hint(on, installed), &mut on) {
+        let downloaded = self.downloaded_model_name();
+        let hint = super::local_ai_ui::local_model_hint(on, installed, downloaded);
+        if crate::cards::settings_toggle(ui, "On-device model for background tasks", &hint, &mut on) {
             self.set_local_model(on);
         }
     }

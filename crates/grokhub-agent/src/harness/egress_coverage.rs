@@ -39,6 +39,7 @@ const WRAPPED: &[(&str, usize, &str)] = &[
     ("grokhub-agent/src/plugins.rs", 1, "fetch_marketplace: guard_quiet (no user data)"),
     ("grokhub-agent/src/tools/media.rs", 1, "run_call / poll_video / save_results: guard_or_park"),
     ("grokhub-agent/src/tools/web_fetch.rs", 1, "fetch_markdown: guard_or_park on every hop"),
+    ("grokhub-app/src/app/model_download_ui.rs", 1, "HfFetch::open / sha256: egress_ok (no user data) to Hugging Face"),
     ("grokhub-app/src/app/pulse_ui.rs", 1, "source_preview / cache_image: egress_ok (chat)"),
     ("grokhub-app/src/desktop.rs", 3, "hub health, CDP HTTP and websocket: egress_ok (loopback)"),
     ("grokhub-app/src/github.rs", 1, "run_github_tool: egress_ok (chat)"),
