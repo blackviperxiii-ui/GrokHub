@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 
 use super::verify::{verify_call, verify_call_at, verify_gate, Observation, Verdict, CHECKER_UNAVAILABLE, ESCALATED_CLASS};
 use super::view::{zoom_schema, EpisodeView, Folder, ZOOM_TOOL};
+use super::lessons;
 use super::loops::{self, LoopEntry, Outcome, REPEAT_CALL};
 use super::{Episode, EpisodeEnd, OpenPark, StepShape, FANOUT_CAP, GOAL_CAP, PARK_PREFIX, REPLAN_NOTE, STALL_REPLAN, STEP_UP_STEPS};
 use crate::client::{ContentPart, FunctionCall, InputItem, ModelClient, Usage};
@@ -561,8 +562,21 @@ impl Run<'_, '_> {
 
     fn end(&mut self, why: EpisodeEnd) {
         self.ep.ended = Some(why);
+        self.learn(why);
         let header = self.ep.header(self.now());
         let span = self.ep.marker("end", why.as_str(), &header);
+        self.write(span);
+    }
+
+    /// An episode that had to recover writes one lesson, and a quiet
+    /// `lesson` marker names it. A trivial run writes nothing.
+    fn learn(&mut self, why: EpisodeEnd) {
+        let Some(lesson) = lessons::derive(self.ep, why, self.now(), self.k.held) else {
+            return;
+        };
+        let stored = lessons::append(self.k.config_dir, &lesson).is_ok();
+        let line = lessons::lesson_line(&lesson);
+        let span = self.ep.marker("lesson", if stored { "saved" } else { "not saved" }, &line);
         self.write(span);
     }
 

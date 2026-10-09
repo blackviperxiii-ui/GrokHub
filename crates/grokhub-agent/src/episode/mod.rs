@@ -21,6 +21,7 @@
 //! bypass. Hard class always parks.
 
 mod kernel;
+pub mod lessons;
 pub mod loops;
 mod view;
 mod verify;
