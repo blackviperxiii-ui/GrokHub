@@ -2,15 +2,28 @@
 
 ## Unreleased
 
+- Long tasks no longer stop at 60 steps, 30 minutes or 50 turns: a desktop session, a chat, `/bg` and night jobs run until they're done, you Stop or Halt. A run that's stuck or repeating itself is told to re-plan and keeps going instead of pausing, and approving a card after the reply ended now picks the task back up instead of waiting for you to type.
+- Bug hunt (`docs/audits/bug-hunt-2026-10-08.md`). The hard-action check no longer misses a delete or shutdown after a newline, inside `$(...)` or backticks, or behind `env`, `time`, `nice`, `timeout`, `pkexec` or `busybox`, and it now catches MCP tools named like `reply`, `forward`, `sendMessage`, `send_sms`, `post_tweet`, `create_charge`, `buy`, `transfer` or `drop_table`. A one-time approval no longer covers a longer command that contains it. Step logs no longer keep `Authorization` headers, `x-api-key`, access or refresh tokens or client secrets. Long host output, the nightly review and the step log no longer crash on accented or CJK text at the size cap. A permissions file saved with a BOM keeps its Deny rules, and a file that can't be read is never overwritten. Screenshots work again on GNOME with a non-ASCII Pictures folder. On Windows, the maximize button restores again. Quit from the tray no longer hangs on a busy MCP server, and a clean exit no longer leaves a pid file that can stop the next launch. A failed settings or key save now says so instead of "Saved".
+
+## 2.10.98 — 2026-10-08
+
 - Security: a phone, or a computer paired under another computer's name, can no longer take over a session through Inhabit. Phones can't pair, a bundle goes only to the computer it names by id, and a bundle with no destination goes to nobody. Risky typed text on a hard card and in the inbox no longer shows API keys, GitHub tokens or bearer tokens; other typing shows as "type N chars into <window>".
 - The Home suggestion for a paused job now names it ("Paused: Fix the tray icon") and says how long it has been paused. Clicking it opens that job's chat, or the Workboard when the job has no chat, instead of a new Discuss chat about "that job".
 - Speed spans on the auto router, the harness guards and the send path, a speed bench (`speed_bench`) and `docs/audits/speed-2026-10-08.md`. Each route record now carries how long the router's decision took (`timing_us`). Nothing else changes.
 - Sending a message is faster: the router no longer re-reads up to 4 MB of the model-call log on every new message, every Grok Build turn or every desktop step. It follows the log and each chat's span file in memory and reads only what was added, and the week's spend is read without holding its lock. On the bench, Enter to request went from 28 ms to under 1 ms (p50), and a Grok Build send no longer stalls the window for about 30 ms. Approvals, guards and cost rules are unchanged.
-- Carried from the 2.10.97 main hotfix: chat no longer fails with HTTP 400 "does not support parameter reasoningEffort". GrokHub sends a thinking level only to models that take one (Grok 4.7, 4.6, 4.5 and 4.20 multi-agent), never to a non-reasoning model. A model you picked that xAI lists under another name, or that isn't listed but answers, stays in use, and the false "Paused: no model in your plan is answering" card is gone.
-- Carried from 2.10.97: Labs → Beta moves a main install to beta again. The switch no longer stops on GrokHub's own `Cargo.lock` change, and Beta stays on after a sync.
-- Carried from 2.10.97: KDE screenshots ask KWin once. After you refuse, GrokHub stops asking and uses the fallback, and the Arch packages' menu entry starts GrokHub by its full path.
-- Carried from 2.10.97: a model change the router makes on its own is now a note that tells you, not an Undo / Keep row that asks.
-- Bug hunt (`docs/audits/bug-hunt-2026-10-08.md`). The hard-action check no longer misses a delete or shutdown after a newline, inside `$(...)` or backticks, or behind `env`, `time`, `nice`, `timeout`, `pkexec` or `busybox`, and it now catches MCP tools named like `reply`, `forward`, `sendMessage`, `send_sms`, `post_tweet`, `create_charge`, `buy`, `transfer` or `drop_table`. A one-time approval no longer covers a longer command that contains it. Step logs no longer keep `Authorization` headers, `x-api-key`, access or refresh tokens or client secrets. Long host output, the nightly review and the step log no longer crash on accented or CJK text at the size cap. A permissions file saved with a BOM keeps its Deny rules, and a file that can't be read is never overwritten. Screenshots work again on GNOME with a non-ASCII Pictures folder. On Windows, the maximize button restores again. Quit from the tray no longer hangs on a busy MCP server, and a clean exit no longer leaves a pid file that can stop the next launch. A failed settings or key save now says so instead of "Saved".
+
+- Linux: `grokhub-linux-v2.10.98.tar.gz` and AUR `pkgver=2.10.98`.
+- Windows: `GrokHub-Setup-2.10.98.exe` and `grokhub-windows-v2.10.98.zip`.
+
+## 2.10.97 — 2026-10-08
+
+- Chat no longer fails with HTTP 400 "does not support parameter reasoningEffort": GrokHub sends a thinking level only to models that take one (Grok 4.7, 4.6, 4.5 and 4.20 multi-agent), never to a non-reasoning model. A model you picked that xAI lists under another name, or that isn't listed but answers, stays in use, and the false "Paused: no model in your plan is answering" card is gone.
+- Labs → Beta moves a main install to beta again: the switch no longer stops on GrokHub's own `Cargo.lock` change, and Beta stays on after a sync.
+- KDE screenshots ask KWin once: after you refuse, GrokHub stops asking and uses the fallback, and the Arch packages' menu entry starts GrokHub by its full path.
+- A model change the router makes on its own is now a note that tells you, not an Undo / Keep row that asks.
+
+- Linux: `grokhub-linux-v2.10.97.tar.gz` and AUR `pkgver=2.10.97`.
+- Windows: `GrokHub-Setup-2.10.97.exe` and `grokhub-windows-v2.10.97.zip`.
 
 ## 2.10.96 — 2026-10-08
 

@@ -9,7 +9,7 @@ use grokhub_acp::{AcpEvent, GrokUsage};
 
 use crate::gate::{ClosedPermits, Gate, PermMode};
 use crate::tools::DesktopOps;
-use crate::{AuthKind, CancelToken, Engine, HaltCheck, ModelClient, Usage, DEFAULT_MAX_TURNS};
+use crate::{AuthKind, CancelToken, Engine, HaltCheck, ModelClient, Usage};
 
 pub struct UnattendedRun {
     pub client: Arc<dyn ModelClient + Send + Sync>,
@@ -82,7 +82,8 @@ pub fn run_unattended(spec: UnattendedRun) -> UnattendedDone {
         system: spec.system,
         conversation_id: session.clone(),
         auth_kind: spec.auth_kind,
-        max_turns: DEFAULT_MAX_TURNS,
+        // No turn cap: a night job runs until it answers, Halt or Stop.
+        max_turns: 0,
         cancel,
         steer: crate::SteerQueue::new(),
         halt: spec.halt,
@@ -696,5 +697,78 @@ mod tests {
         assert_eq!(info.usage.cost_in_usd_ticks, 42);
         assert_eq!(info.meter, "API credits");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `tools` turns of `list_dir`, then a reply. `same` repeats one call.
+    struct ToolTurns {
+        tools: usize,
+        same: bool,
+        n: AtomicUsize,
+        last_blob: Mutex<String>,
+    }
+
+    impl ModelClient for ToolTurns {
+        fn stream(
+            &self,
+            req: &ResponsesRequest,
+            _cancel: &CancelToken,
+            sink: &mut dyn FnMut(StreamEvent),
+        ) -> Result<TurnOutput, ClientError> {
+            let n = self.n.fetch_add(1, Ordering::SeqCst);
+            *self.last_blob.lock().unwrap() = blob(req);
+            if n < self.tools {
+                let path = if self.same { "p".to_string() } else { format!("p{n}") };
+                return Ok(TurnOutput {
+                    text: String::new(),
+                    reasoning: String::new(),
+                    calls: vec![FunctionCall {
+                        call_id: format!("t{n}"),
+                        name: "list_dir".into(),
+                        arguments: format!(r#"{{"path":"{path}"}}"#),
+                    }],
+                    usage: Usage::default(),
+                });
+            }
+            sink(StreamEvent::TextDelta("chore done".into()));
+            Ok(TurnOutput {
+                text: "chore done".into(),
+                reasoning: String::new(),
+                calls: Vec::new(),
+                usage: Usage::default(),
+            })
+        }
+    }
+
+    fn run_tool_turns(label: &str, tools: usize, same: bool) -> (UnattendedDone, Arc<ToolTurns>) {
+        let dir = workspace(label);
+        let client = Arc::new(ToolTurns {
+            tools,
+            same,
+            n: AtomicUsize::new(0),
+            last_blob: Mutex::new(String::new()),
+        });
+        let done = run_in(&dir, PermMode::Ask, client.clone(), Arc::new(AtomicUsize::new(0)));
+        let _ = std::fs::remove_dir_all(&dir);
+        (done, client)
+    }
+
+    #[test]
+    fn a_night_job_runs_past_fifty_turns_to_its_answer() {
+        let (done, client) = run_tool_turns("long", 70, false);
+        assert_eq!(done.stop_reason, "end_turn");
+        assert_eq!(done.text, "chore done");
+        assert_eq!(client.n.load(Ordering::SeqCst), 71);
+        assert_eq!(done.permission_cards, 0);
+    }
+
+    #[test]
+    fn six_identical_calls_get_the_replan_note_and_still_end_with_no_card() {
+        let (done, client) = run_tool_turns("repeat", 6, true);
+        assert_eq!(done.stop_reason, "end_turn");
+        assert_eq!(done.text, "chore done");
+        assert_eq!(client.n.load(Ordering::SeqCst), 7);
+        let last = client.last_blob.lock().unwrap().clone();
+        assert_eq!(last.matches(crate::REPEAT_REPLAN).count(), 4, "calls 3 to 6 re-plan: {last}");
+        assert_eq!((done.permission_cards, done.elicit_cards), (0, 0));
     }
 }

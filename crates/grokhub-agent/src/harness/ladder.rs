@@ -1,7 +1,7 @@
 //! Spike-1a recovery ladder. A finding moves its target one rung: retry once,
-//! then backtrack (re-observe, then an alternate target), then pause for the
-//! user (a soft park). Every rung is written as a span (`harness_recovery`,
-//! origin `repair`).
+//! then backtrack (re-observe, then an alternate target), then re-plan (a
+//! different approach), as often as it takes. A soft finding never pauses the
+//! run. Every rung is written as a span (`harness_recovery`, origin `repair`).
 //!
 //! A hard-class step is never retried: it pauses at once. A denied or
 //! timed-out hard step stays denied until the user approves a fresh card.
@@ -21,6 +21,10 @@ pub const RECOVERY_TOOL: &str = "harness_recovery";
 pub enum Rung {
     Retry,
     Backtrack,
+    /// Soft and out of retries: re-read the goal and try another approach.
+    /// Repeats; it never stops the run.
+    Replan,
+    /// Hard class or a failed screenshot: the user decides.
     Pause,
 }
 
@@ -29,6 +33,7 @@ impl Rung {
         match self {
             Self::Retry => "retry",
             Self::Backtrack => "backtrack",
+            Self::Replan => "replan",
             Self::Pause => "pause",
         }
     }
@@ -47,7 +52,7 @@ pub struct LadderStep {
     pub evidence: Vec<String>,
     /// Why, in one line.
     pub reason: String,
-    /// The repair turn's prompt (retry / backtrack). `None` on a pause.
+    /// The repair turn's prompt (retry / backtrack / replan). `None` on a pause.
     pub prompt: Option<String>,
 }
 
@@ -140,7 +145,7 @@ impl Ladder {
             _ if shot_failed => Rung::Pause,
             (None, 1) => Rung::Retry,
             (None, 2) => Rung::Backtrack,
-            _ => Rung::Pause,
+            _ => Rung::Replan,
         };
         let reason = match hard {
             Some(c) => format!(
@@ -166,6 +171,12 @@ impl Ladder {
                 finding.detail,
                 finding.tool,
                 redact_args(&args)
+            )),
+            Rung::Replan => Some(format!(
+                "GrokHub's check: {}. Stop repeating that. Re-read the goal, say in one line what you tried, \
+                 then pick a different approach (another tool, another route or a smaller sub-step), \
+                 take a fresh screenshot and go on.",
+                finding.detail
             )),
             Rung::Pause => None,
         };
@@ -248,7 +259,7 @@ mod tests {
     }
 
     #[test]
-    fn soft_finding_climbs_retry_backtrack_pause_and_reset_starts_over() {
+    fn soft_finding_climbs_retry_backtrack_then_replans_and_never_pauses() {
         let spans = click_then_claim();
         let finding = claimed_click_no_change(&spans).remove(0);
         let mut ladder = Ladder::new();
@@ -272,13 +283,16 @@ mod tests {
             .unwrap()
             .contains(r#"different target than before (click {"x":5,"y":9})"#));
         let c = ladder.next(&finding, &spans);
-        assert_eq!((c.rung, c.prompt.clone()), (Rung::Pause, None));
-        assert_eq!(
-            ladder.next(&finding, &spans).rung,
-            Rung::Pause,
-            "stays paused"
-        );
-        assert_eq!(ladder.tried(&a.target), 4);
+        assert_eq!(c.rung, Rung::Replan);
+        assert!(c
+            .prompt
+            .as_deref()
+            .unwrap()
+            .contains("Stop repeating that. Re-read the goal"));
+        for _ in 0..20 {
+            assert_eq!(ladder.next(&finding, &spans).rung, Rung::Replan, "never pauses");
+        }
+        assert_eq!(ladder.tried(&a.target), 23);
         ladder.reset();
         assert_eq!(ladder.next(&finding, &spans).rung, Rung::Retry);
     }
@@ -471,7 +485,7 @@ mod tests {
             vec![
                 (RECOVERY_TOOL, "retry", Origin::Repair),
                 (RECOVERY_TOOL, "backtrack", Origin::Repair),
-                (RECOVERY_TOOL, "pause", Origin::Repair),
+                (RECOVERY_TOOL, "replan", Origin::Repair),
             ]
         );
         let target = format!("type#{}", step_hash("type", r#"{"chars":8}"#));
@@ -481,7 +495,7 @@ mod tests {
                 r#"{{"detector":"claimed_click_no_change","evidence":["chat-l:1","chat-l:1","chat-l:2"],"target":"{target}"}}"#
             )
         );
-        assert_eq!(rungs[2].result, "pause");
+        assert_eq!(rungs[2].result, "replan");
         assert_eq!(rungs[2].approval_class, "soft");
     }
 }

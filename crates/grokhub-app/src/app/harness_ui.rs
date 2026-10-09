@@ -25,8 +25,6 @@ use grokhub_agent::{AccessMode, HardClass};
 /// How often the cabin looks for desktop parks and refreshes the turn file.
 const POLL: Duration = Duration::from_millis(250);
 
-/// The long-run pause card (Spike-3b). Nothing continues until you answer.
-const EPISODE_CAP_NOTE: &str = "Continue, or type what to do next. Nothing runs until you answer.";
 const HARD_NOTE: &str = "Always can't skip this. Approve runs it once. Esc denies.";
 const HEADLESS_NOTE: &str =
     "Grok Build's deny rule stopped this. Approve re-runs this one step with Grok's own Allow. Esc denies.";
@@ -713,9 +711,10 @@ impl Cabin {
                 }
             }
         }
-        self.status = if approve && kernel_park && !self.running {
-            // The kernel runs the step at its next loop, which a message starts.
-            format!("Approved once · {} · send a message to let the session go on", park.class.label())
+        // With no reply running, the approved kernel step runs on a resume turn.
+        let resume = approve && kernel_park && !self.running;
+        self.status = if resume {
+            format!("Approved once · {} · going on", park.class.label())
         } else if approve {
             format!("Approved once · {}", park.class.label())
         } else {
@@ -727,6 +726,11 @@ impl Cabin {
         }
         if let Some(approve) = fix_answer {
             self.fix_hard_answered(approve);
+        }
+        if resume {
+            let status = self.status.clone();
+            self.resume_parked_run();
+            self.status = status;
         }
     }
 
@@ -751,8 +755,9 @@ impl Cabin {
     }
 
     /// A ladder pause answered from its card or the inbox. Approve writes the
-    /// same `resume` span as the user's next message; Deny drops the pause
-    /// and the pending repair turn. Either way the ladder starts over.
+    /// same `resume` span as the user's next message, and approving the last
+    /// pause with no reply running resumes the run; Deny drops the pause and
+    /// the pending repair turn. Either way the ladder starts over.
     pub(super) fn answer_soft_park(&mut self, i: usize, approve: bool, why: &str) {
         if i >= self.harness.soft_parks.len() {
             return;
@@ -780,14 +785,9 @@ impl Cabin {
         self.harness.repair = None;
         self.harness.ladder.reset();
         self.status = if approve { "Resumed".into() } else { "Stopped that step".into() };
-        if park.detector == super::episode_ui::EPISODE_CAP_DETECTOR {
-            if approve {
-                // Continue is the user's click: the episode goes on from here.
-                self.resume_episode(grokhub_agent::episode::Continue::from_click());
-                self.send_chat("Continue".into());
-            } else {
-                self.end_episode(grokhub_agent::episode::EpisodeEnd::Stop);
-            }
+        if approve && self.harness.soft_parks.is_empty() && !self.running {
+            self.resume_parked_run();
+            self.status = "Resumed".into();
         }
     }
 
@@ -914,7 +914,7 @@ impl Cabin {
         let step = self.harness.ladder.next(&window.findings[0], &window.spans);
         self.write_span_at(hx::ladder_span(trace, &step), "audit", turn);
         match step.rung {
-            hx::Rung::Retry | hx::Rung::Backtrack => {
+            hx::Rung::Retry | hx::Rung::Backtrack | hx::Rung::Replan => {
                 self.harness.repair = step.prompt;
                 false
             }
@@ -989,16 +989,7 @@ impl Cabin {
     /// message does not come here.
     pub(super) fn harness_user_sent(&mut self) {
         let trace = self.trace_id();
-        let resumed = self
-            .harness
-            .soft_parks
-            .iter()
-            .any(|p| p.detector == super::episode_ui::EPISODE_CAP_DETECTOR);
-        if resumed {
-            // The user's typed reply answers the long-run pause (Spike-3b).
-            self.resume_episode(grokhub_agent::episode::Continue::from_typing());
-        }
-        self.episode_user_sent(resumed);
+        self.episode_user_sent();
         for park in std::mem::take(&mut self.harness.soft_parks) {
             let args = serde_json::json!({ "detector": park.detector, "evidence": park.evidence }).to_string();
             let mut span = hx::Span::soft_allow(
@@ -1399,14 +1390,13 @@ impl Cabin {
             }
         }
         if let Some(park) = self.harness.soft_parks.first() {
-            let cap = park.detector == super::episode_ui::EPISODE_CAP_DETECTOR;
             let text = CardText {
                 eyebrow: SOFT_EYEBROW,
                 title: &park.reason.clone(),
                 action: "",
-                note: if cap { EPISODE_CAP_NOTE } else { SOFT_NOTE },
-                primary: if cap { "Continue" } else { "Approve" },
-                secondary: if cap { "Stop" } else { "Deny" },
+                note: SOFT_NOTE,
+                primary: "Approve",
+                secondary: "Deny",
                 hard: false,
             };
             let top = ui.cursor().min.y;
@@ -2037,7 +2027,7 @@ mod tests {
     }
 
     #[test]
-    fn turn_end_audit_retries_backtracks_then_pauses_with_spans() {
+    fn turn_end_audit_retries_backtracks_then_replans_with_spans() {
         let (_pin, root) = pinned("harness-ladder");
         let _grok = NoGrok::set(&root);
         let mut cabin = Cabin::quiet_for_test();
@@ -2066,17 +2056,15 @@ mod tests {
         assert!(cabin.harness.repair.as_deref().unwrap().contains("try a different target"));
         cabin.harness.repair = None;
 
-        click(3);
-        cabin.harness_turn_end("Saved.", turn);
-        assert_eq!(cabin.harness.repair, None);
-        assert_eq!(cabin.harness.soft_parks.len(), 1);
-        assert_eq!(cabin.decisions_waiting(), 1);
-        assert_eq!(cabin.status, "1 thing needs a decision");
-
-        // Paused: the ladder waits for the user.
-        click(4);
-        cabin.harness_turn_end("Saved it.", turn);
-        assert_eq!(cabin.harness.soft_parks.len(), 1);
+        // Out of retries, a soft finding re-plans instead of pausing, as often as it takes.
+        for (ts, reply) in [(3, "Saved."), (4, "Saved it.")] {
+            click(ts);
+            cabin.harness_turn_end(reply, turn);
+            let repair = cabin.harness.repair.take().expect("re-plan turn queued");
+            assert!(repair.contains("Stop repeating that. Re-read the goal"), "{repair}");
+            assert!(cabin.harness.soft_parks.is_empty(), "no card");
+            assert_eq!(cabin.decisions_waiting(), 0);
+        }
 
         let got: Vec<(String, String)> = hx::read_spans(&root, "session")
             .unwrap()
@@ -2095,18 +2083,16 @@ mod tests {
                 pair("harness_recovery", "backtrack"),
                 pair("click", "allow"),
                 pair("reply", "say"),
-                pair("harness_recovery", "pause"),
+                pair("harness_recovery", "replan"),
                 pair("click", "allow"),
                 pair("reply", "say"),
+                pair("harness_recovery", "replan"),
             ]
         );
 
-        // The user's own next message answers the pause and starts over.
+        // The user's own next message starts every target over.
         cabin.send_from_composer("ok, use the File menu".into());
         assert!(cabin.harness.soft_parks.is_empty());
-        let last = hx::read_spans(&root, "session").unwrap().pop().unwrap();
-        assert_eq!((last.tool.as_str(), last.decision.as_str()), ("harness_recovery", "resume"));
-        assert!(last.claim.starts_with("you answered the pause (claimed_click_no_change:"), "{}", last.claim);
         assert_eq!(cabin.harness.ladder, hx::Ladder::new());
         let _ = std::fs::remove_dir_all(root);
     }
