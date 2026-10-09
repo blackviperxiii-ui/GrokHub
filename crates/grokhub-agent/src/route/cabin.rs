@@ -129,10 +129,10 @@ mod tests {
         });
         let got = {
             let _o = OriginScope::enter(Origin::Proactive);
-            let call = ModelCall::new(Provider::Xai, "grok-4-fast", Some("high"), "background:summarize");
+            let call = ModelCall::new(Provider::Xai, "grok-4.7", Some("high"), "background:summarize");
             call_model(&dir, &call, |c| {
                 // background:summarize runs at its class start (low), whatever the caller passed.
-                assert_eq!((c.model, c.effort), ("grok-4-fast", Some("low")));
+                assert_eq!((c.model, c.effort), ("grok-4.7", Some("low")));
                 Ok(("the reply", xai_usage(&reply)))
             })
         };
@@ -142,7 +142,7 @@ mod tests {
         let spans = read_spans(&dir, MODEL_TRACE).unwrap();
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].origin, Origin::Proactive);
-        assert_eq!(spans[0].args_redacted, r#"{"effort":"low","model":"grok-4-fast","provider":"xai"}"#);
+        assert_eq!(spans[0].args_redacted, r#"{"effort":"low","model":"grok-4.7","provider":"xai"}"#);
         assert_eq!(
             spans[0].usage,
             Some(ModelUsage {

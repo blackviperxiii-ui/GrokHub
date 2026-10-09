@@ -144,6 +144,8 @@ pub fn heal_messages(events: &[RegistryEvent], reg: &Registry, profiles: &BTreeM
             }),
             // A degraded pin with nothing healthy to stand in keeps answering, slowly.
             (ModelState::Live | ModelState::Probing | ModelState::NotInPlan | ModelState::Degraded, _) => {}
+            // An alias with nothing listed behind it keeps answering under its own name (2.10.97).
+            (ModelState::Redirected, None) => {}
             (_, None) => {
                 let all: Vec<&str> = reg.models.keys().map(String::as_str).collect();
                 heard.msgs.push(pause_msg(id, &failed, &policy::fallback_chain(id, &all)));
