@@ -1,0 +1,17 @@
+# cargo-nextest runs every test in its own process, so tests that set
+# process-wide state (env vars such as GROKHUB_CONFIG, statics, the fake
+# model client) can't see each other. That is what lets CI drop
+# `--test-threads=1`.
+#
+# The `serial` group is for a test that shares something outside its own
+# process (a fixed path, a port, the real config dir) and fails when run
+# side by side. Add an override with a comment naming what it shares;
+# never skip the test.
+
+[test-groups]
+serial = { max-threads = 1 }
+
+[profile.ci]
+# Run everything and list every failure, not just the first.
+fail-fast = false
+failure-output = "immediate-final"

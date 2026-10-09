@@ -6,7 +6,8 @@
 //! and pauses. The kernel loop is observe → propose tool → gate → execute (or
 //! park) → observe → claim. It stops only when the worker returns no tools
 //! and VerifyGate passes; `GOAL_COMPLETE` counts only after `VERIFY_OK`.
-//! Halt, Stop, or [`EPISODE_IDLE`] without a step also end it.
+//! Halt, Stop, or [`EPISODE_IDLE`] without a step also end it; an open park
+//! keeps it from ending idle. An unanswered hard step parks only itself.
 //!
 //! There is no step or wall-time cap. A loop (an identical call failing
 //! twice, the same call changing nothing three times, the same failure three
@@ -21,6 +22,7 @@
 //! bypass. Hard class always parks.
 
 mod kernel;
+pub mod lessons;
 pub mod loops;
 mod view;
 mod verify;
@@ -33,7 +35,7 @@ use crate::harness::{Ladder, Origin, Span};
 
 pub use kernel::{
     fan_out, run_episode, step_span, EpisodeOut, EpisodeStop, FileParks, KernelIn, Parks, CHECKER_ERROR, DEAD_WORKER,
-    EPISODE_RULES, FANOUT_CAPPED, VERIFY_REJECT,
+    EPISODE_RULES, FANOUT_CAPPED, VERIFY_REJECT, WAITING_ON_YOU,
 };
 pub use verify::{
     parse_verdict, verify_call, verify_call_at, verify_gate, Observation, Verdict, CHECKER_UNAVAILABLE, ESCALATED_CLASS,
@@ -109,6 +111,8 @@ impl EpisodeEnd {
 
 /// One hard step waiting on the user's card. The raw args stay in memory to
 /// run the step once on Approve; spans and the park file get redacted args.
+/// Past the approval TTL it stays parked (`waiting`): not run, but a late
+/// Approve still runs it once.
 #[derive(Debug, Clone)]
 pub struct OpenPark {
     pub id: String,
@@ -116,9 +120,12 @@ pub struct OpenPark {
     pub tool: String,
     pub args: String,
     pub args_redacted: String,
+    /// What the card names (redacted).
+    pub action: String,
     pub class: crate::harness::HardClass,
     pub parked_ms: u64,
     pub goal_step: String,
+    pub waiting: bool,
 }
 
 /// The fixed shape every step records: goal step, tool, decision,
@@ -134,6 +141,8 @@ pub struct StepShape {
 
 /// How much of a result a step line keeps.
 pub const STEP_RESULT_CAP: usize = 120;
+/// How much of a "Can't capture the screen" note a span keeps.
+pub const CAPTURE_NOTE_CAP: usize = 600;
 
 impl StepShape {
     /// The step's one line in the episode view.
@@ -183,6 +192,8 @@ pub struct Episode {
     pub(crate) ring: VecDeque<loops::LoopEntry>,
     /// Worker calls still stepped up after the latest re-plan.
     pub step_up: u32,
+    /// The `episode_id`s of the past lessons this episode started with.
+    pub used_lessons: Vec<String>,
 }
 
 fn cap_text(text: &str, held: &[String]) -> String {
@@ -212,6 +223,7 @@ impl Episode {
             last_reject: None,
             ring: VecDeque::new(),
             step_up: 0,
+            used_lessons: Vec::new(),
         }
     }
 

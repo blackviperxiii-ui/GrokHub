@@ -458,6 +458,14 @@ impl<C: CuaChild> CuaProxy<C> {
         if live && in_manifest && probe {
             desk[TARGET_HINT] = cua_target(before.as_ref().map(|(_, state)| state), &args);
         }
+        // Card 18: Enter, a paste or a typed newline is read with the window it
+        // lands in. A step already hard without it sends the child nothing first.
+        let soft_so_far = || decide(Step::Desk { tool: &desk_tool, args: &desk }).is_allow();
+        if live && in_manifest && crate::harness::needs_window(&desk_tool, &desk) && soft_so_far() {
+            if let Some(w) = self.observe(&args).and_then(|(_, state)| window_title(&state)) {
+                desk["window"] = Value::String(w);
+            }
+        }
         let refuse = |reason: &str, parked: Option<(HardClass, bool)>| {
             let call = DeskCall { tool: &desk_tool, args: &desk, ok: false, result: reason, access, ui_changed: None, parked };
             write_cua_span(dir, &tool, &call);

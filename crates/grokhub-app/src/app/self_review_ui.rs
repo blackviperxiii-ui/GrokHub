@@ -242,8 +242,8 @@ impl Cabin {
     }
 
     /// Tonight's passes in order, each once a night at or after the dream
-    /// hour: the Sunday self-review, then dream. Returns whether the
-    /// self-review started and dream's thread.
+    /// hour: the Sunday self-review, then dream (with the episode lessons'
+    /// tidy). Returns whether the self-review started and dream's thread.
     pub(super) fn night_passes(
         &mut self,
         today: &str,
@@ -251,6 +251,7 @@ impl Cabin {
         now: u64,
     ) -> (bool, Option<std::thread::JoinHandle<()>>) {
         let reviewed = self.self_review_tonight(today, clock, now);
+        lessons_tonight(today, clock.hour >= self.dream_hour(), now);
         (reviewed, self.dream_tonight(today, clock.hour, now))
     }
 
@@ -565,6 +566,21 @@ impl Cabin {
     }
 }
 
+/// Once a night at or after the dream hour, in any memory mode: merge
+/// near-duplicate episode lessons and drop stale ones. Local file work, no
+/// tokens.
+fn lessons_tonight(today: &str, due: bool, now: u64) {
+    static DONE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    let dir = config::config_dir();
+    let key = format!("{}\u{1f}{today}", dir.display());
+    let mut done = DONE.lock().unwrap_or_else(|e| e.into_inner());
+    if !due || done.as_deref() == Some(key.as_str()) {
+        return;
+    }
+    *done = Some(key);
+    let _ = grokhub_agent::episode::lessons::dream_store(&dir, now);
+}
+
 // Test hooks sit last: the UndoAsk source scan reads up to the first `#[cfg(test)]`.
 impl Cabin {
     #[cfg(not(test))]
@@ -583,6 +599,7 @@ impl Cabin {
             .ok_or_else(|| "no fake".to_string())
     }
 }
+
 
 #[cfg(test)]
 thread_local! {

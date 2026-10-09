@@ -55,6 +55,12 @@ pub trait DesktopOps {
     fn halted(&self) -> bool;
     fn locked(&self) -> bool;
     fn call(&self, name: &str, args: &Value) -> ToolOutput;
+    /// `args` plus what the hard gate reads beside them: the focused window
+    /// and the control under a click, as path A adds. Never sent to the
+    /// desktop. The default adds nothing.
+    fn hint(&self, _name: &str, args: &Value) -> Value {
+        args.clone()
+    }
 }
 
 pub struct ToolCtx<'a> {

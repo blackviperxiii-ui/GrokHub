@@ -134,6 +134,10 @@ impl Cabin {
             // Unsure = MindCheck history says you might mind (an ask-first
             // window or p_mind at or over 0.2). No history is still a card.
             let key = proactive_key(&c.topic);
+            // "Don't do this again": never suggested again.
+            if mind.prior(&key).is_some_and(|p| p.never) {
+                continue;
+            }
             let unsure = mind.prior(&key).is_some()
                 && mind.mind_route(&hx::Candidate { key: &key, hard: None }) == hx::MindRoute::Ask;
             let Some(route) = pro::route(c, unsure) else {
@@ -212,12 +216,16 @@ impl Cabin {
         Some(outcome)
     }
 
-    /// Dismiss on a proactive card: two in a row halve the card budget for a day.
+    /// Dismiss on a proactive card, quietly: the topic stays off the feed
+    /// for a day, MindCheck hears a Dismiss (+0.1), and two in a row halve
+    /// the card budget for a day. No prompt, no status line.
     pub(super) fn proactive_dismissed(&mut self, card: &UpdateCard) {
-        if card.pulse.proactive.is_some() {
-            self.proactive.dismissed(now_ms());
-            self.save_proactive();
-        }
+        let Some(meta) = &card.pulse.proactive else {
+            return;
+        };
+        self.proactive.dismiss(&meta.topic, now_ms());
+        self.proactive_span(&meta.topic, "dismiss", "dismissed");
+        self.save_proactive();
     }
 
     /// Not this on a proactive card: the topic is muted for 7 days, MindCheck
@@ -375,8 +383,69 @@ mod tests {
         assert_eq!(cabin.post_proactive(vec![prep()], t0 + 6 * day), 0, "muted");
         assert_eq!(cabin.post_proactive(vec![prep()], t0 + 8 * day), 1, "7 days passed");
         let back = proactive_cards(&cabin).pop().unwrap();
-        assert_eq!(back.title, "Should I get standup prep ready?", "MindCheck heard a deny: ask first");
-        assert_eq!(super::super::pulse_ui::run_label(&back), "Yes");
+        assert_eq!(back.title, "Get standup prep ready", "MindCheck heard a deny: a one-tap suggestion");
+        assert_eq!(super::super::pulse_ui::run_label(&back), "Do it");
+    }
+
+    #[test]
+    fn an_unsure_step_is_a_one_tap_suggestion_and_dismiss_is_quiet_for_a_day() {
+        let (_pin, root) = pinned("proactive-suggest");
+        let mut cabin = Cabin::quiet_for_test();
+        let tidy = || {
+            let mut c = Candidate::soft(
+                CandidateSource::Workboard,
+                "tidy Downloads: move 14 installers to ~/Downloads/old",
+                "downloads tidy",
+                0.9,
+                0.9,
+                "w",
+            );
+            c.reversible = Reversibility::Ledger;
+            c
+        };
+        let t0 = now_ms();
+        let day = grokhub_core::proactive::DAY_MS;
+        // MindCheck heard a deny on this topic once: unsure.
+        cabin.proactive_span("downloads tidy", "deny", "not this");
+        assert_eq!(cabin.post_proactive(vec![tidy()], t0), 1);
+        let card = proactive_cards(&cabin).pop().unwrap();
+        assert_eq!(card.title, "Tidy Downloads: move 14 installers to ~/Downloads/old");
+        assert_eq!(card.pulse.proactive.as_ref().map(|p| p.route), Some(ProactiveRoute::Suggest));
+        assert_eq!(super::super::pulse_ui::run_label(&card), "Do it");
+        assert!(cabin.harness.park.is_none() && !cabin.running, "posting asks nothing and runs nothing");
+
+        // One tap runs it once through the gate: no approval card.
+        assert_eq!(cabin.proactive_click(&card.id), Some(hx::GateOutcome::Allow));
+        assert!(cabin.harness.park.is_none());
+        assert_eq!(cabin.harness.next_origin, Some(hx::Origin::Proactive));
+        let approvals = |root: &std::path::Path| {
+            hx::read_spans(root, PROACTIVE_TRACE).unwrap().iter().filter(|s| s.decision == "approve").count()
+        };
+        assert_eq!(approvals(&root), 1);
+
+        // The next one is dismissed: no prompt, no status line, +0.1, and the
+        // topic stays off the feed for the rest of the day.
+        assert_eq!(cabin.post_proactive(vec![tidy()], t0 + 1_000), 1);
+        let again = proactive_cards(&cabin).into_iter().find(|c| c.id != card.id).unwrap();
+        let status = cabin.status.clone();
+        cabin.pulse_dismiss(&again.id, "2027-01-15");
+        assert_eq!(cabin.status, status, "dismiss is quiet");
+        assert!(cabin.harness.park.is_none());
+        let prior = cabin.proactive_mind().prior(&proactive_key("downloads tidy")).unwrap();
+        assert_eq!(prior.hundredths, 65, "deny 0.60, approve -0.05, dismiss +0.10");
+        assert_eq!(approvals(&root), 1, "dismiss ran nothing");
+        assert_eq!(cabin.post_proactive(vec![tidy()], t0 + 2_000), 0, "not posted again that day");
+        assert_eq!(cabin.post_proactive(vec![tidy()], t0 + day + 2_000), 1);
+    }
+
+    #[test]
+    fn dont_do_this_again_means_the_topic_is_never_suggested() {
+        let (_pin, _root) = pinned("proactive-never");
+        let mut cabin = Cabin::quiet_for_test();
+        let c = Candidate::soft(CandidateSource::Workboard, "archive 3 finished board cards", "board archive", 0.9, 0.9, "w");
+        cabin.proactive_span("board archive", "never", "user answer on a Done-for-you card");
+        assert_eq!(cabin.post_proactive(vec![c], now_ms()), 0);
+        assert!(proactive_cards(&cabin).is_empty());
     }
 
     #[test]

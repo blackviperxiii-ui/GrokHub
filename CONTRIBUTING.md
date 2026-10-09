@@ -27,7 +27,7 @@ These rules apply to every contributor and every bot (Cursor, Claude, GrokHub). 
 
 ## Tests
 
-- CI runs `cargo test --workspace --locked -- --test-threads=1` and `cargo clippy --workspace --all-targets -- -D warnings` on Linux and Windows.
+- CI runs `cargo nextest run --workspace --locked --profile ci` (each test in its own process, in parallel), `cargo test --doc --workspace --locked`, and `cargo clippy --workspace --all-targets -- -D warnings` on Linux and Windows.
 - Locally, set `GROKHUB_CONFIG` to a temp dir and run only the tests you touched.
 - Tests assert literal expected values. Never skip, ignore, delete, or loosen a test to get green.
 - Format only the lines you touch; don't mass `cargo fmt`.

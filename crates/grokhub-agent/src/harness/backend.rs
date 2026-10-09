@@ -264,7 +264,8 @@ fn typed_action(args: &serde_json::Value, class: &str) -> String {
         }
     }
     let window = args["window"].as_str().map(str::trim).filter(|w| !w.is_empty()).unwrap_or("the focused window");
-    format!("type {} chars into {window}", text.chars().count())
+    let enter = if text.contains(['\n', '\r']) { " and press Enter" } else { "" };
+    format!("type {} chars into {window}{enter}", text.chars().count())
 }
 
 /// Post a park for the cabin's hard card and wait. True only on Jeremy's
@@ -290,7 +291,11 @@ pub fn park_desk_call(
             args["keys"].as_str().unwrap_or(""),
             args["window"].as_str().unwrap_or("a file manager")
         ),
-        "key" => args["keys"].as_str().unwrap_or("").to_string(),
+        // Enter in a chat, mail or checkout window: the card names the window.
+        "key" => match args["window"].as_str().map(str::trim).filter(|w| !w.is_empty()) {
+            Some(window) => format!("press {} in {window}", args["keys"].as_str().unwrap_or("")),
+            None => args["keys"].as_str().unwrap_or("").to_string(),
+        },
         "delete_files" => delete_files_action(args),
         "click" | "drag" => match click_rule(args) {
             Some(rule) => click_action(args, &rule),
