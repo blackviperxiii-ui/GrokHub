@@ -8,7 +8,8 @@ use serde_json::{json, Value};
 
 use super::verify::{verify_call, verify_call_at, verify_gate, Observation, Verdict, CHECKER_UNAVAILABLE, ESCALATED_CLASS};
 use super::view::{zoom_schema, EpisodeView, Folder, ZOOM_TOOL};
-use super::{Episode, EpisodeEnd, OpenPark, StepShape, FANOUT_CAP, GOAL_CAP, PARK_PREFIX, REPLAN_NOTE, STALL_REPLAN};
+use super::loops::{self, LoopEntry, Outcome, REPEAT_CALL};
+use super::{Episode, EpisodeEnd, OpenPark, StepShape, FANOUT_CAP, GOAL_CAP, PARK_PREFIX, REPLAN_NOTE, STALL_REPLAN, STEP_UP_STEPS};
 use crate::client::{ContentPart, FunctionCall, InputItem, ModelClient, Usage};
 use crate::gate::{self, Decision, Gate, PermAnswer, PermitWait, Waited};
 use crate::harness::{
@@ -180,6 +181,9 @@ struct Run<'a, 'b> {
     /// The note that replaces the worker's last words when the episode ends
     /// unconfirmed.
     end_note: Option<String>,
+    /// A loop re-planned in this batch: 1a's `action_loop` finding on the
+    /// same steps is already handled.
+    looped: bool,
 }
 
 /// Drive one turn of an episode. It returns when the episode ends, the
@@ -192,7 +196,7 @@ pub fn run_episode(
     view: &mut EpisodeView,
     on_event: &mut dyn FnMut(LoopEvent),
 ) -> EpisodeOut {
-    let mut run = Run { k, ep, view, usage: Usage::default(), tokens: None, obs: None, end_note: None };
+    let mut run = Run { k, ep, view, usage: Usage::default(), tokens: None, obs: None, end_note: None, looped: false };
     if run.ep.trail.is_empty() {
         let goal = format!("goal: {}", run.ep.goal.chars().take(GOAL_CAP).collect::<String>());
         run.write(run.ep.marker("begin", "open", &goal));
@@ -287,26 +291,43 @@ impl Run<'_, '_> {
         }
         self.ep.last_ms = self.now();
         let failed = shape.decision == "deny" || shape.result.starts_with("failed");
-        if self.ep.note_progress(&shape.decision, shape.ui_changed, failed) {
-            self.replan();
+        let stalled = self.ep.note_progress(&shape.decision, shape.ui_changed, failed);
+        let looped = (shape.decision != "park")
+            .then(|| {
+                let outcome = match (failed, shape.ui_changed) {
+                    (true, _) => Outcome::Failed,
+                    (false, Some(false)) => Outcome::Still,
+                    _ => Outcome::Moved,
+                };
+                loops::note_call(&mut self.ep.ring, LoopEntry::new(&shape.tool, args_redacted, outcome, &shape.result))
+            })
+            .flatten();
+        if let Some(reason) = looped {
+            self.ep.stall = 0;
+            self.looped = true;
+            self.replan(REPEAT_CALL, reason);
+        } else if stalled {
+            self.replan("no_progress", format!("no_progress: {STALL_REPLAN} steps in a row changed nothing"));
         }
     }
 
-    /// [`STALL_REPLAN`] steps moved nothing: a quiet repair span and a
-    /// re-plan note for the next step. No card, nothing counted, no pause.
-    fn replan(&mut self) {
+    /// A loop or [`STALL_REPLAN`] steps that moved nothing: a quiet repair
+    /// span and a re-plan note for the next step. No card, nothing counted,
+    /// no pause.
+    fn replan(&mut self, detector: &str, reason: String) {
         let step = LadderStep {
             rung: Rung::Replan,
-            detector: "no_progress".into(),
+            detector: detector.into(),
             target: format!("episode#{}", self.ep.id),
             hard: None,
             evidence: Vec::new(),
-            reason: format!("no_progress: {STALL_REPLAN} steps in a row changed nothing"),
+            reason,
             prompt: Some(REPLAN_NOTE.into()),
         };
         let span = ladder_span(&self.ep.chat_id, &step);
         self.write(span);
         self.ep.note = Some(REPLAN_NOTE.into());
+        self.ep.step_up = STEP_UP_STEPS;
     }
 
     /// A screenshot through the same gate as any step. Not a step itself;
@@ -372,7 +393,18 @@ impl Run<'_, '_> {
             .with_tools(self.worker_tools())
             .in_session(&self.ep.chat_id);
         call.provider = self.k.provider.into();
+        // After a re-plan the router goes one model and one rung up for a few
+        // calls, then the episode is back on its own model. No prompt.
+        call.step_up = self.ep.step_up > 0;
         let routed = call_model(self.k.client, &call, self.k.cancel).map_err(|e| e.to_string())?;
+        if call.step_up {
+            if self.ep.step_up == STEP_UP_STEPS {
+                let t = &routed.tokens;
+                let note = format!("stepped up to {} {} for {STEP_UP_STEPS} steps", t.model, t.effort);
+                self.write(self.ep.marker("step_up", &t.model, note.trim()));
+            }
+            self.ep.step_up -= 1;
+        }
         self.usage.add(&routed.out.usage);
         self.tokens = Some(routed.tokens);
         self.ep.note = None;
@@ -475,6 +507,7 @@ impl Run<'_, '_> {
         let span = ladder_span(&self.ep.chat_id, &step);
         self.write(span);
         self.ep.note = Some(format!("{REPLAN_NOTE} The independent check said: {why}"));
+        self.ep.step_up = STEP_UP_STEPS;
         None
     }
 
@@ -494,6 +527,9 @@ impl Run<'_, '_> {
         let step = self.ep.ladder.next(&finding, &self.ep.trail);
         let span = ladder_span(&self.ep.chat_id, &step);
         self.write(span);
+        if step.rung == Rung::Replan {
+            self.ep.step_up = STEP_UP_STEPS;
+        }
         match step.rung {
             Rung::Retry | Rung::Backtrack | Rung::Replan => {
                 let mut note = step.prompt.clone().unwrap_or_default();
@@ -509,12 +545,17 @@ impl Run<'_, '_> {
 
     /// 1a still catches looping steps mid-episode.
     fn check_loop(&mut self) -> Option<EpisodeStop> {
-        let finding = action_loop(&self.ep.trail).into_iter().find(|f| {
-            let key = format!("{}:{}", f.detector, f.evidence.first().map_or("", |e| e.span.as_str()));
-            !self.ep.seen_findings.contains(&key)
-        })?;
-        let key = format!("{}:{}", finding.detector, finding.evidence.first().map_or("", |e| e.span.as_str()));
-        self.ep.seen_findings.push(key);
+        if std::mem::take(&mut self.looped) {
+            for f in action_loop(&self.ep.trail) {
+                let key = finding_key(&f);
+                if !self.ep.seen_findings.contains(&key) {
+                    self.ep.seen_findings.push(key);
+                }
+            }
+            return None;
+        }
+        let finding = action_loop(&self.ep.trail).into_iter().find(|f| !self.ep.seen_findings.contains(&finding_key(f)))?;
+        self.ep.seen_findings.push(finding_key(&finding));
         self.ladder(finding, None)
     }
 
@@ -831,6 +872,11 @@ fn zoom(view: &EpisodeView, arguments: &str) -> ToolOutput {
         Ok(text) => ToolOutput::ok(text),
         Err(e) => ToolOutput::err(e),
     }
+}
+
+/// One `action_loop` finding, by detector and its first step.
+fn finding_key(f: &Finding) -> String {
+    format!("{}:{}", f.detector, f.evidence.first().map_or("", |e| e.span.as_str()))
 }
 
 /// Args as a span keeps them: typed text as its length, credentials and
