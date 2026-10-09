@@ -539,6 +539,45 @@ pub fn card_target(source_id: &str) -> Option<CardTarget> {
     }
 }
 
+/// Quiet mode keeps this many logged suggestions, newest last.
+pub const QUIET_LOG_CAP: usize = 50;
+
+/// A suggestion quiet mode logged instead of posting a Pulse card.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct QuietEntry {
+    /// The local day of the pass, `YYYY-MM-DD`.
+    pub day: String,
+    pub source: String,
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+}
+
+/// Log one suggestion. A newer entry for the same source replaces the older
+/// one, and only the newest [`QUIET_LOG_CAP`] are kept.
+pub fn add_quiet_entry(log: &mut Vec<QuietEntry>, entry: QuietEntry) {
+    log.retain(|e| e.source != entry.source);
+    log.push(entry);
+    let extra = log.len().saturating_sub(QUIET_LOG_CAP);
+    log.drain(..extra);
+}
+
+/// The newest `max` entries, newest first, one line each:
+/// "2026-10-05 · Make a skill: deploy: You did this 4 times in the last two weeks".
+pub fn quiet_log_lines(log: &[QuietEntry], max: usize) -> Vec<String> {
+    log.iter()
+        .rev()
+        .take(max)
+        .map(|e| {
+            if e.body.trim().is_empty() {
+                format!("{} · {}", e.day, e.title)
+            } else {
+                format!("{} · {}: {}", e.day, e.title, e.body.trim())
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -819,5 +858,34 @@ mod tests {
             Some(CardTarget::Revert("z".into()))
         );
         assert_eq!(card_target("situation:x"), None);
+    }
+
+    #[test]
+    fn quiet_mode_logs_one_line_per_suggestion_newest_first_and_capped() {
+        let entry = |day: &str, source: &str, title: &str, body: &str| QuietEntry {
+            day: day.into(),
+            source: source.into(),
+            title: title.into(),
+            body: body.into(),
+        };
+        let mut log = Vec::new();
+        add_quiet_entry(&mut log, entry("2026-10-04", &draft_source("deploy"), "Make a skill: deploy", "You did this 4 times in the last two weeks"));
+        add_quiet_entry(&mut log, entry("2026-10-04", "router-review", "Weekly router review", ""));
+        add_quiet_entry(&mut log, entry("2026-10-11", &draft_source("deploy"), "Make a skill: deploy", "You did this 6 times in the last two weeks"));
+        assert_eq!(
+            quiet_log_lines(&log, 5),
+            vec![
+                "2026-10-11 · Make a skill: deploy: You did this 6 times in the last two weeks".to_string(),
+                "2026-10-04 · Weekly router review".to_string(),
+            ],
+            "the newer pass replaces the same suggestion"
+        );
+        assert_eq!(quiet_log_lines(&log, 1).len(), 1);
+        for i in 0..60 {
+            add_quiet_entry(&mut log, entry("2026-10-18", &format!("s{i}"), &format!("t{i}"), ""));
+        }
+        assert_eq!(log.len(), QUIET_LOG_CAP);
+        assert_eq!(log.first().map(|e| e.source.as_str()), Some("s10"));
+        assert_eq!(quiet_log_lines(&log, 1), vec!["2026-10-18 · t59".to_string()]);
     }
 }
