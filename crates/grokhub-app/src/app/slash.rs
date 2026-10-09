@@ -680,6 +680,7 @@ impl Cabin {
             Slash::Diagnose => self.run_diagnose(Vec::new(), true),
             Slash::Record(note) => self.start_screen_recording(note),
             Slash::RecordStop => self.stop_screen_recording(),
+            Slash::AudioCheck(want) => self.start_audio_check(want),
             Slash::Hub => {
                 self.nav = Nav::Devices;
                 self.status = if self.hub_on {
